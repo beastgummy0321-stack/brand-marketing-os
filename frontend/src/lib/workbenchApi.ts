@@ -139,6 +139,7 @@ export interface GenerationSettingRow {
 }
 
 export interface SetDetail {
+  generation?: { status: string; error: string | null };
   id: string;
   pack_id: string;
   pack_name: string;

@@ -67,6 +67,7 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
       </div>
       <ReadinessCard state={readiness} />
       <PersonaProgress state={personas} />
+      <Link className="text-sm text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/library?tab=customer-voice`}>查看與修正人物誌</Link>
       <div className="flex gap-3">
         {advertisingHistory === "has_history" ? (
           <>

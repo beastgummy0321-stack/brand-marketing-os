@@ -105,3 +105,13 @@ def adopted_output(conn, org_id: str, brand_id: str, brief_id: str, part: str):
     from app.workbench import repository as workbench_repo
 
     return workbench_repo.adopted_output(conn, org_id, brand_id, brief_id, part)
+
+
+def set_action_url(conn, org_id: str, brand_id: str, brief_id: str) -> str | None:
+    """Return a concrete studio destination only for a set in this tenant and brand."""
+    from app.workbench import repository as workbench_repo
+
+    brief = workbench_repo.get_brief(conn, org_id, brand_id, brief_id)
+    if brief is None or not brief.get("pack_id"):
+        return None
+    return f"/app/brands/{brand_id}/workbench/packs/{brief['pack_id']}/sets/{brief_id}"

@@ -105,8 +105,10 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
     new RegExp(`/app/brands/${brandId}/workbench/packs/[^/]+/sets/[^/]+$`),
   );
   await expect(page.getByRole("tab", { name: "圖片" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "顯示提示詞" })).toBeVisible();
-  await expect(page.getByText("還沒有生成過")).toBeVisible();
+  // Memory queue deliberately does not run workers: queued work must not look empty.
+  await expect(page.getByText("素材已排隊，等待生成。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成中…" })).toBeDisabled();
+  await expect(page.getByText("還沒有生成過")).toHaveCount(0);
 
   // --- 產品 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);

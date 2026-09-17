@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 import app.main as main
+import app.workbench as workbench
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core.db import DEV_ORG_ID  # noqa: E402
@@ -72,9 +73,10 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
             {
                 f"/app/brands/{brand_id}/intake",
                 f"/app/brands/{brand_id}/products/prd_test",
-                f"/app/brands/{brand_id}/library",
+                f"/app/brands/{brand_id}/library?tab=customer-voice",
                 f"/app/brands/{brand_id}/report",
-                f"/app/brands/{brand_id}/schedule",
+                f"/app/brands/{brand_id}/ads",
+                f"/app/brands/{brand_id}/workbench",
             },
         )
         expected_keys = {"brand_id", "brand_name", "kind", "status", "stage", "started_at", "action_url"}
@@ -92,6 +94,20 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
         # 半調閘門露出來。
         self.assertEqual(
             sum(1 for job in jobs if job["kind"] == "workbench_generate"), 2)
+
+    def test_workbench_job_targets_its_actual_set(self):
+        brand_id = self.brand["id"]
+        pack_id = workbench.submit_pack(main.conn, DEV_ORG_ID, brand_id, {
+            "name": "Jobs test", "source_kind": "schedule_node", "source_ref": {"p2": True},
+            "sets": [{"name": "Set", "source_ref": {"p2": True}, "coordinates": {},
+                      "required_outputs": {"copy": 1}, "request": {}}],
+        })
+        brief = workbench.briefs_for_source(main.conn, DEV_ORG_ID, brand_id,
+                                           "schedule_node", {"p2": True})[0]
+        _seed_running_queue_job(DEV_ORG_ID, brand_id, "workbench_copy", {"brief_id": brief["id"]})
+        jobs = self.client.get("/api/jobs/active").json()["data"]
+        self.assertIn(f"/app/brands/{brand_id}/workbench/packs/{pack_id}/sets/{brief['id']}",
+                      [job["action_url"] for job in jobs])
 
     def test_workbench_derive_identity_alone_maps_to_generate_stage(self):
         # F07-I13：上面那個測試同時塞了 workbench_copy 和 workbench_derive_identity，
