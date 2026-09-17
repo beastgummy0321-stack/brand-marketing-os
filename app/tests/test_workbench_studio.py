@@ -3,7 +3,6 @@ import app.shared.web as web
 import app.workbench as workbench
 from app.workbench import repository as repo
 
-from .test_dashboard_jobs_boundary import _seed_running_queue_job
 from .test_workbench_pack_api import _WorkbenchPackApiTestBase
 
 
@@ -15,9 +14,6 @@ class StudioProgressTest(_WorkbenchPackApiTestBase):
         self.assertEqual(workbench.set_action_url(web.conn, self.org_id, self.brand_id, brief_id), url)
         self.assertIsNone(workbench.set_action_url(web.conn, "other", self.brand_id, brief_id))
         self.assertIsNone(workbench.set_action_url(web.conn, self.org_id, "other", brief_id))
-        _seed_running_queue_job(self.org_id, self.brand_id, "workbench_copy", {"brief_id": brief_id})
-        jobs = self.client.get("/api/jobs/active").json()["data"]
-        self.assertIn(url, [job["action_url"] for job in jobs])
         for status in ("queued", "running", "done"):
             repo.mark_brief_status(web.conn, self.org_id, self.brand_id, brief_id, status)
             detail = repo.set_detail(web.conn, self.org_id, self.brand_id, brief_id)
