@@ -96,7 +96,7 @@ export function PublishPage({
       .catch((err: unknown) =>
         setState({ status: "error", message: err instanceof Error ? err.message : "讀取發布方式失敗。" }),
       );
-  }, [brandId, c.actions, c.id, adapter]);
+  }, [brandId, c.id, adapter]);
 
   useEffect(load, [load]);
 
