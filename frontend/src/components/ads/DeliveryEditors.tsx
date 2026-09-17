@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Folder, FileText } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -22,6 +22,50 @@ import {
   type StrategyRole,
 } from "@/lib/adsApi";
 import type { Channel } from "@/lib/adsLaunchApi";
+
+type GroupDraft = {
+  name: string;
+  role: StrategyRole;
+  dailyBudget: string;
+  startDate: string;
+  endDate: string;
+  customDates: boolean;
+};
+type AdDraft = { name: string; coords: AdCoordinates };
+const deliveryDraftCache = new Map<string, GroupDraft | AdDraft>();
+
+function readGroupDraft(key: string): GroupDraft | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<GroupDraft> | null;
+    if (value && typeof value.name === "string" && typeof value.role === "string" &&
+        typeof value.dailyBudget === "string" && typeof value.startDate === "string" &&
+        typeof value.endDate === "string" && typeof value.customDates === "boolean") return value as GroupDraft;
+    return null;
+  } catch { return (deliveryDraftCache.get(key) as GroupDraft | undefined) ?? null; }
+}
+
+function readAdDraft(key: string): AdDraft | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<AdDraft> | null;
+    if (value && typeof value.name === "string" && value.coords && typeof value.coords === "object" &&
+        Object.values(value.coords).every((item) => typeof item === "string")) return value as AdDraft;
+    return null;
+  } catch { return (deliveryDraftCache.get(key) as AdDraft | undefined) ?? null; }
+}
+
+function saveDeliveryDraft(key: string, value: GroupDraft | AdDraft) {
+  deliveryDraftCache.set(key, value);
+  try { sessionStorage.setItem(key, JSON.stringify(value)); } catch { /* Memory fallback. */ }
+}
+
+function clearDeliveryDraft(key: string) {
+  deliveryDraftCache.delete(key);
+  try { sessionStorage.removeItem(key); } catch { /* Storage unavailable. */ }
+}
 
 // F06-I06：從 DeliveryTab.tsx 原樣搬出的「調整結構（進階）」編輯零件，行為、文案、測試都不動——
 // 純粹為了讓 DeliveryTab.tsx 回到單檔 800 行上限以內（ARCHITECTURE.md §2、§7）。
@@ -48,6 +92,8 @@ export function GroupPanel({
   campaignEndDate,
   onSaved,
   onDelete,
+  onDirtyChange,
+  draftKey,
 }: {
   brandId: string;
   group: DeliveryGroupRow;
@@ -56,46 +102,74 @@ export function GroupPanel({
   campaignEndDate: string | null;
   onSaved: (group: DeliveryGroupRow) => void;
   onDelete: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  draftKey: string;
 }) {
-  const [name, setName] = useState(g.name);
-  const [role, setRole] = useState<StrategyRole>(g.role);
-  const [dailyBudget, setDailyBudget] = useState(String(g.daily_budget));
-  const [startDate, setStartDate] = useState(g.start_date ?? "");
-  const [endDate, setEndDate] = useState(g.end_date ?? "");
-  const [customDates, setCustomDates] = useState(Boolean(g.start_date || g.end_date));
+  const restoredDraft = useRef((() => {
+    const stored = readGroupDraft(draftKey);
+    const saved = {
+      name: g.name, role: g.role, dailyBudget: String(g.daily_budget),
+      startDate: g.start_date ?? "", endDate: g.end_date ?? "", customDates: Boolean(g.start_date || g.end_date),
+    };
+    return stored && JSON.stringify(stored) !== JSON.stringify(saved) ? stored : null;
+  })());
+  const [name, setName] = useState(restoredDraft.current?.name ?? g.name);
+  const [role, setRole] = useState<StrategyRole>(restoredDraft.current?.role ?? g.role);
+  const [dailyBudget, setDailyBudget] = useState(restoredDraft.current?.dailyBudget ?? String(g.daily_budget));
+  const [startDate, setStartDate] = useState(restoredDraft.current?.startDate ?? g.start_date ?? "");
+  const [endDate, setEndDate] = useState(restoredDraft.current?.endDate ?? g.end_date ?? "");
+  const [customDates, setCustomDates] = useState(restoredDraft.current?.customDates ?? Boolean(g.start_date || g.end_date));
+  const [restored, setRestored] = useState(Boolean(restoredDraft.current));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState(g);
+  const dirty =
+    name !== baseline.name ||
+    role !== baseline.role ||
+    Number(dailyBudget) !== baseline.daily_budget ||
+    (startDate || null) !== baseline.start_date ||
+    (endDate || null) !== baseline.end_date;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const incomingSignature = JSON.stringify(g);
 
   useEffect(() => {
-    setName(g.name);
-    setRole(g.role);
-    setDailyBudget(String(g.daily_budget));
-    setStartDate(g.start_date ?? "");
-    setEndDate(g.end_date ?? "");
-    setCustomDates(Boolean(g.start_date || g.end_date));
-    setError(null);
-  }, [g]);
+    if (!dirtyRef.current) reset(g);
+  }, [g, incomingSignature]);
 
-  const dirty =
-    name !== g.name ||
-    role !== g.role ||
-    Number(dailyBudget) !== g.daily_budget ||
-    (startDate || null) !== g.start_date ||
-    (endDate || null) !== g.end_date;
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (dirty) saveDeliveryDraft(draftKey, { name, role, dailyBudget, startDate, endDate, customDates });
+    else clearDeliveryDraft(draftKey);
+  }, [customDates, dailyBudget, dirty, draftKey, endDate, name, role, startDate]);
+
+  function reset(next: DeliveryGroupRow) {
+    setName(next.name);
+    setRole(next.role);
+    setDailyBudget(String(next.daily_budget));
+    setStartDate(next.start_date ?? "");
+    setEndDate(next.end_date ?? "");
+    setCustomDates(Boolean(next.start_date || next.end_date));
+    setBaseline(next);
+    setError(null);
+    setRestored(false);
+  }
 
   async function handleSave() {
     setSaving(true);
     setError(null);
     try {
-      onSaved(
-        await patchGroup(brandId, g.id, {
-          name,
-          role,
-          daily_budget: Number(dailyBudget),
-          start_date: startDate || null,
-          end_date: endDate || null,
-        }),
-      );
+      const next = await patchGroup(brandId, g.id, {
+        name,
+        role,
+        daily_budget: Number(dailyBudget),
+        start_date: startDate || null,
+        end_date: endDate || null,
+      });
+      reset(next);
+      clearDeliveryDraft(draftKey);
+      onSaved(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新投放組失敗，請稍後再試。");
     } finally {
@@ -118,6 +192,9 @@ export function GroupPanel({
       </div>
       <div className="surface-body flex flex-col gap-4">
         <BoundNotice localState={g.local_state} />
+        {restored && <p role="status" className="text-sm text-warning">
+          已恢復未儲存草稿；最新已保存值可能已變更，請確認後再儲存。
+        </p>}
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1 text-sm">
             名稱
@@ -174,10 +251,11 @@ export function GroupPanel({
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
         {(dirty || saving) && (
-          <div>
+          <div className="flex flex-wrap gap-2">
             <Button onClick={() => void handleSave()} disabled={saving}>
               {saving ? "儲存中…" : "儲存變更"}
             </Button>
+            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(g); }} disabled={saving}>取消變更</Button>}
           </div>
         )}
       </div>
@@ -192,6 +270,8 @@ export function AdPanel({
   campaignStatus,
   onSaved,
   onDelete,
+  onDirtyChange,
+  draftKey,
 }: {
   brandId: string;
   ad: AdRow;
@@ -199,28 +279,55 @@ export function AdPanel({
   campaignStatus: CampaignStatus;
   onSaved: (ad: AdRow) => void;
   onDelete: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  draftKey: string;
 }) {
-  const [name, setName] = useState(a.name);
-  const [coords, setCoords] = useState<AdCoordinates>(coordinatesFromAd(a));
+  const restoredDraft = useRef((() => {
+    const stored = readAdDraft(draftKey);
+    const saved = { name: a.name, coords: coordinatesFromAd(a) };
+    return stored && JSON.stringify(stored) !== JSON.stringify(saved) ? stored : null;
+  })());
+  const [name, setName] = useState(restoredDraft.current?.name ?? a.name);
+  const [coords, setCoords] = useState<AdCoordinates>(restoredDraft.current?.coords ?? coordinatesFromAd(a));
+  const [restored, setRestored] = useState(Boolean(restoredDraft.current));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState(a);
+  const baselineCoords = coordinatesFromAd(baseline);
+  const dirty =
+    name !== baseline.name ||
+    (Object.keys(coords) as (keyof AdCoordinates)[]).some((dim) => coords[dim] !== baselineCoords[dim]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const incomingSignature = JSON.stringify(a);
 
   useEffect(() => {
-    setName(a.name);
-    setCoords(coordinatesFromAd(a));
-    setError(null);
-  }, [a]);
+    if (!dirtyRef.current) reset(a);
+  }, [a, incomingSignature]);
 
-  const baseline = coordinatesFromAd(a);
-  const dirty =
-    name !== a.name ||
-    (Object.keys(coords) as (keyof AdCoordinates)[]).some((dim) => coords[dim] !== baseline[dim]);
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (dirty) saveDeliveryDraft(draftKey, { name, coords });
+    else clearDeliveryDraft(draftKey);
+  }, [coords, dirty, draftKey, name]);
+
+  function reset(next: AdRow) {
+    setName(next.name);
+    setCoords(coordinatesFromAd(next));
+    setBaseline(next);
+    setError(null);
+    setRestored(false);
+  }
 
   async function handleSave() {
     setSaving(true);
     setError(null);
     try {
-      onSaved(await patchAd(brandId, a.id, { name, coordinates: coords }));
+      const next = await patchAd(brandId, a.id, { name, coordinates: coords });
+      reset(next);
+      clearDeliveryDraft(draftKey);
+      onSaved(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新廣告失敗，請稍後再試。");
     } finally {
@@ -240,6 +347,9 @@ export function AdPanel({
       </div>
       <div className="surface-body flex flex-col gap-4">
         <BoundNotice localState={a.local_state} />
+        {restored && <p role="status" className="text-sm text-warning">
+          已恢復未儲存草稿；最新已保存值可能已變更，請確認後再儲存。
+        </p>}
         <label className="flex flex-col gap-1 text-sm">
           名稱
           <Input value={name} onChange={(e) => setName(e.target.value)} />
@@ -267,10 +377,11 @@ export function AdPanel({
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
         {(dirty || saving) && (
-          <div>
+          <div className="flex flex-wrap gap-2">
             <Button onClick={() => void handleSave()} disabled={saving}>
               {saving ? "儲存中…" : "儲存變更"}
             </Button>
+            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(a); }} disabled={saving}>取消變更</Button>}
           </div>
         )}
       </div>

@@ -8,35 +8,46 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { adoptStrategy, dispatchPack, getCampaign } from "@/lib/adsApi";
+import { adoptStrategy, dispatchPack, getCampaign, patchGroup } from "@/lib/adsApi";
 import { DeliveryTab } from "./DeliveryTab";
 
 function renderWithRouter(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
-vi.mock("@/lib/adsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
-  return {
-    ...actual,
-    adoptStrategy: vi.fn(),
-    dispatchPack: vi.fn(),
-    getCampaign: vi.fn(),
-    patchGroup: vi.fn(),
-    patchAd: vi.fn(),
-    createAd: vi.fn(),
-  };
-});
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ scope: "user_1:org_1" }),
+}));
 
-vi.mock("@/lib/coordinatesApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/coordinatesApi")>("@/lib/coordinatesApi");
-  return { ...actual, fetchCoordinates: vi.fn().mockResolvedValue([]) };
-});
+vi.mock("@/lib/adsApi", () => ({
+  adoptStrategy: vi.fn(),
+  dispatchPack: vi.fn(),
+  getCampaign: vi.fn(),
+  deleteAd: vi.fn(),
+  deleteGroup: vi.fn(),
+  patchGroup: vi.fn(),
+  patchAd: vi.fn(),
+  createAd: vi.fn(),
+  createGroup: vi.fn(),
+  currentBudgetTotal: vi.fn((c: CampaignDetail) => {
+    const dailySum = c.groups.reduce((sum, row) => sum + row.daily_budget, 0);
+    const days = c.start_date && c.end_date ? 15 : 0;
+    return { dailySum, days, total: days ? dailySum * days : null };
+  }),
+}));
 
-vi.mock("@/lib/adsLaunchApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsLaunchApi")>("@/lib/adsLaunchApi");
-  return { ...actual, fetchChannels: vi.fn().mockResolvedValue([]) };
-});
+vi.mock("@/lib/coordinatesApi", () => ({
+  COORDINATE_DIMENSIONS: [
+    ["audience", "受眾"], ["pain", "痛點"], ["angle", "角度"], ["hook", "鉤子"],
+    ["proof", "證據"], ["offer", "優惠"], ["format", "格式"],
+  ],
+  fetchCoordinates: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("@/lib/adsLaunchApi", () => ({
+  fetchChannels: vi.fn().mockResolvedValue([]),
+  saveManualSettings: vi.fn(),
+}));
 
 function ad(overrides: Partial<AdRow> = {}): AdRow {
   return {
@@ -126,12 +137,12 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   };
 }
 
-function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn()) {
+function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn(), brandId = "brd_1") {
   return {
     onCampaignChange,
     onChangeTab,
     ...renderWithRouter(
-      <DeliveryTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
+      <DeliveryTab brandId={brandId} campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
     ),
   };
 }
@@ -139,6 +150,7 @@ function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = 
 describe("DeliveryTab（F06-I02）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
   });
 
   it("預設面：開始做素材 → 在，進階收合是關的，沒有未綁定／儲存變更／日期輸入框", () => {
@@ -262,5 +274,108 @@ describe("DeliveryTab（F06-I02）", () => {
     await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
 
     expect(screen.queryByText("未綁定")).toBeNull();
+  });
+
+  it("結構有未存變更時攔下分頁下一步，並註冊瀏覽器離開保護", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const name = screen.getByDisplayValue("投放組");
+    await user.clear(name);
+    await user.type(name, "未存草稿");
+
+    const beforeUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+
+    expect(confirm).toHaveBeenCalledWith("還有未儲存的變更，確定要離開嗎？");
+    expect(dispatchPack).not.toHaveBeenCalled();
+    confirm.mockRestore();
+  });
+
+  it("接受離開 dirty 結構後只確認一次，交棒成功直接前往素材", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(dispatchPack).mockResolvedValueOnce("pk_1");
+    vi.mocked(getCampaign).mockResolvedValueOnce(campaign({ asset_readiness: { ready_count: 0, total: 2, pack_id: "pk_1" } }));
+    const { onChangeTab } = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const name = screen.getByDisplayValue("投放組");
+    await user.clear(name);
+    await user.type(name, "不保存直接前往");
+
+    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onChangeTab).toHaveBeenCalledWith("assets");
+    confirm.mockRestore();
+  });
+
+  it("離開再回同一身份品牌與 Campaign 會恢復結構草稿，不跨品牌恢復", async () => {
+    const user = userEvent.setup();
+    const first = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const name = screen.getByDisplayValue("投放組");
+    await user.clear(name);
+    await user.type(name, "待回來繼續");
+    first.unmount();
+
+    const restored = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    expect(await screen.findByText(/已恢復未儲存草稿/)).toBeTruthy();
+    expect((screen.getByDisplayValue("待回來繼續") as HTMLInputElement).value).toBe("待回來繼續");
+    restored.unmount();
+
+    renderTab(campaign(), vi.fn(), vi.fn(), "brd_2");
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    expect(screen.queryByText(/已恢復未儲存草稿/)).toBeNull();
+    expect((screen.getByDisplayValue("投放組") as HTMLInputElement).value).toBe("投放組");
+  });
+
+  it("伺服器重新讀取不覆蓋 dirty 結構草稿；取消改回最新保存值", async () => {
+    const user = userEvent.setup();
+    const onCampaignChange = vi.fn();
+    const onChangeTab = vi.fn();
+    const view = renderTab(campaign(), onCampaignChange, onChangeTab);
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const name = screen.getByDisplayValue("投放組");
+    await user.clear(name);
+    await user.type(name, "本地草稿");
+
+    const refreshed = campaign({ groups: [group({ name: "伺服器新值", ads: [ad(), ad({ id: "ad_2", name: "廣告二" })] })] });
+    view.rerender(<MemoryRouter><DeliveryTab brandId="brd_1" campaign={refreshed}
+      onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} /></MemoryRouter>);
+    expect((screen.getByDisplayValue("本地草稿") as HTMLInputElement).value).toBe("本地草稿");
+
+    await user.click(screen.getByRole("button", { name: "取消變更" }));
+    expect((screen.getByDisplayValue("伺服器新值") as HTMLInputElement).value).toBe("伺服器新值");
+  });
+
+  it("結構儲存成功後清除離開草稿", async () => {
+    const user = userEvent.setup();
+    const savedGroup = group({ name: "已保存名稱" });
+    vi.mocked(patchGroup).mockResolvedValueOnce(savedGroup);
+    const first = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const name = screen.getByDisplayValue("投放組");
+    await user.clear(name);
+    await user.type(name, "已保存名稱");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    expect(patchGroup).toHaveBeenCalled();
+    first.unmount();
+
+    renderTab(campaign({ groups: [{ ...savedGroup, ads: [ad(), ad({ id: "ad_2", name: "廣告二" })] }] }));
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: /^已保存名稱/ }));
+    expect(screen.queryByText(/已恢復未儲存草稿/)).toBeNull();
   });
 });

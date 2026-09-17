@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -8,25 +8,54 @@ export function Disclosure({
   label,
   children,
   defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   label: string;
   children: ReactNode;
   defaultOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const [hasOpened, setHasOpened] = useState(open);
+  const contentId = useId();
+
+  useEffect(() => {
+    if (open) setHasOpened(true);
+  }, [open]);
+
+  function toggle() {
+    const next = !open;
+    if (next) setHasOpened(true);
+    if (controlledOpen === undefined) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  }
 
   return (
     <div className="surface">
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-controls={contentId}
+        onClick={toggle}
         className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium"
       >
         {label}
         <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
-      {open && <div className="border-t border-border px-4 py-3">{children}</div>}
+      {hasOpened && (
+        <div
+          id={contentId}
+          hidden={!open}
+          inert={!open}
+          aria-hidden={open ? undefined : true}
+          className="border-t border-border px-4 py-3"
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }

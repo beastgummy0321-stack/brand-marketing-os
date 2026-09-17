@@ -1,13 +1,15 @@
 /** frontend/src/components/ads/patterns/patterns.test.tsx — F04-I07: 最便宜的證偽，五個斷言。
  * 每個 pattern 是 pure presentational component，這裡不 mock fetch，直接餵 props。 */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Sparkles } from "lucide-react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ActionTimeline } from "./ActionTimeline";
 import { CampaignTile } from "./CampaignTile";
 import { DecisionCard } from "./DecisionCard";
 import { Disclosure } from "./Disclosure";
+import { FieldCard } from "./FieldCard";
 import { JudgmentBand } from "./JudgmentBand";
 import { KpiStrip } from "./KpiStrip";
 import { ReservedSlotCard } from "./ReservedSlotCard";
@@ -57,15 +59,40 @@ describe("ads patterns（F04-I07）", () => {
     expect(screen.getByText("還沒有任何紀錄。")).toBeTruthy();
   });
 
-  it("Disclosure 預設收起，點了 label 才看得到 children", () => {
+  it("Disclosure 第一次展開才掛載，收起後保留草稿且隱藏內容不可聚焦", async () => {
+    const user = userEvent.setup();
+    const mounted = vi.fn();
+    function Draft() {
+      mounted();
+      return <input aria-label="進階輸入" defaultValue="" />;
+    }
     render(
-      <Disclosure label="進階設定">
-        <p>進階內容</p>
-      </Disclosure>,
+      <>
+        <Disclosure label="進階設定"><Draft /></Disclosure>
+        <button type="button">下一個操作</button>
+      </>,
     );
-    expect(screen.queryByText("進階內容")).toBeNull();
-    fireEvent.click(screen.getByText("進階設定"));
-    expect(screen.getByText("進階內容")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "進階輸入" })).toBeNull();
+    expect(mounted).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "進階設定" }));
+    const input = screen.getByRole("textbox", { name: "進階輸入" });
+    await user.type(input, "草稿");
+    await user.click(screen.getByRole("button", { name: "進階設定" }));
+
+    expect(screen.queryByRole("textbox", { name: "進階輸入" })).toBeNull();
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="進階輸入"]')?.value).toBe("草稿");
+    expect(document.querySelector('[inert] input[aria-label="進階輸入"]')).toBeTruthy();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "下一個操作" }));
+
+    await user.click(screen.getByRole("button", { name: "進階設定" }));
+    expect((screen.getByRole("textbox", { name: "進階輸入" }) as HTMLInputElement).value).toBe("草稿");
+  });
+
+  it("FieldCard 的純圖示修改按鈕有具體名稱", () => {
+    render(<FieldCard icon={Sparkles} label="預算" value="NT$3,000" emptyText="未設定" source="user" onEdit={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "編輯預算" })).toBeTruthy();
   });
 
   it("JudgmentBand 外層不含 surface（會壓掉底色），含 bg-accent/60", () => {
