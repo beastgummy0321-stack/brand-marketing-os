@@ -258,8 +258,8 @@ export function PerformanceTab({
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
-        <PerformanceReady simulated={!!c.simulation_mode} data={state.data} labels={labels}
-          judgment={c.judgment} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
+        <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
+          data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
       {(c.status === "live" || c.status === "ended") && (
@@ -316,20 +316,23 @@ function PerformanceReady({
   simulated,
   data,
   labels,
-  judgment,
   refreshing,
   onRefresh,
 }: {
   simulated: boolean;
   data: CampaignPerformance;
   labels: CampaignLabels;
-  judgment: CampaignDetail["judgment"];
   refreshing: boolean;
   onRefresh: () => void;
 }) {
   const t = data.totals;
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
+  const outcome = t.spend <= 0
+    ? "尚無花費資料，暫時無法判讀成效。"
+    : t.purchases === null || t.revenue === null
+      ? "已有花費資料；轉換或營收未追蹤，暫時不能判定 CPA 或 ROAS。"
+      : "已整理目前回收資料；請對照主要 KPI 與成功條件判讀。";
   return (
     <>
       <div className="surface">
@@ -341,8 +344,7 @@ function PerformanceReady({
           </Button>
         </div>
         <div className="surface-body flex flex-col gap-2">
-          <p className="text-sm font-medium">{judgment?.text ?? "成效資料已整理，請依目前目標指標判讀。"}</p>
-          {judgment?.detail && <p className="text-sm text-muted-foreground">{judgment.detail}</p>}
+          <p className="text-sm font-medium">{outcome}</p>
           <p className="text-xs text-muted-foreground">
             資料狀態：{latestDay ? `最新資料日 ${latestDay}` : "還沒有每日資料"}；來源為{source}。
             {data.coverage.expected > 0 && ` 缺少 ${data.coverage.missing}／${data.coverage.expected} 個廣告日。`}

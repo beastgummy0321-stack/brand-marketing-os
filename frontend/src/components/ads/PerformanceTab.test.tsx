@@ -262,6 +262,15 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     await waitFor(() => expect(readSimulation).toHaveBeenCalledTimes(1));
   });
 
+  it("舊 sim_ adapter campaign 仍標示模擬資料，但不開放內部回收工具", async () => {
+    renderTab(campaign({ status: "live", simulation_mode: false, external_id: "sim_legacy" }));
+
+    await screen.findByRole("heading", { name: "目前成果" });
+    expect(screen.getAllByText(/模擬回收/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "內部驗收工具（隔離模擬）" })).toBeNull();
+    expect(readSimulation).not.toHaveBeenCalled();
+  });
+
   it("成效重新整理後，已展開的比較同步重新讀取；未使用時仍不讀取", async () => {
     const user = userEvent.setup();
     renderTab(campaign({ status: "live" }));
