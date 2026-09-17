@@ -189,6 +189,8 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
             </div>
           </div>
 
+          <IncompleteOutputs brandId={brandId} pack={pack} />
+
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
             <div className="flex flex-col gap-4 min-w-0">
               <ProgressCard pack={pack} />
@@ -238,6 +240,37 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
   );
 }
 
+function IncompleteOutputs({ brandId, pack }: { brandId: string; pack: PackDetail }) {
+  const missing = pack.sets.flatMap((set) =>
+    set.cells
+      .filter((cell) => cell.required !== null && cell.state !== "已選定")
+      .map((cell) => ({
+        setId: set.id,
+        setName: set.name,
+        part: cell.part,
+        label: cell.label,
+        text: cell.text,
+      })),
+  );
+  if (missing.length === 0) return null;
+  return (
+    <div className="surface flex flex-col gap-2 p-3" aria-label="尚未完成的產物">
+      <p className="text-sm font-medium text-foreground">尚未完成</p>
+      <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+        {missing.map((item) => (
+          <Link
+            key={`${item.setId}:${item.label}`}
+            to={`/brands/${brandId}/workbench/packs/${pack.id}/sets/${item.setId}?part=${item.part}`}
+            className="text-primary hover:underline"
+          >
+            {item.setName}：{item.label}（{item.text}）
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MetaTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -270,6 +303,7 @@ function PackRail({ brandId, pack }: { brandId: string; pack: PackDetail }) {
         <button
           key={set.id}
           type="button"
+          onClick={() => navigate(`/brands/${brandId}/workbench/packs/${pack.id}/sets/${set.id}`)}
           className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent"
         >
           <span className={cn("size-2.5 shrink-0 rounded-full", SET_ROW_DOT[set.status]?.split(" ")[0] ?? "bg-muted-foreground/40")} />

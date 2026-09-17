@@ -90,3 +90,77 @@ describe("PackPage 探索風格提醒（F07-I12）", () => {
     expect((approveButton as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("F12 任務包的一般完成路徑", () => {
+  it("逐項列出未完成部分的名稱並提供素材組直達連結", async () => {
+    mockGetPack.mockResolvedValue(
+      packDetail({
+        can_approve: false,
+        blocking_text: "還有 1 個必要產物未選定",
+        sets: [
+          {
+            id: "set_missing",
+            name: "新客主力",
+            status: "等待決定",
+            cells: [
+              {
+                part: "copy",
+                label: "文案",
+                state: "未生成",
+                selected: 0,
+                required: 1,
+                text: "尚未選定",
+              },
+              {
+                part: "video_script",
+                label: "腳本",
+                state: "不需要",
+                selected: 0,
+                required: null,
+                text: "—",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    renderPack();
+
+    const link = await screen.findByRole("link", { name: "新客主力：文案（尚未選定）" });
+    expect(link.getAttribute("href")).toBe(
+      "/brands/brd_1/workbench/packs/pack_1/sets/set_missing?part=copy",
+    );
+    expect(screen.queryByRole("link", { name: /腳本/ })).toBeNull();
+    expect(screen.getAllByText(/還有 1 個必要產物未選定/).length).toBeGreaterThan(0);
+    expect((screen.getByRole("button", { name: "核准整包" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+  });
+
+  it("所有產物已選定時不顯示未完成清單", async () => {
+    mockGetPack.mockResolvedValue(
+      packDetail({
+        sets: [
+          {
+            id: "set_done",
+            name: "新客主力",
+            status: "已完成",
+            cells: [
+              {
+                part: "image_prompt",
+                label: "圖片",
+                state: "已選定",
+                selected: 1,
+                required: 1,
+                text: "已選 1／1",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    renderPack();
+
+    await screen.findByRole("button", { name: "核准整包" });
+    expect(screen.queryByLabelText("尚未完成的產物")).toBeNull();
+  });
+});
