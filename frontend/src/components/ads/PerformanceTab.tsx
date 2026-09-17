@@ -5,6 +5,7 @@ import type { EChartsOption } from "echarts";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ import {
 import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
+import { Disclosure } from "./patterns";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
@@ -149,6 +151,11 @@ function Kpi({ label, value, caption }: { label: string; value: string; caption:
   );
 }
 
+function hasSavedComparison(campaign: CampaignDetail) {
+  const value = campaign.context_json.comparison_plan;
+  return Boolean(value && typeof value === "object");
+}
+
 /** 成效 tab（F03-I16）：素材／策略／結構那幾頁是「編輯」，這頁是「唯讀＋兩個動作」
  * （重新整理成效、立即結案）——所有數字只認 `getPerformance`／`ingestOutcome`，絕不讀
  * `campaign_detail.outcome`（那是列表卡片的 SQL 小計，§0「Two total-derivers exist」）。 */
@@ -163,6 +170,7 @@ export function PerformanceTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const { scope: draftScope } = useWorkspace();
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
   const labels = c.labels ?? DEFAULT_LABELS;
   const today = new Date().toLocaleDateString("sv-SE");
@@ -173,6 +181,7 @@ export function PerformanceTab({
     | { status: "ready"; data: CampaignPerformance }
   >({ status: "loading" });
   const [refreshing, setRefreshing] = useState(false);
+  const [comparisonRefresh, setComparisonRefresh] = useState(0);
   const [closeOpen, setCloseOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -194,6 +203,7 @@ export function PerformanceTab({
     try {
       const data = await ingestOutcome(brandId, c.id);
       setState({ status: "ready", data });
+      setComparisonRefresh((current) => current + 1);
     } catch (err) {
       setState({ status: "error", message: err instanceof Error ? err.message : "重新整理成效失敗。" });
     } finally {
@@ -215,8 +225,15 @@ export function PerformanceTab({
     }
   }
 
-  const comparison = <ExperimentPlan key={`${c.id}:${c.status}`} brandId={brandId} campaignId={c.id} refreshKey={state} onViewPlan={() => onChangeTab("structure")} />;
-  const recovery = <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={load} />;
+  const comparison = <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
+    hasSavedComparison={hasSavedComparison(c)} refreshToken={`${c.status}:${comparisonRefresh}`}
+    onViewPlan={() => onChangeTab("structure")} />;
+  const recovery = c.simulation_mode ? <Disclosure label="內部驗收工具（隔離模擬）">
+    <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={() => {
+      load();
+      setComparisonRefresh((current) => current + 1);
+    }} />
+  </Disclosure> : null;
 
   if (!published) {
     return (
@@ -226,16 +243,14 @@ export function PerformanceTab({
           description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
         />
         <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
-        {recovery}
         {comparison}
+        {recovery}
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {recovery}
-      {comparison}
       {state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
@@ -243,7 +258,8 @@ export function PerformanceTab({
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
-        <PerformanceReady simulated={!!c.simulation_mode || !!c.external_id?.startsWith("sim_")} data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
+        <PerformanceReady simulated={!!c.simulation_mode} data={state.data} labels={labels}
+          judgment={c.judgment} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
       {(c.status === "live" || c.status === "ended") && (
@@ -271,6 +287,9 @@ export function PerformanceTab({
 
       {c.status === "closed" && <VerdictCard brandId={brandId} campaign={c} />}
 
+      {comparison}
+      {recovery}
+
       <Dialog open={closeOpen} onOpenChange={(open) => !open && setCloseOpen(false)}>
         <DialogContent>
           <DialogTitle>結案</DialogTitle>
@@ -297,35 +316,60 @@ function PerformanceReady({
   simulated,
   data,
   labels,
+  judgment,
   refreshing,
   onRefresh,
 }: {
   simulated: boolean;
   data: CampaignPerformance;
   labels: CampaignLabels;
+  judgment: CampaignDetail["judgment"];
   refreshing: boolean;
   onRefresh: () => void;
 }) {
   const t = data.totals;
   const source = simulated ? "模擬回收" : "平台回報";
+  const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="花費" value={formatCurrency(t.spend)} caption={`累計花費・${source}`} />
-        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
-        <Kpi label="CPA" value={fmtCpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
-        <Kpi label="ROAS" value={formatMetaRoas(t.roas_conservative)} caption={`保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
-        <Kpi label="點擊率" value={formatPercent(t.ctr)} caption="累計點擊 ÷ 曝光" />
-        <Kpi label="曝光" value={formatCount(t.impressions)} caption={`累計曝光・${source}`} />
-      </div>
-
       <div className="surface">
         <div className="surface-header">
-          <h2>成效趨勢</h2>
+          <h2>目前成果</h2>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw size={14} className={refreshing ? "animate-spin" : "hidden"} />
             {refreshing ? "整理中…" : "重新整理成效"}
           </Button>
+        </div>
+        <div className="surface-body flex flex-col gap-2">
+          <p className="text-sm font-medium">{judgment?.text ?? "成效資料已整理，請依目前目標指標判讀。"}</p>
+          {judgment?.detail && <p className="text-sm text-muted-foreground">{judgment.detail}</p>}
+          <p className="text-xs text-muted-foreground">
+            資料狀態：{latestDay ? `最新資料日 ${latestDay}` : "還沒有每日資料"}；來源為{source}。
+            {data.coverage.expected > 0 && ` 缺少 ${data.coverage.missing}／${data.coverage.expected} 個廣告日。`}
+          </p>
+          {(t.purchases === null || t.revenue === null) && <p className="text-xs text-warning">
+            轉換或營收未追蹤時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。
+          </p>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Kpi label="花費" value={formatCurrency(t.spend)} caption={`累計花費・${source}`} />
+        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
+        <Kpi label="CPA" value={fmtCpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
+        <Kpi label="ROAS" value={formatMetaRoas(t.roas_conservative)} caption={`保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
+      </div>
+
+      <Disclosure label="查看每日資料、次要指標與公式">
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Kpi label="點擊率" value={formatPercent(t.ctr)} caption="累計點擊 ÷ 曝光" />
+            <Kpi label="曝光" value={formatCount(t.impressions)} caption={`累計曝光・${source}`} />
+          </div>
+
+      <div className="surface">
+        <div className="surface-header">
+          <h2>成效趨勢</h2>
         </div>
         <div className="surface-body flex flex-col gap-3">
           {data.daily.length === 0 ? (
@@ -341,6 +385,24 @@ function PerformanceReady({
             )}
             <li>{data.last_data_at ? `最新資料日：${data.daily[data.daily.length - 1]?.day ?? "－"}` : "還沒有資料"}</li>
           </ul>
+        </div>
+      </div>
+
+      <div className="surface">
+        <div className="surface-header"><h2>每日資料</h2></div>
+        <div className="surface-body table-surface">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-muted text-muted-foreground"><tr>
+              <th className="px-3 py-2 font-medium">日期</th><th className="px-3 py-2 font-medium">花費</th>
+              <th className="px-3 py-2 font-medium">{labels.count}</th><th className="px-3 py-2 font-medium">CPA</th>
+              <th className="px-3 py-2 font-medium">ROAS（保守／樂觀）</th>
+            </tr></thead>
+            <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
+              <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{formatCurrency(day.spend)}</td>
+              <td className="px-3 py-2">{fmtPurchases(day.purchases)}</td><td className="px-3 py-2">{fmtCpa(day.cpa)}</td>
+              <td className="px-3 py-2">{formatMetaRoas(day.roas_conservative)} ／ {formatMetaRoas(day.roas)}</td>
+            </tr>) : <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">還沒有每日資料。</td></tr>}</tbody>
+          </table>
         </div>
       </div>
 
@@ -421,6 +483,13 @@ function PerformanceReady({
           </table>
         </div>
       </div>
+          <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+            <p>CPA＝花費 ÷ 轉換數；沒有追蹤到轉換時顯示「算不出來」。</p>
+            <p>ROAS 保守值用全部花費作分母；樂觀值只使用有追蹤營收的花費。兩者須一起看。</p>
+            <p>花費占比＝該投放組或廣告花費 ÷ Campaign 總花費。</p>
+          </div>
+        </div>
+      </Disclosure>
     </>
   );
 }
