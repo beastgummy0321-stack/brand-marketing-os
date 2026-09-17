@@ -3,7 +3,7 @@
 interface (`describe`/`publish`/`bind`); registered under the key `"manual"`.
 """
 
-from app.ads import plan
+from app.ads import manual_settings, plan
 from app.ads import repository as ads_repo
 from app.core import approval as approval_mod
 from app.meta import repository as meta_repo
@@ -78,8 +78,21 @@ def describe(campaign: dict) -> dict:
     """逐節點清單，campaign 節點打頭，然後每個投放組、再來是它底下每支廣告——使用者到
     平台後台照這份清單一字不差地建。"""
     checklist = [_campaign_field(campaign)]
+    records = {g["id"]: g for g in manual_settings.handoff(campaign)["groups"]}
     for group in campaign.get("groups") or []:
-        checklist.append(_group_field(group))
+        item = _group_field({**group,
+                             "start_date": group.get("start_date") or campaign.get("start_date"),
+                             "end_date": group.get("end_date") or campaign.get("end_date")})
+        record = records[group["id"]]
+        item["fields"].append({"label": "人工上架設定狀態", "value": record["status"],
+                               "reason": "待補：" + "、".join(record["missing"])
+                               if record["missing"] else "已填資料仍需在平台核對。"})
+        item["fields"].extend(
+            {"label": f["label"], "value": record["values"].get(f["key"]) or "尚未填寫",
+             "reason": "手動紀錄；不代表已配對或已同步至平台。"}
+            for f in manual_settings.FIELDS
+        )
+        checklist.append(item)
         for ad in group.get("ads") or []:
             checklist.append(_ad_field(ad))
     return {"adapter": "manual", "message": None, "checklist": checklist}

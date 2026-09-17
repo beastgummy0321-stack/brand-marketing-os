@@ -22,6 +22,7 @@ from app.ads import (
     channels,
     closeout,
     judgment,
+    manual_settings_routes,
     outcome,
     plan,
     readiness,
@@ -33,6 +34,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 
 router = APIRouter(prefix="/api/ads")
+router.include_router(manual_settings_routes.router)
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
 GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
