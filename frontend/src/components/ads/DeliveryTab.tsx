@@ -3,6 +3,7 @@ import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { formatCurrency } from "@/lib/format";
 import {
   Dialog,
@@ -65,6 +66,7 @@ export function DeliveryTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const { scope: draftScope } = useWorkspace();
   const [selected, setSelected] = useState<SelectedKey | null>(null);
   const [vocabulary, setVocabulary] = useState<Coordinate[]>([]);
   const [channelInfo, setChannelInfo] = useState<Channel[]>([]);
@@ -77,6 +79,40 @@ export function DeliveryTab({
   const [deleting, setDeleting] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
+  const [manualSettingsDirty, setManualSettingsDirty] = useState(false);
+  const hasUnsavedDraft = editorDirty || manualSettingsDirty;
+
+  useEffect(() => {
+    if (!hasUnsavedDraft) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [hasUnsavedDraft]);
+
+  function confirmDiscard() {
+    if (!hasUnsavedDraft) return true;
+    const confirmed = window.confirm("還有未儲存的變更，確定要離開嗎？");
+    if (confirmed) {
+      setEditorDirty(false);
+      setManualSettingsDirty(false);
+    }
+    return confirmed;
+  }
+
+  function requestTabChange(target: StepTarget) {
+    if (confirmDiscard()) onChangeTab(target);
+  }
+
+  function selectNode(next: SelectedKey) {
+    if (selected === next) return;
+    if (editorDirty && !window.confirm("目前節點有未儲存的變更，確定要切換嗎？")) return;
+    setEditorDirty(false);
+    setSelected(next);
+  }
 
   useEffect(() => {
     fetchCoordinates(brandId).then(setVocabulary).catch(() => setVocabulary([]));
@@ -163,7 +199,7 @@ export function DeliveryTab({
     return (
       <div className="flex flex-col gap-4">
         <EmptyState title="這個 Campaign 還沒有投放結構" description={step.sentence} />
-        <NextStepButton step={step} onChangeTab={onChangeTab} />
+        <NextStepButton step={step} onChangeTab={requestTabChange} />
       </div>
     );
   }
@@ -229,18 +265,19 @@ export function DeliveryTab({
         {step.id === "add_ad" ? (
           <StepButton onClick={() => setAddAdOpen(true)}>新增廣告 →</StepButton>
         ) : step.id === "dispatch" ? (
-          <StepButton onClick={() => void handleDispatch()} disabled={dispatching}>
+          <StepButton onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
             {dispatching ? "交棒中…" : "開始做素材 →"}
           </StepButton>
         ) : (
-          <NextStepButton step={step} onChangeTab={onChangeTab} />
+          <NextStepButton step={step} onChangeTab={requestTabChange} />
         )}
         {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
       </div>
 
-      <ManualSettings brandId={brandId} campaign={c} onSaved={onCampaignChange} />
+      <ManualSettings key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
+        onSaved={onCampaignChange} onDirtyChange={setManualSettingsDirty} />
 
-      <Disclosure label="調整結構（進階）">
+      <Disclosure label={`調整結構（進階）${editorDirty ? " · 有未儲存變更" : ""}`}>
         <div className="flex flex-col gap-4">
           <div className="surface">
             <div className="surface-header">
@@ -325,7 +362,7 @@ export function DeliveryTab({
                   <div key={g.id}>
                     <button
                       type="button"
-                      onClick={() => setSelected(`group:${g.id}`)}
+                      onClick={() => selectNode(`group:${g.id}`)}
                       className={`flex w-full items-center gap-2 rounded-md py-1.5 pl-6 pr-2 text-left text-sm ${
                         selected === `group:${g.id}` ? "bg-accent" : "hover:bg-muted"
                       }`}
@@ -342,7 +379,7 @@ export function DeliveryTab({
                       <button
                         key={a.id}
                         type="button"
-                        onClick={() => setSelected(`ad:${a.id}`)}
+                        onClick={() => selectNode(`ad:${a.id}`)}
                         className={`flex w-full items-center gap-2 rounded-md py-1.5 pl-12 pr-2 text-left text-sm ${
                           selected === `ad:${a.id}` ? "bg-accent" : "hover:bg-muted"
                         }`}
@@ -363,6 +400,7 @@ export function DeliveryTab({
 
             {selectedGroup ? (
               <GroupPanel
+                key={`${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
                 brandId={brandId}
                 group={selectedGroup}
                 channels={channelInfo}
@@ -370,15 +408,20 @@ export function DeliveryTab({
                 campaignEndDate={c.end_date}
                 onSaved={replaceGroup}
                 onDelete={() => setDeleteTarget({ kind: "group", row: selectedGroup })}
+                onDirtyChange={setEditorDirty}
+                draftKey={`brand-os:ads:group-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
               />
             ) : selectedAd ? (
               <AdPanel
+                key={`${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
                 brandId={brandId}
                 ad={selectedAd}
                 vocabulary={vocabulary}
                 campaignStatus={c.status}
                 onSaved={replaceAd}
                 onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
+                onDirtyChange={setEditorDirty}
+                draftKey={`brand-os:ads:ad-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
               />
             ) : (
               <div className="surface">
