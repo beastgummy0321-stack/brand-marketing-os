@@ -8,7 +8,8 @@ import re
 
 from app.brand_intelligence import repository as bi_repo
 
-MESSAGE = "這版含尚未確認來源或履約方式的優惠／背書。請先在品牌智庫確認完整條件與入口，或重新生成無優惠版本。"
+MESSAGE = ("這版含尚未確認來源或履約方式的優惠／背書。"
+           "請先在品牌智庫確認完整條件與入口，或重新生成無優惠版本。")
 # Bounded coverage: these are fulfilment/endorsement families, not all possible factual claims.
 RISK = re.compile(
     r"試飲|試喝|試吃|試用|體驗券|體驗價|免費體驗|折扣|優惠|折價|折抵|折價券|促銷|"
@@ -17,7 +18,8 @@ RISK = re.compile(
     r"熱銷[\d萬千百]+|銷售[\d萬千百]+|free trial|free sample|discount|free shipping|testimonial",
     re.IGNORECASE,
 )
-_META = {"validation", "warnings", "coordinates", "fingerprint", "round", "visual_tone", "visual_concept"}
+_META = {"validation", "warnings", "coordinates", "fingerprint", "round",
+         "visual_tone", "visual_concept"}
 
 
 def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
@@ -27,7 +29,8 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
         rows += bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")
     result = [{"id": r["id"], "text": str(r.get("value") or "")} for r in rows]
     claims = (bi_repo.list_claims_for_product(conn, brand_id, knowledge_id) if knowledge_id
-              else [r for r in bi_repo.list_claims_for_brand(conn, brand_id) if not r.get("product_id")])
+              else [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
+                    if not r.get("product_id")])
     result += [{"id": r["id"], "text": r["claim_text"]} for r in claims
                if r["claim_type"] == "approved"]
     return result
@@ -76,7 +79,9 @@ def unsupported(value, rows: list[dict]) -> list[str]:
             continue
         if re.search(r"待確認|未確認|尚未|不提供|禁止|不能|不可", text):
             continue
-        offer = re.search(r"試飲|試喝|試吃|試用|優惠|折扣|贈|免運|退款|trial|sample|discount", text, re.I)
+        offer = re.search(
+            r"試飲|試喝|試吃|試用|優惠|折扣|贈|免運|退款|trial|sample|discount", text, re.I,
+        )
         if offer and not re.search(r"https?://|門市|櫃台|結帳|客服|現場", text):
             continue
         approved.append(text)

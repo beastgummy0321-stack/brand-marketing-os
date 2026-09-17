@@ -3,10 +3,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.workbench import claims
-from app.tests.test_workbench_pack_api import _WorkbenchPackApiTestBase
-from app.workbench import repository
 import app.shared.web as web
+from app.tests.test_workbench_pack_api import _WorkbenchPackApiTestBase
+from app.workbench import claims, repository
 
 
 @pytest.mark.parametrize("value", [
@@ -39,7 +38,8 @@ def test_pending_forbidden_other_product_never_support():
          patch.object(claims.bi_repo, "list_claims_for_brand", return_value=[
              {"id": "other", "product_id": "other", "claim_type": "approved", "claim_text": "試飲"},
              {"id": "bad", "product_id": None, "claim_type": "forbidden", "claim_text": "折扣"},
-             {"id": "risk", "product_id": None, "claim_type": "high_risk", "claim_text": "專家背書"},
+             {"id": "risk", "product_id": None, "claim_type": "high_risk",
+              "claim_text": "專家背書"},
          ]):
         assert claims.sources(None, "brand", None) == []
         facts.assert_called_once_with(None, "brand", status="confirmed")
@@ -60,5 +60,8 @@ class TestAdoptionGuard(_WorkbenchPackApiTestBase):
         )
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "claim_unconfirmed"
-        saved = web.conn.execute("SELECT adopted_at FROM workbench_output WHERE id = %s", (out["id"],)).fetchone()
+        saved = web.conn.execute(
+            "SELECT adopted_at FROM workbench_output WHERE id = %s", (out["id"],),
+        ).fetchone()
+        assert saved is not None
         assert saved["adopted_at"] is None

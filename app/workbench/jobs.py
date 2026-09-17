@@ -25,9 +25,9 @@ from app.background import app as background_app
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import APP_DIR, connection
 from app.llm import context_compiler, gateway, methodology, providers
+from app.workbench import claims, prompts, repository, validate, visual
 from app.workbench import identity as identity_mod
 from app.workbench import looks as looks_mod
-from app.workbench import claims, prompts, repository, validate, visual
 
 DEPARTMENTS_DIR = APP_DIR / "departments" / "workbench"
 
