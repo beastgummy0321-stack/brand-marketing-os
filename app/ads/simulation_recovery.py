@@ -43,6 +43,8 @@ def eligibility(conn, org_id, brand_id) -> str | None:
         return "這個品牌已有真實成效，不能改成模擬品牌。"
     for campaign in repository.list_campaigns(conn, org_id, brand_id):
         detail = repository.campaign_detail(conn, org_id, brand_id, campaign["id"])
+        if detail is None:
+            continue
         nodes = [detail, *detail["groups"], *[a for g in detail["groups"] for a in g["ads"]]]
         if any(n.get("external_id") and not n["external_id"].startswith("sim_") for n in nodes):
             return "這個品牌已有真實平台對應，請另建隔離測試品牌。"
