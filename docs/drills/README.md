@@ -5,6 +5,9 @@ plan the schedule, publish, collect performance, adopt what the diagnosis says, 
 publish again — and scores every step 1–10. It is not a test suite. Its output is a ranked list
 of places where a real person stalls, which becomes tickets and issues.
 
+本頁是演練流程入口，只在使用者要求演練時讀。歷次 plan／operator／findings／synthesis 是當次實驗快照；其中舊模型、工具、禁止修復等指令不覆蓋本頁或當前授權。新的演練重用此入口與需要的 persona，不複製整套文件。
+修復停止條件下的共通阻塞仍須在已授權範圍內，且記錄前後版本使分數可比較。一般修復留待演練結束。
+
 ## Roles
 
 | Role | Who | May |
@@ -49,7 +52,7 @@ Steps 6 and 8 of the loop need a human inside Meta Ads Manager and real money. T
 replaces the network edge instead: `scripts/drill/fake_meta.py` serves invented platform data
 to the product's own Graph client, and the backend runs under `scripts/drill/serve.py`.
 Binding and the spend pull run their real code. **The invented ROAS numbers say nothing about
-whether the product's judgement is any good** — only real spend can answer that. What the
+whether the product's judgement is any good** — business effectiveness is outside this simulated drill. What the
 drill proves is that the pipeline carries a signal from one end to the other, and that what a
 persona adopts changes what they are offered next.
 
@@ -119,7 +122,7 @@ Two money-correctness defects, both reproduced independently in more than one or
 `docs/issues/plan-quality/`; the screen-level findings are in `docs/issues/ui/`.
 
 What the drill could not answer, and no drill can: whether the judgement is any good. The
-stand-in's ROAS numbers are invented. Only real spend answers that.
+stand-in's ROAS numbers are invented. Business effectiveness is outside the simulated drill; do not request live spend for acceptance.
 
 ## Results, fourth drill (2026-09-13) — the final internal test before release
 

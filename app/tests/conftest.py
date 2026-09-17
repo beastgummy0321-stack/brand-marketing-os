@@ -125,11 +125,19 @@ _SCHEMA_DDL_LOCK_KEY = 913042027
 
 
 def _ddl(admin: psycopg.Connection, sql: str) -> None:
-    admin.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
-    try:
-        admin.execute(sql)
-    finally:
-        admin.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
+    # Storage connections do not take our advisory lock. PostgreSQL rolls back the
+    # whole multi-statement batch on deadlock; retry it once on this autocommit
+    # connection. Other SQL errors and a second deadlock must still fail the test.
+    for attempt in range(2):
+        admin.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
+        try:
+            admin.execute(sql)
+            return
+        except psycopg.errors.DeadlockDetected:
+            if attempt:
+                raise
+        finally:
+            admin.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_DDL_LOCK_KEY,))
 
 
 def _search_path_dsn(schema: str) -> str:

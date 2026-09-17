@@ -24,7 +24,7 @@ Status: **2026-09-14 八題全部裁決**（見文末「已裁決」一節）。
 7. RC-F 「後端做完畫面不說」三機制：非同步生成無通知（`GET /api/jobs/active` 已存在、ads 未接）／配對回應成功時不渲染（`PublishPage.tsx`）／行動紀錄硬截 6 筆無「查看全部」（`routes.py:80`）。
 8. RC-G 前提與結果沒有單一出處（理解如下沒有成功條件格、成效頁沒有對目標的一句話）；RC-H 模型建議被當成使用者決定（精靈預設勾風險最高選項、Meta 帳號未指定品牌也放行）。
 
-## 需要使用者裁決的 8 題（建議在括號）
+## 歷史提問（已於 2026-09-14 全部裁決；不得再次當成待答）
 
 1. 廢掉「Meta 購買一律當未追蹤」§0 Blocked-if（廢）。
 2. 目標 CPA 改由成功條件推導＋推薦金額受宣告預算約束——與 2026-09-12 裁決 4 衝突（都改）。
@@ -74,3 +74,8 @@ RC-D → RC-A1‖RC-C → RC-A2 → RC-B → RC-F（三修法）→ RC-G → RC-
 
 閉環 feature 的依賴順序沿用 `docs/drills/drill-4/synthesis.md` §D，但 RC-A1／RC-A2 那兩層拿掉（F05 做完了）：
 RC-D → RC-C → RC-B → RC-F（三修法）→ RC-G → RC-E。
+
+## RC-D 補充證據（F07 審查，2026-09-15）
+
+合併自 `issue-meta-purchases-not-ingested.md`，仍未排入佇列；沿用上述已裁決 RC-D，不重問。
+`app/ads/outcome.py::ingest_meta` 當時將 Meta purchases 寫為 0，`_bucket` 當未追蹤；`sample_bucket` 在購買數低於 10 時回低。F07 `app/ads/visual_learning.py` 因而持續寫「看不出」，只有 simulated rows 可產生 winner。影響為結案視覺學習無法餵回下一輪主力 looks。修復時核對當前程式並保留 NULL（未追蹤）與 0（真零）的區分，不將歷史行號當現況。

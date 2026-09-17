@@ -503,6 +503,11 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
 
 @app.exception_handler(Exception)
 async def handle_unexpected_exception(request: Request, exc: Exception):
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"error": {"code": "internal", "message": "系統出了點狀況，再試一次。", "details": None}},
+            status_code=500,
+        )
     return HTMLResponse(_error_page("系統出了點狀況，再試一次。"), status_code=500)
 
 

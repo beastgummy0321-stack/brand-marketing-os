@@ -1,32 +1,10 @@
-# React + TypeScript + Vite
+# MarketingOS 前端
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React＋TypeScript＋Vite；後端建置掛 `/app`，API 在 `/api`。
 
-Currently, two official plugins are available:
+- 開發：本目錄 `npm ci`、`npm run dev`；完整系統啟動與環境見 [專案入口](../CLAUDE.md)。
+- UI 元件與樣式：[設計系統](../docs/design-system.md)。
+- 依變更挑選檢查：[驗證規則](../docs/verification.md)；指令實際定義在 [package.json](package.json)。
+- 功能邊界：[架構 manifest](../ARCHITECTURE.md) 與 [.dependency-cruiser.cjs](.dependency-cruiser.cjs)。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+只有任務涉及上述領域時才讀對應頁面。

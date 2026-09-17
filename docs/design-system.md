@@ -8,8 +8,7 @@ Decision record: ADR 0065. Reference image: `docs/design-system.png` (the dashbo
 `frontend/src/styles/tokens.css`. Component kit: `frontend/src/components/layout/` (shared, ADR 0060)
 and `frontend/src/components/layout/ui/` (shadcn/ui, new-york, Radix).
 
-Precedence: `CONSTITUTION.md` rule 12 → this document → a ticket. A ticket that asks for a look this
-document does not describe is `blocked-upstream`; change this document first (ADR-level, ask the user).
+Current user-authorized scope → this document → ticket details. Apply established patterns directly; ask only when a material product/design choice is unresolved. Update this document when an authorized change alters a shared rule.
 Every retired frontend rule (ADR 0051, the ui-reset handoff's "red lines", the U3 font/palette issue)
 is folded in here — nothing else governs how a screen looks or reads.
 
@@ -38,7 +37,8 @@ where attention belongs.
    disclosure. Nothing is one long scroll. The single exception is `/brands/:id/report`, which is a
    printable document by design.
 2. **Numbers over sentences.** Anything that can be a number, a bar, or a status pill is not prose.
-3. **Honest empties.** No data is never `0`, `—` or an empty card; it is one line saying why
+3. **Honest empties.** Missing/untracked data is never silently `0` or an empty card; explain why.
+   A documented not-applicable placeholder may use `—`; do not confuse it with measured zero. Use labels
    (「本月還沒有訂單」「未追蹤」「累積中」). Sample data on screen always carries the 示意資料 badge.
 4. **Two readings, both shown.** Where the system has two calculation bases (conservative / optimistic
    ROAS) both are drawn; the interface never hides uncertainty to look simpler.
@@ -170,7 +170,7 @@ Navigation reads 工作區 → 品牌 → 功能:
   through TanStack Query with cache keys that include org and brand, so a switch never shows the previous
   object's data.
 - Breadcrumb inside the page (`nav[aria-label="麵包屑"]`) is hidden; the topbar carries 當前位置.
-- The routes are **17** (F03-I17, 2026-09-13): `/brands/:id/schedule` (檔期規劃) is retired, replaced
+- Route definitions in `frontend/src/App.tsx` are authoritative: `/brands/:id/schedule` (檔期規劃) is retired, replaced
   by `/brands/:id/ads` and its two sibling routes (投放中心 清單頁／建立 Campaign／Campaign 工作區).
   The `/app` basename is fixed; all of the above is done with in-page tabs and layout.
 
@@ -220,7 +220,7 @@ correct. Cards that carry data use the full grid cell.
 
 - 發布、配對、核准、撤回、結算 live in the tab they belong to and are enabled by **backend state**, never
   by which tab the frontend is on.
-- 核准 keeps its meaning: the button must not look like it publishes an ad (`CONSTITUTION.md` rule 9).
+- 核准 keeps its meaning: the button must not look like it publishes an ad.
 - Background work shows what is being processed, success or failure, and a retry; leaving and returning
   restores it. No percentage bar without real progress data.
 
@@ -242,7 +242,7 @@ F04 現況：首頁四塊（判斷帶／需要你決定／進行中的 Campaign�
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
 | 訂單與顧客 | tabs 概況・訂單・商品毛利・通路營收・口徑紀錄 |
 | 設定 | grouped subnav: 組織・AI 與費用・廣告連線・品牌參數 |
-| 建檔精靈 | resumable steps; external AI research as 複製交接內容 → 等待結果 → 貼回驗證 |
+| 建檔精靈 | resumable steps; in-system research and confirmed facts per `docs/architecture/intake.md` |
 | 顧問分析報告 | reading and print layout, plus a section index, data version and stale state |
 | 登入／接受邀請 | auth split; return to the invitation after login |
 
@@ -343,22 +343,9 @@ range; appearance is never added ahead of data.
 
 ---
 
-## 9. Gates (every frontend ticket)
+## 9. Verification
 
-1. `npm run build` (tsc + vite) · `npm run lint` · `npm test`.
-2. `frontend/src/designTokens.test.ts` — no raw hex outside `tokens.css` / `chartColors.ts`,
-   no `font-family` outside `tokens.css`.
-3. `npm run e2e`: `smoke`, `width-overflow` (at 1280, `#root.scrollWidth <= innerWidth` on every
-   route — the `documentElement` formula is green no matter what and must not be reused),
-   `dashboard-layout`.
-4. Real-browser acceptance on a **fresh browser session and a restarted backend**; a cached bundle
-   shows old code. Check 1024 and 1920, and the loading / empty / error states, not only the happy path.
-5. A new gate is proven red once before it counts.
-6. The three representative screens — 經營概況 (data), 投放中心 (flow), 品牌智庫 (data management) —
-   are the acceptance set for any change to the kit or the shell, each in **empty, normal and heavy
-   data**. Empty screenshots alone never prove a layout.
-
----
+Use `docs/verification.md` for commands, stage coverage and browser procedure. Token tests run as part of frontend tests; do not repeat the same test separately. Shared shell/kit layout changes cover 經營概況、投放中心、品牌智庫 at 1024/1920 in empty/normal/heavy states. Local changes check their affected screen and relevant states. Preserve accessibility, truthful data display and overflow checks (`#root.scrollWidth`, not `documentElement`).
 
 ## 10. New screen checklist
 
@@ -367,4 +354,4 @@ range; appearance is never added ahead of data.
 2. Every control from §6; every colour, size and radius from `tokens.css`.
 3. Every number formatted and captioned per §7; every empty state says why.
 4. Every label passes §8.
-5. Gates §9, then look at it in a browser at 1024 and 1920.
+5. Use §9 evidence once; reuse current-tree browser checks rather than repeating them for this checklist.

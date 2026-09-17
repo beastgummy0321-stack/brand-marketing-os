@@ -1,5 +1,8 @@
 # A Meta parent id nobody has ever bound still reaches Meta on this org's token
 
+> 歷史問題紀錄：其中舊流程名稱與已刪文件不是目前執行指令。重用症狀／證據前只核對受影響路徑；規劃依 CLAUDE.md 與現行架構。保留未解問題，不以紀錄年代判定已解決。
+
+
 Status: known-residual — 票 06 收尾時由審查員量出並記下（2026-09-05）。今天打不到，未來多一個呼叫端就打得到。
 
 成因：`app/meta/repository.py:335-356` 的 `_refuse_if_parent_owned_by_another_org` 是
