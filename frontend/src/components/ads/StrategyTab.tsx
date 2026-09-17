@@ -343,9 +343,9 @@ export function StrategyTab({
         {primaryError && <p className="text-sm text-danger">{primaryError}</p>}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-3">
       {step.id !== "strategy_adopt" ? (
-        <p className="text-sm text-muted-foreground sm:col-span-3">
+        <p className="text-sm text-muted-foreground xl:col-span-3">
           投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。
         </p>
       ) : (
