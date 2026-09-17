@@ -1,8 +1,12 @@
 """F11 comparison controls, explicit confirmation, stale snapshots and conservative results."""
 
+import json
 from datetime import timedelta
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+import app.main as main
 from app.ads import closeout, experiments, plan, repository, simulation_recovery
 from app.core.db import jsonb
 from app.shared import web
@@ -81,6 +85,181 @@ class ExperimentTest(SimulatedPublishTestBase):
         self.assertEqual(first["confirmed_by"], "tester")
         self.assertEqual(first["timing"], "before_data")
 
+    def test_settings_contract_replaces_overrides_and_restores_one_value(self):
+        state = experiments.read(*self.args)
+        settings = state["settings"]
+        self.assertEqual(settings["revision"], "0")
+        self.assertEqual(settings["scope"], "campaign")
+        self.assertEqual(
+            settings["defaults"],
+            {
+                "min_days": 7,
+                "min_conversions_each": 10,
+                "relative_difference": 0.1,
+                "window": {
+                    "start": str(self.today - timedelta(days=6)),
+                    "end": str(self.today),
+                },
+            },
+        )
+        first = experiments.save_settings(
+            *self.args,
+            revision="0",
+            overrides={"min_conversions_each": 12, "relative_difference": 0.25},
+            actor="tester",
+        )
+        self.assertEqual(first["revision"], "1")
+        self.assertEqual(first["customized"], ["min_conversions_each", "relative_difference"])
+        second = experiments.save_settings(
+            *self.args,
+            revision="1",
+            overrides={"relative_difference": 0.25},
+            actor="tester",
+        )
+        self.assertEqual(second["overrides"], {"relative_difference": 0.25})
+        self.assertEqual(second["effective"]["min_conversions_each"], 10)
+        self.assertEqual(second["effective"]["relative_difference"], 0.25)
+
+    def test_settings_reject_unknown_invalid_and_stale_values(self):
+        invalid = [
+            {"unknown": 1},
+            {"min_days": 0},
+            {"min_days": True},
+            {"min_conversions_each": 1.5},
+            {"relative_difference": float("nan")},
+            {"relative_difference": 1.01},
+            {"window": {"start": "bad", "end": str(self.today)}},
+            {
+                "window": {
+                    "start": str(self.today - timedelta(days=7)),
+                    "end": str(self.today),
+                }
+            },
+            {"min_days": 8},
+        ]
+        for overrides in invalid:
+            with self.subTest(overrides=overrides), self.assertRaises(experiments.InvalidSettings):
+                experiments.save_settings(
+                    *self.args, revision="0", overrides=overrides, actor="tester"
+                )
+        experiments.save_settings(
+            *self.args, revision="0", overrides={"relative_difference": 0.2}, actor="tester"
+        )
+        with self.assertRaisesRegex(experiments.StaleSettings, "重新讀取"):
+            experiments.save_settings(
+                *self.args, revision="0", overrides={}, actor="tester"
+            )
+
+    def test_non_default_thresholds_and_window_drive_text_and_judgment(self):
+        settings = experiments.save_settings(
+            *self.args,
+            revision="0",
+            overrides={
+                "min_days": 3,
+                "min_conversions_each": 2,
+                "relative_difference": 0.6,
+                "window": {
+                    "start": str(self.today - timedelta(days=2)),
+                    "end": str(self.today),
+                },
+            },
+            actor="tester",
+        )
+        self.assertEqual(settings["effective"]["window"]["start"], str(self.today - timedelta(days=2)))
+        proposal, _ = experiments.propose(*self.args)
+        self.assertIn("60%", proposal["hypothesis"])
+        self.assertEqual(proposal["rules"]["min_conversions_each"], 2)
+        self.confirm(proposal["fingerprint"])
+        self.fill(days=3, purchases=2)
+        result = experiments.read(*self.args)["result"]
+        self.assertEqual(result["verdict"], "看不出")
+        self.assertIn("60%", result["reason"])
+
+    def test_same_effective_defaults_keep_old_confirmation_valid_and_restore_it(self):
+        original, _ = experiments.propose(*self.args)
+        legacy = {
+            **original,
+            "rules": {
+                "min_days": 7,
+                "min_purchases_each": 10,
+                "relative_difference": 0.1,
+            },
+            "confirmed_at": "2026-09-01T00:00:00+00:00",
+            "confirmed_by": "legacy-tester",
+            "timing": "before_data",
+        }
+        legacy = json.loads(json.dumps(legacy, default=str))
+        detail = repository.get_campaign(*self.args)
+        context = {**detail["context_json"], "comparison_plan": legacy}
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json=%s WHERE id=%s",
+            (jsonb(context), self.args[-1]),
+        )
+        legacy_read = experiments.read(*self.args)
+        self.assertEqual(legacy_read["confirmed"], legacy)
+        self.assertFalse(legacy_read["stale"])
+        same = experiments.save_settings(
+            *self.args,
+            revision="0",
+            overrides={
+                "min_days": 7,
+                "min_conversions_each": 10,
+                "relative_difference": 0.1,
+                "window": original["window"],
+            },
+            actor="tester",
+        )
+        self.assertEqual(experiments.propose(*self.args)[0]["fingerprint"], original["fingerprint"])
+        self.assertFalse(experiments.read(*self.args)["stale"])
+        changed = experiments.save_settings(
+            *self.args,
+            revision=same["revision"],
+            overrides={"relative_difference": 0.2},
+            actor="tester",
+        )
+        self.assertTrue(experiments.read(*self.args)["stale"])
+        experiments.save_settings(
+            *self.args, revision=changed["revision"], overrides={}, actor="tester"
+        )
+        restored = experiments.read(*self.args)
+        self.assertFalse(restored["stale"])
+        self.assertEqual(restored["confirmed"], legacy)
+        self.assertIn("min_purchases_each", original["snapshot"]["rules"])
+
+    def test_saved_window_becomes_unavailable_after_period_shrinks_until_reset(self):
+        saved = experiments.save_settings(
+            *self.args,
+            revision="0",
+            overrides={
+                "min_days": 3,
+                "window": {
+                    "start": str(self.today - timedelta(days=4)),
+                    "end": str(self.today - timedelta(days=2)),
+                },
+            },
+            actor="tester",
+        )
+        repository.update_campaign(
+            *self.args,
+            {"start_date": self.today - timedelta(days=2), "end_date": self.today},
+        )
+        unavailable = experiments.read(*self.args)
+        self.assertIsNone(unavailable["proposal"])
+        self.assertIn("不再符合共同投放期間", unavailable["missing"])
+        self.assertEqual(unavailable["settings"]["overrides"]["window"]["start"], str(self.today - timedelta(days=4)))
+        with self.assertRaisesRegex(ValueError, "不再符合"):
+            experiments.confirm(
+                *self.args,
+                fingerprint="old",
+                controls_checked=True,
+                actor="tester",
+            )
+        reset = experiments.save_settings(
+            *self.args, revision=saved["revision"], overrides={}, actor="tester"
+        )
+        self.assertEqual(reset["overrides"], {})
+        self.assertIsNotNone(experiments.read(*self.args)["proposal"])
+
     def test_different_audiences_or_multiple_variables_are_not_a_comparison(self):
         for dimension in ("audience", "offer"):
             with self.subTest(dimension=dimension):
@@ -147,6 +326,10 @@ class ExperimentTest(SimulatedPublishTestBase):
         self.assertEqual(closed["status"], "closed")
         with self.assertRaisesRegex(ValueError, "已結案"):
             self.confirm()
+        with self.assertRaisesRegex(experiments.ClosedSettings, "已結案"):
+            experiments.save_settings(
+                *self.args, revision="0", overrides={}, actor="tester"
+            )
 
     def test_post_data_confirmation_is_labelled_retrospective_and_budget_cap_stops_judgment(self):
         self.fill(second_spend=400)
@@ -167,6 +350,63 @@ class ExperimentTest(SimulatedPublishTestBase):
             experiments.read(*args)
         with self.assertRaisesRegex(ValueError, "找不到"):
             experiments.confirm(*args, fingerprint="fake", controls_checked=True, actor="tester")
+        with self.assertRaisesRegex(ValueError, "找不到"):
+            experiments.save_settings(
+                *args, revision="0", overrides={}, actor="tester"
+            )
+
+    def test_unsupported_metric_is_explicitly_unavailable_without_purchase_fallback(self):
+        detail = repository.campaign_detail(*self.args)
+        detail["success_metric"] = "platform_custom_metric"
+        with patch("app.ads.experiments._detail", return_value=detail):
+            proposal, missing = experiments.propose(*self.args)
+        self.assertIsNone(missing)
+        self.assertIn("不支援", proposal["metric_label"])
+        result = experiments.judge(
+            *self.args, proposal=proposal, confirmed=True, stale=False
+        )
+        self.assertEqual(result["verdict"], "看不出")
+        self.assertIn("不支援活動成功指標", result["reason"])
+
+    def test_settings_proposal_confirmation_and_judgment_do_not_call_llm(self):
+        with patch("app.llm.gateway.run_task", side_effect=AssertionError("unexpected LLM")) as run:
+            state = experiments.read(*self.args)
+            saved = experiments.save_settings(
+                *self.args,
+                revision=state["settings"]["revision"],
+                overrides={"min_conversions_each": 2},
+                actor="tester",
+            )
+            proposal, _ = experiments.propose(*self.args)
+            self.confirm(proposal["fingerprint"])
+            self.fill(purchases=2)
+            self.assertEqual(experiments.read(*self.args)["settings"]["revision"], saved["revision"])
+            run.assert_not_called()
+
+    def test_http_put_contract_and_revision_conflict(self):
+        web.conn.commit()
+        client = TestClient(main.app)
+        url = (
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.args[-1]}/comparison"
+        )
+        state = client.get(url)
+        self.assertEqual(state.status_code, 200, state.text)
+        self.assertEqual(state.json()["settings"]["revision"], "0")
+        updated = client.put(
+            url,
+            json={"revision": "0", "overrides": {"min_conversions_each": 12}},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["settings"]["effective"]["min_conversions_each"], 12)
+        stale = client.put(url, json={"revision": "0", "overrides": {}})
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["error"]["code"], "comparison_settings_stale")
+        unknown = client.put(
+            url,
+            json={"revision": "1", "overrides": {"platform": "meta"}},
+        )
+        self.assertEqual(unknown.status_code, 400, unknown.text)
+        self.assertEqual(unknown.json()["error"]["code"], "comparison_settings_invalid")
 
 
     def test_query_order_is_not_a_material_change(self):
