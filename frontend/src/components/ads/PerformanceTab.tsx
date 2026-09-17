@@ -24,6 +24,7 @@ import {
   type CampaignPerformance,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -213,6 +214,8 @@ export function PerformanceTab({
     }
   }
 
+  const recovery = <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={load} />;
+
   if (!published) {
     return (
       <div className="flex flex-col gap-4">
@@ -221,12 +224,14 @@ export function PerformanceTab({
           description={`Campaign 上線後，這裡會顯示每日花費、${labels.conversion}與 ROAS 趨勢，以及結案時的判定。`}
         />
         <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
+        {recovery}
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
+      {recovery}
       {state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>

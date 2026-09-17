@@ -3,7 +3,7 @@
 interface (`describe`/`publish`/`bind`); registered under the key `"manual"`.
 """
 
-from app.ads import manual_settings, plan
+from app.ads import manual_settings, plan, simulation_mode
 from app.ads import repository as ads_repo
 from app.core import approval as approval_mod
 from app.meta import repository as meta_repo
@@ -104,6 +104,7 @@ def publish(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -
     """不建立任何平台物件——只留一列 `ads_action(kind='publish')` 記意圖，跟**每一次**都寫
     一列 `approval`（F03-I09 修正 2：不管這個 Campaign 有沒有排期，都要核准，`amount` 沒有
     期間時退回投放組日預算合計，絕不悄悄不核准）。"""
+    simulation_mode.require_real(conn, org_id, brand_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -137,6 +138,7 @@ def bind(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> d
     """逐節點由上往下比對（campaign -> group -> ad），因為 Meta 的查找是階層式的：上一層
     沒綁成，底下整批不比對。全部綁完、且原本是 `ready` 才轉 `live`（F03-I09 修正 4：任何
     其他狀態原樣留著，重新配對不會救回一個已經 `closed` 的 Campaign）。"""
+    simulation_mode.require_real(conn, org_id, brand_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")

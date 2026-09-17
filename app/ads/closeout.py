@@ -15,8 +15,10 @@ a no-op that returns the already-closed row unchanged, no second learning (§0 "
 guard stays status='closed' on the campaign row; do not query the ledger for it").
 """
 
+from datetime import timedelta
+
 from app.ads import learning as ads_learning
-from app.ads import outcome, repository, visual_learning
+from app.ads import outcome, repository, simulation_mode, visual_learning
 from app.ads.judgment import conversion_labels
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy, jsonb
@@ -73,12 +75,21 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     commit——檔案慣例）→ 一次 UPDATE 把 `verdict`／`verdict_json`／`status='closed'`／
     `closed_at` 落地，順序固定（§0「Close in the order record_learning(...) -> one UPDATE」）。
     已經是 `closed` 的 Campaign 直接照原樣回傳，不重判也不重寫學習。"""
+    simulation_mode.lock(conn, org_id, brand_id)
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
     if campaign["status"] == "closed":
         return campaign
 
+    recovery = (campaign.get("context_json") or {}).get("simulation_recovery")
+    if recovery:
+        # record_learning commits internally. Freeze recovery before that commit releases the lock.
+        recovery["closing"] = True
+        conn.execute(
+            "UPDATE ads_campaign SET context_json=%s WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (jsonb(campaign["context_json"]), org_id, brand_id, campaign_id),
+        )
     brand = bi_repo.get_brand(conn, brand_id)
     labels = conversion_labels(brand.get("conversion_goal") if brand else None)
 
@@ -91,13 +102,29 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     sample_bucket = outcome.sample_bucket(purchases_for_bucket, days)
 
     verdict, verdict_json = _judge(campaign, totals, sample_bucket, labels)
+    if simulation_mode.enabled(conn, org_id, brand_id):
+        verdict_json["data_source"] = "isolated_simulation"
+        verdict_json["simulation_receipts"] = recovery.get("days", {}) if recovery else {}
+    incomplete_simulation = False
+    if recovery:
+        receipts = recovery.get("days", {})
+        incomplete_simulation = not days or any(
+            not receipts.get((campaign["start_date"] + timedelta(days=i)).isoformat())
+            or receipts[(campaign["start_date"] + timedelta(days=i)).isoformat()].get(
+                "missing_ad_count", 1
+            )
+            for i in range(days)
+        )
+        if incomplete_simulation:
+            verdict = "看不出"
+            verdict_json["missing"] = "模擬回收尚有缺日或缺廣告，不把缺資料視為零。"
     if reason:
         verdict_json["close_reason"] = reason
 
     learning_row = ads_learning.write_learning(
         conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor, labels=labels,
     )
-    visual_rows = visual_learning.write_visual_learnings(
+    visual_rows = [] if incomplete_simulation else visual_learning.write_visual_learnings(
         conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
     )
     verdict_json["learning_ids"] = [learning_row["id"], *[r["id"] for r in visual_rows]]

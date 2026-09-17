@@ -101,7 +101,9 @@ def ingest_meta(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
     `meta_*` 表（§0「Outcome ingest」）。沒有比對到綁定節點的列不進這個 Campaign（不是不存
     在，是不屬於它）。"""
     from app.ads import repository as ads_repo  # 延遲 import 避免循環（routes.py 已是入口）
+    from app.ads import simulation_mode
 
+    simulation_mode.require_real(conn, org_id, brand_id)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")

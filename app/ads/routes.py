@@ -27,6 +27,9 @@ from app.ads import (
     plan,
     readiness,
     repository,
+    simulation_mode,
+    simulation_recovery,
+    simulation_routes,
     strategy,
 )
 from app.ads.adapters import simulated
@@ -35,6 +38,7 @@ from app.core import settings as coresettings
 
 router = APIRouter(prefix="/api/ads")
 router.include_router(manual_settings_routes.router)
+router.include_router(simulation_routes.router)
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
 GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
@@ -58,6 +62,7 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
         assets.pack_id(web.conn, actor.org_id, brand_id, campaign["id"]),
     )
     campaign["labels"] = _conversion_labels(brand_id)
+    campaign["simulation_mode"] = simulation_mode.enabled(web.conn, actor.org_id, brand_id)
     return campaign
 
 
@@ -600,6 +605,8 @@ def _adopted_image_prompt_text(image_output: dict | None) -> str | None:
 
 
 _PUBLISH_ERRORS = {
+    simulation_mode.MESSAGE: (409, simulation_mode.MESSAGE),
+    "simulation_isolation_required": (409, "請到成效頁啟用隔離模擬回收；只限測試品牌。"),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "adapter_unknown": (400, "找不到這個發布方式。"),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
@@ -636,6 +643,12 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
     if chosen is None:
         raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
     try:
+        if body.adapter == "simulated":
+            reason = simulation_recovery.eligibility(web.conn, actor.org_id, brand_id)
+            if reason:
+                raise web.ApiError(409, "simulation_unavailable", reason)
+            if not simulation_mode.enabled(web.conn, actor.org_id, brand_id):
+                raise ValueError("simulation_isolation_required")
         chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
     except ValueError as exc:
         code = str(exc)

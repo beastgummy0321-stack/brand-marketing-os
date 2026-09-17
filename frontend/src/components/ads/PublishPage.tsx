@@ -4,13 +4,6 @@ import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/layout/ui/dialog";
-import {
   bindCampaign,
   getCampaign,
   getPublish,
@@ -278,83 +271,16 @@ function ManualPublish({
   );
 }
 
-function SimulatedPublish({
-  brandId,
-  campaign: c,
-  describe,
-  onCampaignChange,
-  onViewPerformance,
-}: {
+function SimulatedPublish({ onViewPerformance }: {
   brandId: string;
   campaign: CampaignDetail;
   describe: PublishDescribe;
   onCampaignChange: (campaign: CampaignDetail) => void;
   onViewPerformance: () => void;
 }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [publishing, setPublishing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-
-  async function handleConfirm() {
-    setPublishing(true);
-    setError(null);
-    try {
-      await publishCampaign(brandId, c.id, "simulated");
-      const fresh = await getCampaign(brandId, c.id);
-      onCampaignChange(fresh);
-      setDone(true);
-      setConfirmOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "模擬發布失敗，請稍後再試。");
-    } finally {
-      setPublishing(false);
-    }
-  }
-
-  const counts = bindCounts(c);
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="surface">
-        <div className="surface-body flex flex-col items-center gap-3 py-8 text-center">
-          {done ? (
-            <>
-              <p className="flex items-center gap-1.5 text-success">
-                <CheckCircle2 size={18} /> 配對完成：{counts.matched}／{counts.total} 個節點對上
-              </p>
-              <p className="text-sm text-muted-foreground">Campaign 已上線，狀態更新為投放中。</p>
-              <Button variant="outline" onClick={onViewPerformance}>
-                查看成效 <ArrowRight size={13} />
-              </Button>
-            </>
-          ) : (
-            <>
-              <Badge variant="outline">演練用</Badge>
-              <p className="max-w-md text-sm text-muted-foreground">{describe.message}</p>
-              {error && <p className="text-sm text-danger">{error}</p>}
-              <Button onClick={() => setConfirmOpen(true)} disabled={publishing}>
-                {publishing ? "產生中…" : "模擬發布"}
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-
-      <Dialog open={confirmOpen} onOpenChange={(open) => !open && setConfirmOpen(false)}>
-        <DialogContent>
-          <DialogTitle>模擬發布</DialogTitle>
-          <DialogDescription>{describe.message}</DialogDescription>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)} disabled={publishing}>
-              取消
-            </Button>
-            <Button type="button" onClick={() => void handleConfirm()} disabled={publishing}>
-              {publishing ? "產生中…" : "確認模擬發布"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+  return <div className="surface p-6 flex flex-col items-start gap-3">
+    <Badge variant="outline">演練用</Badge>
+    <p className="text-sm">隔離演練會使用測試品牌與模擬數字，不會對外投放。到成效頁確認隔離範圍，再逐日輸入成效。</p>
+    <Button onClick={onViewPerformance}>前往隔離模擬回收</Button>
+  </div>;
 }
