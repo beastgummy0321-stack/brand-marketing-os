@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Link as LinkIcon } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -80,6 +79,7 @@ function SetStudio({
 }) {
   const { brands } = useWorkspace();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const brand = brands.find((b) => b.brand_id === brandId);
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [pollError, setPollError] = useState<string | null>(null);
@@ -103,6 +103,18 @@ function SetStudio({
   }
 
   useEffect(load, [brandId, setId]);
+
+  useEffect(() => {
+    const requested = searchParams.get("part") as ProductPart | null;
+    if (
+      requested &&
+      ["copy", "image_prompt", "video_script"].includes(requested) &&
+      state.status === "ready" &&
+      state.set.required_parts.includes(requested)
+    ) {
+      setActivePart(requested);
+    }
+  }, [searchParams, state]);
 
   const generating = state.status === "ready" &&
     ["queued", "running"].includes(state.set.generation?.status ?? "");
@@ -160,6 +172,15 @@ function SetStudio({
     else navigate(`/brands/${brandId}/workbench/packs/${packId}`);
   }
 
+  function openPart(part: ProductPart) {
+    setActivePart(part);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("part", part);
+      return next;
+    }, { replace: true });
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <Breadcrumb
@@ -176,6 +197,7 @@ function SetStudio({
 
         <div className="flex flex-col gap-4 min-w-0">
           <SetHeader set={set} />
+          <MissingPartLinks set={set} onOpen={openPart} />
           {generating && <p role="status" className="rounded-md bg-muted p-3 text-sm">{set.generation?.status === "queued" ? "素材已排隊，等待生成。" : "素材生成中，完成後會自動更新。"}</p>}
           {pollError && <p role="alert" className="text-sm text-danger">{pollError}</p>}
           {set.generation?.status === "failed" && <p role="alert" className="rounded-md bg-danger/10 p-3 text-sm text-danger">這輪生成失敗：{set.generation.error || "請稍後再試。"} 可以按「再生成」重試。</p>}
@@ -187,7 +209,7 @@ function SetStudio({
           )}
 
           {activePart && (
-            <Tabs value={activePart} onValueChange={(v) => setActivePart(v as ProductPart)}>
+            <Tabs value={activePart} onValueChange={(v) => openPart(v as ProductPart)}>
               <TabsList>
                 {set.required_parts.map((part) => (
                   <TabsTrigger key={part} value={part}>
@@ -202,7 +224,7 @@ function SetStudio({
                     set={set}
                     part={part}
                     onUpdated={applyUpdated}
-                    onSwitchPart={setActivePart}
+                    onSwitchPart={openPart}
                     onFinish={finishSet}
                   />
                 </TabsContent>
@@ -211,6 +233,34 @@ function SetStudio({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function MissingPartLinks({
+  set,
+  onOpen,
+}: {
+  set: SetDetail;
+  onOpen: (part: ProductPart) => void;
+}) {
+  const missing = set.required_parts.filter(
+    (part) => (set.products[part] as SetProduct | undefined)?.state !== "已選定",
+  );
+  if (missing.length === 0) return null;
+  return (
+    <div className="surface flex flex-wrap items-center gap-2 p-3 text-sm">
+      <span className="text-muted-foreground">完成前尚需選定：</span>
+      {missing.map((part) => (
+        <button
+          key={part}
+          type="button"
+          onClick={() => onOpen(part)}
+          className="font-medium text-primary hover:underline"
+        >
+          {PART_LABEL[part]}
+        </button>
+      ))}
     </div>
   );
 }
@@ -318,24 +368,16 @@ function ProductPanel({
   onFinish: () => void;
 }) {
   const product = set.products[part] as SetProduct | undefined;
-  const [mode, setMode] = useState<"quick" | "precise">("quick");
   const [count, setCount] = useState<number>(
     (product?.generation_settings.count as number | undefined) ?? DEFAULT_COUNT,
   );
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   if (!product) {
     return <EmptyState title="這個素材組不需要這個產物" description="" />;
   }
-
-  // 摘要行：跳過 `generation_settings` 前三列（header chips 已經顯示過同樣的值），
-  // 其餘照給的順序濃縮成一行，不重打一份標籤對照表。
-  const summaryLine = set.generation_settings
-    .slice(3)
-    .filter((row) => row.text !== "—")
-    .map((row) => row.text)
-    .join("、");
 
   async function handleRun(runCount?: number) {
     setRunning(true);
@@ -370,6 +412,9 @@ function ProductPanel({
   const generating = running || ["queued", "running"].includes(set.generation?.status ?? "");
   const locked = set.lock.locked;
   const showOutput = product.versions.length > 0 || (!generating && set.generation?.status !== "failed");
+  const missingLabels = set.required_parts
+    .filter((requiredPart) => set.products[requiredPart]?.state !== "已選定")
+    .map((requiredPart) => PART_LABEL[requiredPart]);
 
   function similarCount(): number {
     return (product?.generation_settings.count as number | undefined) ?? count;
@@ -381,46 +426,21 @@ function ProductPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="surface flex flex-wrap items-center gap-3 p-3">
-        {part !== "image_prompt" && (
-          <div className="inline-flex overflow-hidden rounded-md border border-border">
-            <button
-              type="button"
-              onClick={() => setMode("quick")}
-              className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "quick" ? "bg-accent" : "bg-card")}
-            >
-              快速生成
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("precise")}
-              className={cn("px-2.5 py-1.5 text-xs font-medium", mode === "precise" ? "bg-accent" : "bg-card")}
-            >
-              精準控制
-            </button>
-          </div>
-        )}
-
-        {summaryLine && (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
-            <LinkIcon className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">{summaryLine}</span>
-          </div>
-        )}
-
-        {part !== "image_prompt" && mode === "precise" && (
-          <input
-            type="number"
-            min={1}
-            value={count}
-            onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
-            className="h-8 w-16 rounded-md border border-border bg-card px-2 text-sm"
-            aria-label="產出數量"
-          />
-        )}
-
+      <div className="surface flex flex-wrap items-center justify-between gap-3 p-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-sm font-medium text-foreground">
+            {PART_LABEL[part]}：{product.state}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            已選 {product.selected}／需要 {product.required}
+          </span>
+        </div>
         <Button disabled={generating || locked} onClick={() => void handleRun()}>
-          {generating ? "生成中…" : part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
+          {generating
+            ? "生成中…"
+            : part === "image_prompt"
+              ? "再生成一輪（10 張）"
+              : `再生成 ${count} 張`}
         </Button>
       </div>
 
@@ -444,13 +464,53 @@ function ProductPanel({
         <VideoScriptPart product={product} onSelect={handleSelect} locked={locked} />
       )}
 
-      <div className="surface flex items-center justify-between p-3">
-        <Button variant="outline" disabled={generating || locked} onClick={() => void handleRun()}>
-          {part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
-        </Button>
-        <Button disabled={!allDone || locked} onClick={onFinish}>
-          完成此素材組
-        </Button>
+      <details
+        className="surface group"
+        open={advancedOpen}
+        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+      >
+        <summary className="surface-header cursor-pointer select-none text-sm font-medium text-foreground">
+          進階設定
+        </summary>
+        {advancedOpen && <div className="surface-body flex flex-col gap-4">
+          {part === "image_prompt" ? (
+            <p className="text-sm text-muted-foreground">
+              每輪提供 10 個圖片提案，數量不可調整。
+            </p>
+          ) : (
+            <label className="flex max-w-xs flex-col gap-1 text-sm text-foreground">
+              產出數量
+              <input
+                type="number"
+                min={1}
+                value={count}
+                disabled={generating || locked}
+                onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))}
+                className="h-9 rounded-md border border-border bg-card px-2 text-sm"
+              />
+            </label>
+          )}
+          {set.generation_settings.length > 0 && (
+            <div className="flex flex-col gap-2 border-t border-border pt-3">
+              <p className="text-xs font-medium text-muted-foreground">本次生成快照（唯讀）</p>
+              {set.generation_settings.map((row) => (
+                <div key={row.label} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="shrink-0 text-muted-foreground">{row.label}</span>
+                  <span className="text-right text-foreground">{row.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>}
+      </details>
+
+      <div className="surface flex flex-wrap items-center justify-end gap-3 p-3">
+        {!allDone && (
+          <span className="text-xs text-muted-foreground">
+            尚需選定：{missingLabels.join("、")}
+          </span>
+        )}
+        <Button disabled={!allDone || locked} onClick={onFinish}>完成此素材組</Button>
       </div>
     </div>
   );
