@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useWorkspace } from "./WorkspaceContext";
 import { Logo } from "./Logo";
+import { brandDestination } from "./brandNavigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,13 +70,7 @@ export function Sidebar({
     }
   }, [brandId, brands, scope]);
   function switchBrand(id: string) {
-    const match = pathname.match(/^\/brands\/[^/]+(.*)$/);
-    let suffix = match?.[1] ?? "";
-    if (suffix.startsWith("/products/")) suffix = "/products";
-    if (suffix === "/intake") suffix = "";
-    navigate(
-      `/brands/${encodeURIComponent(id)}${suffix}${suffix ? search : ""}`,
-    );
+    navigate(brandDestination(id, pathname, search));
   }
   function nav(
     to: string,

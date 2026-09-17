@@ -1384,6 +1384,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     return {
         "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
         "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
+        "generation": {"status": brief["status"], "error": brief.get("last_error")},
         "source_kind": pack_row["source_kind"],
         "origin_label": origin_label, "origin_href": origin_href,
         "lock": {

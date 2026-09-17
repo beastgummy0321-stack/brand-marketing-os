@@ -154,7 +154,7 @@ def generation_state(brand_id: str) -> dict:  # 讀 llm_task 取代 JOBS dict；
 def _notify(conn, brand_id: str, message: str) -> None:
     background_job.notify(
         conn, brand_id, category="personas_ready", dedupe_key=new_id("psnjob"),
-        message=message, action_url=f"/app/brands/{brand_id}/library",
+        message=message, action_url=f"/app/brands/{brand_id}/library?tab=customer-voice",
     )
 
 

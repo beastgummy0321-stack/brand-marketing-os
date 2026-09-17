@@ -32,7 +32,7 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
   { key: "claims", label: "宣稱", count: (d) => d.claims.length },
   { key: "assets", label: "官方素材", count: (d) => d.assets.length },
   { key: "channels", label: "自有渠道", count: (d) => d.channels.length },
-  { key: "customer-voice", label: "顧客原話", count: (d) => d.customer_voices.length },
+  { key: "customer-voice", label: "人物誌與顧客原話", count: (d) => d.customer_voices.length },
   { key: "research-reports", label: "調研報告" },
   { key: "coordinates", label: "創意座標" },
 ];

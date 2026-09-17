@@ -6,7 +6,7 @@
  * the payload (not a re-spelt copy), and (F07-I12) that `version.badges`/`fingerprint_text` and
  * `copy_all_text` are rendered verbatim, never rebuilt — the same importActual+覆寫 fake as
  * `frontend/src/components/intake/IntakeWizard.test.tsx`. */
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -457,5 +457,30 @@ describe("SetStudioPage 文案的生成按鈕不變（F07-I12 Decision 28：只�
     await userEvent.click(runButtons[0]);
 
     expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 4);
+  });
+});
+
+describe("background generation", () => {
+  it("shows active work and refreshes completed output without reload", async () => {
+    vi.useFakeTimers();
+    const pending = setDetail({ generation: { status: "running", error: null }, products: { image_prompt: { state: "未生成", selected: 0, required: 1, generation_settings: {}, versions: [] } } });
+    mockGetSet.mockResolvedValueOnce(pending).mockResolvedValue(setDetail({ generation: { status: "done", error: null } }));
+    const view = renderStudio();
+    try {
+      await act(async () => {});
+      expect(screen.getByText("素材生成中，完成後會自動更新。")).toBeTruthy();
+      expect(screen.queryByText("還沒有生成過")).toBeNull();
+      expect((screen.getByRole("button", { name: "生成中…" }) as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(screen.queryByText("素材生成中，完成後會自動更新。")).toBeNull();
+      expect(screen.getByRole("button", { name: "顯示提示詞" })).toBeTruthy();
+    } finally { view.unmount(); vi.useRealTimers(); }
+  });
+  it("keeps failure distinct from never generated and permits retry", async () => {
+    mockGetSet.mockResolvedValue(setDetail({ generation: { status: "failed", error: "服務暫時離線" }, products: { image_prompt: { state: "未生成", selected: 0, required: 1, generation_settings: {}, versions: [] } } }));
+    renderStudio();
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("服務暫時離線"));
+    expect(screen.queryByText("還沒有生成過")).toBeNull();
+    expect((screen.getAllByRole("button", { name: "再生成一輪（10 張）" })[0] as HTMLButtonElement).disabled).toBe(false);
   });
 });
