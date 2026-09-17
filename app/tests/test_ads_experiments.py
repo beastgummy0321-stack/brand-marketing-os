@@ -165,7 +165,10 @@ class ExperimentTest(SimulatedPublishTestBase):
             },
             actor="tester",
         )
-        self.assertEqual(settings["effective"]["window"]["start"], str(self.today - timedelta(days=2)))
+        self.assertEqual(
+            settings["effective"]["window"]["start"],
+            str(self.today - timedelta(days=2)),
+        )
         proposal, _ = experiments.propose(*self.args)
         self.assertIn("60%", proposal["hypothesis"])
         self.assertEqual(proposal["rules"]["min_conversions_each"], 2)
@@ -246,7 +249,10 @@ class ExperimentTest(SimulatedPublishTestBase):
         unavailable = experiments.read(*self.args)
         self.assertIsNone(unavailable["proposal"])
         self.assertIn("不再符合共同投放期間", unavailable["missing"])
-        self.assertEqual(unavailable["settings"]["overrides"]["window"]["start"], str(self.today - timedelta(days=4)))
+        self.assertEqual(
+            unavailable["settings"]["overrides"]["window"]["start"],
+            str(self.today - timedelta(days=4)),
+        )
         with self.assertRaisesRegex(ValueError, "不再符合"):
             experiments.confirm(
                 *self.args,
@@ -380,7 +386,9 @@ class ExperimentTest(SimulatedPublishTestBase):
             proposal, _ = experiments.propose(*self.args)
             self.confirm(proposal["fingerprint"])
             self.fill(purchases=2)
-            self.assertEqual(experiments.read(*self.args)["settings"]["revision"], saved["revision"])
+            self.assertEqual(
+                experiments.read(*self.args)["settings"]["revision"], saved["revision"]
+            )
             run.assert_not_called()
 
     def test_http_put_contract_and_revision_conflict(self):
