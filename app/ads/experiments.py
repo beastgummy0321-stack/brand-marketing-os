@@ -128,7 +128,7 @@ def propose(conn, org_id, brand_id, campaign_id):
                     "ads",
                 )
             }
-            for g in detail["groups"]
+            for g in sorted(detail["groups"], key=lambda row: row["id"])
         ],
         "materials": materials,
         "rules": RULES,
@@ -150,7 +150,7 @@ def propose(conn, org_id, brand_id, campaign_id):
                     "asset_ready_at",
                 )
             }
-            for ad in g["ads"]
+            for ad in sorted(g["ads"], key=lambda row: row["id"])
         ]
     return {
         "fingerprint": _fingerprint(snapshot),

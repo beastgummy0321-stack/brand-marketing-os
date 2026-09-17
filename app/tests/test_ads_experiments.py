@@ -167,3 +167,13 @@ class ExperimentTest(SimulatedPublishTestBase):
             experiments.read(*args)
         with self.assertRaisesRegex(ValueError, "找不到"):
             experiments.confirm(*args, fingerprint="fake", controls_checked=True, actor="tester")
+
+
+    def test_query_order_is_not_a_material_change(self):
+        self.confirm()
+        detail = repository.campaign_detail(*self.args)
+        detail["groups"] = list(reversed(detail["groups"]))
+        for group in detail["groups"]:
+            group["ads"] = list(reversed(group["ads"]))
+        with patch("app.ads.experiments._detail", return_value=detail):
+            self.assertFalse(experiments.read(*self.args)["stale"])
