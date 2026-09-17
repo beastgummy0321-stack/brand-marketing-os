@@ -100,6 +100,8 @@ describe("ConfirmBriefPage（F04-I12）", () => {
     for (const label of ["商品", "目標", "平台", "預算", "時間", "受眾方向"]) {
       expect(await screen.findByText(label)).toBeTruthy();
     }
+    expect(screen.getByText(/確認後會依這六項需求整理策略、預算配置與素材需求/)).toBeTruthy();
+    expect(screen.queryByText("Tracking 建議")).toBeNull();
   });
 
   it("field_sources 混合 user／system：畫面上「你說的」與「系統帶入」都出現", async () => {

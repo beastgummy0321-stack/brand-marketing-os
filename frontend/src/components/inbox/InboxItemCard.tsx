@@ -53,12 +53,12 @@ export function InboxItemDetail({ item, variant, resolving, busy, error, onResol
     </div>
     {variant === "done" && <div className="flex items-center gap-2 rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">
       <CheckCheck className="size-4" aria-hidden="true" />
-      {item.resolved_at ? `結案於 ${resolvedDate(item.resolved_at)}` : "已處理"}
+      {item.resolved_at ? `已標記處理於 ${resolvedDate(item.resolved_at)}` : "已標記處理"}
     </div>}
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
       {item.action_url && <Button variant="outline" asChild><Link to={internalHref(item.action_url)}>前往詳情<ArrowUpRight className="size-4" aria-hidden="true" /></Link></Button>}
-      {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} disabled={busy}>{resolving ? "處理中…" : "知道了"}</Button>}
+      {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} disabled={busy}>{resolving ? "標記中…" : "標記已處理"}</Button>}
     </div>
   </section>;
 }

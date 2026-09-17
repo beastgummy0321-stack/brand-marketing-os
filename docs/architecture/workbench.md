@@ -339,3 +339,11 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
 素材組 API 的 `generation` 原樣投影 brief 的 status 與 last_error，和「未選定／已完成」等內容選定狀態分開。前端在 queued／running 時停用重複生成，每 3 秒讀取目前素材組直到工作結束；進度讀取失敗保留目前內容並重試。未產出時的 running／failed 不顯示「還沒有生成過」，既有版本保留可讀，failed 可重試。
 
 全域工作進度使用公開 `workbench.set_action_url` 解析同組織、同品牌的 brief → pack/set 目的地；缺少有效 brief 時回素材工作檯，不再連到已不存在的排程頁。人物誌進度與完成／失敗通知直達智庫 `?tab=customer-voice` 的「人物誌與顧客原話」，沿用既有閱讀、編輯與重試功能。
+
+### 5.15 一般選擇與同頁詳情（F12，已實作）
+
+一般層突出推薦內容、選定、生成狀態、主要再生成動作與完成；精準控制、生成設定、fingerprint 描述、完整提示詞與版本資訊放同頁收合。未接圖片成品生成前，一鍵複製提示詞仍是一般必要操作，不顯示假圖片或稱提示詞為完成素材。未選部分要能直接定位；整包核准阻擋原因直接顯示，探索提醒保持非阻擋。
+
+生成設定仍為本次生成的 readonly 快照，只有原接口支持的 run parameters 才能編輯。不改 F07 十張／輪播／主力探索／腳本／使用者選定／驗證規則，不新增 LLM 呼叫或 provider。F07 原人工驗收内容保持，生成設定／特徵文字改由展開詳情讀取；其未完成驗收不因此結案。
+
+內部整理留在 workbench，外部只經現有 index.ts、API client 與後端 public entry；不從 ads 引入私有 UI 元件，不為共用收合增加業務依賴。表單收合草稿、可存取性與狀態遵循 design-system.md §F12。

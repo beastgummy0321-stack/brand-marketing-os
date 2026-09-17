@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Boxes, ImageIcon, LineChart, Plus, Share2, Sparkles, Target, X } from "lucide-react";
+import { ArrowLeft, Plus, Sparkles, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -15,15 +15,6 @@ const CONSTRAINT_FIELDS: { key: string; label: string; placeholder: string; isDa
   { key: "product", label: "指定商品", placeholder: "選擇商品" },
   { key: "dates", label: "日期", placeholder: "", isDate: true },
   { key: "other", label: "其他限制", placeholder: "例如受眾、地區等" },
-];
-
-/** 右欄說明卡（圖 3）：純靜態文字，不畫插圖／貼紙（R6 裁決）。 */
-const AUTO_ITEMS: { icon: typeof Boxes; title: string; detail: string }[] = [
-  { icon: Boxes, title: "商品", detail: "判斷主打商品與賣點" },
-  { icon: Target, title: "目標", detail: "設定行銷目標與關鍵指標" },
-  { icon: Share2, title: "平台", detail: "建議最適合的廣告平台與版位" },
-  { icon: LineChart, title: "預算建議", detail: "分配預算並提供投放時程建議" },
-  { icon: ImageIcon, title: "素材需求", detail: "建議所需素材類型與數量" },
 ];
 
 /** 建立 Campaign 步驟一（F04-I12，圖 3）：一句話＋選填限制條件 → `POST /campaigns`。
@@ -112,7 +103,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
         description="只要告訴我們你的目標，行銷駕駛艙會幫你整理投放策略、預算、素材與排程。"
       />
       <p className="text-xs text-muted-foreground">未送出的內容會保留在這個分頁，離開後返回可繼續填寫。</p>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
+      <div className="max-w-3xl">
         <div className="surface">
           <div className="surface-body flex flex-col gap-4">
             <div>
@@ -208,31 +199,6 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                 <Sparkles size={15} />
                 產生建議
               </Button>
-            </div>
-          </div>
-        </div>
-        <div className="surface">
-          <div className="surface-body flex flex-col gap-4">
-            <div>
-              <h2 className="flex items-center gap-1.5 text-[15px] font-semibold">
-                <Sparkles size={15} className="text-primary" /> 行銷駕駛艙會自動幫你整理
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                我們會根據你的描述，快速產生完整的投放計畫。
-              </p>
-            </div>
-            <div className="flex flex-col gap-3">
-              {AUTO_ITEMS.map((item) => (
-                <div key={item.title} className="flex items-center gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent">
-                    <item.icon className="size-4 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{item.title}</p>
-                    <p className="text-xs text-muted-foreground">{item.detail}</p>
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
         </div>

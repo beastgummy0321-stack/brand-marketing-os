@@ -1,0 +1,72 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/settingsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/settingsApi")>("@/lib/settingsApi");
+  return {
+    ...actual,
+    fetchBrandOptions: vi.fn(),
+    fetchRuleCards: vi.fn(),
+    saveRuleCard: vi.fn(),
+    resetRuleCard: vi.fn(),
+  };
+});
+
+import { fetchBrandOptions, fetchRuleCards, resetRuleCard, type RuleCard } from "@/lib/settingsApi";
+import { RuleCardsSection } from "./RuleCardsSection";
+
+const mockFetchBrands = vi.mocked(fetchBrandOptions);
+const mockFetchCards = vi.mocked(fetchRuleCards);
+const mockReset = vi.mocked(resetRuleCard);
+
+function card(value: number, customized = false): RuleCard {
+  return {
+    key: "spend",
+    title: "花費護欄",
+    description: "控制品牌花費判讀",
+    fields: [{ key: "minimum", label: "最低花費", unit: "US$", help: "低於此值先觀察", value, customized }],
+  };
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+});
+
+describe("RuleCardsSection 規則卡範圍與重設", () => {
+  it("清楚顯示作用品牌、欄位單位，且切換品牌不會沿用另一品牌的草稿", async () => {
+    mockFetchBrands.mockResolvedValue([
+      { brand_id: "a", brand_name: "甲品牌" },
+      { brand_id: "b", brand_name: "乙品牌" },
+    ]);
+    mockFetchCards.mockImplementation(async (brandId) => ({ brand_id: brandId, cards: [card(brandId === "a" ? 10 : 20)] }));
+    render(<RuleCardsSection />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"), "a");
+    expect(await screen.findByText("甲品牌", { selector: "span" })).toBeTruthy();
+    const input = screen.getByRole("spinbutton", { name: /最低花費/ });
+    expect(input).toHaveProperty("value", "10");
+    expect(screen.getByText("US$")).toBeTruthy();
+    await userEvent.clear(input);
+    await userEvent.type(input, "999");
+
+    await userEvent.selectOptions(screen.getByLabelText("選擇品牌"), "b");
+    await waitFor(() => expect(screen.getByRole("spinbutton", { name: /最低花費/ })).toHaveProperty("value", "20"));
+    expect(screen.getByText("乙品牌", { selector: "span" })).toBeTruthy();
+  });
+
+  it("把整張卡重設寫在按鈕與確認訊息，並沿用既有 reset API", async () => {
+    mockFetchBrands.mockResolvedValue([{ brand_id: "a", brand_name: "甲品牌" }]);
+    mockFetchCards.mockResolvedValue({ brand_id: "a", cards: [card(10, true)] });
+    mockReset.mockResolvedValue(card(5));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<RuleCardsSection />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"), "a");
+    await userEvent.click(await screen.findByRole("button", { name: "重設整張卡" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("重設整張「花費護欄」"));
+    await waitFor(() => expect(mockReset).toHaveBeenCalledWith("a", "spend"));
+    expect(screen.getByRole("spinbutton", { name: /最低花費/ })).toHaveProperty("value", "5");
+  });
+});

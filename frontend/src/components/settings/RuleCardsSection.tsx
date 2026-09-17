@@ -26,6 +26,9 @@ export function RuleCardsSection() {
   const [cardsState, setCardsState] = useState<CardsState>({ status: "idle" });
   const [selectedCard, setSelectedCard] = useState("");
   const cardRequest = useRef(0);
+  const selectedBrandName = brandsState.status === "ready"
+    ? brandsState.brands.find((brand) => brand.brand_id === brandId)?.brand_name
+    : undefined;
 
   function loadBrands() {
     setBrandsState({ status: "loading" });
@@ -126,6 +129,7 @@ export function RuleCardsSection() {
           {cardsState.status === "ready" && (
             <div className="flex flex-col gap-4">
               {cardsState.cards.length === 0 ? <EmptyState title="目前沒有規則卡" description="這個品牌還沒有可調整的規則參數。" /> : <>
+                <p className="text-xs text-muted-foreground">作用品牌：<span className="font-medium text-foreground">{selectedBrandName}</span></p>
                 <label className="flex max-w-sm flex-col gap-1.5 text-sm">
                   <span className="font-medium">選擇規則卡</span>
                   <select value={cardsState.cards.some((card) => card.key === selectedCard) ? selectedCard : cardsState.cards[0].key} onChange={(event) => setSelectedCard(event.target.value)}>
@@ -133,7 +137,7 @@ export function RuleCardsSection() {
                   </select>
                 </label>
                 {cardsState.cards.map((card) => (
-                  <div key={card.key} hidden={card.key !== (cardsState.cards.some((candidate) => candidate.key === selectedCard) ? selectedCard : cardsState.cards[0].key)}>
+                  <div key={`${brandId}:${card.key}`} hidden={card.key !== (cardsState.cards.some((candidate) => candidate.key === selectedCard) ? selectedCard : cardsState.cards[0].key)}>
                     <RuleCardItem brandId={brandId} card={card} onUpdated={handleCardUpdated} />
                   </div>
                 ))}
@@ -173,7 +177,7 @@ function RuleCardItem({
   });
 
   function handleReset() {
-    if (window.confirm(`確定要把「${card.title}」的所有欄位重設回系統預設值？`)) {
+    if (window.confirm(`確定要重設整張「${card.title}」？這會把這張卡的所有欄位重設回系統預設值。`)) {
       void resetForm.submit();
     }
   }
@@ -224,7 +228,7 @@ function RuleCardItem({
             disabled={resetForm.saving}
             className="rounded-md border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {resetForm.saving ? "處理中…" : "重設為系統預設值"}
+            {resetForm.saving ? "正在重設整張卡…" : "重設整張卡"}
           </button>
         </div>
       </form>

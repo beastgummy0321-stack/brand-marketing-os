@@ -76,9 +76,9 @@ function setDetail(overrides: Partial<SetDetail> = {}): SetDetail {
   };
 }
 
-function renderStudio() {
+function renderStudio(entry = "/brands/brd_1/workbench/packs/pack_1/sets/set_1") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <SetStudioPage brandId="brd_1" packId="pack_1" setId="set_1" />
     </MemoryRouter>,
   );
@@ -91,9 +91,11 @@ describe("SetStudioPage 圖片 tab（F02-I13）", () => {
 
     const toggle = await screen.findByRole("button", { name: "顯示提示詞" });
 
-    // connected: true → 預設是收合的保留席位畫面，不是卡片。
+    // F12：一般層先給後端原文節錄供選擇，完整提示詞與逐張複製仍收合。
     expect(screen.getByText(RESERVED_SEAT_REASON)).toBeTruthy();
-    expect(screen.queryByText("一位跑者在夜晚街道上衝刺")).toBeNull();
+    expect(screen.getByText("①主圖 · 內容節錄")).toBeTruthy();
+    expect(screen.getByText("一位跑者在夜晚街道上衝刺")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "複製①主圖" })).toBeNull();
 
     // 點一次：卡片出現。
     await userEvent.click(toggle);
@@ -104,9 +106,9 @@ describe("SetStudioPage 圖片 tab（F02-I13）", () => {
     expect(screen.getByRole("button", { name: "複製①主圖" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "複製②變體" })).toBeTruthy();
 
-    // 再點一次：卡片收回、換回保留席位那句話（原樣渲染，不是元件自己重打的字）。
+    // 再點一次：完整提示詞收回，選擇所需的內容節錄仍在一般層。
     await userEvent.click(toggle);
-    expect(screen.queryByText("一位跑者在夜晚街道上衝刺")).toBeNull();
+    expect(screen.getByText("①主圖 · 內容節錄")).toBeTruthy();
     expect(screen.getByText(RESERVED_SEAT_REASON)).toBeTruthy();
   });
 
@@ -334,7 +336,7 @@ describe("SetStudioPage 四個控制（F02-I17）", () => {
 });
 
 describe("SetStudioPage 圖片的生成按鈕（F07-I12 Decision 28）", () => {
-  it("沒有數量輸入框、兩個按鈕都叫「再生成一輪（10 張）」、呼叫 runProduct 不帶數量", async () => {
+  it("圖片只保留一個主要再生成按鈕、不顯示數量輸入、呼叫 runProduct 不帶數量", async () => {
     mockRunProduct.mockResolvedValue(setDetail());
     mockGetSet.mockResolvedValue(
       setDetail({
@@ -361,8 +363,8 @@ describe("SetStudioPage 圖片的生成按鈕（F07-I12 Decision 28）", () => {
     renderStudio();
 
     const runButtons = await screen.findAllByRole("button", { name: "再生成一輪（10 張）" });
-    expect(runButtons).toHaveLength(2);
-    expect(screen.queryByLabelText("產出數量")).toBeNull();
+    expect(runButtons).toHaveLength(1);
+    expect(screen.queryByRole("spinbutton", { name: "產出數量" })).toBeNull();
     expect(screen.queryByRole("button", { name: "精準控制" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^再生成 \d+ 張$/ })).toBeNull();
 
@@ -437,15 +439,15 @@ function copySetDetail(): SetDetail {
 }
 
 describe("SetStudioPage 文案的生成按鈕不變（F07-I12 Decision 28：只動圖片）", () => {
-  it("精準控制仍有數量輸入框、按鈕文字仍是「再生成 N 張」", async () => {
+  it("進階設定保留數量輸入，收合時不進入可存取樹", async () => {
     mockGetSet.mockResolvedValue(copySetDetail());
     renderStudio();
 
-    const preciseButton = await screen.findByRole("button", { name: "精準控制" });
-    expect(screen.queryByLabelText("產出數量")).toBeNull();
-    await userEvent.click(preciseButton);
-    expect(screen.getByLabelText("產出數量")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /^再生成 \d+ 張$/ }).length).toBeGreaterThan(0);
+    const advanced = await screen.findByText("進階設定");
+    expect(screen.queryByRole("spinbutton", { name: "產出數量" })).toBeNull();
+    await userEvent.click(advanced);
+    expect(screen.getByRole("spinbutton", { name: "產出數量" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^再生成 \d+ 張$/ })).toHaveLength(1);
   });
 
   it("呼叫 runProduct 仍帶數量", async () => {
@@ -457,6 +459,79 @@ describe("SetStudioPage 文案的生成按鈕不變（F07-I12 Decision 28：只�
     await userEvent.click(runButtons[0]);
 
     expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 4);
+  });
+});
+
+describe("F12 一般選擇與同頁詳情", () => {
+  it("生成快照預設收合，展開後逐字顯示且仍不可編輯", async () => {
+    mockGetSet.mockResolvedValue(
+      setDetail({
+        generation_settings: [
+          { label: "品牌視覺", text: "冷色、留白、清楚層級" },
+          { label: "風格分配", text: "主力：明亮乾淨；探索：紀實自然光" },
+        ],
+      }),
+    );
+    renderStudio();
+
+    const advanced = await screen.findByText("進階設定");
+    const details = advanced.closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    await userEvent.click(advanced);
+    expect(details.open).toBe(true);
+    expect(screen.getByText("冷色、留白、清楚層級")).toBeTruthy();
+    expect(screen.getByText("本次生成快照（唯讀）")).toBeTruthy();
+    expect(screen.queryByDisplayValue("冷色、留白、清楚層級")).toBeNull();
+  });
+
+  it("未選部分在一般層具名且可直達", async () => {
+    const image = setDetail().products.image_prompt!;
+    mockGetSet.mockResolvedValue(
+      setDetail({
+        required_parts: ["image_prompt", "copy"],
+        products: {
+          image_prompt: { ...image, state: "已選定", selected: 1 },
+          copy: copySetDetail().products.copy,
+        },
+      }),
+    );
+    renderStudio();
+
+    expect(await screen.findByText("完成前尚需選定：")).toBeTruthy();
+    const missingLinks = screen.getAllByRole("button", { name: "文案" });
+    await userEvent.click(missingLinks[0]);
+    expect(screen.getByText("文案：未生成")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "完成此素材組" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+  });
+
+  it("必要部分都已選定時，完成按鈕可用", async () => {
+    const image = setDetail().products.image_prompt!;
+    mockGetSet.mockResolvedValue(
+      setDetail({
+        status: "已完成",
+        products: { image_prompt: { ...image, state: "已選定", selected: 1 } },
+      }),
+    );
+    renderStudio();
+
+    const finish = await screen.findByRole("button", { name: "完成此素材組" });
+    expect((finish as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("完成前尚需選定：")).toBeNull();
+  });
+
+  it("part 深連結直接打開指定的未完成分頁", async () => {
+    const image = setDetail().products.image_prompt!;
+    mockGetSet.mockResolvedValue(
+      setDetail({
+        required_parts: ["image_prompt", "copy"],
+        products: { image_prompt: image, copy: copySetDetail().products.copy },
+      }),
+    );
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
+
+    expect(await screen.findByText("文案：未生成")).toBeTruthy();
+    expect(screen.getAllByText("主文").length).toBeGreaterThan(0);
   });
 });
 

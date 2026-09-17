@@ -38,8 +38,8 @@ export function FieldCard({
         {editing ? children : <p className="text-[15px] font-semibold">{value || emptyText}</p>}
       </div>
       {onEdit && (
-        <Button variant="ghost" size="sm" onClick={onEdit}>
-          <Pencil />
+        <Button variant="ghost" size="sm" onClick={onEdit} aria-label={`編輯${label}`}>
+          <Pencil aria-hidden="true" />
         </Button>
       )}
     </div>

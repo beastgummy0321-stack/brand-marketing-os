@@ -2,12 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
-  BarChart3,
   Boxes,
   Calendar,
   Database,
-  FileText,
-  ImageIcon,
   Megaphone,
   Sparkles,
   Target,
@@ -29,13 +26,6 @@ import {
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 
 const OBJECTIVE_OPTIONS = ["購買", "加購物車", "名單", "流量", "知名度"];
-
-const WILL_GENERATE = [
-  { icon: FileText, title: "策略建議", detail: "行銷方向與重點建議" },
-  { icon: BarChart3, title: "預算配置", detail: "各管道預算分配建議" },
-  { icon: ImageIcon, title: "素材需求", detail: "所需素材類型與數量" },
-  { icon: BarChart3, title: "Tracking 建議", detail: "成效追蹤的設定建議（自動發布接上後開放）" },
-];
 
 interface CampaignContext {
   product_ids?: string[];
@@ -266,29 +256,9 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         </div>
         {saveError && <p className="px-4 pb-3 text-sm text-destructive">{saveError}</p>}
       </div>
-      <div className="surface">
-        <div className="surface-header">
-          <div>
-            <h2 className="flex items-center gap-1.5">
-              <BarChart3 size={15} className="text-primary" /> 行銷駕駛艙將據此產生：
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              我們會根據以上內容，為你生成完整的行銷方案，包含以下項目：
-            </p>
-          </div>
-        </div>
-        <div className="surface-body grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {WILL_GENERATE.map((item) => (
-            <div key={item.title} className="flex items-start gap-2 rounded-lg border border-border p-3">
-              <item.icon className="mt-0.5 size-4 shrink-0 text-primary" />
-              <div>
-                <p className="text-sm font-medium">{item.title}</p>
-                <p className="text-xs text-muted-foreground">{item.detail}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <p className="text-center text-sm text-muted-foreground">
+        確認後會依這六項需求整理策略、預算配置與素材需求；之後仍由你核准採用與上架。
+      </p>
       {generateError && <p className="text-sm text-destructive">{generateError}</p>}
       <div className="flex justify-center gap-3">
         <Button onClick={handleGenerate} disabled={generating}>
