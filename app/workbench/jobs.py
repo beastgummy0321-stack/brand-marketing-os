@@ -25,9 +25,9 @@ from app.background import app as background_app
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import APP_DIR, connection
 from app.llm import context_compiler, gateway, methodology, providers
+from app.workbench import claims, prompts, repository, validate, visual
 from app.workbench import identity as identity_mod
 from app.workbench import looks as looks_mod
-from app.workbench import prompts, repository, validate, visual
 
 DEPARTMENTS_DIR = APP_DIR / "departments" / "workbench"
 
@@ -687,6 +687,9 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         brand_row = bi_repo.get_brand(conn, brand_id)
         assert brand_row is not None  # brief 已經查得到，它的 brand_id 不可能是空品牌
         brand_version = brand_row["knowledge_version"]
+
+    claim_sources = claims.sources(conn, brand_id, product_id)
+    brand_context += "\n\n" + claims.policy(claim_sources)
 
     task_type = f"workbench_{part}"
     department_text = (DEPARTMENTS_DIR / f"{part}.md").read_text(encoding="utf-8")
