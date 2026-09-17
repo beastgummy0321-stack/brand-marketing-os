@@ -400,10 +400,19 @@ export function StrategyTab({
               <div>
                 <h3 className="mb-2 text-sm font-medium">預算情境選擇</h3>
                 <p className="mb-2 text-sm text-muted-foreground">依你的目標與資源，選擇最適合的預算規模。</p>
+                <p className="mb-2 text-sm text-muted-foreground">
+                  {scenarios.mode === "cold_start"
+                    ? `計算依據：目前 CPA ${c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 ? formatCurrency(c.success_target) : "未設定"} × 每天 2／5／10 筆 × ${days ?? "未設定"} 天。`
+                    : `計算依據：各情境所列歷史日預算 × ${days ?? "未設定"} 天。`}
+                  {constraintBudget !== null && ` 預算上限 ${formatCurrency(constraintBudget)}。`}
+                </p>
+                {c.budget_planned !== null && (
+                  <p className="mb-2 text-sm">已選預算 {formatCurrency(c.budget_planned)}；更新目標不會自動改動。</p>
+                )}
                 {scenarioError && <p className="mb-2 text-sm text-danger">{scenarioError}</p>}
                 <div className="grid grid-cols-3 gap-3">
                   {scenarios.scenarios.map((s) => {
-                    const active = selectedKey === s.key;
+                    const active = selectedKey === s.key && (c.budget_planned === null || c.budget_planned === s.total);
                     return (
                       <button
                         type="button"
@@ -420,13 +429,16 @@ export function StrategyTab({
                         </div>
                         <div className="numeric my-1.5 text-base font-semibold">{formatCurrency(s.total)}</div>
                         <div className="text-xs text-muted-foreground">{s.caption}</div>
+                        {constraintBudget !== null && s.total !== null && s.total > constraintBudget && (
+                          <p className="mt-1 text-xs text-warning">超過預算上限 {formatCurrency(constraintBudget)}</p>
+                        )}
                       </button>
                     );
                   })}
                 </div>
                 {amountsUnknown && (
                   <p className="mt-3 text-sm text-muted-foreground">
-                    要估金額需要商品的售價與成本{" "}
+                    要估金額需要有效的 CPA 成功條件與活動期間。商品數字可作為設定依據。{" "}
                     <Link to={productEconomicsHref} className="text-primary hover:underline">
                       去補商品數字
                     </Link>

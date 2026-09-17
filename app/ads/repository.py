@@ -15,7 +15,7 @@ import statistics
 from datetime import date, timedelta
 from typing import cast
 
-from app.ads import channels, judgment
+from app.ads import budget, channels, judgment
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import settings as coresettings
@@ -218,7 +218,11 @@ def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND id = %s",
         (org_id, brand_id, campaign_id),
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    brand = bi_repo.get_brand(cast(Conn, conn), brand_id)
+    labels = judgment.conversion_labels((brand or {}).get("conversion_goal"))
+    return budget.reconcile_campaign(dict(row), labels["conversion"])
 
 
 def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> list:

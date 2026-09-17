@@ -299,6 +299,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         conn, org_id, brand_id, product_ids=product_ids, days=days, history=history,
         conversion_label=labels["conversion"],
     )
+    scenario_result = budget.current_scenarios(scenario_result, campaign, labels["conversion"])
     scenarios_text = _scenarios_section(scenario_result)
 
     knowledge_item_ids = (
