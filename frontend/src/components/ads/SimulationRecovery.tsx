@@ -84,6 +84,9 @@ export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }:
             })}
           </fieldset>)}
           {data.closed ? <p className="text-sm">已結案，成效快照與來源紀錄已凍結。</p> : <Button className="self-start" disabled={readOnly} onClick={() => void save()}>{busy ? "儲存中…" : "儲存這一天的模擬成效"}</Button>}
+          <Button variant="ghost" className="self-start" disabled={busy} onClick={() => {
+            if (!dirty || window.confirm("尚有未儲存的變更，確定重新讀取這一天？")) setReload(n => n + 1);
+          }}>重新讀取這一天</Button>
           <p role="status" className="text-xs text-muted-foreground">{dirty ? "有尚未儲存的變更" : data.revision ? `此日期已保存，第 ${data.revision} 版 · ${data.saved_at}` : "此日期尚無回收快照"}</p>
           <details><summary className="cursor-pointer text-sm">回收來源紀錄</summary><ul className="mt-2 space-y-1 text-xs">{Object.entries(data.receipts).sort().map(([date,r]) => <li key={date}>{date} · 第 {r.revision} 版 · {r.ad_count} 則已回收／{r.missing_ad_count} 則缺資料 · {r.saved_at} · {r.saved_by}</li>)}</ul></details>
         </>}
