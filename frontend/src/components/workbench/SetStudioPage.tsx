@@ -65,7 +65,11 @@ function groupRounds(versions: ProductVersion[]): RoundGroup[] {
 /** 素材組 studio（F02-I09，`ARCHITECTURE.md` §5.1-§5.3／§5.11／§5.13，參考圖 3 1:1）：
  * 生成、看版本、選定、完成這個素材組的地方。所有畫面文字（`cells`/`image_generation.reason`/
  * `generation_settings`）都照 `SetDetail` 給的原樣渲染，這支檔案不重算、不重打一份規則。 */
-export function SetStudioPage({
+export function SetStudioPage(props: Parameters<typeof SetStudio>[0]) {
+  return <SetStudio key={`${props.brandId}:${props.setId}`} {...props} />;
+}
+
+function SetStudio({
   brandId,
   packId,
   setId,
@@ -78,6 +82,7 @@ export function SetStudioPage({
   const navigate = useNavigate();
   const brand = brands.find((b) => b.brand_id === brandId);
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [pollError, setPollError] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<ProductPart | null>(null);
 
   function load() {
@@ -98,6 +103,27 @@ export function SetStudioPage({
   }
 
   useEffect(load, [brandId, setId]);
+
+  const generating = state.status === "ready" &&
+    ["queued", "running"].includes(state.set.generation?.status ?? "");
+  useEffect(() => {
+    if (!generating) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await getSet(brandId, setId);
+        if (cancelled) return;
+        setState({ status: "ready", set: next });
+        setPollError(null);
+      } catch {
+        if (!cancelled) setPollError("進度暫時讀不到，會自動重試；請勿重複生成。");
+      }
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    }
+    timer = setTimeout(poll, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [brandId, setId, generating]);
 
   function applyUpdated(next: SetDetail) {
     setState({ status: "ready", set: next });
@@ -150,6 +176,9 @@ export function SetStudioPage({
 
         <div className="flex flex-col gap-4 min-w-0">
           <SetHeader set={set} />
+          {generating && <p role="status" className="rounded-md bg-muted p-3 text-sm">{set.generation?.status === "queued" ? "素材已排隊，等待生成。" : "素材生成中，完成後會自動更新。"}</p>}
+          {pollError && <p role="alert" className="text-sm text-danger">{pollError}</p>}
+          {set.generation?.status === "failed" && <p role="alert" className="rounded-md bg-danger/10 p-3 text-sm text-danger">這輪生成失敗：{set.generation.error || "請稍後再試。"} 可以按「再生成」重試。</p>}
 
           {set.lock.locked && (
             <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -338,7 +367,9 @@ function ProductPanel({
   const allDone = set.required_parts.every(
     (p) => (set.products[p] as SetProduct | undefined)?.state === "已選定",
   );
+  const generating = running || ["queued", "running"].includes(set.generation?.status ?? "");
   const locked = set.lock.locked;
+  const showOutput = product.versions.length > 0 || (!generating && set.generation?.status !== "failed");
 
   function similarCount(): number {
     return (product?.generation_settings.count as number | undefined) ?? count;
@@ -388,8 +419,8 @@ function ProductPanel({
           />
         )}
 
-        <Button disabled={running || locked} onClick={() => void handleRun()}>
-          {running ? "生成中…" : part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
+        <Button disabled={generating || locked} onClick={() => void handleRun()}>
+          {generating ? "生成中…" : part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
         </Button>
       </div>
 
@@ -397,7 +428,7 @@ function ProductPanel({
         <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div>
       )}
 
-      {part === "image_prompt" && (
+      {showOutput && part === "image_prompt" && (
         <ImagePart
           set={set}
           product={product}
@@ -408,13 +439,13 @@ function ProductPanel({
           onSimilar={handleSimilar}
         />
       )}
-      {part === "copy" && <CopyPart product={product} onSelect={handleSelect} locked={locked} />}
-      {part === "video_script" && (
+      {showOutput && part === "copy" && <CopyPart product={product} onSelect={handleSelect} locked={locked} />}
+      {showOutput && part === "video_script" && (
         <VideoScriptPart product={product} onSelect={handleSelect} locked={locked} />
       )}
 
       <div className="surface flex items-center justify-between p-3">
-        <Button variant="outline" disabled={running || locked} onClick={() => void handleRun()}>
+        <Button variant="outline" disabled={generating || locked} onClick={() => void handleRun()}>
           {part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`}
         </Button>
         <Button disabled={!allDone || locked} onClick={onFinish}>

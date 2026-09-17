@@ -72,9 +72,10 @@ class DashboardJobsBoundaryTest(unittest.TestCase):
             {
                 f"/app/brands/{brand_id}/intake",
                 f"/app/brands/{brand_id}/products/prd_test",
-                f"/app/brands/{brand_id}/library",
+                f"/app/brands/{brand_id}/library?tab=customer-voice",
                 f"/app/brands/{brand_id}/report",
-                f"/app/brands/{brand_id}/schedule",
+                f"/app/brands/{brand_id}/ads",
+                f"/app/brands/{brand_id}/workbench",
             },
         )
         expected_keys = {"brand_id", "brand_name", "kind", "status", "stage", "started_at", "action_url"}

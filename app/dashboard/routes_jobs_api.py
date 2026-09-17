@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 
 from app.brand_intelligence import repository as bi
+from app import workbench
 from app.shared import web
 from app.shared.web import require_actor
 
@@ -54,7 +55,7 @@ def _queue_active_jobs(conn) -> list[dict]:
     `docs/contracts/background.md`：這張表沒有專屬模組，任何模組都能讀（已有
     `app/schedule/state.py`／`app/brand_web/routes_report_api.py` 先例）。"""
     rows = conn.execute(
-        "SELECT brand_id, task_type, started_at, context_scope_json FROM llm_task "
+        "SELECT org_id, brand_id, task_type, started_at, context_scope_json FROM llm_task "
         "WHERE status = 'running' AND task_type = ANY(%s)",
         (list(_QUEUE_JOB_KINDS),),
     ).fetchall()
@@ -66,11 +67,15 @@ def _queue_active_jobs(conn) -> list[dict]:
         if kind == "product_research":
             action_url = f"/app/brands/{brand_id}/products/{scope.get('product_id', '')}"
         elif kind in ("library_convert", "persona"):
-            action_url = f"/app/brands/{brand_id}/library"
+            action_url = f"/app/brands/{brand_id}/library?tab=customer-voice"
         elif kind in ("scan", "question", "paste_fix", "research"):
             action_url = f"/app/brands/{brand_id}/intake"
-        elif kind in ("schedule_plan", "schedule_tree", "workbench_generate"):
-            action_url = f"/app/brands/{brand_id}/schedule"
+        elif kind == "workbench_generate":
+            action_url = workbench.set_action_url(
+                conn, row["org_id"], brand_id, scope.get("brief_id", ""),
+            ) or f"/app/brands/{brand_id}/workbench"
+        elif kind in ("schedule_plan", "schedule_tree"):
+            action_url = f"/app/brands/{brand_id}/ads"
         else:
             action_url = f"/app/brands/{brand_id}/report"
         jobs.append({

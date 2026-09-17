@@ -90,15 +90,7 @@ export function PublishPage({
 
   const load = useCallback(() => {
     setState({ status: "loading" });
-    // 手動發布第一次進來要順便落地一次核准＋操作紀錄（決策：「使用者確認手動發布」就是打開
-    // 這個進階選單項目本身），已經發布過（`actions` 已有一列 publish）就只讀，不重複寫。
-    const alreadyPublished = c.actions.some(
-      (a) => a.kind === "publish" && a.target_kind === "campaign",
-    );
-    const request =
-      adapter === "manual" && !alreadyPublished
-        ? publishCampaign(brandId, c.id, "manual")
-        : getPublish(brandId, c.id, adapter).then((res) => res.describe);
+    const request = getPublish(brandId, c.id, adapter).then((res) => res.describe);
     request
       .then((describe) => setState({ status: "ready", describe }))
       .catch((err: unknown) =>
@@ -108,7 +100,7 @@ export function PublishPage({
 
   useEffect(load, [load]);
 
-  const title = adapter === "manual" ? "手動發布" : adapter === "simulated" ? "模擬發布（演練）" : "發布 Campaign";
+  const title = adapter === "manual" ? "手動上架準備" : adapter === "simulated" ? "模擬發布（演練）" : "選擇上架方式";
   const missing = c.asset_readiness.total - c.asset_readiness.ready_count;
 
   return (
@@ -166,7 +158,7 @@ export function PublishPage({
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1">
-                <StepButton onClick={() => onChangeAdapter("manual")}>手動發布</StepButton>
+                <StepButton onClick={() => onChangeAdapter("manual")}>手動上架準備</StepButton>
                 <p className="text-center text-xs text-muted-foreground">照清單自己在平台上建好，再回來配對</p>
               </div>
               <div className="flex flex-col gap-1">
@@ -196,6 +188,9 @@ function ManualPublish({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onViewPerformance: () => void;
 }) {
+  const [confirmed, setConfirmed] = useState(c.actions.some(a =>
+    a.kind === "publish" && a.target_kind === "campaign" && a.after_json.adapter === "manual"));
+  const [confirming, setConfirming] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
   const [bindMessage, setBindMessage] = useState<string | null>(null);
@@ -203,6 +198,18 @@ function ManualPublish({
 
   const counts = bindCounts(c);
   const allBound = attempted && bindMessage === null && counts.matched === counts.total;
+
+  async function confirmPreparation() {
+    setConfirming(true);
+    setBindError(null);
+    try {
+      await publishCampaign(brandId, c.id, "manual");
+      setConfirmed(true);
+      onCampaignChange(await getCampaign(brandId, c.id));
+    } catch (err) {
+      setBindError(err instanceof Error ? err.message : "確認失敗，請稍後再試。");
+    } finally { setConfirming(false); }
+  }
 
   async function handleBind() {
     setBinding(true);
@@ -221,6 +228,14 @@ function ManualPublish({
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="surface p-4 text-sm space-y-2">
+        <p className="font-semibold">確認手動上架準備</p>
+        <p>只在本系統記錄手動上架意圖與預算核准，不會在 Meta 建立廣告或花費廣告費，也不代表已上線。</p>
+        <p>平台：Meta；此步驟不選擇或寫入任何廣告帳戶。之後配對會查詢這個品牌已綁定的帳戶。</p>
+        <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
+        <p>確認後，本系統會以目前預算作為後續調整的核准上限。</p>
+        {!confirmed ? <Button disabled={confirming} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
+      </div>
       {describe.checklist.map((node) => (
         <NodeCard key={`${node.level}:${node.id}`} node={node} />
       ))}
@@ -229,7 +244,7 @@ function ManualPublish({
         <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">
           {bindError && <p className="text-sm text-danger">{bindError}</p>}
           {!attempted ? (
-            <Button onClick={() => void handleBind()} disabled={binding}>
+            <Button onClick={() => void handleBind()} disabled={binding || !confirmed}>
               {binding ? "配對中…" : "我已在 Meta 建好，開始配對"}
             </Button>
           ) : allBound ? (
@@ -252,7 +267,7 @@ function ManualPublish({
                   <p className="text-sm">{bindMessage}</p>
                 </div>
               )}
-              <Button onClick={() => void handleBind()} disabled={binding}>
+              <Button onClick={() => void handleBind()} disabled={binding || !confirmed}>
                 {binding ? "配對中…" : "重新配對"}
               </Button>
             </div>

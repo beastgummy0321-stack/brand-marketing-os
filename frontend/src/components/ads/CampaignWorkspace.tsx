@@ -114,7 +114,7 @@ export function CampaignWorkspace({
               <Badge variant={STATUS_TONE[campaign.status]}>{STATUS_LABEL[campaign.status]}</Badge>
               {canPublish && (
                 <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
-                  發布 Campaign
+                  選擇上架方式
                 </Button>
               )}
             </div>

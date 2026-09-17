@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Boxes, ImageIcon, LineChart, Plus, Share2, Sparkles, Target, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -6,6 +6,8 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { createCampaign } from "@/lib/adsApi";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { readDraft, saveDraft, clearDraft } from "./campaignDraft";
 
 const CONSTRAINT_FIELDS: { key: string; label: string; placeholder: string; isDate?: boolean }[] = [
   { key: "budget", label: "預算上限", placeholder: "例如 NT$ 30,000" },
@@ -29,14 +31,25 @@ const AUTO_ITEMS: { icon: typeof Boxes; title: string; detail: string }[] = [
  * 這裡只在「只填一邊」時擋下來。送出成功後導去步驟二（`ConfirmBriefPage`）確認理解，
  * 不再直接進策略頁——那一步才是第二次、也是最後一次模型呼叫。 */
 export function NewCampaignPage({ brandId }: { brandId: string }) {
+  const { scope } = useWorkspace();
+  const draftKey = `campaign-draft:${scope}:${brandId}`;
+  return <CampaignForm key={draftKey} brandId={brandId} draftKey={draftKey} />;
+}
+
+function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string }) {
   const navigate = useNavigate();
-  const [goalText, setGoalText] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [openConstraints, setOpenConstraints] = useState<Record<string, boolean>>({});
-  const [constraintValues, setConstraintValues] = useState<Record<string, string>>({});
+  const [initial] = useState(() => readDraft(draftKey));
+  const [goalText, setGoalText] = useState(initial.goalText);
+  const [startDate, setStartDate] = useState(initial.startDate);
+  const [endDate, setEndDate] = useState(initial.endDate);
+  const [openConstraints, setOpenConstraints] = useState<Record<string, boolean>>(initial.openConstraints);
+  const [constraintValues, setConstraintValues] = useState<Record<string, string>>(initial.constraintValues);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    saveDraft(draftKey, { goalText, startDate, endDate, openConstraints, constraintValues });
+  }, [draftKey, goalText, startDate, endDate, openConstraints, constraintValues]);
 
   function toggleConstraint(key: string) {
     setOpenConstraints((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -62,6 +75,7 @@ export function NewCampaignPage({ brandId }: { brandId: string }) {
         ...(startDate && endDate ? { start_date: startDate, end_date: endDate } : {}),
         ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
       });
+      clearDraft(draftKey);
       navigate(`/brands/${brandId}/ads/new/${draft.id}`, {
         state: draft.parsed
           ? undefined
@@ -97,6 +111,7 @@ export function NewCampaignPage({ brandId }: { brandId: string }) {
         title="建立投放計畫"
         description="只要告訴我們你的目標，行銷駕駛艙會幫你整理投放策略、預算、素材與排程。"
       />
+      <p className="text-xs text-muted-foreground">未送出的內容會保留在這個分頁，離開後返回可繼續填寫。</p>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
         <div className="surface">
           <div className="surface-body flex flex-col gap-4">

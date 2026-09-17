@@ -333,3 +333,9 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
     with a different shape (the per-product run parameters `copy_length`／`count`) and keeps its
     meaning; the table is the top-level one.
 
+
+### 5.14 生成工作狀態與回程（F10）
+
+素材組 API 的 `generation` 原樣投影 brief 的 status 與 last_error，和「未選定／已完成」等內容選定狀態分開。前端在 queued／running 時停用重複生成，每 3 秒讀取目前素材組直到工作結束；進度讀取失敗保留目前內容並重試。未產出時的 running／failed 不顯示「還沒有生成過」，既有版本保留可讀，failed 可重試。
+
+全域工作進度使用公開 `workbench.set_action_url` 解析同組織、同品牌的 brief → pack/set 目的地；缺少有效 brief 時回素材工作檯，不再連到已不存在的排程頁。人物誌進度與完成／失敗通知直達智庫 `?tab=customer-voice` 的「人物誌與顧客原話」，沿用既有閱讀、編輯與重試功能。
