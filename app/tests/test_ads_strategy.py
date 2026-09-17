@@ -152,7 +152,7 @@ class ScenarioAmountUnknownTest(StrategyTestBase):
 
     def setUp(self):
         super().setUp()
-        self.campaign = self._create_campaign()
+        self.campaign = self._create_campaign(success_target=None)
         strategy.PROVIDER = _fake(_VALID_REPLY)
         detail = self._generate()
         budget_basis_json = dict(detail["budget_basis_json"])
@@ -714,3 +714,29 @@ class ScriptedReplyValidatesTest(StrategyTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CurrentCpaScenariosTest(StrategyTestBase):
+    def test_edit_refresh_and_selection_keep_adopted_amount(self):
+        self.campaign = self._create_campaign(end_date="2026-10-14", success_target=210)
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        self._generate()
+        strategy.select_scenario(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                 scenario_key="recommended", actor=ACTOR)
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                 {"success_target": 300})
+        for _ in range(2):
+            detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
+                                              self.campaign["id"])
+            assert detail is not None
+            assert detail["budget_planned"] == 14700
+            rows = detail["budget_basis_json"]["scenarios"]["scenarios"]
+            assert [r["total"] for r in rows] == [8400, 21000, 42000]
+            assert detail["budget_planned"] / detail["success_target"] == 49
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                 {"success_metric": "roas", "success_target": 2})
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        assert detail is not None
+        rows = detail["budget_basis_json"]["scenarios"]["scenarios"]
+        assert all(r["total"] is None for r in rows)
+        assert detail["budget_planned"] == 14700

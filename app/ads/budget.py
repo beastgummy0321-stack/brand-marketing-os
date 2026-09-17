@@ -159,3 +159,59 @@ def split(total: float, weights: dict) -> list:
         largest_label = max(weights, key=lambda label: weights[label])
         amounts[largest_label] += remainder
     return [{"label": label, "amount": amounts[label]} for label in weights]
+
+
+def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購買") -> dict:
+    """Project recommendations from current inputs, without changing adopted money.
+
+    History rows retain their observed daily basis; cold starts use the campaign's
+    explicit CPA. Missing/non-CPA targets are unknown, not the old product estimate.
+    Called on every detail/selection read so pre-fix stored snapshots also reconcile.
+    """
+    import math
+    from decimal import Decimal
+
+    start, end = campaign.get("start_date"), campaign.get("end_date")
+    days = max((end - start).days + 1, 0) if start and end else 0
+    if stored.get("mode") == "cold_start":
+        value = campaign.get("success_target")
+        target = (float(value) if campaign.get("success_metric") == "cpa"
+                  and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+                  and math.isfinite(value) and value > 0 else None)
+        result = _cold_start_scenarios(target, None, days, conversion_label)
+        result["basis"].update({
+            "days": days, "source_text": "目前成功條件的 CPA" if target else "尚無有效 CPA 目標",
+        })
+        return result
+    result = {**stored, "basis": {**stored.get("basis", {}), "days": days}}
+    result["scenarios"] = [
+        {**r, "total": round(r["daily"] * days) if r.get("daily") is not None and days else None}
+        for r in stored.get("scenarios", [])
+    ]
+    return result
+
+
+def reconcile_campaign(campaign: dict, conversion_label: str = "購買") -> dict:
+    """Return an up-to-date projection. Never write budget_planned or group budgets."""
+    basis = campaign.get("budget_basis_json") or {}
+    stored = basis.get("scenarios")
+    if not stored:
+        return campaign
+    scenarios_now = current_scenarios(stored, campaign, conversion_label)
+    strategy_now = dict(basis.get("strategy") or {})
+    allocation = strategy_now.get("allocation") or []
+    selected = campaign.get("budget_planned")
+    if selected is None:
+        recommended = next((r for r in scenarios_now["scenarios"]
+                            if r["key"] == scenarios_now["recommended"]), {})
+        selected = recommended.get("total")
+    if allocation:
+        amounts = split(selected, {str(i): r["pct"] / 100 for i, r in enumerate(allocation)}) \
+            if selected is not None else []
+        strategy_now["allocation"] = [
+            {**r, "amount": amounts[i]["amount"] if amounts else None}
+            for i, r in enumerate(allocation)
+        ]
+    return {**campaign, "budget_basis_json": {
+        **basis, "scenarios": scenarios_now, "strategy": strategy_now,
+    }}
