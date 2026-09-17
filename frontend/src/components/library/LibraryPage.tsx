@@ -37,6 +37,8 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
   { key: "coordinates", label: "創意座標" },
 ];
 
+const ADVANCED_TAB_KEYS: TabKey[] = ["research-reports", "coordinates"];
+
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -67,6 +69,11 @@ export function LibraryPage({ brandId }: { brandId: string }) {
 
   const requestedTab = searchParams.get("tab");
   const activeTab: TabKey = TABS.some((t) => t.key === requestedTab) ? (requestedTab as TabKey) : "facts";
+  const [advancedOpen, setAdvancedOpen] = useState(() => ADVANCED_TAB_KEYS.includes(activeTab));
+
+  useEffect(() => {
+    if (ADVANCED_TAB_KEYS.includes(activeTab)) setAdvancedOpen(true);
+  }, [activeTab]);
 
   function setTab(key: TabKey) {
     const next = new URLSearchParams(searchParams);
@@ -98,7 +105,8 @@ export function LibraryPage({ brandId }: { brandId: string }) {
     content = (
       <div className="workspace-split">
         <nav className="workspace-subnav" aria-label="智庫分類">
-            {TABS.map((t) => (
+            <p className="px-3 pb-2 pt-3 text-xs text-muted-foreground">品牌資料</p>
+            {TABS.filter((tab) => !ADVANCED_TAB_KEYS.includes(tab.key)).map((t) => (
               <button
                 key={t.key}
                 type="button"
@@ -118,6 +126,20 @@ export function LibraryPage({ brandId }: { brandId: string }) {
                 )}
               </button>
             ))}
+            <details
+              className="mt-2 border-t border-border pt-2"
+              open={advancedOpen}
+              onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+            >
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-foreground">進階內容</summary>
+              <div className="flex flex-col gap-1 pt-1">
+                {TABS.filter((tab) => ADVANCED_TAB_KEYS.includes(tab.key)).map((t) => (
+                  <button key={t.key} type="button" onClick={() => setTab(t.key)} aria-pressed={activeTab === t.key}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </details>
         </nav>
         <div className="workspace-content surface p-5">
 
