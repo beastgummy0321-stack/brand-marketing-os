@@ -2,13 +2,13 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ManualSettings } from "./ManualSettings";
-import { getCampaign } from "@/lib/adsApi";
+import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { saveManualSettings } from "@/lib/adsLaunchApi";
 
 vi.mock("@/lib/adsLaunchApi", () => ({ saveManualSettings: vi.fn() }));
 vi.mock("@/lib/adsApi", () => ({ getCampaign: vi.fn() }));
 
-function campaign(value = "") {
+function campaign(value = ""): Pick<CampaignDetail, "id" | "status" | "manual_handoff"> {
   return { id: "c1", status: "ready" as const, manual_handoff: {
     fields: [
       { key: "audience_source", label: "受眾來源", section: "受眾", required: true },
@@ -16,7 +16,7 @@ function campaign(value = "") {
     ],
     pending_count: value ? 0 : 1,
     groups: [{ id: "g1", name: "再行銷", status: value ? "已填設定" : "待補設定",
-      values: value ? { audience_source: value } : {}, missing: value ? [] : ["受眾來源"],
+      values: value ? { audience_source: value } : {} as Record<string, string>, missing: value ? [] : ["受眾來源"],
       saved_at: null, saved_by: null, ads: [] }],
   } };
 }
