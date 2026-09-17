@@ -19,23 +19,23 @@ it("omits missing ads, saves explicit zero and preserves inputs after a failure"
   for (const label of ["花費","曝光","點擊","轉換數","營收"]) await userEvent.type(screen.getByLabelText(`廣告甲 ${label}`), "0");
   vi.mocked(saveSimulation).mockRejectedValueOnce(new Error("版本衝突，請重新讀取"));
   await userEvent.click(screen.getByRole("button", {name:"儲存這一天的模擬成效"}));
-  expect(await screen.findByRole("alert")).toHaveTextContent("版本衝突");
-  expect(screen.getByLabelText("廣告甲 花費")).toHaveValue(0);
+  expect((await screen.findByRole("alert")).textContent).toContain("版本衝突");
+  expect((screen.getByLabelText("廣告甲 花費") as HTMLInputElement).value).toBe("0");
   expect(saveSimulation).toHaveBeenCalledWith("brand","c","2026-09-01",0,[{ad_id:"a",spend:0,impressions:0,clicks:0,purchases:0,revenue:0}]);
   expect(startSimulation).not.toHaveBeenCalled();
 });
 it("requires all fields for a received ad and freezes closed recovery", async () => {
   vi.mocked(readSimulation).mockResolvedValue({...data, closed:true});
   await open();
-  expect(screen.getByLabelText("已回收：廣告甲")).toBeDisabled();
-  expect(screen.queryByRole("button",{name:"儲存這一天的模擬成效"})).not.toBeInTheDocument();
+  expect((screen.getByLabelText("已回收：廣告甲") as HTMLInputElement).disabled).toBe(true);
+  expect(screen.queryByRole("button",{name:"儲存這一天的模擬成效"})).toBeNull();
 });
 it("does not activate merely by opening the panel or confirmation dialog", async () => {
   vi.mocked(readSimulation).mockResolvedValue({...data,started:false,enabled:false});
   render(<SimulationRecovery brandId="brand" campaign={campaign} onChanged={vi.fn()} onSaved={vi.fn()} />);
   await userEvent.click(screen.getByText("隔離模擬成效回收"));
   await userEvent.click(await screen.findByRole("button",{name:"啟用隔離模擬回收"}));
-  expect(await screen.findByRole("dialog")).toHaveTextContent("不能進行真實平台配對");
+  expect((await screen.findByRole("dialog")).textContent).toContain("不能進行真實平台配對");
   expect(startSimulation).not.toHaveBeenCalled();
 });
 it("shows read failure and retries without modifying campaign", async () => {
