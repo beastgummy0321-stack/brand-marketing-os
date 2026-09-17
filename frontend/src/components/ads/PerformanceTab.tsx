@@ -24,6 +24,7 @@ import {
   type CampaignPerformance,
   type SuccessMetric,
 } from "@/lib/adsApi";
+import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 
@@ -214,6 +215,7 @@ export function PerformanceTab({
     }
   }
 
+  const comparison = <ExperimentPlan key={`${c.id}:${c.status}`} brandId={brandId} campaignId={c.id} refreshKey={state} onViewPlan={() => onChangeTab("structure")} />;
   const recovery = <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={load} />;
 
   if (!published) {
@@ -225,6 +227,7 @@ export function PerformanceTab({
         />
         <NextStepButton step={nextStep(c)} onChangeTab={onChangeTab} />
         {recovery}
+        {comparison}
       </div>
     );
   }
@@ -232,6 +235,7 @@ export function PerformanceTab({
   return (
     <div className="flex flex-col gap-4">
       {recovery}
+      {comparison}
       {state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>

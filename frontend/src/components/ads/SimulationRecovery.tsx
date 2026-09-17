@@ -35,7 +35,7 @@ export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }:
       if (!cancelled) { setData(next); setValues(entries(campaignRef.current, next.rows)); setDirty(false); }
     }).catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : "讀取失敗。"); });
     return () => { cancelled = true; };
-  }, [brandId, c.id, day, reload]);
+  }, [brandId, c.id, c.status, day, reload]);
   async function start() {
     setBusy(true); setError(null);
     try {

@@ -21,6 +21,7 @@ from app.ads import (
     brief,
     channels,
     closeout,
+    experiment_routes,
     judgment,
     manual_settings_routes,
     outcome,
@@ -39,6 +40,7 @@ from app.core import settings as coresettings
 router = APIRouter(prefix="/api/ads")
 router.include_router(manual_settings_routes.router)
 router.include_router(simulation_routes.router)
+router.include_router(experiment_routes.router)
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
 GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
