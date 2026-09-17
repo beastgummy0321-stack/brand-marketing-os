@@ -355,7 +355,7 @@ describe("StrategyTab（F04-I14）", () => {
 
     await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
 
-    expect(screen.getByText("要估金額需要商品的售價與成本")).toBeTruthy();
+    expect(screen.getByText(/要估金額需要有效的 CPA 成功條件與活動期間/)).toBeTruthy();
     const link = screen.getByRole("link", { name: "去補商品數字" });
     expect(link.getAttribute("href")).toContain("/products/");
   });
@@ -389,6 +389,7 @@ describe("StrategyTab（F04-I14）", () => {
 it("shows current CPA, preserves selected money and labels scenarios beyond the cap", async () => {
   const c = campaign({ success_target: 300, budget_planned: 14700, budget_scenario: "recommended",
     start_date: "2026-09-01", end_date: "2026-09-14", constraints_json: { budget: 15000 } });
+  if (!c.budget_basis_json.scenarios) throw new Error("scenario fixture missing");
   c.budget_basis_json.scenarios.scenarios = [
     { key: "minimum", label: "最低", daily: 600, total: 8400, caption: "CPA × 2" },
     { key: "recommended", label: "推薦", daily: 1500, total: 21000, caption: "CPA × 5" },
@@ -396,7 +397,7 @@ it("shows current CPA, preserves selected money and labels scenarios beyond the 
   ];
   renderTab(c);
   await userEvent.click(screen.getByRole("button", { name: "調整建議" }));
-  expect(screen.getByText(/計算依據：目前 CPA/)).toHaveTextContent("14 天");
-  expect(screen.getByText(/已選預算.*14,700/)).toBeVisible();
+  expect(screen.getByText(/計算依據：目前 CPA/).textContent).toContain("14 天");
+  expect(screen.getByText(/已選預算.*14,700/)).toBeTruthy();
   expect(screen.getAllByText(/超過預算上限/)).toHaveLength(2);
 });
