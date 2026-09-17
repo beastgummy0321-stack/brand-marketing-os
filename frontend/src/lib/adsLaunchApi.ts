@@ -48,3 +48,21 @@ export async function fetchChannels(brandId: string): Promise<Channel[]> {
   const data = await parseJsonOrThrow<{ channels: Channel[] }>(res, "讀取通路清單失敗。");
   return data.channels;
 }
+
+
+export interface ManualHandoff {
+  fields: { key: string; label: string; section: string; required: boolean }[];
+  groups: { id: string; name: string; values: Record<string, string>; missing: string[];
+    status: string; saved_at: string | null; saved_by: string | null;
+    ads: { id: string; name: string }[] }[];
+  pending_count: number;
+}
+
+export async function saveManualSettings(
+  brandId: string, campaignId: string, groupId: string, values: Record<string, string>,
+): Promise<void> {
+  const res = await apiFetch(`${BASE}/brands/${brandId}/campaigns/${campaignId}/groups/${groupId}/manual-settings`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }),
+  });
+  await parseJsonOrThrow<{ ok: boolean }>(res, "儲存人工上架設定失敗，請稍後再試。");
+}

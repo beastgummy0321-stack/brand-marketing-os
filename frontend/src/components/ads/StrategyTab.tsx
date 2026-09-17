@@ -20,7 +20,7 @@ import {
   type SuccessMetric,
 } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
-import { Disclosure, JudgmentBand, KpiStrip, ReservedSlotCard, type KpiCell } from "./patterns";
+import { Disclosure, JudgmentBand, KpiStrip, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -511,12 +511,10 @@ export function StrategyTab({
       </Disclosure>
 
       <Disclosure label="進階設定">
-        <ReservedSlotCard
-          title="進階投放設定"
-          description="這些設定會在自動發布接上之後開放，屆時可以在這裡微調；現在的投放結構仍然可以手動調整。"
-          tag="自動發布接上後開放"
-          bullets={["平台結構", "受眾設定", "版位設定", "出價策略", "優化事件", "歸因設定", "追蹤設定", "UTM 參數"]}
-        />
+        <p className="mb-2 text-sm text-muted-foreground">
+          人工上架可在投放結構保存受眾、版位、出價、追蹤與平台 ID 對應。
+        </p>
+        <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
       </Disclosure>
       </div>
 

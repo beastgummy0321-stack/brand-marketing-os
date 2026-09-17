@@ -33,6 +33,8 @@ import { Disclosure, JudgmentBand, KpiStrip, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 import { ROLE_LABEL, GroupPanel, AdPanel, AddGroupDialog, AddAdDialog } from "./DeliveryEditors";
 
+import { ManualSettings } from "./ManualSettings";
+
 const LOCAL_STATE_LABEL: Record<string, string> = {
   unbound: "未綁定",
   bound: "已綁定",
@@ -235,6 +237,8 @@ export function DeliveryTab({
         )}
         {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
       </div>
+
+      <ManualSettings brandId={brandId} campaign={c} onSaved={onCampaignChange} />
 
       <Disclosure label="調整結構（進階）">
         <div className="flex flex-col gap-4">

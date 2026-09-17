@@ -3,6 +3,7 @@
  * 之後檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就
  * 用預設訊息。 */
 import { apiFetch, errorMessageFrom } from "./http";
+import type { ManualHandoff } from "./adsLaunchApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type SuccessMetric = "cpa" | "roas" | "purchases";
@@ -117,6 +118,7 @@ export interface ActionRow {
 /** `GET /campaigns/{c}` — 五分頁工作區共用的一份 dict：Campaign 本身欄位 + 推導出來的
  * `budget_total` + 投放組（各自掛著廣告）+ 最新的操作紀錄 + 成效小計。 */
 export interface CampaignDetail extends EntityBinding {
+  manual_handoff?: ManualHandoff;
   id: string;
   name: string;
   goal_text: string;
