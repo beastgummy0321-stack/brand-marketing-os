@@ -1,0 +1,98 @@
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Button } from "@/components/layout/ui/button";
+import { EmptyState } from "@/components/layout/EmptyState";
+import { getOrgId } from "@/lib/auth";
+import { ChangeRequestRejected, actOnChangeItem, approveChangeSet, createChangeSet, decideChangeSet, getChangeControl, type ChangeControlData, type ChangeDraft, type ChangeSet } from "@/lib/adsChangeApi";
+import { ChangeComposer } from "./ChangeComposer";
+import { ChangeSetView } from "./ChangeSetView";
+import { currentBudgetMonth, MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
+import { Disclosure } from "./patterns/Disclosure";
+
+function Control({ brandId, campaignId }: { brandId: string; campaignId: string }) {
+  const [search, setSearch] = useSearchParams();
+  const storageKey = `ads-change-operation:${getOrgId()}:${brandId}:${campaignId}`;
+  const [pending, setPending] = useState<ChangeDraft | null>(() => {
+    try { const raw = sessionStorage.getItem(storageKey); return raw ? JSON.parse(raw) as ChangeDraft : null; } catch { return null; }
+  });
+  const [data, setData] = useState<ChangeControlData | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(search.get("change"));
+  const [composing, setComposing] = useState(Boolean(pending));
+  const [supersedesId, setSupersedesId] = useState<string | undefined>(pending?.supersedes_id);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [budgetRefresh, setBudgetRefresh] = useState(0);
+  const lifetime = useRef(new AbortController());
+  useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
+  useEffect(() => {
+    const controller = new AbortController(); setError("");
+    getChangeControl(brandId, campaignId, controller.signal).then(value => {
+      if (controller.signal.aborted) return;
+      setData(value); setSelectedId(previous => value.change_sets.some(set => set.id === previous) ? previous : value.change_sets[0]?.id ?? null);
+    }).catch(() => { if (!controller.signal.aborted) setError("變更清單暫時讀取不到。請重新讀取，先不要重做平台操作。"); });
+    return () => controller.abort();
+  }, [brandId, campaignId, reload]);
+  function update(set: ChangeSet) {
+    setData(previous => previous ? { ...previous, change_sets: [set, ...previous.change_sets.filter(row => row.id !== set.id)] } : previous);
+    select(set.id); setBudgetRefresh(value => value + 1);
+  }
+  function select(id: string) {
+    setSelectedId(id);
+    setSearch(previous => { const next = new URLSearchParams(previous); next.set("change", id); return next; }, { replace: true });
+  }
+  async function mutate(task: (signal: AbortSignal) => Promise<ChangeSet>) {
+    if (busy) return;
+    const signal = lifetime.current.signal; setBusy(true); setError("");
+    try { const result = await task(signal); if (!signal.aborted) update(result); }
+    catch (err) { if (!signal.aborted) setError(err instanceof Error ? err.message : "結果尚未確認。請重試核對，不要重做平台操作。"); }
+    finally { if (!signal.aborted) setBusy(false); }
+  }
+  async function save(value: Omit<ChangeDraft, "operation_id">) {
+    const request = pending ?? { ...value, operation_id: crypto.randomUUID(), ...(supersedesId ? { supersedes_id: supersedesId } : {}) };
+    setPending(request); sessionStorage.setItem(storageKey, JSON.stringify(request));
+    await mutate(async signal => {
+      let result;
+      try { result = await createChangeSet(brandId, campaignId, request, signal); }
+      catch (err) {
+        if (!signal.aborted && err instanceof ChangeRequestRejected) { sessionStorage.removeItem(storageKey); setPending(null); }
+        throw err;
+      }
+      if (!signal.aborted) { sessionStorage.removeItem(storageKey); setPending(null); setComposing(false); }
+      return result;
+    });
+  }
+  const selected = data?.change_sets.find(set => set.id === selectedId);
+  async function reconsider() {
+    if (!selected || busy) return;
+    const signal = lifetime.current.signal; setBusy(true); setError("");
+    try {
+      const fresh = await getChangeControl(brandId, campaignId, signal);
+      if (signal.aborted) return;
+      setData(fresh);
+      const original = fresh.change_sets.find(set => set.id === selected.id);
+      if (!original || original.can_revise !== true) {
+        setError("原清單仍有操作尚未核對，或相關證據已過期。請先逐項讀回，再修改未完成項目。"); return;
+      }
+      setSupersedesId(original.id); setComposing(true);
+    } catch (err) { if (!signal.aborted) setError(err instanceof Error ? err.message : "目前設定尚未讀取完成，請稍後再試。"); }
+    finally { if (!signal.aborted) setBusy(false); }
+  }
+  return <div className="space-y-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">變更與核對</h2><p className="mt-1 text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p></div>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
+    <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth()} refresh={budgetRefresh} compact />
+    {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
+    {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
+    {data && composing && <ChangeComposer targets={data.targets} month={currentBudgetMonth()} pending={pending} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} />}
+    {data && !composing && selected && <ChangeSetView key={selected.id + selected.status} set={selected} busy={busy}
+      onApprove={() => void mutate(signal => approveChangeSet(brandId, campaignId, selected, signal))}
+      onDecision={value => void mutate(signal => decideChangeSet(brandId, campaignId, selected.id, value, signal))}
+      onItem={(item, action) => void mutate(signal => actOnChangeItem(brandId, campaignId, selected.id, item.id, action, signal))}
+      onReconsider={() => void reconsider()} />}
+    {data && !composing && !selected && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : "先從投放中心帶入既有活動，或完成廣告對應；原有平台物件與歷史會保留。"} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => setComposing(true) } : {})} />}
+    {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{new Date(set.created_at).toLocaleDateString("zh-TW")}</span></button>)}</div></Disclosure>}
+  </div>;
+}
+export function ChangeControl(props: Parameters<typeof Control>[0]) {
+  return <Control key={`${getOrgId()}:${props.brandId}:${props.campaignId}`} {...props} />;
+}

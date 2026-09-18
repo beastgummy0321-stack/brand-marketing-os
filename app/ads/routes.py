@@ -19,6 +19,8 @@ from app.ads import (
     adapters,
     assets,
     brief,
+    change_control_data,
+    change_control_launch,
     channels,
     closeout,
     experiment_routes,
@@ -676,13 +678,17 @@ def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str 
     chosen = adapters.get_adapter(adapter)
     if chosen is None:
         raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
-    return {
-        "adapters": adapters.ADAPTERS, "adapter": adapter, "describe": chosen.describe(enriched),
-    }
+    description = chosen.describe(enriched)
+    if adapter == "manual":
+        description["content_hash"] = change_control_data.digest(
+            change_control_launch.snapshot(web.conn, actor.org_id, brand_id, campaign_id))
+    return {"adapters": adapters.ADAPTERS, "adapter": adapter, "describe": description}
 
 
 class PublishRequest(BaseModel):
     adapter: str = "manual"
+    operation_id: str | None = None
+    content_hash: str | None = None
 
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/publish")
@@ -701,13 +707,18 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
                 raise web.ApiError(409, "simulation_unavailable", reason)
             if not simulation_mode.enabled(web.conn, actor.org_id, brand_id):
                 raise ValueError("simulation_isolation_required")
-        chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
+        if body.adapter == "manual":
+            chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+                           operation_id=body.operation_id, content_hash=body.content_hash)
+        else:
+            chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
     except ValueError as exc:
         code = str(exc)
         # 唯一沒進 `_PUBLISH_ERRORS` 的例外碼是 `auto_meta` adapter 保留位置的那個（F03-I09），
         # 這裡不重複那個字面字串（§0：平台名字只准住在 channels.py／adapters/**）——直接問
         # adapter 自己保留的訊息。
-        fallback = (400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE)
+        fallback = (409, code) if body.adapter == "manual" else (
+            400, adapters.AUTO_META_NOT_CONNECTED_MESSAGE)
         status, message = _PUBLISH_ERRORS.get(code, fallback)
         raise web.ApiError(status, code, message) from exc
     enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)

@@ -1,6 +1,7 @@
 /** frontend/src/components/ads/AdsHomePage.test.tsx — F04-I09: 首頁四塊全部照 `getAdsHome`
  * 給的字串印，前端不重拼判斷句、不算百分比、不印假 0。 */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +10,12 @@ import { getAdsHome } from "@/lib/adsApi";
 import type { LaunchReadiness } from "@/lib/adsLaunchApi";
 import { fetchLaunchReadiness } from "@/lib/adsLaunchApi";
 import { AdsHomePage } from "./AdsHomePage";
+import { getChangeControlSummary, getMonthlyBudget } from "@/lib/adsChangeApi";
+vi.mock("@/lib/adsChangeApi", () => ({ getChangeControlSummary: vi.fn(), getMonthlyBudget: vi.fn() }));
+beforeEach(() => {
+  vi.mocked(getChangeControlSummary).mockResolvedValue({ pending_count: 0, items: [], truncated: false });
+  vi.mocked(getMonthlyBudget).mockResolvedValue({ month: "2026-09", currency: "TWD", amount: null, revision: 0, known_spend: null, ongoing_estimate: null, reserved_increases: 0, available: null, uncertainties: ["待補資料"], can_increase: false, period_end: "2026-09-30", confirmed_at: null, notice: "餘額未知" });
+});
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -82,8 +89,10 @@ describe("AdsHomePage（F04-I09）", () => {
 
     renderPage();
 
-    expect(await screen.findByText("目前沒有需要你決定的事")).toBeTruthy();
+    expect(await screen.findByText("目前沒有待確認的變更清單")).toBeTruthy();
     expect(screen.getByText("目前沒有進行中的 Campaign。")).toBeTruthy();
+    expect(screen.queryByText("還沒有任何紀錄。")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "查看歷史操作紀錄" }));
     expect(screen.getByText("還沒有任何紀錄。")).toBeTruthy();
     expect(screen.queryByText("0")).toBeNull();
   });
@@ -104,14 +113,14 @@ describe("AdsHomePage（F04-I09）", () => {
     expect(await screen.findByText("投放中，預算花得比時間快")).toBeTruthy();
   });
 
-  it("席位保留卡：出現「自動執行接上後開放」，且沒有「不支援」「尚未開放使用」這些字", async () => {
+  it("優先呈現月總額與真實待辦，不再用自動執行保留卡佔首屏", async () => {
     vi.mocked(getAdsHome).mockResolvedValue(home());
 
     renderPage();
 
-    expect(await screen.findByText("自動執行接上後開放")).toBeTruthy();
-    expect(screen.queryByText(/不支援/)).toBeNull();
-    expect(screen.queryByText(/尚未開放使用/)).toBeNull();
+    expect(await screen.findByRole("region", { name: "每月品牌廣告預算" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "需要你決定的事" })).toBeTruthy();
+    expect(screen.queryByText("自動執行接上後開放")).toBeNull();
   });
 
   it("Campaign 卡格線在 1024／1280 是兩欄、1536 以上才三欄", async () => {
@@ -133,6 +142,7 @@ describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", ()
 
     renderPage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
     expect(await screen.findByText("開始建立")).toBeTruthy();
     expect(screen.queryByText(/還缺/)).toBeNull();
   });
@@ -154,6 +164,7 @@ describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", ()
 
     renderPage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
     expect(await screen.findByText("還沒有填任何一項商品或服務。")).toBeTruthy();
     expect(screen.getByText("還沒有設定成效目標。")).toBeTruthy();
     expect(screen.getByText("還沒接上廣告帳戶。")).toBeTruthy();
@@ -180,6 +191,7 @@ describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", ()
 
     renderPage();
 
+    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
     expect(await screen.findByText("進入投放中心（有假設值）")).toBeTruthy();
     expect(screen.queryByText("還是要先建立")).toBeNull();
   });
@@ -194,3 +206,4 @@ it("renders imported campaign in the existing campaign grid", async () => {
   expect(screen.queryByText("已納入的既有平台活動")).toBeNull();
   expect(screen.queryByText("草稿")).toBeNull();
 });
+

@@ -42,6 +42,7 @@
         "frontend/src/lib/adsLaunchApi.ts",
         "frontend/src/lib/adsExternalApi.ts",
         "frontend/src/lib/adsUserAssetsApi.ts",
+        "frontend/src/lib/adsChangeApi.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },
@@ -80,6 +81,14 @@
     }
   },
   "resources": {
+    "ads_change_set": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_change_set"
+    },
+    "ads_month_budget": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_month_budget"
+    },
     "workbench_pack": {
       "owner": "workbench",
       "kind": "sql-table",

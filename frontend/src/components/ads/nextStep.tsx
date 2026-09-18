@@ -8,7 +8,7 @@ import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import type { CampaignDetail } from "@/lib/adsApi";
 
-export type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance";
+export type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance" | "changes";
 export type StepTarget = WorkspaceTab | "publish";
 export type StepId =
   | "strategy_generate"

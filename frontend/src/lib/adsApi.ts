@@ -631,6 +631,7 @@ export interface PublishDescribe {
   adapter: AdapterKey;
   message: string | null;
   checklist: PublishChecklistNode[];
+  content_hash?: string;
 }
 
 export interface PublishGetResponse {
@@ -655,10 +656,11 @@ export async function publishCampaign(
   brandId: string,
   campaignId: string,
   adapter: AdapterKey = "manual",
+  approval?: { operation_id: string; content_hash: string },
 ): Promise<PublishDescribe> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/publish`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter }) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter, ...approval }) },
   );
   return parseJsonOrThrow<PublishDescribe>(res, "發布失敗。");
 }
