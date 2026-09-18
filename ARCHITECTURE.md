@@ -133,6 +133,18 @@
       "definition": ["supabase/migrations/*_ads_*.sql"],
       "symbol": "ads_external_listing"
     },
+    "ads_asset_suggestion_batch": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_suggestion_batch"
+    },
+    "ads_asset_suggestion_reservation": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_suggestion_reservation"
+    },
     "ads_asset_upload_batch": {
       "owner": "ads",
       "kind": "sql-table",

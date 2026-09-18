@@ -824,6 +824,8 @@ def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
 
 _CHILD_TABLES = (
     ("ads_asset_placement", "自帶素材安排"),
+    ("ads_asset_suggestion_reservation", "素材建議費用預留"),
+    ("ads_asset_suggestion_batch", "素材建議批次"),
     ("ads_asset_upload", "素材上傳紀錄"),
     ("ads_asset_upload_batch", "素材上傳批次"),
     ("ads_user_asset", "品牌自帶原檔"),

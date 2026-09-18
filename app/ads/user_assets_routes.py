@@ -282,3 +282,70 @@ async def revise(request: Request, brand_id: str, campaign_id: str, placement_id
         }
     except ValueError as exc:
         raise _error(exc) from exc
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/asset-suggestions")
+async def suggest_assets(request: Request, brand_id: str, campaign_id: str):
+    from app.ads import asset_suggestions
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return {
+            "batch": asset_suggestions.request(
+                db.current(),
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                body.get("placements"),
+                body.get("idempotency_key"),
+                body.get("summary", ""),
+            ),
+            "limits": {
+                "max_placements": 10,
+                "input_code_points": 12000,
+                "response_code_points": 16384,
+                "timeout_seconds": 120,
+                "codex_notice": asset_suggestions.policy.CODEX_NOTICE,
+            },
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/asset-suggestions/{batch_id}")
+def asset_suggestion_batch(request: Request, brand_id: str, campaign_id: str, batch_id: str):
+    from app.ads import asset_suggestions
+
+    actor = web.require_actor(request)
+    try:
+        return {
+            "batch": asset_suggestions.get_batch(
+                db.current(), actor.org_id, brand_id, campaign_id, batch_id
+            )
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/confirm")
+async def confirm_placement(request: Request, brand_id: str, campaign_id: str, placement_id: str):
+    from app.ads import asset_suggestions
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return {
+            "placement": asset_suggestions.confirm(
+                db.current(),
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                placement_id,
+                body.get("expected_revision"),
+                body.get("batch_id"),
+                str(actor.user_id),
+            )
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
