@@ -166,6 +166,7 @@ EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
 # （settings 頁「使用的模型」）——目前只有思考等級依任務性質分檔，模型維持全站一致，
 # 需要哪個任務換模型時再回來改這裡，不用動呼叫端。
 TASK_TYPE_LABELS = {
+    "ads_user_asset_suggestions": "自帶素材：補文案與安排",
     "schedule_plan": "檔期規劃（出方案）",
     "schedule_tree": "檔期規劃（展開活動樹，票 09）",
     "workbench_copy": "素材工作檯：文案",
@@ -188,6 +189,7 @@ TASK_TYPE_LABELS = {
 }
 
 TASK_DEFAULTS = {
+    "ads_user_asset_suggestions": {"model": None, "thinking": "low"},
     # 規劃：較高思考
     "schedule_plan": {"model": None, "thinking": "high"},
     "schedule_tree": {"model": None, "thinking": "high"},

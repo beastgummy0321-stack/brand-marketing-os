@@ -1,0 +1,7 @@
+{
+  "campaign_name": "F13 測試｜暫停活動",
+  "brand_name": "F13 隔離驗收品牌",
+  "accounts": ["fixture-account-a", "fixture-account-b"],
+  "original_copy": {"headline": "品牌介紹", "body": "了解更多", "description": "查看商品資訊", "caption": "額外原文保留"},
+  "neutral_additions": {"headline": "探索品牌", "body": "了解更多", "description": "查看商品資訊"}
+}

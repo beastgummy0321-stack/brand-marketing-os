@@ -13,9 +13,11 @@ PRICING = {
         "input_per_mtok": 5.0,
         "output_per_mtok": 25.0,
     },
+    # 2026-09-18 official pricing: scheduled increase cancelled; historical tasks unchanged.
+    # https://platform.claude.com/docs/en/about-claude/pricing
     "claude-sonnet-5": {
-        "input_per_mtok": 3.0,
-        "output_per_mtok": 15.0,
+        "input_per_mtok": 2.0,
+        "output_per_mtok": 10.0,
     },
     "claude-haiku-4-5": {
         "input_per_mtok": 1.0,

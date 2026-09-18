@@ -11,11 +11,19 @@ Write shape (this issue): only `create_campaign` — groups/ads/actions/outcomes
 later issues (publish, bind, outcome ingest). This issue is the shared read contract.
 """
 
+import math
 import statistics
 from datetime import date, timedelta
 from typing import cast
 
-from app.ads import budget, channels, judgment, manual_settings
+from app.ads import (
+    budget,
+    channels,
+    external_models,
+    external_repository,
+    judgment,
+    manual_settings,
+)
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core import settings as coresettings
@@ -130,6 +138,34 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     if campaign is None:
         raise ValueError("campaign_unknown")
 
+    if campaign.get("origin") == "imported":
+        allowed = {"goal_text", "objective", "success_metric", "success_target", "success_basis"}
+        if set(updates) - allowed:
+            raise ValueError(external_models.IMPORTED_REASON)
+        for key in ("goal_text", "objective"):
+            value = updates.get(key)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{key}_unknown")
+        if (updates.get("success_metric") is not None
+                and updates["success_metric"] not in _SUCCESS_METRICS):
+            raise ValueError("success_metric_unknown")
+        target = updates.get("success_target")
+        if target is not None and (
+            isinstance(target, bool) or not isinstance(target, (int, float))
+            or not math.isfinite(target)
+        ):
+            raise ValueError("success_target_unknown")
+        if updates:
+            conn.execute(
+                "UPDATE ads_campaign SET updated_at=now(),"
+                + ",".join(key + "=%s" for key in updates)
+                + " WHERE org_id=%s AND brand_id=%s AND id=%s",
+                (*updates.values(), org_id, brand_id, campaign_id),
+            )
+        updated = get_campaign(conn, org_id, brand_id, campaign_id)
+        assert updated is not None
+        return updated
+
     for field in ("name", "objective"):
         if field in updates:
             value = updates[field]
@@ -220,9 +256,24 @@ def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -
     ).fetchone()
     if row is None:
         return None
+    if row["origin"] == "imported":
+        return dict(row)
     brand = bi_repo.get_brand(cast(Conn, conn), brand_id)
     labels = judgment.conversion_labels((brand or {}).get("conversion_goal"))
     return budget.reconcile_campaign(dict(row), labels["conversion"])
+
+
+def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:
+    campaign = get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+    if campaign.get("origin") == "imported":
+        raise ValueError(external_models.IMPORTED_REASON)
+    return campaign
+
+
+def _empty_external_outcome() -> dict:
+    return {"spend": None, "purchases": None, "revenue": None, "row_count": 0}
 
 
 def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> list:
@@ -247,7 +298,8 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     for row in rows:
         row = dict(row)
         groups = _groups_for_campaign(conn, org_id, brand_id, row["id"])
-        outcome = _outcome_totals(conn, org_id, brand_id, row["id"])
+        outcome = (_empty_external_outcome() if row["origin"] == "imported" else
+                   _outcome_totals(conn, org_id, brand_id, row["id"]))
         budget_total = _budget_total(row["start_date"], row["end_date"], groups)
         spend = float(outcome["spend"]) if outcome["row_count"] else None
         pct = (
@@ -256,6 +308,7 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
         )
         entries.append({
             "id": row["id"], "name": row["name"], "status": row["status"],
+            "origin": row["origin"], "capabilities": external_models.capabilities(row["origin"]),
             "start_date": row["start_date"], "end_date": row["end_date"],
             "objective": row["objective"],
             "created_at": row["created_at"], "created_by": row["created_by"],
@@ -356,10 +409,16 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         " ORDER BY created_at DESC LIMIT 20",
         (org_id, brand_id, campaign_id),
     ).fetchall()
-    outcome = _outcome_totals(conn, org_id, brand_id, campaign_id)
+    outcome = (_empty_external_outcome() if campaign["origin"] == "imported" else
+               _outcome_totals(conn, org_id, brand_id, campaign_id))
     budget_total = _budget_total(campaign["start_date"], campaign["end_date"], groups)
 
     detail = dict(campaign)
+    detail["capabilities"] = external_models.capabilities(campaign["origin"])
+    detail["external_view"] = (
+        external_repository.external_view(conn, org_id, brand_id, campaign_id)
+        if campaign["origin"] == "imported" else None
+    )
     detail["groups"] = groups
     detail["manual_handoff"] = manual_settings.handoff(detail)
     detail["budget_total"] = budget_total
@@ -464,6 +523,7 @@ def save_strategy(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, 
                    budget_basis_json: dict) -> dict:
     """F03-I05: 策略＋預算情境＋依據整包寫進 `ads_campaign.budget_basis_json`——沒有新表
     （§0「strategy JSON stored in the campaign row」）。"""
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET budget_basis_json = %s"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
@@ -479,6 +539,7 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     """F03-I05: 使用者採用的情境（或手改的總額）——寫 `budget_planned`／`budget_scenario`；
     這之後 group 日預算才是錢的真相（§0「One source of truth for money after 採用」），這裡
     寫的是「採用當下記錄」，永不被重算覆寫。"""
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET budget_planned = %s, budget_scenario = %s,"
         " budget_basis_json = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
@@ -494,6 +555,7 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
 
 def set_campaign_status(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
                          status: str) -> None:
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET status = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
         (status, org_id, brand_id, campaign_id),
@@ -517,6 +579,7 @@ def coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> list:
 def create_group(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                   channel_key: str, name: str, role: str, daily_budget: float,
                   start_date=None, end_date=None) -> dict:
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     group_id = new_id("adg")
     conn.execute(
         "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key, name,"
@@ -545,6 +608,9 @@ def update_group_fields(conn: _AnyConn, org_id: str, brand_id: str, group_id: st
                          updates: dict) -> dict:
     """單純欄位寫入——業務規則（金額核准煞車、`ads_action` 留痕）在 `app/ads/plan.py`，
     這裡只管落地，跟 `update_campaign` 同一個分層。"""
+    node = get_group(conn, org_id, brand_id, group_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     set_clauses = []
     params: list = []
     for column in _GROUP_PATCHABLE:
@@ -564,6 +630,9 @@ def update_group_fields(conn: _AnyConn, org_id: str, brand_id: str, group_id: st
 
 
 def delete_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str) -> None:
+    node = get_group(conn, org_id, brand_id, group_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     conn.execute(
         "DELETE FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s AND id = %s",
         (org_id, brand_id, group_id),
@@ -588,6 +657,7 @@ _AD_COORDINATE_COLUMNS = {
 
 def create_ad(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, group_id: str, *,
               name: str, coordinates: dict, coordinates_snapshot: dict) -> dict:
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     ad_id = new_id("ada")
     conn.execute(
         "INSERT INTO ads_ad (id, org_id, brand_id, campaign_id, group_id, name, audience_key,"
@@ -617,6 +687,9 @@ def update_ad_fields(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str,
     """`updates` 是 `{"name": ..., "coordinates": {"audience": ..., ...}}`——`coordinates`
     只送使用者真的改過的維度，其餘維度保持原樣（跟 `update_campaign` 的 `exclude_unset`
     同一條慣例）。"""
+    node = get_ad(conn, org_id, brand_id, ad_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     set_clauses = []
     params: list = []
     if "name" in updates:
@@ -640,6 +713,9 @@ def update_ad_fields(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str,
 
 
 def delete_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str) -> None:
+    node = get_ad(conn, org_id, brand_id, ad_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     conn.execute(
         "DELETE FROM ads_ad WHERE org_id = %s AND brand_id = %s AND id = %s",
         (org_id, brand_id, ad_id),
@@ -663,6 +739,9 @@ def set_ad_asset_ready(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *
                         actor: str | None, ready: bool) -> dict:
     """F03-I08：使用者手動勾／取消勾「素材已就位」——不是 `ads_action`（沒有東西碰到平台，
     §0「It is not an ads_action」），單純這一列自己的事實。"""
+    node = get_ad(conn, org_id, brand_id, ad_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     if ready:
         conn.execute(
             "UPDATE ads_ad SET asset_ready_source = 'manual', asset_ready_by = %s,"
@@ -706,6 +785,7 @@ def record_action(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, 
 
 def bind_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                    external_id: str, external_name: str, external_status: str | None) -> None:
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET external_id = %s, external_name = %s, external_status = %s,"
         " local_state = 'bound', bound_at = now()"
@@ -716,6 +796,9 @@ def bind_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, 
 
 def bind_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str, *,
                external_id: str, external_name: str, external_status: str | None) -> None:
+    node = get_group(conn, org_id, brand_id, group_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     conn.execute(
         "UPDATE ads_delivery_group SET external_id = %s, external_name = %s,"
         " external_status = %s, local_state = 'bound', bound_at = now()"
@@ -726,6 +809,9 @@ def bind_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str, *,
 
 def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
             external_id: str, external_name: str, external_status: str | None) -> None:
+    node = get_ad(conn, org_id, brand_id, ad_id)
+    if node is not None:
+        require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
     conn.execute(
         "UPDATE ads_ad SET external_id = %s, external_name = %s, external_status = %s,"
         " local_state = 'bound', bound_at = now()"
@@ -737,6 +823,18 @@ def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------
 
 _CHILD_TABLES = (
+    ("ads_asset_observation_claim", "素材版本成效歸屬"),
+    ("ads_asset_binding", "素材版本平台證據"),
+    ("ads_asset_placement", "自帶素材安排"),
+    ("ads_asset_suggestion_reservation", "素材建議費用預留"),
+    ("ads_asset_suggestion_batch", "素材建議批次"),
+    ("ads_asset_upload", "素材上傳紀錄"),
+    ("ads_asset_upload_batch", "素材上傳批次"),
+    ("ads_user_asset", "品牌自帶原檔"),
+    ("ads_external_listing", "既有活動清單"),
+    ("ads_external_sync_job", "既有活動同步"),
+    ("ads_external_daily", "既有活動來源成效"),
+    ("ads_external_entity", "既有活動來源結構"),
     ("ads_outcome_daily", "投放中心成效"),
     ("ads_action", "投放中心操作紀錄"),
     ("ads_ad", "投放中心廣告"),

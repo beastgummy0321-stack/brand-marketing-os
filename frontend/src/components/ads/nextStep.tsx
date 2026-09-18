@@ -28,6 +28,9 @@ export interface NextStep {
 }
 
 export function nextStep(c: CampaignDetail): NextStep {
+  if (c.origin === "imported" || c.capabilities?.unavailable.strategy) {
+    return { id: "make_assets", target: "assets", stageIndex: 3, sentence: "查看原始資料，安排自帶素材與手動交接。", label: "安排自帶素材 →" };
+  }
   if (c.status === "closed") {
     return { id: "performance", target: "performance", stageIndex: 5, sentence: "已結案，結案紀錄在成效。", label: "查看成效 →" };
   }

@@ -36,9 +36,12 @@
         "app/ads/**",
         "app/departments/ads/**",
         "app/tests/test_ads*.py",
+        "app/tests/fixtures/ads_external/**",
         "frontend/src/components/ads/**",
         "frontend/src/lib/adsApi.ts",
         "frontend/src/lib/adsLaunchApi.ts",
+        "frontend/src/lib/adsExternalApi.ts",
+        "frontend/src/lib/adsUserAssetsApi.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },
@@ -108,6 +111,78 @@
         "supabase/migrations/*_workbench_*.sql"
       ],
       "symbol": "workbench_visual_identity"
+    },
+    "ads_external_entity": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_entity"
+    },
+    "ads_external_daily": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_daily"
+    },
+    "ads_external_sync_job": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_sync_job"
+    },
+    "ads_external_listing": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_listing"
+    },
+    "ads_asset_suggestion_batch": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_suggestion_batch"
+    },
+    "ads_asset_suggestion_reservation": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_suggestion_reservation"
+    },
+    "ads_asset_binding": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_binding"
+    },
+    "ads_asset_observation_claim": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_observation_claim"
+    },
+    "ads_asset_upload_batch": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_upload_batch"
+    },
+    "ads_user_asset": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_user_asset"
+    },
+    "ads_asset_upload": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_upload"
+    },
+    "ads_asset_placement": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_placement"
     },
     "ads_campaign": {
       "owner": "ads",

@@ -1,3 +1,4 @@
+import { ExternalCampaignPanel } from "./ExternalCampaignPanel";
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -32,7 +33,7 @@ function periodLabel(c: CampaignDetail): string {
 /** Campaign 五分頁工作區（F03-I14／I15）：總覽／策略／投放結構／素材四分頁是真的內容；
  * 成效還沒補（自己的票補上），先用「誠實的空狀態＋下一步」頂著——
  * 規則沿用 §4.2：分頁沒資料不做成禁用分頁。 */
-export function CampaignWorkspace({
+function Workspace({
   brandId,
   campaignId,
 }: {
@@ -91,13 +92,13 @@ export function CampaignWorkspace({
 
   // §6.2 決議 15：規則回的 target 可能是 "publish"，不是分頁——這裡把它接到既有的發布入口。
   function go(target: StepTarget) {
-    if (target === "publish") setPublishAdapter("auto_meta");
+    if (target === "publish") { if (canPublish) setPublishAdapter("auto_meta"); else changeTab("assets"); }
     else changeTab(target);
   }
 
   const campaign = state.status === "ready" ? state.campaign : null;
   // 已經投放中／結束／結案不再需要發布動作——只在草稿／待發布時給這個入口。
-  const canPublish = campaign ? campaign.status === "draft" || campaign.status === "ready" : false;
+  const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
 
   function updateCampaign(next: CampaignDetail) {
     setState({ status: "ready", campaign: next });
@@ -165,6 +166,8 @@ export function CampaignWorkspace({
             <div className="surface">
               <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
             </div>
+          ) : campaign.origin === "imported" && tab !== "assets" ? (
+            <ExternalCampaignPanel key={campaign.id} brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
           ) : tab === "overview" ? (
             <OverviewTab campaign={campaign} onChangeTab={go} />
           ) : tab === "strategy" ? (
@@ -186,3 +189,5 @@ export function CampaignWorkspace({
     </div>
   );
 }
+
+export function CampaignWorkspace(props: Parameters<typeof Workspace>[0]) { return <Workspace key={`${props.brandId}:${props.campaignId}`} {...props} />; }

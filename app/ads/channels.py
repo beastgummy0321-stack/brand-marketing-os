@@ -114,3 +114,17 @@ def account_spend_history(
         "days": 30,
         "channel_label": "Meta",
     }
+
+
+
+def external_reader(platform):
+    if platform == "meta":
+        from app.ads.adapters.meta_read import MetaReader
+        return MetaReader()
+    return None
+
+
+
+def has_legacy_campaign_binding(platform, native_kind):
+    """The old manual adapter stored only Meta campaign IDs on ads_campaign.external_id."""
+    return platform == "meta" and native_kind == "campaign"

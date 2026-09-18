@@ -56,6 +56,7 @@ def publish(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
     """造假外部 id、逐節點綁定（campaign → 每個投放組 → 每支廣告）、Campaign 轉 `live`，
     最後補齊成效——跟 `manual.publish` 不同的是這裡不留「等使用者回來配對」這一步，
     一次做完（決策 19：兩個通路實作，手動／模擬）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
@@ -92,6 +93,7 @@ def bind(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
          actor: str) -> dict:  # noqa: ARG001 — 介面要求收 actor，模擬通路不需要它
     """冪等空操作——`publish` 已經自己綁完了，「配對」只是把同一份 campaign_detail 原樣
     回報一次（決策 19：模擬通路不需要使用者再按一次配對）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -162,6 +164,7 @@ def generate_outcomes(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: s
     """補齊 `start_date` 到 `min(end_date, until or today)` 每一天缺的成效——`until` 之外／
     今天之後一律不生（§0「nothing beyond today」），`seed` 給定時整批可重現（驗收要能重跑同
     一份螢幕）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")

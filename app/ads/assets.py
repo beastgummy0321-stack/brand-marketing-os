@@ -134,6 +134,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     `campaign_unknown`、`pack_already_exists`（再交棒一次——已經有一份了）；其餘（
     `sets_unknown`／`required_outputs_unknown`／...）是 `workbench.submit_pack` 自己的驗證，
     原樣往上丟，這裡不重新包一次。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
