@@ -27,6 +27,7 @@ def change_summary(request: Request, brand_id: str):
             "count(*) OVER() AS total FROM ads_change_set s "
             "JOIN ads_campaign c ON c.id=s.campaign_id AND c.org_id=s.org_id "
             "AND c.brand_id=s.brand_id LEFT JOIN ads_action a ON a.change_set_id=s.id "
+            "AND NOT (a.evidence_json ? 'superseded_by') "
             "WHERE s.org_id=%s AND s.brand_id=%s AND s.status IN ('draft','deferred','approved') "
             "GROUP BY s.id,c.name HAVING s.status<>'approved' OR "
             "count(a.id) FILTER(WHERE a.verification_state<>'confirmed')>0 "

@@ -393,6 +393,11 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(binding["native_id"], self.ad["native_id"])
         self.assertIsNotNone(binding["valid_to"])
         self.assertIn("creative", binding["stale_reason"])
+        from app.main import app
+
+        summary = TestClient(app).get(f"/api/ads/brands/{self.brand}/change-control-summary")
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual([item["id"] for item in summary.json()["items"]], [revised["id"]])
 
     def _readback_with_concurrent_sync(self, approved, synced_node, **changes):
         outer = self
