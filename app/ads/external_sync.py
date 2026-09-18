@@ -180,7 +180,17 @@ def _save_page(conn, job, task, page):
             ):
                 errors.append("部分素材缺少已讀回的來源節點。")
                 continue
-            repo.upsert_entity(conn, org, brand, task["campaign_id"], item)
+            if "creative" in item:
+                from app.ads import asset_binding_repository
+
+                asset_binding_repository.lock_native(conn, {"org_id": org, **item})
+            saved = repo.upsert_entity(conn, org, brand, task["campaign_id"], item)
+            if "creative" in item:
+                from app.ads import asset_binding_repository
+
+                asset_binding_repository.stale_for_entity(
+                    conn, org, brand, task["campaign_id"], saved["id"], item["creative"]
+                )
     return errors
 
 
@@ -264,6 +274,12 @@ def run_sync(org_id, brand_id, job_id):
                     )
                 # FK/acyclic constraints are deferred: check before marking the page successful.
                 conn.execute("SET CONSTRAINTS ALL IMMEDIATE")
+                if errors and task.get("campaign_id"):
+                    from app.ads import asset_binding_repository
+
+                    asset_binding_repository.sync_failed(
+                        conn, org_id, brand_id, task["campaign_id"]
+                    )
                 current = _update_task(conn, job, key, updated)
             except Exception as exc:
                 conn.rollback()
@@ -286,6 +302,12 @@ def run_sync(org_id, brand_id, job_id):
                             "error_code": code,
                             "last_attempt_at": now_utc(),
                         },
+                    )
+                if task.get("campaign_id"):
+                    from app.ads import asset_binding_repository
+
+                    asset_binding_repository.sync_failed(
+                        conn, org_id, brand_id, task["campaign_id"]
                     )
                 current = _update_task(conn, job, key, updated)
             if current["status"] == "pending":

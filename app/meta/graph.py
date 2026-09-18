@@ -506,6 +506,9 @@ _EXTERNAL_FIELDS = {
         "id,account_id,name,objective,effective_status,start_time,stop_time,"
         "daily_budget,lifetime_budget"
     ),
+    "adset": ("id,account_id,campaign_id,name,effective_status"),
+    "ad": ("id,account_id,campaign_id,adset_id,name,effective_status,creative{id,body,title,"
+           "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}"),
     "adsets": (
         "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
         "daily_budget,lifetime_budget"
@@ -542,7 +545,7 @@ def external_page(
         params["after"] = cursor
     if section == "campaigns":
         path = f"act_{account_id}/campaigns"
-    elif section == "campaign":
+    elif section in {"campaign", "adset", "ad"}:
         if native_id is None:
             raise GraphError("缺少來源活動。")
         path = str(native_id)
@@ -578,7 +581,7 @@ def external_page(
             f"平台無法讀取此資料（代碼 {code if isinstance(code, int) else '未知'}）。",
             code=code if isinstance(code,int) else None,
         )
-    data = [body] if section == "campaign" else body.get("data")
+    data = [body] if section in {"campaign", "adset", "ad"} else body.get("data")
     if (
         not isinstance(data, list)
         or len(data) > 100

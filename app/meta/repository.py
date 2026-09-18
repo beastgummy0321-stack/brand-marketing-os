@@ -771,7 +771,7 @@ cleanup.register(
 def external_bound_accounts(conn, org_id, brand_id):
     """Source facade: expose only accounts currently bound to this tenant and brand."""
     rows = conn.execute(
-        "SELECT a.account_id,a.name,a.currency FROM meta_ad_account a "
+        "SELECT a.account_id,a.name,a.currency,a.timezone_name FROM meta_ad_account a "
         "JOIN brand_meta_ad_account b ON b.ad_account_id=a.id AND b.org_id=a.org_id "
         "WHERE a.org_id=%s AND b.brand_id=%s ORDER BY a.account_id", (org_id, brand_id),
     ).fetchall()
@@ -816,3 +816,13 @@ def external_purchase_values(actions, values):
             return {"purchases":number(counts[kind]), "revenue":number(revenues.get(kind)),
                     "action_type":kind}
     return {"purchases":None,"revenue":None,"action_type":None}
+
+
+def read_external_object(conn, org_id, brand_id, account_id, kind, native_id):
+    """Fresh, bounded node GET through the existing credential and tenant facade."""
+    if kind not in {"ad", "adset", "campaign"}:
+        raise ValueError("不支援的單物件讀取。")
+    page=read_external_page(conn,org_id,brand_id,account_id,kind,native_id=native_id)
+    if len(page["data"])!=1 or str(page["data"][0].get("id"))!=str(native_id):
+        raise ValueError("平台沒有回傳指定物件。")
+    return page["data"][0]

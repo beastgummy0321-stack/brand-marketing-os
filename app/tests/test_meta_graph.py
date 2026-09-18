@@ -51,3 +51,12 @@ class ExternalGraphTest(unittest.TestCase):
             graph.external_page("secret", "1", "campaigns", cursor="opaque/+=")
         self.assertEqual(fetch.call_args.kwargs["params"]["after"], "opaque/+=")
         self.assertEqual(fetch.call_args.args[0], graph.GRAPH_BASE_URL + "/act_1/campaigns")
+
+    def test_single_objects_use_fixed_node_get_not_campaign_listing(self):
+        for kind in ("ad", "adset", "campaign"):
+            with patch.object(
+                graph, "fetch_page", return_value={"id": "3", "account_id": "1"}
+            ) as fetch:
+                result = graph.external_page("secret", "1", kind, native_id="3")
+            self.assertEqual(fetch.call_args.args[0], graph.GRAPH_BASE_URL + "/3")
+            self.assertEqual(result["data"][0]["id"], "3")

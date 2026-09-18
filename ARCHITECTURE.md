@@ -145,6 +145,18 @@
       "definition": ["supabase/migrations/*_ads_*.sql"],
       "symbol": "ads_asset_suggestion_reservation"
     },
+    "ads_asset_binding": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_binding"
+    },
+    "ads_asset_observation_claim": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_observation_claim"
+    },
     "ads_asset_upload_batch": {
       "owner": "ads",
       "kind": "sql-table",
