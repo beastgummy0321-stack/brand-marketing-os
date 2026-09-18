@@ -133,6 +133,30 @@
       "definition": ["supabase/migrations/*_ads_*.sql"],
       "symbol": "ads_external_listing"
     },
+    "ads_asset_upload_batch": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_upload_batch"
+    },
+    "ads_user_asset": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_user_asset"
+    },
+    "ads_asset_upload": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_upload"
+    },
+    "ads_asset_placement": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_asset_placement"
+    },
     "ads_campaign": {
       "owner": "ads",
       "kind": "sql-table",
