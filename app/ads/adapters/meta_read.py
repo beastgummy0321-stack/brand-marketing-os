@@ -43,7 +43,7 @@ def _entity(item, kind, account):
         "source_account": account["account_id"],
         "native_id": str(item["id"]),
         "native_kind": kind,
-        "native_label": kind,
+        "native_label": {"campaign": "活動", "adset": "廣告組", "ad": "廣告"}[kind],
         "availability": {},
         "last_attempt_at": now_utc(),
         "last_success_at": now_utc(),
@@ -263,3 +263,69 @@ class MetaReader:
             if following
             else None,
         )
+
+    def binding_kinds(self):
+        return ("ad",)
+
+    def verify_native(
+        self,
+        conn,
+        org_id,
+        brand_id,
+        account,
+        *,
+        native_kind,
+        native_id,
+        root_kind,
+        root_id,
+        original,
+    ):
+        if native_kind != "ad" or root_kind != "campaign":
+            raise SourceReadError("此來源不支援指定素材核對。", "unsupported")
+        try:
+            ad = source.read_external_object(
+                conn, org_id, brand_id, account["account_id"], "ad", native_id
+            )
+            if not ad.get("adset_id") or str(ad.get("campaign_id")) != root_id:
+                raise ValueError("廣告不屬於指定活動。")
+            adset = source.read_external_object(
+                conn, org_id, brand_id, account["account_id"], "adset", str(ad["adset_id"])
+            )
+            campaign = source.read_external_object(
+                conn, org_id, brand_id, account["account_id"], "campaign", root_id
+            )
+            if str(adset.get("campaign_id")) != root_id:
+                raise ValueError("廣告父層不屬於指定活動。")
+            identity = {
+                "platform",
+                "source_account",
+                "native_kind",
+                "native_id",
+                "parent_native_kind",
+                "parent_native_id",
+            }
+
+            def verified_identity(raw, kind):
+                parsed = _entity(raw, kind, account)
+                result = {key: value for key, value in parsed.items() if key in identity}
+                if "effective_status" in raw:
+                    result["native_status"] = raw["effective_status"]
+                return result
+
+            entity = verified_identity(ad, "ad")
+            entity["creative"] = creative_summary(ad.get("creative"))
+            parents = [verified_identity(adset, "adset"), verified_identity(campaign, "campaign")]
+            return {
+                "entity": entity,
+                "parents": parents,
+                "timezone_name": account.get("timezone_name"),
+                "media_equivalence": None,
+                "continuous_intervals": [],
+                "limitations": [
+                    "Meta 未提供原檔位元組等價與連續 creative 歷史；版本成效不可歸屬。"
+                ],
+            }
+        except source.ExternalReadError as exc:
+            raise SourceReadError(str(exc), exc.code) from None
+        except ValueError:
+            raise SourceReadError("平台物件或完整父鏈無法核對。", "parent_mismatch") from None

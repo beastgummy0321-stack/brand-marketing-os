@@ -588,3 +588,20 @@ def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, 
         fingerprint(data),
         actor,
     )
+
+
+def list_batches(conn, org, brand, campaign, *, after=None, limit=20):
+    if campaigns.get_campaign(conn, org, brand, campaign) is None:
+        raise ValueError("找不到活動。")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise ValueError("每頁請選 1 至 50 筆。")
+    rows = conn.execute(
+        "SELECT id,status,error,created_at,updated_at FROM ads_asset_suggestion_batch "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND (%s::text IS NULL OR "
+        "id<%s) ORDER BY id DESC LIMIT %s",
+        (org, brand, campaign, after, after, limit + 1),
+    ).fetchall()
+    return {
+        "batches": [dict(row) for row in rows[:limit]],
+        "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
+    }

@@ -349,3 +349,180 @@ async def confirm_placement(request: Request, brand_id: str, campaign_id: str, p
         }
     except ValueError as exc:
         raise _error(exc) from exc
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/asset-suggestions")
+def list_asset_suggestion_batches(
+    request: Request, brand_id: str, campaign_id: str, cursor: str | None = None, limit: int = 20
+):
+    from app.ads import asset_suggestions
+
+    actor = web.require_actor(request)
+    try:
+        return asset_suggestions.list_batches(
+            db.current(), actor.org_id, brand_id, campaign_id, after=cursor, limit=limit
+        )
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/handoff")
+def asset_handoff(
+    request: Request, brand_id: str, campaign_id: str, placement_id: str, revision: int
+):
+    from app.ads import asset_binding
+
+    actor = web.require_actor(request)
+    try:
+        return asset_binding.handoff(
+            db.current(), actor.org_id, brand_id, campaign_id, placement_id, revision
+        )
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.get(
+    "/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/binding-candidates"
+)
+def asset_binding_candidates(
+    request: Request,
+    brand_id: str,
+    campaign_id: str,
+    placement_id: str,
+    revision: int,
+    platform: str,
+    account_id: str,
+    cursor: str | None = None,
+):
+    from app.ads import asset_binding
+
+    actor = web.require_actor(request)
+    try:
+        return asset_binding.candidates(
+            db.current(),
+            actor.org_id,
+            brand_id,
+            campaign_id,
+            placement_id,
+            revision,
+            platform=platform,
+            account_id=account_id,
+            after=cursor,
+        )
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/self-report")
+async def asset_self_report(request: Request, brand_id: str, campaign_id: str, placement_id: str):
+    from app.ads import asset_binding_repository
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return {
+            "binding": asset_binding_repository.report(
+                db.current(),
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                placement_id,
+                body.get("expected_revision"),
+                str(actor.user_id),
+            )
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+async def _await_binding_work(function, *args, **kwargs):
+    task = asyncio.create_task(run_in_threadpool(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        task.result()
+        raise
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/verify-binding")
+async def asset_verify_binding(
+    request: Request, brand_id: str, campaign_id: str, placement_id: str
+):
+    from app.ads import asset_binding
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return {
+            "binding": await _await_binding_work(
+                asset_binding.verify,
+                db.current(),
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                placement_id,
+                body.get("expected_revision"),
+                body.get("entity_id"),
+                str(actor.user_id),
+                user_verified=body.get("user_verified", False),
+            )
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/end-binding")
+async def asset_end_binding(request: Request, brand_id: str, campaign_id: str, placement_id: str):
+    from app.ads import asset_binding
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return {
+            "binding": asset_binding.end(
+                db.current(),
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                placement_id,
+                body.get("expected_revision"),
+                body.get("binding_id"),
+            )
+        }
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/version-metrics")
+def asset_version_metrics(
+    request: Request,
+    brand_id: str,
+    campaign_id: str,
+    placement_id: str,
+    revision: int,
+    start: str,
+    end: str,
+):
+    from datetime import date
+
+    from app.ads import asset_binding
+
+    actor = web.require_actor(request)
+    try:
+        return asset_binding.metrics(
+            db.current(),
+            actor.org_id,
+            brand_id,
+            campaign_id,
+            placement_id,
+            revision,
+            start=date.fromisoformat(start),
+            end=date.fromisoformat(end),
+        )
+    except ValueError as exc:
+        raise _error(exc) from exc

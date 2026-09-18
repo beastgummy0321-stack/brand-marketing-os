@@ -504,8 +504,10 @@ class SuggestionsTest(unittest.TestCase):
                 "test",
             )
             self.conn.commit()
-            url = (f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
-                   f"/placements/{row['id']}/confirm")
+            url = (
+                f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+                f"/placements/{row['id']}/confirm"
+            )
             self.assertEqual(client.post(url, json={"expected_revision": 1}).status_code, 409)
             result = client.post(url, json={"expected_revision": changed["revision"]})
             self.assertEqual(result.status_code, 200, result.text)
@@ -513,3 +515,26 @@ class SuggestionsTest(unittest.TestCase):
                 result.json()["placement"]["status"], "pending" if risky else "manual_ready"
             )
         self.assertEqual(len(self.fake.calls), 0)
+
+    def test_batch_history_is_paginated_and_campaign_scoped(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        rows = [self.placement(), self.placement(), self.placement()]
+        for index, row in enumerate(rows):
+            self.request([row], str(index))
+        page = suggestions.list_batches(self.conn, self.org, self.brand, self.campaign, limit=2)
+        self.assertEqual(len(page["batches"]), 2)
+        rest = suggestions.list_batches(
+            self.conn, self.org, self.brand, self.campaign, after=page["next_cursor"], limit=2
+        )
+        self.assertEqual(len(rest["batches"]), 1)
+        self.assertIsNone(rest["next_cursor"])
+        with self.assertRaises(ValueError):
+            suggestions.list_batches(self.conn, "other", self.brand, self.campaign)
+        response = TestClient(app).get(
+            f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/asset-suggestions?limit=2"
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["batches"]), 2)
