@@ -837,6 +837,8 @@ _CHILD_TABLES = (
     ("ads_external_entity", "既有活動來源結構"),
     ("ads_outcome_daily", "投放中心成效"),
     ("ads_action", "投放中心操作紀錄"),
+    ("ads_change_set", "廣告變更核准清單"),
+    ("ads_month_budget", "品牌月預算"),
     ("ads_ad", "投放中心廣告"),
     ("ads_delivery_group", "投放中心投放組"),
     ("ads_campaign", "投放中心 Campaign"),

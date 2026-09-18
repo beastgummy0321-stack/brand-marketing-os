@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
@@ -17,6 +17,7 @@ import {
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { StepButton } from "./nextStep";
 import { Disclosure } from "./patterns";
+import { getOrgId } from "@/lib/auth";
 
 const OPTIONAL_HANDOFF_FIELDS = new Set([
   "平台活動 ID（手動紀錄）",
@@ -227,8 +228,11 @@ function ManualPublish({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onViewPerformance: () => void;
 }) {
-  const [confirmed, setConfirmed] = useState(c.actions.some(a =>
-    a.kind === "publish" && a.target_kind === "campaign" && a.after_json.adapter === "manual"));
+  const [confirmed, setConfirmed] = useState(Boolean(describe.content_hash) && c.actions.some(a =>
+    a.kind === "publish" && a.target_kind === "campaign" && a.after_json.adapter === "manual"
+    && a.after_json.content_hash === describe.content_hash && Boolean(a.after_json.operation_id)));
+  const operationKey = `ads-publish:${getOrgId()}:${brandId}:${c.id}:${describe.content_hash}`;
+  const operation = useRef<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
@@ -243,10 +247,13 @@ function ManualPublish({
   const platformNames = platforms.map((platform) => platform.label).join("、") || "平台";
 
   async function confirmPreparation() {
+    if (!describe.content_hash) { setBindError("目前內容尚未取得可核准版本，請重新開啟本頁。"); return; }
     setConfirming(true);
     setBindError(null);
     try {
-      await publishCampaign(brandId, c.id, "manual");
+      operation.current ??= sessionStorage.getItem(operationKey) ?? crypto.randomUUID();
+      sessionStorage.setItem(operationKey, operation.current);
+      await publishCampaign(brandId, c.id, "manual", { content_hash: describe.content_hash, operation_id: operation.current });
       setConfirmed(true);
       onCampaignChange(await getCampaign(brandId, c.id));
     } catch (err) {
@@ -278,7 +285,8 @@ function ManualPublish({
         <p>平台：{platforms.length ? platforms.map((platform) => `${platform.label}（${platform.state}）`).join("、") : "尚未建立投放組"}。此步驟不選擇或寫入任何廣告帳戶。</p>
         <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
         <p>確認後，本系統會以目前預算作為後續調整的核准上限。</p>
-        {!confirmed ? <Button disabled={confirming} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
+        {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
+        {!confirmed ? <Button disabled={confirming || !describe.content_hash} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
       </div>
       {describe.checklist.map((node) => (
         <NodeCard key={`${node.level}:${node.id}`} node={node} />
@@ -319,7 +327,7 @@ function ManualPublish({
               <p className="flex items-center gap-1.5 text-success">
                 <CheckCircle2 size={18} /> 配對完成：{counts.matched}／{counts.total} 個節點對上
               </p>
-              <p className="text-sm text-muted-foreground">Campaign 已上線，狀態更新為投放中。</p>
+              <p className="text-sm text-muted-foreground">平台物件已對應；是否開始投遞及成效是否足夠仍需另外確認。</p>
               <Button variant="outline" onClick={onViewPerformance}>
                 查看成效 <ArrowRight size={13} />
               </Button>

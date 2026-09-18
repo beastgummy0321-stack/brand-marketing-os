@@ -145,7 +145,7 @@ describe("PublishPage（F06-I04）", () => {
 });
 
   it("opening manual checklist is read-only; explicit confirmation writes once", async () => {
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [] } });
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
     vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
     vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 0, total: 0 }));
     vi.mocked(publishCampaign).mockClear();
@@ -155,7 +155,7 @@ describe("PublishPage（F06-I04）", () => {
     expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(confirm);
     await waitFor(() => expect(publishCampaign).toHaveBeenCalledTimes(1));
-    expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual");
+    expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "current-plan-hash", operation_id: expect.any(String) });
     expect(await screen.findByText("已記錄手動上架準備；請在平台完成設定後再配對。")).toBeTruthy();
   });
 

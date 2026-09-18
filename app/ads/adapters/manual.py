@@ -3,9 +3,8 @@
 interface (`describe`/`publish`/`bind`); registered under the key `"manual"`.
 """
 
-from app.ads import manual_settings, plan, simulation_mode
+from app.ads import change_control_launch, manual_settings, simulation_mode
 from app.ads import repository as ads_repo
-from app.core import approval as approval_mod
 from app.meta import repository as meta_repo
 
 # app/schedule/binding.py 的訊息規則「再實作一份行為」（§0「reused as behaviour,
@@ -100,10 +99,9 @@ def describe(campaign: dict) -> dict:
 
 # -- publish：不碰平台，只記意圖＋寫一次核准 -----------------------------------------------------
 
-def publish(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
-    """不建立任何平台物件——只留一列 `ads_action(kind='publish')` 記意圖，跟**每一次**都寫
-    一列 `approval`（F03-I09 修正 2：不管這個 Campaign 有沒有排期，都要核准，`amount` 沒有
-    期間時退回投放組日預算合計，絕不悄悄不核准）。"""
+def publish(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
+            operation_id: str | None = None, content_hash: str | None = None) -> dict:
+    """只保存核准與人工交接意圖；相同操作重送不重複核准，從不建立平台物件。"""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     simulation_mode.require_real(conn, org_id, brand_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
@@ -116,21 +114,8 @@ def publish(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -
         # 預算相關的操作都被 plan.py::_check_budget_ceiling 擋死，而 ads 沒有撤銷核准的路徑
         # （F03-I09 修正 2 的未決情況，planner 2026-09-12 裁決）。
         raise ValueError("no_groups_to_publish")
-    detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
-    assert detail is not None
-    amount = detail["budget_total"] if detail["budget_total"] is not None else daily_sum
-
-    approval_mod.approve(
-        conn, org_id=org_id, brand_id=brand_id, scope_type=plan.APPROVAL_SCOPE_TYPE,
-        scope_ref=campaign_id, content_hash=campaign_id, amount=amount,
-        max_daily_amount=daily_sum, actor=actor,
-    )
-    ads_repo.record_action(
-        conn, org_id, brand_id, campaign_id, target_kind="campaign", target_id=campaign_id,
-        kind="publish", before={}, after={"adapter": "manual"}, approved_by=actor,
-        sync_state="pending_manual",
-    )
-    return {"ok": True}
+    return change_control_launch.publish(conn, org_id, brand_id, campaign_id, actor,
+                                         operation_id, content_hash)
 
 
 # -- bind：逐節點由上往下精準名稱比對 -------------------------------------------------------------

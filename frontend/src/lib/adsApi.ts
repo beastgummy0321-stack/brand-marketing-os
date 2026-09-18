@@ -1,3 +1,5 @@
+import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
+export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 /** 投放中心 API 型別與呼叫（F03-I01）。對應 `app/ads/routes.py`——Campaign 物件的共用契約，
  * 只有讀取；後續票在這個檔案上加，不重排這裡已經定的形狀。錯誤處理沿用既有寫法：`apiFetch`
  * 之後檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就
@@ -605,40 +607,6 @@ export async function setAssetReady(
 
 // -- F03-I09：手動發布／配對 -------------------------------------------------------------------
 
-export type AdapterKey = "manual" | "auto_meta" | "simulated";
-
-export interface AdapterOption {
-  key: AdapterKey;
-  label: string;
-}
-
-/** 逐節點清單的一列——campaign 節點打頭，然後每個投放組，再來是它底下每支廣告。 */
-export interface PublishChecklistField {
-  label: string;
-  value: string | number;
-  reason: string;
-}
-
-export interface PublishChecklistNode {
-  level: "campaign" | "group" | "ad";
-  id: string;
-  name: string;
-  fields: PublishChecklistField[];
-}
-
-/** `describe`：`message` 非 `null` 時（例如 `auto_meta` 的「自動發布未接上」）沒有清單可看。 */
-export interface PublishDescribe {
-  adapter: AdapterKey;
-  message: string | null;
-  checklist: PublishChecklistNode[];
-}
-
-export interface PublishGetResponse {
-  adapters: AdapterOption[];
-  adapter: AdapterKey;
-  describe: PublishDescribe;
-}
-
 export async function getPublish(
   brandId: string,
   campaignId: string,
@@ -655,10 +623,11 @@ export async function publishCampaign(
   brandId: string,
   campaignId: string,
   adapter: AdapterKey = "manual",
+  approval?: { operation_id: string; content_hash: string },
 ): Promise<PublishDescribe> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/publish`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter }) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter, ...approval }) },
   );
   return parseJsonOrThrow<PublishDescribe>(res, "發布失敗。");
 }

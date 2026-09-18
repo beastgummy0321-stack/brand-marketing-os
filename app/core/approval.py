@@ -22,12 +22,12 @@ _AnyConn = Conn | ConnProxy
 def approve(
     conn: _AnyConn, *, org_id: str, brand_id: str, scope_type: str, scope_ref: str,
     content_hash: str, amount: float, max_daily_amount: float, actor: str,
-    note: str | None = None,
+    note: str | None = None, commit: bool = True,
 ) -> str:
     """插入一列核准紀錄，寫一筆 audit_log，回傳新 id。舊列從不覆寫——重新核准是新的一列
     （ticket 明文：the old row is never rewritten）。比照 `rule_cards.set_value()` ／
     `interrupts.resolve()` 既有慣例：會 commit（這是一次完整、獨立的落地動作，不是留給
-    呼叫端拼在別的交易裡）。
+    呼叫端拼在別的交易裡）。需與操作清單原子落地時可傳 commit=False，由呼叫端管理交易。
 
     `max_daily_amount` 必填、沒有預設值（ADR 0059）：給預設值等於把「上限＝簽核總額」
     這條業務規則塞進 `app/core`，跟本檔檔頭那句「核准內容、金額怎麼算……一律是呼叫端的
@@ -49,7 +49,8 @@ def approve(
             "max_daily_amount": max_daily_amount,
         },
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return approval_id
 
 
