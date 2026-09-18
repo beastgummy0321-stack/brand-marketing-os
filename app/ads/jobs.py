@@ -88,3 +88,10 @@ def register_tasks() -> None:
     if "ads.user_asset_pending" not in a.tasks:
         a.periodic(cron="* * * * *",periodic_id="ads_user_asset_pending")(
             a.task(name="ads.user_asset_pending")(user_assets.dispatch_pending))
+
+    from app.ads import asset_suggestions
+    if asset_suggestions.TASK not in a.tasks:
+        a.task(name=asset_suggestions.TASK)(asset_suggestions.run)
+    if "ads.asset_suggestion_pending" not in a.tasks:
+        a.periodic(cron="* * * * *",periodic_id="ads_asset_suggestion_pending")(
+            a.task(name="ads.asset_suggestion_pending")(asset_suggestions.dispatch_pending))
