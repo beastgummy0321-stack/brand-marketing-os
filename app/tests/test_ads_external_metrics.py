@@ -1,8 +1,10 @@
 """Provider metrics preserve missing/zero/value and never sum competing action synonyms."""
 
 import unittest
+from unittest.mock import patch
 
 from app.ads.adapters.meta_read import _entity, creative_summary, observation
+from app.meta import graph
 
 
 class MetricsTest(unittest.TestCase):
@@ -105,3 +107,58 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(len(set(ids)), 105)
         self.assertIsNone(second["next_observation_cursor"])
         self.assertNotIn("totals", first)
+
+    def test_reader_uses_live_facade_with_current_binding(self):
+        from app.ads.adapters.meta_read import MetaReader
+        from app.core import db
+        from app.meta import repository as source
+
+        conn = db.current()
+        account = {"account_id": "1", "currency": "USD"}
+        with (
+            patch.object(source, "external_bound_accounts", return_value=[account]),
+            patch.object(source, "get_token", return_value="secret"),
+            patch.object(
+                graph,
+                "fetch_page",
+                return_value={
+                    "data": [
+                        {
+                            "id": "2",
+                            "account_id": "1",
+                            "name": "paused",
+                            "effective_status": "PAUSED",
+                        }
+                    ]
+                },
+            ) as fetch,
+        ):
+            page = MetaReader().list_existing(conn, "org", "brand", account)
+            self.assertEqual(page.items[0]["native_status"], "PAUSED")
+            self.assertEqual(fetch.call_count, 1)
+        with (
+            patch.object(source, "external_bound_accounts", return_value=[]),
+            patch.object(graph, "fetch_page") as fetch,
+        ):
+            with self.assertRaises(ValueError):
+                MetaReader().list_existing(conn, "org", "brand", account)
+            fetch.assert_not_called()
+
+    def test_permission_failure_is_safe_and_distinct(self):
+        from app.ads.adapters.external import SourceReadError
+        from app.ads.adapters.meta_read import MetaReader
+        from app.core import db
+        from app.meta import repository as source
+
+        account = {"account_id": "1"}
+        with (
+            patch.object(source, "external_bound_accounts", return_value=[account]),
+            patch.object(source, "get_token", return_value="secret"),
+            patch.object(
+                graph, "fetch_page", return_value={"error": {"code": 200, "message": "secret-url"}}
+            ),
+        ):
+            with self.assertRaises(SourceReadError) as caught:
+                MetaReader().list_existing(db.current(), "org", "brand", account)
+        self.assertEqual(caught.exception.code, "permission_denied")
+        self.assertNotIn("secret", str(caught.exception))
