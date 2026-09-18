@@ -36,7 +36,8 @@ def close_expired_campaigns(org_id: str) -> None:
         cutoff = today - timedelta(days=_EXPIRY_DAYS)
         rows = conn.execute(
             "SELECT id, brand_id FROM ads_campaign WHERE org_id = %s"
-            " AND status IN ('live', 'ended') AND end_date IS NOT NULL AND end_date <= %s",
+            " AND origin = 'internal' AND status IN ('live', 'ended')"
+            " AND end_date IS NOT NULL AND end_date <= %s",
             (org_id, cutoff),
         ).fetchall()
         for row in rows:
@@ -52,7 +53,8 @@ def _dispatch_close_expired(timestamp: int) -> None:  # noqa: ARG001 — procras
     with connection() as conn:
         org_ids = [
             row["org_id"] for row in conn.execute(
-                "SELECT DISTINCT org_id FROM ads_campaign WHERE status IN ('live', 'ended')",
+                "SELECT DISTINCT org_id FROM ads_campaign WHERE origin = 'internal'"
+                " AND status IN ('live', 'ended')",
             ).fetchall()
         ]
     a = background_app()

@@ -276,6 +276,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     """組context、打模型、套 `budget.scenarios()`／`budget.split()`，整包寫進
     `ads_campaign.budget_basis_json`。失敗（provider 出錯或回覆解不出來）一律 `ValueError`，
     不落地任何東西——草稿留在 `draft`，沒有寫一半的策略。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -368,6 +369,7 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
                      scenario_key: str, custom_total: float | None = None, actor: str) -> dict:
     """使用者選最低／推薦／積極，或手打一個總額——重新用已存的百分比 `split()` 出金額，
     寫 `budget_planned`／`budget_scenario`（§0）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -408,6 +410,7 @@ def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,
     """F04-I13：採用之前調整三個角色的百分比——`rationale`／`label` 沿用模型當初那一項的值
     （角色的理由是模型寫的，使用者改的只是比例），金額一律 `_apply_amounts()` 重算，不自己
     乘除（§0「模型只回百分比，金額一律 `budget.split()`」）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")

@@ -109,6 +109,18 @@
       ],
       "symbol": "workbench_visual_identity"
     },
+    "ads_external_entity": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_entity"
+    },
+    "ads_external_daily": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_daily"
+    },
     "ads_campaign": {
       "owner": "ads",
       "kind": "sql-table",

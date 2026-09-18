@@ -99,6 +99,9 @@ def campaign_judgment(campaign: dict[str, Any], *, today: date) -> dict:
     就是答案（見票面表格）。`campaign` 至少要有 `status`／`verdict`／`closed_at`／`end_date`／
     `start_date`／`budget_basis_json`（campaign row 原欄位）加上 `budget_total`／`spend`
     （呼叫端算好的衍生值）。"""
+    if campaign.get("origin") == "imported":
+        return {"tone": "neutral", "text": "既有活動工作區",
+                "detail": "平台狀態與工作區分開；成功條件待確認。"}
     status = campaign.get("status")
 
     if status == "closed":

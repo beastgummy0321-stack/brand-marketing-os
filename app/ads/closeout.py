@@ -75,6 +75,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     commit——檔案慣例）→ 一次 UPDATE 把 `verdict`／`verdict_json`／`status='closed'`／
     `closed_at` 落地，順序固定（§0「Close in the order record_learning(...) -> one UPDATE」）。
     已經是 `closed` 的 Campaign 直接照原樣回傳，不重判也不重寫學習。"""
+    repository.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     simulation_mode.lock(conn, org_id, brand_id)
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
