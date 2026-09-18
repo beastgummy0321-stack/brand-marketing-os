@@ -36,6 +36,7 @@
         "app/ads/**",
         "app/departments/ads/**",
         "app/tests/test_ads*.py",
+        "app/tests/fixtures/ads_external/**",
         "frontend/src/components/ads/**",
         "frontend/src/lib/adsApi.ts",
         "frontend/src/lib/adsLaunchApi.ts",
