@@ -95,16 +95,17 @@ def create(conn, org, brand, campaign, payload, actor):
         )
         if supersedes:
             for item in previous["items"]:
-                if data.unchanged_readback(item):
+                if item["verification_state"] in {"stale", "deviated"} or data.unchanged_readback(item):
                     conn.execute(
-                        "UPDATE ads_action SET verification_state='stale',"
+                        "UPDATE ads_action SET verification_state=CASE "
+                        "WHEN verification_state='pending' THEN 'stale' ELSE verification_state END,"
                         "evidence_json=evidence_json || %s::jsonb WHERE id=%s "
                         "AND org_id=%s AND brand_id=%s AND change_set_id=%s",
                         (
                             db.jsonb(
                                 {
                                     "superseded_by": set_id,
-                                    "message": "尚未變更，改由新清單審核；舊證據保留。",
+                                    "superseded_message": "改由新清單審核；原核對結果與證據保留。",
                                 }
                             ),
                             item["id"],
