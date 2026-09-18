@@ -400,6 +400,50 @@ class BindingTest(unittest.TestCase):
             results = list(pool.map(insert, rows))
         self.assertEqual(sorted(results), [False, True])
 
+    def test_failure_update_does_not_invert_native_and_row_locks(self):
+        import queue
+        import time
+
+        f = self.f
+        first = f.verify(f.placement())
+        worker_pid = queue.Queue()
+
+        def fail_sync():
+            with db.connection() as conn:
+                conn.execute("SET LOCAL statement_timeout='5s'")
+                worker_pid.put(conn.execute("SELECT pg_backend_pid() pid").fetchone()["pid"])
+                repo.sync_failed(conn, f.org, f.brand, f.campaign)
+                conn.commit()
+
+        repo.lock_native(f.conn, first)
+        f.conn.execute("SET LOCAL statement_timeout='5s'")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(fail_sync)
+            try:
+                pid = worker_pid.get(timeout=5)
+                deadline = time.monotonic() + 3
+                while not future.done() and time.monotonic() < deadline:
+                    wait = f.conn.execute(
+                        "SELECT wait_event FROM pg_stat_activity WHERE pid=%s", (pid,)
+                    ).fetchone()
+                    if wait and wait["wait_event"] == "advisory":
+                        break
+                    time.sleep(0.01)
+                # Old trigger: B holds the row and waits for A's native lock;
+                # this A row read closes the cycle and PostgreSQL detects it.
+                f.conn.execute(
+                    "SELECT id FROM ads_asset_binding WHERE id=%s FOR UPDATE", (first["id"],)
+                )
+                future.result(timeout=5)
+            finally:
+                f.conn.rollback()
+        current = f.conn.execute(
+            "SELECT stale_reason,last_verified_at FROM ads_asset_binding WHERE id=%s",
+            (first["id"],),
+        ).fetchone()
+        self.assertTrue(current["stale_reason"])
+        self.assertEqual(current["last_verified_at"], first["last_verified_at"])
+
     def test_meta_verify_patch_keeps_previously_synced_dates_and_budget(self):
         f = self.f
         account = {"account_id": "1"}

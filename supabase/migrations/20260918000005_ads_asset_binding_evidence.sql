@@ -50,6 +50,17 @@ CREATE TABLE ads_asset_observation_claim (
 );
 CREATE FUNCTION ads_binding_no_overlap() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ -- Metadata-only writes already hold the row lock. They do not change overlap
+ -- eligibility, so must not invert the native-lock -> row-lock service order.
+ IF TG_OP='UPDATE' THEN
+  IF ROW(NEW.org_id,NEW.platform,NEW.source_account,NEW.native_kind,NEW.native_id,
+    NEW.existence_status,NEW.valid_from,NEW.valid_to)
+   IS NOT DISTINCT FROM
+   ROW(OLD.org_id,OLD.platform,OLD.source_account,OLD.native_kind,OLD.native_id,
+    OLD.existence_status,OLD.valid_from,OLD.valid_to) THEN
+   RETURN NEW;
+  END IF;
+ END IF;
  IF NEW.existence_status='platform_confirmed' THEN
   IF NEW.platform IS NULL OR NEW.source_account IS NULL OR NEW.native_kind IS NULL OR NEW.native_id IS NULL THEN
    RAISE EXCEPTION 'binding_native_scope_required' USING ERRCODE='23514';
