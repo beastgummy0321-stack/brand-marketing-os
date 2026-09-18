@@ -297,6 +297,15 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   workbench 公開的唯讀 validate_claims 入口，先核對 org／brand／product 歸屬；
   不改工作檯內部驗證程式，不新增跨模組 SQL。所有權見 ARCHITECTURE.md 的 ads manifest。
 
+#### 6.9.1a 共用前端工作區（F14）
+
+- 納入視窗不變；匯入後與 internal 共用同一 URL、五個分頁及原有元件，移除 imported 專用面板分流。首頁沿用 Campaign 卡片區，不再另列專用面板。
+- Workspace 讀完 external 的兩組分頁後，將原生資料交給原總覽、策略、結構、素材、成效。頁面讀取不新增平台請求；「重新讀取平台」沿用既有同步工作。
+- 原結構樹与明細以來源 ID 呈現唯讀節點，不建立假的 internal group/ad；原生預算缺值顯示未知，不換算 raw 或用日預算推總額。
+- 原成效元件按層級、幣別、歸因選取單一範圍，保留 null；不虛構保守／樂觀值或完整涵蓋率。原生狀態與內部流程分開呈現。
+- 策略分頁保留原版型、目標與成功條件編輯；不支援的策略／預算／發布／結案動作如實限制。自帶素材仍走原 revision/confirm/handoff，與內部 readiness、平台上架各自獨立。
+- 此次只改前端接線；API guard、同步、儲存及 Meta 零寫入邊界不變。
+
 #### 6.9.2 平台讀取與同步
 
 - 通路能力入口提供 list_existing、read_structure、read_creatives、read_observations，

@@ -207,3 +207,28 @@ describe("OverviewTab（F03-I23）", () => {
     expect(onChangeTab).toHaveBeenCalledWith("publish");
   });
 });
+
+function importedView(): NonNullable<CampaignDetail["external_view"]> {
+  return {
+    entities: [{ id: "native-root", platform: "meta", source_account: "account", native_kind: "campaign", native_id: "root", native_label: "活動", name: "平台活動", parent_native_id: null, native_status: "PAUSED", start_date: "2026-08-01", end_date: null, budget_amount: null, budget_type: "daily", budget_raw: { daily_budget: "30000" }, currency: "TWD", last_success_at: "2026-09-19", sync_error: null, creative: {} }],
+    observations: [], next_entity_cursor: null, next_observation_cursor: null,
+    window: { start: "2026-08-01", end: "2026-09-19" }, connections: [], sync: {}, coverage: {},
+  };
+}
+
+it("匯入活動使用原總覽但不推算預算、不捏造內部歷程", () => {
+  const { container } = render(<OverviewTab campaign={campaign({ origin: "imported", status: "draft", external_view: importedView(), groups: [group()], start_date: "2026-08-01", end_date: "2026-08-10" })} onChangeTab={vi.fn()} />);
+  expect(screen.getByText("活動層級預算未知")).toBeTruthy();
+  expect(screen.getByText("尚無已讀回成效")).toBeTruthy();
+  expect(screen.getByText("平台狀態：已暫停（PAUSED）")).toBeTruthy();
+  expect(screen.queryByText("草稿")).toBeNull();
+  expect(container.querySelectorAll(".bg-success").length).toBe(0);
+  expect(screen.queryByText(/日預算.*×/)).toBeNull();
+});
+it("原生活動有預算時保留幣別與預算方式，不跨層加總花費", () => {
+  const view = importedView(); view.entities[0].budget_amount = 300;
+  view.observations = [{ id: "o", entity_id: "native-root", day: "2026-09-01", metric_scope: "campaign", attribution_key: "default", currency: "USD", spend: 42, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} }];
+  render(<OverviewTab campaign={campaign({ origin: "imported", external_view: view })} onChangeTab={vi.fn()} />);
+  expect(screen.getByText("300 TWD")).toBeTruthy();
+  expect(screen.getByText("查看成效分頁")).toBeTruthy();
+});

@@ -1,5 +1,4 @@
-import { ExternalCampaignPanel } from "./ExternalCampaignPanel";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageTabs } from "@/components/layout/PageTabs";
@@ -9,6 +8,7 @@ import { Button } from "@/components/layout/ui/button";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
+import { completeExternalView, syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { STATUS_LABEL, STATUS_TONE } from "./AdsHomePage";
 import { OverviewTab } from "./OverviewTab";
 import { StrategyTab } from "./StrategyTab";
@@ -27,7 +27,10 @@ const TABS: { value: WorkspaceTab; label: string }[] = [
 ];
 
 function periodLabel(c: CampaignDetail): string {
-  if (c.origin === "imported") return "平台日期與狀態請見原生結構";
+  if (c.origin === "imported") {
+    const root = c.external_view?.entities.find(e => !e.parent_native_id);
+    return `${root?.start_date ?? "開始日未知"} ~ ${root?.end_date ?? "結束日未知"}`;
+  }
   return c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "投放期間尚未設定";
 }
 
@@ -53,6 +56,15 @@ function Workspace({
   >({ status: "loading" });
   const [publishAdapter, setPublishAdapter] = useState<AdapterKey | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const request = useRef<AbortController | null>(null);
+  const [syncId, setSyncId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const lifetime = useRef(new AbortController());
+  useEffect(() => {
+    lifetime.current = new AbortController();
+    return () => { lifetime.current.abort(); request.current?.abort(); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,18 +81,60 @@ function Workspace({
   }, [brandId]);
 
   const load = useCallback(() => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setState({ status: "loading" });
     getCampaign(brandId, campaignId)
-      .then((campaign) => setState({ status: "ready", campaign }))
-      .catch((err: unknown) =>
-        setState({
+      .then(async (campaign) => {
+        if (controller.signal.aborted) return;
+        const hydrated = campaign.origin === "imported"
+          ? { ...campaign, external_view: await completeExternalView(brandId, campaignId, controller.signal) }
+          : campaign;
+        if (!controller.signal.aborted) setState({ status: "ready", campaign: hydrated });
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setState({
           status: "error",
           message: err instanceof Error ? err.message : "讀取 Campaign 失敗，請稍後再試。",
-        }),
-      );
+        });
+      });
   }, [brandId, campaignId]);
 
   useEffect(load, [load]);
+
+  async function refreshPlatform() {
+    if (syncing) return;
+    const signal = lifetime.current.signal;
+    setSyncing(true); setSyncError("");
+    try {
+      const result = await syncCampaign(brandId, campaignId);
+      if (!signal.aborted) setSyncId(result.job.id);
+    } catch (err) {
+      if (!signal.aborted) { setSyncError(err instanceof Error ? err.message : "同步失敗。"); setSyncing(false); }
+    }
+  }
+  useEffect(() => {
+    if (!syncId) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const result = await syncJob(brandId, syncId!, controller.signal);
+        if (controller.signal.aborted) return;
+        if (["pending", "running"].includes(result.job.status)) timer = setTimeout(() => void poll(), 3000);
+        else {
+          setSyncId(null); setSyncing(false);
+          if (result.job.error) setSyncError(result.job.error);
+          load();
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) { setSyncError(err instanceof Error ? err.message : "同步狀態讀取失敗。"); setSyncId(null); setSyncing(false); }
+      }
+    }
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [syncId, brandId, load]);
 
   function changeTab(next: WorkspaceTab) {
     // 保留其他查詢參數——占位骨架的 setSearchParams({tab}) 會把它們沖掉。
@@ -102,7 +156,9 @@ function Workspace({
   const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
 
   function updateCampaign(next: CampaignDetail) {
-    setState({ status: "ready", campaign: next });
+    setState(previous => ({ status: "ready", campaign: {
+      ...next, external_view: next.origin === "imported" && previous.status === "ready" ? previous.campaign.external_view : next.external_view,
+    } }));
   }
 
   return (
@@ -114,7 +170,8 @@ function Workspace({
         actions={
           campaign ? (
             <div className="flex items-center gap-2">
-              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? "既有平台活動" : STATUS_LABEL[campaign.status]}</Badge>
+              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? campaign.external_view?.entities.find(e => !e.parent_native_id)?.native_status ?? "平台狀態未知" : STATUS_LABEL[campaign.status]}</Badge>
+              {campaign.origin === "imported" && <Button size="sm" variant="outline" disabled={syncing} onClick={() => void refreshPlatform()}>{syncing ? "同步中…" : "重新讀取平台"}</Button>}
               {canPublish && (
                 <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
                   選擇上架方式
@@ -124,6 +181,12 @@ function Workspace({
           ) : undefined
         }
       />
+      {syncError && <p role="alert" className="text-sm text-destructive">{syncError}</p>}
+      {campaign?.origin === "imported" && <p className="text-xs text-muted-foreground">
+        {campaign.external_view?.connections.map(connection => `${connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
+        {" · 最近成功："}{Object.values(campaign.external_view?.sync ?? {}).map(s => s.last_success_at).filter(Boolean).sort().at(-1) ?? "尚未成功讀回"}
+        {Object.entries(campaign.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
+      </p>}
       {location.state?.parseWarning && (
         <p className="text-sm text-warning">{location.state.parseWarning}</p>
       )}
@@ -167,8 +230,6 @@ function Workspace({
             <div className="surface">
               <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
             </div>
-          ) : campaign.origin === "imported" && tab !== "assets" ? (
-            <ExternalCampaignPanel key={campaign.id} brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} />
           ) : tab === "overview" ? (
             <OverviewTab campaign={campaign} onChangeTab={go} />
           ) : tab === "strategy" ? (
@@ -183,7 +244,7 @@ function Workspace({
           ) : tab === "assets" ? (
             <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           ) : (
-            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
+            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} />
           )}
         </>
       )}

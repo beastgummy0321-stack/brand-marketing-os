@@ -68,6 +68,11 @@ export function StrategyTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const imported = c.origin === "imported";
+  const readonlyReason = c.capabilities?.unavailable.strategy ?? "既有活動保留平台設定，不使用內部策略與預算操作。";
+  const [goal, setGoal] = useState(c.goal_text);
+  const [goalSaving, setGoalSaving] = useState(false);
+  const [goalError, setGoalError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [scenarioError, setScenarioError] = useState<string | null>(null);
@@ -98,7 +103,7 @@ export function StrategyTab({
     };
   }, [brandId]);
 
-  const strategy = c.budget_basis_json.strategy;
+  const strategy = imported ? undefined : c.budget_basis_json.strategy;
   const scenarios = c.budget_basis_json.scenarios;
   const basis = c.budget_basis_json.basis;
   const labels = c.labels ?? DEFAULT_LABELS;
@@ -190,7 +195,7 @@ export function StrategyTab({
     }
   }
 
-  if (!strategy) {
+  if (!strategy && !imported) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyState
@@ -204,8 +209,8 @@ export function StrategyTab({
     );
   }
 
-  const platformKey = typeof c.constraints_json.platform === "string" ? c.constraints_json.platform : null;
-  const allocationSummary = strategy.allocation.map((item) => `${item.label} ${item.pct}%`).join(" / ");
+  const platformKey = imported ? c.external_view?.entities[0]?.platform ?? null : typeof c.constraints_json.platform === "string" ? c.constraints_json.platform : null;
+  const allocationSummary = (strategy?.allocation ?? []).map((item) => `${item.label} ${item.pct}%`).join(" / ");
   const readyCount = c.asset_readiness.total > 0 ? `${c.asset_readiness.ready_count}／${c.asset_readiness.total} 已準備` : "採用策略後才知道";
 
   const kpiCells: KpiCell[] = [
@@ -213,30 +218,30 @@ export function StrategyTab({
       icon: Radio,
       label: "平台",
       value: platformKey ? channels.find((ch) => ch.key === platformKey)?.label ?? platformKey : "尚未指定",
-      caption: "採用後會建立對應的投放組",
+      caption: imported ? "平台讀回來源" : "採用後會建立對應的投放組",
     },
     {
       icon: Wallet,
       label: "預算",
-      value: total !== null ? formatCurrency(total) : "尚未設定",
-      caption: c.budget_planned !== null ? "你採用的情境金額" : "推薦情境（可調整）",
+      value: imported ? "見投放結構" : total !== null ? formatCurrency(total) : "尚未設定",
+      caption: imported ? "平台原始預算" : c.budget_planned !== null ? "你採用的情境金額" : "推薦情境（可調整）",
     },
     {
       icon: PieChart,
       label: "配置",
-      value: allocationSummary,
-      caption: "按角色分配預算",
+      value: imported ? "未提供策略配置" : allocationSummary,
+      caption: imported ? "保留平台結構" : "按角色分配預算",
     },
     {
       icon: Calendar,
       label: "時間",
-      value: c.start_date && c.end_date ? `${mmdd(c.start_date)} – ${mmdd(c.end_date)}` : "未設定",
-      caption: days !== null ? `共 ${days} 天` : "未設定",
+      value: imported ? `${c.external_view?.entities.find((row) => row.native_kind === "campaign")?.start_date ?? "開始未知"} – ${c.external_view?.entities.find((row) => row.native_kind === "campaign")?.end_date ?? "結束未知"}` : c.start_date && c.end_date ? `${mmdd(c.start_date)} – ${mmdd(c.end_date)}` : "未設定",
+      caption: imported ? "平台讀回日期" : days !== null ? `共 ${days} 天` : "未設定",
     },
     {
       icon: ImageIcon,
       label: "需要素材",
-      value: readyCount,
+      value: imported ? "前往素材查看" : readyCount,
       caption: "每則廣告需要文案與圖片",
     },
   ];
@@ -259,21 +264,21 @@ export function StrategyTab({
     <div className="flex flex-col gap-4">
       <JudgmentBand
         icon={Sparkles}
-        sentence="行銷駕駛艙建議這樣投"
-        facts={strategy.why[0] ?? allocationSummary}
+        sentence={imported ? "這個 Campaign 尚無內部策略建議" : "行銷駕駛艙建議這樣投"}
+        facts={imported ? readonlyReason : strategy?.why[0] ?? allocationSummary}
       />
 
       <div className="surface">
         <div className="surface-header">
           <h2>目標：{c.objective}</h2>
           <span className="text-sm text-muted-foreground">
-            這是根據你的資料整理的建議，可以直接使用，也可以調整。
+            {imported ? "平台投放目標與內部管理目標分開保留。" : "這是根據你的資料整理的建議，可以直接使用，也可以調整。"}
           </span>
         </div>
         <div className="surface-body flex flex-col gap-4">
           <KpiStrip cells={kpiCells} />
           <p className="text-sm text-muted-foreground">
-            {estimatedPurchases !== null ? (
+            {imported ? "平台資料未包含原始策略建議，不推估配置與購買數。" : estimatedPurchases !== null ? (
               <>
                 預估{labels.conversion} {estimatedPurchases} 筆
                 <span className="ml-1">推估（CPA 不變的算術）</span>
@@ -286,11 +291,11 @@ export function StrategyTab({
               <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
                 <HelpCircle size={14} /> 目前最大的未知
               </div>
-              {strategy.unknowns.length === 0 ? (
-                <p className="text-sm text-muted-foreground">沒有列出未知</p>
+              {(strategy?.unknowns ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">{imported ? "原始策略與配置未提供。" : "沒有列出未知"}</p>
               ) : (
                 <ul className="list-disc space-y-1 pl-5 text-sm">
-                  {strategy.unknowns.map((line, i) => (
+                  {(strategy?.unknowns ?? []).map((line, i) => (
                     <li key={i}>{line}</li>
                   ))}
                 </ul>
@@ -325,7 +330,7 @@ export function StrategyTab({
       </div>
 
       <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-3">
-      {step.id !== "strategy_adopt" ? (
+      {imported ? <Disclosure label="調整建議"><p className="text-sm text-muted-foreground">{readonlyReason}</p><Button className="mt-3" disabled>產生策略</Button></Disclosure> : step.id !== "strategy_adopt" ? (
         <p className="text-sm text-muted-foreground xl:col-span-3">
           投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。
         </p>
@@ -344,7 +349,7 @@ export function StrategyTab({
                 </Button>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {strategy.allocation.map((item) => (
+                  {(strategy?.allocation ?? []).map((item) => (
                     <div key={item.role} className="flex items-center gap-3 text-sm">
                       <span className="w-16">{ROLE_LABEL[item.role]}</span>
                       <Input
@@ -488,9 +493,9 @@ export function StrategyTab({
             <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
               <Lightbulb size={14} /> 主要原因
             </div>
-            {strategy.why.length === 0 ? <p className="text-sm text-muted-foreground">這一輪沒有列出</p> : (
+            {(strategy?.why ?? []).length === 0 ? <p className="text-sm text-muted-foreground">這一輪沒有列出</p> : (
               <ul className="list-disc space-y-1 pl-5 text-sm">
-                {strategy.why.map((line, i) => <li key={i}>{line}</li>)}
+                {(strategy?.why ?? []).map((line, i) => <li key={i}>{line}</li>)}
               </ul>
             )}
           </div>
@@ -498,11 +503,11 @@ export function StrategyTab({
             <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
               <Target size={14} /> 這輪想學到什麼
             </div>
-            {(strategy.learning_goals ?? []).length === 0 ? (
+            {(strategy?.learning_goals ?? []).length === 0 ? (
               <p className="text-sm text-muted-foreground">這一輪沒有設定學習目標</p>
             ) : (
               <ul className="list-disc space-y-1 pl-5 text-sm">
-                {(strategy.learning_goals ?? []).map((line, i) => <li key={i}>{line}</li>)}
+                {(strategy?.learning_goals ?? []).map((line, i) => <li key={i}>{line}</li>)}
               </ul>
             )}
           </div>
@@ -514,10 +519,23 @@ export function StrategyTab({
       </Disclosure>
 
       <Disclosure label="進階設定">
-        <p className="mb-2 text-sm text-muted-foreground">
-          人工上架可在投放結構保存受眾、版位、出價、追蹤與平台 ID 對應。
-        </p>
-        <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
+        {imported ? <div className="flex flex-col gap-3">
+          <label htmlFor="campaign-goal" className="text-sm font-medium">內部活動目標</label>
+          <Textarea id="campaign-goal" value={goal} onChange={(event) => setGoal(event.target.value)} />
+          <p className="text-xs text-muted-foreground">供工作區管理使用，不會更改平台投放目標。</p>
+          <Button disabled={goalSaving || !goal.trim() || goal === c.goal_text} onClick={async () => {
+            setGoalSaving(true); setGoalError(null);
+            try { onCampaignChange(await patchCampaign(brandId, c.id, { goal_text: goal.trim(), objective: goal.trim() })); }
+            catch (error) { setGoalError(error instanceof Error ? error.message : "儲存目標失敗。"); }
+            finally { setGoalSaving(false); }
+          }}>{goalSaving ? "儲存中…" : "儲存目標"}</Button>
+          {goalError && <p role="alert" className="text-sm text-danger">{goalError}</p>}
+          <p className="text-sm">成功條件：{c.success_target === null ? "尚未設定" : `${metricLabel(c.success_metric, labels)} ${formatTarget(c.success_metric, c.success_target)}`}</p>
+          <Button variant="outline" onClick={() => setEditOpen(true)}>編輯成功條件</Button>
+        </div> : <>
+          <p className="mb-2 text-sm text-muted-foreground">人工上架可在投放結構保存受眾、版位、出價、追蹤與平台 ID 對應。</p>
+          <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
+        </>}
       </Disclosure>
       </div>
 

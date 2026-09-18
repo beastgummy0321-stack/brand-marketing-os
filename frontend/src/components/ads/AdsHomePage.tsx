@@ -74,20 +74,16 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
     content = <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
   } else {
     const { home } = state;
+    const campaigns = [...new Map([...home.campaigns, ...(home.imported_campaigns ?? [])].map(c => [c.id, c])).values()];
     content = (
       <div className="flex flex-col gap-4">
         <JudgmentBand icon={BarChart3} sentence={home.headline.text} facts={home.headline.facts} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="flex flex-col gap-4 lg:col-span-2">
             <DecisionCard items={[]} />
-            {!!home.imported_campaigns?.length && <section className="surface">
-              <div className="surface-header"><h2>已納入的既有平台活動</h2><Link className="text-sm text-primary" to={`/brands/${brandId}/ads/campaigns`}>查看全部活動 →</Link></div>
-              <div className="surface-body flex flex-col gap-3"><p className="text-sm text-muted-foreground">查看平台原始資料，或進入素材頁準備手動上架。</p>{home.imported_campaigns.map(c => <div className="flex flex-wrap items-center justify-between gap-2" key={c.id}><Link className="font-medium text-primary" to={`/brands/${brandId}/ads/campaigns/${c.id}`}>{c.name}</Link><Button asChild variant="outline" size="sm"><Link to={`/brands/${brandId}/ads/campaigns/${c.id}?tab=assets`}>自帶素材與手動交接</Link></Button></div>)}</div>
-            </section>}
-
             <div className="surface">
               <div className="surface-header">
-                <h2>{home.imported_campaigns?.length ? "MarketingOS 內部計畫的投放進度" : "進行中的 Campaign"}</h2>
+                <h2>{home.imported_campaigns?.length ? "Campaign" : "進行中的 Campaign"}</h2>
                 <Link
                   to={`/brands/${brandId}/ads/campaigns`}
                   className="text-sm text-primary hover:underline"
@@ -96,16 +92,16 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                 </Link>
               </div>
               <div className="surface-body">
-                {home.campaigns.length === 0 ? (
+                {campaigns.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
-                    {home.imported_campaigns?.length ? "目前沒有由 MarketingOS 建立且已上架的活動。" : "目前沒有進行中的 Campaign。"}
+                    目前沒有進行中的 Campaign。
                   </p>
                 ) : (
                   <div
                     data-testid="campaign-grid"
                     className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3"
                   >
-                    {home.campaigns.map((c) => {
+                    {campaigns.map((c) => {
                       const spent = c.budget_progress.spent;
                       const total = c.budget_progress.total;
                       const pct = c.budget_progress.pct;
@@ -117,13 +113,13 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                         <CampaignTile
                           key={c.id}
                           name={c.name}
-                          statusLabel={STATUS_LABEL[c.status]}
+                          statusLabel={c.origin === "imported" ? "平台活動" : STATUS_LABEL[c.status]}
                           statusTone={STATUS_TONE[c.status]}
                           meta={`目標・${c.objective}`}
-                          spendText={spendText}
-                          budgetText={budgetText}
-                          percentText={percentText}
-                          percent={pct ?? 0}
+                          spendText={c.origin === "imported" ? "進入活動查看花費" : spendText}
+                          budgetText={c.origin === "imported" ? "平台預算" : budgetText}
+                          percentText={c.origin === "imported" ? "未知" : percentText}
+                          percent={c.origin === "imported" ? 0 : pct ?? 0}
                           judgment={c.judgment.text}
                           judgmentDetail={c.judgment.detail}
                           onClick={() => navigate(`/brands/${brandId}/ads/campaigns/${c.id}`)}

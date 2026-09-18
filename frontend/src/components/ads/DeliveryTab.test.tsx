@@ -379,3 +379,26 @@ describe("DeliveryTab（F06-I02）", () => {
     expect(screen.queryByText(/已恢復未儲存草稿/)).toBeNull();
   });
 });
+
+
+it("uses the existing structure tree for native groups and keeps native edits unavailable", async () => {
+  const user = userEvent.setup();
+  const native = {
+    id: "native-group", platform: "meta", source_account: "account", native_kind: "adset", native_id: "native-42",
+    native_label: null, name: "真實平台投放組", parent_native_id: "native-campaign", native_status: "ACTIVE",
+    start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {},
+    currency: null, last_success_at: null, sync_error: null, creative: {},
+  };
+  renderTab(campaign({ origin: "imported", groups: [], external_view: {
+    entities: [native], observations: [], next_entity_cursor: null, next_observation_cursor: null,
+    window: {start: "2026-01-01", end: "2026-01-15"}, connections: [], sync: {}, coverage: {},
+  }}));
+  expect(screen.getByText("平台投放結構已載入 1 筆")).toBeTruthy();
+  await user.click(screen.getByText("調整結構（進階）"));
+  expect(screen.getByRole("button", {name: "新增節點"}).hasAttribute("disabled")).toBe(true);
+  await user.click(screen.getByRole("button", {name: /真實平台投放組/}));
+  expect(screen.getByText("平台 ID：native-42")).toBeTruthy();
+  expect(screen.getByText("預算：未知")).toBeTruthy();
+  expect(screen.getByRole("button", {name: "儲存"}).hasAttribute("disabled")).toBe(true);
+  expect(screen.queryByText("採用時的計畫")).toBeNull();
+});

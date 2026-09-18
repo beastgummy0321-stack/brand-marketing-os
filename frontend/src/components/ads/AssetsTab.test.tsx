@@ -11,6 +11,8 @@ import type { AdRow, AssetReadinessRow, CampaignDetail, DeliveryGroupRow } from 
 import { getAssets, getCampaign, setAssetReady } from "@/lib/adsApi";
 import { AssetsTab } from "./AssetsTab";
 
+vi.mock("./UserAssetPlacements", () => ({ UserAssetPlacements: () => <div>自帶素材安排</div> }));
+
 function renderWithRouter(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
@@ -235,4 +237,28 @@ describe("AssetsTab（F06-I03）", () => {
       await screen.findByText("交棒之後才新增的，不在素材任務包裡；做好後勾「素材已就位」。"),
     ).toBeTruthy();
   });
+});
+
+function importedView(): NonNullable<CampaignDetail["external_view"]> {
+  return {
+    entities: [{ id: "native-root", platform: "meta", source_account: "account", native_kind: "campaign", native_id: "root", native_label: "活動", name: "平台活動", parent_native_id: null, native_status: "PAUSED", start_date: "2026-08-01", end_date: null, budget_amount: null, budget_type: "daily", budget_raw: { daily_budget: "30000" }, currency: "TWD", last_success_at: "2026-09-19", sync_error: null, creative: {} }],
+    observations: [], next_entity_cursor: null, next_observation_cursor: null,
+    window: { start: "2026-08-01", end: "2026-09-19" }, connections: [], sync: {}, coverage: {},
+  };
+}
+
+it("原生廣告在原素材表查看，不呼叫內部就緒 API 或建立假工作檯連結", async () => {
+  vi.mocked(getAssets).mockClear();
+  const view = importedView();
+  view.entities.push({ ...view.entities[0], id: "native-ad", native_id: "ad", native_kind: "ad", name: "平台廣告素材", parent_native_id: "root", creative: { kind: "image", fields: { body: "平台原文案" } } });
+  const { onChangeTab } = renderTab(campaign({ origin: "imported", external_view: view, groups: [], asset_readiness: { total: 0, ready_count: 0 } }));
+  expect(await screen.findByText("平台廣告素材")).toBeTruthy();
+  expect(screen.getByRole("table")).toBeTruthy();
+  expect(screen.queryByText("素材已就位")).toBeNull();
+  expect(screen.queryByRole("link", { name: "素材組" })).toBeNull();
+  expect(getAssets).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByText("查看素材"));
+  expect(screen.getByText("內文：平台原文案")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "查看成效 →" }));
+  expect(onChangeTab).toHaveBeenCalledWith("performance");
 });
