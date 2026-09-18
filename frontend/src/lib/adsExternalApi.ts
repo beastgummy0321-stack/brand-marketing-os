@@ -1,6 +1,12 @@
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 
+export interface ExternalCampaignFields {
+  origin?: "internal" | "imported";
+  capabilities?: { allowed: string[]; unavailable: Record<string, string> };
+  external_view?: ExternalView | null;
+}
+
 export interface SourceAccount { platform: string; label: string; account_id: string; name?: string }
 export interface NativeEntity {
   id: string; platform: string; source_account: string; native_kind: string; native_id: string;
