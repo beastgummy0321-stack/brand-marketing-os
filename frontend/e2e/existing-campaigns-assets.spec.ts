@@ -128,8 +128,8 @@ test("existing campaign, originals, confirmation and version evidence survive re
   }).toPass({ timeout: 30_000 });
   await card.getByRole("checkbox", { name: `納入建議 ${imageName}`, exact: true }).check();
   await page.getByRole("button", { name: "為選取 1 件取得建議", exact: true }).click();
-  await expect(card.getByRole("button", { name: "核對後確認本批建議" })).toBeEnabled({ timeout: 30_000 });
-  await card.getByRole("button", { name: "核對後確認本批建議" }).click();
+  await expect(card.getByRole("button", { name: "核對後確認這件建議" })).toBeEnabled({ timeout: 30_000 });
+  await card.getByRole("button", { name: "核對後確認這件建議" }).click();
   const confirmed = card;
   await expect(confirmed).toBeVisible();
   await confirmed.getByRole("button", { name: "手動交接與平台核對", exact: true }).click();
