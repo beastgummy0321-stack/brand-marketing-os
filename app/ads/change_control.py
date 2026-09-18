@@ -95,10 +95,13 @@ def create(conn, org, brand, campaign, payload, actor):
         )
         if supersedes:
             for item in previous["items"]:
-                if item["verification_state"] in {"stale", "deviated"} or data.unchanged_readback(item):
+                if item["verification_state"] in {"stale", "deviated"} or data.unchanged_readback(
+                    item
+                ):
                     conn.execute(
                         "UPDATE ads_action SET verification_state=CASE "
-                        "WHEN verification_state='pending' THEN 'stale' ELSE verification_state END,"
+                        "WHEN verification_state='pending' THEN 'stale' "
+                        "ELSE verification_state END,"
                         "evidence_json=evidence_json || %s::jsonb WHERE id=%s "
                         "AND org_id=%s AND brand_id=%s AND change_set_id=%s",
                         (
