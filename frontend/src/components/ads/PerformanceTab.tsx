@@ -29,6 +29,7 @@ import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 import { Disclosure } from "./patterns";
+import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./nativePerformance";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
@@ -89,7 +90,8 @@ const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
   看不出: "outline",
 };
 
-function buildTrendOption(daily: CampaignPerformance["daily"]): EChartsOption {
+function buildTrendOption(daily: PerformanceView["daily"], native = false, currency: string | null = null): EChartsOption {
+  const roasLabel = native ? "ROAS" : "ROAS（保守）";
   return {
     grid: { left: 56, right: 56, top: 28, bottom: 40 },
     legend: { bottom: 0, textStyle: { color: CHART_COLOR_AXIS_TEXT, fontSize: 12 } },
@@ -101,7 +103,7 @@ function buildTrendOption(daily: CampaignPerformance["daily"]): EChartsOption {
         axisLabel: { formatter: (v: number) => v.toLocaleString("zh-TW") },
         splitLine: { lineStyle: { opacity: 0.35 } },
       },
-      { type: "value", name: "ROAS（保守）", splitLine: { show: false } },
+      { type: "value", name: roasLabel, splitLine: { show: false } },
     ],
     tooltip: {
       trigger: "axis",
@@ -110,7 +112,7 @@ function buildTrendOption(daily: CampaignPerformance["daily"]): EChartsOption {
         const lines = [`<b>${list[0]?.axisValue ?? ""}</b>`];
         for (const p of list) {
           lines.push(
-            `${p.seriesName}：${p.seriesName === "花費" ? formatCurrency(p.value) : formatMetaRoas(p.value)}`,
+            `${p.seriesName}：${p.seriesName === "花費" ? (native ? nativeMoney(p.value, currency) : formatCurrency(p.value)) : formatMetaRoas(p.value)}`,
           );
         }
         return lines.join("<br/>");
@@ -124,19 +126,22 @@ function buildTrendOption(daily: CampaignPerformance["daily"]): EChartsOption {
         itemStyle: { color: CHART_COLOR_SPEND, opacity: 0.75 },
       },
       {
-        name: "ROAS（保守）",
+        name: roasLabel,
         type: "line",
         yAxisIndex: 1,
         connectNulls: false,
-        data: daily.map((d) => d.roas_conservative),
+        data: daily.map((d) => native ? d.roas : d.roas_conservative),
         itemStyle: { color: CHART_COLOR_REVENUE },
       },
     ],
   };
 }
 
-function TrendChart({ daily }: { daily: CampaignPerformance["daily"] }) {
-  const option = useMemo(() => buildTrendOption(daily), [daily]);
+function nativeMoney(value: number | null, currency: string | null) {
+  return value === null ? "未知" : `${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })} ${currency ?? "幣別未知"}`;
+}
+function TrendChart({ daily, native, currency }: { daily: PerformanceView["daily"]; native: boolean; currency: string | null }) {
+  const option = useMemo(() => buildTrendOption(daily, native, currency), [daily, native, currency]);
   const ref = useEchart(option);
   return <div ref={ref} className="h-64 w-full" />;
 }
@@ -164,13 +169,22 @@ export function PerformanceTab({
   campaign: c,
   onCampaignChange,
   onChangeTab,
+  onSync,
+  syncing = false,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
+  onSync?: () => void;
+  syncing?: boolean;
 }) {
   const { scope: draftScope } = useWorkspace();
+  const imported = c.origin === "imported";
+  const scopes = useMemo(() => nativeMetricScopes(c.external_view), [c.external_view]);
+  const [scopeKey, setScopeKey] = useState<string>();
+  const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? scopes[0];
+  const nativeData = useMemo(() => nativePerformance(c.external_view, selectedScope?.key), [c.external_view, selectedScope?.key]);
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
   const labels = c.labels ?? DEFAULT_LABELS;
   const today = new Date().toLocaleDateString("sv-SE");
@@ -187,18 +201,19 @@ export function PerformanceTab({
   const [closeError, setCloseError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    if (!published) return;
+    if (!published || imported) return;
     setState({ status: "loading" });
     getPerformance(brandId, c.id)
       .then((data) => setState({ status: "ready", data }))
       .catch((err: unknown) =>
         setState({ status: "error", message: err instanceof Error ? err.message : "讀取成效失敗。" }),
       );
-  }, [brandId, c.id, published]);
+  }, [brandId, c.id, published, imported]);
 
   useEffect(load, [load]);
 
   async function handleRefresh() {
+    if (imported) { onSync?.(); return; }
     setRefreshing(true);
     try {
       const data = await ingestOutcome(brandId, c.id);
@@ -212,6 +227,7 @@ export function PerformanceTab({
   }
 
   async function handleClose() {
+    if (imported) return;
     setClosing(true);
     setCloseError(null);
     try {
@@ -225,17 +241,17 @@ export function PerformanceTab({
     }
   }
 
-  const comparison = <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
+  const comparison = imported ? <Disclosure label="成效比較"><p className="text-sm text-muted-foreground">{c.capabilities?.unavailable.comparison ?? "既有平台活動不支援內部成效比較。"}</p></Disclosure> : <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
     hasSavedComparison={hasSavedComparison(c)} refreshToken={`${c.status}:${comparisonRefresh}`}
     onViewPlan={() => onChangeTab("structure")} />;
-  const recovery = c.simulation_mode ? <Disclosure label="內部驗收工具（隔離模擬）">
+  const recovery = !imported && c.simulation_mode ? <Disclosure label="內部驗收工具（隔離模擬）">
     <SimulationRecovery key={c.id} brandId={brandId} campaign={c} onChanged={onCampaignChange} onSaved={() => {
       load();
       setComparisonRefresh((current) => current + 1);
     }} />
   </Disclosure> : null;
 
-  if (!published) {
+  if (!published && !imported) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyState
@@ -251,7 +267,12 @@ export function PerformanceTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {state.status === "loading" ? (
+      {imported ? (
+        <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
+          onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null}
+          scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${c.external_view?.window.start ?? "未知"} ～ ${c.external_view?.window.end ?? "未知"}`}
+          scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null} />
+      ) : state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
         </div>
@@ -262,7 +283,7 @@ export function PerformanceTab({
           data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
       )}
 
-      {(c.status === "live" || c.status === "ended") && (
+      {(imported || c.status === "live" || c.status === "ended") && (
         <div className="surface">
           <div className="surface-header">
             <h2>結案</h2>
@@ -270,22 +291,22 @@ export function PerformanceTab({
           <div className="surface-body flex items-center justify-between gap-4">
             <span className="flex flex-col gap-1 text-sm text-muted-foreground">
               <span>
-                {c.status === "ended"
+                {imported ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。") : c.status === "ended"
                   ? "投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。"
                   : EARLY_CLOSE_SENTENCE}
               </span>
-              {c.status === "live" && c.end_date && c.end_date > today && (
+              {!imported && c.status === "live" && c.end_date && c.end_date > today && (
                 <span className="text-xs text-muted-foreground">
                   投放期間到 {c.end_date}，現在結案等於提前結束
                 </span>
               )}
             </span>
-            <Button onClick={() => setCloseOpen(true)}>立即結案</Button>
+            <Button disabled={imported} onClick={() => setCloseOpen(true)}>立即結案</Button>
           </div>
         </div>
       )}
 
-      {c.status === "closed" && <VerdictCard brandId={brandId} campaign={c} />}
+      {!imported && c.status === "closed" && <VerdictCard brandId={brandId} campaign={c} />}
 
       {comparison}
       {recovery}
@@ -318,55 +339,73 @@ function PerformanceReady({
   labels,
   refreshing,
   onRefresh,
+  native = false,
+  currency = null,
+  scopeControl,
+  scopeCaption,
+  refreshDisabled = false,
 }: {
   simulated: boolean;
-  data: CampaignPerformance;
+  data: PerformanceView;
   labels: CampaignLabels;
   refreshing: boolean;
   onRefresh: () => void;
+  native?: boolean;
+  currency?: string | null;
+  scopeControl?: React.ReactNode;
+  scopeCaption?: string;
+  refreshDisabled?: boolean;
 }) {
   const t = data.totals;
+  const money = (value: number | null) => native ? nativeMoney(value, currency) : formatCurrency(value);
+  const count = (value: number | null) => native && value === null ? "未知" : fmtPurchases(value);
+  const cpa = (value: number | null) => native ? money(value) : fmtCpa(value);
+  const percent = (value: number | null) => native && value === null ? "未知" : formatPercent(value);
+  const roas = (value: number | null) => native && value === null ? "未知" : formatMetaRoas(value);
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
-  const outcome = t.spend <= 0
-    ? "尚無花費資料，暫時無法判讀成效。"
+  const outcome = t.spend === null ? "尚無完整花費資料，暫時無法判讀成效。" : t.spend <= 0
+    ? (native ? "已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。" : "尚無花費資料，暫時無法判讀成效。")
     : t.purchases === null || t.revenue === null
-      ? "已有花費資料；轉換或營收未追蹤，暫時不能判定 CPA 或 ROAS。"
+      ? (native ? "已有花費資料；轉換或營收資料不完整，暫時不能判定 CPA 或 ROAS。" : "已有花費資料；轉換或營收未追蹤，暫時不能判定 CPA 或 ROAS。")
       : "已整理目前回收資料；請對照主要 KPI 與成功條件判讀。";
   return (
     <>
       <div className="surface">
         <div className="surface-header">
           <h2>目前成果</h2>
-          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
+          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing || refreshDisabled}>
             <RefreshCw size={14} className={refreshing ? "animate-spin" : "hidden"} />
             {refreshing ? "整理中…" : "重新整理成效"}
           </Button>
         </div>
         <div className="surface-body flex flex-col gap-2">
           <p className="text-sm font-medium">{outcome}</p>
+          {native && <p className="text-xs text-muted-foreground">{scopeCaption}。僅彙整已讀回資料，完整性未知。</p>}
           <p className="text-xs text-muted-foreground">
             資料狀態：{latestDay ? `最新資料日 ${latestDay}` : "還沒有每日資料"}；來源為{source}。
-            {data.coverage.expected > 0 && ` 缺少 ${data.coverage.missing}／${data.coverage.expected} 個廣告日。`}
+            {(data.coverage?.expected ?? 0) > 0 && ` 缺少 ${data.coverage?.missing}／${data.coverage?.expected} 個廣告日。`}
           </p>
           {(t.purchases === null || t.revenue === null) && <p className="text-xs text-warning">
-            轉換或營收未追蹤時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。
+            {native ? "轉換或營收未知時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。" : "轉換或營收未追蹤時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。"}
           </p>}
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi label="花費" value={formatCurrency(t.spend)} caption={`累計花費・${source}`} />
-        <Kpi label={labels.count} value={fmtPurchases(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
-        <Kpi label="CPA" value={fmtCpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
-        <Kpi label="ROAS" value={formatMetaRoas(t.roas_conservative)} caption={`保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
+        <Kpi label="花費" value={money(t.spend)} caption={`累計花費・${source}`} />
+        <Kpi label={labels.count} value={count(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
+        <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
+        <Kpi label="ROAS" value={roas(native ? t.roas : t.roas_conservative)} caption={native ? "同一資料範圍營收 ÷ 花費" : `保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
       </div>
 
       <Disclosure label="查看每日資料、次要指標與公式">
         <div className="flex flex-col gap-4">
+          {scopeControl}
+          {native && <p className="text-xs text-muted-foreground">目前指標只計算所選層級、幣別與歸因；不同層級不相加。缺少資料顯示未知，不推算缺漏天數。</p>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Kpi label="點擊率" value={formatPercent(t.ctr)} caption="累計點擊 ÷ 曝光" />
-            <Kpi label="曝光" value={formatCount(t.impressions)} caption={`累計曝光・${source}`} />
+            <Kpi label="點擊率" value={percent(t.ctr)} caption="累計點擊 ÷ 曝光" />
+            <Kpi label="曝光" value={native && t.impressions === null ? "未知" : formatCount(t.impressions)} caption={`累計曝光・${source}`} />
           </div>
 
       <div className="surface">
@@ -377,12 +416,12 @@ function PerformanceReady({
           {data.daily.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">還沒有每日資料。</p>
           ) : (
-            <TrendChart daily={data.daily} />
+            <TrendChart daily={data.daily} native={native} currency={currency} />
           )}
           <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {data.coverage.expected > 0 && (
+            {(data.coverage?.expected ?? 0) > 0 && (
               <li>
-                {data.coverage.missing} 個廣告日沒有資料（共 {data.coverage.expected} 個）
+                {data.coverage?.missing} 個廣告日沒有資料（共 {data.coverage?.expected} 個）
               </li>
             )}
             <li>{data.last_data_at ? `最新資料日：${data.daily[data.daily.length - 1]?.day ?? "－"}` : "還沒有資料"}</li>
@@ -397,12 +436,12 @@ function PerformanceReady({
             <thead className="bg-muted text-muted-foreground"><tr>
               <th className="px-3 py-2 font-medium">日期</th><th className="px-3 py-2 font-medium">花費</th>
               <th className="px-3 py-2 font-medium">{labels.count}</th><th className="px-3 py-2 font-medium">CPA</th>
-              <th className="px-3 py-2 font-medium">ROAS（保守／樂觀）</th>
+              <th className="px-3 py-2 font-medium">{native ? "ROAS" : "ROAS（保守／樂觀）"}</th>
             </tr></thead>
             <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
-              <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{formatCurrency(day.spend)}</td>
-              <td className="px-3 py-2">{fmtPurchases(day.purchases)}</td><td className="px-3 py-2">{fmtCpa(day.cpa)}</td>
-              <td className="px-3 py-2">{formatMetaRoas(day.roas_conservative)} ／ {formatMetaRoas(day.roas)}</td>
+              <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{money(day.spend)}</td>
+              <td className="px-3 py-2">{count(day.purchases)}</td><td className="px-3 py-2">{cpa(day.cpa)}</td>
+              <td className="px-3 py-2">{native ? roas(day.roas) : `${formatMetaRoas(day.roas_conservative)} ／ ${formatMetaRoas(day.roas)}`}</td>
             </tr>) : <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">還沒有每日資料。</td></tr>}</tbody>
           </table>
         </div>
@@ -420,7 +459,7 @@ function PerformanceReady({
                 <th className="px-3 py-2 font-medium">花費</th>
                 <th className="px-3 py-2 font-medium">{labels.count}</th>
                 <th className="px-3 py-2 font-medium">CPA</th>
-                <th className="px-3 py-2 font-medium">ROAS（保守／樂觀）</th>
+                <th className="px-3 py-2 font-medium">{native ? "ROAS" : "ROAS（保守／樂觀）"}</th>
                 <th className="px-3 py-2 font-medium">點擊率</th>
                 <th className="px-3 py-2 font-medium">花費占比</th>
               </tr>
@@ -436,14 +475,14 @@ function PerformanceReady({
                 data.groups.map((g) => (
                   <tr key={g.group_id} className="border-t border-border">
                     <td className="px-3 py-2">{g.name}</td>
-                    <td className="px-3 py-2">{formatCurrency(g.spend)}</td>
-                    <td className="px-3 py-2">{fmtPurchases(g.purchases)}</td>
-                    <td className="px-3 py-2">{fmtCpa(g.cpa)}</td>
+                    <td className="px-3 py-2">{money(g.spend)}</td>
+                    <td className="px-3 py-2">{count(g.purchases)}</td>
+                    <td className="px-3 py-2">{cpa(g.cpa)}</td>
                     <td className="px-3 py-2">
-                      {formatMetaRoas(g.roas_conservative)} ／ {formatMetaRoas(g.roas)}
+                      {native ? roas(g.roas) : `${formatMetaRoas(g.roas_conservative)} ／ ${formatMetaRoas(g.roas)}`}
                     </td>
-                    <td className="px-3 py-2">{formatPercent(g.ctr)}</td>
-                    <td className="px-3 py-2">{formatPercent(g.spend_share)}</td>
+                    <td className="px-3 py-2">{percent(g.ctr)}</td>
+                    <td className="px-3 py-2">{percent(g.spend_share)}</td>
                   </tr>
                 ))
               )}
@@ -476,8 +515,8 @@ function PerformanceReady({
                 data.ads.map((a) => (
                   <tr key={a.ad_id} className="border-t border-border">
                     <td className="px-3 py-2">{a.name}</td>
-                    <td className="px-3 py-2">{formatCurrency(a.spend)}</td>
-                    <td className="px-3 py-2">{formatPercent(a.spend_share)}</td>
+                    <td className="px-3 py-2">{money(a.spend)}</td>
+                    <td className="px-3 py-2">{percent(a.spend_share)}</td>
                   </tr>
                 ))
               )}
@@ -486,9 +525,9 @@ function PerformanceReady({
         </div>
       </div>
           <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-            <p>CPA＝花費 ÷ 轉換數；沒有追蹤到轉換時顯示「算不出來」。</p>
-            <p>ROAS 保守值用全部花費作分母；樂觀值只使用有追蹤營收的花費。兩者須一起看。</p>
-            <p>花費占比＝該投放組或廣告花費 ÷ Campaign 總花費。</p>
+            <p>{native ? "CPA＝花費 ÷ 轉換數；缺少資料時顯示「未知」。" : "CPA＝花費 ÷ 轉換數；沒有追蹤到轉換時顯示「算不出來」。"}</p>
+            <p>{native ? "ROAS＝所選資料範圍的營收 ÷ 花費；任一筆營收未知時，不推算 ROAS。" : "ROAS 保守值用全部花費作分母；樂觀值只使用有追蹤營收的花費。兩者須一起看。"}</p>
+            <p>{native ? "花費占比＝項目花費 ÷ 所選資料範圍總花費。投放組與廣告明細只顯示所選層級。" : "花費占比＝該投放組或廣告花費 ÷ Campaign 總花費。"}</p>
           </div>
         </div>
       </Disclosure>

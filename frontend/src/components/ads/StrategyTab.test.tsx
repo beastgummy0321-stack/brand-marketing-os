@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { adoptStrategy, selectScenario } from "@/lib/adsApi";
+import { adoptStrategy, selectScenario, patchCampaign, generateStrategy } from "@/lib/adsApi";
 import { StrategyTab } from "./StrategyTab";
 
 function renderWithRouter(ui: ReactElement) {
@@ -427,4 +427,28 @@ it("shows current CPA, preserves selected money and labels scenarios beyond the 
   expect(screen.getByText(/計算依據：目前 CPA/).textContent).toContain("14 天");
   expect(screen.getByText(/已選預算.*14,700/)).toBeTruthy();
   expect(screen.getAllByText(/超過預算上限/)).toHaveLength(2);
+});
+
+
+it("keeps imported strategy in the existing disclosures and saves only the internal goal", async () => {
+  vi.clearAllMocks();
+  const user = userEvent.setup();
+  const imported = campaign({origin: "imported", groups: [], budget_basis_json: {}});
+  const changed = vi.fn();
+  vi.mocked(patchCampaign).mockResolvedValue({...imported, goal_text: "內部管理目標"});
+  renderWithRouter(<StrategyTab brandId="brd_1" campaign={imported} onCampaignChange={changed} onChangeTab={vi.fn()} />);
+  expect(screen.getByText("這個 Campaign 尚無內部策略建議")).toBeTruthy();
+  await user.click(screen.getByText("調整建議"));
+  expect(screen.getByRole("button", {name: "產生策略"}).hasAttribute("disabled")).toBe(true);
+  await user.click(screen.getByText("進階設定"));
+  await user.clear(screen.getByLabelText("內部活動目標"));
+  await user.type(screen.getByLabelText("內部活動目標"), "內部管理目標");
+  await user.click(screen.getByRole("button", {name: "儲存目標"}));
+  expect(patchCampaign).toHaveBeenCalledWith("brd_1", imported.id, {goal_text: "內部管理目標", objective: "內部管理目標"});
+  expect(changed).toHaveBeenCalled();
+  expect(generateStrategy).not.toHaveBeenCalled();
+  expect(adoptStrategy).not.toHaveBeenCalled();
+  expect(selectScenario).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", {name: "編輯成功條件"}));
+  expect(screen.getByLabelText("目標值（留空＝尚未設定）")).toBeTruthy();
 });

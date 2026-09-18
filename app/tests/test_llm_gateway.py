@@ -1059,3 +1059,7 @@ class ParseJsonReplyShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_sonnet_five_current_official_price():
+    assert pricing.calculate_cost("claude-sonnet-5", 1_000_000, 1_000_000) == 12.0

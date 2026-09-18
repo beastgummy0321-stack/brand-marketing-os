@@ -184,3 +184,13 @@ describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", ()
     expect(screen.queryByText("還是要先建立")).toBeNull();
   });
 });
+
+it("renders imported campaign in the existing campaign grid", async () => {
+  vi.mocked(getAdsHome).mockResolvedValue(home({ imported_campaigns: [campaignCard({ id: "imported1", name: "BP AD existing", origin: "imported", status: "draft" })] }));
+  vi.mocked(fetchLaunchReadiness).mockResolvedValue(readiness());
+  renderPage();
+  expect(await screen.findByRole("heading", { name: "BP AD existing" })).toBeTruthy();
+  expect(screen.getByTestId("campaign-grid").textContent).toContain("BP AD existing");
+  expect(screen.queryByText("已納入的既有平台活動")).toBeNull();
+  expect(screen.queryByText("草稿")).toBeNull();
+});

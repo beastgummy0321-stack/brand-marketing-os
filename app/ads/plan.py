@@ -123,6 +123,7 @@ def _validate_reply(data, roles: set) -> list | None:
 def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
     """草稿 -> `ready`：把已採用的策略角色分配展開成投放組／廣告。再跑一次（`status` 已經
     不是 `draft`）一律拒絕——第二次展開會讓已經綁定平台的節點變孤兒（§0）。"""
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -266,6 +267,7 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
 
 def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: str, role: str,
                   daily_budget: float, start_date=None, end_date=None) -> dict:
+    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     if not isinstance(name, str) or not name.strip():
         raise ValueError("name_unknown")
     if role not in _ROLES:

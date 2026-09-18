@@ -35,10 +35,17 @@ export function OverviewTab({
 }) {
   const labels = c.labels ?? DEFAULT_LABELS;
   const step = nextStep(c);
-  const idx = step.stageIndex;
+  const imported = c.origin === "imported";
+  const roots = c.external_view?.entities.filter(e => e.native_kind === "campaign") ?? [];
+  const root = roots.length === 1 ? roots[0] : undefined;
+  const nativeStates = ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"];
+  const nativeLabels = ["投放啟用", "已暫停", "已封存", "已刪除", "狀態未知"];
+  const nativeIndex = nativeStates.indexOf(root?.native_status ?? "");
+  const idx = imported ? (nativeIndex < 0 ? 4 : nativeIndex) : step.stageIndex;
+  const stageLabels = imported ? nativeLabels : STAGE_LABELS;
   const t = currentBudgetTotal(c);
-  const hasOutcome = c.outcome.spend > 0 || c.outcome.purchases > 0 || c.outcome.revenue > 0;
-  const pct = t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
+  const hasOutcome = (c.outcome.spend ?? 0) > 0 || (c.outcome.purchases ?? 0) > 0 || (c.outcome.revenue ?? 0) > 0;
+  const pct = c.outcome.spend !== null && t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
 
   const budgetCaption =
     (t.total !== null ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天` : "還沒設定投放起訖日") +
@@ -63,7 +70,7 @@ export function OverviewTab({
     {
       icon: BarChart2,
       label: "已花費",
-      value: hasOutcome ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
+      value: hasOutcome && c.outcome.spend !== null ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
       caption: hasOutcome
         ? t.total !== null
           ? `佔總預算 ${pct}%・平台回報`
@@ -71,6 +78,18 @@ export function OverviewTab({
         : "發布後才會有花費資料",
     },
   ];
+
+  if (imported) {
+    kpiCells[1] = {
+      icon: Wallet, label: "平台預算",
+      value: root?.budget_amount != null ? `${root.budget_amount.toLocaleString()} ${root.currency ?? "幣別未知"}` : "活動層級預算未知",
+      caption: `${({ daily: "日預算", lifetime: "總額預算", unknown: "預算方式未知" } as Record<string, string>)[root?.budget_type ?? "unknown"] ?? root?.budget_type}・${root?.start_date ?? "開始日未知"} — ${root?.end_date ?? "結束日未知"}；各組預算見投放結構`,
+    };
+    kpiCells[2] = {
+      icon: BarChart2, label: "已花費", value: c.external_view?.observations.length ? "查看成效分頁" : "尚無已讀回成效",
+      caption: "依原生層級、幣別與歸因分開呈現；缺漏不代表 0。",
+    };
+  }
 
   const judgmentTone = c.judgment?.tone ?? "neutral";
   const timelineItems: TimelineItem[] = (c.action_lines ?? []).map((a, i) => ({
@@ -94,7 +113,9 @@ export function OverviewTab({
         {labels.conversion}、{labels.cpa}、ROAS 等成效數字在成效分頁——那裡分得出「未追蹤」與 0。
       </p>
 
-      {c.judgment && (
+      {imported ? (
+        <JudgmentBand icon={Clock} sentence={`平台狀態：${nativeLabels[idx]}${root?.native_status ? `（${root.native_status}）` : ""}`} facts="顯示最近讀回的平台狀態；不代表內部策略、素材確認或上架流程已完成。" tone="neutral" />
+      ) : c.judgment && (
         <JudgmentBand
           icon={JUDGMENT_ICON[judgmentTone]}
           sentence={c.judgment.text}
@@ -116,18 +137,18 @@ export function OverviewTab({
 
       <div className="surface">
         <div className="surface-header">
-          <h2>狀態時間軸</h2>
+          <h2>狀態時間軸</h2>{imported && <span className="text-xs text-muted-foreground">僅標示最近讀回狀態，非狀態變更歷程</span>}
         </div>
         <div className="surface-body flex items-center gap-0 pt-2">
-          {STAGE_LABELS.map((label, i) => {
-            const done = i < idx;
+          {stageLabels.map((label, i) => {
+            const done = !imported && i < idx;
             const current = i === idx;
             return (
               <div key={label} className="relative flex-1 text-center">
                 {i > 0 && (
                   <div
                     className={`absolute top-[9px] right-1/2 left-[-50%] h-0.5 ${
-                      done || current ? "bg-primary" : "bg-border"
+                      !imported && (done || current) ? "bg-primary" : "bg-border"
                     }`}
                   />
                 )}

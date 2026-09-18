@@ -1,3 +1,5 @@
+import { NativeCreativeView } from "./NativeCreativeView";
+import { UserAssetPlacements } from "./UserAssetPlacements";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
@@ -37,7 +39,7 @@ const STATE_TONE: Record<AssetReadinessState, "default" | "outline" | "secondary
 
 /** 素材 tab（F03-I15）：一列一支廣告，讀 F03-I08 的就緒狀態，派工到工作檯或手動勾
  * 「素材已就位」。不擋發布（決策 8／10），這裡只是誠實顯示現況。 */
-export function AssetsTab({
+function LegacyAssetsTab({
   brandId,
   campaign: c,
   onCampaignChange,
@@ -48,6 +50,7 @@ export function AssetsTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const imported = c.origin === "imported";
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
@@ -57,26 +60,34 @@ export function AssetsTab({
   const [confirmBusy, setConfirmBusy] = useState(false);
 
   const load = useCallback(() => {
+    if (imported) { setState({ status: "ready", rows: [], readyCount: 0, total: 0 }); return; }
     setState({ status: "loading" });
     getAssets(brandId, c.id)
       .then((data) => setState({ status: "ready", rows: data.assets, readyCount: data.ready_count, total: data.total }))
       .catch((err: unknown) =>
         setState({ status: "error", message: err instanceof Error ? err.message : "讀取素材就緒狀態失敗。" }),
       );
-  }, [brandId, c.id]);
+  }, [brandId, c.id, imported]);
 
   useEffect(load, [load]);
 
-  const ads = c.groups.flatMap((g) => g.ads.map((a) => ({ ad: a, groupName: g.name })));
+  const entities = c.external_view?.entities ?? [];
+  const ads = imported
+    ? entities.filter(e => e.native_kind === "ad").map(native => ({
+        ad: { id: native.id, name: native.name ?? native.native_id },
+        groupName: entities.find(e => e.platform === native.platform && e.source_account === native.source_account && e.native_id === native.parent_native_id)?.name ?? "投放組名稱未知",
+        native,
+      }))
+    : c.groups.flatMap(g => g.ads.map(ad => ({ ad, groupName: g.name, native: undefined })));
   const step = nextStep(c);
 
   if (ads.length === 0) {
     return (
       <EmptyState
-        title="這個 Campaign 還沒有廣告"
-        description={step.sentence}
-        actionLabel={step.label}
-        onAction={() => onChangeTab(step.target)}
+        title={imported ? "尚未讀回廣告素材" : "這個 Campaign 還沒有廣告"}
+        description={imported ? "可在上方加入自帶素材，完成內部確認與手動交接；平台素材未讀回不代表不存在。" : `自帶素材可在上方完成確認與手動交接。如需系統產生廣告素材：${step.sentence}`}
+        actionLabel={imported ? "查看投放結構" : step.label}
+        onAction={() => onChangeTab(imported ? "structure" : step.target)}
       />
     );
   }
@@ -93,7 +104,7 @@ export function AssetsTab({
   }
 
   const rowsByAdId = new Map(state.rows.map((r) => [r.ad_id, r]));
-  const packId = c.asset_readiness.pack_id ?? null;
+  const packId = imported ? null : c.asset_readiness.pack_id ?? null;
 
   async function handleConfirmReady() {
     if (!confirmAd) return;
@@ -114,7 +125,7 @@ export function AssetsTab({
     <div className="flex flex-col gap-4">
       <div className="surface">
         <div className="surface-header">
-          <h2>{state.readyCount}／{state.total} 則已就位</h2>
+          <h2>{imported ? `${ads.length} 則平台廣告` : `${state.readyCount}／${state.total} 則已就位`}</h2>
           {packId && (
             <Button variant="outline" size="sm" asChild>
               <Link to={`/brands/${brandId}/workbench/packs/${packId}`}>查看素材任務包</Link>
@@ -134,7 +145,7 @@ export function AssetsTab({
                 </tr>
               </thead>
               <tbody>
-                {ads.map(({ ad, groupName }) => {
+                {ads.map(({ ad, groupName, native }) => {
                   const row = rowsByAdId.get(ad.id);
                   const rowState = row?.state ?? "not_started";
                   return (
@@ -142,7 +153,8 @@ export function AssetsTab({
                       <td className="px-3 py-2">{groupName}</td>
                       <td className="px-3 py-2">{ad.name}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={STATE_TONE[rowState]}>{STATE_LABEL[rowState]}</Badge>
+                        <Badge variant={STATE_TONE[rowState]}>{native ? (native.native_status ?? "平台狀態未知") : STATE_LABEL[rowState]}</Badge>
+                        {native?.sync_error && <p className="text-xs text-warning">{native.sync_error}</p>}
                         {row?.by && (
                           <span className="ml-2 text-xs text-muted-foreground">
                             {row.by} 於 {row.at}
@@ -154,9 +166,10 @@ export function AssetsTab({
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{row?.at ?? "－"}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{native ? (native.last_success_at ?? "尚未成功讀回") : (row?.at ?? "－")}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          {native && <details className="max-w-lg text-left"><summary className="cursor-pointer text-primary">查看素材</summary><NativeCreativeView creative={native.creative} /></details>}
                           {row?.pack_id && row.brief_id && (
                             <Button variant="ghost" size="sm" asChild>
                               <Link to={`/brands/${brandId}/workbench/packs/${row.pack_id}/sets/${row.brief_id}`}>
@@ -164,7 +177,7 @@ export function AssetsTab({
                               </Link>
                             </Button>
                           )}
-                          {rowState !== "ready_workbench" && (
+                          {!imported && rowState !== "ready_workbench" && (
                             <label className="flex items-center gap-1.5 text-sm">
                               <input
                                 type="checkbox"
@@ -187,7 +200,7 @@ export function AssetsTab({
         </div>
       </div>
 
-      {step.id === "make_assets" ? (
+      {imported ? <StepButton onClick={() => onChangeTab("performance")}>查看成效 →</StepButton> : step.id === "make_assets" ? (
         <StepButton asChild>
           <Link to={`/brands/${brandId}/workbench/packs/${c.asset_readiness.pack_id}`}>前往素材工作檯 →</Link>
         </StepButton>
@@ -216,4 +229,8 @@ export function AssetsTab({
       </Dialog>
     </div>
   );
+}
+
+export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
+  return <div className="flex flex-col gap-4"><UserAssetPlacements key={`${props.brandId}:${props.campaign.id}`} brandId={props.brandId} campaign={props.campaign} /><LegacyAssetsTab {...props} /></div>;
 }

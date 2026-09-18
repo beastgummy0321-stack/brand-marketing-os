@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NativeCreativeView } from "./NativeCreativeView";
 import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
@@ -43,7 +44,7 @@ const LOCAL_STATE_LABEL: Record<string, string> = {
   retired: "已停用",
 };
 
-type SelectedKey = `group:${string}` | `ad:${string}`;
+type SelectedKey = `group:${string}` | `ad:${string}` | `native:${string}`;
 
 /** ISO 日期（`YYYY-MM-DD`）→ `MM/DD`，只給這個分頁的日期 KPI 格用（同 `StrategyTab.tsx::mmdd`，
  * 各自一份短函式，不為此拉共用模組）。 */
@@ -66,8 +67,21 @@ export function DeliveryTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const imported = c.origin === "imported";
+  const nativeEntities = c.external_view?.entities ?? [];
+  const nativeCampaign = nativeEntities.find((row) => row.native_kind === "campaign");
+  const nativeGroups = nativeEntities.filter((row) => row.native_kind === "adset");
+  const nativeAds = nativeEntities.filter((row) => row.native_kind === "ad");
+  const orderedNative = [
+    ...nativeEntities.filter((row) => row.native_kind === "campaign"),
+    ...nativeGroups.flatMap((group) => [group, ...nativeAds.filter((ad) => ad.parent_native_id === group.native_id && ad.platform === group.platform && ad.source_account === group.source_account)]),
+    ...nativeAds.filter((ad) => !nativeGroups.some((group) => group.native_id === ad.parent_native_id && group.platform === ad.platform && group.source_account === ad.source_account)),
+    ...nativeEntities.filter((row) => !["campaign", "adset", "ad"].includes(row.native_kind)),
+  ];
+  const readonlyReason = c.capabilities?.unavailable.budget ?? "平台結構目前只支援查看，不會修改平台設定。";
   const { scope: draftScope } = useWorkspace();
   const [selected, setSelected] = useState<SelectedKey | null>(null);
+  const selectedNative = nativeEntities.find((row) => `native:${row.id}` === selected);
   const [vocabulary, setVocabulary] = useState<Coordinate[]>([]);
   const [channelInfo, setChannelInfo] = useState<Channel[]>([]);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
@@ -195,7 +209,7 @@ export function DeliveryTab({
 
   const step = nextStep(c);
 
-  if (c.groups.length === 0) {
+  if (!imported && c.groups.length === 0) {
     return (
       <div className="flex flex-col gap-4">
         <EmptyState title="這個 Campaign 還沒有投放結構" description={step.sentence} />
@@ -220,7 +234,16 @@ export function DeliveryTab({
     ["live", "ended", "closed"].includes(c.status) ||
     c.actions.some((a) => a.kind === "publish" && a.target_kind === "campaign");
 
-  const kpiCells: KpiCell[] = [
+  function nativeBudget(row: typeof nativeCampaign) {
+    if (!row || row.budget_amount === null || !row.currency) return "未知";
+    return `${row.currency} ${row.budget_amount.toLocaleString()}${row.budget_type === "daily" ? "／天" : row.budget_type === "lifetime" ? "（總額）" : `（${row.budget_type}）`}`;
+  }
+  const kpiCells: KpiCell[] = imported ? [
+    { icon: Folder, label: "投放組", value: nativeEntities.length ? `${nativeGroups.length} 個` : "尚未讀回", caption: "目前已讀回的平台結構" },
+    { icon: FileText, label: "廣告", value: nativeEntities.length ? `${nativeAds.length} 則` : "尚未讀回", caption: "目前已讀回的廣告" },
+    { icon: Wallet, label: "活動預算", value: nativeBudget(nativeCampaign), caption: "各層級預算分開呈現，不加總" },
+    { icon: Calendar, label: "投放期間", value: `${nativeCampaign?.start_date ?? "開始未知"} – ${nativeCampaign?.end_date ?? "結束未知"}`, caption: "平台讀回日期" },
+  ] : [
     {
       icon: Folder,
       label: "投放組",
@@ -251,8 +274,8 @@ export function DeliveryTab({
     <div className="flex flex-col gap-4">
       <JudgmentBand
         icon={Layers}
-        sentence="系統已經照策略建好投放結構"
-        facts="不用改也可以；想微調再打開下面的「調整結構（進階）」。"
+        sentence={imported ? nativeEntities.length ? `平台投放結構已載入 ${nativeEntities.length} 筆` : "尚未讀回平台投放結構" : "系統已經照策略建好投放結構"}
+        facts={imported ? readonlyReason : "不用改也可以；想微調再打開下面的「調整結構（進階）」。"}
       />
 
       <div className="surface">
@@ -274,12 +297,12 @@ export function DeliveryTab({
         {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
       </div>
 
-      <ManualSettings key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
-        onSaved={onCampaignChange} onDirtyChange={setManualSettingsDirty} />
+      {!imported && <ManualSettings key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
+        onSaved={onCampaignChange} onDirtyChange={setManualSettingsDirty} />}
 
       <Disclosure label={`調整結構（進階）${editorDirty ? " · 有未儲存變更" : ""}`}>
         <div className="flex flex-col gap-4">
-          <div className="surface">
+          {!imported && <div className="surface">
             <div className="surface-header">
               <h2>預算（這個 Campaign）</h2>
             </div>
@@ -320,7 +343,7 @@ export function DeliveryTab({
                 </div>
               </div>
             </div>
-          </div>
+          </div>}
 
           <div className="grid grid-cols-[minmax(260px,0.9fr)_minmax(0,1.4fr)] items-start gap-4">
             <div className="surface">
@@ -328,7 +351,7 @@ export function DeliveryTab({
                 <h2>投放結構</h2>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="新增節點">
+                    <Button variant="ghost" size="icon" aria-label="新增節點" disabled={imported} title={imported ? readonlyReason : undefined}>
                       <Plus size={16} />
                     </Button>
                   </DropdownMenuTrigger>
@@ -358,7 +381,16 @@ export function DeliveryTab({
                     </div>
                   );
                 })}
-                {c.groups.map((g) => (
+                {imported && orderedNative.map((entity) => (
+                  <button key={entity.id} type="button" onClick={() => selectNode(`native:${entity.id}`)}
+                    style={{ paddingLeft: entity.native_kind === "ad" ? 48 : entity.native_kind === "adset" ? 24 : 8 }}
+                    className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm ${selected === `native:${entity.id}` ? "bg-accent" : "hover:bg-muted"}`}>
+                    {entity.native_kind === "ad" ? <FileText size={12} /> : <Folder size={13} />}
+                    <span className="flex-1 truncate">{entity.name ?? entity.native_id}</span>
+                    <Badge variant="outline">{entity.native_status ?? "狀態未知"}</Badge>
+                  </button>
+                ))}
+                {!imported && c.groups.map((g) => (
                   <div key={g.id}>
                     <button
                       type="button"
@@ -398,7 +430,24 @@ export function DeliveryTab({
               </div>
             </div>
 
-            {selectedGroup ? (
+            {selectedNative ? (
+              <div className="surface">
+                <div className="surface-header"><h2>{selectedNative.name ?? selectedNative.native_id}</h2></div>
+                <div className="surface-body flex flex-col gap-3 text-sm">
+                  <p>平台 ID：{selectedNative.native_id}</p>
+                  <p>上層 ID：{selectedNative.parent_native_id ?? "無"}</p>
+                  <p>狀態：{selectedNative.native_status ?? "未知"}</p>
+                  <p>預算：{nativeBudget(selectedNative)}</p>
+                  {Object.keys(selectedNative.budget_raw ?? {}).length > 0 && <p>平台原始預算（未換算）：{JSON.stringify(selectedNative.budget_raw)}</p>}
+                  <p>期間：{selectedNative.start_date ?? "開始未知"} – {selectedNative.end_date ?? "結束未知"}</p>
+                  {selectedNative.sync_error && <p role="alert" className="text-danger">同步狀態：{selectedNative.sync_error}</p>}
+                  <p>最近成功：{selectedNative.last_success_at ?? "尚無成功紀錄"}</p>
+                  <NativeCreativeView creative={selectedNative.creative} />
+                  <p className="text-muted-foreground">{readonlyReason}</p>
+                  <Button disabled>儲存</Button>
+                </div>
+              </div>
+            ) : selectedGroup ? (
               <GroupPanel
                 key={`${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
                 brandId={brandId}
@@ -426,7 +475,7 @@ export function DeliveryTab({
             ) : (
               <div className="surface">
                 <div className="surface-body py-10 text-center text-sm text-muted-foreground">
-                  點左邊的投放組或廣告來調整。
+                  {imported ? "點左邊的投放組或廣告查看明細。" : "點左邊的投放組或廣告來調整。"}
                 </div>
               </div>
             )}

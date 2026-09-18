@@ -47,6 +47,7 @@ would collide across test modules and across organisations. `channel_credential.
 is the index instead.
 """
 
+import math
 from datetime import date
 
 import app.shared.web as web
@@ -764,3 +765,64 @@ cleanup.register(
     delete_product=None,
     product_tables=frozenset(),
 )
+
+
+
+def external_bound_accounts(conn, org_id, brand_id):
+    """Source facade: expose only accounts currently bound to this tenant and brand."""
+    rows = conn.execute(
+        "SELECT a.account_id,a.name,a.currency,a.timezone_name FROM meta_ad_account a "
+        "JOIN brand_meta_ad_account b ON b.ad_account_id=a.id AND b.org_id=a.org_id "
+        "WHERE a.org_id=%s AND b.brand_id=%s ORDER BY a.account_id", (org_id, brand_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+class ExternalReadError(ValueError):
+    """Sanitized external transport failure; never contains a provider URL or token."""
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def read_external_page(conn, org_id, brand_id, account_id, section, **kwargs):
+    if account_id not in {a["account_id"] for a in external_bound_accounts(conn, org_id, brand_id)}:
+        raise ValueError("來源帳號已解除或不屬於此品牌。")
+    token = get_token(conn, org_id)
+    if not token:
+        raise ValueError("來源連線沒有可用的憑證。")
+    # This facade is used by the read-only background worker; no transaction waits on HTTP.
+    conn.commit()
+    try:
+        return graph.external_page(token, account_id, section, **kwargs)
+    except graph.GraphError as exc:
+        code = "permission_denied" if exc.code in {10,190,200} else "source_error"
+        raise ExternalReadError(str(exc),code) from None
+
+
+
+def external_purchase_values(actions, values):
+    """One explicit synonymous action defines both count and value; absent is unavailable."""
+    counts = {a.get("action_type"):a.get("value") for a in (actions or []) if isinstance(a, dict)}
+    revenues = {a.get("action_type"):a.get("value") for a in (values or []) if isinstance(a, dict)}
+    def number(value):
+        try:
+            result = float(value)
+            return result if math.isfinite(result) else None
+        except (TypeError, ValueError):
+            return None
+    for kind in graph._ROAS_ACTION_PRIORITY:
+        if kind in counts:
+            return {"purchases":number(counts[kind]), "revenue":number(revenues.get(kind)),
+                    "action_type":kind}
+    return {"purchases":None,"revenue":None,"action_type":None}
+
+
+def read_external_object(conn, org_id, brand_id, account_id, kind, native_id):
+    """Fresh, bounded node GET through the existing credential and tenant facade."""
+    if kind not in {"ad", "adset", "campaign"}:
+        raise ValueError("不支援的單物件讀取。")
+    page=read_external_page(conn,org_id,brand_id,account_id,kind,native_id=native_id)
+    if len(page["data"])!=1 or str(page["data"][0].get("id"))!=str(native_id):
+        raise ValueError("平台沒有回傳指定物件。")
+    return page["data"][0]

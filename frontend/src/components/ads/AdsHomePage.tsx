@@ -1,3 +1,4 @@
+import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, type NavigateFunction } from "react-router-dom";
 import { BarChart3, Plus } from "lucide-react";
@@ -73,16 +74,16 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
     content = <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
   } else {
     const { home } = state;
+    const campaigns = [...new Map([...home.campaigns, ...(home.imported_campaigns ?? [])].map(c => [c.id, c])).values()];
     content = (
       <div className="flex flex-col gap-4">
         <JudgmentBand icon={BarChart3} sentence={home.headline.text} facts={home.headline.facts} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="flex flex-col gap-4 lg:col-span-2">
             <DecisionCard items={[]} />
-
             <div className="surface">
               <div className="surface-header">
-                <h2>進行中的 Campaign</h2>
+                <h2>{home.imported_campaigns?.length ? "Campaign" : "進行中的 Campaign"}</h2>
                 <Link
                   to={`/brands/${brandId}/ads/campaigns`}
                   className="text-sm text-primary hover:underline"
@@ -91,7 +92,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                 </Link>
               </div>
               <div className="surface-body">
-                {home.campaigns.length === 0 ? (
+                {campaigns.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
                     目前沒有進行中的 Campaign。
                   </p>
@@ -100,7 +101,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                     data-testid="campaign-grid"
                     className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3"
                   >
-                    {home.campaigns.map((c) => {
+                    {campaigns.map((c) => {
                       const spent = c.budget_progress.spent;
                       const total = c.budget_progress.total;
                       const pct = c.budget_progress.pct;
@@ -112,13 +113,13 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                         <CampaignTile
                           key={c.id}
                           name={c.name}
-                          statusLabel={STATUS_LABEL[c.status]}
+                          statusLabel={c.origin === "imported" ? "平台活動" : STATUS_LABEL[c.status]}
                           statusTone={STATUS_TONE[c.status]}
                           meta={`目標・${c.objective}`}
-                          spendText={spendText}
-                          budgetText={budgetText}
-                          percentText={percentText}
-                          percent={pct ?? 0}
+                          spendText={c.origin === "imported" ? "進入活動查看花費" : spendText}
+                          budgetText={c.origin === "imported" ? "平台預算" : budgetText}
+                          percentText={c.origin === "imported" ? "未知" : percentText}
+                          percent={c.origin === "imported" ? 0 : pct ?? 0}
                           judgment={c.judgment.text}
                           judgmentDetail={c.judgment.detail}
                           onClick={() => navigate(`/brands/${brandId}/ads/campaigns/${c.id}`)}
@@ -168,9 +169,9 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
         title="投放中心"
         description="讓行銷駕駛艙幫你持續優化廣告投放。"
         actions={
-          <Button asChild>
+          <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
             <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
-          </Button>
+          </Button></div>
         }
       />
       {content}

@@ -91,6 +91,13 @@ function renderPage() {
 }
 
 describe("ConfirmBriefPage（F04-I12）", () => {
+  it("provides a direct asset handoff route without generating strategy", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockFetchProductList.mockResolvedValue([]);
+    renderPage();
+    const link = await screen.findByRole("link", { name: "先處理自帶素材與手動交接" });
+    expect(link.getAttribute("href")).toContain("/ads/campaigns/cmp_1?tab=assets");
+  });
   it("六張卡的 label 都在畫面上", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockFetchProductList.mockResolvedValue([{ id: "prd_1", name: "Beast Gummy", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "none" }]);

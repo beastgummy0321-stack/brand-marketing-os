@@ -22,12 +22,37 @@
 - 本機完整後端套件使用 `-n 4 --dist loadfile`：2026-09-17 F09 整合時 8 個程序加既有服務耗盡 Postgres 連線並逾時，因此降低本機平行數；測試案例與斷言不變。20 核主機的 auto 也曾耗盡 100 條連線。loadfile 維持各測試檔的 DB/schema 隔離，不改 CI 配置。
 - `supabase start`；migration 只在授權且確認共享 DB 沒有其他工作依赖時套用一次，放 `privileged`，不放會重跑的 verify。`supabase db reset` 會刪除 seed 外資料與帳號；本機測試資料可重建不代表 worker 可越過 touch 或干擾別人的測試。
 - seed 登入資訊與啟動方式見 [CLAUDE.md](../CLAUDE.md)。長駐 8710 不保證是本次程式，實機驗收須重啟對應後端。
+- `test_real_db_schema_drift.py` 固定比較該連線資料庫的 `public` 與全新 migration 結果；僅改 `search_path` 不能隔離這個基準。共享 `public` 尚未套本分支 migration 時，完整整合使用另建的本機測試 database，先在其 `public` 套 migration／seed，再以 `DATABASE_URL` 指向它。保留原斷言，不跳過差異或修改共享資料庫來換取通過；Auth／Vault 必須保留真實結構與擴充能力。
 
 ## e2e 的能力邊界
 
 `npm run e2e` 會 build，再由 Playwright 啟動 8720 後端。若本次 Harness integration 已成功 build，`verify.smoke_after_build` 使用同一 checkout 的 `npx playwright test`，避免第二次 build；不能跨樹或沿用未知的 dist。
 [playwright.config.ts](../frontend/playwright.config.ts) 用 `scripted` 供應商與 `memory` queue，僅允許 local。未知 task type 會失敗；背景工作不執行。需背景結果的測試應選擇可覆蓋該行為的整合測試或授權的獨立測試環境，不能把等待逾時當驗收。
 新的 scripted reply 必須由所屬模組測試約束形狀；涉及 legacy seam 的票仍需 `legacy_migration` 與邊界審查。保留租戶隔離、憑證保護與費用限制。
+
+### F13 的隔離完整流程
+
+人工逐步驗收請依 [F13 驗收手冊：既有活動、自帶素材與手動上架](acceptance/f13-existing-campaigns-user-assets.md)。
+
+真帳號驗收的 server 與 worker 必須使用同一 checkout 與本機設定，且 `BRAND_OS_JOB_QUEUE=postgres`；memory queue 只適合隔離 smoke，會令跨程序同步停在首段。真實讀取、模型回覆與平台寫入的驗證範圍分開記錄。
+
+`uv run python scripts/verify_existing_campaigns_assets.py --isolated --timeout 180`
+讀本 checkout 的本機 `.env`（也可明確指定 `--env-file`），建立自己專用的 schema／組織／品牌，
+啟動 8731 起的獨立服務。它只讀取既存 seed 登入者的 Auth 身分，不 reset 或建立共享 Auth fixture。
+真 HTTP、資料庫、Storage、FFmpeg、gateway 與同步／預覽／補文案 handlers 均實際執行；
+平台 reader 與模型 provider 僅在測試程序注入，外部非本機傳輸一律拒絕，未測試真模型或平台寫入。
+執行預算包括媒體建立、DDL、啟動等待與 HTTP；清理另有有界的程序／Storage／DB 等待，
+正常與失敗路徑皆產生 `cleanup.json`。重啟前保留實際 queued 工作，重啟後由真 dispatcher 續跑，
+並核對原檔 bytes 不變。stdout 提供本機證據目錄；`runtime-result.json` 與清理結果必須一起檢查。
+
+需要瀏覽器時加 `--browser --browser-timeout 900 --context <專用證據目錄/context.json> --port 8732`。
+先 build 同 checkout，再用 `F13_E2E_CONTEXT=<該 context.json>`、`E2E_BASE_URL=<context.base_url>`
+執行 `npx playwright test existing-campaigns-assets.spec.ts`。測試正常登入 seed 帳號，實際批次上傳、
+解碼圖片／影片預覽、確認與回讀，再覆蓋 heavy／empty／loading／error 的 1024／1920 截圖。
+loading／error 只延遲或中止測試瀏覽器的 GET，不植入產品成功狀態；預覽解碼不冒充原檔位元組驗證。
+普通 smoke 的不執行背景環境會明確跳過此專屬 spec；F13 必須另有真實執行且通過的結果。
+完成後建立 context 的 `stop_file`，父程序清理自己的服務／schema／Storage／fixture 媒體並保留證據。
+不要把舊服務、fixture 回應或佇列 done 當成真帳號能力及人工驗收；F13 與 F07 的未驗收項目分開保存。
 
 ## UI 與視覺
 

@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { UserAssetsLibrary } from "./UserAssetsLibrary";
+import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
+import type { CampaignDraft } from "@/lib/adsApi";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Plus, Sparkles, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
-import { createCampaign } from "@/lib/adsApi";
+import { createCampaign, getCampaign } from "@/lib/adsApi";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { readDraft, saveDraft, clearDraft } from "./campaignDraft";
 
@@ -29,15 +32,30 @@ export function NewCampaignPage({ brandId }: { brandId: string }) {
 
 function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string }) {
   const navigate = useNavigate();
+  const [search, setSearch] = useSearchParams();
+  const existingId = search.get("created");
+  const [restoring, setRestoring] = useState(!!existingId);
+  const life = useRef(new AbortController());
+  useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
   const [initial] = useState(() => readDraft(draftKey));
   const [goalText, setGoalText] = useState(initial.goalText);
   const [startDate, setStartDate] = useState(initial.startDate);
   const [endDate, setEndDate] = useState(initial.endDate);
   const [openConstraints, setOpenConstraints] = useState<Record<string, boolean>>(initial.openConstraints);
   const [constraintValues, setConstraintValues] = useState<Record<string, string>>(initial.constraintValues);
+  const [uploads, setUploads] = useState<AssetUpload[]>([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [created, setCreated] = useState<CampaignDraft | null>(null);
+  const [attached, setAttached] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!existingId || created?.id === existingId) { setRestoring(false); return; }
+    let cancelled = false; setRestoring(true);
+    getCampaign(brandId, existingId).then(value => { if (!cancelled) { setCreated({ ...value, parsed: true }); setGoalText(value.goal_text); } }).catch(e => { if (!cancelled) setError(`找回已建立活動失敗，請重開此頁或至活動清單查看：${String(e)}`); }).finally(() => { if (!cancelled) setRestoring(false); });
+    return () => { cancelled = true; };
+  }, [brandId, existingId, created?.id]);
   useEffect(() => {
     saveDraft(draftKey, { goalText, startDate, endDate, openConstraints, constraintValues });
   }, [draftKey, goalText, startDate, endDate, openConstraints, constraintValues]);
@@ -47,11 +65,13 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
   }
 
   async function handleSubmit() {
-    if (!goalText.trim() || submitting) return;
+    if (!goalText.trim() || submitting || uploadBusy || restoring || (existingId && !created)) return;
+    if (uploads.some(u => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     if ((startDate && !endDate) || (!startDate && endDate)) {
       setError("開始與結束日期請一起填，或兩個都留空。");
       return;
     }
+    const signal = life.current.signal;
     setSubmitting(true);
     setError(null);
     const constraints: Record<string, unknown> = {};
@@ -61,11 +81,25 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
       if (openConstraints[field.key] && value) constraints[field.key] = value;
     }
     try {
-      const draft = await createCampaign(brandId, {
+      const draft = created ?? await createCampaign(brandId, {
         goal_text: goalText,
         ...(startDate && endDate ? { start_date: startDate, end_date: endDate } : {}),
         ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
       });
+      if (signal.aborted) return;
+      setCreated(draft);
+      setSearch(prev => { const next = new URLSearchParams(prev); next.set("created", draft.id); return next; }, { replace: true });
+      const completed = new Set(attached);
+      const errors: string[] = [];
+      for (const upload of uploads) {
+        if (signal.aborted) return;
+        if (completed.has(upload.id)) continue;
+        try { await attachUpload(brandId, draft.id, upload.id); completed.add(upload.id); }
+        catch (e) { errors.push(`${upload.filename}：${e instanceof Error ? e.message : String(e)}`); }
+      }
+      if (signal.aborted) return;
+      setAttached(completed);
+      if (errors.length) { setError(`活動已建立，未完成素材仍可重試，不會重建活動。${errors.join("；")}`); setSubmitting(false); return; }
       clearDraft(draftKey);
       navigate(`/brands/${brandId}/ads/new/${draft.id}`, {
         state: draft.parsed
@@ -73,22 +107,12 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
           : { parseWarning: "這句話沒有完全被理解，請確認下面的欄位。" },
       });
     } catch (err) {
+      if (signal.aborted) return;
       setError(err instanceof Error ? err.message : "建立 Campaign 失敗，請稍後再試。");
       setSubmitting(false);
     }
   }
 
-  if (submitting) {
-    return (
-      <div className="mx-auto max-w-xl py-16 text-center">
-        <div className="mx-auto mb-4 size-6 animate-spin rounded-full border-2 border-border border-t-primary" />
-        <p className="text-sm font-medium">讀取品牌／商品／投放紀錄…</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          行銷駕駛艙正在整理這個品牌的資料，準備第一版策略。
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -103,6 +127,9 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
         description="只要告訴我們你的目標，行銷駕駛艙會幫你整理投放策略、預算、素材與排程。"
       />
       <p className="text-xs text-muted-foreground">未送出的內容會保留在這個分頁，離開後返回可繼續填寫。</p>
+      <UserAssetsLibrary brandId={brandId} readOnly={submitting} onSelection={setUploads} onBusy={setUploadBusy} />
+      {created && <p className="text-sm">活動已建立。<Link to={`/brands/${brandId}/ads/campaigns/${created.id}?tab=assets`}>前往此活動核對素材</Link></p>}
+      {submitting && <p role="status">讀取品牌／商品／投放紀錄…正在建立活動或加入所選素材。</p>}
       <div className="max-w-3xl">
         <div className="surface">
           <div className="surface-body flex flex-col gap-4">
@@ -115,6 +142,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
               </p>
               <Textarea
                 id="goal-textarea"
+                disabled={submitting || !!created}
                 value={goalText}
                 onChange={(e) => setGoalText(e.target.value)}
                 placeholder="9 月想推 Beast Gummy，上班族為主，希望增加購買，預算大約三萬。"
@@ -138,6 +166,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                       {field.isDate ? (
                         <span className="flex items-center gap-1">
                           <Input
+                            disabled={submitting || !!created}
                             aria-label="開始日期"
                             type="date"
                             value={startDate}
@@ -146,6 +175,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                           />
                           <span className="text-muted-foreground">~</span>
                           <Input
+                            disabled={submitting || !!created}
                             aria-label="結束日期"
                             type="date"
                             value={endDate}
@@ -155,6 +185,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                         </span>
                       ) : (
                         <Input
+                          disabled={submitting || !!created}
                           aria-label={field.label}
                           value={constraintValues[field.key] ?? ""}
                           onChange={(e) =>
@@ -166,6 +197,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                       )}
                       <button
                         type="button"
+                        disabled={submitting || !!created}
                         aria-label={`移除${field.label}`}
                         onClick={() => {
                           toggleConstraint(field.key);
@@ -183,6 +215,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                     <button
                       key={field.key}
                       type="button"
+                      disabled={submitting || !!created}
                       onClick={() => toggleConstraint(field.key)}
                       className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-sm text-muted-foreground hover:bg-muted"
                     >
@@ -195,9 +228,9 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <div className="flex justify-end">
-              <Button onClick={handleSubmit} disabled={!goalText.trim()}>
+              <Button onClick={handleSubmit} disabled={!goalText.trim() || submitting || uploadBusy || restoring || (!!existingId && !created)}>
                 <Sparkles size={15} />
-                產生建議
+                {created ? "重試加入未完成素材並繼續" : "產生建議"}
               </Button>
             </div>
           </div>

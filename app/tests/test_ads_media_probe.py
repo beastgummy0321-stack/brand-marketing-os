@@ -1,0 +1,83 @@
+"""Real local decoding fixtures; no platform calls or generated media service."""
+
+import json
+import shutil
+import subprocess
+from unittest.mock import patch
+
+import pytest
+
+from app.ads import media_probe as media
+
+
+@pytest.mark.parametrize(
+    "extension,codec,mime",
+    [
+        ("png", "png", "image/png"),
+        ("jpg", "mjpeg", "image/jpeg"),
+        ("webp", "libwebp", "image/webp"),
+        ("mp4", "libx264", "video/mp4"),
+        ("mov", "libx264", "video/quicktime"),
+    ],
+)
+def test_real_preview_and_original_bytes(tmp_path, extension, codec, mime):
+    tool = shutil.which("ffmpeg")
+    assert tool, "FFmpeg is required to verify real preview decoding"
+    path = tmp_path / ("fixture." + extension)
+    args = [
+        tool,
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=320x240:r=10",
+        "-frames:v",
+        "3" if mime.startswith("video") else "1",
+        "-c:v",
+        codec,
+        "-threads",
+        "1",
+        "-y",
+        str(path),
+    ]
+    subprocess.run(args, check=True, timeout=20, capture_output=True)
+    original = path.read_bytes()
+    result = media.preview(original)
+    assert result["mime_type"] == mime
+    assert (result["width"], result["height"]) == (320, 240)
+    assert result["thumbnail"].startswith(b"\xff\xd8\xff")
+    assert path.read_bytes() == original
+    if mime.startswith("video"):
+        assert result["preview_mime"] == "video/mp4"
+        assert result["preview"][4:8] == b"ftyp"
+        assert 0 < result["preview_duration"] <= 15
+
+
+def test_corrupt_magic_missing_tools_and_timeout():
+    with pytest.raises(media.MediaError):
+        media.preview(b"\x89PNG\r\n\x1a\ncorrupt")
+    with pytest.raises(media.MediaError):
+        media.sniff(b"pretend.jpg")
+    with (
+        patch.object(media.shutil, "which", return_value=None),
+        pytest.raises(media.MediaError, match="FFprobe"),
+    ):
+        media.preview(b"\x89PNG\r\n\x1a\n")
+    with (
+        patch.object(media.subprocess, "run", side_effect=subprocess.TimeoutExpired("ffmpeg", 1)),
+        pytest.raises(media.MediaError, match="逾時"),
+    ):
+        media._run(["ffmpeg"], 1)
+
+
+@pytest.mark.parametrize("duration,width", [("NaN", 320), ("Infinity", 320), ("1", 100000)])
+def test_unbounded_metadata_rejected(duration, width):
+    raw = json.dumps(
+        {
+            "streams": [{"codec_type": "video", "width": width, "height": 240}],
+            "format": {"duration": duration},
+        }
+    ).encode()
+    with patch.object(media, "_run", return_value=raw), pytest.raises(media.MediaError):
+        media.preview(b"\x00\x00\x00\x18ftypisom")

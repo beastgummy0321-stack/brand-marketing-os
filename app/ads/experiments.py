@@ -46,6 +46,8 @@ def _detail(conn, org_id, brand_id, campaign_id, *, write=False):
     detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("找不到這個活動。")
+    if write:
+        repository.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     return detail
 
 

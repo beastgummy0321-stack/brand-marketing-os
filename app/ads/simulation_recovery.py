@@ -23,6 +23,8 @@ def _campaign(conn, org_id, brand_id, campaign_id, *, write=False):
     detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("找不到這個活動。")
+    if write:
+        repository.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     if write and (detail.get("context_json") or {}).get("simulation_recovery", {}).get("closing"):
         raise ValueError("活動正在結案，模擬成效已凍結。")
     if write and detail["status"] == "closed":

@@ -115,3 +115,17 @@ def set_action_url(conn, org_id: str, brand_id: str, brief_id: str) -> str | Non
     if brief is None or not brief.get("pack_id"):
         return None
     return f"/app/brands/{brand_id}/workbench/packs/{brief['pack_id']}/sets/{brief_id}"
+
+
+def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, value) -> dict:
+    """Read-only bounded promise-family check; never a complete semantic fact verifier."""
+    from app.brand_intelligence import repository as brands
+    from app.workbench import claims
+
+    brand = brands.get_brand(conn, brand_id)
+    if brand is None or brand["org_id"] != org_id:
+        raise ValueError("找不到品牌。")
+    if product_id is not None and brands.get_product(conn, brand_id, product_id) is None:
+        raise ValueError("找不到此品牌商品。")
+    missing = claims.unsupported(value, claims.sources(conn, brand_id, product_id))
+    return {"unsupported_promises": missing, "scope": "fulfilment_and_endorsement_families"}
