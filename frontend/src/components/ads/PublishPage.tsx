@@ -77,7 +77,7 @@ function NodeCard({ node }: { node: PublishChecklistNode }) {
  * 「從來不是拒絕，是還沒接」）；手動／模擬兩個進階路徑各自的流程見下方兩個子元件。
  * 不新增路由（票只准動 CampaignWorkspace／這個檔），發布畫面是 CampaignWorkspace 裡的一個
  * 內嵌畫面，用 `onClose` 換回原本的分頁。 */
-export function PublishPage({
+function LegacyPublishPage({
   brandId,
   campaign: c,
   adapter,
@@ -357,4 +357,9 @@ function SimulatedPublish({ onViewPerformance }: {
     <p className="text-sm">隔離演練會使用測試品牌與模擬數字，不會對外投放。到成效頁確認隔離範圍，再逐日輸入成效。</p>
     <Button onClick={onViewPerformance}>前往隔離模擬回收</Button>
   </div>;
+}
+
+export function PublishPage(props: Parameters<typeof LegacyPublishPage>[0]) {
+  if (props.campaign.origin === "imported" || props.campaign.capabilities?.unavailable.publish) return <div className="surface"><div className="surface-body"><p>{props.campaign.capabilities?.unavailable.publish ?? "此活動只支援素材手動交接，不支援內部發布。"}</p><Button onClick={props.onGoToAssets}>前往自帶素材安排</Button></div></div>;
+  return <LegacyPublishPage {...props} />;
 }

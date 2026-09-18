@@ -1,3 +1,4 @@
+import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertTriangle, Clock, Megaphone, TrendingUp } from "lucide-react";
@@ -194,7 +195,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                   const JudgmentIcon = JUDGMENT_ICON[c.judgment.tone];
                   return (
                     <tr key={c.id} className="border-t border-border align-top">
-                      <td className="px-3 py-2 font-medium">{c.name}</td>
+                      <td className="px-3 py-2 font-medium">{c.name}{c.origin === "imported" && <span className="mt-1 block text-xs text-muted-foreground">既有平台活動</span>}</td>
                       <td className="px-3 py-2">
                         <Badge variant={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge>
                       </td>
@@ -251,9 +252,9 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
         title="所有 Campaign"
         description="管理進行中與即將上線的投放，掌握整體成效與進度。"
         actions={
-          <Button asChild>
+          <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
             <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
-          </Button>
+          </Button></div>
         }
       />
       {content}

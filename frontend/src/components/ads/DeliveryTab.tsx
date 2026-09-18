@@ -1,3 +1,4 @@
+import { ExternalCampaignPanel } from "./ExternalCampaignPanel";
 import { useEffect, useState } from "react";
 import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -55,7 +56,7 @@ function mmdd(iso: string): string {
 /** 投放結構 tab（F06-I02）：長得跟策略頁一樣——判斷帶＋數字條＋整寬主要按鈕，樹與編輯面板
  * 收進「調整結構（進階）」（ARCHITECTURE.md §6.2 決議 16）。主要按鈕讀 `nextStep()`：沒有廣告
  * 給「新增廣告」，有廣告還沒交棒給「開始做素材」，其餘照規則走（永遠不交棒第二次）。 */
-export function DeliveryTab({
+function LegacyDeliveryTab({
   brandId,
   campaign: c,
   onCampaignChange,
@@ -486,4 +487,8 @@ export function DeliveryTab({
       </Dialog>
     </div>
   );
+}
+
+export function DeliveryTab(props: Parameters<typeof LegacyDeliveryTab>[0]) {
+  return props.campaign.origin === "imported" ? <ExternalCampaignPanel {...props} /> : <LegacyDeliveryTab {...props} />;
 }
