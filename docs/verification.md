@@ -22,6 +22,7 @@
 - 本機完整後端套件使用 `-n 4 --dist loadfile`：2026-09-17 F09 整合時 8 個程序加既有服務耗盡 Postgres 連線並逾時，因此降低本機平行數；測試案例與斷言不變。20 核主機的 auto 也曾耗盡 100 條連線。loadfile 維持各測試檔的 DB/schema 隔離，不改 CI 配置。
 - `supabase start`；migration 只在授權且確認共享 DB 沒有其他工作依赖時套用一次，放 `privileged`，不放會重跑的 verify。`supabase db reset` 會刪除 seed 外資料與帳號；本機測試資料可重建不代表 worker 可越過 touch 或干擾別人的測試。
 - seed 登入資訊與啟動方式見 [CLAUDE.md](../CLAUDE.md)。長駐 8710 不保證是本次程式，實機驗收須重啟對應後端。
+- `test_real_db_schema_drift.py` 固定比較該連線資料庫的 `public` 與全新 migration 結果；僅改 `search_path` 不能隔離這個基準。共享 `public` 尚未套本分支 migration 時，完整整合使用另建的本機測試 database，先在其 `public` 套 migration／seed，再以 `DATABASE_URL` 指向它。保留原斷言，不跳過差異或修改共享資料庫來換取通過；Auth／Vault 必須保留真實結構與擴充能力。
 
 ## e2e 的能力邊界
 
