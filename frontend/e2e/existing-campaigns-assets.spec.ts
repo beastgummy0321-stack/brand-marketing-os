@@ -73,16 +73,18 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await dialog.getByRole("button", { name: "納入並開啟" }).first().click();
   await expect(page).toHaveURL(/\/ads\/campaigns\/[^?]+/);
   const campaignUrl = new URL(page.url()).pathname;
-  await expect(page.getByRole("heading", { name: "既有平台活動" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "狀態時間軸" })).toBeVisible();
   await page.getByRole("button", { name: "重新讀取平台", exact: true }).click();
   await expect(page.getByRole("button", { name: "同步中…", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新讀取平台", exact: true })).toBeEnabled({ timeout: 30_000 });
-  await page.getByLabel("內部活動目標（待補也能查看資料）").fill("介紹品牌產品");
+  await page.getByRole("button", { name: "策略", exact: true }).click();
+  await page.getByRole("button", { name: "進階設定", exact: true }).click();
+  await page.getByLabel("內部活動目標", { exact: true }).fill(`介紹品牌產品 ${Date.now()}`);
   await page.getByRole("button", { name: "儲存目標", exact: true }).click();
-  await expect(page.getByRole("button", { name: "儲存目標", exact: true })).toBeEnabled();
-  await page.getByText(/原生結構與預算 · 已載入/).click();
-  await page.getByText(/原始成效 ·/).click();
-  await expect(page.getByText(/金額未知|平台原始值/).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "儲存目標", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "投放結構", exact: true }).click();
+  await page.getByRole("button", { name: "調整結構（進階）", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "投放結構", exact: true })).toBeVisible();
   await capture(page, evidence, "existing-native");
 
   await page.goto(`${campaignUrl}?tab=assets`);

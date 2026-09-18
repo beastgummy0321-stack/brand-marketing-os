@@ -185,11 +185,12 @@ describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", ()
   });
 });
 
-it("shows imported campaign entry separately from internal delivery counts", async () => {
+it("renders imported campaign in the existing campaign grid", async () => {
   vi.mocked(getAdsHome).mockResolvedValue(home({ imported_campaigns: [campaignCard({ id: "imported1", name: "BP AD existing", origin: "imported", status: "draft" })] }));
   vi.mocked(fetchLaunchReadiness).mockResolvedValue(readiness());
   renderPage();
-  expect(await screen.findByRole("link", { name: "BP AD existing" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "自帶素材與手動交接" }).getAttribute("href")).toContain("imported1?tab=assets");
-  expect(screen.getByText("目前沒有由 MarketingOS 建立且已上架的活動。")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "BP AD existing" })).toBeTruthy();
+  expect(screen.getByTestId("campaign-grid").textContent).toContain("BP AD existing");
+  expect(screen.queryByText("已納入的既有平台活動")).toBeNull();
+  expect(screen.queryByText("草稿")).toBeNull();
 });

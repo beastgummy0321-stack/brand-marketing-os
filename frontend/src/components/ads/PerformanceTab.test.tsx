@@ -11,6 +11,8 @@ import { readComparison } from "@/lib/adsExperimentApi";
 import { readSimulation } from "@/lib/adsSimulationApi";
 import { PerformanceTab } from "./PerformanceTab";
 
+vi.mock("@/lib/useEchart", () => ({ useEchart: () => ({ current: null }) }));
+
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ scope: "user:org" }),
 }));
@@ -284,4 +286,34 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     await user.click(screen.getByRole("button", { name: "重新整理成效" }));
     await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(2));
   });
+});
+
+it("imported shares the KPI layout and sync while disabling internal operations", async () => {
+  vi.clearAllMocks();
+  const sync = vi.fn();
+  const c = campaign({ origin: "imported", status: "draft", external_view: {
+    entities: [], observations: [
+      { id: "o", entity_id: "c", day: "2026-09-01", metric_scope: "campaign", attribution_key: "7d", currency: "USD", spend: 12, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} },
+      { id: "a", entity_id: "a", day: "2026-09-01", metric_scope: "ad", attribution_key: "7d", currency: "USD", spend: 999, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} },
+    ], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {},
+  } });
+  render(<PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} />);
+  expect(screen.getByText(/活動 · USD · 7d · 2026-09-01 ～ 2026-09-30/)).toBeTruthy();
+  expect(screen.getByText("目前成果")).toBeTruthy(); expect(screen.getByText("12 USD")).toBeTruthy(); expect(screen.queryByText(/保守值/)).toBeNull();
+  expect((screen.getByRole("button", { name: "立即結案" }) as HTMLButtonElement).disabled).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "重新整理成效" })); expect(sync).toHaveBeenCalledOnce();
+  await userEvent.click(screen.getByRole("button", { name: /查看每日資料/ }));
+  await userEvent.selectOptions(screen.getByLabelText("資料範圍"), JSON.stringify(["ad", "USD", "7d"]));
+  expect(screen.getAllByText("999 USD").length).toBeGreaterThan(0);
+  await userEvent.click(screen.getByRole("button", { name: "成效比較" }));
+  expect(screen.getByText("既有平台活動不支援內部成效比較。")).toBeTruthy();
+  expect(getPerformance).not.toHaveBeenCalled(); expect(ingestOutcome).not.toHaveBeenCalled(); expect(readComparison).not.toHaveBeenCalled(); expect(closeCampaign).not.toHaveBeenCalled();
+});
+
+
+it("native reported zero spend is distinct from missing spend", () => {
+  const c = campaign({ origin: "imported", external_view: { entities: [], observations: [{ id: "o", entity_id: "c", day: "2026-09-01", metric_scope: "campaign", attribution_key: "7d", currency: "USD", spend: 0, impressions: 0, clicks: 0, purchases: null, revenue: null, availability: {} }], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {} } });
+  render(<PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />);
+  expect(screen.getByText("已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。")).toBeTruthy();
+  expect(screen.getByText("0 USD")).toBeTruthy();
 });
