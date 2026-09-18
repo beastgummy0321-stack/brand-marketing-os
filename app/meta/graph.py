@@ -154,7 +154,10 @@ def list_ad_accounts(token: str) -> list[dict]:
 
 
 _ROAS_ACTION_PRIORITY = (
-    "omni_purchase", "onsite_web_purchase", "offsite_conversion.fb_pixel_purchase", "purchase",
+    "omni_purchase",
+    "onsite_web_purchase",
+    "offsite_conversion.fb_pixel_purchase",
+    "purchase",
 )
 
 
@@ -185,7 +188,8 @@ def _to_campaign(item: dict) -> dict | None:
     if not campaign_id:
         return None
     return {
-        "campaign_id": campaign_id, "name": item.get("name") or "",
+        "campaign_id": campaign_id,
+        "name": item.get("name") or "",
         "effective_status": item.get("effective_status"),
     }
 
@@ -216,7 +220,8 @@ def _to_ad_set(item: dict) -> dict | None:
     if not adset_id:
         return None
     return {
-        "adset_id": adset_id, "name": item.get("name") or "",
+        "adset_id": adset_id,
+        "name": item.get("name") or "",
         "external_status": item.get("effective_status"),
     }
 
@@ -249,7 +254,8 @@ def _to_ad(item: dict) -> dict | None:
     if not ad_id:
         return None
     return {
-        "ad_id": ad_id, "name": item.get("name") or "",
+        "ad_id": ad_id,
+        "name": item.get("name") or "",
         "external_status": item.get("effective_status"),
     }
 
@@ -284,7 +290,8 @@ def fetch_budgets(token: str, external_ids: list[str]) -> dict[str, dict]:
         try:
             body = fetch_page(
                 f"{GRAPH_BASE_URL}/{external_id}",
-                params={"fields": "daily_budget,lifetime_budget"}, headers=headers,
+                params={"fields": "daily_budget,lifetime_budget"},
+                headers=headers,
             )
         except httpx.HTTPError:
             raise GraphError("連不上 Meta，請稍後再試。") from None
@@ -349,7 +356,9 @@ def fetch_ad_creatives(token: str, ad_ids: list[str]) -> dict[str, dict | None]:
     for ad_id in ad_ids:
         try:
             body = fetch_page(
-                f"{GRAPH_BASE_URL}/{ad_id}", params={"fields": fields}, headers=headers,
+                f"{GRAPH_BASE_URL}/{ad_id}",
+                params={"fields": fields},
+                headers=headers,
             )
         except httpx.HTTPError:
             raise GraphError("連不上 Meta，請稍後再試。") from None
@@ -367,7 +376,9 @@ def fetch_ad_creatives(token: str, ad_ids: list[str]) -> dict[str, dict | None]:
             "body": _first_non_empty(creative.get("body"), link_data.get("message")),
             "title": _first_non_empty(creative.get("title"), link_data.get("name")),
             "image_url": _first_non_empty(
-                creative.get("image_url"), link_data.get("picture"), creative.get("thumbnail_url"),
+                creative.get("image_url"),
+                link_data.get("picture"),
+                creative.get("thumbnail_url"),
             ),
         }
     return result
@@ -466,7 +477,11 @@ def _to_entity_row(item: dict, level: str, attribution_window: str) -> dict | No
 
 
 def list_entity_insights(
-    token: str, account_id: str, level: str, since: date, until: date,
+    token: str,
+    account_id: str,
+    level: str,
+    since: date,
+    until: date,
 ) -> list[dict]:
     """這個帳號在 [since, until] 之間、`level`（campaign／adset／ad）每個實體**每一天**
     一列的成效；一列的形狀見 `_to_entity_row`。`account_id` 是 `meta_ad_account.account_id`
@@ -507,8 +522,10 @@ _EXTERNAL_FIELDS = {
         "daily_budget,lifetime_budget"
     ),
     "adset": ("id,account_id,campaign_id,name,effective_status"),
-    "ad": ("id,account_id,campaign_id,adset_id,name,effective_status,creative{id,body,title,"
-           "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}"),
+    "ad": (
+        "id,account_id,campaign_id,adset_id,name,effective_status,creative{id,body,title,"
+        "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}"
+    ),
     "adsets": (
         "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
         "daily_budget,lifetime_budget"
@@ -549,7 +566,13 @@ def external_page(
         if section != "campaigns":
             statuses += ["CAMPAIGN_PAUSED"]
         if section in {"ads", "creatives"}:
-            statuses += ["ADSET_PAUSED", "PENDING_REVIEW", "DISAPPROVED", "PREAPPROVED", "PENDING_BILLING_INFO"]
+            statuses += [
+                "ADSET_PAUSED",
+                "PENDING_REVIEW",
+                "DISAPPROVED",
+                "PREAPPROVED",
+                "PENDING_BILLING_INFO",
+            ]
         params["effective_status"] = json.dumps(statuses)
     if cursor:
         params["after"] = cursor
@@ -589,7 +612,7 @@ def external_page(
         code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
         raise GraphError(
             f"平台無法讀取此資料（代碼 {code if isinstance(code, int) else '未知'}）。",
-            code=code if isinstance(code,int) else None,
+            code=code if isinstance(code, int) else None,
         )
     data = [body] if section in {"campaign", "adset", "ad"} else body.get("data")
     if (
