@@ -13,18 +13,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/workbenchApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/workbenchApi")>("@/lib/workbenchApi");
-  return { ...actual, getSet: vi.fn(), runProduct: vi.fn() };
+  return { ...actual, getSet: vi.fn(), runProduct: vi.fn(), selectVersion: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
 }));
 
 import type { SetDetail } from "@/lib/workbenchApi";
-import { getSet, runProduct } from "@/lib/workbenchApi";
+import { getSet, runProduct, selectVersion } from "@/lib/workbenchApi";
 import { SetStudioPage } from "./SetStudioPage";
 
 const mockGetSet = vi.mocked(getSet);
 const mockRunProduct = vi.mocked(runProduct);
+const mockSelectVersion = vi.mocked(selectVersion);
 const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
 beforeEach(() => {
@@ -83,6 +84,57 @@ function renderStudio(entry = "/brands/brd_1/workbench/packs/pack_1/sets/set_1")
     </MemoryRouter>,
   );
 }
+
+describe("優惠來源僅提醒，由使用者確認", () => {
+  it("顯示橘色提醒與選用入口，返回不選定、確認後完成且不再提醒", async () => {
+    const detail = setDetail({ required_parts: ["copy"], products: { copy: {
+      state: "待選定", selected: 0, required: 1, generation_settings: {}, versions: [{
+        id: "copy_warn", version_index: 1, generation_round: 1, selected_at: null,
+        body: { body: "三盒一起備著，先試用感受是否合拍" },
+        claim_warning: { message: "「試用」可能包含未確認的優惠／試用／背書。", href: "/brands/brd_1/library?tab=claims" },
+      }, {
+        id: "copy_clean", version_index: 2, generation_round: 1, selected_at: null,
+        body: { body: "配合你的高頻移動日程" }, claim_warning: null,
+      }],
+    } } });
+    mockGetSet.mockResolvedValue(detail);
+    const selected = structuredClone(detail);
+    selected.products.copy!.versions[0].selected_at = "2026-09-18T00:00:00Z";
+    selected.products.copy!.selected = 1;
+    selected.products.copy!.state = "已選定";
+    mockSelectVersion.mockResolvedValue(selected);
+    renderStudio();
+    expect((await screen.findByRole("status")).className).toContain("text-warning");
+    expect(screen.getByRole("link", { name: "前往品牌智庫補充資料（選用）" }).getAttribute("href"))
+      .toBe("/brands/brd_1/library?tab=claims");
+    await userEvent.click(screen.getByRole("button", { name: "選定" }));
+    expect(mockSelectVersion).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "返回查看" }));
+    expect(mockSelectVersion).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "選定" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一版" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認無誤，選定此版" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "下一版" }));
+    expect(screen.queryByRole("button", { name: "確認無誤，選定此版" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "選定" }));
+    await userEvent.click(screen.getByRole("button", { name: "確認無誤，選定此版" }));
+    expect(mockSelectVersion).toHaveBeenCalledWith("brd_1", "set_1", "copy_warn");
+    expect(await screen.findByRole("button", { name: "✓ 已選定" })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect((screen.getByRole("button", { name: "完成此素材組" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("沒有警告的版本直接選定", async () => {
+    const detail = setDetail();
+    mockGetSet.mockResolvedValue(detail);
+    mockSelectVersion.mockResolvedValue(detail);
+    renderStudio();
+    await userEvent.click(await screen.findByRole("button", { name: "選定" }));
+    expect(mockSelectVersion).toHaveBeenCalledWith("brd_1", "set_1", "ver_1");
+    expect(screen.queryByRole("button", { name: "確認無誤，選定此版" })).toBeNull();
+  });
+});
 
 describe("SetStudioPage 圖片 tab（F02-I13）", () => {
   it("有版本：顯示提示詞卡片、各自有複製按鈕、複製全部、且切換鍵兩個方向都真的有效果", async () => {

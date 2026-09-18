@@ -307,9 +307,6 @@ def adopt_output(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> 
     ).fetchone()
     if output is None:
         return None
-    candidate = _slice_body(output["part"], output["body_json"], output["version_index"])
-    if claims.unsupported(candidate, claims.sources(conn, brand_id, output["product_id"])):
-        raise ValueError("claim_unconfirmed")
     conn.execute(
         "UPDATE workbench_output SET adopted_at = now()"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
@@ -1049,16 +1046,6 @@ def approve_pack(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> di
     if row["approved_at"] is None:
         detail = pack_detail(conn, org_id, brand_id, pack_id)
         assert detail is not None
-        selected = conn.execute(
-            "SELECT o.*, b.product_id FROM workbench_output o"
-            " JOIN workbench_brief b ON b.id = o.brief_id"
-            " WHERE o.org_id = %s AND o.brand_id = %s AND b.pack_id = %s"
-            " AND o.adopted_at IS NOT NULL", (org_id, brand_id, pack_id),
-        ).fetchall()
-        for output in selected:
-            candidate = _slice_body(output["part"], output["body_json"], output["version_index"])
-            if claims.unsupported(candidate, claims.sources(conn, brand_id, output["product_id"])):
-                raise ValueError("claim_unconfirmed")
         if not detail["can_approve"]:
             raise ValueError("completion_incomplete")
         conn.execute(
@@ -1224,7 +1211,7 @@ def _image_variant_count(request_json: dict | None) -> int:
 
 
 def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str,
-                    request_json: dict | None = None) -> list:
+                    request_json: dict | None = None, product_id: str | None = None) -> list:
     rows = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
         " AND part = %s ORDER BY generation_round DESC, version_index ASC",
@@ -1238,6 +1225,10 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         }
         for r in (dict(row) for row in rows)
     ]
+    if versions:
+        claim_sources = claims.sources(conn, brand_id, product_id)
+        for version in versions:
+            version["claim_warning"] = claims.warning(version["body"], claim_sources, brand_id)
     if part == "image_prompt":
         variant_count = _image_variant_count(request_json)
         for version, r in zip(versions, (dict(row) for row in rows), strict=True):
@@ -1358,7 +1349,9 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     products = {}
     image_prompt_bodies: list = []
     for part in required_parts:
-        versions = _part_versions(conn, org_id, brand_id, set_id, part, brief["request_json"])
+        versions = _part_versions(
+            conn, org_id, brand_id, set_id, part, brief["request_json"], brief["product_id"],
+        )
         copy_all_text = None
         if part == "image_prompt" and versions:
             max_round = versions[0]["generation_round"]

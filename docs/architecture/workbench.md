@@ -64,14 +64,17 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
    unreachable from the new screens; the pack's own origin is `source_kind = "free_job"`, so the
    two words never collide. New packs ask only for `copy`／`image_prompt`／`video_script`, and the
    API owns the one label map (文案／圖片／腳本).
-5. **核准整包：完成條件可人工覆核；承諾來源檢查不可略過（F09）。** 完成條件 is three checks: 「完成所有素材組的必要文案與圖片」
+5. **核准整包：完成條件可人工覆核；承諾來源僅提醒，由使用者確認。** 完成條件 is three checks: 「完成所有素材組的必要文案與圖片」
    (computed from §5.3), 「確認內容符合品牌規範」 and 「可核准整包並回報上游」 (human ticks). The
    computed check may be overridden by a person; the override warns, and the warning is skippable.
-   F09 adds a separate non-overridable promise-source check at version adoption and pack approval.
+   2026-09-18 使用者裁決取代 F09 的不可略過檢查：版本回傳 `claim_warning`，前端以橘色指出
+   可能未確認的用語；使用者可「確認無誤，選定此版」或「返回查看」。智庫補充入口為選用，
+   不要求先新增來源。選定成功沿用 `adopted_at`，重載後不重複確認；切換版本清除確認狀態。
+   選定 API 與核准整包不因承諾來源不足拒絕操作，不新增 AI 呼叫或資料表。
    Creative offer/proof coordinates, pack summaries and prior model output are not evidence.
    Copy, image and video generation receive the same source policy: use no offer/endorsement when
-   confirmed evidence is absent. The conservative deterministic guard in `app/workbench/claims.py`
-   covers common trial/discount/gift/guarantee/endorsement expressions; recognized promises require
+   confirmed evidence is absent. The advisory detector in `app/workbench/claims.py`
+   covers common trial/discount/gift/guarantee/endorsement expressions; suppressing a warning requires
    exact confirmed brand/product statements or approved claims, plus a fulfilment location for offers.
    Pending, forbidden, high-risk and other-product claims cannot authorize them. Existing outputs
    are rechecked against current sources. This is bounded expression detection, not a universal

@@ -1,15 +1,14 @@
-"""Conservative, deterministic checks for fulfilment promises, not a semantic fact checker.
+"""Advisory expression checks for fulfilment promises, not a semantic fact checker.
 
 Only confirmed source statements can support a promise. Coordinate labels, prompts,
-pack summaries and previous model output are never evidence. Re-check on adoption so
-old output and subsequently withdrawn sources use the same policy as new output.
+pack summaries and previous model output are never evidence. Read current sources for
+old and new versions alike. These warnings never prevent adoption or pack approval.
 """
 import re
+from urllib.parse import quote
 
 from app.brand_intelligence import repository as bi_repo
 
-MESSAGE = ("這版含尚未確認來源或履約方式的優惠／背書。"
-           "請先在品牌智庫確認完整條件與入口，或重新生成無優惠版本。")
 # Bounded coverage: these are fulfilment/endorsement families, not all possible factual claims.
 RISK = re.compile(
     r"試飲|試喝|試吃|試用|體驗券|體驗價|免費體驗|折扣|優惠|折價|折抵|折價券|促銷|"
@@ -95,3 +94,16 @@ def unsupported(value, rows: list[dict]) -> list[str]:
             text = text.replace(statement, "")
         missing.extend(m.group(0) for m in RISK.finditer(text))
     return list(dict.fromkeys(missing))
+
+
+def warning(value, rows: list[dict], brand_id: str) -> dict | None:
+    terms = unsupported(value, rows)
+    if not terms:
+        return None
+    return {
+        "message": (
+            f"「{'、'.join(terms)}」可能包含未確認的優惠／試用／背書。"
+            "請確認品牌能提供文案描述的內容；確認無誤即可選定，不必先新增智庫資料。"
+        ),
+        "href": f"/brands/{quote(brand_id, safe='')}/library?tab=claims",
+    }

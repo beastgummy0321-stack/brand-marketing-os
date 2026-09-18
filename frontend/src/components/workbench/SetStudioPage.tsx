@@ -532,13 +532,30 @@ export function VersionBadge({
   disabled?: boolean;
 }) {
   const selected = Boolean(version.selected_at);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => setConfirming(false), [version.id, version.selected_at]);
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {!selected && version.claim_warning && (
+        <div role="status" className="w-full rounded-md bg-warning/10 p-3 text-sm text-warning">
+          <p>{version.claim_warning.message}</p>
+          <Link className="underline" to={version.claim_warning.href}>前往品牌智庫補充資料（選用）</Link>
+          {confirming && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="sm" disabled={disabled} onClick={onSelect}>確認無誤，選定此版</Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirming(false)}>返回查看</Button>
+            </div>
+          )}
+        </div>
+      )}
       <Button
         size="sm"
         variant={selected ? "default" : "outline"}
         disabled={disabled}
-        onClick={onSelect}
+        onClick={() => {
+          if (!selected && version.claim_warning) setConfirming(true);
+          else onSelect();
+        }}
       >
         {selected ? "✓ 已選定" : "選定"}
       </Button>

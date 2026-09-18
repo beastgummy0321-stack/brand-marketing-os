@@ -45,8 +45,8 @@ def test_pending_forbidden_other_product_never_support():
         facts.assert_called_once_with(None, "brand", status="confirmed")
 
 
-class TestAdoptionGuard(_WorkbenchPackApiTestBase):
-    def test_legacy_output_rechecked_and_rejection_does_not_select(self):
+class TestAdoptionWarning(_WorkbenchPackApiTestBase):
+    def test_legacy_output_warns_but_selection_and_pack_approval_continue(self):
         pack = self._submit_pack([self._one_set("1", {"copy": 1})])
         brief = self._briefs(pack)[0]
         out = repository.write_output(
@@ -55,13 +55,35 @@ class TestAdoptionGuard(_WorkbenchPackApiTestBase):
             body_json=[{"sets": [{"body": "可先試喝一包，再決定20入單盒"}]}],
             coordinates_json=None, llm_task_id=None,
         )[0]
+        detail = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        warning = detail["products"]["copy"]["versions"][0]["claim_warning"]
+        assert "試喝" in warning["message"]
+        assert "可能包含" in warning["message"]
+        assert warning["href"] == f"/brands/{self.brand_id}/library?tab=claims"
         response = self.client.post(
             f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}/versions/{out['id']}/select"
         )
-        assert response.status_code == 409
-        assert response.json()["error"]["code"] == "claim_unconfirmed"
+        assert response.status_code == 200
         saved = web.conn.execute(
             "SELECT adopted_at FROM workbench_output WHERE id = %s", (out["id"],),
         ).fetchone()
         assert saved is not None
-        assert saved["adopted_at"] is None
+        assert saved["adopted_at"] is not None
+        # Reload preserves the selection; pack approval never re-blocks this warning.
+        detail = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        assert detail["products"]["copy"]["versions"][0]["selected_at"] is not None
+        for key in repository._COMPLETION_KEYS:
+            response = self.client.post(
+                f"/api/workbench/brands/{self.brand_id}/packs/{pack}/completion",
+                json={"key": key, "checked": True},
+            )
+            assert response.status_code == 200
+        response = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack}/approve"
+        )
+        assert response.status_code == 200
+        assert response.json()["pack"]["status"] == "done"

@@ -102,6 +102,8 @@ export interface PromptCard {
 }
 
 export interface ProductVersion {
+  /** Advisory only. The user may confirm and select without adding a source. */
+  claim_warning?: { message: string; href: string } | null;
   id: string;
   version_index: number;
   generation_round: number;

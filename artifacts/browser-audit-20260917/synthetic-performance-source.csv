@@ -1,0 +1,13 @@
+phase,ad_alias,audience,spend_twd,impressions,clicks,purchases,revenue_twd
+early,A,cold,600,10000,300,1,600
+early,B,cold,600,8000,120,2,1200
+early,C,warm,300,3000,90,2,1200
+early,D,cold,60,600,12,1,600
+middle,A,cold,2400,40000,1200,4,2400
+middle,B,cold,2400,32000,480,12,7200
+middle,C,warm,1200,12000,360,10,6000
+middle,D,cold,240,2400,48,0,0
+late,A,cold,2400,40000,1200,4,2400
+late,B,cold,2400,32000,480,3,1800
+late,C,warm,1200,12000,360,5,3000
+late,D,cold,240,2400,48,1,600
