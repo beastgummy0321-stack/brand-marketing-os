@@ -130,6 +130,7 @@ class ExternalSyncTest(unittest.TestCase):
         self.reader.fail_second = False
         job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
         self.assertEqual(job["status"], "succeeded")
+        self.assertIsNone(job["tasks"]["list"].get("error_code"))
         self.assertEqual(
             len(repo.listing(self.conn, self.org, self.brand, "other", "account")["items"]), 2
         )

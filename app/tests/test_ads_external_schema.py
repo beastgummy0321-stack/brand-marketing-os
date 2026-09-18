@@ -248,3 +248,26 @@ class ExternalSchemaTest(unittest.TestCase):
         updated = self.entity(name="新名稱", sync_status="error", sync_error="partial")
         self.assertEqual(updated["creative"], {"body": "原本文案"})
         self.assertEqual(updated["last_success_at"].date(), date(2026, 1, 1))
+
+    def test_successful_retry_clears_previous_error_code(self):
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            section="structure",
+            state={"status": "error", "error": "permission", "error_code": "permission_denied"},
+        )
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            section="structure",
+            state={"status": "success", "error": None},
+        )
+        state = external.external_view(self.conn, self.org, self.brand, self.campaign)["sync"][
+            "structure"
+        ]
+        self.assertIsNone(state["error"])
+        self.assertIsNone(state["error_code"])

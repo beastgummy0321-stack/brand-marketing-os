@@ -241,6 +241,7 @@ def run_sync(org_id, brand_id, job_id):
                     **task,
                     "cursor": page.cursor,
                     "errors": errors,
+                    "error_code": "partial_source_page" if errors else None,
                     "status": "pending" if page.cursor else "failed" if errors else "succeeded",
                 }
                 if task["section"] != "list":

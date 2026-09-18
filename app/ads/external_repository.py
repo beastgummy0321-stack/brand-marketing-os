@@ -98,10 +98,16 @@ def record_sync(conn, org_id, brand_id, campaign_id, *, section, state):
         raise ValueError("sync_section_unknown")
     _campaign(conn, org_id, brand_id, campaign_id)
     state = dict(state)
+    if state.get("status") in {"success", "syncing"} and not state.get("error"):
+        state["error_code"] = None
     if state.get("status") in {"error", "failed", "unavailable", "partial"} or state.get("error"):
         state.pop("last_success_at", None)
         state.pop("coverage", None)
-    state = {key: value for key, value in state.items() if value is not None or key == "error"}
+    state = {
+        key: value
+        for key, value in state.items()
+        if value is not None or key in {"error", "error_code"}
+    }
     conn.execute(
         "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{external_sync}', "
         "COALESCE(context_json->'external_sync','{}'::jsonb) || jsonb_build_object(%s::text, "
