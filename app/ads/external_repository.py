@@ -1,7 +1,11 @@
 """Persistence of scoped native snapshots. No platform calls, deletion inference or totals."""
 
+from datetime import timedelta
+
+from app.ads import channels
 from app.ads.external_models import ExternalEntity, ExternalObservation
 from app.brand_intelligence import repository as bi_repo
+from app.core import settings
 from app.core.db import jsonb, new_id
 
 
@@ -52,7 +56,7 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
         raise ValueError("external_entity_already_imported")
     columns = list(data)
     values = [
-        jsonb(value) if key in ("availability", "creative") else value
+        jsonb(value) if key in ("availability", "creative", "budget_raw") else value
         for key, value in data.items()
     ]
     row = conn.execute(
@@ -94,10 +98,16 @@ def record_sync(conn, org_id, brand_id, campaign_id, *, section, state):
         raise ValueError("sync_section_unknown")
     _campaign(conn, org_id, brand_id, campaign_id)
     state = dict(state)
+    if state.get("status") in {"success", "syncing"} and not state.get("error"):
+        state["error_code"] = None
     if state.get("status") in {"error", "failed", "unavailable", "partial"} or state.get("error"):
         state.pop("last_success_at", None)
         state.pop("coverage", None)
-    state = {key: value for key, value in state.items() if value is not None or key == "error"}
+    state = {
+        key: value
+        for key, value in state.items()
+        if value is not None or key in {"error", "error_code"}
+    }
     conn.execute(
         "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{external_sync}', "
         "COALESCE(context_json->'external_sync','{}'::jsonb) || jsonb_build_object(%s::text, "
@@ -107,22 +117,149 @@ def record_sync(conn, org_id, brand_id, campaign_id, *, section, state):
     )
 
 
-def external_view(conn, org_id, brand_id, campaign_id):
+def external_view(
+    conn,
+    org_id,
+    brand_id,
+    campaign_id,
+    *,
+    start=None,
+    end=None,
+    entity_after=None,
+    observation_after=None,
+    limit=100,
+):
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
+    limit = min(max(int(limit), 1), 100)
+    end = end or settings.today_for_org(conn, org_id=org_id)
+    start = start or end - timedelta(days=29)
+    if start > end or (end - start).days > 365:
+        raise ValueError("成效查詢請分成最多一年一期。")
     entities = conn.execute(
         "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "ORDER BY created_at,id",
-        (org_id, brand_id, campaign_id),
+        "AND (%s::text IS NULL OR id>%s) ORDER BY id LIMIT %s",
+        (org_id, brand_id, campaign_id, entity_after, entity_after, limit + 1),
     ).fetchall()
     observations = conn.execute(
         "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "ORDER BY day,entity_id,metric_scope,attribution_key,currency",
-        (org_id, brand_id, campaign_id),
+        "AND day BETWEEN %s AND %s AND (%s::text IS NULL OR id>%s) ORDER BY id LIMIT %s",
+        (
+            org_id,
+            brand_id,
+            campaign_id,
+            start,
+            end,
+            observation_after,
+            observation_after,
+            limit + 1,
+        ),
     ).fetchall()
     sync = (campaign.get("context_json") or {}).get("external_sync", {})
+    connections = []
+    for platform, account in sorted({(row["platform"], row["source_account"]) for row in entities}):
+        reader = channels.external_reader(platform)
+        connected = bool(
+            reader and account in {a["account_id"] for a in reader.accounts(conn, org_id, brand_id)}
+        )
+        connections.append(
+            {
+                "platform": platform,
+                "source_account": account,
+                "state": "connected" if connected else "disconnected",
+            }
+        )
     return {
-        "entities": [dict(row) for row in entities],
-        "observations": [dict(row) for row in observations],
+        "entities": [dict(row) for row in entities[:limit]],
+        "observations": [dict(row) for row in observations[:limit]],
+        "next_entity_cursor": entities[limit - 1]["id"] if len(entities) > limit else None,
+        "next_observation_cursor": observations[limit - 1]["id"]
+        if len(observations) > limit
+        else None,
+        "window": {"start": start, "end": end},
+        "connections": connections,
         "coverage": {key: value.get("coverage") for key, value in sync.items()},
         "sync": sync,
     }
+
+
+def cache_listing(conn, org_id, brand_id, platform, account, item):
+    model = ExternalEntity.model_validate(item)
+    if model.platform != platform or model.source_account != account or model.parent_native_id:
+        raise ValueError("來源活動範圍不符。")
+    conn.execute(
+        "INSERT INTO "
+        "ads_external_listing(id,org_id,brand_id,platform,source_account,"
+        "native_kind,native_id,snapshot) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT "
+        "(org_id,brand_id,platform,source_account,native_kind,native_id) DO UPDATE SET "
+        "snapshot=EXCLUDED.snapshot,observed_at=now()",
+        (
+            new_id("ael"),
+            org_id,
+            brand_id,
+            platform,
+            account,
+            model.native_kind,
+            model.native_id,
+            jsonb(model.model_dump(mode="json")),
+        ),
+    )
+
+
+def listing(conn, org_id, brand_id, platform, account, *, after=None, limit=100):
+    limit = min(max(int(limit), 1), 100)
+    rows = conn.execute(
+        "SELECT * FROM ads_external_listing WHERE org_id=%s AND brand_id=%s AND platform=%s "
+        "AND source_account=%s AND (%s::text IS NULL OR id>%s) ORDER BY id LIMIT %s",
+        (org_id, brand_id, platform, account, after, after, limit + 1),
+    ).fetchall()
+    return {
+        "items": [dict(row) for row in rows[:limit]],
+        "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
+    }
+
+
+def get_job(conn, org_id, brand_id, job_id):
+    row = conn.execute(
+        "SELECT * FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (org_id, brand_id, job_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("找不到同步工作。")
+    return dict(row)
+
+
+def import_cached(conn, org_id, brand_id, platform, account, native_kind, native_id, actor):
+    key = ":".join((org_id, brand_id, platform, account, native_kind, native_id))
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (key,))
+    row = conn.execute(
+        "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND "
+        "brand_id=%s AND platform=%s "
+        "AND source_account=%s AND native_kind=%s AND native_id=%s",
+        (org_id, brand_id, platform, account, native_kind, native_id),
+    ).fetchone()
+    if row:
+        return _campaign(conn, org_id, brand_id, row["campaign_id"])
+    cached = conn.execute(
+        "SELECT snapshot FROM ads_external_listing WHERE org_id=%s AND brand_id=%s AND platform=%s "
+        "AND source_account=%s AND native_kind=%s AND native_id=%s",
+        (org_id, brand_id, platform, account, native_kind, native_id),
+    ).fetchone()
+    if cached is None:
+        raise ValueError("活動尚未讀回，請先更新既有活動清單。")
+    if channels.has_legacy_campaign_binding(platform, native_kind):
+        internal = conn.execute(
+            "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND origin='internal' "
+            "AND external_id=%s",
+            (org_id, brand_id, native_id),
+        ).fetchall()
+        if len(internal) > 1:
+            raise ValueError("此來源已對應多個內部工作區，請先釐清歸屬。")
+        if internal:
+            return dict(internal[0])
+    item = cached["snapshot"]
+    campaign = create_imported_campaign(
+        conn, org_id, brand_id, name=item.get("name") or native_id, created_by=actor
+    )
+    upsert_entity(conn, org_id, brand_id, campaign["id"], item)
+    return campaign

@@ -45,6 +45,7 @@ class ExternalEntity(BaseModel):
     end_date: date | None = None
     budget_type: Literal["daily", "lifetime", "unknown"] = "unknown"
     budget_amount: float | None = None
+    budget_raw: dict[str, Any] = Field(default_factory=dict)
     currency: str | None = None
     budget_source: str | None = None
     availability: dict[str, Availability] = Field(default_factory=dict)
