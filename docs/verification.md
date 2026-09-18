@@ -6,9 +6,9 @@
 |---|---|
 | 一般工程文件 | 檢查修改的引用、規則一致性與 diff；有 frontmatter 則驗證其 schema |
 | 小型直接修復 | 受影響的測試與型別／邊界檢查；碰前端建置才 build，碰啟動／跨層流程才 e2e |
-| 佇列 issue | 開發中跑定位問題所需測試；交給 `finish` 統一跑票上 verify、checker、typecheck、build；不要交件前再完整跑一遍 |
+| 佇列 issue | 開發中跑定位問題所需測試；交給 `finish` 統一跑票上 verify、checker 及適用的 typecheck／build；僅純後端測試／程式提示詞可用 manifest 的 issue profile，介面變更與未匹配範圍維持全套；不要交件前再完整跑一遍 |
 | issue merge | checker 與 smoke 驗證合併後的樹，不能沿用合併前結果冒充 |
-| Feature integration | 全域型別、build、完整後端／前端測試、smoke，再加未涵蓋的 Feature 專屬驗證；完整套件已含的子集不再列 |
+| Feature integration | 全域型別、build、完整後端／前端測試、smoke，再加未涵蓋的 Feature 專屬驗證；完整套件已含的子集不再列；`typecheck_before_test` 不重跑完整 Vitest 已包含的前端邊界測試 |
 | schema／migration | 受影響測試加 `test_org_isolation_all_tables.py`、`test_brand_isolation_all_tables.py`、`test_architecture_boundaries.py`；完整後端套件已包含時不另跑 |
 
 通過後只因相關程式、命令、依賴、環境變更或新失敗證據重跑。相同樹、相同環境的證據可共用；不要以換階段為理由人工重複檢查。Harness 的 merge/final integration 仍驗證各自的合併樹。

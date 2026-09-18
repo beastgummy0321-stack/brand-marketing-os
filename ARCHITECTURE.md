@@ -343,7 +343,19 @@
     "build": "cd frontend && npm run build",
     "build_outputs": ["frontend/dist"],
     "smoke": "cd frontend && npm run e2e",
-    "smoke_after_build": "cd frontend && npx playwright test"
+    "smoke_after_build": "cd frontend && npx playwright test",
+    "typecheck_before_test": "uv run ruff check app && uv run python -m pyright && cd frontend && npm run lint && npm run depcruise",
+    "issue_profiles": [
+      {
+        "only": [
+          "app/tests/**",
+          "app/methodology/**",
+          "app/departments/**"
+        ],
+        "typecheck": "uv run ruff check app && uv run python -m pyright",
+        "build": null
+      }
+    ]
   },
   "checker": {
     "command": "uv run python tools/check_architecture.py"

@@ -16,7 +16,7 @@ Claude 與 Codex 共用本指引。Harness 依任務選入口：`dig` 討論、`
 - `CONTEXT.md`：業務用詞；`docs/design-system.md`：UI 規則；`docs/verification.md`：檢查時機與環境。
 - `.work/`：已規劃 Feature 與工作票；`.harness/`：本機執行狀態與暫存證據。
 - `docs/backlog/`：未排入佇列的候選，只找與當前問題相關者；`docs/drills/README.md` 只在演練時讀。
-- 既有 Campaign／自帶素材工程：讀 `docs/backlog/engineering-existing-campaigns-user-assets.md`；自主行銷／大型重構：讀 `docs/backlog/roadmap-autonomous-marketing-major-updates.md`。兩者分開規劃，後者另用工作樹；文件不是實作授權。
+- 既有 Campaign／自帶素材工程：先讀 `docs/architecture/ads.md` 的相關決策；僅在缺少原始需求或未實作範圍時讀 `docs/backlog/engineering-existing-campaigns-user-assets.md`。規劃自主行銷／大型重構時才讀 `docs/backlog/roadmap-autonomous-marketing-major-updates.md`，另用工作樹；文件不是實作授權。
 - `docs/boot-autostart.md` 只在處理 Windows 登入自動啟動時讀。歷史 ADR、done 票與探測紀錄不是開工必讀。
 
 ## 階段收尾（dig／carve／crank 與直接修復共用）
@@ -36,9 +36,9 @@ Claude 與 Codex 共用本指引。Harness 依任務選入口：`dig` 討論、`
 
 1. 有收到 Harness SessionStart 狀態時，以它定位相關 Feature、工作票與未完成事項。
    未收到時，續接佇列先執行 `node "<已載入插件根目錄>/bin/harness.mjs" status`。
-   嚴格唯讀任務改讀 `.work/features/`、佇列與 `.harness/runtime/leases/`；CLI status 會寫 metrics。
+   嚴格唯讀且需要續接狀態時，只讀相關 Feature、工作票與 leases；CLI status 會寫 metrics。無關的問答、審查或直接小修跳過佇列狀態讀取。
    沒有 `.harness/` 時，只有建立佇列才初始化；討論與小修復不需要初始化。
-2. 既存計畫與驗證紀錄是上下文，不是本次執行授權。佇列空不代表 Feature 結案；檢查 `closed` 與人工驗收。
+2. 既存計畫與驗證紀錄是上下文，不是本次執行授權。判斷 Feature 是否完成時才檢查 `closed` 與人工驗收；佇列空不代表結案。
 3. 只搜尋與本次議題相關的 backlog。已裁決但未實作的條目可沿用決定，不重開相同問題。
 
 ## 地標

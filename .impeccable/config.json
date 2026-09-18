@@ -12,5 +12,6 @@
         "reason": "same: project font, lowercase variant in Google Fonts URL"
       }
     ]
-  }
+  },
+  "designDocument": "docs/design-system.md"
 }
