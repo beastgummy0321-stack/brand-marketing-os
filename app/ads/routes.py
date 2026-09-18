@@ -150,7 +150,10 @@ def get_home(request: Request, brand_id: str):
     labels = _conversion_labels(brand_id)
     for c in campaigns:
         c["labels"] = labels
+    imported = [c for c in campaigns if c.get("origin") == "imported"]
+    campaigns = [c for c in campaigns if c.get("origin") != "imported"]
     counts = {
+        "imported": len(imported),
         "running": sum(1 for c in campaigns if c["status"] == "live"),
         "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
         "ended": sum(1 for c in campaigns if c["status"] in ("ended", "closed")),
@@ -160,8 +163,12 @@ def get_home(request: Request, brand_id: str):
         "headline": judgment.brand_headline(counts),
         "counts": counts,
         "campaigns": [c for c in campaigns if c["status"] == "live"][:6],
+        "imported_campaigns": imported[:6],
         "actions": repository.recent_actions(web.conn, actor.org_id, brand_id, limit=6),
     }
+    if imported:
+        home["headline"]["text"] = f"已納入 {len(imported)} 個既有平台活動；平台狀態請進入活動查看"
+        home["headline"]["facts"] = "內部計畫：" + home["headline"]["facts"]
     return {"home": home}
 
 

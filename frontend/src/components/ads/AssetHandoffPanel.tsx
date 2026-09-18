@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
-import { existingCampaigns, type SourceAccount } from "@/lib/adsExternalApi";
+import { existingCampaigns, type NativeEntity, type SourceAccount } from "@/lib/adsExternalApi";
 import { assetHandoff, bindingAction, bindingCandidates, versionMetrics, type AssetHandoff, type BindingCandidate, type Placement, type VersionMetrics } from "@/lib/adsUserAssetsApi";
 import { AuthAssetMedia } from "./AuthAssetMedia";
 import { COPY_FIELDS } from "./UserAssetsLibrary";
 
-function HandoffPanel({ brandId, campaignId, placement: p, readOnly }: { brandId: string; campaignId: string; placement: Placement; readOnly: boolean }) {
+function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = [] }: { brandId: string; campaignId: string; placement: Placement; readOnly: boolean; entities?: NativeEntity[] }) {
   const [handoff, setHandoff] = useState<AssetHandoff | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState<SourceAccount[]>([]); const [sourceIndex, setSourceIndex] = useState("");
   const [candidates, setCandidates] = useState<BindingCandidate[]>([]); const [cursor, setCursor] = useState<string | null>(null);
@@ -34,7 +34,7 @@ function HandoffPanel({ brandId, campaignId, placement: p, readOnly }: { brandId
     {handoff && <div className="mt-3 flex flex-col gap-3"><p className="text-sm">{handoff.notice}</p><AuthAssetMedia brandId={brandId} assetId={p.asset_id} filename={p.filename} mime={p.mime_type} />
       <div className="flex items-center gap-2 text-sm">建議追蹤名稱：{handoff.tracking_name}<CopyIconButton ariaLabel="複製追蹤名稱" getText={() => handoff.tracking_name} /></div>
       {Object.entries(handoff.effective_copy).map(([key, value]) => <div className="flex items-start gap-2 border-t border-border pt-2" key={key}><span className="w-12 shrink-0 text-sm">{COPY_FIELDS.find(f => f.key === key)?.label ?? key}</span><p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm">{value || "待補"}</p><CopyIconButton ariaLabel={`複製${key}`} getText={() => value} /></div>)}
-      <p className="text-sm">用途：{handoff.purpose ?? "待補"} · 目的節點：{handoff.destination_entity_id ?? "未指定"} · {handoff.start_date ?? "開始日待核對"} — {handoff.end_date ?? "結束日待核對"}</p>
+      <p className="text-sm">用途：{handoff.purpose ?? "待補"} · 目的節點：{entities.find(e => e.id === handoff.destination_entity_id)?.name ?? (handoff.destination_entity_id ? "已保存目的節點（請載入本活動目的節點核對）" : "沿活動安排")} · {handoff.start_date ?? "開始日待核對"} — {handoff.end_date ?? "結束日待核對"}</p>
       <details><summary className="cursor-pointer text-sm">原文與補充文案分開查看</summary><p className="whitespace-pre-wrap text-sm">原文：{JSON.stringify(handoff.original_copy, null, 2)}</p><p className="whitespace-pre-wrap text-sm">補充：{JSON.stringify(handoff.suggested_copy, null, 2)}</p></details>
       <p className="text-sm font-medium">廣告存在、素材版本與成效歸屬是三件不同的事。</p>
       {!handoff.bindings.length && <p className="text-sm">尚未記錄上架，也尚未讀回平台廣告。素材版本與成效待核對。</p>}

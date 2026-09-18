@@ -137,6 +137,19 @@ class AdsHomeRouteTest(unittest.TestCase):
         web.conn.commit()
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
+    def test_imported_campaign_is_visible_without_becoming_an_upcoming_draft(self):
+        from app.ads import external_repository
+
+        imported = external_repository.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="真實平台活動"
+        )
+        web.conn.commit()
+        response = self.client.get(f"/api/ads/brands/{self.brand_id}/home", headers=self.headers)
+        home = response.json()["home"]
+        self.assertEqual(home["counts"]["upcoming"], 0)
+        self.assertEqual(home["imported_campaigns"][0]["id"], imported["id"])
+        self.assertEqual(home["counts"]["imported"], 1)
+
     def test_home_404s_for_wrong_tenant_and_200s_with_honest_empty_state(self):
         other_user = uuid4()
         other_token = mint_hs256(

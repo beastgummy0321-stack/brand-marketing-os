@@ -1,12 +1,32 @@
 """One GET per source page, fixed host/path, no token-bearing next URL replay."""
 
 import unittest
+import json
 from unittest.mock import patch
 
 from app.meta import graph
 
 
 class ExternalGraphTest(unittest.TestCase):
+    def test_historical_structure_does_not_drop_archived_entities(self):
+        def platform(url, *, params, headers):
+            statuses = json.loads(params.get("effective_status", "[]"))
+            if url.endswith("/adsets"):
+                self.assertEqual(set(statuses), {
+                    "ACTIVE", "PAUSED", "ARCHIVED", "IN_PROCESS",
+                    "WITH_ISSUES", "CAMPAIGN_PAUSED",
+                })
+            rows = [{"id": "active"}]
+            self.assertNotIn("DELETED", statuses)
+            if "ARCHIVED" in statuses:
+                rows.append({"id": "historical"})
+            return {"data": rows}
+
+        for section in ("campaigns", "adsets", "ads", "creatives"):
+            with self.subTest(section=section), patch.object(graph, "fetch_page", side_effect=platform):
+                page = graph.external_page("secret", "1", section, native_id="3")
+                self.assertIn("historical", [row["id"] for row in page["data"]])
+
     def test_page_is_bounded_and_never_follows_next_url(self):
         payload = {
             "data": [{"id": "2"}],

@@ -541,6 +541,16 @@ def external_page(
     ):
         raise GraphError("分頁游標無效。")
     params = {"fields": _EXTERNAL_FIELDS[section], "limit": 100}
+    # Explicitly include historical entities: Meta's default edge listing omits
+    # archived objects even when insights still reports their spend. Deleted
+    # objects are excluded: Meta rejects DELETED on this campaign edge.
+    if section in {"campaigns", "adsets", "ads", "creatives"}:
+        statuses = ["ACTIVE", "PAUSED", "ARCHIVED", "IN_PROCESS", "WITH_ISSUES"]
+        if section != "campaigns":
+            statuses += ["CAMPAIGN_PAUSED"]
+        if section in {"ads", "creatives"}:
+            statuses += ["ADSET_PAUSED", "PENDING_REVIEW", "DISAPPROVED", "PREAPPROVED", "PENDING_BILLING_INFO"]
+        params["effective_status"] = json.dumps(statuses)
     if cursor:
         params["after"] = cursor
     if section == "campaigns":

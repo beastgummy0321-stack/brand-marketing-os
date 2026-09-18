@@ -32,6 +32,10 @@
 
 ### F13 的隔離完整流程
 
+人工逐步驗收請依 [F13 驗收手冊：既有活動、自帶素材與手動上架](acceptance/f13-existing-campaigns-user-assets.md)。
+
+真帳號驗收的 server 與 worker 必須使用同一 checkout 與本機設定，且 `BRAND_OS_JOB_QUEUE=postgres`；memory queue 只適合隔離 smoke，會令跨程序同步停在首段。真實讀取、模型回覆與平台寫入的驗證範圍分開記錄。
+
 `uv run python scripts/verify_existing_campaigns_assets.py --isolated --timeout 180`
 讀本 checkout 的本機 `.env`（也可明確指定 `--env-file`），建立自己專用的 schema／組織／品牌，
 啟動 8731 起的獨立服務。它只讀取既存 seed 登入者的 Auth 身分，不 reset 或建立共享 Auth fixture。

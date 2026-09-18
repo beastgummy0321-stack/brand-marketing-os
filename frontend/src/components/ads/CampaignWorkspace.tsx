@@ -27,6 +27,7 @@ const TABS: { value: WorkspaceTab; label: string }[] = [
 ];
 
 function periodLabel(c: CampaignDetail): string {
+  if (c.origin === "imported") return "平台日期與狀態請見原生結構";
   return c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "投放期間尚未設定";
 }
 
@@ -113,7 +114,7 @@ function Workspace({
         actions={
           campaign ? (
             <div className="flex items-center gap-2">
-              <Badge variant={STATUS_TONE[campaign.status]}>{STATUS_LABEL[campaign.status]}</Badge>
+              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? "既有平台活動" : STATUS_LABEL[campaign.status]}</Badge>
               {canPublish && (
                 <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
                   選擇上架方式

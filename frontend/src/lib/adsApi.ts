@@ -775,6 +775,7 @@ export async function closeCampaign(
 // -- F04-I08：首頁四塊 -------------------------------------------------------------------------
 
 export interface AdsHomeCounts {
+  imported?: number;
   running: number;
   upcoming: number;
   ended: number;
@@ -786,6 +787,7 @@ export interface AdsHomeCounts {
 export interface AdsHome {
   headline: { text: string; facts: string };
   counts: AdsHomeCounts;
+  imported_campaigns?: CampaignCard[];
   campaigns: CampaignCard[];
   actions: AdsActionLine[];
 }

@@ -260,7 +260,10 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         確認後會依這六項需求整理策略、預算配置與素材需求；之後仍由你核准採用與上架。
       </p>
       {generateError && <p className="text-sm text-destructive">{generateError}</p>}
-      <div className="flex justify-center gap-3">
+      <div className="flex flex-wrap justify-center gap-3">
+        <Button asChild variant="outline" disabled={generating}>
+          <Link to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=assets`}>先處理自帶素材與手動交接</Link>
+        </Button>
         <Button onClick={handleGenerate} disabled={generating}>
           <Sparkles size={15} />
           {generating ? "產生中…" : "產生策略建議 →"}

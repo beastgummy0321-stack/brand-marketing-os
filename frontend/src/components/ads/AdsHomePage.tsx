@@ -80,10 +80,14 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <div className="flex flex-col gap-4 lg:col-span-2">
             <DecisionCard items={[]} />
+            {!!home.imported_campaigns?.length && <section className="surface">
+              <div className="surface-header"><h2>已納入的既有平台活動</h2><Link className="text-sm text-primary" to={`/brands/${brandId}/ads/campaigns`}>查看全部活動 →</Link></div>
+              <div className="surface-body flex flex-col gap-3"><p className="text-sm text-muted-foreground">查看平台原始資料，或進入素材頁準備手動上架。</p>{home.imported_campaigns.map(c => <div className="flex flex-wrap items-center justify-between gap-2" key={c.id}><Link className="font-medium text-primary" to={`/brands/${brandId}/ads/campaigns/${c.id}`}>{c.name}</Link><Button asChild variant="outline" size="sm"><Link to={`/brands/${brandId}/ads/campaigns/${c.id}?tab=assets`}>自帶素材與手動交接</Link></Button></div>)}</div>
+            </section>}
 
             <div className="surface">
               <div className="surface-header">
-                <h2>進行中的 Campaign</h2>
+                <h2>{home.imported_campaigns?.length ? "MarketingOS 內部計畫的投放進度" : "進行中的 Campaign"}</h2>
                 <Link
                   to={`/brands/${brandId}/ads/campaigns`}
                   className="text-sm text-primary hover:underline"
@@ -94,7 +98,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
               <div className="surface-body">
                 {home.campaigns.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
-                    目前沒有進行中的 Campaign。
+                    {home.imported_campaigns?.length ? "目前沒有由 MarketingOS 建立且已上架的活動。" : "目前沒有進行中的 Campaign。"}
                   </p>
                 ) : (
                   <div

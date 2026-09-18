@@ -75,7 +75,7 @@ function LegacyAssetsTab({
     return (
       <EmptyState
         title="這個 Campaign 還沒有廣告"
-        description={step.sentence}
+        description={`自帶素材可在上方完成確認與手動交接。如需系統產生廣告素材：${step.sentence}`}
         actionLabel={step.label}
         onAction={() => onChangeTab(step.target)}
       />

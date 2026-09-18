@@ -18,7 +18,7 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "ready"; campaigns: CampaignCard[] };
 
-type FilterKey = "all" | "live" | "upcoming" | "ended";
+type FilterKey = "all" | "live" | "upcoming" | "ended" | "imported";
 
 const UPCOMING_STATUSES: CampaignStatus[] = ["draft", "ready"];
 const ENDED_STATUSES: CampaignStatus[] = ["ended", "closed"];
@@ -67,15 +67,18 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
   const counts = useMemo(
     () => ({
       all: campaigns.length,
-      live: campaigns.filter((c) => c.status === "live").length,
-      upcoming: campaigns.filter((c) => UPCOMING_STATUSES.includes(c.status)).length,
-      ended: campaigns.filter((c) => ENDED_STATUSES.includes(c.status)).length,
+      imported: campaigns.filter(c => c.origin === "imported").length,
+      live: campaigns.filter((c) => c.origin !== "imported" && c.status === "live").length,
+      upcoming: campaigns.filter((c) => c.origin !== "imported" && UPCOMING_STATUSES.includes(c.status)).length,
+      ended: campaigns.filter((c) => c.origin !== "imported" && ENDED_STATUSES.includes(c.status)).length,
     }),
     [campaigns],
   );
 
   const visible = useMemo(() => {
     const byFilter = campaigns.filter((c) => {
+      if (filter === "imported") return c.origin === "imported";
+      if (filter !== "all" && c.origin === "imported") return false;
       if (filter === "live") return c.status === "live";
       if (filter === "upcoming") return UPCOMING_STATUSES.includes(c.status);
       if (filter === "ended") return ENDED_STATUSES.includes(c.status);
@@ -136,6 +139,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
             {(
               [
                 ["all", "全部", counts.all],
+                ["imported", "既有平台活動", counts.imported],
                 ["live", "進行中", counts.live],
                 ["upcoming", "即將上線", counts.upcoming],
                 ["ended", "已結束", counts.ended],
@@ -197,7 +201,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                     <tr key={c.id} className="border-t border-border align-top">
                       <td className="px-3 py-2 font-medium">{c.name}{c.origin === "imported" && <span className="mt-1 block text-xs text-muted-foreground">既有平台活動</span>}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={STATUS_TONE[c.status]}>{STATUS_LABEL[c.status]}</Badge>
+                        <Badge variant={STATUS_TONE[c.status]}>{c.origin === "imported" ? "平台狀態見原始資料" : STATUS_LABEL[c.status]}</Badge>
                       </td>
                       <td className="px-3 py-2">{c.objective}</td>
                       <td className="px-3 py-2">
