@@ -121,6 +121,18 @@
       "definition": ["supabase/migrations/*_ads_*.sql"],
       "symbol": "ads_external_daily"
     },
+    "ads_external_sync_job": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_sync_job"
+    },
+    "ads_external_listing": {
+      "owner": "ads",
+      "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"],
+      "symbol": "ads_external_listing"
+    },
     "ads_campaign": {
       "owner": "ads",
       "kind": "sql-table",

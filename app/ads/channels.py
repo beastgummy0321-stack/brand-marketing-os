@@ -114,3 +114,11 @@ def account_spend_history(
         "days": 30,
         "channel_label": "Meta",
     }
+
+
+
+def external_reader(platform):
+    if platform == "meta":
+        from app.ads.adapters.meta_read import MetaReader
+        return MetaReader()
+    return None

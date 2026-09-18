@@ -71,3 +71,13 @@ def register_tasks() -> None:
         a.periodic(cron=_CLOSE_CRON, periodic_id=_DISPATCH_PERIODIC_ID)(
             a.task(name=_DISPATCH_TASK_NAME)(_dispatch_close_expired)
         )
+
+    from app.ads import external_sync
+    if external_sync.TASK not in a.tasks:
+        a.task(name=external_sync.TASK)(external_sync.run_sync)
+    if "ads.external_pending" not in a.tasks:
+        a.periodic(cron="* * * * *",periodic_id="ads_external_pending")(
+            a.task(name="ads.external_pending")(external_sync.dispatch_pending))
+    if "ads.external_daily" not in a.tasks:
+        a.periodic(cron="0 5 * * *",periodic_id="ads_external_daily")(
+            a.task(name="ads.external_daily")(external_sync.dispatch_daily))
