@@ -6,7 +6,7 @@ Field declarations do not establish live account permissions.
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from app.ads.adapters.external import SourcePage
+from app.ads.adapters.external import SourcePage, SourceReadError
 from app.core.db import now_utc
 from app.meta import repository as source
 
@@ -162,9 +162,12 @@ class MetaReader:
         return source.external_bound_accounts(conn, org_id, brand_id)
 
     def _page(self, conn, org_id, brand_id, account, section, **kwargs):
-        return source.read_external_page(
-            conn, org_id, brand_id, account["account_id"], section, **kwargs
-        )
+        try:
+            return source.read_external_page(
+                conn, org_id, brand_id, account["account_id"], section, **kwargs
+            )
+        except source.ExternalReadError as exc:
+            raise SourceReadError(str(exc), exc.code) from None
 
     def list_existing(self, conn, org_id, brand_id, account, *, cursor=None, **kwargs):
         page = self._page(

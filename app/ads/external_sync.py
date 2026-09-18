@@ -1,10 +1,12 @@
 """Resumable account reads. One invocation commits one bounded page, never a platform write."""
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from app import background
 from app.ads import channels
 from app.ads import external_repository as repo
+from app.ads.adapters.external import SourceReadError
+from app.core import settings
 from app.core.db import connection, jsonb, new_id, now_utc, set_tenant_scope
 
 TASK = "background.ads_external_sync"
@@ -14,11 +16,11 @@ SECTIONS = ("structure", "creatives", "observations")
 def account_reader(conn, org_id, brand_id, platform, source_account):
     reader = channels.external_reader(platform)
     if reader is None:
-        raise ValueError("此通路尚未支援既有活動讀取。")
+        raise SourceReadError("此通路尚未支援既有活動讀取。", "unsupported")
     accounts = reader.accounts(conn, org_id, brand_id)
     account = next((a for a in accounts if a["account_id"] == source_account), None)
     if account is None:
-        raise ValueError("來源帳號已解除或不屬於此品牌。")
+        raise SourceReadError("來源帳號已解除或不屬於此品牌。", "disconnected")
     return reader, account
 
 
@@ -32,9 +34,10 @@ def _enqueue(job):
 
 def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None):
     account_reader(conn, org_id, brand_id, platform, source_account)
-    end = end or date.today()
+    today = settings.today_for_org(conn, org_id=org_id)
+    end = end or today
     start = start or end - timedelta(days=29)
-    if start > end or (end - start).days > 30 or end > date.today():
+    if start > end or (end - start).days > 30 or end > today:
         raise ValueError("每次同步請選擇最多31日且不含未來的範圍。")
     conn.execute(
         "INSERT INTO ads_external_sync_job(id,org_id,brand_id,platform,source_account) "
@@ -49,7 +52,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
     assert row is not None
     tasks = dict(row["tasks"])
     roots = conn.execute(
-        "SELECT e.campaign_id,e.native_id FROM ads_external_entity e JOIN ads_campaign c ON c.id=e.campaign_id "
+        "SELECT e.campaign_id,e.native_id FROM ads_external_entity e JOIN "
+        "ads_campaign c ON c.id=e.campaign_id "
         "WHERE e.org_id=%s AND e.brand_id=%s AND e.platform=%s AND e.source_account=%s "
         "AND e.parent_native_id IS NULL AND c.origin='imported'",
         (org_id, brand_id, platform, source_account),
@@ -66,6 +70,11 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
                 "start": str(start),
                 "end": str(end),
             }
+    tasks = {
+        key: task
+        for key, task in tasks.items()
+        if task["status"] != "succeeded" or key in requested
+    }
     active = row["status"] in {"pending", "running"}
     for key, task in requested.items():
         old = tasks.get(key)
@@ -79,7 +88,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "errors": [],
         }
     conn.execute(
-        "UPDATE ads_external_sync_job SET tasks=%s,status='pending',error=NULL,updated_at=now() WHERE id=%s",
+        "UPDATE ads_external_sync_job SET "
+        "tasks=%s,status='pending',error=NULL,updated_at=now() WHERE id=%s",
         (jsonb(tasks), row["id"]),
     )
     conn.commit()
@@ -91,7 +101,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
 def _update_task(conn, job, key, task):
     conn.execute(
         "UPDATE ads_external_sync_job SET tasks=tasks || jsonb_build_object(%s::text,%s::jsonb), "
-        "revision=revision+1,last_attempt_at=now(),updated_at=now() WHERE org_id=%s AND brand_id=%s AND id=%s",
+        "revision=revision+1,last_attempt_at=now(),updated_at=now() WHERE "
+        "org_id=%s AND brand_id=%s AND id=%s",
         (key, jsonb(task), job["org_id"], job["brand_id"], job["id"]),
     )
     current = repo.get_job(conn, job["org_id"], job["brand_id"], job["id"])
@@ -120,7 +131,8 @@ def _save_page(conn, job, task, page):
             repo.cache_listing(conn, org, brand, job["platform"], job["source_account"], item)
         elif task["section"] == "observations":
             entity = conn.execute(
-                "SELECT id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+                "SELECT id FROM ads_external_entity WHERE org_id=%s AND "
+                "brand_id=%s AND campaign_id=%s "
                 "AND platform=%s AND source_account=%s AND native_kind=%s AND native_id=%s",
                 (
                     org,
@@ -152,7 +164,8 @@ def _save_page(conn, job, task, page):
             if (
                 task["section"] == "creatives"
                 and not conn.execute(
-                    "SELECT 1 FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+                    "SELECT 1 FROM ads_external_entity WHERE org_id=%s AND "
+                    "brand_id=%s AND campaign_id=%s "
                     "AND platform=%s AND source_account=%s AND native_kind=%s AND native_id=%s",
                     (
                         org,
@@ -176,13 +189,15 @@ def run_sync(org_id, brand_id, job_id):
         set_tenant_scope(conn, org_id)
         job = repo.get_job(conn, org_id, brand_id, job_id)
         lock = f"external-account:{org_id}:{job['platform']}:{job['source_account']}"
-        acquired = conn.execute(
+        lock_row = conn.execute(
             "SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS ok", (lock,)
-        ).fetchone()["ok"]
+        ).fetchone()
+        acquired = bool(lock_row and lock_row["ok"])
         conn.commit()
         if not acquired:
             return  # The minute dispatcher retries durable pending jobs, across brands too.
         try:
+            job = repo.get_job(conn, org_id, brand_id, job_id)
             pending = [
                 (key, value) for key, value in job["tasks"].items() if value["status"] == "pending"
             ]
@@ -191,7 +206,8 @@ def run_sync(org_id, brand_id, job_id):
             priority = {"list": 0, "structure": 1, "creatives": 2, "observations": 3}
             key, task = min(pending, key=lambda pair: (priority[pair[1]["section"]], pair[0]))
             conn.execute(
-                "UPDATE ads_external_sync_job SET status='running',last_attempt_at=now() WHERE id=%s",
+                "UPDATE ads_external_sync_job SET "
+                "status='running',last_attempt_at=now() WHERE id=%s",
                 (job_id,),
             )
             conn.commit()
@@ -215,6 +231,8 @@ def run_sync(org_id, brand_id, job_id):
                     start=task.get("start"),
                     end=task.get("end"),
                 )
+                if page.cursor is not None and page.cursor == task.get("cursor"):
+                    raise ValueError("來源未前進至下一頁。")
                 # A binding can be revoked while HTTP is in flight; do not save that response.
                 account_reader(conn, org_id, brand_id, job["platform"], job["source_account"])
                 errors = _save_page(conn, job, task, page)
@@ -246,11 +264,14 @@ def run_sync(org_id, brand_id, job_id):
                 # FK/acyclic constraints are deferred: check before marking the page successful.
                 conn.execute("SET CONSTRAINTS ALL IMMEDIATE")
                 current = _update_task(conn, job, key, updated)
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
                 # No raw provider/validation exception is persisted (it can include source URLs).
                 reason = "來源讀取失敗或連線已解除；已保留前次資料，可重試。"
-                updated = {**task, "status": "failed", "errors": [reason]}
+                if isinstance(exc, SourceReadError):
+                    reason = str(exc)
+                code = exc.code if isinstance(exc, SourceReadError) else "invalid_source_page"
+                updated = {**task, "status": "failed", "errors": [reason], "error_code": code}
                 if task["section"] != "list":
                     repo.record_sync(
                         conn,
@@ -258,7 +279,12 @@ def run_sync(org_id, brand_id, job_id):
                         brand_id,
                         task["campaign_id"],
                         section=task["section"],
-                        state={"status": "error", "error": reason, "last_attempt_at": now_utc()},
+                        state={
+                            "status": "error",
+                            "error": reason,
+                            "error_code": code,
+                            "last_attempt_at": now_utc(),
+                        },
                     )
                 current = _update_task(conn, job, key, updated)
             if current["status"] == "pending":
@@ -271,11 +297,20 @@ def run_sync(org_id, brand_id, job_id):
 
 def dispatch_pending(timestamp):
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM ads_external_sync_job WHERE status IN ('pending','running')"
+        orgs = conn.execute(
+            "SELECT DISTINCT org_id FROM ads_external_sync_job "
+            "WHERE status IN ('pending','running')"
         ).fetchall()
-    for row in rows:
-        _enqueue(dict(row))
+    for org in orgs:
+        with connection() as conn:
+            set_tenant_scope(conn, org["org_id"])
+            rows = conn.execute(
+                "SELECT * FROM ads_external_sync_job WHERE org_id=%s "
+                "AND status IN ('pending','running')",
+                (org["org_id"],),
+            ).fetchall()
+        for row in rows:
+            _enqueue(dict(row))
 
 
 def dispatch_daily(timestamp):

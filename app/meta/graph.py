@@ -63,7 +63,8 @@ class GraphError(Exception):
     """Graph API 拒絕了這個權杖或這次呼叫。message 是 Graph 原文（英文）或本檔補的人話，
     呼叫端直接包進中文句子顯示——絕不含權杖本身。"""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, code: int | None = None):
+        self.code = code
         self.message = message
         super().__init__(message)
 
@@ -495,27 +496,46 @@ def list_entity_insights(
     return [r for r in (_to_entity_row(i, level, window) for i in items) if r is not None]
 
 
-
 # F13: bounded, read-only transport. Never follow or retain paging.next (it may contain a token).
 _EXTERNAL_FIELDS = {
-    "campaigns": "id,account_id,name,objective,effective_status,start_time,stop_time,daily_budget,lifetime_budget",
-    "campaign": "id,account_id,name,objective,effective_status,start_time,stop_time,daily_budget,lifetime_budget",
-    "adsets": "id,account_id,campaign_id,name,effective_status,start_time,end_time,daily_budget,lifetime_budget",
-    "ads": "id,account_id,campaign_id,adset_id,name,effective_status",
-    "creatives": "id,account_id,campaign_id,adset_id,creative{id,body,title,image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}",
-    "insights": "account_id,account_currency,campaign_id,adset_id,ad_id,date_start,date_stop,spend,impressions,clicks,actions,action_values",
+    "campaigns": (
+        "id,account_id,name,objective,effective_status,start_time,stop_time,"
+        "daily_budget,lifetime_budget"
+    ),
+    "campaign": (
+        "id,account_id,name,objective,effective_status,start_time,stop_time,"
+        "daily_budget,lifetime_budget"
+    ),
+    "adsets": (
+        "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
+        "daily_budget,lifetime_budget"
+    ),
+    "ads": ("id,account_id,campaign_id,adset_id,name,effective_status"),
+    "creatives": (
+        "id,account_id,campaign_id,adset_id,creative{id,body,title,image_hash,"
+        "image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,"
+        "product_set_id}"
+    ),
+    "insights": (
+        "account_id,account_currency,campaign_id,adset_id,ad_id,date_start,"
+        "date_stop,spend,impressions,clicks,actions,action_values"
+    ),
 }
 
 
-def external_page(token, account_id, section, *, native_id=None, cursor=None, level=None,
-                  start=None, end=None):
+def external_page(
+    token, account_id, section, *, native_id=None, cursor=None, level=None, start=None, end=None
+):
     """One GET, at most 100 rows. IDs are identifiers, never host/path fragments."""
     if not str(account_id).isdigit() or (native_id is not None and not str(native_id).isdigit()):
         raise GraphError("來源識別碼無效。")
     if section not in _EXTERNAL_FIELDS:
         raise GraphError("不支援的唯讀資料種類。")
-    if cursor is not None and (not isinstance(cursor, str) or len(cursor) > 4096
-                               or any(c in cursor for c in "/?&=:\r\n")):
+    if cursor is not None and (
+        not isinstance(cursor, str)
+        or len(cursor) > 4096
+        or any(ord(c) < 32 or ord(c) == 127 for c in cursor)
+    ):
         raise GraphError("分頁游標無效。")
     params = {"fields": _EXTERNAL_FIELDS[section], "limit": 100}
     if cursor:
@@ -531,27 +551,49 @@ def external_page(token, account_id, section, *, native_id=None, cursor=None, le
             raise GraphError("缺少來源活動。")
         path = f"{native_id}/{'ads' if section == 'creatives' else section}"
     else:
-        if native_id is None or level not in {"campaign", "adset", "ad"} or start is None or end is None:
+        if (
+            native_id is None
+            or level not in {"campaign", "adset", "ad"}
+            or start is None
+            or end is None
+        ):
             raise GraphError("來源成效範圍無效。")
         path = f"{native_id}/insights"
-        params.update(level=level, time_increment=1,
-                      time_range=json.dumps({"since": str(start), "until": str(end)}),
-                      action_attribution_windows=json.dumps(["7d_click", "1d_view"]))
+        params.update(
+            level=level,
+            time_increment=1,
+            time_range=json.dumps({"since": str(start), "until": str(end)}),
+            action_attribution_windows=json.dumps(["7d_click", "1d_view"]),
+        )
     try:
-        body = fetch_page(f"{GRAPH_BASE_URL}/{path}", params=params,
-                          headers={"Authorization": f"Bearer {token}"})
+        body = fetch_page(
+            f"{GRAPH_BASE_URL}/{path}", params=params, headers={"Authorization": f"Bearer {token}"}
+        )
     except (httpx.HTTPError, json.JSONDecodeError):
         raise GraphError("平台讀取失敗，請稍後重試。") from None
     if not isinstance(body, dict) or "error" in body:
         # The provider can echo URL/token in its message. Persist a code, never that text.
         code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
-        raise GraphError(f"平台無法讀取此資料（代碼 {code if isinstance(code, int) else '未知'}）。")
+        raise GraphError(
+            f"平台無法讀取此資料（代碼 {code if isinstance(code, int) else '未知'}）。",
+            code=code if isinstance(code,int) else None,
+        )
     data = [body] if section == "campaign" else body.get("data")
-    if not isinstance(data, list) or len(data) > 100 or any(not isinstance(item, dict) for item in data):
+    if (
+        not isinstance(data, list)
+        or len(data) > 100
+        or any(not isinstance(item, dict) for item in data)
+    ):
         raise GraphError("平台分頁格式無效，未保存此頁。")
     paging = body.get("paging") or {}
     after = (paging.get("cursors") or {}).get("after") if paging.get("next") else None
-    if paging.get("next") and (not isinstance(after, str) or not after or after == cursor
-                               or len(after) > 4096 or any(c in after for c in "/?&=:\r\n")):
+    if paging.get("next") and (
+        not isinstance(after, str)
+        or not after
+        or after == cursor
+        or len(after) > 4096
+        or after == token
+        or any(ord(c) < 32 or ord(c) == 127 for c in after)
+    ):
         raise GraphError("平台未提供可安全續跑的游標。")
     return {"data": data, "cursor": after}

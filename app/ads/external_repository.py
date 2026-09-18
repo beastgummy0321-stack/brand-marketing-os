@@ -1,9 +1,11 @@
 """Persistence of scoped native snapshots. No platform calls, deletion inference or totals."""
 
-from datetime import date, timedelta
+from datetime import timedelta
 
+from app.ads import channels
 from app.ads.external_models import ExternalEntity, ExternalObservation
 from app.brand_intelligence import repository as bi_repo
+from app.core import settings
 from app.core.db import jsonb, new_id
 
 
@@ -123,7 +125,7 @@ def external_view(
 ):
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
     limit = min(max(int(limit), 1), 100)
-    end = end or date.today()
+    end = end or settings.today_for_org(conn, org_id=org_id)
     start = start or end - timedelta(days=29)
     if start > end or (end - start).days > 365:
         raise ValueError("成效查詢請分成最多一年一期。")
@@ -147,6 +149,19 @@ def external_view(
         ),
     ).fetchall()
     sync = (campaign.get("context_json") or {}).get("external_sync", {})
+    connections = []
+    for platform, account in sorted({(row["platform"], row["source_account"]) for row in entities}):
+        reader = channels.external_reader(platform)
+        connected = bool(
+            reader and account in {a["account_id"] for a in reader.accounts(conn, org_id, brand_id)}
+        )
+        connections.append(
+            {
+                "platform": platform,
+                "source_account": account,
+                "state": "connected" if connected else "disconnected",
+            }
+        )
     return {
         "entities": [dict(row) for row in entities[:limit]],
         "observations": [dict(row) for row in observations[:limit]],
@@ -155,6 +170,7 @@ def external_view(
         if len(observations) > limit
         else None,
         "window": {"start": start, "end": end},
+        "connections": connections,
         "coverage": {key: value.get("coverage") for key, value in sync.items()},
         "sync": sync,
     }
@@ -165,7 +181,9 @@ def cache_listing(conn, org_id, brand_id, platform, account, item):
     if model.platform != platform or model.source_account != account or model.parent_native_id:
         raise ValueError("來源活動範圍不符。")
     conn.execute(
-        "INSERT INTO ads_external_listing(id,org_id,brand_id,platform,source_account,native_kind,native_id,snapshot) "
+        "INSERT INTO "
+        "ads_external_listing(id,org_id,brand_id,platform,source_account,"
+        "native_kind,native_id,snapshot) "
         "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT "
         "(org_id,brand_id,platform,source_account,native_kind,native_id) DO UPDATE SET "
         "snapshot=EXCLUDED.snapshot,observed_at=now()",
@@ -209,7 +227,8 @@ def import_cached(conn, org_id, brand_id, platform, account, native_kind, native
     key = ":".join((org_id, brand_id, platform, account, native_kind, native_id))
     conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (key,))
     row = conn.execute(
-        "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND platform=%s "
+        "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND "
+        "brand_id=%s AND platform=%s "
         "AND source_account=%s AND native_kind=%s AND native_id=%s",
         (org_id, brand_id, platform, account, native_kind, native_id),
     ).fetchone()
@@ -222,15 +241,16 @@ def import_cached(conn, org_id, brand_id, platform, account, native_kind, native
     ).fetchone()
     if cached is None:
         raise ValueError("活動尚未讀回，請先更新既有活動清單。")
-    internal = conn.execute(
-        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND origin='internal' "
-        "AND external_id=%s",
-        (org_id, brand_id, native_id),
-    ).fetchall()
-    if len(internal) > 1:
-        raise ValueError("此來源已對應多個內部工作區，請先釐清歸屬。")
-    if internal:
-        return dict(internal[0])
+    if channels.has_legacy_campaign_binding(platform, native_kind):
+        internal = conn.execute(
+            "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND origin='internal' "
+            "AND external_id=%s",
+            (org_id, brand_id, native_id),
+        ).fetchall()
+        if len(internal) > 1:
+            raise ValueError("此來源已對應多個內部工作區，請先釐清歸屬。")
+        if internal:
+            return dict(internal[0])
     item = cached["snapshot"]
     campaign = create_imported_campaign(
         conn, org_id, brand_id, name=item.get("name") or native_id, created_by=actor

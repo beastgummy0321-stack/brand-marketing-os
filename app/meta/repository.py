@@ -778,6 +778,13 @@ def external_bound_accounts(conn, org_id, brand_id):
     return [dict(row) for row in rows]
 
 
+class ExternalReadError(ValueError):
+    """Sanitized external transport failure; never contains a provider URL or token."""
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
 def read_external_page(conn, org_id, brand_id, account_id, section, **kwargs):
     if account_id not in {a["account_id"] for a in external_bound_accounts(conn, org_id, brand_id)}:
         raise ValueError("來源帳號已解除或不屬於此品牌。")
@@ -786,7 +793,11 @@ def read_external_page(conn, org_id, brand_id, account_id, section, **kwargs):
         raise ValueError("來源連線沒有可用的憑證。")
     # This facade is used by the read-only background worker; no transaction waits on HTTP.
     conn.commit()
-    return graph.external_page(token, account_id, section, **kwargs)
+    try:
+        return graph.external_page(token, account_id, section, **kwargs)
+    except graph.GraphError as exc:
+        code = "permission_denied" if exc.code in {10,190,200} else "source_error"
+        raise ExternalReadError(str(exc),code) from None
 
 
 

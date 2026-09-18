@@ -61,3 +61,47 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(item["budget_type"], "lifetime")
         self.assertIsNone(item["budget_amount"])
         self.assertEqual(item["budget_raw"]["values"]["lifetime_budget"], "1000")
+
+    def test_external_view_pages_without_mixing_dimensions(self):
+        from datetime import date
+
+        from app.ads import external_repository as repo
+        from app.core import db
+        from app.tests.test_ads_external_sync import setup_brand
+
+        conn = db.current()
+        org, brand = setup_brand(conn)
+        campaign = repo.create_imported_campaign(conn, org, brand, name="分頁")
+        entity = repo.upsert_entity(
+            conn,
+            org,
+            brand,
+            campaign["id"],
+            {"platform": "other", "source_account": "a", "native_kind": "root", "native_id": "1"},
+        )
+        for i in range(105):
+            repo.upsert_observation(
+                conn,
+                org,
+                brand,
+                campaign["id"],
+                {
+                    "entity_id": entity["id"],
+                    "day": date.today(),
+                    "metric_scope": "root",
+                    "attribution_key": str(i),
+                    "source": "other",
+                    "currency": "TWD" if i % 2 else "USD",
+                    "spend": i,
+                },
+            )
+        first = repo.external_view(conn, org, brand, campaign["id"])
+        second = repo.external_view(
+            conn, org, brand, campaign["id"], observation_after=first["next_observation_cursor"]
+        )
+        self.assertEqual(len(first["observations"]), 100)
+        self.assertEqual(len(second["observations"]), 5)
+        ids = [r["id"] for r in first["observations"] + second["observations"]]
+        self.assertEqual(len(set(ids)), 105)
+        self.assertIsNone(second["next_observation_cursor"])
+        self.assertNotIn("totals", first)

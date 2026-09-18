@@ -1,6 +1,6 @@
 """Scoped cache/import/sync APIs. HTTP handlers never wait for platform reads."""
 
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -59,9 +59,9 @@ def existing(
             "AND platform=%s AND source_account=%s",
             (actor.org_id, brand_id, platform, source_account),
         ).fetchone()
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stale = not row or (
             row["status"] not in {"pending", "running"}
             and (

@@ -103,9 +103,14 @@ class ExternalSchemaTest(unittest.TestCase):
                         "spend": 5,
                     },
                 )
-        rows = external.external_view(self.conn, self.org, self.brand, self.campaign)[
-            "observations"
-        ]
+        rows = external.external_view(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 1),
+        )["observations"]
         self.assertEqual(len(rows), 4)
         self.assertTrue(
             all(

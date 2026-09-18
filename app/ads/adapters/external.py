@@ -17,3 +17,9 @@ class ExternalReader(Protocol):
     def read_structure(self, conn, org_id, brand_id, account, **kwargs) -> SourcePage: ...
     def read_creatives(self, conn, org_id, brand_id, account, **kwargs) -> SourcePage: ...
     def read_observations(self, conn, org_id, brand_id, account, **kwargs) -> SourcePage: ...
+
+
+class SourceReadError(ValueError):
+    def __init__(self, message, code="source_error"):
+        super().__init__(message)
+        self.code = code
