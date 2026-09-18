@@ -823,6 +823,10 @@ def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------
 
 _CHILD_TABLES = (
+    ("ads_asset_placement", "自帶素材安排"),
+    ("ads_asset_upload", "素材上傳紀錄"),
+    ("ads_asset_upload_batch", "素材上傳批次"),
+    ("ads_user_asset", "品牌自帶原檔"),
     ("ads_external_listing", "既有活動清單"),
     ("ads_external_sync_job", "既有活動同步"),
     ("ads_external_daily", "既有活動來源成效"),

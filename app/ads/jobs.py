@@ -81,3 +81,10 @@ def register_tasks() -> None:
     if "ads.external_daily" not in a.tasks:
         a.periodic(cron="0 5 * * *",periodic_id="ads_external_daily")(
             a.task(name="ads.external_daily")(external_sync.dispatch_daily))
+
+    from app.ads import user_assets
+    if user_assets.TASK not in a.tasks:
+        a.task(name=user_assets.TASK)(user_assets.process_preview)
+    if "ads.user_asset_pending" not in a.tasks:
+        a.periodic(cron="* * * * *",periodic_id="ads_user_asset_pending")(
+            a.task(name="ads.user_asset_pending")(user_assets.dispatch_pending))
