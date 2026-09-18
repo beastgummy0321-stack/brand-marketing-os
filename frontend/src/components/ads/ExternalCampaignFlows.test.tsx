@@ -66,6 +66,23 @@ describe("既有活動來源與原始資料", () => {
     expect(screen.queryByText(/原生結構：success/)).not.toBeNull();
   });
 
+  it("總提示採用已保存的分區成功時間，即使原生節點沒有成功時間", async () => {
+    vi.mocked(externalView).mockResolvedValue(view({ sync: {
+      structure: { status: "success", last_success_at: "2026-09-18T01:00:00Z" },
+      creatives: { status: "success", last_success_at: "2026-09-18T02:00:00Z" },
+      observations: { status: "success", last_success_at: "2026-09-18T03:00:00Z" },
+    } }));
+    render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);
+    expect(await screen.findByText(/^最近成功：2026-09-18T03:00:00Z/)).not.toBeNull();
+    expect(screen.queryByText(/尚未成功讀回/)).toBeNull();
+  });
+
+  it("沒有分區成功時間時仍保留原生節點時間作補充", async () => {
+    vi.mocked(externalView).mockResolvedValue(view({ entities: [{ ...entity("活動根"), last_success_at: "2026-09-17T01:00:00Z" }] }));
+    render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);
+    expect(await screen.findByText(/^最近成功：2026-09-17T01:00:00Z/)).not.toBeNull();
+  });
+
   it("結構分頁不丟棄原有結構或另一維度的觀測", async () => {
     vi.mocked(externalView).mockResolvedValueOnce(view({ next_entity_cursor: "entity_2", observations: [{ id: "saved_day", entity_id: "活動根", day: "2026-09-16", metric_scope: "ad", attribution_key: "saved-window", currency: "TWD", spend: 30, impressions: 100, clicks: 2, purchases: null, revenue: null, availability: {} }] })).mockResolvedValueOnce(view({ entities: [entity("第二個原生節點")] }));
     render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);

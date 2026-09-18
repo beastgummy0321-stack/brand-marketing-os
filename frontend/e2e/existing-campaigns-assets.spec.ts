@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Locator } from "@playwright/test";
 import { readFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -36,12 +36,13 @@ function uniqueMedia(bytes: Buffer, kind: "png" | "mp4", tag: string) {
   return Buffer.concat([bytes.subarray(0, -12), length, payload, checksum, bytes.subarray(-12)]);
 }
 
-async function capture(page: Page, directory: string, state: string) {
+async function capture(page: Page, directory: string, state: string, focus?: Locator) {
   for (const width of [1024, 1920]) {
     await page.setViewportSize({ width, height: 1080 });
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2)).toBe(true);
     await page.screenshot({ path: join(directory, `${state}-${width}.png`), fullPage: true });
+    if (focus) await focus.screenshot({ path: join(directory, `${state}-card-${width}.png`) });
   }
 }
 
@@ -156,7 +157,7 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await confirmed.getByRole("button", { name: "讀取版本成效", exact: true }).click();
   await expect(confirmed.getByText(/不可歸屬本版：|版本成效未知/).first()).toBeVisible();
   await expect(confirmed.getByText("此筆觀測有足夠證據歸屬本版")).toHaveCount(0);
-  await capture(page, evidence, "manual-handoff");
+  await capture(page, evidence, "manual-handoff", confirmed);
   await page.reload();
   await confirmed.getByRole("button", { name: "手動交接與平台核對", exact: true }).click();
   await expect(confirmed.getByText(/平台已讀回廣告與父層關係/)).toBeVisible();
@@ -181,7 +182,7 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await videoCard.getByRole("button", { name: "手動交接與平台核對", exact: true }).click();
   await videoCard.getByRole("button", { name: "查看預覽", exact: true }).click();
   await expect.poll(() => videoCard.locator("video").evaluate(node => (node as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(1);
-  await capture(page, evidence, "playable-video");
+  await capture(page, evidence, "playable-video", videoCard);
 
   // New campaign uses the same durable brand library, without generating a strategy.
   await page.goto(`${root}/new`);

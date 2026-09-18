@@ -29,6 +29,26 @@
 [playwright.config.ts](../frontend/playwright.config.ts) 用 `scripted` 供應商與 `memory` queue，僅允許 local。未知 task type 會失敗；背景工作不執行。需背景結果的測試應選擇可覆蓋該行為的整合測試或授權的獨立測試環境，不能把等待逾時當驗收。
 新的 scripted reply 必須由所屬模組測試約束形狀；涉及 legacy seam 的票仍需 `legacy_migration` 與邊界審查。保留租戶隔離、憑證保護與費用限制。
 
+### F13 的隔離完整流程
+
+`uv run python scripts/verify_existing_campaigns_assets.py --isolated --timeout 180`
+讀本 checkout 的本機 `.env`（也可明確指定 `--env-file`），建立自己專用的 schema／組織／品牌，
+啟動 8731 起的獨立服務。它只讀取既存 seed 登入者的 Auth 身分，不 reset 或建立共享 Auth fixture。
+真 HTTP、資料庫、Storage、FFmpeg、gateway 與同步／預覽／補文案 handlers 均實際執行；
+平台 reader 與模型 provider 僅在測試程序注入，外部非本機傳輸一律拒絕，未測試真模型或平台寫入。
+執行預算包括媒體建立、DDL、啟動等待與 HTTP；清理另有有界的程序／Storage／DB 等待，
+正常與失敗路徑皆產生 `cleanup.json`。重啟前保留實際 queued 工作，重啟後由真 dispatcher 續跑，
+並核對原檔 bytes 不變。stdout 提供本機證據目錄；`runtime-result.json` 與清理結果必須一起檢查。
+
+需要瀏覽器時加 `--browser --browser-timeout 900 --context <專用證據目錄/context.json> --port 8732`。
+先 build 同 checkout，再用 `F13_E2E_CONTEXT=<該 context.json>`、`E2E_BASE_URL=<context.base_url>`
+執行 `npx playwright test existing-campaigns-assets.spec.ts`。測試正常登入 seed 帳號，實際批次上傳、
+解碼圖片／影片預覽、確認與回讀，再覆蓋 heavy／empty／loading／error 的 1024／1920 截圖。
+loading／error 只延遲或中止測試瀏覽器的 GET，不植入產品成功狀態；預覽解碼不冒充原檔位元組驗證。
+普通 smoke 的不執行背景環境會明確跳過此專屬 spec；F13 必須另有真實執行且通過的結果。
+完成後建立 context 的 `stop_file`，父程序清理自己的服務／schema／Storage／fixture 媒體並保留證據。
+不要把舊服務、fixture 回應或佇列 done 當成真帳號能力及人工驗收；F13 與 F07 的未驗收項目分開保存。
+
 ## UI 與視覺
 
 - 新畫面、版面或共用元件變更：依 [設計系統](design-system.md) 與該頁參考圖比較實際截圖。局部文案修正只驗證受影響位置，不強制啟動設計技能或完整全站巡覽。
