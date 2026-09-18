@@ -10,8 +10,8 @@ repository/brief function -> wrap.
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, ConfigDict
 
 import app.shared.web as web
 from app import workbench
@@ -22,6 +22,8 @@ from app.ads import (
     channels,
     closeout,
     experiment_routes,
+    external_models,
+    external_repository,
     judgment,
     manual_settings_routes,
     outcome,
@@ -37,7 +39,45 @@ from app.ads.adapters import simulated
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 
-router = APIRouter(prefix="/api/ads")
+
+def _legacy_campaign_guard(request: Request):
+    """Protect existing mutation routes, including the mounted legacy routers."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return
+    params = request.path_params
+    brand_id = params.get("brand_id")
+    if not brand_id:
+        return
+    campaign_id = params.get("campaign_id")
+    # F13 source/material routes have their own capability contracts.
+    if campaign_id:
+        suffix = request.url.path.split("/campaigns/" + campaign_id, 1)[-1]
+        if not suffix and request.method == "PATCH":
+            return  # update_campaign validates the imported goal-only allowlist
+        if suffix and suffix.split("/")[1] not in {
+            "strategy", "plan", "groups", "ads", "pack", "publish", "bind", "ingest", "close",
+            "comparison", "simulation", "simulate", "simulation-recovery",
+        }:
+            return
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)
+    if not campaign_id:
+        row = None
+        if params.get("group_id"):
+            row = repository.get_group(web.conn, actor.org_id, brand_id, params["group_id"])
+        elif params.get("ad_id"):
+            row = repository.get_ad(web.conn, actor.org_id, brand_id, params["ad_id"])
+        if row:
+            campaign_id = row["campaign_id"]
+    if campaign_id:
+        campaign = repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+        if campaign and campaign.get("origin") == "imported":
+            raise web.ApiError(
+                409, "imported_operation_unavailable", external_models.IMPORTED_REASON,
+            )
+
+
+router = APIRouter(prefix="/api/ads", dependencies=[Depends(_legacy_campaign_guard)])
 router.include_router(manual_settings_routes.router)
 router.include_router(simulation_routes.router)
 router.include_router(experiment_routes.router)
@@ -177,6 +217,8 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
 
 
 class PatchCampaignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    goal_text: str | None = None
     name: str | None = None
     objective: str | None = None
     success_metric: str | None = None
@@ -189,6 +231,7 @@ class PatchCampaignRequest(BaseModel):
 
 
 _PATCH_CAMPAIGN_ERRORS = {
+    external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "name_unknown": (400, "名稱不能是空白。"),
     "objective_unknown": (400, "目標不能是空白。"),
@@ -698,6 +741,10 @@ def get_performance(request: Request, brand_id: str, campaign_id: str):
     """F03-I11：成效分頁的整包 payload——`app/ads/outcome.py::summary()`。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    campaign = repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    if campaign and campaign.get("origin") == "imported":
+        return {"origin": "imported", "external_view": external_repository.external_view(
+            web.conn, actor.org_id, brand_id, campaign_id)}
     try:
         result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
     except ValueError as exc:
