@@ -50,6 +50,8 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from . import read_policy
+
 GRAPH_API_VERSION = "v26.0"
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 # Runaway guard, not a data limit — hitting it raises (see `_fetch_all_pages`). Measured
@@ -60,8 +62,7 @@ _MAX_PAGES = 200
 
 
 class GraphError(Exception):
-    """Graph API 拒絕了這個權杖或這次呼叫。message 是 Graph 原文（英文）或本檔補的人話，
-    呼叫端直接包進中文句子顯示——絕不含權杖本身。"""
+    """平台讀取失敗；真實傳輸的錯誤訊息先經 read_policy 清理，不回傳憑證。"""
 
     def __init__(self, message: str, code: int | None = None):
         self.code = code
@@ -80,8 +81,16 @@ def fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     "try to break down the query into smaller queries by putting in filters like date
     range"（SPEC §7.4(b)），再上去是 async insights job，**都不是把 timeout 調大**；
     而按月切分 backfill（見 daily_pull.py `_month_chunks`）已經在做了。"""
-    resp = httpx.get(url, params=params, headers=headers, timeout=10.0)
-    return resp.json()
+    try:
+        url, params, headers = read_policy.prepare_read(url, params, headers, GRAPH_BASE_URL)
+        resp = httpx.get(url, params=params, headers=headers, timeout=10.0, follow_redirects=False)
+        return read_policy.safe_response(resp.json())
+    except read_policy.ReadPolicyError as exc:
+        raise GraphError(str(exc)) from None
+    except httpx.HTTPError:
+        raise GraphError("連不上 Meta，請稍後再試。") from None
+    except json.JSONDecodeError:
+        raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
 
 
 def _to_account(item: dict) -> dict | None:
@@ -110,7 +119,7 @@ def _raise_if_error(body: dict) -> None:
     共用同一份判斷，不是各自寫各自的錯誤偵測（票 05-budget-level-mismatch 明文）。"""
     if "error" in body:
         message = body["error"].get("message") or "Meta 回報了一個沒有說明的錯誤。"
-        raise GraphError(message)
+        raise GraphError(message, code=body["error"].get("code"))
 
 
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
@@ -135,7 +144,10 @@ def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]
         next_url = body.get("paging", {}).get("next")
         if not next_url:
             return items
-        url, params = next_url, None
+        try:
+            url, params = read_policy.next_read_page(url, params, next_url, headers, GRAPH_BASE_URL)
+        except read_policy.ReadPolicyError as exc:
+            raise GraphError(str(exc)) from None
     raise GraphError(
         "Meta 的資料超過一次可以取回的上限，這次沒有全部拿到，請縮小日期範圍再試一次。"
     )

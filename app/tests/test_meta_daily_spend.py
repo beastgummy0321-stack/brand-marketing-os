@@ -1106,16 +1106,21 @@ class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
 
     def test_hitting_the_page_ceiling_raises_instead_of_returning_a_short_list(self):
         def always_one_more_page(url, *, params, headers):
-            return {"data": [{"campaign_id": "c1"}], "paging": {"next": "https://example/next"}}
+            cursor = int((params or {}).get("after", 0)) + 1
+            return {"data": [{"campaign_id": "c1"}], "paging": {
+                "next": f"{graph.GRAPH_BASE_URL}/act_1/campaigns?after={cursor}"}}
 
         graph.fetch_page = always_one_more_page
         with self.assertRaises(graph.GraphError):
-            graph._fetch_all_pages("https://example/first", None, {})
+            graph._fetch_all_pages(graph.GRAPH_BASE_URL + "/act_1/campaigns", None,
+                                   {"Authorization": "Bearer tok"})
 
     def test_a_walk_that_ends_normally_still_returns_every_page(self):
         pages = [
-            {"data": [{"campaign_id": "c1"}], "paging": {"next": "https://example/2"}},
-            {"data": [{"campaign_id": "c2"}], "paging": {"next": "https://example/3"}},
+            {"data": [{"campaign_id": "c1"}], "paging": {
+                "next": graph.GRAPH_BASE_URL + "/act_1/campaigns?after=2"}},
+            {"data": [{"campaign_id": "c2"}], "paging": {
+                "next": graph.GRAPH_BASE_URL + "/act_1/campaigns?after=3"}},
             {"data": [{"campaign_id": "c3"}], "paging": {}},
         ]
         calls = iter(pages)
@@ -1124,7 +1129,8 @@ class PagingNeverTruncatesSilentlyTest(unittest.TestCase):
             return next(calls)
 
         graph.fetch_page = walk
-        items = graph._fetch_all_pages("https://example/1", None, {})
+        items = graph._fetch_all_pages(graph.GRAPH_BASE_URL + "/act_1/campaigns", None,
+                                      {"Authorization": "Bearer tok"})
         self.assertEqual([i["campaign_id"] for i in items], ["c1", "c2", "c3"])
 
 
@@ -1206,13 +1212,13 @@ class ListAdSetsTest(unittest.TestCase):
             {"data": [
                 {"id": "as-1", "name": "組合1", "effective_status": "ACTIVE"},
                 {"name": "沒有 id，應該整筆被丟掉"},
-            ], "paging": {"next": "https://example/adsets/2"}},
+            ], "paging": {"next": graph.GRAPH_BASE_URL + "/1/adsets?after=2"}},
             {"data": [{"id": "as-2", "effective_status": "PAUSED"}], "paging": {}},
         ]
         calls = iter(pages)
         graph.fetch_page = lambda url, *, params, headers: next(calls)
 
-        result = graph.list_ad_sets("tok", "camp-1")
+        result = graph.list_ad_sets("tok", "1")
         self.assertEqual(result, [
             {"adset_id": "as-1", "name": "組合1", "external_status": "ACTIVE"},
             {"adset_id": "as-2", "name": "", "external_status": "PAUSED"},
@@ -1260,13 +1266,13 @@ class ListAdsTest(unittest.TestCase):
             {"data": [
                 {"id": "ad-1", "name": "單元1", "effective_status": "ACTIVE"},
                 {"name": "沒有 id，應該整筆被丟掉"},
-            ], "paging": {"next": "https://example/ads/2"}},
+            ], "paging": {"next": graph.GRAPH_BASE_URL + "/1/ads?after=2"}},
             {"data": [{"id": "ad-2", "effective_status": "PENDING_REVIEW"}], "paging": {}},
         ]
         calls = iter(pages)
         graph.fetch_page = lambda url, *, params, headers: next(calls)
 
-        result = graph.list_ads("tok", "as-1")
+        result = graph.list_ads("tok", "1")
         self.assertEqual(result, [
             {"ad_id": "ad-1", "name": "單元1", "external_status": "ACTIVE"},
             {"ad_id": "ad-2", "name": "", "external_status": "PENDING_REVIEW"},
