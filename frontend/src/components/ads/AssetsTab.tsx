@@ -1,3 +1,4 @@
+import { UserAssetPlacements } from "./UserAssetPlacements";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
@@ -37,7 +38,7 @@ const STATE_TONE: Record<AssetReadinessState, "default" | "outline" | "secondary
 
 /** 素材 tab（F03-I15）：一列一支廣告，讀 F03-I08 的就緒狀態，派工到工作檯或手動勾
  * 「素材已就位」。不擋發布（決策 8／10），這裡只是誠實顯示現況。 */
-export function AssetsTab({
+function LegacyAssetsTab({
   brandId,
   campaign: c,
   onCampaignChange,
@@ -216,4 +217,8 @@ export function AssetsTab({
       </Dialog>
     </div>
   );
+}
+
+export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
+  return <div className="flex flex-col gap-4"><UserAssetPlacements key={`${props.brandId}:${props.campaign.id}`} brandId={props.brandId} campaign={props.campaign} />{props.campaign.origin !== "imported" && <LegacyAssetsTab {...props} />}</div>;
 }

@@ -39,6 +39,8 @@
         "frontend/src/components/ads/**",
         "frontend/src/lib/adsApi.ts",
         "frontend/src/lib/adsLaunchApi.ts",
+        "frontend/src/lib/adsExternalApi.ts",
+        "frontend/src/lib/adsUserAssetsApi.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },

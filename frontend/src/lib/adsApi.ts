@@ -3,6 +3,7 @@
  * 之後檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就
  * 用預設訊息。 */
 import { apiFetch, errorMessageFrom } from "./http";
+import type { ExternalView } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
@@ -10,9 +11,9 @@ export type SuccessMetric = "cpa" | "roas" | "purchases";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
 
 export interface CampaignOutcomeTotals {
-  spend: number;
-  purchases: number;
-  revenue: number;
+  spend: number | null;
+  purchases: number | null;
+  revenue: number | null;
 }
 
 /** F04-I08：`app/ads/judgment.py::campaign_judgment()` 的回傳形狀——程式組好的一句判斷，
@@ -40,6 +41,9 @@ export interface CampaignLabels {
 /** `GET /campaigns` 一列。`budget_total` 是後端推導出來的（`sum(投放組.daily_budget) x 天數`），
  * `budget_planned` 是使用者採用的情境金額——兩者可能因為天數捨入而略有出入，畫面上要分開標。 */
 export interface CampaignCard {
+  origin?: "internal" | "imported";
+  capabilities?: { allowed: string[]; unavailable: Record<string, string> };
+  external_view?: ExternalView | null;
   id: string;
   name: string;
   status: CampaignStatus;
@@ -118,6 +122,9 @@ export interface ActionRow {
 /** `GET /campaigns/{c}` — 五分頁工作區共用的一份 dict：Campaign 本身欄位 + 推導出來的
  * `budget_total` + 投放組（各自掛著廣告）+ 最新的操作紀錄 + 成效小計。 */
 export interface CampaignDetail extends EntityBinding {
+  origin?: "internal" | "imported";
+  capabilities?: { allowed: string[]; unavailable: Record<string, string> };
+  external_view?: ExternalView | null;
   simulation_mode?: boolean;
   manual_handoff?: ManualHandoff;
   id: string;
@@ -229,6 +236,7 @@ export interface CreateCampaignInput {
 /** `PATCH /campaigns/{id}` 的請求體——草稿欄位的一般編輯，不是 `ads_action`。所有欄位選填，
  * 沒帶到的欄位維持原樣；`success_target`／`success_basis` 可以明確傳 `null` 清空。 */
 export interface PatchCampaignInput {
+  goal_text?: string;
   name?: string;
   objective?: string;
   success_metric?: SuccessMetric;

@@ -1,3 +1,4 @@
+import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, type NavigateFunction } from "react-router-dom";
 import { BarChart3, Plus } from "lucide-react";
@@ -168,9 +169,9 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
         title="投放中心"
         description="讓行銷駕駛艙幫你持續優化廣告投放。"
         actions={
-          <Button asChild>
+          <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
             <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
-          </Button>
+          </Button></div>
         }
       />
       {content}

@@ -37,8 +37,8 @@ export function OverviewTab({
   const step = nextStep(c);
   const idx = step.stageIndex;
   const t = currentBudgetTotal(c);
-  const hasOutcome = c.outcome.spend > 0 || c.outcome.purchases > 0 || c.outcome.revenue > 0;
-  const pct = t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
+  const hasOutcome = (c.outcome.spend ?? 0) > 0 || (c.outcome.purchases ?? 0) > 0 || (c.outcome.revenue ?? 0) > 0;
+  const pct = c.outcome.spend !== null && t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
 
   const budgetCaption =
     (t.total !== null ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天` : "還沒設定投放起訖日") +
@@ -63,7 +63,7 @@ export function OverviewTab({
     {
       icon: BarChart2,
       label: "已花費",
-      value: hasOutcome ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
+      value: hasOutcome && c.outcome.spend !== null ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
       caption: hasOutcome
         ? t.total !== null
           ? `佔總預算 ${pct}%・平台回報`
