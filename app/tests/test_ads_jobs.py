@@ -4,8 +4,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from app.ads import external_repository as external
 from app.ads import closeout, jobs, repository
+from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
 
