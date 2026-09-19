@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 v7｜投放中心</title>
+<style>
+/* Disposable prototype, fake data only. Tokens from frontend/src/styles/tokens.css.
+   v3 goal (docs/design-system.md §1.7): layout carries the guidance — one title, one purpose line,
+   one warning max per page, fixed action bar (back left · secondary middle · primary right). */
+:root{--bg:#f6f7fb;--fg:#202237;--card:#fff;--primary:#7055d8;--secondary:#f0edf9;--muted:#f0f2f7;--mfg:#626b80;--accent:#f1edfc;--afg:#6348c5;--border:#e3e6ef;--success:#238169;--warning:#a96711;--danger:#c53945;--r:.75rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "Inter","Noto Sans TC","Microsoft JhengHei",sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;color:inherit}button:disabled{cursor:not-allowed;opacity:.45}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0;font-weight:600}p{margin:0}
+.shell{display:flex;max-width:1920px;min-height:100vh}
+.side{width:232px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:24px 16px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.logo{font-weight:700;font-size:16px;margin-bottom:20px}.logo b{color:var(--primary)}
+.brand{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:var(--r);padding:10px;margin-bottom:18px}
+.nav a{display:block;padding:9px 12px;border-radius:.5rem;color:var(--fg);text-decoration:none;margin-bottom:2px}.nav a.on{background:var(--accent);color:var(--afg);font-weight:600}
+.proto{margin-top:auto;border:1px dashed #c9cede;border-radius:.5rem;padding:10px;font-size:11.5px;color:var(--mfg)}.proto b{display:block;margin-bottom:4px}.proto button{background:none;border:0;padding:0;color:var(--primary);font-size:11.5px;text-align:left;display:block;margin-top:4px}
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{height:56px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 32px;color:var(--mfg);font-size:13px}
+.top a{color:var(--mfg);text-decoration:none}.top a:hover{color:var(--primary)}.top b{color:var(--fg);font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:6px}
+.page{padding:24px 32px 32px;max-width:1180px;width:100%;flex:1}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;box-shadow:0 2px 6px rgb(32 34 55/.025)}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 10px;border-radius:99px;background:var(--muted);color:var(--mfg);white-space:nowrap}
+.chip.v{background:var(--secondary);color:var(--afg)}.chip.ok{background:#e4f3ee;color:var(--success)}.chip.warn{background:#faefdc;color:var(--warning)}.chip.bad{background:#fbe6e8;color:var(--danger)}
+.btn{border:1px solid var(--border);background:var(--card);padding:10px 18px;border-radius:.5rem;font-weight:600}.btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:#fff;padding:12px 26px}.btn.pri:hover:not(:disabled){filter:brightness(1.08);color:#fff}
+.btn.sm{padding:5px 12px;font-size:13px;font-weight:500}.btn.ghost{border-color:transparent;background:none;color:var(--mfg);font-weight:500}
+.lnk{background:none;border:0;padding:0;color:var(--primary);font-size:13px}
+/* step header */
+.sh{margin-bottom:20px}.dots{display:flex;align-items:center;gap:0;margin-bottom:14px}
+.d{width:26px;height:26px;border-radius:50%;border:0;background:var(--muted);color:var(--mfg);font-size:12px;font-weight:600;display:grid;place-items:center;padding:0}
+.d.done{background:var(--primary);color:#fff}.d.on{background:var(--primary);color:#fff;box-shadow:0 0 0 5px var(--accent)}.d:disabled{opacity:1;cursor:default}
+.dl{font-size:12px;color:var(--mfg);margin:0 10px 0 6px}.dl.on{color:var(--fg);font-weight:600}.dots i{width:22px;height:1px;background:var(--border);margin-right:10px}
+.sh .row{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap}.purpose{color:var(--mfg);margin-top:4px;font-size:15px}
+/* action bar */
+.bar{position:sticky;bottom:0;background:rgb(255 255 255/.94);backdrop-filter:blur(6px);border-top:1px solid var(--border);padding:12px 32px;display:flex;align-items:center;gap:12px;z-index:5}
+.bar .mid{margin-left:auto;display:flex;gap:8px;align-items:center;position:relative}.bar small{color:var(--mfg);font-size:12px}
+.menu{position:absolute;bottom:48px;right:0;background:var(--card);border:1px solid var(--border);border-radius:.6rem;box-shadow:0 10px 30px rgb(32 34 55/.14);padding:6px;min-width:180px}
+.menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 12px;border-radius:.4rem}.menu button:hover{background:var(--muted)}
+.sheet{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:16px 20px;margin-top:16px;display:flex;gap:12px;align-items:end;flex-wrap:wrap;box-shadow:0 6px 20px rgb(32 34 55/.06)}
+.sheet label,.fld label{display:block;font-size:12px;color:var(--mfg);margin-bottom:4px}
+input[type=text],textarea,input[type=date],input[type=datetime-local]{border:1px solid #dce0ea;border-radius:.5rem;padding:9px 12px;font:inherit;background:#fff;width:100%}textarea{min-height:150px;resize:vertical}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:.5rem;overflow:hidden}.seg button{border:0;background:#fff;padding:8px 14px}.seg button.on{background:var(--accent);color:var(--afg);font-weight:600}
+/* thumbs */
+.thumb{border-radius:.6rem;background:linear-gradient(135deg,#e9e2d6,#cfc3ae);position:relative;overflow:hidden;flex-shrink:0}
+.thumb:after{content:"";position:absolute;left:36%;top:22%;width:28%;height:60%;background:#f7f3ea;border-radius:12% 12% 18% 18%;box-shadow:0 -6px 0 -1px #b9ad98}
+.thumb.b{background:linear-gradient(135deg,#9db3a0,#56705f)}.thumb.c{background:linear-gradient(135deg,#c9d3e6,#8091b3)}.thumb.gone{background:var(--muted)}.thumb.gone:after{display:none}
+/* ad cards */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.ad{display:flex;gap:14px;text-align:left;width:100%;border:1px solid var(--border);background:var(--card);border-radius:var(--r);padding:12px}
+.ad:hover{border-color:var(--primary)}.ad.pick{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}
+.nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.k{display:flex;gap:20px;margin-top:8px}.k span{display:block;font-size:11.5px;color:var(--mfg)}.k b{font-size:17px;font-variant-numeric:tabular-nums}
+.dt{font-size:11.5px;color:var(--mfg);margin-left:4px;font-weight:500}.unk{color:#9aa1b3;font-weight:500}
+details.f{border:1px solid var(--border);border-radius:.5rem;background:var(--card)}details.f summary{padding:10px 14px;color:var(--mfg);cursor:pointer}details.f>div{padding:0 14px 14px}
+/* evidence */
+.rv{display:grid;grid-template-columns:1.05fr 1fr 1fr;gap:16px;align-items:start}
+.ev{display:grid;grid-template-columns:96px 1fr 84px 52px;gap:10px;align-items:center;padding:11px 0;border-top:1px solid var(--border)}.ev:first-of-type{border-top:0}
+.ev .l{font-size:13px;color:var(--mfg)}.ev .n{text-align:right;font-variant-numeric:tabular-nums}.ev .n b{font-size:16px;display:block}.ev .n small{color:var(--mfg);font-size:11.5px}
+.ev .dd{font-size:12px;text-align:right;color:var(--fg);font-weight:600}
+.bars div{height:7px;border-radius:4px;background:#d6dae6;margin:3px 0}.bars div.c{background:var(--primary)}.bars div.q{background:repeating-linear-gradient(45deg,#e3e6ef,#e3e6ef 4px,#f6f7fb 4px,#f6f7fb 8px)}
+.opt{border:1px solid var(--border);background:var(--card);border-radius:var(--r);padding:20px 16px;text-align:left}.opt:hover{border-color:var(--primary)}
+.opt.pick{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}.opt b{display:block;margin:10px 0 4px;font-size:15px}.opt span{color:var(--mfg);font-size:13px}
+.ic{width:40px;height:40px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-size:18px}
+.old,.new{border-radius:.5rem;padding:14px;white-space:pre-wrap;font-size:13.5px;line-height:1.65}.old{background:var(--muted)}.new{background:var(--accent)}
+mark{background:#fde9bd;color:inherit;border-radius:3px;padding:0 1px}mark.g{background:#d9f0e6}
+/* budget bar */
+.bb{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--muted);margin:12px 0 8px}.bb i{display:block}.lg{display:flex;gap:16px;font-size:12px;color:var(--mfg);flex-wrap:wrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+/* checklist + rail */
+.todo{display:flex;gap:16px;align-items:center;padding:18px 0;border-top:1px solid var(--border)}.todo:first-child{border-top:0}
+.no{width:32px;height:32px;border-radius:50%;background:var(--muted);color:var(--mfg);display:grid;place-items:center;font-weight:700;flex-shrink:0}.todo.ok .no{background:var(--success);color:#fff}.todo b{font-size:15px}
+.rail{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.rail div{padding:14px 16px;border-left:1px solid var(--border);color:var(--mfg)}.rail div:first-child{border-left:0}.rail b{display:block;color:var(--fg);margin-bottom:2px}.rail .ok{background:#eef8f4}.rail .ok b{color:var(--success)}
+.hero{display:flex;gap:16px;align-items:center;border-radius:var(--r);padding:20px}.hero .big{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font-size:22px;color:#fff;flex-shrink:0}
+.hero.ok{background:#eef8f4}.hero.ok .big{background:var(--success)}.hero.warn{background:#fdf3e1}.hero.warn .big{background:#d18a1f}.hero.bad{background:#fcebed}.hero.bad .big{background:var(--danger)}
+table{width:100%;border-collapse:collapse}th{font-size:12px;font-weight:500;color:var(--mfg);background:var(--bg);text-align:left}th,td{padding:12px 16px;border-bottom:1px solid var(--border)}tr:last-child td{border-bottom:0}
+.toast{position:fixed;right:24px;bottom:84px;background:var(--fg);color:#fff;padding:10px 16px;border-radius:.5rem;font-size:13px;opacity:0;transition:opacity .2s;z-index:9}.toast.on{opacity:1}
+@media(max-width:1100px){.rv{grid-template-columns:1fr}.grid4{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+</style>
+<style>
+/* v4 additions */
+.q{display:flex;gap:16px;align-items:center;padding:16px 20px;border-top:1px solid var(--border)}.q:first-child{border-top:0}.q.done{opacity:.55}
+.q .what{flex:1;min-width:0}.q .viz{width:220px;flex-shrink:0}
+.kind{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px}
+.kind.stop{background:#fbe6e8;color:var(--danger)}.kind.worse{background:#faefdc;color:var(--warning)}.kind.up{background:#e4f3ee;color:var(--success)}.kind.fresh{background:var(--secondary);color:var(--afg)}
+.meter{position:relative;height:10px;border-radius:6px;background:var(--muted);margin:6px 0 4px}.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:6px}.meter u{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg)}
+.cap{font-size:11.5px;color:var(--mfg);display:flex;justify-content:space-between}
+.strip{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:10px 0 8px}.strip i{display:block}
+.ladder{display:flex;align-items:center;gap:0;font-size:12px;color:var(--mfg)}.ladder b{padding:4px 12px;border-radius:99px;background:var(--muted);font-weight:500}.ladder b.on{background:var(--primary);color:#fff}.ladder b.past{background:var(--secondary);color:var(--afg)}.ladder s{width:18px;height:1px;background:var(--border);text-decoration:none}
+.learn{display:flex;gap:12px;align-items:center;border:1px dashed #b9aef0;background:#faf8ff;border-radius:var(--r);padding:14px 16px}
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.tiles{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.qpos{font-size:12px;color:var(--mfg);margin-left:auto}
+@media(max-width:1100px){.cols3{grid-template-columns:1fr}.q .viz{display:none}}
+.camp{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mfg);white-space:nowrap}.camp i{font-style:normal;width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;color:#fff}
+.o-sales{background:#7055d8}.o-engage{background:#2ea7af}.o-traffic{background:#397cda}
+.filt{display:flex;gap:6px;margin-bottom:12px}.filt button{border:1px solid var(--border);background:#fff;border-radius:99px;padding:5px 14px;font-size:13px}.filt button.on{background:var(--fg);color:#fff;border-color:var(--fg)}
+.cc{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.tag{border:1px solid var(--border);background:#fff;border-radius:99px;padding:5px 14px;font-size:13px}.tag.on{background:var(--primary);color:#fff;border-color:var(--primary)}
+@media(max-width:1100px){.cc{grid-template-columns:1fr}}
+.o-mid{background:#d18a1f}.o-old{background:#8892a8}
+.conn{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}.cn{display:flex;gap:16px;align-items:center}.cn .big{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;font-size:24px;background:var(--muted);flex-shrink:0}
+.cn.off{opacity:.55;background:var(--muted)}.days{display:flex;gap:4px}.days i{width:22px;height:22px;border-radius:6px;background:var(--primary);display:grid;place-items:center;font-style:normal;font-size:10px;color:#fff}.days i.x{background:#fff;border:1px dashed var(--danger);color:var(--danger)}
+.rec{display:flex;align-items:center;gap:0;margin-top:14px}.rec b{display:flex;align-items:center;gap:8px;font-weight:500;font-size:13px;color:var(--mfg)}.rec b i{font-style:normal;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--muted);font-size:12px}
+.rec b.ok i{background:var(--success);color:#fff}.rec b.on{color:var(--fg);font-weight:600}.rec b.on i{background:var(--primary);color:#fff;box-shadow:0 0 0 4px var(--accent)}.rec s{flex:0 0 36px;height:1px;background:var(--border);margin:0 10px}
+@media(max-width:1100px){.conn{grid-template-columns:1fr}}
+.pickc{border:1px solid var(--border);background:#fff;border-radius:var(--r);padding:16px;text-align:left;display:block;width:100%}.pickc:hover{border-color:var(--primary)}
+.pickc.on{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}.pickc b{font-size:22px;display:block;margin:6px 0 2px}.pickc span{font-size:13px;color:var(--mfg)}
+.adrow{display:flex;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--border)}.adrow:first-child{border-top:0}.grp summary{display:flex;align-items:center;gap:10px;padding:14px 20px;cursor:pointer;list-style:none}.grp summary::-webkit-details-marker{display:none}
+.grp{background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px}.grp>div{padding:0 20px 10px}.sw{width:12px;height:12px;border-radius:3px}
+.calc{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.calc input{width:120px}.calc .op{font-size:20px;color:var(--mfg);padding-bottom:8px}
+.cname{background:none;border:0;padding:0;text-align:left}.cname:hover{color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><b>▮▮</b> 行銷駕駛艙</div>
+    <div class="brand"><div class="thumb" style="width:36px;height:36px"></div><div><b>示例品牌</b><div style="font-size:12px;color:var(--mfg)">晨光隨行杯</div></div></div>
+    <nav class="nav"><a href="#/">品牌總覽</a><a href="#/">收件匣</a><a href="#/">經營概況</a><a class="on" href="#/">投放中心</a><a href="#/">素材工作檯</a><a href="#/">商品</a><a href="#/">設定</a></nav>
+    <div class="proto"><b>原型備註（不是產品畫面）</b>v7・假資料・重新整理會重設。<span id="pnote"></span><button data-act="demoLost">示範：下次保存「沒收到回應」</button><button data-act="demoRecover">示範：系統剛恢復（開／關）</button></div>
+  </aside>
+  <main><div class="top"><div id="crumb"></div><button class="lnk" style="color:var(--mfg);display:flex;align-items:center;gap:8px" data-go="#/connections"><span class="dot" style="margin:0"></span>最近同步 09/19 22:40 <span class="chip warn">3 項待處理</span></button></div><div class="page" id="app"></div><div id="bar"></div></main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+// Fake backend v4. Adds to v3: program triage (own previous window, sample gate, 3×CPA stop-loss), a decision queue,
+// program-originated pause / scale proposals (3-step light flow), lineage ladder, learning written at retirement,
+// state-triggered refresh, and an internal monthly review. Platform campaign is never closed or rebuilt.
+// Campaigns with different objectives. Each is judged on ITS OWN result and target ("cost per result"), never on purchases by default.
+const CAMP={
+ sales:{id:"sales",name:"日常商品推廣",obj:"轉換",ic:"購",cls:"o-sales",result:"購買",cost:"購買成本",target:450,basis:"打平值",ads:19,cap:10,budget:"每日 2,000",counts:{stop:1,worse:1,better:2,flat:5,nodata:10}},
+ engage:{id:"engage",name:"品牌互動貼文",obj:"互動",ic:"互",cls:"o-engage",result:"互動",cost:"每次互動成本",target:2,basis:"自己近 30 天",ads:6,cap:null,budget:null,counts:{stop:0,worse:1,better:1,flat:3,nodata:1}},
+ traffic:{id:"traffic",name:"新品預告導流",obj:"流量",ic:"流",cls:"o-traffic",result:"連結點擊",cost:"每次點擊成本",target:null,basis:null,ads:4,cap:null,budget:"每日 300",counts:null}};
+ CAMP.mid={id:"mid",name:"中秋限定活動",short:"中秋",obj:"轉換",ic:"秋",cls:"o-mid",state:"waiting",ads:5,note:"缺 2 天資料・讀取權限失效"};
+ CAMP.old={id:"old",name:"上半年檔期活動",short:"舊檔期",obj:"轉換",ic:"舊",cls:"o-old",state:"failed",ads:8,note:"暫時讀取不到"};
+ CAMP.sales.short="日常";CAMP.engage.short="互動貼文";CAMP.traffic.short="導流";
+const LONG="一杯剛剛好的溫度，陪你走過每一個日常。\n通勤、開會、健身、接小孩，晨光隨行杯 12 小時保溫保冷，單手開蓋不滴漏，杯身只有 280 公克。\n現在官網兩入組 NT$1,580 免運，再送原廠杯刷。\n👉 前往官網看更多顏色";
+const M=(spend,res,extra)=>({spend,res,cost:spend!=null&&res?Math.round(spend/res*10)/10:null,extra});
+const A={
+ a:{id:"a",camp:"sales",name:"晨光隨行杯・日常出發",thumb:"",cur:M(5200,17,3.4),prev:M(4900,15,3.2),days:7},
+ b:{id:"b",camp:"sales",name:"晨光隨行杯・隨時有你｜好攜帶，走到哪都適合（通勤情境單圖・最多數量 1150706）",thumb:"b",cur:M(3000,5,1.6),prev:M(2900,8,2.7),days:7,ladder:0,tags:["好攜帶訴求","通勤情境"],
+    snap:{title:"每天的隨行杯",body:LONG},rec:{title:"保留圖片，換文案試試",why:"花費持平，但平台回報購買和商城訂單同期都下降。",copy:{title:"輕鬆帶走，每天剛剛好",body:"帶著晨光出發\n好咖啡・好心情，每一段旅程都值得。\n現在官網兩入組 NT$1,580 免運，再送原廠杯刷。\n👉 前往官網看更多顏色"}}},
+ c:{id:"c",camp:"sales",name:"晨光隨行杯・辦公室一角",thumb:"c",cur:M(1420,0,0),prev:M(null,null,null),days:9,angle:null,tags:["辦公室情境","上班族","質感桌面"]},
+ e:{id:"e",camp:"engage",name:"你的早晨第一口是什麼？（提問貼文）",thumb:"",cur:M(620,200,5400),prev:M(600,300,6100),days:7,ladder:1,tags:["提問式貼文","抽獎互動"],
+    snap:{title:"你的早晨第一口是什麼？",body:"留言告訴我們你的早晨儀式。\n抽 3 位送晨光隨行杯。"},rec:{title:"文案改過仍下滑，建議換圖",why:"花費持平，互動數掉了三分之一，觸及也在下降。",copy:{title:"早晨第一口，你選哪一杯？",body:"A 黑咖啡　B 拿鐵　C 熱茶\n留言選一個，抽 3 位送晨光隨行杯。"}}}};
+const SHOP={cur:{count:6,order_net:14900,paid_net:null},prev:{count:11,order_net:28570,paid_net:21870}};
+const db={lostNext:false,filter:"all",budget:{amount:60000,known_spend:22000,ongoing_estimate:28000,available:10000},
+ queue:[
+  {id:"stop",kind:"pause",ad:"c",camp:"sales",cs:null},
+  {id:"fix",kind:"review",ad:"b",camp:"sales",review:null,task:null,draft:null,cs:null,branch:null},
+  {id:"fix2",kind:"review",ad:"e",camp:"engage",review:null,task:null,draft:null,cs:null,branch:null},
+  {id:"scale",kind:"budget",camp:"sales",group:"廣告組 G・廣泛受眾",from:1000,to:1200,cs:null},
+  {id:"fresh",kind:"refresh",camp:"sales"},
+  {id:"data",kind:"data",camp:"mid"}],recovering:false};
+const campChip=c=>`<span class="camp"><i class="${CAMP[c].cls}">${CAMP[c].ic}</i>${CAMP[c].name}・${CAMP[c].obj}</span>`;
+const $=s=>document.querySelector(s),app=$("#app"),bar=$("#bar");
+const num=v=>v==null?'<span class="unk">未知</span>':Number(v).toLocaleString();
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const short=(s,n)=>s.length>n?s.slice(0,n)+"…":s;
+const Q=id=>db.queue.find(x=>x.id===id);
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("on");setTimeout(()=>e.classList.remove("on"),1800)}
+function go(h){if(location.hash===h)route();else location.hash=h}
+const delta=(c,p)=>c==null||p==null||!p?"":c===p?"持平":`${c>p?"▲":"▼"}${Math.abs(Math.round((c-p)/p*100))}%`;
+const thumb=(t,s)=>`<div class="thumb ${t.thumb}" style="width:${s}px;height:${s}px"></div>`;
+
+// ---- progress of each queue item, derived from its records only
+function state(q){if(q.kind==="data")return{step:null,label:"去處理",done:false};if(q.kind==="refresh")return{step:null,label:"準備新素材",done:false};const cs=q.cs,v=cs?.items[0].verification_state;
+ if(cs){if(cs.status==="draft")return{step:"confirm",label:"等你核准"};if(cs.status!=="approved")return{step:"confirm",label:cs.status==="rejected"?"已拒絕":"已暫緩",done:true};
+  if(v==="pending")return{step:"handoff",label:"到平台完成"};if(v==="confirmed")return{step:"verify",label:"已核對",done:true};return{step:"verify",label:v==="deviated"?"與核准不符":v==="stale"?"需重新檢討":"核對中"}}
+ if(q.kind!=="review")return{step:"confirm",label:"等你決定"};const r=q.review;
+ if(!r||r.status==="running")return{step:"review",label:"等你決定"};if(r.decision==="deferred")return{step:"review",label:r.revisit.slice(5).replace("-","/")+" 重看",done:true};
+ if(r.decision==="unjudgeable")return{step:"review",label:"無法判定",done:true};if(r.decision==="completed")return{step:q.task?"copy":"prepare",label:q.task?"修改文案":"選方向"};return{step:"review",label:"等你決定"}}
+const FLOWK=q=>q.kind!=="refresh"&&q.kind!=="data";const open=()=>db.queue.filter(q=>!state(q).done&&FLOWK(q));
+const nextOf=id=>open().find(q=>q.id!==id);
+const FLOW={review:[["review","看證據","確認這則廣告值不值得改"],["prepare","選方向","依這條素材已處理過的次數給建議"],["copy","改文案","圖片不變，只換文字"],["confirm","確認變更","核准後才到平台操作"],["handoff","到平台完成","照清單手動修改"],["verify","核對結果","系統讀回平台確認"]],
+ light:[["confirm","確認提議","核准後才到平台操作"],["handoff","到平台完成","照清單手動修改"],["verify","核對結果","系統讀回平台確認"]]};
+const flowOf=q=>q.kind==="review"?FLOW.review:FLOW.light;
+function head(q,cur,title,right=""){const S=flowOf(q),i=S.findIndex(s=>s[0]===cur),all=db.queue.filter(FLOWK),pos=all.findIndex(x=>x.id===q.id)+1;
+ return`<div class="sh"><div class="dots">${S.map((s,k)=>`${k?"<i></i>":""}<button class="d ${k<i?"done":k===i?"on":""}" ${k<i?`data-go="#/q/${q.id}/${s[0]}"`:"disabled"}>${k<i?"✓":k+1}</button><span class="dl ${k===i?"on":""}">${s[1]}</span>`).join("")}<span class="qpos" style="display:flex;gap:14px;align-items:center">${campChip(q.camp)}<span>第 ${pos} 件／共 ${all.length} 件</span></span></div>
+ <div class="row"><div><h1>${title}</h1><p class="purpose">${S[i][2]}</p></div><div>${right}</div></div></div>`}
+function crumb(p){$("#crumb").innerHTML=p.map((x,i)=>i===p.length-1?`<b>${x[0]}</b>`:`<a href="${x[1]}">${x[0]}</a>`).join(" &nbsp;›&nbsp; ")}
+function setBar({back,mid="",pri,hint=""}={}){bar.innerHTML=!back&&!pri?"":`<div class="bar">${back?`<button class="btn ghost" data-go="${back[1]}">← ${back[0]}</button>`:""}<div class="mid">${hint?`<small>${hint}</small>`:""}${mid}${pri?`<button class="btn pri" ${pri[2]?"disabled":""} data-act="${pri[1]}">${pri[0]} →</button>`:""}</div></div>`}
+function budgetBar(extra=0){const b=db.budget,p=v=>v/b.amount*100;return`<div class="bb"><i style="width:${p(b.known_spend)}%;background:#8892a8"></i><i style="width:${p(b.ongoing_estimate)}%;background:#c9cede"></i>${extra?`<i style="width:${p(extra)}%;background:var(--success)"></i>`:""}<i style="width:${p(b.available-extra)}%;background:var(--primary)"></i></div>
+ <div class="lg"><span><i style="background:#8892a8"></i>已花 ${num(b.known_spend)}</span><span><i style="background:#c9cede"></i>預留 ${num(b.ongoing_estimate)}</span>${extra?`<span><i style="background:var(--success)"></i>這次加碼 ${num(extra)}</span>`:""}<span><i style="background:var(--primary)"></i>可用 ${num(b.available-extra)}</span></div>`}
+const meter=(v,max,line,color)=>`<div class="meter"><i style="width:${Math.min(100,v/max*100)}%;background:${color}"></i>${line?`<u style="left:${line/max*100}%"></u>`:""}</div>`;
+const quick=()=>`<div class="seg" id="q"><button data-act="qd" data-arg="3">3 天後</button><button class="on" data-act="qd" data-arg="7">7 天後</button><button data-act="qd" data-arg="0">自訂</button></div><input type="date" id="qd" value="2026-09-27" style="display:none;width:auto;margin-left:8px">`;
+
+// ---- HOME: one brand-level queue across campaigns + one card per campaign (own objective, own target)
+function home(){crumb([["投放中心"]]);setBar();const op=open(),n=db.queue.filter(q=>!state(q).done).length,first=op[0],f=db.filter;
+ const row=q=>{const s=state(q),c=CAMP[q.camp];let kind,title,viz,btn;
+  if(q.kind==="pause"){const a=A[q.ad];kind='<span class="kind stop">■ 停損</span>';title=a.name;viz=`${meter(a.cur.spend,2000,c.target*3,"var(--danger)")}<div class="cap"><span>花了 ${num(a.cur.spend)}・0 筆${c.result}</span><span>停損線 ${num(c.target*3)}</span></div>`;btn="看提議"}
+  else if(q.kind==="review"){const a=A[q.ad];kind='<span class="kind worse">▼ 變差</span>';title=a.name;viz=`${meter(a.cur.cost,c.target*2,c.target,"#d18a1f")}<div class="cap"><span>${c.cost} ${num(a.cur.cost)} ${delta(a.cur.cost,a.prev.cost)}</span><span>目標 ${c.target}</span></div>`;btn="看證據"}
+  else if(q.kind==="budget"){kind='<span class="kind up">▲ 可加預算</span>';title=q.group;viz=`${meter(306,900,c.target,"var(--success)")}<div class="cap"><span>${c.cost} 306</span><span>目標 ${c.target}</span></div>`;btn="看提議"}
+  else if(q.kind==="data"){kind='<span class="kind stop" style="background:#faefdc;color:var(--warning)">！資料不足</span>';title="這個活動暫時無法判斷";viz=`<div class="days">${["13","14","15","16","17","18","19"].map((d,k)=>`<i class="${k===4||k===5?"x":""}">${d}</i>`).join("")}</div><div class="cap" style="margin-top:6px"><span>缺 9/17、9/18</span><span>讀取權限失效</span></div>`;btn="去處理"}
+  else{kind='<span class="kind fresh">＋ 補素材</span>';title="能判讀的素材只剩 2 則";viz=`<div class="tiles">${thumb(A.a,34)}${thumb(A.b,34)}<div class="thumb gone" style="width:34px;height:34px;border:1px dashed #c9cede"></div><div class="thumb gone" style="width:34px;height:34px;border:1px dashed #c9cede"></div></div>`;btn="準備新素材"}
+  const t=q.ad?thumb(A[q.ad],52):`<div class="ic" style="width:52px;height:52px;border-radius:.6rem">${q.kind==="budget"?"💰":q.kind==="data"?"🔌":"🖼"}</div>`;
+  return`<div class="q ${s.done?"done":""}">${t}<div class="what"><div style="display:flex;gap:10px;align-items:center">${kind}${campChip(q.camp)}</div><div class="nm" style="margin-top:6px">${esc(title)}</div></div><div class="viz">${viz}</div>
+   ${s.done?`<span class="chip ok">${s.label}</span>`:q.kind==="refresh"?`<button class="btn" data-toast="原型未包含：到素材工作檯準備">${btn} →</button>`:q.kind==="data"?`<button class="btn" data-go="#/wait/${q.camp}">${btn} →</button>`:db.recovering?`<span class="chip">補完資料後更新</span>`:`<button class="btn ${q===first?"pri":""}" style="${q===first?"padding:10px 18px":""}" data-go="#/q/${q.id}/${s.step}">${s.label==="等你決定"||s.label==="等你核准"?btn:s.label} →</button>`}</div>`};
+ const seg=[["stop","停損","var(--danger)"],["worse","變差","#d18a1f"],["better","變好","var(--success)"],["flat","持平","#8892a8"],["nodata","資料不足","#d6dae6"]];
+ const cnt=k=>db.queue.filter(q=>q.camp===k).length,rows=db.queue.filter(q=>f==="all"||q.camp===f);
+ const ccard=c=>c.state?`<div class="card" style="${c.state==="failed"?"background:var(--muted)":""}"><div style="display:flex;justify-content:space-between;align-items:start;gap:8px"><div class="camp" style="font-size:14px;color:var(--fg);font-weight:600"><i class="${c.cls}">${c.ic}</i>${c.name}</div><span class="chip">${c.obj}・${c.ads} 則</span></div>
+   <div style="margin-top:12px;font-size:20px;font-weight:650;color:${c.state==="failed"?"#9aa1b3":"var(--warning)"}">${c.state==="failed"?"暫時讀取不到":"資料不足，先不判斷"}</div><div class="strip"><i style="width:100%;background:repeating-linear-gradient(45deg,#e3e6ef,#e3e6ef 4px,#f6f7fb 4px,#f6f7fb 8px)"></i></div>
+   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="chip ${c.state==="failed"?"":"warn"}">${c.state==="failed"?"已保存的紀錄都還在":c.note}</span><button class="btn sm" ${c.state==="failed"?'data-act="retryCamp"':`data-go="#/wait/${c.id}"`}>${c.state==="failed"?"重新讀取":"去處理"}</button></div></div>`:`<div class="card"><div style="display:flex;justify-content:space-between;align-items:start;gap:8px"><button class="cname camp" style="font-size:14px;color:var(--fg);font-weight:600" data-go="#/camp/${c.id}"><i class="${c.cls}">${c.ic}</i>${c.name} ›</button><span class="chip">${c.obj}・${c.ads} 則</span></div>
+   ${c.target?`<div style="margin-top:12px;font-size:12px;color:var(--mfg)">目標${c.cost}</div><div style="font-size:20px;font-weight:650">${c.target} <span class="chip" style="font-weight:400">${c.basis}</span> <button class="lnk" data-go="#/target/${c.id}">調整</button></div>
+    <div class="strip">${seg.map(s=>`<i style="width:${c.counts[s[0]]/c.ads*100}%;background:${s[2]}"></i>`).join("")}</div><div class="lg">${seg.filter(s=>c.counts[s[0]]).map(s=>`<span><i style="background:${s[2]}"></i>${s[1]} ${c.counts[s[0]]}</span>`).join("")}</div>`
+   :`<div style="margin-top:12px;font-size:12px;color:var(--mfg)">目標${c.cost}</div><div style="font-size:20px;font-weight:650;color:#9aa1b3">尚未設定</div><div class="strip"><i style="width:100%;background:repeating-linear-gradient(45deg,#e3e6ef,#e3e6ef 4px,#f6f7fb 4px,#f6f7fb 8px)"></i></div><button class="btn sm" data-go="#/target/${c.id}">設定目標，才開始判斷</button>`}
+   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">${c.budget?`<span class="chip">${c.budget}</span>`:`<span class="chip warn">預算待核實・暫不提議加預算</span>`}${c.cap?`<span class="chip warn">約撐得起 ${c.cap} 則</span>`:""}</div></div>`;
+ app.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px"><div><h1>今天需要你決定的事</h1><p class="purpose">${n?`${n} 件・由上往下處理就好`:"都處理完了"}</p></div><div style="display:flex;gap:10px"><button class="btn" data-go="#/month">每月回顧</button><button class="btn" data-toast="原型未包含">加入既有活動</button><button class="btn" data-toast="原型未包含">＋ 建立投放計畫</button></div></div>
+ ${db.recovering?`<div class="card" style="margin-bottom:16px;border-color:#ddd3f7;background:var(--accent)"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><b style="font-size:16px">系統暫停了 2 小時 20 分，正在補資料</b><div style="font-size:13px;color:var(--mfg);margin-top:2px">09:10 – 11:30 沒有檢查・下面的數字補完後會更新</div></div><span class="chip warn">這段時間平台可能照常花費</span></div>
+   <div class="rec"><b class="ok"><i>✓</i>重新連線</b><s></s><b class="ok"><i>✓</i>確認讀取權限</b><s></s><b class="on"><i>3</i>補 2 小時的資料</b><s></s><b><i>4</i>重新判斷廣告</b><s></s><b><i>5</i>核對你回報的操作</b></div></div>`:""}
+ <div style="display:grid;grid-template-columns:1.9fr 1fr;gap:16px;align-items:start"><div><div class="filt"><button class="${f==="all"?"on":""}" data-act="filt" data-arg="all">全部 ${db.queue.length}</button>${Object.values(CAMP).filter(c=>cnt(c.id)).map(c=>`<button class="${f===c.id?"on":""}" data-act="filt" data-arg="${c.id}">${c.short} ${cnt(c.id)}</button>`).join("")}</div><div class="card" style="padding:0">${rows.map(row).join("")}</div></div>
+  <div class="card" style="margin-top:42px"><div style="display:flex;justify-content:space-between;align-items:start"><div><div style="font-size:12px;color:var(--mfg)">9 月可新增承諾・全品牌</div><div style="font-size:28px;font-weight:650;font-variant-numeric:tabular-nums">${num(db.budget.available)} <span style="font-size:13px;color:var(--mfg);font-weight:400">/ ${num(db.budget.amount)}</span></div></div><button class="lnk" data-toast="原型未包含">調整</button></div>${budgetBar()}</div></div>
+ <h2 style="margin:26px 0 10px">活動</h2><div class="cc">${Object.values(CAMP).map(ccard).join("")}</div>`}
+
+// ---- REVIEW (repair loop step 1) — AI runs only here; evidence rows follow the campaign's own result
+function review(q){const a=A[q.ad],c=CAMP[q.camp];crumb([["投放中心","#/"],["變差・"+short(a.name,10)]]);
+ if(!q.review){q.review={status:"running",decision:null,snapshot:a.snap,rec:{...a.rec,risks:["資料仍可能回補","期間內素材與設定是否改過，尚未證實","商城是品牌整體，分不到單則廣告"]}};setTimeout(()=>{q.review.status="ready";if(location.hash===`#/q/${q.id}/review`)route()},1100)}
+ const r=q.review;if(r.status==="running"){app.innerHTML=head(q,"review","這則廣告變差了")+`<div class="card" style="text-align:center;padding:64px"><div style="font-size:28px">✦</div><h2 style="font-size:18px;margin-top:8px">AI 正在整理證據</h2><p class="purpose">可以先離開，好了會出現在投放中心</p></div>`;return setBar({back:["投放中心","#/"]})}
+ const mx=(x,y)=>Math.max(x||0,y||0)||1,ev=(l,p,cu,qq)=>`<div class="ev"><div class="l">${l}</div><div class="bars"><div style="width:${(p||0)/mx(p,cu)*100}%"></div><div class="${qq?"q":"c"}" style="width:${qq?60:(cu||0)/mx(p,cu)*100}%"></div></div><div class="n"><b>${qq?'<span class="unk">待確認</span>':num(cu)}</b><small>前期 ${num(p)}</small></div><div class="dd">${qq?"":delta(cu,p)}</div></div>`;
+ const lad=["改文案","換圖","退役"].map((x,k)=>`${k?"<s></s>":""}<b class="${k===a.ladder?"on":k<a.ladder?"past":""}">${x}</b>`).join("");
+ const third=c.id==="sales"?`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h2>商城訂單</h2><span class="chip">品牌整體・分不到單則</span></div>${ev("訂單數",SHOP.prev.count,SHOP.cur.count)}${ev("訂單淨額",SHOP.prev.order_net,SHOP.cur.order_net)}${ev("已付款淨額",SHOP.prev.paid_net,null,true)}<div style="margin-top:8px;display:flex;gap:6px;align-items:center"><span class="chip warn">報表期間待確認</span><button class="lnk" data-toast="原型未包含">補報表</button></div></div>`
+  :`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h2>這條素材的紀錄</h2><span class="chip">已處理 ${a.ladder} 次</span></div><div class="todo" style="padding:12px 0"><div class="no" style="background:var(--secondary);color:var(--afg)">✓</div><div style="flex:1"><b style="font-weight:500">9/06 改過文案</b><div style="font-size:12px;color:var(--mfg)">之後 7 天・${c.cost} 2.0 → 3.1</div></div></div><span class="chip">這個活動看${c.result}，不看商城訂單</span></div>`;
+ app.innerHTML=head(q,"review","這則廣告變差了",`<div class="ladder">${lad}</div>`)+
+ `<div class="rv"><div class="card" style="background:var(--accent);border-color:#ddd3f7"><div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${thumb(a,56)}<div class="nm" style="-webkit-line-clamp:2">${esc(a.name)}</div></div>
+   <span class="chip v">✦ AI 建議</span><div style="font-size:20px;font-weight:650;margin:8px 0 6px">${r.rec.title}</div><p style="color:#3f2f86">${r.rec.why}</p>
+   <details class="f" style="margin-top:14px;background:transparent;border-color:#ddd3f7"><summary>依據與風險</summary><div style="font-size:13px;color:var(--mfg)">${r.rec.risks.map(x=>"・"+x).join("<br>")}</div></details></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h2>這則廣告</h2><span class="chip">平台回報</span></div>${ev("花費",a.prev.spend,a.cur.spend)}${ev(c.result,a.prev.res,a.cur.res)}${ev(c.cost,a.prev.cost,a.cur.cost)}${ev(c.id==="sales"?"ROAS":"觸及",a.prev.extra,a.cur.extra)}
+   <div style="margin-top:8px;display:flex;gap:6px"><span class="chip">7/7 天有資料</span><span class="chip">目標 ${c.target}</span></div></div>${third}</div>
+ <div style="display:flex;gap:14px;margin-top:12px;font-size:12px;color:var(--mfg)"><span><i style="display:inline-block;width:14px;height:6px;border-radius:3px;background:#d6dae6;margin-right:5px"></i>前期 9/06–9/12</span><span><i style="display:inline-block;width:14px;height:6px;border-radius:3px;background:var(--primary);margin-right:5px"></i>本期 9/13–9/19</span></div><div id="sheet"></div>`;
+ setBar(r.decision==="completed"?{back:["投放中心","#/"],pri:["繼續：選方向","toPrepare"]}:r.decision?{back:["投放中心","#/"],mid:`<button class="btn" data-act="reopen">改變決定</button>`,pri:nextOf(q.id)?["下一件","next"]:null}:
+  {back:["投放中心","#/"],mid:`<button class="btn" data-act="menu">先不決定 ▾</button><div id="menu"></div>`,pri:["選擇處理方向","toPrepare"]})}
+function sheet(kind){const d=kind==="deferred";$("#sheet").innerHTML=`<div class="sheet"><b style="align-self:center">${d?"暫緩":"無法判定"}</b><div class="fld" style="flex:1;min-width:220px"><label>原因</label><input type="text" id="dr" value="${d?"等資料更完整":"資料缺漏，無法比較"}"></div>${d?`<div class="fld"><label>何時重看</label>${quick()}</div>`:""}<button class="btn" data-act="closeSheet">取消</button><button class="btn pri" data-act="saveDecision" data-arg="${kind}">保存</button></div>`}
+
+function prepare(q){if(!q.review)return go(`#/q/${q.id}/review`);const a=A[q.ad];crumb([["投放中心","#/"],["選方向"]]);const rec=["copy","image","retire"][a.ladder],p=q.branch||(q.branch=rec);
+ const o=[["copy","📝","只改文案","圖片不變，換文字"],["image","✚","換一張圖","訴求保留，做新圖再回來挑"],["existing","🖼","用現成素材","上傳圖片或影片直接用"],["observe","⏸","先觀察","不調整，到時間再看"],["retire","■","停掉這則","記為無效，不再投"]];
+ app.innerHTML=head(q,"prepare","這次要做什麼",`<span style="display:inline-flex;gap:8px;align-items:center;color:var(--mfg);font-size:13px">${thumb(a,28)} ${esc(short(a.name,16))}</span>`)+
+ `<div class="grid4" style="grid-template-columns:repeat(5,1fr)">${o.map(x=>`<button class="opt ${x[0]===p?"pick":""}" data-act="branch" data-arg="${x[0]}"><div class="ic">${x[1]}</div><b>${x[2]}${x[0]===rec?' <span class="chip v" style="font-weight:500">建議</span>':""}</b><span>${x[3]}</span></button>`).join("")}</div>
+ <div class="sheet"><div class="fld" style="flex:1;min-width:260px"><label>原因</label><input type="text" id="pr" value="${{observe:"資料量還不夠，先觀察",retire:"多次調整仍未改善",copy:"採用建議：保留圖片，測試新文案",image:"文案改過仍未改善，換圖",existing:"改用現成素材"}[p]}"></div>${p==="observe"?`<div class="fld"><label>何時重看</label>${quick()}</div>`:""}</div>`;
+ setBar({back:["看證據",`#/q/${q.id}/review`],pri:[{copy:"開始改文案",observe:"保存，先觀察",existing:"上傳素材",image:"準備新圖",retire:"建立暫停提議"}[p],"savePrepare"]})}
+
+function diffOld(o,n){const nl=new Set(n.split("\n").map(s=>s.trim()));return o.split("\n").map(l=>nl.has(l.trim())||!l.trim()?esc(l):`<mark>${esc(l)}</mark>`).join("\n")}
+function copy(q){const r=q.review;if(!r||!q.task)return go(`#/q/${q.id}/prepare`);const a=A[q.ad],d=q.draft||(q.draft={title:r.rec.copy.title,body:r.rec.copy.body,reason:"測試新的文案訴求"});crumb([["投放中心","#/"],["改文案"]]);
+ app.innerHTML=head(q,"copy","改文案",`<span style="display:inline-flex;gap:8px;align-items:center;color:var(--mfg);font-size:13px">${thumb(a,36)} ${esc(short(a.name,16))} <span class="chip">圖片不變</span></span>`)+
+ (q.pendingOp?`<div class="hero warn" style="margin-bottom:16px;padding:14px 20px"><div class="big" style="width:36px;height:36px;font-size:16px">?</div><b style="flex:1">上次保存沒收到回應</b><button class="btn" data-act="commitDraft">再核對一次（不會重複建立）</button></div>`:"")+
+ `<div class="grid2" style="gap:16px"><div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><h2>目前</h2><span class="chip">讀取於 09/19 22:40</span></div><div class="old" id="oldv"></div></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><h2>新版</h2><button class="lnk" data-toast="原型未包含：送素材工作檯">要更多版本 →</button></div><input id="t" type="text" value="${esc(d.title)}" style="font-weight:600;margin-bottom:8px" aria-label="新標題"><textarea id="b" aria-label="新內文">${esc(d.body)}</textarea></div></div>
+ <div class="sheet"><div class="fld" style="flex:1"><label>原因</label><input id="r" type="text" value="${esc(d.reason)}"></div><span style="font-size:12px;color:var(--mfg);align-self:center"><mark>　</mark> 會被換掉的內容</span></div>`;
+ const paint=()=>{$("#oldv").innerHTML="<b>"+($("#t").value.trim()===r.snapshot.title?esc(r.snapshot.title):"<mark>"+esc(r.snapshot.title)+"</mark>")+"</b>\n"+diffOld(r.snapshot.body,$("#b").value)};$("#t").oninput=$("#b").oninput=paint;paint();
+ setBar({back:["選方向",`#/q/${q.id}/prepare`],pri:["加入變更清單","saveDraft",!!q.pendingOp]})}
+
+// ---- CONFIRM (shared by copy / pause / budget)
+function confirmPage(q){if(q.kind!=="review"&&!q.cs)q.cs={status:"draft",checks:0,items:[{kind:q.kind,verification_state:"pending",evidence:{}}]};const cs=q.cs;if(!cs)return go(`#/q/${q.id}/copy`);const i=cs.items[0],closed=cs.status==="rejected"||cs.status==="deferred";crumb([["投放中心","#/"],["確認"]]);let body,title,priL;
+ if(i.kind==="copy"){const a=A[q.ad];title="確認變更";priL="核准，接著到平台操作";body=`<div class="card"><div style="display:flex;gap:16px;align-items:center">${thumb(a,64)}<div style="flex:1;min-width:0"><span class="chip v">改文案・圖片不變</span><div class="nm" style="margin-top:6px">${esc(a.name)}</div></div><span class="chip ok">✓ 不會新增花費</span></div>
+   <div style="display:grid;grid-template-columns:1fr 28px 1fr;gap:16px;align-items:center;margin-top:16px"><div class="old"><b>${esc(i.before.title)}</b>\n${esc(short(i.before.body,60))}</div><div style="text-align:center;font-size:20px;color:var(--mfg)">→</div><div class="new"><b>${esc(i.after.title)}</b>\n${esc(short(i.after.body,60))}</div></div><div style="margin-top:10px;font-size:13px;color:var(--mfg)">原因：${esc(i.reason)}</div></div>`}
+ else if(i.kind==="pause"){const a=A[q.ad];title="提議：暫停這則廣告";priL="核准暫停，接著到平台操作";body=`<div class="card"><div style="display:flex;gap:16px;align-items:center">${thumb(a,64)}<div style="flex:1;min-width:0"><span class="kind stop">■ 停損</span><div class="nm" style="margin-top:6px">${esc(a.name)}</div></div><span class="chip ok">✓ 不會新增花費</span></div>
+   <div style="margin-top:18px;max-width:560px">${meter(a.cur.spend,2000,CAMP[q.camp].target*3,"var(--danger)")}<div class="cap"><span>已花 <b style="color:var(--fg)">${num(a.cur.spend)}</b>・購買 <b style="color:var(--fg)">0</b>・${a.days} 天</span><span>停損線 ${num(CAMP[q.camp].target*3)}（目標 × 3）</span></div></div></div>
+   <div class="learn" style="margin-top:12px"><span style="font-size:20px">📒</span><div style="flex:1"><b>這則主打什麼？</b><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${a.tags.map(t=>`<button class="tag ${a.angle===t?"on":""}" data-act="tag" data-arg="${t}">${t}</button>`).join("")}<button class="tag" data-toast="原型未包含：自訂">＋ 自訂</button></div></div><div style="font-size:13px;color:var(--mfg);max-width:250px">${a.angle?`暫停後記入品牌學習<br><b style="color:var(--fg)">「${a.angle}」對這群受眾無效</b>`:"選一個，暫停後記入品牌學習"}</div></div>`}
+ else{const extra=(q.to-q.from)*11;title="提議：加預算";priL="核准加碼，接著到平台操作";body=`<div class="card"><div style="display:flex;gap:16px;align-items:center"><div class="ic" style="width:64px;height:64px;border-radius:.6rem;font-size:26px">💰</div><div style="flex:1"><span class="kind up">▲ 可加預算</span><div class="nm" style="margin-top:6px">${esc(q.group)}・同組 8 則一起受影響</div></div><div style="text-align:right"><div style="font-size:12px;color:var(--mfg)">每日預算</div><div style="font-size:22px;font-weight:650">${num(q.from)} → ${num(q.to)} <span class="chip ok">+20%</span></div></div></div>
+   <div class="cols3" style="margin-top:18px"><div>${meter(306,900,CAMP[q.camp].target,"var(--success)")}<div class="cap"><span>購買成本 306</span><span>目標 ${CAMP[q.camp].target}</span></div></div><div><div class="tiles" style="margin-top:0">${thumb(A.a,30)}<span style="font-size:13px;align-self:center">主力穩定 2 個觀察期</span></div></div><div style="font-size:13px;color:var(--mfg);align-self:center">加碼後等 3–5 天再看</div></div></div>
+   <div class="card" style="margin-top:12px"><h2>本月預算放得下</h2>${budgetBar(extra)}</div>`}
+ app.innerHTML=head(q,"confirm",title,closed?`<span class="chip">${cs.status==="rejected"?"已拒絕":"已暫緩"}・${esc(cs.reason)}</span>`:"")+body+`<div id="sheet"></div>`;
+ setBar(cs.status==="approved"?{back:["投放中心","#/"],pri:["到平台操作","toHandoff"]}:closed?{back:["投放中心","#/"],pri:nextOf(q.id)?["下一件","next"]:null}:
+  {back:i.kind==="copy"?["修改內容",`#/q/${q.id}/copy`]:["投放中心","#/"],mid:`<button class="btn" data-act="rejectSheet">拒絕／暫緩</button>`,hint:"核准不會改動平台",pri:[priL,"approve"]})}
+
+function handoff(q){const cs=q.cs;if(!cs||cs.status!=="approved")return go(`#/q/${q.id}/confirm`);const i=cs.items[0],h=cs.todo||(cs.todo={a:false,b:false});crumb([["投放中心","#/"],["到平台完成"]]);let rows;
+ if(i.kind==="copy")rows=`<div class="todo ${h.a?"ok":""}"><div class="no">${h.a?"✓":1}</div><div style="flex:1"><b>複製新文案</b><div class="new" style="margin-top:10px"><b>${esc(i.after.title)}</b>\n${esc(i.after.body)}</div></div><div style="display:flex;flex-direction:column;gap:8px"><button class="btn sm" data-act="cp" data-arg="title">複製標題</button><button class="btn sm" data-act="cp" data-arg="body">複製內文</button></div></div>
+  <div class="todo ${h.b?"ok":""}"><div class="no">${h.b?"✓":2}</div><b style="flex:1">在平台編輯這則廣告，貼上</b><button class="btn" data-act="openPlatform">↗ 打開平台</button></div>`;
+ else if(i.kind==="pause")rows=`<div class="todo ${h.b?"ok":""}"><div class="no">${h.b?"✓":1}</div><b style="flex:1">打開平台上的這則廣告</b><button class="btn" data-act="openPlatform">↗ 打開平台</button></div><div class="todo ${h.a?"ok":""}"><div class="no">${h.a?"✓":2}</div><b style="flex:1">把這則廣告的開關關掉</b><button class="btn sm" data-act="tick">我關了</button></div>`;
+ else rows=`<div class="todo ${h.b?"ok":""}"><div class="no">${h.b?"✓":1}</div><b style="flex:1">打開平台上的「${esc(q.group)}」</b><button class="btn" data-act="openPlatform">↗ 打開平台</button></div><div class="todo ${h.a?"ok":""}"><div class="no">${h.a?"✓":2}</div><b style="flex:1">每日預算改成 <span style="font-size:18px">${num(q.to)}</span></b><button class="btn sm" data-act="cpNum">複製金額</button></div>`;
+ app.innerHTML=head(q,"handoff","到平台完成")+`<div class="card" style="padding:4px 24px">${rows}<div class="todo"><div class="no">3</div><b style="flex:1">回來按「我做完了」</b><span style="color:var(--mfg)">↘</span></div></div>`+(i.kind==="copy"?`<details class="f" style="margin-top:12px"><summary>看舊文案</summary><div class="old"><b>${esc(i.before.title)}</b>\n${esc(i.before.body)}</div></details>`:"");
+ setBar({back:["還沒做完，先離開","#/"],hint:"系統會讀回平台核對",pri:["我做完了，開始核對","report"]})}
+
+function verify(q){const cs=q.cs;if(!cs||cs.items[0].verification_state==="pending")return go(`#/q/${q.id}/handoff`);const i=cs.items[0],v=i.verification_state,e=i.evidence,nx=nextOf(q.id);crumb([["投放中心","#/"],["核對結果"]]);
+ const again=`<button class="btn" data-act="check">⟳ 重新核對</button>`,priNext=nx?["下一件","next"]:["回投放中心","toHome"];let body;
+ if(v==="confirmed"){const txt={copy:"平台上的文案和你核准的一樣",pause:"平台上這則廣告已經關閉",budget:`平台上的每日預算已經是 ${num(q.to)}`}[i.kind];
+  const rail={copy:`<div class="ok"><b>✓ 設定相符</b>標題、內文</div><div><b>開始投遞</b>等待中</div><div><b>成效累積</b>9/27 自動重看</div>`,pause:`<div class="ok"><b>✓ 設定相符</b>狀態：已暫停</div><div><b>花費停止</b>明天確認</div>${A[q.ad]?.angle?`<div class="ok"><b>✓ 已記入品牌學習</b>第 1 次觀察</div>`:`<div><b>品牌學習</b>沒標主打，未記入</div>`}`,budget:`<div class="ok"><b>✓ 設定相符</b>每日 ${num(q.to)}</div><div><b>學習期</b>3–5 天</div><div><b>成效回看</b>9/25</div>`}[i.kind];
+  body=`<div class="hero ok"><div class="big">✓</div><div style="flex:1"><h2 style="font-size:20px">${txt}</h2><p class="purpose">讀回於 ${e.at}</p></div></div><div class="rail" style="margin-top:16px">${rail}</div>`+
+   (i.kind==="pause"&&A[q.ad]?.angle?`<div class="learn" style="margin-top:16px"><span style="font-size:20px">📒</span><div style="flex:1"><b>「${A[q.ad].angle}」對這群受眾無效</b><div style="font-size:13px;color:var(--mfg)">下次規劃素材時會避開・再出現 1 次同方向結果會升為「可能成立」</div></div><span class="chip">觀察到</span></div>`:"");setBar({mid:again,pri:priNext})}
+ else if(v==="deviated"){const bl=new Set(i.after.body.split("\n"));body=`<div class="hero warn"><div class="big">≠</div><div><h2 style="font-size:20px">平台上的內文和核准的不一樣</h2><p class="purpose">標題相符・讀回於 ${e.at}</p></div></div>
+  <div class="grid2" style="margin-top:16px;gap:16px"><div class="card"><h2 style="margin-bottom:10px">你核准的</h2><div class="new"><b>${esc(i.after.title)}</b>\n${esc(i.after.body)}</div></div><div class="card"><h2 style="margin-bottom:10px">平台目前</h2><div class="old"><b>${esc(e.observed.title)}</b>\n${e.observed.body.split("\n").map(l=>bl.has(l)?esc(l):"<mark>"+esc(l)+"</mark>").join("\n")}</div></div></div>`;
+  setBar({mid:`<button class="btn ghost" data-act="adoptPlatform">改用平台現在的內容</button>${again}`,pri:["回平台改成核准內容","toHandoff"]})}
+ else{body=`<div class="hero bad"><div class="big">!</div><div><h2 style="font-size:20px">這則廣告的設定變了，原本的核准不再適用</h2><p class="purpose">用現在的資料重新檢討一次；舊紀錄都會保留</p></div></div>`;setBar({back:["投放中心","#/"],pri:["重新檢討","restart"]})}
+ app.innerHTML=head(q,"verify","核對結果")+body;if(i.kind==="copy")$("#pnote").textContent=" 連按「重新核對」依序示範：已核對→不符→設定變了。"}
+
+// ---- MONTHLY REVIEW (internal only; platform campaigns untouched). Spend is brand-wide; each campaign is judged on its own result.
+function month(){crumb([["投放中心","#/"],["每月回顧"]]);setBar({back:["投放中心","#/"]});
+ const led=(l,tone,n,ts)=>`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2>${l}</h2><span class="chip ${tone}">${n} 則</span></div><div class="tiles">${ts}</div></div>`;
+ const crow=(c,spend,val,ok)=>`<div class="todo" style="padding:14px 0"><div class="camp" style="width:210px;font-size:14px;color:var(--fg);font-weight:600"><i class="${c.cls}">${c.ic}</i>${c.name}</div><div style="width:110px"><div style="font-size:12px;color:var(--mfg)">花費</div><b>${num(spend)}</b></div>
+   <div style="flex:1">${c.target?`${meter(val,c.target*2,c.target,ok?"var(--success)":"#d18a1f")}<div class="cap"><span>${c.cost} ${val}</span><span>目標 ${c.target}</span></div>`:`<div class="meter" style="background:repeating-linear-gradient(45deg,#e3e6ef,#e3e6ef 4px,#f6f7fb 4px,#f6f7fb 8px)"></div><div class="cap"><span>${c.cost} ${val}</span><span>尚未設定目標</span></div>`}</div>
+   <span class="chip ${c.target?(ok?"ok":"warn"):""}" style="width:64px;justify-content:center">${c.target?(ok?"達標":"未達標"):"未判斷"}</span></div>`;
+ app.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:end;margin-bottom:20px"><div><h1>9 月回顧</h1><p class="purpose">活動照常投放，這裡只整理帳</p></div><div class="seg"><button>8 月</button><button class="on">9 月</button></div></div>
+ <div class="grid2" style="gap:16px"><div class="card"><div class="cap"><span>全品牌花費</span><span>月總額 ${num(60000)}</span></div><div style="font-size:24px;font-weight:650">${num(22000)}</div>${meter(22000,60000,0,"#8892a8")}</div>
+  <div class="card"><div class="cap"><span>商城訂單淨額・品牌整體</span><span>8 月 ${num(61200)}</span></div><div style="font-size:24px;font-weight:650">${num(43470)} <span style="font-size:13px;font-weight:600">▼29%</span></div>${meter(43470,61200,0,"var(--primary)")}</div></div>
+ <h2 style="margin:26px 0 10px">各活動</h2><div class="card" style="padding:4px 20px">${crow(CAMP.sales,18400,412,true)}${crow(CAMP.engage,2600,2.6,false)}${crow(CAMP.traffic,1000,4.2,false)}</div>
+ <h2 style="margin:26px 0 10px">素材</h2><div class="cols3">${led("有效","ok",3,thumb(A.a,44)+thumb({thumb:"c"},44)+thumb({thumb:""},44))}${led("無效・已停","bad",3,thumb(A.c,44)+thumb({thumb:"gone"},44)+thumb({thumb:""},44))}${led("還看不出","",5,thumb(A.b,44)+thumb(A.e,44)+thumb({thumb:"c"},44)+thumb({thumb:"gone"},44)+thumb({thumb:""},44))}</div>
+ <h2 style="margin:26px 0 10px">記入品牌學習</h2><div class="card" style="padding:4px 20px">${[["「日常出發」生活情境對廣泛受眾有效","可能成立","v","2 次同方向","sales"],["「辦公室情境」對廣泛受眾無效","觀察到","","1 次","sales"],["「提問式貼文」改文案救不回互動","觀察到","","1 次","engage"]].map(x=>`<div class="todo" style="padding:14px 0"><span style="font-size:18px">📒</span><b style="flex:1;font-weight:500">${x[0]}</b>${campChip(x[4])}<span style="font-size:12px;color:var(--mfg);width:70px;text-align:right">${x[3]}</span><span class="chip ${x[2]}">${x[1]}</span></div>`).join("")}</div>
+ <h2 style="margin:26px 0 10px">✦ 10 月建議</h2><div class="cols3">${[["🖼","補 3 則「生活情境」新素材","有效的方向只剩 1 則在投","sales"],["🧹","清掉 6 則沒被投放的廣告","同時 19 則，預算約撐 10 則","sales"],["🎯","替「新品預告導流」設目標","沒有目標，系統無法判斷好壞","traffic"]].map(x=>`<div class="card">${campChip(x[3])}<b style="display:block;margin:10px 0 4px;font-size:15px">${x[0]} ${x[1]}</b><div style="font-size:13px;color:var(--mfg);margin-bottom:14px">${x[2]}</div><div style="display:flex;gap:8px"><button class="btn sm" data-toast="原型：採用後會出現在「今天需要你決定的事」">採用</button><button class="btn sm ghost" data-toast="已略過">略過</button></div></div>`).join("")}</div>`}
+
+// ---- DATA-SHORT state (D5): what is missing + where to fix it; no verdict is faked
+function waitPage(id){const c=CAMP[id];crumb([["投放中心","#/"],[c.name]]);setBar({back:["投放中心","#/"],pri:["重新檢查","recheckData"]});
+ const it=[["🔌","Meta 讀取權限失效","重新授權後會自動補資料","重新授權"],["📅","缺 9/17、9/18 兩天","權限恢復後自動補","—"],["🧾","商城報表只到 9/12","補到 9/19 才能對照訂單","補報表"]];
+ app.innerHTML=`<div class="hero warn" style="margin-bottom:16px"><div class="big">…</div><div style="flex:1"><h1 style="font-size:22px">資料不足，這個活動先不判斷</h1><p class="purpose">${campChip(id)}</p></div><span class="chip warn">平台照常投放，不受影響</span></div>
+ <div class="card" style="padding:4px 20px">${it.map(x=>`<div class="todo"><div class="no" style="font-size:16px">${x[0]}</div><div style="flex:1"><b style="font-weight:600">${x[1]}</b><div style="font-size:13px;color:var(--mfg)">${x[2]}</div></div>${x[3]==="—"?`<span class="chip">自動</span>`:`<button class="btn sm" data-go="#/connections">${x[3]} →</button>`}</div>`).join("")}</div>
+ <div class="card" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:center"><h2>最近 7 天</h2><span style="font-size:12px;color:var(--mfg)">之前 28 天的紀錄仍可查看</span></div><div class="days" style="margin-top:12px">${["13","14","15","16","17","18","19"].map((d,k)=>`<i class="${k===4||k===5?"x":""}" style="width:40px;height:40px;font-size:13px">${d}</i>`).join("")}</div></div>`}
+
+// ---- CONNECTION HUB (D3): read-only status, every card links to the existing entry
+function connections(){crumb([["投放中心","#/"],["資料連線"]]);setBar({back:["投放中心","#/"]});
+ const cards=[["∞","Meta 廣告帳戶","2 個帳戶・最近讀取 09/19 22:40","warn","1 個帳戶權限失效","重新授權",["中秋限定活動 無法判斷"]],
+  ["💱","Meta 預算金額","幣別與單位尚未核實","warn","預算待核實","去核實",["加預算提議","約撐得起幾則"]],
+  ["🧾","商城訂單報表","最新到 9/12","warn","缺 9/13 之後","補報表",["檢討頁的訂單對照"]],
+  ["🏷","商品售價與成本","3 個商品，2 個有成本","ok","可算打平值","補成本",["目標購買成本"]],
+  ["🗂","過去的廣告紀錄","已帶入 37 個月","ok","完成","查看",[]]];
+ const need=cards.filter(c=>c[3]==="warn").length;
+ app.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:end;margin-bottom:20px;gap:16px;flex-wrap:wrap"><div><h1>資料連線</h1><p class="purpose">${need} 項需要處理</p></div><span class="chip ok" style="padding:6px 14px">🔒 只讀取，不會修改你的廣告</span></div>
+ <div class="conn">${cards.map(c=>`<div class="card cn"><div class="big">${c[0]}</div><div style="flex:1;min-width:0"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:15px">${c[1]}</b><span class="chip ${c[3]}">${c[3]==="ok"?"✓ ":""}${c[4]}</span></div><div style="font-size:13px;color:var(--mfg);margin-top:2px">${c[2]}</div>${c[6].length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><span style="font-size:12px;color:var(--mfg)">影響</span>${c[6].map(x=>`<span class="chip">${x}</span>`).join("")}</div>`:""}</div><button class="btn ${c[3]==="warn"?"":"ghost"}" data-toast="原型：這裡會連到現有的「${c[1]}」設定入口">${c[5]} →</button></div>`).join("")}
+  <div class="card cn off"><div class="big">G</div><div style="flex:1"><div style="display:flex;gap:8px;align-items:center"><b style="font-size:15px">Google Ads</b><span class="chip">尚未支援</span></div><div style="font-size:13px;color:var(--mfg);margin-top:2px">接上後開放</div></div></div></div>`}
+
+// ---- SET TARGET: which result this campaign is judged on + where the target cost comes from
+const TOPT={sales:{results:["購買"],actual:412,be:true},engage:{results:["貼文互動","留言"],actual:2.6,be:false},traffic:{results:["連結點擊","到達頁瀏覽"],actual:4.2,be:false}};
+function targetPage(id){const c=CAMP[id],o=TOPT[id];if(!o)return home();crumb([["投放中心","#/"],[c.name,`#/camp/${id}`],["設定目標"]]);
+ const d=c.draftT||(c.draftT={result:c.result&&o.results.includes(c.result)?c.result:o.results[0],src:c.target?(c.basis==="打平值"?"be":c.basis==="自己填"?"own":"hist"):(o.be?"be":"hist"),price:1580,cost:id==="sales"?1130:"",own:c.target||""});
+ const be=d.price&&d.cost?Math.round(d.price-d.cost):null,val=d.src==="be"?be:d.src==="hist"?o.actual:Number(d.own)||null,max=Math.max(o.actual,val||0)*1.6;
+ app.innerHTML=`<div class="sh"><div class="row"><div><h1>這個活動的目標</h1><p class="purpose">${campChip(id)}</p></div></div></div>
+ <div class="card"><h2>看什麼成果</h2><div class="seg" style="margin-top:12px">${o.results.map(r=>`<button class="${d.result===r?"on":""}" data-act="tRes" data-arg="${r}">${r}</button>`).join("")}</div></div>
+ <div class="card" style="margin-top:16px"><h2>每次${d.result}最多花多少</h2>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px">
+   ${o.be?`<button class="pickc ${d.src==="be"?"on":""}" data-act="tSrc" data-arg="be"><span class="chip v">建議</span><b>${be??"—"}</b><span>打平值・賣一件剛好不虧</span></button>`:""}
+   <button class="pickc ${d.src==="hist"?"on":""}" data-act="tSrc" data-arg="hist">${o.be?"":'<span class="chip v">建議</span>'}<span class="chip warn">暫定</span><b>${o.actual}</b><span>自己近 30 天的實際成本</span></button>
+   <button class="pickc ${d.src==="own"?"on":""}" data-act="tSrc" data-arg="own"><span class="chip">自訂</span><b>${d.own||"—"}</b><span>自己填一個更嚴格的數字</span></button></div>
+  ${d.src==="be"?`<div class="sheet" style="box-shadow:none;background:var(--muted);border:0"><div class="calc"><div class="fld"><label>售價</label><input type="text" id="tp" value="${d.price}"></div><span class="op">−</span><div class="fld"><label>成本（含運費）</label><input type="text" id="tc" value="${d.cost}" placeholder="還沒填"></div><span class="op">=</span><div class="fld"><label>每件毛利＝打平值</label><div style="font-size:22px;font-weight:650;padding-bottom:4px">${be??"填了成本才算得出來"}</div></div></div></div>`:""}
+  ${d.src==="own"?`<div class="sheet" style="box-shadow:none;background:var(--muted);border:0"><div class="fld"><label>目標每次${d.result}成本</label><input type="text" id="to" value="${d.own}" style="width:160px"></div></div>`:""}
+  ${val?`<div style="margin-top:18px;max-width:620px">${meter(o.actual,max,val,o.actual<=val?"var(--success)":"#d18a1f")}<div class="cap"><span>近 30 天實際 ${o.actual}</span><span>目標線 ${val}</span></div></div>`:""}</div>`;
+ ["tp","tc","to"].forEach(k=>{const e=$("#"+k);if(e)e.onchange=()=>{if(k==="tp")d.price=Number(e.value)||0;if(k==="tc")d.cost=Number(e.value)||"";if(k==="to")d.own=e.value;route()}});
+ setBar({back:["返回","#/"],hint:val?"":"還差一個數字",pri:[c.target?"儲存":"儲存，開始判斷","saveTarget",!val]})}
+
+// ---- CAMPAIGN PAGE: every ad by class, cleanup candidates, door to the advanced tabs
+function campPage(id){const c=CAMP[id];if(c.state)return waitPage(id);crumb([["投放中心","#/"],[c.name]]);setBar({back:["投放中心","#/"]});
+ const G=[["stop","停損","var(--danger)"],["worse","變差","#d18a1f"],["better","變好","var(--success)"],["flat","持平","#8892a8"],["nodata","資料不足","#d6dae6"]];
+ const mine=Object.values(A).filter(a=>a.camp===id),by={stop:mine.filter(a=>a.cur.res===0),worse:mine.filter(a=>a.ladder!=null),better:mine.filter(a=>a.id==="a")};
+ const fake=(n,k)=>Array.from({length:n},(_,i)=>({name:`115070${i+6} 再行銷・利益點／優惠 - 複本 ${i+1}`,thumb:i%2?"c":"gone",cur:{spend:k==="nodata"?(i<6?12+i*3:180+i*40):700-i*45,cost:k==="nodata"?null:380+i*12},idle:k==="nodata"&&i<6}));
+ const rowOf=(a,k)=>{const q=db.queue.find(x=>x.ad===a.id);return`<div class="adrow">${thumb(a,40)}<div style="flex:1;min-width:0"><div class="nm" style="font-weight:500">${esc(a.name)}</div>${a.ladder!=null?`<div class="ladder" style="margin-top:4px;transform:scale(.85);transform-origin:left">${["改文案","換圖","退役"].map((x,j)=>`${j?"<s></s>":""}<b class="${j===a.ladder?"on":j<a.ladder?"past":""}">${x}</b>`).join("")}</div>`:""}</div>
+   <div style="width:90px;text-align:right"><div style="font-size:11.5px;color:var(--mfg)">花費</div><b>${num(a.cur.spend)}</b></div><div style="width:110px;text-align:right"><div style="font-size:11.5px;color:var(--mfg)">${c.cost||"成本"}</div><b>${num(a.cur.cost)}</b></div>
+   <div style="width:110px;text-align:right">${q?`<button class="btn sm" data-go="#/q/${q.id}/${state(q).step}">${state(q).done?"看結果":"去處理"} →</button>`:a.idle?`<span class="chip warn">14 天幾乎沒投</span>`:""}</div></div>`};
+ const cnt=c.counts||{nodata:c.ads};
+ const groups=G.filter(g=>cnt[g[0]]).map(g=>{const real=by[g[0]]||[],rows=[...real,...fake(cnt[g[0]]-real.length,g[0])];return`<details class="grp" ${g[0]==="stop"||g[0]==="worse"?"open":""}><summary><span class="sw" style="background:${g[2]}"></span><b>${g[1]}</b><span class="chip">${rows.length} 則</span><span style="flex:1"></span><span style="color:var(--mfg);font-size:12px">${g[0]==="nodata"?`還沒花到可判讀的金額${c.target?"（"+num(c.target*3)+"）":""}`:g[0]==="flat"?"照常投放":""}</span></summary><div>${rows.map(r=>rowOf(r,g[0])).join("")}</div></details>`}).join("");
+ app.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;margin-bottom:20px"><div><h1>${c.name}</h1><p class="purpose" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip">${c.obj}・${c.ads} 則</span>${c.target?`<span class="chip">目標${c.cost} ${c.target}</span>`:`<span class="chip warn">尚未設定目標</span>`}${c.budget?`<span class="chip">${c.budget}</span>`:`<span class="chip warn">預算待核實</span>`}<span class="chip">平台設定：啟用</span></p></div>
+   <div style="display:flex;gap:10px"><button class="btn" data-go="#/target/${id}">${c.target?"調整目標":"設定目標"}</button><button class="btn ghost" data-toast="原型：這裡進入原本的分頁（策略／投放結構／素材／成效／變更紀錄），給熟手查全部資料">全部資料 ›</button></div></div>
+ ${c.target?"":`<div class="hero warn" style="margin-bottom:16px;padding:16px 20px"><div class="big" style="width:40px;height:40px;font-size:18px">🎯</div><b style="flex:1">沒有目標，這個活動的廣告都還不會被判斷</b><button class="btn pri" style="padding:10px 18px" data-go="#/target/${id}">設定目標 →</button></div>`}
+ ${c.cap?`<div class="card" style="margin-bottom:16px;display:flex;gap:20px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:260px"><div style="display:flex;justify-content:space-between"><h2>同時在投 ${c.ads} 則</h2><span style="font-size:12px;color:var(--mfg)">你的預算約撐得起 ${c.cap} 則</span></div>${meter(c.ads,24,c.cap,"#d18a1f")}</div><div style="display:flex;gap:-6px">${Array.from({length:6},(_,i)=>`<div class="thumb ${i%2?"c":"gone"}" style="width:34px;height:34px;margin-left:${i?-8:0}px;border:2px solid #fff"></div>`).join("")}</div><button class="btn" data-toast="原型：會變成一件「清理」出現在今天要決定的事；流程同停損（確認→到平台→核對），一次 6 則">提議暫停沒在投的 6 則 →</button></div>`:""}
+ ${groups}`}
+
+let _q="fix";const cur=()=>Q(_q);
+const act={
+ tRes(a){const c=CAMP[location.hash.split("/")[2]];c.draftT.result=a;route()},tSrc(a){const c=CAMP[location.hash.split("/")[2]];c.draftT.src=a;route()},
+ saveTarget(){const id=location.hash.split("/")[2],c=CAMP[id],d=c.draftT,o=TOPT[id];c.result=d.result;c.cost="每次"+d.result+"成本";if(id==="sales")c.cost="購買成本";c.target=d.src==="be"?Math.round(d.price-d.cost):d.src==="hist"?o.actual:Number(d.own);c.basis={be:"打平值",hist:"自己近 30 天",own:"自己填"}[d.src];if(!c.counts)c.counts={stop:0,worse:0,better:1,flat:1,nodata:c.ads-2};toast("已儲存，開始判斷");go("#/camp/"+id)},
+ retryCamp(){toast("仍然讀取不到，已保存的紀錄都還在")},recheckData(){toast("仍缺 2 天資料；權限恢復後會自動補")},demoRecover(){db.recovering=!db.recovering;go("#/")},
+ tag(a){const x=A[cur().ad];x.angle=x.angle===a?null:a;route()},filt(a){db.filter=a;route()},
+ menu(){const m=$("#menu");m.innerHTML=m.innerHTML?"":`<div class="menu"><button data-act="sheetOpen" data-arg="deferred">暫緩，晚點再看</button><button data-act="sheetOpen" data-arg="unjudgeable">記錄無法判定</button></div>`},
+ sheetOpen(k){$("#menu").innerHTML="";sheet(k);$("#dr").focus()},closeSheet(){$("#sheet").innerHTML=""},
+ qd(a,el){[...$("#q").children].forEach(b=>b.classList.toggle("on",b===el));$("#qd").style.display=a==="0"?"inline-block":"none";if(a!=="0")$("#qd").value=a==="3"?"2026-09-23":"2026-09-27"},
+ saveDecision(k){const r=cur().review,reason=$("#dr").value.trim();if(!reason)return $("#dr").focus();r.decision=k;r.reason=reason;r.revisit=k==="deferred"?$("#qd").value:null;route()},
+ reopen(){cur().review.decision=null;route()},toPrepare(){go(`#/q/${_q}/prepare`)},branch(a){cur().branch=a;route()},
+ savePrepare(){const q=cur(),p=q.branch,reason=$("#pr").value.trim(),r=q.review;if(!reason)return $("#pr").focus();
+  if(p==="observe"){r.decision="deferred";r.reason=reason;r.revisit=$("#qd").value;return go(`#/q/${q.id}/review`)}
+  if(p==="retire"){r.decision="completed";q.cs={status:"draft",checks:0,items:[{kind:"pause",verification_state:"pending",evidence:{}}]};return go(`#/q/${q.id}/confirm`)}
+  if(p!=="copy")return toast("這個分支不在本次原型");r.decision="completed";r.reason=reason;q.task={mode:"copy"};go(`#/q/${q.id}/copy`)},
+ saveDraft(){const q=cur();if(!$("#b").value.trim())return $("#b").focus();if(!$("#r").value.trim())return $("#r").focus();q.draft={title:$("#t").value,body:$("#b").value,reason:$("#r").value};if(db.lostNext){db.lostNext=false;q.pendingOp=true;return route()}act.commitDraft()},
+ commitDraft(){const q=cur();q.pendingOp=false;q.cs={status:"draft",checks:0,items:[{kind:"copy",before:{...q.review.snapshot},after:{title:q.draft.title,body:q.draft.body},reason:q.draft.reason,verification_state:"pending",evidence:{}}]};go(`#/q/${q.id}/confirm`)},
+ rejectSheet(){$("#sheet").innerHTML=`<div class="sheet"><div class="seg" id="rk"><button class="on" data-act="rk" data-arg="deferred">暫緩</button><button data-act="rk" data-arg="rejected">拒絕</button></div><div class="fld" style="flex:1;min-width:200px"><label>原因</label><input type="text" id="cr" value="想再觀察幾天"></div><div class="fld" id="rq"><label>何時重看</label>${quick()}</div><button class="btn" data-act="closeSheet">取消</button><button class="btn pri" data-act="closeSet">保存</button></div>`},
+ rk(a,el){[...$("#rk").children].forEach(b=>b.classList.toggle("on",b===el));$("#rq").style.display=a==="deferred"?"":"none";$("#rk").dataset.v=a},
+ closeSet(){const cs=cur().cs;if(!$("#cr").value.trim())return $("#cr").focus();cs.status=$("#rk").dataset.v||"deferred";cs.reason=$("#cr").value;route()},
+ approve(){cur().cs.status="approved";go(`#/q/${_q}/handoff`)},toHandoff(){go(`#/q/${_q}/handoff`)},toHome(){go("#/")},
+ next(){const n=nextOf(_q);n?go(`#/q/${n.id}/${state(n).step}`):go("#/")},
+ cp(k){const cs=cur().cs;navigator.clipboard?.writeText(cs.items[0].after[k]).catch(()=>{});cs.todo.a=true;toast("已複製");route()},cpNum(){navigator.clipboard?.writeText(String(cur().to)).catch(()=>{});cur().cs.todo.a=true;toast("已複製");route()},
+ tick(){cur().cs.todo.a=true;route()},openPlatform(){cur().cs.todo.b=true;toast("原型：這裡會開啟平台上對應的編輯頁");route()},
+ report(){cur().cs.items[0].verification_state="reported";act.check()},
+ check(){const q=cur(),cs=q.cs,i=cs.items[0];cs.checks++;if(i.kind!=="copy"||cs.checks===1){i.verification_state="confirmed";i.evidence={at:"09/20 10:13"}}
+  else if(cs.checks===2){i.verification_state="deviated";i.evidence={at:"09/20 14:40",observed:{title:i.after.title,body:i.after.body.split("\n").map((l,k)=>k===1?"帶上晨光，出發看見更大的自己。":l).join("\n")}}}else i.verification_state="stale";go(`#/q/${q.id}/verify`)},
+ adoptPlatform(){const q=cur(),o=q.cs.items[0].evidence.observed;q.draft={title:o.title,body:o.body,reason:"改用平台目前的內容"};q.cs=null;go(`#/q/${q.id}/copy`)},
+ restart(){const q=cur();q.review=q.task=q.draft=q.cs=q.branch=null;go(`#/q/${q.id}/review`)},
+ demoLost(){db.lostNext=true;toast("下次按「加入變更清單」會示範沒收到回應")}};
+document.addEventListener("click",e=>{const el=e.target.closest("[data-act],[data-go],[data-toast]");if(!el)return;if(el.dataset.go)return go(el.dataset.go);if(el.dataset.toast)return toast(el.dataset.toast);act[el.dataset.act]?.(el.dataset.arg,el)});
+function route(){$("#pnote").textContent="";if(location.hash==="#/month")return month();if(location.hash==="#/connections")return connections();const t=location.hash.match(/^#\/target\/(\w+)/);if(t&&CAMP[t[1]])return targetPage(t[1]);const cp=location.hash.match(/^#\/camp\/(\w+)/);if(cp&&CAMP[cp[1]])return campPage(cp[1]);const w=location.hash.match(/^#\/wait\/(\w+)/);if(w&&CAMP[w[1]])return waitPage(w[1]);const m=location.hash.match(/^#\/q\/(\w+)\/(\w+)/);if(!m||!Q(m[1]))return home();_q=m[1];const q=cur();
+ ({review,prepare,copy,confirm:confirmPage,handoff,verify}[m[2]]||confirmPage)(q);window.scrollTo(0,0)}
+addEventListener("hashchange",route);route();
+</script>
+</body>
+</html>

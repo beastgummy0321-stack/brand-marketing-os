@@ -50,6 +50,25 @@ where attention belongs.
    原始頁面下，不點開是不會看到），不要把版面做的像是另外一個 meta 後台／google 後台。
    進階設定一律是同一頁裡的收合區塊（`Disclosure`），不是模式切換、不是第二頁、不是第二份資料模型。
 
+### 1.7 UIUX acceptance goal (user ruling 2026-09-20)
+
+Passing functional tests does not mean the UI is accepted. A screen is accepted only when a first-time,
+non-technical user can answer these from the screen alone, without an AI, the docs or the source code:
+**where am I · what does this step do · what happens when I press the main button · where are next, back,
+accept, reject and exit.** 使用者原話：「不是越簡單越好，也不是越豐富越好」「絕對不是用新手指南或說明書教使用者」。
+
+- The layout carries the guidance: hierarchy, position, grouping, one dominant primary action, visible step
+  position. Explanatory paragraphs, stacked disclaimers, tutorial overlays and "how to use" text are a design
+  failure, not a fix. If a screen needs a sentence to explain a control, redesign the control.
+- Not a wizard that hides decisions: the user still sees the evidence and makes the choice. Simplify the
+  path, not the judgement. Honest unknowns (principle 4, F12) stay; say each once, where the number is.
+- New UI work starts from the information hierarchy and the reference image (`預覽圖/`, `docs/design/ads/`),
+  then wires data. Re-skinning an existing page by adding notes, status lines and forms to it is not a redesign.
+- Every UI issue states its reference image and ends with a side-by-side screenshot review against it plus
+  this five-question check, recorded as evidence. Flow, data and test evidence cannot substitute for it.
+- Prefer visual encodings over prose where they are truthful: before/after, deltas, status chips, progress,
+  thumbnails. Text budget per step: one title, one line of purpose, labels; everything else is folded or cut.
+
 ---
 
 ## F12. 一般流程與同頁進階（已驗收結案）
