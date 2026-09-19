@@ -460,6 +460,54 @@ class BudgetHistoryTest(StrategyTestBase):
         self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
         self.assertIsNone(ads_repo.budget_history(web.conn, self.org_id, self.brand_id))
 
+    def test_null_purchases_day_excluded_from_median_and_sample_ads_never_treated_as_zero(self):
+        """F16-I01 repair regression: a day where the group has no tracked purchases at all
+        (`purchases IS NULL` — exactly the shape a normalised legacy Meta row or an
+        untracked Meta day has) must be excluded from both the daily-CPA median and the
+        `purchases > 0` sample-ads count, never coerced into a real counted zero. The untracked
+        day below carries the largest spend on purpose: if `repository.py:463-495` regressed to
+        `COALESCE(SUM(purchases), 0)` in the SQL or `float(row["purchases"] or 0)` in the
+        median comprehension, this either crashes on division by the coerced zero or drags
+        `sample_days`/`cpa` away from the two tracked days' own numbers — either way this test
+        fails."""
+        tag = uuid4().hex[:8]
+        closed = self._create_campaign(status="closed")
+        group = web.conn.execute(
+            "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key,"
+            " name, role, daily_budget) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (f"adg_{tag}", self.org_id, self.brand_id, closed["id"], "meta", "新客組", "new",
+             400),
+        ).fetchone()
+        web.conn.execute(
+            "INSERT INTO ads_ad (id, org_id, brand_id, campaign_id, group_id, name,"
+            " local_state) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (f"ada_{tag}", self.org_id, self.brand_id, closed["id"], group["id"], "測試廣告",
+             "bound"),
+        )
+        web.conn.execute(
+            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
+            " entity_id, day, spend, purchases, source) VALUES"
+            " (%s, %s, %s, %s, 'group', %s, %s, %s, NULL, 'meta')",
+            (f"ado_{tag}_null", self.org_id, self.brand_id, closed["id"], group["id"],
+             "2026-10-01", 5000),
+        )
+        for day, spend, purchases in (("2026-10-02", 400, 2), ("2026-10-03", 600, 2)):
+            web.conn.execute(
+                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
+                " entity_id, day, spend, purchases, source) VALUES"
+                " (%s, %s, %s, %s, 'group', %s, %s, %s, %s, 'simulated')",
+                (f"ado_{tag}_{day}", self.org_id, self.brand_id, closed["id"], group["id"], day,
+                 spend, purchases),
+            )
+        web.conn.commit()
+
+        history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
+
+        self.assertIsNotNone(history)
+        self.assertEqual(history["sample_days"], 2)  # 未追蹤那天不算進去，只有兩天真的有追蹤
+        self.assertEqual(history["cpa"], 250)  # median(200, 300)，跟未追蹤那天的大額花費無關
+        self.assertEqual(history["sample_ads"], 1)  # 未追蹤那天不會讓廣告被誤算進樣本
+
 
 class ProviderFailureTest(StrategyTestBase):
     def test_provider_failure_raises_and_leaves_campaign_without_a_strategy(self):

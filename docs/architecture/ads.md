@@ -501,8 +501,12 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
 - `ads_outcome_daily.purchases`／`revenue` 從 `NOT NULL DEFAULT 0` 改為可空
   （`supabase/migrations/20260920000001_ads_outcome_nullable.sql`）：`NULL` 表示未追蹤、`0`
   表示真的是零，兩者不再共用同一個位元。`ingest_meta` 對 Meta 來源列一律寫 `purchases=NULL`；
-  `revenue` 有 `roas` 才算得出數字，否則也是 `NULL`。此前寫入的舊列在資料庫裡仍然是 `0`——
-  沒有回填；那些歷史零值本來就代表未追蹤，讀它們時仍要當未知處理，不當成真零。
+  `revenue` 有 `roas` 才算得出數字，否則也是 `NULL`。第一支 migration 本身不改寫任何舊列；
+  接續的第二支 migration `20260920000002_ads_outcome_legacy_meta_unknown.sql` 把「F16 之前、
+  `ingest_meta` 對每一筆 Meta 來源列無條件寫入」的舊 `purchases=0`／`revenue=0` 字面值正規化
+  成 `NULL`——這些字面值從來沒有代表過一次真的觀測，正規化只是把讀者原本靠
+  `source == 'meta'` 猜出來的「未追蹤」還原成欄位本身誠實的 `NULL`，不是回填真資料，也不會
+  改變任何現有讀者今天算出來的結果。
 - 讀者（`outcome._bucket`、`repository._outcome_totals`、`repository.budget_history`、
   `experiments.judge`）一律用「這欄是不是 `NULL`」判斷追蹤與否，不再用 `source == 'meta'`
   或 `revenue != 0` 這類猜測性 sentinel；`closeout.close()`／`_judge()` 本來就正確處理

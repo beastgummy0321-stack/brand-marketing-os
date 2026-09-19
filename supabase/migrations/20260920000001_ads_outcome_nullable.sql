@@ -7,10 +7,13 @@
 -- name baked into platform-neutral core. Dropping NOT NULL/DEFAULT lets untracked be `NULL` and
 -- a real, counted zero stay `0` — the two stop being the same bit pattern.
 --
--- Existing rows are NOT rewritten. Every Meta-sourced row written before this migration still
--- physically holds `purchases = 0`/`revenue` possibly `0`: legacy zero = unknown for
--- Meta-sourced rows written before this migration. A back-fill would have to guess which
--- historic zeros were real, which this ticket does not do.
+-- This migration itself does NOT rewrite any row — it only relaxes the column constraints so
+-- `NULL` becomes a legal value. Every Meta-sourced row written before this migration still
+-- physically holds `purchases = 0`/`revenue` possibly `0` immediately after this file runs:
+-- legacy zero = unknown for Meta-sourced rows written before this migration. The follow-up
+-- migration `20260920000002_ads_outcome_legacy_meta_unknown.sql` is the one that turns those
+-- specific legacy literals into `NULL` (a normalisation, not a guessed back-fill of real data —
+-- it only restores the "unknown" that the old readers used to infer from `source = 'meta'`).
 
 ALTER TABLE ads_outcome_daily ALTER COLUMN purchases DROP NOT NULL;
 ALTER TABLE ads_outcome_daily ALTER COLUMN purchases DROP DEFAULT;

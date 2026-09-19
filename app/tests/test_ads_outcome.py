@@ -9,6 +9,7 @@ campaign adds the missing days and on a bound (Meta) campaign does not call the 
 import unittest
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -348,6 +349,50 @@ class OutcomeTotalsReturnsNullNotZeroWhenAllUnknownTest(OutcomeTestBase):
         self.assertEqual(float(totals["spend"]), 500.0)
         self.assertIsNone(totals["purchases"])
         self.assertIsNone(totals["revenue"])
+
+
+class LegacyMetaZeroNormalisedReadsAsUnknownTest(OutcomeTestBase):
+    """F16-I01 repair: pre-F16 `ingest_meta` wrote `purchases=0`/`revenue=0` unconditionally
+    for every Meta-sourced row — those literals never recorded an observation. Migration
+    `20260920000002_ads_outcome_legacy_meta_unknown.sql` normalises that legacy shape to
+    `NULL`; this proves a row normalised that way reads as unknown (`None`), never as a real
+    counted zero, in both `_outcome_totals` (via `outcome.summary`) and campaign detail — the
+    exact contradiction the repair fixes now that `_bucket` keys on `IS NOT NULL` instead of
+    `source != 'meta'`. Runs the actual migration file (not a re-derived statement) so a change
+    to its SQL is what this test is checking."""
+
+    def test_legacy_meta_zero_row_normalised_by_migration_reads_as_unknown(self):
+        detail, _group_ext, _ad_ext = self._bound_campaign()
+        group_id = detail["groups"][0]["id"]
+        # 灌一列跟舊版 `ingest_meta` 一樣的形狀：Meta 來源、purchases/revenue 都是字面 0，
+        # 從來沒有代表過一次真的觀測。
+        self._insert_row(detail["id"], group_id, self.today, spend=500.0,
+                          purchases=0, revenue=0.0, source="meta")
+
+        migration_path = (
+            Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+            / "20260920000002_ads_outcome_legacy_meta_unknown.sql"
+        )
+        sql_lines = (
+            line for line in migration_path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("--")
+        )
+        for statement in "\n".join(sql_lines).split(";"):
+            statement = statement.strip()
+            if not statement:
+                continue
+            web.conn.execute(statement)
+        web.conn.commit()
+
+        totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
+        self.assertIsNone(totals["purchases"])
+        self.assertIsNone(totals["revenue"])
+
+        campaign_detail = ads_repo.campaign_detail(
+            web.conn, self.org_id, self.brand_id, detail["id"],
+        )
+        self.assertIsNone(campaign_detail["outcome"]["purchases"])
+        self.assertIsNone(campaign_detail["outcome"]["revenue"])
 
 
 class SampleBucketBoundaryTest(unittest.TestCase):
