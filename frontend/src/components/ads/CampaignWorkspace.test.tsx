@@ -13,6 +13,7 @@ vi.mock("./OverviewTab", () => ({ OverviewTab: () => <h2>共用總覽</h2> }));
 vi.mock("./StrategyTab", () => ({ StrategyTab: () => <h2>共用策略</h2> }));
 vi.mock("./DeliveryTab", () => ({ DeliveryTab: () => <h2>共用結構</h2> }));
 vi.mock("./AssetsTab", () => ({ AssetsTab: () => <h2>共用素材</h2> }));
+vi.mock("./ReviewPanel", () => ({ ReviewPanel: () => <h2>單則廣告檢討</h2> }));
 vi.mock("./PerformanceTab", () => ({ PerformanceTab: () => <h2>共用成效</h2> }));
 vi.mock("./PublishPage", () => ({ PublishPage: () => <h2>發布</h2> }));
 afterEach(cleanup);
@@ -26,6 +27,7 @@ it("routes imported campaigns through the same five tab components", async () =>
   await screen.findByText("共用總覽");
   for (const [label, content] of [["策略", "共用策略"], ["投放結構", "共用結構"], ["素材", "共用素材"], ["成效", "共用成效"]]) {
     fireEvent.click(screen.getByRole("button", { name: label }));
+    if (label === "成效") { expect(await screen.findByText("單則廣告檢討")).toBeTruthy(); fireEvent.click(screen.getByRole("button", { name: "查看平台原始成效圖表" })); }
     expect(await screen.findByText(content)).toBeTruthy();
   }
   expect(completeExternalView).toHaveBeenCalledTimes(1);

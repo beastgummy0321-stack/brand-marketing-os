@@ -8,6 +8,7 @@ error, and refuses dates outside `start <= end` with a readable message.
 import datetime
 import json
 import unittest
+from unittest.mock import patch
 
 import app.shared.web as web
 from app.ads import brief
@@ -67,6 +68,48 @@ class _BriefTestBase(unittest.TestCase):
 
 
 class ValidReplyTest(_BriefTestBase):
+    def test_saved_goal_and_connected_channels_reach_prompt_and_evidence_without_overriding_request(
+        self,
+    ):
+        bi_repo.set_brand_switches(
+            web.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
+        )
+        provider = _fake(json.dumps({
+            "objective": "名單", "success_metric": "cpa", "success_target": None, "product_ids": [],
+        }))
+        brief.PROVIDER = provider
+        channel = {"key": "connected-fixture", "label": "已綁平台", "connected": True}
+        with patch.object(brief.channels, "list_channels", return_value=[
+            channel, {"key": "disconnected-fixture", "label": "未綁平台", "connected": False},
+        ]) as read_channels:
+            detail = self._create(constraints={"budget": "1200", "platform": "user-choice"})
+        read_channels.assert_called_once_with(web.conn, self.org_id, self.brand_id)
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn('"conversion_goal": "lead"', prompt)
+        self.assertIn("留資料", prompt)
+        self.assertIn("connected-fixture", prompt)
+        self.assertNotIn("disconnected-fixture", prompt)
+        self.assertIn("不證明權限仍有效", prompt)
+        self.assertIn("品牌月額度不是本次活動預算", prompt)
+        self.assertEqual(detail["context_json"]["brand_setup"], {
+            "conversion_goal": "lead",
+            "connected_channels": [{"key": "connected-fixture", "label": "已綁平台"}],
+        })
+        self.assertEqual(detail["constraints_json"], {"budget": "1200", "platform": "user-choice"})
+        self.assertEqual(len(provider.calls), 1)
+
+    def test_missing_saved_setup_stays_unknown_and_does_not_fabricate_a_platform_or_budget(self):
+        provider = _fake(json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": None, "product_ids": [],
+        }))
+        brief.PROVIDER = provider
+        detail = self._create()
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn('"conversion_goal": null', prompt)
+        self.assertIn('"connected_channels": []', prompt)
+        self.assertIn("尚未設定", prompt)
+        self.assertEqual(detail["constraints_json"], {})
+
     def test_parsed_reply_preserves_sentence_and_names_products_used(self):
         goal_text = "幫夜跑背心做一波購買導向的投放，這個月衝業績"
         reply = json.dumps({

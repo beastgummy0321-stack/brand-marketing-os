@@ -26,6 +26,7 @@ from app.ads import (
     experiment_routes,
     external_models,
     external_repository,
+    handoff_assignment,
     judgment,
     manual_settings_routes,
     outcome,
@@ -626,6 +627,9 @@ def _enriched_campaign(conn, org_id: str, brand_id: str, campaign_id: str) -> di
 
     for group in detail["groups"]:
         for ad in group["ads"]:
+            ad["material_assignment"] = handoff_assignment.material_snapshot(
+                conn, org_id, brand_id, campaign_id, ad
+            )
             ad["copy_text"] = None
             ad["image_prompt_text"] = None
             ad_brief = briefs_by_ad_id.get(ad["id"])

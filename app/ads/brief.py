@@ -15,6 +15,7 @@ be parsed — and the response carries `parsed: false` instead of raising.
 """
 
 import calendar
+import json
 from datetime import date, timedelta
 
 from app.ads import channels
@@ -22,6 +23,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.core.db import APP_DIR
+from app.core.vocab import CONVERSION_GOAL_LABELS
 from app.llm import context_compiler, gateway, providers
 
 DEPARTMENT_PATH = APP_DIR / "departments" / "ads" / "brief_parse.md"
@@ -221,6 +223,17 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         conn, brand_id, include_personas=False,
     )
     products_text, economics_ids, brand_product_ids = _products_context(conn, org_id, brand_id)
+    brand = bi_repo.get_brand(conn, brand_id) or {}
+    conversion_goal = brand.get("conversion_goal")
+    connected_channels = [
+        {"key": channel["key"], "label": channel["label"]}
+        for channel in channels.list_channels(conn, org_id, brand_id) if channel["connected"]
+    ]
+    brand_setup = {"conversion_goal": conversion_goal, "connected_channels": connected_channels}
+    setup_text = json.dumps({
+        **brand_setup,
+        "conversion_goal_label": CONVERSION_GOAL_LABELS.get(conversion_goal or "", "尚未設定"),
+    }, ensure_ascii=False)
 
     today = coresettings.today_for_org(conn, org_id=org_id)
     if start is not None and end is not None:
@@ -236,6 +249,10 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         + f"\n\n今天是 {today.isoformat()}。"
         + "\n\n## 額外限制\n\n" + (str(constraints) if constraints else "（無）")
         + "\n\n## 品牌已知的事實\n\n" + (brand_text or "（這個品牌還沒有任何確認過的事實）")
+        + "\n\n## 已保存的成效目標與平台設定\n\n" + setup_text
+        + "\n使用者沒有另行指定時，沿用已知目標與平台作為建議依據；缺少的設定明示待確認。"
+        + "平台已綁定只表示本機已有連線設定，不證明權限仍有效，也不表示目前活動已匯入。"
+        + "品牌月額度不是本次活動預算；不要將它直接套入活動預算。"
         + "\n\n" + products_text
     )
 
@@ -301,6 +318,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         "status": "draft",
         "context_json": {
             "brand_version": brand_version,
+            "brand_setup": brand_setup,
             "product_ids": product_ids or [],
             "economics_ids": economics_ids,
             "llm_task_id": task_row["id"],

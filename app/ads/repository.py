@@ -823,6 +823,10 @@ def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------
 
 _CHILD_TABLES = (
+    ("ads_handoff_item", "人工交接逐項核對"),
+    ("ads_material_operation", "素材任務保存紀錄"),
+    ("ads_material_revision", "素材需求版本"),
+    ("ads_material_task", "活動素材需求"),
     ("ads_asset_observation_claim", "素材版本成效歸屬"),
     ("ads_asset_binding", "素材版本平台證據"),
     ("ads_asset_placement", "自帶素材安排"),
@@ -858,6 +862,12 @@ def _count_brand(conn: _AnyConn, brand_id: str) -> list:
 
 def _delete_brand(conn: _AnyConn, brand_id: str) -> dict:
     counts = dict(_count_brand(conn, brand_id))
+    # The original plan survives assignment edits; release the scoped reference
+    # before deleting its material placement during brand cleanup.
+    conn.execute(
+        "UPDATE ads_ad SET material_placement_id=NULL,material_placement_revision=NULL "
+        "WHERE brand_id=%s", (brand_id,),
+    )
     for table, _label in _CHILD_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE brand_id = %s", (brand_id,))
     return counts

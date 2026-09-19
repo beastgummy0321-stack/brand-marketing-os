@@ -64,10 +64,23 @@ def _ad_field(ad: dict) -> dict:
         {"label": "廣告名稱", "value": ad["name"],
          "reason": "名稱要跟這裡一字不差，之後「配對」靠它。"},
     ]
-    if ad.get("copy_text"):
+    material = ad.get("material_assignment")
+    if material:
+        fields.append({"label": "指定素材檔案", "value": material["filename"],
+                       "reason": f"素材安排第 {material['placement_revision']} 版；請使用此原檔。"})
+        for key, label in (("headline", "標題"), ("body", "文案"), ("description", "說明"),
+                           ("cta", "行動呼籲"), ("landing_url", "連結")):
+            value = material["copy_fields"].get(key)
+            if value:
+                fields.append({"label": label, "value": value,
+                               "reason": "此計畫廣告明確指定的素材版本內容。"})
+        if material["assignment_status"] != "confirmed":
+            fields.append({"label": "素材需重新指派", "value": material["reason"],
+                           "reason": "失效版本不能沿用核准。"})
+    elif ad.get("copy_text"):
         fields.append({"label": "文案", "value": ad["copy_text"],
                         "reason": "貼到平台的廣告文案內容。"})
-    if ad.get("image_prompt_text"):
+    if not material and ad.get("image_prompt_text"):
         fields.append({"label": "圖片提示詞", "value": ad["image_prompt_text"],
                         "reason": "拿去產圖或找素材用的提示詞。"})
     return {"level": "ad", "id": ad["id"], "name": ad["name"], "fields": fields}

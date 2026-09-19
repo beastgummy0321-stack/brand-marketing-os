@@ -86,7 +86,7 @@ function AdsHome({ brandId }: { brandId: string }) {
             <ChangeAttention brandId={brandId} />
             <div className="surface">
               <div className="surface-header">
-                <h2>{home.imported_campaigns?.length ? "Campaign" : "進行中的 Campaign"}</h2>
+                <h2>{home.imported_campaigns?.length ? "活動" : "進行中的活動"}</h2>
                 <Link
                   to={`/brands/${brandId}/ads/campaigns`}
                   className="text-sm text-primary hover:underline"
@@ -97,7 +97,7 @@ function AdsHome({ brandId }: { brandId: string }) {
               <div className="surface-body">
                 {campaigns.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
-                    目前沒有進行中的 Campaign。
+                    目前沒有進行中的活動。
                   </p>
                 ) : (
                   <div
@@ -159,7 +159,7 @@ function AdsHome({ brandId }: { brandId: string }) {
         description="讓行銷駕駛艙幫你持續優化廣告投放。"
         actions={
           <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
-            <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
+            <Link to={`/brands/${brandId}/ads/new`}>建立投放計畫</Link>
           </Button></div>
         }
       />
@@ -194,7 +194,7 @@ function NewCampaignCard({
             <Plus className="size-5 text-primary" />
           </div>
           <div>
-            <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+            <p className="text-[15px] font-semibold">建立投放計畫</p>
             <p className="text-sm text-muted-foreground">
               告訴行銷駕駛艙你的目標，它會幫你完成後續設定。
             </p>
@@ -217,7 +217,7 @@ function NewCampaignCard({
           <Plus className="size-5 text-primary" />
         </div>
         <div>
-          <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+          <p className="text-[15px] font-semibold">建立投放計畫</p>
           <p className="text-sm text-muted-foreground">
             還缺 {missing} 項，補齊之後系統才算得出預算與成效。
           </p>

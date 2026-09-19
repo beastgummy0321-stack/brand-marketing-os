@@ -46,6 +46,26 @@ docstring for why "explicit None" and "omitted" are not the same thing here).
 from fastapi import FastAPI
 
 
+def prepare_material_pack(conn, org_id, brand_id, pack):
+    from app.workbench.material_handoff import prepare
+    return prepare(conn, org_id, brand_id, pack)
+
+
+def start_material_pack(conn, org_id, brand_id, pack_id):
+    from app.workbench.material_handoff import start
+    return start(conn, org_id, brand_id, pack_id)
+
+
+def material_options(conn, org_id, brand_id, *, part=None):
+    from app.workbench.material_handoff import options
+    return options(conn, org_id, brand_id, part=part)
+
+
+def material_source(conn, org_id, brand_id, set_id, version_id, card_index=None):
+    from app.workbench.material_handoff import source
+    return source(conn, org_id, brand_id, set_id, version_id, card_index)
+
+
 def register(app: FastAPI) -> None:
     """掛 /api/workbench/* 路由（機械式，比照 app/schedule/__init__.py 的延遲 import
     慣例）。票 03：router 搬進 routes.py 本身，這裡只負責掛。"""

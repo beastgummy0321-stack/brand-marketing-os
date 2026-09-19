@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { ManualHandoffPanel } from "./ManualHandoffPanel";
+import { getMaterialTask } from "@/lib/adsMaterialApi";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -51,13 +53,28 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     }).catch(() => { if (!controller.signal.aborted) setError("檢討建議尚未讀取完成，請回到成效頁重新查看。"); });
     return () => controller.abort();
   }, [brandId, campaignId, reviewId, recommendationId, pending]);
+  const materialId = search.get("material_copy");
+  useEffect(() => {
+    if (!materialId || pending || !data || loadedRecommendation.current === `material:${materialId}`) return;
+    const controller = new AbortController();
+    getMaterialTask(brandId, campaignId, materialId, controller.signal).then(({ task }) => {
+      if (controller.signal.aborted) return;
+      const after = { ...(task.copy_fields.headline ? { title: task.copy_fields.headline } : {}), ...(task.copy_fields.body ? { body: task.copy_fields.body } : {}) };
+      if (task.mode !== "copy" || !Object.keys(after).length) { setError("這份素材需求尚未保存可用文案，請回到素材頁選定版本。"); return; }
+      loadedRecommendation.current = `material:${materialId}`;
+      const sourceTarget = task.review_context?.entity_id;
+      setInitialDraft({ title: `${task.title}（原廣告文案）`, month: currentBudgetMonth(), material_task_id: task.id, material_revision: task.revision, items: [{ kind: "copy", target_id: typeof sourceTarget === "string" ? sourceTarget : data.targets.find(row => row.native_kind === "ad")?.id ?? "", after, reason: task.instruction || "測試這份已保存的文案方向，圖片保持不變。" }] });
+      setSupersedesId(undefined); setComposing(true);
+    }).catch(() => { if (!controller.signal.aborted) setError("素材版本尚未讀取完成，請回素材頁核對已保存的內容。"); });
+    return () => controller.abort();
+  }, [brandId, campaignId, materialId, pending, data]);
   function update(set: ChangeSet) {
     setData(previous => previous ? { ...previous, change_sets: [set, ...previous.change_sets.filter(row => row.id !== set.id)] } : previous);
     select(set.id); setBudgetRefresh(value => value + 1);
   }
   function select(id: string) {
     setSelectedId(id);
-    setSearch(previous => { const next = new URLSearchParams(previous); next.set("change", id); next.delete("review"); next.delete("recommendation"); return next; }, { replace: true });
+    setSearch(previous => { const next = new URLSearchParams(previous); next.set("change", id); next.delete("review"); next.delete("recommendation"); next.delete("material_copy"); return next; }, { replace: true });
   }
   async function mutate(task: (signal: AbortSignal) => Promise<ChangeSet>) {
     if (busy) return;
@@ -68,7 +85,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
   }
   async function save(value: Omit<ChangeDraft, "operation_id">) {
     const source = initialDraft ?? (supersedesId ? data?.change_sets.find(row => row.id === supersedesId) : undefined);
-    const request = pending ?? { ...value, operation_id: crypto.randomUUID(), ...(supersedesId ? { supersedes_id: supersedesId } : {}), ...(source?.review_id && source?.recommendation_id ? { review_id: source.review_id, recommendation_id: source.recommendation_id } : {}) };
+    const request = pending ?? { ...value, operation_id: crypto.randomUUID(), ...(supersedesId ? { supersedes_id: supersedesId } : {}), ...(source?.material_task_id && source?.material_revision ? { material_task_id: source.material_task_id, material_revision: source.material_revision } : {}), ...(source?.review_id && source?.recommendation_id ? { review_id: source.review_id, recommendation_id: source.recommendation_id } : {}) };
     setPending(request); sessionStorage.setItem(storageKey, JSON.stringify(request));
     await mutate(async signal => {
       let result;
@@ -102,13 +119,14 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth()} refresh={budgetRefresh} compact />
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
-    {data && composing && <><p className="text-sm text-muted-foreground">{initialDraft?.review_id ? "已承接上一輪判讀；文案仍是待驗假設，可調整後再核准。" : ""}</p><ChangeComposer key={initialDraft?.review_id ?? supersedesId ?? "new"} targets={data.targets} month={currentBudgetMonth()} pending={pending} initialDraft={initialDraft} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} /></>}
+    {data && composing && <><p className="text-sm text-muted-foreground">{initialDraft?.review_id ? "已承接上一輪判讀；文案仍是待驗假設，可調整後再核准。" : ""}</p><ChangeComposer key={initialDraft?.material_task_id ?? initialDraft?.review_id ?? supersedesId ?? "new"} targets={data.targets} month={currentBudgetMonth()} pending={pending} initialDraft={initialDraft} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} /></>}
     {data && !composing && selected && <ChangeSetView key={selected.id + selected.status} set={selected} busy={busy}
       onApprove={() => void mutate(signal => approveChangeSet(brandId, campaignId, selected, signal))}
       onDecision={value => void mutate(signal => decideChangeSet(brandId, campaignId, selected.id, value, signal))}
       onItem={(item, action) => void mutate(signal => actOnChangeItem(brandId, campaignId, selected.id, item.id, action, signal))}
       onReconsider={() => void reconsider()} />}
     {data && !composing && !selected && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : "先從投放中心帶入既有活動，或完成廣告對應；原有平台物件與歷史會保留。"} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => setComposing(true) } : {})} />}
+    {!composing && <div id="manual-handoff"><ManualHandoffPanel brandId={brandId} campaignId={campaignId} mode="items" refreshKey={budgetRefresh} /></div>}
     {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{new Date(set.created_at).toLocaleDateString("zh-TW")}</span></button>)}</div></Disclosure>}
   </div>;
 }

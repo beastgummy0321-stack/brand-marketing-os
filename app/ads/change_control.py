@@ -33,7 +33,15 @@ def create(conn, org, brand, campaign, payload, actor):
     if (
         not isinstance(payload, dict)
         or not required <= set(payload)
-        or set(payload) - required - {"supersedes_id", "review_id", "recommendation_id"}
+        or set(payload)
+        - required
+        - {
+            "supersedes_id",
+            "review_id",
+            "recommendation_id",
+            "material_task_id",
+            "material_revision",
+        }
     ):
         raise ValueError("請提供完整的變更清單。")
     operation_id, month = data.operation(payload["operation_id"]), data.month(payload["month"])
@@ -71,6 +79,17 @@ def create(conn, org, brand, campaign, payload, actor):
             payload.get("recommendation_id"),
             items,
         )
+        from app.ads import handoff_material
+
+        material_reference = handoff_material.reference(
+            conn,
+            org,
+            brand,
+            campaign,
+            payload.get("material_task_id"),
+            payload.get("material_revision"),
+            items,
+        )
         supersedes = payload.get("supersedes_id")
         if supersedes:
             previous = data.get(conn, org, brand, campaign, supersedes)
@@ -85,6 +104,7 @@ def create(conn, org, brand, campaign, payload, actor):
             "supersedes_id": supersedes,
             "items": [{k: v for k, v in i.items() if k != "id"} for i in items],
             **review_reference,
+            **material_reference,
         }
         set_id = db.new_id("acs")
         conn.execute(
@@ -101,7 +121,14 @@ def create(conn, org, brand, campaign, payload, actor):
                 data.digest(frozen),
                 frozen["title"],
                 month,
-                db.jsonb({"items": items, "supersedes_id": supersedes, **review_reference}),
+                db.jsonb(
+                    {
+                        "items": items,
+                        "supersedes_id": supersedes,
+                        **review_reference,
+                        **material_reference,
+                    }
+                ),
                 actor,
             ),
         )
@@ -143,7 +170,9 @@ def create(conn, org, brand, campaign, payload, actor):
 
 def _insert_actions(conn, org, brand, campaign, current, actor):
     for item in current["items"]:
-        kind = {"copy": "creative", "launch": "publish"}.get(item["kind"], item["kind"])
+        kind = {"copy": "creative", "launch": "publish", "new_ad": "publish"}.get(
+            item["kind"], item["kind"]
+        )
         target_kind = {"adset": "group"}.get(
             item["target"]["native_kind"], item["target"]["native_kind"]
         )
@@ -191,7 +220,15 @@ def approve(conn, org, brand, campaign, set_id, expected_hash, actor):
         if current["status"] not in {"draft", "deferred"}:
             raise ValueError("此清單已拒絕，請重新建立。")
         c = data.campaign(conn, org, brand, campaign)
+        from app.ads import handoff_material
+
+        handoff_material.validate_approval(conn, org, brand, campaign, current)
         for item in current["items"]:
+            if item["kind"] == "new_ad":
+                from app.ads import handoff_new_ad
+
+                handoff_new_ad.validate_approval(conn, org, brand, campaign, item)
+                continue
             entity = bindings.entity(conn, org, brand, campaign, item["target_id"])
             if data.digest(data.premise(entity, item["kind"], c)) != item["premise_hash"]:
                 raise ValueError("這項變更所依據的設定已改變，請依現況重新建立清單。")
@@ -222,6 +259,9 @@ def approve(conn, org, brand, campaign, set_id, expected_hash, actor):
             commit=False,
         )
         _insert_actions(conn, org, brand, campaign, current, actor)
+        for item in current["items"]:
+            if item["kind"] == "new_ad":
+                handoff_new_ad.install(conn, org, brand, campaign, set_id, item)
         conn.execute(
             "UPDATE ads_change_set SET status='approved',approval_id=%s,approved_at=now() "
             "WHERE id=%s AND org_id=%s AND brand_id=%s",

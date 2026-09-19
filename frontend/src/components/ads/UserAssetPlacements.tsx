@@ -8,10 +8,10 @@ import { AssetApiError, attachUpload, attachAsset, listPlacements, listSuggestio
 import { UserAssetsLibrary, CopyEditor, COPY_FIELDS } from "./UserAssetsLibrary";
 import { AssetHandoffPanel } from "./AssetHandoffPanel";
 
-export function UserAssetPlacements({ brandId, campaign }: { brandId: string; campaign: CampaignDetail }) {
-  return <Placements key={`${brandId}:${campaign.id}`} brandId={brandId} campaign={campaign} />;
+export function UserAssetPlacements(props: { brandId: string; campaign: CampaignDetail; onChanged?: () => void }) {
+  return <Placements key={`${props.brandId}:${props.campaign.id}`} {...props} />;
 }
-function Placements({ brandId, campaign }: { brandId: string; campaign: CampaignDetail }) {
+function Placements({ brandId, campaign, onChanged }: { brandId: string; campaign: CampaignDetail; onChanged?: () => void }) {
   const [rows, setRows] = useState<Placement[]>([]); const [batches, setBatches] = useState<SuggestionBatch[]>([]);
   const [batchCursor, setBatchCursor] = useState<string | null>(null); const [batch, setBatch] = useState<SuggestionBatch | null>(null);
   const [selected, setSelected] = useState<string[]>([]); const [summary, setSummary] = useState("");
@@ -62,7 +62,7 @@ function Placements({ brandId, campaign }: { brandId: string; campaign: Campaign
       <details><summary className="cursor-pointer font-medium">先前建議批次 · {batches.length} 筆</summary><div className="max-h-60 overflow-auto">{batches.map(b => <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-border py-2 text-sm"><span>{b.created_at} · {b.status === "succeeded" ? "已取得建議" : ["queued", "pending", "running"].includes(b.status) ? "處理中／待核對" : "未完成"}{b.error ? ` · ${b.error}` : ""}</span><Button variant="outline" size="sm" onClick={() => { void getSuggestionBatch(brandId, campaign.id, b.id).then(v => setBatch(v.batch)).catch(e => setError(String(e))); }}>查看本批</Button></div>)}</div>{batchCursor && <Button variant="outline" onClick={() => void loadBatches(batchCursor).catch(e => setError(String(e)))}>更多建議批次</Button>}</details>
       {batch && <div className="rounded bg-muted p-3 text-sm"><p>目前批次：{batch.id} · {batch.status === "succeeded" ? "建議已備妥，請逐件核對" : batch.error ?? "尚未完成，請稍後查看；可先手動編輯"}</p>{batch.stale && <p className="text-warning">資料或版本已改變，此批建議已過時，不能覆蓋現版。</p>}<p>{batch.usage_notice}</p><p>{batch.retry_notice}</p><p>本批之外仍有 {batch.remaining_count ?? "未知"} 件待處理。</p></div>}
       <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => void loadEntities()}>載入本活動目的節點</Button>{entityCursor && <Button variant="outline" size="sm" onClick={() => void loadEntities(true)}>更多目的節點</Button>}</div>
-      <div className="flex flex-col gap-3">{current.map(p => <PlacementEditor key={p.id} brandId={brandId} campaignId={campaign.id} placement={p} history={rows.filter(h => h.id === p.id && !h.is_current)} entities={entities} readOnly={readOnly} selected={selected.includes(p.id)} onSelect={value => { setSelected(prev => value ? [...prev, p.id] : prev.filter(id => id !== p.id)); requestKey.current = null; }} result={batch?.results?.find(r => r.id === p.id && r.revision === p.revision)} batch={batch} onReload={load} />)}</div>
+      <div className="flex flex-col gap-3">{current.map(p => <PlacementEditor key={p.id} brandId={brandId} campaignId={campaign.id} placement={p} history={rows.filter(h => h.id === p.id && !h.is_current)} entities={entities} readOnly={readOnly} selected={selected.includes(p.id)} onSelect={value => { setSelected(prev => value ? [...prev, p.id] : prev.filter(id => id !== p.id)); requestKey.current = null; }} result={batch?.results?.find(r => r.id === p.id && r.revision === p.revision)} batch={batch} onReload={async () => { await load(); onChanged?.(); }} />)}</div>
     </div></section>
   </div>;
 }

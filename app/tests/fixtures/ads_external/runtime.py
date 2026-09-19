@@ -292,6 +292,11 @@ def install_assembly(context):
             }
             if not followup:
                 item["suggested_copy"] = {"title": "探索品牌", "body": "了解更多"}
+            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+                item["recommendation"] = "new_test"
+                item["hypothesis"] = "保留原廣告，另測試素材與敘述是否容易理解。"
+                item["next_step"] = "先確認候選素材，再獨立決定新廣告是否交接。"
+                item.pop("suggested_copy", None)
             return providers.ProviderResponse(
                 output_text=json.dumps({"recommendations": [item]}, ensure_ascii=False),
                 structured=None,
@@ -303,9 +308,82 @@ def install_assembly(context):
         if task_type == asset_suggestions.TASK_TYPE:
             return SuggestionProvider()
         if task_type == "ads_brief_parse":
+            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+                stats["provider_calls"] += 1
             return providers.ScriptedProvider(providers.SCRIPTED_REPLIES[task_type])
-        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") == "B":
+        if (
+            task_type in {"ads_strategy", "ads_delivery_plan"}
+            and os.environ.get("F15_ACCEPTANCE_PHASE") == "C"
+        ):
+            stats["provider_calls"] += 1
+            reply = (
+                providers.SCRIPTED_REPLIES["ads_strategy"]
+                if task_type == "ads_strategy"
+                else {
+                    "groups": [
+                        {
+                            "role": role,
+                            "name": f"冷啟動{role}投放組",
+                            "ads": [
+                                {
+                                    "name": f"冷啟動{role}廣告",
+                                    "coordinates": {
+                                        dim: "隔離驗收未分類"
+                                        for dim in (
+                                            "audience",
+                                            "pain",
+                                            "angle",
+                                            "hook",
+                                            "proof",
+                                            "offer",
+                                            "format",
+                                        )
+                                    },
+                                }
+                            ],
+                        }
+                        for role in ("new", "retarget", "explore")
+                    ]
+                }
+            )
+            fake = providers.FakeProvider(
+                providers.ProviderResponse(
+                    output_text=json.dumps(reply, ensure_ascii=False),
+                    structured=None,
+                    usage=providers.Usage(input_tokens=0, output_tokens=0),
+                    stop_reason="end_turn",
+                )
+            )
+            fake.name = "codex_cli"
+            return fake
+        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") in {"B", "C"}:
             return ReviewProvider()
+        if task_type == "workbench_copy" and os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            stats["provider_calls"] += 1
+            reply = {
+                "coordinates": {},
+                "sets": [
+                    {
+                        "body": "先了解品牌日常與自己的需要，再決定適合的選擇。" * 6,
+                        "headline": "了解品牌日常",
+                        "description": "探索適合自己的選擇",
+                    }
+                    for _ in range(5)
+                ],
+                "visual_tone": None,
+                "visual_concept": "隔離色塊視覺",
+                "warnings": [],
+            }
+            fake = providers.FakeProvider(
+                providers.ProviderResponse(
+                    output_text=json.dumps(reply, ensure_ascii=False),
+                    structured=None,
+                    usage=providers.Usage(input_tokens=0, output_tokens=0),
+                    stop_reason="end_turn",
+                )
+            )
+            fake.name = "codex_cli"
+            return fake
         raise LookupError(f"F13 has no fake provider for {task_type}")
 
     providers.select_provider = select
@@ -315,10 +393,17 @@ def install_assembly(context):
         user_assets.TASK: user_assets.process_preview,
         asset_suggestions.TASK: asset_suggestions.run,
     }
-    if os.environ.get("F15_ACCEPTANCE_PHASE") == "B":
+    if os.environ.get("F15_ACCEPTANCE_PHASE") in {"B", "C"}:
         from app.ads import review_jobs
 
         handlers[review_jobs.TASK] = review_jobs.run
+    if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+        from app import workbench
+
+        workbench.register_tasks()
+        handlers["background.workbench_generate"] = background.app().tasks[
+            "background.workbench_generate"
+        ].func
     jobs = queue.Queue()
     active = set()
     stopped = threading.Event()

@@ -269,4 +269,6 @@ def get(conn, org, brand, campaign_id, set_id):
     result["can_revise"] = can_revise(result)
     result["review_id"] = result["plan_json"].get("review_id")
     result["recommendation_id"] = result["plan_json"].get("recommendation_id")
+    result["material_task_id"] = result["plan_json"].get("material_task_id")
+    result["material_revision"] = result["plan_json"].get("material_revision")
     return result

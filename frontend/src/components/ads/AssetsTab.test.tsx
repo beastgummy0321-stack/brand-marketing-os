@@ -1,8 +1,9 @@
+vi.mock("./PlannedMaterialAssignments", () => ({ PlannedMaterialAssignments: () => null }));
 /** frontend/src/components/ads/AssetsTab.test.tsx — F06-I03: 素材分頁底部整寬按鈕改讀
  * `nextStep(c)`；派工到工作檯的入口只留投放結構那顆，這裡只保留「查看素材任務包」；
  * 交棒之後才新增的廣告在列上提示，不重新交棒。 */
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -11,10 +12,14 @@ import type { AdRow, AssetReadinessRow, CampaignDetail, DeliveryGroupRow } from 
 import { getAssets, getCampaign, setAssetReady } from "@/lib/adsApi";
 import { AssetsTab } from "./AssetsTab";
 
+vi.mock("./MaterialTasksPanel", () => ({ MaterialTasksPanel: () => <p>素材分流入口</p> }));
+vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 vi.mock("./UserAssetPlacements", () => ({ UserAssetPlacements: () => <div>自帶素材安排</div> }));
 
 function renderWithRouter(ui: ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+  const result = render(<MemoryRouter>{ui}</MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "原有任務包與平台素材" }));
+  return result;
 }
 
 vi.mock("@/lib/adsApi", async () => {

@@ -1,4 +1,4 @@
-"""Isolated A/B acceptance. Reuse the existing local lifecycle/cleanup runner.
+"""Isolated A/B/C acceptance. Reuse the existing local lifecycle/cleanup runner.
 
 The source changes below are test-only platform replacements, not live operations.
 The browser uses normal login; runtime HTTP uses the runner's isolated tenant token.
@@ -22,7 +22,87 @@ COPY_V2 = "先了解適合自己的補給方式，再選擇日常所需。"
 
 
 class CycleReader(assembly.ReadOnlyReader):
+    def cold_nodes(self, account):
+        today = date.today()
+        root = self.node(account, "cold-root", "campaign", objective="購買")
+        root.update(
+            start_date=today.isoformat(),
+            end_date=(today + timedelta(days=7)).isoformat(),
+            budget_type="unknown",
+            budget_amount=None,
+        )
+        nodes = [root]
+        for role, amount in (("new", 50), ("retarget", 30), ("explore", 20)):
+            group = self.node(
+                account,
+                f"cold-{role}-group",
+                "adset",
+                parent_native_kind="campaign",
+                parent_native_id="cold-root",
+            )
+            group.update(
+                start_date=root["start_date"],
+                end_date=root["end_date"],
+                budget_type="daily",
+                budget_amount=amount,
+            )
+            ad = self.node(
+                account,
+                f"cold-{role}-ad",
+                "ad",
+                parent_native_kind="adset",
+                parent_native_id=group["native_id"],
+                creative={
+                    "kind": "image",
+                    "fields": {
+                        "title": "探索品牌",
+                        "body": "了解更多",
+                        "description": "品牌介紹",
+                        "image_hash": "fixture-cold-original",
+                    },
+                },
+            )
+            nodes.extend([group, ad])
+        return nodes
+
+    def read_structure(self, *args, **kwargs):
+        if kwargs.get("native_id") == "cold-root":
+            from app.ads.adapters.external import SourcePage
+
+            return SourcePage(self.cold_nodes(args[3]))
+        return super().read_structure(*args, **kwargs)
+
+    def read_creatives(self, *args, **kwargs):
+        if kwargs.get("native_id") == "cold-root":
+            from app.ads.adapters.external import SourcePage
+
+            return SourcePage([r for r in self.cold_nodes(args[3]) if r["native_kind"] == "ad"])
+        return super().read_creatives(*args, **kwargs)
+
+    def accounts(self, *args):
+        rows = super().accounts(*args)
+        if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            return rows[:1] if self.platform == "meta" else []
+        return rows
+
+    def list_existing(self, *args, **kwargs):
+        page = super().list_existing(*args, **kwargs)
+        if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            page.cursor = None
+        return page
+
     def node(self, account, native_id, kind, **fields):
+        if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            today = date.today()
+            fields.update(
+                currency="TWD",
+                start_date=today.replace(day=1).isoformat(),
+                end_date=(today + timedelta(days=10)).isoformat(),
+            )
+            fields.update(
+                budget_type="daily" if kind == "campaign" else "unknown",
+                budget_amount=100 if kind == "campaign" else None,
+            )
         return super().node(account, native_id, kind, **{"native_status": "ACTIVE", **fields})
 
     def creative(self):
@@ -36,7 +116,11 @@ class CycleReader(assembly.ReadOnlyReader):
         return value
 
     def read_observations(self, conn, org, brand, account, *, native_id, start, end, **kwargs):
-        if os.environ.get("F15_ACCEPTANCE_PHASE") != "B":
+        if native_id == "cold-root":
+            from app.ads.adapters.external import SourcePage
+
+            return SourcePage([])
+        if os.environ.get("F15_ACCEPTANCE_PHASE") not in {"B", "C"}:
             return super().read_observations(
                 conn, org, brand, account, native_id=native_id, start=start, end=end, **kwargs
             )
@@ -67,7 +151,7 @@ class CycleReader(assembly.ReadOnlyReader):
 
     def read_monthly(self, conn, org, brand, account, *, start, end, **kwargs):
         page = super().read_monthly(conn, org, brand, account, start=start, end=end, **kwargs)
-        if os.environ.get("F15_ACCEPTANCE_PHASE") != "B":
+        if os.environ.get("F15_ACCEPTANCE_PHASE") not in {"B", "C"}:
             return page
         first, last = date.fromisoformat(str(start)), date.fromisoformat(str(end))
         page.items = [
@@ -88,6 +172,54 @@ class CycleReader(assembly.ReadOnlyReader):
     def verify_native(self, *args, **kwargs):
         if self.state().get("fail_next"):
             raise ValueError("隔離替身暫時無法讀回。")
+        if kwargs.get("native_id", "").startswith("cold-"):
+            nodes = self.cold_nodes(args[3])
+            node = next(r for r in nodes if r["native_id"] == kwargs["native_id"])
+            parents = []
+            current = node
+            while current.get("parent_native_id"):
+                current = next(r for r in nodes if r["native_id"] == current["parent_native_id"])
+                parents.append(current)
+            return {
+                "entity": node,
+                "parents": parents,
+                "timezone_name": "Asia/Taipei",
+                "media_equivalence": None,
+                "continuous_intervals": [],
+            }
+        if os.environ.get("F15_ACCEPTANCE_PHASE") == "C" and kwargs.get("native_id") == "B2":
+            account = args[3]
+            return {
+                "entity": self.node(
+                    account,
+                    "B2",
+                    "ad",
+                    parent_native_kind="adset",
+                    parent_native_id="root-group",
+                    creative={
+                        "kind": "image",
+                        "fields": {
+                            "title": "探索品牌",
+                            "body": "了解更多",
+                            "description": "品牌介紹",
+                            "image_hash": "fixture-new-picture",
+                        },
+                    },
+                ),
+                "parents": [
+                    self.node(
+                        account,
+                        "root-group",
+                        "adset",
+                        parent_native_kind="campaign",
+                        parent_native_id="root",
+                    ),
+                    self.node(account, "root", "campaign"),
+                ],
+                "timezone_name": "Asia/Taipei",
+                "media_equivalence": None,
+                "continuous_intervals": [],
+            }
         return super().verify_native(*args, **kwargs)
 
 
@@ -413,11 +545,502 @@ def review_cycle_flow(client, context, remaining):
     }
 
 
+def cold_start_flow(call, base, context, asset_id):
+    """Cold lifecycle through public HTTP only; this is API evidence, not UI evidence."""
+    today = date.today()
+    cold = call(
+        "POST",
+        base + "/campaigns",
+        json={
+            "goal_text": (
+                "請沿用品牌已知資料建立首次計畫，已有成品，不需要生圖；未知條件保留待確認。"
+            ),
+            "start_date": today.isoformat(),
+            "end_date": (today + timedelta(days=7)).isoformat(),
+            "constraints": {"platform": "meta"},
+        },
+    )["campaign"]
+    route = base + "/campaigns/" + cold["id"]
+    call(
+        "PATCH",
+        route,
+        json={
+            "name": "API 冷啟動完整交接",
+            "objective": "購買",
+            "success_metric": "roas",
+            "success_target": 2,
+        },
+    )
+    call("POST", route + "/strategy", json={})
+    call("POST", route + "/strategy/scenario", json={"scenario_key": "custom", "custom_total": 800})
+    call("POST", route + "/plan", json={})
+    planned = call("GET", route)["campaign"]
+    groups = planned["groups"]
+    assert len(groups) == 3 and all(len(group["ads"]) == 1 for group in groups)
+    task = call(
+        "POST",
+        route + "/material-tasks",
+        json={
+            "operation_id": "c-cold-material",
+            "title": "首檔已有成品",
+            "mode": "existing",
+            "copy_fields": {"headline": "探索品牌", "body": "了解更多", "description": "品牌介紹"},
+        },
+    )["task"]
+    task_url = route + "/material-tasks/" + task["id"]
+    gathered = call(
+        "POST",
+        task_url + "/candidates",
+        json={
+            "operation_id": "c-cold-candidate",
+            "expected_revision": 1,
+            "asset_ids": [asset_id],
+        },
+    )["task"]
+    selected = call(
+        "POST",
+        task_url + "/select",
+        json={
+            "operation_id": "c-cold-select",
+            "expected_revision": gathered["revision"],
+            "content_hash": gathered["content_hash"],
+            "candidate_id": gathered["candidates"][0]["id"],
+        },
+    )["task"]
+    placement_url = route + "/placements/" + selected["placement_id"]
+    placement = call(
+        "PATCH",
+        placement_url,
+        json={
+            "expected_revision": selected["placement_revision"],
+            "purpose": "品牌介紹",
+        },
+    )["placement"]
+    placement = call(
+        "POST",
+        placement_url + "/confirm",
+        json={
+            "expected_revision": placement["revision"],
+            "batch_id": None,
+        },
+    )["placement"]
+    assert placement["confirmed_at"], placement
+    assignment_url = route + "/launch-materials"
+    initial = call("GET", assignment_url)
+    assert len(initial["planned_ads"]) == 3
+    for group in groups:
+        call(
+            "PUT",
+            assignment_url + "/" + group["ads"][0]["id"],
+            json={
+                "placement_id": placement["id"],
+                "revision": placement["revision"],
+            },
+        )
+    reopened = call("GET", assignment_url)
+    assert all(row["assignment_status"] == "confirmed" for row in reopened["planned_ads"])
+    description = call("GET", route + "/publish?adapter=manual")["describe"]
+    approval = {
+        "adapter": "manual",
+        "operation_id": "c-cold-launch",
+        "content_hash": description["content_hash"],
+    }
+    call("POST", route + "/publish", json=approval)
+    call("POST", route + "/publish", json=approval)
+    items = call("GET", route + "/handoff")["items"]
+    assert len(items) == 7
+    native_ids = {cold["id"]: "cold-root"}
+    for group in groups:
+        native_ids[group["id"]] = f"cold-{group['role']}-group"
+        native_ids[group["ads"][0]["id"]] = f"cold-{group['role']}-ad"
+    checks = []
+    for kind in ("campaign", "group", "ad"):
+        for item in (r for r in items if r["planned_kind"] == kind):
+            item_url = route + "/handoff/" + item["id"]
+            reported = call("POST", item_url + "/report", json={})["item"]
+            assert reported["status"] == "reported" and not reported["entity_exists"]
+            checked = call(
+                "POST",
+                item_url + "/check",
+                json={
+                    "platform": "meta",
+                    "source_account": assembly.FIXTURE["accounts"][0],
+                    "native_kind": "adset" if kind == "group" else kind,
+                    "native_id": native_ids[item["planned_id"]],
+                    "user_verified": kind == "ad",
+                },
+            )["item"]
+            assert (
+                checked["entity_exists"] and not checked["evidence_json"]["delivery_confirmed"]
+            ), checked
+            assert checked["status"] == ("unknown" if kind == "group" else "confirmed"), checked
+            checks.append(checked)
+    context.update(
+        cold_campaign_id=cold["id"],
+        cold_material_task_id=task["id"],
+        cold_planned_ad_ids=[group["ads"][0]["id"] for group in groups],
+        cold_placement_id=placement["id"],
+        cold_placement_revision=placement["revision"],
+        cold_handoff_item_ids=[item["id"] for item in items],
+    )
+    assembly.write_json(
+        Path(context["evidence_dir"]) / "cold-start-api.json",
+        {
+            "campaign": planned,
+            "assigned": reopened,
+            "handoff": checks,
+            "evidence_boundary": "Real local HTTP submissions; not browser UI evidence.",
+            "unknown": "Group manual settings remain unknown; platform delivery is not confirmed.",
+        },
+    )
+
+
+def material_cycle_flow(client, context, remaining):
+    """Real HTTP/storage trace for C; all generated text and native reads are fixtures."""
+    import struct
+    import zlib
+
+    def call(method, url, **kwargs):
+        response = client.request(method, url, timeout=remaining(), **kwargs)
+        if response.is_error:
+            raise AssertionError(f"{method} {url}: {response.status_code} {response.text}")
+        return response.json()
+
+    brand = context["brand_id"]
+    base = f"/api/ads/brands/{brand}"
+    source = {"platform": "meta", "source_account": assembly.FIXTURE["accounts"][0]}
+    listing = call("POST", base + "/existing-campaigns/refresh", json=source)
+    runtime.wait_job(client, brand, listing["job"]["id"], remaining)
+    imported = call(
+        "POST",
+        base + "/imports",
+        json={
+            **source,
+            "native_kind": "campaign",
+            "native_id": "root",
+        },
+    )
+    campaign = imported["campaign"]["id"]
+    runtime.wait_job(client, brand, imported["job"]["id"], remaining)
+    route = base + "/campaigns/" + campaign
+    call("PATCH", route, json={"goal_text": "保留原廣告，另開素材測試", "objective": "知名度"})
+    controls = call("GET", route + "/change-control")
+    ad = next(t for t in controls["targets"] if t["native_kind"] == "ad")
+    group = next(t for t in controls["targets"] if t["native_kind"] == "adset")
+    original_copy = ad["creative_json"] if "creative_json" in ad else None
+    originals, uploaded = [], []
+
+    def chunk(kind, value):
+        return (
+            struct.pack("!I", len(value))
+            + kind
+            + value
+            + struct.pack("!I", zlib.crc32(kind + value) & 0xFFFFFFFF)
+        )
+
+    # Distinct original bytes, all clearly synthetic colored squares.
+    for index, label in enumerate(["R", *[f"I{i}" for i in range(1, 11)]]):
+        path = Path(context["evidence_dir"]) / f"fixture-{label}.png"
+        raw = b"".join(b"\x00" + bytes([index * 20, 100, 200]) * 32 for _ in range(32))
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack("!2I5B", 32, 32, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b"")
+        )
+        context["media_paths"][label] = str(path)
+        batch = call(
+            "POST",
+            base + "/user-assets/batches",
+            json={
+                "files": [
+                    {
+                        "filename": path.name,
+                        "size": path.stat().st_size,
+                        "content_type": "image/png",
+                        "copy_fields": {},
+                    }
+                ]
+            },
+        )["batch"]
+        upload = call(
+            "PUT",
+            base + f"/user-assets/uploads/{batch['uploads'][0]['id']}/content",
+            content=path.read_bytes(),
+        )["upload"]
+        uploaded.append(upload["asset_id"])
+        originals.append((upload["asset_id"], str(path)))
+    while True:
+        library = call("GET", base + "/user-assets")["assets"]
+        pending = [r for r in library if r["id"] in uploaded and r["status"] != "ready"]
+        if not pending:
+            break
+        # Asset state is rendered on the normal library API, never patched in SQL.
+        assert not any(r["status"] == "error" for r in pending), pending
+        time.sleep(min(0.1, remaining()))
+    assert call("GET", "/__f13/state")["provider_calls"] == 0
+    tasks = route + "/material-tasks"
+    existing = call(
+        "POST", tasks, json={"operation_id": "c-existing", "title": "自帶成品", "mode": "existing"}
+    )["task"]
+    external = call(
+        "POST",
+        tasks,
+        json={
+            "operation_id": "c-external",
+            "title": "外部圖片回收",
+            "mode": "external_image",
+            "copy_fields": {"headline": "探索品牌", "body": "了解更多", "description": "品牌介紹"},
+            "prompt": {"source": "manual", "text": "P2：合成色塊測試", "origin": "隔離驗收提示詞"},
+            "reference_asset_ids": [uploaded[0]],
+        },
+    )["task"]
+    task_url = tasks + "/" + external["id"]
+    batch_payload = {
+        "operation_id": "c-batch-ten",
+        "expected_revision": external["revision"],
+        "asset_ids": uploaded[1:],
+        "prompt": external["prompt"],
+        "reference_asset_ids": [uploaded[0]],
+    }
+    gathered = call("POST", task_url + "/candidates", json=batch_payload)["task"]
+    replay = call("POST", task_url + "/candidates", json=batch_payload)["task"]
+    assert replay["revision"] == gathered["revision"] and len(replay["candidates"]) == 10
+    seven = gathered["candidates"][6]
+    assert seven["asset_id"] == uploaded[7] and seven["filename"] == "fixture-I7.png"
+    selected = call(
+        "POST",
+        task_url + "/select",
+        json={
+            "operation_id": "c-select-I7",
+            "expected_revision": gathered["revision"],
+            "content_hash": gathered["content_hash"],
+            "candidate_id": seven["id"],
+        },
+    )["task"]
+    reopened = call("GET", task_url)["task"]
+    history = call("GET", task_url + "?revision=2")["task"]
+    assert reopened["selected_candidate_id"] == seven["id"]
+    assert reopened["placement_current"] is True and history["selected_candidate_id"] is None
+    assert seven["prompt"]["text"] == external["prompt"]["text"]
+    assert seven["reference_asset_ids"] == [uploaded[0]]
+    assert call("GET", "/__f13/state")["provider_calls"] == 0
+    assert client.get(
+        f"/api/ads/brands/{context['second_brand_id']}/campaigns/{campaign}"
+        f"/material-tasks/{external['id']}"
+    ).status_code in {403, 404, 409}
+
+    today = date.today()
+    review = call(
+        "POST",
+        route + "/reviews",
+        json={
+            "entity_id": ad["id"],
+            "start": (today - timedelta(days=7)).isoformat(),
+            "end": (today - timedelta(days=1)).isoformat(),
+        },
+    )["review"]
+    while review["status"] in {"queued", "running"}:
+        time.sleep(min(0.1, remaining()))
+        review = call("GET", route + "/reviews/" + review["id"])["review"]
+    assert review["status"] == "ready", review
+    recommendation = review["result_json"]["recommendations"][0]
+    assert recommendation["recommendation"] == "new_test"
+    next_task = call(
+        "POST",
+        tasks,
+        json={
+            "operation_id": "c-next-round",
+            "title": "下一輪文案",
+            "mode": "copy",
+            "instruction": "保留原廣告，另準備新測試。",
+            "review_id": review["id"],
+            "recommendation_id": recommendation["id"],
+        },
+    )["task"]
+    assert next_task["review_context"]["evidence_refs"] == recommendation["evidence_refs"]
+    next_url = tasks + "/" + next_task["id"]
+    dispatch_payload = {
+        "operation_id": "c-dispatch",
+        "expected_revision": 1,
+        "content_hash": next_task["content_hash"],
+    }
+    dispatched = call("POST", next_url + "/dispatch", json=dispatch_payload)["task"]
+    assert dispatched["pack_id"] and dispatched["dispatch_status"] == "queued"
+    assert (
+        call("POST", next_url + "/dispatch", json=dispatch_payload)["task"]["pack_id"]
+        == dispatched["pack_id"]
+    )
+    while True:
+        options = call("GET", next_url + "/prompt-options")["options"]
+        stats = call("GET", "/__f13/state")
+        assert not stats["errors"], stats
+        if options:
+            break
+        time.sleep(min(0.1, remaining()))
+    assert len(options) == 5
+    assert stats["provider_calls"] == 2 and stats["blocked_external"] == 0, stats
+    copied = call(
+        "PATCH",
+        next_url,
+        json={
+            "operation_id": "c-save-generated-version",
+            "expected_revision": dispatched["revision"],
+            "prompt": {
+                "source": "workbench",
+                "set_id": options[0]["set_id"],
+                "version_id": options[0]["version_id"],
+            },
+        },
+    )["task"]
+    assert copied["prompt"]["version_id"] == options[0]["version_id"]
+    assert copied["copy_fields"] == options[0]["copy_fields"]
+    assert copied["pack_id"] == dispatched["pack_id"]
+
+    placement_url = route + "/placements/" + selected["placement_id"]
+    arranged = call(
+        "PATCH",
+        placement_url,
+        json={
+            "expected_revision": selected["placement_revision"],
+            "purpose": "品牌介紹",
+            "destination_entity_id": group["id"],
+        },
+    )["placement"]
+    confirmed = call(
+        "POST",
+        placement_url + "/confirm",
+        json={
+            "expected_revision": arranged["revision"],
+            "batch_id": None,
+        },
+    )["placement"]
+    assert confirmed["confirmed_at"], confirmed
+    assert call("GET", task_url)["task"]["placement_current"] is False
+    selected = call(
+        "POST",
+        task_url + "/select",
+        json={
+            "operation_id": "c-reselect-current",
+            "expected_revision": selected["revision"],
+            "content_hash": selected["content_hash"],
+            "candidate_id": seven["id"],
+        },
+    )["task"]
+    assert selected["placement_revision"] == confirmed["revision"]
+    month = today.strftime("%Y-%m")
+    call(
+        "PUT",
+        base + "/monthly-budget",
+        json={
+            "month": month,
+            "currency": "TWD",
+            "amount": 30000,
+            "expected_revision": 0,
+        },
+    )
+    budget = call("GET", base + "/monthly-budget?month=" + month)["budget"]
+    assert budget["available"] is not None, budget
+    new_request = {
+        "operation_id": "c-new-B2",
+        "title": "另建 B2，保留原廣告",
+        "month": month,
+        "placement_id": confirmed["id"],
+        "revision": confirmed["revision"],
+        "destination_entity_id": group["id"],
+        "reason": "獨立驗證下一個素材假設",
+        "review_id": review["id"],
+        "recommendation_id": recommendation["id"],
+    }
+    draft = call("POST", route + "/new-ad-handoffs", json=new_request)["change_set"]
+    assert (
+        call("POST", route + "/new-ad-handoffs", json=new_request)["change_set"]["id"]
+        == draft["id"]
+    )
+    call(
+        "POST",
+        route + "/change-sets/" + draft["id"] + "/approve",
+        json={"content_hash": draft["content_hash"]},
+    )
+    handoff = next(
+        row
+        for row in call("GET", route + "/handoff")["items"]
+        if row["change_set_id"] == draft["id"]
+    )
+    handoff_url = route + "/handoff/" + handoff["id"]
+    reported = call("POST", handoff_url + "/report", json={})["item"]
+    assert reported["status"] == "reported" and not reported["entity_id"]
+    checked = call(
+        "POST",
+        handoff_url + "/check",
+        json={**source, "native_kind": "ad", "native_id": "B2", "user_verified": True},
+    )["item"]
+    assert checked["status"] == "confirmed", checked
+    assert checked["native_id"] == "B2" and checked["entity_id"] != ad["id"]
+    assert checked["evidence_json"]["delivery_confirmed"] is False
+
+    cold_start_flow(call, base, context, uploaded[1])
+    unchanged = next(
+        t for t in call("GET", route + "/change-control")["targets"] if t["id"] == ad["id"]
+    )
+    if original_copy is not None:
+        assert unchanged["creative_json"] == original_copy
+    assert unchanged["native_status"] == "ACTIVE"
+    stats = call("GET", "/__f13/state")
+    assert stats["provider_calls"] == 5 and not stats["errors"], stats
+    context.update(
+        phase="C",
+        ad_entity_id=ad["id"],
+        group_entity_id=group["id"],
+        existing_material_task_id=existing["id"],
+        material_task_id=external["id"],
+        selected_candidate_id=seven["id"],
+        selected_asset_id=uploaded[7],
+        reference_asset_id=uploaded[0],
+        placement_id=selected["placement_id"],
+        placement_revision=selected["placement_revision"],
+        next_material_task_id=next_task["id"],
+        material_pack_id=dispatched["pack_id"],
+        first_review_id=review["id"],
+        browser_review_id=review["id"],
+        recommendation_id=recommendation["id"],
+        new_ad_change_set_id=draft["id"],
+        handoff_item_id=checked["id"],
+        new_ad_entity_id=checked["entity_id"],
+        browser_note="合成色塊與 FakeProvider 隔離驗收；原廣告未被停止。",
+    )
+    assembly.write_json(
+        Path(context["evidence_dir"]) / "material-cycle.json",
+        {"selected": selected, "history": history, "next_round": copied, "review": review},
+    )
+    return {
+        "ok": True,
+        "phase": "C",
+        "campaign_id": campaign,
+        "originals": originals,
+        "provider_calls": stats["provider_calls"],
+        "ten_candidates_selected_I7": True,
+        "P2_reference_R_preserved": True,
+        "same_operation_replayed": True,
+        "old_revision_reopened": True,
+        "review_hypothesis_preserved": True,
+        "generated_copy_version_saved": True,
+        "new_B2_separate_from_original": True,
+        "reported_not_published": True,
+        "cold_campaign_material_saved": True,
+        "cold_strategy_plan_assignment_launch_readback": True,
+        "cold_group_manual_settings": "unknown",
+        "cross_brand_rejected": True,
+        "real_platform_capability": "not tested; fixture reads only",
+        "model_capability": "scripted review and FakeProvider workbench; no real AI",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--isolated", action="store_true")
     parser.add_argument(
-        "--phase", choices=("A", "B"), default=os.environ.get("F15_ACCEPTANCE_PHASE", "A")
+        "--phase", choices=("A", "B", "C"), default=os.environ.get("F15_ACCEPTANCE_PHASE", "A")
     )
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--env-file")
@@ -432,7 +1055,9 @@ def main():
         parser.error("Use an isolated port starting at 8731")
     os.environ["F15_ACCEPTANCE_PHASE"] = args.phase
     assembly.ReadOnlyReader = CycleReader
-    runtime.runtime_flow = review_cycle_flow if args.phase == "B" else cycle_flow
+    runtime.runtime_flow = {"A": cycle_flow, "B": review_cycle_flow, "C": material_cycle_flow}[
+        args.phase
+    ]
     runtime.__file__ = __file__  # Child and bounded cleanup use this same assembly.
     if args.cleanup_storage:
         import re

@@ -1,13 +1,13 @@
 """Compatibility seam for the existing cold-start manual handoff, never a platform write."""
 
 from app import workbench
-from app.ads import assets, change_control, manual_settings, month_budget, plan
+from app.ads import assets, change_control, handoff_assignment, manual_settings, month_budget, plan
 from app.ads import change_control_data as data
 from app.ads import repository as campaigns
 from app.core import approval, db, settings
 
 
-def snapshot(conn, org, brand, campaign_id):
+def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
     campaign = campaigns.campaign_detail(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -34,15 +34,20 @@ def snapshot(conn, org, brand, campaign_id):
             },
             "ads": [
                 {
-                    key: ad.get(key)
-                    for key in (
-                        "id",
-                        "name",
-                        "external_id",
-                        "asset_ready",
-                        "copy_text",
-                        "image_prompt_text",
-                    )
+                    **{
+                        key: ad.get(key)
+                        for key in (
+                            "id",
+                            "name",
+                            "external_id",
+                            "asset_ready",
+                            "copy_text",
+                            "image_prompt_text",
+                        )
+                    },
+                    "material_assignment": handoff_assignment.material_snapshot(
+                        conn, org, brand, campaign_id, ad, validate=validate_material
+                    ),
                 }
                 for ad in group.get("ads", [])
             ],
@@ -54,31 +59,51 @@ def snapshot(conn, org, brand, campaign_id):
         for group in manual_settings.handoff(campaign)["groups"]
     ]
     source_ref = {"ads_campaign_id": campaign_id}
+    legacy_ads = {
+        ad["id"]: ad
+        for group in result["groups"]
+        for ad in group["ads"]
+        if not ad["material_assignment"]
+    }
     result["outputs"] = []
-    for brief in workbench.briefs_for_source(conn, org, brand, assets.PACK_SOURCE_KIND, source_ref):
+    # Match the manual checklist's selected brief for each unassigned planned ad.
+    briefs_by_ad = {
+        (brief.get("source_ref") or {}).get("ads_ad_id"): brief
+        for brief in workbench.briefs_for_source(
+            conn, org, brand, assets.PACK_SOURCE_KIND, source_ref
+        )
+        if (brief.get("source_ref") or {}).get("ads_ad_id") in legacy_ads
+    }
+    for ad_id, ad in legacy_ads.items():
+        brief = briefs_by_ad.get(ad_id)
+        if brief is None:
+            continue
         for part in ("copy", "image_prompt"):
             output = workbench.adopted_output(conn, org, brand, brief["id"], part)
-            if output:
-                result["outputs"].append(
-                    {
-                        "brief_id": brief["id"],
-                        "part": part,
-                        "id": output["id"],
-                        "body": output.get("body_json"),
-                    }
+            if not output:
+                continue
+            body = output.get("body_json") or {}
+            if part == "copy":
+                cards = body.get("sets")
+                text = (
+                    cards[0].get("body")
+                    if (isinstance(cards, list) and cards and isinstance(cards[0], dict))
+                    else None
                 )
-    result["placements"] = [
-        {
-            **{k: v for k, v in row.items() if k != "confirmed_at"},
-            "confirmed": row["confirmed_at"] is not None,
-        }
-        for row in conn.execute(
-            "SELECT id,revision,asset_id,copy_fields,suggested_copy,confirmed_at "
-            "FROM ads_asset_placement "
-            "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND is_current ORDER BY id",
-            (org, brand, campaign_id),
-        ).fetchall()
-    ]
+            else:
+                text = body.get("text") if output.get("is_adopted") else None
+            if not isinstance(text, str) or not text:
+                continue
+            ad["copy_text" if part == "copy" else "image_prompt_text"] = text
+            result["outputs"].append(
+                {
+                    "ad_id": ad_id,
+                    "brief_id": brief["id"],
+                    "part": part,
+                    "id": output["id"],
+                    "text": text,
+                }
+            )
     return result
 
 
@@ -101,7 +126,7 @@ def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
                 raise ValueError("同一次操作的內容已改變，請重新檢視。")
             conn.commit()
             return {"ok": True, "change_set_id": prior["id"]}
-        frozen = snapshot(conn, org, brand, campaign_id)
+        frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
         content_hash = data.digest(frozen)
         if expected_hash != content_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
@@ -180,6 +205,9 @@ def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
             "WHERE id=%s",
             (approval_id, set_id),
         )
+        from app.ads import handoff_data
+
+        handoff_data.install_launch(conn, org, brand, campaign_id, set_id, item["id"], frozen)
         conn.commit()
         return {"ok": True, "change_set_id": set_id}
     except Exception:
