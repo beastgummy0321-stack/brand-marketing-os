@@ -768,6 +768,15 @@ cleanup.register(
 
 
 
+def external_sync_scopes(conn):
+    """Bound account scopes for the trusted background dispatcher, including empty brands."""
+    return [dict(row) for row in conn.execute(
+        "SELECT DISTINCT b.org_id,b.brand_id,a.account_id AS source_account "
+        "FROM brand_meta_ad_account b JOIN meta_ad_account a "
+        "ON a.id=b.ad_account_id AND a.org_id=b.org_id"
+    ).fetchall()]
+
+
 def external_bound_accounts(conn, org_id, brand_id):
     """Source facade: expose only accounts currently bound to this tenant and brand."""
     rows = conn.execute(
@@ -796,7 +805,9 @@ def read_external_page(conn, org_id, brand_id, account_id, section, **kwargs):
     try:
         return graph.external_page(token, account_id, section, **kwargs)
     except graph.GraphError as exc:
-        code = "permission_denied" if exc.code in {10,190,200} else "source_error"
+        code = ("permission_denied" if exc.code in {10, 190, 200} else
+                "source_error" if exc.retryable or exc.code in {1, 2, 4, 17, 32, 613} else
+                "invalid_source_page")
         raise ExternalReadError(str(exc),code) from None
 
 

@@ -21,8 +21,7 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
   const [truth, setTruth] = useState<TruthState>({ status: "loading" });
   const [personas, setPersonas] = useState<OptionalState<PersonaBundle>>({ status: "loading" });
   const [readiness, setReadiness] = useState<OptionalState<LaunchReadiness>>({ status: "loading" });
-  // 票 past-ads/04：按鈕列要不要多一顆「把過去的廣告帶進來」——讀 fetchLibrary() 的品牌
-  // 形狀（票 03 加的 advertising_history 欄位），讀不到就當沒有那顆按鈕，不擋其餘內容。
+  // 投放歷史只決定是否顯示回顧入口，不代表目前活動已匯入。
   const [advertisingHistory, setAdvertisingHistory] = useState<"has_history" | "none" | null>(null);
 
   function load() {
@@ -54,6 +53,7 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
         <p className="font-medium text-danger">建檔已完成，但完成畫面暫時讀不到</p>
         <p className="text-muted-foreground">{truth.message}</p>
         <div><button type="button" onClick={load} className="rounded-md border border-border px-3 py-1.5 font-medium text-foreground hover:border-primary hover:text-primary">重新讀取</button></div>
+        <Link className="text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/ads`}>前往投放中心</Link>
       </div>
     );
   }
@@ -68,21 +68,19 @@ export function IntakeCompletedPage({ brandId, onRestart }: { brandId: string; o
       <ReadinessCard state={readiness} />
       <PersonaProgress state={personas} />
       <Link className="text-sm text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/library?tab=customer-voice`}>查看與修正人物誌</Link>
-      <div className="flex gap-3">
-        {advertisingHistory === "has_history" ? (
-          <>
-            <Button asChild>
-              <Link to={`/brands/${encodeURIComponent(brandId)}/intake/history`}>把過去的廣告帶進來</Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link to={"/brands/" + encodeURIComponent(brandId)}>前往品牌頁</Link>
-            </Button>
-          </>
-        ) : (
-          <Link to={"/brands/" + encodeURIComponent(brandId)} className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90">前往品牌頁</Link>
-        )}
+      <div className="flex flex-wrap gap-3">
+        <Button asChild><Link to={`/brands/${encodeURIComponent(brandId)}/ads/new`}>建立投放計畫</Link></Button>
+        <Button asChild variant="outline"><Link to={`/brands/${encodeURIComponent(brandId)}/ads`}>前往投放中心</Link></Button>
+        <Button asChild variant="outline"><Link to={"/brands/" + encodeURIComponent(brandId)}>前往品牌頁</Link></Button>
         <Button type="button" variant="outline" onClick={onRestart}>再跑一次調研</Button>
       </div>
+      <p className="text-sm text-muted-foreground">目前活動的匯入、追蹤與品牌月額度都在投放中心管理。</p>
+      {advertisingHistory === "has_history" && (
+        <div className="rounded-lg border border-border p-4 text-sm">
+          <Link className="font-medium text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/intake/history`}>回顧歷史投放（選用）</Link>
+          <p className="mt-1 text-muted-foreground">歷史數字與素材供回顧、標記使用，不會加入投放中心的目前活動。</p>
+        </div>
+      )}
     </div>
   );
 }

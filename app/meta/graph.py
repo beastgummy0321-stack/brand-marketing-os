@@ -50,6 +50,8 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
+from . import read_policy
+
 GRAPH_API_VERSION = "v26.0"
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 # Runaway guard, not a data limit — hitting it raises (see `_fetch_all_pages`). Measured
@@ -60,11 +62,11 @@ _MAX_PAGES = 200
 
 
 class GraphError(Exception):
-    """Graph API 拒絕了這個權杖或這次呼叫。message 是 Graph 原文（英文）或本檔補的人話，
-    呼叫端直接包進中文句子顯示——絕不含權杖本身。"""
+    """平台讀取失敗；真實傳輸的錯誤訊息先經 read_policy 清理，不回傳憑證。"""
 
-    def __init__(self, message: str, code: int | None = None):
+    def __init__(self, message: str, code: int | None = None, *, retryable=False):
         self.code = code
+        self.retryable = retryable
         self.message = message
         super().__init__(message)
 
@@ -80,8 +82,16 @@ def fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     "try to break down the query into smaller queries by putting in filters like date
     range"（SPEC §7.4(b)），再上去是 async insights job，**都不是把 timeout 調大**；
     而按月切分 backfill（見 daily_pull.py `_month_chunks`）已經在做了。"""
-    resp = httpx.get(url, params=params, headers=headers, timeout=10.0)
-    return resp.json()
+    try:
+        url, params, headers = read_policy.prepare_read(url, params, headers, GRAPH_BASE_URL)
+        resp = httpx.get(url, params=params, headers=headers, timeout=10.0, follow_redirects=False)
+        return read_policy.safe_response(resp.json())
+    except read_policy.ReadPolicyError as exc:
+        raise GraphError(str(exc)) from None
+    except httpx.HTTPError:
+        raise GraphError("連不上 Meta，請稍後再試。", retryable=True) from None
+    except json.JSONDecodeError:
+        raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
 
 
 def _to_account(item: dict) -> dict | None:
@@ -110,7 +120,7 @@ def _raise_if_error(body: dict) -> None:
     共用同一份判斷，不是各自寫各自的錯誤偵測（票 05-budget-level-mismatch 明文）。"""
     if "error" in body:
         message = body["error"].get("message") or "Meta 回報了一個沒有說明的錯誤。"
-        raise GraphError(message)
+        raise GraphError(message, code=body["error"].get("code"))
 
 
 def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]:
@@ -127,7 +137,7 @@ def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]
         try:
             body = fetch_page(url, params=params, headers=headers)
         except httpx.HTTPError:
-            raise GraphError("連不上 Meta，請稍後再試。") from None
+            raise GraphError("連不上 Meta，請稍後再試。", retryable=True) from None
         except json.JSONDecodeError:
             raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
         _raise_if_error(body)
@@ -135,7 +145,10 @@ def _fetch_all_pages(url: str, params: dict | None, headers: dict) -> list[dict]
         next_url = body.get("paging", {}).get("next")
         if not next_url:
             return items
-        url, params = next_url, None
+        try:
+            url, params = read_policy.next_read_page(url, params, next_url, headers, GRAPH_BASE_URL)
+        except read_policy.ReadPolicyError as exc:
+            raise GraphError(str(exc)) from None
     raise GraphError(
         "Meta 的資料超過一次可以取回的上限，這次沒有全部拿到，請縮小日期範圍再試一次。"
     )
@@ -294,7 +307,7 @@ def fetch_budgets(token: str, external_ids: list[str]) -> dict[str, dict]:
                 headers=headers,
             )
         except httpx.HTTPError:
-            raise GraphError("連不上 Meta，請稍後再試。") from None
+            raise GraphError("連不上 Meta，請稍後再試。", retryable=True) from None
         except json.JSONDecodeError:
             raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
         _raise_if_error(body)
@@ -361,7 +374,7 @@ def fetch_ad_creatives(token: str, ad_ids: list[str]) -> dict[str, dict | None]:
                 headers=headers,
             )
         except httpx.HTTPError:
-            raise GraphError("連不上 Meta，請稍後再試。") from None
+            raise GraphError("連不上 Meta，請稍後再試。", retryable=True) from None
         except json.JSONDecodeError:
             raise GraphError("Meta 回了看不懂的內容，請稍後再試。") from None
         if "error" in body:
@@ -521,7 +534,10 @@ _EXTERNAL_FIELDS = {
         "id,account_id,name,objective,effective_status,start_time,stop_time,"
         "daily_budget,lifetime_budget"
     ),
-    "adset": ("id,account_id,campaign_id,name,effective_status"),
+    "adset": (
+        "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
+        "daily_budget,lifetime_budget"
+    ),
     "ad": (
         "id,account_id,campaign_id,adset_id,name,effective_status,creative{id,body,title,"
         "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}"
@@ -536,6 +552,7 @@ _EXTERNAL_FIELDS = {
         "image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,"
         "product_set_id}"
     ),
+    "monthly": "account_id,account_currency,campaign_id,date_start,date_stop,spend",
     "insights": (
         "account_id,account_currency,campaign_id,adset_id,ad_id,date_start,"
         "date_stop,spend,impressions,clicks,actions,action_values"
@@ -578,6 +595,12 @@ def external_page(
         params["after"] = cursor
     if section == "campaigns":
         path = f"act_{account_id}/campaigns"
+    elif section == "monthly":
+        if start is None or end is None or str(start) > str(end):
+            raise GraphError("來源月份範圍無效。")
+        path = f"act_{account_id}/insights"
+        params.update(level="campaign", time_increment=1,
+                      time_range=json.dumps({"since": str(start), "until": str(end)}))
     elif section in {"campaign", "adset", "ad"}:
         if native_id is None:
             raise GraphError("缺少來源活動。")
@@ -605,8 +628,10 @@ def external_page(
         body = fetch_page(
             f"{GRAPH_BASE_URL}/{path}", params=params, headers={"Authorization": f"Bearer {token}"}
         )
-    except (httpx.HTTPError, json.JSONDecodeError):
-        raise GraphError("平台讀取失敗，請稍後重試。") from None
+    except httpx.HTTPError:
+        raise GraphError("平台讀取失敗，請稍後重試。", retryable=True) from None
+    except json.JSONDecodeError:
+        raise GraphError("平台分頁格式無效，未保存此頁。") from None
     if not isinstance(body, dict) or "error" in body:
         # The provider can echo URL/token in its message. Persist a code, never that text.
         code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None

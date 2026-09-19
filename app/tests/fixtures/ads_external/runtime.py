@@ -162,6 +162,23 @@ class ReadOnlyReader:
             ]
         )
 
+    def read_monthly(self, conn, org, brand, account, *, start, end, **kwargs):
+        from app.ads.adapters.external import SourcePage
+
+        # The original source fixture has no spending; this complete fixture query
+        # is explicit evidence, independent of real platform coverage.
+        return SourcePage(
+            [],
+            coverage={
+                "scope": "account_campaign_day",
+                "account_id": account["account_id"],
+                "currency": account["currency"],
+                "timezone_name": account["timezone_name"],
+                "start": str(start),
+                "end": str(end),
+            },
+        )
+
     def binding_kinds(self):
         return (self.kinds()[2],)
 
@@ -196,7 +213,7 @@ class ReadOnlyReader:
         }
 
 
-def install_assembly(context):
+def install_assembly(context, *, durable=False):
     import httpx
     import pytest  # noqa: F401 -- main skips root dotenv only in test processes
 
@@ -254,20 +271,148 @@ def install_assembly(context):
                 stop_reason="end_turn",
             )
 
+    class ReviewProvider:
+        name = "codex_cli"
+
+        def complete(self, *, messages, **kwargs):
+            stats["provider_calls"] += 1
+            payload = json.loads(messages[0]["content"])
+            followup = bool(payload.get("previous_review"))
+            item = {
+                "target_id": payload["target"]["id"],
+                "recommendation": "observe" if followup else "adjust",
+                "evidence_refs": ["current", "commerce.current", "commerce.previous"],
+                "hypothesis": "商城資料未支持平台樂觀結果，先暫停加碼判斷。"
+                if followup
+                else "先測試更清楚的品牌介紹文案，保留原圖片。",
+                "risks": ["商城幣別與完整性尚未確認，不能直接歸因至廣告。"],
+                "next_step": "補齊商城與平台期間後重看。"
+                if followup
+                else "人工核准文案清單後逐項讀回。",
+            }
+            if not followup:
+                item["suggested_copy"] = {"title": "探索品牌", "body": "了解更多"}
+            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C" or (
+                os.environ.get("F15_ACCEPTANCE_PHASE") == "D" and not followup
+            ):
+                item["recommendation"] = "new_test"
+                item["hypothesis"] = "保留原廣告，另測試素材與敘述是否容易理解。"
+                item["next_step"] = "先確認候選素材，再獨立決定新廣告是否交接。"
+                item.pop("suggested_copy", None)
+            return providers.ProviderResponse(
+                output_text=json.dumps({"recommendations": [item]}, ensure_ascii=False),
+                structured=None,
+                usage=providers.Usage(input_tokens=0, output_tokens=0),
+                stop_reason="end_turn",
+            )
+
     def select(provider, task_type=None):
         if task_type == asset_suggestions.TASK_TYPE:
             return SuggestionProvider()
         if task_type == "ads_brief_parse":
+            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+                stats["provider_calls"] += 1
             return providers.ScriptedProvider(providers.SCRIPTED_REPLIES[task_type])
+        if (
+            task_type in {"ads_strategy", "ads_delivery_plan"}
+            and os.environ.get("F15_ACCEPTANCE_PHASE") == "C"
+        ):
+            stats["provider_calls"] += 1
+            reply = (
+                providers.SCRIPTED_REPLIES["ads_strategy"]
+                if task_type == "ads_strategy"
+                else {
+                    "groups": [
+                        {
+                            "role": role,
+                            "name": f"冷啟動{role}投放組",
+                            "ads": [
+                                {
+                                    "name": f"冷啟動{role}廣告",
+                                    "coordinates": {
+                                        dim: "隔離驗收未分類"
+                                        for dim in (
+                                            "audience",
+                                            "pain",
+                                            "angle",
+                                            "hook",
+                                            "proof",
+                                            "offer",
+                                            "format",
+                                        )
+                                    },
+                                }
+                            ],
+                        }
+                        for role in ("new", "retarget", "explore")
+                    ]
+                }
+            )
+            fake = providers.FakeProvider(
+                providers.ProviderResponse(
+                    output_text=json.dumps(reply, ensure_ascii=False),
+                    structured=None,
+                    usage=providers.Usage(input_tokens=0, output_tokens=0),
+                    stop_reason="end_turn",
+                )
+            )
+            fake.name = "codex_cli"
+            return fake
+        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") in {
+            "B",
+            "C",
+            "D",
+        }:
+            return ReviewProvider()
+        if task_type == "workbench_copy" and os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            stats["provider_calls"] += 1
+            reply = {
+                "coordinates": {},
+                "sets": [
+                    {
+                        "body": "先了解品牌日常與自己的需要，再決定適合的選擇。" * 6,
+                        "headline": "了解品牌日常",
+                        "description": "探索適合自己的選擇",
+                    }
+                    for _ in range(5)
+                ],
+                "visual_tone": None,
+                "visual_concept": "隔離色塊視覺",
+                "warnings": [],
+            }
+            fake = providers.FakeProvider(
+                providers.ProviderResponse(
+                    output_text=json.dumps(reply, ensure_ascii=False),
+                    structured=None,
+                    usage=providers.Usage(input_tokens=0, output_tokens=0),
+                    stop_reason="end_turn",
+                )
+            )
+            fake.name = "codex_cli"
+            return fake
         raise LookupError(f"F13 has no fake provider for {task_type}")
 
     providers.select_provider = select
     providers.resolve_model = lambda *args, **kwargs: "gpt-5.6-luna"
+    if durable:
+        # D keeps the real PostgreSQL queue and the independent app.worker entry point.
+        return stats
     handlers = {
         external_sync.TASK: external_sync.run_sync,
         user_assets.TASK: user_assets.process_preview,
         asset_suggestions.TASK: asset_suggestions.run,
     }
+    if os.environ.get("F15_ACCEPTANCE_PHASE") in {"B", "C"}:
+        from app.ads import review_jobs
+
+        handlers[review_jobs.TASK] = review_jobs.run
+    if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+        from app import workbench
+
+        workbench.register_tasks()
+        handlers["background.workbench_generate"] = (
+            background.app().tasks["background.workbench_generate"].func
+        )
     jobs = queue.Queue()
     active = set()
     stopped = threading.Event()

@@ -89,6 +89,13 @@ async function captureDesktopEvidence(page: Page, name: string) {
   }
 }
 
+async function openPerformanceDetails(page: Page) {
+  const details = page.getByRole("button", { name: "查看平台原始成效圖表", exact: true });
+  await expect(details).toHaveAttribute("aria-expanded", "false");
+  await details.click();
+  await expect(details).toHaveAttribute("aria-expanded", "true");
+}
+
 async function createCampaignInUi(page: Page, brandId: string): Promise<string> {
   await page.goto(`/app/brands/${brandId}/ads/new`);
   await page.getByLabel("你這次想做到什麼？").fill("測試新品購買成效，保持平台與素材條件可核對。");
@@ -252,6 +259,10 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await captureDesktopEvidence(page, "manual-launch-settings");
 
   await page.getByRole("button", { name: "素材", exact: true }).click();
+  const legacyMaterials = page.getByRole("button", { name: "原有任務包與平台素材", exact: true });
+  await expect(legacyMaterials).toHaveAttribute("aria-expanded", "false");
+  await legacyMaterials.click();
+  await expect(legacyMaterials).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByText("0／2 則已就位")).toBeVisible();
   await expect(page.getByText("未開始", { exact: true }).first()).toBeVisible();
 
@@ -260,6 +271,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
     if (/\/simulation\/\d{4}-\d{2}-\d{2}$/.test(request.url())) simulationReads += 1;
   });
   await page.getByRole("button", { name: "成效", exact: true }).click();
+  await openPerformanceDetails(page);
   await expect(page.getByRole("button", { name: "素材比較（選用）" })).toBeVisible();
   await expect(page.getByRole("button", { name: "內部驗收工具（隔離模擬）" })).toHaveCount(0);
   expect(simulationReads).toBe(0);
@@ -286,6 +298,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await page.getByRole("spinbutton", { name: "每則最少轉換數" }).fill("12");
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=overview`);
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=performance`);
+  await openPerformanceDetails(page);
   await expect(page.getByText(/已恢復未儲存的比較設定草稿/)).toBeVisible();
   await page.getByRole("button", { name: "素材比較（選用）" }).click();
   await page.getByRole("button", { name: "進階判讀設定" }).click();
@@ -314,6 +327,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   );
   await setupAds(page, headers, brandId, missingCampaign.campaign.id, false);
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${missingCampaign.campaign.id}?tab=performance`);
+  await openPerformanceDetails(page);
   await page.getByRole("button", { name: "素材比較（選用）" }).click();
   await expect(page.getByText(/缺少合格對照/)).toBeVisible();
   await page.getByRole("button", { name: "前往投放結構補對照" }).click();
@@ -325,6 +339,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   });
   simulationReads = 0;
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=performance`);
+  await openPerformanceDetails(page);
   const internal = page.getByRole("button", { name: "內部驗收工具（隔離模擬）" });
   await expect(internal).toBeVisible();
   expect(simulationReads).toBe(0);

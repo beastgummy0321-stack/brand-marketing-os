@@ -16,7 +16,11 @@ import { DeliveryTab } from "./DeliveryTab";
 import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
 import { PublishPage } from "./PublishPage";
+import { ChangeControl } from "./ChangeControl";
+import { ReviewPanel } from "./ReviewPanel";
+import { Disclosure } from "./patterns";
 import type { StepTarget, WorkspaceTab } from "./nextStep";
+import { formatSyncTime } from "@/lib/format";
 
 const TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "overview", label: "總覽" },
@@ -24,6 +28,7 @@ const TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "structure", label: "投放結構" },
   { value: "assets", label: "素材" },
   { value: "performance", label: "成效" },
+  { value: "changes", label: "變更與核對" },
 ];
 
 function periodLabel(c: CampaignDetail): string {
@@ -152,6 +157,9 @@ function Workspace({
   }
 
   const campaign = state.status === "ready" ? state.campaign : null;
+  const lastRead = Object.values(campaign?.external_view?.sync ?? {}).map(s => s.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1);
+  const nativeStatus = campaign?.external_view?.entities.find(e => !e.parent_native_id)?.native_status;
+  const platformState = ({ ACTIVE: "活動設定：啟用", PAUSED: "活動設定：暫停", ARCHIVED: "活動設定：已封存", DELETED: "活動設定：已刪除" } as Record<string, string>)[nativeStatus ?? ""] ?? "活動設定尚待確認";
   // 已經投放中／結束／結案不再需要發布動作——只在草稿／待發布時給這個入口。
   const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
 
@@ -170,7 +178,7 @@ function Workspace({
         actions={
           campaign ? (
             <div className="flex items-center gap-2">
-              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? campaign.external_view?.entities.find(e => !e.parent_native_id)?.native_status ?? "平台狀態未知" : STATUS_LABEL[campaign.status]}</Badge>
+              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? platformState : STATUS_LABEL[campaign.status]}</Badge>
               {campaign.origin === "imported" && <Button size="sm" variant="outline" disabled={syncing} onClick={() => void refreshPlatform()}>{syncing ? "同步中…" : "重新讀取平台"}</Button>}
               {canPublish && (
                 <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
@@ -183,8 +191,9 @@ function Workspace({
       />
       {syncError && <p role="alert" className="text-sm text-destructive">{syncError}</p>}
       {campaign?.origin === "imported" && <p className="text-xs text-muted-foreground">
-        {campaign.external_view?.connections.map(connection => `${connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
-        {" · 最近成功："}{Object.values(campaign.external_view?.sync ?? {}).map(s => s.last_success_at).filter(Boolean).sort().at(-1) ?? "尚未成功讀回"}
+        {campaign.external_view?.connections.map(connection => `${connection.platform === "meta" ? "Meta" : connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
+        {" · 最近成功："}{lastRead ? formatSyncTime(lastRead) : "尚未成功讀回"}
+        {" · 活動設定不代表已實際投遞"}
         {Object.entries(campaign.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
       </p>}
       {location.state?.parseWarning && (
@@ -243,8 +252,13 @@ function Workspace({
             <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
           ) : tab === "assets" ? (
             <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
+          ) : tab === "changes" ? (
+            <ChangeControl brandId={brandId} campaignId={campaign.id} />
           ) : (
-            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} />
+            <div className="space-y-4">
+              <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
+              <Disclosure label="查看平台原始成效圖表"><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
+            </div>
           )}
         </>
       )}

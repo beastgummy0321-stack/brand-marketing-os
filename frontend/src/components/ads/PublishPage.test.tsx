@@ -21,6 +21,7 @@ vi.mock("@/lib/adsApi", async () => {
   };
 });
 
+vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => <p>逐項平台核對</p> }));
 vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn() }));
 
 function group(channel_key = "meta"): DeliveryGroupRow {
@@ -145,17 +146,18 @@ describe("PublishPage（F06-I04）", () => {
 });
 
   it("opening manual checklist is read-only; explicit confirmation writes once", async () => {
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [] } });
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
     vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
     vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 0, total: 0 }));
     vi.mocked(publishCampaign).mockClear();
     renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
     const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     expect(publishCampaign).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(confirm);
     await waitFor(() => expect(publishCampaign).toHaveBeenCalledTimes(1));
-    expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual");
+    expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "current-plan-hash", operation_id: expect.any(String) });
     expect(await screen.findByText("已記錄手動上架準備；請在平台完成設定後再配對。")).toBeTruthy();
   });
 
@@ -179,6 +181,7 @@ describe("PublishPage（F06-I04）", () => {
 
     renderPage(c, "manual");
     const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await user.click(confirm);
     expect(await screen.findByText(/目前僅支援與 Meta 配對/)).toBeTruthy();
     expect(screen.getByText(/這個 Campaign 的平台目前不能使用 Meta 配對/)).toBeTruthy();
@@ -215,6 +218,7 @@ describe("PublishPage（F06-I04）", () => {
     c.groups = [group("meta")];
     renderPage(c, "manual");
     const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await userEvent.click(confirm);
     expect(await screen.findByText(/Meta 連線狀態目前無法確認/)).toBeTruthy();
     const pairingButton = screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement;
@@ -235,6 +239,7 @@ describe("PublishPage（F06-I04）", () => {
     c.groups = [group("meta")];
     renderPage(c, "manual");
     const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await userEvent.click(confirm);
     expect(await screen.findByText(/先完成 Meta 廣告連線/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "前往 Meta 廣告連線" }).getAttribute("href")).toBe("/settings?tab=meta");

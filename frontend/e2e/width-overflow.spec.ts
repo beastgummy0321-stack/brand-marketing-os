@@ -113,7 +113,7 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
 
   // --- /brands/:brandId/ads/new：建 Campaign 兩步流程（F04-I12）——步驟一填目標、
   // 步驟二「理解如下」確認欄位、按「產生策略建議」才進工作區頁 ----------------------
-  await page.getByRole("link", { name: "建立 Campaign" }).click();
+  await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
   await assertNoOverflow("/brands/:brandId/ads/new");
   await page.getByLabel("你這次想做到什麼？").fill("寬度測試用的一句話目標，預算大約三萬。");
   await page.getByRole("button", { name: "產生建議", exact: true }).click();

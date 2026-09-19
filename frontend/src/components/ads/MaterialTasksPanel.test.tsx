@@ -1,0 +1,52 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, expect, it, vi } from "vitest";
+import * as api from "@/lib/adsMaterialApi";
+import { MaterialTasksPanel } from "./MaterialTasksPanel";
+
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org" }));
+vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof api>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
+vi.mock("./UserAssetsLibrary", () => ({ CopyEditor: () => <p>文案編輯</p>, UserAssetsLibrary: () => <p>品牌原檔</p> }));
+vi.mock("./AuthAssetMedia", () => ({ AuthAssetMedia: () => <p>原檔預覽</p> }));
+const task: api.MaterialTask = { id: "task_a", campaign_id: "campaign_a", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [{ revision: 1, content_hash: "a", created_at: "2026-09-19" }], limitations: [], created_at: "2026-09-19" };
+function page(brandId = "brand_a", query = "") { return <MemoryRouter initialEntries={[`/${query}`]}><MaterialTasksPanel brandId={brandId} campaignId="campaign_a" /></MemoryRouter>; }
+beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); vi.mocked(api.listMaterialTasks).mockResolvedValue({ tasks: [] }); vi.mocked(api.materialOptions).mockResolvedValue({ options: [] }); });
+
+it("saves existing artwork without dispatching a generation", async () => {
+  const user = userEvent.setup(); vi.mocked(api.saveMaterialOperation).mockResolvedValue({ task }); render(page());
+  await user.click(await screen.findByRole("button", { name: /使用已有成品/ }));
+  await user.click(screen.getByRole("button", { name: "保存素材需求" }));
+  await screen.findByRole("button", { name: "上傳或選擇成品" });
+  expect(api.saveMaterialOperation).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(api.saveMaterialOperation).mock.calls[0][0].body).toMatchObject({ mode: "existing", prompt: { source: "none" } });
+  expect(screen.queryByRole("button", { name: "確認需求，交給工作台" })).toBeNull();
+});
+
+it("replays the same frozen operation after a lost response", async () => {
+  const user = userEvent.setup(); vi.mocked(api.saveMaterialOperation).mockRejectedValueOnce(new TypeError("response lost")).mockResolvedValueOnce({ task }); render(page());
+  await user.click(await screen.findByRole("button", { name: /使用已有成品/ })); await user.click(screen.getByRole("button", { name: "保存素材需求" }));
+  await user.click(await screen.findByRole("button", { name: "核對同一次保存" }));
+  await screen.findByRole("button", { name: "上傳或選擇成品" });
+  const calls = vi.mocked(api.saveMaterialOperation).mock.calls;
+  expect(calls[1][0]).toEqual(calls[0][0]); expect(sessionStorage.length).toBe(0);
+});
+
+it("keeps a saved operation scoped to its own brand on remount", async () => {
+  const pending = { path: api.materialPath("brand_a", "campaign_a"), method: "POST", body: { operation_id: "pending_a", mode: "existing" } };
+  sessionStorage.setItem("material-operation:test_org:brand_a:campaign_a", JSON.stringify(pending));
+  const { rerender } = render(page()); await screen.findByRole("button", { name: "核對同一次保存" });
+  rerender(page("brand_b")); await waitFor(() => expect(screen.queryByRole("button", { name: "核對同一次保存" })).toBeNull());
+  expect(api.saveMaterialOperation).not.toHaveBeenCalled(); expect(sessionStorage.getItem("material-operation:test_org:brand_a:campaign_a")).not.toBeNull();
+});
+
+it("retains review provenance in the new material request", async () => {
+  const user = userEvent.setup(); vi.mocked(api.saveMaterialOperation).mockResolvedValue({ task: { ...task, review_id: "review_a", recommendation_id: "rec_a" } }); render(page("brand_a", "?material_new=1&review=review_a&recommendation=rec_a"));
+  await user.click(await screen.findByRole("button", { name: /回收外部生圖/ })); await user.click(screen.getByRole("button", { name: "保存素材需求" }));
+  await waitFor(() => expect(api.saveMaterialOperation).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.saveMaterialOperation).mock.calls[0][0].body).toMatchObject({ review_id: "review_a", recommendation_id: "rec_a", mode: "external_image" });
+});
+
+it("serializes a selected workbench prompt without trusting echoed text", () => {
+  expect(api.promptInput({ source: "workbench", text: "browser altered", set_id: "s", version_id: "v", card_index: 1 })).toEqual({ source: "workbench", set_id: "s", version_id: "v", card_index: 1 });
+});

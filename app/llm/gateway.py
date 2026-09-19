@@ -18,6 +18,7 @@
 import hashlib
 import inspect
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from app.brand_intelligence import repository as bi_repo
@@ -110,25 +111,44 @@ def get_task(conn: db.Conn, task_id: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+_worker_execution = False
+
+
+@contextmanager
+def worker_execution():
+    """Mark tasks created by this dedicated worker process, including its job threads."""
+    global _worker_execution
+    previous = _worker_execution
+    _worker_execution = True
+    try:
+        yield
+    finally:
+        _worker_execution = previous
+
+
+def find_tasks_for_scope(conn, *, org_id, brand_id, task_type, context_scope, limit=2):
+    """Bounded, tenant-scoped recovery lookup; callers never query llm tables directly."""
+    if not context_scope or not isinstance(context_scope, dict) or not 1 <= limit <= 2:
+        raise ValueError("A nonempty task scope and a limit of one or two are required")
+    rows = conn.execute(
+        "SELECT * FROM llm_task WHERE org_id=%s AND brand_id=%s AND task_type=%s "
+        "AND context_scope_json @> %s ORDER BY started_at,id LIMIT %s",
+        (org_id, brand_id, task_type, db.jsonb(context_scope), limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 INTERRUPTED_TASK_ERROR = "上次執行到一半被中斷了，請再按一次。"
 
 
 def fail_interrupted_tasks(conn: db.Conn) -> int:
-    """票 05-1 frozen decision 2：process 重啟時，上一個 process 死掉留下的
-    `status = 'running'` 列沒有人會再把它改掉——中斷的工作標記失敗，絕不自動重跑（重跑會
-    再花一次錢，做的可能是幾乎跑完的工作）。`app.llm` 是唯一寫 `llm_task` 的模組（一張表
-    只有一個模組會寫，見 `app/schedule/routes.py` 檔頭），所以這支掃描函式落在這裡，不是
-    `app/background`——呼叫端是 `app/worker.py`，在 worker 接下第一個 job 之前跑一次
-    （ADR 0063）。回傳受影響列數。
+    """After acquiring the unique worker lock, fail only proven worker-owned orphans.
 
-    ponytail: 假設同一時間只有一個 process 擁有全部 `running` 列。ADR 0063 之後 worker 是
-    自己的 process，這個假設還是成立——一個 worker process 開機時仍然一列都不擁有、跑起來
-    之後仍然擁有全部。真的要換成心跳／存活時間判斷，觸發點是**出現第二個 worker
-    process**（cloud autoscale），不是 worker 離開 `app/main.py`——那天已經是今天了，假設
-    活了下來。"""
+    Web calls and legacy rows without ownership evidence remain untouched. No paid retry.
+    """
     rows = conn.execute(
         "UPDATE llm_task SET status = 'failed', error = %s, finished_at = %s "
-        "WHERE status = 'running'",
+        "WHERE status = 'running' AND context_scope_json->>'runtime_owner'='worker'",
         (INTERRUPTED_TASK_ERROR, db.now_utc()),
     )
     conn.commit()
@@ -142,6 +162,9 @@ def _insert_running_row(
 ) -> dict:
     row_id = db.new_id("llm")
     ts = db.now_utc()
+    scope = {key: value for key, value in context.context_scope.items() if key != "runtime_owner"}
+    if _worker_execution:
+        scope["runtime_owner"] = "worker"
     # 輸入內容雜湊：對已排序的 knowledge_item_ids 取 sha256，供重現比對（03 §3.1）；
     # 純雜湊輸入不是欄位值，維持 json.dumps。
     input_context_hash = hashlib.sha256(
@@ -158,7 +181,7 @@ def _insert_running_row(
                    NULL, NULL, NULL, NULL, NULL, %s, NULL, NULL, %s)""",
         (
             row_id, org_id, brand_id, task_type,
-            db.jsonb(context.context_scope),
+            db.jsonb(scope),
             db.jsonb(context.knowledge_item_ids), input_context_hash,
             db.jsonb(context.knowledge_item_ids),
             context.brand_version, context.product_version,

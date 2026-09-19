@@ -20,7 +20,7 @@ import uuid
 from unittest import mock
 
 import app.shared.web as web
-from app.ads import adapters, assets, plan, routes
+from app.ads import adapters, assets, change_control_data, change_control_launch, plan, routes
 from app.ads import repository as ads_repo
 from app.ads.adapters import manual as manual_adapter
 from app.brand_intelligence import repository as bi_repo
@@ -75,6 +75,16 @@ class PublishTestBase(unittest.TestCase):
 
     def tearDown(self):
         plan.PROVIDER = self._orig_provider
+
+    def _publish_with_isolated_budget_evidence(self, campaign_id):
+        content_hash = change_control_data.digest(change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, campaign_id))
+        with mock.patch.object(change_control_launch.month_budget, "preflight",
+                               return_value={"can_increase": True}) as preflight:
+            result = manual_adapter.publish(web.conn, self.org_id, self.brand_id, campaign_id,
+                actor=ACTOR, operation_id=str(uuid.uuid4()), content_hash=content_hash)
+        self.assertEqual(preflight.call_args.args[4][0]["kind"], "launch")
+        return result
 
     def _create_campaign(self, *, start_date: str | None = "2026-10-01",
                           end_date: str | None = "2026-10-14",
@@ -285,11 +295,40 @@ class AutoMetaAdapterTest(PublishTestBase):
 
 
 class PublishWritesOneApprovalTest(PublishTestBase):
+    def test_missing_approval_hash_and_unknown_budget_cannot_bypass_new_boundary(self):
+        detail = self._adopted_campaign()
+        with self.assertRaisesRegex(ValueError, "重新檢視"):
+            manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        content_hash = change_control_data.digest(change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, detail["id"]))
+        with self.assertRaisesRegex(ValueError, "餘額尚不確定"):
+            manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
+                                   operation_id="unknown-budget", content_hash=content_hash)
+        self.assertEqual(self._approvals(detail["id"]), [])
+        self.assertEqual(self._actions(detail["id"]), [])
+
+    def test_launch_lost_response_replays_same_atomic_approval_and_action(self):
+        detail = self._adopted_campaign()
+        content_hash = change_control_data.digest(change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, detail["id"]))
+        with mock.patch.object(change_control_launch.month_budget, "preflight", return_value={}):
+            first = manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"],
+                actor=ACTOR, operation_id="stable-launch", content_hash=content_hash)
+            again = manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"],
+                actor=ACTOR, operation_id="stable-launch", content_hash=content_hash)
+        self.assertEqual(first, again)
+        self.assertEqual(len(self._approvals(detail["id"])), 1)
+        actions = self._actions(detail["id"])
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["after_json"]["content_hash"], content_hash)
+        self.assertEqual(actions[0]["after_json"]["operation_id"], "stable-launch")
+        self.assertEqual(actions[0]["verification_state"], "pending")
+
     def test_one_manual_publish_writes_exactly_one_approval_row(self):
         detail = self._adopted_campaign()
         daily_sum = ads_repo.group_budget_total(web.conn, self.org_id, self.brand_id, detail["id"])
 
-        manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        self._publish_with_isolated_budget_evidence(detail["id"])
 
         rows = self._approvals(detail["id"])
         self.assertEqual(len(rows), 1)
@@ -313,7 +352,7 @@ class PublishWritesOneApprovalTest(PublishTestBase):
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])
         self.assertIsNone(reloaded["budget_total"])
 
-        manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        self._publish_with_isolated_budget_evidence(detail["id"])
 
         rows = self._approvals(detail["id"])
         self.assertEqual(len(rows), 1)
@@ -326,7 +365,7 @@ class CrossCampaignApprovalTest(PublishTestBase):
         campaign_a = self._adopted_campaign()
         campaign_b = self._adopted_campaign()
 
-        manual_adapter.publish(web.conn, self.org_id, self.brand_id, campaign_a["id"], actor=ACTOR)
+        self._publish_with_isolated_budget_evidence(campaign_a["id"])
         approval_a = self._approvals(campaign_a["id"])[0]
 
         # B 從沒被核准過——A 的核准不該拿來判 B 的預算煞車（沒有核准就沒有煞車）。
@@ -405,6 +444,20 @@ class ClosedCampaignNotRevivedTest(PublishTestBase):
 # -- F07-I10：手動配對清單的圖片提示詞欄位讀 §5.8 的 `text`，不是舊的 `rendered` -------------
 
 class ImagePromptTextOnManualChecklistTest(PublishTestBase):
+    def test_explicit_material_assignment_replaces_legacy_copy_in_checklist(self):
+        detail = self._adopted_campaign()
+        ad = detail["groups"][0]["ads"][0]
+        ad.update(copy_text="舊工作檯文案", image_prompt_text="舊生成提示詞",
+                  material_assignment={"filename": "使用者選定.png", "placement_revision": 2,
+                    "copy_fields": {"headline": "選定標題", "body": "實際投放文字"},
+                    "assignment_status": "confirmed", "reason": None})
+        node = next(n for n in manual_adapter.describe(detail)["checklist"] if n["id"] == ad["id"])
+        fields = {f["label"]: f["value"] for f in node["fields"]}
+        self.assertEqual(fields["指定素材檔案"], "使用者選定.png")
+        self.assertEqual(fields["文案"], "實際投放文字")
+        self.assertEqual(fields["標題"], "選定標題")
+        self.assertNotIn("圖片提示詞", fields)
+
     def _dispatched_ad(self):
         detail = self._adopted_campaign()
         assets.dispatch_pack(web.conn, self.org_id, self.brand_id, detail["id"])

@@ -130,6 +130,16 @@ class FlowReader:
             ]
         )
 
+    def read_monthly(self, conn, org, brand, account, *, start, end, **kwargs):
+        self.calls.append(("GET", "monthly", account["account_id"], None))
+        # This paused fixture has no account spend; the zero row set is explicitly
+        # scoped, not an assumption that a missing reader means a complete month.
+        return SourcePage([], coverage={
+            "scope": "account_campaign_day", "start": str(start), "end": str(end),
+            "account_id": account["account_id"], "currency": account["currency"],
+            "timezone_name": account["timezone_name"],
+        })
+
     def binding_kinds(self):
         return ("unit",)
 

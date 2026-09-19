@@ -30,12 +30,13 @@ PACK_APPROVED_MESSAGE = "這個任務包已核准，選定已鎖定。"
 
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
-                  name: str | None = None, required_outputs: dict | None = None) -> str:
+                  name: str | None = None, required_outputs: dict | None = None,
+                  enqueue_generation: bool = True) -> str:
     """寫一列 `workbench_brief`。`request["parts"]` 是唯一權威來源（ARCHITECTURE.md
     §5.4）：非空列表，`_PART_NAMES` 的子集，缺欄／空／不是 list／有未知名稱一律
     `ValueError("parts_unknown")`。`kind` 在這裡衍生（多於一個 part -> `"ad_creative"`，
     否則就是那個唯一的 part 名），只為顯示而寫進欄位，`create_brief`／`run_part` 都不
-    再靠它做決定。`parts` 永遠非空，所以 status 永遠是 `"queued"`。
+    再靠它做決定。一般提交立即 queued；上游先保存的交棒用 idle，待明確派工。
 
     F02-I02：私有——「a set only exists inside a pack」(ARCHITECTURE.md §5.4)，呼叫端
     (`create_brief()`／`submit_pack()`) 一定要帶 `pack_id`。`name`／`required_outputs`
@@ -75,7 +76,7 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
         raise ValueError("count_out_of_range")
     brief_id = new_id("wbb")
     kind = "ad_creative" if len(parts) > 1 else parts[0]
-    status = "queued"
+    status = "queued" if enqueue_generation else "idle"
 
     conn.execute(
         "INSERT INTO workbench_brief (id, org_id, brand_id, kind, source_kind, source_ref,"
@@ -90,7 +91,7 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
             pack_id, name, jsonb(required_outputs or {}),
         ),
     )
-    for part in parts:
+    for part in parts if enqueue_generation else []:
         if part == "image_prompt":
             # F07-I07：張數不再是使用者輸入，`jobs.py` 自己從 shape 算，這裡一律排 `None`。
             count = None

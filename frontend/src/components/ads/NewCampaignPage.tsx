@@ -20,6 +20,8 @@ const CONSTRAINT_FIELDS: { key: string; label: string; placeholder: string; isDa
   { key: "other", label: "其他限制", placeholder: "例如受眾、地區等" },
 ];
 
+const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
+
 /** 建立 Campaign 步驟一（F04-I12，圖 3）：一句話＋選填限制條件 → `POST /campaigns`。
  * 日期不是必填欄位（F04-I11 後端會從句子判斷，判斷不出來就今天～+30 天並標「系統帶入」）；
  * 這裡只在「只填一邊」時擋下來。送出成功後導去步驟二（`ConfirmBriefPage`）確認理解，
@@ -64,8 +66,8 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
     setOpenConstraints((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  async function handleSubmit() {
-    if (!goalText.trim() || submitting || uploadBusy || restoring || (existingId && !created)) return;
+  async function handleSubmit(request = goalText) {
+    if (!request.trim() || submitting || uploadBusy || restoring || (existingId && !created)) return;
     if (uploads.some(u => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     if ((startDate && !endDate) || (!startDate && endDate)) {
       setError("開始與結束日期請一起填，或兩個都留空。");
@@ -74,6 +76,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
     const signal = life.current.signal;
     setSubmitting(true);
     setError(null);
+    setGoalText(request);
     const constraints: Record<string, unknown> = {};
     for (const field of CONSTRAINT_FIELDS) {
       if (field.isDate) continue;
@@ -82,7 +85,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
     }
     try {
       const draft = created ?? await createCampaign(brandId, {
-        goal_text: goalText,
+        goal_text: request,
         ...(startDate && endDate ? { start_date: startDate, end_date: endDate } : {}),
         ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
       });
@@ -127,6 +130,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
         description="只要告訴我們你的目標，行銷駕駛艙會幫你整理投放策略、預算、素材與排程。"
       />
       <p className="text-xs text-muted-foreground">未送出的內容會保留在這個分頁，離開後返回可繼續填寫。</p>
+      <p className="text-sm text-muted-foreground">商品資料會沿用品牌已保存的內容。有完成的圖片或影片可直接加入，下方不必重新製作素材。</p>
       <UserAssetsLibrary brandId={brandId} readOnly={submitting} onSelection={setUploads} onBusy={setUploadBusy} />
       {created && <p className="text-sm">活動已建立。<Link to={`/brands/${brandId}/ads/campaigns/${created.id}?tab=assets`}>前往此活動核對素材</Link></p>}
       {submitting && <p role="status">讀取品牌／商品／投放紀錄…正在建立活動或加入所選素材。</p>}
@@ -138,14 +142,14 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                 你這次想做到什麼？
               </label>
               <p className="mb-2 text-sm text-muted-foreground">
-                用自然語言告訴我們你的想法，越詳細越好。
+                寫一句話即可，或讓 AI 依已知品牌資料起草，再由你確認。
               </p>
               <Textarea
                 id="goal-textarea"
                 disabled={submitting || !!created}
                 value={goalText}
                 onChange={(e) => setGoalText(e.target.value)}
-                placeholder="9 月想推 Beast Gummy，上班族為主，希望增加購買，預算大約三萬。"
+                placeholder="例如：下個月想推主力商品，希望增加購買。"
                 className="min-h-28"
                 maxLength={500}
               />
@@ -225,10 +229,12 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
                   ),
                 )}
               </div>
+              <p className="mt-2 text-xs text-muted-foreground">這裡的預算上限只適用於本次活動。品牌月額度沿用<Link className="text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/ads`}>投放中心</Link>的設定，兩者會分別核對。</p>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <div className="flex justify-end">
-              <Button onClick={handleSubmit} disabled={!goalText.trim() || submitting || uploadBusy || restoring || (!!existingId && !created)}>
+            <div className="flex flex-wrap justify-end gap-3">
+              {!goalText.trim() && !created && <Button variant="outline" onClick={() => void handleSubmit(BRAND_SUGGESTION_REQUEST)} disabled={submitting || uploadBusy || restoring || !!existingId}>請 AI 依品牌資料建議</Button>}
+              <Button onClick={() => void handleSubmit()} disabled={!goalText.trim() || submitting || uploadBusy || restoring || (!!existingId && !created)}>
                 <Sparkles size={15} />
                 {created ? "重試加入未完成素材並繼續" : "產生建議"}
               </Button>

@@ -22,18 +22,12 @@ _VERDICT_TEXT = {
 }
 
 _KIND_TITLES = {
-    "publish": "發布了 {name}",
-    "bind": "配對了 {name}",
-    "budget": "調整了 {name} 的預算",
-    "date": "調整了 {name} 的投放期間",
-    "pause": "暫停了 {name}",
-    "creative": "更新了 {name} 的素材",
-}
-
-_SYNC_STATE_TEXT = {
-    "pending_manual": "待手動同步",
-    "confirmed_manual": "已手動同步",
-    "auto_synced": "自動同步",
+    "publish": "{name} 的發布交接",
+    "bind": "{name} 的物件配對",
+    "budget": "{name} 的預算調整",
+    "date": "{name} 的投放期間調整",
+    "pause": "{name} 的暫停操作",
+    "creative": "{name} 的素材調整",
 }
 
 _MONEY_KEYS = frozenset({"daily_budget", "budget_planned", "total_budget"})
@@ -219,13 +213,29 @@ def action_line(action: dict[str, Any], *, campaign_name: str, target_name: str 
     name = target_name or campaign_name
     kind = str(action["kind"])
     title = _KIND_TITLES.get(kind, kind).format(name=name)
+    state = action.get("verification_state")
+    evidence = action.get("evidence_json") or {}
+    if (
+        state == "confirmed" and evidence.get("setting_matches") is True
+        and action.get("verified_at")
+    ):
+        prefix, status = "已讀回核對", "本次設定符合清單；不代表已投遞或成效改善。"
+    elif state == "reported" or action.get("sync_state") == "confirmed_manual":
+        prefix, status = "使用者已回報", "尚待平台讀回核對。"
+    elif state == "deviated":
+        prefix, status = "核對有差異", "平台讀回設定與核准內容不同。"
+    elif state == "stale":
+        prefix, status = "需重新檢視", "原核准條件已失效，不能視為平台完成。"
+    elif action.get("change_set_id") and state == "pending":
+        prefix, status = "已本機核准", "已保存交接清單，尚待平台操作與讀回核對。"
+    else:
+        prefix, status = "已記錄", "尚無足夠的本次平台讀回證據。"
+    title = f"{prefix}：{title}"
 
     detail = None
     if kind in ("budget", "date"):
         detail = _change_detail(action.get("before_json") or {}, action.get("after_json") or {})
-    if detail is None:
-        sync_text = _SYNC_STATE_TEXT.get(str(action.get("sync_state") or ""), "")
-        detail = sync_text or "已記錄"
+    detail = f"{detail}；{status}" if detail else status
 
     return {
         "time_text": _time_text(action["created_at"], today=today),

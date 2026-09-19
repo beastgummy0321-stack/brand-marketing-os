@@ -104,7 +104,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
       <EmptyState
         title="這個品牌還沒有 Campaign"
         description="建立第一個 Campaign，讓行銷駕駛艙幫你完成後續設定。"
-        actionLabel="建立 Campaign"
+        actionLabel="建立投放計畫"
         onAction={() => navigate(`/brands/${brandId}/ads/new`)}
       />
     );
@@ -257,7 +257,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
         description="管理進行中與即將上線的投放，掌握整體成效與進度。"
         actions={
           <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
-            <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
+            <Link to={`/brands/${brandId}/ads/new`}>建立投放計畫</Link>
           </Button></div>
         }
       />

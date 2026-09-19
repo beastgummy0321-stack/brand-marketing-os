@@ -3,8 +3,10 @@ https://github.com/facebook/facebook-python-business-sdk/tree/main/facebook_busi
 Field declarations do not establish live account permissions.
 """
 
+import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads.adapters.external import SourcePage, SourceReadError
 from app.core.db import now_utc
@@ -72,7 +74,7 @@ def _entity(item, kind, account):
             else "unknown",
             budget_raw={
                 "values": raw,
-                "unit": "platform_minor_unit",
+                "unit": "unknown",
                 "conversion": "unverified_currency_denominator",
             },
             currency=account.get("currency"),
@@ -81,6 +83,31 @@ def _entity(item, kind, account):
         )
         result["availability"]["budget_amount"] = "unknown"
     return result
+
+
+def _verified_snapshot(raw, kind, account):
+    """Partial reads never erase fields the provider did not return."""
+    parsed = _entity(raw, kind, account)
+    keys = {
+        "platform",
+        "source_account",
+        "native_kind",
+        "native_id",
+        "parent_native_kind",
+        "parent_native_id",
+    }
+    for target, field in (
+        ("native_status", "effective_status"),
+        ("name", "name"),
+        ("objective", "objective"),
+        ("start_date", "start_time"),
+        ("end_date", "stop_time" if kind == "campaign" else "end_time"),
+    ):
+        if field in raw:
+            keys.add(target)
+    if kind != "ad" and any(field in raw for field in ("daily_budget", "lifetime_budget")):
+        keys.update({"budget_type", "budget_amount", "budget_raw", "currency", "budget_source"})
+    return {key: value for key, value in parsed.items() if key in keys}
 
 
 def creative_summary(value):
@@ -158,6 +185,9 @@ def observation(item, level, account):
 
 
 class MetaReader:
+    def sync_scopes(self, conn):
+        return source.external_sync_scopes(conn)
+
     def accounts(self, conn, org_id, brand_id):
         return source.external_bound_accounts(conn, org_id, brand_id)
 
@@ -264,6 +294,62 @@ class MetaReader:
             else None,
         )
 
+    def read_monthly(self, conn, org_id, brand_id, account, *, start, end, cursor=None, **kwargs):
+        # A successful empty account query is evidence; an absent/invalid field is not.
+        start, end = str(start), str(end)
+        try:
+            first, last = date.fromisoformat(start), date.fromisoformat(end)
+            if first.day != 1 or first > last or first.strftime("%Y-%m") != last.strftime("%Y-%m"):
+                raise ValueError
+            ZoneInfo(account.get("timezone_name") or "")
+            if not re.fullmatch(r"[A-Z]{3}", account.get("currency") or ""):
+                raise ValueError
+        except (ValueError, ZoneInfoNotFoundError):
+            raise SourceReadError(
+                "帳戶月份、幣別或時區無法核對。", "invalid_monthly_scope"
+            ) from None
+        query = {
+            "start": start,
+            "end": end,
+            "account_id": account["account_id"],
+            "currency": account["currency"],
+            "timezone_name": account["timezone_name"],
+        }
+        if cursor and cursor.get("query") != query:
+            raise SourceReadError("月份分頁條件已變更，請完整重讀。", "invalid_monthly_scope")
+        page = self._page(
+            conn,
+            org_id,
+            brand_id,
+            account,
+            "monthly",
+            start=start,
+            end=end,
+            cursor=(cursor or {}).get("after"),
+        )
+        rows = []
+        for item in page["data"]:
+            row = observation(item, "campaign", account)
+            if (
+                item.get("account_currency") != account["currency"]
+                or not first <= date.fromisoformat(row["day"]) <= last
+                or item.get("date_start") != row["day"]
+                or item.get("date_stop") != row["day"]
+                or isinstance(item.get("spend"), bool)
+                or row["spend"] is None
+                or row["spend"] < 0
+            ):
+                raise SourceReadError(
+                    "月份來源列的日期、幣別或花費無法核對。", "invalid_source_page"
+                )
+            row["attribution_key"] = "account_monthly_spend"
+            rows.append(row)
+        return SourcePage(
+            rows,
+            {"after": page["cursor"], "query": query} if page["cursor"] else None,
+            coverage={"scope": "account_campaign_day", **query},
+        )
+
     def binding_kinds(self):
         return ("ad",)
 
@@ -280,41 +366,36 @@ class MetaReader:
         root_id,
         original,
     ):
-        if native_kind != "ad" or root_kind != "campaign":
+        if native_kind not in {"ad", "adset", "campaign"} or root_kind != "campaign":
             raise SourceReadError("此來源不支援指定素材核對。", "unsupported")
         try:
-            ad = source.read_external_object(
-                conn, org_id, brand_id, account["account_id"], "ad", native_id
+            raw = source.read_external_object(
+                conn, org_id, brand_id, account["account_id"], native_kind, native_id
             )
-            if not ad.get("adset_id") or str(ad.get("campaign_id")) != root_id:
-                raise ValueError("廣告不屬於指定活動。")
-            adset = source.read_external_object(
-                conn, org_id, brand_id, account["account_id"], "adset", str(ad["adset_id"])
-            )
-            campaign = source.read_external_object(
-                conn, org_id, brand_id, account["account_id"], "campaign", root_id
-            )
-            if str(adset.get("campaign_id")) != root_id:
-                raise ValueError("廣告父層不屬於指定活動。")
-            identity = {
-                "platform",
-                "source_account",
-                "native_kind",
-                "native_id",
-                "parent_native_kind",
-                "parent_native_id",
-            }
-
-            def verified_identity(raw, kind):
-                parsed = _entity(raw, kind, account)
-                result = {key: value for key, value in parsed.items() if key in identity}
-                if "effective_status" in raw:
-                    result["native_status"] = raw["effective_status"]
-                return result
-
-            entity = verified_identity(ad, "ad")
-            entity["creative"] = creative_summary(ad.get("creative"))
-            parents = [verified_identity(adset, "adset"), verified_identity(campaign, "campaign")]
+            if native_kind == "campaign":
+                if str(raw.get("id")) != root_id:
+                    raise ValueError("活動不符。")
+                parents = []
+            else:
+                if str(raw.get("campaign_id")) != root_id:
+                    raise ValueError("物件不屬於指定活動。")
+                parents = []
+                if native_kind == "ad":
+                    if not raw.get("adset_id"):
+                        raise ValueError("廣告缺少父層。")
+                    adset = source.read_external_object(
+                        conn, org_id, brand_id, account["account_id"], "adset", str(raw["adset_id"])
+                    )
+                    if str(adset.get("campaign_id")) != root_id:
+                        raise ValueError("廣告父層不屬於指定活動。")
+                    parents.append(_verified_snapshot(adset, "adset", account))
+                campaign = source.read_external_object(
+                    conn, org_id, brand_id, account["account_id"], "campaign", root_id
+                )
+                parents.append(_verified_snapshot(campaign, "campaign", account))
+            entity = _verified_snapshot(raw, native_kind, account)
+            if native_kind == "ad":
+                entity["creative"] = creative_summary(raw.get("creative"))
             return {
                 "entity": entity,
                 "parents": parents,
@@ -322,7 +403,7 @@ class MetaReader:
                 "media_equivalence": None,
                 "continuous_intervals": [],
                 "limitations": [
-                    "Meta 未提供原檔位元組等價與連續 creative 歷史；版本成效不可歸屬。"
+                    "目前讀取介面尚未取得原檔等價與連續素材版本歷史；無法將成效分到素材版本。"
                 ],
             }
         except source.ExternalReadError as exc:

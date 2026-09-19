@@ -943,16 +943,17 @@ class FailInterruptedTasksTest(unittest.TestCase):
             org_id=db.DEV_ORG_ID,
         )
 
-    def _insert(self, status: str) -> str:
+    def _insert(self, status: str, *, worker=True) -> str:
         row_id = db.new_id("llm")
         self.conn.execute(
             "INSERT INTO llm_task (id, org_id, brand_id, task_type, context_scope_json,"
             " input_context_ids_json, input_context_hash, knowledge_item_ids_json,"
             " brand_version, prompt_template_id, prompt_template_version, provider, model,"
             " status, attempt_no, started_at)"
-            " VALUES (%s, %s, %s, 'schedule_plan', '{}', '[]', '', '[]', 1, 'p', 'v1',"
+            " VALUES (%s, %s, %s, 'schedule_plan', %s, '[]', '', '[]', 1, 'p', 'v1',"
             " 'seed', 'seed', %s, 1, %s)",
-            (row_id, db.DEV_ORG_ID, self.brand["id"], status, db.now_utc()),
+            (row_id, db.DEV_ORG_ID, self.brand["id"],
+             db.jsonb({"runtime_owner": "worker"} if worker else {}), status, db.now_utc()),
         )
         self.conn.commit()
         return row_id
@@ -972,6 +973,56 @@ class FailInterruptedTasksTest(unittest.TestCase):
         succeeded_row = gateway.get_task(self.conn, succeeded_id)
         self.assertEqual(succeeded_row["status"], "succeeded")
         self.assertIsNone(succeeded_row["error"])
+
+    def test_web_and_legacy_tasks_are_not_assumed_dead(self):
+        legacy = self._insert("running", worker=False)
+        gateway.fail_interrupted_tasks(self.conn)
+        self.assertEqual(gateway.get_task(self.conn, legacy)["status"], "running")
+
+    def test_worker_context_records_owner_without_mutating_context_or_prompt(self):
+        context = gateway.TaskContext({"brand_id": self.brand["id"]}, [], 1)
+        fake = FakeProvider()
+        def run():
+            return gateway.run_task(
+                self.conn, fake, brand_id=self.brand["id"], task_type="schedule_plan",
+                prompt_template_id="p", prompt_template_version="v1", system="system",
+                messages=[{"role": "user", "content": "hello"}], context=context,
+            )
+        with gateway.worker_execution():
+            worker = run()
+        web = run()
+        self.assertEqual(worker["context_scope_json"]["runtime_owner"], "worker")
+        self.assertNotIn("runtime_owner", web["context_scope_json"])
+        self.assertNotIn("runtime_owner", context.context_scope)
+        found = gateway.find_tasks_for_scope(
+            self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand["id"], task_type="schedule_plan",
+            context_scope={"runtime_owner": "worker"},
+        )
+        self.assertEqual([row["id"] for row in found], [worker["id"]])
+        self.assertEqual(gateway.find_tasks_for_scope(
+            self.conn, org_id="other", brand_id=self.brand["id"], task_type="schedule_plan",
+            context_scope={"runtime_owner": "worker"},
+        ), [])
+
+    def test_cleanup_during_live_web_provider_does_not_fail_it(self):
+        fake = FakeProvider()
+        original = fake.complete
+        def complete(**kwargs):
+            gateway.fail_interrupted_tasks(self.conn)
+            row = self.conn.execute(
+                "SELECT status FROM llm_task WHERE brand_id=%s ORDER BY started_at DESC LIMIT 1",
+                (self.brand["id"],),
+            ).fetchone()
+            self.assertEqual(row["status"], "running")
+            return original(**kwargs)
+        with mock.patch.object(fake, "complete", side_effect=complete):
+            task = gateway.run_task(
+                self.conn, fake, brand_id=self.brand["id"], task_type="schedule_plan",
+                prompt_template_id="p", prompt_template_version="v1", system="system",
+                messages=[{"role": "user", "content": "hello"}],
+                context=gateway.TaskContext({}, [], 1),
+            )
+        self.assertEqual(task["status"], "succeeded")
 
 
 class ScriptedProviderTest(unittest.TestCase):

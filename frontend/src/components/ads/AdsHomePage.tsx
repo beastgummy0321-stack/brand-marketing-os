@@ -9,7 +9,11 @@ import { Button } from "@/components/layout/ui/button";
 import { formatCurrency } from "@/lib/format";
 import { getAdsHome, type AdsHome, type CampaignStatus } from "@/lib/adsApi";
 import { fetchLaunchReadiness, type LaunchReadiness } from "@/lib/adsLaunchApi";
-import { JudgmentBand, DecisionCard, CampaignTile, ActionTimeline, ReservedSlotCard, ReadinessList } from "./patterns";
+import { JudgmentBand, CampaignTile, ActionTimeline, ReadinessList } from "./patterns";
+import { Disclosure } from "./patterns/Disclosure";
+import { MonthlyBudgetPanel, currentBudgetMonth } from "./MonthlyBudgetPanel";
+import { ChangeAttention } from "./ChangeAttention";
+import { getOrgId } from "@/lib/auth";
 
 export const STATUS_LABEL: Record<CampaignStatus, string> = {
   draft: "草稿",
@@ -39,7 +43,7 @@ type ReadinessLoadState =
   | { status: "error" }
   | { status: "ready"; readiness: LaunchReadiness };
 
-export function AdsHomePage({ brandId }: { brandId: string }) {
+function AdsHome({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [readinessState, setReadinessState] = useState<ReadinessLoadState>({ status: "loading" });
   const navigate = useNavigate();
@@ -77,13 +81,12 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
     const campaigns = [...new Map([...home.campaigns, ...(home.imported_campaigns ?? [])].map(c => [c.id, c])).values()];
     content = (
       <div className="flex flex-col gap-4">
-        <JudgmentBand icon={BarChart3} sentence={home.headline.text} facts={home.headline.facts} />
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="flex flex-col gap-4 lg:col-span-2">
-            <DecisionCard items={[]} />
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-4">
+            <ChangeAttention brandId={brandId} />
             <div className="surface">
               <div className="surface-header">
-                <h2>{home.imported_campaigns?.length ? "Campaign" : "進行中的 Campaign"}</h2>
+                <h2>{home.imported_campaigns?.length ? "活動" : "進行中的活動"}</h2>
                 <Link
                   to={`/brands/${brandId}/ads/campaigns`}
                   className="text-sm text-primary hover:underline"
@@ -94,7 +97,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
               <div className="surface-body">
                 {campaigns.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
-                    目前沒有進行中的 Campaign。
+                    目前沒有進行中的活動。
                   </p>
                 ) : (
                   <div
@@ -115,7 +118,7 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
                           name={c.name}
                           statusLabel={c.origin === "imported" ? "平台活動" : STATUS_LABEL[c.status]}
                           statusTone={STATUS_TONE[c.status]}
-                          meta={`目標・${c.objective}`}
+                          meta={`目標・${c.objective || "尚待確認"}`}
                           spendText={c.origin === "imported" ? "進入活動查看花費" : spendText}
                           budgetText={c.origin === "imported" ? "平台預算" : budgetText}
                           percentText={c.origin === "imported" ? "未知" : percentText}
@@ -131,34 +134,20 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
               </div>
             </div>
 
-            <NewCampaignCard brandId={brandId} readinessState={readinessState} navigate={navigate} />
           </div>
-
-          <div className="flex flex-col gap-4">
-            <div className="surface">
-              <div className="surface-header">
-                <h2>行銷駕駛艙最近做了什麼</h2>
-              </div>
-              <div className="surface-body">
-                <ActionTimeline
-                  items={home.actions.map((a) => ({
-                    id: `${a.campaign_id}-${a.time_text}-${a.title}`,
-                    time: a.time_text,
-                    title: a.title,
-                    detail: a.detail,
-                  }))}
-                  emptyText="還沒有任何紀錄。"
-                />
-              </div>
-            </div>
-
-            <ReservedSlotCard
-              title="行銷駕駛艙為你執行中"
-              description="接上自動執行之後，這裡會列出系統自己做掉的調整。"
-              tag="自動執行接上後開放"
-            />
-          </div>
+          <MonthlyBudgetPanel brandId={brandId} month={currentBudgetMonth()} />
         </div>
+        <JudgmentBand icon={BarChart3} sentence={home.headline.text} facts={home.headline.facts} />
+        <Disclosure label="查看新活動的建檔準備">
+          <NewCampaignCard brandId={brandId} readinessState={readinessState} navigate={navigate} />
+        </Disclosure>
+          <Disclosure label="查看歷史操作紀錄">
+            <p className="mb-3 text-xs text-muted-foreground">這些是過去的系統紀錄；舊有發布或同步文字不代表本次平台變更已核對。請以活動內的逐項核對結果為準。</p>
+            <ActionTimeline items={home.actions.map((a) => ({
+              id: `${a.campaign_id}-${a.time_text}-${a.title}`, time: a.time_text,
+              title: a.title, detail: a.detail,
+            }))} emptyText="還沒有任何紀錄。" />
+          </Disclosure>
       </div>
     );
   }
@@ -170,13 +159,17 @@ export function AdsHomePage({ brandId }: { brandId: string }) {
         description="讓行銷駕駛艙幫你持續優化廣告投放。"
         actions={
           <div className="flex gap-2"><ExistingCampaignDialog brandId={brandId} /><Button asChild>
-            <Link to={`/brands/${brandId}/ads/new`}>建立 Campaign</Link>
+            <Link to={`/brands/${brandId}/ads/new`}>建立投放計畫</Link>
           </Button></div>
         }
       />
       {content}
     </div>
   );
+}
+
+export function AdsHomePage(props: { brandId: string }) {
+  return <AdsHome key={`${getOrgId()}:${props.brandId}`} {...props} />;
 }
 
 /** 「建立新的 Campaign」卡（F05-I10）：綠燈畫面跟原本一模一樣，其餘顏色多印檢查表，
@@ -201,7 +194,7 @@ function NewCampaignCard({
             <Plus className="size-5 text-primary" />
           </div>
           <div>
-            <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+            <p className="text-[15px] font-semibold">建立投放計畫</p>
             <p className="text-sm text-muted-foreground">
               告訴行銷駕駛艙你的目標，它會幫你完成後續設定。
             </p>
@@ -224,7 +217,7 @@ function NewCampaignCard({
           <Plus className="size-5 text-primary" />
         </div>
         <div>
-          <p className="text-[15px] font-semibold">建立新的 Campaign</p>
+          <p className="text-[15px] font-semibold">建立投放計畫</p>
           <p className="text-sm text-muted-foreground">
             還缺 {missing} 項，補齊之後系統才算得出預算與成效。
           </p>

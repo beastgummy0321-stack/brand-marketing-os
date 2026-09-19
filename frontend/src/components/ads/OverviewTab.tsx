@@ -2,7 +2,7 @@ import { Check, Sparkles, Target, Wallet, BarChart2, Settings, Image as ImageIco
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
 import { currentBudgetTotal, type CampaignDetail, type CampaignLabels, type SuccessMetric } from "@/lib/adsApi";
-import { JudgmentBand, ReservedSlotCard, DecisionCard, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
+import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 import { nextStep, type StepTarget, type WorkspaceTab } from "./nextStep";
 
 const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
@@ -36,6 +36,8 @@ export function OverviewTab({
   const labels = c.labels ?? DEFAULT_LABELS;
   const step = nextStep(c);
   const imported = c.origin === "imported";
+  const runtime = c.context_json.runtime;
+  const checkedAt = runtime && typeof runtime === "object" && "last_checked_at" in runtime && typeof runtime.last_checked_at === "string" ? runtime.last_checked_at : null;
   const roots = c.external_view?.entities.filter(e => e.native_kind === "campaign") ?? [];
   const root = roots.length === 1 ? roots[0] : undefined;
   const nativeStates = ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"];
@@ -124,16 +126,13 @@ export function OverviewTab({
         />
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <ReservedSlotCard
-            title="行銷駕駛艙為你執行中"
-            description="接上自動執行之後，這裡會列出系統正在做的事與下一步；現在所有調整都由你確認後才發生。"
-            tag="自動執行接上後開放"
-          />
+      <section className="surface p-5 flex flex-wrap items-center justify-between gap-4" aria-label="檢討與持續追蹤">
+        <div className="space-y-2"><h2 className="flex items-center gap-2 font-semibold"><Clock className="size-5 text-primary" />檢討與持續追蹤</h2>
+          <p className="text-sm">查看單則廣告與商城證據，決定保留、觀察或準備新測試。</p>
+          <p className="text-xs text-muted-foreground">{checkedAt ? `背景最近檢查：${new Date(checkedAt).toLocaleString("zh-TW")}。` : "尚無背景檢查紀錄，請先確認平台廣告對應與檢討條件。"}平台變更仍由你核准後手動操作。</p>
         </div>
-        <DecisionCard items={[]} />
-      </div>
+        <Button onClick={() => onChangeTab("performance")}>前往廣告檢討 →</Button>
+      </section>
 
       <div className="surface">
         <div className="surface-header">

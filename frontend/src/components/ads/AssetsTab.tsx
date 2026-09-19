@@ -1,5 +1,9 @@
 import { NativeCreativeView } from "./NativeCreativeView";
 import { UserAssetPlacements } from "./UserAssetPlacements";
+import { ManualHandoffPanel } from "./ManualHandoffPanel";
+import { MaterialTasksPanel } from "./MaterialTasksPanel";
+import { PlannedMaterialAssignments } from "./PlannedMaterialAssignments";
+import { Disclosure } from "./patterns";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
@@ -232,5 +236,17 @@ function LegacyAssetsTab({
 }
 
 export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
-  return <div className="flex flex-col gap-4"><UserAssetPlacements key={`${props.brandId}:${props.campaign.id}`} brandId={props.brandId} campaign={props.campaign} /><LegacyAssetsTab {...props} /></div>;
+  const [materialRefresh, setMaterialRefresh] = useState(0);
+  const [placementRefresh, setPlacementRefresh] = useState(0);
+  const [placementsOpen, setPlacementsOpen] = useState(window.location.hash === "#material-placements");
+  useEffect(() => { const open = () => { if (window.location.hash === "#material-placements") setPlacementsOpen(true); }; window.addEventListener("hashchange", open); return () => window.removeEventListener("hashchange", open); }, []);
+  return <div className="flex flex-col gap-4">
+    <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} onSaved={() => setMaterialRefresh(value => value + 1)} />
+    <div id="material-placements"><Disclosure label="素材安排與人工交接" open={placementsOpen} onOpenChange={setPlacementsOpen}>
+      <UserAssetPlacements key={`${props.brandId}:${props.campaign.id}:${materialRefresh}`} brandId={props.brandId} campaign={props.campaign} onChanged={() => setPlacementRefresh(value => value + 1)} />
+      {props.campaign.origin !== "imported" && <PlannedMaterialAssignments brandId={props.brandId} campaignId={props.campaign.id} refreshKey={materialRefresh + placementRefresh} />}
+      <ManualHandoffPanel brandId={props.brandId} campaignId={props.campaign.id} mode="new-ad" refreshKey={materialRefresh + placementRefresh} />
+    </Disclosure></div>
+    <Disclosure label="原有任務包與平台素材"><LegacyAssetsTab {...props} /></Disclosure>
+  </div>;
 }

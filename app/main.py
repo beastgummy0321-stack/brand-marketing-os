@@ -17,7 +17,7 @@
 成效、每週判讀）也隨之退場。
 
 ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工作跟連線池借一條
-（`app.core.db.connection()`，見本檔最外層那道 HTTP middleware）；`app.shared.web.conn`
+（HTTP 用 `app.core.db.async_connection()`，背景工作用 `connection()`）；`app.shared.web.conn`
 是 `coredb.ConnProxy()`，即時轉發到當下綁定的那條。每日備份（sqlite 檔案複製）
 在 Postgres 世界沒有意義（Supabase 自己做備份），ADR 0027 決策 5 整個模組退場
 （原 `app/core/backup.py`）；這裡只留 llm_task 保留策略清理的啟動節奏。
@@ -156,7 +156,7 @@ if _FRONTEND_DIST.is_dir():
 @app.middleware("http")
 async def _db_connection_middleware(request: Request, call_next):
     """ADR 0027：每個 request 從連線池借一條連線，掛在這個 request 的 contextvar 上
-    （`app.core.db.connection()`——乾淨結束 commit、例外 rollback、結束一律歸還連線池）。
+    （`app.core.db.async_connection()`——乾淨結束 commit、例外 rollback、結束一律歸還連線池）。
     整條 middleware 鏈只有這一個，天然是最外層，request 進來第一件事就是借好連線，
     路由與其他邏輯全程透過 `web.conn`（`ConnProxy`）拿到同一條。
 
@@ -170,7 +170,7 @@ async def _db_connection_middleware(request: Request, call_next):
     """
     request_id = str(uuid.uuid4())
     app_logging.set_request_id(request_id)
-    with coredb.connection():
+    async with coredb.async_connection():
         _purge_expired_llm_task_content_if_new_day()
         response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
