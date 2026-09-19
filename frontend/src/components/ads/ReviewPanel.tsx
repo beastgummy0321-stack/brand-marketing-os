@@ -103,7 +103,6 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm"><p>{error}</p><Button className="mt-2" variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取檢討</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取廣告與檢討紀錄…</p>}
     {data && !data.targets.length && <EmptyState title="先帶入正在投放的廣告" description="需要已讀回的平台廣告與成效，才能開始判讀。已有成品可以直接使用，不必重新生圖。" />}
-    {data && data.targets.length > 0 && <ReviewTracking brandId={brandId} campaignId={campaignId} entityId={review?.entity_id ?? target} refreshKey={`${review?.id}:${review?.status}:${reload}`} />}
     {data && data.targets.length > 0 && (form || !review) && <section className="surface" aria-label="檢討範圍">
       <div className="surface-header"><h3 className="font-semibold">這次先看哪則廣告</h3><p className="mt-1 text-sm text-muted-foreground">沿用已讀取的設定與報表；你只需要選擇觀察對象。</p></div>
       <div className="surface-body space-y-4"><label className="block text-sm">廣告<select aria-label="檢討廣告" className="mt-1 w-full" value={target} disabled={busy || Boolean(previousId)} onChange={event => setTarget(event.target.value)}>{data.targets.map(row => <option key={row.id} value={row.id}>{row.name ?? row.native_id} · {row.platform} · {row.source_account}</option>)}</select></label>
@@ -124,6 +123,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
         {decision && <div className="rounded-md bg-muted p-3 space-y-3"><label className="block text-sm">原因與後續處理<Textarea value={reason} onChange={event => setReason(event.target.value)} /></label>{decision === "deferred" && <label className="block text-sm">下次重看時間<Input type="datetime-local" value={revisit} onChange={event => setRevisit(event.target.value)} /></label>}<div className="flex gap-2"><Button disabled={busy || !reason.trim()} onClick={() => void saveDecision()}>保存檢討決定</Button><Button variant="outline" disabled={busy} onClick={() => setDecision(null)}>取消</Button></div></div>}
       </section>}
     </>}
+    {data && data.targets.length > 0 && <ReviewTracking brandId={brandId} campaignId={campaignId} entityId={review?.entity_id ?? target} refreshKey={`${review?.id}:${review?.status}:${reload}`} />}
     {data && data.reviews.length > 1 && <Disclosure label="其他檢討與歷史紀錄"><div className="space-y-2">{data.reviews.filter(row => row.id !== selected).map(row => <button key={row.id} className="flex w-full items-center justify-between gap-3 rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy} onClick={() => show(row.id)}><span>{row.evidence_json.target.name ?? "平台廣告"} · {row.window_start} — {row.window_end}</span><span className="flex items-center gap-1 text-xs text-muted-foreground"><Clock className="size-3" />{labels[row.status]}</span></button>)}</div>{data.reviews_truncated && <p className="mt-2 text-xs text-muted-foreground">目前顯示最近的檢討紀錄。</p>}</Disclosure>}
   </div>;
 }
