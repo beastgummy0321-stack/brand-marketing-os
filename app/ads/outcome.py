@@ -11,12 +11,27 @@ exactly one campaign; if the data says otherwise (two campaigns bound to the sam
 entity) that is a binding bug and ingest refuses, naming both campaigns, rather than silently
 picking one.
 
-`purchases`: `daily_entity_spend` does not return a usable purchase count (spend/impressions/
-clicks/roas/currency only — see the module docstring's ADR 0057 note on `actions` staying raw
-JSON one layer up). Purchases stay untracked (`NULL`, not `0`) for Meta-sourced rows until that
-read grows a purchase count — inventing them from ROAS and an assumed order value is still out
-of scope. `revenue` is `spend * roas` when the pulled row's `roas` is tracked, else `NULL` too —
-untracked is never a number.
+`purchases`/`revenue` (F16-I05): `daily_entity_spend` now also returns `purchases`, `revenue`,
+`action_type` and `attribution_window`, derived from the already-stored `meta_entity_spend.actions`/
+`action_values` through `app.meta.repository.external_purchase_values()` — the ONE definition of
+purchase synonyms (`graph._ROAS_ACTION_PRIORITY`); this module never keeps a second copy of that
+list. Per row: `NULL` when the row has no purchase action at all (untracked, never coerced to
+`0`), `0` when a purchase action is present with a tracked-zero value, the real count otherwise.
+
+Revenue source (pick one, not both): this module writes `row["revenue"]` — the value paired with
+the SAME matched `action_type` in `action_values` — and never also derives revenue from `roas`.
+`roas` is Meta's own ratio (denominator = spend, sometimes a different rounding/currency path);
+`action_values` is the raw reported order value tied to the exact action synonym `purchases` was
+counted from, so purchases and revenue always describe the same event set. Computing both and
+picking one row-by-row would silently swap sources depending on which happened to be tracked that
+day — the CPA/ROAS printed for a campaign would stop meaning one thing consistently.
+
+Attribution reporting: `daily_entity_spend`'s `action_type`/`attribution_window` are the same
+`attribution_key`/`action_type` shape `app/ads/adapters/meta_read.py:observation()` already
+reports for the external-campaign path — the "how was this counted" is never dropped at the
+facade boundary. `ads_outcome_daily` has no column for it (F16-I05 is a read/write change, not a
+schema change — no migration here), so today it lives in-process at ingest time only; persisting
+it per row would need a new migration, out of this issue's scope.
 
 `ads_outcome_daily.purchases`/`revenue` are nullable (F16-I01 migration
 `20260913000001_ads_tables.sql` originally froze them `NOT NULL DEFAULT 0`; the follow-up
@@ -137,12 +152,12 @@ def ingest_meta(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
             entity = by_external.get(row["entity_id"])
             if entity is None:
                 continue  # 這一列的錢不屬於這個 Campaign——不猜、不分、不寫
-            revenue = round(row["spend"] * row["roas"], 2) if row["roas"] is not None else None
             _upsert_outcome(
                 conn, org_id, brand_id, campaign_id, entity_kind=entity_kind,
                 entity_id=entity["id"], day=row["spend_date"], spend=row["spend"],
-                impressions=row["impressions"], clicks=row["clicks"], purchases=None,
-                revenue=revenue, currency=row["currency"], source="meta",
+                impressions=row["impressions"], clicks=row["clicks"],
+                purchases=row["purchases"],
+                revenue=row["revenue"], currency=row["currency"], source="meta",
             )
 
     _pull("adset", groups, "group")
