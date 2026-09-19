@@ -348,10 +348,12 @@ def bootstrap(conn, timestamp, *, limit=100):
     from app.ads import review_jobs
 
     limit = min(max(int(limit), 1), 100)
-    count = conn.execute(
-        "SELECT COUNT(*) AS n FROM ads_review_round WHERE decision IS NULL "
-        "AND status IN ('queued','running','unknown')"
-    ).fetchone()["n"]
+    # Startup is worker-wide; count tenant-scoped backlogs without exposing review data.
+    backlogs = conn.execute(
+        "SELECT org_id,COUNT(*) AS n FROM ads_review_round WHERE decision IS NULL "
+        "AND status IN ('queued','running','unknown') GROUP BY org_id"
+    ).fetchall()
+    count = sum(row["n"] for row in backlogs)
     recovered = dict(reviews_recovered=0, reviews_unknown=0, reviews_failed=0,
                      reviews_enqueued=0, has_more=False)
     # Scan the captured backlog once, including unchanged unknown rows ahead of
@@ -367,7 +369,8 @@ def bootstrap(conn, timestamp, *, limit=100):
     conn.execute(
         "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{runtime}',"
         "COALESCE(context_json->'runtime','{}'::jsonb) || %s::jsonb) WHERE "
-        "EXISTS(SELECT 1 FROM ads_external_entity e WHERE e.campaign_id=ads_campaign.id)",
+        "EXISTS(SELECT 1 FROM ads_external_entity e WHERE e.campaign_id=ads_campaign.id "
+        "AND e.org_id=ads_campaign.org_id AND e.brand_id=ads_campaign.brand_id)",
         (db.jsonb({"last_bootstrap_at": datetime.fromtimestamp(timestamp, UTC)}),),
     )
     conn.commit()

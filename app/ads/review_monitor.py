@@ -31,7 +31,9 @@ def _view(conn, row):
         state = "paused"
     elif row["review_id"]:
         review = conn.execute(
-            "SELECT status,error FROM ads_review_round WHERE id=%s", (row["review_id"],)
+            "SELECT status,error FROM ads_review_round WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND id=%s",
+            (row["org_id"], row["brand_id"], row["campaign_id"], row["review_id"]),
         ).fetchone()
         if review and review["status"] in {"queued", "running", "ready"}:
             state = review["status"]
