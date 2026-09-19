@@ -34,7 +34,13 @@ from fastapi import FastAPI
 
 def register(app: FastAPI) -> None:
     """掛 /api/ads/* 路由（機械式，比照 app/workbench/__init__.py 的延遲 import 慣例）。"""
-    from app.ads import change_routes, external_routes, month_budget_routes, user_assets_routes
+    from app.ads import (
+        change_routes,
+        external_routes,
+        month_budget_routes,
+        review_routes,
+        user_assets_routes,
+    )
     from app.ads import routes as ads_routes
 
     app.include_router(ads_routes.router)
@@ -42,14 +48,17 @@ def register(app: FastAPI) -> None:
     app.include_router(user_assets_routes.router)
     app.include_router(change_routes.router)
     app.include_router(month_budget_routes.router)
+    app.include_router(review_routes.router)
 
 
 def register_tasks() -> None:
     """F03-I12：掛 `background.ads_close_expired`（結案的自動路徑）＋每日 periodic
     dispatch，冪等。見 `app/ads/jobs.py` 檔頭。"""
     from app.ads import jobs as ads_jobs
+    from app.ads import review_jobs
 
     ads_jobs.register_tasks()
+    review_jobs.register_tasks()
 
 
 def launch_readiness(conn, org_id: str, brand_id: str) -> dict:

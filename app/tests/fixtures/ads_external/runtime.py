@@ -162,6 +162,23 @@ class ReadOnlyReader:
             ]
         )
 
+    def read_monthly(self, conn, org, brand, account, *, start, end, **kwargs):
+        from app.ads.adapters.external import SourcePage
+
+        # The original source fixture has no spending; this complete fixture query
+        # is explicit evidence, independent of real platform coverage.
+        return SourcePage(
+            [],
+            coverage={
+                "scope": "account_campaign_day",
+                "account_id": account["account_id"],
+                "currency": account["currency"],
+                "timezone_name": account["timezone_name"],
+                "start": str(start),
+                "end": str(end),
+            },
+        )
+
     def binding_kinds(self):
         return (self.kinds()[2],)
 
@@ -254,11 +271,41 @@ def install_assembly(context):
                 stop_reason="end_turn",
             )
 
+    class ReviewProvider:
+        name = "codex_cli"
+
+        def complete(self, *, messages, **kwargs):
+            stats["provider_calls"] += 1
+            payload = json.loads(messages[0]["content"])
+            followup = bool(payload.get("previous_review"))
+            item = {
+                "target_id": payload["target"]["id"],
+                "recommendation": "observe" if followup else "adjust",
+                "evidence_refs": ["current", "commerce.current", "commerce.previous"],
+                "hypothesis": "商城資料未支持平台樂觀結果，先暫停加碼判斷。"
+                if followup
+                else "先測試更清楚的品牌介紹文案，保留原圖片。",
+                "risks": ["商城幣別與完整性尚未確認，不能直接歸因至廣告。"],
+                "next_step": "補齊商城與平台期間後重看。"
+                if followup
+                else "人工核准文案清單後逐項讀回。",
+            }
+            if not followup:
+                item["suggested_copy"] = {"title": "探索品牌", "body": "了解更多"}
+            return providers.ProviderResponse(
+                output_text=json.dumps({"recommendations": [item]}, ensure_ascii=False),
+                structured=None,
+                usage=providers.Usage(input_tokens=0, output_tokens=0),
+                stop_reason="end_turn",
+            )
+
     def select(provider, task_type=None):
         if task_type == asset_suggestions.TASK_TYPE:
             return SuggestionProvider()
         if task_type == "ads_brief_parse":
             return providers.ScriptedProvider(providers.SCRIPTED_REPLIES[task_type])
+        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") == "B":
+            return ReviewProvider()
         raise LookupError(f"F13 has no fake provider for {task_type}")
 
     providers.select_provider = select
@@ -268,6 +315,10 @@ def install_assembly(context):
         user_assets.TASK: user_assets.process_preview,
         asset_suggestions.TASK: asset_suggestions.run,
     }
+    if os.environ.get("F15_ACCEPTANCE_PHASE") == "B":
+        from app.ads import review_jobs
+
+        handlers[review_jobs.TASK] = review_jobs.run
     jobs = queue.Queue()
     active = set()
     stopped = threading.Event()

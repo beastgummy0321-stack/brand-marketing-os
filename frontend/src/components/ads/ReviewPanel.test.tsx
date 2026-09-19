@@ -1,0 +1,242 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useSearchParams } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as reviews from "@/lib/adsReviewApi";
+import * as changes from "@/lib/adsChangeApi";
+import type { NativeEntity } from "@/lib/adsExternalApi";
+import { apiFetch } from "@/lib/http";
+import { ReviewPanel } from "./ReviewPanel";
+import { ChangeControl } from "./ChangeControl";
+
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
+vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
+vi.mock("@/lib/adsReviewApi", () => ({
+  getReviews: vi.fn(), getReview: vi.fn(), createReview: vi.fn(), decideReview: vi.fn(),
+}));
+vi.mock("@/lib/adsChangeApi", async importOriginal => ({
+  ...await importOriginal<typeof changes>(), getMonthlyBudget: vi.fn(), getChangeControl: vi.fn(),
+}));
+
+const target: NativeEntity = {
+  id: "ad_a", platform: "fixture", source_account: "account_a", native_id: "native_a",
+  native_kind: "ad", native_label: "廣告", name: "虛構品牌 A 廣告", parent_native_id: "group_a",
+  native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null,
+  budget_type: "unknown", budget_raw: {}, currency: null, last_success_at: null, sync_error: null,
+  creative: { kind: "image", fields: { body: "保留的原始內文", title: "保留的原始標題" } },
+};
+function commerce(): reviews.CommerceEvidence {
+  return {
+    scope: "brand", start: "2026-09-01", end: "2026-09-07", attribution: "unavailable",
+    order_summary: {
+      count: 8, non_void_count: 7, order_net_amount: 4567, paid_net_amount: null,
+      unknown_payment_count: 3, currency: null, currency_basis: "unknown", coverage: "unknown",
+      latest_import_at: null, unpaid_count: 2, void_count: 1, refunded_count: 1,
+    },
+    channels: [{ channel: "website", currency: null, amount: 4567, row_count: 8,
+      source_type: "order_mirror", source: "easystore_xlsx" }],
+    limitations: ["來源幣別尚未確認，不得把商城金額分配至單則廣告。"],
+  };
+}
+function period(): reviews.ReviewPeriod {
+  return {
+    row_count: 6, days_present: 6, days_expected: 7, missing_days: 1,
+    series: [{ metric_scope: "ad", attribution_key: "7d_click", currency: null, source: "platform",
+      row_count: 6, days_present: 6, known_counts: { spend: 6, purchases: 0 },
+      metrics: { spend: 1234, impressions: 4000, clicks: 20, purchases: null,
+        revenue: null, ctr: 0.5, cpc: 61.7, cpa: null, roas: null } }],
+  };
+}
+function round(status: reviews.ReviewStatus = "waiting"): reviews.ReviewRound {
+  return {
+    id: "review_a", entity_id: target.id, window_start: "2026-09-01", window_end: "2026-09-07",
+    previous_id: null, status, evidence_hash: "hash_a", llm_task_id: null, error: null,
+    decision: null, reason: null, revisit_at: null, created_at: "2026-09-08T00:00:00Z",
+    result_json: {}, evidence_json: {
+      target,
+      window: { start: "2026-09-01", end: "2026-09-07", previous_start: "2026-08-25",
+        previous_end: "2026-08-31", timezone: null },
+      current: period(), previous: { row_count: 0, days_present: 0, days_expected: 7,
+        missing_days: 7, series: [] },
+      commerce: { current: commerce(), previous: { ...commerce(), order_summary: {
+        ...commerce().order_summary, count: 0, non_void_count: 0, order_net_amount: null,
+      } } },
+      conditions: { history: "unknown", creative_snapshot: { kind: "image", copy_fields: {
+        body: "保留的原始內文",
+      } }, binding_count: 1 },
+      previous_review: null, limitations: ["未讀到完整報表。"],
+      waiting_reasons: status === "waiting" ? ["購買與付款證據尚未齊全。"] : [],
+      sources: [{ id: "source_a", text: "已收平台報表，缺購買指標。" }],
+    },
+  };
+}
+function data(value = round()): reviews.ReviewsData {
+  return { reviews: [value], targets: [target], reviews_truncated: false, targets_truncated: false };
+}
+const onGoal = vi.fn();
+function page(brandId = "brand_a") {
+  return <MemoryRouter><ReviewPanel brandId={brandId} campaignId="campaign_a" onGoal={onGoal} /></MemoryRouter>;
+}
+beforeEach(() => {
+  vi.resetAllMocks(); sessionStorage.clear();
+  vi.mocked(reviews.getReviews).mockResolvedValue(data());
+});
+
+describe("廣告檢討的證據與使用者決定", () => {
+  it("商城與平台分區呈現，未知付款、幣別與缺資料不顯示成功或補零", async () => {
+    const user = userEvent.setup();
+    render(page());
+    const platform = within(await screen.findByRole("region", { name: "單則廣告成效" }));
+    const shop = within(screen.getByRole("region", { name: "商城與通路證據" }));
+    expect(platform.getByText("1,234")).toBeTruthy();
+    expect(platform.queryByText("4,567")).toBeNull();
+    expect(shop.getByText("4,567")).toBeTruthy();
+    expect(shop.queryByText("1,234")).toBeNull();
+    const purchases = platform.getByRole("row", { name: /平台回報購買/ });
+    expect(within(purchases).getAllByRole("cell").map(cell => cell.textContent))
+      .toEqual(["平台回報購買", "尚待確認", "尚待確認"]);
+    const paid = shop.getByRole("row", { name: /明確付款訂單淨額/ });
+    expect(within(paid).getAllByRole("cell").map(cell => cell.textContent))
+      .toEqual(["明確付款訂單淨額", "尚待確認", "尚待確認"]);
+    expect(shop.getByText("3 筆")).toBeTruthy();
+    expect(shop.getByText(/原始來源未確認/)).toBeTruthy();
+    expect(platform.getByText(/幣別待確認.*6 \/ 7/)).toBeTruthy();
+    expect(screen.getByText("資料不足，等待補齊")).toBeTruthy();
+    expect(screen.queryByText("建議已備妥")).toBeNull();
+    expect(screen.queryByRole("button", { name: "完成本次檢討" })).toBeNull();
+    await user.click(shop.getByRole("button", { name: "查看通路來源與資料限制" }));
+    expect(shop.getByText(/由訂單同步，不與訂單再次相加/)).toBeTruthy();
+  });
+
+  it("waiting 只讀取資料與開啟補件入口，明確提交前不重新建立檢討", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviews.createReview).mockResolvedValue(round());
+    render(page());
+    await user.click(await screen.findByRole("button", { name: "檢視活動目標" }));
+    expect(onGoal).toHaveBeenCalledTimes(1);
+    expect(reviews.createReview).not.toHaveBeenCalled();
+    expect(reviews.getReview).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "重新檢查本期資料" }));
+    await waitFor(() => expect(reviews.createReview).toHaveBeenCalledTimes(1));
+    expect(reviews.createReview).toHaveBeenCalledWith("brand_a", "campaign_a",
+      { entity_id: "ad_a", start: "2026-09-01", end: "2026-09-07" }, expect.any(AbortSignal));
+  });
+
+  it("觀察建議的空文案不顯示修改入口", async () => {
+    const value = round("ready");
+    value.result_json.recommendations = [{ id: "observe", target_id: target.id, recommendation: "observe",
+      evidence_refs: ["current"], hypothesis: "等待更完整證據", risks: ["資料仍不足"], next_step: "補齊來源", suggested_copy: {} }];
+    vi.mocked(reviews.getReviews).mockResolvedValue(data(value));
+    render(page());
+    await screen.findByText("等待更完整證據");
+    expect(screen.queryByRole("link", { name: "只改文案，保留圖片" })).toBeNull();
+  });
+
+  it("承接上一回與核對紀錄，提交下一回時保留 previous_id", async () => {
+    const user = userEvent.setup();
+    const completed = round("completed");
+    completed.previous_id = "review_before";
+    completed.evidence_json.previous_review = { id: "review_before", result_json: {},
+      decision: "completed", reason: "上一回選擇保留圖片，再觀察新內文", actions: [{ state: "confirmed" }] };
+    vi.mocked(reviews.getReviews).mockResolvedValue(data(completed));
+    vi.mocked(reviews.createReview).mockResolvedValue({ ...round(), id: "review_next", previous_id: "review_a" });
+    render(page());
+    await user.click(await screen.findByRole("button", { name: "查看完整判讀依據、缺漏與上一輪結果" }));
+    expect(screen.getByText("上一回選擇保留圖片，再觀察新內文")).toBeTruthy();
+    expect(screen.getByText(/已帶入 1 項操作核對紀錄/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "暫緩本次檢討" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "記錄無法判定" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "準備下一次檢討" }));
+    expect(screen.getByText(/承接上一輪判讀與操作紀錄/)).toBeTruthy();
+    expect(reviews.createReview).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "開始本次檢討" }));
+    expect(reviews.createReview).toHaveBeenCalledWith("brand_a", "campaign_a",
+      expect.objectContaining({ previous_id: completed.id }), expect.any(AbortSignal));
+  });
+
+  it("切品牌清掉舊證據，延遲回應不能把前一品牌資料帶回", async () => {
+    let resolveOld: (value: reviews.ReviewsData) => void = () => {};
+    vi.mocked(reviews.getReviews).mockImplementation(brand => brand === "brand_a"
+      ? new Promise(resolve => { resolveOld = resolve; })
+      : Promise.resolve({ reviews: [], targets: [], reviews_truncated: false, targets_truncated: false }));
+    const view = render(page());
+    await waitFor(() => expect(reviews.getReviews).toHaveBeenCalledTimes(1));
+    const oldSignal = vi.mocked(reviews.getReviews).mock.calls[0][2];
+    view.rerender(page("brand_b"));
+    await screen.findByText("先帶入正在投放的廣告");
+    await act(async () => { resolveOld(data()); });
+    expect(oldSignal?.aborted).toBe(true);
+    expect(screen.queryByText(target.name!)).toBeNull();
+    expect(screen.queryByRole("region", { name: "商城與通路證據" })).toBeNull();
+    expect(reviews.createReview).not.toHaveBeenCalled();
+  });
+
+  it("已顯示的舊品牌證據在切換後立即移除", async () => {
+    const view = render(page());
+    await screen.findByText(target.name!);
+    vi.mocked(reviews.getReviews).mockImplementation(() => new Promise(() => {}));
+    view.rerender(page("brand_b"));
+    expect(screen.queryByText(target.name!)).toBeNull();
+    expect(screen.queryByRole("region", { name: "商城與通路證據" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("正在讀取");
+  });
+
+  it("建議連到文案清單，使用者修改後 POST 保留檢討與建議識別", async () => {
+    const user = userEvent.setup();
+    const ready = round("ready");
+    ready.result_json = { recommendations: [{ id: "recommendation_a", target_id: target.id,
+      recommendation: "adjust", evidence_refs: ["source_a"], hypothesis: "測試不同訴求，尚未證明改善",
+      risks: ["目前購買資料不足"], next_step: "保留圖片，測試新的文案",
+      suggested_copy: { title: "建議新標題", body: "建議新內文" } }] };
+    vi.mocked(reviews.getReviews).mockResolvedValue(data(ready));
+    vi.mocked(reviews.getReview).mockResolvedValue(ready);
+    vi.mocked(changes.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [] });
+    vi.mocked(changes.getMonthlyBudget).mockResolvedValue({ month: "2026-09", currency: null,
+      amount: null, revision: 0, known_spend: null, ongoing_estimate: null, reserved_increases: 0,
+      available: null, uncertainties: ["資料待確認"], can_increase: false, period_end: "2026-09-30",
+      confirmed_at: null, notice: "尚待確認" });
+    const saved: changes.ChangeSet = { id: "change_a", campaign_id: "campaign_a", title: "文案測試",
+      month: "2026-09", operation_id: "op_a", content_hash: "hash_a", status: "draft",
+      reason: null, revisit_at: null, approval_id: null, created_at: "2026-09-19T00:00:00Z",
+      approved_at: null, review_id: ready.id, recommendation_id: "recommendation_a", items: [{
+        id: "item_a", kind: "copy", target_id: target.id, target,
+        before: { title: "保留的原始標題", body: "保留的原始內文" },
+        after: { title: "建議新標題", body: "使用者修訂後的測試內文" },
+        reason: "測試不同訴求，尚未證明改善", verification_state: "pending", evidence_json: {},
+        reported_at: null, first_observed_at: null, verified_at: null,
+      }],
+    };
+    vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ change_set: saved }), { status: 200 }));
+    function Flow() {
+      const [search] = useSearchParams();
+      return search.get("tab") === "changes"
+        ? <ChangeControl brandId="brand_a" campaignId="campaign_a" />
+        : <ReviewPanel brandId="brand_a" campaignId="campaign_a" onGoal={onGoal} />;
+    }
+    render(<MemoryRouter><Flow /></MemoryRouter>);
+    const link = await screen.findByRole("link", { name: "只改文案，保留圖片" });
+    expect(link.getAttribute("href")).toContain("review=review_a&recommendation=recommendation_a");
+    await user.click(link);
+    expect(await screen.findByDisplayValue("建議新內文")).toBeTruthy();
+    expect(screen.getByDisplayValue("建議新標題")).toBeTruthy();
+    expect(apiFetch).not.toHaveBeenCalled();
+    await user.clear(screen.getByLabelText("變更 1 新內文"));
+    await user.type(screen.getByLabelText("變更 1 新內文"), "使用者修訂後的測試內文");
+    await user.click(screen.getByRole("button", { name: "保存清單，檢視並核准" }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    const [url, options] = vi.mocked(apiFetch).mock.calls[0];
+    expect(url).toContain("/brands/brand_a/campaigns/campaign_a/change-sets");
+    expect(options?.method).toBe("POST");
+    expect(typeof options?.body).toBe("string");
+    const body = JSON.parse(String(options?.body));
+    expect(body).toMatchObject({ review_id: "review_a", recommendation_id: "recommendation_a",
+      items: [{ kind: "copy", target_id: "ad_a", after: {
+        title: "建議新標題", body: "使用者修訂後的測試內文",
+      } }] });
+    expect(body.operation_id).toEqual(expect.any(String));
+    expect(reviews.createReview).not.toHaveBeenCalled();
+    await screen.findByRole("button", { name: "核准這份變更清單" });
+    expect(screen.getByText("使用者修訂後的測試內文")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "保存清單，檢視並核准" })).toBeNull();
+  });
+});

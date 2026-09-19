@@ -26,6 +26,8 @@ class CreateRequest(BaseModel):
     month: str
     items: list[dict] = Field(min_length=1, max_length=30)
     supersedes_id: str | None = None
+    review_id: str | None = None
+    recommendation_id: str | None = None
 
 
 class ApproveRequest(BaseModel):

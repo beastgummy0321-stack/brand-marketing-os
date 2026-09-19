@@ -267,4 +267,6 @@ def get(conn, org, brand, campaign_id, set_id):
         result["items"].append(view)
     result["reason"] = result.pop("decision_reason")
     result["can_revise"] = can_revise(result)
+    result["review_id"] = result["plan_json"].get("review_id")
+    result["recommendation_id"] = result["plan_json"].get("recommendation_id")
     return result
