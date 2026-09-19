@@ -683,7 +683,22 @@ def daily_entity_spend(
     就是一整個群組一列，等於原樣傳遞那一列的 `roas`），真正跨天、跨廣告的誠實加總（T5
     要的 `roas_coverage`）留給呼叫端 `app/schedule/performance.py` 用 Python 做，正是
     ADR 0057 §1 要求的「join 在 Python 做，不是一支跨模組的 SQL」。`currency`
-    （ADR 0057 §4）直接讀這一列自己凍住的欄位，不用另外 JOIN `meta_ad_account`。"""
+    （ADR 0057 §4）直接讀這一列自己凍住的欄位，不用另外 JOIN `meta_ad_account`。
+
+    F16-I05：多回 `purchases`／`revenue`／`action_type`／`attribution_window` 四欄——沒有
+    新讀取，`mes.actions`／`mes.action_values`／`mes.attribution_window` 是這一列早就存好
+    的欄位，這裡只是也選出來。同義字判定整段沿用 `external_purchase_values()`（`purchase`
+    目標的唯一定義是 `graph._ROAS_ACTION_PRIORITY`，不在這裡另外挑一次、也不 SUM 展開後的
+    `jsonb_array_elements`——理由跟 `_CONVERSIONS_LATERAL` 上方註解一樣：同一次成交會被
+    好幾個同義 action_type 各回報一次，展開再加總會把同一筆購買算成好幾筆）。做法：把每個
+    physical row 的 `actions`／`action_values` 用 `jsonb_build_object` 包成一組（`array_agg`
+    保留 SQL NULL，一個 physical row 一個陣列元素，兩個欄位天生配對，不必依賴兩個
+    `array_agg` 之間的順序一致），SQL 只做「同一列打包」，真正的同義字判定與『一列有沒有
+    追蹤到購買』全部留給 `external_purchase_values()`。`(spend_date, entity_id, currency)`
+    通常只有一個 physical row（唯一索引 `(ad_account_id, level, entity_id, spend_date)`
+    保證），但這裡的聚合规则在有多列時一樣成立：跟 `roas`／`cpa` 同一條 all-or-nothing
+    規則（`_combine_purchases()`），一列沒追蹤到購買，整組就不能假裝那一列貢獻了 0——
+    未追蹤永遠不是 0。"""
     if level not in LEVELS:
         raise ValueError(f"level 只能是 {'/'.join(LEVELS)} 其中之一")
     if not ad_account_ids:
@@ -692,7 +707,10 @@ def daily_entity_spend(
         "SELECT spend_date, entity_id, currency, SUM(spend) AS spend,"
         " SUM(impressions) AS impressions, SUM(clicks) AS clicks,"
         " CASE WHEN bool_and(roas IS NOT NULL)"
-        "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas"
+        "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas,"
+        " array_agg(jsonb_build_object('actions', mes.actions,"
+        "                              'action_values', mes.action_values)) AS purchase_rows,"
+        " (array_agg(mes.attribution_window))[1] AS attribution_window"
         " FROM meta_entity_spend mes"
         + _SPEND_WHERE
         + " GROUP BY spend_date, entity_id, currency ORDER BY spend_date, entity_id",
@@ -701,9 +719,37 @@ def daily_entity_spend(
     return [
         {"spend_date": r["spend_date"], "entity_id": r["entity_id"], "currency": r["currency"],
          "spend": float(r["spend"]), "impressions": int(r["impressions"]),
-         "clicks": int(r["clicks"]), "roas": _float_or_none(r["roas"])}
+         "clicks": int(r["clicks"]), "roas": _float_or_none(r["roas"]),
+         "attribution_window": r["attribution_window"],
+         **_combine_purchases(r["purchase_rows"])}
         for r in rows
     ]
+
+
+def _combine_purchases(purchase_rows: list[dict]) -> dict:
+    """一個 `(spend_date, entity_id, currency)` group 裡的每個 physical row 各自用
+    `external_purchase_values()` 判定（同一份 purchase 同義字優先序，不另挑一次）；通常
+    只有一個 physical row，這裡的規則是給「萬一不只一個」的誠實保底：跟 `_CPA_METRIC`／
+    `roas` 同一條 all-or-nothing 規則——任何一個 physical row 沒追蹤到購買，整組直接回
+    `None`，不能讓一列的『沒追蹤』被其他列的數字蓋過去、悄悄當成貢獻了 0。revenue 套同一條
+    規則：任何一個有追蹤到購買數的 row 卻沒追蹤到營收，整組營收也是 `None`——不能拿
+    "有些天有營收" 去補"有些天沒有" 的洞。"""
+    parsed = [
+        external_purchase_values(item.get("actions"), item.get("action_values"))
+        for item in purchase_rows
+    ]
+    if any(p["purchases"] is None for p in parsed):
+        return {"purchases": None, "revenue": None, "action_type": None}
+    revenue = (
+        None if any(p["revenue"] is None for p in parsed)
+        else round(sum(p["revenue"] for p in parsed), 2)
+    )
+    action_type = next((p["action_type"] for p in parsed if p["action_type"]), None)
+    return {
+        "purchases": int(round(sum(p["purchases"] for p in parsed))),
+        "revenue": revenue,
+        "action_type": action_type,
+    }
 
 
 # ---- brand_meta_ad_account ----------------------------------------------------------

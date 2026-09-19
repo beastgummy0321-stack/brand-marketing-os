@@ -511,7 +511,40 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `experiments.judge`）一律用「這欄是不是 `NULL`」判斷追蹤與否，不再用 `source == 'meta'`
   或 `revenue != 0` 這類猜測性 sentinel；`closeout.close()`／`_judge()` 本來就正確處理
   `None`，這次沒有改動判讀邏輯本身。
-- 尚未完成：`app/meta/repository.py::daily_entity_spend`（本票 do-not-touch）依然不回傳購買
-  數，所以真實 Meta 活動的 `purchases` 目前還是恆為 `NULL`——結案對這些活動仍然判「看不出」，
-  跟這張票之前一樣；改變的只是「未追蹤」現在誠實地是 `NULL`，不再是一個看起來像數字的 `0`。
-  讓 `daily_entity_spend` 真的吐出購買數是下一張票的範圍。
+- 這一票之後真實 Meta 活動的 `purchases` 仍然恆為 `NULL`（結案仍判「看不出」）；讓
+  `daily_entity_spend` 真的吐出購買數是 F16-I05 的範圍，見 §6.11。
+
+### 6.11 F16-I05 — 真實 Meta 購買數接上結案判讀（settled 2026-09-20）
+
+- `app/meta/repository.py::daily_entity_spend`（facade 新增，非 refactor）多回四欄：
+  `purchases`／`revenue`／`action_type`／`attribution_window`。沒有新讀取——
+  `meta_entity_spend.actions`／`action_values`／`attribution_window` 是既有每日拉取早就存好
+  的欄位，這次只是也選出來；同義字判定整段沿用 `external_purchase_values()`（`purchase` 目標
+  的唯一定義是 `graph._ROAS_ACTION_PRIORITY`），`app/ads/**` 沒有另外維護第二份同義字清單。
+  `(spend_date, entity_id, currency)` 一個 group 內任何一個 physical row 沒追蹤到購買，整組
+  就是 `NULL`（跟 `roas`／`cpa` 同一條 all-or-nothing 誠實規則）——未追蹤永遠不是 0。
+- `ingest_meta`（`app/ads/outcome.py`）改寫 `purchases`：`NULL`（列沒有任何購買同義字）／
+  `0`（追蹤到真的零）／真的數字，三選一，不再對 Meta 來源列一律寫 `NULL`。`revenue` 只認
+  `action_values`——不再從 `roas` 反推（`revenue = spend * roas` 這行整個刪掉）：`roas` 是
+  Meta 自己算的比率，`action_values` 是跟 `purchases` 同一個 action_type 配對的原始金額，
+  兩者都用會依當天哪個先追蹤到而悄悄換來源，讓同一支活動的 CPA／ROAS 失去一致的定義。
+  `action_type`／`attribution_window` 隨號碼一起從 facade 回來（跟
+  `app/ads/adapters/meta_read.py:observation()` 對外部活動已經在用的 `attribution_key`／
+  `action_type` 同一種形狀）；`ads_outcome_daily` 沒有欄位可以逐列存這個歸因說明——這是讀寫
+  變更，不是 schema 變更（沒有新 migration），所以目前只在 ingest 當下的記憶體裡看得到、寫進
+  程式註解，還沒有持久化到資料庫；要逐列留存需要另開一張票加欄位。
+- 沒有雙重計算：`ads_outcome_daily`（內部 Campaign，`ingest_meta` 從 `meta_entity_spend` 灌）
+  跟 `ads_external_daily`（自帶／既有活動，`external_sync` 從平台 Graph API 直接灌）是完全分
+  流的兩條路徑——一個平台實體綁定到哪個 Campaign（內部或外部）互斥（`ads_delivery_group`／
+  `ads_ad` 的綁定，`_conflicting_campaigns` 在 `ingest_meta` 裡強制檢查），所以同一筆 Meta 花
+  費不會同時被兩條路徑各記一次。內部路徑走本模組自己每日排程拉的 `meta_entity_spend`
+  （campaign/adset/ad 三層都有）；外部路徑走 `external_sync` 對已標記「既有活動」的 Campaign
+  直接呼叫 Graph API（不落地 `meta_entity_spend`）。
+- 「活動過了結束日 7 天自動結案」是三處過期敘述，這次改成文字，行為本來就沒有這回事
+  （`app/ads/jobs.py::close_expired_campaigns` 早就只排監控、從不自己結案）：
+  `app/main.py:454`（註解）、`app/ads/__init__.py:63`（docstring）、
+  `frontend/src/lib/adsApi.ts:726`（JSDoc）。
+- 驗證：`app/tests/test_meta_daily_spend.py::DailyEntitySpendPurchasesTest`（facade 本身，
+  真實 jsonb 形狀）、`app/tests/test_ads_outcome.py`（`ingest_meta` 寫入 NULL／0／真數字三種
+  情境，`RealMetaPurchasesReachCloseoutTest` 端到端驗真實購買數能通過樣本門檻判「達成」／
+  「未達成」）。

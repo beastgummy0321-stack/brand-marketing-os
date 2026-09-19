@@ -723,7 +723,7 @@ export async function ingestOutcome(
 
 // -- F03-I12：結案 -----------------------------------------------------------------------------
 
-/** 提前手動結案；自動路徑（end+7d）在後端背景工作，寫的是同一個 verdict/verdict_json 形狀。 */
+/** 手動結案——結案永遠是使用者動作，沒有活動過了結束日就自動結案這回事（F16-I05）。 */
 export async function closeCampaign(
   brandId: string,
   campaignId: string,

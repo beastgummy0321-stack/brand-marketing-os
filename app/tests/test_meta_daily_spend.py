@@ -1029,6 +1029,119 @@ class CpaMappingTest(unittest.TestCase):
         self.assertIsNone(summary["entities"][0]["cpa"], "同一個實體小計也要一樣回 None")
 
 
+# -- 9b. F16-I05：daily_entity_spend 多回 purchases／revenue／action_type／attribution_window --
+
+# 2026-09-20 從 `meta_entity_spend` 撈的真實形狀（見票 F16-I05 環境說明），不是憑空造的購買
+# 定義域：同一次交易被好幾個同義字各回報一次（`omni_purchase`／`purchase`），優先序只認
+# `graph._ROAS_ACTION_PRIORITY` 第一個對得上的——這裡刻意兩個都放，用來驗證優先序真的生效。
+_REAL_ACTIONS_WITH_PURCHASE = [
+    {"value": "6", "1d_view": "4", "7d_click": "2", "action_type": "omni_purchase"},
+    {"value": "6", "1d_view": "4", "7d_click": "2", "action_type": "purchase"},
+    {"value": "31", "7d_click": "31", "action_type": "link_click"},
+]
+_REAL_ACTION_VALUES_WITH_PURCHASE = [
+    {"value": "6000", "1d_view": "3000", "7d_click": "3000", "action_type": "purchase"},
+    {"value": "6000", "1d_view": "3000", "7d_click": "3000", "action_type": "omni_purchase"},
+]
+# 同一份真實資料裡「有 actions 卻沒有任何購買同義字」的一列（帳號那天只回報互動事件）。
+_REAL_ACTIONS_NO_PURCHASE = [
+    {"value": "2", "7d_click": "2", "action_type": "link_click"},
+    {"value": "91", "1d_view": "88", "7d_click": "3", "action_type": "page_engagement"},
+    {"value": "1", "action_type": "post_interaction_gross"},
+]
+
+
+class DailyEntitySpendPurchasesTest(unittest.TestCase):
+    """F16-I05：`daily_entity_spend` 不再回不了購買數——同義字判定整段沿用
+    `external_purchase_values()`（`purchase` 目標的唯一定義是 `graph._ROAS_ACTION_PRIORITY`），
+    這裡只驗證 SQL 端把對的欄位接出來，不是另外挑一次同義字。"""
+
+    def setUp(self):
+        from datetime import UTC, datetime
+
+        self.org_id = f"org_purchases_test_{uuid4().hex[:10]}"
+        web.conn.execute(
+            "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+            " ON CONFLICT (id) DO NOTHING",
+            (self.org_id, self.org_id),
+        )
+        meta_repo.upsert_accounts(web.conn, self.org_id, [
+            {"account_id": BP_ACCOUNT_ID, "name": "BP AD", "currency": "TWD"},
+        ])
+        web.conn.commit()
+        self.account_id = next(
+            a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
+            if a["account_id"] == BP_ACCOUNT_ID
+        )
+        self.today = datetime.now(UTC).date()
+
+    def _row(self, entity_id: str, *, actions, action_values) -> dict:
+        return {
+            "level": "campaign", "entity_id": entity_id, "entity_name": entity_id,
+            "campaign_id": entity_id, "adset_id": None, "ad_id": None,
+            "spend_date": self.today, "spend": 1000, "impressions": 1000, "clicks": 50,
+            "roas": None, "actions": actions, "action_values": action_values,
+            "attribution_window": "7d_click,1d_view",
+        }
+
+    def _daily(self) -> dict:
+        rows = meta_repo.daily_entity_spend(
+            web.conn, self.org_id, [self.account_id], self.today,
+            self.today + timedelta(days=1), level="campaign",
+        )
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_real_purchase_action_reports_count_revenue_and_attribution(self):
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c1", actions=_REAL_ACTIONS_WITH_PURCHASE,
+                      action_values=_REAL_ACTION_VALUES_WITH_PURCHASE),
+        ])
+        web.conn.commit()
+        row = self._daily()
+        self.assertEqual(row["purchases"], 6)
+        self.assertAlmostEqual(row["revenue"], 6000.0, places=2)
+        # 優先序第一個對得上的是 omni_purchase，不是同一列裡也存在的 purchase。
+        self.assertEqual(row["action_type"], "omni_purchase")
+        self.assertEqual(row["attribution_window"], "7d_click,1d_view")
+
+    def test_no_purchase_action_present_is_untracked_not_zero(self):
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c2", actions=_REAL_ACTIONS_NO_PURCHASE, action_values=None),
+        ])
+        web.conn.commit()
+        row = self._daily()
+        self.assertIsNone(row["purchases"], "沒有任何購買同義字，未追蹤永遠不是 0")
+        self.assertIsNone(row["revenue"])
+        self.assertIsNone(row["action_type"])
+
+    def test_purchase_action_present_with_tracked_zero_value_is_zero_not_none(self):
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c3",
+                      actions=[{"action_type": "omni_purchase", "value": "0"}],
+                      action_values=[{"action_type": "omni_purchase", "value": "0"}]),
+        ])
+        web.conn.commit()
+        row = self._daily()
+        self.assertEqual(row["purchases"], 0, "追蹤到真的零，不該回 None")
+        self.assertEqual(row["revenue"], 0.0)
+        self.assertEqual(row["action_type"], "omni_purchase")
+
+    def test_no_actions_at_all_stays_untracked(self):
+        """既有形狀（`actions`／`action_values` 都是 SQL NULL）不能被新欄位動到——這是
+        F16-I05 之前所有既有呼叫端（`app/schedule/*`）已經在用的形狀。"""
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c4", actions=None, action_values=None),
+        ])
+        web.conn.commit()
+        row = self._daily()
+        self.assertIsNone(row["purchases"])
+        self.assertIsNone(row["revenue"])
+        self.assertIsNone(row["action_type"])
+        self.assertEqual(row["spend"], 1000.0)
+        self.assertEqual(row["impressions"], 1000)
+
+
 # -- 10. backfill：37 個月保護在任何 HTTP 呼叫之前就擋下 --------------------------------
 
 class RetentionGuardTest(_MetaDailySpendTestBase):

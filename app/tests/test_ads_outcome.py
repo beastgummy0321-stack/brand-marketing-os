@@ -85,17 +85,20 @@ class OutcomeTestBase(unittest.TestCase):
         self._account_row_id = row["id"]
         return row["id"]  # ad_account_id（`daily_entity_spend` 要的是這個內部 id）
 
-    def _bound_campaign(self, *, start_date=None, end_date=None) -> tuple[dict, str, str]:
+    def _bound_campaign(self, *, start_date=None, end_date=None, success_metric="cpa",
+                         success_target=300) -> tuple[dict, str, str]:
         """回傳 (campaign_detail, group_external_id, ad_external_id)，campaign/group/ad 三層
         都已經精準名稱比對綁定完成（跟 `test_ads_publish_manual.py::FullMatchTest` 同一套）。
         每個平台實體 id 都是這次呼叫自己造的（`uuid`），不同測試、不同 Campaign 之間不會撞名。
-        """
+        `success_metric`／`success_target` 預設跟原本一樣，F16-I05 的結案整合測試需要判
+        `purchases` 才覆寫。"""
         start_date = start_date or self.today
         end_date = end_date or self.today
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "objective": "購買", "success_metric": success_metric,
+            "success_target": success_target,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": 500, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -138,12 +141,25 @@ class OutcomeTestBase(unittest.TestCase):
 
     def _spend_row(self, *, level: str, entity_id: str, campaign_ext: str, day: date,
                    spend: float, roas: float | None, adset_id: str | None = None,
-                   ad_id: str | None = None) -> dict:
+                   ad_id: str | None = None, purchases: int | None = None,
+                   revenue: float | None = None, action_type: str = "omni_purchase") -> dict:
+        """F16-I05：`purchases` 給定時才長出 `actions`／`action_values`——真實形狀（`action_type`
+        跟它配對的 `value`），不是憑空塞一個數字進 `ads_outcome_daily`。預設 `None` 保留舊有
+        呼叫端「這一列沒有購買同義字」的行為不變。"""
+        actions = (
+            None if purchases is None
+            else [{"action_type": action_type, "value": str(purchases)}]
+        )
+        action_values = (
+            None if purchases is None or revenue is None
+            else [{"action_type": action_type, "value": str(revenue)}]
+        )
         return {
             "level": level, "entity_id": entity_id, "entity_name": entity_id,
             "campaign_id": campaign_ext, "adset_id": adset_id, "ad_id": ad_id,
             "spend_date": day, "spend": spend, "impressions": 1000, "clicks": 20, "roas": roas,
-            "actions": None, "action_values": None, "attribution_window": "7d_click,1d_view",
+            "actions": actions, "action_values": action_values,
+            "attribution_window": "7d_click,1d_view",
         }
 
     def _outcome_rows(self, campaign_id: str) -> list:
@@ -189,7 +205,11 @@ class SpendLandsOnTheRightCampaignTest(OutcomeTestBase):
         self.assertEqual(group_rows[0]["day"], self.today)
         self.assertEqual(float(group_rows[0]["spend"]), 500.0)
         self.assertEqual(group_rows[0]["source"], "meta")
-        self.assertEqual(float(group_rows[0]["revenue"]), 1000.0)  # roas(2.0) x spend(500)
+        # F16-I05：revenue 只認 action_values，不再從 roas 反推——這一列只給了 roas，沒有任何
+        # 購買同義字，revenue／purchases 都該是未追蹤（None），不是拿 roas(2.0) x spend(500) 造
+        # 出一個看起來有根據、其實沒被 Meta 標記為購買事件的數字。
+        self.assertIsNone(group_rows[0]["purchases"])
+        self.assertIsNone(group_rows[0]["revenue"])
 
 
 class UnboundSpendLandsNowhereTest(OutcomeTestBase):
@@ -259,12 +279,16 @@ class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
             start_date=self.today - timedelta(days=1), end_date=self.today,
         )
         account_id = self._account_row_id
+        # F16-I05：revenue 現在只認 action_values，不是 roas——兩天各給一個真的購買同義字
+        # 跟它的 value，總營收 1800／總花費 1000，跟原本靠 roas 反推的假設值保持一致，只是
+        # 換成真的來源。
         meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
             self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
                              day=self.today - timedelta(days=1), spend=400.0, roas=3.0,
-                             adset_id=group_ext),
+                             adset_id=group_ext, purchases=1, revenue=1200.0),
             self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
-                             day=self.today, spend=600.0, roas=1.0, adset_id=group_ext),
+                             day=self.today, spend=600.0, roas=1.0, adset_id=group_ext,
+                             purchases=1, revenue=600.0),
         ])
         web.conn.commit()
 
@@ -282,10 +306,11 @@ class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
 
 
 class MetaIngestWritesUntrackedNotZeroTest(OutcomeTestBase):
-    """F16-I01：`ingest_meta` 沒有購買數可拉，寫的是 `NULL`（未追蹤），不是看起來像數字的
-    `0`；`revenue` 有 `roas` 才是數字，沒有一樣是 `NULL`，不是 0。"""
+    """F16-I01/F16-I05：這一列的 `actions` 裡沒有任何購買同義字（`roas=None` 也沒有一個對得上
+    `graph._ROAS_ACTION_PRIORITY` 的 action_type），`ingest_meta` 寫的是 `NULL`（未追蹤），
+    不是看起來像數字的 `0`。"""
 
-    def test_meta_row_purchases_is_null_and_revenue_null_without_roas(self):
+    def test_meta_row_purchases_is_null_and_revenue_null_without_a_purchase_action(self):
         detail, group_ext, _ad_ext = self._bound_campaign()
         account_id = self._account_row_id
         meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
@@ -301,6 +326,44 @@ class MetaIngestWritesUntrackedNotZeroTest(OutcomeTestBase):
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["purchases"])
         self.assertIsNone(rows[0]["revenue"])
+
+    def test_meta_row_with_a_tracked_zero_purchase_action_stores_zero_not_none(self):
+        """一個 purchase 同義字真的回報了、值是 0——追蹤到的真零，不是「沒有這個 key」。"""
+        detail, group_ext, _ad_ext = self._bound_campaign()
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=None, adset_id=group_ext,
+                             purchases=0, revenue=0.0),
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today, end=self.today + timedelta(days=1))
+
+        rows = self._outcome_rows(detail["id"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["purchases"], 0)
+        self.assertEqual(float(rows[0]["revenue"]), 0.0)
+
+    def test_meta_row_with_a_real_purchase_action_stores_the_real_count_and_revenue(self):
+        """真實形狀（`omni_purchase`＋它的 `value`）——不是拿 roas 反推。"""
+        detail, group_ext, _ad_ext = self._bound_campaign()
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=None, adset_id=group_ext,
+                             purchases=6, revenue=6000.0),
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today, end=self.today + timedelta(days=1))
+
+        rows = self._outcome_rows(detail["id"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["purchases"], 6)
+        self.assertAlmostEqual(float(rows[0]["revenue"]), 6000.0, places=2)
 
 
 class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):
@@ -464,6 +527,67 @@ class IngestEndpointDispatchTest(OutcomeTestBase):
         rows = [r for r in self._outcome_rows(detail["id"]) if r["source"] == "meta"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(float(rows[0]["spend"]), 250.0)
+
+
+class RealMetaPurchasesReachCloseoutTest(OutcomeTestBase):
+    """F16-I05: a real, bound Meta campaign — three days of `meta_entity_spend` rows built from
+    the real jsonb shape (`omni_purchase` synonym, matching `action_values`) — passes the sample
+    gate (>=10 purchases, >=3 days) and closes as 達成 or 未達成, never 看不出. Before this
+    issue, `daily_entity_spend` never returned a purchase count, so `ingest_meta` always wrote
+    `NULL` and every Meta-sourced campaign closed as 看不出 regardless of real performance."""
+
+    def test_bound_campaign_with_real_purchase_actions_closes_as_achieved(self):
+        from app.ads import closeout
+
+        detail, group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today - timedelta(days=2), end_date=self.today,
+            success_metric="purchases", success_target=8,
+        )
+        account_id = self._account_row_id
+        # 三天各 4 個真的購買（omni_purchase，跟真實資料同一組同義字），合計 12 >= target(8)、
+        # 也 >= 樣本門檻(10)，天數 3 天 >= 3——樣本門檻通過，不是「看不出」。
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today - timedelta(days=i), spend=400.0, roas=None,
+                             adset_id=group_ext, purchases=4, revenue=4000.0)
+            for i in range(3)
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today - timedelta(days=2),
+                             end=self.today + timedelta(days=1))
+
+        closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+
+        self.assertEqual(closed["verdict"], "達成")
+        self.assertEqual(closed["verdict_json"]["actual"], 12)
+        self.assertEqual(closed["verdict_json"]["sample_bucket"], "中")
+
+    def test_bound_campaign_with_real_purchase_actions_below_target_closes_as_missed(self):
+        from app.ads import closeout
+
+        detail, group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today - timedelta(days=2), end_date=self.today,
+            success_metric="purchases", success_target=20,
+        )
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today - timedelta(days=i), spend=400.0, roas=None,
+                             adset_id=group_ext, purchases=4, revenue=4000.0)
+            for i in range(3)
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today - timedelta(days=2),
+                             end=self.today + timedelta(days=1))
+
+        closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+
+        self.assertEqual(closed["verdict"], "未達成")
+        self.assertEqual(closed["verdict_json"]["actual"], 12)
 
 
 if __name__ == "__main__":
