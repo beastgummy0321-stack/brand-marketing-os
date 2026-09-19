@@ -54,15 +54,62 @@ class MetricsTest(unittest.TestCase):
             creative_summary({"asset_feed_spec": {}, "image_hash": "a"})["kind"], "image"
         )
 
-    def test_native_budget_keeps_unknown_denominator(self):
+    def test_native_budget_resolves_zero_decimal_currency(self):
+        # TWD offset 1 (docs/architecture/ads.md §6.12): 1000 minor units == NT$1000, no rounding.
         item = _entity(
             {"id": "2", "account_id": "1", "lifetime_budget": "1000"},
             "campaign",
-            {"account_id": "1", "currency": "JPY"},
+            {"account_id": "1", "currency": "TWD"},
         )
         self.assertEqual(item["budget_type"], "lifetime")
-        self.assertIsNone(item["budget_amount"])
+        self.assertEqual(item["budget_amount"], 1000.0)
         self.assertEqual(item["budget_raw"]["values"]["lifetime_budget"], "1000")
+        self.assertEqual(item["budget_raw"]["conversion"], "offset_table:1")
+        self.assertEqual(item["availability"]["budget_amount"], "available")
+
+    def test_native_budget_resolves_two_decimal_currency(self):
+        # USD offset 100: 150055 minor units == $1500.55, exact Decimal division, no float loss.
+        item = _entity(
+            {"id": "3", "account_id": "1", "campaign_id": "2", "daily_budget": "150055"},
+            "adset",
+            {"account_id": "1", "currency": "USD"},
+        )
+        self.assertEqual(item["budget_type"], "daily")
+        self.assertEqual(item["budget_amount"], 1500.55)
+        self.assertEqual(item["budget_raw"]["conversion"], "offset_table:100")
+        self.assertEqual(item["availability"]["budget_amount"], "available")
+
+    def test_native_budget_currency_absent_from_offset_table_stays_unknown(self):
+        # BTC (or any currency not in Meta's documented table) never defaults to 1 or 100.
+        item = _entity(
+            {"id": "4", "account_id": "1", "daily_budget": "1000"},
+            "campaign",
+            {"account_id": "1", "currency": "BTC"},
+        )
+        self.assertIsNone(item["budget_amount"])
+        self.assertEqual(item["budget_raw"]["conversion"], "currency_not_in_offset_table")
+        self.assertEqual(item["availability"]["budget_amount"], "unknown")
+
+    def test_native_budget_missing_currency_stays_unknown(self):
+        item = _entity(
+            {"id": "5", "account_id": "1", "daily_budget": "1000"},
+            "campaign",
+            {"account_id": "1", "currency": None},
+        )
+        self.assertIsNone(item["budget_amount"])
+        self.assertEqual(item["budget_raw"]["conversion"], "currency_absent")
+        self.assertEqual(item["availability"]["budget_amount"], "unknown")
+
+    def test_native_budget_absent_value_stays_unknown(self):
+        item = _entity(
+            {"id": "6", "account_id": "1"},
+            "campaign",
+            {"account_id": "1", "currency": "TWD"},
+        )
+        self.assertEqual(item["budget_type"], "unknown")
+        self.assertIsNone(item["budget_amount"])
+        self.assertEqual(item["budget_raw"]["conversion"], "no_budget_value")
+        self.assertEqual(item["availability"]["budget_amount"], "unknown")
 
     def test_external_view_pages_without_mixing_dimensions(self):
         from datetime import date

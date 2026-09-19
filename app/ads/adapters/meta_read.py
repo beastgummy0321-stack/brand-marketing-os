@@ -5,12 +5,63 @@ Field declarations do not establish live account permissions.
 
 import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads.adapters.external import SourcePage, SourceReadError
 from app.core.db import now_utc
 from app.meta import repository as source
+
+# Meta Marketing API currency offsets. Source: https://developers.facebook.com/docs/
+# marketing-api/currencies (fetched 2026-09-20): "Each currency has an offset which specifies
+# how the platform handles its subdivisions." An amount in API minor units is divided by the
+# currency's offset to get the amount in the account currency. Cross-checked read-only against
+# campaign 120250284145340671 on TWD account 368741390835357: daily_budget "1900" only holds
+# together against that campaign's actual daily spend (1,639-2,383 TWD) at offset 1 (NT$1,900/day);
+# offset 100 (NT$19/day) is impossible against that spend. See docs/architecture/ads.md §6.12.
+# A currency in neither set below resolves to budget_amount=None with a reason; never a default.
+_OFFSET_1_CURRENCIES = frozenset({
+    "CLP", "COP", "CRC", "HUF", "IDR", "ISK", "JPY", "KRW", "PYG", "TWD", "VND",
+})
+_OFFSET_100_CURRENCIES = frozenset({
+    "DZD", "ARS", "AUD", "BHD", "BDT", "BOB", "BGN", "BRL", "GBP", "CAD", "CNY", "HRK", "CZK",
+    "DKK", "EGP", "EUR", "GTQ", "HNL", "HKD", "INR", "ILS", "JOD", "KES", "LVL", "LTL", "MOP",
+    "MYR", "MXN", "NZD", "NIO", "NGN", "NOK", "PKR", "PEN", "PHP", "PLN", "QAR", "RON", "RUB",
+    "SAR", "RSD", "SGD", "SKK", "ZAR", "SEK", "CHF", "THB", "TRY", "AED", "UAH", "USD", "UYU",
+    "VEF", "FBZ", "VES",
+})
+
+
+def _budget_minor_unit_amount(raw_value, currency):
+    """Resolve one Meta minor-unit budget into the account currency, or explain why not.
+
+    Returns (amount: float|None, reason: str). `reason` is always a machine-readable token:
+    an "offset_table:<n>" trail for a resolved amount, or the specific block for an unresolved
+    one. Unknown is never a number — a currency absent from both documented offset sets stays
+    None rather than guessing 1 or 100.
+    """
+    if not currency or not re.fullmatch(r"[A-Z]{3}", currency):
+        return None, "currency_absent"
+    if currency in _OFFSET_1_CURRENCIES:
+        offset, places = 1, 0
+    elif currency in _OFFSET_100_CURRENCIES:
+        offset, places = 100, 2
+    else:
+        return None, "currency_not_in_offset_table"
+    if raw_value is None:
+        return None, "no_budget_value"
+    try:
+        units = Decimal(str(raw_value))
+    except InvalidOperation:
+        return None, "no_budget_value"
+    if not units.is_finite():
+        return None, "no_budget_value"
+    # Meta always reports minor units as integers, so this division is exact for well-formed
+    # platform data; ROUND_HALF_UP is a defensive fallback only, never a source of precision
+    # loss on a resolved two-decimal currency (Decimal throughout, no binary float division).
+    quantum = Decimal(1).scaleb(-places)
+    amount = (units / Decimal(offset)).quantize(quantum, rounding=ROUND_HALF_UP)
+    return float(amount), f"offset_table:{offset}"
 
 
 def _number(value):
@@ -66,22 +117,31 @@ def _entity(item, kind, account):
         )
     if kind != "ad":
         raw = {key: item[key] for key in ("daily_budget", "lifetime_budget") if key in item}
-        result.update(
-            budget_type="lifetime"
+        budget_type = (
+            "lifetime"
             if _number(raw.get("lifetime_budget"))
             else "daily"
             if _number(raw.get("daily_budget"))
-            else "unknown",
+            else "unknown"
+        )
+        currency = account.get("currency")
+        if budget_type == "unknown":
+            amount, conversion = None, "no_budget_value"
+        else:
+            raw_value = raw.get("lifetime_budget" if budget_type == "lifetime" else "daily_budget")
+            amount, conversion = _budget_minor_unit_amount(raw_value, currency)
+        result.update(
+            budget_type=budget_type,
             budget_raw={
                 "values": raw,
-                "unit": "unknown",
-                "conversion": "unverified_currency_denominator",
+                "unit": "minor_units" if amount is not None else "unknown",
+                "conversion": conversion,
             },
-            currency=account.get("currency"),
+            currency=currency,
             budget_source="graph",
-            budget_amount=None,
+            budget_amount=amount,
         )
-        result["availability"]["budget_amount"] = "unknown"
+        result["availability"]["budget_amount"] = "available" if amount is not None else "unknown"
     return result
 
 

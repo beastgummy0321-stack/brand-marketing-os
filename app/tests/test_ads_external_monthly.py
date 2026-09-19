@@ -321,7 +321,9 @@ class MetaMonthlyContractTest(unittest.TestCase):
             self.read()
         fetch.assert_not_called()
 
-    def test_verify_campaign_and_adset_returns_budget_unknown_not_divided(self):
+    def test_verify_campaign_and_adset_resolves_budget_for_documented_currency_else_stays_unknown(
+        self,
+    ):
         from app.meta import repository as source
 
         for kind in ("campaign", "adset"):
@@ -344,6 +346,37 @@ class MetaMonthlyContractTest(unittest.TestCase):
                     root_id="2",
                     original={},
                 )
-            self.assertIsNone(result["entity"]["budget_amount"])
-            self.assertEqual(result["entity"]["budget_raw"]["unit"], "unknown")
+            # self.account currency is TWD (offset 1, docs/architecture/ads.md §6.12): resolved.
+            self.assertEqual(result["entity"]["budget_amount"], 1000.0)
+            self.assertEqual(result["entity"]["budget_raw"]["unit"], "minor_units")
+            self.assertEqual(result["entity"]["budget_raw"]["conversion"], "offset_table:1")
             self.assertEqual(result["continuous_intervals"], [])
+
+        # A currency absent from both documented offset tables stays None with a reason,
+        # never a guessed division.
+        self.account["currency"] = "XXX"
+        raw = {
+            "id": "2",
+            "account_id": "1",
+            "campaign_id": "2",
+            "daily_budget": "1000",
+            "effective_status": "PAUSED",
+        }
+        with patch.object(source, "read_external_object", return_value=raw):
+            result = self.reader.verify_native(
+                None,
+                "org",
+                "brand",
+                self.account,
+                native_kind="campaign",
+                native_id=raw["id"],
+                root_kind="campaign",
+                root_id="2",
+                original={},
+            )
+        self.assertIsNone(result["entity"]["budget_amount"])
+        self.assertEqual(result["entity"]["budget_raw"]["unit"], "unknown")
+        self.assertEqual(
+            result["entity"]["budget_raw"]["conversion"], "currency_not_in_offset_table"
+        )
+        self.assertEqual(result["continuous_intervals"], [])
