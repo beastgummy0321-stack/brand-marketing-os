@@ -14,7 +14,18 @@ from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.main import app
-from app.workbench import repository as wb
+
+
+def saved_workbench_output(conn, *, org_id, brand_id, brief_id, part, body_json):
+    """Seed an already-produced historical output; exercise only the public read seam."""
+    output_id = db.new_id("wbo")
+    conn.execute(
+        "INSERT INTO workbench_output(id,org_id,brand_id,brief_id,part,generation_round,"
+        "version_index,body_json) VALUES(%s,%s,%s,%s,%s,1,1,%s)",
+        (output_id, org_id, brand_id, brief_id, part, db.jsonb(body_json)),
+    )
+    conn.commit()
+    return {"id": output_id}
 
 
 @pytest.fixture
@@ -308,16 +319,13 @@ def test_workbench_version_source_is_scoped_and_exact_text_is_read_by_server(set
         },
     )
     brief = workbench.briefs_for_source(conn, org, brand, "schedule_node", {"test": task["id"]})[0]
-    output = wb.write_output(
+    output = saved_workbench_output(
         conn,
         org_id=org,
         brand_id=brand,
         brief_id=brief["id"],
         part="image_prompt",
-        generation_round=1,
         body_json={"title": "P2", "text": "伺服器保存的P2", "prompt": "P2"},
-        coordinates_json=None,
-        llm_task_id=None,
     )
     options = tasks.prompt_options(conn, org, brand, campaign, task["id"])["options"]
     assert options[0]["text"] == "伺服器保存的P2"
@@ -501,16 +509,13 @@ def test_prepare_is_idle_and_copy_version_can_be_saved_without_generation(setup)
     briefs = workbench.briefs_for_source(conn, org, brand, "schedule_node", payload["source_ref"])
     assert len(briefs) == 1
     assert briefs[0]["status"] == "idle"
-    output = wb.write_output(
+    output = saved_workbench_output(
         conn,
         org_id=org,
         brand_id=brand,
         brief_id=briefs[0]["id"],
         part="copy",
-        generation_round=1,
         body_json={"sets": [{"body": "保存的文案", "headline": "標題"}]},
-        coordinates_json=None,
-        llm_task_id=None,
     )
     task = create(
         setup,

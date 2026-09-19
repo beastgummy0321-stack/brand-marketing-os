@@ -398,9 +398,12 @@ def install_assembly(context):
 
         handlers[review_jobs.TASK] = review_jobs.run
     if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
-        from app.workbench.jobs import workbench_generate
+        from app import workbench
 
-        handlers["background.workbench_generate"] = workbench_generate
+        workbench.register_tasks()
+        handlers["background.workbench_generate"] = background.app().tasks[
+            "background.workbench_generate"
+        ].func
     jobs = queue.Queue()
     active = set()
     stopped = threading.Event()
