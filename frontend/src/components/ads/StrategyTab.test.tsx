@@ -452,3 +452,10 @@ it("keeps imported strategy in the existing disclosures and saves only the inter
   await user.click(screen.getByRole("button", {name: "編輯成功條件"}));
   expect(screen.getByLabelText("目標值（留空＝尚未設定）")).toBeTruthy();
 });
+
+it("opens an imported campaign whose goal was never set", async () => {
+  const imported = campaign({origin: "imported", groups: [], budget_basis_json: {}, goal_text: null});
+  renderWithRouter(<StrategyTab brandId="brd_1" campaign={imported} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />);
+  await userEvent.setup().click(screen.getByText("進階設定"));
+  expect((screen.getByLabelText("內部活動目標") as HTMLTextAreaElement).value).toBe("");
+});

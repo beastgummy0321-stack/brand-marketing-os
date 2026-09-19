@@ -166,6 +166,24 @@ describe("廣告檢討的證據與使用者決定", () => {
       expect.objectContaining({ previous_id: completed.id }), expect.any(AbortSignal));
   });
 
+  it("同一天可改選另一則廣告開始第一次檢討，不承接上一則的紀錄", async () => {
+    const user = userEvent.setup();
+    const completed = round("completed");
+    completed.window_end = "2999-01-01";
+    const other = { ...target, id: "entity_other", name: "另一則廣告" };
+    vi.mocked(reviews.getReviews).mockResolvedValue({ ...data(completed), targets: [target, other] });
+    vi.mocked(reviews.createReview).mockResolvedValue({ ...round(), id: "review_other", entity_id: other.id });
+    render(page());
+    await user.click(await screen.findByRole("button", { name: "檢討另一則廣告" }));
+    const select = screen.getByLabelText("檢討廣告") as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.value).toBe(other.id);
+    await user.click(screen.getByRole("button", { name: "開始本次檢討" }));
+    const body = vi.mocked(reviews.createReview).mock.calls[0][2];
+    expect(body.entity_id).toBe(other.id);
+    expect("previous_id" in body).toBe(false);
+  });
+
   it("切品牌清掉舊證據，延遲回應不能把前一品牌資料帶回", async () => {
     let resolveOld: (value: reviews.ReviewsData) => void = () => {};
     vi.mocked(reviews.getReviews).mockImplementation(brand => brand === "brand_a"

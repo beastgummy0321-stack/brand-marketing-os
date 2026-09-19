@@ -55,7 +55,7 @@ function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string
   useEffect(() => {
     if (!existingId || created?.id === existingId) { setRestoring(false); return; }
     let cancelled = false; setRestoring(true);
-    getCampaign(brandId, existingId).then(value => { if (!cancelled) { setCreated({ ...value, parsed: true }); setGoalText(value.goal_text); } }).catch(e => { if (!cancelled) setError(`找回已建立活動失敗，請重開此頁或至活動清單查看：${String(e)}`); }).finally(() => { if (!cancelled) setRestoring(false); });
+    getCampaign(brandId, existingId).then(value => { if (!cancelled) { setCreated({ ...value, parsed: true }); setGoalText(value.goal_text ?? ""); } }).catch(e => { if (!cancelled) setError(`找回已建立活動失敗，請重開此頁或至活動清單查看：${String(e)}`); }).finally(() => { if (!cancelled) setRestoring(false); });
     return () => { cancelled = true; };
   }, [brandId, existingId, created?.id]);
   useEffect(() => {

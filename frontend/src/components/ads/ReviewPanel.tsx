@@ -89,6 +89,10 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
     }
     setPreviousId(review?.id); setTarget(review?.entity_id ?? target); setPeriod(range); setForm(true);
   }
+  function another() {
+    const reviewed = new Set(data?.reviews.map(row => row.entity_id));
+    setPreviousId(undefined); setTarget(data?.targets.find(row => !reviewed.has(row.id))?.id ?? target); setPeriod(defaults()); setError(""); setForm(true);
+  }
   function refreshCurrent() {
     if (!review) return;
     void mutate(signal => createReview(brandId, campaignId, { entity_id: review.entity_id, start: review.window_start, end: review.window_end, ...(review.previous_id ? { previous_id: review.previous_id } : {}) }, signal));
@@ -99,7 +103,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
     await mutate(signal => decideReview(brandId, campaignId, review.id, { decision, reason: reason.trim(), ...(revisit ? { revisit_at: new Date(revisit).toISOString() } : {}) }, signal));
   }
   return <div className="space-y-4">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-semibold">{review ? "本次廣告檢討" : "開始第一次檢討"}</h2><p className="mt-1 text-sm text-muted-foreground">先看證據，再決定保留、觀察或調整。活動與檢討分開持續追蹤。</p></div>{review && !form && <Button variant="outline" disabled={busy} onClick={next}>準備下一次檢討</Button>}</div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-semibold">{review ? "本次廣告檢討" : "開始第一次檢討"}</h2><p className="mt-1 text-sm text-muted-foreground">先看證據，再決定保留、觀察或調整。活動與檢討分開持續追蹤。</p></div>{review && !form && <div className="flex flex-wrap gap-2">{(data?.targets.length ?? 0) > 1 && <Button variant="outline" disabled={busy} onClick={another}>檢討另一則廣告</Button>}<Button variant="outline" disabled={busy} onClick={next}>準備下一次檢討</Button></div>}</div>
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm"><p>{error}</p><Button className="mt-2" variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取檢討</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取廣告與檢討紀錄…</p>}
     {data && !data.targets.length && <EmptyState title="先帶入正在投放的廣告" description="需要已讀回的平台廣告與成效，才能開始判讀。已有成品可以直接使用，不必重新生圖。" />}

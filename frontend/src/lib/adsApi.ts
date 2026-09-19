@@ -125,7 +125,7 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   manual_handoff?: ManualHandoff;
   id: string;
   name: string;
-  goal_text: string;
+  goal_text: string | null;
   objective: string;
   success_metric: SuccessMetric;
   success_target: number | null;

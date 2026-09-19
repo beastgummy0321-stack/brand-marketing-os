@@ -70,7 +70,7 @@ export function StrategyTab({
 }) {
   const imported = c.origin === "imported";
   const readonlyReason = c.capabilities?.unavailable.strategy ?? "既有活動保留平台設定，不使用內部策略與預算操作。";
-  const [goal, setGoal] = useState(c.goal_text);
+  const [goal, setGoal] = useState(c.goal_text ?? "");
   const [goalSaving, setGoalSaving] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
