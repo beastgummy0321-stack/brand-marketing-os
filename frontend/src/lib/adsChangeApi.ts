@@ -24,8 +24,9 @@ export interface ChangeSet {
   reason: string | null; revisit_at: string | null; approval_id: string | null;
   created_at: string; approved_at: string | null; items: ChangeItem[];
   can_revise?: boolean;
+  review_id?: string | null; recommendation_id?: string | null;
 }
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string }
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

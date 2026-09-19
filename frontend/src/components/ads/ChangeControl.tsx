@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { getOrgId } from "@/lib/auth";
+import { getReview } from "@/lib/adsReviewApi";
 import { ChangeRequestRejected, actOnChangeItem, approveChangeSet, createChangeSet, decideChangeSet, getChangeControl, type ChangeControlData, type ChangeDraft, type ChangeSet } from "@/lib/adsChangeApi";
 import { ChangeComposer } from "./ChangeComposer";
 import { ChangeSetView } from "./ChangeSetView";
@@ -19,6 +20,8 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
   const [selectedId, setSelectedId] = useState<string | null>(search.get("change"));
   const [composing, setComposing] = useState(Boolean(pending));
   const [supersedesId, setSupersedesId] = useState<string | undefined>(pending?.supersedes_id);
+  const [initialDraft, setInitialDraft] = useState<Omit<ChangeDraft, "operation_id">>();
+  const loadedRecommendation = useRef<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -33,13 +36,28 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     }).catch(() => { if (!controller.signal.aborted) setError("變更清單暫時讀取不到。請重新讀取，先不要重做平台操作。"); });
     return () => controller.abort();
   }, [brandId, campaignId, reload]);
+  const reviewId = search.get("review"), recommendationId = search.get("recommendation");
+  useEffect(() => {
+    const recommendationKey = `${reviewId}:${recommendationId}`;
+    if (!reviewId || !recommendationId || pending || loadedRecommendation.current === recommendationKey) return;
+    const controller = new AbortController();
+    getReview(brandId, campaignId, reviewId, controller.signal).then(review => {
+      if (controller.signal.aborted) return;
+      const item = review.result_json.recommendations?.find(row => row.id === recommendationId);
+      if (item?.recommendation !== "adjust" || !item.suggested_copy || !(item.suggested_copy.body || item.suggested_copy.title) || !["ready", "completed"].includes(review.status)) { setError("這份建議目前不能建立文案變更，請回到成效檢討確認最新結果。"); return; }
+      loadedRecommendation.current = recommendationKey;
+      setInitialDraft({ title: `${review.evidence_json.target.name ?? "廣告"}文案測試`, month: currentBudgetMonth(), review_id: review.id, recommendation_id: item.id, items: [{ kind: "copy", target_id: item.target_id, after: item.suggested_copy, reason: item.hypothesis }] });
+      setSupersedesId(undefined); setComposing(true);
+    }).catch(() => { if (!controller.signal.aborted) setError("檢討建議尚未讀取完成，請回到成效頁重新查看。"); });
+    return () => controller.abort();
+  }, [brandId, campaignId, reviewId, recommendationId, pending]);
   function update(set: ChangeSet) {
     setData(previous => previous ? { ...previous, change_sets: [set, ...previous.change_sets.filter(row => row.id !== set.id)] } : previous);
     select(set.id); setBudgetRefresh(value => value + 1);
   }
   function select(id: string) {
     setSelectedId(id);
-    setSearch(previous => { const next = new URLSearchParams(previous); next.set("change", id); return next; }, { replace: true });
+    setSearch(previous => { const next = new URLSearchParams(previous); next.set("change", id); next.delete("review"); next.delete("recommendation"); return next; }, { replace: true });
   }
   async function mutate(task: (signal: AbortSignal) => Promise<ChangeSet>) {
     if (busy) return;
@@ -49,7 +67,8 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     finally { if (!signal.aborted) setBusy(false); }
   }
   async function save(value: Omit<ChangeDraft, "operation_id">) {
-    const request = pending ?? { ...value, operation_id: crypto.randomUUID(), ...(supersedesId ? { supersedes_id: supersedesId } : {}) };
+    const source = initialDraft ?? (supersedesId ? data?.change_sets.find(row => row.id === supersedesId) : undefined);
+    const request = pending ?? { ...value, operation_id: crypto.randomUUID(), ...(supersedesId ? { supersedes_id: supersedesId } : {}), ...(source?.review_id && source?.recommendation_id ? { review_id: source.review_id, recommendation_id: source.recommendation_id } : {}) };
     setPending(request); sessionStorage.setItem(storageKey, JSON.stringify(request));
     await mutate(async signal => {
       let result;
@@ -58,7 +77,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
         if (!signal.aborted && err instanceof ChangeRequestRejected) { sessionStorage.removeItem(storageKey); setPending(null); }
         throw err;
       }
-      if (!signal.aborted) { sessionStorage.removeItem(storageKey); setPending(null); setComposing(false); }
+      if (!signal.aborted) { sessionStorage.removeItem(storageKey); setPending(null); setInitialDraft(undefined); setComposing(false); }
       return result;
     });
   }
@@ -74,16 +93,16 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       if (!original || original.can_revise !== true) {
         setError("原清單仍有操作尚未核對，或相關證據已過期。請先逐項讀回，再修改未完成項目。"); return;
       }
-      setSupersedesId(original.id); setComposing(true);
+      setInitialDraft(undefined); setSupersedesId(original.id); setComposing(true);
     } catch (err) { if (!signal.aborted) setError(err instanceof Error ? err.message : "目前設定尚未讀取完成，請稍後再試。"); }
     finally { if (!signal.aborted) setBusy(false); }
   }
   return <div className="space-y-4">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">變更與核對</h2><p className="mt-1 text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p></div>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">變更與核對</h2><p className="mt-1 text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p></div>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
     <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth()} refresh={budgetRefresh} compact />
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
-    {data && composing && <ChangeComposer targets={data.targets} month={currentBudgetMonth()} pending={pending} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} />}
+    {data && composing && <><p className="text-sm text-muted-foreground">{initialDraft?.review_id ? "已承接上一輪判讀；文案仍是待驗假設，可調整後再核准。" : ""}</p><ChangeComposer key={initialDraft?.review_id ?? supersedesId ?? "new"} targets={data.targets} month={currentBudgetMonth()} pending={pending} initialDraft={initialDraft} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} /></>}
     {data && !composing && selected && <ChangeSetView key={selected.id + selected.status} set={selected} busy={busy}
       onApprove={() => void mutate(signal => approveChangeSet(brandId, campaignId, selected, signal))}
       onDecision={value => void mutate(signal => decideChangeSet(brandId, campaignId, selected.id, value, signal))}

@@ -22,12 +22,12 @@ function blank(targets: NativeEntity[], kind: ChangeKind = "copy"): ChangeInput 
   return { kind, target_id: target?.id ?? "", reason: "", after: kind === "copy" ? originalCopy(target) : kind === "pause" ? { status: "PAUSED" } : {} };
 }
 
-export function ChangeComposer({ targets, month, pending, initial, busy, onSave, onClose }: {
-  targets: NativeEntity[]; month: string; pending: ChangeDraft | null; initial?: ChangeSet; busy: boolean;
+export function ChangeComposer({ targets, month, pending, initial, initialDraft, busy, onSave, onClose }: {
+  targets: NativeEntity[]; month: string; pending: ChangeDraft | null; initial?: ChangeSet; initialDraft?: Omit<ChangeDraft, "operation_id">; busy: boolean;
   onSave: (value: Omit<ChangeDraft, "operation_id">) => void; onClose: () => void;
 }) {
-  const [title, setTitle] = useState(pending?.title ?? (initial ? `${initial.title}（修訂）` : "本次廣告調整"));
-  const [items, setItems] = useState<ChangeInput[]>(pending?.items ?? initial?.items.filter(item => item.verification_state !== "confirmed").map(({ kind, target_id, after, reason }) => ({ kind, target_id, after, reason })) ?? [blank(targets)]);
+  const [title, setTitle] = useState(pending?.title ?? initialDraft?.title ?? (initial ? `${initial.title}（修訂）` : "本次廣告調整"));
+  const [items, setItems] = useState<ChangeInput[]>(pending?.items ?? initialDraft?.items ?? initial?.items.filter(item => item.verification_state !== "confirmed").map(({ kind, target_id, after, reason }) => ({ kind, target_id, after, reason })) ?? [blank(targets)]);
   const [validation, setValidation] = useState("");
   const locked = busy || Boolean(pending);
   function update(index: number, value: Partial<ChangeInput>) { setItems(rows => rows.map((item, i) => i === index ? { ...item, ...value } : item)); }

@@ -82,6 +82,44 @@ class ExternalGraphTest(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["params"]["after"], "opaque/+=")
         self.assertEqual(fetch.call_args.args[0], graph.GRAPH_BASE_URL + "/act_1/campaigns")
 
+    def test_transport_timeout_remains_retryable_after_sanitization(self):
+        with patch.object(graph.httpx, "get", side_effect=graph.httpx.ReadTimeout("secret-url")):
+            with self.assertRaises(graph.GraphError) as caught:
+                graph.external_page("secret", "1", "monthly", start="2026-09-01", end="2026-09-19")
+        self.assertTrue(caught.exception.retryable)
+        self.assertNotIn("secret", str(caught.exception))
+
+    def test_monthly_transport_repeats_account_scope_on_every_page(self):
+        with patch.object(graph.httpx, "get") as get:
+            get.return_value.json.side_effect = [
+                {"data": [], "paging": {"next": "https://ignored/", "cursors": {"after": "next"}}},
+                {"data": []},
+            ]
+            first = graph.external_page(
+                "secret", "1", "monthly", start="2026-09-01", end="2026-09-19"
+            )
+            graph.external_page(
+                "secret",
+                "1",
+                "monthly",
+                cursor=first["cursor"],
+                start="2026-09-01",
+                end="2026-09-19",
+            )
+        for call in get.call_args_list:
+            self.assertEqual(call.args[0], graph.GRAPH_BASE_URL + "/act_1/insights")
+            params = call.kwargs["params"]
+            self.assertEqual(
+                params["fields"],
+                "account_id,account_currency,campaign_id,date_start,date_stop,spend",
+            )
+            self.assertEqual(params["level"], "campaign")
+            self.assertEqual(str(params["time_increment"]), "1")
+            self.assertEqual(
+                json.loads(params["time_range"]), {"since": "2026-09-01", "until": "2026-09-19"}
+            )
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["after"], "next")
+
     def test_single_objects_use_fixed_node_get_not_campaign_listing(self):
         for kind in ("ad", "adset", "campaign"):
             with patch.object(

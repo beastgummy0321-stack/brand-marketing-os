@@ -28,7 +28,29 @@ class Reader:
 
     def accounts(self, conn, org, brand):
         return (
-            [{"account_id": "account", "currency": "TWD", "name": "來源"}] if self.connected else []
+            [
+                {
+                    "account_id": "account",
+                    "currency": "TWD",
+                    "name": "來源",
+                    "timezone_name": "Asia/Taipei",
+                }
+            ]
+            if self.connected
+            else []
+        )
+
+    def read_monthly(self, conn, org, brand, account, *, start, end, **kwargs):
+        return SourcePage(
+            [],
+            coverage={
+                "scope": "account_campaign_day",
+                "start": start,
+                "end": end,
+                "account_id": account["account_id"],
+                "currency": account["currency"],
+                "timezone_name": account["timezone_name"],
+            },
         )
 
     def root(self, native_id="root", **values):

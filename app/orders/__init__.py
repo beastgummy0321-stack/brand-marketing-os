@@ -1,5 +1,7 @@
 """app/orders — 訂單模組（票 03-1 補上模組文件字串：原本是空檔）。"""
 
+from app.orders.commerce_evidence import review_evidence as review_evidence
+
 
 def register(app) -> None:
     """掛本模組所有路由（票 03-1，機械式搬移自 app/main.py）。"""

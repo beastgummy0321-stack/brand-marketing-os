@@ -43,6 +43,8 @@
         "frontend/src/lib/adsExternalApi.ts",
         "frontend/src/lib/adsUserAssetsApi.ts",
         "frontend/src/lib/adsChangeApi.ts",
+        "frontend/src/lib/adsReviewApi.ts",
+        "frontend/src/lib/adsPublishTypes.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },
@@ -81,6 +83,10 @@
     }
   },
   "resources": {
+    "ads_review_round": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_review_round"
+    },
     "ads_change_set": {
       "owner": "ads", "kind": "sql-table",
       "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_change_set"

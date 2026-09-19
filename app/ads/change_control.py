@@ -33,7 +33,7 @@ def create(conn, org, brand, campaign, payload, actor):
     if (
         not isinstance(payload, dict)
         or not required <= set(payload)
-        or set(payload) - required - {"supersedes_id"}
+        or set(payload) - required - {"supersedes_id", "review_id", "recommendation_id"}
     ):
         raise ValueError("請提供完整的變更清單。")
     operation_id, month = data.operation(payload["operation_id"]), data.month(payload["month"])
@@ -60,6 +60,17 @@ def create(conn, org, brand, campaign, payload, actor):
             conn.commit()
             return result
         items = [data.build_item(conn, org, brand, campaign, item, c) for item in payload["items"]]
+        from app.ads import review_rounds
+
+        review_reference = review_rounds.proposal_reference(
+            conn,
+            org,
+            brand,
+            campaign,
+            payload.get("review_id"),
+            payload.get("recommendation_id"),
+            items,
+        )
         supersedes = payload.get("supersedes_id")
         if supersedes:
             previous = data.get(conn, org, brand, campaign, supersedes)
@@ -73,6 +84,7 @@ def create(conn, org, brand, campaign, payload, actor):
             "month": month,
             "supersedes_id": supersedes,
             "items": [{k: v for k, v in i.items() if k != "id"} for i in items],
+            **review_reference,
         }
         set_id = db.new_id("acs")
         conn.execute(
@@ -89,7 +101,7 @@ def create(conn, org, brand, campaign, payload, actor):
                 data.digest(frozen),
                 frozen["title"],
                 month,
-                db.jsonb({"items": items, "supersedes_id": supersedes}),
+                db.jsonb({"items": items, "supersedes_id": supersedes, **review_reference}),
                 actor,
             ),
         )

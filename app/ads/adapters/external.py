@@ -9,10 +9,15 @@ class SourcePage:
     items: list[dict]
     cursor: dict | None = None
     errors: list[str] = field(default_factory=list)
+    coverage: dict | None = None
 
 
 class ExternalReader(Protocol):
     def accounts(self, conn, org_id, brand_id) -> list[dict]: ...
+    def sync_scopes(self, conn) -> list[dict]: ...
+    def read_monthly(
+        self, conn, org_id, brand_id, account, *, start, end, cursor=None, **kwargs
+    ) -> SourcePage: ...
     def binding_kinds(self) -> tuple[str, ...]: ...
     def verify_native(
         self,

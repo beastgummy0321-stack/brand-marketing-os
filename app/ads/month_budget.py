@@ -223,6 +223,8 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
 
 
 def _inventory(conn, org, brand, start, today):
+    coverage_end = min(today, start.replace(day=calendar.monthrange(start.year, start.month)[1]))
+    covered_accounts = {}
     entities = [
         dict(r)
         for r in conn.execute(
@@ -248,6 +250,17 @@ def _inventory(conn, org, brand, start, today):
     if not accounts:
         issues.append("尚未接上可核對的廣告帳戶，請先完成連線。")
     zone = str(settings.org_timezone(conn, org_id=org))
+    envelope = conn.execute(
+        "SELECT currency FROM ads_month_budget WHERE org_id=%s AND brand_id=%s AND month=%s",
+        (org, brand, start),
+    ).fetchone()
+    currencies = {a.get("currency") for a in accounts}
+    if (
+        None in currencies
+        or len(currencies) > 1
+        or (envelope and currencies != {envelope["currency"]})
+    ):
+        issues.append("帳戶幣別未知或與月預算不一致，不能混合花費。")
     for account in accounts:
         platform, account_id = account["platform"], account["account_id"]
         if account.get("timezone_name") != zone:
@@ -257,8 +270,6 @@ def _inventory(conn, org, brand, start, today):
             "AND platform=%s AND source_account=%s",
             (org, brand, platform, account_id),
         ).fetchone()
-        if not job or not _fresh(job["last_success_at"]) or job["status"] != "succeeded":
-            issues.append("帳戶清單或成效尚未完整讀回，請同步或恢復連線。")
         monthly = ((job["tasks"] if job else {}) or {}).get(
             "monthly:" + start.strftime("%Y-%m"), {}
         )
@@ -267,10 +278,16 @@ def _inventory(conn, org, brand, start, today):
             monthly.get("status") != "succeeded"
             or coverage.get("scope") != "account_campaign_day"
             or (_date(coverage.get("start")) or date.max) > start
-            or (_date(coverage.get("end")) or date.min) < today
+            or (_date(coverage.get("end")) or date.min) < coverage_end
+            or not _fresh(monthly.get("completed_at"))
+            or coverage.get("currency") != account.get("currency")
+            or not account.get("currency")
+            or coverage.get("timezone_name") != account.get("timezone_name")
             or coverage.get("unassigned_native_ids") != []
         ):
             issues.append("帳戶整月花費涵蓋範圍與歷史活動歸屬尚待核對。")
+        else:
+            covered_accounts[(platform, account_id)] = monthly
         listed = conn.execute(
             "SELECT native_kind,native_id FROM ads_external_listing "
             "WHERE org_id=%s AND brand_id=%s "
@@ -293,6 +310,13 @@ def _inventory(conn, org, brand, start, today):
         "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s", (org, brand)
     ).fetchall():
         if campaign["origin"] == "imported":
+            campaign_accounts = {
+                (e["platform"], e["source_account"])
+                for e in entities
+                if e["campaign_id"] == campaign["id"] and not e.get("parent_native_id")
+            }
+            if campaign_accounts and campaign_accounts <= covered_accounts.keys():
+                continue
             sync = (campaign["context_json"] or {}).get("external_sync", {})
             coverage = (sync.get("observations") or {}).get("coverage") or {}
             if (_date(coverage.get("start")) or date.max) > start or (
@@ -314,7 +338,22 @@ def _inventory(conn, org, brand, start, today):
     ).fetchone()
     if duplicate:
         issues.append("同一平台物件被多個品牌承接，請先釐清花費歸屬。")
-    return entities, observations, issues
+    # Successful account-month reads are the authoritative spend grain. A previous
+    # row omitted by a complete reread must not survive as stale monthly spending.
+    by_id = {e["id"]: e for e in entities}
+    filtered = []
+    for observation in observations:
+        entity = by_id.get(observation["entity_id"], {})
+        monthly = covered_accounts.get((entity.get("platform"), entity.get("source_account")))
+        if monthly and not entity.get("parent_native_id"):
+            if observation.get("attribution_key") != "account_monthly_spend":
+                continue
+            if monthly.get("started_at") and datetime.fromisoformat(
+                str(observation["observed_at"])
+            ) < datetime.fromisoformat(str(monthly["started_at"])):
+                continue
+        filtered.append(observation)
+    return entities, filtered, issues
 
 
 def _pending(conn, org, brand, month):

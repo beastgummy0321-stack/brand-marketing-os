@@ -17,6 +17,8 @@ import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
 import { PublishPage } from "./PublishPage";
 import { ChangeControl } from "./ChangeControl";
+import { ReviewPanel } from "./ReviewPanel";
+import { Disclosure } from "./patterns";
 import type { StepTarget, WorkspaceTab } from "./nextStep";
 import { formatSyncTime } from "@/lib/format";
 
@@ -253,7 +255,10 @@ function Workspace({
           ) : tab === "changes" ? (
             <ChangeControl brandId={brandId} campaignId={campaign.id} />
           ) : (
-            <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} />
+            campaign.origin === "imported" ? <div className="space-y-4">
+              <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
+              <Disclosure label="查看平台原始成效圖表"><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
+            </div> : <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} />
           )}
         </>
       )}
