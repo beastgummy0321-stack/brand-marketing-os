@@ -376,5 +376,7 @@ class MetaMonthlyContractTest(unittest.TestCase):
             )
         self.assertIsNone(result["entity"]["budget_amount"])
         self.assertEqual(result["entity"]["budget_raw"]["unit"], "unknown")
-        self.assertEqual(result["entity"]["budget_raw"]["conversion"], "currency_not_in_offset_table")
+        self.assertEqual(
+            result["entity"]["budget_raw"]["conversion"], "currency_not_in_offset_table"
+        )
         self.assertEqual(result["continuous_intervals"], [])
