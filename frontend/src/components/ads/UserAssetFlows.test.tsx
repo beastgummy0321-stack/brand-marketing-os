@@ -12,6 +12,7 @@ import { nextStep } from "./nextStep";
 import { NewCampaignPage } from "./NewCampaignPage";
 import { createCampaign } from "@/lib/adsApi";
 import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, attachUpload, assetBlob, listPlacements, listSuggestionBatches, suggestAssets, getSuggestionBatch, revisePlacement, confirmPlacement, assetHandoff, AssetApiError, type AssetLibrary, type Placement, type AssetUpload, type SuggestionBatch } from "@/lib/adsUserAssetsApi";
+import * as materialApi from "@/lib/adsMaterialApi";
 import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
 import type { CampaignDetail } from "@/lib/adsApi";
 
@@ -20,6 +21,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ 
 vi.mock("@/lib/adsApi", async importOriginal => ({ ...await importOriginal<object>(), createCampaign: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
+vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof materialApi>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
 const library = (): AssetLibrary => ({ assets: [], uploads: [], next_cursor: null, next_upload_cursor: null });
 const upload = (id = "u1", status = "complete"): AssetUpload => ({ id, batch_id: "batch1", filename: `${id}.png`, expected_size: 1, status, error: null, asset_id: status === "complete" ? "asset1" : null, copy_fields: { headline: "原標題", body: "原內文", description: "原說明", caption: "額外原文" } });
 const placement = (id = "p1", revision = 1): Placement => ({ id, revision, is_current: true, asset_id: "asset1", filename: `${id}.png`, mime_type: "image/png", asset_status: "ready", asset_error: null, copy_fields: { headline: "原標題", body: "原內文", description: "原說明", caption: "額外原文" }, suggested_copy: {}, purpose: "產品介紹", destination_entity_id: null, start_date: null, end_date: null, status: "pending", pending_reason: "尚待確認安排", required: true, confirmed_at: null, suggestion_batch_id: null });
@@ -32,6 +34,9 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 function viewPlacements() { return render(<MemoryRouter><UserAssetPlacements brandId="b1" campaign={campaign} /></MemoryRouter>); }
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
+  vi.mocked(materialApi.listMaterialTasks).mockResolvedValue({ tasks: [] });
+  vi.mocked(materialApi.materialOptions).mockResolvedValue({ options: [] });
   vi.mocked(listUserAssets).mockResolvedValue(library()); vi.mocked(listPlacements).mockResolvedValue({ placements: [] });
   vi.mocked(listSuggestionBatches).mockResolvedValue({ batches: [], next_cursor: null });
   vi.mocked(existingCampaigns).mockResolvedValue({ items: [], sources: [], next_cursor: null, job: null });
@@ -115,8 +120,20 @@ describe("durable upload UI", () => {
 describe("placement and evidence UI", () => {
   it("imported empty groups still expose uploads and never require generated ads", async () => {
     render(<MemoryRouter><AssetsTab brandId="b1" campaign={campaign} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} /></MemoryRouter>);
-    expect(screen.getByText("自帶圖片／影片")).toBeTruthy(); expect(screen.queryByText("這個 Campaign 還沒有廣告")).toBeNull();
-    expect(nextStep(campaign).target).toBe("assets"); await screen.findByText(/尚未加入自帶素材/);
+    vi.mocked(materialApi.saveMaterialOperation).mockResolvedValue({ task: {
+      id: "task1", campaign_id: "c1", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [], limitations: [], created_at: "2026-09-19",
+    } });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /使用已有成品/ }));
+    await user.click(screen.getByRole("button", { name: "保存素材需求" }));
+    await user.click(await screen.findByRole("button", { name: "上傳或選擇成品" }));
+    expect(screen.getByText("自帶圖片／影片")).toBeTruthy();
+    expect(screen.getByLabelText("選擇自帶素材")).toBeTruthy();
+    expect(screen.queryByText("這個 Campaign 還沒有廣告")).toBeNull();
+    expect(screen.queryByRole("button", { name: "確認需求，交給工作台" })).toBeNull();
+    expect(materialApi.saveMaterialOperation).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(materialApi.saveMaterialOperation).mock.calls[0][0].body).toMatchObject({ mode: "existing" });
+    expect(nextStep(campaign).target).toBe("assets");
   });
   it("shows all required pending rows beyond a ten-item suggestion batch", async () => {
     vi.mocked(listPlacements).mockResolvedValue({ placements: Array.from({ length: 11 }, (_, i) => placement(`p${i}`)) });
