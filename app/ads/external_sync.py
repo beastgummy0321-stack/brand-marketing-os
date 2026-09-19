@@ -102,12 +102,13 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             and old["status"] == "failed"
             and (task["section"] != "monthly" or same_range and not old.get("restart_required"))
         )
+        resumed = old if resume and old is not None else {}
         tasks[key] = {
-            **(old if resume else {}),
+            **resumed,
             **task,
-            "generation": old.get("generation") if resume else new_id("round"),
-            "started_at": old.get("started_at") if resume else now_utc(),
-            "cursor": old.get("cursor") if resume else None,
+            "generation": resumed.get("generation") if resume else new_id("round"),
+            "started_at": resumed.get("started_at") if resume else now_utc(),
+            "cursor": resumed.get("cursor") if resume else None,
             "status": "pending",
             "errors": [],
             "error_code": None,
@@ -378,13 +379,13 @@ def run_sync(org_id, brand_id, job_id):
                 _, current_account = account_reader(
                     conn, org_id, brand_id, job["platform"], job["source_account"]
                 )
-                latest = (
-                    conn.execute(
-                        "SELECT tasks FROM ads_external_sync_job WHERE id=%s FOR UPDATE", (job_id,)
-                    )
-                    .fetchone()["tasks"]
-                    .get(key, {})
-                )
+                latest_row = conn.execute(
+                    "SELECT tasks FROM ads_external_sync_job WHERE id=%s FOR UPDATE", (job_id,)
+                ).fetchone()
+                if latest_row is None:
+                    conn.rollback()
+                    return
+                latest = latest_row["tasks"].get(key, {})
                 if latest.get("generation") != task.get("generation"):
                     conn.rollback()
                     _enqueue(repo.get_job(conn, org_id, brand_id, job_id))
@@ -432,13 +433,13 @@ def run_sync(org_id, brand_id, job_id):
                 current = _update_task(conn, job, key, updated)
             except Exception as exc:
                 conn.rollback()
-                latest = (
-                    conn.execute(
-                        "SELECT tasks FROM ads_external_sync_job WHERE id=%s FOR UPDATE", (job_id,)
-                    )
-                    .fetchone()["tasks"]
-                    .get(key, {})
-                )
+                latest_row = conn.execute(
+                    "SELECT tasks FROM ads_external_sync_job WHERE id=%s FOR UPDATE", (job_id,)
+                ).fetchone()
+                if latest_row is None:
+                    conn.rollback()
+                    return
+                latest = latest_row["tasks"].get(key, {})
                 if latest.get("generation") != task.get("generation"):
                     conn.rollback()
                     _enqueue(repo.get_job(conn, org_id, brand_id, job_id))
