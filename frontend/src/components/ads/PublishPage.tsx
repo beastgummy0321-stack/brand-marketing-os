@@ -1,3 +1,4 @@
+import { ManualHandoffPanel } from "./ManualHandoffPanel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -62,7 +63,7 @@ function NodeCard({ node }: { node: PublishChecklistNode }) {
       <div className="surface-body flex flex-col gap-2">
         {node.level !== "campaign" && (
           <p className="flex items-center gap-1.5 text-xs text-warning">
-            <AlertTriangle size={12} /> 名稱要一字不差，配對靠它
+            <AlertTriangle size={12} /> 平台名稱供辨識，實際對應仍以平台識別與讀回核對為準
           </p>
         )}
         {fields(essential)}
@@ -284,7 +285,7 @@ function ManualPublish({
         <p>只在本系統記錄手動上架意圖與預算核准，不會在平台建立廣告或花費廣告費，也不代表已上線。</p>
         <p>平台：{platforms.length ? platforms.map((platform) => `${platform.label}（${platform.state}）`).join("、") : "尚未建立投放組"}。此步驟不選擇或寫入任何廣告帳戶。</p>
         <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
-        <p>確認後，本系統會以目前預算作為後續調整的核准上限。</p>
+        <p>這次核准是品牌月總額內的分配；持續投放及其他已核准安排會一起計算。</p>
         {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
         {!confirmed ? <Button disabled={confirming || !describe.content_hash} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
       </div>
@@ -297,9 +298,11 @@ function ManualPublish({
         <p className="mt-1 text-muted-foreground">逐項使用上方名稱、素材、預算與追蹤設定。完成平台操作不會自動改成本系統的已上線狀態。</p>
       </div>
 
+      {confirmed && <ManualHandoffPanel brandId={brandId} campaignId={c.id} mode="items" />}
+      <Disclosure label="舊版名稱配對與紀錄（不代表本次清單完成）">
       <div className="surface">
         <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">
-          <p className="font-semibold">3. 回到系統配對</p>
+          <p className="font-semibold">依舊版名稱尋找平台物件</p>
           <p className="text-sm text-muted-foreground">
             目前僅支援與 {pairingPlatform.label} 配對；其他平台目前可使用準備清單。
           </p>
@@ -349,6 +352,7 @@ function ManualPublish({
           )}
         </div>
       </div>
+      </Disclosure>
     </div>
   );
 }

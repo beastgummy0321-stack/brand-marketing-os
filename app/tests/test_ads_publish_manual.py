@@ -444,6 +444,20 @@ class ClosedCampaignNotRevivedTest(PublishTestBase):
 # -- F07-I10：手動配對清單的圖片提示詞欄位讀 §5.8 的 `text`，不是舊的 `rendered` -------------
 
 class ImagePromptTextOnManualChecklistTest(PublishTestBase):
+    def test_explicit_material_assignment_replaces_legacy_copy_in_checklist(self):
+        detail = self._adopted_campaign()
+        ad = detail["groups"][0]["ads"][0]
+        ad.update(copy_text="舊工作檯文案", image_prompt_text="舊生成提示詞",
+                  material_assignment={"filename": "使用者選定.png", "placement_revision": 2,
+                    "copy_fields": {"headline": "選定標題", "body": "實際投放文字"},
+                    "assignment_status": "confirmed", "reason": None})
+        node = next(n for n in manual_adapter.describe(detail)["checklist"] if n["id"] == ad["id"])
+        fields = {f["label"]: f["value"] for f in node["fields"]}
+        self.assertEqual(fields["指定素材檔案"], "使用者選定.png")
+        self.assertEqual(fields["文案"], "實際投放文字")
+        self.assertEqual(fields["標題"], "選定標題")
+        self.assertNotIn("圖片提示詞", fields)
+
     def _dispatched_ad(self):
         detail = self._adopted_campaign()
         assets.dispatch_pack(web.conn, self.org_id, self.brand_id, detail["id"])

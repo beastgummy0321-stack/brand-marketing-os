@@ -2,7 +2,7 @@
 
 集裝箱憲章 §1 邊界定案：
 1. 對外進入點：本檔（`app/core/db.py`）。
-2. 進出形狀：見下方 public 函式群——`dsn()`/`pool()`/`connection()`/`current()`/
+2. 進出形狀：見下方 public 函式群——`dsn()`/`pool()`/`connection()`/`async_connection()`/`current()`/
    `ConnProxy`/`now_utc()`/`now_iso()`/`jsonb()`/`new_id()`/`DEV_ORG_ID`。其餘一律私有。
 3. 呼叫端：全站經 `app.shared.web.conn`（`ConnProxy`，350 處呼叫點不動）與直接
    `from app.core import db` 的模組。
@@ -15,17 +15,21 @@ Migration 交給 Supabase CLI 管（`supabase/migrations/`，02-2 落地內容�
 擁有 migration runner。
 """
 
+import asyncio
 import json
 import logging
 import os
+import sys
 import time
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import anyio
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -178,6 +182,9 @@ class Conn:
 
 _pool: ConnectionPool | None = None
 _current: ContextVar["Conn"] = ContextVar("db_current_conn")
+# Borrowers may wait for all ten connections. They must not occupy the workers used
+# by sync routes or connection returns, which are what can make a connection available.
+_borrow_workers = ThreadPoolExecutor(max_workers=10, thread_name_prefix="db-borrow")
 
 
 def _reset_pooled_connection(pg_conn: "psycopg.Connection") -> None:
@@ -224,6 +231,69 @@ def connection() -> Iterator[Conn]:
             yield conn
         finally:
             _current.reset(token)
+
+
+async def _finish_worker(future):
+    """Drain an in-flight worker even under AnyIO level or repeated task cancellation."""
+    with anyio.CancelScope(shield=True):
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                # A Python worker cannot be interrupted safely. In particular, a
+                # cancelled borrower can still obtain a connection that must be returned.
+                continue
+        return future.result()
+
+
+async def _exit_async_connection(manager, error_info):
+    # Separate from _borrow_workers: a full queue of waiting borrowers must never
+    # prevent commit/rollback/putconn. The existing pool also runs its tenant reset.
+    future = asyncio.create_task(asyncio.to_thread(manager.__exit__, *error_info))
+    try:
+        await asyncio.shield(future)
+    except asyncio.CancelledError:
+        await _finish_worker(future)
+        raise
+
+
+@asynccontextmanager
+async def async_connection() -> AsyncIterator[Conn]:
+    """Async request scope over the same sync pool and transaction/reset contract.
+
+    Only borrowing and returning run in workers. Bind/reset the ContextVar here in
+    the owning request task so child tasks and FastAPI sync routes inherit it. Route
+    SQL remains unchanged. Cancellation waits for an in-flight borrow/return to
+    finish; an acquired connection is never abandoned or silently committed after a
+    cancellation raised inside this scope.
+    """
+    manager = pool().connection()
+    borrowed = asyncio.get_running_loop().run_in_executor(_borrow_workers, manager.__enter__)
+    try:
+        pg_conn = await asyncio.shield(borrowed)
+    except asyncio.CancelledError as cancellation:
+        error_info = sys.exc_info()
+        try:
+            await _finish_worker(borrowed)
+        except BaseException:
+            # Acquisition failed, so the manager never yielded a borrowed connection.
+            raise cancellation.with_traceback(error_info[2])
+        await _exit_async_connection(manager, error_info)
+        raise
+
+    token = None
+    error_info = (None, None, None)
+    try:
+        conn = Conn(pg_conn)
+        token = _current.set(conn)
+        yield conn
+    except BaseException:
+        error_info = sys.exc_info()
+        raise
+    finally:
+        if token is not None:
+            _current.reset(token)
+        await _exit_async_connection(manager, error_info)
 
 
 def current() -> Conn:

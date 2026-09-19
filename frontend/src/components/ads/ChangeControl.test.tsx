@@ -7,6 +7,7 @@ import type { NativeEntity } from "@/lib/adsExternalApi";
 import { ChangeControl } from "./ChangeControl";
 import { MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
 
+vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/adsChangeApi", async importOriginal => ({
   ...await importOriginal<typeof api>(),

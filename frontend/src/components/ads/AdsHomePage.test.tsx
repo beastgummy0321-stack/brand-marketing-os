@@ -90,7 +90,7 @@ describe("AdsHomePage（F04-I09）", () => {
     renderPage();
 
     expect(await screen.findByText("目前沒有待確認的變更清單")).toBeTruthy();
-    expect(screen.getByText("目前沒有進行中的 Campaign。")).toBeTruthy();
+    expect(screen.getByText("目前沒有進行中的活動。")).toBeTruthy();
     expect(screen.queryByText("還沒有任何紀錄。")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "查看歷史操作紀錄" }));
     expect(screen.getByText("還沒有任何紀錄。")).toBeTruthy();

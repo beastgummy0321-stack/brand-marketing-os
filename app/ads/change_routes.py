@@ -28,6 +28,8 @@ class CreateRequest(BaseModel):
     supersedes_id: str | None = None
     review_id: str | None = None
     recommendation_id: str | None = None
+    material_task_id: str | None = None
+    material_revision: int | None = None
 
 
 class ApproveRequest(BaseModel):

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/layout/ui/button";
 import type { MetaAccount, MetaAccountsData } from "@/lib/metaApi";
 import {
   bindMetaAccount,
@@ -55,6 +57,8 @@ export function ToolsStep({ brandId, onNext }: { brandId: string; onNext: () => 
         <button type="button" onClick={load} className="self-start text-sm font-medium text-primary hover:underline">
           重新載入
         </button>
+        <p className="text-sm text-muted-foreground">目前無法確認帳戶與目標設定，仍可先起草計畫，投放前再確認連線。</p>
+        <Button asChild className="self-start"><Link to={`/brands/${encodeURIComponent(brandId)}/ads/new`}>先建立投放計畫</Link></Button>
       </div>
     );
   }
@@ -238,17 +242,11 @@ export function ToolsStep({ brandId, onNext }: { brandId: string; onNext: () => 
         <span>GA4 接上後開放</span>
       </div>
 
-      <div className="flex items-center gap-4">
-        <button
-          type="button"
-          onClick={onNext}
-          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          下一步
-        </button>
-        <button type="button" onClick={onNext} className="text-sm font-medium text-muted-foreground hover:underline">
-          跳過，之後再接
-        </button>
+      <p className="text-sm text-muted-foreground">已保存的商品、成效目標與帳戶可沿用。你可以先建立計畫；品牌研究進度會保留，稍後仍可回來補充。</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button asChild><Link to={`/brands/${encodeURIComponent(brandId)}/ads/new`}>先建立投放計畫</Link></Button>
+        <Button type="button" variant="outline" onClick={onNext}>繼續品牌研究（選用）</Button>
+        <Link className="text-sm text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/ads`}>查看投放中心與月額度</Link>
       </div>
       {!assignedAccountId && <p className="text-xs text-muted-foreground">{SKIP_NOTE}</p>}
     </div>

@@ -403,7 +403,7 @@ class MetaReader:
                 "media_equivalence": None,
                 "continuous_intervals": [],
                 "limitations": [
-                    "Meta 未提供原檔位元組等價與連續 creative 歷史；版本成效不可歸屬。"
+                    "目前讀取介面尚未取得原檔等價與連續素材版本歷史；無法將成效分到素材版本。"
                 ],
             }
         except source.ExternalReadError as exc:

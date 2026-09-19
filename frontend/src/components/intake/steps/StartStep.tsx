@@ -210,9 +210,9 @@ export function StartStep({
               </label>
             </div>
             {pastAds === "has_history" && (
-              <p className="text-xs text-muted-foreground">接工具那一步綁好廣告帳戶後，系統會拉近 37 個月花費當預算依據。</p>
+              <p className="text-xs text-muted-foreground">之後可選擇回顧歷史投放。要接手目前活動，請到投放中心從已連線帳戶匯入；這個選項不會替你匯入活動。</p>
             )}
-            {pastAds === "none" && <p className="text-xs text-muted-foreground">系統會用你的售價與成本算一筆試驗預算。</p>}
+            {pastAds === "none" && <p className="text-xs text-muted-foreground">可先建立第一份投放計畫；已知商品與成本會作為建議依據，預算仍由你確認。</p>}
           </div>
         )}
 

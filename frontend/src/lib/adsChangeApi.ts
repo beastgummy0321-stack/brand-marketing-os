@@ -11,7 +11,9 @@ export interface MonthlyBudget {
 export type ChangeKind = "copy" | "budget" | "pause";
 export type SettingValues = { body?: string; title?: string; daily_amount?: number; status?: string };
 export interface ChangeInput { kind: ChangeKind; target_id: string; after: SettingValues; reason: string }
-export interface ChangeItem extends ChangeInput {
+export interface ChangeItem extends Omit<ChangeInput, "kind"> {
+  kind: ChangeKind | "new_ad" | "launch";
+  handoff_snapshot?: { filename: string; revision: number; copy: Record<string, string>; destination: { native_id: string; name?: string }; budget_owner: { budget_amount: number; currency: string } };
   id: string; target: Pick<NativeEntity, "id" | "name" | "platform" | "source_account" | "native_kind" | "native_id">;
   before: SettingValues;
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
@@ -25,8 +27,9 @@ export interface ChangeSet {
   created_at: string; approved_at: string | null; items: ChangeItem[];
   can_revise?: boolean;
   review_id?: string | null; recommendation_id?: string | null;
+  material_task_id?: string | null; material_revision?: number | null;
 }
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string }
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

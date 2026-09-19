@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/http";
 import { ReviewPanel } from "./ReviewPanel";
 import { ChangeControl } from "./ChangeControl";
 
+vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
 vi.mock("@/lib/adsReviewApi", () => ({

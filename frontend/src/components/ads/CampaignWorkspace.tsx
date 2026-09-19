@@ -255,10 +255,10 @@ function Workspace({
           ) : tab === "changes" ? (
             <ChangeControl brandId={brandId} campaignId={campaign.id} />
           ) : (
-            campaign.origin === "imported" ? <div className="space-y-4">
+            <div className="space-y-4">
               <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
               <Disclosure label="查看平台原始成效圖表"><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
-            </div> : <PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} />
+            </div>
           )}
         </>
       )}

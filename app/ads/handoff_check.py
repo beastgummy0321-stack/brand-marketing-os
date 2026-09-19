@@ -1,0 +1,356 @@
+"""Fresh read-only native verification with scoped ownership and late-response protection."""
+
+import json
+
+from app.ads import asset_binding, change_control_launch, external_sync, handoff_data
+from app.ads import asset_binding_repository as bindings
+from app.ads import change_control_data as changes
+from app.ads import external_repository as external
+from app.ads import repository as campaigns
+from app.ads.external_models import ExternalEntity
+from app.core import db
+from app.shared.web import to_json_value
+
+
+def _canonical(value):
+    if isinstance(value, dict):
+        return {k: _canonical(v) for k, v in value.items() if k != "external_id"}
+    if isinstance(value, list):
+        return [_canonical(v) for v in value]
+    return value
+
+
+def _launch_current(conn, org, brand, campaign, change_set):
+    original = change_set["plan_json"].get("launch_snapshot")
+    if original is None:
+        return True
+    current = change_control_launch.snapshot(conn, org, brand, campaign)
+
+    def encode(value):
+        return json.dumps(_canonical(value), default=to_json_value, sort_keys=True)
+
+    return encode(current) == encode(original)
+
+
+def _parent(conn, org, brand, campaign, item):
+    if item["parent_item_id"]:
+        parent = handoff_data.get(conn, org, brand, campaign, item["parent_item_id"])
+        if not parent["entity_id"]:
+            raise ValueError("請先讀回上一層物件，才能核對這一項。")
+        return bindings.entity(conn, org, brand, campaign, parent["entity_id"])
+    destination = item["expected_json"].get("destination_entity_id")
+    return bindings.entity(conn, org, brand, campaign, destination) if destination else None
+
+
+def _ownership(conn, org, brand, campaign, node):
+    bindings.lock_native(conn, node | {"org_id": org})
+    occupied = conn.execute(
+        "SELECT brand_id,campaign_id FROM ads_external_entity WHERE org_id=%s AND platform=%s "
+        "AND source_account=%s AND native_kind=%s AND native_id=%s",
+        (org, node["platform"], node["source_account"], node["native_kind"], node["native_id"]),
+    ).fetchall()
+    if any(r["brand_id"] != brand or r["campaign_id"] != campaign for r in occupied):
+        raise ValueError("此平台物件已屬於另一個品牌或活動，不可重新掛接。")
+    if node["parent_native_id"] is None:
+        legacy = conn.execute(
+            "SELECT c.id,c.brand_id FROM ads_campaign c WHERE c.org_id=%s AND c.origin='internal' "
+            "AND c.external_id=%s AND (NOT EXISTS (SELECT 1 FROM ads_external_entity e "
+            "WHERE e.campaign_id=c.id AND e.parent_native_id IS NULL) OR EXISTS "
+            "(SELECT 1 FROM ads_external_entity e WHERE e.campaign_id=c.id "
+            "AND e.platform=%s AND e.source_account=%s AND e.parent_native_id IS NULL))",
+            (org, node["native_id"], node["platform"], node["source_account"]),
+        ).fetchall()
+        if any(r["id"] != campaign or r["brand_id"] != brand for r in legacy):
+            raise ValueError("此平台活動已有其他內部計畫歸屬，不可重新掛接。")
+
+
+def _source_versions(conn, org, platform, account, native_ids):
+    return {
+        r["id"]: str(r["updated_at"])
+        for r in conn.execute(
+            "SELECT id,updated_at FROM ads_external_entity WHERE org_id=%s AND platform=%s "
+            "AND source_account=%s AND native_id=ANY(%s)",
+            (org, platform, account, native_ids),
+        ).fetchall()
+    }
+
+
+def _settings(item, node, material):
+    expected = item["expected_json"]
+    known, missing, differences = {}, [], []
+    if item["planned_kind"] == "ad":
+        fields = changes.copy_fields(node)
+        creative = (node.get("creative") or {}).get("fields") or {}
+        link = (creative.get("object_story_spec") or {}).get("link_data") or {}
+        fields["description"] = creative.get("description", link.get("description"))
+        expected_fields = expected.get("copy") or {"body": expected.get("copy_text")}
+        for key, value in expected_fields.items():
+            if not value:
+                continue
+            if fields.get(key) is None:
+                missing.append("文案：" + key)
+            elif fields[key] != value:
+                differences.append("文案：" + key)
+            else:
+                known[key] = value
+        if not any(expected_fields.values()):
+            missing.append("核准文案內容")
+        if material == "unknown":
+            missing.append("圖片或影片版本等價")
+    else:
+        for key, value in expected.items():
+            if key == "manual_settings":
+                # No existing reader contract proves these semantic/manual fields.
+                missing.extend("人工設定：" + k for k in value)
+            elif value is None or node.get(key) is None:
+                missing.append(key)
+            elif str(node[key]) != str(value):
+                if key == "budget_amount" and float(node[key]) == float(value):
+                    known[key] = value
+                else:
+                    differences.append(key)
+            else:
+                known[key] = value
+    state = "deviated" if differences else "unknown" if missing else "confirmed"
+    return state, {
+        "setting_matches": False if differences else None if missing else True,
+        "matched_fields": list(known),
+        "unknown_fields": missing,
+        "deviated_fields": differences,
+        "material_evidence": material,
+        "entity_exists": True,
+        "delivery_confirmed": False,
+        "message": "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。",
+    }
+
+
+def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id=None):
+    observed = evidence.get("entity_exists") is True
+    if not observed:
+        evidence["attempted_at"] = db.now_utc().isoformat()
+    conn.execute(
+        "UPDATE ads_handoff_item SET status=%s,evidence_json=%s,entity_id=COALESCE(%s,entity_id),"
+        "observed_at=CASE WHEN %s THEN now() ELSE observed_at END,updated_at=now() "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND id=%s AND attempt_id=%s",
+        (status, db.jsonb(evidence), entity_id, observed, org, brand, campaign, item_id, attempt),
+    )
+    current = handoff_data.get(conn, org, brand, campaign, item_id)
+    if current["attempt_id"] == attempt:
+        peers = conn.execute(
+            "SELECT status FROM ads_handoff_item WHERE action_id=%s", (current["action_id"],)
+        ).fetchall()
+        aggregate = "confirmed" if all(r["status"] == "confirmed" for r in peers) else "unknown"
+        conn.execute(
+            "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
+            "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
+            "ELSE first_observed_at END,"
+            "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END WHERE id=%s",
+            (
+                aggregate,
+                db.jsonb(
+                    {
+                        "handoff_item_id": item_id,
+                        "setting_matches": aggregate == "confirmed",
+                        "delivery_confirmed": False,
+                        "message": evidence["message"],
+                    }
+                ),
+                observed,
+                aggregate,
+                current["action_id"],
+            ),
+        )
+    conn.commit()
+    return handoff_data.get(conn, org, brand, campaign, item_id)
+
+
+def check(conn, org, brand, campaign, item_id, payload, actor):
+    changes.lock(conn, org, brand)
+    item = handoff_data.get(conn, org, brand, campaign, item_id)
+    change_set = changes.get(conn, org, brand, campaign, item["change_set_id"])
+    if change_set["status"] != "approved":
+        raise ValueError("此交接尚未核准。")
+    parent = _parent(conn, org, brand, campaign, item)
+    if parent and (payload["platform"], payload["source_account"]) != (
+        parent["platform"],
+        parent["source_account"],
+    ):
+        raise ValueError("來源帳號必須與已讀回父層一致。")
+    if item["entity_id"] and (
+        payload["platform"],
+        payload["source_account"],
+        payload["native_kind"],
+        payload["native_id"],
+    ) != (item["platform"], item["source_account"], item["native_kind"], item["native_id"]):
+        raise ValueError("此交接已對應另一個平台物件，不能覆寫既有身分。")
+    if item["expected_json"].get("source_entity_id"):
+        source = bindings.entity(
+            conn, org, brand, campaign, item["expected_json"]["source_entity_id"]
+        )
+        if (
+            payload["platform"],
+            payload["source_account"],
+            payload["native_kind"],
+            payload["native_id"],
+        ) == (
+            source["platform"],
+            source["source_account"],
+            source["native_kind"],
+            source["native_id"],
+        ):
+            raise ValueError("新測試必須使用獨立廣告，不能把原廣告當成新廣告。")
+    if payload["native_id"] in item["expected_json"].get("existing_native_ids", []):
+        raise ValueError("此廣告在建立新測試前已存在，請選新增廣告的獨立身分。")
+    reader, account = external_sync.account_reader(
+        conn, org, brand, payload["platform"], payload["source_account"]
+    )
+    if item["planned_kind"] == "ad" and payload["native_kind"] not in reader.binding_kinds():
+        raise ValueError("請選擇可對應素材的廣告層級。")
+    root = bindings.root(conn, org, brand, campaign, parent) if parent else payload
+    source_ids = list(
+        {payload["native_id"], root["native_id"], *([parent["native_id"]] if parent else [])}
+    )
+    source_versions = _source_versions(
+        conn, org, payload["platform"], payload["source_account"], source_ids
+    )
+    attempt = db.new_id("ahc")
+    conn.execute("UPDATE ads_handoff_item SET attempt_id=%s WHERE id=%s", (attempt, item_id))
+    conn.commit()
+    proof = None
+    try:
+        proof = reader.verify_native(
+            conn,
+            org,
+            brand,
+            account,
+            native_kind=payload["native_kind"],
+            native_id=payload["native_id"],
+            root_kind=root["native_kind"],
+            root_id=root["native_id"],
+            original={},
+        )
+        asset_binding._validate_chain(proof, payload, root)
+        node = proof["entity"]
+        if parent and (node.get("parent_native_kind"), node.get("parent_native_id")) != (
+            parent["native_kind"],
+            parent["native_id"],
+        ):
+            raise ValueError("平台直接父層與交接計畫不符。")
+        if not parent and node.get("parent_native_id") is not None:
+            raise ValueError("活動交接必須選擇來源根層級。")
+        external_sync.account_reader(
+            conn, org, brand, payload["platform"], payload["source_account"]
+        )
+        changes.lock(conn, org, brand)
+        latest = handoff_data.get(conn, org, brand, campaign, item_id)
+        if latest["attempt_id"] != attempt:
+            conn.commit()
+            return latest
+        if source_versions != _source_versions(
+            conn, org, payload["platform"], payload["source_account"], source_ids
+        ):
+            return _finish(
+                conn,
+                org,
+                brand,
+                campaign,
+                item_id,
+                attempt,
+                "unknown",
+                {
+                    "message": "核對期間來源已更新，保留較新的資料，請再核對。",
+                    "entity_exists": False,
+                },
+            )
+        if not _launch_current(conn, org, brand, campaign, change_set):
+            return _finish(
+                conn,
+                org,
+                brand,
+                campaign,
+                item_id,
+                attempt,
+                "stale",
+                {"message": "核准後計畫或素材已變更，請重新檢視交接。", "entity_exists": False},
+            )
+        nodes = [
+            ExternalEntity.model_validate(
+                {k: v for k, v in raw.items() if k in ExternalEntity.model_fields}
+            ).model_dump()
+            for raw in [node, *proof["parents"]]
+        ]
+        for raw in nodes:
+            _ownership(conn, org, brand, campaign, raw)
+        for raw in reversed(nodes):
+            saved = external.upsert_entity(conn, org, brand, campaign, raw)
+            if raw is nodes[0]:
+                entity_id = saved["id"]
+        occupied = conn.execute(
+            "SELECT id FROM ads_handoff_item WHERE org_id=%s AND entity_id=%s AND id<>%s",
+            (org, entity_id, item_id),
+        ).fetchone()
+        if occupied:
+            raise ValueError("此平台物件已對應另一個交接項目。")
+        if change_set["plan_json"].get("launch_snapshot"):
+            bind = {
+                "campaign": campaigns.bind_campaign,
+                "group": campaigns.bind_group,
+                "ad": campaigns.bind_ad,
+            }[item["planned_kind"]]
+            bind(
+                conn,
+                org,
+                brand,
+                item["planned_id"],
+                external_id=node["native_id"],
+                external_name=node.get("name") or node["native_id"],
+                external_status=node.get("native_status"),
+            )
+        conn.execute(
+            "UPDATE ads_handoff_item SET entity_id=%s WHERE id=%s AND attempt_id=%s",
+            (entity_id, item_id, attempt),
+        )
+        conn.commit()
+        material = "user_verified" if payload.get("user_verified") else "unknown"
+        if item["placement_id"]:
+            binding = asset_binding.verify(
+                conn,
+                org,
+                brand,
+                campaign,
+                item["placement_id"],
+                item["placement_revision"],
+                entity_id,
+                actor,
+                user_verified=payload.get("user_verified", False),
+            )
+            material = binding["evidence_level"]
+            node = bindings.entity(conn, org, brand, campaign, entity_id)
+        status, evidence = _settings(item, node, material)
+        evidence.update(
+            observed_at=db.now_utc().isoformat(),
+            native_id=node["native_id"],
+            source_account=node["source_account"],
+            attempt_id=attempt,
+        )
+        return _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id)
+    except (ValueError, AttributeError):
+        conn.rollback()
+        return _finish(
+            conn,
+            org,
+            brand,
+            campaign,
+            item_id,
+            attempt,
+            "unknown",
+            {
+                "message": "來源、物件歸屬或完整設定無法核對，未確認完成；請核對選擇後重試。",
+                "entity_exists": False,
+                "setting_matches": None,
+                "material_evidence": "unknown",
+                "delivery_confirmed": False,
+                "attempt_id": attempt,
+            },
+        )

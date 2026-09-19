@@ -59,7 +59,7 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
         "SELECT e.campaign_id,e.native_id FROM ads_external_entity e JOIN "
         "ads_campaign c ON c.id=e.campaign_id "
         "WHERE e.org_id=%s AND e.brand_id=%s AND e.platform=%s AND e.source_account=%s "
-        "AND e.parent_native_id IS NULL AND c.origin='imported'",
+        "AND e.parent_native_id IS NULL",
         (org_id, brand_id, platform, source_account),
     ).fetchall()
     requested = {"list": {"section": "list"}}

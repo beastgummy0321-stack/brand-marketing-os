@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, Info } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -29,6 +30,7 @@ export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReco
   const [revisit, setRevisit] = useState("");
   const confirmed = set.items.filter(item => item.verification_state === "confirmed").length;
   const approved = set.status === "approved";
+  const separateHandoff = set.items.some(item => item.kind === "launch" || item.kind === "new_ad");
   const stale = set.items.some(item => ["stale", "deviated"].includes(item.verification_state));
   const unexecuted = approved && set.items.some(item => item.verification_state === "pending");
   return <section className="surface" aria-label="本次變更清單">
@@ -40,23 +42,23 @@ export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReco
         const current = item.evidence_json.observed;
         return <article key={item.id} className={`rounded-lg border p-4 space-y-3 ${needsReview ? "border-destructive/30 bg-destructive/5" : "border-border"}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-start gap-2">{item.verification_state === "confirmed" ? <CheckCircle2 className="mt-0.5 size-5 text-success" /> : needsReview ? <AlertTriangle className="mt-0.5 size-5 text-destructive" /> : <Clock className="mt-0.5 size-5 text-warning" />}<div><h3 className="font-medium text-sm">{index + 1}. {targetLabel(item.target)}</h3><p className="text-xs text-muted-foreground">{kindLabel[item.kind]}</p></div></div>
+            <div className="flex items-start gap-2">{item.verification_state === "confirmed" ? <CheckCircle2 className="mt-0.5 size-5 text-success" /> : needsReview ? <AlertTriangle className="mt-0.5 size-5 text-destructive" /> : <Clock className="mt-0.5 size-5 text-warning" />}<div><h3 className="font-medium text-sm">{index + 1}. {targetLabel(item.target)}</h3><p className="text-xs text-muted-foreground">{item.kind === "new_ad" ? "新增另一則廣告，保留原廣告" : item.kind === "launch" ? "首次投放人工交接" : kindLabel[item.kind]}</p></div></div>
             {approved && <Badge variant="outline" className={needsReview ? "text-destructive" : item.verification_state === "confirmed" ? "text-success" : "text-warning"}>{verificationLabels[item.verification_state]}</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">{item.reason}</p>
           {item.kind === "budget" && item.before.daily_amount !== undefined && item.after.daily_amount !== undefined && item.after.daily_amount < item.before.daily_amount && item.verification_state !== "confirmed" && <p className="text-sm text-warning">降額尚未核對，不會先釋放額度。目前 {item.before.daily_amount.toLocaleString()} → 目標 {item.after.daily_amount.toLocaleString()}。</p>}
           <Disclosure label={needsReview ? "查看差異與重審原因" : "查看變更內容與操作對象"} defaultOpen={!approved && index === 0 || needsReview}>
             <div className="space-y-3">
-              <div className="grid gap-3 xl:grid-cols-2"><div className="rounded-md bg-muted p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "原核准內容" : "變更前"}</h4><Values value={needsReview ? item.after : item.before} /></div><div className="rounded-md bg-accent/60 p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "平台目前" : "希望調整為"}</h4><Values value={needsReview ? (current && typeof current === "object" ? current as SettingValues : {}) : item.after} /></div></div>
+              <div className="grid gap-3 xl:grid-cols-2"><div className="rounded-md bg-muted p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "原核准內容" : "變更前"}</h4>{item.kind === "new_ad" ? <p className="text-sm">原廣告與投放組預算保持不變。</p> : <Values value={needsReview ? item.after : item.before} />}</div><div className="rounded-md bg-accent/60 p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "平台目前" : "希望調整為"}</h4>{item.kind === "new_ad" ? <div className="space-y-2 text-sm"><p>{item.handoff_snapshot?.filename} · 素材版本 {item.handoff_snapshot?.revision}</p><p>沿用現有父層預算，不另產生可花額度。</p><Values value={{ title: item.handoff_snapshot?.copy.headline, body: item.handoff_snapshot?.copy.body }} /></div> : <Values value={needsReview ? (current && typeof current === "object" ? current as SettingValues : {}) : item.after} />}</div></div>
               {item.kind === "copy" && <p className="flex items-start gap-2 text-sm text-muted-foreground"><Info className="size-4 shrink-0" />只修改原廣告文案，圖片保持不變。文案相符也不代表圖片等價已證實。</p>}
-              <p className="text-xs text-muted-foreground">{item.target.platform} · 帳戶 {item.target.source_account} · 平台識別 {item.target.native_id}</p>
+              <p className="text-xs text-muted-foreground">{item.target.platform ?? "平台待指定"} · 帳戶 {item.target.source_account ?? "待對應"} · 平台識別 {item.target.native_id ?? "尚未建立對應"}</p>
               {item.stale_reason && <p className="text-sm text-destructive">{item.stale_reason}</p>}
               {typeof item.evidence_json.message === "string" && <p className="text-sm">{item.evidence_json.message}</p>}
               {item.reported_at && <p className="text-xs text-muted-foreground">使用者回報：{new Date(item.reported_at).toLocaleString("zh-TW")}</p>}
               {item.first_observed_at && <p className="text-xs text-muted-foreground">首次觀測：{new Date(item.first_observed_at).toLocaleString("zh-TW")}；平台實際生效時間仍需其他證據。</p>}
             </div>
           </Disclosure>
-          {approved && <>
+          {approved && item.kind !== "new_ad" && item.kind !== "launch" && <>
             {item.verification_state === "confirmed" && <p className="text-xs text-muted-foreground">設定讀回與核准內容相符；實際投遞與成效是否足夠需另行觀察。</p>}
             <div className="flex flex-wrap gap-2">
               {!needsReview && item.verification_state !== "confirmed" && item.verification_state !== "reported" && <Button size="sm" variant="outline" disabled={busy} onClick={() => onItem(item, "report")}>我已手動完成這一項</Button>}
@@ -65,9 +67,10 @@ export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReco
           </>}
         </article>;
       })}
-      {stale && <div className="rounded-md bg-warning/10 p-3 space-y-2 text-sm"><p>只有相關設定已改變的項目需要重審；其他項目保留自己的結果。一般資料同步不要求重新核准。</p>{set.can_revise !== true && <p>原清單仍有操作尚未核對，或證據已過期。請先核對其他項目，再重新讀取清單。</p>}<Button variant="outline" disabled={busy || set.can_revise !== true} onClick={onReconsider}>依目前設定另建清單</Button></div>}
-      {unexecuted && !stale && <div className="rounded-md bg-muted p-3 space-y-2 text-sm"><p>若想調整尚未執行的項目，請先逐項讀回，確認平台仍是變更前的設定。已完成項目會保留，不會再次列入。</p><Button variant="outline" disabled={busy || set.can_revise !== true} onClick={onReconsider}>修改尚未執行項目</Button></div>}
-      {(set.status === "draft" || set.status === "deferred") && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4"><p className="max-w-prose text-xs text-muted-foreground">核准只代表同意這份清單，之後仍由你到平台手動操作。</p><div className="flex flex-wrap gap-2"><Button disabled={busy} onClick={onApprove}>{busy ? "處理中…" : "核准這份變更清單"}</Button><Button variant="outline" disabled={busy} onClick={onReconsider}>修改清單</Button><Button variant="outline" disabled={busy} onClick={() => setDecision("rejected")}>拒絕</Button><Button variant="outline" disabled={busy} onClick={() => setDecision("deferred")}>暫緩</Button></div></div>}
+      {!separateHandoff && stale && <div className="rounded-md bg-warning/10 p-3 space-y-2 text-sm"><p>只有相關設定已改變的項目需要重審；其他項目保留自己的結果。一般資料同步不要求重新核准。</p>{set.can_revise !== true && <p>原清單仍有操作尚未核對，或證據已過期。請先核對其他項目，再重新讀取清單。</p>}<Button variant="outline" disabled={busy || set.can_revise !== true} onClick={onReconsider}>依目前設定另建清單</Button></div>}
+      {!separateHandoff && unexecuted && !stale && <div className="rounded-md bg-muted p-3 space-y-2 text-sm"><p>若想調整尚未執行的項目，請先逐項讀回，確認平台仍是變更前的設定。已完成項目會保留，不會再次列入。</p><Button variant="outline" disabled={busy || set.can_revise !== true} onClick={onReconsider}>修改尚未執行項目</Button></div>}
+      {separateHandoff && <div className="rounded-md bg-accent p-3 text-sm space-y-2"><p>新增物件須在人工交接區逐項核對。原廣告是否暫停另列一項；沒有確認的降額不會釋放額度。</p>{approved ? <a className="text-primary" href="#manual-handoff">前往平台對應核對</a> : <Link className="text-primary" to="?tab=assets">回到素材與計畫檢視</Link>}</div>}
+      {(set.status === "draft" || set.status === "deferred") && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4"><p className="max-w-prose text-xs text-muted-foreground">核准只代表同意這份清單，之後仍由你到平台手動操作。</p><div className="flex flex-wrap gap-2"><Button disabled={busy} onClick={onApprove}>{busy ? "處理中…" : "核准這份變更清單"}</Button>{!separateHandoff && <Button variant="outline" disabled={busy} onClick={onReconsider}>修改清單</Button>}<Button variant="outline" disabled={busy} onClick={() => setDecision("rejected")}>拒絕</Button><Button variant="outline" disabled={busy} onClick={() => setDecision("deferred")}>暫緩</Button></div></div>}
       {decision && <form className="rounded-md border border-border p-4 space-y-3" onSubmit={e => { e.preventDefault(); onDecision({ decision, reason, ...(decision === "deferred" ? { revisit_at: new Date(revisit).toISOString() } : {}) }); }}>
         <label className="block text-sm">{decision === "deferred" ? "暫緩原因與待補條件" : "拒絕原因"}<Textarea aria-label="決定原因" value={reason} onChange={e => setReason(e.target.value)} required disabled={busy} /></label>
         {decision === "deferred" && <label className="block text-sm">重看時間<Input aria-label="重看時間" type="datetime-local" value={revisit} onChange={e => setRevisit(e.target.value)} required disabled={busy} /></label>}
@@ -75,7 +78,7 @@ export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReco
         <div className="flex gap-2"><Button type="submit" disabled={busy || !reason.trim() || decision === "deferred" && !revisit}>保存決定</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setDecision(null)}>取消</Button></div>
       </form>}
       {(set.status === "rejected" || set.status === "deferred") && <div className="rounded-md bg-muted p-3 text-sm space-y-1"><p>{set.reason}</p>{set.revisit_at && <p>重看時間：{new Date(set.revisit_at).toLocaleString("zh-TW")}</p>}<p className="text-muted-foreground">本次決定不會停止平台廣告。活動花費與重要期限仍需持續查看。</p></div>}
-      {set.status === "rejected" && <Button variant="outline" disabled={busy} onClick={onReconsider}>依目前設定另建清單</Button>}
+      {!separateHandoff && set.status === "rejected" && <Button variant="outline" disabled={busy} onClick={onReconsider}>依目前設定另建清單</Button>}
       {approved && <p className="flex items-start gap-2 rounded-md bg-background p-3 text-xs text-muted-foreground"><Info className="size-4 shrink-0" />本次檢討是否完成、執行清單是否完成、活動是否持續投放，是三件不同的事。</p>}
     </div>
   </section>;

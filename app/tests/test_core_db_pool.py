@@ -6,13 +6,19 @@
 不留垃圾。本模組自己的 schema 由 conftest.py 的 `_module_schema` fixture 建立。
 """
 
+import asyncio
 import os
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import quote
 
+import anyio
+import httpx
 import psycopg
 import pytest
+from fastapi import FastAPI
+from psycopg_pool import ConnectionPool
 
 from app.core import db as coredb
 
@@ -133,6 +139,244 @@ class ConnProxyTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             proxy.execute("SELECT 1")
+
+
+class AsyncRequestPoolTest(unittest.TestCase):
+    def test_more_than_ten_requests_can_wait_without_blocking_routes_or_returns(self):
+        from app import main
+
+        async def run():
+            app = FastAPI()
+            app.middleware("http")(main._db_connection_middleware)
+            first_wave = asyncio.Event()
+            release = asyncio.Event()
+            active = set()
+            maximum = 0
+            entered = 0
+
+            @app.get("/probe/{number}")
+            async def probe(number: int):
+                nonlocal maximum, entered
+                conn = coredb.current()
+                self.assertNotIn(id(conn), active)
+                active.add(id(conn))
+                maximum = max(maximum, len(active))
+                entered += 1
+                if entered == 10:
+                    first_wave.set()
+                try:
+                    await release.wait()
+                    self.assertIs(coredb.current(), conn)
+                    self.assertIs(await asyncio.to_thread(coredb.current), conn)
+                    value = coredb.ConnProxy().execute("SELECT 1 AS x").fetchone()["x"]
+                    return {"number": number, "value": value}
+                finally:
+                    active.remove(id(conn))
+
+            real_pool = coredb.pool()
+            original_connection = real_pool.connection
+            # Bound regression failures: the old blocking middleware otherwise waits
+            # 30 seconds per excess request before the event loop can release a slot.
+            with (
+                patch.object(
+                    real_pool, "connection", side_effect=lambda: original_connection(timeout=1),
+                ),
+                patch.object(main, "_purge_expired_llm_task_content_if_new_day") as purge,
+            ):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://fixture",
+                ) as client:
+                    tasks = [asyncio.create_task(client.get(f"/probe/{i}")) for i in range(25)]
+                    try:
+                        await asyncio.wait_for(first_wave.wait(), 5)
+                        # This timer and the ten waiting routes must continue to run
+                        # while more requests wait for the full pool.
+                        await asyncio.sleep(0.05)
+                        self.assertEqual(entered, 10)
+                        self.assertEqual(len(active), 10)
+                        release.set()
+                        responses = await asyncio.wait_for(asyncio.gather(*tasks), 8)
+                    finally:
+                        release.set()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+            self.assertEqual(maximum, 10)
+            self.assertEqual([response.json()["number"] for response in responses], list(range(25)))
+            self.assertTrue(all(response.json()["value"] == 1 for response in responses))
+            self.assertEqual(len({response.headers["X-Request-Id"] for response in responses}), 25)
+            self.assertEqual(purge.call_count, 25)
+            with self.assertRaises(RuntimeError):
+                coredb.current()
+
+        asyncio.run(run())
+
+    def test_async_commit_rollback_and_nested_context_restore(self):
+        async def run():
+            with coredb.connection() as outer:
+                outer.execute(f"CREATE TABLE {_SCRATCH_TABLE} (x int)")
+                outer.commit()
+                try:
+                    async with coredb.async_connection() as inner:
+                        self.assertIsNot(inner, outer)
+                        inner.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+                    self.assertIs(coredb.current(), outer)
+                    with self.assertRaisesRegex(ValueError, "rollback"):
+                        async with coredb.async_connection() as inner:
+                            inner.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (2)")
+                            raise ValueError("rollback")
+                    self.assertIs(coredb.current(), outer)
+                    self.assertEqual(
+                        outer.execute(f"SELECT x FROM {_SCRATCH_TABLE}").fetchall(), [{"x": 1}],
+                    )
+                finally:
+                    outer.rollback()
+                    outer.execute(f"DROP TABLE {_SCRATCH_TABLE}")
+            with self.assertRaises(RuntimeError):
+                coredb.current()
+
+        asyncio.run(run())
+
+    def test_tenant_scope_survives_request_rollback_and_is_reset_before_reuse(self):
+        async def run():
+            # One slot proves that the next request receives the same physical
+            # connection, with the existing pool reset callback applied.
+            with ConnectionPool(
+                coredb.dsn(), min_size=1, max_size=1,
+                reset=coredb._reset_pooled_connection,
+                kwargs={"row_factory": psycopg.rows.dict_row},
+            ) as one:
+                with patch.object(coredb, "pool", return_value=one):
+                    async with coredb.async_connection() as conn:
+                        baseline = conn.execute(
+                            "SELECT current_user AS role, pg_backend_pid() AS pid",
+                        ).fetchone()
+                        coredb.set_tenant_scope(conn, coredb.DEV_ORG_ID)
+                        conn.rollback()
+                        scoped = conn.execute(
+                            "SELECT current_user AS role, current_setting('app.org_id') AS org",
+                        ).fetchone()
+                        self.assertEqual(
+                            scoped, {"role": "authenticated", "org": coredb.DEV_ORG_ID},
+                        )
+                    async with coredb.async_connection() as conn:
+                        restored = conn.execute(
+                            "SELECT current_user AS role, pg_backend_pid() AS pid, "
+                            "current_setting('app.org_id', true) AS org",
+                        ).fetchone()
+                        self.assertEqual(restored["pid"], baseline["pid"])
+                        self.assertEqual(restored["role"], baseline["role"])
+                        self.assertIn(restored["org"], (None, ""))
+
+        asyncio.run(run())
+
+    def test_cancelled_request_rolls_back_and_returns_its_connection(self):
+        async def run():
+            entered = asyncio.Event()
+            with coredb.connection() as setup:
+                setup.execute(f"CREATE TABLE {_SCRATCH_TABLE} (x int)")
+            async def worker():
+                async with coredb.async_connection() as conn:
+                    conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (9)")
+                    entered.set()
+                    await asyncio.Event().wait()
+            task = asyncio.create_task(worker())
+            try:
+                await asyncio.wait_for(entered.wait(), 5)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                async with coredb.async_connection() as conn:
+                    self.assertEqual(conn.execute(f"SELECT x FROM {_SCRATCH_TABLE}").fetchall(), [])
+            finally:
+                with coredb.connection() as cleanup:
+                    cleanup.execute(f"DROP TABLE {_SCRATCH_TABLE}")
+            with self.assertRaises(RuntimeError):
+                coredb.current()
+
+        asyncio.run(run())
+
+
+class AsyncCancellationTest(unittest.TestCase):
+    class Manager:
+        def __init__(self, *, block_borrow=False, block_return=False):
+            self.borrowed = threading.Event()
+            self.returning = threading.Event()
+            self.allow_borrow = threading.Event()
+            self.allow_return = threading.Event()
+            self.exits = []
+            if not block_borrow:
+                self.allow_borrow.set()
+            if not block_return:
+                self.allow_return.set()
+
+        def __enter__(self):
+            self.borrowed.set()
+            if not self.allow_borrow.wait(3):
+                raise RuntimeError("test borrower timed out")
+            return object()
+
+        def __exit__(self, kind, value, traceback):
+            self.returning.set()
+            if not self.allow_return.wait(3):
+                raise RuntimeError("test return timed out")
+            self.exits.append(kind)
+
+    def test_cancel_during_borrow_returns_eventually_acquired_connection(self):
+        async def run():
+            manager = self.Manager(block_borrow=True)
+            entered_body = False
+            async def worker():
+                nonlocal entered_body
+                async with coredb.async_connection():
+                    entered_body = True
+            with patch.object(coredb, "pool") as get_pool:
+                get_pool.return_value.connection.return_value = manager
+                task = asyncio.create_task(worker())
+                self.assertTrue(await asyncio.to_thread(manager.borrowed.wait, 1))
+                task.cancel()
+                await asyncio.sleep(0)
+                manager.allow_borrow.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+            self.assertFalse(entered_body)
+            self.assertEqual(manager.exits, [asyncio.CancelledError])
+            with self.assertRaises(RuntimeError):
+                coredb.current()
+        asyncio.run(run())
+
+    def test_repeated_cancel_during_return_still_finishes_one_return(self):
+        async def run():
+            manager = self.Manager(block_return=True)
+            async def worker():
+                async with coredb.async_connection():
+                    pass
+            with patch.object(coredb, "pool") as get_pool:
+                get_pool.return_value.connection.return_value = manager
+                task = asyncio.create_task(worker())
+                self.assertTrue(await asyncio.to_thread(manager.returning.wait, 1))
+                task.cancel()
+                await asyncio.sleep(0)
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                manager.allow_return.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+            self.assertEqual(manager.exits, [None])
+        asyncio.run(run())
+
+    def test_anyio_level_cancellation_finishes_cleanup_without_leaking_context(self):
+        async def run():
+            manager = self.Manager()
+            with patch.object(coredb, "pool") as get_pool:
+                get_pool.return_value.connection.return_value = manager
+                with anyio.move_on_after(0.02) as scope:
+                    async with coredb.async_connection():
+                        await anyio.sleep_forever()
+            self.assertTrue(scope.cancel_called)
+            self.assertEqual(manager.exits, [asyncio.CancelledError])
+            with self.assertRaises(RuntimeError):
+                coredb.current()
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { assetBlob } from "@/lib/adsUserAssetsApi";
 
-export function AuthAssetMedia({ brandId, assetId, filename, mime, duration }: { brandId: string; assetId: string; filename: string; mime: string; duration?: number | null }) {
-  const [show, setShow] = useState(false); const [url, setUrl] = useState("");
+export function AuthAssetMedia({ brandId, assetId, filename, mime, duration, autoPreview = false }: { brandId: string; assetId: string; filename: string; mime: string; duration?: number | null; autoPreview?: boolean }) {
+  const [show, setShow] = useState(autoPreview); const [url, setUrl] = useState("");
   const [error, setError] = useState(""); const [downloading, setDownloading] = useState(false);
   useEffect(() => {
     if (!show) return;
@@ -17,9 +17,9 @@ export function AuthAssetMedia({ brandId, assetId, filename, mime, duration }: {
   }, [brandId, assetId, show]);
   const downloadController = useRef<AbortController | null>(null);
   useEffect(() => {
-    setShow(false); setUrl(""); setError(""); setDownloading(false);
+    setShow(autoPreview); setUrl(""); setError(""); setDownloading(false);
     return () => downloadController.current?.abort();
-  }, [brandId, assetId]);
+  }, [brandId, assetId, autoPreview]);
   async function download() {
     downloadController.current?.abort();
     const controller = new AbortController(); downloadController.current = controller;

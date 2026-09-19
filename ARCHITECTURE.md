@@ -44,6 +44,8 @@
         "frontend/src/lib/adsUserAssetsApi.ts",
         "frontend/src/lib/adsChangeApi.ts",
         "frontend/src/lib/adsReviewApi.ts",
+        "frontend/src/lib/adsMaterialApi.ts",
+        "frontend/src/lib/adsHandoffApi.ts",
         "frontend/src/lib/adsPublishTypes.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
@@ -83,6 +85,22 @@
     }
   },
   "resources": {
+    "ads_material_task": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_material_task"
+    },
+    "ads_material_revision": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_material_revision"
+    },
+    "ads_material_operation": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_material_operation"
+    },
+    "ads_handoff_item": {
+      "owner": "ads", "kind": "sql-table",
+      "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_handoff_item"
+    },
     "ads_review_round": {
       "owner": "ads", "kind": "sql-table",
       "definition": ["supabase/migrations/*_ads_*.sql"], "symbol": "ads_review_round"

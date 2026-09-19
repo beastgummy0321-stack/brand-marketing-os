@@ -83,7 +83,8 @@ class ActionLineTest(unittest.TestCase):
         result = judgment.action_line(
             action, campaign_name="活動一", target_name="投放組 A", today=date(2026, 9, 12),
         )
-        self.assertIn("調整了", result["title"])
+        self.assertIn("已記錄", result["title"])
+        self.assertIn("預算調整", result["title"])
         self.assertIn("NT$ 1,000 → NT$ 1,500", result["detail"])
 
     def test_detail_never_prints_approved_by_id(self):
@@ -94,8 +95,43 @@ class ActionLineTest(unittest.TestCase):
         result = judgment.action_line(
             action, campaign_name="活動一", target_name=None, today=date(2026, 9, 12),
         )
-        self.assertEqual(result["detail"], "待手動同步")
+        self.assertEqual(result["detail"], "尚無足夠的本次平台讀回證據。")
         self.assertNotIn("b0a57eef", result["detail"])
+
+    def test_approval_and_user_reports_do_not_claim_platform_completion(self):
+        for kind in ("publish", "budget", "date", "pause", "creative"):
+            for state, expected in (("pending", "已本機核准"), ("reported", "使用者已回報")):
+                with self.subTest(kind=kind, state=state):
+                    result = judgment.action_line(
+                        {"kind": kind, "change_set_id": "local", "verification_state": state,
+                         "created_at": date(2026, 9, 12)},
+                        campaign_name="活動一", target_name=None, today=date(2026, 9, 12),
+                    )
+                    self.assertIn(expected, result["title"])
+                    self.assertNotIn("發布了", result["title"])
+                    self.assertNotIn("暫停了", result["title"])
+                    self.assertIn("讀回核對", result["detail"])
+
+    def test_legacy_sync_markers_and_confirmation_without_evidence_are_not_upgraded(self):
+        for sync in ("auto_synced", "confirmed_manual", "pending_manual"):
+            result = judgment.action_line(
+                {"kind": "publish", "sync_state": sync, "verification_state": "confirmed",
+                 "created_at": date(2026, 9, 12)}, campaign_name="活動一", target_name=None,
+                today=date(2026, 9, 12),
+            )
+            self.assertNotIn("已讀回核對", result["title"])
+            self.assertNotIn("已手動同步", result["detail"])
+            self.assertNotIn("自動同步", result["detail"])
+
+    def test_readback_confirms_settings_without_claiming_delivery(self):
+        result = judgment.action_line(
+            {"kind": "publish", "verification_state": "confirmed",
+             "evidence_json": {"setting_matches": True, "delivery_confirmed": False},
+             "verified_at": date(2026, 9, 12), "created_at": date(2026, 9, 12)},
+            campaign_name="活動一", target_name=None, today=date(2026, 9, 12),
+        )
+        self.assertIn("已讀回核對", result["title"])
+        self.assertIn("不代表已投遞", result["detail"])
 
 
 class CampaignDetailJudgmentTest(unittest.TestCase):
