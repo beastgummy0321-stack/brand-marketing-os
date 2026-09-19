@@ -232,7 +232,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     brand_setup = {"conversion_goal": conversion_goal, "connected_channels": connected_channels}
     setup_text = json.dumps({
         **brand_setup,
-        "conversion_goal_label": CONVERSION_GOAL_LABELS.get(conversion_goal, "尚未設定"),
+        "conversion_goal_label": CONVERSION_GOAL_LABELS.get(conversion_goal or "", "尚未設定"),
     }, ensure_ascii=False)
 
     today = coresettings.today_for_org(conn, org_id=org_id)
