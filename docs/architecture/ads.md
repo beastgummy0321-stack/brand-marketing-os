@@ -322,7 +322,7 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   類型和可讀原始摘要、標「無法完整還原」，不拼造一張代表成品。縮圖不是影片原檔。
   實際讀回已確認一筆動態廣告及其廣告組／活動父鏈與帳號時區。這不代表所有帳號／類型都有權限，
   影片原檔、媒體等價及連續版本歷史仍未取得；其餘分支的 fixture 證據另列。
-  預算原始數值保持平台格式；沒有可靠幣別換算分母時，金額標未知，不推造換算值。
+  預算原始數值保持平台格式，換算規則見 §6.12；沒有可靠幣別換算分母時，金額標未知，不推造換算值。
 - 只有平台 GET；無 CSV 備援、無建立／停投／續跑／改預算 API。解除帳號綁定後拒絕新讀取，
   舊資料保留並標連線已解除，不跨品牌重新授權。
 
@@ -550,3 +550,41 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   真實 jsonb 形狀）、`app/tests/test_ads_outcome.py`（`ingest_meta` 寫入 NULL／0／真數字三種
   情境，`RealMetaPurchasesReachCloseoutTest` 端到端驗真實購買數能通過樣本門檻判「達成」／
   「未達成」）。
+
+### 6.12 F16-I02 — Meta 預算換算成帳戶幣別真實金額（settled 2026-09-20）
+
+- 換算歸屬 ads 自有 adapter：`app/ads/adapters/meta_read.py::_budget_minor_unit_amount()`，在
+  `_entity()` 組好 `budget_raw` 之後就地換算；`app/meta/**` 是舊模組，這次沒有改動，也沒有任何
+  新的 Graph 呼叫或新欄位——換算只用既有 `daily_budget`／`lifetime_budget`／帳戶 `currency`。
+- 換算規則：官方文件 <https://developers.facebook.com/docs/marketing-api/currencies>（取得於
+  2026-09-20）——「Each currency has an offset which specifies how the platform handles its
+  subdivisions.」平台單位除以該幣別的 offset 得到帳戶幣別金額。offset 1（零小數）：CLP、COP、
+  CRC、HUF、IDR、ISK、JPY、KRW、PYG、TWD、VND；offset 100（兩位小數）：DZD、ARS、AUD、BHD、
+  BDT、BOB、BGN、BRL、GBP、CAD、CNY、HRK、CZK、DKK、EGP、EUR、GTQ、HNL、HKD、INR、ILS、JOD、
+  KES、LVL、LTL、MOP、MYR、MXN、NZD、NIO、NGN、NOK、PKR、PEN、PHP、PLN、QAR、RON、RUB、SAR、
+  RSD、SGD、SKK、ZAR、SEK、CHF、THB、TRY、AED、UAH、USD、UYU、VEF、FBZ、VES。兩份清單都是窮舉；
+  不在任一清單、幣別缺失或格式不是三位大寫字母，一律 `budget_amount=None`，不猜 1 也不猜 100。
+- 讀回交叉核對（唯讀、零寫入，一次性）：TWD 帳戶 `368741390835357` 的活動
+  `120250284145340671`（「【銷售】1150706 Beast Prime 最高數量」）`daily_budget` 回傳 `"1900"`，
+  同活動 `ads_external_daily` 實際單日花費落在 1,639～2,383 TWD 之間。offset 1 換算成
+  NT$1,900／天，與花費量級一致；offset 100 會是 NT$19／天，對不上同一活動 1,639～2,383 的實際
+  花費——offset 1 對 TWD 成立，文件與讀回互相印證，此後不需要再對這條規則本身提出疑問。
+  （這是一次性讀回核對，不是要求使用者投放才能看到結果；帳戶資料狀態僅作為既有事實記錄。）
+- 金額計算全程用 `Decimal`：平台單位一律是整數，除以 offset 通常整除；`ROUND_HALF_UP` 只是防禦
+  性設定、非精度來源。結果依 offset 對應小數位（offset 1 → 0 位、offset 100 → 2 位）量化後才轉
+  `float` 存入 `budget_amount`，兩位小數幣別不會被二進位浮點誤差吃掉尾數。
+- `budget_raw.conversion` 一律是機器可讀的判斷依據：換算成功是 `offset_table:<offset>`；未成
+  功依序是 `currency_absent`（幣別缺失或格式不對）、`currency_not_in_offset_table`（幣別不在兩
+  份清單內）、`no_budget_value`（平台沒有回傳日預算或總額預算數值）。`availability.budget_amount`
+  只有在真的換算出金額時才是 `available`，其餘都留 `unknown`。
+- `month_budget.py:168-169` 的「持續投放的預算金額、單位或幣別未核實」判斷本來就是逐一實體檢查
+  `budget_amount is None`；換算成功的實體自然不再觸發這條提醒，未換算成功的實體不變、繼續明確標
+  未核實——這次沒有改動 `month_budget.py` 本身的邏輯，行為變化完全來自 `_entity()` 現在真的能給
+  出金額。
+- 變更清單／讀回核對（`change_control_data.before()`、`change_control_verify.check()`）沒有改
+  動：兩者本來就直接讀 `entity.get("budget_amount")` 做比對，換算前後都是同一段程式碼；新增
+  `test_ads_change_control.py::ChangeControlTest.test_meta_budget_conversion_flows_through_
+  confirmed_readback` 端到端證明用 `_entity()` 產生的真實換算金額走到 `check()` 也能判「已核對
+  一致」，不是只用測試自訂的假數字。
+- 驗證：`app/tests/test_ads_external_metrics.py`（零小數 TWD、兩位小數 USD、不在清單的幣別、幣
+  別缺失、無預算數值五種情境）、`app/tests/test_ads_change_control.py`（端到端讀回）。
