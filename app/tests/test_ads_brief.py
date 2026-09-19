@@ -68,12 +68,20 @@ class _BriefTestBase(unittest.TestCase):
 
 
 class ValidReplyTest(_BriefTestBase):
-    def test_saved_goal_and_connected_channels_reach_prompt_and_evidence_without_overriding_request(self):
-        bi_repo.set_brand_switches(web.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR)
-        provider = _fake(json.dumps({"objective": "名單", "success_metric": "cpa", "success_target": None, "product_ids": []}))
+    def test_saved_goal_and_connected_channels_reach_prompt_and_evidence_without_overriding_request(
+        self,
+    ):
+        bi_repo.set_brand_switches(
+            web.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
+        )
+        provider = _fake(json.dumps({
+            "objective": "名單", "success_metric": "cpa", "success_target": None, "product_ids": [],
+        }))
         brief.PROVIDER = provider
         channel = {"key": "connected-fixture", "label": "已綁平台", "connected": True}
-        with patch.object(brief.channels, "list_channels", return_value=[channel, {"key": "disconnected-fixture", "label": "未綁平台", "connected": False}]) as read_channels:
+        with patch.object(brief.channels, "list_channels", return_value=[
+            channel, {"key": "disconnected-fixture", "label": "未綁平台", "connected": False},
+        ]) as read_channels:
             detail = self._create(constraints={"budget": "1200", "platform": "user-choice"})
         read_channels.assert_called_once_with(web.conn, self.org_id, self.brand_id)
         prompt = provider.calls[0]["messages"][0]["content"]
@@ -83,12 +91,17 @@ class ValidReplyTest(_BriefTestBase):
         self.assertNotIn("disconnected-fixture", prompt)
         self.assertIn("不證明權限仍有效", prompt)
         self.assertIn("品牌月額度不是本次活動預算", prompt)
-        self.assertEqual(detail["context_json"]["brand_setup"], {"conversion_goal": "lead", "connected_channels": [{"key": "connected-fixture", "label": "已綁平台"}]})
+        self.assertEqual(detail["context_json"]["brand_setup"], {
+            "conversion_goal": "lead",
+            "connected_channels": [{"key": "connected-fixture", "label": "已綁平台"}],
+        })
         self.assertEqual(detail["constraints_json"], {"budget": "1200", "platform": "user-choice"})
         self.assertEqual(len(provider.calls), 1)
 
     def test_missing_saved_setup_stays_unknown_and_does_not_fabricate_a_platform_or_budget(self):
-        provider = _fake(json.dumps({"objective": "購買", "success_metric": "cpa", "success_target": None, "product_ids": []}))
+        provider = _fake(json.dumps({
+            "objective": "購買", "success_metric": "cpa", "success_target": None, "product_ids": [],
+        }))
         brief.PROVIDER = provider
         detail = self._create()
         prompt = provider.calls[0]["messages"][0]["content"]
