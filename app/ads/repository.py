@@ -823,6 +823,7 @@ def bind_ad(conn: _AnyConn, org_id: str, brand_id: str, ad_id: str, *,
 # -- app.core.cleanup 登記（品牌刪除連鎖清資料，ARCHITECTURE.md §4） -------------------------
 
 _CHILD_TABLES = (
+    ("ads_review_monitor", "持續廣告檢討條件"),
     ("ads_handoff_item", "人工交接逐項核對"),
     ("ads_material_operation", "素材任務保存紀錄"),
     ("ads_material_revision", "素材需求版本"),

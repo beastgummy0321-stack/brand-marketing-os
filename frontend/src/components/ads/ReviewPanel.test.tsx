@@ -10,6 +10,7 @@ import { ReviewPanel } from "./ReviewPanel";
 import { ChangeControl } from "./ChangeControl";
 
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
+vi.mock("./ReviewTracking", () => ({ ReviewTracking: () => null }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
 vi.mock("@/lib/adsReviewApi", () => ({
@@ -84,6 +85,16 @@ beforeEach(() => {
 });
 
 describe("廣告檢討的證據與使用者決定", () => {
+  it("通知或來源連結可讀回不在最近清單內的歷史檢討", async () => {
+    const old = { ...round("completed"), id: "older_review", reason: "歷史假設需要重新確認" };
+    vi.mocked(reviews.getReview).mockResolvedValue(old);
+    render(<MemoryRouter initialEntries={["/?tab=performance&review=older_review"]}><ReviewPanel brandId="brand_a" campaignId="campaign_a" onGoal={onGoal} /></MemoryRouter>);
+    await screen.findByText("本次檢討完成");
+    expect(reviews.getReview).toHaveBeenCalledWith("brand_a", "campaign_a", "older_review", expect.any(AbortSignal));
+    expect(screen.queryByText("資料不足，等待補齊")).toBeNull();
+    expect(reviews.createReview).not.toHaveBeenCalled();
+  });
+
   it("商城與平台分區呈現，未知付款、幣別與缺資料不顯示成功或補零", async () => {
     const user = userEvent.setup();
     render(page());

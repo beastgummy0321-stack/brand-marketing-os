@@ -40,7 +40,9 @@ def register(app: FastAPI) -> None:
         handoff_routes,
         material_routes,
         month_budget_routes,
+        review_monitor_routes,
         review_routes,
+        runtime_routes,
         user_assets_routes,
     )
     from app.ads import routes as ads_routes
@@ -53,6 +55,8 @@ def register(app: FastAPI) -> None:
     app.include_router(review_routes.router)
     app.include_router(material_routes.router)
     app.include_router(handoff_routes.router)
+    app.include_router(review_monitor_routes.router)
+    app.include_router(runtime_routes.router)
 
 
 def register_tasks() -> None:
@@ -63,6 +67,20 @@ def register_tasks() -> None:
 
     ads_jobs.register_tasks()
     review_jobs.register_tasks()
+
+
+def bootstrap_runtime(conn, timestamp: int, *, limit=100) -> dict:
+    """Only the worker holding its schema's exclusive session lock may call this."""
+    from app.ads import runtime
+
+    return runtime.bootstrap(conn, timestamp, limit=limit)
+
+
+def dispatch_runtime(timestamp: int, *, limit=100) -> dict:
+    """Periodic read-only sync/health and condition-based review scheduling."""
+    from app.ads import runtime
+
+    return runtime.dispatch(timestamp, limit=limit)
 
 
 def launch_readiness(conn, org_id: str, brand_id: str) -> dict:

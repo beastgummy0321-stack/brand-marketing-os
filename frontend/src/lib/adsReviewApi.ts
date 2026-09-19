@@ -41,6 +41,7 @@ export interface ReviewRound {
     commerce: { current: CommerceEvidence; previous: CommerceEvidence };
     conditions: { history: string; creative_snapshot: { kind?: string; copy_fields?: Record<string, string | null> }; binding_count: number };
     previous_review: { id: string; result_json: ReviewRound["result_json"]; decision: string | null; reason: string | null; actions: Record<string, unknown>[] } | null;
+    source_review?: { relation: "new_test"; review_id: string; source_entity_id: string; recommendation_id: string; evidence_hash: string; handoff_item_id: string; change_set_id: string; action_id: string; window: { start: string; end: string }; recommendation: Pick<Recommendation, "recommendation" | "hypothesis" | "risks" | "next_step" | "evidence_refs">; current: ReviewPeriod; material: Record<string, unknown>; readback: { state: string; reported_at: string | null; first_observed_at: string | null; entity_exists: boolean; setting_matches: boolean | null; material_evidence: string; delivery_confirmed: false }; limitations: string[] } | null;
     limitations: string[]; waiting_reasons: string[]; sources: { id: string; text: string }[];
   };
 }

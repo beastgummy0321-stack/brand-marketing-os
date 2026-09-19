@@ -33,13 +33,12 @@ Process exit is no longer the only thing that frees the lock; it is now the fall
 *crashed* worker, where the operating system drops the connection and Postgres frees the lock
 with it.
 
-`fail_interrupted_tasks()` runs once here, only after the lock is taken and before the worker
-takes its first job (ADR 0063, "What this changes about interrupted work"): one worker process
-owns every `llm_task` row still `status = 'running'`, and owns none at the moment it boots, so
-every such row left over from the previous process is dead and gets marked failed — see
-`app/llm/gateway.py`'s docstring for the invariant this depends on, and its `ponytail:` note
-for when it stops holding (more than one worker process). The lock is what now makes "one
-worker process" true instead of assumed.
+Startup recovery runs only after that lock, before taking any job. The LLM sweep handles
+only rows explicitly marked as worker-owned; foreground web calls and legacy unmarked
+rows are not inferred dead. Queue recovery then retries exact known read-only tasks and
+terminates interrupted review queue entries before ads restores saved results or safely
+queues never-sent reviews. The gateway worker_execution context covers job threads, not
+the web process. No blanket paid retry is performed.
 
 Signal handling stays procrastinate's own default (`install_signal_handlers=True`, what
 `App.run_worker()` already defaults to) — do **not** pass `install_signal_handlers=False`: that
@@ -54,8 +53,10 @@ what procrastinate does not do on Windows").
 """
 
 import hashlib
+import time
 
 import app.main  # noqa: F401 — triggers .env load, logging install, task registration
+from app import ads, background
 from app.background import app as background_app
 from app.core import db as coredb
 from app.llm import gateway as llm_gateway
@@ -67,6 +68,36 @@ def _advisory_lock_key(schema: str) -> int:
     schema, not global — see module docstring for why."""
     digest = hashlib.sha256(f"app.worker:{schema}".encode()).digest()
     return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def _recover_queue_backlog() -> dict:
+    """Up to 1,000 captured orphans under the schema lock, never a live-job sweep."""
+    recovered: dict[str, list[int]] = {
+        "retried_ids": [],
+        "failed_ids": [],
+        "aborted_ids": [],
+        "deferred_ids": [],
+    }
+    seen: set[int] = set()
+    for _ in range(10):
+        receipt = background.recover_interrupted_jobs(limit=100)
+        changed = set()
+        for key in ("retried_ids", "failed_ids", "aborted_ids"):
+            fresh = [job_id for job_id in receipt[key] if job_id not in seen]
+            recovered[key].extend(fresh)
+            changed.update(fresh)
+        seen.update(changed)
+        recovered["deferred_ids"] = receipt["deferred_ids"]
+        if not receipt["deferred_ids"] or not changed:
+            break
+    if seen:
+        print(f"已處理 {len(seen)} 件已知中斷佇列工作，付費工作不自動重送。")
+    if recovered["deferred_ids"]:
+        print(
+            f"仍有 {len(recovered['deferred_ids'])} 件已知中斷工作未恢復；"
+            "本次啟動已達批次上限或沒有進展，需後續重啟續接。"
+        )
+    return recovered
 
 
 def main(*, wait: bool = True) -> None:
@@ -82,9 +113,7 @@ def main(*, wait: bool = True) -> None:
         assert schema_row is not None  # SELECT current_schema() always returns exactly one row
         schema = schema_row["current_schema"]
         key = _advisory_lock_key(schema)  # same key needed again below, to release this lock
-        lock_row = conn.execute(
-            "SELECT pg_try_advisory_lock(%s)", (key,)
-        ).fetchone()
+        lock_row = conn.execute("SELECT pg_try_advisory_lock(%s)", (key,)).fetchone()
         assert lock_row is not None  # pg_try_advisory_lock() always returns exactly one row
         got_lock = lock_row["pg_try_advisory_lock"]
         conn.commit()  # close out this SELECT's transaction now; the session lock survives
@@ -96,7 +125,10 @@ def main(*, wait: bool = True) -> None:
             return
         try:
             llm_gateway.fail_interrupted_tasks(conn)
-            background_app().run_worker(wait=wait)
+            _recover_queue_backlog()
+            ads.bootstrap_runtime(conn, int(time.time()), limit=100)
+            with llm_gateway.worker_execution():
+                background_app().run_worker(wait=wait)
         finally:
             # Round 3 (ADR 0063): only the caller that took the lock releases it — a worker
             # that returned early above never reaches this block, so it can never release a
@@ -105,6 +137,7 @@ def main(*, wait: bool = True) -> None:
             # connection that goes back to the pool still holding it — which is what let a
             # second in-process main() be handed a different, unlocked connection and quietly
             # do nothing.
+            conn.rollback()  # startup failure may have left its transaction aborted
             conn.execute("SELECT pg_advisory_unlock(%s)", (key,))
             conn.commit()  # verified against this repo's own Postgres: pg_advisory_unlock()
             # takes effect immediately regardless of commit/rollback; this commit only leaves

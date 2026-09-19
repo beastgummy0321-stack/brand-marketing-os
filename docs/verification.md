@@ -61,3 +61,27 @@ loading／error 只延遲或中止測試瀏覽器的 GET，不植入產品成功
 - 版面檢查 1024、1920 與受影響的 loading／empty／error 狀態；共用 kit／shell 變更才擴到經營概況、投放中心、品牌智庫的 empty／normal／heavy。已有同樹有效截圖不再重拍。
 - 使用主機可用的瀏覽器工具；需暫存腳本或截圖時放 repo 外的任務暫存目錄，遵守 scope，結束關閉自己啟動的瀏覽器／伺服器。報告程式版本、頁面狀態與證據路徑。工具失敗如實報告，不能宣稱已驗收。
 - `review: planner` 的風險審查保留；一般視覺比較可由當前 agent 完成。只有主觀品質判斷或真正人工操作才交使用者，不重問已授權的局部修正。
+
+
+### F15 的 A／B／C／D 隔離驗收
+
+`uv run python scripts/verify_ads_cycle.py --isolated --phase D --timeout 240`
+沿用 F13 fixture 基礎，但限定專用 `f15_validation_*` database。A／B／C 可由 `--phase`
+分別執行核准月額、檢討文案及素材交接；D 使用真 Postgres 佇列、獨立 Web 與
+`app.worker.main`，外部 reader／模型仍是替身且只允許本機傳輸。
+
+D 在來源第二頁、模型已保存未掛回、模型呼叫中、檢討已保存未入佇列等真執行邊界中斷
+自己啟動的程序，再由正式恢復入口處理；Windows 以實際 worker PID 與啟動鍵核對，
+不得只停止 venv launcher 就宣稱 worker 中斷。檢查 `source-recovery.json`、
+`review-recovery.json`、第二輪證據、`runtime-result.json` 與 `cleanup.json`；
+`ok` 只證明隔離流程，不代表真平台修改或真實營收改善。
+
+瀏覽器加 `--browser --context <專用暫存目錄/context.json> --port 8735`，先 build 同樹；
+設定 `F15_D_E2E_CONTEXT` 與 `E2E_BASE_URL` 後執行 `npx playwright test ads-runtime-cycle.spec.ts`。
+正常登入／投放中心入口核對未知結果、B2 來源、資料不足及追蹤條件保存、重開與讀回，
+1920／1024 全頁截圖存同一證據目錄。A／B／C 分別用對應 spec／context；普通 smoke
+明確跳過依賴專屬 fixture 的案例，不能把 skipped 視為已驗收。
+
+關閉頁面不停止 worker，關閉服務／主機則會中斷本地監測；完成瀏覽器驗收後寫入 context
+指定的 `stop_file`，讓 runner 清理自己的服務／schema／Storage。真 Meta 唯讀探測另列
+實際取得欄位與缺漏；不得把替身設定讀回、使用者自述或檢討完成當作真實平台變更證據。

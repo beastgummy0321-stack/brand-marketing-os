@@ -11,7 +11,9 @@
    `enqueue(task_name, *, org_id, lock, **kwargs) -> bool`（見下方函式檔頭：defer 一個 job，
    同一個 `lock` 已經有一個在 `todo` 狀態排隊時回 False，不拋例外），再加上票
    08-standalone-jobs-on-the-queue round 2 補的 `is_active(lock: str) -> bool`（見下方函式
-   檔頭：這個 `queueing_lock` 名下還有列在 `todo` 或 `doing`）。其餘一律私有。
+   檔頭：這個 `queueing_lock` 名下還有列在 `todo` 或 `doing`）。F15 另提供
+   `recover_interrupted_jobs(*, retry_tasks=None, fail_tasks=None, limit=100) -> dict`，
+   僅供持有 schema worker 鎖的組裝根在啟動時回收明確清單內的孤兒工作。其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
@@ -97,11 +99,13 @@ shell `list_jobs`／`list_locks` 指令同一個公開 API，不是繞過它自�
 
 import asyncio
 import logging
+import re
 import sys
-from urllib.parse import quote, urlsplit, urlunsplit
+from collections.abc import Collection
 
 import procrastinate
 from procrastinate.exceptions import AlreadyEnqueued
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.core import config, db
 
@@ -134,10 +138,36 @@ def _queue_search_path() -> str:
 
 
 def _with_search_path(dsn: str, schema: str) -> str:
-    """把 `dsn` 的 `search_path` option 換成只指這一個 schema（不帶 `public` 墊底）。"""
-    parts = urlsplit(dsn)
-    options = f"options={quote(f'-c search_path={schema}')}"
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, options, ""))
+    """Preserve URL/keyword conninfo and other options; the last search_path wins.
+
+    PostgreSQL options use backslash-escaped whitespace, not shell quoting. The value
+    itself is a quoted SQL identifier, so spaces, commas and quotes stay one schema.
+    """
+    params = conninfo_to_dict(dsn)
+    identifier = '"' + schema.replace('"', '""') + '"'
+    option = re.sub(r"([\\\s])", r"\\\1", f"search_path={identifier}")
+    options = f"{params.get('options', '')} -c {option}".strip()
+    return make_conninfo(dsn, options=options)
+
+
+def recover_interrupted_jobs(
+    *, retry_tasks: Collection[str] | None = None,
+    fail_tasks: Collection[str] | None = None, limit: int = 100,
+) -> dict:
+    """Recover exact known orphan tasks, ONLY under the worker schema session lock.
+
+    The assembly root owns that lock and calls this before any worker starts. This
+    never retries arbitrary paid work or inspects domain tables. Review domain
+    recovery runs afterward, through ads.bootstrap_runtime. Memory mode does nothing.
+    """
+    from .recovery import recover
+
+    if config.settings().brand_os_job_queue == "memory":
+        return {key: [] for key in ("retried_ids", "failed_ids", "aborted_ids", "deferred_ids")}
+    return recover(
+        _with_search_path(db.dsn(), _queue_search_path()),
+        retry_tasks=retry_tasks, fail_tasks=fail_tasks, limit=limit,
+    )
 
 
 def app() -> procrastinate.App:

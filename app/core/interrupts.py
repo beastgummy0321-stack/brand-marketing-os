@@ -32,6 +32,8 @@ SEVERITY_LABELS = {
 # 類別登記表（單一權威）：新模組要送打斷佇列，在這裡登記一筆，不得在呼叫端自報 severity。
 # dict 順序＝同嚴重度內的行動價值排序。
 CATEGORIES = {
+    "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
+    "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
     # 產品 AI 調研（新建與再次調研共用）背景工作，完成／失敗都進這裡（票 B2-products）。

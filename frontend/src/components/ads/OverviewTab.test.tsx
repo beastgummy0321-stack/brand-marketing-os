@@ -159,11 +159,14 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.getByText(/名單、每筆名單成本、ROAS 等成效數字/)).toBeTruthy();
   });
 
-  it("佔位卡與需要你決定的空狀態都在畫面上", () => {
-    render(<OverviewTab campaign={campaign()} onChangeTab={vi.fn()} />);
-
-    expect(screen.getByText("自動執行接上後開放")).toBeTruthy();
-    expect(screen.getByText("目前沒有需要你決定的事")).toBeTruthy();
+  it("總覽以已保存的背景時間引導檢討，不再宣稱尚未開放或沒有待決定事項", async () => {
+    const user = userEvent.setup(), onChangeTab = vi.fn();
+    render(<OverviewTab campaign={campaign({ context_json: { runtime: { last_checked_at: "2026-09-19T01:00:00Z" } } })} onChangeTab={onChangeTab} />);
+    expect(screen.getByText(/背景最近檢查/)).toBeTruthy();
+    expect(screen.queryByText("自動執行接上後開放")).toBeNull();
+    expect(screen.queryByText("目前沒有需要你決定的事")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "前往廣告檢討 →" }));
+    expect(onChangeTab).toHaveBeenCalledWith("performance");
   });
 
   it("策略已產生、一個投放組兩則廣告、素材 2/2 就位、status ready：下一步按鈕是「發布 →」，按下去呼叫 onChangeTab(\"publish\")", async () => {

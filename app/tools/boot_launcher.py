@@ -23,15 +23,115 @@ app/main.py 內該函式的說明）。
 字會讓啟動器整支炸掉（`AttributeError`），所以下面先把兩者接到一個 log 檔再匯入 uvicorn。
 """
 
+import contextlib
+import os
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from typing import TextIO
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PORT = 8710
 _LOG_PATH = _REPO_ROOT / "logs" / "boot_launcher.log"
 _WORKER_LOG_PATH = _REPO_ROOT / "logs" / "worker.log"
+_RESTART_DELAYS = (2, 5, 15)
+
+
+class _WorkerWatchdog:
+    """Own only the child we created; never discover or kill somebody else's worker."""
+
+    def __init__(self, log: TextIO):
+        self.log = log
+        self.child: subprocess.Popen | None = None
+        self.stop_event = threading.Event()
+        self.guard = threading.Lock()
+        self.thread: threading.Thread | None = None
+
+    def _spawn(self) -> None:
+        with self.guard:
+            if self.stop_event.is_set():
+                return
+            try:
+                self.child = subprocess.Popen(
+                    [sys.executable, "-m", "app.worker"],
+                    cwd=_REPO_ROOT,
+                    stdout=self.log,
+                    stderr=self.log,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+            except OSError:
+                self.child = None
+                print("worker 無法啟動，依有限次數重試。", file=self.log)
+
+    def start(self) -> None:
+        self._spawn()
+        self.thread = threading.Thread(target=self._run, name="worker-watchdog", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        restarts = 0
+        while not self.stop_event.is_set():
+            code = self.child.poll() if self.child is not None else -1
+            if code is None:
+                self.stop_event.wait(0.5)
+                continue
+            if code == 0:
+                # Includes a duplicate worker declining the schema lock.
+                return
+            if restarts == len(_RESTART_DELAYS):
+                print("worker 重啟已達 3 次上限，網站保留；請查看 worker.log。", file=self.log)
+                return
+            delay = _RESTART_DELAYS[restarts]
+            restarts += 1
+            print(f"worker 異常結束；{delay} 秒後進行第 {restarts} 次重啟。", file=self.log)
+            if self.stop_event.wait(delay):
+                return
+            self._spawn()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        # Serialize shutdown against a spawn already in progress. _spawn checks the
+        # stop event while holding the same guard, so no replacement escapes cleanup.
+        with self.guard:
+            child = self.child
+            if child is None or child.poll() is not None:
+                return
+            self._terminate(child)
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._terminate(child, force=True)
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print("worker 終止等待逾時，保留錯誤供檢查。", file=self.log)
+
+    def _terminate(self, child: subprocess.Popen, *, force: bool = False) -> None:
+        if os.name == "nt":
+            # A Windows venv python.exe may be only a launcher. Killing that PID
+            # alone would orphan the real interpreter. /T follows this owned PID's
+            # descendants; never select processes by image name or search other workers.
+            # Windows terminate() is already forceful; /F preserves that behavior.
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(child.pid), "/T", "/F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                if result.returncode and child.poll() is None:
+                    print("worker 子行程樹終止失敗，保留錯誤供檢查。", file=self.log)
+            except (OSError, subprocess.TimeoutExpired):
+                print("worker 子行程樹終止未完成，保留錯誤供檢查。", file=self.log)
+        elif force:
+            child.kill()
+        else:
+            child.terminate()
 
 
 def _port_is_listening(port: int, host: str = "127.0.0.1") -> bool:
@@ -45,24 +145,24 @@ def main() -> None:
         return  # 已經有人在跑了（例如使用者自己手動開的），不重複啟動
 
     _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(_LOG_PATH, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — 常駐到 process 結束才關，不適合用 with
-    sys.stdout = log_file
-    sys.stderr = log_file
-    print(f"---- boot_launcher 啟動 {__file__} ----", file=log_file)
-
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))  # 讓 "app.main:app" 這個字串能被匯入到，不依賴目前工作目錄
-
     _WORKER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    worker_log = open(_WORKER_LOG_PATH, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — 常駐到子行程結束才關，不適合用 with
-    subprocess.Popen(
-        [sys.executable, "-m", "app.worker"], cwd=_REPO_ROOT,
-        stdout=worker_log, stderr=worker_log,
-    )  # 子行程（見上方檔頭第 2 點）；sys.executable 在這支啟動器底下已經是 pythonw.exe
+    with (
+        open(_LOG_PATH, "a", encoding="utf-8", buffering=1) as log_file,
+        open(_WORKER_LOG_PATH, "a", encoding="utf-8", buffering=1) as worker_log,
+        contextlib.redirect_stdout(log_file),
+        contextlib.redirect_stderr(log_file),
+    ):
+        print(f"---- boot_launcher 啟動 {__file__} ----")
+        if str(_REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(_REPO_ROOT))
+        watchdog = _WorkerWatchdog(worker_log)
+        try:
+            watchdog.start()
+            import uvicorn  # logs and import path must be ready before importing
 
-    import uvicorn  # 延遲匯入：先接好 log、把路徑插好，任何匯入期的例外才有地方可以印
-
-    uvicorn.run("app.main:app", host="127.0.0.1", port=_PORT, log_config=None)
+            uvicorn.run("app.main:app", host="127.0.0.1", port=_PORT, log_config=None)
+        finally:
+            watchdog.stop()
 
 
 if __name__ == "__main__":

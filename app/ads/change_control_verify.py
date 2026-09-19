@@ -9,6 +9,12 @@ from app.core import db
 from app.core.audit import write_audit
 
 
+def _source_content(row):
+    return {k: row.get(k) for k in ExternalEntity.model_fields if k not in {
+        "last_success_at", "last_attempt_at", "sync_status", "sync_error"
+    }}
+
+
 def _snapshot_chain(conn, org, brand, campaign, leaf):
     snapshots = [leaf]
     while snapshots[-1]["parent_native_id"] is not None:
@@ -194,7 +200,8 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
             )
         )
         snapshot_changed = any(
-            row["id"] not in locked or locked[row["id"]]["updated_at"] != row["updated_at"]
+            row["id"] not in locked
+            or _source_content(locked[row["id"]]) != _source_content(row)
             for row in snapshots
         )
         if snapshot_proof is not None:
@@ -206,8 +213,15 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
             state, verified = "stale", None
             evidence["message"] = "此操作的目標或計畫條件已改變，請重新檢視。"
         elif snapshot_changed:
-            state, verified = "stale", None
-            evidence["message"] = "核對期間來源已重新同步，保留較新的設定，請重新檢視。"
+            relevant = data.premise(fresh, action["kind"], c) != data.premise(
+                leaf, action["kind"], c
+            )
+            state, verified = "stale" if relevant else "unknown", None
+            evidence["setting_matches"] = None
+            evidence["message"] = (
+                "核對期間相關設定已改變，保留較新資料，請重新檢視。" if relevant else
+                "核對期間有其他設定同步，保留較新資料；稍後重新核對即可，無需重複核准。"
+            )
         elif snapshot_proof is not None:
             for node in reversed(snapshot_proof):
                 node["last_success_at"] = observed
