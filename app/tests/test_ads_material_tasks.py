@@ -16,18 +16,6 @@ from app.core import db
 from app.main import app
 
 
-def saved_workbench_output(conn, *, org_id, brand_id, brief_id, part, body_json):
-    """Seed an already-produced historical output; exercise only the public read seam."""
-    output_id = db.new_id("wbo")
-    conn.execute(
-        "INSERT INTO workbench_output(id,org_id,brand_id,brief_id,part,generation_round,"
-        "version_index,body_json) VALUES(%s,%s,%s,%s,%s,1,1,%s)",
-        (output_id, org_id, brand_id, brief_id, part, db.jsonb(body_json)),
-    )
-    conn.commit()
-    return {"id": output_id}
-
-
 @pytest.fixture
 def setup(monkeypatch):
     enqueue = Mock(return_value=True)
@@ -300,51 +288,50 @@ def test_enqueue_failure_is_unknown_and_does_not_resend_automatically(setup):
     assert enqueue.call_count == 1
 
 
-def test_workbench_version_source_is_scoped_and_exact_text_is_read_by_server(setup):
+def test_workbench_version_source_uses_public_canonical_text_not_client_text(setup, monkeypatch):
     conn, org, brand, campaign, _ = setup
     task = create(setup)
-    pack = workbench.prepare_material_pack(
-        conn,
-        org,
-        brand,
-        {
-            "source_ref": {"test": task["id"]},
-            "name": "提示詞包",
-            "sets": [
-                {
-                    "name": "提示詞版本",
-                    "required_outputs": {"image_prompt": 1},
-                }
-            ],
-        },
-    )
-    brief = workbench.briefs_for_source(conn, org, brand, "schedule_node", {"test": task["id"]})[0]
-    output = saved_workbench_output(
-        conn,
-        org_id=org,
-        brand_id=brand,
-        brief_id=brief["id"],
-        part="image_prompt",
-        body_json={"title": "P2", "text": "伺服器保存的P2", "prompt": "P2"},
-    )
+    canonical = {
+        "source": "workbench",
+        "set_id": "saved-set",
+        "version_id": "saved-version",
+        "part": "image_prompt",
+        "pack_id": "saved-pack",
+        "card_index": 0,
+        "text": "伺服器保存的P2",
+    }
+    options_reader = Mock(return_value=[canonical])
+    source_reader = Mock(return_value=canonical)
+    monkeypatch.setattr(workbench, "material_options", options_reader)
+    monkeypatch.setattr(workbench, "material_source", source_reader)
     options = tasks.prompt_options(conn, org, brand, campaign, task["id"])["options"]
     assert options[0]["text"] == "伺服器保存的P2"
-    assert options[0]["set_id"] == brief["id"]
+    assert options[0]["set_id"] == canonical["set_id"]
+    options_reader.assert_called_once_with(conn, org, brand, part="image_prompt")
     updated = change(
         setup,
         task,
         "update",
         prompt={
             "source": "workbench",
-            "set_id": brief["id"],
-            "version_id": output["id"],
+            "set_id": canonical["set_id"],
+            "version_id": canonical["version_id"],
             "text": "前端篡改不應採用",
         },
     )
     assert updated["prompt"]["text"] == "伺服器保存的P2"
+    assert updated["prompt"]["version_id"] == canonical["version_id"]
+    source_reader.assert_called_once_with(conn, org, brand, "saved-set", "saved-version", None)
+    assert tasks.get(conn, org, brand, campaign, task["id"], 1)["prompt"]["source"] == "none"
+    assert tasks.get(conn, org, brand, campaign, task["id"])["prompt"] == canonical
+    source_reader.side_effect = ValueError("找不到此品牌的提示詞或文案版本。")
     with pytest.raises(ValueError, match="找不到"):
-        workbench.material_source(conn, org, brand, "other_set", output["id"])
-    assert pack
+        change(
+            setup,
+            updated,
+            "update",
+            prompt={"source": "workbench", "set_id": "other_set", "version_id": "saved-version"},
+        )
 
 
 def test_recovery_selection_and_copy_edit_keep_existing_dispatch_identity(setup):
@@ -497,33 +484,28 @@ def test_api_saves_reopens_and_rejects_unknown_fields_without_generation(setup):
     enqueue.assert_not_called()
 
 
-def test_prepare_is_idle_and_copy_version_can_be_saved_without_generation(setup):
+def test_public_copy_version_is_preserved_until_explicit_manual_revision(setup, monkeypatch):
     conn, org, brand, _, enqueue = setup
-    payload = {
-        "source_ref": {"fixture_material": "copy-version"},
-        "name": "保存文案",
-        "sets": [{"name": "文案", "required_outputs": {"copy": 1}}],
+    canonical = {
+        "source": "workbench",
+        "set_id": "copy-set",
+        "version_id": "copy-version",
+        "part": "copy",
+        "pack_id": "copy-pack",
+        "card_index": None,
+        "text": "保存的文案\n標題",
+        "copy_fields": {"body": "保存的文案", "headline": "標題"},
     }
-    first = workbench.prepare_material_pack(conn, org, brand, payload)
-    assert workbench.prepare_material_pack(conn, org, brand, payload) == first
-    briefs = workbench.briefs_for_source(conn, org, brand, "schedule_node", payload["source_ref"])
-    assert len(briefs) == 1
-    assert briefs[0]["status"] == "idle"
-    output = saved_workbench_output(
-        conn,
-        org_id=org,
-        brand_id=brand,
-        brief_id=briefs[0]["id"],
-        part="copy",
-        body_json={"sets": [{"body": "保存的文案", "headline": "標題"}]},
-    )
+    source_reader = Mock(return_value=canonical)
+    monkeypatch.setattr(workbench, "material_source", source_reader)
     task = create(
         setup,
         "copy",
-        prompt={"source": "workbench", "set_id": briefs[0]["id"], "version_id": output["id"]},
+        prompt={"source": "workbench", "set_id": "copy-set", "version_id": "copy-version"},
     )
     assert task["copy_fields"] == {"body": "保存的文案", "headline": "標題"}
-    assert task["prompt"]["version_id"] == output["id"]
+    assert task["prompt"]["version_id"] == "copy-version"
+    source_reader.assert_called_once_with(conn, org, brand, "copy-set", "copy-version", None)
     with pytest.raises(ValueError, match="不同於工作檯"):
         change(setup, task, "update", copy_fields={"body": "已手改文案"})
     edited = change(
@@ -534,15 +516,13 @@ def test_prepare_is_idle_and_copy_version_can_be_saved_without_generation(setup)
         prompt={
             "source": "manual",
             "text": "已手改文案",
-            "origin": "改寫工作檯版本 " + output["id"],
+            "origin": "改寫工作檯版本 copy-version",
         },
     )
     assert edited["prompt"]["source"] == "manual"
-    assert output["id"] in edited["prompt"]["origin"]
-    other = brands.create_brand(
-        conn, org_id=org, name="無權讀取來源", client_name=None, actor="test"
-    )["id"]
-    assert workbench.material_options(conn, org, other) == []
-    with pytest.raises(ValueError, match="找不到"):
-        workbench.material_source(conn, org, other, briefs[0]["id"], output["id"])
+    assert "copy-version" in edited["prompt"]["origin"]
+    original = tasks.get(conn, org, brand, setup[3], task["id"], 1)
+    assert original["copy_fields"] == canonical["copy_fields"]
+    assert original["prompt"]["version_id"] == "copy-version"
+    assert edited["revision"] == 2
     enqueue.assert_not_called()
