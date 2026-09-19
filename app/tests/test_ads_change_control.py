@@ -462,11 +462,22 @@ class ChangeControlTest(unittest.TestCase):
             budget_amount=2000,
             budget_type="daily",
         )
-        self.assertEqual(checked["items"][0]["verification_state"], "stale")
+        self.assertEqual(checked["items"][0]["verification_state"], "unknown")
+        self.assertEqual(checked["approval_id"], approved["approval_id"])
+        self.assertIn("無需重複核准", checked["items"][0]["evidence_json"]["message"])
         parent = bindings.entity(self.conn, self.org, self.brand, self.campaign, self.group["id"])
         target = bindings.entity(self.conn, self.org, self.brand, self.campaign, self.ad["id"])
         self.assertEqual(parent["budget_amount"], 2000)
         self.assertEqual(target["creative"], self.ad["creative"])
+
+    def test_metadata_only_sync_during_readback_keeps_approval_and_confirms(self):
+        approved = self.approve(self.create())
+        checked = self._readback_with_concurrent_sync(
+            approved, self.ad, last_attempt_at=db.now_utc(), last_success_at=db.now_utc(),
+            sync_status="succeeded",
+        )
+        self.assertEqual(checked["items"][0]["verification_state"], "confirmed")
+        self.assertEqual(checked["approval_id"], approved["approval_id"])
 
     def test_readback_of_unperformed_action_allows_linked_revision_without_deleting_approval(self):
         first = self.approve(self.create())

@@ -5,6 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.ads import review_monitor
 from app.ads import review_rounds as service
 from app.shared import web
 
@@ -50,18 +51,22 @@ def workspace(request: Request, brand_id: str, campaign_id: str):
 
 @router.post("/reviews")
 def create(request: Request, brand_id: str, campaign_id: str, body: CreateRequest):
+    review = _run(
+        request,
+        brand_id,
+        campaign_id,
+        service.request_manual,
+        body.entity_id,
+        body.start,
+        body.end,
+        body.previous_id,
+        str(web.require_actor(request).user_id),
+    )
     return {
-        "review": _run(
-            request,
-            brand_id,
-            campaign_id,
-            service.request,
-            body.entity_id,
-            body.start,
-            body.end,
-            body.previous_id,
-            str(web.require_actor(request).user_id),
-        )
+        "review": review,
+        "monitor": review_monitor.get(
+            web.conn, review["org_id"], brand_id, campaign_id, review["entity_id"]
+        ),
     }
 
 

@@ -264,8 +264,8 @@ class ClosingTwiceDoesNotDuplicateLearningTest(CloseoutTestBase):
         self.assertEqual(len(learnings), 1)
 
 
-class AutoCloseTaskRespectsSevenDayWindowTest(CloseoutTestBase):
-    def test_auto_close_closes_at_end_plus_7d_not_end_plus_6d(self):
+class ExpiredActivityRemainsOpenTest(CloseoutTestBase):
+    def test_expiry_never_closes_activity_at_seven_or_six_days(self):
         expired = self._campaign(
             metric="purchases", target=None, start_date=self.today - timedelta(days=14),
             end_date=self.today - timedelta(days=7), status="live",
@@ -279,7 +279,7 @@ class AutoCloseTaskRespectsSevenDayWindowTest(CloseoutTestBase):
 
         closed = ads_repo.get_campaign(self.conn, self.org_id, self.brand_id, expired["id"])
         still_live = ads_repo.get_campaign(self.conn, self.org_id, self.brand_id, not_yet["id"])
-        self.assertEqual(closed["status"], "closed")
+        self.assertEqual(closed["status"], "live")
         self.assertEqual(still_live["status"], "live")
 
 

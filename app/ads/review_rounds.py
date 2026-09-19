@@ -83,10 +83,62 @@ def _reserve(conn, org, amount):
         raise ValueError("組織剩餘 AI 額度不足，本回未送出。")
 
 
-def request(conn, org, brand, campaign, entity_id, start, end, previous_id=None, actor="human"):
+def request(
+    conn,
+    org,
+    brand,
+    campaign,
+    entity_id,
+    start,
+    end,
+    previous_id=None,
+    actor="human",
+    *,
+    automatic=False,
+    manual_monitor=False,
+):
     evidence = review_evidence.snapshot(
-        conn, org, brand, campaign, entity_id, start, end, previous_id
+        conn, org, brand, campaign, entity_id, start, end, previous_id, automatic=automatic
     )
+    return submit(
+        conn,
+        org,
+        brand,
+        campaign,
+        entity_id,
+        start,
+        end,
+        previous_id,
+        actor,
+        evidence,
+        manual_monitor=manual_monitor,
+    )
+
+
+def request_manual(
+    conn, org, brand, campaign, entity_id, start, end, previous_id=None, actor="human"
+):
+    """The explicit HTTP command opts in and commits its monitor linkage before queue dispatch."""
+    return request(
+        conn, org, brand, campaign, entity_id, start, end, previous_id, actor, manual_monitor=True
+    )
+
+
+def submit(
+    conn,
+    org,
+    brand,
+    campaign,
+    entity_id,
+    start,
+    end,
+    previous_id,
+    actor,
+    evidence,
+    *,
+    manual_monitor=False,
+):
+    """Persist an already compiled ads-owned snapshot; no repeated compilation in monitor ticks."""
     system = PROMPT.read_text(encoding="utf-8")
     provider = providers.select_provider(PROVIDER, task_type=TASK_TYPE)
     model = providers.resolve_model(task_type=TASK_TYPE, conn=conn, brand_id=brand)
@@ -102,8 +154,13 @@ def request(conn, org, brand, campaign, entity_id, start, end, previous_id=None,
         (org, brand, campaign, digest),
     ).fetchone()
     if old:
+        result = get(conn, org, brand, campaign, old["id"])
+        if manual_monitor:
+            from app.ads import review_monitor
+
+            review_monitor.track_manual(conn, result, commit=False)
         conn.commit()
-        return get(conn, org, brand, campaign, old["id"])
+        return result
     waiting = bool(evidence["waiting_reasons"])
     if not waiting and len(system) + len(policy.encode(evidence)) + 32 > policy.INPUT_CHARS:
         raise ValueError("完整證據超過 12,000 字元，未截斷或送出；請縮短期間或整理品牌背景。")
@@ -133,6 +190,10 @@ def request(conn, org, brand, campaign, entity_id, start, end, previous_id=None,
             actor,
         ),
     )
+    if manual_monitor:
+        from app.ads import review_monitor
+
+        review_monitor.track_manual(conn, get(conn, org, brand, campaign, review_id), commit=False)
     conn.commit()
     if not waiting:
         from app.ads import review_jobs
@@ -170,8 +231,12 @@ def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=N
     ).fetchone()
     if row is None:
         raise ValueError("本回仍在處理或已完成，請重新載入；不會結束活動。")
+    result = get(conn, org, brand, campaign, review_id)
+    from app.ads import review_monitor
+
+    review_monitor.on_decision(conn, result, commit=False)
     conn.commit()
-    return get(conn, org, brand, campaign, review_id)
+    return result
 
 
 def proposal_reference(conn, org, brand, campaign, review_id, recommendation_id, items):

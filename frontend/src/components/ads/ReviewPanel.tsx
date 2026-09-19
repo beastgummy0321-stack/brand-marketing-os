@@ -9,11 +9,12 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { getOrgId } from "@/lib/auth";
 import { createReview, decideReview, getReview, getReviews, type ReviewRound, type ReviewsData, type ReviewStatus } from "@/lib/adsReviewApi";
 import { ReviewEvidence } from "./ReviewEvidence";
+import { ReviewTracking } from "./ReviewTracking";
 import { Disclosure } from "./patterns";
 
 const labels: Record<ReviewStatus, string> = { waiting: "資料不足，等待補齊", queued: "已安排檢討", running: "正在整理建議", ready: "建議已備妥", completed: "本次檢討完成", deferred: "本次檢討暫緩", unjudgeable: "本次無法判定", failed: "本次未完成", unknown: "結果尚未確認" };
 const directions = { retain: "保留現有投放", observe: "先觀察，再決定", adjust: "調整後繼續觀察", new_test: "準備下一個測試" };
-const evidenceLabels: Record<string, string> = { current: "本期單則廣告資料", previous: "前期單則廣告資料", conditions: "投放條件與素材歷史", campaign: "活動目標", "commerce.current": "本期商城與通路證據", "commerce.previous": "前期商城與通路證據", previous_review: "上一輪判讀與操作結果" };
+const evidenceLabels: Record<string, string> = { current: "本期單則廣告資料", previous: "前期單則廣告資料", conditions: "投放條件與素材歷史", campaign: "活動目標", "commerce.current": "本期商城與通路證據", "commerce.previous": "前期商城與通路證據", previous_review: "上一輪判讀與操作結果", source_review: "新測試承接的原廣告判讀" };
 function defaults() {
   const end = new Date(); end.setDate(end.getDate() - 1);
   const start = new Date(end); start.setDate(start.getDate() - 6);
@@ -21,6 +22,7 @@ function defaults() {
 }
 function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: string; onGoal: () => void }) {
   const [params, setParams] = useSearchParams();
+  const requestedReview = params.get("review");
   const [data, setData] = useState<ReviewsData | null>(null);
   const [selected, setSelected] = useState<string | null>(params.get("review"));
   const [error, setError] = useState("");
@@ -37,14 +39,18 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
   useEffect(() => {
     const controller = new AbortController();
-    getReviews(brandId, campaignId, controller.signal).then(value => {
+    getReviews(brandId, campaignId, controller.signal).then(async value => {
+      if (requestedReview && !value.reviews.some(row => row.id === requestedReview)) {
+        const linked = await getReview(brandId, campaignId, requestedReview, controller.signal);
+        value = { ...value, reviews: [linked, ...value.reviews] };
+      }
       if (controller.signal.aborted) return;
-      setData(value); setSelected(current => value.reviews.some(row => row.id === current) ? current : value.reviews[0]?.id ?? null);
+      setData(value); setSelected(current => requestedReview ?? (value.reviews.some(row => row.id === current) ? current : value.reviews[0]?.id ?? null));
       setTarget(current => value.targets.some(row => row.id === current) ? current : value.targets[0]?.id ?? "");
       setError("");
     }).catch(() => { if (!controller.signal.aborted) setError("本次檢討暫時讀取不到，請重新讀取。不要重做平台操作。"); });
     return () => controller.abort();
-  }, [brandId, campaignId, reload]);
+  }, [brandId, campaignId, reload, requestedReview]);
   const review = data?.reviews.find(row => row.id === selected);
   const pollingId = review?.id, pollingStatus = review?.status;
   useEffect(() => {
@@ -97,6 +103,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm"><p>{error}</p><Button className="mt-2" variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取檢討</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取廣告與檢討紀錄…</p>}
     {data && !data.targets.length && <EmptyState title="先帶入正在投放的廣告" description="需要已讀回的平台廣告與成效，才能開始判讀。已有成品可以直接使用，不必重新生圖。" />}
+    {data && data.targets.length > 0 && <ReviewTracking brandId={brandId} campaignId={campaignId} entityId={review?.entity_id ?? target} refreshKey={`${review?.id}:${review?.status}:${reload}`} />}
     {data && data.targets.length > 0 && (form || !review) && <section className="surface" aria-label="檢討範圍">
       <div className="surface-header"><h3 className="font-semibold">這次先看哪則廣告</h3><p className="mt-1 text-sm text-muted-foreground">沿用已讀取的設定與報表；你只需要選擇觀察對象。</p></div>
       <div className="surface-body space-y-4"><label className="block text-sm">廣告<select aria-label="檢討廣告" className="mt-1 w-full" value={target} disabled={busy || Boolean(previousId)} onChange={event => setTarget(event.target.value)}>{data.targets.map(row => <option key={row.id} value={row.id}>{row.name ?? row.native_id} · {row.platform} · {row.source_account}</option>)}</select></label>
@@ -104,7 +111,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
         <Disclosure label="調整觀察期間"><div className="grid grid-cols-2 gap-3"><label className="text-sm">開始日期<Input type="date" value={period.start} disabled={busy} onChange={event => setPeriod(value => ({ ...value, start: event.target.value }))} /></label><label className="text-sm">結束日期<Input type="date" value={period.end} disabled={busy} onChange={event => setPeriod(value => ({ ...value, end: event.target.value }))} /></label></div><p className="mt-2 text-xs text-muted-foreground">一次最多 31 天；後端依組織日期確認範圍，成效仍標示來源帳戶的時區。</p></Disclosure>
         {data.targets_truncated && <p className="text-sm text-warning">目前只載入部分廣告；未顯示的廣告尚未納入這次檢討。</p>}
         <div className="flex flex-wrap gap-2"><Button disabled={busy || !target || !period.start || !period.end} onClick={() => void mutate(signal => createReview(brandId, campaignId, { entity_id: target, ...period, ...(previousId ? { previous_id: previousId } : {}) }, signal))}>{busy ? "保存中…" : "開始本次檢討"}</Button>{review && <Button variant="outline" onClick={() => setForm(false)} disabled={busy}>返回本次檢討</Button>}</div>
-        <p className="text-xs text-muted-foreground">系統先檢查資料；資料不足會列出待補項目，相同證據不重複請 AI 分析。</p>
+        <p className="text-xs text-muted-foreground">開始後預設每 7 天自動檢查這則廣告，可在追蹤設定暫停或調整。資料不足先等待補齊，相同證據不重複請 AI 分析；已存在的設定沿用。</p>
       </div>
     </section>}
     {review && !form && <>

@@ -35,6 +35,8 @@ def validate(conn, org, brand, evidence, reply):
     }
     if evidence["previous_review"]:
         refs.add("previous_review")
+    if evidence.get("source_review"):
+        refs.add("source_review")
     refs |= {f"source:{s['id']}" for s in evidence["sources"]}
     output = []
     required = {"target_id", "recommendation", "evidence_refs", "hypothesis", "risks", "next_step"}

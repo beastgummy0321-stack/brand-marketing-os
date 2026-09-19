@@ -213,7 +213,7 @@ class ReadOnlyReader:
         }
 
 
-def install_assembly(context):
+def install_assembly(context, *, durable=False):
     import httpx
     import pytest  # noqa: F401 -- main skips root dotenv only in test processes
 
@@ -292,7 +292,9 @@ def install_assembly(context):
             }
             if not followup:
                 item["suggested_copy"] = {"title": "探索品牌", "body": "了解更多"}
-            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
+            if os.environ.get("F15_ACCEPTANCE_PHASE") == "C" or (
+                os.environ.get("F15_ACCEPTANCE_PHASE") == "D" and not followup
+            ):
                 item["recommendation"] = "new_test"
                 item["hypothesis"] = "保留原廣告，另測試素材與敘述是否容易理解。"
                 item["next_step"] = "先確認候選素材，再獨立決定新廣告是否交接。"
@@ -356,7 +358,11 @@ def install_assembly(context):
             )
             fake.name = "codex_cli"
             return fake
-        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") in {"B", "C"}:
+        if task_type == "ads_ad_review" and os.environ.get("F15_ACCEPTANCE_PHASE") in {
+            "B",
+            "C",
+            "D",
+        }:
             return ReviewProvider()
         if task_type == "workbench_copy" and os.environ.get("F15_ACCEPTANCE_PHASE") == "C":
             stats["provider_calls"] += 1
@@ -388,6 +394,9 @@ def install_assembly(context):
 
     providers.select_provider = select
     providers.resolve_model = lambda *args, **kwargs: "gpt-5.6-luna"
+    if durable:
+        # D keeps the real PostgreSQL queue and the independent app.worker entry point.
+        return stats
     handlers = {
         external_sync.TASK: external_sync.run_sync,
         user_assets.TASK: user_assets.process_preview,
@@ -401,9 +410,9 @@ def install_assembly(context):
         from app import workbench
 
         workbench.register_tasks()
-        handlers["background.workbench_generate"] = background.app().tasks[
-            "background.workbench_generate"
-        ].func
+        handlers["background.workbench_generate"] = (
+            background.app().tasks["background.workbench_generate"].func
+        )
     jobs = queue.Queue()
     active = set()
     stopped = threading.Event()

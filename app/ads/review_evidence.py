@@ -8,7 +8,7 @@ from app import orders
 from app.ads import asset_binding_repository as bindings
 from app.ads import asset_suggestion_policy as policy
 from app.ads import change_control_data as changes
-from app.ads import external_sync
+from app.ads import external_sync, review_monitor_source
 from app.ads.adapters.external import SourceReadError
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
@@ -103,7 +103,9 @@ def premise(entity, campaign):
     return result
 
 
-def snapshot(conn, org, brand, campaign_id, entity_id, start, end, previous_id=None):
+def snapshot(
+    conn, org, brand, campaign_id, entity_id, start, end, previous_id=None, *, automatic=False
+):
     campaign = changes.campaign(conn, org, brand, campaign_id)
     if campaign["status"] == "closed":
         raise ValueError("已結案活動只能查看歷史檢討。")
@@ -173,7 +175,7 @@ def snapshot(conn, org, brand, campaign_id, entity_id, start, end, previous_id=N
             "result_json": value["result_json"],
             "decision": value["decision"],
             "reason": value["reason"],
-            "actions": [dict(a) for a in actions],
+            "actions": [review_monitor_source.action_summary(dict(a)) for a in actions],
         }
         prior["evidence"] = {key: value["evidence_json"][key] for key in ("current", "conditions")}
     text, knowledge, version, _ = context_compiler.compile(conn, brand, include_personas=False)
@@ -237,12 +239,32 @@ def snapshot(conn, org, brand, campaign_id, entity_id, start, end, previous_id=N
     ):
         waiting.append("本期沒有足夠的已知平台活動樣本；請同步完整期間或延後重看。")
     limitations = list(LIMITATIONS)
+    source_review = review_monitor_source.source_review(conn, org, brand, campaign_id, entity_id)
+    first_test = False
+    if automatic and source_review and not previous_id and timezone:
+        monitor = conn.execute(
+            "SELECT observe_after FROM ads_review_monitor WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND entity_id=%s",
+            (org, brand, campaign_id, entity_id),
+        ).fetchone()
+        anchor = monitor["observe_after"] if monitor else None
+        if anchor and prior_end <= anchor.astimezone(ZoneInfo(timezone)).date():
+            first_test = True
+            previous["comparison_available"] = False
+            previous["comparison_basis"] = "before_first_identity_observation"
+            limitations.append(
+                "新測試前期早於首次身分觀測，沒有可比較的完整前期；缺漏不補零，來源廣告僅供背景。"
+            )
     if timezone is None:
         limitations.append("來源平台帳戶時區未知，不以組織時區代替。")
     if mixed:
         limitations.append("投放條件有變動：曾讀到不同素材版本，本期不可歸因到單一素材。")
     if current["missing_days"] or previous["missing_days"]:
         limitations.append("本期或前期缺日期；指標只代表已讀到的日期，缺漏不能當零。")
+    if automatic and timezone is None:
+        waiting.append("自動檢討等待來源帳戶時區確認，再確認完整日期。")
+    if automatic and (current["missing_days"] or (previous["missing_days"] and not first_test)):
+        waiting.append("自動檢討等待本期與等長前期的完整日期；固定觀察窗不隨重看移動。")
     return {
         "target": {
             k: entity.get(k) for k in ("id", "name", "platform", "source_account", "native_id")
@@ -271,6 +293,7 @@ def snapshot(conn, org, brand, campaign_id, entity_id, start, end, previous_id=N
             },
         },
         "previous_review": prior,
+        "source_review": source_review,
         "limitations": limitations,
         "waiting_reasons": waiting,
         "context": text,
