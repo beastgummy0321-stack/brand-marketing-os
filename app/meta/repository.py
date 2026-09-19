@@ -691,14 +691,16 @@ def daily_entity_spend(
     目標的唯一定義是 `graph._ROAS_ACTION_PRIORITY`，不在這裡另外挑一次、也不 SUM 展開後的
     `jsonb_array_elements`——理由跟 `_CONVERSIONS_LATERAL` 上方註解一樣：同一次成交會被
     好幾個同義 action_type 各回報一次，展開再加總會把同一筆購買算成好幾筆）。做法：把每個
-    physical row 的 `actions`／`action_values` 用 `jsonb_build_object` 包成一組（`array_agg`
-    保留 SQL NULL，一個 physical row 一個陣列元素，兩個欄位天生配對，不必依賴兩個
-    `array_agg` 之間的順序一致），SQL 只做「同一列打包」，真正的同義字判定與『一列有沒有
-    追蹤到購買』全部留給 `external_purchase_values()`。`(spend_date, entity_id, currency)`
+    physical row 的 `actions`／`action_values`／`attribution_window` 用 `jsonb_build_object`
+    包成一組（`array_agg` 保留 SQL NULL，一個 physical row 一個陣列元素，三個欄位天生配對，
+    不必依賴多個 `array_agg` 之間的順序一致），SQL 只做「同一列打包」，真正的同義字判定、
+    『一列有沒有追蹤到購買』、以及『這幾個 physical row 講不講得通同一件事』全部留給
+    `_combine_purchases()`／`external_purchase_values()`。`(spend_date, entity_id, currency)`
     通常只有一個 physical row（唯一索引 `(ad_account_id, level, entity_id, spend_date)`
     保證），但這裡的聚合规则在有多列時一樣成立：跟 `roas`／`cpa` 同一條 all-or-nothing
-    規則（`_combine_purchases()`），一列沒追蹤到購買，整組就不能假裝那一列貢獻了 0——
-    未追蹤永遠不是 0。"""
+    規則（`_combine_purchases()`），一列沒追蹤到購買、或幾列對不上同一個 `action_type`／
+    `attribution_window`，整組就不能假裝湊得出一個數字——未追蹤永遠不是 0，講不清楚的加總
+    永遠不是一個看似有根據的數字。"""
     if level not in LEVELS:
         raise ValueError(f"level 只能是 {'/'.join(LEVELS)} 其中之一")
     if not ad_account_ids:
@@ -709,8 +711,9 @@ def daily_entity_spend(
         " CASE WHEN bool_and(roas IS NOT NULL)"
         "      THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas,"
         " array_agg(jsonb_build_object('actions', mes.actions,"
-        "                              'action_values', mes.action_values)) AS purchase_rows,"
-        " (array_agg(mes.attribution_window))[1] AS attribution_window"
+        "                              'action_values', mes.action_values,"
+        "                              'attribution_window', mes.attribution_window))"
+        "   AS purchase_rows"
         " FROM meta_entity_spend mes"
         + _SPEND_WHERE
         + " GROUP BY spend_date, entity_id, currency ORDER BY spend_date, entity_id",
@@ -720,7 +723,6 @@ def daily_entity_spend(
         {"spend_date": r["spend_date"], "entity_id": r["entity_id"], "currency": r["currency"],
          "spend": float(r["spend"]), "impressions": int(r["impressions"]),
          "clicks": int(r["clicks"]), "roas": _float_or_none(r["roas"]),
-         "attribution_window": r["attribution_window"],
          **_combine_purchases(r["purchase_rows"])}
         for r in rows
     ]
@@ -733,22 +735,37 @@ def _combine_purchases(purchase_rows: list[dict]) -> dict:
     `roas` 同一條 all-or-nothing 規則——任何一個 physical row 沒追蹤到購買，整組直接回
     `None`，不能讓一列的『沒追蹤』被其他列的數字蓋過去、悄悄當成貢獻了 0。revenue 套同一條
     規則：任何一個有追蹤到購買數的 row 卻沒追蹤到營收，整組營收也是 `None`——不能拿
-    "有些天有營收" 去補"有些天沒有" 的洞。"""
+    "有些天有營收" 去補"有些天沒有" 的洞。
+
+    同一條 all-or-nothing 規則也管『不一致』，不是只管『缺席』：如果 tracked 的 physical row
+    彼此對到的 `action_type` 不一樣，或者 `attribution_window` 不只一種，代表這幾個 physical
+    row 講的根本不是同一件事——把它們的 `purchases` 加起來、只印其中一個 row 的 `action_type`
+    /`attribution_window` 當作整組的說明，等於印一個算對了、標籤卻是亂猜的數字，比印「不知
+    道」更糟（看起來有根據，其實沒有）。唯一索引 `(ad_account_id, level, entity_id,
+    spend_date)` 讓同一天同一個實體通常真的只有一個 physical row，這個分支平常走不到——但
+    正因為走不到、沒有真實資料驗證過，才必須直接失敗成『未知』，不能放著一條沒人驗證過的
+    加總邏輯去猜一個看起來合理的答案。"""
     parsed = [
         external_purchase_values(item.get("actions"), item.get("action_values"))
         for item in purchase_rows
     ]
+    windows = {item.get("attribution_window") for item in purchase_rows}
     if any(p["purchases"] is None for p in parsed):
-        return {"purchases": None, "revenue": None, "action_type": None}
+        return {"purchases": None, "revenue": None, "action_type": None,
+                "attribution_window": None}
+    action_types = {p["action_type"] for p in parsed}
+    if len(action_types) > 1 or len(windows) > 1:
+        return {"purchases": None, "revenue": None, "action_type": None,
+                "attribution_window": None}
     revenue = (
         None if any(p["revenue"] is None for p in parsed)
         else round(sum(p["revenue"] for p in parsed), 2)
     )
-    action_type = next((p["action_type"] for p in parsed if p["action_type"]), None)
     return {
         "purchases": int(round(sum(p["purchases"] for p in parsed))),
         "revenue": revenue,
-        "action_type": action_type,
+        "action_type": action_types.pop(),
+        "attribution_window": windows.pop(),
     }
 
 

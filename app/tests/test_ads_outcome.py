@@ -305,6 +305,41 @@ class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
         self.assertAlmostEqual(result["totals"]["roas_conservative"], 1.8)
 
 
+class RoasBasesDivergeWhenPartlyUntrackedTest(OutcomeTestBase):
+    """使用者裁決：optimistic（`roas`）／conservative（`roas_conservative`）兩個基準永遠都要
+    顯示、不能收斂成一個。F16-I05 review repair：前一個測試的兩天剛好都有追蹤到營收，兩個
+    基準算出來一樣，抓不到「以後有人把兩者合併」的迴歸——這裡讓一天有追蹤、一天沒有，兩個
+    基準的分母因此不同，數字必須真的不一樣。"""
+
+    def test_optimistic_and_conservative_roas_diverge_when_one_day_is_untracked(self):
+        detail, group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today - timedelta(days=1), end_date=self.today,
+        )
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            # 有追蹤到營收的一天：花費 500、營收 1000。
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today - timedelta(days=1), spend=500.0, roas=None,
+                             adset_id=group_ext, purchases=2, revenue=1000.0),
+            # 完全沒有購買同義字的一天：花費 500，營收未追蹤（不是 0）。
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=None, adset_id=group_ext),
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today - timedelta(days=1),
+                             end=self.today + timedelta(days=1))
+        result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
+        totals = result["totals"]
+
+        # optimistic：只拿「有追蹤到營收」那一天的花費當分母 —— 1000 / 500 = 2.0。
+        # conservative：拿全部花費（含未追蹤那天）當分母 —— 1000 / 1000 = 1.0。
+        self.assertAlmostEqual(totals["roas"], 2.0)
+        self.assertAlmostEqual(totals["roas_conservative"], 1.0)
+        self.assertNotEqual(totals["roas"], totals["roas_conservative"])
+
+
 class MetaIngestWritesUntrackedNotZeroTest(OutcomeTestBase):
     """F16-I01/F16-I05：這一列的 `actions` 裡沒有任何購買同義字（`roas=None` 也沒有一個對得上
     `graph._ROAS_ACTION_PRIORITY` 的 action_type），`ingest_meta` 寫的是 `NULL`（未追蹤），
@@ -364,6 +399,30 @@ class MetaIngestWritesUntrackedNotZeroTest(OutcomeTestBase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["purchases"], 6)
         self.assertAlmostEqual(float(rows[0]["revenue"]), 6000.0, places=2)
+
+    def test_meta_row_with_purchases_tracked_but_revenue_untracked_stays_null(self):
+        """F16-I05 review repair：一個真的購買同義字有值，但 `action_values` 裡沒有配對的
+        entry——`purchases` 是數字，`revenue` 是 `NULL`，不是回退去用 `spend * roas` 反推出一個
+        數字（這一列刻意也給 `roas=2.0`，如果 revenue 又被 roas 算出來，這裡就會抓到）。"""
+        detail, group_ext, _ad_ext = self._bound_campaign()
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=2.0, adset_id=group_ext,
+                             purchases=6, revenue=None),
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today, end=self.today + timedelta(days=1))
+
+        rows = self._outcome_rows(detail["id"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["purchases"], 6)
+        self.assertIsNone(
+            rows[0]["revenue"],
+            "沒有配對到 action_values，revenue 該是 None，不是 roas(2.0) x spend(500) 的 1000",
+        )
 
 
 class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):

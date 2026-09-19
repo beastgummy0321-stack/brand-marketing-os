@@ -1067,26 +1067,35 @@ class DailyEntitySpendPurchasesTest(unittest.TestCase):
         )
         meta_repo.upsert_accounts(web.conn, self.org_id, [
             {"account_id": BP_ACCOUNT_ID, "name": "BP AD", "currency": "TWD"},
+            {"account_id": SD_ACCOUNT_ID, "name": "上等生技廣告帳號", "currency": "TWD"},
         ])
         web.conn.commit()
         self.account_id = next(
             a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
             if a["account_id"] == BP_ACCOUNT_ID
         )
+        # 兩個帳號用來組「同一個 (spend_date, entity_id, currency) group 裡有不只一個 physical
+        # row」的情境——唯一索引 `(ad_account_id, level, entity_id, spend_date)` 讓同一個帳號
+        # 沒辦法讓同一天同一個實體長出兩列，換一個帳號才擠得出這個 near-impossible 的分支。
+        self.account_id_2 = next(
+            a["id"] for a in meta_repo.list_accounts(web.conn, self.org_id)
+            if a["account_id"] == SD_ACCOUNT_ID
+        )
         self.today = datetime.now(UTC).date()
 
-    def _row(self, entity_id: str, *, actions, action_values) -> dict:
+    def _row(self, entity_id: str, *, actions, action_values,
+              attribution_window: str = "7d_click,1d_view") -> dict:
         return {
             "level": "campaign", "entity_id": entity_id, "entity_name": entity_id,
             "campaign_id": entity_id, "adset_id": None, "ad_id": None,
             "spend_date": self.today, "spend": 1000, "impressions": 1000, "clicks": 50,
             "roas": None, "actions": actions, "action_values": action_values,
-            "attribution_window": "7d_click,1d_view",
+            "attribution_window": attribution_window,
         }
 
-    def _daily(self) -> dict:
+    def _daily(self, account_ids: list | None = None) -> dict:
         rows = meta_repo.daily_entity_spend(
-            web.conn, self.org_id, [self.account_id], self.today,
+            web.conn, self.org_id, account_ids or [self.account_id], self.today,
             self.today + timedelta(days=1), level="campaign",
         )
         self.assertEqual(len(rows), 1)
@@ -1140,6 +1149,45 @@ class DailyEntitySpendPurchasesTest(unittest.TestCase):
         self.assertIsNone(row["action_type"])
         self.assertEqual(row["spend"], 1000.0)
         self.assertEqual(row["impressions"], 1000)
+
+    def test_two_rows_disagreeing_on_action_type_are_unknown_not_summed(self):
+        """F16-I05 review repair：同一個 group 裡兩個 physical row（用兩個帳號硬湊，唯一索引
+        讓同一個帳號辦不到）各自對到不同的購買同義字——加起來印一個數字、只掛其中一個
+        action_type，等於講一個算對了、標籤卻是亂猜的故事。必須整組回未知，不是加總。"""
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c5", actions=[{"action_type": "omni_purchase", "value": "3"}],
+                      action_values=[{"action_type": "omni_purchase", "value": "3000"}]),
+        ])
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id_2, [
+            self._row("c5", actions=[{"action_type": "purchase", "value": "5"}],
+                      action_values=[{"action_type": "purchase", "value": "5000"}]),
+        ])
+        web.conn.commit()
+        row = self._daily([self.account_id, self.account_id_2])
+        self.assertIsNone(row["purchases"], "兩個 row 對到不同 action_type，不能加總成 8")
+        self.assertIsNone(row["revenue"])
+        self.assertIsNone(row["action_type"])
+        self.assertIsNone(row["attribution_window"])
+        self.assertEqual(row["spend"], 2000.0, "花費本身照樣誠實加總，不受這條規則影響")
+
+    def test_two_rows_disagreeing_on_attribution_window_are_unknown(self):
+        """同一個購買同義字，但兩個 physical row 的歸因窗不一樣——同一條規則，不同觸發條件。"""
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id, [
+            self._row("c6", actions=[{"action_type": "omni_purchase", "value": "3"}],
+                      action_values=[{"action_type": "omni_purchase", "value": "3000"}],
+                      attribution_window="7d_click,1d_view"),
+        ])
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, self.account_id_2, [
+            self._row("c6", actions=[{"action_type": "omni_purchase", "value": "5"}],
+                      action_values=[{"action_type": "omni_purchase", "value": "5000"}],
+                      attribution_window="1d_click"),
+        ])
+        web.conn.commit()
+        row = self._daily([self.account_id, self.account_id_2])
+        self.assertIsNone(row["purchases"], "兩個 row 的歸因窗不一樣，不能假裝是同一件事")
+        self.assertIsNone(row["revenue"])
+        self.assertIsNone(row["action_type"])
+        self.assertIsNone(row["attribution_window"])
 
 
 # -- 10. backfill：37 個月保護在任何 HTTP 呼叫之前就擋下 --------------------------------
