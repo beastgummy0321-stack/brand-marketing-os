@@ -533,13 +533,15 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `action_type` 同一種形狀）；`ads_outcome_daily` 沒有欄位可以逐列存這個歸因說明——這是讀寫
   變更，不是 schema 變更（沒有新 migration），所以目前只在 ingest 當下的記憶體裡看得到、寫進
   程式註解，還沒有持久化到資料庫；要逐列留存需要另開一張票加欄位。
-- 沒有雙重計算：`ads_outcome_daily`（內部 Campaign，`ingest_meta` 從 `meta_entity_spend` 灌）
-  跟 `ads_external_daily`（自帶／既有活動，`external_sync` 從平台 Graph API 直接灌）是完全分
-  流的兩條路徑——一個平台實體綁定到哪個 Campaign（內部或外部）互斥（`ads_delivery_group`／
-  `ads_ad` 的綁定，`_conflicting_campaigns` 在 `ingest_meta` 裡強制檢查），所以同一筆 Meta 花
-  費不會同時被兩條路徑各記一次。內部路徑走本模組自己每日排程拉的 `meta_entity_spend`
-  （campaign/adset/ad 三層都有）；外部路徑走 `external_sync` 對已標記「既有活動」的 Campaign
-  直接呼叫 Graph API（不落地 `meta_entity_spend`）。
+- 沒有雙重計算：`ads_campaign.origin` 是單一開關，一個 Campaign 只會走其中一條路徑，不會兩條
+  都寫。`origin != 'imported'`（內部 Campaign）由 `POST .../ingest` 呼叫 `outcome.ingest_meta`，
+  從本模組每日排程已經拉好的 `meta_entity_spend` 灌 `ads_outcome_daily`（campaign/adset/ad
+  三層都有，不即時打 Graph API）。`origin == 'imported'`（自帶／既有活動）完全不會進到
+  `outcome.ingest_meta`／`ads_outcome_daily`——`routes.py` 對這類 Campaign 直接回
+  `external_view`，成效由 `external_sync` 另外直接呼叫 Graph API 灌 `ads_external_daily`，兩張
+  表、兩條讀寫路徑不相交；額外一層保護是 `ingest_meta` 內的 `_conflicting_campaigns`：同一個
+  平台實體（`ads_delivery_group`／`ads_ad`）綁到兩個不同 Campaign 一律拒絕，不會有一筆 Meta
+  花費被算給兩個不同 Campaign。
 - 「活動過了結束日 7 天自動結案」是三處過期敘述，這次改成文字，行為本來就沒有這回事
   （`app/ads/jobs.py::close_expired_campaigns` 早就只排監控、從不自己結案）：
   `app/main.py:454`（註解）、`app/ads/__init__.py:63`（docstring）、
