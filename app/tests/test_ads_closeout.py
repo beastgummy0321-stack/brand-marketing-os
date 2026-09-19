@@ -2,8 +2,10 @@
 closes as 達成 with the compared numbers; one that missed it closes as 未達成; one with two
 purchases closes as 看不出 and still writes a learning (at `observed`, text names the small
 sample); a second campaign in the same direction makes the next learning `likely`; closing
-twice does not write a second learning; the auto-close task closes an ended campaign at end+7d
-and not at end+6d; a learning is never written into `brand_fact` or `rule` (ruling 15/16).
+twice does not write a second learning; an ended campaign at end+7d or end+6d stays open — there is
+no unattended auto-close path, close-out is always a person's or an explicit job's call
+(`ExpiredActivityRemainsOpenTest`); a learning is never written into `brand_fact` or `rule`
+(ruling 15/16).
 """
 
 import unittest
@@ -46,7 +48,8 @@ class CloseoutTestBase(unittest.TestCase):
         )
 
     def _outcome_row(self, campaign_id: str, group_id: str, day, *, spend: float,
-                      purchases: int, revenue: float, source: str = "simulated") -> None:
+                      purchases: int | None, revenue: float | None,
+                      source: str = "simulated") -> None:
         self.conn.execute(
             "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
             " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
@@ -138,7 +141,7 @@ class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBas
         for offset in range(7):
             self._outcome_row(
                 campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=5000.0, purchases=0, revenue=0.0, source="meta",
+                spend=5000.0, purchases=None, revenue=None, source="meta",
             )
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -189,7 +192,7 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
         for offset in range(7):
             self._outcome_row(
                 campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=5000.0, purchases=0, revenue=0.0, source="meta",
+                spend=5000.0, purchases=None, revenue=None, source="meta",
             )
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)

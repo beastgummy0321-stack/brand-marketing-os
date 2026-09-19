@@ -385,7 +385,13 @@ def judge(conn, org_id, brand_id, campaign_id, proposal, confirmed, stale):
             return {**result, "reason": "兩則廣告尚有缺日；缺資料不當成零。"}
         if any(r["source"] != "simulated" for r in own):
             return {**result, "reason": "目前真實平台回收未追蹤轉換，不能判讀此指標。"}
-        total = {k: sum(float(r[k]) for r in own) for k in ("spend", "purchases", "revenue")}
+        # `purchases`/`revenue` are nullable (F16-I01); simulated rows never leave them
+        # untracked, but the sum stays defensive rather than crashing on a future NULL —
+        # unknown days are skipped, never coerced into 0.
+        total = {
+            k: sum(float(r[k]) for r in own if r[k] is not None)
+            for k in ("spend", "purchases", "revenue")
+        }
         if total["purchases"] < min_conversions:
             return {
                 **result,

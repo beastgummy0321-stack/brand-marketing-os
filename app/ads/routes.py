@@ -816,7 +816,8 @@ class CloseCampaignRequest(BaseModel):
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/close")
 def close_campaign(request: Request, brand_id: str, campaign_id: str,
                     body: CloseCampaignRequest):
-    """提前手動結案——自動路徑（end+7d）在 `app/ads/jobs.py`，兩邊都走
+    """手動結案——`app/ads/jobs.py` 的排程只監控已結束的活動、從不自動結案（F16-I01：
+    移除「end+7d 自動結案」的過時說法），結案永遠得經這裡或人工觸發，都是走
     `app/ads/closeout.py::close()`，寫一樣的 verdict 跟學習。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404

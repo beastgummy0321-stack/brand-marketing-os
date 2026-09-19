@@ -196,7 +196,7 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     renderTab(campaign({ status: "ended", end_date: "2099-12-31" }));
 
     expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
-    expect(screen.getByText("投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。")).toBeTruthy();
+    expect(screen.getByText("投放已結束，待人工結案；可以現在手動結案。")).toBeTruthy();
     expect(screen.queryByText(/現在結案等於提前結束/)).toBeNull();
   });
 
