@@ -9,6 +9,7 @@ campaign adds the missing days and on a bound (Meta) campaign does not call the 
 import unittest
 import uuid
 from datetime import date, timedelta
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -152,6 +153,21 @@ class OutcomeTestBase(unittest.TestCase):
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def _insert_row(self, campaign_id: str, entity_id: str, day: date, *, spend: float,
+                     purchases: int | None, revenue: float | None,
+                     source: str = "simulated") -> None:
+        """F16-I01：直接灌一列進 `ads_outcome_daily`——用來組「一部分列有追蹤、一部分沒有」
+        的情境，`ingest_meta`／模擬 adapter 目前都不會產生這種混合，但欄位本身允許（nullable），
+        讀者（`_bucket`）要能正確處理。"""
+        web.conn.execute(
+            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
+            " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
+            " VALUES (%s, %s, %s, %s, 'group', %s, %s, %s, 100, 10, %s, %s, %s)",
+            (coredb.new_id("ado"), self.org_id, self.brand_id, campaign_id, entity_id, day,
+             spend, purchases, revenue, source),
+        )
+        web.conn.commit()
+
 
 class SpendLandsOnTheRightCampaignTest(OutcomeTestBase):
     def test_spend_on_a_bound_entity_lands_on_its_campaign_day(self):
@@ -263,6 +279,120 @@ class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
         # 這個情境下兩個值理當相等——但都要是數字，不是 None。
         self.assertAlmostEqual(result["totals"]["roas"], 1.8)
         self.assertAlmostEqual(result["totals"]["roas_conservative"], 1.8)
+
+
+class MetaIngestWritesUntrackedNotZeroTest(OutcomeTestBase):
+    """F16-I01：`ingest_meta` 沒有購買數可拉，寫的是 `NULL`（未追蹤），不是看起來像數字的
+    `0`；`revenue` 有 `roas` 才是數字，沒有一樣是 `NULL`，不是 0。"""
+
+    def test_meta_row_purchases_is_null_and_revenue_null_without_roas(self):
+        detail, group_ext, _ad_ext = self._bound_campaign()
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=None, adset_id=group_ext),
+        ])
+        web.conn.commit()
+
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today, end=self.today + timedelta(days=1))
+
+        rows = self._outcome_rows(detail["id"])
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["purchases"])
+        self.assertIsNone(rows[0]["revenue"])
+
+
+class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):
+    """F16-I01：一個 group 底下三天——一天未追蹤（`NULL`）、一天追蹤到真的零、一天追蹤到真的
+    非零——加總只算有追蹤到的那兩天，`5`，不是把未追蹤那天當 0 灌進去（結果會一樣是 5，但如果
+    真的把它當 0 算，這裡改成任何非 5 的數字都能抓到迴歸）；未追蹤那天存在，不是完全沒有列。"""
+
+    def test_bucket_sums_only_tracked_days_never_coercing_null_to_zero(self):
+        detail, group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today - timedelta(days=2), end_date=self.today,
+        )
+        group_id = detail["groups"][0]["id"]
+        self._insert_row(detail["id"], group_id, self.today - timedelta(days=2),
+                          spend=100.0, purchases=None, revenue=None, source="meta")
+        self._insert_row(detail["id"], group_id, self.today - timedelta(days=1),
+                          spend=100.0, purchases=0, revenue=0.0, source="simulated")
+        self._insert_row(detail["id"], group_id, self.today,
+                          spend=100.0, purchases=5, revenue=500.0, source="simulated")
+
+        result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        self.assertEqual(result["totals"]["purchases"], 5)
+        self.assertEqual(result["totals"]["revenue"], 500.0)
+        self.assertEqual(len(result["daily"]), 3)
+
+
+class OutcomeTotalsReturnsNullNotZeroWhenAllUnknownTest(OutcomeTestBase):
+    def test_outcome_totals_purchases_and_revenue_are_none_when_every_row_is_meta_untracked(self):
+        detail, group_ext, _ad_ext = self._bound_campaign()
+        account_id = self._account_row_id
+        meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
+            self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
+                             day=self.today, spend=500.0, roas=None, adset_id=group_ext),
+        ])
+        web.conn.commit()
+        outcome.ingest_meta(web.conn, self.org_id, self.brand_id, detail["id"],
+                             start=self.today, end=self.today + timedelta(days=1))
+
+        # `campaign_detail`'s `outcome` key is `_outcome_totals`'s return value verbatim for an
+        # internal (non-imported) campaign — going through the public read keeps this a
+        # black-box check of the same contract `list_campaigns`/`campaign_detail` ship.
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])
+        totals = detail["outcome"]
+
+        self.assertEqual(totals["row_count"], 1)
+        self.assertEqual(float(totals["spend"]), 500.0)
+        self.assertIsNone(totals["purchases"])
+        self.assertIsNone(totals["revenue"])
+
+
+class LegacyMetaZeroNormalisedReadsAsUnknownTest(OutcomeTestBase):
+    """F16-I01 repair: pre-F16 `ingest_meta` wrote `purchases=0`/`revenue=0` unconditionally
+    for every Meta-sourced row — those literals never recorded an observation. Migration
+    `20260920000002_ads_outcome_legacy_meta_unknown.sql` normalises that legacy shape to
+    `NULL`; this proves a row normalised that way reads as unknown (`None`), never as a real
+    counted zero, in both `_outcome_totals` (via `outcome.summary`) and campaign detail — the
+    exact contradiction the repair fixes now that `_bucket` keys on `IS NOT NULL` instead of
+    `source != 'meta'`. Runs the actual migration file (not a re-derived statement) so a change
+    to its SQL is what this test is checking."""
+
+    def test_legacy_meta_zero_row_normalised_by_migration_reads_as_unknown(self):
+        detail, _group_ext, _ad_ext = self._bound_campaign()
+        group_id = detail["groups"][0]["id"]
+        # 灌一列跟舊版 `ingest_meta` 一樣的形狀：Meta 來源、purchases/revenue 都是字面 0，
+        # 從來沒有代表過一次真的觀測。
+        self._insert_row(detail["id"], group_id, self.today, spend=500.0,
+                          purchases=0, revenue=0.0, source="meta")
+
+        migration_path = (
+            Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+            / "20260920000002_ads_outcome_legacy_meta_unknown.sql"
+        )
+        sql_lines = (
+            line for line in migration_path.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("--")
+        )
+        for statement in "\n".join(sql_lines).split(";"):
+            statement = statement.strip()
+            if not statement:
+                continue
+            web.conn.execute(statement)
+        web.conn.commit()
+
+        totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
+        self.assertIsNone(totals["purchases"])
+        self.assertIsNone(totals["revenue"])
+
+        campaign_detail = ads_repo.campaign_detail(
+            web.conn, self.org_id, self.brand_id, detail["id"],
+        )
+        self.assertIsNone(campaign_detail["outcome"]["purchases"])
+        self.assertIsNone(campaign_detail["outcome"]["revenue"])
 
 
 class SampleBucketBoundaryTest(unittest.TestCase):

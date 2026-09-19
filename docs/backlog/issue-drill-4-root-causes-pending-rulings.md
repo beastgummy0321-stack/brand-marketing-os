@@ -79,3 +79,13 @@ RC-D → RC-C → RC-B → RC-F（三修法）→ RC-G → RC-E。
 
 合併自 `issue-meta-purchases-not-ingested.md`，仍未排入佇列；沿用上述已裁決 RC-D，不重問。
 `app/ads/outcome.py::ingest_meta` 當時將 Meta purchases 寫為 0，`_bucket` 當未追蹤；`sample_bucket` 在購買數低於 10 時回低。F07 `app/ads/visual_learning.py` 因而持續寫「看不出」，只有 simulated rows 可產生 winner。影響為結案視覺學習無法餵回下一輪主力 looks。修復時核對當前程式並保留 NULL（未追蹤）與 0（真零）的區分，不將歷史行號當現況。
+
+### RC-D 實作進度（F16-I01，2026-09-20）——schema 這一半做完，資料來源那一半還沒
+
+`ads_outcome_daily.purchases`／`revenue` 已改成 nullable（見 `docs/architecture/ads.md` §6.10），
+`_bucket`／`_outcome_totals`／`experiments.judge` 都改成用「欄位是不是 `NULL`」判斷未追蹤，拿掉
+`source == 'meta'`／`revenue != 0` 這兩個 sentinel。**但** `daily_entity_spend` 本身仍未回傳購買數
+（`app/meta/**` 不在 F16-I01 範圍內）——真實 Meta 活動的 `purchases` 目前依然恆為 `NULL`，結案依然
+判「看不出」，跟這條根因原本描述的症狀一樣，只是現在誠實地是 `NULL` 而不是偽裝成數字的 `0`。
+讓 `daily_entity_spend` 真的吐出購買數（原建議：沿用 `_CONVERSIONS_LATERAL` 多回 `conversions`）
+仍是後續票要做的事，RC-D 到那張票才算真正閉環。

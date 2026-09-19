@@ -495,3 +495,23 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   平台存在、設定相符、素材等價、開始投遞及足夠成效仍是不同證據。
 - 本地驗證使用真 Postgres 佇列與獨立 worker，但外部平台與模型是隔離替身；商務對照
   沿用品牌訂單證據，不把兩回流程成功描述為真實營收或因果改善。
+
+### 6.10 F16-I01 — 成效追蹤欄位可為空值（settled 2026-09-20，ruling RC-D 第一階段）
+
+- `ads_outcome_daily.purchases`／`revenue` 從 `NOT NULL DEFAULT 0` 改為可空
+  （`supabase/migrations/20260920000001_ads_outcome_nullable.sql`）：`NULL` 表示未追蹤、`0`
+  表示真的是零，兩者不再共用同一個位元。`ingest_meta` 對 Meta 來源列一律寫 `purchases=NULL`；
+  `revenue` 有 `roas` 才算得出數字，否則也是 `NULL`。第一支 migration 本身不改寫任何舊列；
+  接續的第二支 migration `20260920000002_ads_outcome_legacy_meta_unknown.sql` 把「F16 之前、
+  `ingest_meta` 對每一筆 Meta 來源列無條件寫入」的舊 `purchases=0`／`revenue=0` 字面值正規化
+  成 `NULL`——這些字面值從來沒有代表過一次真的觀測，正規化只是把讀者原本靠
+  `source == 'meta'` 猜出來的「未追蹤」還原成欄位本身誠實的 `NULL`，不是回填真資料，也不會
+  改變任何現有讀者今天算出來的結果。
+- 讀者（`outcome._bucket`、`repository._outcome_totals`、`repository.budget_history`、
+  `experiments.judge`）一律用「這欄是不是 `NULL`」判斷追蹤與否，不再用 `source == 'meta'`
+  或 `revenue != 0` 這類猜測性 sentinel；`closeout.close()`／`_judge()` 本來就正確處理
+  `None`，這次沒有改動判讀邏輯本身。
+- 尚未完成：`app/meta/repository.py::daily_entity_spend`（本票 do-not-touch）依然不回傳購買
+  數，所以真實 Meta 活動的 `purchases` 目前還是恆為 `NULL`——結案對這些活動仍然判「看不出」，
+  跟這張票之前一樣；改變的只是「未追蹤」現在誠實地是 `NULL`，不再是一個看起來像數字的 `0`。
+  讓 `daily_entity_spend` 真的吐出購買數是下一張票的範圍。

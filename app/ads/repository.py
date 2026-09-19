@@ -327,16 +327,20 @@ def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     """Campaign-level totals sum `entity_kind = 'group'` rows only. `ads_outcome_daily` also
     carries `entity_kind = 'ad'` rows (for the per-ad 花費占比), and those are never summed
     into a campaign total — summing both levels double-counts (§0 "money totals belong to the
-    group level")."""
+    group level"). `purchases`／`revenue` are nullable (F16-I01): `SUM()` already ignores `NULL`
+    rows on its own, so no `COALESCE` here — when every row is untracked the sum comes back
+    `NULL`/`None`, never a fabricated 0. `spend` stays `COALESCE`d to 0 — spend is always
+    tracked, and `row_count` is how callers already tell "no data at all" apart from "zero
+    spend"."""
     row = conn.execute(
-        "SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(purchases), 0) AS purchases,"
-        " COALESCE(SUM(revenue), 0) AS revenue, COUNT(*) AS row_count"
+        "SELECT COALESCE(SUM(spend), 0) AS spend, SUM(purchases) AS purchases,"
+        " SUM(revenue) AS revenue, COUNT(*) AS row_count"
         " FROM ads_outcome_daily WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
         " AND entity_kind = 'group'",
         (org_id, brand_id, campaign_id),
     ).fetchone()
     return dict(row) if row is not None else {
-        "spend": 0, "purchases": 0, "revenue": 0, "row_count": 0,
+        "spend": 0, "purchases": None, "revenue": None, "row_count": 0,
     }
 
 

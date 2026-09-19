@@ -107,8 +107,8 @@ def campaign_judgment(campaign: dict[str, Any], *, today: date) -> dict:
     if status == "ended":
         end_date = campaign.get("end_date")
         detail = (
-            f"結束於 {_fmt_date(end_date)}，7 天後自動結案"
-            if end_date is not None else "已結束，7 天後自動結案"
+            f"結束於 {_fmt_date(end_date)}，待人工結案"
+            if end_date is not None else "已結束，待人工結案"
         )
         return {"tone": "neutral", "text": "投放已結束，還沒結案", "detail": detail}
 

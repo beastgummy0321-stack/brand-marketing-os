@@ -292,7 +292,7 @@ export function PerformanceTab({
             <span className="flex flex-col gap-1 text-sm text-muted-foreground">
               <span>
                 {imported ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。") : c.status === "ended"
-                  ? "投放已結束，7 天後系統會自動結案，也可以現在提前手動結案。"
+                  ? "投放已結束，待人工結案；可以現在手動結案。"
                   : EARLY_CLOSE_SENTENCE}
               </span>
               {!imported && c.status === "live" && c.end_date && c.end_date > today && (
