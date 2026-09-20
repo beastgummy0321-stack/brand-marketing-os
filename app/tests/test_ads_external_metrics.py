@@ -71,6 +71,8 @@ class MetricsTest(unittest.TestCase):
             row = observation(item, "campaign", {"account_id": "1"}, objective)
             self.assertIsNone(row["result_kind"], objective)
             self.assertIsNone(row["result_count"], objective)
+            self.assertIsNone(row["result_action"], objective)
+            self.assertIsNone(row["result_attribution"], objective)
             self.assertEqual(row["purchases"], 9)
 
     def test_engagement_objective_counts_its_own_action_not_incidental_purchase(self):
@@ -89,6 +91,8 @@ class MetricsTest(unittest.TestCase):
         row = observation(item, "campaign", {"account_id": "1"}, "OUTCOME_ENGAGEMENT")
         self.assertEqual(row["result_kind"], "engagement")
         self.assertEqual(row["result_count"], 45)
+        self.assertEqual(row["result_action"], "post_engagement")
+        self.assertEqual(row["result_attribution"], "7d_click+1d_view")
         # The incidental purchase is still a platform fact, just never this campaign's result.
         self.assertEqual(row["purchases"], 1)
         self.assertEqual(row["revenue"], 30)
@@ -103,6 +107,8 @@ class MetricsTest(unittest.TestCase):
         row = observation(item, "campaign", {"account_id": "1"}, "OUTCOME_LEADS")
         self.assertEqual(row["result_kind"], "lead")
         self.assertIsNone(row["result_count"])
+        self.assertIsNone(row["result_action"])
+        self.assertIsNone(row["result_attribution"])
 
     def test_reader_looks_up_synced_campaign_objective_for_every_level(self):
         from app.ads import external_repository as repo
@@ -148,6 +154,8 @@ class MetricsTest(unittest.TestCase):
         row = page.items[0]
         self.assertEqual(row["result_kind"], "engagement")
         self.assertEqual(row["result_count"], 45)
+        self.assertEqual(row["result_action"], "post_engagement")
+        self.assertEqual(row["result_attribution"], "7d_click+1d_view")
         self.assertEqual(row["purchases"], 1)
 
     def test_reader_returns_unknown_result_when_campaign_not_yet_synced(self):

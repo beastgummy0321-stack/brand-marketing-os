@@ -88,20 +88,32 @@ def campaign_objective(conn, org_id, brand_id, platform, source_account, native_
 
 
 def upsert_observation(
-    conn, org_id, brand_id, campaign_id, observation, *, result_kind=None, result_count=None
+    conn,
+    org_id,
+    brand_id,
+    campaign_id,
+    observation,
+    *,
+    result_kind=None,
+    result_count=None,
+    result_action=None,
+    result_attribution=None,
 ):
     _campaign(conn, org_id, brand_id, campaign_id)
     data = ExternalObservation.model_validate(observation).model_dump()
-    # result_kind/result_count (F16-I03) are kept outside the strict ExternalObservation model
-    # on purpose: every other source (fixtures, future platforms) that has no result mapping
-    # opinion would otherwise fail `extra="forbid"` for two fields it never sets. NULL is the
-    # correct default everywhere — "no result known", never a guessed zero.
+    # result_kind/result_count/result_action/result_attribution (F16-I03) are kept outside the
+    # strict ExternalObservation model on purpose: every other source (fixtures, future
+    # platforms) that has no result mapping opinion would otherwise fail `extra="forbid"` for
+    # fields it never sets. NULL is the correct default everywhere — "no result known", never a
+    # guessed zero.
     data["availability"] = {
         **data["availability"],
         "result_count": "available" if result_count is not None else "unknown",
     }
     data["result_kind"] = result_kind
     data["result_count"] = result_count
+    data["result_action"] = result_action
+    data["result_attribution"] = result_attribution
     columns = list(data)
     values = [jsonb(value) if key == "availability" else value for key, value in data.items()]
     row = conn.execute(

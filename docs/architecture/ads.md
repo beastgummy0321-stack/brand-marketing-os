@@ -629,9 +629,49 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `availability["result_count"]` 比照其餘欄位規則自己補（有數字才是 `available`）。
 - `review_evidence.aggregate()`：`METRICS` 加入 `result_count`，套用同一條「這組只要有一天未追
   蹤，整組就是 `None`」誠實規則，不特例；比率清單加一列
-  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。
-  `result_kind` 不是可加總的數字，另外在每個 series 上取「這組裡第一個非空的 result_kind」，
-  沒有的話是 `None`。
+  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。這個依
+  `attribution_key` 分組的 series 是既有分組，**沒有再放** `result_kind`（見下方修復輪）。
+
+#### 6.13.1 修復輪：撕裂的 series 與跨動作加總（settled 2026-09-20）
+
+探針發現兩個缺陷：`attribution_key` 是拿購買動作類型組出來的，一則互動類廣告只要某天出現一次偶
+發購買，`attribution_key` 就會在 `…:unavailable` 與 `…:omni_purchase` 之間翻面，`aggregate()`
+照這個鍵分組，一則廣告的 series 因此被撕成兩組，前後期比較等於只比了半則廣告。另外，同一個
+`result_kind` 標籤底下可能來自不同的平台動作類型（例如 day1 是 `post_engagement`、day3 是
+`page_engagement`），而 Meta 的 `page_engagement` 本身就**包含** `post_engagement`，把兩者加總
+出來的數字在平台上從不存在；原本的「這組裡第一個非空 `result_kind`」寫法完全看不出這種混用。
+
+- 第二支 migration `supabase/migrations/20260920000004_ads_result_definition.sql`（沿用
+  §6.13 的規則：不改已套用的 `…0003`，開新檔修正）再對 `ads_external_daily` 加兩個可空文字欄
+  位：`result_action`（真正被算進 `result_count` 的那個平台動作類型，例如
+  `post_engagement`）／`result_attribution`（這個數字是在哪個歸因設定下讀到的，由 adapter 直接
+  當成不透明字串提供）。同樣不回填舊列。
+- `meta_read.py` 新增常數 `_ATTRIBUTION_WINDOW = "7d_click+1d_view"`：`attribution_key` 前綴與
+  `result_attribution` 都直接引用這個常數，共用層絕不會反過來解析 `attribution_key` 字串去猜歸
+  因設定。`_objective_result()` 回傳 `(result_kind, result_count, result_action,
+  result_attribution)` 四個值；`result_action`／`result_attribution` 只在 `result_count` 真的
+  有值那天才填，成果數未知的日子兩者也保持 `None`（呼應「未知不是零」）。
+- `aggregate()` 新增第二種分組：**不看** `attribution_key`，只依 `(metric_scope, currency)` 把
+  整個窗口的所有列分成一組，對每一組算出「這則廣告自己的成果」一份 result view（`result_kind`／
+  `result_action`／`result_attribution`／`result_count`／`cost_per_result`／`days_present`／
+  `days_known`／`reason`），放在 `aggregate()` 回傳值新增的 `result_views` 陣列。前後期比較「活
+  動自己的成果」一律讀這個 view，不讀 per-`attribution_key` 的 series；`review_evidence.py` 的
+  `_result_view()` 是唯一實作。失效即關閉（fail-closed），跟既有「這組只要有一天未追蹤整組就是
+  `None`」同一家族，不特例：
+  - 組內已知的 `result_kind`／`result_action`／`result_attribution` 只要有一個出現兩種以上不同
+    值 → `result_count`／`cost_per_result` 都是 `None`，`reason="mixed_result_definition"`；不
+    再有任何「挑第一個非空值」的寫法。
+  - 窗口內只要有一列 `result_count` 未知（不論那列有沒有花費），整組就是 `None`，
+    `reason="result_unknown_days"`；絕不用部分列的和去除以部分或全部花費。
+  - `cost_per_result` 的分母永遠是「被算進 `result_count` 那些列」的花費總和，不是整個窗口的花
+    費。
+- `frontend/src/lib/adsExternalApi.ts`／`adsReviewApi.ts` 型別同步：`NativeObservation` 加
+  `result_action`／`result_attribution`；新增 `ReviewResultView` 型別、`ReviewPeriod` 加
+  `result_views` 欄位；`ReviewSeries` 移除 `result_kind`（後端已不再輸出）。沒有動任何元件。
+- 驗證：`app/tests/test_ads_external_metrics.py`（adapter 層 `result_action`／
+  `result_attribution` 跟著 `result_count` 一起有/沒有）、`app/tests/test_ads_review_cycle.py`
+  （撕裂 series 情境下 view 仍是一份、跨動作類型混用判 `mixed_result_definition`、SALES 的
+  view 跟既有購買指標一致）。
 - 提示詞（`app/departments/ads/review_round.md`）新增一句：cpa／roas 只認購買，
   `cost_per_result` 才是活動依自己目標算出的成果與成本；沒有成果定義時是 `null`，偶發的購買不
   是該活動的目標成果，不能當成效變好或變差的證據。`review_policy.py` 的驗證器沒有改——它驗證

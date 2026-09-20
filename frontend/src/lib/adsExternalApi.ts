@@ -24,6 +24,7 @@ export interface NativeObservation {
   currency: string | null; spend: number | null; impressions: number | null; clicks: number | null;
   purchases: number | null; revenue: number | null; availability: Record<string, string>;
   result_kind?: string | null; result_count?: number | null;
+  result_action?: string | null; result_attribution?: string | null;
 }
 export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null }
 export interface ExistingPage {

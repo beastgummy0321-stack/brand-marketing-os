@@ -247,21 +247,33 @@ _OBJECTIVE_RESULT_ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
 # entity hasn't synced one yet), which is how the two call sites stay distinguishable.
 _NO_OBJECTIVE = object()
 
+# The attribution setting every result count below is read under. A fixed literal today, not a
+# parse of `attribution_key` — shared code (review_evidence.aggregate) must learn this only
+# through `result_attribution`, never by splitting the Meta-formatted `attribution_key` string.
+_ATTRIBUTION_WINDOW = "7d_click+1d_view"
 
-def _objective_result(objective, actions, purchase):
-    """This campaign's own (label, count) — reusing the one purchase definition for sales
-    objectives, and never letting any other objective read a stray purchase as its result."""
+
+def _objective_result(objective, actions, purchase, attribution):
+    """This campaign's own (label, count, action, attribution) — reusing the one purchase
+    definition for sales objectives, and never letting any other objective read a stray purchase
+    as its result. `action`/`attribution` are only filled alongside a known `count` (F16-I03
+    repair): an unknown count means no specific action was actually read that day."""
     if objective in _SALES_OBJECTIVES:
-        return "purchase", purchase["purchases"]
+        count = purchase["purchases"]
+        action = purchase["action_type"] if count is not None else None
+        return "purchase", count, action, (attribution if count is not None else None)
     mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
     if mapped is None:
-        return None, None
+        return None, None, None, None
     label, action_types = mapped
     counts = {a.get("action_type"): a.get("value") for a in (actions or []) if isinstance(a, dict)}
     for action_type in action_types:
         if action_type in counts:
-            return label, _number(counts[action_type])
-    return label, None
+            count = _number(counts[action_type])
+            if count is None:
+                return label, None, None, None
+            return label, count, action_type, attribution
+    return label, None, None, None
 
 
 def observation(item, level, account, objective=_NO_OBJECTIVE):
@@ -281,7 +293,7 @@ def observation(item, level, account, objective=_NO_OBJECTIVE):
         "native_id": str(native_id),
         "day": day,
         "metric_scope": level,
-        "attribution_key": "7d_click+1d_view:" + (purchase["action_type"] or "unavailable"),
+        "attribution_key": _ATTRIBUTION_WINDOW + ":" + (purchase["action_type"] or "unavailable"),
         "currency": item.get("account_currency") or account.get("currency"),
         **metrics,
         "availability": {
@@ -290,9 +302,12 @@ def observation(item, level, account, objective=_NO_OBJECTIVE):
         "source": "graph",
     }
     if objective is not _NO_OBJECTIVE:
-        result["result_kind"], result["result_count"] = _objective_result(
-            objective, item.get("actions"), purchase
-        )
+        (
+            result["result_kind"],
+            result["result_count"],
+            result["result_action"],
+            result["result_attribution"],
+        ) = _objective_result(objective, item.get("actions"), purchase, _ATTRIBUTION_WINDOW)
     return result
 
 

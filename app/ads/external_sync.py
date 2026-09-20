@@ -277,10 +277,9 @@ def _save_page(conn, job, task, page):
             if entity is None:
                 errors.append("部分成效缺少已讀回的來源節點。")
                 continue
+            result_keys = {"result_kind", "result_count", "result_action", "result_attribution"}
             fields = {
-                k: v
-                for k, v in item.items()
-                if k not in {"native_kind", "native_id", "result_kind", "result_count"}
+                k: v for k, v in item.items() if k not in {"native_kind", "native_id", *result_keys}
             }
             repo.upsert_observation(
                 conn,
@@ -290,6 +289,8 @@ def _save_page(conn, job, task, page):
                 fields | {"entity_id": entity["id"]},
                 result_kind=item.get("result_kind"),
                 result_count=item.get("result_count"),
+                result_action=item.get("result_action"),
+                result_attribution=item.get("result_attribution"),
             )
         else:
             if (

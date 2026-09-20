@@ -5,13 +5,23 @@ import type { NativeEntity } from "./adsExternalApi";
 export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "completed" | "deferred" | "unjudgeable" | "failed" | "unknown";
 export interface ReviewSeries {
   metric_scope: string; attribution_key: string; currency: string | null; source: string;
-  row_count: number; days_present: number; result_kind?: string | null;
+  row_count: number; days_present: number;
   metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>
     & Partial<Record<"result_count" | "cost_per_result", number | null>>;
   known_counts: Record<string, number>;
 }
+// This entity's own result, over every row of one (metric_scope, currency) regardless of
+// attribution_key (F16-I03 repair) — previous-vs-current comparison reads this, not ReviewSeries.
+export interface ReviewResultView {
+  metric_scope: string; currency: string | null;
+  result_kind: string | null; result_action: string | null; result_attribution: string | null;
+  result_count: number | null; cost_per_result: number | null;
+  days_present: number; days_known: number;
+  reason: "mixed_result_definition" | "result_unknown_days" | null;
+}
 export interface ReviewPeriod {
-  row_count: number; days_present: number; days_expected: number; missing_days: number; series: ReviewSeries[];
+  row_count: number; days_present: number; days_expected: number; missing_days: number;
+  series: ReviewSeries[]; result_views?: ReviewResultView[];
 }
 export interface CommerceEvidence {
   scope: string; start: string; end: string;
