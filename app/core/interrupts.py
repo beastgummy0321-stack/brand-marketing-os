@@ -32,6 +32,11 @@ SEVERITY_LABELS = {
 # 類別登記表（單一權威）：新模組要送打斷佇列，在這裡登記一筆，不得在呼叫端自報 severity。
 # dict 順序＝同嚴重度內的行動價值排序。
 CATEGORIES = {
+    # F18-I03: brand-level decision queue over program triage (`app/ads/triage.py`) -- one entry
+    # per class the queue actually carries in this batch (`worse` is a decision to make, not yet
+    # a loss, so it ranks below `stop_loss` but above the pre-existing informational entries).
+    "ads_triage_stop_loss": {"severity": "money_loss", "label": "廣告停損待決定"},
+    "ads_triage_worse": {"severity": "rule_warning", "label": "廣告變差待決定"},
     "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
     "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。

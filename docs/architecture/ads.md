@@ -964,3 +964,43 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   重複列（同一身分、不同 `attribution_key`），花費跟成果會被同時多算一次——比例不變，`cost_per_result`
   本身不會失真，但 `spend`／`result_count`／`sample.spend_multiple` 這些絕對值會偏高；不是本票要
   修的範圍（依賴 §6.15 既有的 heal 規則本身正確）。
+
+### 6.18 F18-I03 — 品牌決策佇列：程式分流併進既有 `interrupts` 收件匣（settled 2026-09-21）
+
+- 兩個新登記類別（`app/core/interrupts.py::CATEGORIES`，本票對這支舊檔唯一允許的改動——登記在
+  `ads_runtime_attention` 之前）：`ads_triage_stop_loss`（`severity=money_loss`，標籤「廣告停損待
+  決定」）、`ads_triage_worse`（`severity=rule_warning`，標籤「廣告變差待決定」）。本批只有
+  `stop_loss`／`worse` 兩種 class 進佇列；`better`／`flat`／`insufficient`／`no_target` 不進。
+- `app/ads/triage.py::refresh_queue(conn, org_id, brand_id)`（`POST
+  /api/ads/brands/{brand_id}/queue/refresh`）：對這個品牌**每個非結案**（`status != 'closed'`）
+  Campaign 各呼叫一次 `classify()`（沒有已匯入廣告實體的 Campaign 自然出 0 個 item，不必另外過
+  濾），`stop_loss`／`worse` 的 item 各送一筆 `interrupts.enqueue()`；一個交易（逐筆 enqueue 後一次
+  `commit()`）。
+- `app/ads/triage.py::get_queue(conn, org_id, brand_id)`（`GET /api/ads/brands/{brand_id}/queue`）：
+  唯讀，不呼叫 `refresh_queue()`、不寫任何列。
+- **去重鍵含窗口結束日**：`dedupe_key = f"ads-triage:{class}:{entity_id}:{window_end}"`。
+  `interrupts.enqueue()` 既有的去重查詢不分 `status`（見該檔 `enqueue()` 內的 `SELECT`），所以同一把
+  key 只要存在（不管 open 還是 resolved）就不會插入第二筆——一筆已 resolve 的決定會維持
+  resolved，直到窗口真的往前移動、`window_end` 換了新值、算出一把新 key 才會生出新的 open
+  列。這個語意完全來自 `interrupts.py` 既有行為，本票沒有再改它一行。
+- **GET 過濾陳舊 open 列，不封存**：`get_queue()` 重新對這個品牌全部非結案 Campaign 跑一次
+  `classify()`，只把「(class, entity_id, window_end) 仍等於這次分流結果」的 open 列放進回應——
+  某支廣告在較晚一次 `refresh_queue()` 已經轉走（變 `flat`、或掉回 `needs_resync`），它舊窗口那筆
+  interrupt 仍然是 DB 裡的 `open` 列，只是不再出現在 GET 回應裡。**Known limit（本批刻意不做）**：
+  這種陳舊 open 列不會被自動 resolve 或 archive——`interrupts.py` 是舊檔，本票不建封存機制；如果同
+  一支廣告的 (class, entity_id, window_end) 之後又重新出現（理論上少見，因為 window_end 通常單調前
+  進），這筆舊列會再度符合過濾條件、重新出現在 GET 回應裡。下一批若要做「一離開就 resolve」，是在
+  `app/ads`（呼叫 `interrupts.enqueue()`／`resolve()` 的那一層）加邏輯，不動 `interrupts.py`。
+- `counts`：六個 class 在這個品牌全部非結案 Campaign 上的分流結果各自計數（不是只算進佇列的兩類）；
+  `total_ads`：全部 item 數；`kinds_available=["stop_loss","worse"]`、
+  `kinds_pending=["scale_budget","refresh_creative"]` 兩個路由固定回傳，永遠不是空清單冒充「沒事要
+  做」。
+- 訊息：`廣告「{name}」{停損|變差}，待決定`，`name` 超過 20 字截斷加「…」，確保全句 ≤
+  `interrupts.MAX_MESSAGE_LEN`（30 全形字）；不出現任何平台字面字串。`action_url`
+  沿用既有慣例（同 `app/ads/runtime.py::_health` 的 `ads_runtime_attention`）：
+  `/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=performance`。
+- 驗證：`app/tests/test_ads_triage_queue.py`（真資料端到端一則、queue 機制用固定 item 隔離測試：同窗
+  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列但不封存、六類計數、
+  `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選）、
+  `app/tests/test_core_interrupts.py`、`app/tests/test_dashboard_overview.py`（確認新登記類別不影響
+  既有跨品牌總覽排序／健康燈號斷言）。
