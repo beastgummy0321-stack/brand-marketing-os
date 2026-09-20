@@ -896,10 +896,71 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   跟組織時區不同時用帳戶時區當截止；`tracked_zero.apply()` 內部例外回報 `derive_failed`；帳戶時區
   未知或無法解析時整批跳過推定但成效頁照常成功、不回報任何錯誤代碼）、
   `app/tests/test_ads_targets.py`（`_trailing_30` 在窗口只有推定 0 時仍能解出，不再卡 `missing`）。
-- **Known limit（型別還沒跟上）**：`app/ads/external_models.py::Availability` 這個 `Literal`
-  目前仍只有 `"available"`／`"unknown"`／`"unavailable"` 三種，沒有列進 `"derived_zero"`——
-  `tracked_zero.apply()` 用原生 SQL `UPDATE` 直接寫這個值，繞過 `ExternalObservation` 的驗證，
-  今天可以動；但任何未來程式碼如果把已經存在資料庫裡、`availability.result_count="derived_zero"`
-  的列重新丟回 `ExternalObservation.model_validate()`（例如寫一個「重新核對既有列」的維護工具），
-  會直接炸掉。在 F18-I02 把 `Availability` 這個 Literal 一併擴充、加上對應驗證測試之前，這個型別
-  落差是刻意接受的已知落差，不是本票的範圍。
+- **型別落差已補（F18-I02）**：`app/ads/external_models.py::Availability` 這個 `Literal` 現在包含
+  `"derived_zero"`（原本只有 `"available"`／`"unknown"`／`"unavailable"` 三種、`tracked_zero.apply()`
+  用原生 SQL `UPDATE` 繞過驗證直接寫這個值的落差，見 `app/tests/test_ads_external_models.py`）。
+
+### 6.17 F18-I02 — 程式分流：每則廣告對自己前一期做判讀（settled 2026-09-21）
+
+- `app/ads/triage.py::classify(conn, org_id, brand_id, campaign_id) -> {"window_days", "items"}`：
+  純讀取、不呼叫模型、不寫任何表（ARCHITECTURE.md §0「程式整理，LLM 判斷」）；平台中立
+  （§6.14）——這支檔案不 import 任何 adapter、不出現平台字面字串，時區與平台讀取都透過既有
+  `external_sync.account_reader()` 轉手。一個 Campaign 底下每個 `native_kind='ad'` 的
+  `ads_external_entity` 各出一個 item；class 六選一
+  `stop_loss｜worse｜better｜flat｜insufficient｜no_target`，中文標籤
+  停損／變差／變好／持平／資料不足／尚未設定目標 由這支檔案自己產生（feature Decisions 凍結的
+  共用契約，逐字實作）。
+- **窗口與截止日**：`WINDOW_STEPS=(7,14,28)`；`window_days`（回傳最外層）固定是這三步裡最大的一個
+  （28）——只代表「最多可能看多遠」，每個 item 實際用到的窗長要看自己的 `window.days`。第一個窗口
+  的結束日是**這個 Campaign 所接帳戶自己時區**的「昨天」（沿用 §6.15、
+  `review_evidence.py::snapshot()` 同一種算法，只是改問這個 Campaign 的實體所屬帳戶，不是使用者選
+  的觀察結束日）；帳戶時區未知或無法解析時 fail-closed 退回 `today_for_org - 2 天`（review 修正
+  2026-09-21：真實時區落差最大到約 26 小時，只退一天不保證真的是完整日）。樣本門檻沒通過就依序延
+  到 14、28 天（`window.extended_from` 記上一步窗長）；28 天仍沒通過 ⇒
+  `insufficient`／`below_sample_gate`。
+- **同步涵蓋率門檻（review 修正 2026-09-21，blocker）**：使用者一次同步最多只選 31 天，28 天的判
+  讀窗口底下可能只有 7 天真的同步過；`_result_view` 只看存在的列，沒同步的那幾天不會被算進「已知」
+  也不會被算進「未知」，會被誤讀成「證明過的東西」。`classify()` 對每個 Campaign 只讀一次這個
+  Campaign 自己的 `ads_campaign.context_json->'external_sync'->'observations'->'coverage'`
+  （`external_sync.py::run_sync` 在 observations 任務乾淨完成時寫入，同一個位置 §6.16 已在用）。
+  目前判讀窗口沒有完整落在涵蓋範圍內（含完全沒同步過）⇒ `insufficient`／`needs_resync`，**在那一步
+  就地回報，不繼續延到更長的窗口**——窗口越長，涵蓋率只會越差，不會變好。前一期沒有完整落在涵蓋範
+  圍內 ⇒ `insufficient`／`no_previous_window`。這個門檻刻意不看 `aggregate()` 的
+  `missing_days`——沒有列可能是那天真的沒投放（合法的 0 筆），不是沒同步。
+- **樣本門檻**（`MIN_RESULT_EVENTS=10`）：`spend ≥ 3 × target.value` 或（`window.days ≥ 7` 且
+  `result_count ≥ 10`）。停損門檻用同一個 3 倍常數（`STOP_LOSS_SPEND_MULTIPLE=3`），每個窗口長度
+  都先過涵蓋率門檻、再檢查停損、才檢查樣本門檻——停損只認**已知**的 0（`result_views` 的 `reason`
+  必須是 `None`，含 §6.16 的 `derived_zero`），花費未知或成果未知永遠不算停損。
+- **成效只走一個來源**：`review_evidence.aggregate(rows, start, end)["result_views"]`、
+  `metric_scope='ad'`、一次一個廣告，絕不第二次自己定義「已知」；花費同理只加總
+  `aggregate()` 自己算出的 `series[...]["metrics"]["spend"]`（同一組 attribution_key 子群全部
+  已知才視為已知，跟 `_result_view` 的完整性門檻一致；超過一種幣別一律回 `None`，不混加總）。目標
+  端 `target.value is None` ⇒ `no_target`／`target_unresolved`（`target.missing` 逐字帶出）；
+  `target.result_kind` 與這個廣告第一個窗口的 `result_kind` 兩邊都不知道 ⇒
+  `no_target`／`result_kind_unknown`（只在第一個窗口、且該窗口通過涵蓋率門檻時判一次，不隨延窗重
+  判）。
+- **前一期比較**：前一期不可用（沒有列、`reason` 非 `None`、`cost_per_result` 是 0 或 `None`、或不
+  在涵蓋範圍內）⇒ `insufficient`／`no_previous_window`，永遠不除以 0；本期 `cost_per_result`
+  本身是 0 或 `None`（今天的常數巧合下走不到這條路——3 倍門檻同時是停損跟樣本門檻的花費子句，已知
+  0 一定先被停損攔下；獨立保留這道守門，防止常數以後分岔）也同樣 ⇒
+  `insufficient`／`below_sample_gate`，由 `_compare()` 這個獨立小函式守住，不是隱性除以 0。否則
+  `change_pct=(本期-前期)/前期`，`> 0.20`（`FLAT_BAND`）⇒ `worse`／`cost_per_result_up`，
+  `< -0.20` ⇒ `better`／`cost_per_result_down`，其餘 ⇒ `flat`／`cost_per_result_flat`。
+- **一次讀完一個 Campaign（review 修正 2026-09-21，N+1）**：`classify()` 只對
+  `ads_external_daily` 發一次查詢（`entity_id = ANY(廣告清單)` 且
+  `day BETWEEN cutoff-55 AND cutoff`，55 天涵蓋任何廣告在最長 28 天窗口＋等長前期時可能用到的最
+  早日期），在 Python 依 `entity_id` 分組後，每個廣告、每個窗口只是對這份記憶體資料切片，不再對
+  每則廣告、每個延窗步驟各自查一次表。
+- `GET /api/ads/brands/{brand_id}/campaigns/{campaign_id}/triage`（`app/ads/triage_routes.py`，
+  `routes.py` 只掛一行 `include_router`）：跟 `get_campaign_target` 同一種租戶界線寫法
+  （`require_actor` → `require_brand`），回 `{"triage": {...}}`。
+- 驗證：`app/tests/test_ads_triage.py`（每個 class／reason code 各自的 falsifier、非銷售廣告不被
+  一筆意外購買帶偏、沒有目標時停損不會誤發、推定 0 才讓停損真的發得出來、部分／完全沒涵蓋的窗口
+  不會冒充停損或前後比較、查詢數不隨廣告數成長）。
+- **Known limit（前端還沒接）**：`frontend/src/lib/adsReviewApi.ts` 的 `ReviewResultView` 還沒有
+  `derived_zero_days` 欄位，v7 前端批次要把「規則推定」的標記接上（下一批的驗收項目，不是本票
+  範圍）。
+- **Known limit（重複列會等比例放大）**：如果 `ads_external_daily` 對同一天有未被 §6.15 heal 掉的
+  重複列（同一身分、不同 `attribution_key`），花費跟成果會被同時多算一次——比例不變，`cost_per_result`
+  本身不會失真，但 `spend`／`result_count`／`sample.spend_multiple` 這些絕對值會偏高；不是本票要
+  修的範圍（依賴 §6.15 既有的 heal 規則本身正確）。

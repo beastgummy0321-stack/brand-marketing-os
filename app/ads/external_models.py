@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Availability = Literal["available", "unknown", "unavailable"]
+Availability = Literal["available", "unknown", "unavailable", "derived_zero"]
 IMPORTED_REASON = "既有活動只支援查看、同步與自帶素材安排；不使用內部策略、預算、模擬發布或結案。"
 LEGACY_OPERATIONS = (
     "strategy",

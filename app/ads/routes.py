@@ -37,6 +37,7 @@ from app.ads import (
     simulation_recovery,
     simulation_routes,
     strategy,
+    triage_routes,
 )
 from app.ads.adapters import simulated
 from app.brand_intelligence import repository as bi_repo
@@ -84,6 +85,7 @@ router = APIRouter(prefix="/api/ads", dependencies=[Depends(_legacy_campaign_gua
 router.include_router(manual_settings_routes.router)
 router.include_router(simulation_routes.router)
 router.include_router(experiment_routes.router)
+router.include_router(triage_routes.router)
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
 GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"
