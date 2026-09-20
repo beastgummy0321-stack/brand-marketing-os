@@ -6,7 +6,8 @@ literal in this file, no adapter import, no `attribution_key` parsing -- window 
 never a second, divergent definition of "known".
 """
 
-from datetime import timedelta
+from collections import defaultdict
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import external_sync, repository, review_evidence, targets
@@ -16,10 +17,12 @@ from app.core.settings import today_for_org
 
 # F18 discovery §2.3 (2026-09-21 user-confirmed numeric defaults, feature Decisions).
 MIN_RESULT_EVENTS = 10
-OBSERVATION_WINDOW_DAYS = 28
 FLAT_BAND = 0.20
 STOP_LOSS_SPEND_MULTIPLE = 3
 WINDOW_STEPS = (7, 14, 28)
+# The widest span any window pair (current + its equal-length previous window) can ever need,
+# counting back from `cutoff` -- feeds the single per-campaign read (review fix: N+1 -> one read).
+_MAX_LOOKBACK_DAYS = 2 * WINDOW_STEPS[-1] - 1
 
 LABELS = {
     "stop_loss": "停損",
@@ -36,15 +39,57 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     if campaign is None:
         raise ValueError("campaign_unknown")
     target = targets.resolve(conn, org_id, brand_id, campaign)
+    coverage = _coverage(campaign)
     cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
     ads = conn.execute(
         "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
         "AND native_kind='ad' ORDER BY name,id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
-    items = [_classify_ad(conn, org_id, brand_id, campaign_id, dict(ad), target, cutoff)
-             for ad in ads]
+    entity_ids = [ad["id"] for ad in ads]
+    rows_by_entity = defaultdict(list)
+    if entity_ids:
+        # One read for the whole campaign (review fix: was one query per ad per window step) --
+        # every window any ad ever needs (current + its equal-length previous window, up to 28
+        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`.
+        range_start = cutoff - timedelta(days=_MAX_LOOKBACK_DAYS)
+        rows = conn.execute(
+            "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+            "AND metric_scope='ad' AND entity_id = ANY(%s) AND day BETWEEN %s AND %s",
+            (org_id, brand_id, campaign_id, entity_ids, range_start, cutoff),
+        ).fetchall()
+        for row in rows:
+            rows_by_entity[row["entity_id"]].append(dict(row))
+    items = [
+        _classify_ad(dict(ad), target, cutoff, coverage, rows_by_entity.get(ad["id"], []))
+        for ad in ads
+    ]
     return {"window_days": WINDOW_STEPS[-1], "items": items}
+
+
+def _coverage(campaign):
+    """This campaign's own recorded `observations` sync coverage (`external_repository
+    .record_sync`, written by `external_sync.py::run_sync` when the observations section
+    completes cleanly) -- `ads_campaign.context_json->'external_sync'->'observations'->'coverage'`,
+    read once per campaign, never a per-ad query. `None` when never synced."""
+    sync = (campaign.get("context_json") or {}).get("external_sync") or {}
+    coverage = (sync.get("observations") or {}).get("coverage") or {}
+    start, end = coverage.get("start"), coverage.get("end")
+    if not start or not end:
+        return None
+    return date.fromisoformat(start), date.fromisoformat(end)
+
+
+def _window_covered(coverage, start, end):
+    """A user can request any <=31-day sync range, so a 28-day judgement window may rest on far
+    fewer actually-synced days -- `_result_view` only ever judges rows that exist, so an unsynced
+    day would silently read as "no row, so it doesn't count against known days", never surfacing
+    as the missing evidence it is (review-arbitrated blocker). `[start, end]` must sit entirely
+    inside the recorded coverage range, or this window can't be trusted at all."""
+    if coverage is None:
+        return False
+    coverage_start, coverage_end = coverage
+    return start >= coverage_start and end <= coverage_end
 
 
 def _account_cutoff(conn, org_id, brand_id, campaign_id):
@@ -52,22 +97,24 @@ def _account_cutoff(conn, org_id, brand_id, campaign_id):
     `review_evidence.py::snapshot()` applies for "today is not a complete day", resolved for
     whichever connected account this campaign's entities belong to (`external_sync.account_reader`,
     same seam F18-I01's `external_sync.py::run_sync` uses). Unknown/unreachable account timezone
-    falls back to `today_for_org - 1 day`."""
+    fails closed to `today_for_org - 2 days` (review fix: the real-world timezone spread is up to
+    ~26h, so "yesterday" alone is not always guaranteed complete)."""
     today = today_for_org(conn, org_id=org_id)
+    fallback = today - timedelta(days=2)
     entity = conn.execute(
         "SELECT platform,source_account FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
         "AND campaign_id=%s LIMIT 1",
         (org_id, brand_id, campaign_id),
     ).fetchone()
     if entity is None:
-        return today - timedelta(days=1)
+        return fallback
     try:
         _, account = external_sync.account_reader(
             conn, org_id, brand_id, entity["platform"], entity["source_account"]
         )
         zone = ZoneInfo(account.get("timezone_name") or "")
     except (SourceReadError, ValueError, ZoneInfoNotFoundError):
-        return today - timedelta(days=1)
+        return fallback
     return (now_utc().astimezone(zone) - timedelta(days=1)).date()
 
 
@@ -90,21 +137,21 @@ def _ad_spend(aggregated):
     """This ad's own known spend, summed across every `attribution_key` subgroup of its 'ad'
     scope -- reuses `aggregate()`'s own per-subgroup `metrics["spend"]` (already NULL-aware,
     F16-I06's completeness rule) rather than a second, divergent "known" predicate over the raw
-    rows. Any unknown subgroup makes the whole window's spend unknown, matching the same
-    completeness bar `review_evidence._result_view` uses for its own `reason`."""
+    rows. Any unknown subgroup, or more than one currency among them, makes the whole window's
+    spend unknown -- never an arbitrary pick, never a sum across currencies."""
     entries = [s for s in aggregated["series"] if s["metric_scope"] == "ad"]
     if not entries or any(s["metrics"]["spend"] is None for s in entries):
+        return None
+    if len({s["currency"] for s in entries}) > 1:
         return None
     return sum(s["metrics"]["spend"] for s in entries)
 
 
-def _ad_window(conn, org_id, brand_id, campaign_id, entity_id, start, end):
-    rows = conn.execute(
-        "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND entity_id=%s AND metric_scope='ad' AND day BETWEEN %s AND %s",
-        (org_id, brand_id, campaign_id, entity_id, start, end),
-    ).fetchall()
-    aggregated = review_evidence.aggregate([dict(r) for r in rows], start, end)
+def _ad_window(entity_rows, start, end):
+    """`entity_rows` is this ad's own pre-fetched rows for the whole campaign-level lookback
+    (`classify()`'s single read) -- sliced here per window, never re-queried."""
+    rows = [row for row in entity_rows if start <= row["day"] <= end]
+    aggregated = review_evidence.aggregate(rows, start, end)
     ad_views = [v for v in aggregated["result_views"] if v["metric_scope"] == "ad"]
     # More than one currency in the window has no single unambiguous view (same defensive shape
     # `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick.
@@ -144,25 +191,38 @@ def _stop_loss_hit(view, spend, target_value):
 
 def _sample_view(spend, view, target_value, days, gate):
     spend_multiple = spend / target_value if spend is not None and target_value else None
-    return {
-        "gate": gate, "spend_multiple": spend_multiple,
-        "days_with_events": view["days_known"] if view else 0,
-    }
+    days_with_events = (view["days_known"] - view["derived_zero_days"]) if view else 0
+    return {"gate": gate, "spend_multiple": spend_multiple, "days_with_events": days_with_events}
 
 
-def _classify_ad(conn, org_id, brand_id, campaign_id, entity, target, cutoff):
+def _compare(current_cost, previous_cost):
+    """The guarded current-vs-previous comparison (review fix): a falsy current
+    `cost_per_result` (0 or, in practice, `None`) is `insufficient`/`below_sample_gate`, never a
+    division -- unreachable through `_classify_ad` today only because `STOP_LOSS_SPEND_MULTIPLE`
+    and the sample gate's spend clause share the same constant (a known-zero result that passed
+    the gate via spend would already have fired stop-loss first, see `_stop_loss_hit`), so this
+    guard is kept explicit rather than relying on that coincidence never changing."""
+    if not current_cost:
+        return "insufficient", "below_sample_gate", None
+    change_pct = (current_cost - previous_cost) / previous_cost
+    if change_pct > FLAT_BAND:
+        return "worse", "cost_per_result_up", change_pct
+    if change_pct < -FLAT_BAND:
+        return "better", "cost_per_result_down", change_pct
+    return "flat", "cost_per_result_flat", change_pct
+
+
+def _classify_ad(entity, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
-        "campaign_id": campaign_id,
+        "campaign_id": entity["campaign_id"],
     }
 
     def finish(cls, reason_code, start, end, days, extended_from, view, spend, change_pct=None,
                previous=None):
         if previous is None:
             previous_start, previous_end = _previous_range(start, days)
-            previous = _ad_window(
-                conn, org_id, brand_id, campaign_id, entity["id"], previous_start, previous_end,
-            )
+            previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
         gate = _sample_gate(spend, view, target["value"], days)
         return {
@@ -173,29 +233,33 @@ def _classify_ad(conn, org_id, brand_id, campaign_id, entity, target, cutoff):
             "sample": _sample_view(spend, view, target["value"], days, gate),
         }
 
-    first_days = WINDOW_STEPS[0]
-    first_end = cutoff
-    first_start = first_end - timedelta(days=first_days - 1)
-    first_view, first_spend = _ad_window(
-        conn, org_id, brand_id, campaign_id, entity["id"], first_start, first_end,
-    )
-
     if target["value"] is None:
+        first_days = WINDOW_STEPS[0]
+        first_end = cutoff
+        first_start = first_end - timedelta(days=first_days - 1)
+        first_view, first_spend = _ad_window(entity_rows, first_start, first_end)
         return finish("no_target", "target_unresolved", first_start, first_end, first_days, None,
                       first_view, first_spend)
-    if target["result_kind"] is None and (first_view is None or first_view["result_kind"] is None):
-        return finish("no_target", "result_kind_unknown", first_start, first_end, first_days, None,
-                      first_view, first_spend)
 
-    days, start, end, view, spend = first_days, first_start, first_end, first_view, first_spend
+    days = start = end = view = spend = None
     extended_from = None
     gate_pass = False
     for step_idx, step_days in enumerate(WINDOW_STEPS):
-        if step_idx > 0:
-            days = step_days
-            end = cutoff
-            start = end - timedelta(days=days - 1)
-            view, spend = _ad_window(conn, org_id, brand_id, campaign_id, entity["id"], start, end)
+        days = step_days
+        end = cutoff
+        start = end - timedelta(days=days - 1)
+        if not _window_covered(coverage, start, end):
+            # Review blocker: an unsynced part of the window must never read as a proven
+            # anything. Stop here -- a longer window is covered even less, so extending past a
+            # coverage gap can only make the evidence worse, never better.
+            view, spend = _ad_window(entity_rows, start, end)
+            return finish("insufficient", "needs_resync", start, end, days, extended_from,
+                          view, spend)
+        view, spend = _ad_window(entity_rows, start, end)
+        if step_idx == 0 and target["result_kind"] is None \
+                and (view is None or view["result_kind"] is None):
+            return finish("no_target", "result_kind_unknown", start, end, days, extended_from,
+                          view, spend)
         if _stop_loss_hit(view, spend, target["value"]):
             return finish("stop_loss", "spend_over_target_no_result", start, end, days,
                           extended_from, view, spend)
@@ -212,9 +276,10 @@ def _classify_ad(conn, org_id, brand_id, campaign_id, entity, target, cutoff):
         return finish("insufficient", reason, start, end, days, extended_from, view, spend)
 
     previous_start, previous_end = _previous_range(start, days)
-    prev_view, prev_spend = _ad_window(
-        conn, org_id, brand_id, campaign_id, entity["id"], previous_start, previous_end,
-    )
+    if not _window_covered(coverage, previous_start, previous_end):
+        return finish("insufficient", "no_previous_window", start, end, days, extended_from,
+                      view, spend)
+    prev_view, prev_spend = _ad_window(entity_rows, previous_start, previous_end)
     previous = (prev_view, prev_spend)
     # A previous cost_per_result of 0 or None (no previous result known, or known zero results)
     # is never a divisor -- `no_previous_window`, never a ZeroDivisionError.
@@ -222,14 +287,6 @@ def _classify_ad(conn, org_id, brand_id, campaign_id, entity, target, cutoff):
         return finish("insufficient", "no_previous_window", start, end, days, extended_from,
                       view, spend, previous=previous)
 
-    change_pct = (
-        (view["cost_per_result"] - prev_view["cost_per_result"]) / prev_view["cost_per_result"]
-    )
-    if change_pct > FLAT_BAND:
-        cls, reason_code = "worse", "cost_per_result_up"
-    elif change_pct < -FLAT_BAND:
-        cls, reason_code = "better", "cost_per_result_down"
-    else:
-        cls, reason_code = "flat", "cost_per_result_flat"
+    cls, reason_code, change_pct = _compare(view["cost_per_result"], prev_view["cost_per_result"])
     return finish(cls, reason_code, start, end, days, extended_from, view, spend,
                   change_pct=change_pct, previous=previous)

@@ -1,6 +1,7 @@
 """app/tests/test_ads_triage.py — F18-I02 falsifiers: every class and reason code the shared
-contract defines, plus the three named guarantees (non-sales ad never judged on purchases,
-stop-loss never fires without a target, a derived zero is what lets stop-loss fire).
+contract defines, plus the named guarantees (non-sales ad never judged on purchases, stop-loss
+never fires without a target, a derived zero is what lets stop-loss fire, an unsynced part of a
+window never reads as proven anything, one read serves the whole campaign).
 """
 
 import unittest
@@ -24,6 +25,23 @@ class _Reader:
     def accounts(self, conn, org, brand):
         return [{"account_id": "act_1", "currency": "TWD", "name": "來源",
                   "timezone_name": ACCOUNT_TZ}]
+
+
+class _CountingConn:
+    """Wraps a real connection, counting every `.execute()` call and recording the SQL text --
+    used to prove `classify()` reads the campaign's daily rows exactly once, never once per ad
+    (review fix: N+1)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls = []
+
+    def execute(self, sql, params=()):
+        self.calls.append(sql)
+        return self._inner.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 class TriageTest(unittest.TestCase):
@@ -52,6 +70,28 @@ class TriageTest(unittest.TestCase):
         self.cutoff = (
             db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
         ).date()
+        # Broad default coverage (well past anything any test's windows touch) so every test
+        # below exercises its own class/reason without also having to think about the coverage
+        # gate -- the coverage-gate tests explicitly narrow or remove it.
+        self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)
+        self.conn.commit()
+
+    def set_coverage(self, start, end):
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={
+                "last_success_at": db.now_utc().isoformat(),
+                "coverage": {"start": start.isoformat(), "end": end.isoformat()},
+            },
+        )
+        self.conn.commit()
+
+    def clear_coverage(self):
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json "
+            "#- '{external_sync,observations,coverage}' WHERE id=%s",
+            (self.campaign,),
+        )
         self.conn.commit()
 
     def set_target(self, value, result_kind=None):
@@ -64,11 +104,11 @@ class TriageTest(unittest.TestCase):
 
     def obs(self, day, *, spend=100, impressions=1000, result_kind="purchase", result_count=None,
             result_action="omni_purchase", result_attribution="7d_click+1d_view",
-            attribution_key=None, purchases=None):
+            attribution_key=None, purchases=None, ad_id=None):
         external.upsert_observation(
             self.conn, self.org, self.brand, self.campaign,
             {
-                "entity_id": self.ad["id"], "day": day, "metric_scope": "ad",
+                "entity_id": ad_id or self.ad["id"], "day": day, "metric_scope": "ad",
                 "attribution_key": attribution_key or str(day), "currency": "TWD",
                 "source": "meta", "spend": spend, "impressions": impressions,
                 "purchases": purchases,
@@ -149,7 +189,61 @@ class TriageTest(unittest.TestCase):
             self.obs(self.cutoff - timedelta(days=offset), spend=500, result_count=None,
                       attribution_key=f"unk{offset}")
         item = self.classify_one()
-        self.assertNotEqual(item["class"], "stop_loss")
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "result_unknown_days")
+
+    # -- coverage gate (review blocker) ----------------------------------------------------------
+
+    def test_no_coverage_is_needs_resync_never_stop_loss(self):
+        self.clear_coverage()
+        self.set_target(100, result_kind="purchase")
+        # Same known-zero, over-threshold shape that fires stop-loss when covered.
+        self.obs(
+            self.cutoff - timedelta(days=10), spend=50, result_count=5, attribution_key="demo",
+        )
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=50, result_count=None,
+                      attribution_key=f"target{offset}")
+        tracked_zero.apply(
+            self.conn, self.org, self.brand, self.campaign,
+            self.cutoff - timedelta(days=6), self.cutoff, self.cutoff,
+        )
+        item = self.classify_one()
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "needs_resync")
+        self.assertEqual(item["window"]["days"], 7)
+        self.assertIsNone(item["window"]["extended_from"])
+
+    def test_partially_covered_window_never_yields_stop_loss_or_comparison(self):
+        # Coverage only reaches 3 days back -- the smallest (7-day) window is not fully covered,
+        # even though the underlying data shape would otherwise fire stop-loss.
+        self.set_coverage(self.cutoff - timedelta(days=3), self.cutoff)
+        self.set_target(100, result_kind="purchase")
+        self.obs(
+            self.cutoff - timedelta(days=10), spend=50, result_count=5, attribution_key="demo",
+        )
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=50, result_count=None,
+                      attribution_key=f"target{offset}")
+        tracked_zero.apply(
+            self.conn, self.org, self.brand, self.campaign,
+            self.cutoff - timedelta(days=6), self.cutoff, self.cutoff,
+        )
+        item = self.classify_one()
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "needs_resync")
+        self.assertNotIn(item["class"], {"stop_loss", "worse", "better", "flat"})
+
+    def test_previous_window_not_covered_is_no_previous_window(self):
+        # Current window fully covered and fully known; previous window falls outside coverage.
+        self.set_coverage(self.cutoff - timedelta(days=6), self.cutoff)
+        self.set_target(1, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=10, result_count=2,
+                      attribution_key=f"cur{offset}")
+        item = self.classify_one()
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "no_previous_window")
 
     # -- insufficient: below_sample_gate ---------------------------------------------------------
 
@@ -177,7 +271,7 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "mixed_result_definition")
 
-    def test_needs_resync_is_insufficient(self):
+    def test_needs_resync_from_legacy_rows_is_insufficient(self):
         self.set_target(1, result_kind="purchase")
         for offset in range(7):
             self.obs(self.cutoff - timedelta(days=offset), spend=10, result_kind=None,
@@ -193,7 +287,7 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "needs_resync")
 
-    def test_no_previous_window_is_insufficient(self):
+    def test_no_previous_window_when_never_synced_before(self):
         self.set_target(1, result_kind="purchase")  # trivial spend gate passes gate immediately
         for offset in range(7):
             self.obs(self.cutoff - timedelta(days=offset), spend=10, result_count=2,
@@ -202,7 +296,35 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "no_previous_window")
 
+    def test_previous_known_zero_result_is_no_previous_window(self):
+        # Previous window fully covered and fully known, but its own cost_per_result is None
+        # (known zero results) -- never a divisor, `no_previous_window`, not a crash.
+        self.set_target(1, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=7 + offset), spend=10, result_count=0,
+                      attribution_key=f"prevzero{offset}")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=10, result_count=2,
+                      attribution_key=f"cur{offset}")
+        item = self.classify_one()
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "no_previous_window")
+        self.assertIsNone(item["previous"]["cost_per_result"])
+
     # -- worse / better / flat -------------------------------------------------------------------
+
+    def test_flat_exact_no_change_is_flat(self):
+        self.set_target(1000, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=7 + offset), spend=5, result_count=5,
+                      attribution_key=f"prevsame{offset}")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=5, result_count=5,
+                      attribution_key=f"cursame{offset}")
+        item = self.classify_one()
+        self.assertEqual(item["class"], "flat")
+        self.assertEqual(item["reason_code"], "cost_per_result_flat")
+        self.assertEqual(item["change_pct"], 0.0)
 
     def test_flat_within_band_keeps_change_pct_none_reasoning_off(self):
         self.set_target(1000, result_kind="purchase")
@@ -263,6 +385,62 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["current"]["result_kind"], "lead")
         self.assertIn(item["class"], {"worse", "better", "flat"})
         self.assertIsNone(item["current"]["reason"])
+
+    # -- _account_cutoff fail-closed fallback ------------------------------------------------------
+
+    def test_unknown_account_timezone_falls_back_two_days_not_one(self):
+        empty_campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="沒有任何實體",
+        )["id"]
+        self.conn.commit()
+        from app.core import settings as coresettings
+
+        today = coresettings.today_for_org(self.conn, org_id=self.org)
+        cutoff = triage._account_cutoff(self.conn, self.org, self.brand, empty_campaign)
+        self.assertEqual(cutoff, today - timedelta(days=2))
+
+    # -- _compare guard ---------------------------------------------------------------------------
+
+    def test_compare_guards_a_falsy_current_cost_per_result(self):
+        self.assertEqual(
+            triage._compare(0, 10), ("insufficient", "below_sample_gate", None),
+        )
+        self.assertEqual(
+            triage._compare(None, 10), ("insufficient", "below_sample_gate", None),
+        )
+        self.assertEqual(triage._compare(10, 10), ("flat", "cost_per_result_flat", 0.0))
+
+    # -- N+1 -----------------------------------------------------------------------------------
+
+    def test_query_count_does_not_grow_with_ad_count(self):
+        self.set_target(1000, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=7 + offset), spend=100, result_count=10,
+                      attribution_key=f"prevx{offset}")
+            self.obs(self.cutoff - timedelta(days=offset), spend=100, result_count=10,
+                      attribution_key=f"curx{offset}")
+
+        def count_daily_reads():
+            counting = _CountingConn(self.conn)
+            triage.classify(counting, self.org, self.brand, self.campaign)
+            return sum(1 for sql in counting.calls if "ads_external_daily" in sql)
+
+        one_ad_reads = count_daily_reads()
+
+        for i in range(4):
+            ad = external.upsert_entity(
+                self.conn, self.org, self.brand, self.campaign,
+                {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+                 "native_id": f"ad_extra_{i}", "name": f"廣告{i}",
+                 "parent_native_kind": "campaign", "parent_native_id": "c1"},
+            )
+            for offset in range(7):
+                self.obs(self.cutoff - timedelta(days=offset), spend=100, result_count=10,
+                          attribution_key=f"extra{i}_{offset}", ad_id=ad["id"])
+
+        five_ad_reads = count_daily_reads()
+        self.assertEqual(one_ad_reads, 1)
+        self.assertEqual(one_ad_reads, five_ad_reads)
 
 
 if __name__ == "__main__":
