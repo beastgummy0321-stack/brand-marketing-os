@@ -6,8 +6,7 @@ export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "complet
 export interface ReviewSeries {
   metric_scope: string; attribution_key: string; currency: string | null; source: string;
   row_count: number; days_present: number;
-  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>
-    & Partial<Record<"result_count" | "cost_per_result", number | null>>;
+  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>;
   known_counts: Record<string, number>;
 }
 // This entity's own result, over every row of one (metric_scope, currency) regardless of

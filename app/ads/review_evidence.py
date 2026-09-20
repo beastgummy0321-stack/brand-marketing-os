@@ -14,7 +14,7 @@ from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.llm import context_compiler
 
-METRICS = ("spend", "impressions", "clicks", "purchases", "revenue", "result_count")
+METRICS = ("spend", "impressions", "clicks", "purchases", "revenue")
 LIMITATIONS = [
     "平台歸因收入不是商務實收；品牌訂單淨額不可分配至單則廣告。",
     "商務來源訂單淨額未經會計核實；未付款、未知幣別及不完整覆蓋不可當實收或計算跨來源 ROAS。",
@@ -99,7 +99,6 @@ def aggregate(rows, start, end):
             ("cpc", "spend", "clicks", 1),
             ("cpa", "spend", "purchases", 1),
             ("roas", "revenue", "spend", 1),
-            ("cost_per_result", "spend", "result_count", 1),
         ):
             a, b = metrics[numerator], metrics[denominator]
             metrics[name] = (
