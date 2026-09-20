@@ -122,7 +122,7 @@ class QueueEndToEndTest(unittest.TestCase):
             f"/brands/{self.brand}/ads/campaigns/{self.campaign}?tab=performance",
         )
         # F19-I01: each queue row carries the current triage item that produced it (matched by
-        # the same dedupe key the enqueue used), never null while it's still the live classification.
+        # the same dedupe key the enqueue used) -- never null, it's filtered to only live rows.
         self.assertEqual(stop_row["triage"]["class"], "stop_loss")
         self.assertEqual(stop_row["triage"]["entity_id"], self.ad_stop["id"])
 

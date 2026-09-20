@@ -5,12 +5,13 @@
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
+import type { AlertSeverity } from "./api";
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
 export interface TriageWindow {
   start: string; end: string; days: number;
-  previous_start: string | null; previous_end: string | null;
+  previous_start: string; previous_end: string;
   extended_from: number | null;
 }
 export interface TriageTargetView {
@@ -38,8 +39,8 @@ export interface CampaignTriage { window_days: number; items: TriageItem[] }
  * enqueue used. A row whose ad has moved off `stop_loss`/`worse` since it was raised is filtered
  * out of the payload rather than listed without a match, so `triage` is always present here. */
 export interface QueueItem {
-  id: string; org_id: string; brand_id: string | null; campaign_cycle_id: string | null;
-  dedupe_key: string; category: string; kind: string | null; severity: string;
+  id: string; org_id: string; brand_id: string | null; campaign_period_id: string | null;
+  dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
   triage: TriageItem;
@@ -57,7 +58,7 @@ export interface CampaignTarget {
 export interface TargetRequest {
   result_kind?: string | null; basis?: "own" | "break_even" | "trailing_30" | null;
   value?: number | null; product_id?: string | null; price?: number | null;
-  variable_cost?: number | null; expected_revision?: number | null;
+  variable_cost?: number | null; expected_revision: number;
 }
 
 const brandPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}`;
