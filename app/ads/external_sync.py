@@ -9,6 +9,7 @@ from app.ads import channels
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.core import settings
 from app.core.db import connection, jsonb, new_id, now_utc, set_tenant_scope
 
@@ -231,7 +232,7 @@ def _save_monthly(conn, job, task, page, account):
             job["brand_id"],
             root["campaign_id"],
             {k: v for k, v in item.items() if k not in {"native_kind", "native_id"}}
-            | {"entity_id": root["id"], "attribution_key": "account_monthly_spend"},
+            | {"entity_id": root["id"], "attribution_key": MONTHLY_BUDGET_ATTRIBUTION_KEY},
         )
     # Recheck all observed identities: another brand may have claimed a root between pages.
     for kind, native_id in sorted(seen):
@@ -312,6 +313,10 @@ def _save_page(conn, job, task, page, reader=None):
                 result_count=item.get("result_count"),
                 result_action=item.get("result_action"),
                 result_attribution=item.get("result_attribution"),
+                # F16-I06: this is the one point every platform reader's regular (non-monthly)
+                # observation write routes through -- heal superseded same-identity rows here,
+                # not per reader.
+                heal_superseded_attribution=True,
             )
         else:
             if (

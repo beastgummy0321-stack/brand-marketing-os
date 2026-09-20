@@ -227,6 +227,193 @@ class ExternalSyncTest(unittest.TestCase):
         self.assertEqual(view["observations"][0]["result_kind"], "lead")
         self.assertEqual(view["observations"][0]["result_count"], 3)
 
+    def test_resync_heals_row_superseded_by_a_changed_attribution_key(self):
+        # F16-I06 cause #2: a platform's `attribution_key` can embed something that changes
+        # between reads of the very same identity (entity, day, metric_scope, currency, source) --
+        # Meta's embeds the purchase action type, so a day first read before any purchase lands
+        # is stored under one key and a later re-sync after a purchase stores it under another.
+        # The DB's uniqueness key treats that as two rows; a re-sync must heal its own duplicate.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        day = date(2026, 1, 1)
+
+        def page(attribution_key, spend):
+            return SourcePage(
+                [
+                    {
+                        "native_kind": "line",
+                        "native_id": "child",
+                        "day": day,
+                        "metric_scope": "line",
+                        "attribution_key": attribution_key,
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": spend,
+                        "purchases": None,
+                    }
+                ]
+            )
+
+        with patch.object(
+            self.reader, "read_observations", return_value=page("window:unavailable", 722)
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account", start=day, end=day
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        with patch.object(
+            self.reader, "read_observations", return_value=page("window:omni_purchase", 1747)
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account", start=day, end=day
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn, self.org, self.brand, campaign["id"], start=day, end=day
+        )
+        rows = [r for r in view["observations"] if r["day"] == day]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["spend"], 1747)
+        self.assertEqual(rows[0]["attribution_key"], "window:omni_purchase")
+
+    def test_monthly_write_never_heals_or_is_healed_by_an_observation_row(self):
+        # Monthly-budget rows are a different grain entirely (F16-I06) -- the healing that repairs
+        # cause #2 must never delete or be triggered by them.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        entity = self.conn.execute(
+            "SELECT id FROM ads_external_entity WHERE campaign_id=%s AND native_kind='portfolio'",
+            (campaign["id"],),
+        ).fetchone()
+        day = date(2026, 1, 1)
+        repo.upsert_observation(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign["id"],
+            {
+                "entity_id": entity["id"],
+                "day": day,
+                "metric_scope": "portfolio",
+                "attribution_key": repo.MONTHLY_BUDGET_ATTRIBUTION_KEY,
+                "currency": "TWD",
+                "source": "other",
+                "spend": 1900,
+            },
+        )
+        self.conn.commit()
+        with patch.object(
+            self.reader,
+            "read_observations",
+            return_value=SourcePage(
+                [
+                    {
+                        "native_kind": "portfolio",
+                        "native_id": "root",
+                        "day": day,
+                        "metric_scope": "portfolio",
+                        "attribution_key": "own-window",
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": 100,
+                        "purchases": None,
+                    }
+                ]
+            ),
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account", start=day, end=day
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn, self.org, self.brand, campaign["id"], start=day, end=day
+        )
+        keys = {r["attribution_key"] for r in view["observations"] if r["day"] == day}
+        self.assertEqual(keys, {"own-window", repo.MONTHLY_BUDGET_ATTRIBUTION_KEY})
+
+    def test_heal_only_reaches_the_identity_it_replaces(self):
+        # F16-I06 known limit: the heal treats ANY differing `attribution_key` of the same
+        # identity as superseded, so the boundary of "same identity" is the whole safety
+        # argument. `metric_scope`, `currency` and `source` are part of that identity -- a row
+        # differing in any one of them is a different grain, not an older read of this one, and
+        # must survive untouched. The same-identity row is seeded too, so this can never pass
+        # by the heal simply not firing.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        entity = self.conn.execute(
+            "SELECT id FROM ads_external_entity WHERE campaign_id=%s AND native_kind='portfolio'",
+            (campaign["id"],),
+        ).fetchone()
+        day = date(2026, 1, 1)
+        for attribution_key, overrides in (
+            ("stale-window", {}),  # same identity, older key -- the only row that may go
+            ("other-scope", {"metric_scope": "line"}),
+            ("other-currency", {"currency": "USD"}),
+            ("other-source", {"source": "manual"}),
+        ):
+            repo.upsert_observation(
+                self.conn,
+                self.org,
+                self.brand,
+                campaign["id"],
+                {
+                    "entity_id": entity["id"],
+                    "day": day,
+                    "metric_scope": "portfolio",
+                    "attribution_key": attribution_key,
+                    "currency": "TWD",
+                    "source": "other",
+                    "spend": 100,
+                }
+                | overrides,
+            )
+        self.conn.commit()
+        with patch.object(
+            self.reader,
+            "read_observations",
+            return_value=SourcePage(
+                [
+                    {
+                        "native_kind": "portfolio",
+                        "native_id": "root",
+                        "day": day,
+                        "metric_scope": "portfolio",
+                        "attribution_key": "own-window",
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": 1747,
+                        "purchases": None,
+                    }
+                ]
+            ),
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account", start=day, end=day
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn, self.org, self.brand, campaign["id"], start=day, end=day
+        )
+        keys = {r["attribution_key"] for r in view["observations"] if r["day"] == day}
+        self.assertEqual(keys, {"own-window", "other-scope", "other-currency", "other-source"})
+
     def _structure_page(self, native_id="root", *, objective):
         # Same two-entity shape `Reader.read_structure` returns by default (root + one child) --
         # only the root carries the objective a real platform's structure sync would report at

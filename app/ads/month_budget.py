@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from app.ads import channels
+from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.core.audit import write_audit
@@ -346,7 +347,7 @@ def _inventory(conn, org, brand, start, today):
         entity = by_id.get(observation["entity_id"], {})
         monthly = covered_accounts.get((entity.get("platform"), entity.get("source_account")))
         if monthly and not entity.get("parent_native_id"):
-            if observation.get("attribution_key") != "account_monthly_spend":
+            if not is_monthly_budget_row(observation.get("attribution_key")):
                 continue
             if monthly.get("started_at") and datetime.fromisoformat(
                 str(observation["observed_at"])

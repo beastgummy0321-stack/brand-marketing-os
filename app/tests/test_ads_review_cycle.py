@@ -3,7 +3,7 @@
 import json
 import unittest
 from copy import deepcopy
-from datetime import timedelta
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from app.ads import (
@@ -637,3 +637,46 @@ class ReviewCycleTest(unittest.TestCase):
         changed = client.post(base + "/change-sets", json=payload)
         self.assertEqual(changed.status_code, 409)
         self.assertIn("目標已改變", changed.text)
+
+
+def _daily_row(day, attribution_key, spend, *, result_kind=None, result_count=None,
+                result_action=None, result_attribution=None, metric_scope="campaign",
+                currency="TWD", source="graph"):
+    """The real `ads_external_daily` row shape (F16-I06), built without any DB round trip --
+    `aggregate()` is a pure function over rows, exactly like this."""
+    metrics = {"spend": spend, "impressions": None, "clicks": None, "purchases": None,
+               "revenue": None}
+    return {
+        "day": day, "metric_scope": metric_scope, "attribution_key": attribution_key,
+        "currency": currency, "source": source, **metrics,
+        "availability": {
+            **{k: ("available" if v is not None else "unavailable") for k, v in metrics.items()},
+            "result_count": "available" if result_count is not None else "unknown",
+        },
+        "result_kind": result_kind, "result_count": result_count,
+        "result_action": result_action, "result_attribution": result_attribution,
+    }
+
+
+class AggregateExcludesMonthlyBudgetRowsTest(unittest.TestCase):
+    """F16-I06 cause #1: a monthly-budget source row shares entity/day/metric_scope/currency
+    with an ordinary observation row -- only `attribution_key` tells them apart. Neither the
+    per-`attribution_key` series nor the result view may let it double-count spend or force the
+    result unknown."""
+
+    def test_monthly_row_never_pollutes_series_or_result_view(self):
+        day = date(2026, 9, 19)
+        observation_row = _daily_row(
+            day, "7d_click+1d_view:omni_purchase", 1747,
+            result_kind="purchase", result_count=5, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        monthly_row = _daily_row(day, external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, 1900)
+        aggregated = review_evidence.aggregate([observation_row, monthly_row], day, day)
+        # Only the observation row's own attribution_key series survives.
+        self.assertEqual(len(aggregated["series"]), 1)
+        self.assertEqual(aggregated["series"][0]["metrics"]["spend"], 1747)
+        self.assertEqual(len(aggregated["result_views"]), 1)
+        view = aggregated["result_views"][0]
+        self.assertIsNone(view["reason"])
+        self.assertEqual(view["cost_per_result"], 1747 / 5)

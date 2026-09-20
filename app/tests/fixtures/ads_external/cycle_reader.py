@@ -3,6 +3,7 @@
 import os
 from datetime import date, timedelta
 
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.tests.fixtures.ads_external import runtime as assembly
 
 COPY_V2 = "先了解適合自己的補給方式，再選擇日常所需。"
@@ -147,7 +148,7 @@ class CycleReader(assembly.ReadOnlyReader):
                 "native_id": "root",
                 "day": (first + timedelta(days=i)).isoformat(),
                 "metric_scope": self.kinds()[0],
-                "attribution_key": "account_monthly_spend",
+                "attribution_key": MONTHLY_BUDGET_ATTRIBUTION_KEY,
                 "currency": "TWD",
                 "spend": 100,
                 "source": "fixture",

@@ -60,12 +60,13 @@ def _trailing_30(conn, org_id: str, brand_id: str, campaign_id: str) -> tuple[di
         # either way there is no single unambiguous trailing-30 number to report.
         return None, ["trailing_30"]
     view = views[0]
-    if view["reason"] == "mixed_result_definition":
-        return None, ["mixed_result_definition"]
-    if view["reason"] == "result_unknown_days":
-        # Includes rows written before the F16-I03 result migrations (result_kind/result_count
-        # NULL on every day) -- that is missing data pending a re-sync, never a zero.
-        return None, ["needs_resync"]
+    if view["reason"] is not None:
+        # F16-I06: `_result_view` already discriminates the three unknown shapes into three
+        # distinct, truthful reasons (`mixed_result_definition`, `needs_resync` for rows that
+        # literally predate the F16-I03 result columns, `result_unknown_days` for a row a result
+        # mapping ran against but that genuinely has nothing to report) -- this file names no
+        # reason itself, never a second, divergent guess.
+        return None, [view["reason"]]
     if view["cost_per_result"] is None:
         # Known days, but zero results happened -- spend/0 is never computed (F16-I03's own
         # rule), so this is "no usable rate yet", not a fabricated zero either.
