@@ -35,14 +35,14 @@ export interface CampaignTriage { window_days: number; items: TriageItem[] }
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
- * enqueue used — `null` when no current item still matches (stale: the ad moved off this class,
- * or the window hasn't advanced since a `GET` that never writes). */
+ * enqueue used. A row whose ad has moved off `stop_loss`/`worse` since it was raised is filtered
+ * out of the payload rather than listed without a match, so `triage` is always present here. */
 export interface QueueItem {
   id: string; org_id: string; brand_id: string | null; campaign_cycle_id: string | null;
   dedupe_key: string; category: string; kind: string | null; severity: string;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
-  triage: TriageItem | null;
+  triage: TriageItem;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

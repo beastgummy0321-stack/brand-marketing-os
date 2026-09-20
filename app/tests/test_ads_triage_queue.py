@@ -285,21 +285,19 @@ class QueuePlumbingTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(old_row["status"], "resolved")  # untouched by the new window's refresh
 
-    def test_get_queue_marks_a_stale_open_row_with_null_triage_when_classification_moves_on(self):
+    def test_get_queue_filters_a_stale_open_row_when_classification_moves_on(self):
         w1 = date(2026, 1, 7)
         stop_loss_item = self._item("stop_loss", window_end=w1)
         with patch.object(triage, "_classify_brand", return_value=[stop_loss_item]):
             triage.refresh_queue(self.conn, self.org, self.brand)
 
         # Same ad, same window_end, but a later refresh's classification has moved off stop_loss
-        # (e.g. now flat) -- GET never writes, so the old open row still shows (F19-I01: no
-        # longer hidden), but its `triage` is null: no CURRENT item produced this dedupe key.
+        # (e.g. now flat) -- the old open row is stale and must not be reported to GET.
         flat_item = self._item("flat", window_end=w1)
         with patch.object(triage, "_classify_brand", return_value=[flat_item]):
             queue = triage.get_queue(self.conn, self.org, self.brand)
 
-        self.assertEqual(len(queue["items"]), 1)
-        self.assertIsNone(queue["items"][0]["triage"])
+        self.assertEqual(queue["items"], [])
         row = self.conn.execute(
             "SELECT status FROM interrupt WHERE brand_id=%s AND category='ads_triage_stop_loss'",
             (self.brand,),
