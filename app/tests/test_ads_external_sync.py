@@ -1,14 +1,16 @@
 """Real isolated PostgreSQL + fake source capability, no platform writes or LLM."""
 
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dt_time
 from unittest.mock import patch
 
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
+from app.ads import tracked_zero
 from app.ads.adapters.external import SourcePage
 from app.brand_intelligence import repository as brands
-from app.core import db
+from app.core import db, settings
 
 
 def setup_brand(conn):
@@ -18,6 +20,26 @@ def setup_brand(conn):
     ]
     conn.commit()
     return org, brand
+
+
+def _demo_and_target_items(demo_day, target_day, *, target_spend=50):
+    """F18-I01: one day that demonstrates a result definition, one day with known spend and no
+    result reported yet -- the shared shape every derivation-related sync test builds on."""
+    return [
+        {
+            "native_kind": "line", "native_id": "child", "day": demo_day,
+            "metric_scope": "line", "attribution_key": "demo", "currency": "TWD",
+            "source": "other", "spend": 100, "purchases": None,
+            "result_kind": "lead", "result_count": 5,
+            "result_action": "lead_form", "result_attribution": "7d_click",
+        },
+        {
+            "native_kind": "line", "native_id": "child", "day": target_day,
+            "metric_scope": "line", "attribution_key": "target", "currency": "TWD",
+            "source": "other", "spend": target_spend, "purchases": None,
+            "result_kind": "lead", "result_count": None,
+        },
+    ]
 
 
 class Reader:
@@ -148,6 +170,16 @@ class ExternalSyncTest(unittest.TestCase):
                 return job
         self.fail("cursor did not terminate")
 
+    def _accounts_with_timezone(self, timezone_name):
+        """F18-I01: patches `self.reader.accounts()` to report `timezone_name` on every account,
+        so a test can control what `run_sync` resolves the derivation cutoff against."""
+        original = self.reader.accounts
+
+        def patched(conn, org, brand):
+            return [{**a, "timezone_name": timezone_name} for a in original(conn, org, brand)]
+
+        return patch.object(self.reader, "accounts", side_effect=patched)
+
     def test_second_page_failure_resumes_and_preserves_cache(self):
         self.reader.fail_second = True
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
@@ -226,6 +258,123 @@ class ExternalSyncTest(unittest.TestCase):
         )
         self.assertEqual(view["observations"][0]["result_kind"], "lead")
         self.assertEqual(view["observations"][0]["result_count"], 3)
+
+    def test_run_sync_derives_tracked_zero_once_observations_complete_cleanly(self):
+        # F18-I01: the one call site is `run_sync`, in the same transaction the "observations"
+        # section records its coverage -- never a separate background step.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        demo_day, target_day = today - timedelta(days=3), today - timedelta(days=1)
+        with patch.object(
+            self.reader, "read_observations",
+            return_value=SourcePage(_demo_and_target_items(demo_day, target_day)),
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account",
+                    start=demo_day, end=target_day,
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn, self.org, self.brand, campaign["id"], start=target_day, end=target_day
+        )
+        row = next(r for r in view["observations"] if r["attribution_key"] == "target")
+        self.assertEqual(row["result_count"], 0)
+        self.assertEqual(row["result_action"], "lead_form")
+        self.assertEqual(row["result_attribution"], "7d_click")
+        self.assertEqual(row["availability"]["result_count"], "derived_zero")
+
+    def test_tracked_zero_failure_reports_derive_failed_not_a_source_read_failure(self):
+        # F18-I01 review fix: the platform read itself already succeeded here -- a bug in our own
+        # derivation rule must surface as its own error_code, never conflated with a real source
+        # read problem (`invalid_source_page`/`source_error`/etc).
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        with patch.object(tracked_zero, "apply", side_effect=RuntimeError("boom")):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "partial")
+        observations_key = next(k for k in job["tasks"] if ":observations:" in k)
+        self.assertEqual(job["tasks"][observations_key]["error_code"], "derive_failed")
+
+    def test_missing_account_timezone_skips_derivation_and_keeps_the_synced_page(self):
+        # F18-I01 review fix: an unresolved account timezone means the cutoff can't be computed --
+        # fail closed (skip derivation, rows stay unknown), never `derive_failed`, never rolling
+        # back the page the platform read already succeeded on. (A missing timezone also fails
+        # the unrelated "monthly" account-spend task, §6.12 -- that's pre-existing and not
+        # this fix's concern, so this asserts on the "observations" task specifically.)
+        with self._accounts_with_timezone(None):
+            self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+            campaign = repo.import_cached(
+                self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+            )
+            self.conn.commit()
+            today = settings.today_for_org(self.conn, org_id=self.org)
+            demo_day, target_day = today - timedelta(days=3), today - timedelta(days=1)
+            with patch.object(
+                self.reader, "read_observations",
+                return_value=SourcePage(_demo_and_target_items(demo_day, target_day)),
+            ):
+                job = self.run_pages(
+                    sync.request_sync(
+                        self.conn, self.org, self.brand, "other", "account",
+                        start=demo_day, end=target_day,
+                    )
+                )
+            observations_key = next(k for k in job["tasks"] if ":observations:" in k)
+            observations_task = job["tasks"][observations_key]
+            self.assertEqual(observations_task["status"], "succeeded", job["tasks"])
+            self.assertIsNone(observations_task["error_code"])
+            view = repo.external_view(
+                self.conn, self.org, self.brand, campaign["id"],
+                start=target_day, end=target_day,
+            )
+        row = next(r for r in view["observations"] if r["attribution_key"] == "target")
+        self.assertIsNone(row["result_count"])
+        self.assertEqual(row["availability"]["result_count"], "unknown")
+
+    def test_zero_derivation_cutoff_uses_account_timezone_not_org_timezone(self):
+        # F18-I01 review fix: pick a moment where the org (Asia/Taipei, UTC+8) has already rolled
+        # over to a new day but a UTC-8 account has not -- the org's "yesterday" is still today in
+        # the account's own timezone, so that day must stay undecided (not derived) under the
+        # account's clock, even though the org-based cutoff would have allowed it.
+        real_today = settings.today_for_org(self.conn, org_id=self.org)
+        moment = datetime.combine(real_today, dt_time(1, 0), tzinfo=UTC)
+        org_yesterday = real_today - timedelta(days=1)  # still "today" for the UTC-8 account
+        demo_day = org_yesterday - timedelta(days=3)
+
+        with self._accounts_with_timezone("Etc/GMT+8"):
+            self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+            campaign = repo.import_cached(
+                self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+            )
+            self.conn.commit()
+            with patch.object(sync, "now_utc", return_value=moment), patch.object(
+                self.reader, "read_observations",
+                return_value=SourcePage(_demo_and_target_items(demo_day, org_yesterday)),
+            ):
+                job = self.run_pages(
+                    sync.request_sync(
+                        self.conn, self.org, self.brand, "other", "account",
+                        start=demo_day, end=org_yesterday,
+                    )
+                )
+            self.assertEqual(job["status"], "succeeded", job["tasks"])
+            view = repo.external_view(
+                self.conn, self.org, self.brand, campaign["id"],
+                start=org_yesterday, end=org_yesterday,
+            )
+        row = next(r for r in view["observations"] if r["attribution_key"] == "target")
+        self.assertIsNone(row["result_count"])
 
     def test_resync_heals_row_superseded_by_a_changed_attribution_key(self):
         # F16-I06 cause #2: a platform's `attribution_key` can embed something that changes

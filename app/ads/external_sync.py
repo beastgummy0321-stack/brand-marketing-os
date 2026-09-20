@@ -1,11 +1,11 @@
 """Resumable account reads. One invocation commits one bounded page, never a platform write."""
 
 import calendar
-from datetime import timedelta
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import background
-from app.ads import channels
+from app.ads import channels, tracked_zero
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
@@ -451,6 +451,46 @@ def run_sync(org_id, brand_id, job_id):
                         state["last_success_at"] = now_utc()
                         if task["section"] == "observations":
                             state["coverage"] = {"start": task["start"], "end": task["end"]}
+                            # F18-I01: derive conditional tracked zeros in this same transaction,
+                            # only once this section's read for the covered window is complete
+                            # and clean (no cursor, no errors) -- same place coverage is recorded.
+                            # The cutoff for "day is complete" is the AD ACCOUNT's own timezone
+                            # (review-arbitrated 2026-09-21 deviation from the issue's
+                            # `today_for_org` wording) -- same guard review_evidence.py's
+                            # `snapshot()` uses for "today is not a complete day" (§6.15), just
+                            # keyed by the account currently synced instead of the org.
+                            try:
+                                zone = ZoneInfo(current_account.get("timezone_name") or "")
+                            except (ValueError, ZoneInfoNotFoundError):
+                                # Fail-closed, not fail-loud: an unknown/invalid account timezone
+                                # means the cutoff can't be resolved, so derivation is skipped
+                                # entirely (rows stay unknown) -- the platform read already
+                                # succeeded and that page must still be kept, not rolled back.
+                                zone = None
+                            if zone is not None:
+                                last_complete_day = (
+                                    now_utc().astimezone(zone) - timedelta(days=1)
+                                ).date()
+                                try:
+                                    tracked_zero.apply(
+                                        conn,
+                                        org_id,
+                                        brand_id,
+                                        task["campaign_id"],
+                                        date.fromisoformat(task["start"]),
+                                        date.fromisoformat(task["end"]),
+                                        last_complete_day,
+                                    )
+                                except SourceReadError:
+                                    raise
+                                except Exception as exc:
+                                    # Never a source read failure -- the platform read already
+                                    # succeeded; this is our own derivation rule breaking.
+                                    raise SourceReadError(
+                                        "推定 0 規則執行失敗，"
+                                        "已讀到的成效本身不受影響，可重新同步。",
+                                        "derive_failed",
+                                    ) from exc
                     repo.record_sync(
                         conn,
                         org_id,
