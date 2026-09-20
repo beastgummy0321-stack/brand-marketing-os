@@ -56,10 +56,10 @@ advances to the next. 停損/加預算 use a 3-step light flow (confirm → plat
 
 ## 4. Prerequisites (existing debts that block the loop)
 
-- Meta purchases are zeroed at close-out (`outcome.py:142,170`; ruled 2026-09-14, unimplemented) → every real verdict is 看不出.
+- (Resolved by F16, re-read 2026-09-21: Meta purchases now reach close-out; see §5a.)
 - Imported campaigns cannot produce learning (`external_models.py:9-29`, `ads.md:291-293`).
 - No lineage counter: `ads_review_round.previous_id` and `source_review` exist but nothing counts interventions.
-- Three stale texts still promise an automatic close (`routes.py:819`, `judgment.py:109-112`, `PerformanceTab.tsx:295`).
+- (Resolved by F16: the three stale "automatic close" texts now say manual close.)
 
 ## 4a. Wiring probe of prototype v4 + multi-objective check (code-read 2026-09-20)
 
@@ -146,7 +146,25 @@ Phase 2 must know / decide:
   agents die with the session. Until fixed: merge/integrate run from the main session with env loaded and a raised timeout.
 - Time-bomb test fixed in passing: `test_orders_api.py` used a literal date against a trailing 30-day window.
 
+## 5b. Tooling check and Phase 2 batch 1 (2026-09-21)
+
+Harness 3.0.4 verified live with F17 (one issue, closed and merged to master): the worker ran in
+`.harness/worktrees/F17-I01`; finish, merge smoke and the full `integrate` were green with the manifest's
+`verify.env_files` / `env_exclude` / `timeouts` and no external env wrapper. Two plugin defects remain, to fix in the plugin
+source (`D:/0UserProfile/Desktop/Default/Planner`):
+- a worker Bash call that fails never fires PostToolUse, so its baseline is left behind, blocks `merge`, and
+  `baselines --reconcile` refuses it while the lease lives (30 min TTL). Workaround once the worker is confirmed ended:
+  `HARNESS_BASELINE_TTL_MS=1 harness baselines --reconcile`.
+- the write gate hard-denies Edit/Write on `ARCHITECTURE.md` regardless of `touch`, while a Bash write to the same file is
+  judged by `touch` only — two rules for one file.
+
+Phase 2 batch 1 is carved as F18 (`.work/features/F18.md`; contract and rulings live there): conditional tracked zero →
+program triage → brand queue summary. User-confirmed defaults 2026-09-21: enough events = 10 per window; tracking
+observation window = 28 days; flat band = ±20 %. The derived zero is marked in `ads_external_daily.availability`, so the
+`ads_outcome_daily` attribution migration noted in §5a is NOT needed for this batch. Later batches: pause/scale proposals
+with suppression, then the v7 front end.
+
 ## 6. Still open
 
-Exact numeric defaults (event count for "enough", fatigue definition, "almost no delivery"), wording of learning sentences,
+Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,
 how scale proposals behave under CBO vs ad-set budgets, what the monthly review shows for brands with several platforms.
