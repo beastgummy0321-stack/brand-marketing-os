@@ -341,10 +341,39 @@ def _dedupe_key(cls, entity_id, window_end):
     return f"ads-triage:{cls}:{entity_id}:{window_end.isoformat()}"
 
 
+def _live_keys(items) -> set:
+    return {
+        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"])
+        for item in items if item["class"] in QUEUE_CATEGORY
+    }
+
+
+def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
+    """Lead review arbitration (2026-09-21, F18-I03 REQUEST_CHANGES): the same `interrupt` table
+    feeds the brand home and `/api/inbox`, and auto-archive only covers `informational` severity
+    -- a stale open `stop_loss`/`worse` row (superseded by a newer window, or the ad moved off
+    both classes) would otherwise sit open forever and keep inflating `brand_health`. Close every
+    OPEN row of this brand in the two triage categories whose `dedupe_key` is no longer live,
+    through the existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads`
+    (architecture boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at
+    most one open row per (class, entity) at any time; a user-resolved key is already not
+    'open', so this loop never touches it and never re-raises it."""
+    for category in QUEUE_CATEGORY.values():
+        stale = [
+            row for row in interrupts.list_open(conn, brand_id=brand_id, category=category,
+                                                 archive_stale=False)
+            if row["dedupe_key"] not in live_keys
+        ]
+        for row in stale:
+            interrupts.resolve(conn, row["id"], actor="system", org_id=org_id)
+
+
 def refresh_queue(conn, org_id, brand_id) -> dict:
     """`POST .../queue/refresh` (Done #3): classify every non-closed campaign, raise one
     interrupt per `stop_loss`/`worse` ad. One transaction -- every enqueue below, then a single
-    commit; the returned payload is read back afterward, same shape as `get_queue()`."""
+    commit. Afterward, supersede every open row this brand's two triage categories no longer
+    match (`_supersede_stale_open_rows`) -- each call its own `resolve()`, not part of the enqueue
+    transaction. The returned payload is read back afterward, same shape as `get_queue()`."""
     items = _classify_brand(conn, org_id, brand_id)
     for item in items:
         cls = item["class"]
@@ -357,27 +386,22 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
             action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}?tab=performance",
         )
     conn.commit()
+    _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))
     return _queue_payload(conn, brand_id, items)
 
 
 def get_queue(conn, org_id, brand_id) -> dict:
-    """`GET .../queue` (Done #4): read-only -- current classification decides which open
-    interrupt rows are still live. An older window's open row whose ad has since moved off
-    `stop_loss`/`worse` (e.g. now flat, or `needs_resync` on a later refresh) is a stale row from
-    an earlier `refresh_queue()` call; it is filtered out of this payload rather than archived
-    (design caution: no archival mechanism invented in `interrupts.py`). That row stays 'open' in
-    the database and would reappear if a later window put the same ad back into `stop_loss`/
-    `worse` with a matching dedupe key -- a documented known limit for this batch, see
-    docs/architecture/ads.md."""
+    """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
+    only place that supersedes stale rows (it may not have run yet since the ad's classification
+    last changed). Current classification decides which open interrupt rows are still live: an
+    older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
+    filtered out of this payload the same way, without writing anything."""
     items = _classify_brand(conn, org_id, brand_id)
     return _queue_payload(conn, brand_id, items)
 
 
 def _queue_payload(conn, brand_id, items) -> dict:
-    live_keys = {
-        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"])
-        for item in items if item["class"] in QUEUE_CATEGORY
-    }
+    live_keys = _live_keys(items)
     queue_categories = set(QUEUE_CATEGORY.values())
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger

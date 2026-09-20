@@ -975,22 +975,36 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   /api/ads/brands/{brand_id}/queue/refresh`）：對這個品牌**每個非結案**（`status != 'closed'`）
   Campaign 各呼叫一次 `classify()`（沒有已匯入廣告實體的 Campaign 自然出 0 個 item，不必另外過
   濾），`stop_loss`／`worse` 的 item 各送一筆 `interrupts.enqueue()`；一個交易（逐筆 enqueue 後一次
-  `commit()`）。
+  `commit()`）。commit 之後再跑一輪 supersede（見下）。
 - `app/ads/triage.py::get_queue(conn, org_id, brand_id)`（`GET /api/ads/brands/{brand_id}/queue`）：
-  唯讀，不呼叫 `refresh_queue()`、不寫任何列。
+  唯讀，不呼叫 `refresh_queue()`、不寫任何列，也不做 supersede。
 - **去重鍵含窗口結束日**：`dedupe_key = f"ads-triage:{class}:{entity_id}:{window_end}"`。
   `interrupts.enqueue()` 既有的去重查詢不分 `status`（見該檔 `enqueue()` 內的 `SELECT`），所以同一把
   key 只要存在（不管 open 還是 resolved）就不會插入第二筆——一筆已 resolve 的決定會維持
   resolved，直到窗口真的往前移動、`window_end` 換了新值、算出一把新 key 才會生出新的 open
   列。這個語意完全來自 `interrupts.py` 既有行為，本票沒有再改它一行。
-- **GET 過濾陳舊 open 列，不封存**：`get_queue()` 重新對這個品牌全部非結案 Campaign 跑一次
-  `classify()`，只把「(class, entity_id, window_end) 仍等於這次分流結果」的 open 列放進回應——
-  某支廣告在較晚一次 `refresh_queue()` 已經轉走（變 `flat`、或掉回 `needs_resync`），它舊窗口那筆
-  interrupt 仍然是 DB 裡的 `open` 列，只是不再出現在 GET 回應裡。**Known limit（本批刻意不做）**：
-  這種陳舊 open 列不會被自動 resolve 或 archive——`interrupts.py` 是舊檔，本票不建封存機制；如果同
-  一支廣告的 (class, entity_id, window_end) 之後又重新出現（理論上少見，因為 window_end 通常單調前
-  進），這筆舊列會再度符合過濾條件、重新出現在 GET 回應裡。下一批若要做「一離開就 resolve」，是在
-  `app/ads`（呼叫 `interrupts.enqueue()`／`resolve()` 的那一層）加邏輯，不動 `interrupts.py`。
+- **`refresh_queue()` 之後 supersede 陳舊 open 列（lead review 2026-09-21 裁決）**：`interrupt`
+  這張表同時餵品牌首頁（`app/dashboard/repository.py::_brand_card` → `list_open`，嚴重度決定
+  `brand_health`）跟 `/api/inbox`；逾期自動封存只管 `informational`。去重鍵含 `window_end`、截止日
+  每天往前走，代表一支持續 `stop_loss` 的廣告每天多開一筆 `money_loss` 的 open 列、一支已經恢復的廣
+  告舊 open 列永遠留著——只在 `GET /queue` 濾掉陳舊列並不會把它們從首頁移除。`refresh_queue()`
+  commit 完新／續留的列之後，對這個品牌 `ads_triage_stop_loss`／`ads_triage_worse` 兩個類別各跑一次
+  `interrupts.list_open(brand_id=..., category=..., archive_stale=False)`，把 `dedupe_key` 不在這次
+  分流結果內的 open 列逐筆呼叫既有的公開 `interrupts.resolve(conn, row_id, actor="system",
+  org_id=org_id)`（`resolve()` 自己 commit、自己寫 audit；`"system"` actor 沿用
+  `app/llm/methodology.py` 的既有慣例）——全程走公開介面，`app/ads` 不直接 `UPDATE interrupt`
+  （`test_architecture_boundaries.py` 的分層檢查）、`interrupts.py` 本身不再多改一行。結果：同一
+  (class, entity) 任何時刻最多一筆 open 列；使用者手動 resolve 的列不是 `open`，這輪 supersede 找不
+  到它，也就不會重新打開；窗口一換算出新 key，照常補一筆新 open 列。
+- **GET 沿用同一套「只回當前分流」過濾**：`get_queue()` 重新對這個品牌全部非結案 Campaign 跑一次
+  `classify()`，只把「(class, entity_id, window_end) 仍等於這次分流結果」的 open 列放進回應——這條
+  過濾在 `refresh_queue()` 剛 supersede 完之後是多餘保險，但 GET 可能發生在下一次 refresh 之前，此
+  時陳舊列還沒被 supersede，過濾仍然必要，且 GET 本身不寫任何東西。
+- **Known limit（本批刻意不做，留給下一批的暫停／擴量提案批次）**：supersede 只認得
+  `dedupe_key`，不知道「這筆是使用者主動 resolve 還是被 supersede」——只要窗口往前走（每天）、廣告
+  仍在 `stop_loss`／`worse`，就會算出新 key、補一筆新 open 列，也就是使用者昨天才處理過的同一支廣
+  告，今天分流結果不變的話仍會再冒出來待決定。「使用者做過決定就不要再打擾」屬於暫停／擴量提案批
+  次的抑制邏輯，本票不做。
 - `counts`：六個 class 在這個品牌全部非結案 Campaign 上的分流結果各自計數（不是只算進佇列的兩類）；
   `total_ads`：全部 item 數；`kinds_available=["stop_loss","worse"]`、
   `kinds_pending=["scale_budget","refresh_creative"]` 兩個路由固定回傳，永遠不是空清單冒充「沒事要
@@ -1000,7 +1014,9 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   沿用既有慣例（同 `app/ads/runtime.py::_health` 的 `ads_runtime_attention`）：
   `/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=performance`。
 - 驗證：`app/tests/test_ads_triage_queue.py`（真資料端到端一則、queue 機制用固定 item 隔離測試：同窗
-  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列但不封存、六類計數、
-  `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選）、
+  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、六類計數、
+  `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選、窗口連續前進兩次同一支廣
+  告仍是 `stop_loss` 時只留一筆 open、舊列以 `"system"` actor resolve、廣告恢復 `flat` 後開回 0
+  筆 open、supersede 不動別的類別或別的品牌、使用者手動 resolve 的列同窗不會被重新打開）、
   `app/tests/test_core_interrupts.py`、`app/tests/test_dashboard_overview.py`（確認新登記類別不影響
   既有跨品牌總覽排序／健康燈號斷言）。

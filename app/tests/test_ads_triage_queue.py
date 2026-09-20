@@ -296,9 +296,93 @@ class QueuePlumbingTest(unittest.TestCase):
             "SELECT status FROM interrupt WHERE brand_id=%s AND category='ads_triage_stop_loss'",
             (self.brand,),
         ).fetchone()
-        # Left open in the DB, not archived (design caution: no archival mechanism invented in
-        # interrupts.py for this batch -- documented known limit, docs/architecture/ads.md).
+        # GET never writes -- the row is only actually superseded by the NEXT refresh_queue()
+        # call (see test_refresh_closes_open_row_when_ad_recovers_to_flat below).
         self.assertEqual(row["status"], "open")
+
+    def _stop_loss_at(self, window_end):
+        return patch.object(triage, "_classify_brand",
+                             return_value=[self._item("stop_loss", window_end=window_end)])
+
+    def test_refresh_supersedes_older_open_rows_when_window_advances_while_still_stop_loss(self):
+        """Lead review arbitration: the cutoff advances daily, so an ad that stays in stop_loss
+        gets a new dedupe key (new window_end) on every refresh -- without supersede this would
+        pile up one open money_loss row per day for the same ad. After three refreshes across
+        three window ends, exactly one open row survives; the older two are resolved by the
+        "system" actor, not archived and not deleted."""
+        w1, w2, w3 = date(2026, 1, 7), date(2026, 1, 8), date(2026, 1, 9)
+        with self._stop_loss_at(w1):
+            first = triage.refresh_queue(self.conn, self.org, self.brand)
+        with self._stop_loss_at(w2):
+            second = triage.refresh_queue(self.conn, self.org, self.brand)
+        with self._stop_loss_at(w3):
+            third = triage.refresh_queue(self.conn, self.org, self.brand)
+
+        self.assertEqual(len(third["items"]), 1)
+        rows = self.conn.execute(
+            "SELECT id, status FROM interrupt WHERE brand_id=%s"
+            " AND category='ads_triage_stop_loss' ORDER BY created_at",
+            (self.brand,),
+        ).fetchall()
+        self.assertEqual(len(rows), 3)  # nothing deleted -- three distinct windows, three rows
+        statuses = {row["id"]: row["status"] for row in rows}
+        first_id, second_id, third_id = (
+            first["items"][0]["id"], second["items"][0]["id"], third["items"][0]["id"],
+        )
+        self.assertEqual(statuses[first_id], "resolved")
+        self.assertEqual(statuses[second_id], "resolved")
+        self.assertEqual(statuses[third_id], "open")
+
+        audit_rows = self.conn.execute(
+            "SELECT actor FROM audit_log WHERE entity_type='interrupt' AND entity_id IN (%s,%s)",
+            (first_id, second_id),
+        ).fetchall()
+        self.assertEqual({row["actor"] for row in audit_rows}, {"system"})
+
+    def test_refresh_closes_open_row_when_ad_recovers_to_flat(self):
+        w1 = date(2026, 1, 7)
+        with self._stop_loss_at(w1):
+            first = triage.refresh_queue(self.conn, self.org, self.brand)
+        old_id = first["items"][0]["id"]
+
+        flat_item = self._item("flat", window_end=w1)
+        with patch.object(triage, "_classify_brand", return_value=[flat_item]):
+            second = triage.refresh_queue(self.conn, self.org, self.brand)
+
+        self.assertEqual(second["items"], [])
+        row = self.conn.execute(
+            "SELECT status FROM interrupt WHERE id=%s", (old_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "resolved")
+
+    def test_supersede_never_touches_other_categories_or_other_brands(self):
+        other_brand = brands.create_brand(
+            self.conn, org_id=self.org, name="別的品牌測試", actor="test", client_name=None,
+        )["id"]
+        core_interrupts.enqueue(
+            self.conn, org_id=self.org, brand_id=self.brand, category="ads_runtime_attention",
+            dedupe_key="unrelated-1", message="測試訊息，不受影響。",
+        )
+        self.conn.commit()
+
+        w1, w2 = date(2026, 1, 7), date(2026, 1, 8)
+        with self._stop_loss_at(w1):
+            triage.refresh_queue(self.conn, self.org, self.brand)
+            triage.refresh_queue(self.conn, self.org, other_brand)
+        # Only THIS brand advances to a new window -- other_brand's row must stay untouched.
+        with self._stop_loss_at(w2):
+            triage.refresh_queue(self.conn, self.org, self.brand)
+
+        other_brand_row = self.conn.execute(
+            "SELECT status FROM interrupt WHERE brand_id=%s AND category='ads_triage_stop_loss'",
+            (other_brand,),
+        ).fetchone()
+        self.assertEqual(other_brand_row["status"], "open")
+
+        unrelated_row = self.conn.execute(
+            "SELECT status FROM interrupt WHERE dedupe_key='unrelated-1'"
+        ).fetchone()
+        self.assertEqual(unrelated_row["status"], "open")
 
     def test_get_queue_does_not_write(self):
         with patch.object(triage, "_classify_brand", return_value=[]):
