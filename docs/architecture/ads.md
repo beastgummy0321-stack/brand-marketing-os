@@ -866,11 +866,16 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   （約行 241）「觀察結束日於來源帳戶時區尚未完整結束」同一種算法，差別只在這裡問的是帳戶今天，
   不是使用者選的觀察結束日。
 - 呼叫點只有一處：`external_sync.py::run_sync`，「observations」任務完成、記錄 `coverage` 的同一
-  段程式碼、同一個交易裡（不是獨立背景工作，也不是每個 reader 各自呼叫）；換算時區與呼叫
-  `tracked_zero.apply()` 包在同一個 try/except 裡，任何例外（含時區名稱本身無法解析）一律轉成
-  `SourceReadError(..., "derive_failed")` 往外拋，交易仍然整批回滾（跟這個函式既有的例外處理規則
-  一致），但 `error_code` 是專屬的 `derive_failed`，不會跟平台真的讀取失敗（`invalid_source_page`
-  等既有代碼）混在一起誤判。
+  段程式碼、同一個交易裡（不是獨立背景工作，也不是每個 reader 各自呼叫）；兩層各自負責一種失敗：
+  - **帳戶時區本身未知或無法解析**（`ZoneInfo(...)` 拋 `ValueError`／`ZoneInfoNotFoundError`，例如
+    帳戶尚未回填時區）——fail-closed：整批跳過推定，不呼叫 `tracked_zero.apply()`，這些列停在
+    `unknown`；已經讀回、已經寫進 `ads_external_daily` 的那一頁成效**照常保留、照常算成功**，不是
+    錯誤，也絕不是 `derive_failed`（review 修正 2026-09-21：時區未知不代表平台讀取失敗，不該把
+    已經讀到的資料回滾）。
+  - **時區可以解析，但 `tracked_zero.apply()` 本身丟例外**——這才包在 try/except 裡轉成
+    `SourceReadError(..., "derive_failed")` 往外拋，交易整批回滾（跟這個函式既有的例外處理規則
+    一致），`error_code` 是專屬的 `derive_failed`，不會跟平台真的讀取失敗（`invalid_source_page`
+    等既有代碼）混在一起誤判。
 - `review_evidence._result_view()`：`availability.result_count` 是 `"available"` 或
   `"derived_zero"` 都算「已知」，同一條「整組只要有一天未知就是 None」誠實規則不變；新增
   `derived_zero_days` 回報這組已知天數裡有幾天是推定出來的，讓前端／人工判讀能把「真的回報 0」
@@ -883,12 +888,14 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
 - 冪等：對同一涵蓋窗口重複同步，第二次執行時已推定的列 `result_count` 已經是 `0`（非
   `NULL`），不再符合寫入條件，不會重複改寫；若中間真的讀到平台回報的真實值，`upsert_observation`
   在 `tracked_zero.apply()` 之前就已經覆蓋掉那列，推定規則自然不會再套用。
-- 驗證：`app/tests/test_ads_tracked_zero.py`（三條件各自單獨擋下推定、示範定義零種／多種、只涵
-  蓋窗口內的列、不碰月讀列、冪等重同步）、`app/tests/test_ads_review_cycle.py`（`derived_zero`
-  在 result view 算已知、`derived_zero_days` 計數、跟平台回報的 `"available"` 0 可分辨）、
-  `app/tests/test_ads_external_sync.py`（`run_sync` 在 observations 任務乾淨完成時真的呼叫
-  `tracked_zero.apply()`，涵蓋範圍就是同步窗口）、`app/tests/test_ads_targets.py`
-  （`_trailing_30` 在窗口只有推定 0 時仍能解出，不再卡 `missing`）。
+- 驗證：`app/tests/test_ads_tracked_zero.py`（三條件各自單獨擋下推定、28 天示範窗口的邊界
+  27／28 天與更久以前都各自驗證、示範定義零種／多種、只涵蓋窗口內的列、不碰月讀列、冪等重同步）、
+  `app/tests/test_ads_review_cycle.py`（`derived_zero` 在 result view 算已知、`derived_zero_days`
+  計數、跟平台回報的 `"available"` 0 可分辨）、`app/tests/test_ads_external_sync.py`（`run_sync`
+  在 observations 任務乾淨完成時真的呼叫 `tracked_zero.apply()`，涵蓋範圍就是同步窗口；帳戶時區
+  跟組織時區不同時用帳戶時區當截止；`tracked_zero.apply()` 內部例外回報 `derive_failed`；帳戶時區
+  未知或無法解析時整批跳過推定但成效頁照常成功、不回報任何錯誤代碼）、
+  `app/tests/test_ads_targets.py`（`_trailing_30` 在窗口只有推定 0 時仍能解出，不再卡 `missing`）。
 - **Known limit（型別還沒跟上）**：`app/ads/external_models.py::Availability` 這個 `Literal`
   目前仍只有 `"available"`／`"unknown"`／`"unavailable"` 三種，沒有列進 `"derived_zero"`——
   `tracked_zero.apply()` 用原生 SQL `UPDATE` 直接寫這個值，繞過 `ExternalObservation` 的驗證，

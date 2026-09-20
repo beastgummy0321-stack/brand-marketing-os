@@ -461,27 +461,36 @@ def run_sync(org_id, brand_id, job_id):
                             # keyed by the account currently synced instead of the org.
                             try:
                                 zone = ZoneInfo(current_account.get("timezone_name") or "")
+                            except (ValueError, ZoneInfoNotFoundError):
+                                # Fail-closed, not fail-loud: an unknown/invalid account timezone
+                                # means the cutoff can't be resolved, so derivation is skipped
+                                # entirely (rows stay unknown) -- the platform read already
+                                # succeeded and that page must still be kept, not rolled back.
+                                zone = None
+                            if zone is not None:
                                 last_complete_day = (
                                     now_utc().astimezone(zone) - timedelta(days=1)
                                 ).date()
-                                tracked_zero.apply(
-                                    conn,
-                                    org_id,
-                                    brand_id,
-                                    task["campaign_id"],
-                                    date.fromisoformat(task["start"]),
-                                    date.fromisoformat(task["end"]),
-                                    last_complete_day,
-                                )
-                            except SourceReadError:
-                                raise
-                            except Exception as exc:
-                                # Never a source read failure -- the platform read already
-                                # succeeded; this is our own derivation rule breaking.
-                                raise SourceReadError(
-                                    "推定 0 規則執行失敗，已讀到的成效本身不受影響，可重新同步。",
-                                    "derive_failed",
-                                ) from exc
+                                try:
+                                    tracked_zero.apply(
+                                        conn,
+                                        org_id,
+                                        brand_id,
+                                        task["campaign_id"],
+                                        date.fromisoformat(task["start"]),
+                                        date.fromisoformat(task["end"]),
+                                        last_complete_day,
+                                    )
+                                except SourceReadError:
+                                    raise
+                                except Exception as exc:
+                                    # Never a source read failure -- the platform read already
+                                    # succeeded; this is our own derivation rule breaking.
+                                    raise SourceReadError(
+                                        "推定 0 規則執行失敗，"
+                                        "已讀到的成效本身不受影響，可重新同步。",
+                                        "derive_failed",
+                                    ) from exc
                     repo.record_sync(
                         conn,
                         org_id,
