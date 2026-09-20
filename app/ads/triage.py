@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import external_sync, repository, review_evidence, targets
 from app.ads.adapters.external import SourceReadError
+from app.core import interrupts
 from app.core.db import now_utc
 from app.core.settings import today_for_org
 
@@ -290,3 +291,129 @@ def _classify_ad(entity, target, cutoff, coverage, entity_rows):
     cls, reason_code, change_pct = _compare(view["cost_per_result"], prev_view["cost_per_result"])
     return finish(cls, reason_code, start, end, days, extended_from, view, spend,
                   change_pct=change_pct, previous=previous)
+
+
+# ---------------------------------------------------------------------------
+# F18-I03: brand decision queue over program triage, through the existing `interrupts` inbox.
+# ---------------------------------------------------------------------------
+
+# One category per class this batch actually surfaces (feature Decisions: "scale_budget" and
+# "refresh_creative" are reported as pending, never queued -- no interrupts.py entry for them).
+QUEUE_CATEGORY = {"stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse"}
+ALL_CLASSES = ("stop_loss", "worse", "better", "flat", "insufficient", "no_target")
+KINDS_AVAILABLE = ["stop_loss", "worse"]
+KINDS_PENDING = ["scale_budget", "refresh_creative"]
+_NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10 fixed chars).
+
+
+def _non_closed_campaign_ids(conn, org_id, brand_id):
+    rows = conn.execute(
+        "SELECT id FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND status != 'closed'",
+        (org_id, brand_id),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def _classify_brand(conn, org_id, brand_id):
+    """Every imported ad of every non-closed campaign of this brand, own program triage
+    (`classify()`) -- a campaign with no imported ad entities contributes no items on its own."""
+    items = []
+    for campaign_id in _non_closed_campaign_ids(conn, org_id, brand_id):
+        items.extend(classify(conn, org_id, brand_id, campaign_id)["items"])
+    return items
+
+
+def _safe_name(name):
+    name = name or "(未命名廣告)"
+    return name if len(name) <= _NAME_BUDGET else name[:_NAME_BUDGET - 1] + "…"
+
+
+def _queue_message(cls, name):
+    return f"廣告「{_safe_name(name)}」{LABELS[cls]}，待決定"
+
+
+def _dedupe_key(cls, entity_id, window_end):
+    # Window end in the key (feature Decisions #3): a resolved decision stays resolved until the
+    # window moves on to a new `window_end`, which is a new dedupe key and a fresh open row --
+    # `interrupts.enqueue`'s own dedupe check finds the OLD row by key and status, resolved or
+    # not, and never reopens or duplicates it (see `interrupts.py::enqueue`, no change needed
+    # there beyond the two registered categories above).
+    return f"ads-triage:{cls}:{entity_id}:{window_end.isoformat()}"
+
+
+def _live_keys(items) -> set:
+    return {
+        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"])
+        for item in items if item["class"] in QUEUE_CATEGORY
+    }
+
+
+def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
+    """Lead review arbitration (2026-09-21, F18-I03 REQUEST_CHANGES): the same `interrupt` table
+    feeds the brand home and `/api/inbox`, and auto-archive only covers `informational` severity
+    -- a stale open `stop_loss`/`worse` row (superseded by a newer window, or the ad moved off
+    both classes) would otherwise sit open forever and keep inflating `brand_health`. Close every
+    OPEN row of this brand in the two triage categories whose `dedupe_key` is no longer live,
+    through the existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads`
+    (architecture boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at
+    most one open row per (class, entity) at any time; a user-resolved key is already not
+    'open', so this loop never touches it and never re-raises it."""
+    for category in QUEUE_CATEGORY.values():
+        stale = [
+            row for row in interrupts.list_open(conn, brand_id=brand_id, category=category,
+                                                 archive_stale=False)
+            if row["dedupe_key"] not in live_keys
+        ]
+        for row in stale:
+            interrupts.resolve(conn, row["id"], actor="system", org_id=org_id)
+
+
+def refresh_queue(conn, org_id, brand_id) -> dict:
+    """`POST .../queue/refresh` (Done #3): classify every non-closed campaign, raise one
+    interrupt per `stop_loss`/`worse` ad. One transaction -- every enqueue below, then a single
+    commit. Afterward, supersede every open row this brand's two triage categories no longer
+    match (`_supersede_stale_open_rows`) -- each call its own `resolve()`, not part of the enqueue
+    transaction. The returned payload is read back afterward, same shape as `get_queue()`."""
+    items = _classify_brand(conn, org_id, brand_id)
+    for item in items:
+        cls = item["class"]
+        if cls not in QUEUE_CATEGORY:
+            continue
+        interrupts.enqueue(
+            conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[cls],
+            dedupe_key=_dedupe_key(cls, item["entity_id"], item["window"]["end"]),
+            message=_queue_message(cls, item["name"]),
+            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}?tab=performance",
+        )
+    conn.commit()
+    _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))
+    return _queue_payload(conn, brand_id, items)
+
+
+def get_queue(conn, org_id, brand_id) -> dict:
+    """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
+    only place that supersedes stale rows (it may not have run yet since the ad's classification
+    last changed). Current classification decides which open interrupt rows are still live: an
+    older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
+    filtered out of this payload the same way, without writing anything."""
+    items = _classify_brand(conn, org_id, brand_id)
+    return _queue_payload(conn, brand_id, items)
+
+
+def _queue_payload(conn, brand_id, items) -> dict:
+    live_keys = _live_keys(items)
+    queue_categories = set(QUEUE_CATEGORY.values())
+    # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
+    # `refresh_queue` already committed its own writes above -- neither call should also trigger
+    # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
+    open_rows = [
+        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        if row["category"] in queue_categories and row["dedupe_key"] in live_keys
+    ]
+    counts = dict.fromkeys(ALL_CLASSES, 0)
+    for item in items:
+        counts[item["class"]] += 1
+    return {
+        "items": open_rows, "counts": counts, "total_ads": len(items),
+        "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,
+    }
