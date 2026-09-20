@@ -125,7 +125,13 @@ untabled currency ⇒ None with reason; per-row `result_kind/result_count/result
 sync fills `ads_campaign.result_kind` only when NULL.
 
 Phase 2 must know / decide:
-- PRODUCT RULING NEEDED: an absent platform action is stored as unknown, never zero (F15 rule). With all-or-nothing
+- RULED 2026-09-21 (user, option 1 — conditional tracked zero): an absent platform action may be read as a tracked zero
+  ONLY when all three hold: (1) the entity delivered that day (spend or impressions present); (2) the same account reported
+  that same action type within the recent observation window (the account demonstrably tracks it); (3) that day was fully
+  synced. Otherwise it stays unknown. A derived zero is stored/marked as "derived by rule", distinguishable from a
+  platform-reported number, and shown as such. F16 closed and merged to master on 2026-09-21 after human acceptance on real
+  synced data (daily budget 1,900; 29-day cost per purchase ≈ 452).
+- Background of that ruling: an absent platform action was stored as unknown, never zero (F15 rule). With all-or-nothing
   windows many real ads resolve to unknown and a "spend with zero results" stop-loss can never fire. May "delivery present +
   action absent + account demonstrably tracks that action" count as a tracked zero?
 - Attribution window / counted synonym are not persisted on `ads_outcome_daily` (needs a migration).
