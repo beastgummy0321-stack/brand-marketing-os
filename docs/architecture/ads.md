@@ -627,10 +627,15 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `MetaReader` 回傳的 `result_kind`／`result_count` 從 observation dict 裡摘出來，轉成關鍵字參
   數傳過去，其餘來源（測試替身、既有 fixture）沒有這兩個 key 就一律是 `None`，行為不變。
   `availability["result_count"]` 比照其餘欄位規則自己補（有數字才是 `available`）。
-- `review_evidence.aggregate()`：`METRICS` 加入 `result_count`，套用同一條「這組只要有一天未追
-  蹤，整組就是 `None`」誠實規則，不特例；比率清單加一列
-  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。這個依
-  `attribution_key` 分組的 series 是既有分組，**沒有再放** `result_kind`（見下方修復輪）。
+- **文件更正（F18-I01 發現的落差）**：本節原稿寫「`review_evidence.aggregate()`：`METRICS`
+  加入 `result_count`」，程式實際上沒有這樣做（`METRICS` 從頭到尾只有
+  `spend`／`impressions`／`clicks`／`purchases`／`revenue` 五項，`app/ads/review_evidence.py:18`；
+  `aggregate()` 本身依 `attribution_key` 分組算 `series` 與 ctr／cpc／cpa／roas 那個比率清單在
+  `app/ads/review_evidence.py:135-154`）；`result_count`／`cost_per_result` 從來沒有進過依
+  `attribution_key` 分組的 `series`。這兩個欄位只活在下面 6.13.1 新增的、不看 `attribution_key`、
+  依 `(metric_scope, currency)` 分組的 `result_views` 裡（`_result_view()`，一個獨立函式，
+  `app/ads/review_evidence.py:45-120`）——這才是實際落地的設計，本節這句舊敘述作廢，不要依它推斷
+  `series` 的欄位形狀。
 
 #### 6.13.1 修復輪：撕裂的 series 與跨動作加總（settled 2026-09-20）
 
@@ -825,3 +830,76 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   重新讀取的資料反而比較差（例如平台這次沒回報購買動作），它會取代掉比較好的舊列。這是刻意沿用
   本模組既有慣例，不是這次的瑕疵：`app/ads/month_budget.py::_inventory` 對月讀列採同一條規則
   （「完整重讀時被省略的舊列，不可以當成還有效的月花費留著」）。
+
+### 6.16 F18-I01 — 條件式推定 0（settled 2026-09-21）
+
+- 問題：平台某天沒回報這則廣告的成果動作，跟平台回報「有這個動作、次數是 0」在資料上長得一樣
+  ——`result_count IS NULL`。前者是「不知道」，後者才是「知道是 0」；共用層一律誠實回 `unknown`，
+  導致一則廣告明明持續花錢卻始終沒有成果的窗口，永遠卡在 `result_unknown_days`／`missing`，判不
+  出停損。
+- 規則（三條件缺一不可，`app/ads/tracked_zero.py::apply()`，平台中立、不 import 任何 adapter）：
+  1. **先證明這個 Campaign 真的在追蹤這個動作**：over 這個 campaign 自己的 entity 列，取
+     `day BETWEEN end-27 AND end`（`OBSERVATION_WINDOW_DAYS=28`，`end` 是本次完成同步的涵蓋窗尾
+     日）內 `availability.result_count='available'` 且 `result_count>0` 的列，取
+     `(result_kind, result_action, result_attribution)` 相異值。剛好一種 ⇒ 這是「已示範的定
+     義」；零種或一種以上 ⇒ 不寫任何東西，回報 `no_demonstrated_definition`／
+     `mixed_result_definition`（絕不用猜的或挑第一個）。
+  2. 只在同一次同步「observations」任務**乾淨完成**（無 cursor、無 errors，涵蓋範圍已記錄）的
+     同一交易內，對這次同步涵蓋的 `[start, end]` 窗口逐列判斷：`result_kind` 等於已示範的定義且
+     `result_count IS NULL`；`availability` 確實有 `result_count` 這個 key（排除 §6.15 的
+     `_predates_result_columns` 舊列形狀）；`availability.spend='available'` 且
+     （`spend>0` 或 `impressions>0`，代表這天真的有花錢／有曝光，不是活動還沒開始）；
+     `day` 不晚於**這個廣告帳戶自己時區**的昨天（今天永遠不算完整日，沿用 §6.15
+     `targets._trailing_30` 同一條規則，但這裡刻意不沿用它的組織時區口徑——見下方時區裁決）；
+     `day` 落在這次同步實際涵蓋的窗口內；不是 §6.15 的月讀列（`is_monthly_budget_row`）。
+  3. 全部成立才寫：`result_count=0`、`result_action`／`result_attribution` 填已示範的那組值、
+     `availability.result_count="derived_zero"`——**不是** `"available"`（平台真的回報的 0）、
+     **不是** `"unknown"`（真的不知道），三種狀態永遠可分辨。只動這四個欄位，`spend`／
+     `purchases`／`revenue`／`attribution_key`／唯一鍵完全不碰。
+- **時區裁決（review 修正 2026-09-21，偏離原票 Done #3 的 `today_for_org` 字面寫法）**：
+  「今天還沒過完」不能問組織的時區，要問**這個廣告帳戶自己**的時區——組織與底下接的帳戶時區可以
+  不同，用組織時區會把帳戶那邊其實還沒過完的一天當成已完整，錯誤推定 0。`tracked_zero.apply()`
+  因此不再自己算日期，改收呼叫端傳入的 `last_complete_day: date` 參數，模組本身仍平台中立、不
+  import `zoneinfo`、不查任何時區設定。唯一呼叫點 `external_sync.py::run_sync` 用這次同步已經
+  讀回的帳戶物件（`current_account["timezone_name"]`）換算：
+  `(now_utc().astimezone(帳戶時區) - 1 天).date()`，跟 `review_evidence.py::snapshot()`
+  （約行 241）「觀察結束日於來源帳戶時區尚未完整結束」同一種算法，差別只在這裡問的是帳戶今天，
+  不是使用者選的觀察結束日。
+- 呼叫點只有一處：`external_sync.py::run_sync`，「observations」任務完成、記錄 `coverage` 的同一
+  段程式碼、同一個交易裡（不是獨立背景工作，也不是每個 reader 各自呼叫）；兩層各自負責一種失敗：
+  - **帳戶時區本身未知或無法解析**（`ZoneInfo(...)` 拋 `ValueError`／`ZoneInfoNotFoundError`，例如
+    帳戶尚未回填時區）——fail-closed：整批跳過推定，不呼叫 `tracked_zero.apply()`，這些列停在
+    `unknown`；已經讀回、已經寫進 `ads_external_daily` 的那一頁成效**照常保留、照常算成功**，不是
+    錯誤，也絕不是 `derive_failed`（review 修正 2026-09-21：時區未知不代表平台讀取失敗，不該把
+    已經讀到的資料回滾）。
+  - **時區可以解析，但 `tracked_zero.apply()` 本身丟例外**——這才包在 try/except 裡轉成
+    `SourceReadError(..., "derive_failed")` 往外拋，交易整批回滾（跟這個函式既有的例外處理規則
+    一致），`error_code` 是專屬的 `derive_failed`，不會跟平台真的讀取失敗（`invalid_source_page`
+    等既有代碼）混在一起誤判。
+- `review_evidence._result_view()`：`availability.result_count` 是 `"available"` 或
+  `"derived_zero"` 都算「已知」，同一條「整組只要有一天未知就是 None」誠實規則不變；新增
+  `derived_zero_days` 回報這組已知天數裡有幾天是推定出來的，讓前端／人工判讀能把「真的回報 0」
+  跟「規則推定 0」分開看，不需要另外查。`_predates_result_columns()`／`mixed_result_definition`／
+  三分 `missing[]` 規則（§6.15）不變。
+- `app/ads/targets.py`／`app/ads/month_budget.py` 未修改也不需要修改：`targets._trailing_30` 透
+  過 `aggregate()` 的 `result_views` 自動吃到 `derived_zero` 已知列，能在窗口內只有推定 0（沒有
+  一天真的回報過)時仍算出 trailing-30 成本；`month_budget.py` 完全不讀 `result_count`／
+  `availability.result_count`，只認 `spend`／`availability.spend`，不受影響（已逐一確認）。
+- 冪等：對同一涵蓋窗口重複同步，第二次執行時已推定的列 `result_count` 已經是 `0`（非
+  `NULL`），不再符合寫入條件，不會重複改寫；若中間真的讀到平台回報的真實值，`upsert_observation`
+  在 `tracked_zero.apply()` 之前就已經覆蓋掉那列，推定規則自然不會再套用。
+- 驗證：`app/tests/test_ads_tracked_zero.py`（三條件各自單獨擋下推定、28 天示範窗口的邊界
+  27／28 天與更久以前都各自驗證、示範定義零種／多種、只涵蓋窗口內的列、不碰月讀列、冪等重同步）、
+  `app/tests/test_ads_review_cycle.py`（`derived_zero` 在 result view 算已知、`derived_zero_days`
+  計數、跟平台回報的 `"available"` 0 可分辨）、`app/tests/test_ads_external_sync.py`（`run_sync`
+  在 observations 任務乾淨完成時真的呼叫 `tracked_zero.apply()`，涵蓋範圍就是同步窗口；帳戶時區
+  跟組織時區不同時用帳戶時區當截止；`tracked_zero.apply()` 內部例外回報 `derive_failed`；帳戶時區
+  未知或無法解析時整批跳過推定但成效頁照常成功、不回報任何錯誤代碼）、
+  `app/tests/test_ads_targets.py`（`_trailing_30` 在窗口只有推定 0 時仍能解出，不再卡 `missing`）。
+- **Known limit（型別還沒跟上）**：`app/ads/external_models.py::Availability` 這個 `Literal`
+  目前仍只有 `"available"`／`"unknown"`／`"unavailable"` 三種，沒有列進 `"derived_zero"`——
+  `tracked_zero.apply()` 用原生 SQL `UPDATE` 直接寫這個值，繞過 `ExternalObservation` 的驗證，
+  今天可以動；但任何未來程式碼如果把已經存在資料庫裡、`availability.result_count="derived_zero"`
+  的列重新丟回 `ExternalObservation.model_validate()`（例如寫一個「重新核對既有列」的維護工具），
+  會直接炸掉。在 F18-I02 把 `Availability` 這個 Literal 一併擴充、加上對應驗證測試之前，這個型別
+  落差是刻意接受的已知落差，不是本票的範圍。
