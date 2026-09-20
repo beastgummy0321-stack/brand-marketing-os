@@ -150,13 +150,13 @@ Phase 2 must know / decide:
 
 Harness 3.0.4 verified live with F17 (one issue, closed and merged to master): the worker ran in
 `.harness/worktrees/F17-I01`; finish, merge smoke and the full `integrate` were green with the manifest's
-`verify.env_files` / `env_exclude` / `timeouts` and no external env wrapper. Two plugin defects remain, to fix in the plugin
-source (`D:/0UserProfile/Desktop/Default/Planner`):
+`verify.env_files` / `env_exclude` / `timeouts` and no external env wrapper. Two plugin defects were found and fixed in harness 3.0.5 on 2026-09-21 (plugin source
+`D:/0UserProfile/Desktop/Default/Planner`; needs a new session to load; the Codex install is not updated):
 - a worker Bash call that fails never fires PostToolUse, so its baseline is left behind, blocks `merge`, and
-  `baselines --reconcile` refuses it while the lease lives (30 min TTL). Workaround once the worker is confirmed ended:
-  `HARNESS_BASELINE_TTL_MS=1 harness baselines --reconcile`.
+  `baselines --reconcile` refuses it while the lease lives (30 min TTL). 3.0.5: failed calls clear their own baseline (PostToolUseFailure); for interrupted calls use
+  `harness baselines --reconcile --ended <issue>` after the worker's completion notice.
 - the write gate hard-denies Edit/Write on `ARCHITECTURE.md` regardless of `touch`, while a Bash write to the same file is
-  judged by `touch` only — two rules for one file.
+  judged by `touch` only — two rules for one file. 3.0.5: one rule everywhere — `touch` must name `ARCHITECTURE.md` literally.
 
 Phase 2 batch 1 is carved as F18 (`.work/features/F18.md`; contract and rulings live there): conditional tracked zero →
 program triage → brand queue summary. User-confirmed defaults 2026-09-21: enough events = 10 per window; tracking
