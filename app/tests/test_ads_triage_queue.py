@@ -121,11 +121,17 @@ class QueueEndToEndTest(unittest.TestCase):
             stop_row["action_url"],
             f"/brands/{self.brand}/ads/campaigns/{self.campaign}?tab=performance",
         )
+        # F19-I01: each queue row carries the current triage item that produced it (matched by
+        # the same dedupe key the enqueue used) -- never null, it's filtered to only live rows.
+        self.assertEqual(stop_row["triage"]["class"], "stop_loss")
+        self.assertEqual(stop_row["triage"]["entity_id"], self.ad_stop["id"])
 
         worse_row = by_category["ads_triage_worse"]
         self.assertEqual(worse_row["severity"], "rule_warning")
         self.assertIn("廣告變差用", worse_row["message"])
         self.assertLessEqual(len(worse_row["message"]), core_interrupts.MAX_MESSAGE_LEN)
+        self.assertEqual(worse_row["triage"]["class"], "worse")
+        self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
 
         self.assertEqual(result["kinds_available"], ["stop_loss", "worse"])
         self.assertEqual(result["kinds_pending"], ["scale_budget", "refresh_creative"])
@@ -299,6 +305,15 @@ class QueuePlumbingTest(unittest.TestCase):
         # GET never writes -- the row is only actually superseded by the NEXT refresh_queue()
         # call (see test_refresh_closes_open_row_when_ad_recovers_to_flat below).
         self.assertEqual(row["status"], "open")
+
+    def test_get_queue_attaches_the_matching_triage_item_by_dedupe_key(self):
+        window_end = date(2026, 1, 7)
+        item = self._item("worse", window_end=window_end)
+        with patch.object(triage, "_classify_brand", return_value=[item]):
+            triage.refresh_queue(self.conn, self.org, self.brand)  # raises the open row
+            queue = triage.get_queue(self.conn, self.org, self.brand)
+        self.assertEqual(len(queue["items"]), 1)
+        self.assertEqual(queue["items"][0]["triage"], item)
 
     def _stop_loss_at(self, window_end):
         return patch.object(triage, "_classify_brand",

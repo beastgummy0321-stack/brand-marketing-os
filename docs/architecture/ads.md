@@ -1009,12 +1009,17 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `total_ads`：全部 item 數；`kinds_available=["stop_loss","worse"]`、
   `kinds_pending=["scale_budget","refresh_creative"]` 兩個路由固定回傳，永遠不是空清單冒充「沒事要
   做」。
+- **F19-I01：`items` 每一列自帶 `triage`**——用同一把 `_dedupe_key(class, entity_id, window_end)`
+  比對出「當下是哪個 program triage item 產生了這筆待決定」（形狀同 `triage.py:229-235`），前端不解析
+  `dedupe_key` 字串；因為只有通過上面「仍等於這次分流結果」過濾的列才會出現在 `items` 裡，`triage`
+  永遠比對得到、不是 `null`。
 - 訊息：`廣告「{name}」{停損|變差}，待決定`，`name` 超過 20 字截斷加「…」，確保全句 ≤
   `interrupts.MAX_MESSAGE_LEN`（30 全形字）；不出現任何平台字面字串。`action_url`
   沿用既有慣例（同 `app/ads/runtime.py::_health` 的 `ads_runtime_attention`）：
   `/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=performance`。
 - 驗證：`app/tests/test_ads_triage_queue.py`（真資料端到端一則、queue 機制用固定 item 隔離測試：同窗
-  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、六類計數、
+  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、比對得上的列附正確
+  `triage` item、六類計數、
   `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選、窗口連續前進兩次同一支廣
   告仍是 `stop_loss` 時只留一筆 open、舊列以 `"system"` actor resolve、廣告恢復 `flat` 後開回 0
   筆 open、supersede 不動別的類別或別的品牌、使用者手動 resolve 的列同窗不會被重新打開）、

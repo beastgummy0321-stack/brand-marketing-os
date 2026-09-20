@@ -395,20 +395,28 @@ def get_queue(conn, org_id, brand_id) -> dict:
     only place that supersedes stale rows (it may not have run yet since the ad's classification
     last changed). Current classification decides which open interrupt rows are still live: an
     older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
-    filtered out of this payload the same way, without writing anything."""
+    filtered out of this payload the same way, without writing anything. Each listed row carries
+    the current triage item that produced it (F19-I01, `_queue_payload`)."""
     items = _classify_brand(conn, org_id, brand_id)
     return _queue_payload(conn, brand_id, items)
 
 
 def _queue_payload(conn, brand_id, items) -> dict:
-    live_keys = _live_keys(items)
+    # F19-I01: each open row's own triage item, keyed by the same dedupe key the enqueue used --
+    # the frontend never parses `dedupe_key` strings itself. Only `stop_loss`/`worse` items ever
+    # produce a key (see `_live_keys`), so this doubles as the "still live" filter below.
+    items_by_key = {
+        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"]): item
+        for item in items if item["class"] in QUEUE_CATEGORY
+    }
     queue_categories = set(QUEUE_CATEGORY.values())
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
     open_rows = [
-        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
-        if row["category"] in queue_categories and row["dedupe_key"] in live_keys
+        {**row, "triage": items_by_key[row["dedupe_key"]]}
+        for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        if row["category"] in queue_categories and row["dedupe_key"] in items_by_key
     ]
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:
