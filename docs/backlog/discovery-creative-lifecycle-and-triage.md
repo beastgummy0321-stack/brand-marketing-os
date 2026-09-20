@@ -164,7 +164,7 @@ observation window = 28 days; flat band = ±20 %. The derived zero is marked in 
 `ads_outcome_daily` attribution migration noted in §5a is NOT needed for this batch. Later batches: pause/scale proposals
 with suppression, then the v7 front end.
 
-F18 integrated 2026-09-21 (three issues merged, `integrate` green; human acceptance pending). Settled in review and now
+F18 closed and merged to master 2026-09-21 after human acceptance on real synced data (Beast Prime, target cost 450: 69 derived-zero ad-days marked, 20 ads classified, queue empty). Settled in review and now
 documented in `docs/architecture/ads.md` §6.16–6.18: the derived-zero cutoff and the triage window end use the AD ACCOUNT's
 timezone (unknown timezone ⇒ no derivation / org-today − 2 days); a window not fully inside the recorded sync coverage is
 `needs_resync`, never a zero; refresh supersedes stale open triage interrupts through `interrupts.resolve(actor="system")`.
@@ -175,6 +175,7 @@ Known limits for the next batch:
   belongs to the pause/scale-proposal batch.
 - `frontend/src/lib/adsReviewApi.ts` `ReviewResultView` lacks `derived_zero_days`; the v7 front end must label derived
   zeros 規則推定 (acceptance item of that batch).
+- Observed at acceptance: an ad at 2.4 × target cost classifies `flat` because triage compares only with its own previous window; a persistently over-target ad never reaches the queue. Candidate class for the next batch (needs a user ruling).
 - Read-only preview on the local real data (2026-09-21): both imported campaigns classify every ad as
   `no_target / target_unresolved` (`missing: product` plus `needs_resync` / `result_unknown_days`) — acceptance needs a
   re-sync (which derives zeros) and a target cost set through `PUT …/target` first.
