@@ -110,6 +110,36 @@ next-next-next); never solve confusion with tutorial screens or stacked explanat
 passing functional tests is not UI acceptance; an uncovered screen gets a prototype or a side-by-side screenshot review
 against the nearest approved v7 page before merge, and a material new screen goes back to the user first.
 
+## 5a. Phase 1 result — F16 integrated 2026-09-21 (not closed: human acceptance pending)
+
+Branch `feature/ads-judgement-foundation`; `harness integrate feature F16` green: backend 1832 passed (`-n 4`), frontend
+311 tests, build, Playwright 5 passed / 6 skipped. Five issues (I05 added mid-run). Migrations 20260920000001–06, applied and
+registered on the local dev DB only. No platform writes; one bounded read-only Meta read (budget cross-check).
+
+Implemented: `ads_outcome_daily.purchases/revenue` nullable + legacy Meta zeros normalised to NULL; real Meta purchases and
+purchase value reach close-out through the meta facade (one synonym definition, disagreement ⇒ unknown); Meta budgets
+resolved by the official currency offset table (TWD offset 1 proven: doc + read-back 1,900 vs daily spend 1,639–2,383),
+untabled currency ⇒ None with reason; per-row `result_kind/result_count/result_action/result_attribution` and an untorn
+`result_views` per (scope, currency) with `mixed_result_definition` / `result_unknown_days`; target cost in its OWN columns
+(`target_cost`, `target_basis`, `result_kind`, `target_revision`) with `GET/PUT …/target`, never touching `success_*`;
+sync fills `ads_campaign.result_kind` only when NULL.
+
+Phase 2 must know / decide:
+- PRODUCT RULING NEEDED: an absent platform action is stored as unknown, never zero (F15 rule). With all-or-nothing
+  windows many real ads resolve to unknown and a "spend with zero results" stop-loss can never fire. May "delivery present +
+  action absent + account demonstrably tracks that action" count as a tracked zero?
+- Attribution window / counted synonym are not persisted on `ads_outcome_daily` (needs a migration).
+- Objective→result table is verified against real data only for OUTCOME_SALES; AWARENESS/REACH are unmapped on purpose.
+- Already-imported non-sales campaigns need a normal re-sync before results exist (no new permission).
+- The frontend target client was deferred: add `frontend/src/lib/adsTargetApi.ts` + manifest `owns` with the set-target page
+  (`adsApi.ts` is at the 800-line cap).
+- User remembered NT$2,000/day for Beast Prime; the platform reads NT$1,900 — confirm at acceptance.
+- Workflow defects to fix before the next crank: host-isolated workers must `attach` (binding the lease to a disposable agent
+  worktree, leaving unsignable baselines and a dead lease); `finish` takes base_sha at attach time; worktrees have no `.env`
+  / `frontend/.env` / node_modules; e2e exceeds the 120 s command default; workers cannot message the lead; background
+  agents die with the session. Until fixed: merge/integrate run from the main session with env loaded and a raised timeout.
+- Time-bomb test fixed in passing: `test_orders_api.py` used a literal date against a trailing 30-day window.
+
 ## 6. Still open
 
 Exact numeric defaults (event count for "enough", fatigue definition, "almost no delivery"), wording of learning sentences,
