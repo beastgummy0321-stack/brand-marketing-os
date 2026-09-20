@@ -739,9 +739,10 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   同款）。`PUT` 的 `price`／`variable_cost` 只轉交
   `app.brand_intelligence.repository.save_product_economics`（既有公開寫入路徑，先讀現有
   `product_economics` 補齊必填欄位再存，`ads` 這邊不直接碰那張表）。
-- Frontend：只加型別與 API 呼叫（`frontend/src/lib/adsApi.ts` 的 `CampaignTarget`／
-  `getCampaignTarget`／`saveCampaignTarget`）；`SuccessMetric` 沒有加寬——設定目標成本的畫面
-  本身是 phase 2。
+- Frontend：本期不加前端 client。原先加在 `frontend/src/lib/adsApi.ts` 的 `CampaignTarget`／
+  `getCampaignTarget`／`saveCampaignTarget` 會讓該檔超過 800 行上限（`architectureBoundaries.test.ts`），
+  且目前沒有任何畫面使用；phase 2 做「設定目標」畫面時，以獨立的 `frontend/src/lib/adsTargetApi.ts`
+  加入並同步更新 `ARCHITECTURE.md` 的 ads `owns`。`SuccessMetric` 沒有加寬。
 - 驗證：`app/tests/test_ads_targets.py`（銷售有／無成本、engagement 走 trailing-30、完全沒資
   料、既有活動缺商品、使用者覆寫、F16-I03 前的 NULL 列回報 `needs_resync` 而非零、
   `result_kind` 經真的 adapter 對照表跟真的寫入路徑落地而非手塞 dict、`PUT` 不動
