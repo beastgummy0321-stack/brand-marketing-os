@@ -393,22 +393,32 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
 def get_queue(conn, org_id, brand_id) -> dict:
     """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
     only place that supersedes stale rows (it may not have run yet since the ad's classification
-    last changed). Current classification decides which open interrupt rows are still live: an
-    older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
-    filtered out of this payload the same way, without writing anything."""
+    last changed). An older window's still-open row whose ad has since moved off
+    `stop_loss`/`worse` (e.g. now flat) stays in this payload (GET never hides or writes) but
+    carries `triage: null` (F19-I01) -- no CURRENT item produced its dedupe key anymore, so the
+    frontend can tell "still open, stale" from "still open, current"."""
     items = _classify_brand(conn, org_id, brand_id)
     return _queue_payload(conn, brand_id, items)
 
 
 def _queue_payload(conn, brand_id, items) -> dict:
-    live_keys = _live_keys(items)
     queue_categories = set(QUEUE_CATEGORY.values())
+    # F19-I01: each open row's own triage item, keyed by the same dedupe key the enqueue used --
+    # the frontend never parses `dedupe_key` strings itself. Only `stop_loss`/`worse` items ever
+    # produce a key (see `_live_keys`), so a stale row (its ad moved off both classes, or its
+    # window hasn't advanced yet -- see `get_queue()`) is simply absent from this map, giving
+    # `triage: null` via `.get()` rather than a KeyError.
+    items_by_key = {
+        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"]): item
+        for item in items if item["class"] in QUEUE_CATEGORY
+    }
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
     open_rows = [
-        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
-        if row["category"] in queue_categories and row["dedupe_key"] in live_keys
+        {**row, "triage": items_by_key.get(row["dedupe_key"])}
+        for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        if row["category"] in queue_categories
     ]
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:

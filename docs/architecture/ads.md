@@ -996,10 +996,11 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   （`test_architecture_boundaries.py` 的分層檢查）、`interrupts.py` 本身不再多改一行。結果：同一
   (class, entity) 任何時刻最多一筆 open 列；使用者手動 resolve 的列不是 `open`，這輪 supersede 找不
   到它，也就不會重新打開；窗口一換算出新 key，照常補一筆新 open 列。
-- **GET 沿用同一套「只回當前分流」過濾**：`get_queue()` 重新對這個品牌全部非結案 Campaign 跑一次
-  `classify()`，只把「(class, entity_id, window_end) 仍等於這次分流結果」的 open 列放進回應——這條
-  過濾在 `refresh_queue()` 剛 supersede 完之後是多餘保險，但 GET 可能發生在下一次 refresh 之前，此
-  時陳舊列還沒被 supersede，過濾仍然必要，且 GET 本身不寫任何東西。
+- **GET 不再整筆濾掉陳舊列（F19-I01 改寫，取代原「只回當前分流」過濾）**：`get_queue()` 重新對這個
+  品牌全部非結案 Campaign 跑一次 `classify()`，兩個 triage 類別的 open 列全部放進回應；每一列的
+  `triage` 欄位才是「(class, entity_id, window_end) 是否仍等於這次分流結果」的判斷結果——比對得到就
+  是那個 item，比對不到（GET 可能發生在下一次 `refresh_queue()` supersede 之前，陳舊列還沒被
+  resolve）就是 `null`。GET 本身仍然不寫任何東西。
 - **Known limit（本批刻意不做，留給下一批的暫停／擴量提案批次）**：supersede 只認得
   `dedupe_key`，不知道「這筆是使用者主動 resolve 還是被 supersede」——只要窗口往前走（每天）、廣告
   仍在 `stop_loss`／`worse`，就會算出新 key、補一筆新 open 列，也就是使用者昨天才處理過的同一支廣
@@ -1009,12 +1010,19 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `total_ads`：全部 item 數；`kinds_available=["stop_loss","worse"]`、
   `kinds_pending=["scale_budget","refresh_creative"]` 兩個路由固定回傳，永遠不是空清單冒充「沒事要
   做」。
+- **F19-I01：`items` 每一列自帶 `triage`**——用同一把 `_dedupe_key(class, entity_id, window_end)`
+  比對出「當下是哪個 program triage item 產生了這筆待決定」（形狀同 `triage.py:229-235`），前端不解析
+  `dedupe_key` 字串；比對不到（該廣告已換分流，或 `GET` 從不寫入還沒被下一次 `refresh_queue()`
+  supersede）就是 `null`。因此 `GET .../queue` 不再把陳舊 open 列整筆濾掉，改成用 `triage: null`
+  標出「還開著、但已經不是現在的分流結果」；`refresh_queue()` 在 supersede 完之後才讀回，陳舊列已被
+  `resolve()` 成 `resolved`，不會出現在回應裡。
 - 訊息：`廣告「{name}」{停損|變差}，待決定`，`name` 超過 20 字截斷加「…」，確保全句 ≤
   `interrupts.MAX_MESSAGE_LEN`（30 全形字）；不出現任何平台字面字串。`action_url`
   沿用既有慣例（同 `app/ads/runtime.py::_health` 的 `ads_runtime_attention`）：
   `/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=performance`。
 - 驗證：`app/tests/test_ads_triage_queue.py`（真資料端到端一則、queue 機制用固定 item 隔離測試：同窗
-  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、六類計數、
+  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 對陳舊 open 列標 `triage: null`、
+  比對得上的列附正確 `triage` item、六類計數、
   `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選、窗口連續前進兩次同一支廣
   告仍是 `stop_loss` 時只留一筆 open、舊列以 `"system"` actor resolve、廣告恢復 `flat` 後開回 0
   筆 open、supersede 不動別的類別或別的品牌、使用者手動 resolve 的列同窗不會被重新打開）、
