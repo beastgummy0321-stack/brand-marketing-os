@@ -685,3 +685,42 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `app/tests/test_ads_external_sync.py`（`result_kind`／`result_count` 經由通用同步流程真的落
   進 `ads_external_daily`）、`app/tests/test_ads_review_cycle.py`
   （`review_evidence.aggregate()` 的 `result_kind`／`cost_per_result`／未追蹤誠實規則）。
+
+### 6.14 F16-I04 — 每個 Campaign 都能算出目標成本（settled 2026-09-20）
+
+- 問題：`success_metric` 原本只認 cpa／roas／purchases（`20260913000001_ads_tables.sql:22`），
+  既有活動（`origin='imported'`）完全沒有目標成本可比。
+- Schema（新檔 `20260920000005_ads_campaign_target.sql`，比照 §6.13 的規則：不改已套用的
+  `ads_campaign_success_metric_check`，開新檔 ALTER）：`success_metric` 加入
+  `cost_per_result`；新增可空欄位 `ads_campaign.result_kind`（跟 `ads_external_daily.
+  result_kind` 同一份平台中立詞彙——"purchase"／"engagement"／...，絕不是 Meta 目標字串）；
+  新 CHECK `ads_campaign_cost_per_result_basis` 只在 `success_metric='cost_per_result'` 時把
+  `success_basis` 限成 `break_even`／`trailing_30`／`own` 三個機器代碼——既有 cpa／roas／
+  purchases 列的 `success_basis`（一句話說明）完全不受影響、不回填、不重新解讀。另加
+  `target_revision`（integer，預設 0），是這個子資源自己的樂觀版本號，跟 `ads_month_budget.
+  revision` 同一招，但獨立於其餘 Campaign 欄位的寫入（策略／plan／bind…都不會動到它）。
+- `app/ads/targets.py::resolve(conn, org, brand, campaign, *, product_id=None)`：純函式、不打
+  模型、不寫任何表。固定優先序（不可被呼叫端重排）：① `success_metric='cost_per_result'` 且
+  `success_basis='own'` 時 `success_target` 永遠贏；② 這個 Campaign「自己的結果是購買」
+  （`result_kind=='purchase'`，或 `result_kind` 未知且 `origin!='imported'`——既有內建 Campaign
+  向來只認購買，`brief.py::_OBJECTIVES` 五種目標全部走 cpa／roas／purchases，系統裡沒有第二種
+  可數的轉換事件）時，帶著商品（既有 `context_json.product_ids`，或既有活動由呼叫端明講的
+  `product_id`）走 `budget.breakeven_cpa()` + `budget.economics_for()`（`_economics_for` 的公開
+  包裝，跟 `scenarios()` 共用同一套「多個商品挑第一個算得出來的」規則，不重寫第二份）；③ 否則
+  這個 Campaign 自己近 30 個完整日的實際 cost per result（`_trailing_30`：只取
+  `metric_scope='campaign'` 那層、重用 `review_evidence.aggregate()`
+  的 `result_views`——NULL-aware，未知日永遠不進分子也不進分母，`reason='result_unknown_days'`
+  一律回報 `missing=['needs_resync']`，絕不是零）；④ 都不成立時 `value=None`，`missing` 列出
+  卡住的原因（`"product"`／`"product_cost"`／`"needs_resync"`／`"trailing_30"`／
+  `"mixed_result_definition"`）——絕不是預設數字、絕不是零。
+- 讀寫：`repository.get_campaign_target()`／`save_campaign_target()`，路由
+  `GET`／`PUT /api/ads/brands/{b}/campaigns/{c}/target`（`routes.py`，`_legacy_campaign_guard`
+  白名單沒有 `target` 這個 suffix，兩條路由自己做 `require_actor`／`require_brand`，跟月預算
+  同款）。`PUT` 的 `price`／`variable_cost` 只轉交
+  `app.brand_intelligence.repository.save_product_economics`（既有公開寫入路徑，先讀現有
+  `product_economics` 補齊必填欄位再存，`ads` 這邊不直接碰那張表）。
+- Frontend：只加型別與 API 呼叫（`frontend/src/lib/adsApi.ts` 的 `CampaignTarget`／
+  `getCampaignTarget`／`saveCampaignTarget`）；設定目標成本的畫面本身是 phase 2。
+- 驗證：`app/tests/test_ads_targets.py`（銷售有／無成本、engagement 走 trailing-30、完全沒資
+  料、既有活動缺商品、使用者覆寫、F16-I03 前的 NULL 列回報 `needs_resync` 而非零）、
+  `app/tests/test_ads_external_schema.py`（新 migration 的 CHECK 約束）。
