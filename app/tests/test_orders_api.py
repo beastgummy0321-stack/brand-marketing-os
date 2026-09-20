@@ -2,6 +2,7 @@
 
 import io
 import unittest
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,6 +14,9 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import repository as orders_repo
+
+# Relative, not literal: the summary defaults to a trailing window, so a fixed date expires.
+_RECENT_ORDER_DATE = (date.today() - timedelta(days=10)).isoformat()
 
 _EASYSTORE_HEADERS = [
     "Order Number", "Date", "Total Amount", "Refunded Amount", "Financial Status",
@@ -42,7 +46,7 @@ class OrdersApiTest(unittest.TestCase):
         rows = []
         for index in range(13):
             rows.append({
-                "order_number": f"ES-{index + 1:05}", "order_date": "2026-08-20",
+                "order_number": f"ES-{index + 1:05}", "order_date": _RECENT_ORDER_DATE,
                 "total_amount": 1000 + index, "refunded_amount": 0, "financial_status": "paid",
                 "fulfillment_status": "fulfilled", "order_status": "completed",
                 "voucher_code": "SUMMER10" if index == 0 else None,
