@@ -11,6 +11,7 @@ from datetime import timedelta
 import app.shared.web as web
 from app.ads import channels, repository, targets
 from app.ads import external_repository as external
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
@@ -190,10 +191,104 @@ class ResolveTargetTest(unittest.TestCase):
             (5, 200, None, None, None, None),
             (10, 300, None, None, None, None),
         ])
+        # `upsert_observation` (F16-I03 onward) always records an `availability.result_count`
+        # entry, even "unknown" -- a genuine pre-migration row (written before that bookkeeping
+        # existed) has no such entry at all. Simulate that historical shape directly: this is the
+        # only thing `needs_resync` may key off (F16-I06), never a date guess.
+        web.conn.execute(
+            "UPDATE ads_external_daily SET availability = availability - 'result_count' "
+            "WHERE campaign_id=%s",
+            (campaign_id,),
+        )
+        web.conn.commit()
         campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
         self.assertIsNone(result["value"])
         self.assertIn("needs_resync", result["missing"])
+
+    def test_known_result_kind_without_a_count_is_unknown_not_needs_resync(self):
+        # F16-I06: a row a result mapping already ran against, but that simply had no purchase/
+        # engagement/etc that day, keeps its `availability.result_count == "unknown"` entry --
+        # this is genuinely unknown, never a stand-in for "needs a re-sync".
+        campaign_id = self._imported_campaign_with_days([
+            (0, 100, "engagement", None, None, None),
+            (5, 200, "engagement", 10, "post_engagement", "7d_click+1d_view"),
+        ])
+        campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertIsNone(result["value"])
+        self.assertIn("result_unknown_days", result["missing"])
+        self.assertNotIn("needs_resync", result["missing"])
+
+    # -- account-month budget source rows must never pollute this campaign's own result --------
+
+    def test_trailing_30_ignores_monthly_budget_rows_sharing_the_same_day(self):
+        campaign_id = external.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="混有月讀列",
+        )["id"]
+        entity = external.upsert_entity(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            {
+                "platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+                "native_id": "c1",
+            },
+        )
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        day = today - timedelta(days=1)
+        external.upsert_observation(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            {
+                "entity_id": entity["id"], "day": day, "metric_scope": "campaign",
+                "attribution_key": "7d_click+1d_view:omni_purchase", "currency": "TWD",
+                "source": "meta", "spend": 1747,
+            },
+            result_kind="purchase", result_count=5, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        # Same entity, day, metric_scope and currency as the row above -- only `attribution_key`
+        # tells this monthly-budget source row apart (F16-I06's real production shape).
+        external.upsert_observation(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            {
+                "entity_id": entity["id"], "day": day, "metric_scope": "campaign",
+                "attribution_key": MONTHLY_BUDGET_ATTRIBUTION_KEY, "currency": "TWD",
+                "source": "meta", "spend": 1900,
+            },
+        )
+        web.conn.commit()
+        campaign = {
+            **repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id),
+            "result_kind": "purchase",
+        }
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["basis"], "trailing_30")
+        self.assertAlmostEqual(result["value"], 1747 / 5)
+        self.assertEqual(result["missing"], [])
+
+    def test_trailing_30_excludes_todays_partial_day(self):
+        campaign_id = self._imported_campaign_with_days([
+            (0, 100, "engagement", 10, "post_engagement", "7d_click+1d_view"),
+        ])
+        entity = web.conn.execute(
+            "SELECT id FROM ads_external_entity WHERE campaign_id=%s AND native_kind='campaign'",
+            (campaign_id,),
+        ).fetchone()
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        external.upsert_observation(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            {
+                "entity_id": entity["id"], "day": today, "metric_scope": "campaign",
+                "attribution_key": "unused-today", "currency": "TWD", "source": "meta",
+                "spend": 999999,
+            },
+            result_kind="engagement", result_count=1, result_action="post_engagement",
+            result_attribution="7d_click+1d_view",
+        )
+        web.conn.commit()
+        campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["basis"], "trailing_30")
+        self.assertAlmostEqual(result["value"], 100 / 10)
 
     # -- result_kind provenance: the real Meta adapter mapping, never a dict literal ------------
 

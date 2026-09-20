@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import external_repository
 from app.ads.adapters.external import SourcePage, SourceReadError
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.core.db import now_utc
 from app.meta import repository as source
 
@@ -495,7 +496,7 @@ class MetaReader:
                 raise SourceReadError(
                     "月份來源列的日期、幣別或花費無法核對。", "invalid_source_page"
                 )
-            row["attribution_key"] = "account_monthly_spend"
+            row["attribution_key"] = MONTHLY_BUDGET_ATTRIBUTION_KEY
             rows.append(row)
         return SourcePage(
             rows,

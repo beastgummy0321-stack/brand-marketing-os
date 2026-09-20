@@ -750,3 +750,62 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `app/tests/test_ads_closeout.py`（`PUT` 前後同一顆內建 CPA Campaign 結案 verdict 一致）、
   `app/tests/test_ads_external_sync.py`（同步只在 `result_kind` 是 NULL 時填、不蓋使用者已存的
   選擇）、`app/tests/test_ads_external_schema.py`（新舊兩份 migration 的 CHECK 約束）。
+
+### 6.15 F16-I06 — 月讀列與被取代的攻擊列污染活動自己的成果（settled 2026-09-21，真實資料人工驗收發現）
+
+- 問題：人工驗收在使用者自己同步的既有 SALES 活動上，重新同步成功後 `GET .../target` 仍回
+  `missing: ["product","needs_resync"]`。兩個各自獨立的成因，都在 `ads_external_daily` 的
+  `metric_scope='campaign'` 那一層：
+  1. `attribution_key='account_monthly_spend'` 的月讀來源列（寫入端 `meta_read.py::read_monthly`
+     ／`external_sync.py::_save_monthly`，讀取端 `month_budget.py::_inventory`）跟一般逐日觀測列
+     共用 entity／day／`metric_scope`／currency——F16-I03 的 `_result_view()`／`aggregate()` 依
+     `(metric_scope, currency)` 分組時**沒有排除**它們：花費被算兩次，它們永遠 `NULL` 的
+     `result_count` 又讓整個窗口的 `reason` 卡在 `result_unknown_days`。
+  2. `attribution_key` 內嵌了 Meta 的購買動作類型（`_ATTRIBUTION_WINDOW + ":" + action_type`），
+     同一天先讀到「還沒有購買」（`…:unavailable`）、後讀到「有購買」（`…:omni_purchase`）會落成
+     唯一鍵下的兩列而不是一次 UPDATE；兩列都留著，同一天的花費因此被算了兩次。真實資料重現於
+     2026-09-19：`…:unavailable` 花費 722、`…:omni_purchase` 花費 1747，兩列同時存在。
+- 修復點都在**共用層**，不是每個讀者各自修：
+  - **一份共用、跟平台無關的定義**：`external_repository.py` 新增
+    `MONTHLY_BUDGET_ATTRIBUTION_KEY` 常數與 `is_monthly_budget_row()` 判斷式，取代原本散在四處
+    （`meta_read.py`／`external_sync.py`／`month_budget.py`／
+    `app/tests/fixtures/ads_external/cycle_reader.py`）各自硬寫的
+    `"account_monthly_spend"` 字面值。`month_budget.py::_inventory` 的規則不變（帳戶整月讀到時，
+    根節點只留月讀列，因為月讀是權威花費口徑）。`review_evidence.aggregate()` 在分組前先過濾掉
+    月讀列，一次涵蓋「依 `attribution_key` 分組的 series」跟「不看 `attribution_key` 的
+    `result_views`」兩邊；`targets.py` 透過呼叫 `aggregate()` 自動吃到這個排除，本身不直接讀
+    `attribution_key`（沿用 §6.14 的中立原則）。
+  - **同步路徑自己修復被取代的列**：`external_repository.upsert_observation()` 新增關鍵字參數
+    `heal_superseded_attribution`（預設 `False`，行為不變）；只有
+    `external_sync.py::_save_page()` 寫「observations」任務（每個平台 reader 的一般逐日觀測都經
+    過這一個進站點）時打開它——寫入新列後，在**同一個交易**裡刪掉同一身分
+    （entity／day／metric_scope／currency／source）下 `attribution_key` 不同、且不是月讀列的舊
+    列。唯一鍵與 `attribution_key` 格式都沒有變；月讀寫入（`_save_monthly`）不使用這個參數，永
+    遠不會刪到、也不會觸發刪月讀列。重新同步一次受影響的窗口就會自己吃掉重複列，不必手動改資料。
+  - **`missing[]` 三分**：`_result_view()` 現在把「未知」拆成三種各自誠實的 `reason`：組內
+    `result_kind`／`result_action`／`result_attribution` 不一致仍是 `mixed_result_definition`；
+    花費未知，或某列缺 `result_count` 但那列本來就有結果對照（`availability` 有記錄
+    `result_count`，只是值是 `unavailable`／`unknown`）→ `result_unknown_days`；某列缺
+    `result_count` **且**四個成果欄位全是 `NULL`、`availability` 完全沒有 `result_count`
+    這個 key（新的判斷式 `_predates_result_columns()`，只認列本身的形狀，不猜日期）→ 代表這是
+    F16-I03 加欄位以前寫的舊列，回報 `needs_resync`。`targets.py::_trailing_30` 不再自己把
+    `result_unknown_days` 硬轉成 `needs_resync`，直接原樣轉發 `_result_view()` 給的
+    `reason`——三個 `missing` 字串現在都可能出現，各自對應不同的下一步（`needs_resync` 表示重新
+    同步會修好；`result_unknown_days` 表示這是真的不知道，重新同步不保證解決）。
+  - `targets._trailing_30` 的「今天永遠不算完整日」（`end = today - 1 day`）這條規則本來就是對
+    的，這次沒有改，只補了鎖定它的測試。
+  - 真實資料唯讀重現（org `org_bughunt`／brand `brd_bughunt`，campaign
+    `adc_01M2T370NSGZDS0YXWTATKCN3T`）：同一天（09-19／09-20 等）確實同時有月讀列與逐日觀測
+    列、且逐日觀測列確實從 `…:unavailable` 換成 `…:omni_purchase` 但舊列沒被刪；另外發現
+    2026-08-22 那天的觀測列 `availability` 完全沒有 `result_count` 這個 key（`result_kind`／
+    `result_count` 皆 `NULL`），是真實環境裡「F16-I03 以前」形狀的活樣本，跟本票模擬的測試資料
+    形狀一致——這天要等下一次重新同步整個 30 天窗口一起補齊，`missing=["needs_resync"]` 是正確
+    的誠實回報，不是本票要另外修的資料。
+- 驗證：`app/tests/test_ads_targets.py`（月讀列與觀測列同天不污染 trailing-30、預先移除
+  `availability.result_count` key 模擬真正的舊列才回 `needs_resync`、有 `result_kind` 但當天無
+  計數回 `result_unknown_days` 而非 `needs_resync`、鎖定 trailing-30 排除今天）、
+  `app/tests/test_ads_review_cycle.py`（純函式層級：`aggregate()` 排除月讀列，series 與
+  result view 都不被污染）、`app/tests/test_ads_external_sync.py`（重新同步真的刪掉被
+  `attribution_key` 取代的舊列；月讀寫入不觸發、也不會被這個修復刪除）、既有
+  `test_ads_external_monthly.py`／`test_ads_month_budget.py` 全數維持通過，確認月預算總額不受
+  這次重構影響。
