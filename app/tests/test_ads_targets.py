@@ -275,7 +275,9 @@ class ResolveTargetTest(unittest.TestCase):
         ])
         end = coresettings.today_for_org(web.conn, org_id=self.org_id) - timedelta(days=1)
         start = end - timedelta(days=6)
-        derived = tracked_zero.apply(web.conn, self.org_id, self.brand_id, campaign_id, start, end)
+        derived = tracked_zero.apply(
+            web.conn, self.org_id, self.brand_id, campaign_id, start, end, end,
+        )
         self.assertEqual(derived["derived"], 1)
         web.conn.commit()
         campaign = {

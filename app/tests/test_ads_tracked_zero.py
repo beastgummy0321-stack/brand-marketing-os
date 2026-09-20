@@ -1,5 +1,5 @@
 """app/tests/test_ads_tracked_zero.py — F18-I01 falsifiers: `tracked_zero.apply()` never guesses
-a result definition, and every one of the three ruled conditions independently blocks derivation.
+a result definition, and every one of the ruled conditions independently blocks derivation.
 """
 
 import unittest
@@ -29,6 +29,9 @@ class TrackedZeroTest(unittest.TestCase):
             },
         )
         self.end = settings.today_for_org(self.conn, org_id=self.org) - timedelta(days=1)
+        # Most tests here aren't about the timezone cutoff itself (that's covered end-to-end in
+        # `test_ads_external_sync.py`) -- default to "yesterday" so ordinary rows are complete.
+        self.last_complete_day = self.end
         self.conn.commit()
 
     def obs(
@@ -60,13 +63,17 @@ class TrackedZeroTest(unittest.TestCase):
             result_action="omni_purchase", result_attribution="7d_click+1d_view", **overrides,
         )
 
+    def apply(self, start, end, *, last_complete_day=None):
+        return tracked_zero.apply(
+            self.conn, self.org, self.brand, self.campaign, start, end,
+            self.last_complete_day if last_complete_day is None else last_complete_day,
+        )
+
     # -- no or ambiguous demonstrated definition: writes nothing -------------------------------
 
     def test_no_demonstrated_definition_writes_nothing(self):
         self.obs(self.end, result_kind=None, result_count=None)
-        result = tracked_zero.apply(
-            self.conn, self.org, self.brand, self.campaign, self.end, self.end
-        )
+        result = self.apply(self.end, self.end)
         self.assertEqual(result, {"derived": 0, "reason": "no_demonstrated_definition"})
         self.assertIsNone(self.row(self.end)["result_count"])
 
@@ -80,8 +87,41 @@ class TrackedZeroTest(unittest.TestCase):
             day1, attribution_key="b", result_kind="purchase", result_count=3,
             result_action="omni_purchase", result_attribution="1d_click",
         )
-        result = tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, day0, day1)
+        result = self.apply(day0, day1)
         self.assertEqual(result, {"derived": 0, "reason": "mixed_result_definition"})
+
+    # -- the 28-day demonstration window: proven, not assumed -----------------------------------
+
+    def test_demonstration_older_than_40_days_never_counts(self):
+        target_day = self.end
+        ancient = self.end - timedelta(days=40)
+        self.demonstrate(ancient)
+        self.obs(target_day, attribution_key="target", result_kind="purchase", result_count=None,
+                  spend=50, impressions=None)
+        result = self.apply(target_day, target_day)
+        self.assertEqual(result, {"derived": 0, "reason": "no_demonstrated_definition"})
+        self.assertIsNone(self.row(target_day, "target")["result_count"])
+
+    def test_demonstration_window_boundary_27_days_back_is_included(self):
+        # OBSERVATION_WINDOW_DAYS=28 means the trailing window is [end-27, end] inclusive.
+        target_day = self.end
+        within = self.end - timedelta(days=27)
+        self.demonstrate(within)
+        self.obs(target_day, attribution_key="target", result_kind="purchase", result_count=None,
+                  spend=50, impressions=None)
+        result = self.apply(target_day, target_day)
+        self.assertEqual(result, {"derived": 1, "reason": None})
+        self.assertEqual(self.row(target_day, "target")["result_count"], 0)
+
+    def test_demonstration_window_boundary_28_days_back_is_excluded(self):
+        target_day = self.end
+        outside = self.end - timedelta(days=28)
+        self.demonstrate(outside)
+        self.obs(target_day, attribution_key="target", result_kind="purchase", result_count=None,
+                  spend=50, impressions=None)
+        result = self.apply(target_day, target_day)
+        self.assertEqual(result, {"derived": 0, "reason": "no_demonstrated_definition"})
+        self.assertIsNone(self.row(target_day, "target")["result_count"])
 
     # -- happy path + idempotent re-sync --------------------------------------------------------
 
@@ -92,9 +132,7 @@ class TrackedZeroTest(unittest.TestCase):
             target_day, attribution_key="target", result_kind="purchase", result_count=None,
             spend=50, impressions=None,
         )
-        result = tracked_zero.apply(
-            self.conn, self.org, self.brand, self.campaign, demo_day, target_day
-        )
+        result = self.apply(demo_day, target_day)
         self.assertEqual(result, {"derived": 1, "reason": None})
         row = self.row(target_day, "target")
         self.assertEqual(row["result_count"], 0)
@@ -104,9 +142,7 @@ class TrackedZeroTest(unittest.TestCase):
         self.assertEqual(row["spend"], 50)
         self.assertEqual(row["attribution_key"], "target")
 
-        again = tracked_zero.apply(
-            self.conn, self.org, self.brand, self.campaign, demo_day, target_day
-        )
+        again = self.apply(demo_day, target_day)
         self.assertEqual(again, {"derived": 0, "reason": None})
         self.assertEqual(dict(self.row(target_day, "target")), dict(row))
 
@@ -116,7 +152,7 @@ class TrackedZeroTest(unittest.TestCase):
         demo_day, target_day = self.end - timedelta(days=1), self.end
         self.demonstrate(demo_day)
         self.obs(target_day, attribution_key="target", result_kind="engagement", result_count=None)
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, target_day)
+        self.apply(demo_day, target_day)
         self.assertIsNone(self.row(target_day, "target")["result_count"])
 
     def test_missing_availability_key_never_derives(self):
@@ -130,7 +166,7 @@ class TrackedZeroTest(unittest.TestCase):
             (self.campaign,),
         )
         self.conn.commit()
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, target_day)
+        self.apply(demo_day, target_day)
         self.assertIsNone(self.row(target_day, "target")["result_count"])
 
     def test_unknown_spend_never_derives(self):
@@ -140,7 +176,7 @@ class TrackedZeroTest(unittest.TestCase):
             target_day, attribution_key="target", result_kind="purchase", result_count=None,
             spend=None, impressions=None,
         )
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, target_day)
+        self.apply(demo_day, target_day)
         self.assertIsNone(self.row(target_day, "target")["result_count"])
 
     def test_no_real_activity_never_derives(self):
@@ -151,16 +187,19 @@ class TrackedZeroTest(unittest.TestCase):
             target_day, attribution_key="target", result_kind="purchase", result_count=None,
             spend=0, impressions=0,
         )
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, target_day)
+        self.apply(demo_day, target_day)
         self.assertIsNone(self.row(target_day, "target")["result_count"])
 
-    def test_todays_incomplete_day_never_derives(self):
-        today = settings.today_for_org(self.conn, org_id=self.org)
-        demo_day = today - timedelta(days=2)
+    def test_day_after_last_complete_day_never_derives(self):
+        # The cutoff is whatever `last_complete_day` the caller passes in (F18-I01 review fix:
+        # the caller resolves it from the AD ACCOUNT's own timezone, not the org's -- exercised
+        # end-to-end in `test_ads_external_sync.py`). This test only proves the comparison itself.
+        last_complete_day = self.end - timedelta(days=1)
+        demo_day = last_complete_day - timedelta(days=1)
         self.demonstrate(demo_day)
-        self.obs(today, attribution_key="target", result_kind="purchase", result_count=None)
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, today)
-        self.assertIsNone(self.row(today, "target")["result_count"])
+        self.obs(self.end, attribution_key="target", result_kind="purchase", result_count=None)
+        self.apply(demo_day, self.end, last_complete_day=last_complete_day)
+        self.assertIsNone(self.row(self.end, "target")["result_count"])
 
     def test_day_outside_the_synced_covered_window_never_derives(self):
         demo_day = self.end - timedelta(days=3)
@@ -168,9 +207,7 @@ class TrackedZeroTest(unittest.TestCase):
         covered_start = self.end - timedelta(days=1)
         self.demonstrate(demo_day)
         self.obs(outside_day, attribution_key="target", result_kind="purchase", result_count=None)
-        tracked_zero.apply(
-            self.conn, self.org, self.brand, self.campaign, covered_start, self.end
-        )
+        self.apply(covered_start, self.end)
         self.assertIsNone(self.row(outside_day, "target")["result_count"])
 
     def test_monthly_budget_row_never_derives_even_if_shaped_to_qualify(self):
@@ -185,7 +222,7 @@ class TrackedZeroTest(unittest.TestCase):
             (self.campaign, MONTHLY_BUDGET_ATTRIBUTION_KEY),
         )
         self.conn.commit()
-        tracked_zero.apply(self.conn, self.org, self.brand, self.campaign, demo_day, target_day)
+        self.apply(demo_day, target_day)
         self.assertIsNone(self.row(target_day, MONTHLY_BUDGET_ATTRIBUTION_KEY)["result_count"])
 
 

@@ -454,14 +454,34 @@ def run_sync(org_id, brand_id, job_id):
                             # F18-I01: derive conditional tracked zeros in this same transaction,
                             # only once this section's read for the covered window is complete
                             # and clean (no cursor, no errors) -- same place coverage is recorded.
-                            tracked_zero.apply(
-                                conn,
-                                org_id,
-                                brand_id,
-                                task["campaign_id"],
-                                date.fromisoformat(task["start"]),
-                                date.fromisoformat(task["end"]),
-                            )
+                            # The cutoff for "day is complete" is the AD ACCOUNT's own timezone
+                            # (review-arbitrated 2026-09-21 deviation from the issue's
+                            # `today_for_org` wording) -- same guard review_evidence.py's
+                            # `snapshot()` uses for "today is not a complete day" (§6.15), just
+                            # keyed by the account currently synced instead of the org.
+                            try:
+                                zone = ZoneInfo(current_account.get("timezone_name") or "")
+                                last_complete_day = (
+                                    now_utc().astimezone(zone) - timedelta(days=1)
+                                ).date()
+                                tracked_zero.apply(
+                                    conn,
+                                    org_id,
+                                    brand_id,
+                                    task["campaign_id"],
+                                    date.fromisoformat(task["start"]),
+                                    date.fromisoformat(task["end"]),
+                                    last_complete_day,
+                                )
+                            except SourceReadError:
+                                raise
+                            except Exception as exc:
+                                # Never a source read failure -- the platform read already
+                                # succeeded; this is our own derivation rule breaking.
+                                raise SourceReadError(
+                                    "推定 0 規則執行失敗，已讀到的成效本身不受影響，可重新同步。",
+                                    "derive_failed",
+                                ) from exc
                     repo.record_sync(
                         conn,
                         org_id,
