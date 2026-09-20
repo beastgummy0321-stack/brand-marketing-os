@@ -164,6 +164,21 @@ observation window = 28 days; flat band = ±20 %. The derived zero is marked in 
 `ads_outcome_daily` attribution migration noted in §5a is NOT needed for this batch. Later batches: pause/scale proposals
 with suppression, then the v7 front end.
 
+F18 integrated 2026-09-21 (three issues merged, `integrate` green; human acceptance pending). Settled in review and now
+documented in `docs/architecture/ads.md` §6.16–6.18: the derived-zero cutoff and the triage window end use the AD ACCOUNT's
+timezone (unknown timezone ⇒ no derivation / org-today − 2 days); a window not fully inside the recorded sync coverage is
+`needs_resync`, never a zero; refresh supersedes stale open triage interrupts through `interrupts.resolve(actor="system")`.
+Known limits for the next batch:
+- Sync coverage records only the LAST synced range (≤ 31 days), so the 28-day step can never see its previous window and
+  always ends in `no_previous_window`; fixing it means cumulative coverage in the sync layer.
+- A user-resolved queue item is raised again when the window moves (daily) while the ad is still 停損/變差; suppression
+  belongs to the pause/scale-proposal batch.
+- `frontend/src/lib/adsReviewApi.ts` `ReviewResultView` lacks `derived_zero_days`; the v7 front end must label derived
+  zeros 規則推定 (acceptance item of that batch).
+- Read-only preview on the local real data (2026-09-21): both imported campaigns classify every ad as
+  `no_target / target_unresolved` (`missing: product` plus `needs_resync` / `result_unknown_days`) — acceptance needs a
+  re-sync (which derives zeros) and a target cost set through `PUT …/target` first.
+
 ## 6. Still open
 
 Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,
