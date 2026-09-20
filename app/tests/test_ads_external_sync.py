@@ -176,6 +176,48 @@ class ExternalSyncTest(unittest.TestCase):
         self.assertEqual(view["observations"][0]["spend"], 0)
         self.assertIsNone(view["observations"][0]["purchases"])
 
+    def test_result_kind_and_count_flow_through_generic_sync(self):
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        with patch.object(
+            self.reader,
+            "read_observations",
+            return_value=SourcePage(
+                [
+                    {
+                        "native_kind": "line",
+                        "native_id": "child",
+                        "day": date(2026, 1, 1),
+                        "metric_scope": "line",
+                        "attribution_key": "own-window",
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": 0,
+                        "purchases": None,
+                        "result_kind": "lead",
+                        "result_count": 3,
+                    }
+                ]
+            ),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign["id"],
+            start=date(2026, 1, 1),
+            end=date(2026, 1, 1),
+        )
+        self.assertEqual(view["observations"][0]["result_kind"], "lead")
+        self.assertEqual(view["observations"][0]["result_count"], 3)
+
     def test_revoked_account_blocks_pending_read_without_erasing_data(self):
         job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")

@@ -5,8 +5,9 @@ import type { NativeEntity } from "./adsExternalApi";
 export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "completed" | "deferred" | "unjudgeable" | "failed" | "unknown";
 export interface ReviewSeries {
   metric_scope: string; attribution_key: string; currency: string | null; source: string;
-  row_count: number; days_present: number;
-  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>;
+  row_count: number; days_present: number; result_kind?: string | null;
+  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>
+    & Partial<Record<"result_count" | "cost_per_result", number | null>>;
   known_counts: Record<string, number>;
 }
 export interface ReviewPeriod {

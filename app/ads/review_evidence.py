@@ -14,7 +14,7 @@ from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.llm import context_compiler
 
-METRICS = ("spend", "impressions", "clicks", "purchases", "revenue")
+METRICS = ("spend", "impressions", "clicks", "purchases", "revenue", "result_count")
 LIMITATIONS = [
     "平台歸因收入不是商務實收；品牌訂單淨額不可分配至單則廣告。",
     "商務來源訂單淨額未經會計核實；未付款、未知幣別及不完整覆蓋不可當實收或計算跨來源 ROAS。",
@@ -46,16 +46,21 @@ def aggregate(rows, start, end):
             ("cpc", "spend", "clicks", 1),
             ("cpa", "spend", "purchases", 1),
             ("roas", "revenue", "spend", 1),
+            ("cost_per_result", "spend", "result_count", 1),
         ):
             a, b = metrics[numerator], metrics[denominator]
             metrics[name] = (
                 a / b * multiplier if a is not None and b and (key[2] or name == "ctr") else None
             )
+        # This campaign's own result label (F16-I03): not a metric to sum, just which of the
+        # group's rows agree on what "result" means here; absent when no row has one yet.
+        result_kind = next((r.get("result_kind") for r in group if r.get("result_kind")), None)
         series.append(
             dict(zip(("metric_scope", "attribution_key", "currency", "source"), key, strict=True))
             | {
                 "row_count": len(group),
                 "days_present": len({r["day"] for r in group}),
+                "result_kind": result_kind,
                 "metrics": metrics,
                 "known_counts": counts,
             }

@@ -23,6 +23,7 @@ export interface NativeObservation {
   id: string; entity_id: string; day: string; metric_scope: string; attribution_key: string;
   currency: string | null; spend: number | null; impressions: number | null; clicks: number | null;
   purchases: number | null; revenue: number | null; availability: Record<string, string>;
+  result_kind?: string | null; result_count?: number | null;
 }
 export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null }
 export interface ExistingPage {

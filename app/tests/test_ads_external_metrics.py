@@ -37,6 +37,151 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(row["purchases"], 3)
         self.assertIsNone(row["revenue"])
 
+    def test_sales_objective_matches_purchase_and_leaves_existing_fields_unchanged(self):
+        item = {
+            "account_id": "1",
+            "campaign_id": "2",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+            "spend": "50",
+            "impressions": "1000",
+            "clicks": "10",
+            "actions": [{"action_type": "omni_purchase", "value": "4"}],
+            "action_values": [{"action_type": "omni_purchase", "value": "120"}],
+        }
+        account = {"account_id": "1", "currency": "USD"}
+        baseline = observation(item, "campaign", account)
+        for objective in ("OUTCOME_SALES", "CONVERSIONS", "PRODUCT_CATALOG_SALES"):
+            sales = observation(item, "campaign", account, objective)
+            for key in baseline:
+                self.assertEqual(sales[key], baseline[key], key)
+            self.assertEqual(sales["result_kind"], "purchase")
+            self.assertEqual(sales["result_count"], 4)
+        self.assertNotIn("result_kind", baseline)
+
+    def test_unmapped_objective_never_falls_back_to_purchase(self):
+        item = {
+            "account_id": "1",
+            "campaign_id": "2",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+            "actions": [{"action_type": "omni_purchase", "value": "9"}],
+        }
+        for objective in ("OUTCOME_AWARENESS", "BRAND_AWARENESS", "some_future_objective", None):
+            row = observation(item, "campaign", {"account_id": "1"}, objective)
+            self.assertIsNone(row["result_kind"], objective)
+            self.assertIsNone(row["result_count"], objective)
+            self.assertEqual(row["purchases"], 9)
+
+    def test_engagement_objective_counts_its_own_action_not_incidental_purchase(self):
+        item = {
+            "account_id": "1",
+            "campaign_id": "2",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+            "spend": "20",
+            "actions": [
+                {"action_type": "post_engagement", "value": "45"},
+                {"action_type": "omni_purchase", "value": "1"},
+            ],
+            "action_values": [{"action_type": "omni_purchase", "value": "30"}],
+        }
+        row = observation(item, "campaign", {"account_id": "1"}, "OUTCOME_ENGAGEMENT")
+        self.assertEqual(row["result_kind"], "engagement")
+        self.assertEqual(row["result_count"], 45)
+        # The incidental purchase is still a platform fact, just never this campaign's result.
+        self.assertEqual(row["purchases"], 1)
+        self.assertEqual(row["revenue"], 30)
+
+    def test_known_objective_without_that_days_action_is_unknown_not_zero(self):
+        item = {
+            "account_id": "1",
+            "campaign_id": "2",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+        }
+        row = observation(item, "campaign", {"account_id": "1"}, "OUTCOME_LEADS")
+        self.assertEqual(row["result_kind"], "lead")
+        self.assertIsNone(row["result_count"])
+
+    def test_reader_looks_up_synced_campaign_objective_for_every_level(self):
+        from app.ads import external_repository as repo
+        from app.ads.adapters.meta_read import MetaReader
+        from app.core import db
+        from app.tests.test_ads_external_sync import setup_brand
+
+        conn = db.current()
+        org, brand = setup_brand(conn)
+        campaign = repo.create_imported_campaign(conn, org, brand, name="互動活動")
+        repo.upsert_entity(
+            conn,
+            org,
+            brand,
+            campaign["id"],
+            {
+                "platform": "meta",
+                "source_account": "1",
+                "native_kind": "campaign",
+                "native_id": "9",
+                "objective": "OUTCOME_ENGAGEMENT",
+            },
+        )
+        conn.commit()
+        account = {"account_id": "1", "currency": "USD"}
+        raw = {
+            "account_id": "1",
+            "campaign_id": "9",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+            "spend": "20",
+            "actions": [
+                {"action_type": "post_engagement", "value": "45"},
+                {"action_type": "omni_purchase", "value": "1"},
+            ],
+            "action_values": [{"action_type": "omni_purchase", "value": "30"}],
+        }
+        reader = MetaReader()
+        with patch.object(reader, "_page", return_value={"data": [raw], "cursor": None}):
+            page = reader.read_observations(
+                conn, org, brand, account, native_id="9", start="2026-01-01", end="2026-01-01"
+            )
+        row = page.items[0]
+        self.assertEqual(row["result_kind"], "engagement")
+        self.assertEqual(row["result_count"], 45)
+        self.assertEqual(row["purchases"], 1)
+
+    def test_reader_returns_unknown_result_when_campaign_not_yet_synced(self):
+        from app.ads.adapters.meta_read import MetaReader
+        from app.core import db
+        from app.tests.test_ads_external_sync import setup_brand
+
+        conn = db.current()
+        org, brand = setup_brand(conn)
+        account = {"account_id": "1", "currency": "USD"}
+        raw = {
+            "account_id": "1",
+            "campaign_id": "unsynced",
+            "date_start": "2026-01-01",
+            "date_stop": "2026-01-01",
+            "spend": "20",
+            "actions": [{"action_type": "omni_purchase", "value": "1"}],
+        }
+        reader = MetaReader()
+        with patch.object(reader, "_page", return_value={"data": [raw], "cursor": None}):
+            page = reader.read_observations(
+                conn,
+                org,
+                brand,
+                account,
+                native_id="unsynced",
+                start="2026-01-01",
+                end="2026-01-01",
+            )
+        row = page.items[0]
+        self.assertIsNone(row["result_kind"])
+        self.assertIsNone(row["result_count"])
+        self.assertEqual(row["purchases"], 1)
+
     def test_creative_types_do_not_fabricate_video_original(self):
         for value, kind in (
             ({"image_hash": "hash"}, "image"),

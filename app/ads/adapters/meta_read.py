@@ -8,6 +8,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ads import external_repository
 from app.ads.adapters.external import SourcePage, SourceReadError
 from app.core.db import now_utc
 from app.meta import repository as source
@@ -217,7 +218,53 @@ def creative_summary(value):
     return result
 
 
-def observation(item, level, account):
+# Meta campaign objective -> this ad's own "result" (F16-I03, docs/architecture/ads.md §6.13).
+# ODAX (current, "OUTCOME_*") and pre-ODAX legacy objective names Meta still accepts both map
+# here; the shared vocabulary the rest of the app reads is only `result_kind`/`result_count`/
+# `cost_per_result` — this table, and the Meta action_type synonyms it points at, are the one
+# place that knows Meta's own naming. An objective absent from this table has no defined result
+# and stays NULL — never a fallback to purchase; that silent fallback is exactly the false
+# stop-loss on incidental purchases this ticket removes.
+_SALES_OBJECTIVES = frozenset({"OUTCOME_SALES", "CONVERSIONS", "PRODUCT_CATALOG_SALES"})
+_OBJECTIVE_RESULT_ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "OUTCOME_ENGAGEMENT": ("engagement", ("post_engagement", "page_engagement")),
+    "POST_ENGAGEMENT": ("engagement", ("post_engagement", "page_engagement")),
+    "OUTCOME_TRAFFIC": ("link_click", ("link_click", "landing_page_view")),
+    "LINK_CLICKS": ("link_click", ("link_click", "landing_page_view")),
+    "OUTCOME_LEADS": ("lead", ("lead",)),
+    "LEAD_GENERATION": ("lead", ("lead",)),
+    "OUTCOME_APP_PROMOTION": ("app_install", ("mobile_app_install",)),
+    "APP_INSTALLS": ("app_install", ("mobile_app_install",)),
+    "VIDEO_VIEWS": ("video_view", ("video_view",)),
+    "MESSAGES": ("message", ("onsite_conversion.messaging_conversation_started_7d",)),
+    "STORE_VISITS": ("store_visit", ("store_visit",)),
+}
+
+# Sentinel, not None: `read_monthly` never looks up an objective (account-wide monthly rollups
+# aren't judged per ad — `_save_monthly` validates that dict shape strictly against
+# `ExternalObservation`), so its `observation()` calls must add no result keys at all.
+# `read_observations` always passes an explicit `objective` (itself may be None when the
+# entity hasn't synced one yet), which is how the two call sites stay distinguishable.
+_NO_OBJECTIVE = object()
+
+
+def _objective_result(objective, actions, purchase):
+    """This campaign's own (label, count) — reusing the one purchase definition for sales
+    objectives, and never letting any other objective read a stray purchase as its result."""
+    if objective in _SALES_OBJECTIVES:
+        return "purchase", purchase["purchases"]
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    if mapped is None:
+        return None, None
+    label, action_types = mapped
+    counts = {a.get("action_type"): a.get("value") for a in (actions or []) if isinstance(a, dict)}
+    for action_type in action_types:
+        if action_type in counts:
+            return label, _number(counts[action_type])
+    return label, None
+
+
+def observation(item, level, account, objective=_NO_OBJECTIVE):
     """Never interpret absent purchase actions as zero or infer revenue from ROAS."""
     if str(item.get("account_id")) != account["account_id"]:
         raise ValueError("平台成效帳號不符。")
@@ -229,7 +276,7 @@ def observation(item, level, account):
     # The legacy source facade defines synonymous purchase actions once.
     purchase = source.external_purchase_values(item.get("actions"), item.get("action_values"))
     metrics.update(purchases=purchase["purchases"], revenue=purchase["revenue"])
-    return {
+    result = {
         "native_kind": level,
         "native_id": str(native_id),
         "day": day,
@@ -242,6 +289,11 @@ def observation(item, level, account):
         },
         "source": "graph",
     }
+    if objective is not _NO_OBJECTIVE:
+        result["result_kind"], result["result_count"] = _objective_result(
+            objective, item.get("actions"), purchase
+        )
+    return result
 
 
 class MetaReader:
@@ -344,9 +396,14 @@ class MetaReader:
         )
         if any(str(item.get("campaign_id")) != native_id for item in page["data"]):
             raise ValueError("平台成效不屬於此活動。")
+        # The result mapping is keyed by the campaign's own Meta objective at every level
+        # (adset/ad observations still belong to one campaign) — looked up once per page.
+        objective = external_repository.campaign_objective(
+            conn, org_id, brand_id, "meta", account["account_id"], native_id
+        )
         following = {"campaign": "adset", "adset": "ad"}.get(phase)
         return SourcePage(
-            [observation(item, phase, account) for item in page["data"]],
+            [observation(item, phase, account, objective) for item in page["data"]],
             {"phase": phase, "after": page["cursor"]}
             if page["cursor"]
             else {"phase": following}

@@ -588,3 +588,60 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   一致」，不是只用測試自訂的假數字。
 - 驗證：`app/tests/test_ads_external_metrics.py`（零小數 TWD、兩位小數 USD、不在清單的幣別、幣
   別缺失、無預算數值五種情境）、`app/tests/test_ads_change_control.py`（端到端讀回）。
+
+### 6.13 F16-I03 — 依活動目標判讀成果，不再只看購買（settled 2026-09-20）
+
+- 問題：Insights 的 `actions` 早就整包拉回來了（`graph.py:556-558`），但除了購買同義字之外全部
+  被丟棄；`ads_external_daily` 只有 `purchases`／`revenue` 兩欄，`review_evidence.aggregate()`
+  寫死 CPA／ROAS。非購買目標的活動因此完全無法判讀，而且一則廣告偶發一次購買，會被讀成「這活
+  動的成果」，觸發不該有的變差／停損判斷——這正是本票要拔掉的假訊號。
+- Schema：`supabase/migrations/20260920000003_ads_result_metric.sql` 對 `ads_external_daily`
+  新增 `result_kind`（text，可空）／`result_count`（numeric，可空）兩個平台中立欄位；既有
+  `purchases`／`revenue`／唯一鍵不變。這支 migration 不回填任何舊列——舊列的 `result_kind`／
+  `result_count` 保持 `NULL`，直到那個活動被用新版 adapter 重新同步一次；migration 沒有辦法知
+  道一列舊資料當初「應該」對到哪個成果，回填等於用今天的規則假造昨天沒發生過的判斷。
+- 目標 → 成果動作對照表整份住在 `app/ads/adapters/meta_read.py`
+  （`_SALES_OBJECTIVES`／`_OBJECTIVE_RESULT_ACTIONS`）——這是 Meta 專有的名詞轉換，跟品牌自己
+  的 `conversion_goal`（`app/meta/repository.py::_CONVERSION_ACTION_PRIORITY`）是不同的鍵、不
+  同的用途，這次沒有動、也沒有 import 對方：
+  - 銷售類目標（`OUTCOME_SALES`／`CONVERSIONS`／`PRODUCT_CATALOG_SALES`）→ 成果 `purchase`，
+    直接沿用 `source.external_purchase_values()` 已經算好的購買數，不另外重新掃一次
+    `actions`——購買同義字的唯一定義還是那一份，這裡不維護第二份。
+  - `OUTCOME_ENGAGEMENT`／`POST_ENGAGEMENT` → `engagement`（`post_engagement`／
+    `page_engagement`）；`OUTCOME_TRAFFIC`／`LINK_CLICKS` → `link_click`（`link_click`／
+    `landing_page_view`）；`OUTCOME_LEADS`／`LEAD_GENERATION` → `lead`；
+    `OUTCOME_APP_PROMOTION`／`APP_INSTALLS` → `app_install`；`VIDEO_VIEWS` → `video_view`；
+    `MESSAGES` → `message`；`STORE_VISITS` → `store_visit`。
+  - 不在表裡的目標（含 `OUTCOME_AWARENESS`／`BRAND_AWARENESS`／`REACH` 這類本來就沒有離散成果
+    可數的目標）一律 `result_kind=result_count=None`——**絕不**退回去算購買數；這是本票最重要
+    的一條規則，用一個物件哨兵（`_NO_OBJECTIVE`）跟「呼叫端沒有要求算成果」區分開來。
+- 讀取端只有 `MetaReader.read_observations()` 會查目標並往下傳：每一頁只查一次
+  `external_repository.campaign_objective()`（讀 `ads_external_entity.objective`，campaign 層
+  已經在既有 structure 同步時存好），同一頁 campaign／adset／ad 三層共用同一個活動的目標。
+  `read_monthly()` 刻意不查、也不傳目標——月結只做帳戶級花費核對，不逐廣告判讀，維持
+  `_save_monthly()`／`ExternalObservation` 既有的嚴格欄位形狀不變。
+- `result_kind`／`result_count` 沒有進 `ExternalObservation`（`app/ads/external_models.py`，這
+  次沒有動）：那個模型是 `extra="forbid"`，硬塞兩個大多數來源都沒有意見的欄位，會逼每個既有測
+  試替身跟著長出這兩個 key。改成 `external_repository.upsert_observation()` 多兩個獨立關鍵字參
+  數，直接補進 `model_dump()` 之後的 dict 再組 SQL；`external_sync.py::_save_page` 把
+  `MetaReader` 回傳的 `result_kind`／`result_count` 從 observation dict 裡摘出來，轉成關鍵字參
+  數傳過去，其餘來源（測試替身、既有 fixture）沒有這兩個 key 就一律是 `None`，行為不變。
+  `availability["result_count"]` 比照其餘欄位規則自己補（有數字才是 `available`）。
+- `review_evidence.aggregate()`：`METRICS` 加入 `result_count`，套用同一條「這組只要有一天未追
+  蹤，整組就是 `None`」誠實規則，不特例；比率清單加一列
+  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。
+  `result_kind` 不是可加總的數字，另外在每個 series 上取「這組裡第一個非空的 result_kind」，
+  沒有的話是 `None`。
+- 提示詞（`app/departments/ads/review_round.md`）新增一句：cpa／roas 只認購買，
+  `cost_per_result` 才是活動依自己目標算出的成果與成本；沒有成果定義時是 `null`，偶發的購買不
+  是該活動的目標成果，不能當成效變好或變差的證據。`review_policy.py` 的驗證器沒有改——它驗證
+  的是模型回覆的形狀，跟評分用哪個指標無關。
+- SALES 不變性：新增回歸測試直接比對「不傳 objective」與「傳 `OUTCOME_SALES`」兩次
+  `observation()` 呼叫，除了新增的 `result_kind`／`result_count` 之外，其餘每一個既有欄位（含
+  `purchases`／`revenue`／`attribution_key`）逐一斷言相等——這保證 SALES 活動今天算出來的
+  CPA／ROAS／購買數，一步變化都不會有。
+- 驗證：`app/tests/test_ads_external_metrics.py`（SALES 不變性、目標對照表逐項、`OUTCOME_
+  ENGAGEMENT` 活動混了一次偶發購買仍判成 `engagement` 而非購買、未對照目標不落回購買）、
+  `app/tests/test_ads_external_sync.py`（`result_kind`／`result_count` 經由通用同步流程真的落
+  進 `ads_external_daily`）、`app/tests/test_ads_review_cycle.py`
+  （`review_evidence.aggregate()` 的 `result_kind`／`cost_per_result`／未追蹤誠實規則）。

@@ -62,7 +62,7 @@ class ReviewCycleTest(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.conn.commit()
 
-    def observation(self, day=None, **extra):
+    def observation(self, day=None, *, result_kind=None, result_count=None, **extra):
         external_repository.upsert_observation(
             self.conn,
             self.org,
@@ -82,6 +82,8 @@ class ReviewCycleTest(unittest.TestCase):
                 "revenue": None,
                 **extra,
             },
+            result_kind=result_kind,
+            result_count=result_count,
         )
         self.conn.commit()
 
@@ -216,6 +218,25 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(evidence["current"]["missing_days"], 1)
         self.assertEqual(evidence["conditions"]["history"], "unknown")
         self.assertEqual(evidence["previous"]["row_count"], 0)
+
+    def test_result_kind_and_cost_per_result_name_the_campaigns_own_result(self):
+        self.observation(result_kind="engagement", result_count=45, spend=90)
+        self.observation(
+            self.end - timedelta(days=1), result_kind="engagement", result_count=15, spend=30
+        )
+        row = self.request()
+        series = row["evidence_json"]["current"]["series"][0]
+        self.assertEqual(series["result_kind"], "engagement")
+        self.assertEqual(series["metrics"]["result_count"], 60)
+        self.assertEqual(series["metrics"]["cost_per_result"], 2.0)
+
+    def test_unknown_result_count_any_day_keeps_cost_per_result_unknown(self):
+        self.observation(result_kind="engagement", result_count=45)
+        self.observation(self.end - timedelta(days=1), result_kind="engagement", result_count=None)
+        row = self.request()
+        series = row["evidence_json"]["current"]["series"][0]
+        self.assertIsNone(series["metrics"]["result_count"])
+        self.assertIsNone(series["metrics"]["cost_per_result"])
 
     def test_invalid_model_target_refs_numbers_and_copy_rejected_without_resend(self):
         self.observation()
