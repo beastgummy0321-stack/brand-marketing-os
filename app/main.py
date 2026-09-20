@@ -451,8 +451,9 @@ schedule_module.register_tasks()
 # app/workbench/jobs.py register_tasks() 檔頭。
 workbench_module.register_tasks()
 
-# 票 F03-I12：掛結案的自動路徑（7 天後自動結案＋寫學習），同一個「DSN 換了要重掛」的理由，見
-# app/ads/jobs.py register_tasks() 檔頭。
+# 票 F03-I12：掛投放中心的背景 task（監控排程、外部同步、素材建議……），同一個「DSN 換了要
+# 重掛」的理由，見 app/ads/jobs.py register_tasks() 檔頭——不再是「7 天後自動結案」：結案是
+# 使用者動作，這裡只排程監控與資料同步（F16-I05）。
 ads_module.register_tasks()
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進

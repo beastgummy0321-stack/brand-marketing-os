@@ -9,6 +9,7 @@ from app.ads import channels
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.core import settings
 from app.core.db import connection, jsonb, new_id, now_utc, set_tenant_scope
 
@@ -231,7 +232,7 @@ def _save_monthly(conn, job, task, page, account):
             job["brand_id"],
             root["campaign_id"],
             {k: v for k, v in item.items() if k not in {"native_kind", "native_id"}}
-            | {"entity_id": root["id"], "attribution_key": "account_monthly_spend"},
+            | {"entity_id": root["id"], "attribution_key": MONTHLY_BUDGET_ATTRIBUTION_KEY},
         )
     # Recheck all observed identities: another brand may have claimed a root between pages.
     for kind, native_id in sorted(seen):
@@ -251,7 +252,28 @@ def _save_monthly(conn, job, task, page, account):
     task["coverage"] = {**proof, "unassigned_native_ids": sorted(set(unassigned))}
 
 
-def _save_page(conn, job, task, page):
+def _fill_result_kind_if_null(conn, reader, org, brand, campaign_id, item):
+    """F16-I04: `ads_campaign.result_kind` from the campaign-level entity (this platform's root
+    of the campaign's own tree -- no `parent_native_id`, whatever `native_kind` label that
+    platform gives it; not hard-coded to Meta's `"campaign"`), only when it is currently NULL --
+    a user's later PUT choice (`repository.save_campaign_target`) must never be overwritten by a
+    re-sync. `reader.result_kind()` is the one seam shared code reads this through (§0 "shared
+    code must not read a Meta objective string"); a reader without that capability (no
+    result-kind mapping defined, e.g. the generic/manual adapters) leaves `result_kind`
+    untouched, same as an unmapped objective."""
+    if not hasattr(reader, "result_kind"):
+        return
+    result_kind = reader.result_kind(item)
+    if result_kind is None:
+        return
+    conn.execute(
+        "UPDATE ads_campaign SET result_kind=%s WHERE org_id=%s AND brand_id=%s AND id=%s"
+        " AND result_kind IS NULL",
+        (result_kind, org, brand, campaign_id),
+    )
+
+
+def _save_page(conn, job, task, page, reader=None):
     org, brand = job["org_id"], job["brand_id"]
     if len(page.items) > 100:
         raise ValueError("來源分頁超過100個節點。")
@@ -277,13 +299,24 @@ def _save_page(conn, job, task, page):
             if entity is None:
                 errors.append("部分成效缺少已讀回的來源節點。")
                 continue
+            result_keys = {"result_kind", "result_count", "result_action", "result_attribution"}
+            fields = {
+                k: v for k, v in item.items() if k not in {"native_kind", "native_id", *result_keys}
+            }
             repo.upsert_observation(
                 conn,
                 org,
                 brand,
                 task["campaign_id"],
-                {k: v for k, v in item.items() if k not in {"native_kind", "native_id"}}
-                | {"entity_id": entity["id"]},
+                fields | {"entity_id": entity["id"]},
+                result_kind=item.get("result_kind"),
+                result_count=item.get("result_count"),
+                result_action=item.get("result_action"),
+                result_attribution=item.get("result_attribution"),
+                # F16-I06: this is the one point every platform reader's regular (non-monthly)
+                # observation write routes through -- heal superseded same-identity rows here,
+                # not per reader.
+                heal_superseded_attribution=True,
             )
         else:
             if (
@@ -321,6 +354,8 @@ def _save_page(conn, job, task, page):
                 asset_binding_repository.stale_for_entity(
                     conn, org, brand, task["campaign_id"], saved["id"], item["creative"]
                 )
+            if task["section"] == "structure" and not item.get("parent_native_id"):
+                _fill_result_kind_if_null(conn, reader, org, brand, task["campaign_id"], item)
     return errors
 
 
@@ -394,7 +429,9 @@ def run_sync(org_id, brand_id, job_id):
                     _save_monthly(conn, job, task, page, current_account)
                     errors = []
                 else:
-                    errors = (task.get("errors", []) + _save_page(conn, job, task, page))[-20:]
+                    errors = (
+                        task.get("errors", []) + _save_page(conn, job, task, page, reader)
+                    )[-20:]
                 updated = {
                     **task,
                     "cursor": page.cursor,

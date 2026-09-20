@@ -272,6 +272,136 @@ def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:
     return campaign
 
 
+_TARGET_BASES = frozenset({"own", "break_even", "trailing_30"})
+
+
+def _campaign_target_view(campaign: dict, resolved: dict) -> dict:
+    own_value = (
+        float(campaign["target_cost"])
+        if campaign.get("target_basis") == "own" and campaign.get("target_cost") is not None
+        else None
+    )
+    return {
+        "campaign_id": campaign["id"],
+        "product_ids": (campaign.get("context_json") or {}).get("product_ids") or [],
+        "own_value": own_value,
+        "revision": campaign.get("target_revision") or 0,
+        **resolved,
+    }
+
+
+def get_campaign_target(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict:
+    """F16-I04: `GET .../target`. `targets.resolve()` is pure and read-only; this is the one
+    place that combines it with the stored configuration (`result_kind`/product choice/own
+    override/`target_revision`) into the shape the route returns."""
+    from app.ads import targets
+
+    campaign = get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+    resolved = targets.resolve(conn, org_id, brand_id, campaign)
+    return _campaign_target_view(campaign, resolved)
+
+
+def save_campaign_target(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+    result_kind: str | None = None, basis: str | None = None, value: float | None = None,
+    product_id: str | None = None, price: float | None = None,
+    variable_cost: float | None = None, expected_revision: int | None, actor: str,
+) -> dict:
+    """F16-I04: `PUT .../target`, optimistic revision exactly like `month_budget.save`
+    (`app/ads/month_budget.py:410`) but scoped to `target_revision` -- this sub-resource's own
+    counter, so unrelated campaign edits (strategy/plan/bind/...) never collide with it.
+
+    Writes only this sub-resource's own columns (`target_cost`/`target_basis`/`result_kind`/
+    `target_revision`) -- never `success_metric`/`success_target`/`success_basis` (2026-09-20
+    re-cut: overloading those three silently corrupted close-out verdicts, learning cohorts,
+    cold-start budgets, asset suggestions and the frontend metric label, all outside this issue).
+
+    `price`/`variable_cost` are never written to `product_economics` here: they only ever reach
+    `app.brand_intelligence.repository.save_product_economics`, that layer's own public write
+    path (container contract §1) -- merged with the product's current economics so a partial
+    edit (just the variable cost, say) never has to guess the other required fields."""
+    row = conn.execute(
+        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s FOR UPDATE",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("campaign_unknown")
+    campaign = dict(row)
+    if (
+        type(expected_revision) is not int
+        or expected_revision != (campaign.get("target_revision") or 0)
+    ):
+        raise ValueError("target_conflict")
+    if basis is not None and basis not in _TARGET_BASES:
+        raise ValueError("target_basis_unknown")
+    if basis == "own" and value is None:
+        raise ValueError("target_value_unknown")
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        raise ValueError("target_value_unknown")
+
+    context_json = dict(campaign.get("context_json") or {})
+    if product_id is not None:
+        brand_product_ids = {p["id"] for p in bi_repo.list_products(cast(Conn, conn), brand_id)}
+        if product_id not in brand_product_ids:
+            raise ValueError("product_unknown")
+        context_json["product_ids"] = [product_id]
+        conn.execute(
+            "UPDATE ads_campaign SET context_json=%s WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (jsonb(context_json), org_id, brand_id, campaign_id),
+        )
+
+    if price is not None or variable_cost is not None:
+        product_ids = [product_id] if product_id else context_json.get("product_ids") or []
+        if not product_ids:
+            raise ValueError("product_unknown")
+        existing = bi_repo.get_product_economics(cast(Conn, conn), brand_id, product_ids[0]) or {}
+        selling_price = price if price is not None else existing.get("selling_price")
+        currency = existing.get("currency")
+        if selling_price is None or currency is None:
+            raise ValueError("product_economics_unknown")
+        bi_repo.save_product_economics(
+            cast(Conn, conn), brand_id, product_ids[0], actor=actor,
+            selling_price=float(selling_price), currency=currency, confirmed_by=actor,
+            fixed_cost=existing.get("fixed_cost"),
+            unit_variable_cost=(
+                float(variable_cost) if variable_cost is not None
+                else existing.get("unit_variable_cost")
+            ),
+            shipping_cost=existing.get("shipping_cost"),
+            effective_from=existing.get("effective_from"),
+            effective_to=existing.get("effective_to"),
+            close_rate=existing.get("close_rate"),
+            assumptions=existing.get("assumptions_json"),
+        )
+
+    set_clauses = ["target_revision = target_revision + 1", "updated_at = now()"]
+    params: list = []
+    if result_kind is not None:
+        set_clauses.append("result_kind = %s")
+        params.append(result_kind)
+    if basis == "own":
+        set_clauses += ["target_basis = %s", "target_cost = %s"]
+        params += ["own", value]
+    elif basis is not None:
+        # `basis` here only ever asks resolve() to pick again among break-even/trailing-30 --
+        # never a stored preference (the priority order is fixed, §0) -- so clearing a prior
+        # "own" override just drops `target_cost` and relabels `target_basis`; `resolve()` never
+        # reads this label for break-even/trailing-30 (both are always recomputed), it is kept
+        # only so `_campaign_target_view` can tell "user asked for X" from "nothing chosen yet".
+        set_clauses += ["target_basis = %s", "target_cost = NULL"]
+        params += [basis]
+    params += [org_id, brand_id, campaign_id]
+    conn.execute(
+        f"UPDATE ads_campaign SET {', '.join(set_clauses)} "
+        "WHERE org_id=%s AND brand_id=%s AND id=%s",
+        tuple(params),
+    )
+    conn.commit()
+    return get_campaign_target(conn, org_id, brand_id, campaign_id)
+
+
 def _empty_external_outcome() -> dict:
     return {"spend": None, "purchases": None, "revenue": None, "row_count": 0}
 
@@ -327,16 +457,20 @@ def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     """Campaign-level totals sum `entity_kind = 'group'` rows only. `ads_outcome_daily` also
     carries `entity_kind = 'ad'` rows (for the per-ad 花費占比), and those are never summed
     into a campaign total — summing both levels double-counts (§0 "money totals belong to the
-    group level")."""
+    group level"). `purchases`／`revenue` are nullable (F16-I01): `SUM()` already ignores `NULL`
+    rows on its own, so no `COALESCE` here — when every row is untracked the sum comes back
+    `NULL`/`None`, never a fabricated 0. `spend` stays `COALESCE`d to 0 — spend is always
+    tracked, and `row_count` is how callers already tell "no data at all" apart from "zero
+    spend"."""
     row = conn.execute(
-        "SELECT COALESCE(SUM(spend), 0) AS spend, COALESCE(SUM(purchases), 0) AS purchases,"
-        " COALESCE(SUM(revenue), 0) AS revenue, COUNT(*) AS row_count"
+        "SELECT COALESCE(SUM(spend), 0) AS spend, SUM(purchases) AS purchases,"
+        " SUM(revenue) AS revenue, COUNT(*) AS row_count"
         " FROM ads_outcome_daily WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
         " AND entity_kind = 'group'",
         (org_id, brand_id, campaign_id),
     ).fetchone()
     return dict(row) if row is not None else {
-        "spend": 0, "purchases": 0, "revenue": 0, "row_count": 0,
+        "spend": 0, "purchases": None, "revenue": None, "row_count": 0,
     }
 
 

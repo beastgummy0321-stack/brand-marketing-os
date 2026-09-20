@@ -607,6 +607,121 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(result["items"][0]["verification_state"], "unknown")
         self.assertIsNone(result["items"][0]["verified_at"])
 
+    def test_meta_budget_conversion_flows_through_confirmed_readback(self):
+        """F16-I02: the real per-currency amount from meta_read._entity, not a synthetic
+        number, is what change_control_data.before()/check() compare against `after`."""
+        from app.ads.adapters.meta_read import _entity
+
+        raw = {"id": "2", "account_id": "account", "campaign_id": "1", "daily_budget": "1600"}
+        resolved = _entity(raw, "adset", {"account_id": "account", "currency": "TWD"})
+        self.assertEqual(resolved["budget_amount"], 1600.0)
+        # Concrete start/end dates so budget_conditions' availability check is satisfied and the
+        # scenario can reach "confirmed" rather than "unknown" for an unrelated missing field.
+        self.entity(
+            "2",
+            "adset",
+            parent_native_kind="campaign",
+            parent_native_id="1",
+            budget_type="daily",
+            budget_amount=1000,
+            currency="TWD",
+            start_date="2026-01-01",
+            end_date="2026-12-31",
+        )
+        self.conn.commit()
+        created = self.create(
+            items=[
+                {
+                    "kind": "budget",
+                    "target_id": self.group["id"],
+                    "after": {"daily_amount": resolved["budget_amount"]},
+                    "reason": "核對讀回換算後的真實金額",
+                }
+            ]
+        )
+        with patch("app.ads.month_budget.preflight", return_value={}):
+            approved = self.approve(created)
+        entity = {
+            **self.group,
+            "budget_amount": resolved["budget_amount"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+        }
+
+        class Reader:
+            def verify_native(inner, *args, **kwargs):
+                return {"entity": entity, "parents": [self.root]}
+
+        with patch.object(external_sync, "account_reader", return_value=(Reader(), {})):
+            result = verification.check(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                approved["id"],
+                approved["items"][0]["id"],
+                "test",
+            )
+        self.assertEqual(result["items"][0]["verification_state"], "confirmed")
+        self.assertTrue(result["items"][0]["evidence_json"]["setting_matches"])
+
+    def test_meta_budget_conversion_flows_through_confirmed_readback_two_decimal_currency(self):
+        """F16-I02: change_control_verify.check() compares read-back money with plain `==`,
+        no tolerance. TWD (offset 1) is integer-valued and trivially safe; USD (offset 100)
+        is the case that can actually break if both sides don't quantize identically."""
+        from app.ads.adapters.meta_read import _entity
+
+        raw = {"id": "2", "account_id": "account", "campaign_id": "1", "daily_budget": "123456"}
+        resolved = _entity(raw, "adset", {"account_id": "account", "currency": "USD"})
+        self.assertEqual(resolved["budget_amount"], 1234.56)
+        self.group = self.entity(
+            "2",
+            "adset",
+            parent_native_kind="campaign",
+            parent_native_id="1",
+            budget_type="daily",
+            budget_amount=1000,
+            currency="USD",
+            start_date="2026-01-01",
+            end_date="2026-12-31",
+        )
+        self.conn.commit()
+        created = self.create(
+            items=[
+                {
+                    "kind": "budget",
+                    "target_id": self.group["id"],
+                    "after": {"daily_amount": resolved["budget_amount"]},
+                    "reason": "核對讀回換算後的真實金額（USD 兩位小數）",
+                }
+            ]
+        )
+        with patch("app.ads.month_budget.preflight", return_value={}):
+            approved = self.approve(created)
+        entity = {
+            **self.group,
+            "budget_amount": resolved["budget_amount"],
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+        }
+
+        class Reader:
+            def verify_native(inner, *args, **kwargs):
+                return {"entity": entity, "parents": [self.root]}
+
+        with patch.object(external_sync, "account_reader", return_value=(Reader(), {})):
+            result = verification.check(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                approved["id"],
+                approved["items"][0]["id"],
+                "test",
+            )
+        self.assertEqual(result["items"][0]["verification_state"], "confirmed")
+        self.assertTrue(result["items"][0]["evidence_json"]["setting_matches"])
+
     def test_two_approval_requests_create_one_approval_and_action(self):
         first = self.create()
         self.conn.commit()

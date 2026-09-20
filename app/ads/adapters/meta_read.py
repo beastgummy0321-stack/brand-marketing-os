@@ -5,12 +5,65 @@ Field declarations do not establish live account permissions.
 
 import re
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ads import external_repository
 from app.ads.adapters.external import SourcePage, SourceReadError
+from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.core.db import now_utc
 from app.meta import repository as source
+
+# Meta Marketing API currency offsets. Source: https://developers.facebook.com/docs/
+# marketing-api/currencies (fetched 2026-09-20): "Each currency has an offset which specifies
+# how the platform handles its subdivisions." An amount in API minor units is divided by the
+# currency's offset to get the amount in the account currency. Cross-checked read-only against
+# campaign 120250284145340671 on TWD account 368741390835357: daily_budget "1900" only holds
+# together against that campaign's actual daily spend (1,639-2,383 TWD) at offset 1 (NT$1,900/day);
+# offset 100 (NT$19/day) is impossible against that spend. See docs/architecture/ads.md §6.12.
+# A currency in neither set below resolves to budget_amount=None with a reason; never a default.
+_OFFSET_1_CURRENCIES = frozenset({
+    "CLP", "COP", "CRC", "HUF", "IDR", "ISK", "JPY", "KRW", "PYG", "TWD", "VND",
+})
+_OFFSET_100_CURRENCIES = frozenset({
+    "DZD", "ARS", "AUD", "BHD", "BDT", "BOB", "BGN", "BRL", "GBP", "CAD", "CNY", "HRK", "CZK",
+    "DKK", "EGP", "EUR", "GTQ", "HNL", "HKD", "INR", "ILS", "JOD", "KES", "LVL", "LTL", "MOP",
+    "MYR", "MXN", "NZD", "NIO", "NGN", "NOK", "PKR", "PEN", "PHP", "PLN", "QAR", "RON", "RUB",
+    "SAR", "RSD", "SGD", "SKK", "ZAR", "SEK", "CHF", "THB", "TRY", "AED", "UAH", "USD", "UYU",
+    "VEF", "FBZ", "VES",
+})
+
+
+def _budget_minor_unit_amount(raw_value, currency):
+    """Resolve one Meta minor-unit budget into the account currency, or explain why not.
+
+    Returns (amount: float|None, reason: str). `reason` is always a machine-readable token:
+    an "offset_table:<n>" trail for a resolved amount, or the specific block for an unresolved
+    one. Unknown is never a number — a currency absent from both documented offset sets stays
+    None rather than guessing 1 or 100.
+    """
+    if not currency or not re.fullmatch(r"[A-Z]{3}", currency):
+        return None, "currency_absent"
+    if currency in _OFFSET_1_CURRENCIES:
+        offset, places = 1, 0
+    elif currency in _OFFSET_100_CURRENCIES:
+        offset, places = 100, 2
+    else:
+        return None, "currency_not_in_offset_table"
+    if raw_value is None:
+        return None, "no_budget_value"
+    try:
+        units = Decimal(str(raw_value))
+    except InvalidOperation:
+        return None, "no_budget_value"
+    if not units.is_finite():
+        return None, "no_budget_value"
+    # Meta always reports minor units as integers, so this division is exact for well-formed
+    # platform data; ROUND_HALF_UP is a defensive fallback only, never a source of precision
+    # loss on a resolved two-decimal currency (Decimal throughout, no binary float division).
+    quantum = Decimal(1).scaleb(-places)
+    amount = (units / Decimal(offset)).quantize(quantum, rounding=ROUND_HALF_UP)
+    return float(amount), f"offset_table:{offset}"
 
 
 def _number(value):
@@ -66,22 +119,31 @@ def _entity(item, kind, account):
         )
     if kind != "ad":
         raw = {key: item[key] for key in ("daily_budget", "lifetime_budget") if key in item}
-        result.update(
-            budget_type="lifetime"
+        budget_type = (
+            "lifetime"
             if _number(raw.get("lifetime_budget"))
             else "daily"
             if _number(raw.get("daily_budget"))
-            else "unknown",
+            else "unknown"
+        )
+        currency = account.get("currency")
+        if budget_type == "unknown":
+            amount, conversion = None, "no_budget_value"
+        else:
+            raw_value = raw.get("lifetime_budget" if budget_type == "lifetime" else "daily_budget")
+            amount, conversion = _budget_minor_unit_amount(raw_value, currency)
+        result.update(
+            budget_type=budget_type,
             budget_raw={
                 "values": raw,
-                "unit": "unknown",
-                "conversion": "unverified_currency_denominator",
+                "unit": "minor_units" if amount is not None else "unknown",
+                "conversion": conversion,
             },
-            currency=account.get("currency"),
+            currency=currency,
             budget_source="graph",
-            budget_amount=None,
+            budget_amount=amount,
         )
-        result["availability"]["budget_amount"] = "unknown"
+        result["availability"]["budget_amount"] = "available" if amount is not None else "unknown"
     return result
 
 
@@ -157,7 +219,65 @@ def creative_summary(value):
     return result
 
 
-def observation(item, level, account):
+# Meta campaign objective -> this ad's own "result" (F16-I03, docs/architecture/ads.md §6.13).
+# ODAX (current, "OUTCOME_*") and pre-ODAX legacy objective names Meta still accepts both map
+# here; the shared vocabulary the rest of the app reads is only `result_kind`/`result_count`/
+# `cost_per_result` — this table, and the Meta action_type synonyms it points at, are the one
+# place that knows Meta's own naming. An objective absent from this table has no defined result
+# and stays NULL — never a fallback to purchase; that silent fallback is exactly the false
+# stop-loss on incidental purchases this ticket removes.
+_SALES_OBJECTIVES = frozenset({"OUTCOME_SALES", "CONVERSIONS", "PRODUCT_CATALOG_SALES"})
+_OBJECTIVE_RESULT_ACTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "OUTCOME_ENGAGEMENT": ("engagement", ("post_engagement", "page_engagement")),
+    "POST_ENGAGEMENT": ("engagement", ("post_engagement", "page_engagement")),
+    "OUTCOME_TRAFFIC": ("link_click", ("link_click", "landing_page_view")),
+    "LINK_CLICKS": ("link_click", ("link_click", "landing_page_view")),
+    "OUTCOME_LEADS": ("lead", ("lead",)),
+    "LEAD_GENERATION": ("lead", ("lead",)),
+    "OUTCOME_APP_PROMOTION": ("app_install", ("mobile_app_install",)),
+    "APP_INSTALLS": ("app_install", ("mobile_app_install",)),
+    "VIDEO_VIEWS": ("video_view", ("video_view",)),
+    "MESSAGES": ("message", ("onsite_conversion.messaging_conversation_started_7d",)),
+    "STORE_VISITS": ("store_visit", ("store_visit",)),
+}
+
+# Sentinel, not None: `read_monthly` never looks up an objective (account-wide monthly rollups
+# aren't judged per ad — `_save_monthly` validates that dict shape strictly against
+# `ExternalObservation`), so its `observation()` calls must add no result keys at all.
+# `read_observations` always passes an explicit `objective` (itself may be None when the
+# entity hasn't synced one yet), which is how the two call sites stay distinguishable.
+_NO_OBJECTIVE = object()
+
+# The attribution setting every result count below is read under. A fixed literal today, not a
+# parse of `attribution_key` — shared code (review_evidence.aggregate) must learn this only
+# through `result_attribution`, never by splitting the Meta-formatted `attribution_key` string.
+_ATTRIBUTION_WINDOW = "7d_click+1d_view"
+
+
+def _objective_result(objective, actions, purchase, attribution):
+    """This campaign's own (label, count, action, attribution) — reusing the one purchase
+    definition for sales objectives, and never letting any other objective read a stray purchase
+    as its result. `action`/`attribution` are only filled alongside a known `count` (F16-I03
+    repair): an unknown count means no specific action was actually read that day."""
+    if objective in _SALES_OBJECTIVES:
+        count = purchase["purchases"]
+        action = purchase["action_type"] if count is not None else None
+        return "purchase", count, action, (attribution if count is not None else None)
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    if mapped is None:
+        return None, None, None, None
+    label, action_types = mapped
+    counts = {a.get("action_type"): a.get("value") for a in (actions or []) if isinstance(a, dict)}
+    for action_type in action_types:
+        if action_type in counts:
+            count = _number(counts[action_type])
+            if count is None:
+                return label, None, None, None
+            return label, count, action_type, attribution
+    return label, None, None, None
+
+
+def observation(item, level, account, objective=_NO_OBJECTIVE):
     """Never interpret absent purchase actions as zero or infer revenue from ROAS."""
     if str(item.get("account_id")) != account["account_id"]:
         raise ValueError("平台成效帳號不符。")
@@ -169,12 +289,12 @@ def observation(item, level, account):
     # The legacy source facade defines synonymous purchase actions once.
     purchase = source.external_purchase_values(item.get("actions"), item.get("action_values"))
     metrics.update(purchases=purchase["purchases"], revenue=purchase["revenue"])
-    return {
+    result = {
         "native_kind": level,
         "native_id": str(native_id),
         "day": day,
         "metric_scope": level,
-        "attribution_key": "7d_click+1d_view:" + (purchase["action_type"] or "unavailable"),
+        "attribution_key": _ATTRIBUTION_WINDOW + ":" + (purchase["action_type"] or "unavailable"),
         "currency": item.get("account_currency") or account.get("currency"),
         **metrics,
         "availability": {
@@ -182,11 +302,40 @@ def observation(item, level, account):
         },
         "source": "graph",
     }
+    if objective is not _NO_OBJECTIVE:
+        (
+            result["result_kind"],
+            result["result_count"],
+            result["result_action"],
+            result["result_attribution"],
+        ) = _objective_result(objective, item.get("actions"), purchase, _ATTRIBUTION_WINDOW)
+    return result
+
+
+def result_kind_for_objective(objective) -> str | None:
+    """F16-I04: this adapter's own objective -> result-kind mapping (§0 "the objective -> result
+    mapping lives in the Meta adapter"), exposed to shared code (`app/ads/external_sync.py`)
+    through `MetaReader.result_kind()` so nothing outside this file ever reads a Meta objective
+    string. Reuses the exact same tables `_objective_result` keys observations by -- one
+    definition, not a second one that could drift. An objective absent from both tables (or
+    `None`, not yet synced) has no defined result and stays `None` -- never a fallback to
+    `"purchase"`."""
+    if objective in _SALES_OBJECTIVES:
+        return "purchase"
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    return mapped[0] if mapped else None
 
 
 class MetaReader:
     def sync_scopes(self, conn):
         return source.external_sync_scopes(conn)
+
+    def result_kind(self, entity: dict) -> str | None:
+        """F16-I04: result kind for this synced entity -- the campaign-level entity's own
+        `objective` field (`_entity()`'s raw Meta string), mapped through this file's one
+        objective -> result table. `app/ads/external_sync.py` calls this instead of reading
+        `entity["objective"]` itself -- shared code never branches on a Meta objective string."""
+        return result_kind_for_objective(entity.get("objective"))
 
     def accounts(self, conn, org_id, brand_id):
         return source.external_bound_accounts(conn, org_id, brand_id)
@@ -284,9 +433,14 @@ class MetaReader:
         )
         if any(str(item.get("campaign_id")) != native_id for item in page["data"]):
             raise ValueError("平台成效不屬於此活動。")
+        # The result mapping is keyed by the campaign's own Meta objective at every level
+        # (adset/ad observations still belong to one campaign) — looked up once per page.
+        objective = external_repository.campaign_objective(
+            conn, org_id, brand_id, "meta", account["account_id"], native_id
+        )
         following = {"campaign": "adset", "adset": "ad"}.get(phase)
         return SourcePage(
-            [observation(item, phase, account) for item in page["data"]],
+            [observation(item, phase, account, objective) for item in page["data"]],
             {"phase": phase, "after": page["cursor"]}
             if page["cursor"]
             else {"phase": following}
@@ -342,7 +496,7 @@ class MetaReader:
                 raise SourceReadError(
                     "月份來源列的日期、幣別或花費無法核對。", "invalid_source_page"
                 )
-            row["attribution_key"] = "account_monthly_spend"
+            row["attribution_key"] = MONTHLY_BUDGET_ATTRIBUTION_KEY
             rows.append(row)
         return SourcePage(
             rows,

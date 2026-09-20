@@ -10,6 +10,7 @@ from app.ads import asset_suggestion_policy as policy
 from app.ads import change_control_data as changes
 from app.ads import external_sync, review_monitor_source
 from app.ads.adapters.external import SourceReadError
+from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.llm import context_compiler
@@ -24,7 +25,97 @@ LIMITATIONS = [
 ]
 
 
+def _predates_result_columns(row):
+    """F16-I06: a row written before the F16-I03 result columns existed was never touched by
+    `external_repository.upsert_observation`'s availability bookkeeping, so it carries no
+    `result_count` entry in `availability` at all (on top of all four result fields being NULL).
+    A row a result mapping actually ran against but that simply had nothing to report that day
+    (e.g. a known objective, no purchase yet) always has that `availability` entry recorded as
+    `"unknown"` -- never absent. This is the only thing `needs_resync` may key off; never a date
+    constant, never a guess."""
+    return (
+        row.get("result_kind") is None
+        and row.get("result_count") is None
+        and row.get("result_action") is None
+        and row.get("result_attribution") is None
+        and "result_count" not in (row.get("availability") or {})
+    )
+
+
+def _result_view(key, group):
+    """This entity's own result, over ALL rows of one (metric_scope, currency) regardless of
+    `attribution_key` (F16-I03 repair): the per-`attribution_key` series above groups by the
+    purchase-derived `attribution_key`, so one ad can flap between keys the day an incidental
+    purchase lands, tearing one ad's result into two series. This view never groups by
+    `attribution_key`, so it cannot be torn that way. `group` never contains monthly-budget rows
+    (`aggregate()` excludes them before grouping, F16-I06) -- their NULL `result_count` must never
+    force this view unknown.
+
+    Fail-closed, same family as the `len(known) == len(group)` rule above: rows must agree on
+    `result_kind`/`result_action`/`result_attribution` (no "pick first" — Meta's `page_engagement`
+    already contains `post_engagement`; summing counts from two different action types under one
+    label is never a real quantity), and every row must have a known `result_count` and `spend`
+    or the whole window is unknown. Never a partial sum divided by partial or full spend.
+
+    `reason` (F16-I06) is one of three distinct, truthful signals for an unknown window:
+    `mixed_result_definition` (rows disagree on what they're even measuring, fail closed rather
+    than pick one); `needs_resync` (every row missing a result count predates the F16-I03 result
+    columns -- a re-sync, not a wait, resolves it); `result_unknown_days` (a result mapping ran
+    but genuinely has nothing to report, or spend itself is unknown -- no re-sync fixes that).
+    """
+    def _known(field):
+        return {r[field] for r in group if r.get(field) is not None}
+
+    metric_scope, currency = key
+    kinds, actions, attributions = _known("result_kind"), _known("result_action"), _known(
+        "result_attribution"
+    )
+    result_known = [
+        r
+        for r in group
+        if r.get("result_count") is not None
+        and r["availability"].get("result_count") == "available"
+    ]
+    spend_known = [
+        r for r in group if r["spend"] is not None and r["availability"].get("spend") == "available"
+    ]
+    reason = None
+    if len(kinds) > 1 or len(actions) > 1 or len(attributions) > 1:
+        reason = "mixed_result_definition"
+    elif len(spend_known) != len(group):
+        reason = "result_unknown_days"
+    elif len(result_known) != len(group):
+        missing = [r for r in group if r not in result_known]
+        reason = (
+            "needs_resync"
+            if all(_predates_result_columns(r) for r in missing)
+            else "result_unknown_days"
+        )
+    result_count = cost_per_result = None
+    if reason is None:
+        result_count = sum(float(r["result_count"]) for r in result_known)
+        spend_total = sum(float(r["spend"]) for r in spend_known)
+        cost_per_result = spend_total / result_count if result_count else None
+    return {
+        "metric_scope": metric_scope,
+        "currency": currency,
+        "result_kind": next(iter(kinds)) if len(kinds) == 1 else None,
+        "result_action": next(iter(actions)) if len(actions) == 1 else None,
+        "result_attribution": next(iter(attributions)) if len(attributions) == 1 else None,
+        "result_count": result_count,
+        "cost_per_result": cost_per_result,
+        "days_present": len({r["day"] for r in group}),
+        "days_known": len({r["day"] for r in result_known}),
+        "reason": reason,
+    }
+
+
 def aggregate(rows, start, end):
+    # F16-I06: account-month budget source rows share entity/day/`metric_scope`/currency with
+    # ordinary observation rows but are a different grain entirely (§0 "one shared definition") --
+    # excluded here, at the one point both the per-`attribution_key` series and the result view
+    # below are built from, not per reader.
+    rows = [r for r in rows if not is_monthly_budget_row(r["attribution_key"])]
     groups = defaultdict(list)
     for row in rows:
         groups[
@@ -60,6 +151,16 @@ def aggregate(rows, start, end):
                 "known_counts": counts,
             }
         )
+    # The campaign's own result (F16-I03 repair): one view per (metric_scope, currency), over
+    # every row of that scope regardless of `attribution_key`. Previous-vs-current comparison of
+    # "this campaign's own result" reads this, never the per-`attribution_key` series above.
+    result_groups = defaultdict(list)
+    for row in rows:
+        result_groups[(row["metric_scope"], row["currency"])].append(row)
+    result_views = [
+        _result_view(key, group)
+        for key, group in sorted(result_groups.items(), key=lambda pair: str(pair[0]))
+    ]
     expected, present = (end - start).days + 1, len({r["day"] for r in rows})
     return {
         "row_count": len(rows),
@@ -67,6 +168,7 @@ def aggregate(rows, start, end):
         "days_expected": expected,
         "missing_days": expected - present,
         "series": series,
+        "result_views": result_views,
     }
 
 

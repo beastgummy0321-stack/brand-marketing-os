@@ -322,7 +322,7 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   類型和可讀原始摘要、標「無法完整還原」，不拼造一張代表成品。縮圖不是影片原檔。
   實際讀回已確認一筆動態廣告及其廣告組／活動父鏈與帳號時區。這不代表所有帳號／類型都有權限，
   影片原檔、媒體等價及連續版本歷史仍未取得；其餘分支的 fixture 證據另列。
-  預算原始數值保持平台格式；沒有可靠幣別換算分母時，金額標未知，不推造換算值。
+  預算原始數值保持平台格式，換算規則見 §6.12；沒有可靠幣別換算分母時，金額標未知，不推造換算值。
 - 只有平台 GET；無 CSV 備援、無建立／停投／續跑／改預算 API。解除帳號綁定後拒絕新讀取，
   舊資料保留並標連線已解除，不跨品牌重新授權。
 
@@ -495,3 +495,333 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   平台存在、設定相符、素材等價、開始投遞及足夠成效仍是不同證據。
 - 本地驗證使用真 Postgres 佇列與獨立 worker，但外部平台與模型是隔離替身；商務對照
   沿用品牌訂單證據，不把兩回流程成功描述為真實營收或因果改善。
+
+### 6.10 F16-I01 — 成效追蹤欄位可為空值（settled 2026-09-20，ruling RC-D 第一階段）
+
+- `ads_outcome_daily.purchases`／`revenue` 從 `NOT NULL DEFAULT 0` 改為可空
+  （`supabase/migrations/20260920000001_ads_outcome_nullable.sql`）：`NULL` 表示未追蹤、`0`
+  表示真的是零，兩者不再共用同一個位元。`ingest_meta` 對 Meta 來源列一律寫 `purchases=NULL`；
+  `revenue` 有 `roas` 才算得出數字，否則也是 `NULL`。第一支 migration 本身不改寫任何舊列；
+  接續的第二支 migration `20260920000002_ads_outcome_legacy_meta_unknown.sql` 把「F16 之前、
+  `ingest_meta` 對每一筆 Meta 來源列無條件寫入」的舊 `purchases=0`／`revenue=0` 字面值正規化
+  成 `NULL`——這些字面值從來沒有代表過一次真的觀測，正規化只是把讀者原本靠
+  `source == 'meta'` 猜出來的「未追蹤」還原成欄位本身誠實的 `NULL`，不是回填真資料，也不會
+  改變任何現有讀者今天算出來的結果。
+- 讀者（`outcome._bucket`、`repository._outcome_totals`、`repository.budget_history`、
+  `experiments.judge`）一律用「這欄是不是 `NULL`」判斷追蹤與否，不再用 `source == 'meta'`
+  或 `revenue != 0` 這類猜測性 sentinel；`closeout.close()`／`_judge()` 本來就正確處理
+  `None`，這次沒有改動判讀邏輯本身。
+- 這一票之後真實 Meta 活動的 `purchases` 仍然恆為 `NULL`（結案仍判「看不出」）；讓
+  `daily_entity_spend` 真的吐出購買數是 F16-I05 的範圍，見 §6.11。
+
+### 6.11 F16-I05 — 真實 Meta 購買數接上結案判讀（settled 2026-09-20）
+
+- `app/meta/repository.py::daily_entity_spend`（facade 新增，非 refactor）多回四欄：
+  `purchases`／`revenue`／`action_type`／`attribution_window`。沒有新讀取——
+  `meta_entity_spend.actions`／`action_values`／`attribution_window` 是既有每日拉取早就存好
+  的欄位，這次只是也選出來；同義字判定整段沿用 `external_purchase_values()`（`purchase` 目標
+  的唯一定義是 `graph._ROAS_ACTION_PRIORITY`），`app/ads/**` 沒有另外維護第二份同義字清單。
+  `(spend_date, entity_id, currency)` 一個 group 內任何一個 physical row 沒追蹤到購買，整組
+  就是 `NULL`（跟 `roas`／`cpa` 同一條 all-or-nothing 誠實規則）——未追蹤永遠不是 0。
+- `ingest_meta`（`app/ads/outcome.py`）改寫 `purchases`：`NULL`（列沒有任何購買同義字）／
+  `0`（追蹤到真的零）／真的數字，三選一，不再對 Meta 來源列一律寫 `NULL`。`revenue` 只認
+  `action_values`——不再從 `roas` 反推（`revenue = spend * roas` 這行整個刪掉）：`roas` 是
+  Meta 自己算的比率，`action_values` 是跟 `purchases` 同一個 action_type 配對的原始金額，
+  兩者都用會依當天哪個先追蹤到而悄悄換來源，讓同一支活動的 CPA／ROAS 失去一致的定義。
+  `action_type`／`attribution_window` 隨號碼一起從 facade 回來（跟
+  `app/ads/adapters/meta_read.py:observation()` 對外部活動已經在用的 `attribution_key`／
+  `action_type` 同一種形狀）；`ads_outcome_daily` 沒有欄位可以逐列存這個歸因說明——這是讀寫
+  變更，不是 schema 變更（沒有新 migration），所以目前只在 ingest 當下的記憶體裡看得到、寫進
+  程式註解，還沒有持久化到資料庫；要逐列留存需要另開一張票加欄位。
+- 沒有雙重計算：`ads_campaign.origin` 是單一開關，一個 Campaign 只會走其中一條路徑，不會兩條
+  都寫。`origin != 'imported'`（內部 Campaign）由 `POST .../ingest` 呼叫 `outcome.ingest_meta`，
+  從本模組每日排程已經拉好的 `meta_entity_spend` 灌 `ads_outcome_daily`（campaign/adset/ad
+  三層都有，不即時打 Graph API）。`origin == 'imported'`（自帶／既有活動）完全不會進到
+  `outcome.ingest_meta`／`ads_outcome_daily`——`routes.py` 對這類 Campaign 直接回
+  `external_view`，成效由 `external_sync` 另外直接呼叫 Graph API 灌 `ads_external_daily`，兩張
+  表、兩條讀寫路徑不相交；額外一層保護是 `ingest_meta` 內的 `_conflicting_campaigns`：同一個
+  平台實體（`ads_delivery_group`／`ads_ad`）綁到兩個不同 Campaign 一律拒絕，不會有一筆 Meta
+  花費被算給兩個不同 Campaign。
+- 「活動過了結束日 7 天自動結案」是三處過期敘述，這次改成文字，行為本來就沒有這回事
+  （`app/ads/jobs.py::close_expired_campaigns` 早就只排監控、從不自己結案）：
+  `app/main.py:454`（註解）、`app/ads/__init__.py:63`（docstring）、
+  `frontend/src/lib/adsApi.ts:726`（JSDoc）。
+- 驗證：`app/tests/test_meta_daily_spend.py::DailyEntitySpendPurchasesTest`（facade 本身，
+  真實 jsonb 形狀）、`app/tests/test_ads_outcome.py`（`ingest_meta` 寫入 NULL／0／真數字三種
+  情境，`RealMetaPurchasesReachCloseoutTest` 端到端驗真實購買數能通過樣本門檻判「達成」／
+  「未達成」）。
+
+### 6.12 F16-I02 — Meta 預算換算成帳戶幣別真實金額（settled 2026-09-20）
+
+- 換算歸屬 ads 自有 adapter：`app/ads/adapters/meta_read.py::_budget_minor_unit_amount()`，在
+  `_entity()` 組好 `budget_raw` 之後就地換算；`app/meta/**` 是舊模組，這次沒有改動，也沒有任何
+  新的 Graph 呼叫或新欄位——換算只用既有 `daily_budget`／`lifetime_budget`／帳戶 `currency`。
+- 換算規則：官方文件 <https://developers.facebook.com/docs/marketing-api/currencies>（取得於
+  2026-09-20）——「Each currency has an offset which specifies how the platform handles its
+  subdivisions.」平台單位除以該幣別的 offset 得到帳戶幣別金額。offset 1（零小數）：CLP、COP、
+  CRC、HUF、IDR、ISK、JPY、KRW、PYG、TWD、VND；offset 100（兩位小數）：DZD、ARS、AUD、BHD、
+  BDT、BOB、BGN、BRL、GBP、CAD、CNY、HRK、CZK、DKK、EGP、EUR、GTQ、HNL、HKD、INR、ILS、JOD、
+  KES、LVL、LTL、MOP、MYR、MXN、NZD、NIO、NGN、NOK、PKR、PEN、PHP、PLN、QAR、RON、RUB、SAR、
+  RSD、SGD、SKK、ZAR、SEK、CHF、THB、TRY、AED、UAH、USD、UYU、VEF、FBZ、VES。兩份清單都是窮舉；
+  不在任一清單、幣別缺失或格式不是三位大寫字母，一律 `budget_amount=None`，不猜 1 也不猜 100。
+- 讀回交叉核對（唯讀、零寫入，一次性）：TWD 帳戶 `368741390835357` 的活動
+  `120250284145340671`（「【銷售】1150706 Beast Prime 最高數量」）`daily_budget` 回傳 `"1900"`，
+  同活動 `ads_external_daily` 實際單日花費落在 1,639～2,383 TWD 之間。offset 1 換算成
+  NT$1,900／天，與花費量級一致；offset 100 會是 NT$19／天，對不上同一活動 1,639～2,383 的實際
+  花費——offset 1 對 TWD 成立，文件與讀回互相印證，此後不需要再對這條規則本身提出疑問。
+  （這是一次性讀回核對，不是要求使用者投放才能看到結果；帳戶資料狀態僅作為既有事實記錄。）
+- 金額計算全程用 `Decimal`：平台單位一律是整數，除以 offset 通常整除；`ROUND_HALF_UP` 只是防禦
+  性設定、非精度來源。結果依 offset 對應小數位（offset 1 → 0 位、offset 100 → 2 位）量化後才轉
+  `float` 存入 `budget_amount`，兩位小數幣別不會被二進位浮點誤差吃掉尾數。
+- `budget_raw.conversion` 一律是機器可讀的判斷依據：換算成功是 `offset_table:<offset>`；未成
+  功依序是 `currency_absent`（幣別缺失或格式不對）、`currency_not_in_offset_table`（幣別不在兩
+  份清單內）、`no_budget_value`（平台沒有回傳日預算或總額預算數值）。`availability.budget_amount`
+  只有在真的換算出金額時才是 `available`，其餘都留 `unknown`。
+- `month_budget.py:168-169` 的「持續投放的預算金額、單位或幣別未核實」判斷本來就是逐一實體檢查
+  `budget_amount is None`；換算成功的實體自然不再觸發這條提醒，未換算成功的實體不變、繼續明確標
+  未核實——這次沒有改動 `month_budget.py` 本身的邏輯，行為變化完全來自 `_entity()` 現在真的能給
+  出金額。
+- 變更清單／讀回核對（`change_control_data.before()`、`change_control_verify.check()`）沒有改
+  動：兩者本來就直接讀 `entity.get("budget_amount")` 做比對，換算前後都是同一段程式碼；新增
+  `test_ads_change_control.py::ChangeControlTest.test_meta_budget_conversion_flows_through_
+  confirmed_readback` 端到端證明用 `_entity()` 產生的真實換算金額走到 `check()` 也能判「已核對
+  一致」，不是只用測試自訂的假數字。
+- 驗證：`app/tests/test_ads_external_metrics.py`（零小數 TWD、兩位小數 USD、不在清單的幣別、幣
+  別缺失、無預算數值五種情境）、`app/tests/test_ads_change_control.py`（端到端讀回）。
+
+### 6.13 F16-I03 — 依活動目標判讀成果，不再只看購買（settled 2026-09-20）
+
+- 問題：Insights 的 `actions` 早就整包拉回來了（`graph.py:556-558`），但除了購買同義字之外全部
+  被丟棄；`ads_external_daily` 只有 `purchases`／`revenue` 兩欄，`review_evidence.aggregate()`
+  寫死 CPA／ROAS。非購買目標的活動因此完全無法判讀，而且一則廣告偶發一次購買，會被讀成「這活
+  動的成果」，觸發不該有的變差／停損判斷——這正是本票要拔掉的假訊號。
+- Schema：`supabase/migrations/20260920000003_ads_result_metric.sql` 對 `ads_external_daily`
+  新增 `result_kind`（text，可空）／`result_count`（numeric，可空）兩個平台中立欄位；既有
+  `purchases`／`revenue`／唯一鍵不變。這支 migration 不回填任何舊列——舊列的 `result_kind`／
+  `result_count` 保持 `NULL`，直到那個活動被用新版 adapter 重新同步一次；migration 沒有辦法知
+  道一列舊資料當初「應該」對到哪個成果，回填等於用今天的規則假造昨天沒發生過的判斷。
+- 目標 → 成果動作對照表整份住在 `app/ads/adapters/meta_read.py`
+  （`_SALES_OBJECTIVES`／`_OBJECTIVE_RESULT_ACTIONS`）——這是 Meta 專有的名詞轉換，跟品牌自己
+  的 `conversion_goal`（`app/meta/repository.py::_CONVERSION_ACTION_PRIORITY`）是不同的鍵、不
+  同的用途，這次沒有動、也沒有 import 對方：
+  - 銷售類目標（`OUTCOME_SALES`／`CONVERSIONS`／`PRODUCT_CATALOG_SALES`）→ 成果 `purchase`，
+    直接沿用 `source.external_purchase_values()` 已經算好的購買數，不另外重新掃一次
+    `actions`——購買同義字的唯一定義還是那一份，這裡不維護第二份。
+  - `OUTCOME_ENGAGEMENT`／`POST_ENGAGEMENT` → `engagement`（`post_engagement`／
+    `page_engagement`）；`OUTCOME_TRAFFIC`／`LINK_CLICKS` → `link_click`（`link_click`／
+    `landing_page_view`）；`OUTCOME_LEADS`／`LEAD_GENERATION` → `lead`；
+    `OUTCOME_APP_PROMOTION`／`APP_INSTALLS` → `app_install`；`VIDEO_VIEWS` → `video_view`；
+    `MESSAGES` → `message`；`STORE_VISITS` → `store_visit`。
+  - 不在表裡的目標（含 `OUTCOME_AWARENESS`／`BRAND_AWARENESS`／`REACH` 這類本來就沒有離散成果
+    可數的目標）一律 `result_kind=result_count=None`——**絕不**退回去算購買數；這是本票最重要
+    的一條規則，用一個物件哨兵（`_NO_OBJECTIVE`）跟「呼叫端沒有要求算成果」區分開來。
+- 讀取端只有 `MetaReader.read_observations()` 會查目標並往下傳：每一頁只查一次
+  `external_repository.campaign_objective()`（讀 `ads_external_entity.objective`，campaign 層
+  已經在既有 structure 同步時存好），同一頁 campaign／adset／ad 三層共用同一個活動的目標。
+  `read_monthly()` 刻意不查、也不傳目標——月結只做帳戶級花費核對，不逐廣告判讀，維持
+  `_save_monthly()`／`ExternalObservation` 既有的嚴格欄位形狀不變。
+- `result_kind`／`result_count` 沒有進 `ExternalObservation`（`app/ads/external_models.py`，這
+  次沒有動）：那個模型是 `extra="forbid"`，硬塞兩個大多數來源都沒有意見的欄位，會逼每個既有測
+  試替身跟著長出這兩個 key。改成 `external_repository.upsert_observation()` 多兩個獨立關鍵字參
+  數，直接補進 `model_dump()` 之後的 dict 再組 SQL；`external_sync.py::_save_page` 把
+  `MetaReader` 回傳的 `result_kind`／`result_count` 從 observation dict 裡摘出來，轉成關鍵字參
+  數傳過去，其餘來源（測試替身、既有 fixture）沒有這兩個 key 就一律是 `None`，行為不變。
+  `availability["result_count"]` 比照其餘欄位規則自己補（有數字才是 `available`）。
+- `review_evidence.aggregate()`：`METRICS` 加入 `result_count`，套用同一條「這組只要有一天未追
+  蹤，整組就是 `None`」誠實規則，不特例；比率清單加一列
+  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。這個依
+  `attribution_key` 分組的 series 是既有分組，**沒有再放** `result_kind`（見下方修復輪）。
+
+#### 6.13.1 修復輪：撕裂的 series 與跨動作加總（settled 2026-09-20）
+
+探針發現兩個缺陷：`attribution_key` 是拿購買動作類型組出來的，一則互動類廣告只要某天出現一次偶
+發購買，`attribution_key` 就會在 `…:unavailable` 與 `…:omni_purchase` 之間翻面，`aggregate()`
+照這個鍵分組，一則廣告的 series 因此被撕成兩組，前後期比較等於只比了半則廣告。另外，同一個
+`result_kind` 標籤底下可能來自不同的平台動作類型（例如 day1 是 `post_engagement`、day3 是
+`page_engagement`），而 Meta 的 `page_engagement` 本身就**包含** `post_engagement`，把兩者加總
+出來的數字在平台上從不存在；原本的「這組裡第一個非空 `result_kind`」寫法完全看不出這種混用。
+
+- 第二支 migration `supabase/migrations/20260920000004_ads_result_definition.sql`（沿用
+  §6.13 的規則：不改已套用的 `…0003`，開新檔修正）再對 `ads_external_daily` 加兩個可空文字欄
+  位：`result_action`（真正被算進 `result_count` 的那個平台動作類型，例如
+  `post_engagement`）／`result_attribution`（這個數字是在哪個歸因設定下讀到的，由 adapter 直接
+  當成不透明字串提供）。同樣不回填舊列。
+- `meta_read.py` 新增常數 `_ATTRIBUTION_WINDOW = "7d_click+1d_view"`：`attribution_key` 前綴與
+  `result_attribution` 都直接引用這個常數，共用層絕不會反過來解析 `attribution_key` 字串去猜歸
+  因設定。`_objective_result()` 回傳 `(result_kind, result_count, result_action,
+  result_attribution)` 四個值；`result_action`／`result_attribution` 只在 `result_count` 真的
+  有值那天才填，成果數未知的日子兩者也保持 `None`（呼應「未知不是零」）。
+- `aggregate()` 新增第二種分組：**不看** `attribution_key`，只依 `(metric_scope, currency)` 把
+  整個窗口的所有列分成一組，對每一組算出「這則廣告自己的成果」一份 result view（`result_kind`／
+  `result_action`／`result_attribution`／`result_count`／`cost_per_result`／`days_present`／
+  `days_known`／`reason`），放在 `aggregate()` 回傳值新增的 `result_views` 陣列。前後期比較「活
+  動自己的成果」一律讀這個 view，不讀 per-`attribution_key` 的 series；`review_evidence.py` 的
+  `_result_view()` 是唯一實作。失效即關閉（fail-closed），跟既有「這組只要有一天未追蹤整組就是
+  `None`」同一家族，不特例：
+  - 組內已知的 `result_kind`／`result_action`／`result_attribution` 只要有一個出現兩種以上不同
+    值 → `result_count`／`cost_per_result` 都是 `None`，`reason="mixed_result_definition"`；不
+    再有任何「挑第一個非空值」的寫法。
+  - 窗口內只要有一列 `result_count` 未知（不論那列有沒有花費），整組就是 `None`，
+    `reason="result_unknown_days"`；絕不用部分列的和去除以部分或全部花費。
+  - `cost_per_result` 的分母永遠是「被算進 `result_count` 那些列」的花費總和，不是整個窗口的花
+    費。
+- `frontend/src/lib/adsExternalApi.ts`／`adsReviewApi.ts` 型別同步：`NativeObservation` 加
+  `result_action`／`result_attribution`；新增 `ReviewResultView` 型別、`ReviewPeriod` 加
+  `result_views` 欄位；`ReviewSeries` 移除 `result_kind`（後端已不再輸出）。沒有動任何元件。
+- 驗證：`app/tests/test_ads_external_metrics.py`（adapter 層 `result_action`／
+  `result_attribution` 跟著 `result_count` 一起有/沒有）、`app/tests/test_ads_review_cycle.py`
+  （撕裂 series 情境下 view 仍是一份、跨動作類型混用判 `mixed_result_definition`、SALES 的
+  view 跟既有購買指標一致）。
+- 提示詞（`app/departments/ads/review_round.md`）新增一句：cpa／roas 只認購買，
+  `cost_per_result` 才是活動依自己目標算出的成果與成本；沒有成果定義時是 `null`，偶發的購買不
+  是該活動的目標成果，不能當成效變好或變差的證據。`review_policy.py` 的驗證器沒有改——它驗證
+  的是模型回覆的形狀，跟評分用哪個指標無關。
+- SALES 不變性：新增回歸測試直接比對「不傳 objective」與「傳 `OUTCOME_SALES`」兩次
+  `observation()` 呼叫，除了新增的 `result_kind`／`result_count` 之外，其餘每一個既有欄位（含
+  `purchases`／`revenue`／`attribution_key`）逐一斷言相等——這保證 SALES 活動今天算出來的
+  CPA／ROAS／購買數，一步變化都不會有。
+- 驗證：`app/tests/test_ads_external_metrics.py`（SALES 不變性、目標對照表逐項、`OUTCOME_
+  ENGAGEMENT` 活動混了一次偶發購買仍判成 `engagement` 而非購買、未對照目標不落回購買）、
+  `app/tests/test_ads_external_sync.py`（`result_kind`／`result_count` 經由通用同步流程真的落
+  進 `ads_external_daily`）、`app/tests/test_ads_review_cycle.py`
+  （`review_evidence.aggregate()` 的 `result_kind`／`cost_per_result`／未追蹤誠實規則）。
+
+### 6.14 F16-I04 — 每個 Campaign 都能算出目標成本（settled 2026-09-20，2026-09-20 再裁一輪）
+
+- 問題：`success_metric` 原本只認 cpa／roas／purchases（`20260913000001_ads_tables.sql:22`），
+  既有活動（`origin='imported'`）完全沒有目標成本可比。
+- **架構裁決（2026-09-20 review 修正）：目標成本用自己的欄位，這個 feature 永遠不再寫
+  `success_metric`／`success_target`／`success_basis`。** 第一版（`20260920000005_ads_
+  campaign_target.sql`）借用這三個欄位（`success_metric='cost_per_result'`）存放目標成本，
+  review 證實這會在票外靜默壞掉：`closeout._metric_value` 沒有 `cost_per_result` 分支，會落到
+  `totals["purchases"]`（一個「數量」）用 `>=` 跟金額目標比，判出捏造的達成／未達成；
+  `learning.py` 把這個原始字串直接印給使用者看、還拿它分群學習世代；`budget.py` 冷啟動與
+  `asset_suggestions.py` 都認 `success_metric=='cpa'`／`success_target is not None`，一被改成
+  `cost_per_result` 就悄悄失效。修正開新檔 `20260920000006_ads_campaign_target_columns.sql`
+  （不改已套用的 `..._0005`）：
+  - 新增 `ads_campaign.target_cost`（numeric，可空）／`target_basis`（text，可空，
+    CHECK IN `break_even`／`trailing_30`／`own`），外加 CHECK
+    `ads_campaign_target_cost_only_for_own`：`target_cost` 只在 `target_basis='own'` 時有值
+    ——`break_even`／`trailing_30` 永遠在讀取當下重新算（`resolve()` 本來就這樣做），這張表
+    只記「使用者上次要求哪一種」的標籤，不記算出來的數字，避免存的數字跟重算的數字兜不起來。
+  - 先用 `DO $$ ... RAISE EXCEPTION ... $$` 斷言沒有任何列的 `success_metric='cost_per_result'`
+    （有就中止，不靜默改列），再把 `ads_campaign_success_metric_check` 收回
+    cpa／roas／purchases、砍掉 `ads_campaign_cost_per_result_basis` 這條 CHECK。既有
+    cpa／roas／purchases 列的 `success_basis`（一句話說明）不受影響。
+  - `result_kind`／`target_revision`（`..._0005` 加的）原樣保留，不動。
+- `app/ads/targets.py::resolve(conn, org, brand, campaign, *, product_id=None)`：純函式、不打
+  模型、不寫任何表。固定優先序（不可被呼叫端重排）：① `target_basis='own'` 且 `target_cost`
+  有值時永遠贏；② 這個 Campaign「自己的結果是購買」（`result_kind=='purchase'`，或
+  `result_kind` 未知且 `origin!='imported'`——既有內建 Campaign 向來只認購買，
+  `brief.py::_OBJECTIVES` 五種目標全部走 cpa／roas／purchases，系統裡沒有第二種可數的轉換
+  事件）時，帶著商品（既有 `context_json.product_ids`，或既有活動由呼叫端明講的
+  `product_id`）走 `budget.breakeven_cpa()` + `budget.economics_for()`（`_economics_for` 的公開
+  包裝，跟 `scenarios()` 共用同一套「多個商品挑第一個算得出來的」規則，不重寫第二份）；③ 否則
+  這個 Campaign 自己近 30 個完整日的實際 cost per result（`_trailing_30`：只取
+  `metric_scope='campaign'` 那層、重用 `review_evidence.aggregate()`
+  的 `result_views`——NULL-aware，未知日永遠不進分子也不進分母，`reason='result_unknown_days'`
+  一律回報 `missing=['needs_resync']`，絕不是零）；④ 都不成立時 `value=None`，`missing` 列出
+  卡住的原因（`"product"`／`"product_cost"`／`"needs_resync"`／`"trailing_30"`／
+  `"mixed_result_definition"`）——絕不是預設數字、絕不是零。
+- **`result_kind` 的來源**：目標→結果的對照表只住在 Meta adapter
+  （`app/ads/adapters/meta_read.py::_SALES_OBJECTIVES`／`_OBJECTIVE_RESULT_ACTIONS`），透過既有
+  reader／capability 介面對外露出唯一一個函式 `MetaReader.result_kind(entity)`（吃這個
+  Campaign 自己根節點 entity 的 `objective` 欄位）——共用層（`app/ads/external_sync.py`）永遠
+  不直接讀 Meta 目標字串。同步（`_save_page`）在「structure」任務裡遇到這個 Campaign 自己樹的
+  根節點（`parent_native_id` 是空的那一列，不寫死 Meta 的 `native_kind=='campaign'`，其他平台
+  的根節點可能叫別的名字）時，呼叫這個函式，**只在 `ads_campaign.result_kind` 目前是 NULL 時**
+  寫回去——使用者事後用 `PUT .../target` 選的 `result_kind` 永遠不會被下一次同步蓋掉。沒有這個
+  能力的 reader（通用／手動 adapter）不受影響，維持原樣。
+- 讀寫：`repository.get_campaign_target()`／`save_campaign_target()`（只寫
+  `target_cost`／`target_basis`／`result_kind`／`target_revision` 四欄），路由
+  `GET`／`PUT /api/ads/brands/{b}/campaigns/{c}/target`（`routes.py`，`_legacy_campaign_guard`
+  白名單沒有 `target` 這個 suffix，兩條路由自己做 `require_actor`／`require_brand`，跟月預算
+  同款）。`PUT` 的 `price`／`variable_cost` 只轉交
+  `app.brand_intelligence.repository.save_product_economics`（既有公開寫入路徑，先讀現有
+  `product_economics` 補齊必填欄位再存，`ads` 這邊不直接碰那張表）。
+- Frontend：本期不加前端 client。原先加在 `frontend/src/lib/adsApi.ts` 的 `CampaignTarget`／
+  `getCampaignTarget`／`saveCampaignTarget` 會讓該檔超過 800 行上限（`architectureBoundaries.test.ts`），
+  且目前沒有任何畫面使用；phase 2 做「設定目標」畫面時，以獨立的 `frontend/src/lib/adsTargetApi.ts`
+  加入並同步更新 `ARCHITECTURE.md` 的 ads `owns`。`SuccessMetric` 沒有加寬。
+- 驗證：`app/tests/test_ads_targets.py`（銷售有／無成本、engagement 走 trailing-30、完全沒資
+  料、既有活動缺商品、使用者覆寫、F16-I03 前的 NULL 列回報 `needs_resync` 而非零、
+  `result_kind` 經真的 adapter 對照表跟真的寫入路徑落地而非手塞 dict、`PUT` 不動
+  `success_metric`／`success_target`／`success_basis` 一個字元）、
+  `app/tests/test_ads_closeout.py`（`PUT` 前後同一顆內建 CPA Campaign 結案 verdict 一致）、
+  `app/tests/test_ads_external_sync.py`（同步只在 `result_kind` 是 NULL 時填、不蓋使用者已存的
+  選擇）、`app/tests/test_ads_external_schema.py`（新舊兩份 migration 的 CHECK 約束）。
+
+### 6.15 F16-I06 — 月讀列與被取代的攻擊列污染活動自己的成果（settled 2026-09-21，真實資料人工驗收發現）
+
+- 問題：人工驗收在使用者自己同步的既有 SALES 活動上，重新同步成功後 `GET .../target` 仍回
+  `missing: ["product","needs_resync"]`。兩個各自獨立的成因，都在 `ads_external_daily` 的
+  `metric_scope='campaign'` 那一層：
+  1. `attribution_key='account_monthly_spend'` 的月讀來源列（寫入端 `meta_read.py::read_monthly`
+     ／`external_sync.py::_save_monthly`，讀取端 `month_budget.py::_inventory`）跟一般逐日觀測列
+     共用 entity／day／`metric_scope`／currency——F16-I03 的 `_result_view()`／`aggregate()` 依
+     `(metric_scope, currency)` 分組時**沒有排除**它們：花費被算兩次，它們永遠 `NULL` 的
+     `result_count` 又讓整個窗口的 `reason` 卡在 `result_unknown_days`。
+  2. `attribution_key` 內嵌了 Meta 的購買動作類型（`_ATTRIBUTION_WINDOW + ":" + action_type`），
+     同一天先讀到「還沒有購買」（`…:unavailable`）、後讀到「有購買」（`…:omni_purchase`）會落成
+     唯一鍵下的兩列而不是一次 UPDATE；兩列都留著，同一天的花費因此被算了兩次。真實資料重現於
+     2026-09-19：`…:unavailable` 花費 722、`…:omni_purchase` 花費 1747，兩列同時存在。
+- 修復點都在**共用層**，不是每個讀者各自修：
+  - **一份共用、跟平台無關的定義**：`external_repository.py` 新增
+    `MONTHLY_BUDGET_ATTRIBUTION_KEY` 常數與 `is_monthly_budget_row()` 判斷式，取代原本散在四處
+    （`meta_read.py`／`external_sync.py`／`month_budget.py`／
+    `app/tests/fixtures/ads_external/cycle_reader.py`）各自硬寫的
+    `"account_monthly_spend"` 字面值。`month_budget.py::_inventory` 的規則不變（帳戶整月讀到時，
+    根節點只留月讀列，因為月讀是權威花費口徑）。`review_evidence.aggregate()` 在分組前先過濾掉
+    月讀列，一次涵蓋「依 `attribution_key` 分組的 series」跟「不看 `attribution_key` 的
+    `result_views`」兩邊；`targets.py` 透過呼叫 `aggregate()` 自動吃到這個排除，本身不直接讀
+    `attribution_key`（沿用 §6.14 的中立原則）。
+  - **同步路徑自己修復被取代的列**：`external_repository.upsert_observation()` 新增關鍵字參數
+    `heal_superseded_attribution`（預設 `False`，行為不變）；只有
+    `external_sync.py::_save_page()` 寫「observations」任務（每個平台 reader 的一般逐日觀測都經
+    過這一個進站點）時打開它——寫入新列後，在**同一個交易**裡刪掉同一身分
+    （entity／day／metric_scope／currency／source）下 `attribution_key` 不同、且不是月讀列的舊
+    列。唯一鍵與 `attribution_key` 格式都沒有變；月讀寫入（`_save_monthly`）不使用這個參數，永
+    遠不會刪到、也不會觸發刪月讀列。重新同步一次受影響的窗口就會自己吃掉重複列，不必手動改資料。
+  - **`missing[]` 三分**：`_result_view()` 現在把「未知」拆成三種各自誠實的 `reason`：組內
+    `result_kind`／`result_action`／`result_attribution` 不一致仍是 `mixed_result_definition`；
+    花費未知，或某列缺 `result_count` 但那列本來就有結果對照（`availability` 有記錄
+    `result_count`，只是值是 `unavailable`／`unknown`）→ `result_unknown_days`；某列缺
+    `result_count` **且**四個成果欄位全是 `NULL`、`availability` 完全沒有 `result_count`
+    這個 key（新的判斷式 `_predates_result_columns()`，只認列本身的形狀，不猜日期）→ 代表這是
+    F16-I03 加欄位以前寫的舊列，回報 `needs_resync`。`targets.py::_trailing_30` 不再自己把
+    `result_unknown_days` 硬轉成 `needs_resync`，直接原樣轉發 `_result_view()` 給的
+    `reason`——三個 `missing` 字串現在都可能出現，各自對應不同的下一步（`needs_resync` 表示重新
+    同步會修好；`result_unknown_days` 表示這是真的不知道，重新同步不保證解決）。
+  - `targets._trailing_30` 的「今天永遠不算完整日」（`end = today - 1 day`）這條規則本來就是對
+    的，這次沒有改，只補了鎖定它的測試。
+  - 真實資料唯讀重現（org `org_bughunt`／brand `brd_bughunt`，campaign
+    `adc_01M2T370NSGZDS0YXWTATKCN3T`）：同一天（09-19／09-20 等）確實同時有月讀列與逐日觀測
+    列、且逐日觀測列確實從 `…:unavailable` 換成 `…:omni_purchase` 但舊列沒被刪；另外發現
+    2026-08-22 那天的觀測列 `availability` 完全沒有 `result_count` 這個 key（`result_kind`／
+    `result_count` 皆 `NULL`），是真實環境裡「F16-I03 以前」形狀的活樣本，跟本票模擬的測試資料
+    形狀一致——這天要等下一次重新同步整個 30 天窗口一起補齊，`missing=["needs_resync"]` 是正確
+    的誠實回報，不是本票要另外修的資料。
+- 驗證：`app/tests/test_ads_targets.py`（月讀列與觀測列同天不污染 trailing-30、預先移除
+  `availability.result_count` key 模擬真正的舊列才回 `needs_resync`、有 `result_kind` 但當天無
+  計數回 `result_unknown_days` 而非 `needs_resync`、鎖定 trailing-30 排除今天）、
+  `app/tests/test_ads_review_cycle.py`（純函式層級：`aggregate()` 排除月讀列，series 與
+  result view 都不被污染）、`app/tests/test_ads_external_sync.py`（重新同步真的刪掉被
+  `attribution_key` 取代的舊列；月讀寫入不觸發、也不會被這個修復刪除；同一天但
+  `metric_scope`／`currency`／`source` 任一不同的列都活下來）、既有
+  `test_ads_external_monthly.py`／`test_ads_month_budget.py` 全數維持通過，確認月預算總額不受
+  這次重構影響。
+- **Known limit（刪除規則比證據寬）**：修復把「同一身分下 `attribution_key` 不同」一律當成被
+  取代。這等同於「只有動作類型後綴變了」**只在** adapter 的歸因視窗是單一常數時成立——今天
+  `app/ads/adapters/meta_read.py` 的 `_ATTRIBUTION_WINDOW = "7d_click+1d_view"` 是模組層級常數，
+  而且整份檔案只有一處組出觀測列的 `attribution_key`（`_ATTRIBUTION_WINDOW + ":" + 動作類型`），
+  所以目前不可能出現兩個合法但不同歸因視窗的列。**不能**用 `result_attribution` 收窄：
+  `_objective_result()` 只在計數已知時才填它，而被取代的正是計數未知那種列（`…:unavailable`），
+  對那些列它永遠是 `NULL`。共用層又不准去拆 Meta 格式的 `attribution_key` 字串（§6.14）。因此哪
+  天平台或個別帳戶開始回報一種以上的歸因設定，**必須先加一個跟平台無關的「歸因視窗」欄位**
+  （schema 變更），再把刪除條件收窄成「同視窗、只有動作類型後綴不同」；在那之前這條寬規則是
+  已知且刻意接受的取捨，邊界由 `metric_scope`／`currency`／`source`／entity／day 守住（上面的
+  `test_heal_only_reaches_the_identity_it_replaces` 鎖定）。
+- **最新平台狀態為準**：同一身分重新同步時，新讀到的那列勝出，舊列被刪。後果要講清楚——如果某次
+  重新讀取的資料反而比較差（例如平台這次沒回報購買動作），它會取代掉比較好的舊列。這是刻意沿用
+  本模組既有慣例，不是這次的瑕疵：`app/ads/month_budget.py::_inventory` 對月讀列採同一條規則
+  （「完整重讀時被省略的舊列，不可以當成還有效的月花費留著」）。

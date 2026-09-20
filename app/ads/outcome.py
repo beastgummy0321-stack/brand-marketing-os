@@ -11,20 +11,37 @@ exactly one campaign; if the data says otherwise (two campaigns bound to the sam
 entity) that is a binding bug and ingest refuses, naming both campaigns, rather than silently
 picking one.
 
-`purchases`: `daily_entity_spend` does not return a usable purchase count (spend/impressions/
-clicks/roas/currency only — see the module docstring's ADR 0057 note on `actions` staying raw
-JSON one layer up). Per this ticket's own "Blocked if": purchases stay untracked for
-Meta-sourced rows in F03 rather than inventing them from ROAS and an assumed order value.
-`revenue` is `spend * roas` when the pulled row's `roas` is tracked, else untracked too.
+`purchases`/`revenue` (F16-I05): `daily_entity_spend` now also returns `purchases`, `revenue`,
+`action_type` and `attribution_window`, derived from the already-stored `meta_entity_spend.actions`/
+`action_values` through `app.meta.repository.external_purchase_values()` — the ONE definition of
+purchase synonyms (`graph._ROAS_ACTION_PRIORITY`); this module never keeps a second copy of that
+list. Per row: `NULL` when the row has no purchase action at all (untracked, never coerced to
+`0`), `0` when a purchase action is present with a tracked-zero value, the real count otherwise.
 
-Ceiling (ponytail): `ads_outcome_daily.purchases`/`revenue` are `NOT NULL DEFAULT 0` (frozen
-schema, F03-I01) — there is no per-row "tracked" flag. Meta rows therefore physically store 0
-for both when untracked; `summary()` below treats **every** Meta-sourced row's purchases as
-untracked outright (the "Blocked if" instruction — Meta purchases are never real in F03) and
-treats a row's revenue as untracked when it is exactly 0 (a real $0 revenue day on a real spend
-is indistinguishable from "untracked" without a schema change; add a `revenue_tracked` column if
-that precision is ever needed). Simulated rows never hit this ambiguity — `generate_outcomes()`
-always writes real, non-zero revenue/purchases for the group-level row it creates.
+Revenue source (pick one, not both): this module writes `row["revenue"]` — the value paired with
+the SAME matched `action_type` in `action_values` — and never also derives revenue from `roas`.
+`roas` is Meta's own ratio (denominator = spend, sometimes a different rounding/currency path);
+`action_values` is the raw reported order value tied to the exact action synonym `purchases` was
+counted from, so purchases and revenue always describe the same event set. Computing both and
+picking one row-by-row would silently swap sources depending on which happened to be tracked that
+day — the CPA/ROAS printed for a campaign would stop meaning one thing consistently.
+
+Attribution reporting: `daily_entity_spend`'s `action_type`/`attribution_window` are the same
+`attribution_key`/`action_type` shape `app/ads/adapters/meta_read.py:observation()` already
+reports for the external-campaign path — the "how was this counted" is never dropped at the
+facade boundary. `ads_outcome_daily` has no column for it (F16-I05 is a read/write change, not a
+schema change — no migration here), so today it lives in-process at ingest time only; persisting
+it per row would need a new migration, out of this issue's scope.
+
+`ads_outcome_daily.purchases`/`revenue` are nullable (F16-I01 migration
+`20260913000001_ads_tables.sql` originally froze them `NOT NULL DEFAULT 0`; the follow-up
+migration drops both). `NULL` means untracked; `0` means a real, counted zero. Every reader
+below (`_bucket`, `repository._outcome_totals`, `experiments.py`) sums only the non-`NULL` rows
+and reports `None`/`NULL` when nothing in the set is tracked — unknown is never coerced into
+zero. Rows written before the migration still physically hold `0` for untracked Meta purchases/
+revenue (legacy zero = unknown for Meta-sourced rows written before this migration; not
+back-filled). Simulated rows never hit this ambiguity — `generate_outcomes()` always writes
+real, non-zero revenue/purchases for the group-level row it creates.
 """
 
 from datetime import date, timedelta
@@ -48,8 +65,8 @@ def sample_bucket(purchases: int, days: int) -> str:
 
 def _upsert_outcome(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                      entity_kind: str, entity_id: str, day: date, spend: float,
-                     impressions: int, clicks: int, purchases: int, revenue: float,
-                     currency: str, source: str) -> None:
+                     impressions: int, clicks: int, purchases: int | None,
+                     revenue: float | None, currency: str, source: str) -> None:
     conn.execute(
         "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
         " entity_id, day, spend, impressions, clicks, purchases, revenue, currency, source)"
@@ -135,12 +152,12 @@ def ingest_meta(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
             entity = by_external.get(row["entity_id"])
             if entity is None:
                 continue  # 這一列的錢不屬於這個 Campaign——不猜、不分、不寫
-            revenue = round(row["spend"] * row["roas"], 2) if row["roas"] is not None else 0
             _upsert_outcome(
                 conn, org_id, brand_id, campaign_id, entity_kind=entity_kind,
                 entity_id=entity["id"], day=row["spend_date"], spend=row["spend"],
-                impressions=row["impressions"], clicks=row["clicks"], purchases=0,
-                revenue=revenue, currency=row["currency"], source="meta",
+                impressions=row["impressions"], clicks=row["clicks"],
+                purchases=row["purchases"],
+                revenue=row["revenue"], currency=row["currency"], source="meta",
             )
 
     _pull("adset", groups, "group")
@@ -161,19 +178,20 @@ def _bucket(rows: list) -> dict:
     """跟 `app/schedule/performance.py::_bucket()` 同一套算法（再實作一份，不 import —
     container contract §5）：`roas`/optimistic 只算「有追蹤到營收」那一份花費當分母，
     `roas_conservative` 用**全部**花費當分母——兩個都是真的，只印一個是在說謊的另一半。
-    購買數對 Meta 來源的列一律當未追蹤（`purchases` 恆為 0，§0「Blocked if」），有追蹤到的
-    只剩模擬通路的列。"""
+    購買數／營收是否追蹤直接看欄位是不是 `NULL`（F16-I01：`ads_outcome_daily.purchases`／
+    `revenue` 已經是 nullable，未追蹤就是 `NULL`，不用猜來源是哪個平台）；有追蹤到的列一起加總，
+    完全沒有追蹤到的列讓整包回 `None`，未追蹤永遠不是 0。"""
     spend = round(sum(float(r["spend"]) for r in rows), 2)
     impressions = sum(int(r["impressions"]) for r in rows)
     clicks = sum(int(r["clicks"]) for r in rows)
 
-    tracked_purchase_rows = [r for r in rows if r["source"] != "meta"]
+    tracked_purchase_rows = [r for r in rows if r["purchases"] is not None]
     purchases = (
         sum(int(r["purchases"]) for r in tracked_purchase_rows) if tracked_purchase_rows
         else None
     )
 
-    revenue_tracked_rows = [r for r in rows if r["source"] != "meta" or float(r["revenue"]) != 0]
+    revenue_tracked_rows = [r for r in rows if r["revenue"] is not None]
     revenue = None
     roas = None
     roas_conservative = None

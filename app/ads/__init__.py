@@ -5,7 +5,11 @@ Shapes other modules may use:
     register(app: FastAPI) -> None       # mounts /api/ads/* (routes.py)
     register_tasks() -> None             # idempotently registers `background.ads_close_expired`
                                           # (+ its periodic dispatch) against the current
-                                          # app.background.app() — F03-I12, see jobs.py
+                                          # app.background.app() — F03-I12, see jobs.py. Despite
+                                          # the name, it never closes a campaign on its own
+                                          # (F16-I05): it only enqueues runtime monitoring for
+                                          # campaigns past their end date; close-out is a user
+                                          # action.
     launch_readiness(conn, org_id, brand_id) -> dict
                                           # F05-I04: the launch readiness checklist
                                           # (ARCHITECTURE.md §8 第 5 條). This is the only `ads`
@@ -60,8 +64,9 @@ def register(app: FastAPI) -> None:
 
 
 def register_tasks() -> None:
-    """F03-I12：掛 `background.ads_close_expired`（結案的自動路徑）＋每日 periodic
-    dispatch，冪等。見 `app/ads/jobs.py` 檔頭。"""
+    """F03-I12：掛 `background.ads_close_expired`＋每日 periodic dispatch，冪等。名字留著是
+    相容既有排入佇列的工作，實際行為（F16-I05 確認）只是替過了 end_date 的 Campaign 排監控
+    任務，從不自己結案——結案永遠是使用者動作。見 `app/ads/jobs.py` 檔頭。"""
     from app.ads import jobs as ads_jobs
     from app.ads import review_jobs
 

@@ -8,6 +8,18 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import settings
 from app.core.db import jsonb, new_id
 
+# F16-I06: the one shared, platform-neutral definition of an account-month budget source row
+# (written by `app.ads.adapters.meta_read.MetaReader.read_monthly` / `app.ads.external_sync`'s
+# `_save_monthly`) versus an ordinary per-entity observation row -- they can share entity, day,
+# `metric_scope` and currency, so `attribution_key` is the only field that tells them apart. Every
+# writer and reader of `ads_external_daily` routes through this constant/predicate instead of
+# repeating the literal, so the two row families can never drift out of sync again.
+MONTHLY_BUDGET_ATTRIBUTION_KEY = "account_monthly_spend"
+
+
+def is_monthly_budget_row(attribution_key: str | None) -> bool:
+    return attribution_key == MONTHLY_BUDGET_ATTRIBUTION_KEY
+
 
 def _campaign(conn, org_id, brand_id, campaign_id):
     row = conn.execute(
@@ -75,9 +87,46 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     return dict(row)
 
 
-def upsert_observation(conn, org_id, brand_id, campaign_id, observation):
+def campaign_objective(conn, org_id, brand_id, platform, source_account, native_id):
+    """The synced Meta-native objective for this root campaign entity, or None when the
+    entity hasn't synced one yet (F16-I03, docs/architecture/ads.md §6.13). Callers must treat
+    None as "no result mapping resolvable yet", never as a synonym for a specific objective."""
+    row = conn.execute(
+        "SELECT objective FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND "
+        "platform=%s AND source_account=%s AND native_kind='campaign' AND native_id=%s",
+        (org_id, brand_id, platform, source_account, native_id),
+    ).fetchone()
+    return row["objective"] if row else None
+
+
+def upsert_observation(
+    conn,
+    org_id,
+    brand_id,
+    campaign_id,
+    observation,
+    *,
+    result_kind=None,
+    result_count=None,
+    result_action=None,
+    result_attribution=None,
+    heal_superseded_attribution=False,
+):
     _campaign(conn, org_id, brand_id, campaign_id)
     data = ExternalObservation.model_validate(observation).model_dump()
+    # result_kind/result_count/result_action/result_attribution (F16-I03) are kept outside the
+    # strict ExternalObservation model on purpose: every other source (fixtures, future
+    # platforms) that has no result mapping opinion would otherwise fail `extra="forbid"` for
+    # fields it never sets. NULL is the correct default everywhere — "no result known", never a
+    # guessed zero.
+    data["availability"] = {
+        **data["availability"],
+        "result_count": "available" if result_count is not None else "unknown",
+    }
+    data["result_kind"] = result_kind
+    data["result_count"] = result_count
+    data["result_action"] = result_action
+    data["result_attribution"] = result_attribution
     columns = list(data)
     values = [jsonb(value) if key == "availability" else value for key, value in data.items()]
     row = conn.execute(
@@ -89,6 +138,30 @@ def upsert_observation(conn, org_id, brand_id, campaign_id, observation):
         + ",observed_at=now() RETURNING *",
         (new_id("aed"), org_id, brand_id, campaign_id, *values),
     ).fetchone()
+    if heal_superseded_attribution and not is_monthly_budget_row(data["attribution_key"]):
+        # F16-I06 cause #2: Meta's `attribution_key` embeds the purchase action type, so a day
+        # first synced before any purchase lands (`...:unavailable`) and later re-synced after a
+        # purchase (`...:omni_purchase`) becomes a second row under the uniqueness key instead of
+        # an update to the first. Only the sync write path opts in (never the generic write above,
+        # never a monthly row) -- it removes any other observation row of this exact identity
+        # (entity, day, metric_scope, currency, source) in this same transaction, so a re-sync of
+        # an affected window heals its own duplicates without a hand-written data fix.
+        conn.execute(
+            "DELETE FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND entity_id=%s "
+            "AND day=%s AND metric_scope=%s AND currency IS NOT DISTINCT FROM %s AND source=%s "
+            "AND attribution_key<>%s AND attribution_key<>%s",
+            (
+                org_id,
+                brand_id,
+                data["entity_id"],
+                data["day"],
+                data["metric_scope"],
+                data["currency"],
+                data["source"],
+                data["attribution_key"],
+                MONTHLY_BUDGET_ATTRIBUTION_KEY,
+            ),
+        )
     return dict(row)
 
 
