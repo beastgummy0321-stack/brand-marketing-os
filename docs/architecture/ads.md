@@ -806,6 +806,22 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   計數回 `result_unknown_days` 而非 `needs_resync`、鎖定 trailing-30 排除今天）、
   `app/tests/test_ads_review_cycle.py`（純函式層級：`aggregate()` 排除月讀列，series 與
   result view 都不被污染）、`app/tests/test_ads_external_sync.py`（重新同步真的刪掉被
-  `attribution_key` 取代的舊列；月讀寫入不觸發、也不會被這個修復刪除）、既有
+  `attribution_key` 取代的舊列；月讀寫入不觸發、也不會被這個修復刪除；同一天但
+  `metric_scope`／`currency`／`source` 任一不同的列都活下來）、既有
   `test_ads_external_monthly.py`／`test_ads_month_budget.py` 全數維持通過，確認月預算總額不受
   這次重構影響。
+- **Known limit（刪除規則比證據寬）**：修復把「同一身分下 `attribution_key` 不同」一律當成被
+  取代。這等同於「只有動作類型後綴變了」**只在** adapter 的歸因視窗是單一常數時成立——今天
+  `app/ads/adapters/meta_read.py` 的 `_ATTRIBUTION_WINDOW = "7d_click+1d_view"` 是模組層級常數，
+  而且整份檔案只有一處組出觀測列的 `attribution_key`（`_ATTRIBUTION_WINDOW + ":" + 動作類型`），
+  所以目前不可能出現兩個合法但不同歸因視窗的列。**不能**用 `result_attribution` 收窄：
+  `_objective_result()` 只在計數已知時才填它，而被取代的正是計數未知那種列（`…:unavailable`），
+  對那些列它永遠是 `NULL`。共用層又不准去拆 Meta 格式的 `attribution_key` 字串（§6.14）。因此哪
+  天平台或個別帳戶開始回報一種以上的歸因設定，**必須先加一個跟平台無關的「歸因視窗」欄位**
+  （schema 變更），再把刪除條件收窄成「同視窗、只有動作類型後綴不同」；在那之前這條寬規則是
+  已知且刻意接受的取捨，邊界由 `metric_scope`／`currency`／`source`／entity／day 守住（上面的
+  `test_heal_only_reaches_the_identity_it_replaces` 鎖定）。
+- **最新平台狀態為準**：同一身分重新同步時，新讀到的那列勝出，舊列被刪。後果要講清楚——如果某次
+  重新讀取的資料反而比較差（例如平台這次沒回報購買動作），它會取代掉比較好的舊列。這是刻意沿用
+  本模組既有慣例，不是這次的瑕疵：`app/ads/month_budget.py::_inventory` 對月讀列採同一條規則
+  （「完整重讀時被省略的舊列，不可以當成還有效的月花費留著」）。
