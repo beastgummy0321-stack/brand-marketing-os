@@ -641,9 +641,11 @@ class ReviewCycleTest(unittest.TestCase):
 
 def _daily_row(day, attribution_key, spend, *, result_kind=None, result_count=None,
                 result_action=None, result_attribution=None, metric_scope="campaign",
-                currency="TWD", source="graph"):
+                currency="TWD", source="graph", result_count_availability=None):
     """The real `ads_external_daily` row shape (F16-I06), built without any DB round trip --
-    `aggregate()` is a pure function over rows, exactly like this."""
+    `aggregate()` is a pure function over rows, exactly like this. `result_count_availability`
+    (F18-I01) lets a case override the default `available`/`unknown` inference to build a
+    `"derived_zero"` row, exactly as `app/ads/tracked_zero.py::apply()` writes one."""
     metrics = {"spend": spend, "impressions": None, "clicks": None, "purchases": None,
                "revenue": None}
     return {
@@ -651,7 +653,8 @@ def _daily_row(day, attribution_key, spend, *, result_kind=None, result_count=No
         "currency": currency, "source": source, **metrics,
         "availability": {
             **{k: ("available" if v is not None else "unavailable") for k, v in metrics.items()},
-            "result_count": "available" if result_count is not None else "unknown",
+            "result_count": result_count_availability
+            or ("available" if result_count is not None else "unknown"),
         },
         "result_kind": result_kind, "result_count": result_count,
         "result_action": result_action, "result_attribution": result_attribution,
@@ -680,3 +683,41 @@ class AggregateExcludesMonthlyBudgetRowsTest(unittest.TestCase):
         view = aggregated["result_views"][0]
         self.assertIsNone(view["reason"])
         self.assertEqual(view["cost_per_result"], 1747 / 5)
+
+
+class DerivedZeroResultViewTest(unittest.TestCase):
+    """F18-I01: `availability.result_count=="derived_zero"` counts as known on the same footing
+    as a platform-reported `"available"` row, and is reported separately via `derived_zero_days`
+    so a reader can tell "zero, proven absent" apart from "zero, actually reported"."""
+
+    def test_derived_zero_counts_as_known_and_is_reported_separately(self):
+        day1, day2 = date(2026, 9, 19), date(2026, 9, 20)
+        reported = _daily_row(
+            day1, "7d_click+1d_view:omni_purchase", 100,
+            result_kind="purchase", result_count=5, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        derived = _daily_row(
+            day2, "7d_click+1d_view:unavailable", 50,
+            result_kind="purchase", result_count=0, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view", result_count_availability="derived_zero",
+        )
+        aggregated = review_evidence.aggregate([reported, derived], day1, day2)
+        view = aggregated["result_views"][0]
+        self.assertIsNone(view["reason"])
+        self.assertEqual(view["result_count"], 5)
+        self.assertEqual(view["cost_per_result"], (100 + 50) / 5)
+        self.assertEqual(view["days_known"], 2)
+        self.assertEqual(view["derived_zero_days"], 1)
+
+    def test_platform_reported_zero_is_not_counted_as_derived(self):
+        day = date(2026, 9, 19)
+        row = _daily_row(
+            day, "7d_click+1d_view:omni_purchase", 100,
+            result_kind="purchase", result_count=0, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        aggregated = review_evidence.aggregate([row], day, day)
+        view = aggregated["result_views"][0]
+        self.assertEqual(view["days_known"], 1)
+        self.assertEqual(view["derived_zero_days"], 0)

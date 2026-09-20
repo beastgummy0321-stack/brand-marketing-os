@@ -62,6 +62,12 @@ def _result_view(key, group):
     than pick one); `needs_resync` (every row missing a result count predates the F16-I03 result
     columns -- a re-sync, not a wait, resolves it); `result_unknown_days` (a result mapping ran
     but genuinely has nothing to report, or spend itself is unknown -- no re-sync fixes that).
+
+    `availability.result_count == "derived_zero"` (F18-I01, `app/ads/tracked_zero.py`) counts as
+    known here on the same footing as a platform-reported `"available"` row -- it is a rule-marked
+    absence of the campaign's own demonstrated result, not a guess. `derived_zero_days` reports how
+    many of the days counted as known were filled this way, so a reader can tell "zero, proven
+    absent" apart from "zero, actually reported" without a second query.
     """
     def _known(field):
         return {r[field] for r in group if r.get(field) is not None}
@@ -74,7 +80,10 @@ def _result_view(key, group):
         r
         for r in group
         if r.get("result_count") is not None
-        and r["availability"].get("result_count") == "available"
+        and r["availability"].get("result_count") in {"available", "derived_zero"}
+    ]
+    derived_zero = [
+        r for r in result_known if r["availability"].get("result_count") == "derived_zero"
     ]
     spend_known = [
         r for r in group if r["spend"] is not None and r["availability"].get("spend") == "available"
@@ -106,6 +115,7 @@ def _result_view(key, group):
         "cost_per_result": cost_per_result,
         "days_present": len({r["day"] for r in group}),
         "days_known": len({r["day"] for r in result_known}),
+        "derived_zero_days": len({r["day"] for r in derived_zero}),
         "reason": reason,
     }
 

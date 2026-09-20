@@ -9,7 +9,7 @@ import unittest
 from datetime import timedelta
 
 import app.shared.web as web
-from app.ads import channels, repository, targets
+from app.ads import channels, repository, targets, tracked_zero
 from app.ads import external_repository as external
 from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
 from app.brand_intelligence import repository as bi_repo
@@ -263,6 +263,28 @@ class ResolveTargetTest(unittest.TestCase):
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
         self.assertEqual(result["basis"], "trailing_30")
         self.assertAlmostEqual(result["value"], 1747 / 5)
+        self.assertEqual(result["missing"], [])
+
+    def test_trailing_30_resolves_on_a_window_blocked_only_by_derivable_zeros(self):
+        # F18-I01: a day the campaign has demonstrated a result on, plus a day with known spend
+        # and no result reported yet, both within trailing-30 -- `tracked_zero.apply()` derives
+        # the absent day to a rule-marked zero, and `_trailing_30` resolves through it.
+        campaign_id = self._imported_campaign_with_days([
+            (0, 200, "purchase", None, None, None),
+            (5, 100, "purchase", 5, "omni_purchase", "7d_click+1d_view"),
+        ])
+        end = coresettings.today_for_org(web.conn, org_id=self.org_id) - timedelta(days=1)
+        start = end - timedelta(days=6)
+        derived = tracked_zero.apply(web.conn, self.org_id, self.brand_id, campaign_id, start, end)
+        self.assertEqual(derived["derived"], 1)
+        web.conn.commit()
+        campaign = {
+            **repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id),
+            "result_kind": "purchase",
+        }
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["basis"], "trailing_30")
+        self.assertAlmostEqual(result["value"], (200 + 100) / 5)
         self.assertEqual(result["missing"], [])
 
     def test_trailing_30_excludes_todays_partial_day(self):

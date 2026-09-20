@@ -1,11 +1,11 @@
 """Resumable account reads. One invocation commits one bounded page, never a platform write."""
 
 import calendar
-from datetime import timedelta
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import background
-from app.ads import channels
+from app.ads import channels, tracked_zero
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
@@ -451,6 +451,17 @@ def run_sync(org_id, brand_id, job_id):
                         state["last_success_at"] = now_utc()
                         if task["section"] == "observations":
                             state["coverage"] = {"start": task["start"], "end": task["end"]}
+                            # F18-I01: derive conditional tracked zeros in this same transaction,
+                            # only once this section's read for the covered window is complete
+                            # and clean (no cursor, no errors) -- same place coverage is recorded.
+                            tracked_zero.apply(
+                                conn,
+                                org_id,
+                                brand_id,
+                                task["campaign_id"],
+                                date.fromisoformat(task["start"]),
+                                date.fromisoformat(task["end"]),
+                            )
                     repo.record_sync(
                         conn,
                         org_id,

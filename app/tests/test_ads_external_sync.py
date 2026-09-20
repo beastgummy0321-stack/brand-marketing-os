@@ -1,14 +1,14 @@
 """Real isolated PostgreSQL + fake source capability, no platform writes or LLM."""
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
 from app.ads.adapters.external import SourcePage
 from app.brand_intelligence import repository as brands
-from app.core import db
+from app.core import db, settings
 
 
 def setup_brand(conn):
@@ -226,6 +226,68 @@ class ExternalSyncTest(unittest.TestCase):
         )
         self.assertEqual(view["observations"][0]["result_kind"], "lead")
         self.assertEqual(view["observations"][0]["result_count"], 3)
+
+    def test_run_sync_derives_tracked_zero_once_observations_complete_cleanly(self):
+        # F18-I01: the one call site is `run_sync`, in the same transaction the "observations"
+        # section records its coverage -- never a separate background step.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        demo_day, target_day = today - timedelta(days=3), today - timedelta(days=1)
+        with patch.object(
+            self.reader,
+            "read_observations",
+            return_value=SourcePage(
+                [
+                    {
+                        "native_kind": "line",
+                        "native_id": "child",
+                        "day": demo_day,
+                        "metric_scope": "line",
+                        "attribution_key": "demo",
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": 100,
+                        "purchases": None,
+                        "result_kind": "lead",
+                        "result_count": 5,
+                        "result_action": "lead_form",
+                        "result_attribution": "7d_click",
+                    },
+                    {
+                        "native_kind": "line",
+                        "native_id": "child",
+                        "day": target_day,
+                        "metric_scope": "line",
+                        "attribution_key": "target",
+                        "currency": "TWD",
+                        "source": "other",
+                        "spend": 50,
+                        "purchases": None,
+                        "result_kind": "lead",
+                        "result_count": None,
+                    },
+                ]
+            ),
+        ):
+            job = self.run_pages(
+                sync.request_sync(
+                    self.conn, self.org, self.brand, "other", "account",
+                    start=demo_day, end=target_day,
+                )
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        view = repo.external_view(
+            self.conn, self.org, self.brand, campaign["id"], start=target_day, end=target_day
+        )
+        row = next(r for r in view["observations"] if r["attribution_key"] == "target")
+        self.assertEqual(row["result_count"], 0)
+        self.assertEqual(row["result_action"], "lead_form")
+        self.assertEqual(row["result_attribution"], "7d_click")
+        self.assertEqual(row["availability"]["result_count"], "derived_zero")
 
     def test_resync_heals_row_superseded_by_a_changed_attribution_key(self):
         # F16-I06 cause #2: a platform's `attribution_key` can embed something that changes

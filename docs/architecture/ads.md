@@ -627,10 +627,13 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `MetaReader` 回傳的 `result_kind`／`result_count` 從 observation dict 裡摘出來，轉成關鍵字參
   數傳過去，其餘來源（測試替身、既有 fixture）沒有這兩個 key 就一律是 `None`，行為不變。
   `availability["result_count"]` 比照其餘欄位規則自己補（有數字才是 `available`）。
-- `review_evidence.aggregate()`：`METRICS` 加入 `result_count`，套用同一條「這組只要有一天未追
-  蹤，整組就是 `None`」誠實規則，不特例；比率清單加一列
-  `("cost_per_result", "spend", "result_count", 1)`，跟 `cpa`／`roas` 同一種算法。這個依
-  `attribution_key` 分組的 series 是既有分組，**沒有再放** `result_kind`（見下方修復輪）。
+- **文件更正（F18-I01 發現的落差）**：本節原稿寫「`review_evidence.aggregate()`：`METRICS`
+  加入 `result_count`」，程式實際上沒有這樣做（`METRICS` 從頭到尾只有
+  `spend`／`impressions`／`clicks`／`purchases`／`revenue` 五項，`app/ads/review_evidence.py:18`）；
+  `result_count`／`cost_per_result` 從來沒有進過依 `attribution_key` 分組的 `series`。這兩個欄位
+  只活在下面 6.13.1 新增的、不看 `attribution_key`、依 `(metric_scope, currency)` 分組的
+  `result_views` 裡（`_result_view()`，`app/ads/review_evidence.py:135-140`）——這才是實際落地
+  的設計，本節這句舊敘述作廢，不要依它推斷 `series` 的欄位形狀。
 
 #### 6.13.1 修復輪：撕裂的 series 與跨動作加總（settled 2026-09-20）
 
@@ -825,3 +828,48 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   重新讀取的資料反而比較差（例如平台這次沒回報購買動作），它會取代掉比較好的舊列。這是刻意沿用
   本模組既有慣例，不是這次的瑕疵：`app/ads/month_budget.py::_inventory` 對月讀列採同一條規則
   （「完整重讀時被省略的舊列，不可以當成還有效的月花費留著」）。
+
+### 6.16 F18-I01 — 條件式推定 0（settled 2026-09-21）
+
+- 問題：平台某天沒回報這則廣告的成果動作，跟平台回報「有這個動作、次數是 0」在資料上長得一樣
+  ——`result_count IS NULL`。前者是「不知道」，後者才是「知道是 0」；共用層一律誠實回 `unknown`，
+  導致一則廣告明明持續花錢卻始終沒有成果的窗口，永遠卡在 `result_unknown_days`／`missing`，判不
+  出停損。
+- 規則（三條件缺一不可，`app/ads/tracked_zero.py::apply()`，平台中立、不 import 任何 adapter）：
+  1. **先證明這個 Campaign 真的在追蹤這個動作**：over 這個 campaign 自己的 entity 列，取
+     `day BETWEEN end-27 AND end`（`OBSERVATION_WINDOW_DAYS=28`，`end` 是本次完成同步的涵蓋窗尾
+     日）內 `availability.result_count='available'` 且 `result_count>0` 的列，取
+     `(result_kind, result_action, result_attribution)` 相異值。剛好一種 ⇒ 這是「已示範的定
+     義」；零種或一種以上 ⇒ 不寫任何東西，回報 `no_demonstrated_definition`／
+     `mixed_result_definition`（絕不用猜的或挑第一個）。
+  2. 只在同一次同步「observations」任務**乾淨完成**（無 cursor、無 errors，涵蓋範圍已記錄）的
+     同一交易內，對這次同步涵蓋的 `[start, end]` 窗口逐列判斷：`result_kind` 等於已示範的定義且
+     `result_count IS NULL`；`availability` 確實有 `result_count` 這個 key（排除 §6.15 的
+     `_predates_result_columns` 舊列形狀）；`availability.spend='available'` 且
+     （`spend>0` 或 `impressions>0`，代表這天真的有花錢／有曝光，不是活動還沒開始）；
+     `day` 不晚於組織所在時區的昨天（今天永遠不算完整日，沿用 §6.14 同一條規則）；`day` 落在這次
+     同步實際涵蓋的窗口內；不是 §6.15 的月讀列（`is_monthly_budget_row`）。
+  3. 全部成立才寫：`result_count=0`、`result_action`／`result_attribution` 填已示範的那組值、
+     `availability.result_count="derived_zero"`——**不是** `"available"`（平台真的回報的 0）、
+     **不是** `"unknown"`（真的不知道），三種狀態永遠可分辨。只動這四個欄位，`spend`／
+     `purchases`／`revenue`／`attribution_key`／唯一鍵完全不碰。
+- 呼叫點只有一處：`external_sync.py::run_sync`，「observations」任務完成、記錄 `coverage` 的同一
+  段程式碼、同一個交易裡（不是獨立背景工作，也不是每個 reader 各自呼叫）。
+- `review_evidence._result_view()`：`availability.result_count` 是 `"available"` 或
+  `"derived_zero"` 都算「已知」，同一條「整組只要有一天未知就是 None」誠實規則不變；新增
+  `derived_zero_days` 回報這組已知天數裡有幾天是推定出來的，讓前端／人工判讀能把「真的回報 0」
+  跟「規則推定 0」分開看，不需要另外查。`_predates_result_columns()`／`mixed_result_definition`／
+  三分 `missing[]` 規則（§6.15）不變。
+- `app/ads/targets.py`／`app/ads/month_budget.py` 未修改也不需要修改：`targets._trailing_30` 透
+  過 `aggregate()` 的 `result_views` 自動吃到 `derived_zero` 已知列，能在窗口內只有推定 0（沒有
+  一天真的回報過)時仍算出 trailing-30 成本；`month_budget.py` 完全不讀 `result_count`／
+  `availability.result_count`，只認 `spend`／`availability.spend`，不受影響（已逐一確認）。
+- 冪等：對同一涵蓋窗口重複同步，第二次執行時已推定的列 `result_count` 已經是 `0`（非
+  `NULL`），不再符合寫入條件，不會重複改寫；若中間真的讀到平台回報的真實值，`upsert_observation`
+  在 `tracked_zero.apply()` 之前就已經覆蓋掉那列，推定規則自然不會再套用。
+- 驗證：`app/tests/test_ads_tracked_zero.py`（三條件各自單獨擋下推定、示範定義零種／多種、只涵
+  蓋窗口內的列、不碰月讀列、冪等重同步）、`app/tests/test_ads_review_cycle.py`（`derived_zero`
+  在 result view 算已知、`derived_zero_days` 計數、跟平台回報的 `"available"` 0 可分辨）、
+  `app/tests/test_ads_external_sync.py`（`run_sync` 在 observations 任務乾淨完成時真的呼叫
+  `tracked_zero.apply()`，涵蓋範圍就是同步窗口）、`app/tests/test_ads_targets.py`
+  （`_trailing_30` 在窗口只有推定 0 時仍能解出，不再卡 `missing`）。
