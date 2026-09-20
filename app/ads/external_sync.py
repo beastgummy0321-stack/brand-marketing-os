@@ -272,7 +272,7 @@ def _fill_result_kind_if_null(conn, reader, org, brand, campaign_id, item):
     )
 
 
-def _save_page(conn, job, task, page, reader):
+def _save_page(conn, job, task, page, reader=None):
     org, brand = job["org_id"], job["brand_id"]
     if len(page.items) > 100:
         raise ValueError("來源分頁超過100個節點。")
