@@ -62,7 +62,16 @@ class ReviewCycleTest(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.conn.commit()
 
-    def observation(self, day=None, **extra):
+    def observation(
+        self,
+        day=None,
+        *,
+        result_kind=None,
+        result_count=None,
+        result_action=None,
+        result_attribution=None,
+        **extra,
+    ):
         external_repository.upsert_observation(
             self.conn,
             self.org,
@@ -82,6 +91,10 @@ class ReviewCycleTest(unittest.TestCase):
                 "revenue": None,
                 **extra,
             },
+            result_kind=result_kind,
+            result_count=result_count,
+            result_action=result_action,
+            result_attribution=result_attribution,
         )
         self.conn.commit()
 
@@ -216,6 +229,105 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(evidence["current"]["missing_days"], 1)
         self.assertEqual(evidence["conditions"]["history"], "unknown")
         self.assertEqual(evidence["previous"]["row_count"], 0)
+
+    def test_result_kind_and_cost_per_result_name_the_campaigns_own_result(self):
+        # Previous-vs-current comparison for the campaign's own result reads the result view,
+        # not the per-attribution_key series (F16-I03 repair).
+        self.observation(result_kind="engagement", result_count=45, spend=90)
+        self.observation(
+            self.end - timedelta(days=1), result_kind="engagement", result_count=15, spend=30
+        )
+        row = self.request()
+        view = row["evidence_json"]["current"]["result_views"][0]
+        self.assertEqual(view["result_kind"], "engagement")
+        self.assertEqual(view["result_count"], 60)
+        self.assertEqual(view["cost_per_result"], 2.0)
+        self.assertIsNone(view["reason"])
+        series = row["evidence_json"]["current"]["series"][0]
+        self.assertNotIn("result_kind", series)
+
+    def test_unknown_result_count_any_day_keeps_cost_per_result_unknown(self):
+        self.observation(result_kind="engagement", result_count=45)
+        self.observation(self.end - timedelta(days=1), result_kind="engagement", result_count=None)
+        row = self.request()
+        view = row["evidence_json"]["current"]["result_views"][0]
+        self.assertIsNone(view["result_count"])
+        self.assertIsNone(view["cost_per_result"])
+        self.assertEqual(view["reason"], "result_unknown_days")
+
+    def test_engagement_result_view_survives_incidental_purchase_attribution_split(self):
+        # Probe: an incidental purchase flips `attribution_key` (purchase-derived) on day 2,
+        # tearing the per-key series into two — the result view must not be torn by it.
+        day1, day2, day3 = self.start, self.start + timedelta(days=1), self.end
+        common = {
+            "result_kind": "engagement",
+            "result_action": "post_engagement",
+            "result_attribution": "7d_click+1d_view",
+        }
+        self.observation(day1, attribution_key="unavailable", result_count=40, spend=40, **common)
+        self.observation(
+            day2,
+            attribution_key="omni_purchase",
+            result_count=50,
+            spend=50,
+            purchases=1,
+            revenue=30,
+            **common,
+        )
+        self.observation(day3, attribution_key="unavailable", result_count=60, spend=60, **common)
+        row = self.request()
+        current = row["evidence_json"]["current"]
+        self.assertEqual(len(current["series"]), 2)
+        self.assertEqual(len(current["result_views"]), 1)
+        view = current["result_views"][0]
+        self.assertEqual(view["result_count"], 150)
+        self.assertEqual(view["cost_per_result"], 1.0)
+        self.assertIsNone(view["reason"])
+
+    def test_mixed_result_action_types_never_summed_under_one_label(self):
+        # Meta's `page_engagement` already contains `post_engagement`; summing them under one
+        # `result_kind` label is not a real quantity, so the mismatch must fail closed.
+        day1, day2, day3 = self.start, self.start + timedelta(days=1), self.end
+        common = {"result_kind": "engagement", "result_attribution": "7d_click+1d_view"}
+        self.observation(day1, result_action="post_engagement", result_count=40, spend=40, **common)
+        self.observation(
+            day2, result_action="post_engagement", result_count=50, spend=50, **common
+        )
+        self.observation(
+            day3, result_action="page_engagement", result_count=60, spend=60, **common
+        )
+        row = self.request()
+        view = row["evidence_json"]["current"]["result_views"][0]
+        self.assertIsNone(view["result_count"])
+        self.assertIsNone(view["cost_per_result"])
+        self.assertEqual(view["reason"], "mixed_result_definition")
+
+    def test_sales_result_view_equals_purchase_metrics_when_known(self):
+        common = {"result_kind": "purchase", "result_action": "omni_purchase"}
+        self.observation(
+            result_attribution="7d_click+1d_view",
+            result_count=3,
+            spend=90,
+            purchases=3,
+            revenue=300,
+            **common,
+        )
+        self.observation(
+            self.end - timedelta(days=1),
+            result_attribution="7d_click+1d_view",
+            result_count=2,
+            spend=30,
+            purchases=2,
+            revenue=200,
+            **common,
+        )
+        row = self.request()
+        current = row["evidence_json"]["current"]
+        view = current["result_views"][0]
+        series = current["series"][0]
+        self.assertEqual(view["result_kind"], "purchase")
+        self.assertEqual(view["result_count"], series["metrics"]["purchases"])
+        self.assertEqual(view["cost_per_result"], series["metrics"]["cpa"])
 
     def test_invalid_model_target_refs_numbers_and_copy_rejected_without_resend(self):
         self.observation()

@@ -75,9 +75,45 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     return dict(row)
 
 
-def upsert_observation(conn, org_id, brand_id, campaign_id, observation):
+def campaign_objective(conn, org_id, brand_id, platform, source_account, native_id):
+    """The synced Meta-native objective for this root campaign entity, or None when the
+    entity hasn't synced one yet (F16-I03, docs/architecture/ads.md §6.13). Callers must treat
+    None as "no result mapping resolvable yet", never as a synonym for a specific objective."""
+    row = conn.execute(
+        "SELECT objective FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND "
+        "platform=%s AND source_account=%s AND native_kind='campaign' AND native_id=%s",
+        (org_id, brand_id, platform, source_account, native_id),
+    ).fetchone()
+    return row["objective"] if row else None
+
+
+def upsert_observation(
+    conn,
+    org_id,
+    brand_id,
+    campaign_id,
+    observation,
+    *,
+    result_kind=None,
+    result_count=None,
+    result_action=None,
+    result_attribution=None,
+):
     _campaign(conn, org_id, brand_id, campaign_id)
     data = ExternalObservation.model_validate(observation).model_dump()
+    # result_kind/result_count/result_action/result_attribution (F16-I03) are kept outside the
+    # strict ExternalObservation model on purpose: every other source (fixtures, future
+    # platforms) that has no result mapping opinion would otherwise fail `extra="forbid"` for
+    # fields it never sets. NULL is the correct default everywhere — "no result known", never a
+    # guessed zero.
+    data["availability"] = {
+        **data["availability"],
+        "result_count": "available" if result_count is not None else "unknown",
+    }
+    data["result_kind"] = result_kind
+    data["result_count"] = result_count
+    data["result_action"] = result_action
+    data["result_attribution"] = result_attribution
     columns = list(data)
     values = [jsonb(value) if key == "availability" else value for key, value in data.items()]
     row = conn.execute(
