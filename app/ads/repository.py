@@ -277,10 +277,8 @@ _TARGET_BASES = frozenset({"own", "break_even", "trailing_30"})
 
 def _campaign_target_view(campaign: dict, resolved: dict) -> dict:
     own_value = (
-        float(campaign["success_target"])
-        if campaign.get("success_metric") == "cost_per_result"
-        and campaign.get("success_basis") == "own"
-        and campaign.get("success_target") is not None
+        float(campaign["target_cost"])
+        if campaign.get("target_basis") == "own" and campaign.get("target_cost") is not None
         else None
     )
     return {
@@ -314,6 +312,11 @@ def save_campaign_target(
     """F16-I04: `PUT .../target`, optimistic revision exactly like `month_budget.save`
     (`app/ads/month_budget.py:410`) but scoped to `target_revision` -- this sub-resource's own
     counter, so unrelated campaign edits (strategy/plan/bind/...) never collide with it.
+
+    Writes only this sub-resource's own columns (`target_cost`/`target_basis`/`result_kind`/
+    `target_revision`) -- never `success_metric`/`success_target`/`success_basis` (2026-09-20
+    re-cut: overloading those three silently corrupted close-out verdicts, learning cohorts,
+    cold-start budgets, asset suggestions and the frontend metric label, all outside this issue).
 
     `price`/`variable_cost` are never written to `product_economics` here: they only ever reach
     `app.brand_intelligence.repository.save_product_economics`, that layer's own public write
@@ -379,16 +382,16 @@ def save_campaign_target(
         set_clauses.append("result_kind = %s")
         params.append(result_kind)
     if basis == "own":
-        set_clauses += ["success_metric = %s", "success_basis = %s", "success_target = %s"]
-        params += ["cost_per_result", "own", value]
+        set_clauses += ["target_basis = %s", "target_cost = %s"]
+        params += ["own", value]
     elif basis is not None:
         # `basis` here only ever asks resolve() to pick again among break-even/trailing-30 --
         # never a stored preference (the priority order is fixed, §0) -- so clearing a prior
-        # "own" override just drops `success_target` and relabels `success_basis`; it never sets
-        # `success_metric` back to NULL (`ads_campaign_internal_required` requires it NOT NULL
-        # for every internal campaign, regardless of which of the three metrics it names).
-        set_clauses += ["success_metric = %s", "success_basis = %s", "success_target = NULL"]
-        params += ["cost_per_result", basis]
+        # "own" override just drops `target_cost` and relabels `target_basis`; `resolve()` never
+        # reads this label for break-even/trailing-30 (both are always recomputed), it is kept
+        # only so `_campaign_target_view` can tell "user asked for X" from "nothing chosen yet".
+        set_clauses += ["target_basis = %s", "target_cost = NULL"]
+        params += [basis]
     params += [org_id, brand_id, campaign_id]
     conn.execute(
         f"UPDATE ads_campaign SET {', '.join(set_clauses)} "

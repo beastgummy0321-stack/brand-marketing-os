@@ -311,9 +311,30 @@ def observation(item, level, account, objective=_NO_OBJECTIVE):
     return result
 
 
+def result_kind_for_objective(objective) -> str | None:
+    """F16-I04: this adapter's own objective -> result-kind mapping (§0 "the objective -> result
+    mapping lives in the Meta adapter"), exposed to shared code (`app/ads/external_sync.py`)
+    through `MetaReader.result_kind()` so nothing outside this file ever reads a Meta objective
+    string. Reuses the exact same tables `_objective_result` keys observations by -- one
+    definition, not a second one that could drift. An objective absent from both tables (or
+    `None`, not yet synced) has no defined result and stays `None` -- never a fallback to
+    `"purchase"`."""
+    if objective in _SALES_OBJECTIVES:
+        return "purchase"
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    return mapped[0] if mapped else None
+
+
 class MetaReader:
     def sync_scopes(self, conn):
         return source.external_sync_scopes(conn)
+
+    def result_kind(self, entity: dict) -> str | None:
+        """F16-I04: result kind for this synced entity -- the campaign-level entity's own
+        `objective` field (`_entity()`'s raw Meta string), mapped through this file's one
+        objective -> result table. `app/ads/external_sync.py` calls this instead of reading
+        `entity["objective"]` itself -- shared code never branches on a Meta objective string."""
+        return result_kind_for_objective(entity.get("objective"))
 
     def accounts(self, conn, org_id, brand_id):
         return source.external_bound_accounts(conn, org_id, brand_id)

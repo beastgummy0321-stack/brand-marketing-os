@@ -84,13 +84,9 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
     "result_kind": str|None, "missing": [str, ...]}`.
     """
     result_kind = campaign.get("result_kind")
-    if (
-        campaign.get("success_metric") == "cost_per_result"
-        and campaign.get("success_basis") == "own"
-        and campaign.get("success_target") is not None
-    ):
+    if campaign.get("target_basis") == "own" and campaign.get("target_cost") is not None:
         return {
-            "value": float(campaign["success_target"]), "basis": "own",
+            "value": float(campaign["target_cost"]), "basis": "own",
             "result_kind": result_kind, "missing": [],
         }
 

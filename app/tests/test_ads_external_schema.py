@@ -274,9 +274,12 @@ class ExternalSchemaTest(unittest.TestCase):
 
 
 class CampaignTargetSchemaTest(unittest.TestCase):
-    """F16-I04 (`supabase/migrations/20260920000005_ads_campaign_target.sql`): the widened
-    `success_metric` vocabulary, the new `result_kind` column, the `cost_per_result`-only basis
-    constraint, and legacy rows keeping their free-text `success_basis` meaning untouched."""
+    """F16-I04 (`supabase/migrations/20260920000005_ads_campaign_target.sql` +
+    `20260920000006_ads_campaign_target_columns.sql`, the repair round): `result_kind` and
+    `target_revision` from `..._0005`; the own-columns `target_cost`/`target_basis` from
+    `..._0006` (only `own` may carry a `target_cost`); `success_metric` restored to
+    cpa/roas/purchases -- `cost_per_result` is rejected again, and legacy rows keep their
+    free-text `success_basis` meaning untouched."""
 
     def setUp(self):
         self.conn = db.current()
@@ -286,34 +289,66 @@ class CampaignTargetSchemaTest(unittest.TestCase):
         )["id"]
         self.conn.commit()
 
-    def test_cost_per_result_metric_and_result_kind_and_default_revision(self):
+    def test_result_kind_and_default_target_revision(self):
         campaign_id = db.new_id("adc")
         self.conn.execute(
-            "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,success_metric,"
-            "success_basis,result_kind) VALUES (%s,%s,%s,'target 測試','imported',"
-            "'cost_per_result','break_even','purchase')",
+            "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,result_kind) "
+            "VALUES (%s,%s,%s,'target 測試','imported','purchase')",
             (campaign_id, self.org, self.brand),
         )
         self.conn.commit()
         row = self.conn.execute(
-            "SELECT success_metric,success_basis,result_kind,target_revision FROM ads_campaign "
-            "WHERE id=%s",
+            "SELECT result_kind,target_revision FROM ads_campaign WHERE id=%s",
             (campaign_id,),
         ).fetchone()
-        self.assertEqual(row["success_metric"], "cost_per_result")
         self.assertEqual(row["result_kind"], "purchase")
         self.assertEqual(row["target_revision"], 0)
 
-    def test_cost_per_result_rejects_a_non_machine_basis(self):
+    def test_success_metric_rejects_cost_per_result_again(self):
+        """`..._0006` undoes `..._0005`'s widening (architect ruling: the target cost gets its
+        own columns, nothing writes `success_metric='cost_per_result'` again)."""
         campaign_id = db.new_id("adc")
         with self.assertRaises(psycopg.errors.CheckViolation):
             with transaction(self.conn):
                 self.conn.execute(
-                    "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,success_metric,"
-                    "success_basis) VALUES (%s,%s,%s,'target 測試','imported','cost_per_result',"
-                    "'一句話說明')",
+                    "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,success_metric) "
+                    "VALUES (%s,%s,%s,'target 測試','imported','cost_per_result')",
                     (campaign_id, self.org, self.brand),
                 )
+
+    def test_target_cost_rejected_for_a_computed_basis(self):
+        campaign_id = db.new_id("adc")
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with transaction(self.conn):
+                self.conn.execute(
+                    "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,target_basis,"
+                    "target_cost) VALUES (%s,%s,%s,'target 測試','imported','break_even',100)",
+                    (campaign_id, self.org, self.brand),
+                )
+
+    def test_own_basis_requires_a_target_cost(self):
+        campaign_id = db.new_id("adc")
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with transaction(self.conn):
+                self.conn.execute(
+                    "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,target_basis) "
+                    "VALUES (%s,%s,%s,'target 測試','imported','own')",
+                    (campaign_id, self.org, self.brand),
+                )
+
+    def test_own_basis_with_target_cost_is_accepted(self):
+        campaign_id = db.new_id("adc")
+        self.conn.execute(
+            "INSERT INTO ads_campaign(id,org_id,brand_id,name,origin,target_basis,target_cost) "
+            "VALUES (%s,%s,%s,'target 測試','imported','own',250)",
+            (campaign_id, self.org, self.brand),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT target_basis,target_cost FROM ads_campaign WHERE id=%s", (campaign_id,),
+        ).fetchone()
+        self.assertEqual(row["target_basis"], "own")
+        self.assertEqual(float(row["target_cost"]), 250.0)
 
     def test_legacy_success_metric_rows_keep_free_text_basis_untouched(self):
         campaign_id = db.new_id("adc")

@@ -9,8 +9,8 @@ import unittest
 from datetime import timedelta
 
 import app.shared.web as web
+from app.ads import channels, repository, targets
 from app.ads import external_repository as external
-from app.ads import repository, targets
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
@@ -37,18 +37,34 @@ class ResolveTargetTest(unittest.TestCase):
         web.conn.commit()
         return product_id
 
-    def _imported_campaign_with_days(self, rows):
+    def _imported_campaign_with_days(self, rows, *, objective=None):
         """`rows` is a list of `(day_offset_before_end, spend, result_kind, result_count,
         result_action, result_attribution)` tuples. `day_offset_before_end=0` is yesterday (the
-        last complete day) -- matches `targets._trailing_30`'s own window exactly."""
+        last complete day) -- matches `targets._trailing_30`'s own window exactly.
+
+        `objective` (F16-I04), when given, is a Meta campaign objective string put on the
+        campaign-level entity exactly as a real sync would see it; `result_kind` is derived from
+        it through the real adapter mapping (`MetaReader.result_kind()`) and saved through the
+        real write path (`repository.save_campaign_target`) -- never hand-set on a campaign dict.
+        """
         campaign_id = external.create_imported_campaign(
             web.conn, self.org_id, self.brand_id, name="既有活動",
         )["id"]
+        entity_fields = {
+            "platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+            "native_id": "c1",
+        }
+        if objective is not None:
+            entity_fields["objective"] = objective
         entity = external.upsert_entity(
-            web.conn, self.org_id, self.brand_id, campaign_id,
-            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
-             "native_id": "c1"},
+            web.conn, self.org_id, self.brand_id, campaign_id, entity_fields,
         )
+        if objective is not None:
+            result_kind = channels.external_reader("meta").result_kind(entity)
+            repository.save_campaign_target(
+                web.conn, self.org_id, self.brand_id, campaign_id,
+                result_kind=result_kind, expected_revision=0, actor="測試員",
+            )
         today = coresettings.today_for_org(web.conn, org_id=self.org_id)
         end = today - timedelta(days=1)
         for offset, spend, result_kind, result_count, result_action, result_attribution in rows:
@@ -63,6 +79,26 @@ class ResolveTargetTest(unittest.TestCase):
                 result_action=result_action, result_attribution=result_attribution,
             )
         web.conn.commit()
+        return campaign_id
+
+    def _imported_campaign_with_objective(self, objective, *, product_id=None):
+        """Same real-adapter-mapping + real-write-path shape as `_imported_campaign_with_days`,
+        for tests that only need the objective -> `result_kind` provenance, not trailing-30 data.
+        """
+        campaign_id = external.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="既有活動：" + objective,
+        )["id"]
+        entity = external.upsert_entity(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1", "objective": objective},
+        )
+        web.conn.commit()
+        result_kind = channels.external_reader("meta").result_kind(entity)
+        repository.save_campaign_target(
+            web.conn, self.org_id, self.brand_id, campaign_id,
+            result_kind=result_kind, product_id=product_id, expected_revision=0, actor="測試員",
+        )
         return campaign_id
 
     # -- sales, with/without product cost ------------------------------------------------------
@@ -137,8 +173,7 @@ class ResolveTargetTest(unittest.TestCase):
         product_id = self._product(unit_variable_cost=150)  # would otherwise break-even to 300
         campaign = {
             "id": "nonexistent", "origin": "internal", "result_kind": "lead",
-            "success_metric": "cost_per_result", "success_basis": "own",
-            "success_target": 999,
+            "target_basis": "own", "target_cost": 999,
             "context_json": {"product_ids": [product_id]},
         }
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
@@ -159,6 +194,60 @@ class ResolveTargetTest(unittest.TestCase):
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
         self.assertIsNone(result["value"])
         self.assertIn("needs_resync", result["missing"])
+
+    # -- result_kind provenance: the real Meta adapter mapping, never a dict literal ------------
+
+    def test_imported_sales_objective_from_meta_resolves_break_even(self):
+        product_id = self._product(unit_variable_cost=150)
+        campaign_id = self._imported_campaign_with_objective("OUTCOME_SALES", product_id=product_id)
+        campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        self.assertEqual(campaign["result_kind"], "purchase")
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["basis"], "break_even")
+        self.assertEqual(result["value"], 300)  # 500 - 150 - 50
+        self.assertEqual(result["result_kind"], "purchase")
+
+    def test_imported_engagement_objective_from_meta_resolves_trailing_30(self):
+        campaign_id = self._imported_campaign_with_days([
+            (0, 100, "engagement", 10, "post_engagement", "7d_click+1d_view"),
+            (5, 200, "engagement", 10, "post_engagement", "7d_click+1d_view"),
+        ], objective="OUTCOME_ENGAGEMENT")
+        campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        self.assertEqual(campaign["result_kind"], "engagement")
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["basis"], "trailing_30")
+        self.assertAlmostEqual(result["value"], (100 + 200) / (10 + 10))
+
+    def test_imported_unmapped_objective_from_meta_is_missing_not_zero(self):
+        campaign_id = self._imported_campaign_with_days([], objective="OUTCOME_AWARENESS")
+        campaign = repository.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        self.assertIsNone(campaign["result_kind"])
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertIsNone(result["value"])
+        self.assertIsNone(result["basis"])
+        self.assertIn("trailing_30", result["missing"])
+
+    # -- regression: PUT .../target never touches the legacy success_* triple -------------------
+
+    def test_put_target_leaves_legacy_success_fields_byte_identical(self):
+        campaign = repository.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": "既有 CPA 活動", "goal_text": "衝一波", "objective": "購買",
+            "success_metric": "cpa", "success_target": 300, "success_basis": "手動輸入",
+        }, created_by="測試員")
+        web.conn.commit()
+        before = web.conn.execute(
+            "SELECT success_metric, success_target, success_basis FROM ads_campaign WHERE id=%s",
+            (campaign["id"],),
+        ).fetchone()
+        repository.save_campaign_target(
+            web.conn, self.org_id, self.brand_id, campaign["id"],
+            basis="own", value=250, expected_revision=0, actor="測試員",
+        )
+        after = web.conn.execute(
+            "SELECT success_metric, success_target, success_basis FROM ads_campaign WHERE id=%s",
+            (campaign["id"],),
+        ).fetchone()
+        self.assertEqual(dict(before), dict(after))
 
 
 if __name__ == "__main__":
