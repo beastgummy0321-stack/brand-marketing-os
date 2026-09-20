@@ -393,7 +393,10 @@
         "typecheck": "uv run ruff check app && uv run python -m pyright",
         "build": null
       }
-    ]
+    ],
+    "env_files": [".env", "frontend/.env"],
+    "env_exclude": ["BRAND_OS_LLM_PROVIDER"],
+    "timeouts": {"test": 2400000, "smoke": 2400000}
   },
   "checker": {
     "command": "uv run python tools/check_architecture.py"
