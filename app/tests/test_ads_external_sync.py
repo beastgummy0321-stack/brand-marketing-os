@@ -99,6 +99,15 @@ class Reader:
             ]
         )
 
+    # F16-I04: a stand-in for a real platform adapter's own objective -> result-kind mapping
+    # (`app.ads.adapters.meta_read.MetaReader.result_kind`) -- exercises the same seam
+    # `external_sync._fill_result_kind_if_null` calls through, without depending on Meta's own
+    # objective vocabulary.
+    _RESULT_KIND_MAP = {"SALES": "purchase", "ENGAGE": "engagement"}
+
+    def result_kind(self, entity):
+        return self._RESULT_KIND_MAP.get(entity.get("objective"))
+
     def read_observations(self, *args, start, **kwargs):
         return SourcePage(
             [
@@ -217,6 +226,59 @@ class ExternalSyncTest(unittest.TestCase):
         )
         self.assertEqual(view["observations"][0]["result_kind"], "lead")
         self.assertEqual(view["observations"][0]["result_count"], 3)
+
+    def _structure_page(self, native_id="root", *, objective):
+        # Same two-entity shape `Reader.read_structure` returns by default (root + one child) --
+        # only the root carries the objective a real platform's structure sync would report at
+        # campaign level.
+        return SourcePage([
+            self.reader.root(native_id, objective=objective),
+            self.reader.root(
+                "child", native_kind="line", parent_native_kind="portfolio",
+                parent_native_id=native_id,
+            ),
+        ])
+
+    def test_sync_fills_result_kind_only_when_null_and_never_overwrites_a_user_choice(self):
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+
+        with patch.object(
+            self.reader, "read_structure",
+            return_value=self._structure_page(objective="SALES"),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        row = self.conn.execute(
+            "SELECT result_kind FROM ads_campaign WHERE id=%s", (campaign["id"],)
+        ).fetchone()
+        self.assertEqual(row["result_kind"], "purchase")
+
+        # A user's own PUT choice, once stored, must survive a later re-sync untouched -- even
+        # one that (from a stale platform read) would otherwise map to something else.
+        from app.ads import repository as ads_repo
+
+        ads_repo.save_campaign_target(
+            self.conn, self.org, self.brand, campaign["id"],
+            result_kind="lead", expected_revision=0, actor="test",
+        )
+        with patch.object(
+            self.reader, "read_structure",
+            return_value=self._structure_page(objective="ENGAGE"),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        row = self.conn.execute(
+            "SELECT result_kind FROM ads_campaign WHERE id=%s", (campaign["id"],)
+        ).fetchone()
+        self.assertEqual(row["result_kind"], "lead")
 
     def test_revoked_account_blocks_pending_read_without_erasing_data(self):
         job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))

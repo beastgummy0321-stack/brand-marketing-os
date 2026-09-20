@@ -85,6 +85,15 @@ def _economics_for(
     return None, None
 
 
+def economics_for(
+    conn, brand_id: str, product_ids: list[str] | None,
+) -> tuple[dict | None, str | None]:
+    """Public wrapper for `_economics_for` -- F16-I04's `app/ads/targets.py::resolve()` needs the
+    exact same "first computable product" lookup this file's own `scenarios()` already uses; no
+    second implementation of that rule."""
+    return _economics_for(conn, brand_id, product_ids)
+
+
 def scenarios(conn, org_id, brand_id, *, product_ids: list[str] | None, days: int,
               history: dict | None, conversion_label: str = "購買") -> dict:
     """Three budget scenarios for the strategy tab. `history` truthy (has a `last_daily_budget`)

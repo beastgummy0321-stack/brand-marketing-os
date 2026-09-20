@@ -11,7 +11,7 @@ repository/brief function -> wrap.
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 import app.shared.web as web
 from app import workbench
@@ -834,3 +834,70 @@ def close_campaign(request: Request, brand_id: str, campaign_id: str,
     # 陽春的 ads_campaign 列，前端的 CampaignDetail 型別要的是這一份（§0 re-cut correction 1）。
     campaign = repository.campaign_detail(web.conn, actor.org_id, brand_id, campaign_id)
     return {"campaign": _with_readiness(actor, brand_id, campaign)}
+
+
+# -- F16-I04：每個 Campaign（自建或既有）都要能算出一個目標成本 -----------------------------
+
+
+class TargetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    result_kind: str | None = None
+    basis: str | None = None
+    value: float | None = None
+    product_id: str | None = None
+    price: float | None = None
+    variable_cost: float | None = None
+    # F03-I20：這個檔案裡每個 request model 的欄位都要有預設值，租戶界線才會先於欄位驗證
+    # 跑（見上方檔頭那段說明）——`None`（沒填）一律被 `repository.save_campaign_target` 當成
+    # 「版本號不對」處理（`type(...) is not int`），不是另開一種缺欄錯誤。`ge=0, strict=True`
+    # 比照 `app/ads/month_budget_routes.py:48` 的 `expected_revision`：一份提供時不接受字串
+    # 強轉或負數，只是這裡多留了 `None` 當預設值。
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+
+
+_TARGET_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    "target_conflict": (409, "目標設定已被更新，請重新載入後再試一次。"),
+    "target_basis_unknown": (400, "basis 只能是 own／break_even／trailing_30。"),
+    "target_value_unknown": (400, "own 目標值必須是數字。"),
+    "product_unknown": (400, "這個商品不屬於這個品牌。"),
+    "product_economics_unknown": (400, "這個商品還沒有售價可以核對，請先補售價。"),
+}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/target")
+def get_campaign_target(request: Request, brand_id: str, campaign_id: str):
+    """F16-I04：這個 Campaign 目前能算出的目標成本——`app/ads/targets.py::resolve()` 的
+    純計算結果，外加這個子資源自己的存檔狀態（`result_kind`／商品選擇／own 覆寫／
+    `target_revision`）。不掛 `_legacy_campaign_guard`（suffix 不在它的白名單裡，見檔頭
+    guard 的註解），自己做租戶界線——既有活動也要能讀這條路由，不像其餘既有 mutation 路由
+    整條擋掉。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        target = repository.get_campaign_target(web.conn, actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _TARGET_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"target": target}
+
+
+@router.put("/brands/{brand_id}/campaigns/{campaign_id}/target")
+def put_campaign_target(request: Request, brand_id: str, campaign_id: str, body: TargetRequest):
+    """F16-I04：`result_kind`／商品選擇／own 覆寫值／樂觀版本號，比照
+    `app/ads/month_budget_routes.py::confirm_budget` 的 `expected_revision` 寫法。
+    `price`／`variable_cost` 一律轉交 `app.brand_intelligence.repository.save_product_economics`
+    這個既有公開寫入路徑，這裡不直接碰 `product_economics` 表。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        target = repository.save_campaign_target(
+            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+            **body.model_dump(),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _TARGET_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"target": target}
