@@ -145,9 +145,15 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
     setSaving(true);
     setSaveError(null);
     setConflict(false);
-    const body: TargetRequest = {
-      basis: draft.basis, result_kind: draft.resultKind, expected_revision: target.revision,
-    };
+    const body: TargetRequest = { basis: draft.basis, expected_revision: target.revision };
+    // review fix: `target.result_kind` may already be a *derived* value (`resolve()` returns
+    // `"purchase"` for break_even, or the observed kind for trailing_30, even while
+    // `ads_campaign.result_kind` is still NULL) — the segmented control pre-selects it so the
+    // heading reads right, but re-sending it on every save would freeze that derived guess into
+    // the column and permanently block `external_sync.py`'s `... AND result_kind IS NULL` from
+    // ever filling it from the real sync. Only send `result_kind` when the user actually picked
+    // a different one than what was loaded.
+    if (draft.resultKind !== target.result_kind) body.result_kind = draft.resultKind;
     if (draft.basis === "own") body.value = Number(draft.ownValue);
     if (draft.basis === "break_even") {
       body.product_id = draft.productId;
@@ -223,10 +229,15 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
           {/* F19-I06（v7 原型 `.seg`，prototype-v7-ads-center.html:329）：分段選單，選項讀
            * `target.result_kinds`；沒有任何一個已知時沒有按鈕預選——誠實的未選狀態，不是猜一個
            * 預設。 */}
+          {/* review fix: no `overflow-hidden` on the container — the global `:focus-visible`
+           * style is an outset outline (tokens.css, 3px offset) and `overflow-hidden` clipped it
+           * on the first/last buttons. Corners are rounded per-button instead
+           * (`first:rounded-l-md last:rounded-r-md`); `relative focus-visible:z-10` keeps a
+           * focused middle button's outline painting over its touching siblings. */}
           <div
             role="group"
             aria-label="看什麼成果"
-            className="inline-flex divide-x divide-border overflow-hidden rounded-md border border-border"
+            className="inline-flex divide-x divide-border rounded-md border border-border"
           >
             {target.result_kinds.map((option) => (
               <button
@@ -234,7 +245,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
                 type="button"
                 aria-pressed={draft.resultKind === option.kind}
                 onClick={() => setDraft((d) => ({ ...d, resultKind: option.kind }))}
-                className={`px-3.5 py-2 text-sm transition-colors ${
+                className={`relative px-3.5 py-2 text-sm transition-colors first:rounded-l-md last:rounded-r-md focus-visible:z-10 ${
                   draft.resultKind === option.kind
                     ? "bg-accent font-semibold text-accent-foreground"
                     : "bg-card text-foreground hover:bg-muted"

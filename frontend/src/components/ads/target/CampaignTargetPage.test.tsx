@@ -204,12 +204,39 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
 
+    // review fix：沒碰過「看什麼成果」就不送 result_kind——沒有 basis 以外的欄位。
     await waitFor(() =>
       expect(mockPutTarget).toHaveBeenCalledWith("brd_1", "cmp_1", {
-        basis: "own", result_kind: null, expected_revision: 0, value: 120,
+        basis: "own", expected_revision: 0, value: 120,
       }),
     );
     expect(await screen.findByText("投放中心首頁")).toBeTruthy();
+  });
+
+  it("review fix：已知（推導出）的成果會預選，但只改 own 數字不碰選單時，存檔不送 result_kind——避免把 resolve() 推導值凍結進使用者選擇，擋住之後的同步", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    // trailing_30 推導出的 result_kind：`ads_campaign.result_kind` 本身仍可能是 NULL（見
+    // `app/ads/targets.py::resolve()`／`external_sync.py` 的 `... AND result_kind IS NULL`）。
+    mockGetTarget.mockResolvedValue(
+      target({ basis: "trailing_30", value: 380, result_kind: "purchase", missing: [] }),
+    );
+    mockPutTarget.mockResolvedValue(
+      target({ basis: "own", value: 500, own_value: 500, revision: 1, result_kind: "purchase" }),
+    );
+    renderPage();
+
+    const group = await screen.findByRole("group", { name: "看什麼成果" });
+    expect(within(group).getByRole("button", { name: "購買" }).getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: /^自訂/ }));
+    fireEvent.change(screen.getByLabelText("目標每次購買成本"), { target: { value: "500" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存目標" }));
+
+    await waitFor(() =>
+      expect(mockPutTarget).toHaveBeenCalledWith("brd_1", "cmp_1", {
+        basis: "own", expected_revision: 0, value: 500,
+      }),
+    );
   });
 
   it("own 依據：0 不是有效目標，按鈕不開、旁邊顯示缺什麼", async () => {
