@@ -69,6 +69,16 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 - Prefer visual encodings over prose where they are truthful: before/after, deltas, status chips, progress,
   thumbnails. Text budget per step: one title, one line of purpose, labels; everything else is folded or cut.
 
+**Worker self-check before handing in a UI issue** (the defect classes review kept finding in F19):
+1. Numeric edges: 0, negative, `null`/unknown are rejected or shown as unknown — never saved or printed as a real value.
+2. No fake success: do not navigate away or show "saved" until the server confirmed and nothing stays unresolved.
+3. A value the system derived is never persisted as the user's choice unless the user changed it.
+4. Money and ratios go through the kit formatter (at most two decimals); no raw floats such as `346.667`.
+5. At 1024 and 1920 with the longest real names: nothing truncates a control, arrow or count; chips do not squeeze the title.
+6. Keyboard: tab order follows reading order and the focus ring is fully visible (not clipped by overflow).
+7. Reviewed behaviour of other issues stays as it is; never change product code to make a test easier — report it.
+8. Your own preview/e2e server uses port 8731 + issue number (I03 → 8734); 8720 belongs to harness merge/integrate.
+
 ---
 
 ## F12. 一般流程與同頁進階（已驗收結案）
