@@ -21,16 +21,14 @@ export interface TriageWindow {
 export interface TriageTargetView {
   value: number | null; basis: "own" | "break_even" | "trailing_30" | null;
   result_kind: string | null;
-  // F19-I06: the backend always sends this now (`app/ads/result_kinds.py::label()`); optional
-  // here only so `AdsHomePage.test.tsx`'s existing `TriageItem` mocks (out of this issue's touch
-  // scope) keep compiling until whichever issue next touches that file starts displaying it.
-  result_label?: string;
+  // F19-I06: always sent by the backend (`app/ads/result_kinds.py::label()`).
+  result_label: string;
   missing: string[];
 }
 export interface TriageMetricsView {
   spend: number | null; result_count: number | null; cost_per_result: number | null;
   result_kind: string | null;
-  result_label?: string; // F19-I06: see `TriageTargetView.result_label`.
+  result_label: string; // F19-I06: see `TriageTargetView.result_label`.
   derived_zero_days: number; reason: string | null;
 }
 export interface TriageSampleView {
