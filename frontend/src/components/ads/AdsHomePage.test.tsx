@@ -58,7 +58,7 @@ function queueItem(id: string, overrides: Partial<TriageItem> = {}) {
     message: `廣告「${overrides.name ?? "晨光隨行杯・日常出發"}」停損，待決定`,
     action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`, visible_from: null,
     status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    triage: triageItem(overrides),
+    triage: triageItem(overrides), proposal: null,
   };
 }
 
