@@ -1,5 +1,5 @@
 import type { CampaignStatus } from "@/lib/adsApi";
-import type { QueueProposal } from "@/lib/adsTriageApi";
+import type { QueueItem, QueueProposal } from "@/lib/adsTriageApi";
 
 /** F19-I02：從 `AdsHomePage.tsx` 抽出，讓 `home/CampaignCards.tsx` 跟 `AdsHomePage.tsx` 都能讀，
  * 不必互相 import 造成循環依賴。`AdsHomePage.tsx` 原樣 re-export，`AllCampaignsPage.tsx`
@@ -85,4 +85,14 @@ export function proposalAction(
           return { label: "已核對", href: stepHref("verify"), done: true };
       }
   }
+}
+
+/** F22-I05 rescope: whether a queue row still counts as "open" for the home header count
+ * (`AdsHomePage.tsx`). `worse` rows have no proposal flow this batch and are never done; a
+ * `stop_loss` row is done exactly when `proposalAction(...).done` is true — same rule the row's
+ * own button already renders, kept in one place so the header and the button can't disagree. */
+export function isQueueItemDone(item: QueueItem): boolean {
+  if (item.triage.class !== "stop_loss") return false;
+  if (item.brand_id === null) return false;
+  return proposalAction(item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal).done;
 }

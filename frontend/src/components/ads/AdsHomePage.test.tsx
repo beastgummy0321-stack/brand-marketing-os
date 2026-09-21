@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import type { QueuePayload, QueueProposal, TriageItem } from "@/lib/adsTriageApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { AdsHomePage } from "./AdsHomePage";
@@ -51,14 +51,14 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-function queueItem(id: string, overrides: Partial<TriageItem> = {}) {
+function queueItem(id: string, overrides: Partial<TriageItem> = {}, proposal: QueueProposal | null = null) {
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
     category: "ads_triage_stop_loss", kind: null, severity: "rule_warning" as const,
     message: `廣告「${overrides.name ?? "晨光隨行杯・日常出發"}」停損，待決定`,
     action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`, visible_from: null,
     status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    triage: triageItem(overrides), proposal: null,
+    triage: triageItem(overrides), proposal,
   };
 }
 
@@ -111,6 +111,26 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(vi.mocked(refreshQueue).mock.calls.length).toBe(1);
   });
 
+  it("header 件數：已核對的停損列不算開著的——一件已完成、一件還開著只印「1 件」（F22-I05 rescope）", async () => {
+    const doneProposal: QueueProposal = {
+      change_set_id: "set_1", campaign_id: "cmp_1", kind: "pause",
+      status: "approved", verification_state: "confirmed",
+      reason: null, revisit_at: null, multi: false,
+    };
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
+        items: [
+          queueItem("q1", { name: "已核對的廣告" }, doneProposal),
+          queueItem("q2", { name: "還沒處理的廣告" }),
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
+  });
+
   it("空佇列：header 印「都處理完了」（誠實空狀態句由 DecisionQueue 的佔位列自己扛，這支只管頁首）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
 
@@ -126,12 +146,13 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
 
     expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
     expect(screen.getByText("停損")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "看證據" })).toBeTruthy();
+    // 停損列沒有 proposal（F22-I05）：按鈕走提議頁，不是靜態的「看證據」。
+    expect(screen.getByRole("link", { name: "去處理" })).toBeTruthy();
   });
 
-  it("佇列列沒有 action_url：不給連結（不落回 /brands//ads）", async () => {
+  it("變差列沒有 action_url：不給連結（不落回 /brands//ads）——停損列的按鈕不看 action_url，見上一則測試", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(
-      queue({ items: [{ ...queueItem("q1"), action_url: null }] }),
+      queue({ items: [{ ...queueItem("q1", { class: "worse", label: "變差" }), action_url: null }] }),
     );
 
     renderPage();
