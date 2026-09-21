@@ -125,6 +125,9 @@ class QueueEndToEndTest(unittest.TestCase):
         # the same dedupe key the enqueue used) -- never null, it's filtered to only live rows.
         self.assertEqual(stop_row["triage"]["class"], "stop_loss")
         self.assertEqual(stop_row["triage"]["entity_id"], self.ad_stop["id"])
+        # F19-I07: the queue is brand-level across campaigns -- each row's triage item carries
+        # its own campaign's name so the frontend can label/filter rows by campaign.
+        self.assertEqual(stop_row["triage"]["campaign_name"], "活動一")
 
         worse_row = by_category["ads_triage_worse"]
         self.assertEqual(worse_row["severity"], "rule_warning")
@@ -132,6 +135,7 @@ class QueueEndToEndTest(unittest.TestCase):
         self.assertLessEqual(len(worse_row["message"]), core_interrupts.MAX_MESSAGE_LEN)
         self.assertEqual(worse_row["triage"]["class"], "worse")
         self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
+        self.assertEqual(worse_row["triage"]["campaign_name"], "活動一")
 
         self.assertEqual(result["kinds_available"], ["stop_loss", "worse"])
         self.assertEqual(result["kinds_pending"], ["scale_budget", "refresh_creative"])

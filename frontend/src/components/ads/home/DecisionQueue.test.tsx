@@ -15,6 +15,7 @@ import { DecisionQueue, type QueueState } from "./DecisionQueue";
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "native_1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1",
+    campaign_name: "晨光隨行杯上市",
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
@@ -155,11 +156,43 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(links[1].getAttribute("data-variant")).toBe("outline");
   });
 
-  it("篩選鈕：只有「全部 N」——活動名稱在 payload 裡不存在，不逐活動分組、不印 id", () => {
+  it("篩選鈕：單一活動也照印「全部 N」＋那顆活動 pill（v7 行為），不印 id 充當名稱", () => {
     renderQueue(ready({ items: [queueItem("q1"), queueItem("q2")] }));
 
     expect(screen.getByText("全部 2")).toBeTruthy();
+    expect(screen.getByText("晨光隨行杯上市 2")).toBeTruthy();
     expect(screen.queryByText(/cmp_1/)).toBeNull();
+  });
+
+  it("列上有活動 chip（跟分類 chip 同一列），截斷有 title 但不印 id", () => {
+    renderQueue(ready({ items: [queueItem("q1")] }));
+
+    const chip = screen.getByText("晨光隨行杯上市");
+    expect(chip.getAttribute("title")).toBe("晨光隨行杯上市");
+  });
+
+  it("多活動：逐活動篩選鈕各自計數、可用鍵盤／滑鼠切換、aria-pressed 反映狀態，篩完只留該活動的列", async () => {
+    const user = userEvent.setup();
+    renderQueue(ready({
+      items: [
+        queueItem("q1", { campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市", name: "廣告A" }),
+        queueItem("q2", { campaign_id: "cmp_2", campaign_name: "夜間保溫瓶回購", name: "廣告B" }),
+      ],
+    }));
+
+    const all = screen.getByRole("button", { name: "全部 2" });
+    const pillA = screen.getByRole("button", { name: "晨光隨行杯上市 1" });
+    const pillB = screen.getByRole("button", { name: "夜間保溫瓶回購 1" });
+    expect(all.getAttribute("aria-pressed")).toBe("true");
+    expect(pillA.getAttribute("aria-pressed")).toBe("false");
+
+    await user.click(pillB);
+    expect(pillB.getAttribute("aria-pressed")).toBe("true");
+    expect(all.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText("廣告B")).toBeTruthy();
+    expect(screen.queryByText("廣告A")).toBeNull();
+    // primary 按鈕跟著篩選後的第一列走。
+    expect(screen.getByRole("link", { name: "看證據" }).getAttribute("data-variant")).toBe("default");
   });
 
   it("空佇列：不重複印「都處理完了」（頁首已經講過），kinds_pending 佔位列照常可見，不印「全部 0」", () => {
@@ -179,7 +212,7 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText("some_future_kind")).toBeNull();
   });
 
-  it("鍵盤順序：Tab 依序落在每一列的「看證據」連結", async () => {
+  it("鍵盤順序：Tab 先落在篩選鈕（全部→逐活動），再依序落在每一列的「看證據」連結", async () => {
     const user = userEvent.setup();
     renderQueue(ready({
       items: [
@@ -188,6 +221,10 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
       ],
     }));
 
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "全部 2" }));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "晨光隨行杯上市 2" }));
     await user.tab();
     expect(document.activeElement).toBe(screen.getAllByRole("link", { name: "看證據" })[0]);
     await user.tab();

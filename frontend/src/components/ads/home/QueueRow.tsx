@@ -1,5 +1,6 @@
 import { Image as ImageIcon } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -106,9 +107,9 @@ function Viz({ item }: { item: QueueItem }) {
   );
 }
 
-/** 佇列一列（F19-I03，v7 `home()` 的 `row`，prototype ≈ 195–203）：圖示格・分類 chip・廣告
- * 名稱・量尺・一個按鈕。原型另外印活動 chip，這裡拿掉——`QueueItem`／`TriageItem` 只帶
- * `campaign_id`，沒有活動名稱可印（見 `DecisionQueue.tsx` 檔頭註解），不印 id 充數。
+/** 佇列一列（F19-I03，v7 `home()` 的 `row`，prototype ≈ 195–203）：圖示格・分類 chip・活動
+ * chip・廣告名稱・量尺・一個按鈕。v7 的活動 chip 帶彩色字母圖示（`CAMP[c].cls`/`.ic`）——這裡
+ * 沒有這份資料，只印中性 chip＋活動名稱（F19-I07，見 feature Decisions：不臆造圖示）。
  * 只有第一列是主要按鈕樣式（`primary`），其餘都是次要——呼叫端負責傳對 index。「看證據」只
  * 看 `action_url` 有沒有，跟量尺畫不畫得出來無關——量尺不知道，不代表證據頁面不存在。 */
 export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean }) {
@@ -121,17 +122,24 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
         <ImageIcon className="size-5 text-muted-foreground" />
       </div>
       <div className="order-2 min-w-0 flex-1">
-        {kind && (
-          <span
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
-              kind.tone === "danger" ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning",
-            )}
-          >
-            <span aria-hidden="true">{kind.mark}</span>
-            <span>{t.label}</span>
-          </span>
-        )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {kind && (
+            <span
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
+                kind.tone === "danger" ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning",
+              )}
+            >
+              <span aria-hidden="true">{kind.mark}</span>
+              <span>{t.label}</span>
+            </span>
+          )}
+          {t.campaign_name && (
+            <Badge variant="outline" className="max-w-40 truncate" title={t.campaign_name}>
+              {t.campaign_name}
+            </Badge>
+          )}
+        </div>
         <p className="mt-1.5 truncate text-sm font-semibold" title={t.name ?? "（未命名廣告）"}>{t.name ?? "（未命名廣告）"}</p>
       </div>
       {/* 暫停提議 chip 在按鈕左邊、同一條垂直中線，單行不換行——兩個都是固定寬度的內容，
