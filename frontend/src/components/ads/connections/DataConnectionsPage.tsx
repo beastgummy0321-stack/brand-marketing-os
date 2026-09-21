@@ -112,7 +112,7 @@ export function budgetCardState(budget: MonthlyBudget, brandId: string): ReadySt
   const impacts = ["加預算提議", "約撐得起幾則"];
   if (budget.amount === null) {
     // 同 MonthlyBudgetPanel.tsx:51 的訊號：amount === null 就是「從沒設定過」。
-    return { status: "ready", tone: "warn", badge: "尚未設定", fact: "尚未設定金額。", impacts, buttonLabel: "去核實", buttonHref: href };
+    return { status: "ready", tone: "warn", badge: "尚未設定", fact: "尚未設定金額。", impacts, buttonLabel: "去設定", buttonHref: href };
   }
   if (budget.currency === null) {
     return { status: "ready", tone: "warn", badge: "預算待核實", fact: `金額 ${budget.amount}，幣別待核實。`, impacts, buttonLabel: "去核實", buttonHref: href };
@@ -152,7 +152,7 @@ export function productsCardState(products: ProductListItem[], brandId: string):
   const confirmed = sellable.filter((p) => p.economics_status === "confirmed").length;
   const fact = `${sellable.length} 個商品，${confirmed} 個有成本`;
   if (sellable.length === 0) {
-    return { status: "ready", tone: "warn", badge: "尚未建立商品", fact, impacts, buttonLabel: "補成本", buttonHref: href };
+    return { status: "ready", tone: "warn", badge: "尚未建立商品", fact, impacts, buttonLabel: "去建立", buttonHref: href };
   }
   if (confirmed >= 1) {
     return { status: "ready", tone: "ok", badge: "可算打平值", fact, impacts: [], buttonLabel: "查看", buttonHref: href };
@@ -168,7 +168,7 @@ export type HistoryCardInput = MetaBackfillStatus | "no-accounts";
 export function historyCardState(input: HistoryCardInput, brandId: string): ReadyState {
   const href = `/brands/${brandId}/intake/history`;
   if (input === "no-accounts") {
-    return { status: "ready", tone: "warn", badge: "先連接帳戶", fact: "還沒有已連接的廣告帳戶，無法帶入過去的紀錄。", impacts: [], buttonLabel: "查看", buttonHref: href };
+    return { status: "ready", tone: "warn", badge: "先連接帳戶", fact: "還沒有已連接的廣告帳戶，無法帶入過去的紀錄。", impacts: [], buttonLabel: "去連接", buttonHref: "/settings?tab=meta" };
   }
   if (input.running) {
     return { status: "ready", tone: "neutral", badge: "帶入中", fact: "背景整理過去的廣告紀錄中，稍後再回來看。", impacts: [], buttonLabel: "查看", buttonHref: href };

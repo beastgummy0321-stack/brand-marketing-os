@@ -236,7 +236,7 @@ describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
     expect(within(budgetCard).getByText("影響")).toBeTruthy();
     expect(within(budgetCard).getByText("加預算提議")).toBeTruthy();
     expect(within(budgetCard).getByText("約撐得起幾則")).toBeTruthy();
-    const link = within(budgetCard).getByRole("link", { name: "去核實 →" });
+    const link = within(budgetCard).getByRole("link", { name: "去設定 →" });
     expect(link.getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 
