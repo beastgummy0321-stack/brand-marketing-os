@@ -7,6 +7,7 @@
  *
  *   node scripts/ui-evidence.cjs --proto ../docs/design/ads/prototype-v7-ads-center.html --hash camp/sales \
  *     --name with-target --out ../.harness/scratch/F21/I01 \
+ *     [--acts approve,report]   prototype-only: click these data-act buttons first (a step reachable only through earlier steps)
  *     [--app brands/brd_bughunt/ads/campaigns/cmp_x/detail --base http://127.0.0.1:8732 --mocks mocks.json]
  *
  * --mocks: JSON object { "<url glob>": <response json> }, e.g. { "**" + "/api/ads/brands/*" + "/queue": {...} }.
@@ -75,7 +76,7 @@ function facts() {
   return out.join("\n");
 }
 
-async function shoot(context, url, kind, setup) {
+async function shoot(context, url, kind, setup, acts = []) {
   let text = "";
   for (const width of WIDTHS) {
     const page = await context.newPage();
@@ -85,6 +86,8 @@ async function shoot(context, url, kind, setup) {
     await page.goto(url);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(400);
+    // --acts: prototype `data-act` names clicked in order to REACH a screen that only exists after earlier steps.
+    for (const act of acts) { await page.locator(`[data-act="${act}"]`).first().click(); await page.waitForTimeout(300); }
     await page.screenshot({ path: `${OUT}/${kind}-${args.name}-${width}.png`, fullPage: true });
     text += `# ${kind} ${args.name} @${width}\n${await page.evaluate(facts)}\n\n`;
     await page.close();
@@ -96,7 +99,7 @@ async function shoot(context, url, kind, setup) {
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext();
-  await shoot(context, "file:///" + path.resolve(args.proto).replace(/\\/g, "/") + HASH, "reference");
+  await shoot(context, "file:///" + path.resolve(args.proto).replace(/\\/g, "/") + HASH, "reference", null, (args.acts || "").split(",").filter(Boolean));
 
   if (args.app) {
     const mocks = args.mocks ? JSON.parse(fs.readFileSync(args.mocks, "utf-8")) : {};
