@@ -56,21 +56,27 @@ function campaignGroups(items: QueueItem[]): { id: string; name: string; count: 
 }
 
 /** 單一顆篩選鈕：真按鈕（鍵盤可達，原生 Tab 順序），`aria-pressed` 帶狀態，不是純視覺樣式
- * 差異。只有一個活動時也照印「全部 N」＋那顆活動 pill，跟 v7 一樣（Done #4）。 */
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+ * 差異。只有一個活動時也照印「全部 N」＋那顆活動 pill，跟 v7 一樣（Done #4）。
+ * Lead review fix 2026-09-21：名稱跟計數分開兩個 `<span>`——名稱自己 `truncate`，計數
+ * `shrink-0` 永遠印得出來，長名稱不會連數字一起被截斷吃掉。`aria-label` 帶完整「名稱 計數」
+ * 當可存取名稱（螢幕報讀器讀到的跟原本沒拆之前一樣），`title` 給滑鼠 hover 看完整名稱。 */
+function FilterPill({ name, count, active, onClick }: { name: string; count: number; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       aria-pressed={active}
+      aria-label={`${name} ${count}`}
+      title={name}
       onClick={onClick}
       className={cn(
-        "max-w-48 truncate rounded-full border px-3.5 py-1 text-xs font-medium",
+        "flex max-w-48 items-center gap-1 rounded-full border px-3.5 py-1 text-xs font-medium",
         active
           ? "border-primary bg-primary text-primary-foreground"
           : "border-border bg-background text-foreground hover:bg-muted",
       )}
     >
-      {label}
+      <span className="min-w-0 truncate">{name}</span>
+      <span className="shrink-0">{count}</span>
     </button>
   );
 }
@@ -105,15 +111,20 @@ export function DecisionQueue({ state, onRetry }: { state: QueueState; onRetry: 
 
   const { items, kinds_pending } = state.queue;
   const groups = campaignGroups(items);
-  const visible = filter === "all" ? items : items.filter((item) => item.triage.campaign_id === filter);
+  // Lead review fix 2026-09-21：`filter` 是舊選擇，重新整理／重試後這個活動可能已經不在
+  // `items` 裡（分流結果換了）——那種情況不能留著一個誰都不亮的篩選鈕、清單卻是空的，沒人
+  // 解釋為什麼。`active` 每次 render 重新從目前的 `groups` derive，選到的活動還在才用它，
+  // 不然自動退回「全部」；不直接改 `filter` 這個 state，下次同一個活動的資料回來時篩選還在。
+  const active = groups.some((g) => g.id === filter) ? filter : "all";
+  const visible = active === "all" ? items : items.filter((item) => item.triage.campaign_id === active);
   return (
     <div className="flex flex-col gap-3">
       {/* 空佇列不印「全部 0」——沒有東西好篩。 */}
       {items.length > 0 && (
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="依活動篩選">
-          <FilterPill label={`全部 ${items.length}`} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterPill name="全部" count={items.length} active={active === "all"} onClick={() => setFilter("all")} />
           {groups.map((g) => (
-            <FilterPill key={g.id} label={`${g.name} ${g.count}`} active={filter === g.id} onClick={() => setFilter(g.id)} />
+            <FilterPill key={g.id} name={g.name} count={g.count} active={active === g.id} onClick={() => setFilter(g.id)} />
           ))}
         </div>
       )}

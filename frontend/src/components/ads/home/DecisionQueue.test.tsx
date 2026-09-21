@@ -4,7 +4,7 @@
  * 兩種分類各自的量尺文案＋寬度、金額格式（最多兩位小數、不四捨五入到整數）、未知數字的兩種
  * 誠實句（量測值「累積中」／配置值「尚未設定」）、只有第一列主要按鈕、按鈕不看量尺畫不畫得
  * 出來、篩選鈕、空狀態不重複頁首那句話＋佔位列同時可見、未認得的 pending 代碼、鍵盤順序。 */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
@@ -157,20 +157,38 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
   });
 
   it("篩選鈕：單一活動也照印「全部 N」＋那顆活動 pill（v7 行為），不印 id 充當名稱", () => {
+    // Lead review fix 2026-09-21：名稱／計數分成兩個 <span>（見下一則測試），DOM 上不再有單一
+    // 元素印出「全部 2」這串完整字——可存取名稱（aria-label）還是「名稱 計數」，用 role 查。
     renderQueue(ready({ items: [queueItem("q1"), queueItem("q2")] }));
 
-    expect(screen.getByText("全部 2")).toBeTruthy();
-    expect(screen.getByText("晨光隨行杯上市 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "全部 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "晨光隨行杯上市 2" })).toBeTruthy();
     expect(screen.queryByText(/cmp_1/)).toBeNull();
+  });
+
+  it("篩選鈕：活動名稱很長也不會把計數擠掉——名稱自己截斷、計數獨立一個 span 永遠印得出來", () => {
+    renderQueue(ready({
+      items: [
+        queueItem("q1", { campaign_id: "cmp_long", campaign_name: "夏季全通路轉換衝刺計畫・北中南三區加碼最終版本" }),
+        queueItem("q2", { campaign_id: "cmp_long", campaign_name: "夏季全通路轉換衝刺計畫・北中南三區加碼最終版本" }),
+      ],
+    }));
+
+    const pill = screen.getByRole("button", { name: "夏季全通路轉換衝刺計畫・北中南三區加碼最終版本 2" });
+    expect(pill.getAttribute("title")).toBe("夏季全通路轉換衝刺計畫・北中南三區加碼最終版本");
+    // 計數本身是獨立、沒被截斷的元素——不是被塞進同一個 truncate 容器裡看不見。
+    expect(within(pill).getByText("2")).toBeTruthy();
   });
 
   it("列上有活動 chip（跟分類 chip 同一列），截斷有 title 但不印 id", () => {
     // Lead review fix 2026-09-21：`title` 掛在外層 chip（Badge 本身），不是內層負責 truncate
     // 的 <span>——放在內層會被 Badge 自己的 `justify-center` 置中裁掉左右兩端、印不出省略號。
-    renderQueue(ready({ items: [queueItem("q1")] }));
+    // 篩選鈕也帶同一個活動名稱的 `title`（見下面的篩選鈕測試），所以這裡用列本身的 `data-slot
+    // ="badge"` 標籤鎖定，不是篩選鈕的 `<button>`。
+    const { container } = renderQueue(ready({ items: [queueItem("q1")] }));
 
-    const chip = screen.getByText("晨光隨行杯上市").closest("[title]");
-    expect(chip?.getAttribute("title")).toBe("晨光隨行杯上市");
+    const chip = container.querySelector('span[data-slot="badge"][title="晨光隨行杯上市"]');
+    expect(chip).toBeTruthy();
   });
 
   it("多活動：逐活動篩選鈕各自計數、可用鍵盤／滑鼠切換、aria-pressed 反映狀態，篩完只留該活動的列", async () => {
@@ -195,6 +213,35 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText("廣告A")).toBeNull();
     // primary 按鈕跟著篩選後的第一列走。
     expect(screen.getByRole("link", { name: "看證據" }).getAttribute("data-variant")).toBe("default");
+  });
+
+  it("篩選中的活動在重新整理後消失（分流結果換了）：自動退回「全部」，不留一個誰都沒按著的篩選鈕", async () => {
+    // Lead review fix 2026-09-21：`filter` state 本身不變，只有 derive 出來的 `active` 退回
+    // all——之後同一個活動又回來時篩選還在，不會因為中途沒資料就永久重置。
+    const user = userEvent.setup();
+    const { rerender } = renderQueue(ready({
+      items: [
+        queueItem("q1", { campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市", name: "廣告A" }),
+        queueItem("q2", { campaign_id: "cmp_2", campaign_name: "夜間保溫瓶回購", name: "廣告B" }),
+      ],
+    }));
+
+    await user.click(screen.getByRole("button", { name: "夜間保溫瓶回購 1" }));
+    expect(screen.getByRole("button", { name: "夜間保溫瓶回購 1" }).getAttribute("aria-pressed")).toBe("true");
+
+    // 重新讀取回來的 payload 不再有 cmp_2（那個活動的分流結果換了，或已經沒有待決定項目）。
+    rerender(
+      <MemoryRouter>
+        <DecisionQueue
+          state={ready({ items: [queueItem("q1", { campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市", name: "廣告A" })] })}
+          onRetry={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "全部 1" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: /夜間保溫瓶回購/ })).toBeNull();
+    expect(screen.getByText("廣告A")).toBeTruthy();
   });
 
   it("空佇列：不重複印「都處理完了」（頁首已經講過），kinds_pending 佔位列照常可見，不印「全部 0」", () => {
