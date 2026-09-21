@@ -3,6 +3,7 @@
  * Kept separate from `ConfirmPage.tsx` so I03 (到平台完成) and I04 (核對結果) reuse the same
  * step rule and paths instead of re-deriving them. */
 import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsChangeApi";
+import type { QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 
 export type FlowStepName = "confirm" | "handoff" | "verify";
 
@@ -84,4 +85,19 @@ export function formatAmount(value: number | null): string {
 export function formatTargetAmount(value: number | null): string {
   if (value === null) return "尚未設定";
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
+}
+
+/** Which queue row a change set's single item belongs to (matched the same way `ConfirmPage`
+ * does it): reused by I03/I04 so the "第 N 件／共 M 件" context chip doesn't get re-derived per
+ * page (feature Decisions "Gaps, shown honestly, not faked"). `null` when the set has no items,
+ * or its target has left the queue. */
+export function findFlowTriageItem(queue: QueuePayload | null, changeSet: ChangeSet | null): QueueItem | null {
+  if (!queue || !changeSet) return null;
+  const targetId = changeSet.items[0]?.target_id;
+  return queue.items.find((i) => i.proposal?.change_set_id === changeSet.id || i.triage.entity_id === targetId) ?? null;
+}
+
+export function flowPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
+  if (!queue || !item) return null;
+  return { pos: queue.items.indexOf(item) + 1, total: queue.items.length };
 }
