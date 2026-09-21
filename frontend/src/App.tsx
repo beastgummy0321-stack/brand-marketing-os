@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, DataConnectionsPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -99,6 +99,7 @@ function App() {
           path="/brands/:brandId/ads/campaigns/:campaignId/detail"
           element={<AdsCampaignDetailRoute />}
         />
+        <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
     </Routes>
@@ -434,6 +435,13 @@ function AdsTargetRoute() {
 function AdsCampaignDetailRoute() {
   const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
   return <CampaignDetailPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
+}
+
+/** 資料連線頁（F21-I02，v7 原型 `connections()`）：投放中心倚賴的五個資料來源各自的狀態，
+ * 家頁與月預算卡的「查看資料連線」都落在這裡。 */
+function AdsConnectionsRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <DataConnectionsPage brandId={brandId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */

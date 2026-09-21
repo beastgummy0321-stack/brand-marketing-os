@@ -68,7 +68,7 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false }: { brandId
             <p>估算涵蓋至 {budget.period_end}，包含下一次檢討後仍持續投放的期間。已核准但未核對完成的降額，不會先增加可用額度。</p>
             <p>已保留的新增承諾：{budgetMoney(budget.reserved_increases, budget.currency)}</p>
             {budget.uncertainties.length > 0 && <ul className="list-disc space-y-1 pl-5">{budget.uncertainties.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
-            <Button asChild size="sm" variant="outline"><Link to="/settings?tab=meta">查看資料連線</Link></Button>
+            <Button asChild size="sm" variant="outline"><Link to={`/brands/${brandId}/ads/connections`}>查看資料連線</Link></Button>
             <div className="grid gap-3 xl:grid-cols-3">
               <p><strong className="block">系統提醒</strong><span className="text-muted-foreground">依最新可取得資料提醒額度與異常。</span></p>
               <p><strong className="block">核准前檢查</strong><span className="text-muted-foreground">每份清單檢查月額、相關設定與資料缺口。</span></p>
