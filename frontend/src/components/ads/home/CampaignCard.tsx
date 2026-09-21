@@ -172,6 +172,10 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
   }, [brandId, campaign.id, reload]);
 
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaign.id}`;
+  // F20-I02：卡片名稱現在落在新的活動詳情頁（v7 `campPage()`），不是五分頁工作區——
+  // 工作區網址不變，由詳情頁的「全部資料 ›」進去。「沒有廣告資料」時的「進入活動」連結
+  // 仍照舊指向工作區（那個空狀態本身就是工作區才有意義的路，跟詳情頁重複沒有新資訊）。
+  const detailHref = `${workspaceHref}/detail`;
   const targetHref = `${workspaceHref}/target`;
   const isError = state.status === "error";
 
@@ -203,7 +207,7 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
         <h3 className="min-w-0 flex-1 text-[15px] font-semibold">
           {/* h3／連結本身是 flex row：長名稱只讓名稱那格 truncate，「›」永遠是 shrink-0、
              不被擠掉（review 裁決）；整個 <Link> 還是同一個點擊區域。 */}
-          <Link to={workspaceHref} className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline">
+          <Link to={detailHref} className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline">
             <span className="min-w-0 truncate" title={campaign.name}>{campaign.name}</span>
             {/* aria-hidden：只是「這裡可以點」的視覺提示，不進可及名稱——名稱連結要留純活動
                名稱給 e2e／accessible name 用（review 裁決）。 */}

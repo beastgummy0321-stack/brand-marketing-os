@@ -215,7 +215,9 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
       <Breadcrumb
         items={[
           { label: "投放中心", href: homeHref },
-          { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}` },
+          // F20-I02：麵包屑的活動連結改指向新的活動詳情頁（v7 `campPage()`），不是五分頁
+          // 工作區——工作區網址不變，從詳情頁的「全部資料 ›」再進去。
+          { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}/detail` },
           { label: "目標" },
         ]}
       />
