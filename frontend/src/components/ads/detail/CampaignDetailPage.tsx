@@ -11,6 +11,7 @@ import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { getQueue, getTriage, type QueueItem, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
 import { Chip, ReservedSlotCard } from "../patterns";
+import { proposalAction } from "../home/status";
 
 // 跟 `home/CampaignCard.tsx` 的 `BASIS_LABEL` 同一份小工具——那支檔案沒有匯出，
 // 這頁又不在 `frontend/src/lib/**`（do_not_touch），沿用既有先例各自留一份（precedent:
@@ -92,14 +93,20 @@ function AdThumb({ url }: { url: string | null }) {
  * lead 裁決（review fix）：「去處理」不能連 `queueItem.action_url`——F20-I01 把佇列的
  * `action_url` 改指到「這一頁」（`.../detail?ad=<id>`），這裡再用它會原地繞一圈、按了
  * 沒反應。六步驟審核流程還沒重建前，這顆按鈕連去既有工作區的「成效」分頁（現有的處理
- * 入口）；還是不是在佇列裡（`queueItem` 有沒有值）決定要不要印這顆按鈕。 */
+ * 入口）；還是不是在佇列裡（`queueItem` 有沒有值）決定要不要印這顆按鈕。
+ *
+ * F22-I05：停損分類的廣告改走 `proposalAction`（跟 `home/QueueRow.tsx` 同一支），按鈕印目前
+ * 進度而不是固定的「去處理」；非停損分類（`worse` 這批唯一還在佇列裡的另一類）維持上面那條
+ * 舊規則不變。 */
 function AdRow({
+  brandId,
   item,
   queueItem,
   reviewHref,
   highlighted,
   rowRef,
 }: {
+  brandId: string;
   item: TriageItem;
   queueItem?: QueueItem;
   reviewHref: string;
@@ -108,6 +115,9 @@ function AdRow({
 }) {
   const name = item.name ?? "（未命名廣告）";
   const costLabel = `每次${item.current.result_label}成本`;
+  const action = queueItem && item.class === "stop_loss"
+    ? proposalAction(brandId, item.campaign_id, item.entity_id, queueItem.proposal)
+    : null;
   return (
     <div
       ref={rowRef}
@@ -130,10 +140,16 @@ function AdRow({
         <p className="numeric text-sm font-semibold">{formatAmount(item.current.cost_per_result)}</p>
       </div>
       <div className="w-24 shrink-0 text-right">
-        {queueItem && (
-          <Button asChild size="sm" variant="outline">
-            <Link to={reviewHref}>去處理</Link>
+        {action ? (
+          <Button asChild size="sm" variant={action.done ? "ghost" : "outline"}>
+            <Link to={action.href}>{action.label}</Link>
           </Button>
+        ) : (
+          queueItem && (
+            <Button asChild size="sm" variant="outline">
+              <Link to={reviewHref}>去處理</Link>
+            </Button>
+          )
         )}
       </div>
     </div>
@@ -146,6 +162,7 @@ function AdRow({
  * 兩截版面，且 `patterns/**` 是這張票的 do_not_touch，不能為了塞進去改它的簽章。原生
  * `<details>` 的可及性（鍵盤、螢幕報讀器）本來就到位，不用另外補。 */
 function Group({
+  brandId,
   cls,
   items,
   queueByEntity,
@@ -155,6 +172,7 @@ function Group({
   highlightId,
   registerRow,
 }: {
+  brandId: string;
   cls: TriageClass;
   items: TriageItem[];
   queueByEntity: Map<string, QueueItem>;
@@ -186,6 +204,7 @@ function Group({
         {items.map((item) => (
           <AdRow
             key={item.entity_id}
+            brandId={brandId}
             item={item}
             queueItem={queueByEntity.get(item.entity_id)}
             reviewHref={reviewHref}
@@ -412,6 +431,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
             {GROUP_ORDER.filter((cls) => (groupedItems.get(cls)?.length ?? 0) > 0).map((cls) => (
               <Group
                 key={cls}
+                brandId={brandId}
                 cls={cls}
                 items={groupedItems.get(cls)!}
                 queueByEntity={queueByEntity}

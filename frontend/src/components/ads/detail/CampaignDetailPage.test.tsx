@@ -168,7 +168,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     expect(container.querySelectorAll("details").length).toBe(4);
   });
 
-  it("佇列裡的廣告才有「去處理」；lead 裁決：不連 queue 的 action_url（那會繞回這一頁），連工作區既有的成效分頁", async () => {
+  it("佇列裡的停損廣告：「去處理」走 F22-I05 的提案流程（沒有 proposal 就是提議頁），不連 queue 的 action_url（那會繞回這一頁）", async () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 7,
       items: [
@@ -186,11 +186,37 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
     const stopRow = screen.getByTestId("ad-row-ad_stop");
     const goLink = within(stopRow).getByRole("link", { name: "去處理" });
-    expect(goLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=performance");
+    expect(goLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/ad_stop");
     expect(goLink.getAttribute("href")).not.toContain("/detail");
+    expect(goLink.getAttribute("href")).not.toContain("tab=performance");
 
     const flatRow = screen.getByTestId("ad-row-ad_flat");
     expect(within(flatRow).queryByRole("link", { name: "去處理" })).toBeNull();
+  });
+
+  it("停損廣告已有提案：按鈕標籤／連結跟著 proposal 狀態走（跟 home/QueueRow 同一支 helper）", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" })],
+    });
+    vi.mocked(getQueue).mockResolvedValue(queue([
+      queueItem({
+        id: "q_stop",
+        triage: triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" }),
+        proposal: {
+          change_set_id: "set_1", campaign_id: "cmp_1", kind: "pause",
+          status: "approved", verification_state: "pending",
+          reason: null, revisit_at: null, multi: false,
+        },
+      }),
+    ]));
+
+    renderPage();
+    await screen.findByText("・1 則");
+
+    const stopRow = screen.getByTestId("ad-row-ad_stop");
+    const link = within(stopRow).getByRole("link", { name: "到平台完成" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/handoff");
   });
 
   it("`getQueue`失敗：不拖累整頁——目標／分類／列照常顯示，只是沒有「去處理」", async () => {
