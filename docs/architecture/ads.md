@@ -1084,3 +1084,21 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   不另查詢、無平台分支）；`refresh_queue` 新寫入的 `action_url` ＝ `…/detail?ad=<entity_id>`，既有開放列不改寫。
 - 詳情頁的「去處理」不使用 `action_url`（那會指回本頁），在六步流程改版前連到工作區 `?tab=performance`。
 - 佇列讀取失敗不拖垮詳情頁（只少「去處理」按鈕）；沒有停損／變差時展開第一個有廣告的分類。
+
+### 6.21 F21 — 資料連線頁（settled 2026-09-22）
+
+Route `/brands/:brandId/ads/connections` (`components/ads/connections/`), v7 `connections()`. The frontend composes
+existing GETs — no aggregation endpoint, no backend change (`app/orders` is legacy and may not gain capability).
+One card per source; one failed GET fails only its card. Rules (each checked against the code that produces the field):
+- accounts: bound = accounts whose `bound_brand_ids` include the brand; 0 → warn 「尚未連接」; else ok. No expired-auth
+  state — the backend has no such data (gap).
+- budget: `amount === null` → warn 「尚未設定」; `currency === null` → warn 「預算待核實」; else ok. `uncertainties` never
+  make the card warn (almost always non-empty, not fixable from this button).
+- orders: latest = first NON-NULL `order_date` on page 1 (`ORDER BY order_date DESC` puts NULLs first); before
+  yesterday → warn. Dates compare as local-calendar `YYYY-MM-DD` strings, never UTC getters.
+- products: only `status === "active"` rows that are not another row's parent (the set the product page shows).
+- history: requested only with ≥ 1 bound account (the backfill GET answers 409 otherwise).
+- header N = warn cards + failed cards. Button emphasis: warn → `outline`, ok/neutral → `ghost`; ok label 「查看」.
+Not built: shell header 「最近同步・N 項待處理」 (no brand-level sync endpoint); `last_pull_at` is a `min()` that ignores
+never-pulled accounts.
+
