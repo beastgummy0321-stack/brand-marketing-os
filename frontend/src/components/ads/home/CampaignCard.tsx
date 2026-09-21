@@ -200,7 +200,7 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 text-[15px] font-semibold">
+        <h3 className="min-w-0 flex-1 text-[15px] font-semibold">
           {/* h3／連結本身是 flex row：長名稱只讓名稱那格 truncate，「›」永遠是 shrink-0、
              不被擠掉（review 裁決）；整個 <Link> 還是同一個點擊區域。 */}
           <Link to={workspaceHref} className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline">
@@ -212,9 +212,13 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
         </h3>
         <div className="flex shrink-0 items-center gap-1.5">
           <Badge variant={statusTone}>{statusLabel}</Badge>
-          <span className={chip()}>
-            {campaign.objective || "尚待確認"}
-            {state.status === "ready" ? `・${state.items.length} 則` : ""}
+          {/* Imported campaigns carry a whole sentence as objective: only the objective text
+             truncates, the ad count never does, and the campaign name keeps its room. */}
+          <span className={cn(chip(), "inline-flex max-w-[14rem] items-center")}>
+            <span className="min-w-0 truncate" title={campaign.objective || undefined}>
+              {campaign.objective || "尚待確認"}
+            </span>
+            {state.status === "ready" && <span className="shrink-0">・{state.items.length} 則</span>}
           </span>
         </div>
       </div>

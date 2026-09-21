@@ -37,7 +37,7 @@ function campaignCardData(overrides: Partial<CampaignCardData> = {}): CampaignCa
 
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
-    entity_id: "ad_1", native_id: "native_1", name: "廣告 A", campaign_id: "cmp_1",
+    entity_id: "ad_1", native_id: "native_1", name: "廣告 A", campaign_id: "cmp_1", campaign_name: "活動一",
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
@@ -87,7 +87,7 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.getByText("450", { exact: true })).toBeTruthy();
     expect(screen.queryByText(/NT\$/)).toBeNull();
     expect(screen.getByText("損益兩平")).toBeTruthy();
-    expect(screen.getByText("轉換・5 則")).toBeTruthy();
+    expect(screen.getByText("・5 則")).toBeTruthy();
     expect(screen.getByText("投放中")).toBeTruthy(); // STATUS_LABEL.live
 
     const adjust = screen.getByRole("link", { name: "調整" });
@@ -144,7 +144,7 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     await screen.findByText("目標每次購買成本");
 
     expect(screen.getByText("2 則無法判斷")).toBeTruthy();
-    expect(screen.getByText("轉換・4 則")).toBeTruthy(); // header 的「N 則」仍是總則數
+    expect(screen.getByText("・4 則")).toBeTruthy(); // header 的「N 則」仍是總則數
     const width = (cls: string) => (container.querySelector(`[data-segment="${cls}"]`) as HTMLElement).style.width;
     expect(width("better")).toBe("50%"); // 分母排除 no_target：2 則已判斷，各占一半
     expect(width("flat")).toBe("50%");

@@ -36,11 +36,8 @@ export interface TriageSampleView {
 }
 export interface TriageItem {
   entity_id: string; native_id: string; name: string | null; campaign_id: string;
-  // F19-I07: the campaign's own name, already loaded where the campaign row is read
-  // (`app/ads/triage.py::classify`) — no per-ad query. The backend always sends it; typed
-  // optional only so the per-campaign `CampaignCard` test fixtures (out of this issue's touch,
-  // predate this field, never render it) don't need updating for an interface they don't use.
-  campaign_name?: string;
+  // F19-I07: the campaign's own name; always sent (`app/ads/triage.py::classify`).
+  campaign_name: string;
   class: TriageClass; label: string; reason_code: string;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
