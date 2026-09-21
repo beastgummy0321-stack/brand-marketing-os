@@ -1102,3 +1102,37 @@ One card per source; one failed GET fails only its card. Rules (each checked aga
 Not built: shell header 「最近同步・N 項待處理」 (no brand-level sync endpoint); `last_pull_at` is a `min()` that ignores
 never-pulled accounts.
 
+### 6.22 F22-I01 — Queue row `proposal` and change item `platform_url`（settled 2026-09-22）
+
+Two read-only payload additions for the v7 停損提案三步流程 (F22-I02/I03); no migration, no platform write, no new
+route. Neither field is stored — both are computed at read time on every call.
+
+- `app/ads/triage.py::_queue_payload` (`GET/POST .../queue`): every open row gains `proposal`. `null` on every `worse`
+  row this batch (`worse` proposals are out of scope). On a `stop_loss` row: the newest (`created_at DESC`)
+  non-superseded `ads_change_set` of the row's own campaign whose items include a `pause` item targeting
+  `triage.entity_id` (`_matching_pause_set`) — `null` when there is none. That set "counts" (returns a `proposal`)
+  unless: it's `deferred` and its own `revisit_at <= now()`; it's `rejected` and its `created_at` calendar day (UTC)
+  falls outside the row's current `triage.window.start..end`; or its matching item's `verification_state` reads back
+  `confirmed` while the entity's own `ads_external_entity.native_status` is no longer `"PAUSED"` (triage itself never
+  reads `native_status` — `triage.py:228-307` — so a re-enabled ad needs the row to read as if there were no
+  proposal, not a stale `confirmed` one). When it counts: `{change_set_id, campaign_id, kind, status,
+  verification_state, reason, revisit_at, multi}` — `kind`/`verification_state` are the matching item's own,
+  `reason` is the set's `decision_reason`, `multi` is `len(items) > 1` (a multi-item set is not rendered by the
+  three-step pages; the row links to the campaign workspace instead).
+  Three queries for the whole brand, never per row: every non-superseded change set (grouped by `campaign_id` in
+  Python), every `ads_action.verification_state` of the brand, and `native_status` for exactly the `stop_loss` rows'
+  own entities (only a `confirmed` match ever reads it).
+- `app/ads/change_control_data.py::get`: every item view gains `platform_url: str | None`, computed from the item's
+  own `target` through `app/ads/adapters::platform_url(target)` — a one-line dispatch on `target["platform"]`, lazily
+  importing `app/ads/adapters/meta_read.py::platform_url` (same lazy-import seam `channels.py::external_reader`
+  already uses, to dodge the `adapters/__init__.py -> manual.py -> change_control_launch.py ->
+  change_control_data.py` import-time cycle). Meta: `https://adsmanager.facebook.com/adsmanager/manage/
+  {campaigns|adsets|ads}?act={source_account}&selected_{campaign|adset|ad}_ids={native_id}` — `null` when the native
+  kind isn't one of those three, or `native_id`/`source_account` is missing. Unknown platform → `null`. Never written
+  to `plan_json`; no hash (`content_hash`, `premise_hash`) ever depends on it. `null` → the "↗ 打開平台" button is
+  replaced by the target's own name + native id + 「複製編號」 (F22-I03).
+- 驗證：`app/tests/test_ads_triage_queue.py::QueueProposalTest`（null／draft／approved-pending／confirmed 及其失效／
+  rejected 在窗內外／deferred 過期／superseded／別支廣告的清單／別個活動的清單／multi）、
+  `app/tests/test_ads_change_control.py::ChangeControlPlatformUrlTest`（meta 目標有連結／未知平台是 `null`／
+  `content_hash` 不受影響）。
+

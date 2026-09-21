@@ -47,6 +47,18 @@ export interface TriageItem {
 }
 export interface CampaignTriage { window_days: number; items: TriageItem[] }
 
+/** F22-I01: the change set (if any) that currently answers a `stop_loss` row, per
+ * `app/ads/triage.py::_row_proposal` (feature Decisions "Queue row state") — `null` when there
+ * is none, or the matching set doesn't currently "count" (deferred past `revisit_at`, rejected
+ * outside the row's current window, or confirmed while the entity has left `native_status`
+ * paused). Always `null` on a `worse` row this batch. */
+export interface QueueProposal {
+  change_set_id: string; campaign_id: string; kind: string;
+  status: "draft" | "approved" | "rejected" | "deferred";
+  verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  reason: string | null; revisit_at: string | null; multi: boolean;
+}
+
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
  * enqueue used. A row whose ad has moved off `stop_loss`/`worse` since it was raised is filtered
@@ -56,7 +68,7 @@ export interface QueueItem {
   dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
-  triage: TriageItem;
+  triage: TriageItem; proposal: QueueProposal | null;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

@@ -402,7 +402,7 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
         )
     conn.commit()
     _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))
-    return _queue_payload(conn, brand_id, items)
+    return _queue_payload(conn, org_id, brand_id, items)
 
 
 def get_queue(conn, org_id, brand_id) -> dict:
@@ -413,10 +413,110 @@ def get_queue(conn, org_id, brand_id) -> dict:
     filtered out of this payload the same way, without writing anything. Each listed row carries
     the current triage item that produced it (F19-I01, `_queue_payload`)."""
     items = _classify_brand(conn, org_id, brand_id)
-    return _queue_payload(conn, brand_id, items)
+    return _queue_payload(conn, org_id, brand_id, items)
 
 
-def _queue_payload(conn, brand_id, items) -> dict:
+# ---------------------------------------------------------------------------
+# F22-I01: each queue row's own `proposal` -- the change set (if any) that currently answers a
+# `stop_loss` row's ad, per the "Queue row state" rule (feature Decisions). Read-only, brand-wide
+# (one query for every non-superseded change set, one for every `ads_action` verification_state,
+# one for the handful of entities whose matching item reads back `confirmed`) -- never per row.
+# ---------------------------------------------------------------------------
+
+
+def _brand_change_sets_by_campaign(conn, org_id, brand_id) -> dict:
+    """Every non-superseded change set of this brand, newest (`created_at`) first -- one query
+    for the whole brand. Grouped by `campaign_id` in Python; the SQL-level `ORDER BY created_at
+    DESC` is preserved inside each campaign's own sublist (stable grouping), so "the newest
+    change set of the row's campaign" is just "the first match found while walking that list"."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,status,plan_json,decision_reason,revisit_at,created_at "
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND status != 'superseded' "
+        "ORDER BY created_at DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    by_campaign = defaultdict(list)
+    for row in rows:
+        by_campaign[row["campaign_id"]].append(dict(row))
+    return by_campaign
+
+
+def _brand_action_verification_states(conn, org_id, brand_id) -> dict:
+    """`ads_action.id -> verification_state` for this whole brand -- one query. A change-set
+    item with no matching row here has never been approved, so it reads back `data.get()`'s own
+    default of `"pending"` at the call site, not here."""
+    rows = conn.execute(
+        "SELECT id,verification_state FROM ads_action WHERE org_id=%s AND brand_id=%s",
+        (org_id, brand_id),
+    ).fetchall()
+    return {row["id"]: row["verification_state"] for row in rows}
+
+
+def _brand_entity_native_status(conn, org_id, brand_id, entity_ids) -> dict:
+    """`ads_external_entity.id -> native_status` for exactly the entities this refresh might need
+    it for (only a `confirmed` pause proposal ever reads it -- see `_row_proposal`) -- one bounded
+    query, never per row."""
+    if not entity_ids:
+        return {}
+    rows = conn.execute(
+        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND id = ANY(%s)",
+        (org_id, brand_id, list(entity_ids)),
+    ).fetchall()
+    return {row["id"]: row["native_status"] for row in rows}
+
+
+def _matching_pause_set(sets_by_campaign, campaign_id, entity_id):
+    """The newest non-superseded change set of `campaign_id` whose items include a `pause` item
+    targeting `entity_id`, and that item itself -- `None, None` when there isn't one. A set with
+    an item for a different entity, or living in a different campaign, is never a match."""
+    for change_set in sets_by_campaign.get(campaign_id, ()):
+        item = next(
+            (i for i in change_set["plan_json"].get("items", ())
+             if i.get("kind") == "pause" and i.get("target_id") == entity_id),
+            None,
+        )
+        if item is not None:
+            return change_set, item
+    return None, None
+
+
+def _row_proposal(sets_by_campaign, action_states, native_status_by_entity, triage_item):
+    """The `proposal` for one `stop_loss` row (feature Decisions "Queue row state", pre-dispatch
+    challenge corrections folded in) -- `None` when there is no matching set, or the matching set
+    doesn't currently "count": a `deferred` set past its own `revisit_at`, a `rejected` set whose
+    `created_at` day has fallen outside this row's current triage window, or an `approved` set
+    whose matching item reads back `confirmed` while the entity's own `native_status` is no
+    longer paused (triage never reads `native_status` itself -- see `triage.py:228-307` -- so a
+    re-enabled ad must get a fresh proposal rather than reusing a stale `confirmed` one)."""
+    change_set, matched_item = _matching_pause_set(
+        sets_by_campaign, triage_item["campaign_id"], triage_item["entity_id"],
+    )
+    if change_set is None or matched_item is None:
+        return None
+    verification_state = action_states.get(matched_item["id"], "pending")
+    if change_set["status"] == "deferred":
+        revisit_at = change_set["revisit_at"]
+        if revisit_at is not None and revisit_at <= now_utc():
+            return None
+    elif change_set["status"] == "rejected":
+        window = triage_item["window"]
+        created_day = change_set["created_at"].date()
+        if not (window["start"] <= created_day <= window["end"]):
+            return None
+    elif verification_state == "confirmed":
+        if native_status_by_entity.get(triage_item["entity_id"]) != "PAUSED":
+            return None
+    return {
+        "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
+        "kind": matched_item["kind"], "status": change_set["status"],
+        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "revisit_at": change_set["revisit_at"],
+        "multi": len(change_set["plan_json"].get("items", ())) > 1,
+    }
+
+
+def _queue_payload(conn, org_id, brand_id, items) -> dict:
     # F19-I01: each open row's own triage item, keyed by the same dedupe key the enqueue used --
     # the frontend never parses `dedupe_key` strings itself. Only `stop_loss`/`worse` items ever
     # produce a key (see `_live_keys`), so this doubles as the "still live" filter below.
@@ -428,11 +528,32 @@ def _queue_payload(conn, brand_id, items) -> dict:
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
-    open_rows = [
-        {**row, "triage": items_by_key[row["dedupe_key"]]}
+    rows = [
+        row
         for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
         if row["category"] in queue_categories and row["dedupe_key"] in items_by_key
     ]
+    # F22-I01: `worse` rows never get a proposal this batch -- only their own entities need the
+    # native_status lookup narrowed to `stop_loss` rows.
+    stop_loss_entity_ids = {
+        items_by_key[row["dedupe_key"]]["entity_id"]
+        for row in rows
+        if items_by_key[row["dedupe_key"]]["class"] == "stop_loss"
+    }
+    sets_by_campaign = _brand_change_sets_by_campaign(conn, org_id, brand_id)
+    action_states = _brand_action_verification_states(conn, org_id, brand_id)
+    native_status_by_entity = _brand_entity_native_status(
+        conn, org_id, brand_id, stop_loss_entity_ids
+    )
+    open_rows = []
+    for row in rows:
+        triage_item = items_by_key[row["dedupe_key"]]
+        proposal = (
+            _row_proposal(sets_by_campaign, action_states, native_status_by_entity, triage_item)
+            if triage_item["class"] == "stop_loss"
+            else None
+        )
+        open_rows.append({**row, "triage": triage_item, "proposal": proposal})
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:
         counts[item["class"]] += 1
