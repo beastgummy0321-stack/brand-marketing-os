@@ -94,15 +94,22 @@ function AdThumb({ url }: { url: string | null }) {
 }
 
 /** 一列廣告（v7 `rowOf()`，prototype ≈ 346–348）：縮圖・名稱・花費・每次成果成本・
- * 在佇列裡才有的「去處理」。ladder／「14 天幾乎沒投」照 Feature Decisions 省略，不是漏做。 */
+ * 在佇列裡才有的「去處理」。ladder／「14 天幾乎沒投」照 Feature Decisions 省略，不是漏做。
+ *
+ * lead 裁決（review fix）：「去處理」不能連 `queueItem.action_url`——F20-I01 把佇列的
+ * `action_url` 改指到「這一頁」（`.../detail?ad=<id>`），這裡再用它會原地繞一圈、按了
+ * 沒反應。六步驟審核流程還沒重建前，這顆按鈕連去既有工作區的「成效」分頁（現有的處理
+ * 入口）；還是不是在佇列裡（`queueItem` 有沒有值）決定要不要印這顆按鈕。 */
 function AdRow({
   item,
   queueItem,
+  reviewHref,
   highlighted,
   rowRef,
 }: {
   item: TriageItem;
   queueItem?: QueueItem;
+  reviewHref: string;
   highlighted: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
 }) {
@@ -130,9 +137,9 @@ function AdRow({
         <p className="numeric text-sm font-semibold">{formatAmount(item.current.cost_per_result)}</p>
       </div>
       <div className="w-24 shrink-0 text-right">
-        {queueItem?.action_url && (
+        {queueItem && (
           <Button asChild size="sm" variant="outline">
-            <Link to={queueItem.action_url}>去處理</Link>
+            <Link to={reviewHref}>去處理</Link>
           </Button>
         )}
       </div>
@@ -149,6 +156,7 @@ function Group({
   cls,
   items,
   queueByEntity,
+  reviewHref,
   open,
   onToggle,
   highlightId,
@@ -157,6 +165,7 @@ function Group({
   cls: TriageClass;
   items: TriageItem[];
   queueByEntity: Map<string, QueueItem>;
+  reviewHref: string;
   open: boolean;
   onToggle: (open: boolean) => void;
   highlightId: string | null;
@@ -186,6 +195,7 @@ function Group({
             key={item.entity_id}
             item={item}
             queueItem={queueByEntity.get(item.entity_id)}
+            reviewHref={reviewHref}
             highlighted={item.entity_id === highlightId}
             rowRef={(el) => registerRow(item.entity_id, el)}
           />
@@ -217,7 +227,15 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    Promise.all([listCampaigns(brandId), getTriage(brandId, campaignId), getQueue(brandId)])
+    Promise.all([
+      listCampaigns(brandId),
+      getTriage(brandId, campaignId),
+      // review fix：佇列只餵這頁一顆選用的「去處理」按鈕，不是這頁存在的理由——`getQueue`
+      // 失敗不該連目標／分類／列都一起讀不出來（同 `AdsHomePage.tsx:19-20` 佇列／月預算／
+      // 活動卡三塊分開讀取、互不拖累的原則）。失敗時當作「這次沒有廣告在佇列裡」，頁面照常
+      // 顯示，只是沒有「去處理」按鈕。
+      getQueue(brandId).catch(() => ({ items: [] as QueueItem[] })),
+    ])
       .then(([campaigns, triage, queue]) => {
         if (cancelled) return;
         setState({
@@ -250,10 +268,15 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     setHandledAdParam(highlightAdParam);
   }, [state, highlightAdParam, handledAdParam]);
 
+  // review fix：`openGroups` 每次收合／展開都是新的 `Set`，這個 effect 原本連著它一起重跑，
+  // 使用者手動摺疊別的分類就會把畫面重新捲回高亮那一列一次。只在真的換了一個新的
+  // `highlightId` 時捲一次；捲過就記住，之後任何 `openGroups` 變化都不再觸發。
+  const scrolledToRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!highlightId) return;
+    if (!highlightId || scrolledToRef.current === highlightId) return;
     const el = rowRefs.current.get(highlightId);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrolledToRef.current = highlightId;
   }, [highlightId, openGroups]);
 
   const groupedItems = useMemo(() => {
@@ -334,7 +357,15 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold" title={campaign.name}>{campaign.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className={chip()}>{campaign.objective || "尚待確認"}・{items.length} 則</span>
+            {/* review fix：跟 `home/CampaignCard.tsx:215-221` 同一顆欄位同一種處理——匯入
+               活動的 objective 是一整句話，只有它自己截斷，「・N 則」永遠印得出來，
+               1024 寬不會被擠到換行。 */}
+            <span className={cn(chip(), "max-w-[14rem] items-center")}>
+              <span className="min-w-0 truncate" title={campaign.objective || undefined}>
+                {campaign.objective || "尚待確認"}
+              </span>
+              <span className="shrink-0">・{items.length} 則</span>
+            </span>
             {items.length > 0 && (
               hasTarget ? (
                 <span className={chip()}>
@@ -391,6 +422,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
                 cls={cls}
                 items={groupedItems.get(cls)!}
                 queueByEntity={queueByEntity}
+                reviewHref={`${workspaceHref}?tab=performance`}
                 open={openGroups.has(cls)}
                 onToggle={(isOpen) =>
                   setOpenGroups((prev) => {

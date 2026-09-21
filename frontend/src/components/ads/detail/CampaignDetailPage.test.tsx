@@ -95,7 +95,8 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "【銷售】1150706 Beast Prime 最高數量" })).toBeTruthy();
-    expect(screen.getByText("轉換・1 則")).toBeTruthy();
+    expect(screen.getByText("轉換")).toBeTruthy();
+    expect(screen.getByText("・1 則")).toBeTruthy();
     expect(screen.getByText(/目標每次購買成本 450・自訂/)).toBeTruthy();
     expect(screen.getByText("總預算 NT$ 60,000")).toBeTruthy();
     expect(screen.queryByText("尚未設定目標")).toBeNull();
@@ -106,6 +107,23 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     expect(all.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
   });
 
+  it("objective chip：跟 `home/CampaignCard.tsx` 同一種處理——只有 objective 自己截斷，「・N 則」不被擠到換行", async () => {
+    const longObjective = "提高 Beast Prime 的購買數量，以購買次數為主要成效，這是一整句很長的匯入活動目標敘述用來測試截斷";
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({ objective: longObjective })]);
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+
+    renderPage();
+    await screen.findByText("・1 則");
+
+    const objectiveNode = screen.getByText(longObjective);
+    expect(objectiveNode.className).toMatch(/truncate/);
+    expect(objectiveNode.getAttribute("title")).toBe(longObjective);
+    const chipNode = objectiveNode.parentElement!;
+    expect(chipNode.className).toMatch(/max-w-\[14rem\]/);
+    // 「・1 則」是不會被截斷的獨立節點，永遠印得出來。
+    expect(screen.getByText("・1 則").className).not.toMatch(/truncate/);
+  });
+
   it("沒有目標：每一則都算 no_target，印警告 chip、警告條與「設定目標」（不是「調整目標」）", async () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 28,
@@ -114,7 +132,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
     renderPage();
 
-    await screen.findByText("轉換・1 則");
+    await screen.findByText("・1 則");
     expect(screen.getAllByText("尚未設定目標").length).toBeGreaterThan(0); // header chip + 分類名稱
     expect(screen.getByText("沒有目標，這個活動的廣告都還不會被判斷")).toBeTruthy();
     expect(screen.getByRole("link", { name: "設定目標" })).toBeTruthy();
@@ -135,7 +153,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     const { container } = renderPage();
-    await screen.findByText("轉換・4 則");
+    await screen.findByText("・4 則");
 
     const detailsOf = (label: string) => {
       const summary = screen.getByText(label).closest("summary")!;
@@ -150,7 +168,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     expect(container.querySelectorAll("details").length).toBe(4);
   });
 
-  it("佇列裡的廣告才有「去處理」，連到 queue 那一列的 action_url", async () => {
+  it("佇列裡的廣告才有「去處理」；lead 裁決：不連 queue 的 action_url（那會繞回這一頁），連工作區既有的成效分頁", async () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 7,
       items: [
@@ -159,18 +177,35 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
       ],
     });
     vi.mocked(getQueue).mockResolvedValue(queue([
+      // action_url 故意指回這一頁（F20-I01 之後 queue 的真實形狀）——按鈕不能原樣用它。
       queueItem({ id: "q_stop", triage: triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" }), action_url: "/brands/brd_1/ads/campaigns/cmp_1/detail?ad=ad_stop" }),
     ]));
 
     renderPage();
-    await screen.findByText("轉換・2 則");
+    await screen.findByText("・2 則");
 
     const stopRow = screen.getByTestId("ad-row-ad_stop");
     const goLink = within(stopRow).getByRole("link", { name: "去處理" });
-    expect(goLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=ad_stop");
+    expect(goLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=performance");
+    expect(goLink.getAttribute("href")).not.toContain("/detail");
 
     const flatRow = screen.getByTestId("ad-row-ad_flat");
     expect(within(flatRow).queryByRole("link", { name: "去處理" })).toBeNull();
+  });
+
+  it("`getQueue`失敗：不拖累整頁——目標／分類／列照常顯示，只是沒有「去處理」", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" })],
+    });
+    vi.mocked(getQueue).mockRejectedValue(new Error("佇列讀取失敗"));
+
+    renderPage();
+
+    expect(await screen.findByText("・1 則")).toBeTruthy();
+    expect(screen.getByText("停損").closest("summary")!.closest("details")!.open).toBe(true);
+    expect(screen.queryByRole("link", { name: "去處理" })).toBeNull();
+    expect(screen.queryByText("讀取失敗")).toBeNull();
   });
 
   it("縮圖：null 落到中性佔位，有網址先顯示圖片，載入失敗改回佔位", async () => {
@@ -183,7 +218,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage();
-    await screen.findByText("轉換・2 則");
+    await screen.findByText("・2 則");
 
     const nullRow = screen.getByTestId("ad-row-ad_null");
     expect(nullRow.querySelector("img")).toBeNull();
@@ -208,13 +243,36 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=ad_flat");
-    await screen.findByText("轉換・2 則");
+    await screen.findByText("・2 則");
 
     const summary = screen.getByText("持平").closest("summary")!;
     const details = summary.closest("details")!;
     expect(details.open).toBe(true);
     const row = screen.getByTestId("ad-row-ad_flat");
     expect(row.className).toMatch(/ring-primary/);
+  });
+
+  it("`?ad=` 深連結只捲動一次：之後摺疊／展開別的分類不會再觸發 scrollIntoView", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [
+        triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
+        triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
+        triageItem({ entity_id: "ad_better", class: "better", label: "變好" }),
+      ],
+    });
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+
+    renderPage("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=ad_flat");
+    await screen.findByText("・3 則");
+    expect(screen.getByTestId("ad-row-ad_flat")).toBeTruthy();
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+
+    // 開另一個原本收合的分類（「變好」）——`openGroups` 換了一個新的 `Set`，但高亮的
+    // 那一則沒有變，不該再捲一次。
+    await userEvent.click(screen.getByText("變好").closest("summary")!);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
   });
 
   it("不認得的 `?ad=` id：忽略，維持預設展開狀態，不當機", async () => {
@@ -227,7 +285,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=unknown_id");
-    await screen.findByText("轉換・2 則");
+    await screen.findByText("・2 則");
 
     // 停損有東西所以照 Feature Outcome 預設展開；持平不受這個不存在的 `?ad=` 影響，維持收合。
     expect(screen.getByText("停損").closest("summary")!.closest("details")!.open).toBe(true);
@@ -245,7 +303,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage();
-    await screen.findByText("轉換・3 則");
+    await screen.findByText("・3 則");
 
     expect(screen.getByText("照常投放")).toBeTruthy();
     expect(screen.getByText("還沒花到可判讀的金額")).toBeTruthy();
@@ -265,7 +323,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage();
-    await screen.findByText("轉換・3 則");
+    await screen.findByText("・3 則");
 
     // GROUP_ORDER 裡第一個有廣告的是「變好」——不能三個分類全部收合、頁面看起來像空的。
     expect(screen.getByText("變好").closest("summary")!.closest("details")!.open).toBe(true);
@@ -282,7 +340,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     });
 
     renderPage();
-    await screen.findByText("轉換・1 則");
+    await screen.findByText("・1 則");
 
     const summaries = screen.getAllByText("尚未設定目標").map((el) => el.closest("summary")).filter((el): el is HTMLElement => el !== null);
     expect(summaries.length).toBe(1);
@@ -293,7 +351,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
 
     const { container } = renderPage();
-    await screen.findByText("轉換・1 則");
+    await screen.findByText("・1 則");
 
     expect(container.querySelector(".max-w-\\[1180px\\]")).toBeTruthy();
   });
@@ -320,7 +378,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
 
-    expect(await screen.findByText("轉換・1 則")).toBeTruthy();
+    expect(await screen.findByText("・1 則")).toBeTruthy();
   });
 
   it("清單裡找不到這個 Campaign：讀取失敗態，訊息是「找不到這個 Campaign。」", async () => {
