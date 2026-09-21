@@ -226,6 +226,51 @@ Measured (`.harness/runtime/metrics.jsonl` + agent durations), authorize 00:48 �
   field added to a shared API type needs its test factories in `touch`; a link changed in one issue must be traced to
   every consumer planned in the next.
 
+## 5e. Handoff — cut UI-worker time and review bounces (open, written 2026-09-22)
+
+Goal (user-chosen, before the remaining v7 screens): make a UI issue cheaper. In F20 the screen issue took 59 of 95 min:
+worker first pass 34 min, two bounces 20 min (lead screenshot compare 9, Opus review 5 + repair 6). Tooling fixes
+(harness 3.0.8: `rescope`, unattached finish refused, leftovers moved aside, new-directory note) save ~12 min and do not
+touch this. Gates are not the cost: finish ≤ 69 s, merge ≤ 66 s.
+
+Measured, I02 worker (Sonnet), whole life incl. both repairs: 240 tool calls, ~513k tokens. 70 Reads over 48 distinct
+files (its own page 10×, 18 image reads of its own screenshots), 34 Edits, ~125 shell calls (13 playwright, 16 node
+helper scripts, 13 git, 8 npm test, 4 builds, 3 sleeps, ~57 uncategorised). First pass alone: 174 calls, 367k tokens.
+I01 worker (backend, 40 lines): 49 + 27 calls, 6 + 3 min. Opus review: 29 calls, 5 min, three real defects.
+Raw transcripts (git-ignored, do not read whole — tally with a script): `.harness/runtime/logs/F20-transcripts/`
+(only `I02-worker.jsonl` survived; the other three copied empty).
+
+What the bounces were, by origin:
+- Plan defect (lead): 去處理 looped to the same page because I01 changed `action_url` and I02 was told to use it.
+- Spec not reaching the worker: content `max-width:1180px` and the two summary hints are in the prototype HTML/CSS; the
+  worker missed them and also expanded the prototype's groups by hand before shooting, hiding the fold mismatch.
+- Missing general knowledge: queue failure killing the page, scroll effect replaying — both already solved once on the
+  home page (`AdsHomePage.tsx:19-20`), not carried to the next screen.
+
+Hypotheses, none verified — measure before changing anything:
+1. A lead-side pre-pass that extracts the prototype screen's facts mechanically (container widths, every text node,
+   default open/closed state, each control's target) into the issue would have prevented bounce 1 entirely.
+2. A short per-project "screen pitfalls" list fed by past review findings (independent blocks fail independently;
+   effects keyed on fresh objects; focus ring clipping; zero vs unknown) would have prevented bounce 2's two generic defects.
+3. 48 distinct files read suggests orientation cost; a per-screen context pack (the 5–8 files a new ads screen always
+   needs: a sibling page, its test, the API type file, patterns index, tokens) could replace exploration.
+4. Evidence capture is expensive (13 playwright + 16 helper scripts + 18 image reads): one reusable side-by-side
+   script in the repo, parameterised by prototype hash and app route, instead of each worker writing its own.
+5. Model choice is unmeasured: Opus as worker may cost more per minute but fewer bounces. Needs an A/B on one screen.
+
+Rejected / constraints: do not add approval rounds, new reports or mandatory reading (user rule); do not replace design
+with explanatory text; the HTML prototype stays the spec; a new gate must be replayed against real history before it is
+installed (3.0.7's path check failed that: 17 of 334 false refusals). User instruction in force: if a returned worker
+fails again, pause and show the user the cause instead of returning it a third time.
+
+State: F20 closed into `feature/ads-center-v7-home` (main tree is on it, clean). F19 still open (human acceptance
+pending). Nothing pushed. harness 3.0.8 installed from Planner `2d5ef0c`; loads in a new session; Codex copy not updated.
+Remaining v7 screens (evidence／six-step repair, data connections, three abnormal states, monthly review) wait for this.
+Docker on this machine needs the two-folder rename before each start (memory `docker-stale-sockets-block-start`).
+
+Next step: tally `I02-worker.jsonl` by phase (orientation → build → evidence → repair) with timestamps to see which of
+hypotheses 1–4 owns the most minutes; then try the cheapest one on the next single screen and compare against 59 min / 2 bounces.
+
 ## 6. Still open
 
 Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,
