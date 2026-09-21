@@ -111,7 +111,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
     vi.restoreAllMocks();
   });
 
-  it("載入後顯示目前的成果與已解出的目標線", async () => {
+  it("載入後顯示目前的成果與已解出的目標線；建議 chip 落在目前生效的依據卡上", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockGetTarget.mockResolvedValue(target({ basis: "trailing_30", value: 380, result_kind: "purchase" }));
     renderPage();
@@ -120,6 +120,27 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect(await screen.findByText("每次購買最多花多少")).toBeTruthy();
     expect(await screen.findByText("380")).toBeTruthy();
     expect((screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement).disabled).toBe(true);
+
+    const badge = screen.getByText("建議");
+    expect(badge.closest("button")?.textContent).toContain("自己近 30 天");
+  });
+
+  it("target.basis 是 break_even 時，建議只落在打平值卡", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockGetTarget.mockResolvedValue(target({ basis: "break_even", value: 300, product_ids: ["prd_1"] }));
+    renderPage();
+
+    const badge = await screen.findByText("建議");
+    expect(badge.closest("button")?.textContent).toContain("打平值");
+  });
+
+  it("依據是 own（使用者自訂覆寫）時：任何一張卡都不顯示「建議」——resolve() 提早回傳，根本沒評估過 break_even／trailing_30", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockGetTarget.mockResolvedValue(target({ basis: "own", value: 200, own_value: 200, missing: [] }));
+    renderPage();
+
+    await screen.findByRole("heading", { name: "這個活動的目標" });
+    expect(screen.queryByText("建議")).toBeNull();
   });
 
   it("看什麼成果尚未知道時是誠實的空狀態，不是選單", async () => {

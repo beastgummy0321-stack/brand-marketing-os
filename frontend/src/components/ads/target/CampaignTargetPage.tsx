@@ -74,12 +74,12 @@ function draftFrom(target: CampaignTarget): Draft {
   };
 }
 
-// F19 repair #5：break_even 是否「值得推薦」只用已經拿到的欄位判斷，不臆測——`resolve()`
-// 已經在算 break_even（basis 就是它，或 missing 出現 product／product_cost，代表這個活動是
-// 銷售型、有嘗試算過但缺輸入），才算「建議」落在打平值卡；否則落在近 30 天卡，跟 v7 的
-// `o.be` 後備邏輯同一個道理，只是依據真的欄位、不是前端自己猜。
-function breakEvenIsApplicable(target: CampaignTarget): boolean {
-  return target.basis === "break_even" || target.missing.includes("product") || target.missing.includes("product_cost");
+// F19 re-review A：「建議」只准落在後端這次真的算出來、目前生效的依據上——`target.basis`
+// 是 break_even 或 trailing_30 時才有「建議」，own（使用者自訂覆寫）一律不顯示，因為 own
+// 生效時 `resolve()` 直接提早回傳（`app/ads/targets.py:88`），根本沒有評估過 break_even／
+// trailing_30，這時候在任何一張卡上放「建議」都是編出來的、不是後端真的推薦了什麼。
+function recommendedBasis(target: CampaignTarget): Basis | null {
+  return target.basis === "break_even" || target.basis === "trailing_30" ? target.basis : null;
 }
 
 /** 設定目標頁（F19-I05，v7 原型 ≈ 326–345 行）：這個活動被判斷用的成果與目標成本，純畫面，
@@ -207,169 +207,170 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
   }
 
   const resultKind = resultKindLabel(target.result_kind);
-  const breakEvenApplicable = breakEvenIsApplicable(target);
+  const recommended = recommendedBasis(target);
 
   return (
-    <>
-      <div className="flex flex-col gap-4 pb-28">
-        <Breadcrumb
-          items={[
-            { label: "投放中心", href: homeHref },
-            { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}` },
-            { label: "目標" },
-          ]}
-        />
-        <PageHeader title="這個活動的目標" description="設定判斷這個活動好壞的成果與成本門檻。" />
+    <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+      <Breadcrumb
+        items={[
+          { label: "投放中心", href: homeHref },
+          { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}` },
+          { label: "目標" },
+        ]}
+      />
+      <PageHeader title="這個活動的目標" description="設定判斷這個活動好壞的成果與成本門檻。" />
 
-        <section className="surface" aria-labelledby="target-result-heading">
-          <div className="surface-header">
-            <h2 id="target-result-heading">看什麼成果</h2>
-          </div>
-          <div className="surface-body">
-            {resultKind ? (
-              <Badge variant="secondary">{resultKind}</Badge>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                尚未知道——累積到這個活動自己的投放資料後才會知道。
-              </p>
-            )}
-          </div>
-        </section>
+      <section className="surface" aria-labelledby="target-result-heading">
+        <div className="surface-header">
+          <h2 id="target-result-heading">看什麼成果</h2>
+        </div>
+        <div className="surface-body">
+          {resultKind ? (
+            <Badge variant="secondary">{resultKind}</Badge>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              尚未知道——累積到這個活動自己的投放資料後才會知道。
+            </p>
+          )}
+        </div>
+      </section>
 
-        <section className="surface" aria-labelledby="target-cost-heading">
-          <div className="surface-header">
-            <h2 id="target-cost-heading">{resultKind ? `每次${resultKind}最多花多少` : "每次成果最多花多少"}</h2>
+      <section className="surface" aria-labelledby="target-cost-heading">
+        <div className="surface-header">
+          <h2 id="target-cost-heading">{resultKind ? `每次${resultKind}最多花多少` : "每次成果最多花多少"}</h2>
+        </div>
+        <div className="surface-body flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
+            {BASIS_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={draft.basis === option.key}
+                onClick={() => setDraft((d) => ({ ...d, basis: option.key }))}
+                className={`rounded-xl border p-4 text-left transition-colors ${
+                  draft.basis === option.key ? "border-primary bg-accent" : "border-border hover:border-primary"
+                }`}
+              >
+                {/* min-h 保留固定高度：不管這張卡有沒有 chip，標題都對齊同一條基線。 */}
+                <div className="flex min-h-5 flex-wrap items-center gap-1.5">
+                  {option.key === recommended && <Badge variant="secondary">建議</Badge>}
+                  {option.key === "trailing_30" && <Badge variant="outline">暫定</Badge>}
+                </div>
+                <p className="mt-2 text-sm font-semibold">{option.label}</p>
+                {/* own 卡的數字只在「不是目前編輯中的依據」時顯示一次；選到 own 時輸入框與
+                 * 下面「目前判斷用的目標線」已經各秀一次，這裡不重複第三次（re-review 附加）。 */}
+                {option.key === "own" && draft.basis !== "own" && (
+                  <p className="metric-number numeric">
+                    {target.own_value !== null ? target.own_value.toLocaleString("zh-TW") : "—"}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-muted-foreground">{option.hint}</p>
+              </button>
+            ))}
           </div>
-          <div className="surface-body flex flex-col gap-4">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
-              {BASIS_OPTIONS.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  aria-pressed={draft.basis === option.key}
-                  onClick={() => setDraft((d) => ({ ...d, basis: option.key }))}
-                  className={`rounded-xl border p-4 text-left transition-colors ${
-                    draft.basis === option.key ? "border-primary bg-accent" : "border-border hover:border-primary"
-                  }`}
+
+          {draft.basis === "own" && (
+            <label className="flex max-w-xs flex-col gap-1 text-sm">
+              目標每次{resultKind ?? "成果"}成本
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={draft.ownValue}
+                onChange={(e) => setDraft((d) => ({ ...d, ownValue: e.target.value }))}
+                className="w-40"
+              />
+            </label>
+          )}
+
+          {draft.basis === "break_even" && (
+            <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="flex flex-col gap-1 text-sm">
+                商品
+                <select
+                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                  value={draft.productId}
+                  onChange={(e) => setDraft((d) => ({ ...d, productId: e.target.value }))}
                 >
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {option.key === "break_even" && breakEvenApplicable && <Badge variant="secondary">建議</Badge>}
-                    {option.key === "trailing_30" && !breakEvenApplicable && <Badge variant="secondary">建議</Badge>}
-                    {option.key === "trailing_30" && <Badge variant="outline">暫定</Badge>}
-                    {option.key === "own" && <Badge variant="outline">自訂</Badge>}
-                  </div>
-                  <p className="mt-2 text-sm font-semibold">{option.label}</p>
-                  {option.key === "own" && (
-                    <p className="metric-number numeric">
-                      {target.own_value !== null ? target.own_value.toLocaleString("zh-TW") : "—"}
-                    </p>
-                  )}
-                  <p className="mt-1 text-xs text-muted-foreground">{option.hint}</p>
-                </button>
-              ))}
-            </div>
-
-            {draft.basis === "own" && (
-              <label className="flex max-w-xs flex-col gap-1 text-sm">
-                目標每次{resultKind ?? "成果"}成本
+                  <option value="">請選擇商品</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id} disabled={p.economics_status === "none"}>
+                      {p.name}
+                      {p.economics_status === "none" ? "（尚無售價）" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                售價
                 <Input
                   type="number"
                   min="0"
                   step="0.01"
-                  value={draft.ownValue}
-                  onChange={(e) => setDraft((d) => ({ ...d, ownValue: e.target.value }))}
-                  className="w-40"
+                  value={draft.price}
+                  onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+                  aria-label="售價"
                 />
               </label>
-            )}
+              <label className="flex flex-col gap-1 text-sm">
+                成本（含運費）
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draft.variableCost}
+                  onChange={(e) => setDraft((d) => ({ ...d, variableCost: e.target.value }))}
+                  aria-label="成本（含運費）"
+                />
+              </label>
+            </div>
+          )}
 
-            {draft.basis === "break_even" && (
-              <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
-                <label className="flex flex-col gap-1 text-sm">
-                  商品
-                  <select
-                    className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                    value={draft.productId}
-                    onChange={(e) => setDraft((d) => ({ ...d, productId: e.target.value }))}
-                  >
-                    <option value="">請選擇商品</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id} disabled={p.economics_status === "none"}>
-                        {p.name}
-                        {p.economics_status === "none" ? "（尚無售價）" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  售價
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={draft.price}
-                    onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
-                    aria-label="售價"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  成本（含運費）
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={draft.variableCost}
-                    onChange={(e) => setDraft((d) => ({ ...d, variableCost: e.target.value }))}
-                    aria-label="成本（含運費）"
-                  />
-                </label>
+          <div>
+            {target.value !== null ? (
+              <p className="metric-number numeric">{target.value.toLocaleString("zh-TW")}</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {target.missing.length > 0 ? (
+                  target.missing.map((reason) => (
+                    <Badge key={reason} variant="secondary">
+                      {missingLabel(reason)}
+                    </Badge>
+                  ))
+                ) : (
+                  <Badge variant="secondary">尚未算出</Badge>
+                )}
               </div>
             )}
-
-            <div>
-              {target.value !== null ? (
-                <p className="metric-number numeric">{target.value.toLocaleString("zh-TW")}</p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {target.missing.length > 0 ? (
-                    target.missing.map((reason) => (
-                      <Badge key={reason} variant="secondary">
-                        {missingLabel(reason)}
-                      </Badge>
-                    ))
-                  ) : (
-                    <Badge variant="secondary">尚未算出</Badge>
-                  )}
-                </div>
-              )}
-              <p className="mt-1 text-xs text-muted-foreground">
-                {target.value !== null ? "目前判斷用的目標線" : "填齊後儲存才會算出目標線"}
-              </p>
-            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {target.value !== null ? "目前判斷用的目標線" : "填齊後儲存才會算出目標線"}
+            </p>
           </div>
-        </section>
+        </div>
+      </section>
 
-        {conflict && (
-          <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-warning/10 p-3 text-sm text-warning">
-            <p className="flex-1">這個活動的目標已被更新，你的編輯尚未覆蓋新版本。</p>
-            <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
-              重新讀取最新版本
-            </Button>
-          </div>
-        )}
-        {saveError && (
-          <p role="alert" className="text-sm text-destructive">
-            {saveError}
-          </p>
-        )}
-      </div>
+      {conflict && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-warning/10 p-3 text-sm text-warning">
+          <p className="flex-1">這個活動的目標已被更新，你的編輯尚未覆蓋新版本。</p>
+          <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+            重新讀取最新版本
+          </Button>
+        </div>
+      )}
+      {saveError && (
+        <p role="alert" className="text-sm text-destructive">
+          {saveError}
+        </p>
+      )}
 
-      {/* F19 repair #5：真的釘在畫面最下方（跟 v7 的 .bar 一樣），不是跟著內容跑；
-       * 左邊界照 `--width-sidebar`，不蓋過側欄。內容區留了 pb-28 避免蓋到最後一張卡。 */}
-      <div
-        className="fixed right-0 bottom-0 z-20 flex flex-wrap items-center gap-3 border-t border-border bg-card px-7 py-3"
-        style={{ left: "var(--width-sidebar)" }}
-      >
+      {/* re-review B：改回 `sticky`，活在頁面自己的內容流裡——不用猜側欄現在是展開（232／
+       * 208px）還是收合（76px），負的左右外距直接抵消 `app-main` 自己的內距（22px／xl 起
+       * 28px，跟 tokens.css 的中斷點同一個 1280px），視覺上貼齊內容區左右邊；bar 內距補回
+       * 同樣數字，按鈕位置跟上面卡片對齊。外層 `min-h` 讓內容短的頁面 bar 也能貼在畫面最下面
+       * （模擬 v7 `.page{flex:1}` 的效果，這裡不能改 AppShell，用自己的 min-height／flex-1
+       * 撐開代替）；sticky 元素本身仍在文件流裡，不會蓋到前一張卡，不需要額外的 pb。 */}
+      <div className="flex-1" />
+      <div className="sticky bottom-0 z-10 -mx-[22px] flex flex-wrap items-center gap-3 border-t border-border bg-card px-[22px] py-3 xl:-mx-7 xl:px-7">
         <Button variant="ghost" asChild>
           <Link to={homeHref}>← 投放中心</Link>
         </Button>
@@ -380,6 +381,6 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
           </Button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
