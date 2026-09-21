@@ -6,7 +6,10 @@ import { getChangeControlSummary, type ChangeControlSummary } from "@/lib/adsCha
 
 /** 需要你決定的事（F04；F19-I02 review repair (d)：沒有待確認清單時整塊不佔版面，不再印
  * 「目前沒有待確認的變更清單」——呼叫端（`AdsHomePage`）不再另外打一次 `getChangeControlSummary`
- * 來判斷要不要掛這個元件，這支自己決定要不要現身，全首頁只有這一次請求。 */
+ * 來判斷要不要掛這個元件，這支自己決定要不要現身，全首頁只有這一次請求。
+ * Re-review 修復：讀取中也不佔版面（沒有「正在整理待確認清單…」卡片）——最常見的零件數
+ * 情境之前會先閃一下卡片、把佇列卡往下推，這裡改成讀取中先什麼都不印；只有讀取失敗
+ * 時仍要現身讓使用者看得到、能重試。 */
 export function ChangeAttention({ brandId }: { brandId: string }) {
   const [summary, setSummary] = useState<ChangeControlSummary | null>(null);
   const [failed, setFailed] = useState(false);
@@ -16,12 +19,11 @@ export function ChangeAttention({ brandId }: { brandId: string }) {
     getChangeControlSummary(brandId, controller.signal).then(value => { if (!controller.signal.aborted) setSummary(value); }).catch(() => { if (!controller.signal.aborted) setFailed(true); });
     return () => controller.abort();
   }, [brandId, retry]);
-  if (summary && summary.pending_count === 0) return null;
+  if (!failed && (!summary || summary.pending_count === 0)) return null;
   const labels: Record<string, string> = { draft: "待確認清單", approved: "待完成核對", deferred: "本次已暫緩" };
   return <section className="surface" aria-label="需要你決定的事">
     <div className="surface-header"><div className="flex items-center gap-2"><ClipboardCheck className="size-5 text-primary" /><h2>需要你決定的事</h2></div></div>
     <div className="surface-body space-y-3">
-      {!summary && !failed && <p role="status" className="text-sm text-muted-foreground">正在整理待確認清單…</p>}
       {failed && <div className="space-y-2"><p role="alert" className="text-sm text-warning">目前無法讀取待辦，不能確認是否還有未完成項目。</p><Button variant="outline" size="sm" onClick={() => setRetry(value => value + 1)}>重新整理待辦</Button></div>}
       {summary && <>
         <p className="text-lg font-semibold">{summary.pending_count} 份清單需要確認或核對</p>

@@ -5,19 +5,34 @@ import { MonthlyBudgetPanel, budgetMoney, currentBudgetMonth } from "../MonthlyB
 
 type State = { status: "loading" } | { status: "error" } | { status: "ready"; budget: MonthlyBudget };
 
+// 圖例色點跟長條分段同一組 token（design-system §2.1），v7 原型的 `.lg i` 做法。
+const SEGMENT_SWATCH: Record<"spend" | "reserved" | "available", string> = {
+  spend: "bg-chart-rest",
+  reserved: "bg-border",
+  available: "bg-primary",
+};
+
+function Swatch({ kind }: { kind: keyof typeof SEGMENT_SWATCH }) {
+  return <span aria-hidden="true" className={`inline-block size-2 rounded-sm ${SEGMENT_SWATCH[kind]}`} />;
+}
+
 /** 三段可用度長條：已花／預留／可用，佔月總額的比例。任一數字未知或總額未知都不假裝算得出
- * 比例——整條顯示一段灰階，數字仍照實印（design-system §7「誠實的空狀態」）。 */
+ * 比例——整條顯示一段灰階，數字仍照實印（design-system §7「誠實的空狀態」）。圖例三個色點
+ * 跟長條分段同一組顏色，未知態數字雖然沒有真的畫出對應色塊，色點仍標出「這句話對應哪一段」。 */
 function BudgetBar({ budget }: { budget: MonthlyBudget }) {
   const { amount, known_spend, ongoing_estimate, available, currency } = budget;
+  const legend = (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5"><Swatch kind="spend" />已花 {budgetMoney(known_spend, currency)}</span>
+      <span className="inline-flex items-center gap-1.5"><Swatch kind="reserved" />預留 {budgetMoney(ongoing_estimate, currency)}</span>
+      <span className="inline-flex items-center gap-1.5"><Swatch kind="available" />可用 {budgetMoney(available, currency)}</span>
+    </div>
+  );
   if (amount === null || amount <= 0 || known_spend === null || ongoing_estimate === null || available === null) {
     return (
       <div className="space-y-2">
         <div className="h-2.5 w-full rounded-full bg-muted" aria-hidden="true" />
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>已花 {budgetMoney(known_spend, currency)}</span>
-          <span>預留 {budgetMoney(ongoing_estimate, currency)}</span>
-          <span>可用 {budgetMoney(available, currency)}</span>
-        </div>
+        {legend}
       </div>
     );
   }
@@ -29,11 +44,7 @@ function BudgetBar({ budget }: { budget: MonthlyBudget }) {
         <div className="bg-border" style={{ width: `${pct(ongoing_estimate)}%` }} />
         <div className="bg-primary" style={{ width: `${pct(available)}%` }} />
       </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>已花 {budgetMoney(known_spend, currency)}</span>
-        <span>預留 {budgetMoney(ongoing_estimate, currency)}</span>
-        <span>可用 {budgetMoney(available, currency)}</span>
-      </div>
+      {legend}
     </div>
   );
 }

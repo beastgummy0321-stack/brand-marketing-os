@@ -91,6 +91,8 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  // 重置每個 mock 的呼叫紀錄，讓「refreshQueue 每次掛載只呼叫一次」這類斷言不受測試順序影響。
+  vi.clearAllMocks();
   vi.mocked(getChangeControlSummary).mockResolvedValue({ pending_count: 0, items: [], truncated: false });
   vi.mocked(getMonthlyBudget).mockResolvedValue(unknownBudget());
   vi.mocked(listCampaigns).mockResolvedValue([]);

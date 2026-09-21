@@ -1,6 +1,7 @@
-/** frontend/src/components/ads/ChangeAttention.test.tsx — F19-I02 review repair (d)：
- * `pending_count === 0` 時整塊不渲染（不印「目前沒有待確認的變更清單」），讀取中／讀取失敗
- * 仍照舊顯示；有待確認清單時內容照舊。 */
+/** frontend/src/components/ads/ChangeAttention.test.tsx — F19-I02 review repair (d) + re-review：
+ * `pending_count === 0` 時整塊不渲染（不印「目前沒有待確認的變更清單」）；讀取中也不佔版面
+ * （沒有「正在整理待確認清單…」卡片，不閃一下把佇列卡往下推）；讀取失敗仍要現身讓使用者
+ * 看得到、能重試；有待確認清單時內容照舊。 */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -27,11 +28,15 @@ function renderIt() {
 }
 
 describe("ChangeAttention（F19-I02 review repair d）", () => {
-  it("pending_count 為 0：整塊不渲染，讀取完成後 region 消失", async () => {
+  it("pending_count 為 0：讀取中與讀取完成都不佔版面（沒有讀取中卡片閃一下）", async () => {
     vi.mocked(getChangeControlSummary).mockResolvedValue(summary({ pending_count: 0 }));
-    renderIt();
+    const { container } = renderIt();
 
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    // 讀取中：不印任何內容，不是先出現卡片再消失。
+    expect(container.textContent).toBe("");
+    expect(screen.queryByRole("region", { name: "需要你決定的事" })).toBeNull();
+
+    await waitFor(() => expect(getChangeControlSummary).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "需要你決定的事" })).toBeNull();
   });
 
