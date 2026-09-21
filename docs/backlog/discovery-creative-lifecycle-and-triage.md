@@ -202,6 +202,30 @@ Known gaps, not built (each needs its own screen or a backend field; none is fak
 - One `getTriage` request per campaign card; add a brand-level summary endpoint when a brand has > 10 campaigns.
 - Queue meter clamps at 1.5 ×, so 1.5 × and 4 × over look equally full; the numbers carry the difference.
 
+## 5d. v7 front end batch 2 — F20 campaign detail page, measured trial of harness 3.0.6 (2026-09-22)
+
+Built (two issues, branch `feature/ads-center-v7-detail`, base `feature/ads-center-v7-home`): triage items carry
+`thumbnail_url` (from `creative.fields`); new queue rows' `action_url` lands on `/brands/:b/ads/campaigns/:c/detail?ad=<entity>`;
+the detail page itself (groups by class, 停損／變差 open — else the first non-empty group, rows with thumbnail / spend / cost,
+去處理 for queued ads → workspace `?tab=performance` until the six-step flow is rebuilt, capacity card as one grey placeholder).
+Omitted, no backend: ladder, 「14 天幾乎沒投」, 「平台設定」 chip, the 3× amount in the 資料不足 hint. Closes §5c gap 1.
+Noted, not fixed: every detail-page open calls `getQueue`, which re-classifies the whole brand.
+
+Measured (`.harness/runtime/metrics.jsonl` + agent durations), authorize 00:48 → second merge 02:23 = 95 min:
+- Environment, 21 min: Docker would not start (undeletable `.sock` files after a Windows update; workaround = rename two folders).
+- I01 (backend, 40 lines + tests), 14 min: worker 6 min + 3 min; finish 69 s; merge 66 s. ~8 min of it was lead error:
+  wrong test path in `touch` (carve typo), build broke on three test factories outside `touch`, and a skipped `attach`
+  after a re-claim blocked the issue. No code was returned by review.
+- I02 (screen, 415 + 334 lines), 59 min: worker 34 min first pass; lead screenshot compare returned it once (content
+  max-width, summary hints, all-folded page) 9 min; finish 28 s; Opus adversarial review 5 min returned it once with three
+  real defects (去處理 looped to the same page — caused by the I01 plan, queue failure killed the page, `?ad=` scroll
+  replayed) 6 min; finish 25 s; merge 44 s.
+- Documents a worker was told to read: the issue, the feature file, design-system §1.7, the prototype function. No long .md.
+- Takeaways: each touch-list correction costs a save-patch → release → edit → claim → apply → attach round (~2–3 min and
+  easy to get wrong) — this is the missing `rescope`; carve must `ls` every path it writes into `touch`/`verify`; a type
+  field added to a shared API type needs its test factories in `touch`; a link changed in one issue must be traced to
+  every consumer planned in the next.
+
 ## 6. Still open
 
 Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,
