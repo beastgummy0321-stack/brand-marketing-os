@@ -122,7 +122,10 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
         <ImageIcon className="size-5 text-muted-foreground" />
       </div>
       <div className="order-2 min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* Lead review fix 2026-09-21：分類 chip／活動 chip 同一行不換行——活動 chip 是
+         * `min-w-0 shrink` 把 Badge 預設的 `w-fit shrink-0` 蓋掉，長名稱在自己框裡截斷成
+         * 「…」，不會擠到換行或被外層裁掉右邊框。 */}
+        <div className="flex flex-nowrap items-center gap-1.5">
           {kind && (
             <span
               className={cn(
@@ -135,16 +138,21 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
             </span>
           )}
           {t.campaign_name && (
-            <Badge variant="outline" className="max-w-40 truncate" title={t.campaign_name}>
-              {t.campaign_name}
+            // Badge 本身是 `inline-flex justify-center`——直接把 `truncate` 放在 Badge 上，
+            // 溢出的文字會被置中裁切（左右各切一段、看不到「…」），要另包一層佔滿寬度的
+            // `<span>` 自己 truncate 才會在右邊出現省略號（lead review fix 2026-09-21）。
+            <Badge variant="outline" className="min-w-0 max-w-[14rem] shrink" title={t.campaign_name}>
+              <span className="min-w-0 w-full truncate">{t.campaign_name}</span>
             </Badge>
           )}
         </div>
         <p className="mt-1.5 truncate text-sm font-semibold" title={t.name ?? "（未命名廣告）"}>{t.name ?? "（未命名廣告）"}</p>
       </div>
       {/* 暫停提議 chip 在按鈕左邊、同一條垂直中線，單行不換行——兩個都是固定寬度的內容，
-       * 這個群組本身不會比第 1 行其他項目撐更高（review fix：原本各自站一行，把第一列撐高）。 */}
-      <div className="order-3 flex shrink-0 items-center gap-2 xl:order-4">
+       * 這個群組本身不會比第 1 行其他項目撐更高（review fix：原本各自站一行，把第一列撐高）。
+       * Lead review fix 2026-09-21：xl 給固定寬度、內容靠右——停損列多一顆暫停提議 chip，
+       * 沒有它的變差列不能因此把量尺往右推，兩種列的量尺欄在 xl 要對齊同一個 x 座標。 */}
+      <div className="order-3 flex shrink-0 items-center gap-2 xl:order-4 xl:w-56 xl:justify-end">
         {t.class === "stop_loss" && (
           <span className="inline-flex items-center rounded-full border border-dashed border-border bg-muted px-2.5 py-1 text-xs whitespace-nowrap text-muted-foreground">
             暫停提議・接上後開放

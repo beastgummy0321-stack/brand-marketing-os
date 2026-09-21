@@ -165,10 +165,12 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
   });
 
   it("列上有活動 chip（跟分類 chip 同一列），截斷有 title 但不印 id", () => {
+    // Lead review fix 2026-09-21：`title` 掛在外層 chip（Badge 本身），不是內層負責 truncate
+    // 的 <span>——放在內層會被 Badge 自己的 `justify-center` 置中裁掉左右兩端、印不出省略號。
     renderQueue(ready({ items: [queueItem("q1")] }));
 
-    const chip = screen.getByText("晨光隨行杯上市");
-    expect(chip.getAttribute("title")).toBe("晨光隨行杯上市");
+    const chip = screen.getByText("晨光隨行杯上市").closest("[title]");
+    expect(chip?.getAttribute("title")).toBe("晨光隨行杯上市");
   });
 
   it("多活動：逐活動篩選鈕各自計數、可用鍵盤／滑鼠切換、aria-pressed 反映狀態，篩完只留該活動的列", async () => {
