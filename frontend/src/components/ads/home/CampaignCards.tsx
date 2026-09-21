@@ -1,14 +1,60 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { Skeleton } from "@/components/layout/Skeleton";
 import { CampaignTile } from "../patterns";
 import { formatCurrency } from "@/lib/format";
-import type { CampaignCard } from "@/lib/adsApi";
+import { listCampaigns, type CampaignCard } from "@/lib/adsApi";
 import { STATUS_LABEL, STATUS_TONE } from "./status";
 
-/** 一張品牌卡牌一個 Campaign（F19-I02 版面骨架；每卡的目標／五分類條留給 I04）：沿用既有
- * `CampaignTile`，數字格式化與「未知≠0」規則都在呼叫端做好——元件本身不算數。 */
-export function CampaignCards({ brandId, campaigns }: { brandId: string; campaigns: CampaignCard[] }) {
+type State =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; campaigns: CampaignCard[] };
+
+/** 一張卡一個 Campaign（F19-I02 版面骨架；每卡的目標／五分類條留給 I04）：沿用既有
+ * `CampaignTile`，數字格式化與「未知≠0」規則都在呼叫端做好——元件本身不算數。自己打
+ * `listCampaigns`，讀取失敗不拖累佇列卡或月預算卡（review repair (b)）。只列未結案的
+ * Campaign（含既有平台活動）；已結案的透過 `AdsHomePage` 旁邊的「查看全部活動」連到清單頁
+ * 找，不在這裡塞（review repair (h)）。 */
+export function CampaignCards({ brandId }: { brandId: string }) {
   const navigate = useNavigate();
+  const [state, setState] = useState<State>({ status: "loading" });
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "loading" });
+    listCampaigns(brandId)
+      .then((campaigns) => { if (!cancelled) setState({ status: "ready", campaigns }); })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+      });
+    return () => { cancelled = true; };
+  }, [brandId, reload]);
+
+  if (state.status === "loading") {
+    return (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <EmptyState
+        title="讀取失敗"
+        description={state.message}
+        onAction={() => setReload((v) => v + 1)}
+        actionLabel="重新載入"
+      />
+    );
+  }
+
+  const campaigns = state.campaigns.filter((c) => c.status !== "closed");
 
   if (campaigns.length === 0) {
     return (

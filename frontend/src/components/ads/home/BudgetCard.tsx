@@ -38,8 +38,10 @@ function BudgetBar({ budget }: { budget: MonthlyBudget }) {
   );
 }
 
-/** 首頁右側月預算卡（F19-I02）：大數字＋分段長條，「調整」直接切成既有 `MonthlyBudgetPanel`
- * （compact）——編輯邏輯、驗證與保存全部沿用那支，這裡不重做一份。 */
+/** 首頁右側月預算卡（F19-I02）：大數字＋分段長條，header／「調整」對齊跟其他卡一致
+ * （review repair (g)：用 `.surface-header`/`.surface-body`，不再自己刻 padding）。
+ * 「調整」直接切成既有 `MonthlyBudgetPanel`（compact）——編輯邏輯、驗證與保存全部沿用
+ * 那支，這裡不重做一份。 */
 export function BudgetCard({ brandId }: { brandId: string }) {
   const month = currentBudgetMonth();
   const [state, setState] = useState<State>({ status: "loading" });
@@ -73,7 +75,16 @@ export function BudgetCard({ brandId }: { brandId: string }) {
 
   return (
     <section className="surface" aria-label="本月可新增承諾">
-      <div className="surface-body space-y-3 pt-5">
+      <div className="surface-header">
+        <div>
+          <h2>可新增承諾</h2>
+          <p className="text-xs text-muted-foreground">{month}・全品牌</p>
+        </div>
+        {state.status === "ready" && (
+          <Button variant="ghost" size="sm" onClick={() => setAdjusting(true)}>調整</Button>
+        )}
+      </div>
+      <div className="surface-body space-y-3">
         {state.status === "loading" && (
           <p role="status" className="text-sm text-muted-foreground">正在整理月預算…</p>
         )}
@@ -85,20 +96,14 @@ export function BudgetCard({ brandId }: { brandId: string }) {
         )}
         {state.status === "ready" && (
           <>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">{month} 可新增承諾・全品牌</p>
-                <p className="numeric mt-1 flex flex-wrap items-baseline gap-x-1 text-[28px] font-semibold tracking-tight">
-                  <span className="whitespace-nowrap">{budgetMoney(state.budget.available, state.budget.currency)}</span>
-                  {state.budget.amount !== null && (
-                    <span className="whitespace-nowrap text-sm font-normal text-muted-foreground">
-                      / {budgetMoney(state.budget.amount, state.budget.currency)}
-                    </span>
-                  )}
-                </p>
-              </div>
-              <Button variant="ghost" size="sm" onClick={() => setAdjusting(true)}>調整</Button>
-            </div>
+            <p className="numeric flex flex-wrap items-baseline gap-x-1 text-[28px] font-semibold tracking-tight">
+              <span className="whitespace-nowrap">{budgetMoney(state.budget.available, state.budget.currency)}</span>
+              {state.budget.amount !== null && (
+                <span className="whitespace-nowrap text-sm font-normal text-muted-foreground">
+                  / {budgetMoney(state.budget.amount, state.budget.currency)}
+                </span>
+              )}
+            </p>
             <BudgetBar budget={state.budget} />
           </>
         )}

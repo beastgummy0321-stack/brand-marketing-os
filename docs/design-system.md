@@ -246,8 +246,9 @@ correct. Cards that carry data use the full grid cell.
 
 ### 5.1 投放中心：清單頁 ＋ Campaign 工作區
 
-投放中心：清單頁 ＋ Campaign 工作區（五個分頁：總覽／策略/投放結構/素材/成效，分頁狀態在查詢字串）。
-`/brands/:id/ads` 是清單頁（Campaign 清單 + 建立 Campaign），`/brands/:id/ads/campaigns/:id` 是工作區。
+投放中心：首頁 ＋ 清單頁 ＋ Campaign 工作區（五個分頁：總覽／策略/投放結構/素材/成效，分頁狀態在查詢字串）。
+`/brands/:id/ads` 是首頁（v7 決定佇列＋月預算＋活動卡，見下方「F19 現況」，不是清單頁），
+`/brands/:id/ads/campaigns` 才是清單頁（Campaign 清單 + 建立 Campaign），`/brands/:id/ads/campaigns/:id` 是工作區。
 同樣的規則沿用自舊版的 staged workspace：
 
 - 發布、配對、核准、撤回、結算 live in the tab they belong to and are enabled by **backend state**, never
@@ -257,12 +258,18 @@ correct. Cards that carry data use the full grid cell.
   restores it. No percentage bar without real progress data.
 
 F19 現況（取代舊版 F04 首頁四塊）：首頁改照 v7 原型（`docs/design/ads/prototype-v7-ads-center.html`
-`home()`）——`PageHeader`「今天需要你決定的事」＋開著幾件／都處理完了，右側灰階「每月回顧」
-佔位（`接上後開放`）、加入既有活動、建立投放計畫；下面 `1.9fr/1fr` 格線，左 `DecisionQueue`
-（品牌層停損／變差決定佇列，讀 `refreshQueue`）、右 `BudgetCard`（月可新增承諾大數字＋已花／
-預留／可用分段長條，調整沿用既有 `MonthlyBudgetPanel` 編輯，不重刻一份）；再下方「活動」＋
-`CampaignCards`（沿用 `CampaignTile`，Campaign 清單含既有平台活動）。三支元件都在
-`components/ads/home/`；I02 定版面與骨架，佇列列與活動卡各自的細節（目標、五分類條）留給
+`home()`）——`PageHeader`「今天需要你決定的事」＋開著幾件／都處理完了，右側「每月回顧」是灰階
+不可互動的 chip（`ReservedSlotCard` 同一條規則：連 disabled 假按鈕都不做，一個元素裡印
+「接上後開放」）、加入既有活動、建立投放計畫；`需要你決定的事`（`ChangeAttention`）只在真的有
+待確認清單時才佔版面，沒有時整塊不算——它自己一次請求決定，首頁不另外打第二次同一支 API 判斷
+要不要顯示。下面 `1.9fr/1fr` 格線，左 `DecisionQueue`（品牌層停損／變差決定佇列；只印分類 chip、
+廣告名稱與連結，沒有 `action_url` 的列不給連結，也不印任何金額——那些數字要等 F19-I06 的
+`result_label` 才有依據，是 I03 的範圍）、右 `BudgetCard`（月可新增承諾大數字＋已花／預留／可用
+分段長條，header／`調整` 對齊跟其他卡一致，調整沿用既有 `MonthlyBudgetPanel` 編輯，不重刻一份）；
+再下方「活動」＋「查看全部活動 →」連到清單頁＋`CampaignCards`（沿用 `CampaignTile`，只列未結案的
+Campaign，含既有平台活動；已結案的從清單頁找）。三支元件都在 `components/ads/home/`；`DecisionQueue`
+／`BudgetCard`／`CampaignCards` 各自獨立打自己的 API、各自的 loading／error＋重試殼——三塊裡一塊
+讀取失敗不會拖累另外兩塊。I02 定版面與骨架，佇列列與活動卡各自的細節（目標、五分類條）留給
 I03／I04，設定目標頁是 I05。清單頁、「理解如下」確認畫面、策略頁按鈕、工作區總覽不在這次範圍內，
 沿用既有寫法。判斷帶／時間軸／建檔檢查表元件檔仍在，但首頁不再引用。
 
@@ -286,7 +293,10 @@ I03／I04，設定目標頁是 I05。清單頁、「理解如下」確認畫面�
 
 ### 5.3 投放中心的版面樣式
 
-視覺真相是 `docs/design/ads/*.png`；原型與圖不一致時以圖為準。
+視覺真相是 `docs/design/ads/*.png`；原型與圖不一致時以圖為準。首頁例外（F19 起）：
+`01-home.png` 已由 `docs/design/ads/prototype-v7-ads-center.html` 的 `home()` 取代，
+首頁版面與圖不一致時以這支原型為準；表列「01-home」的樣式仍在其他畫面（如 Campaign 卡）有效，
+只是首頁本身不再照 png 的舊四塊排版。
 
 | 樣式 | 元件 | 形狀 | 出現在哪一張參考圖 |
 |---|---|---|---|
