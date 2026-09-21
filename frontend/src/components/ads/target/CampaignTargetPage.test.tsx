@@ -1,7 +1,8 @@
 /** frontend/src/components/ads/target/CampaignTargetPage.test.tsx — F19-I05：`vi.mock` 掉
  * `@/lib/adsApi`／`@/lib/adsTriageApi`／`@/lib/productsApi`，不打真的 API（e2e 才打真的後端，
- * 見 `frontend/e2e/ads-target.spec.ts`）。覆蓋 Done 6：載入、每種依據、缺漏 chips、版本衝突、
- * 未儲存離開保護。 */
+ * 見 `frontend/e2e/ads-target.spec.ts`）。覆蓋 Done 6＋repair list：載入、每種依據、缺漏
+ * chips、own 不接受 0、break_even 商品沒成本不給選、存檔沒解出數字不假裝完成、版本衝突、
+ * 未儲存離開保護、`<select>` 的可存取名稱含可見標籤。 */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,7 +84,8 @@ function target(overrides: Partial<CampaignTarget> = {}): CampaignTarget {
 }
 
 const products: ProductListItem[] = [
-  { id: "prd_1", name: "晨光隨行杯", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "none" },
+  { id: "prd_1", name: "晨光隨行杯", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "confirmed" },
+  { id: "prd_2", name: "辦公室隨行杯", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "none" },
 ];
 
 function renderPage() {
@@ -102,6 +104,7 @@ function renderPage() {
 
 describe("CampaignTargetPage（F19-I05）", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mockFetchProductList.mockResolvedValue(products);
   });
   afterEach(() => {
@@ -130,10 +133,10 @@ describe("CampaignTargetPage（F19-I05）", () => {
   it("own 依據：輸入金額後可以儲存，成功後回投放中心", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
-    mockPutTarget.mockResolvedValue(target({ basis: "own", value: 120, revision: 1 }));
+    mockPutTarget.mockResolvedValue(target({ basis: "own", value: 120, own_value: 120, revision: 1 }));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^自訂/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /自訂/ }));
     fireEvent.change(screen.getByLabelText("目標每次成果成本"), { target: { value: "120" } });
     const save = screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement;
     expect(save.disabled).toBe(false);
@@ -145,16 +148,47 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect(await screen.findByText("投放中心首頁")).toBeTruthy();
   });
 
+  it("own 依據：0 不是有效目標，按鈕不開、旁邊顯示缺什麼", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /自訂/ }));
+    fireEvent.change(screen.getByLabelText("目標每次成果成本"), { target: { value: "0" } });
+    const save = screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(screen.getByText("還差一個數字")).toBeTruthy();
+    expect(mockPutTarget).not.toHaveBeenCalled();
+  });
+
   it("break_even 依據：要選商品才能儲存", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockGetTarget.mockResolvedValue(target({ missing: ["product"] }));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^打平值/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /打平值/ }));
     const save = screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText("打平值商品"), { target: { value: "prd_1" } });
+    expect(screen.getByText("還差一個商品")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: "prd_1" } });
     expect(save.disabled).toBe(false);
+  });
+
+  it("break_even 依據：商品還沒有售價，選單裡不給選、不能存出一個會失敗的請求", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockGetTarget.mockResolvedValue(target({ missing: ["product"] }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /打平值/ }));
+    const select = screen.getByLabelText("商品") as HTMLSelectElement;
+    const noneOption = Array.from(select.options).find((o) => o.value === "prd_2")!;
+    expect(noneOption.disabled).toBe(true);
+    expect(noneOption.textContent).toContain("尚無售價");
+
+    fireEvent.change(select, { target: { value: "prd_2" } });
+    expect((screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("還差一個商品")).toBeTruthy();
+    expect(mockPutTarget).not.toHaveBeenCalled();
   });
 
   it("缺漏原因用 chip 顯示在數字的位置，不是空白", async () => {
@@ -166,13 +200,29 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect(screen.getByText("商品還沒有成本")).toBeTruthy();
   });
 
+  it("存檔後仍解不出數字：留在這頁顯示最新缺漏，不假裝完成、不跳轉", async () => {
+    mockGetCampaign.mockResolvedValue(campaign());
+    mockGetTarget.mockResolvedValue(target({ missing: ["product"] }));
+    mockPutTarget.mockResolvedValue(target({ basis: "break_even", value: null, missing: ["product_cost"], revision: 1 }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /打平值/ }));
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: "prd_1" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存目標" }));
+
+    await waitFor(() => expect(mockPutTarget).toHaveBeenCalled());
+    expect(await screen.findByText("商品還沒有成本")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "這個活動的目標" })).toBeTruthy();
+    expect(screen.queryByText("投放中心首頁")).toBeNull();
+  });
+
   it("版本衝突：顯示衝突提示，不靜默覆蓋，要重新讀取", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockGetTarget.mockResolvedValueOnce(target({ missing: ["trailing_30"] }));
     mockPutTarget.mockRejectedValueOnce(new TriageRequestRejected("目標設定已被更新，請重新載入後再試一次。"));
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^自訂/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /自訂/ }));
     fireEvent.change(screen.getByLabelText("目標每次成果成本"), { target: { value: "50" } });
     fireEvent.click(screen.getByRole("button", { name: "儲存目標" }));
 
@@ -189,9 +239,8 @@ describe("CampaignTargetPage（F19-I05）", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^自訂/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /自訂/ }));
     fireEvent.change(screen.getByLabelText("目標每次成果成本"), { target: { value: "10" } });
-    expect(screen.getByText("尚未儲存")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("link", { name: "← 投放中心" }));
     expect(confirmSpy).toHaveBeenCalled();

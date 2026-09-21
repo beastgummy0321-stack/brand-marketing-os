@@ -74,6 +74,14 @@ function draftFrom(target: CampaignTarget): Draft {
   };
 }
 
+// F19 repair #5：break_even 是否「值得推薦」只用已經拿到的欄位判斷，不臆測——`resolve()`
+// 已經在算 break_even（basis 就是它，或 missing 出現 product／product_cost，代表這個活動是
+// 銷售型、有嘗試算過但缺輸入），才算「建議」落在打平值卡；否則落在近 30 天卡，跟 v7 的
+// `o.be` 後備邏輯同一個道理，只是依據真的欄位、不是前端自己猜。
+function breakEvenIsApplicable(target: CampaignTarget): boolean {
+  return target.basis === "break_even" || target.missing.includes("product") || target.missing.includes("product_cost");
+}
+
 /** 設定目標頁（F19-I05，v7 原型 ≈ 326–345 行）：這個活動被判斷用的成果與目標成本，純畫面，
  * 不算數——`resolve()` 的結果一律照 GET／PUT 回傳的 `value`／`missing` 顯示，前端不重算打平值。 */
 export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
@@ -125,12 +133,21 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
   const dirty = baseline !== "" && JSON.stringify(draft) !== baseline;
   useAssetDraftGuard(dirty, "這個活動的目標還沒儲存，離開將放棄這次編輯。確定離開？");
 
-  const valid =
-    draft.basis === "own"
-      ? draft.ownValue.trim() !== "" && Number.isFinite(Number(draft.ownValue)) && Number(draft.ownValue) >= 0
-      : draft.basis === "break_even"
-        ? draft.productId !== ""
-        : true;
+  // F19 repair #1：0 不是有效目標——0 會讓每一則廣告的花費都「超過門檻」，一律判定停損。
+  const ownValid = draft.ownValue.trim() !== "" && Number.isFinite(Number(draft.ownValue)) && Number(draft.ownValue) > 0;
+  // F19 repair #2：商品沒有成本（`economics_status==="none"`）送出價格一定會被後端拒絕
+  // （product_economics_unknown）——選單本身就不給選，這裡是第二層防呆（例如載入時
+  // 商品清單還沒到，或既有的 `product_ids` 剛好是這種商品）。
+  const selectedProduct = products.find((p) => p.id === draft.productId);
+  const breakEvenValid = draft.productId !== "" && selectedProduct?.economics_status !== "none";
+  const valid = draft.basis === "own" ? ownValid : draft.basis === "break_even" ? breakEvenValid : true;
+  // F19 repair #4：主按鈕關閉時要說缺什麼，照抄 v7 `setBar({hint})` 的位置（按鈕左邊一小行字）。
+  const hint =
+    draft.basis === "own" && !ownValid
+      ? "還差一個數字"
+      : draft.basis === "break_even" && !breakEvenValid
+        ? "還差一個商品"
+        : "";
 
   async function save() {
     if (!target || saving || !valid) return;
@@ -145,8 +162,14 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
       if (draft.variableCost.trim() !== "") body.variable_cost = Number(draft.variableCost);
     }
     try {
-      await putTarget(brandId, campaignId, body);
-      navigate(homeHref);
+      const updated = await putTarget(brandId, campaignId, body);
+      setTarget(updated);
+      const next = draftFrom(updated);
+      setDraft(next);
+      setBaseline(JSON.stringify(next));
+      // F19 repair #3：只有真的解出數字才算「完成」回投放中心；解不出來（value 仍是
+      // null）就留在這頁，讓使用者看到最新的 missing 原因，不假裝存檔就等於判斷得出來。
+      if (updated.value !== null) navigate(homeHref);
     } catch (err) {
       if (err instanceof TriageRequestRejected && err.message === TARGET_CONFLICT_MESSAGE) {
         setConflict(true);
@@ -160,7 +183,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
 
   if (loading) {
     return (
-      <div className="flex max-w-3xl flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "目標" }]} />
         <Skeleton className="h-8 w-72" />
         <Skeleton className="h-32 w-full" />
@@ -171,7 +194,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
 
   if (loadError || !target) {
     return (
-      <div className="flex max-w-3xl flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "目標" }]} />
         <EmptyState
           title="讀取失敗"
@@ -184,161 +207,179 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
   }
 
   const resultKind = resultKindLabel(target.result_kind);
+  const breakEvenApplicable = breakEvenIsApplicable(target);
 
   return (
-    <div className="flex max-w-3xl flex-col gap-4 pb-4">
-      <Breadcrumb
-        items={[
-          { label: "投放中心", href: homeHref },
-          { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}` },
-          { label: "目標" },
-        ]}
-      />
-      <PageHeader title="這個活動的目標" description="設定判斷這個活動好壞的成果與成本門檻。" />
+    <>
+      <div className="flex flex-col gap-4 pb-28">
+        <Breadcrumb
+          items={[
+            { label: "投放中心", href: homeHref },
+            { label: campaignName ?? "活動", href: `/brands/${brandId}/ads/campaigns/${campaignId}` },
+            { label: "目標" },
+          ]}
+        />
+        <PageHeader title="這個活動的目標" description="設定判斷這個活動好壞的成果與成本門檻。" />
 
-      <section className="surface" aria-labelledby="target-result-heading">
-        <div className="surface-header">
-          <h2 id="target-result-heading">看什麼成果</h2>
-        </div>
-        <div className="surface-body">
-          {resultKind ? (
-            <Badge variant="secondary">{resultKind}</Badge>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              尚未知道——累積到這個活動自己的投放資料後才會知道。
-            </p>
-          )}
-        </div>
-      </section>
-
-      <section className="surface" aria-labelledby="target-cost-heading">
-        <div className="surface-header">
-          <h2 id="target-cost-heading">{resultKind ? `每次${resultKind}最多花多少` : "每次成果最多花多少"}</h2>
-        </div>
-        <div className="surface-body flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
-            {BASIS_OPTIONS.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                aria-pressed={draft.basis === option.key}
-                onClick={() => setDraft((d) => ({ ...d, basis: option.key }))}
-                className={`rounded-xl border p-4 text-left transition-colors ${
-                  draft.basis === option.key ? "border-primary bg-accent" : "border-border hover:border-primary"
-                }`}
-              >
-                <p className="text-sm font-semibold">{option.label}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{option.hint}</p>
-              </button>
-            ))}
+        <section className="surface" aria-labelledby="target-result-heading">
+          <div className="surface-header">
+            <h2 id="target-result-heading">看什麼成果</h2>
           </div>
-
-          {draft.basis === "own" && (
-            <label className="flex flex-col gap-1 text-sm">
-              目標每次{resultKind ?? "成果"}成本
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={draft.ownValue}
-                onChange={(e) => setDraft((d) => ({ ...d, ownValue: e.target.value }))}
-                className="w-40"
-                aria-label={`目標每次${resultKind ?? "成果"}成本`}
-              />
-            </label>
-          )}
-
-          {draft.basis === "break_even" && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <label className="flex flex-col gap-1 text-sm">
-                商品
-                <select
-                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                  value={draft.productId}
-                  onChange={(e) => setDraft((d) => ({ ...d, productId: e.target.value }))}
-                  aria-label="打平值商品"
-                >
-                  <option value="">請選擇商品</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                售價
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={draft.price}
-                  onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
-                  aria-label="售價"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                成本（含運費）
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={draft.variableCost}
-                  onChange={(e) => setDraft((d) => ({ ...d, variableCost: e.target.value }))}
-                  aria-label="成本（含運費）"
-                />
-              </label>
-            </div>
-          )}
-
-          <div>
-            {target.value !== null ? (
-              <p className="metric-number numeric">{target.value.toLocaleString("zh-TW")}</p>
+          <div className="surface-body">
+            {resultKind ? (
+              <Badge variant="secondary">{resultKind}</Badge>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {target.missing.length > 0 ? (
-                  target.missing.map((reason) => (
-                    <Badge key={reason} variant="secondary">
-                      {missingLabel(reason)}
-                    </Badge>
-                  ))
-                ) : (
-                  <Badge variant="secondary">尚未算出</Badge>
-                )}
+              <p className="text-sm text-muted-foreground">
+                尚未知道——累積到這個活動自己的投放資料後才會知道。
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className="surface" aria-labelledby="target-cost-heading">
+          <div className="surface-header">
+            <h2 id="target-cost-heading">{resultKind ? `每次${resultKind}最多花多少` : "每次成果最多花多少"}</h2>
+          </div>
+          <div className="surface-body flex flex-col gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
+              {BASIS_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  aria-pressed={draft.basis === option.key}
+                  onClick={() => setDraft((d) => ({ ...d, basis: option.key }))}
+                  className={`rounded-xl border p-4 text-left transition-colors ${
+                    draft.basis === option.key ? "border-primary bg-accent" : "border-border hover:border-primary"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {option.key === "break_even" && breakEvenApplicable && <Badge variant="secondary">建議</Badge>}
+                    {option.key === "trailing_30" && !breakEvenApplicable && <Badge variant="secondary">建議</Badge>}
+                    {option.key === "trailing_30" && <Badge variant="outline">暫定</Badge>}
+                    {option.key === "own" && <Badge variant="outline">自訂</Badge>}
+                  </div>
+                  <p className="mt-2 text-sm font-semibold">{option.label}</p>
+                  {option.key === "own" && (
+                    <p className="metric-number numeric">
+                      {target.own_value !== null ? target.own_value.toLocaleString("zh-TW") : "—"}
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-muted-foreground">{option.hint}</p>
+                </button>
+              ))}
+            </div>
+
+            {draft.basis === "own" && (
+              <label className="flex max-w-xs flex-col gap-1 text-sm">
+                目標每次{resultKind ?? "成果"}成本
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draft.ownValue}
+                  onChange={(e) => setDraft((d) => ({ ...d, ownValue: e.target.value }))}
+                  className="w-40"
+                />
+              </label>
+            )}
+
+            {draft.basis === "break_even" && (
+              <div className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
+                <label className="flex flex-col gap-1 text-sm">
+                  商品
+                  <select
+                    className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                    value={draft.productId}
+                    onChange={(e) => setDraft((d) => ({ ...d, productId: e.target.value }))}
+                  >
+                    <option value="">請選擇商品</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id} disabled={p.economics_status === "none"}>
+                        {p.name}
+                        {p.economics_status === "none" ? "（尚無售價）" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  售價
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={draft.price}
+                    onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+                    aria-label="售價"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  成本（含運費）
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={draft.variableCost}
+                    onChange={(e) => setDraft((d) => ({ ...d, variableCost: e.target.value }))}
+                    aria-label="成本（含運費）"
+                  />
+                </label>
               </div>
             )}
-            <p className="mt-1 text-xs text-muted-foreground">
-              {target.value !== null ? "目前判斷用的目標線" : "填齊後儲存才會算出目標線"}
-            </p>
+
+            <div>
+              {target.value !== null ? (
+                <p className="metric-number numeric">{target.value.toLocaleString("zh-TW")}</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {target.missing.length > 0 ? (
+                    target.missing.map((reason) => (
+                      <Badge key={reason} variant="secondary">
+                        {missingLabel(reason)}
+                      </Badge>
+                    ))
+                  ) : (
+                    <Badge variant="secondary">尚未算出</Badge>
+                  )}
+                </div>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {target.value !== null ? "目前判斷用的目標線" : "填齊後儲存才會算出目標線"}
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {conflict && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-warning/10 p-3 text-sm text-warning">
-          <p className="flex-1">這個活動的目標已被更新，你的編輯尚未覆蓋新版本。</p>
-          <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
-            重新讀取最新版本
-          </Button>
-        </div>
-      )}
-      {saveError && (
-        <p role="alert" className="text-sm text-destructive">
-          {saveError}
-        </p>
-      )}
+        {conflict && (
+          <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-warning/10 p-3 text-sm text-warning">
+            <p className="flex-1">這個活動的目標已被更新，你的編輯尚未覆蓋新版本。</p>
+            <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+              重新讀取最新版本
+            </Button>
+          </div>
+        )}
+        {saveError && (
+          <p role="alert" className="text-sm text-destructive">
+            {saveError}
+          </p>
+        )}
+      </div>
 
-      <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-border bg-card py-3">
+      {/* F19 repair #5：真的釘在畫面最下方（跟 v7 的 .bar 一樣），不是跟著內容跑；
+       * 左邊界照 `--width-sidebar`，不蓋過側欄。內容區留了 pb-28 避免蓋到最後一張卡。 */}
+      <div
+        className="fixed right-0 bottom-0 z-20 flex flex-wrap items-center gap-3 border-t border-border bg-card px-7 py-3"
+        style={{ left: "var(--width-sidebar)" }}
+      >
         <Button variant="ghost" asChild>
           <Link to={homeHref}>← 投放中心</Link>
         </Button>
         <div className="ml-auto flex items-center gap-3">
-          {dirty && <span className="text-xs text-warning">尚未儲存</span>}
+          {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
           <Button onClick={() => void save()} disabled={!dirty || !valid || saving}>
             {saving ? "儲存中…" : "儲存目標"}
           </Button>
         </div>
       </div>
-    </div>
+    </>
   );
 }

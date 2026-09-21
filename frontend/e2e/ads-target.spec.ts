@@ -45,6 +45,7 @@ test("設定目標：own 依據存檔後，回投放中心、重新整理都還�
 
   // --- 選「自訂」依據，填一個目標值，存檔 -------------------------------------------------
   await page.getByRole("button", { name: /^自訂/ }).click();
+  await expect(page.getByText("還差一個數字", { exact: true })).toBeVisible();
   await page.getByLabel("目標每次成果成本", { exact: true }).fill("120");
   const save = page.getByRole("button", { name: "儲存目標", exact: true });
   await expect(save).toBeEnabled();
@@ -59,8 +60,12 @@ test("設定目標：own 依據存檔後，回投放中心、重新整理都還�
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads$`));
 
   // --- 回這頁：同一個數字還在；整頁重新整理（不是前端快取）也還在 --------------------------
+  // 「自訂」卡本身也照 API 的 own_value 秀一次同一個數字（repair #5），所以畫面上會有兩個
+  // "120"：卡片上那個＋下面「目前判斷用的目標線」那個。用 .last() 專指後者，跟前一版斷言
+  // 的意圖一樣（存進去的數字＝目前拿來判斷的目標線）。
   await page.goto(targetUrl);
-  await expect(page.getByText("120", { exact: true })).toBeVisible();
+  await expect(page.getByText("120", { exact: true }).last()).toBeVisible();
+  await expect(page.getByText("目前判斷用的目標線", { exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByText("120", { exact: true })).toBeVisible();
+  await expect(page.getByText("120", { exact: true }).last()).toBeVisible();
 });
