@@ -406,6 +406,42 @@ class TriageTest(unittest.TestCase):
         cutoff = triage._account_cutoff(self.conn, self.org, self.brand, empty_campaign)
         self.assertEqual(cutoff, today - timedelta(days=2))
 
+    # -- _thumbnail_url ---------------------------------------------------------------------------
+
+    def test_thumbnail_url_prefers_thumbnail_over_image(self):
+        entity = {"creative": {"fields": {
+            "thumbnail_url": "https://example.com/thumb.jpg",
+            "image_url": "https://example.com/full.jpg",
+        }}}
+        self.assertEqual(triage._thumbnail_url(entity), "https://example.com/thumb.jpg")
+
+    def test_thumbnail_url_falls_back_to_image_url(self):
+        entity = {"creative": {"fields": {"image_url": "https://example.com/full.jpg"}}}
+        self.assertEqual(triage._thumbnail_url(entity), "https://example.com/full.jpg")
+
+    def test_thumbnail_url_none_when_neither_present(self):
+        self.assertIsNone(triage._thumbnail_url({"creative": {"fields": {}}}))
+        self.assertIsNone(triage._thumbnail_url({"creative": {}}))
+        self.assertIsNone(triage._thumbnail_url({}))
+
+    def test_classify_item_carries_the_ad_own_thumbnail(self):
+        # End-to-end: `creative` as actually stored by `external.upsert_entity` on a real ad row
+        # flows through `_classify_ad` into the item the API returns (issue Done #1).
+        self.ad2 = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad_thumb", "name": "有縮圖的廣告",
+             "parent_native_kind": "campaign", "parent_native_id": "c1",
+             "creative": {"fields": {"thumbnail_url": "https://example.com/thumb.jpg"}}},
+        )
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        items_by_entity = {item["entity_id"]: item for item in result["items"]}
+        self.assertEqual(
+            items_by_entity[self.ad2["id"]]["thumbnail_url"], "https://example.com/thumb.jpg",
+        )
+        self.assertIsNone(items_by_entity[self.ad["id"]]["thumbnail_url"])
+
     # -- _compare guard ---------------------------------------------------------------------------
 
     def test_compare_guards_a_falsy_current_cost_per_result(self):

@@ -15,7 +15,7 @@ import { DecisionQueue, type QueueState } from "./DecisionQueue";
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "native_1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1",
-    campaign_name: "晨光隨行杯上市",
+    campaign_name: "晨光隨行杯上市", thumbnail_url: null,
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },

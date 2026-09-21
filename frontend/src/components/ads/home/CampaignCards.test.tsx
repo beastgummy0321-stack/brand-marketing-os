@@ -37,7 +37,7 @@ function campaignCardData(overrides: Partial<CampaignCardData> = {}): CampaignCa
 
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
-    entity_id: "ad_1", native_id: "native_1", name: "廣告 A", campaign_id: "cmp_1", campaign_name: "活動一",
+    entity_id: "ad_1", native_id: "native_1", name: "廣告 A", campaign_id: "cmp_1", campaign_name: "活動一", thumbnail_url: null,
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
@@ -157,7 +157,8 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
 
     const heading = await screen.findByRole("heading", { name: "測試 Campaign" });
     const link = within(heading).getByRole("link", { name: "測試 Campaign" });
-    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    // F20-I02：名稱連結現在落在活動詳情頁（v7 campPage()），不是五分頁工作區。
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail");
     expect(screen.getByText("測試 Campaign", { exact: true })).toBeTruthy();
   });
 
@@ -170,7 +171,7 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
 
     const heading = await screen.findByRole("heading", { name: longName });
     const link = within(heading).getByRole("link", { name: longName });
-    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail");
     // 「›」永遠在（shrink-0），只有名稱那格 truncate；用 title 存住完整名稱。
     expect(within(link).getByText("›", { exact: true })).toBeTruthy();
     expect(within(link).getByText(longName, { exact: true }).getAttribute("title")).toBe(longName);

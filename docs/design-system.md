@@ -79,9 +79,11 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 7. Reviewed behaviour of other issues stays as it is; never change product code to make a test easier — report it.
 8. Your own preview/e2e server uses port 8731 + issue number (I03 → 8734); 8720 belongs to harness merge/integrate.
 
-**The reference is the spec (user ruling 2026-09-21).** A UI issue carries the reference screen as screenshots at 1024 and
-1920 (taken from the prototype at carve time, stored under `docs/design/<area>/`), the API calls that feed it, and nothing
-else about the layout — no prose re-description of the screen. Workers develop from minute one against the realistic
+**The HTML prototype is the spec (user ruling 2026-09-21, restated 2026-09-22).** A UI issue names the prototype file,
+the screen's function and its route; the worker opens that HTML in a browser and reads its markup, states and
+interactions — that is the primary source. Screenshots of it at 1024 and 1920 are only the left half of the side-by-side
+evidence, never a substitute for the HTML. The issue adds the API calls that feed the screen and nothing else about the
+layout — no prose re-description of the screen. Workers develop from minute one against the realistic
 fixture (longest real names, drafts, no-target, decimal costs, imported campaigns), not against tidy sample data. A worker
 hands in side-by-side images (reference | built) at both widths; the lead compares them first and returns anything that
 does not match before any review. The user reviews once, after the whole batch is merged, on one side-by-side page per

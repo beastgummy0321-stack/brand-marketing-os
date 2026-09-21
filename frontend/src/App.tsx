@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -94,6 +94,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/target"
           element={<AdsTargetRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/detail"
+          element={<AdsCampaignDetailRoute />}
         />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
@@ -421,6 +425,15 @@ function AdsTargetRoute() {
       <CampaignTargetPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
+}
+
+/** 活動詳情頁（F20-I02，v7 原型 `campPage()`）：家頁的活動卡名稱與佇列的「看證據」都落在
+ * 這裡；原本的五分頁工作區網址（`AdsCampaignRoute`）不變、由這頁的「全部資料 ›」進入。
+ * `key={campaignId}` 理由同 `AdsTargetRoute`——換活動要整支重新掛載，不沿用上一個活動的
+ * 展開／高亮狀態。 */
+function AdsCampaignDetailRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return <CampaignDetailPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */

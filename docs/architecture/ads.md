@@ -1074,3 +1074,13 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `app/tests/test_ads_triage_queue.py`（既有斷言在新增欄位下仍通過，不需要改動舊斷言本身）、
   `app/tests/test_architecture_boundaries.py`、`frontend/src/components/ads/target/
   CampaignTargetPage.test.tsx`、`frontend/e2e/ads-target.spec.ts`。
+
+### 6.20 F20 — 活動詳情頁與「看證據」落點（settled 2026-09-22）
+
+- 路由：`/brands/:brandId/ads/campaigns/:campaignId/detail`（`frontend/src/components/ads/detail/`）。既有五分頁工作區
+  的網址 `/brands/:brandId/ads/campaigns/:campaignId` 不變，由詳情頁的「全部資料 ›」進入；首頁活動卡名稱與設定目標頁的
+  麵包屑指向詳情頁。
+- `app/ads/triage.py`：triage item 多一個 `thumbnail_url`（`creative.fields.thumbnail_url` → `image_url` → `None`，
+  不另查詢、無平台分支）；`refresh_queue` 新寫入的 `action_url` ＝ `…/detail?ad=<entity_id>`，既有開放列不改寫。
+- 詳情頁的「去處理」不使用 `action_url`（那會指回本頁），在六步流程改版前連到工作區 `?tab=performance`。
+- 佇列讀取失敗不拖垮詳情頁（只少「去處理」按鈕）；沒有停損／變差時展開第一個有廣告的分類。
