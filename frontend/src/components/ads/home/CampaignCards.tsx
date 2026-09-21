@@ -33,7 +33,7 @@ export function CampaignCards({ brandId }: { brandId: string }) {
 
   if (state.status === "loading") {
     return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
@@ -65,7 +65,7 @@ export function CampaignCards({ brandId }: { brandId: string }) {
   }
 
   return (
-    <div data-testid="campaign-grid" className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+    <div data-testid="campaign-grid" className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
       {campaigns.map((c) => (
         <CampaignCard key={c.id} brandId={brandId} campaign={c} />
       ))}
