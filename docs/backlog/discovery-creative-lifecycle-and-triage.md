@@ -308,6 +308,10 @@ Root causes (symptoms in brackets):
    tests from the same rule, so only a post-build review can catch it [NULL-first ordering, never-set budget shown as
    verified, UTC "yesterday", zero accounts shown connected, variants counted as products, failures not counted; F20's
    looping 去處理]. Fixed: CLAUDE.md carve rule — challenge each rule against the backend before dispatch.
+3. Tests awaited a container that exists in every state and then asserted a state synchronously: green alone (issue
+   verify runs one file), red under the full suite (integrate). Cost one 3-min integrate. Fixed: §1.7 self-check 11.
+Totals for F21 (authorize 03:21 → integrate green 04:33, incl. building both versions and the tooling): worker 15.1 +
+6.3 min, finish 23 s + 24 s, merge 42 s, integrate 2.7 min red + 3.0 min green.
 Still open: worktrees lack `.env`/`frontend/.env` (`harness env` does not copy untracked config; lead copied by hand);
 issues put `patterns/**` in `do_not_touch`, which is what forced local copies — a missing kit piece must be added by
 the lead before dispatch; Opus-as-worker A/B not run. Next screens: run the pre-build challenge for real and compare
