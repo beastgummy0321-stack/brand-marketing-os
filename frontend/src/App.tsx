@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -107,6 +107,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
           element={<AdsChangeConfirmRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/handoff"
+          element={<AdsChangeHandoffRoute />}
         />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
@@ -468,6 +472,13 @@ function AdsProposePauseRoute() {
 function AdsChangeConfirmRoute() {
   const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
   return <ConfirmPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「到平台完成」頁（changes/:setId/handoff route，F22-I03）：change set 一定
+ * 已核准，草稿與 propose 網址都是上一步（`AdsChangeConfirmRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeHandoffRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <HandoffPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */
