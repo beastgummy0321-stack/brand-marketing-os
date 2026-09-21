@@ -216,10 +216,20 @@ def _compare(current_cost, previous_cost):
     return "flat", "cost_per_result_flat", change_pct
 
 
+def _thumbnail_url(entity):
+    """This ad's own creative thumbnail, read from the already-loaded `ads_external_entity
+    .creative` jsonb -- `creative.fields.thumbnail_url` first, else `.image_url`, else `None`
+    (issue Done #1). Same field set `adapters/meta_read.py::creative_summary` writes; no new
+    query, no platform branch."""
+    fields = (entity.get("creative") or {}).get("fields") or {}
+    return fields.get("thumbnail_url") or fields.get("image_url") or None
+
+
 def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
         "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
+        "thumbnail_url": _thumbnail_url(entity),
     }
 
     def finish(cls, reason_code, start, end, days, extended_from, view, spend, change_pct=None,
@@ -387,7 +397,8 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
             conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[cls],
             dedupe_key=_dedupe_key(cls, item["entity_id"], item["window"]["end"]),
             message=_queue_message(cls, item["name"]),
-            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}?tab=performance",
+            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
+                       f"?ad={item['entity_id']}",
         )
     conn.commit()
     _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))

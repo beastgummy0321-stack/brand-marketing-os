@@ -117,9 +117,10 @@ class QueueEndToEndTest(unittest.TestCase):
         self.assertIn("…", stop_row["message"])  # long name truncated
         self.assertNotIn("Meta", stop_row["message"])
         self.assertNotIn("meta", stop_row["message"])
+        # F20-I01: newly enqueued rows land on the detail page, anchored on the ad that fired.
         self.assertEqual(
             stop_row["action_url"],
-            f"/brands/{self.brand}/ads/campaigns/{self.campaign}?tab=performance",
+            f"/brands/{self.brand}/ads/campaigns/{self.campaign}/detail?ad={self.ad_stop['id']}",
         )
         # F19-I01: each queue row carries the current triage item that produced it (matched by
         # the same dedupe key the enqueue used) -- never null, it's filtered to only live rows.

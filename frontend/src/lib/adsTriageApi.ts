@@ -38,6 +38,8 @@ export interface TriageItem {
   entity_id: string; native_id: string; name: string | null; campaign_id: string;
   // F19-I07: the campaign's own name; always sent (`app/ads/triage.py::classify`).
   campaign_name: string;
+  // F20-I01: thumbnail first, else full image, else `null` (`app/ads/triage.py::_thumbnail_url`).
+  thumbnail_url: string | null;
   class: TriageClass; label: string; reason_code: string;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
