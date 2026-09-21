@@ -148,7 +148,10 @@ function Group({
     <details
       open={open}
       onToggle={(e) => onToggle(e.currentTarget.open)}
-      className="group surface overflow-hidden"
+      // `overflow-hidden` 不能加在這裡——`:focus-visible` 是外擴 3px 的 outline
+      // （tokens.css），加了會把鍵盤聚焦 summary 的框裁掉一截（`CampaignTargetPage.tsx`
+      // 同一個坑的既有修法）。不需要它也能看：`.surface` 本身圓角，內容背景跟卡片同色。
+      className="group surface"
     >
       <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <span aria-hidden="true" className={cn("size-2.5 shrink-0 rounded-sm", GROUP_SWATCH[cls])} />
