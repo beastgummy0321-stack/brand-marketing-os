@@ -36,8 +36,8 @@ function facts() {
     const mw = getComputedStyle(e).maxWidth;
     if (mw !== "none" && vis(e) && e.getBoundingClientRect().width >= 400) out.push(`${label(e)}  max-width:${mw}  width:${Math.round(e.getBoundingClientRect().width)}`);
   }
-  // Screen content only: the app's <main>, or the prototype's #app + #bar. The shell is not part of a screen issue.
-  const roots = document.querySelector("#main-content") ? [document.querySelector("#main-content")] : [...document.querySelectorAll("#app, #bar")];
+  // Screen content only: the app's <main>, or the prototype's #app (its crumb and back bar are shell). The shell is not part of a screen issue.
+  const roots = document.querySelector("#main-content") ? [document.querySelector("#main-content")] : [...document.querySelectorAll("#app")];
   const within = (sel) => roots.flatMap((r) => [...r.querySelectorAll(sel)]);
   out.push("", "## folds (default state)");
   for (const d of within("details")) if (vis(d)) out.push(`${d.open ? "OPEN  " : "CLOSED"} ${(d.querySelector("summary")?.innerText || "").replace(/\s+/g, " ").slice(0, 100)}`);
@@ -51,7 +51,7 @@ function facts() {
   // Prototype vocabulary -> kit piece. The reference side prints what to build with; the built side prints what was used.
   out.push("", "## pieces (kit component to use | text)");
   for (const e of within("button, a, .chip, [data-slot=chip], [data-slot=badge]")) {
-    if (!vis(e)) continue;
+    if (!vis(e) || e.closest("nav")) continue; // the app breadcrumb stands in for the prototype's crumb/back bar, which live outside #app
     const c = e.classList;
     let piece = null;
     if (e.dataset.slot === "button") piece = `Button ${e.dataset.variant}`;
