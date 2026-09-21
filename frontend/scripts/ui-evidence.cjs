@@ -63,6 +63,14 @@ function facts() {
     else if (e.tagName === "A" || e.tagName === "BUTTON") piece = "(hand-rolled control)";
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
+  // Prototype side only: classes on this screen that map to no kit piece. At carve time the lead decides for each:
+  // layout only (the worker builds it with tokens) or a missing piece (add it to components/ads/patterns first).
+  if (!document.querySelector("#main-content")) {
+    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v"]);
+    const seen = {};
+    for (const e of within("[class]")) if (vis(e)) for (const c of e.classList) if (!known.has(c)) seen[c] = (seen[c] || 0) + 1;
+    out.push("", "## prototype classes with no kit mapping (class x count)", Object.entries(seen).map(([c, n]) => `${c} x${n}`).join(", "));
+  }
   out.push("", "## visible text, in reading order", document.body.innerText.replace(/\n{2,}/g, "\n"));
   return out.join("\n");
 }
