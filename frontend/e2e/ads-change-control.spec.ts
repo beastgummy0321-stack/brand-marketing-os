@@ -31,14 +31,18 @@ test("A: normal entry, save/reopen/approve, lost response replay and independent
   await expect(brandLink).toBeVisible();
   await brandLink.click();
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "投放中心", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "本月廣告預算", exact: true })).toBeVisible();
+  // F19-I02 起首頁是 v7 版面：h1「今天需要你決定的事」，月預算編輯要先按右側卡片的
+  // 「調整」才會換成既有 `MonthlyBudgetPanel`（design-system.md §5.1「F19 現況」）。
+  await expect(page.getByRole("heading", { name: "今天需要你決定的事", exact: true })).toBeVisible();
   await screenshot(page, evidence, "home");
+  await page.getByRole("button", { name: "調整", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "本月廣告預算", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "調整月總額", exact: true }).click();
   await page.getByLabel("每月品牌總額", { exact: true }).fill("60000");
   await page.getByRole("button", { name: "確認月總額", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "月總額已保存" })).toBeVisible();
   await page.reload();
+  await page.getByRole("button", { name: "調整", exact: true }).click();
   await expect(page.getByText("TWD 60,000", { exact: true })).toBeVisible();
   // Normal campaign card entry followed by the workspace tab, not a fabricated internal state.
   await page.getByTestId("campaign-grid").getByText("F13 測試｜暫停活動", { exact: true }).first().click();
