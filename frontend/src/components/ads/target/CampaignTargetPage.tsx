@@ -28,17 +28,6 @@ const BASIS_OPTIONS: { key: Basis; label: string; hint: string }[] = [
   { key: "own", label: "自訂", hint: "自己填一個更嚴格的數字" },
 ];
 
-// F19-I05 Blocked-if：這個活動能接受的 result_kind 清單，沒有任何既有 API 或共用常數可查
-// （`app/ads/targets.py`／`app/ads/repository.py::save_campaign_target` 對 `result_kind` 完全
-// 不驗證，是自由字串；沒有任何路由回傳「這個活動能接受哪些成果」）。依票面指示：不假造一份
-// 平台專屬清單，Card 1 因此只唯讀顯示目前已知的成果，不提供選擇——這裡的翻譯只是把已知的
-// 少數代碼轉成中文顯示，未知代碼原樣顯示，不是在編一份選項清單。
-const RESULT_KIND_LABEL: Record<string, string> = { purchase: "購買", engagement: "互動", lead: "名單" };
-function resultKindLabel(kind: string | null): string | null {
-  if (!kind) return null;
-  return RESULT_KIND_LABEL[kind] ?? kind;
-}
-
 const MISSING_LABEL: Record<string, string> = {
   product: "尚未選商品",
   product_cost: "商品還沒有成本",
@@ -51,12 +40,13 @@ function missingLabel(reason: string): string {
   return MISSING_LABEL[reason] ?? reason;
 }
 
-// 逐字對照 `app/ads/routes.py::_TARGET_ERRORS["target_conflict"]`——用來把「版本衝突」跟其他
-// 4xx 錯誤分開處理；`adsTriageApi.ts` 的 `TriageRequestRejected` 只帶訊息，不帶狀態碼。
-const TARGET_CONFLICT_MESSAGE = "目標設定已被更新，請重新載入後再試一次。";
+// F19-I06：版本衝突用錯誤信封的 `code`（`app/shared/web.py::ApiError` → `TriageRequestRejected
+// .code`）認出來，不再比對中文訊息字串——訊息文字以後改了也不會讓前端誤判成別種錯誤。
+const TARGET_CONFLICT_CODE = "target_conflict";
 
 interface Draft {
   basis: Basis;
+  resultKind: string | null;
   ownValue: string;
   productId: string;
   price: string;
@@ -67,6 +57,7 @@ function draftFrom(target: CampaignTarget): Draft {
   const basis: Basis = target.basis ?? "trailing_30";
   return {
     basis,
+    resultKind: target.result_kind,
     ownValue: basis === "own" && target.value !== null ? String(target.value) : "",
     productId: target.product_ids[0] ?? "",
     price: "",
@@ -95,7 +86,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [draft, setDraft] = useState<Draft>({ basis: "trailing_30", ownValue: "", productId: "", price: "", variableCost: "" });
+  const [draft, setDraft] = useState<Draft>({ basis: "trailing_30", resultKind: null, ownValue: "", productId: "", price: "", variableCost: "" });
   const [baseline, setBaseline] = useState("");
 
   const [saving, setSaving] = useState(false);
@@ -154,7 +145,9 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
     setSaving(true);
     setSaveError(null);
     setConflict(false);
-    const body: TargetRequest = { basis: draft.basis, expected_revision: target.revision };
+    const body: TargetRequest = {
+      basis: draft.basis, result_kind: draft.resultKind, expected_revision: target.revision,
+    };
     if (draft.basis === "own") body.value = Number(draft.ownValue);
     if (draft.basis === "break_even") {
       body.product_id = draft.productId;
@@ -171,7 +164,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
       // null）就留在這頁，讓使用者看到最新的 missing 原因，不假裝存檔就等於判斷得出來。
       if (updated.value !== null) navigate(homeHref);
     } catch (err) {
-      if (err instanceof TriageRequestRejected && err.message === TARGET_CONFLICT_MESSAGE) {
+      if (err instanceof TriageRequestRejected && err.code === TARGET_CONFLICT_CODE) {
         setConflict(true);
       } else {
         setSaveError(err instanceof Error ? err.message : "儲存失敗，請稍後再試。");
@@ -206,7 +199,9 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
     );
   }
 
-  const resultKind = resultKindLabel(target.result_kind);
+  // F19-I06：標題跟著「目前編輯中」的選擇即時反映（v7 `targetPage()` 同一種即時標題），不是
+  // 只等存檔後的 `target.result_label`——選項清單一律讀 `target.result_kinds`，不是本地翻譯表。
+  const selectedLabel = target.result_kinds.find((o) => o.kind === draft.resultKind)?.label ?? null;
   const recommended = recommendedBasis(target);
 
   return (
@@ -225,19 +220,36 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
           <h2 id="target-result-heading">看什麼成果</h2>
         </div>
         <div className="surface-body">
-          {resultKind ? (
-            <Badge variant="secondary">{resultKind}</Badge>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              尚未知道——累積到這個活動自己的投放資料後才會知道。
-            </p>
-          )}
+          {/* F19-I06（v7 原型 `.seg`，prototype-v7-ads-center.html:329）：分段選單，選項讀
+           * `target.result_kinds`；沒有任何一個已知時沒有按鈕預選——誠實的未選狀態，不是猜一個
+           * 預設。 */}
+          <div
+            role="group"
+            aria-label="看什麼成果"
+            className="inline-flex divide-x divide-border overflow-hidden rounded-md border border-border"
+          >
+            {target.result_kinds.map((option) => (
+              <button
+                key={option.kind}
+                type="button"
+                aria-pressed={draft.resultKind === option.kind}
+                onClick={() => setDraft((d) => ({ ...d, resultKind: option.kind }))}
+                className={`px-3.5 py-2 text-sm transition-colors ${
+                  draft.resultKind === option.kind
+                    ? "bg-accent font-semibold text-accent-foreground"
+                    : "bg-card text-foreground hover:bg-muted"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
       <section className="surface" aria-labelledby="target-cost-heading">
         <div className="surface-header">
-          <h2 id="target-cost-heading">{resultKind ? `每次${resultKind}最多花多少` : "每次成果最多花多少"}</h2>
+          <h2 id="target-cost-heading">{selectedLabel ? `每次${selectedLabel}最多花多少` : "每次成果最多花多少"}</h2>
         </div>
         <div className="surface-body flex flex-col gap-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
@@ -271,7 +283,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
 
           {draft.basis === "own" && (
             <label className="flex max-w-xs flex-col gap-1 text-sm">
-              目標每次{resultKind ?? "成果"}成本
+              目標每次{selectedLabel ?? "成果"}成本
               <Input
                 type="number"
                 min="0"

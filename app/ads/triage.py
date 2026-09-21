@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ads import external_sync, repository, review_evidence, targets
+from app.ads import external_sync, repository, result_kinds, review_evidence, targets
 from app.ads.adapters.external import SourceReadError
 from app.core import interrupts
 from app.core.db import now_utc
@@ -164,11 +164,13 @@ def _metrics_view(view, spend):
     if view is None:
         return {
             "spend": spend, "result_count": None, "cost_per_result": None,
-            "result_kind": None, "derived_zero_days": 0, "reason": "result_unknown_days",
+            "result_kind": None, "result_label": result_kinds.label(None),
+            "derived_zero_days": 0, "reason": "result_unknown_days",
         }
     return {
         "spend": spend, "result_count": view["result_count"],
         "cost_per_result": view["cost_per_result"], "result_kind": view["result_kind"],
+        "result_label": result_kinds.label(view["result_kind"]),
         "derived_zero_days": view["derived_zero_days"], "reason": view["reason"],
     }
 
@@ -228,7 +230,8 @@ def _classify_ad(entity, target, cutoff, coverage, entity_rows):
         gate = _sample_gate(spend, view, target["value"], days)
         return {
             **base, "class": cls, "label": LABELS[cls], "reason_code": reason_code,
-            "window": _window_view(start, end, days, extended_from), "target": target,
+            "window": _window_view(start, end, days, extended_from),
+            "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
             "change_pct": change_pct,
             "sample": _sample_view(spend, view, target["value"], days, gate),

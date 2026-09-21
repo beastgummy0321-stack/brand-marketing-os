@@ -23,6 +23,7 @@ from app.ads import (
     external_repository,
     judgment,
     manual_settings,
+    result_kinds,
 )
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
@@ -287,6 +288,11 @@ def _campaign_target_view(campaign: dict, resolved: dict) -> dict:
         "own_value": own_value,
         "revision": campaign.get("target_revision") or 0,
         **resolved,
+        # F19-I06: the Chinese vocabulary the target page reads its segmented control from --
+        # `result_label` for this campaign's own resolved kind (never a raw code), `result_kinds`
+        # the full stable-order list every campaign may choose from.
+        "result_label": result_kinds.label(resolved.get("result_kind")),
+        "result_kinds": result_kinds.options(),
     }
 
 
@@ -334,6 +340,8 @@ def save_campaign_target(
         or expected_revision != (campaign.get("target_revision") or 0)
     ):
         raise ValueError("target_conflict")
+    if result_kind is not None and result_kind not in result_kinds.LABELS:
+        raise ValueError("result_kind_unknown")
     if basis is not None and basis not in _TARGET_BASES:
         raise ValueError("target_basis_unknown")
     if basis == "own" and value is None:

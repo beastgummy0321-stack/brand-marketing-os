@@ -1025,3 +1025,50 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   筆 open、supersede 不動別的類別或別的品牌、使用者手動 resolve 的列同窗不會被重新打開）、
   `app/tests/test_core_interrupts.py`、`app/tests/test_dashboard_overview.py`（確認新登記類別不影響
   既有跨品牌總覽排序／健康燈號斷言）。
+
+### 6.19 F19-I06 — `result_kind` 的中文詞彙與可選清單（settled 2026-09-21）
+
+- 問題：F19-I02／I05 都發現沒有任何既有 API 或共用常數回答「這個 `result_kind` 中文叫什麼」「這個
+  Campaign 能選哪些 `result_kind`」——I05 只能先做唯讀顯示（自己一份小 map），I03／I04 等這票補上
+  共用詞彙才能接。
+- `app/ads/result_kinds.py`（新檔）：平台中立——不 import 任何 adapter、不出現平台字面字串。
+  `LABELS: dict[str, str]` 是目前 Meta adapter 唯一會產生的八種 `result_kind` → 中文名詞
+  （`purchase`＝購買、`engagement`＝互動、`link_click`＝點擊、`lead`＝名單、`app_install`＝安裝、
+  `video_view`＝觀看、`message`＝訊息、`store_visit`＝到店），詞彙選字都能套進「每次<標籤>成本」這
+  個固定句型。`label(kind)`：`None` 或不在表裡一律回泛用的「成果」，絕不回傳原始代碼。
+  `options()`：`[{"kind","label"}, ...]`，`LABELS` 的插入順序（穩定），target 頁的分段選單直接讀這
+  份清單，不自己排序或另編一份。
+- **反向檢查在測試裡，不在這支檔案裡**：`app/tests/test_ads_result_kinds.py` 直接讀
+  `app/ads/adapters/meta_read.py` 自己的 `_SALES_OBJECTIVES`／`_OBJECTIVE_RESULT_ACTIONS`
+  （唯讀，不改 adapter）重新推導出「這個 adapter 實際會產生的每一種 `result_kind`」，斷言每一種都在
+  `LABELS` 裡有標籤——adapter 加一種新的目標對照，這支測試就會因為少了標籤而紅，而不是 silently
+  drift 成一份跟 adapter 脫鉤的清單。
+- `app/ads/triage.py`：`target`（`_classify_ad::finish` 組出的那份 `targets.resolve()` 結果）、
+  `current`／`previous`（`_metrics_view`）三個地方各自加一個 `result_label` 欄位（各自的
+  `result_kind` 對照 `result_kinds.label()`），`triage.classify()`／`get_queue()`／`refresh_queue()`
+  的回傳形狀因此連帶都多這個欄位，路由層沒有另外改一行。
+- `app/ads/repository.py::_campaign_target_view()`：`GET`／`PUT .../target` 回應在既有欄位之外多
+  `result_label`（這個 Campaign 目前 `resolve()` 出的 `result_kind` 對照的中文）跟 `result_kinds`
+  （固定的 `result_kinds.options()` 清單，跟這個 Campaign 目前選了什麼無關，前端拿它畫分段選單的每
+  一個選項）。
+- **`PUT .../target` 的 trust-boundary 檢查**：`repository.save_campaign_target()` 在寫入前多一道
+  `result_kind not in result_kinds.LABELS` ⇒ `ValueError("result_kind_unknown")`（`None` 維持既有
+  語意「不改」，永遠合法），跟 `target_basis_unknown`／`target_value_unknown` 同一種寫法；路由層
+  （`app/ads/routes.py::_TARGET_ERRORS`）對應 400。拒絕發生在任何 `UPDATE` 之前、同一個交易裡，不會
+  半寫。
+- `frontend/src/lib/adsTriageApi.ts`：`TriageTargetView`／`TriageMetricsView` 加 `result_label:
+  string`；`CampaignTarget` 加 `result_label: string` 與 `result_kinds: { kind: string; label:
+  string }[]`。`putTarget` 的錯誤現在讀後端 `error.code`（`TriageRequestRejected.code`），不再靠比對
+  中文錯誤訊息字串認版本衝突——`target_conflict` 的訊息文字未來改了也不會讓前端誤判成別種錯誤。
+- `frontend/src/components/ads/target/CampaignTargetPage.tsx`（Card 1「看什麼成果」）：從唯讀徽章／
+  「尚未知道」文字改成 v7 原型的分段選單（`prototype-v7-ads-center.html:329` 的 `.seg`），選項讀
+  `target.result_kinds`；沒有任何一個 `result_kind` 已知時，選單裡沒有一顆按鈕預選（誠實的未選狀
+  態，不是猜一個預設）。刪掉頁面本地的 `RESULT_KIND_LABEL`／`resultKindLabel`，各處標題／own 欄位
+  文案一律讀 `result_kinds` 對應的 `label`。改選會讓表單 dirty，跟其他欄位一起經既有的
+  `putTarget(expected_revision=...)` 存檔；存檔後用回應更新畫面（不本地假算）。
+- 驗證：`app/tests/test_ads_result_kinds.py`（詞彙涵蓋每種 adapter 會產生的 kind、`None`／未知代碼
+  回泛用標籤、`options()` 順序、`PUT` 拒絕清單外的 `result_kind` 且什麼都不寫入、`GET .../target`
+  回應帶 `result_label`／`result_kinds`）、`app/tests/test_ads_triage.py`、
+  `app/tests/test_ads_triage_queue.py`（既有斷言在新增欄位下仍通過，不需要改動舊斷言本身）、
+  `app/tests/test_architecture_boundaries.py`、`frontend/src/components/ads/target/
+  CampaignTargetPage.test.tsx`、`frontend/e2e/ads-target.spec.ts`。
