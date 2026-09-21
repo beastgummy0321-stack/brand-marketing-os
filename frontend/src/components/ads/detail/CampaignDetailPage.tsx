@@ -10,20 +10,13 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { getQueue, getTriage, type QueueItem, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
-import { ReservedSlotCard } from "../patterns";
+import { Chip, ReservedSlotCard } from "../patterns";
 
-// 跟 `home/CampaignCard.tsx` 的 `BASIS_LABEL`／`chip()` 同一份小工具——那支檔案沒有匯出，
+// 跟 `home/CampaignCard.tsx` 的 `BASIS_LABEL` 同一份小工具——那支檔案沒有匯出，
 // 這頁又不在 `frontend/src/lib/**`（do_not_touch），沿用既有先例各自留一份（precedent:
 // `QueueRow.tsx`／`CampaignCard.tsx` 都各留一份自己的格式化小工具，不強行共用一個 lib）。
 type Basis = "own" | "break_even" | "trailing_30";
 const BASIS_LABEL: Record<Basis, string> = { own: "自訂", break_even: "損益兩平", trailing_30: "近 30 天" };
-
-function chip(tone?: "warn") {
-  return cn(
-    "inline-flex w-fit shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs",
-    tone === "warn" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground",
-  );
-}
 
 // 花費／每次成果成本沒有幣別（`triage`／`queue` 不回幣別，見 `QueueRow.tsx` 同名函式的
 // 註解）——純數字，最多兩位小數，不用 `Math.round`；未知的量測值＝「累積中」。
@@ -336,10 +329,10 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
   const budgetTotal = campaign.budget_progress.total;
   const budgetChip = campaign.origin === "imported"
-    ? <span className={chip()}>平台預算</span>
+    ? <Chip>平台預算</Chip>
     : budgetTotal !== null
-      ? <span className={chip()}>總預算 {formatCurrency(budgetTotal)}</span>
-      : <span className={chip("warn")}>預算待核實</span>;
+      ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip>
+      : <Chip tone="warn">預算待核實</Chip>;
 
   // 沒有廣告資料（草稿／待發布／剛同步）：跟 `home/CampaignCard.tsx` 同一條規則——不會
   // 判斷，催著設目標也沒用，只留「全部資料 ›」進去活動本身（review 裁決 #2 的同一個理由）。
@@ -360,20 +353,20 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
             {/* review fix：跟 `home/CampaignCard.tsx:215-221` 同一顆欄位同一種處理——匯入
                活動的 objective 是一整句話，只有它自己截斷，「・N 則」永遠印得出來，
                1024 寬不會被擠到換行。 */}
-            <span className={cn(chip(), "max-w-[14rem] items-center")}>
+            <Chip className="max-w-[14rem] items-center">
               <span className="min-w-0 truncate" title={campaign.objective || undefined}>
                 {campaign.objective || "尚待確認"}
               </span>
               <span className="shrink-0">・{items.length} 則</span>
-            </span>
+            </Chip>
             {items.length > 0 && (
               hasTarget ? (
-                <span className={chip()}>
+                <Chip>
                   目標每次{target!.result_label}成本 {formatTargetAmount(target!.value)}
                   {target!.basis && `・${BASIS_LABEL[target!.basis]}`}
-                </span>
+                </Chip>
               ) : (
-                <span className={chip("warn")}>尚未設定目標</span>
+                <Chip tone="warn">尚未設定目標</Chip>
               )
             )}
             {budgetChip}

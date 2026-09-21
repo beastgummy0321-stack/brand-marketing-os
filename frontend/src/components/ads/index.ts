@@ -5,4 +5,5 @@ export { ConfirmBriefPage } from "./ConfirmBriefPage";
 export { CampaignWorkspace } from "./CampaignWorkspace";
 export { CampaignTargetPage } from "./target/CampaignTargetPage";
 export { CampaignDetailPage } from "./detail/CampaignDetailPage";
+export { DataConnectionsPage } from "./connections/DataConnectionsPage";
 export { ReadinessList } from "./patterns/ReadinessList";

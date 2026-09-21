@@ -286,7 +286,36 @@ every group — all three items of bounce 1. design-system §1.7 points to it an
 generic defects of bounce 2). Hypothesis 3 is partly covered (the script header answers serve/port/login); a context
 pack is not built. Hypothesis 5 (Opus as worker) untested. Plan defects (bounce 2's loop) are a carve matter, see §5d.
 
-Next: build one remaining v7 screen with this and compare against 59 min / 2 bounces / 240 calls.
+## 5g. F21 data-connections page — A/B of the UI workflow and two root causes (2026-09-22)
+
+Same screen, same model (Sonnet), built twice. Baseline F20-I02: worker first pass 34 min / 174 calls / 367k tokens,
+2 bounces, 59 min in total.
+- v1 (prototype-first facts + context pack, old order): 15.6 min / 108 calls / 233k. Layout right first time; 2
+  mismatches found by the lead's eye (warn buttons rendered primary; an ok card labelled 「重新授權」 — plan defect).
+- v2 (pieces mapping + `Chip` kit piece + static-first order + mechanical diff): 15.1 min / 105 calls / 218k. 0 visual
+  mismatches; `diff-*.txt` needed no prose from the lead. finish 23 s, merge 42 s.
+- Post-build Opus review of v2: 3.4 min / 125k, 6 real defects — ALL in data→state rules, none visual. Replay of a
+  pre-build challenge on the plan alone (no code): 80 s / 61k, found the same 6 plus 3 more. Rule repair by the same
+  worker: 6.3 min / 22 calls.
+
+Root causes (symptoms in brackets):
+1. The prototype's vocabulary (`btn`, `chip`, `card`) had no counterpart in the kit, and fidelity was checked last, so
+   every worker re-decided emphasis by judgement and reviews re-told the prototype in prose [purple buttons; chip
+   hand-rolled three times; F20 bounce 1]. Fixed: `Chip` pattern, `pieces` + `diff` in `ui-evidence.cjs`, order of work
+   in design-system §1.7.
+2. The prototype specifies appearance only; "which field → which state/number" was written by the planner from field
+   names and never checked against the code that produces the field; the worker implements it literally and writes the
+   tests from the same rule, so only a post-build review can catch it [NULL-first ordering, never-set budget shown as
+   verified, UTC "yesterday", zero accounts shown connected, variants counted as products, failures not counted; F20's
+   looping 去處理]. Fixed: CLAUDE.md carve rule — challenge each rule against the backend before dispatch.
+3. Tests awaited a container that exists in every state and then asserted a state synchronously: green alone (issue
+   verify runs one file), red under the full suite (integrate). Cost one 3-min integrate. Fixed: §1.7 self-check 11.
+Totals for F21 (authorize 03:21 → integrate green 04:33, incl. building both versions and the tooling): worker 15.1 +
+6.3 min, finish 23 s + 24 s, merge 42 s, integrate 2.7 min red + 3.0 min green.
+Still open: worktrees lack `.env`/`frontend/.env` (`harness env` does not copy untracked config; lead copied by hand);
+issues put `patterns/**` in `do_not_touch`, which is what forced local copies — a missing kit piece must be added by
+the lead before dispatch; Opus-as-worker A/B not run. Next screens: run the pre-build challenge for real and compare
+against v2 + 6.3 min repair.
 
 ## 6. Still open
 
