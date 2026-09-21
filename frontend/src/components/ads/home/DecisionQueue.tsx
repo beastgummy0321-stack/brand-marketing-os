@@ -10,11 +10,13 @@ export type QueueState =
   | { status: "error"; message: string }
   | { status: "ready"; queue: QueuePayload };
 
-// `app/ads/triage.py::KINDS_PENDING` — 固定兩個，永遠回這兩個代碼，中文說法只在前端。
+// `app/ads/triage.py::KINDS_PENDING` — 固定兩個，永遠回這兩個代碼，中文說法只在前端。未認得
+// 的代碼（例如以後新增但這支還沒更新）印「其他」，不要把原始代碼漏給使用者看。
 const PENDING_LABEL: Record<string, string> = {
   scale_budget: "可加預算",
   refresh_creative: "補素材",
 };
+const PENDING_FALLBACK_LABEL = "其他";
 
 /** `kinds_pending` 佔位列：灰階、不可點，跟 `ReservedSlotCard` 同一條規則——「接上後開放」不是
  * 「不支援」，連假按鈕都不做（feature F19 決定：pause／可加預算／補素材／每月回顧都只能佔位）。 */
@@ -24,7 +26,7 @@ function PendingRow({ kind }: { kind: string }) {
       <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted" aria-hidden="true">
         <Plug className="size-5 text-muted-foreground" />
       </div>
-      <p className="flex-1 text-sm font-medium text-muted-foreground">{PENDING_LABEL[kind] ?? kind}</p>
+      <p className="flex-1 text-sm font-medium text-muted-foreground">{PENDING_LABEL[kind] ?? PENDING_FALLBACK_LABEL}</p>
       <Badge variant="secondary">接上後開放</Badge>
     </div>
   );
@@ -63,17 +65,17 @@ export function DecisionQueue({ state, onRetry }: { state: QueueState; onRetry: 
   const { items, kinds_pending } = state.queue;
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="依活動篩選">
-        <Badge>全部 {items.length}</Badge>
-      </div>
+      {/* 空佇列不印「全部 0」——沒有東西好篩；「依活動篩選」的 role/aria-label 等 F19-I07
+       * 真的有第二顆鈕再加回來，只有一顆的時候那組語意是假的（review fix）。 */}
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          <Badge>全部 {items.length}</Badge>
+        </div>
+      )}
       <div className="surface divide-y divide-border overflow-hidden">
-        {items.length === 0 ? (
-          <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-            目前沒有需要你決定的廣告。
-          </p>
-        ) : (
-          items.map((item, index) => <QueueRow key={item.id} item={item} primary={index === 0} />)
-        )}
+        {/* 空佇列不重複印「都處理完了」——`AdsHomePage` 的頁首已經講過一次；這裡只留
+         * `kinds_pending` 佔位列（review fix：同一頁一句話只講一次）。 */}
+        {items.map((item, index) => <QueueRow key={item.id} item={item} primary={index === 0} />)}
         {kinds_pending.map((kind) => (
           <PendingRow key={kind} kind={kind} />
         ))}

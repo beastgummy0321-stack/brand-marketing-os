@@ -1,8 +1,9 @@
 /** frontend/src/components/ads/home/DecisionQueue.test.tsx — F19-I03：v7 `home()` 的 `row`
  * （prototype ≈ 195–203）落地後的列內容斷言。殼／loading／error 已經是 F19-I02 的範圍
  * （`AdsHomePage.test.tsx` 蓋），這支只管 `DecisionQueue`／`QueueRow` 自己印出來的東西：
- * 兩種分類各自的量尺文案、未知數字不印 0、只有第一列主要按鈕、篩選鈕、空狀態＋佔位列同時
- * 可見、鍵盤順序。 */
+ * 兩種分類各自的量尺文案＋寬度、金額格式（最多兩位小數、不四捨五入到整數）、未知數字的兩種
+ * 誠實句（量測值「累積中」／配置值「尚未設定」）、只有第一列主要按鈕、按鈕不看量尺畫不畫得
+ * 出來、篩選鈕、空狀態不重複頁首那句話＋佔位列同時可見、未認得的 pending 代碼、鍵盤順序。 */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -55,39 +56,68 @@ function renderQueue(state: QueueState) {
 }
 
 describe("DecisionQueue／QueueRow（F19-I03）", () => {
-  it("停損列：量尺對停損線（3×目標），文案帶花費、筆數、停損線", () => {
+  it("停損列：量尺對停損線（3×目標），文案帶花費、筆數、停損線；填色頂到 100%、marker 在停損線位置", () => {
     renderQueue(ready({ items: [queueItem("q1")] }));
 
     expect(screen.getByText("停損")).toBeTruthy();
     expect(screen.getByText("花了 5,200・0 筆購買")).toBeTruthy();
     expect(screen.getByText("停損線 1,350")).toBeTruthy();
     expect(screen.getByTestId("meter")).toBeTruthy();
+    // value=5200 遠超 marker(=450*3=1350)，量尺自己的上限是 marker*1.5=2025——填色本來會超過
+    // 100%，必須頂住（lead review fix 2）。
+    expect(screen.getByTestId("meter-fill").style.width).toBe("100%");
+    expect(screen.getByTestId("meter-marker").style.left).toBe(`${(1350 / (1350 * 1.5)) * 100}%`);
   });
 
-  it("變差列：量尺對目標，文案帶每次成本、環比與目標", () => {
+  it("變差列：量尺對目標（中間值，不頂滿），▲% 只看 change_pct、不是從成本／目標反推", () => {
+    // cost(600)／target(450) 本身的差是 33%，change_pct 另外給 0.66——兩者刻意不一樣，證明
+    // 「▲66%」印的是 change_pct 這個欄位，不是畫面自己拿 600/450 算出來的（lead review fix 3）。
     renderQueue(ready({
       items: [queueItem("q1", {
         class: "worse", label: "變差",
-        target: { value: 300, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
-        current: { spend: 3000, result_count: 5, cost_per_result: 450, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-        change_pct: 0.5,
+        target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+        current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+        change_pct: 0.66,
       })],
     }));
 
     expect(screen.getByText("變差")).toBeTruthy();
-    expect(screen.getByText("每次購買成本 450 ▲50%")).toBeTruthy();
-    expect(screen.getByText("目標 300")).toBeTruthy();
+    expect(screen.getByText("每次購買成本 600 ▲66%")).toBeTruthy();
+    expect(screen.getByText("目標 450")).toBeTruthy();
     expect(screen.getByTestId("meter")).toBeTruthy();
+    // 中間值：600 對 marker(=450)，量尺上限 450*1.5=675，填色跟 marker 都不頂滿（lead review fix 2）。
+    expect(screen.getByTestId("meter-fill").style.width).toBe(`${(600 / (450 * 1.5)) * 100}%`);
+    expect(screen.getByTestId("meter-marker").style.left).toBe(`${(450 / (450 * 1.5)) * 100}%`);
   });
 
-  it("目標未知：不畫量尺，文字寫「累積中」而不是 0", () => {
+  it("金額格式：最多兩位小數、不四捨五入到整數（5200/15 印 346.67，3.1 留著 3.1，不是 3）", () => {
+    renderQueue(ready({
+      items: [
+        queueItem("q1", {
+          class: "worse", label: "變差",
+          target: { value: null, basis: null, result_kind: "purchase", result_label: "購買", missing: ["target"] },
+          current: { spend: 5200, result_count: 15, cost_per_result: 5200 / 15, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+        }),
+        queueItem("q2", {
+          class: "worse", label: "變差",
+          target: { value: null, basis: null, result_kind: "purchase", result_label: "購買", missing: ["target"] },
+          current: { spend: 310, result_count: 100, cost_per_result: 3.1, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+        }),
+      ],
+    }));
+
+    expect(screen.getByText("每次購買成本 346.67")).toBeTruthy();
+    expect(screen.getByText("每次購買成本 3.1")).toBeTruthy();
+  });
+
+  it("目標未知：不畫量尺，文字寫「尚未設定」而不是「累積中」或 0（目標是沒設定的配置值，不是還在累積的量測值）", () => {
     renderQueue(ready({
       items: [queueItem("q1", {
         target: { value: null, basis: null, result_kind: "purchase", result_label: "購買", missing: ["target"] },
       })],
     }));
 
-    expect(screen.getByText("停損線 累積中")).toBeTruthy();
+    expect(screen.getByText("停損線 尚未設定")).toBeTruthy();
     expect(screen.queryByTestId("meter")).toBeNull();
     expect(screen.queryByText(/停損線 0/)).toBeNull();
   });
@@ -132,13 +162,21 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText(/cmp_1/)).toBeNull();
   });
 
-  it("空佇列：誠實空狀態句＋kinds_pending 佔位列同時可見", () => {
+  it("空佇列：不重複印「都處理完了」（頁首已經講過），kinds_pending 佔位列照常可見，不印「全部 0」", () => {
     renderQueue(ready());
 
-    expect(screen.getByText("目前沒有需要你決定的廣告。")).toBeTruthy();
     expect(screen.getByText("可加預算")).toBeTruthy();
     expect(screen.getByText("補素材")).toBeTruthy();
     expect(screen.getAllByText("接上後開放")).toHaveLength(2);
+    expect(screen.queryByText("目前沒有需要你決定的廣告。")).toBeNull();
+    expect(screen.queryByText(/^全部/)).toBeNull();
+  });
+
+  it("kinds_pending 有未認得的代碼：印「其他」，不印原始代碼", () => {
+    renderQueue(ready({ kinds_pending: ["some_future_kind"] }));
+
+    expect(screen.getByText("其他")).toBeTruthy();
+    expect(screen.queryByText("some_future_kind")).toBeNull();
   });
 
   it("鍵盤順序：Tab 依序落在每一列的「看證據」連結", async () => {

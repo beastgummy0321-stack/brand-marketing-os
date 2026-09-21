@@ -11,12 +11,28 @@ const KIND = {
 };
 
 /** `▲12%`／`▼12%`／`持平`；`change_pct` 是比值（`app/ads/triage.py::_compare`），null 就不印
- * 這一段（沒有前期資料可比）。 */
+ * 這一段（沒有前期資料可比）。這個百分比只看 `change_pct` 這個欄位，不是從花費／目標反推——
+ * 兩者本來就可能不同（`change_pct` 比的是這期跟上一期自己，目標是另一條基準線）。 */
 function formatDeltaPct(pct: number | null): string {
   if (pct === null) return "";
   const rounded = Math.round(Math.abs(pct) * 100);
   if (rounded === 0) return "持平";
   return `${pct > 0 ? "▲" : "▼"}${rounded}%`;
+}
+
+// `queue`／`triage` 沒有回幣別（見下方 Viz 的說明），花費／成本／目標都印純數字。`format.ts` 的
+// `formatCount` 對非整數會印出 `toLocaleString` 的預設精度（最多到 3 位小數，例：5200/15 的
+// 每筆成本印成「346.667」）——lib 不在這張票的 touch 範圍，這裡自己包一個最多 2 位小數、不四捨
+// 五入到整數的版本（3.1 要留著 3.1，不是 3）。
+function formatAmount(value: number | null): string {
+  if (value === null) return "累積中";
+  return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
+}
+// 目標／停損線都是「使用者本來要不要設定」的配置值，不是還在累積的量測值——未設定寫「尚未
+// 設定」，不是「累積中」（design-system §7：不同的未知理由要有不同的誠實句子）。
+function formatTargetAmount(value: number | null): string {
+  if (value === null) return "尚未設定";
+  return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
 }
 
 /** 停損線／目標量尺（v7 `.meter`/`.meter u`，prototype ≈ 190）：後端沒有給「量尺該多寬」，
@@ -29,10 +45,11 @@ function Meter({ value, marker, tone }: { value: number; marker: number; tone: "
   return (
     <div className="relative my-1.5 h-2.5 rounded-full bg-muted" aria-hidden="true" data-testid="meter">
       <div
+        data-testid="meter-fill"
         className={cn("absolute inset-y-0 left-0 rounded-full", tone === "danger" ? "bg-danger" : "bg-warning")}
         style={{ width: `${fillPct}%` }}
       />
-      <div className="absolute -top-1 -bottom-1 w-0.5 bg-foreground" style={{ left: `${markerPct}%` }} />
+      <div data-testid="meter-marker" className="absolute -top-1 -bottom-1 w-0.5 bg-foreground" style={{ left: `${markerPct}%` }} />
     </div>
   );
 }
@@ -48,16 +65,18 @@ const VIZ_CLASS =
 const CAPTION_CLASS = "numeric flex justify-between gap-2 text-[11.5px] whitespace-nowrap text-muted-foreground";
 
 /** 一列的量尺＋兩行說明文字，分類只有 stop_loss／worse 兩種（`adsTriageApi.ts` 契約：佇列已被
- * 後端過濾過）。任何一半數字未知就不畫量尺，兩行文字仍照印、缺的那格寫「累積中」——不是 0
- * （design-system §7 誠實空狀態）。花費／成本／目標不印 `NT$`（lead review fix：`queue`／
- * `triage` 沒有回幣別，`formatCurrency` 硬掛 NT$ 對非台幣廣告帳戶是錯的標籤——跟 v7 一樣印
- * 純數字，`formatCount` 剛好是「分組數字＋null→累積中」，不是自己另拼格式）。 */
+ * 後端過濾過）。任何一半數字未知就不畫量尺，兩行文字仍照印、缺的那格寫誠實的未知句
+ * （design-system §7；花費/筆數是量測值缺「累積中」，目標/停損線是配置值缺「尚未設定」）。
+ * 花費／成本／目標不印 `NT$`——`queue`／`triage` 沒有回幣別，硬掛 NT$ 對非台幣廣告帳戶是錯的
+ * 標籤，跟 v7 一樣印純數字。 */
 function Viz({ item }: { item: QueueItem }) {
   const t = item.triage;
   const resultLabel = t.current.result_label;
 
   if (t.class === "stop_loss") {
     const spend = t.current.spend;
+    // 3× 目標＝停損線，跟後端 `app/ads/triage.py::STOP_LOSS_SPEND_MULTIPLE` 同一個數字——後端
+    // 判斷用它分類，這裡只是把同一條線畫出來給使用者看，`queue` 沒有把算好的線回傳。
     const line = t.target.value === null ? null : t.target.value * 3;
     const countText = t.current.result_count === null
       ? "累積中"
@@ -66,8 +85,8 @@ function Viz({ item }: { item: QueueItem }) {
       <div className={VIZ_CLASS}>
         {spend !== null && line !== null && line > 0 && <Meter value={spend} marker={line} tone="danger" />}
         <div className={CAPTION_CLASS}>
-          <span>花了 {formatCount(spend)}・{countText}</span>
-          <span>停損線 {formatCount(line)}</span>
+          <span>花了 {formatAmount(spend)}・{countText}</span>
+          <span>停損線 {formatTargetAmount(line)}</span>
         </div>
       </div>
     );
@@ -80,8 +99,8 @@ function Viz({ item }: { item: QueueItem }) {
     <div className={VIZ_CLASS}>
       {cost !== null && target !== null && target > 0 && <Meter value={cost} marker={target} tone="warning" />}
       <div className={CAPTION_CLASS}>
-        <span>每次{resultLabel}成本 {formatCount(cost)}{delta && ` ${delta}`}</span>
-        <span>目標 {formatCount(target)}</span>
+        <span>每次{resultLabel}成本 {formatAmount(cost)}{delta && ` ${delta}`}</span>
+        <span>目標 {formatTargetAmount(target)}</span>
       </div>
     </div>
   );
@@ -113,7 +132,7 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
             <span>{t.label}</span>
           </span>
         )}
-        <p className="mt-1.5 truncate text-sm font-semibold">{t.name ?? "（未命名廣告）"}</p>
+        <p className="mt-1.5 truncate text-sm font-semibold" title={t.name ?? "（未命名廣告）"}>{t.name ?? "（未命名廣告）"}</p>
       </div>
       {/* 暫停提議 chip 在按鈕左邊、同一條垂直中線，單行不換行——兩個都是固定寬度的內容，
        * 這個群組本身不會比第 1 行其他項目撐更高（review fix：原本各自站一行，把第一列撐高）。 */}
