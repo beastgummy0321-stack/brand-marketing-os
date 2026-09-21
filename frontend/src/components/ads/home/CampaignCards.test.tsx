@@ -161,6 +161,21 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.getByText("測試 Campaign", { exact: true })).toBeTruthy();
   });
 
+  it("超長活動名稱：「›」不被 truncate 擠掉，連結可及名稱仍是完整名稱", async () => {
+    const longName = "2026 秋季新品啟動・晨光隨行杯 X 在地烘豆師聯名限定款・全通路整合行銷總覽計畫(電商站內+社群廣告+聯盟導流三線並行)";
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({ name: longName })]);
+    vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+    renderCards();
+
+    const heading = await screen.findByRole("heading", { name: longName });
+    const link = within(heading).getByRole("link", { name: longName });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    // 「›」永遠在（shrink-0），只有名稱那格 truncate；用 title 存住完整名稱。
+    expect(within(link).getByText("›", { exact: true })).toBeTruthy();
+    expect(within(link).getByText(longName, { exact: true }).getAttribute("title")).toBe(longName);
+  });
+
   it("有廣告但未設定目標：印「尚未設定」，次要按鈕（outline，非主按鈕）連到設定目標頁，missing 印成 chip", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage([
       triageItem({ target: { value: null, basis: null, result_kind: null, result_label: "購買", missing: ["缺廣告花費資料"] } }),

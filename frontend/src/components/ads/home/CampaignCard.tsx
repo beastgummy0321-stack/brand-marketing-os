@@ -200,12 +200,14 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 truncate text-[15px] font-semibold">
-          <Link to={workspaceHref} className="hover:text-primary hover:underline">
-            <span>{campaign.name}</span>
+        <h3 className="min-w-0 text-[15px] font-semibold">
+          {/* h3／連結本身是 flex row：長名稱只讓名稱那格 truncate，「›」永遠是 shrink-0、
+             不被擠掉（review 裁決）；整個 <Link> 還是同一個點擊區域。 */}
+          <Link to={workspaceHref} className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline">
+            <span className="min-w-0 truncate" title={campaign.name}>{campaign.name}</span>
             {/* aria-hidden：只是「這裡可以點」的視覺提示，不進可及名稱——名稱連結要留純活動
                名稱給 e2e／accessible name 用（review 裁決）。 */}
-            <span aria-hidden="true" className="text-muted-foreground"> ›</span>
+            <span aria-hidden="true" className="shrink-0 text-muted-foreground">›</span>
           </Link>
         </h3>
         <div className="flex shrink-0 items-center gap-1.5">
