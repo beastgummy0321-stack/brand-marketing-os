@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -90,6 +90,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId"
           element={<AdsCampaignRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/target"
+          element={<AdsTargetRoute />}
         />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
@@ -402,6 +406,19 @@ function AdsCampaignRoute() {
   return (
     <>
       <CampaignWorkspace brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
+    </>
+  );
+}
+
+/** 活動目標設定頁（F19-I05，v7 原型「設定目標」畫面）：判斷這個活動好壞的成果與成本門檻，
+ * `AdsCampaignRoute` 卡片的「設定目標／調整目標」連結會導來這裡。`key={campaignId}` 讓
+ * react-router 換活動時整支重新掛載——同一條 route element，不換這個就會沿用同一個元件
+ * instance，上一個活動的草稿／baseline 會被誤帶到下一個活動（F19 repair #6）。 */
+function AdsTargetRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <CampaignTargetPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
 }
