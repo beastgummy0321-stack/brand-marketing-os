@@ -6,4 +6,5 @@ export { CampaignWorkspace } from "./CampaignWorkspace";
 export { CampaignTargetPage } from "./target/CampaignTargetPage";
 export { CampaignDetailPage } from "./detail/CampaignDetailPage";
 export { DataConnectionsPage } from "./connections/DataConnectionsPage";
+export { ConfirmPage } from "./flow/ConfirmPage";
 export { ReadinessList } from "./patterns/ReadinessList";
