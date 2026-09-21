@@ -256,9 +256,15 @@ correct. Cards that carry data use the full grid cell.
 - Background work shows what is being processed, success or failure, and a retry; leaving and returning
   restores it. No percentage bar without real progress data.
 
-F04 現況：首頁四塊（判斷帶／需要你決定／進行中的 Campaign／最近做了什麼）、清單頁、
-「理解如下」確認畫面、策略頁按鈕、工作區總覽都在 F04 做；建議卡的**產生端**（真的有東西可決定）
-仍是 F05——F04 這裡只有元件與空狀態。發布前檢查／批次操作／Inspector 不在這裡。
+F19 現況（取代舊版 F04 首頁四塊）：首頁改照 v7 原型（`docs/design/ads/prototype-v7-ads-center.html`
+`home()`）——`PageHeader`「今天需要你決定的事」＋開著幾件／都處理完了，右側灰階「每月回顧」
+佔位（`接上後開放`）、加入既有活動、建立投放計畫；下面 `1.9fr/1fr` 格線，左 `DecisionQueue`
+（品牌層停損／變差決定佇列，讀 `refreshQueue`）、右 `BudgetCard`（月可新增承諾大數字＋已花／
+預留／可用分段長條，調整沿用既有 `MonthlyBudgetPanel` 編輯，不重刻一份）；再下方「活動」＋
+`CampaignCards`（沿用 `CampaignTile`，Campaign 清單含既有平台活動）。三支元件都在
+`components/ads/home/`；I02 定版面與骨架，佇列列與活動卡各自的細節（目標、五分類條）留給
+I03／I04，設定目標頁是 I05。清單頁、「理解如下」確認畫面、策略頁按鈕、工作區總覽不在這次範圍內，
+沿用既有寫法。判斷帶／時間軸／建檔檢查表元件檔仍在，但首頁不再引用。
 
 ### 5.2 Screen assignments
 
@@ -268,7 +274,7 @@ F04 現況：首頁四塊（判斷帶／需要你決定／進行中的 Campaign�
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
-| 投放中心 | 首頁：判斷帶＋需要你決定＋進行中的 Campaign（`CampaignTile` 卡片）＋最近做了什麼＋建立 Campaign; 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）; 建立 Campaign 先過「理解如下」確認畫面（`StepIndicator`＋`FieldCard`）才花第二次模型錢; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串，策略頁按鈕真的會動 |
+| 投放中心 | 首頁（v7，F19）：`PageHeader`「今天需要你決定的事」＋件數；`1.9fr/1fr` 格線左 `DecisionQueue`（品牌層停損／變差佇列）右 `BudgetCard`（月可新增承諾大數字＋分段長條）；下方「活動」＋`CampaignCards`（`CampaignTile` 卡片，含既有平台活動）; 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）; 建立 Campaign 先過「理解如下」確認畫面（`StepIndicator`＋`FieldCard`）才花第二次模型錢; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串，策略頁按鈕真的會動 |
 | 素材工作檯 | four screens, one IA: 入口（pack card grid／list, search ＋ status pills ＋ 最近使用 ＋ 快速開始） → 任務包（meta strip・摘要・完成條件・素材組 table） → 素材組 studio（tabs per 產物類型, versions as history, 生成設定） → 自由創作（AI 解析 free text → editable sets, two-click flow）. The pack rail and set rail are pack-local／set-local, not the OS sidebar, not a new shared kit component |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |
