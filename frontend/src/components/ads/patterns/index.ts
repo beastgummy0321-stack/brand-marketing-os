@@ -8,3 +8,4 @@ export { StepIndicator } from "./StepIndicator";
 export { FieldCard } from "./FieldCard";
 export { Disclosure } from "./Disclosure";
 export { ReadinessList } from "./ReadinessList";
+export { Chip } from "./Chip";

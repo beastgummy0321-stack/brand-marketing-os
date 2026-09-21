@@ -81,10 +81,16 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 9. Independent blocks fail independently: one failed request (queue, budget, thumbnails) never blanks the rest of the page.
 10. One-shot effects (scroll to `?ad=`, focus) run once per value, not on every refetch; do not key effects on fresh objects.
 
-**Evidence is one command, not a script per issue**: `frontend/scripts/ui-evidence.cjs` (usage in its header). Run it
-first with only the prototype arguments and read `facts-reference-*.txt` (container max-widths, default fold states,
-every control's target, all visible text) before building; run it again with `--app` for the built shots and the
-side-by-side images. It never expands or clicks before shooting, so a fold mismatch stays visible.
+**Assemble the screen from the prototype, do not re-interpret it** (root cause found 2026-09-22: the prototype's
+vocabulary — `btn`, `chip`, `card` — had no counterpart in the kit, so every worker re-decided emphasis by judgement and
+hand-rolled the same chip three times). `frontend/scripts/ui-evidence.cjs` (usage in its header) is the bridge. Order of
+work on a screen: (a) run it with only the prototype arguments and read `facts-reference-*.txt` — container max-widths,
+default fold states, every control's target, and `pieces`: the kit component and variant each prototype button/chip
+maps to; (b) build the screen STATIC first, with the prototype's own sample values, from exactly those pieces, and run
+the script with `--app` until `diff-*.txt` shows no piece type on one side only and the side-by-side matches; (c) only
+then wire the API, states and tests — the layout does not change after (b). A prototype element with no kit piece is a
+missing piece: add it to `components/ads/patterns` with a `data-slot`/variant attribute and one mapping line in the
+script, never a local copy in the page. The script never expands or clicks before shooting.
 
 **The HTML prototype is the spec (user ruling 2026-09-21, restated 2026-09-22).** A UI issue names the prototype file,
 the screen's function and its route; the worker opens that HTML in a browser and reads its markup, states and

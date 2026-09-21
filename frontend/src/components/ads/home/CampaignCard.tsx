@@ -4,6 +4,7 @@ import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { cn } from "@/lib/utils";
+import { Chip } from "../patterns";
 import { formatCurrency } from "@/lib/format";
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { getTriage, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
@@ -29,13 +30,6 @@ const SEGMENTS: { cls: Exclude<TriageClass, "no_target">; label: string; swatch:
   { cls: "flat", label: "持平", swatch: "bg-muted-foreground/40" },
   { cls: "insufficient", label: "資料不足", swatch: "bg-border" },
 ];
-
-function chip(tone?: "warn") {
-  return cn(
-    "inline-flex w-fit shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs",
-    tone === "warn" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground",
-  );
-}
 
 /** 目標／成本數字：後端不回幣別，`formatCurrency` 又是寫死 NT$——套在可能來自非台幣帳戶的
  * 數字上是錯的標籤（design-system §7、review 裁決）。v7 原型也只印數字本身（「450」），這裡
@@ -97,7 +91,7 @@ function TargetBody({
   if (items.length === 0) {
     return (
       <div className="flex flex-col gap-2">
-        <span className={chip()}>沒有廣告資料</span>
+        <Chip>沒有廣告資料</Chip>
         <Link to={workspaceHref} className="w-fit text-sm text-muted-foreground hover:text-primary hover:underline">
           進入活動 ›
         </Link>
@@ -131,7 +125,7 @@ function TargetBody({
         {target.missing.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {target.missing.map((m) => (
-              <span key={m} className={chip()}>{m}</span>
+              <Chip key={m}>{m}</Chip>
             ))}
           </div>
         )}
@@ -145,11 +139,11 @@ function TargetBody({
       <p className="text-xs text-muted-foreground">{label}</p>
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="numeric text-[20px] font-semibold">{formatPlainNumber(target.value)}</span>
-        {basisLabel && <span className={chip()}>{basisLabel}</span>}
+        {basisLabel && <Chip>{basisLabel}</Chip>}
         <Link to={targetHref} className="text-sm text-primary hover:underline">調整</Link>
       </div>
       {knownTotal > 0 && <Strip counts={known} total={knownTotal} />}
-      {noTargetCount > 0 && <span className={chip()}>{noTargetCount} 則無法判斷</span>}
+      {noTargetCount > 0 && <Chip>{noTargetCount} 則無法判斷</Chip>}
     </div>
   );
 }
@@ -188,10 +182,10 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
   // 印一個沒人知道是什麼的裸數字。
   const budgetTotal = campaign.budget_progress.total;
   const budgetChip = campaign.origin === "imported"
-    ? <span className={chip()}>平台預算</span>
+    ? <Chip>平台預算</Chip>
     : budgetTotal !== null
-      ? <span className={chip()}>總預算 {formatCurrency(budgetTotal)}</span>
-      : <span className={chip("warn")}>預算待核實</span>;
+      ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip>
+      : <Chip tone="warn">預算待核實</Chip>;
 
   return (
     <article
@@ -218,12 +212,12 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
           <Badge variant={statusTone}>{statusLabel}</Badge>
           {/* Imported campaigns carry a whole sentence as objective: only the objective text
              truncates, the ad count never does, and the campaign name keeps its room. */}
-          <span className={cn(chip(), "inline-flex max-w-[14rem] items-center")}>
+          <Chip className="max-w-[14rem] items-center">
             <span className="min-w-0 truncate" title={campaign.objective || undefined}>
               {campaign.objective || "尚待確認"}
             </span>
             {state.status === "ready" && <span className="shrink-0">・{state.items.length} 則</span>}
-          </span>
+          </Chip>
         </div>
       </div>
 
@@ -242,7 +236,7 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
           <div className="flex flex-wrap items-center gap-2">
             {/* 讀取失敗只是這次沒拿到新的判斷結果，已經存的紀錄沒有被動過——這句話對這個
                失敗態一定為真才印（review 裁決）。 */}
-            <span className={chip()}>已保存的紀錄都還在</span>
+            <Chip>已保存的紀錄都還在</Chip>
             {/* aria-label 帶活動名稱：頁面上每張卡都會印「重新讀取」，用 aria-label 讓螢幕
                閱讀器分得出這顆按鈕重試的是哪一張卡（其餘元件的重試各自有自己的可及名稱）。 */}
             <Button
