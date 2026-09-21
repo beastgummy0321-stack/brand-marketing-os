@@ -79,6 +79,14 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 7. Reviewed behaviour of other issues stays as it is; never change product code to make a test easier — report it.
 8. Your own preview/e2e server uses port 8731 + issue number (I03 → 8734); 8720 belongs to harness merge/integrate.
 
+**The reference is the spec (user ruling 2026-09-21).** A UI issue carries the reference screen as screenshots at 1024 and
+1920 (taken from the prototype at carve time, stored under `docs/design/<area>/`), the API calls that feed it, and nothing
+else about the layout — no prose re-description of the screen. Workers develop from minute one against the realistic
+fixture (longest real names, drafts, no-target, decimal costs, imported campaigns), not against tidy sample data. A worker
+hands in side-by-side images (reference | built) at both widths; the lead compares them first and returns anything that
+does not match before any review. The user reviews once, after the whole batch is merged, on one side-by-side page per
+screen, and answers pass / what is wrong; the fixes run as one round. Agents never stop mid-batch to ask for acceptance.
+
 ---
 
 ## F12. 一般流程與同頁進階（已驗收結案）
