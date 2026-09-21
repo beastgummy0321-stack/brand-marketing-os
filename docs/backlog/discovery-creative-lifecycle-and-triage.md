@@ -226,7 +226,7 @@ Measured (`.harness/runtime/metrics.jsonl` + agent durations), authorize 00:48 �
   field added to a shared API type needs its test factories in `touch`; a link changed in one issue must be traced to
   every consumer planned in the next.
 
-## 5e. Handoff — cut UI-worker time and review bounces (open, written 2026-09-22)
+## 5e. Handoff — cut UI-worker time and review bounces (written 2026-09-22; result in §5f)
 
 Goal (user-chosen, before the remaining v7 screens): make a UI issue cheaper. In F20 the screen issue took 59 of 95 min:
 worker first pass 34 min, two bounces 20 min (lead screenshot compare 9, Opus review 5 + repair 6). Tooling fixes
@@ -270,6 +270,23 @@ Docker on this machine needs the two-folder rename before each start (memory `do
 
 Next step: tally `I02-worker.jsonl` by phase (orientation → build → evidence → repair) with timestamps to see which of
 hypotheses 1–4 owns the most minutes; then try the cheapest one on the next single screen and compare against 59 min / 2 bounces.
+
+## 5f. Result of the §5e tally and the first change (2026-09-22)
+
+Tally of `I02-worker.jsonl` by timestamp (56 min incl. 8 min idle waiting for the lead): orientation 11.6 min (of which
+~4.5 min was finding how to serve the app, the port and the login); build + tests/lint/build 6 min; evidence ~19 min
+across three rounds (13 + 2.5 + 3.5: six throw-away scripts, heredoc/encoding probes, 18 image reads); repair edits ~11 min.
+The worker first opened the prototype in a browser at minute 27, after the page was built — it had only grepped the
+HTML. That, not missing prose, is why `max-width:1180px`, the summary hints and the default folds were missed.
+
+Change made (hypotheses 1 + 4 in one file, no gate, no new reading): `frontend/scripts/ui-evidence.cjs`. Replayed on
+F20: prototype-only run 2.5 s, full run (login, mocked `/api`, both widths, side-by-side) 10 s; its facts file lists
+`div#app.page max-width:1180px`, `CLOSED 資料不足 10 則 還沒花到可判讀的金額（1,350）` and the OPEN/CLOSED default of
+every group — all three items of bounce 1. design-system §1.7 points to it and gained self-check items 9–10 (the two
+generic defects of bounce 2). Hypothesis 3 is partly covered (the script header answers serve/port/login); a context
+pack is not built. Hypothesis 5 (Opus as worker) untested. Plan defects (bounce 2's loop) are a carve matter, see §5d.
+
+Next: build one remaining v7 screen with this and compare against 59 min / 2 bounces / 240 calls.
 
 ## 6. Still open
 

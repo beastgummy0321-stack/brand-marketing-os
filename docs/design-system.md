@@ -78,6 +78,13 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 6. Keyboard: tab order follows reading order and the focus ring is fully visible (not clipped by overflow).
 7. Reviewed behaviour of other issues stays as it is; never change product code to make a test easier — report it.
 8. Your own preview/e2e server uses port 8731 + issue number (I03 → 8734); 8720 belongs to harness merge/integrate.
+9. Independent blocks fail independently: one failed request (queue, budget, thumbnails) never blanks the rest of the page.
+10. One-shot effects (scroll to `?ad=`, focus) run once per value, not on every refetch; do not key effects on fresh objects.
+
+**Evidence is one command, not a script per issue**: `frontend/scripts/ui-evidence.cjs` (usage in its header). Run it
+first with only the prototype arguments and read `facts-reference-*.txt` (container max-widths, default fold states,
+every control's target, all visible text) before building; run it again with `--app` for the built shots and the
+side-by-side images. It never expands or clicks before shooting, so a fold mismatch stays visible.
 
 **The HTML prototype is the spec (user ruling 2026-09-21, restated 2026-09-22).** A UI issue names the prototype file,
 the screen's function and its route; the worker opens that HTML in a browser and reads its markup, states and
