@@ -53,6 +53,24 @@ const GROUP_SWATCH: Record<TriageClass, string> = {
 };
 // Feature Outcome：停損／變差預設展開，其餘收合。
 const DEFAULT_OPEN: TriageClass[] = ["stop_loss", "worse"];
+// v7 `campPage()` 分類 summary 右側的提示（prototype ≈ 350）：只有「持平」「資料不足」有
+// 固定字句；停損／變差／變好／尚未設定目標一律不印。「資料不足」原型還會接一句
+// 「（目標 × 3）」的金額，那個 3 倍數字是後端常數（`STOP_LOSS_SPEND_MULTIPLE`），
+// `TriageItem` 沒有把它带出來——lead 裁決：不在前端算，只印沒有金額的句子。
+const GROUP_HINT: Partial<Record<TriageClass, string>> = {
+  flat: "照常投放",
+  insufficient: "還沒花到可判讀的金額",
+};
+
+/** 這個活動預設要開哪些分類（review fix：從不能讓整頁只剩收合列）。有停損／變差就開那
+ * 兩類（Feature Outcome）；兩類都不存在時（今天的真實 Beast Prime 資料、尚未設定目標的
+ * 活動都是這樣），改開 `GROUP_ORDER` 裡第一個有廣告的分類，讓使用者一進來就看得到列。 */
+function initialOpenGroups(items: TriageItem[]): Set<TriageClass> {
+  const present = new Set(items.map((item) => item.class));
+  if (present.has("stop_loss") || present.has("worse")) return new Set(DEFAULT_OPEN);
+  const first = GROUP_ORDER.find((cls) => present.has(cls));
+  return first ? new Set([first]) : new Set();
+}
 
 /** 廣告縮圖（issue Done #：`TriageItem.thumbnail_url` 可能是 `null`，也可能是一條會過期的
  * Meta CDN 連結）——`null` 或載入失敗都落到同一顆中性佔位圖示，不是空白、不是破圖示。 */
@@ -157,7 +175,10 @@ function Group({
         <span aria-hidden="true" className={cn("size-2.5 shrink-0 rounded-sm", GROUP_SWATCH[cls])} />
         <span className="text-sm font-semibold">{items[0].label}</span>
         <Badge variant="secondary">{items.length} 則</Badge>
-        <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+        {GROUP_HINT[cls] && (
+          <span className="ml-auto truncate text-xs text-muted-foreground">{GROUP_HINT[cls]}</span>
+        )}
+        <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180", !GROUP_HINT[cls] && "ml-auto")} />
       </summary>
       <div className="border-t border-border">
         {items.map((item) => (
@@ -205,6 +226,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
           items: triage.items,
           queue: queue.items,
         });
+        setOpenGroups(initialOpenGroups(triage.items));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -260,7 +282,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
   if (state.status === "loading") {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex max-w-[1180px] flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
         <Skeleton className="h-9 w-80" />
         <Skeleton className="h-24 w-full" />
@@ -271,7 +293,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
   if (state.status === "error") {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex max-w-[1180px] flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
         <EmptyState title="讀取失敗" description={state.message} onAction={() => setReload((v) => v + 1)} actionLabel="重新讀取" />
       </div>
@@ -282,7 +304,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
   if (campaign === null) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex max-w-[1180px] flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
         <EmptyState title="讀取失敗" description="找不到這個 Campaign。" onAction={() => setReload((v) => v + 1)} actionLabel="重新讀取" />
       </div>
@@ -302,7 +324,10 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   const hasTarget = target !== null && target.value !== null;
 
   return (
-    <div className="flex flex-col gap-5">
+    // v7 `.page{max-width:1180px}`（prototype 行 27）：不跟著殼一路撐到 1920——名稱跟數字
+    // 中間空一大段反而更難對照。跟 `SettingsPage.tsx` 用同一種寫法（外層 `max-w-[…px]`
+    // 字面值，不是共用元件），這裡照抄原型的 1180px。
+    <div className="flex max-w-[1180px] flex-col gap-5">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: campaign.name }]} />
 
       <div className="flex flex-wrap items-start justify-between gap-4">

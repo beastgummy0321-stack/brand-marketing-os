@@ -202,12 +202,13 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 7,
       items: [
+        triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
       ],
     });
 
     renderPage("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=ad_flat");
-    await screen.findByText("轉換・1 則");
+    await screen.findByText("轉換・2 則");
 
     const summary = screen.getByText("持平").closest("summary")!;
     const details = summary.closest("details")!;
@@ -216,17 +217,85 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     expect(row.className).toMatch(/ring-primary/);
   });
 
-  it("不認得的 `?ad=` id：忽略，維持預設收合狀態，不當機", async () => {
+  it("不認得的 `?ad=` id：忽略，維持預設展開狀態，不當機", async () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 7,
-      items: [triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" })],
+      items: [
+        triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
+        triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
+      ],
     });
 
     renderPage("/brands/brd_1/ads/campaigns/cmp_1/detail?ad=unknown_id");
+    await screen.findByText("轉換・2 則");
+
+    // 停損有東西所以照 Feature Outcome 預設展開；持平不受這個不存在的 `?ad=` 影響，維持收合。
+    expect(screen.getByText("停損").closest("summary")!.closest("details")!.open).toBe(true);
+    expect(screen.getByText("持平").closest("summary")!.closest("details")!.open).toBe(false);
+  });
+
+  it("分類 summary 右側提示：持平印「照常投放」，資料不足印「還沒花到可判讀的金額」（不帶金額），其餘分類不印", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [
+        triageItem({ entity_id: "a1", class: "stop_loss", label: "停損" }),
+        triageItem({ entity_id: "a2", class: "flat", label: "持平" }),
+        triageItem({ entity_id: "a3", class: "insufficient", label: "資料不足" }),
+      ],
+    });
+
+    renderPage();
+    await screen.findByText("轉換・3 則");
+
+    expect(screen.getByText("照常投放")).toBeTruthy();
+    expect(screen.getByText("還沒花到可判讀的金額")).toBeTruthy();
+    // 3 倍停損線的金額是後端常數，payload 沒帶——不臆造、不在前端算。
+    expect(screen.queryByText(/還沒花到可判讀的金額（/)).toBeNull();
+    expect(screen.queryByText(/[×x]\s*3/)).toBeNull();
+  });
+
+  it("沒有停損／變差（今天真實 Beast Prime 資料的形狀）：預設展開第一個有廣告的分類，不是整頁收合", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [
+        triageItem({ entity_id: "a1", class: "better", label: "變好" }),
+        triageItem({ entity_id: "a2", class: "flat", label: "持平" }),
+        triageItem({ entity_id: "a3", class: "insufficient", label: "資料不足" }),
+      ],
+    });
+
+    renderPage();
+    await screen.findByText("轉換・3 則");
+
+    // GROUP_ORDER 裡第一個有廣告的是「變好」——不能三個分類全部收合、頁面看起來像空的。
+    expect(screen.getByText("變好").closest("summary")!.closest("details")!.open).toBe(true);
+    expect(screen.getByText("持平").closest("summary")!.closest("details")!.open).toBe(false);
+    expect(screen.getByText("資料不足").closest("summary")!.closest("details")!.open).toBe(false);
+  });
+
+  it("尚未設定目標（唯一分類是 no_target）：預設展開那一類，不是整頁只剩一條收合列", async () => {
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 7,
+      items: [
+        triageItem({ entity_id: "a1", class: "no_target", label: "尚未設定目標", target: { value: null, basis: null, result_kind: null, result_label: "成果", missing: [] } }),
+      ],
+    });
+
+    renderPage();
     await screen.findByText("轉換・1 則");
 
-    const summary = screen.getByText("持平").closest("summary")!;
-    expect(summary.closest("details")!.open).toBe(false);
+    const summaries = screen.getAllByText("尚未設定目標").map((el) => el.closest("summary")).filter((el): el is HTMLElement => el !== null);
+    expect(summaries.length).toBe(1);
+    expect(summaries[0].closest("details")!.open).toBe(true);
+  });
+
+  it("版面寬度照 v7 `.page{max-width:1180px}`：外層容器帶同一個上限，不跟著殼撐到全寬", async () => {
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+
+    const { container } = renderPage();
+    await screen.findByText("轉換・1 則");
+
+    expect(container.querySelector(".max-w-\\[1180px\\]")).toBeTruthy();
   });
 
   it("沒有廣告資料：不催設定目標，只留全部資料 ›", async () => {
