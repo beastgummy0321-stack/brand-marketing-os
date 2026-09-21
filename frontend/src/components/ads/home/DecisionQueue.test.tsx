@@ -59,8 +59,8 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     renderQueue(ready({ items: [queueItem("q1")] }));
 
     expect(screen.getByText("停損")).toBeTruthy();
-    expect(screen.getByText("花了 NT$ 5,200・0 筆購買")).toBeTruthy();
-    expect(screen.getByText("停損線 NT$ 1,350")).toBeTruthy();
+    expect(screen.getByText("花了 5,200・0 筆購買")).toBeTruthy();
+    expect(screen.getByText("停損線 1,350")).toBeTruthy();
     expect(screen.getByTestId("meter")).toBeTruthy();
   });
 
@@ -75,8 +75,8 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     }));
 
     expect(screen.getByText("變差")).toBeTruthy();
-    expect(screen.getByText("每次購買成本 NT$ 450 ▲50%")).toBeTruthy();
-    expect(screen.getByText("目標 NT$ 300")).toBeTruthy();
+    expect(screen.getByText("每次購買成本 450 ▲50%")).toBeTruthy();
+    expect(screen.getByText("目標 300")).toBeTruthy();
     expect(screen.getByTestId("meter")).toBeTruthy();
   });
 
@@ -90,6 +90,19 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.getByText("停損線 累積中")).toBeTruthy();
     expect(screen.queryByTestId("meter")).toBeNull();
     expect(screen.queryByText(/停損線 0/)).toBeNull();
+  });
+
+  it("量尺畫不出來（目標未知）不影響按鈕：action_url 還在，「看證據」就還在（lead review fix 1）", () => {
+    renderQueue(ready({
+      items: [queueItem("q1", {
+        class: "worse", label: "變差",
+        target: { value: null, basis: null, result_kind: "purchase", result_label: "購買", missing: ["target"] },
+        current: { spend: 3000, result_count: 5, cost_per_result: 450, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+      })],
+    }));
+
+    expect(screen.queryByTestId("meter")).toBeNull();
+    expect(screen.getByRole("link", { name: "看證據" })).toBeTruthy();
   });
 
   it("停損列另外有一顆暫停提議的灰階佔位 chip", () => {
