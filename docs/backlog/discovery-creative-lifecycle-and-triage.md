@@ -180,6 +180,28 @@ Known limits for the next batch:
   `no_target / target_unresolved` (`missing: product` plus `needs_resync` / `result_unknown_days`) — acceptance needs a
   re-sync (which derives zeros) and a target cost set through `PUT …/target` first.
 
+## 5c. v7 front end batch 1 — F19 (2026-09-21)
+
+Built (seven issues, feature `F19`, branch `feature/ads-center-v7-home`): v7 home (brand-level decision queue with
+to-target meters, per-campaign filter, month budget card, campaign cards with target + five-class strip) and the
+target page (`/brands/:brandId/ads/campaigns/:campaignId/target`). Small backend additions that followed the screens:
+queue items carry their `triage` item; `app/ads/result_kinds.py` (`result_label`, `result_kinds`, PUT validation);
+`campaign_name` on triage items. Rules are in `docs/design-system.md` §5.1–5.3 and `docs/architecture/ads.md` §6.17–6.19.
+
+Known gaps, not built (each needs its own screen or a backend field; none is faked):
+- 「看證據」 lands on the campaign's performance tab, not on the ad: the workspace keeps the selected ad in local state,
+  there is no query-string selection. Belongs to the campaign-detail batch.
+- Target page shows a number only for the basis in force; per-basis preview numbers (v7 shows three) need a backend
+  "candidates" field. The v7 actual-vs-target gauge is omitted for the same reason.
+- Cost / target numbers print without a currency symbol: triage and target responses carry no currency and
+  `formatCurrency` hard-codes NT$. Add `currency` to those responses before printing a symbol.
+- Zero-ad campaigns (drafts) show no target and no entry to the target page on their card (reach it through the workspace).
+- Revision conflict on the target page reloads server values; local edits are not merged.
+- Placeholders 「接上後開放」: pause proposal, 可加預算, 補素材, 每月回顧. Not built: campaign detail, data-connection page,
+  six-step repair restyle, "系統暫停補資料" banner, "資料不足先不判斷" card state (no backend state).
+- One `getTriage` request per campaign card; add a brand-level summary endpoint when a brand has > 10 campaigns.
+- Queue meter clamps at 1.5 ×, so 1.5 × and 4 × over look equally full; the numbers carry the difference.
+
 ## 6. Still open
 
 Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,
