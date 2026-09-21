@@ -70,7 +70,7 @@ function facts() {
   const VARIANT = { kind: ["stop", "worse", "up"], todo: ["ok"], hero: ["ok", "warn", "bad"] };
   for (const e of within("[class], [data-slot]")) {
     if (!vis(e)) continue;
-    if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${e.dataset.variant || ""}`.trim() + " |"); continue; }
+    if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${e.dataset.slot === "meter" ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
     if (document.querySelector("#main-content")) continue;
     for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
       let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
