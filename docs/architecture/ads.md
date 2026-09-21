@@ -909,7 +909,9 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `ads_external_entity` 各出一個 item；class 六選一
   `stop_loss｜worse｜better｜flat｜insufficient｜no_target`，中文標籤
   停損／變差／變好／持平／資料不足／尚未設定目標 由這支檔案自己產生（feature Decisions 凍結的
-  共用契約，逐字實作）。
+  共用契約，逐字實作）。每個 item 另帶 `campaign_name`（F19-I07：這個 Campaign 自己的
+  `name`，`classify()` 已經讀過的那筆 `campaign` row 上直接取，不是第二次查詢），供品牌層佇列
+  （跨多個 Campaign）標示每列所屬活動、逐活動篩選用。
 - **窗口與截止日**：`WINDOW_STEPS=(7,14,28)`；`window_days`（回傳最外層）固定是這三步裡最大的一個
   （28）——只代表「最多可能看多遠」，每個 item 實際用到的窗長要看自己的 `window.days`。第一個窗口
   的結束日是**這個 Campaign 所接帳戶自己時區**的「昨天」（沿用 §6.15、

@@ -122,7 +122,11 @@ class TriageTest(unittest.TestCase):
         result = triage.classify(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual(result["window_days"], triage.WINDOW_STEPS[-1])
-        return result["items"][0]
+        item = result["items"][0]
+        # F19-I07: every item carries the campaign's own name (GET .../triage returns this shape
+        # unwrapped -- `triage_routes.py::get_campaign_triage` calls `classify()` directly).
+        self.assertEqual(item["campaign_name"], "既有活動")
+        return item
 
     # -- no_target ------------------------------------------------------------------------------
 

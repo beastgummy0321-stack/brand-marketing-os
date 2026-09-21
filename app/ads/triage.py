@@ -62,7 +62,8 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         for row in rows:
             rows_by_entity[row["entity_id"]].append(dict(row))
     items = [
-        _classify_ad(dict(ad), target, cutoff, coverage, rows_by_entity.get(ad["id"], []))
+        _classify_ad(dict(ad), campaign["name"], target, cutoff, coverage,
+                      rows_by_entity.get(ad["id"], []))
         for ad in ads
     ]
     return {"window_days": WINDOW_STEPS[-1], "items": items}
@@ -215,10 +216,10 @@ def _compare(current_cost, previous_cost):
     return "flat", "cost_per_result_flat", change_pct
 
 
-def _classify_ad(entity, target, cutoff, coverage, entity_rows):
+def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
-        "campaign_id": entity["campaign_id"],
+        "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
     }
 
     def finish(cls, reason_code, start, end, days, extended_from, view, spend, change_pct=None,

@@ -40,6 +40,7 @@ function unknownBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "native_1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1",
+    campaign_name: "晨光隨行杯上市",
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
@@ -110,26 +111,22 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(vi.mocked(refreshQueue).mock.calls.length).toBe(1);
   });
 
-  it("空佇列：header 印「都處理完了」，佇列卡印誠實空狀態句", async () => {
+  it("空佇列：header 印「都處理完了」（誠實空狀態句由 DecisionQueue 的佔位列自己扛，這支只管頁首）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
 
     renderPage();
 
     expect(await screen.findByText("都處理完了")).toBeTruthy();
-    expect(await screen.findByText("目前沒有需要你決定的廣告。")).toBeTruthy();
   });
 
-  it("佇列列只印分類、名稱與連結，不印 result_kind 或任何金額", async () => {
+  it("佇列列真的照 payload 渲染（分類、名稱、連結）——列的細節斷言在 DecisionQueue.test.tsx，這支只驗頁面接得到資料", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
 
     renderPage();
 
     expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
     expect(screen.getByText("停損")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "查看" })).toBeTruthy();
-    expect(screen.queryByText("purchase")).toBeNull();
-    expect(screen.queryByText(/成本/)).toBeNull();
-    expect(screen.queryByText(/目標/)).toBeNull();
+    expect(screen.getByRole("link", { name: "看證據" })).toBeTruthy();
   });
 
   it("佇列列沒有 action_url：不給連結（不落回 /brands//ads）", async () => {
@@ -140,7 +137,7 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     renderPage();
 
     expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "查看" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "看證據" })).toBeNull();
   });
 
   it("每月回顧是非互動的灰階佔位，不是按鈕", async () => {
