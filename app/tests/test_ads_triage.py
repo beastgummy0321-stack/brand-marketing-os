@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app.ads import channels, repository, tracked_zero, triage
+from app.ads import channels, repository, result_kinds, tracked_zero, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -383,6 +383,9 @@ class TriageTest(unittest.TestCase):
             )
         item = self.classify_one()
         self.assertEqual(item["current"]["result_kind"], "lead")
+        # F19-I06: `target`/`current` each carry the Chinese label alongside the raw kind.
+        self.assertEqual(item["current"]["result_label"], result_kinds.label("lead"))
+        self.assertEqual(item["target"]["result_label"], result_kinds.label("lead"))
         self.assertIn(item["class"], {"worse", "better", "flat"})
         self.assertIsNone(item["current"]["reason"])
 

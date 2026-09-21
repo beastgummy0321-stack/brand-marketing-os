@@ -864,6 +864,9 @@ _TARGET_ERRORS = {
     "target_value_unknown": (400, "own 目標值必須是數字。"),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
     "product_economics_unknown": (400, "這個商品還沒有售價可以核對，請先補售價。"),
+    # F19-I06: result_kind is a trust-boundary value -- `app/ads/result_kinds.py::LABELS` is the
+    # one vocabulary; anything outside it is rejected, never silently stored.
+    "result_kind_unknown": (400, "result_kind 不在可選清單裡。"),
 }
 
 
