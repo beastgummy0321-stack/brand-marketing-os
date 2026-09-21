@@ -113,3 +113,16 @@ describe("ads patterns（F04-I07）", () => {
     expect(card.className).toContain("bg-muted");
   });
 });
+
+describe("flow pieces（F22）", () => {
+  it("Meter 不知道數值就不畫量尺，只留說明；TodoRow done 換成勾", async () => {
+    const { Meter, TodoRow } = await import("./FlowPieces");
+    const { container, rerender } = render(<Meter value={null} max={100} tone="danger" left="累積中" />);
+    expect(container.querySelector("[aria-hidden]")).toBeNull();
+    expect(screen.getByText("累積中")).toBeTruthy();
+    rerender(<Meter value={500} max={100} marker={90} tone="danger" />);
+    expect((container.querySelector("[aria-hidden] > div") as HTMLElement).style.width).toBe("100%");
+    render(<TodoRow no={2} done>關掉開關</TodoRow>);
+    expect(screen.getByLabelText("已完成")).toBeTruthy();
+  });
+});
