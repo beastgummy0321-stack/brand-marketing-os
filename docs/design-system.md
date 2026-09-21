@@ -80,6 +80,7 @@ accept, reject and exit.** 使用者原話：「不是越簡單越好，也不�
 8. Your own preview/e2e server uses port 8731 + issue number (I03 → 8734); 8720 belongs to harness merge/integrate.
 9. Independent blocks fail independently: one failed request (queue, budget, thumbnails) never blanks the rest of the page.
 10. One-shot effects (scroll to `?ad=`, focus) run once per value, not on every refetch; do not key effects on fresh objects.
+11. Tests await the state they assert (`findByText`), never a container that exists in every state followed by a synchronous `getBy*` — it passes alone and races under the full suite.
 
 **Assemble the screen from the prototype, do not re-interpret it** (root cause found 2026-09-22: the prototype's
 vocabulary — `btn`, `chip`, `card` — had no counterpart in the kit, so every worker re-decided emphasis by judgement and

@@ -220,9 +220,9 @@ describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
     renderPage();
 
     const accountsCard = await screen.findByTestId("connection-card-Meta 廣告帳戶");
-    expect(within(accountsCard).getByText("尚未連接")).toBeTruthy();
+    expect(await within(accountsCard).findByText("尚未連接")).toBeTruthy();
     const historyCard = await screen.findByTestId("connection-card-過去的廣告紀錄");
-    expect(within(historyCard).getByText("先連接帳戶")).toBeTruthy();
+    expect(await within(historyCard).findByText("先連接帳戶")).toBeTruthy();
     expect(fetchMetaBackfillStatus).not.toHaveBeenCalled();
   });
 
@@ -233,7 +233,7 @@ describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
     await screen.findByText("Meta 預算金額");
 
     const budgetCard = screen.getByTestId("connection-card-Meta 預算金額");
-    expect(within(budgetCard).getByText("影響")).toBeTruthy();
+    expect(await within(budgetCard).findByText("影響")).toBeTruthy();
     expect(within(budgetCard).getByText("加預算提議")).toBeTruthy();
     expect(within(budgetCard).getByText("約撐得起幾則")).toBeTruthy();
     const link = within(budgetCard).getByRole("link", { name: "去設定 →" });
@@ -246,7 +246,7 @@ describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
 
     const accountsCard = screen.getByTestId("connection-card-Meta 廣告帳戶");
     expect(within(accountsCard).queryByText("影響")).toBeNull();
-    const link = within(accountsCard).getByRole("link", { name: "查看 →" });
+    const link = await within(accountsCard).findByRole("link", { name: "查看 →" });
     expect(link.getAttribute("href")).toBe("/settings?tab=meta");
   });
 
@@ -256,7 +256,7 @@ describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
     renderPage();
 
     const ordersCard = await screen.findByTestId("connection-card-商城訂單報表");
-    expect(within(ordersCard).getByText("讀取失敗")).toBeTruthy();
+    expect(await within(ordersCard).findByText("讀取失敗")).toBeTruthy();
     expect(within(ordersCard).getByText("訂單讀取失敗")).toBeTruthy();
     expect(await screen.findByText("1 項需要處理")).toBeTruthy();
 
