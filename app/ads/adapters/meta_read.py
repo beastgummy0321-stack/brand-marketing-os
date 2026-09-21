@@ -326,6 +326,35 @@ def result_kind_for_objective(objective) -> str | None:
     return mapped[0] if mapped else None
 
 
+# F22-I01: this adapter's own read-time deep link into Meta Ads Manager, one object kind per
+# entry point Ads Manager can select directly by id (campaign/adset/ad) -- an object kind absent
+# from this table (or, in practice, none today) has no defined link and stays unmapped, never a
+# guessed URL shape.
+_MANAGE_SEGMENT = {"campaign": "campaigns", "adset": "adsets", "ad": "ads"}
+_MANAGE_SELECTED_PARAM = {
+    "campaign": "selected_campaign_ids", "adset": "selected_adset_ids", "ad": "selected_ad_ids",
+}
+
+
+def platform_url(target: dict) -> str | None:
+    """This change item's own target (`app/ads/change_control_data.py::_TARGET` shape) -> a Meta
+    Ads Manager deep link, computed at read time only -- never written to `plan_json`, so no
+    approval hash ever depends on it (F22-I01, "↗ 打開平台"). `None` when the native kind isn't
+    one Ads Manager can select directly, or an identifying field (`native_id`/`source_account`)
+    is missing -- the caller falls back to the target's own name/native id, never a broken link.
+    """
+    native_kind = target.get("native_kind")
+    native_id = target.get("native_id")
+    account = target.get("source_account")
+    if native_kind not in _MANAGE_SEGMENT or not native_id or not account:
+        return None
+    segment, param = _MANAGE_SEGMENT[native_kind], _MANAGE_SELECTED_PARAM[native_kind]
+    return (
+        f"https://adsmanager.facebook.com/adsmanager/manage/{segment}"
+        f"?act={account}&{param}={native_id}"
+    )
+
+
 class MetaReader:
     def sync_scopes(self, conn):
         return source.external_sync_scopes(conn)

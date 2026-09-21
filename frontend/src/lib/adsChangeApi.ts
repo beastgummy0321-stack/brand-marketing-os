@@ -19,6 +19,11 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
   evidence_json: Record<string, unknown>; reported_at: string | null;
   first_observed_at: string | null; verified_at: string | null; stale_reason?: string | null;
+  // F22-I01: read time only (`app/ads/adapters::platform_url`, keyed by `target.platform`) --
+  // never persisted, never part of any hash. `null` when the platform/native kind has no direct
+  // deep link, or an identifying field is missing; the caller falls back to the target's own
+  // name/native id + 「複製編號」.
+  platform_url: string | null;
 }
 export interface ChangeSet {
   id: string; campaign_id: string; title: string; month: string; operation_id: string; content_hash: string;

@@ -902,3 +902,71 @@ class ChangeControlTest(unittest.TestCase):
         reopened = client.get(base + f"/change-sets/{created['id']}").json()["change_set"]
         self.assertEqual(reopened["status"], "approved")
         self.assertEqual(reopened["content_hash"], created["content_hash"])
+
+
+class ChangeControlPlatformUrlTest(unittest.TestCase):
+    """F22-I01: `platform_url` on every item `data.get()` returns -- computed at read time from
+    the item's own `target` through `app/ads/adapters::platform_url`, never written to
+    `plan_json`, so an existing set's `content_hash` is unaffected."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="平台連結測試", actor="test", client_name=None
+        )["id"]
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動一"
+        )["id"]
+        self.meta_ad = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {
+                "platform": "meta", "source_account": "123456789", "native_kind": "ad",
+                "native_id": "ad_1", "native_status": "ACTIVE",
+                "creative": {"kind": "image", "fields": {"body": "文案", "title": "標題"}},
+            },
+        )
+        self.fake_ad = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {
+                "platform": "fake", "source_account": "account", "native_kind": "ad",
+                "native_id": "ad_2", "native_status": "ACTIVE",
+                "creative": {"kind": "image", "fields": {"body": "文案", "title": "標題"}},
+            },
+        )
+        self.conn.commit()
+        self.month = db.now_utc().strftime("%Y-%m")
+
+    def _create(self, ad_id, operation_id):
+        return service.create(
+            self.conn, self.org, self.brand, self.campaign,
+            {
+                "operation_id": operation_id, "month": self.month, "title": "文案調整",
+                "items": [
+                    {
+                        "kind": "copy", "target_id": ad_id, "after": {"body": "新文案"},
+                        "reason": "驗證新訴求，未聲稱因果",
+                    }
+                ],
+            },
+            "test",
+        )
+
+    def test_meta_target_gets_a_deep_link(self):
+        created = self._create(self.meta_ad["id"], "meta-op")
+        self.assertEqual(
+            created["items"][0]["platform_url"],
+            "https://adsmanager.facebook.com/adsmanager/manage/ads"
+            "?act=123456789&selected_ad_ids=ad_1",
+        )
+
+    def test_unknown_platform_target_is_none(self):
+        created = self._create(self.fake_ad["id"], "fake-op")
+        self.assertIsNone(created["items"][0]["platform_url"])
+
+    def test_platform_url_never_changes_content_hash(self):
+        created = self._create(self.meta_ad["id"], "hash-op")
+        before_hash = created["content_hash"]
+        reread = data.get(self.conn, self.org, self.brand, self.campaign, created["id"])
+        self.assertEqual(reread["content_hash"], before_hash)
+        self.assertIn("platform_url", reread["items"][0])
+        self.assertNotIn("platform_url", reread["plan_json"]["items"][0])

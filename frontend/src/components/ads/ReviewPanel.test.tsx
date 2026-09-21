@@ -233,7 +233,7 @@ describe("廣告檢討的證據與使用者決定", () => {
         before: { title: "保留的原始標題", body: "保留的原始內文" },
         after: { title: "建議新標題", body: "使用者修訂後的測試內文" },
         reason: "測試不同訴求，尚未證明改善", verification_state: "pending", evidence_json: {},
-        reported_at: null, first_observed_at: null, verified_at: null,
+        reported_at: null, first_observed_at: null, verified_at: null, platform_url: null,
       }],
     };
     vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ change_set: saved }), { status: 200 }));
