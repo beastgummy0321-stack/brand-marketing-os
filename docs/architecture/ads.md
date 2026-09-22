@@ -1149,12 +1149,11 @@ route. Neither field is stored — both are computed at read time on every call.
   建議／ready 無 adjust 建議／completed 帶文案清單／completed 無清單／deferred／unjudgeable／failed／窗外不匹配／
   `stop_loss` 列不受影響）。
 - 前端型別未跟進：`frontend/src/lib/adsTriageApi.ts::QueueProposal` 這批仍是單一介面（只有 `stop_loss` 形狀），
-  未改成 `kind` 判別聯集。改聯集會讓 `home/status.ts`（do_not_touch）的既有 switch 斷編譯——不管新欄位叫什麼名字：
-  沿用 `status` 這個名字會讓那支 switch 從詳盡變不詳盡（`TS2366`，`npm run build` 已實測）；改名不共用又會讓
-  `status.ts` 讀不到 `proposal.status` 這個屬性（`TS2339`）；`home/DecisionQueue.test.tsx`（同樣 do_not_touch）的
-  `proposal()` 測試工廠用 `{...defaults, ...(overrides: Partial<QueueProposal>)}` 組物件，`QueueProposal` 一旦變聯
-  集也連帶斷掉（`TS2322`）。這兩個檔都在 F23-I01 的 `do_not_touch` 範圍外，需要另外授權才能改；哪個之後要蓋
-  「看證據」等頁面的票，再一併決定型別設計並改這兩檔。
+  未改成 `kind` 判別聯集——設計已經定案（`status.ts::proposalAction` 先用 `proposal.kind` 窄化再各自處理，解掉
+  詳盡性衝突），但改動落在 `home/status.ts`／`home/DecisionQueue.test.tsx`／`AdsHomePage.test.tsx`／
+  `detail/CampaignDetailPage.test.tsx` 四個檔，F23-I01 這次的 lease（`.harness/runtime/leases/F23-I01.json`）跟
+  `.work/doing/F23-I01.md` 的 frontmatter 都還沒把它們移出 `do_not_touch`（Edit 工具直接擋下，訊息 "is in
+  do_not_touch"），需要實際跑過 rescope 才能繼續。
 
 ### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
 

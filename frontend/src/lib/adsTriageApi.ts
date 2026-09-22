@@ -53,20 +53,18 @@ export interface CampaignTriage { window_days: number; items: TriageItem[] }
  * outside the row's current window, or confirmed while the entity has left `native_status`
  * paused). Always `null` on a `worse` row this batch.
  *
- * F23-I01 backend note: `app/ads/triage.py::_row_review_proposal` now gives `worse` rows their
- * own `{kind:"review", ...}` proposal shape too (see that function's docstring for the exact
- * fields) — NOT yet reflected in this type. Turning `QueueProposal` into a `kind`-discriminated
- * union breaks two do_not_touch files with real evidence (`cd frontend && npm run build`):
- * `home/status.ts:53,60,62` (its existing switch assumes `proposal.status` is exactly
- * `"draft"|"approved"|"rejected"|"deferred"` and calls `changePath(..., proposal.change_set_id,
- * ...)` assuming `string`, not `string | null`; any field named `status` shared with a review
- * variant either breaks that switch's exhaustiveness (`TS2366`) or, if renamed, removes the
- * property from the union so `status.ts` can no longer read it at all (`TS2339`)) and
- * `home/DecisionQueue.test.tsx:45` (its `proposal()` fixture builds a plain object typed as the
- * union via `{...defaults, ...(overrides: Partial<QueueProposal>)}`, which no longer resolves to
- * a single member once `QueueProposal` is a union). Left as the single flat interface pending an
- * orchestrator decision (widen touch to co-edit those two files, or defer the FE type to the
- * issue that builds the review pages). */
+ * F23-I01 status: the backend (`app/ads/triage.py::_row_review_proposal`) already gives `worse`
+ * rows their own `{kind:"review", ...}` proposal — NOT yet reflected here. A coordinator message
+ * mid-issue said this file's `do_not_touch` had been widened to include
+ * `frontend/src/components/ads/home/status.ts` (needed to consume a `kind`-discriminated
+ * `QueueProposal` — see that message for the full design, already worked out: `status.ts`
+ * narrows on `proposal.kind` first via an early-return, which resolves the exhaustive-switch
+ * conflict the first attempt hit). The Edit tool rejected the `status.ts` edit with "is in
+ * do_not_touch" — the enforced lease (`.harness/runtime/leases/F23-I01.json`) and
+ * `.work/doing/F23-I01.md`'s own frontmatter both still carry the ORIGINAL scope (verified by
+ * re-reading both files and by a fresh `attach` after the message). The rescope was announced but
+ * never actually landed (`.work/doing/F23-I01.md` frontmatter unedited, no `rescope` run) — so
+ * this file is left as the single flat interface again, pending that rescope actually happening. */
 export interface QueueProposal {
   change_set_id: string; campaign_id: string; kind: string;
   status: "draft" | "approved" | "rejected" | "deferred";
