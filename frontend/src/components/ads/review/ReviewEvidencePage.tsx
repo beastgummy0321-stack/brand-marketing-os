@@ -293,7 +293,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         ) : undefined}
         aside={showEvidence ? (
           <div className="flex items-center gap-2">
-            <Ladder steps={["改文案", "換圖", "退役"]} current={ladder?.step} placeholder={!ladder} />
+            {ladder && <Ladder steps={["改文案", "換圖", "退役"]} current={ladder.step} />}
             {closedChip && <Chip tone="neutral">{closedChip}</Chip>}
           </div>
         ) : undefined}

@@ -432,7 +432,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       </ActionBar>
     );
   } else if (state === "deviated") {
-    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={`讀回於 ${observedAtText(item)}`} />;
+    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={messageOf(item) ?? `讀回於 ${observedAtText(item)}`} />;
     // F27-I15: `DeviatedCompare`'s before/after table only makes sense for a plain settings diff
     // (copy/pause/budget) — a `new_ad` item's evidence is the handoff aggregate, no `observed`/
     // `expected` settings pair to line up (`messageOf(item)` in the hero note is the only signal

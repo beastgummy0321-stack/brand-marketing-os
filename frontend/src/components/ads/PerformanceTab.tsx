@@ -188,7 +188,7 @@ export function PerformanceTab({
   const imported = c.origin === "imported";
   const scopes = useMemo(() => nativeMetricScopes(c.external_view), [c.external_view]);
   const [scopeKey, setScopeKey] = useState<string>();
-  const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? scopes[0];
+  const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? (highlightAd ? scopes.find(scope => scope.metricScope === "ad") : undefined) ?? scopes[0];
   const nativeData = useMemo(() => nativePerformance(c.external_view, selectedScope?.key), [c.external_view, selectedScope?.key]);
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
   const labels = c.labels ?? DEFAULT_LABELS;

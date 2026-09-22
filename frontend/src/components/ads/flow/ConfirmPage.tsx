@@ -316,7 +316,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     return `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`;
   });
   const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  // The page is keyed by its URL, so an approve error must ride the canonical redirect in router
+  // state — otherwise a rebuild-then-fail lands on a fresh instance with the message gone.
+  const [actionError, setActionError] = useState<string | null>(() => (location.state as { actionError?: string } | null)?.actionError ?? null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [decisionKind, setDecisionKind] = useState<DecisionKind>("deferred");
@@ -413,11 +415,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
   // 才會真的把人送到那兩頁；這批只加了 propose 與 confirm 兩條路由。
   useEffect(() => {
-    if (!changeSet) return;
+    if (!changeSet || busy) return;
     const { step } = stepFromChangeSet(changeSet);
     const canonical = changeStepPath(brandId, campaignId, changeSet.id, step);
-    if (canonical !== location.pathname) navigate(canonical, { replace: true });
-  }, [changeSet, brandId, campaignId, location.pathname, navigate]);
+    if (canonical !== location.pathname) navigate(canonical, { replace: true, state: actionError ? { actionError } : undefined });
+  }, [changeSet, busy, actionError, brandId, campaignId, location.pathname, navigate]);
 
   function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。";

@@ -523,6 +523,30 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
   });
 });
 
+describe("ConfirmPage：重建後仍失敗", () => {
+  it("重建的草稿核准又被擋：導到正典網址後錯誤訊息仍在、按鈕不卡在處理中", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
+      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    });
+    const draft = changeSet({
+      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
+    });
+    const rebuilt = { ...draft, id: "acs_rebuilt" };
+    vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce(rebuilt);
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ change_sets: [rebuilt] } as never);
+    // Real latency: the second approve answers after the rebuilt set has already re-rendered the page.
+    vi.mocked(changeApi.approveChangeSet).mockImplementation(() => new Promise((_, reject) =>
+      setTimeout(() => reject(new ChangeRequestRejected("這個物件已有相同操作待核對，請先處理原清單。")), 50)));
+    renderAt(proposeBudgetPath);
+    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+    expect(await screen.findByText("這個物件已有相同操作待核對，請先處理原清單。")).toBeTruthy();
+    expect(screen.queryByText(/處理中/)).toBeNull();
+  });
+});
+
 describe("ConfirmPage（F27-I15）new_ad kind", () => {
   function newAdItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     return changeItem({

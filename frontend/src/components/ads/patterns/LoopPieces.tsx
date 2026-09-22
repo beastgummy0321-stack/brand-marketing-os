@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -68,16 +68,22 @@ export function RecoverSteps({ steps }: { steps: RecoverStep[] }) {
   );
 }
 
+/** One tile; a missing or failed image falls back to the same neutral tile. */
+function Thumb({ url, size }: { url: string | null; size: number }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const tile = "shrink-0 rounded-[.6rem] bg-muted object-cover";
+  return url && failed !== url
+    ? <img src={url} alt="" className={tile} style={{ width: size, height: size }} loading="lazy" onError={() => setFailed(url)} />
+    : <div className={tile} style={{ width: size, height: size }} aria-hidden="true" />;
+}
+
 /** `.tiles` + `.thumb`: a row of square thumbnails; `null` url → neutral tile, `hollow` → dashed empty slot. */
 export function ThumbTiles({ items, size = 44, max, hollow = 0 }: { items: (string | null)[]; size?: number; max?: number; hollow?: number }) {
   const shown = max !== undefined ? items.slice(0, max) : items;
   const rest = items.length - shown.length;
-  const tile = "shrink-0 rounded-[.6rem] bg-muted object-cover";
   return (
     <div data-slot="thumb-tiles" className="mt-2.5 flex flex-wrap items-center gap-1.5">
-      {shown.map((url, i) => url
-        ? <img key={i} src={url} alt="" className={tile} style={{ width: size, height: size }} loading="lazy" onError={(e) => { e.currentTarget.style.visibility = "hidden"; }} />
-        : <div key={i} className={tile} style={{ width: size, height: size }} aria-hidden="true" />)}
+      {shown.map((url, i) => <Thumb key={i} url={url} size={size} />)}
       {Array.from({ length: hollow }, (_, i) => <div key={`h${i}`} className="shrink-0 rounded-[.6rem] border border-dashed border-border" style={{ width: size, height: size }} aria-hidden="true" />)}
       {rest > 0 && <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">＋{rest} 則</span>}
     </div>
