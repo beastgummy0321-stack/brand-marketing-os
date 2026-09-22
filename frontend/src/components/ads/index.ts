@@ -9,4 +9,7 @@ export { DataConnectionsPage } from "./connections/DataConnectionsPage";
 export { ConfirmPage } from "./flow/ConfirmPage";
 export { HandoffPage } from "./flow/HandoffPage";
 export { VerifyPage } from "./flow/VerifyPage";
+export { ReviewEvidencePage } from "./review/ReviewEvidencePage";
+export { PreparePage } from "./review/PreparePage";
+export { CopyPage } from "./review/CopyPage";
 export { ReadinessList } from "./patterns/ReadinessList";

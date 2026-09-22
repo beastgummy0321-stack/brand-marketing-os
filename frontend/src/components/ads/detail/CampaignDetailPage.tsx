@@ -96,8 +96,9 @@ function AdThumb({ url }: { url: string | null }) {
  * 入口）；還是不是在佇列裡（`queueItem` 有沒有值）決定要不要印這顆按鈕。
  *
  * F22-I05：停損分類的廣告改走 `proposalAction`（跟 `home/QueueRow.tsx` 同一支），按鈕印目前
- * 進度而不是固定的「去處理」；非停損分類（`worse` 這批唯一還在佇列裡的另一類）維持上面那條
- * 舊規則不變。 */
+ * 進度而不是固定的「去處理」。F23-I05：`worse` 分類現在也走同一支（`kind: "review"`）——
+ * 這批唯一還留著舊「去處理」規則的分類只剩不在 stop_loss／worse 的其他項（目前沒有，這裡
+ * 留一個誠實的 fallback，不是預期路徑）。 */
 function AdRow({
   brandId,
   item,
@@ -115,8 +116,11 @@ function AdRow({
 }) {
   const name = item.name ?? "（未命名廣告）";
   const costLabel = `每次${item.current.result_label}成本`;
-  const action = queueItem && item.class === "stop_loss"
-    ? proposalAction(brandId, item.campaign_id, item.entity_id, queueItem.proposal)
+  const action = queueItem && (item.class === "stop_loss" || item.class === "worse")
+    ? proposalAction(
+        brandId, item.campaign_id, item.entity_id, queueItem.proposal,
+        item.class === "worse" ? "review" : "pause",
+      )
     : null;
   return (
     <div

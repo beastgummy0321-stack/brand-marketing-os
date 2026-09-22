@@ -21,6 +21,7 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueueItem, type QueuePayload, type TriageItem } from "@/lib/adsTriageApi";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, Meter, ReservedSlotCard, Segmented } from "../patterns";
 import {
   buildPauseDraftItem,
@@ -446,6 +447,12 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
     : "";
   const nextPauseItem = queue?.items.find((i) => i.id !== triageItem?.id && i.triage.class === "stop_loss" && !i.proposal);
+  // 改文案清單、還沒關閉（草稿）、承接自某一輪檢討：返回鍵改成「修改內容」回那一輪的改文案頁
+  // （v7 原型 `confirmPage()` 的 `back:i.kind==="copy"?["修改內容",...]`）；已關閉或核准之後的清單
+  // （`stepFromChangeSet` 這裡不會再回傳 confirm 步驟）都留原本的「投放中心」（issue Done 3）。
+  const editCopyHref = !closed && kind === "copy" && changeSet?.review_id
+    ? reviewRoundPath(brandId, campaignId, changeSet.review_id, "copy")
+    : null;
 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
@@ -488,7 +495,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
 
       <div className="flex-1" />
       <ActionBar
-        back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}
+        back={<Button variant="ghost" asChild><Link to={editCopyHref ?? homeHref}>← {editCopyHref ? "修改內容" : "投放中心"}</Link></Button>}
         hint={!closed ? "核准不會改動平台" : undefined}
       >
         {!closed && (

@@ -125,6 +125,44 @@ describe("ConfirmPage（F22-I02）三種 kind", () => {
     expect(screen.getByText("可加預算")).toBeTruthy();
   });
 
+  it("改文案清單承接自某一輪檢討：返回鍵是「修改內容」，連回那一輪的改文案頁（F23-I04）", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        id: "acs_copy", review_id: "arv_1", recommendation_id: "rec_1",
+        items: [changeItem({ kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "新內文" } })],
+      })],
+    });
+    renderAt(confirmPath("acs_copy"));
+    await screen.findByText("確認變更");
+    const back = screen.getByRole("link", { name: "← 修改內容" }) as HTMLAnchorElement;
+    expect(back.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/copy");
+  });
+
+  it("改文案清單沒有承接的檢討：返回鍵維持「投放中心」（F23-I04）", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        id: "acs_copy", items: [changeItem({ kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "新內文" } })],
+      })],
+    });
+    renderAt(confirmPath("acs_copy"));
+    await screen.findByText("確認變更");
+    const back = screen.getByRole("link", { name: "← 投放中心" }) as HTMLAnchorElement;
+    expect(back.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+
+  it("已拒絕的改文案清單：即使承接自檢討，返回鍵仍是「投放中心」（F23-I04）", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        id: "acs_copy", review_id: "arv_1", recommendation_id: "rec_1", status: "rejected", reason: "資料還不夠",
+        items: [changeItem({ kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "新內文" } })],
+      })],
+    });
+    renderAt(confirmPath("acs_copy"));
+    await screen.findByText("確認變更");
+    const back = screen.getByRole("link", { name: "← 投放中心" }) as HTMLAnchorElement;
+    expect(back.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+
   it("多項變更的清單不重新解讀畫面，連去既有變更與核對", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem(), changeItem({ id: "item_2", target_id: "aex_2" })] })],
