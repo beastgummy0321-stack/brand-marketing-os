@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Chip } from "../patterns";
 import { formatCurrency } from "@/lib/format";
 import type { CampaignCard as CampaignCardData, CampaignSyncState } from "@/lib/adsApi";
-import { getTriage, type TriageClass, type TriageData, type TriageItem } from "@/lib/adsTriageApi";
+import { getTriage, type TriageClass, type TriageClosedBlock, type TriageData, type TriageItem } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { STATUS_LABEL, STATUS_TONE } from "./status";
 
@@ -22,7 +22,7 @@ type TargetView = TriageItem["target"];
 type CardState =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "ready"; items: TriageItem[]; data?: TriageData };
+  | { status: "ready"; items: TriageItem[]; data?: TriageData; closed: TriageClosedBlock };
 
 const SEGMENTS: { cls: Exclude<TriageClass, "no_target">; label: string; swatch: string }[] = [
   { cls: "stop_loss", label: "停損", swatch: "bg-danger" },
@@ -242,7 +242,9 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
     setState({ status: "loading" });
     // ponytail: one triage call per card; add a brand-level summary endpoint when a brand has >10 campaigns
     getTriage(brandId, campaign.id)
-      .then((triage) => { if (!cancelled) setState({ status: "ready", items: triage.items, data: triage.data }); })
+      .then((triage) => {
+        if (!cancelled) setState({ status: "ready", items: triage.items, data: triage.data, closed: triage.closed });
+      })
       .catch(() => { if (!cancelled) setState({ status: "error" }); });
     return () => { cancelled = true; };
   }, [brandId, campaign.id, reload]);
@@ -302,6 +304,10 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
   // 沒補、do_not_touch 衝突見 `adsApi.ts` 註解）視同 `"never"`，走今天原本那張卡。
   const items = state.status === "ready" ? state.items : [];
   const triageData = state.status === "ready" ? state.data : undefined;
+  // F26-I02: closed ads are always sent alongside `items` (`triage.closed`, never a second
+  // request) -- the bottom line below reads straight off it, `null` only while the card hasn't
+  // loaded/errored (no closed count to show yet).
+  const closed: TriageClosedBlock | null = state.status === "ready" ? state.closed : null;
   const sync: CampaignSyncState = triageData?.sync ?? { state: "never", error: null, last_success_at: null };
   const isSyncAbnormal = state.status === "ready"
     && (sync.state === "failed" || sync.state === "syncing" || sync.state === "disconnected");
@@ -356,7 +362,12 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
             <span className="min-w-0 truncate" title={campaign.objective || undefined}>
               {campaign.objective || "尚待確認"}
             </span>
-            {state.status === "ready" && <span className="shrink-0">・{state.items.length} 則</span>}
+            {/* F26-I02 (prototype `home()` chip 「轉換・<b>投放中 5 則</b>」): `state.items` is
+               already active-only (`triage.classify()` judges active ads only, F26-I01) — the
+               「・」separator stays plain, only 「投放中 N 則」 itself is bold. */}
+            {state.status === "ready" && (
+              <span className="shrink-0">・<span className="font-semibold">投放中 {state.items.length} 則</span></span>
+            )}
           </Chip>
         </div>
       </div>
@@ -414,6 +425,21 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
          印這列（那個分支從來沒帶預算 chip），只有既有的 `isError`／`ready` 卡維持原樣。 */}
       {!isSyncAbnormal && !isInsufficient && (
         <div className="flex flex-wrap items-center gap-2">{budgetChip}</div>
+      )}
+
+      {/* F26-I02 (prototype `home()` ccard bottom line, feature Decisions "I02"): closed ads are a
+         fact independent of this card's sync/insufficient state (`triage.closed` always comes back
+         with `items`), so this isn't gated on `isSyncAbnormal`/`isInsufficient` the way the budget
+         chip is — only on actually having a closed count to report. `other` (DELETED／ADSET_PAUSED／
+         CAMPAIGN_PAUSED) folds into the bold total but isn't broken out, same as the prototype. */}
+      {state.status === "ready" && closed && closed.total > 0 && (
+        <div className="flex items-center justify-between gap-2 border-t border-dashed border-border pt-2.5 text-[13px] text-muted-foreground">
+          <span>
+            另有 <b className="font-semibold text-foreground">{closed.total} 則已關閉</b>
+            （暫停 {closed.paused}・已封存 {closed.archived}），不列入判斷
+          </span>
+          <Link to={detailHref} className="shrink-0 text-sm text-primary hover:underline">查看 →</Link>
+        </div>
       )}
     </article>
   );

@@ -51,13 +51,14 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
 }
 
 // F26-I01: `closed` is always sent by the real backend -- an empty block for every test here
-// unless a scenario overrides it directly (none of `CampaignCards`'s own assertions read it yet).
+// unless a scenario overrides it directly (F26-I02's own 「另有 N 則已關閉」 line describe block
+// below passes a real one).
 const EMPTY_CLOSED: TriageClosedBlock = {
   paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
 };
 
-function triage(items: TriageItem[], data?: TriageData): CampaignTriage {
-  return { window_days: 7, items, closed: EMPTY_CLOSED, data };
+function triage(items: TriageItem[], data?: TriageData, closed: TriageClosedBlock = EMPTY_CLOSED): CampaignTriage {
+  return { window_days: 7, items, closed, data };
 }
 
 function renderCards() {
@@ -71,6 +72,13 @@ function renderCards() {
 /** 每次呼叫 `getTriage` 打的是哪個 campaign（第二個參數）；重試只影響那一張卡的斷言用這個。 */
 function callsFor(campaignId: string): number {
   return vi.mocked(getTriage).mock.calls.filter(([, id]) => id === campaignId).length;
+}
+
+/** RTL 的 `getByText` 預設只比對一個節點「自己的」文字節點（`getNodeText`：只收直接子文字
+ * 節點，略過子元素），不是整個 `textContent`——這頁有幾處把一段文字的一部分包進巢狀
+ * `<span>`/`<b>` 加粗（例如「・<b>投放中 N 則</b>」），要用完整 `textContent` 比對才找得到。 */
+function textOf(expected: string) {
+  return (_content: string, node: Element | null) => node?.textContent === expected;
 }
 
 beforeEach(() => {
@@ -95,8 +103,10 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.getByText("450", { exact: true })).toBeTruthy();
     expect(screen.queryByText(/NT\$/)).toBeNull();
     expect(screen.getByText("損益兩平")).toBeTruthy();
-    expect(screen.getByText("・5 則")).toBeTruthy();
-    expect(screen.getByText("投放中")).toBeTruthy(); // STATUS_LABEL.live
+    // F26-I02: the count chip now reads 「・投放中 N 則」 (`state.items` is active-only since
+    // F26-I01) instead of the old bare 「・N 則」.
+    expect(screen.getByText(textOf("・投放中 5 則"))).toBeTruthy();
+    expect(screen.getByText("投放中", { exact: true })).toBeTruthy(); // STATUS_LABEL.live (exact, not the count chip's 「投放中 5 則」)
 
     const adjust = screen.getByRole("link", { name: "調整" });
     expect(adjust.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/target");
@@ -152,7 +162,7 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     await screen.findByText("目標每次購買成本");
 
     expect(screen.getByText("2 則無法判斷")).toBeTruthy();
-    expect(screen.getByText("・4 則")).toBeTruthy(); // header 的「N 則」仍是總則數
+    expect(screen.getByText(textOf("・投放中 4 則"))).toBeTruthy(); // header 的「N 則」仍是總則數
     const width = (cls: string) => (container.querySelector(`[data-segment="${cls}"]`) as HTMLElement).style.width;
     expect(width("better")).toBe("50%"); // 分母排除 no_target：2 則已判斷，各占一半
     expect(width("flat")).toBe("50%");
@@ -412,6 +422,40 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
       );
 
       await waitFor(() => expect(onSync).toHaveBeenCalledWith(campaigns));
+    });
+  });
+
+  describe("F26-I02：另有 N 則已關閉", () => {
+    it("closed.total > 0：印「另有 N 則已關閉（暫停 X・已封存 Y），不列入判斷」＋「查看 →」連到詳情頁", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [triageItem()], undefined, { paused: 11, archived: 4, other: 0, total: 15, items: [], truncated: false },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText(textOf("另有 15 則已關閉（暫停 11・已封存 4），不列入判斷"))).toBeTruthy();
+      const link = screen.getByRole("link", { name: "查看 →" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail");
+    });
+
+    it("closed.total === 0：整行省略，不印「另有」", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()])); // EMPTY_CLOSED 預設
+
+      renderCards();
+
+      await screen.findByText("450", { exact: true });
+      expect(screen.queryByText(/另有/)).toBeNull();
+      expect(screen.queryByRole("link", { name: "查看 →" })).toBeNull();
+    });
+
+    it("other 桶不單獨列出，只併進粗體總數（跟 prototype 一樣不拆 DELETED／ADSET_PAUSED／CAMPAIGN_PAUSED）", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [triageItem()], undefined, { paused: 1, archived: 0, other: 2, total: 3, items: [], truncated: false },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText(textOf("另有 3 則已關閉（暫停 1・已封存 0），不列入判斷"))).toBeTruthy();
     });
   });
 });

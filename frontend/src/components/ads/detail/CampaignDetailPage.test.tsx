@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
 import type {
-  QueueItem, QueuePayload, TriageClass, TriageClosedBlock, TriageItem,
+  QueueItem, QueuePayload, TriageClass, TriageClosedBlock, TriageClosedItem, TriageItem,
 } from "@/lib/adsTriageApi";
 import { getQueue, getTriage } from "@/lib/adsTriageApi";
 import { CampaignDetailPage } from "./CampaignDetailPage";
@@ -64,10 +64,18 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
 }
 
 // F26-I01: `closed` is always sent by the real backend -- an empty block for every `getTriage`
-// fixture here (this page's own 「已關閉」 group is a separate issue, not built yet).
+// fixture here unless a scenario overrides it (F26-I02's own 「已關閉」 describe block below).
 const EMPTY_CLOSED: TriageClosedBlock = {
   paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
 };
+
+function triageClosedItem(overrides: Partial<TriageClosedItem> = {}): TriageClosedItem {
+  return {
+    entity_id: "ad_closed_1", name: "舊版主視覺 0715", native_status: "PAUSED",
+    thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買",
+    ...overrides,
+  };
+}
 
 function queue(items: QueueItem[]): QueuePayload {
   const counts = { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 } as Record<TriageClass, number>;
@@ -422,5 +430,98 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     renderPage();
 
     expect(await screen.findByText("找不到這個 Campaign。")).toBeTruthy();
+  });
+
+  describe("F26-I02：purpose line ＋ 已關閉分組", () => {
+    it("purpose line：只判讀投放中的 N 則（items 已經是 active-only）", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, closed: EMPTY_CLOSED,
+        items: [triageItem({ entity_id: "a1" }), triageItem({ entity_id: "a2" })],
+      });
+
+      renderPage();
+
+      expect(await screen.findByText("只判讀投放中的 2 則；已關閉的廣告保留紀錄，不列入判斷")).toBeTruthy();
+    });
+
+    it("closed.total === 0：不印「已關閉」分組", async () => {
+      vi.mocked(getTriage).mockResolvedValue({ window_days: 7, closed: EMPTY_CLOSED, items: [triageItem()] });
+
+      renderPage();
+
+      await screen.findByText("・1 則");
+      expect(screen.queryByText("已關閉")).toBeNull();
+    });
+
+    it("closed.total > 0：預設收合、印計數與暫停／已封存拆分，展開後看得到每一列（名稱・花費・成本・狀態 chip・看紀錄連結）", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, items: [triageItem()],
+        closed: {
+          paused: 11, archived: 4, other: 0, total: 15, truncated: false,
+          items: [
+            triageClosedItem({ entity_id: "ad_paused", name: "舊版主視覺 0715", native_status: "PAUSED", spend: 321, cost_per_result: 45.5 }),
+            triageClosedItem({ entity_id: "ad_archived", name: "開箱長版 0605", native_status: "ARCHIVED", spend: null, cost_per_result: null }),
+          ],
+        },
+      });
+
+      renderPage();
+      await screen.findByText("・1 則");
+
+      const summary = screen.getByText("已關閉").closest("summary")!;
+      const details = summary.closest("details")!;
+      expect(details.open).toBe(false); // 預設收合（Done #1）
+      expect(within(summary).getByText("15 則")).toBeTruthy();
+      expect(within(summary).getByText("暫停 11・已封存 4・不列入判斷")).toBeTruthy();
+
+      await userEvent.click(summary);
+      expect(details.open).toBe(true);
+
+      const pausedRow = screen.getByTestId("closed-ad-row-ad_paused");
+      expect(within(pausedRow).getByText("舊版主視覺 0715")).toBeTruthy();
+      expect(within(pausedRow).getByText("321")).toBeTruthy();
+      expect(within(pausedRow).getByText("45.5")).toBeTruthy();
+      expect(within(pausedRow).getByText("已暫停")).toBeTruthy();
+      const pausedLink = within(pausedRow).getByRole("link", { name: "看紀錄" });
+      expect(pausedLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=performance&ad=ad_paused");
+
+      const archivedRow = screen.getByTestId("closed-ad-row-ad_archived");
+      expect(within(archivedRow).getByText("已封存")).toBeTruthy();
+      // 沒有花費資料的關掉廣告：印「累積中」而不是 0 或空白（design-system §7）。
+      expect(within(archivedRow).getAllByText("累積中").length).toBe(2);
+    });
+
+    it("truncated：印「…其餘 N 則」，N＝total 減去實際收到的 items 長度", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, items: [triageItem()],
+        closed: {
+          paused: 40, archived: 17, other: 0, total: 57, truncated: true,
+          items: [triageClosedItem({ entity_id: "ad_a" }), triageClosedItem({ entity_id: "ad_b" })],
+        },
+      });
+
+      renderPage();
+      await screen.findByText("・1 則");
+      await userEvent.click(screen.getByText("已關閉").closest("summary")!);
+
+      expect(screen.getByText("…其餘 55 則")).toBeTruthy();
+    });
+
+    it("全部廣告都已關閉（items 空、closed.total > 0）：不印「沒有廣告資料」，已關閉分組照常可見", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, items: [],
+        closed: {
+          paused: 15, archived: 0, other: 0, total: 15, truncated: false,
+          items: [triageClosedItem()],
+        },
+      });
+
+      renderPage();
+
+      expect(await screen.findByText("已關閉")).toBeTruthy();
+      expect(screen.queryByText("沒有廣告資料，這個活動還沒有可以判斷的內容。")).toBeNull();
+      // 沒有廣告資料時原本就不印容量卡／設定目標警示，這裡確認沒有連帶跑出來。
+      expect(screen.queryByText(/同時在投/)).toBeNull();
+    });
   });
 });

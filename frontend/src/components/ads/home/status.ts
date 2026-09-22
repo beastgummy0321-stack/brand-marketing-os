@@ -181,14 +181,15 @@ export function proposalAction(
   }
 }
 
-/** F22-I05/F23-I01/F25-I02: whether a queue row still counts as "open" for the home header count
- * (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
+/** F22-I05/F23-I01/F25-I02/F26-I02: whether a queue row still counts as "open" for the home header
+ * count (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
  * `proposalAction(...).done` is true — same rule the row's own button already renders, kept in
  * one place so the header and the button can't disagree. `scale_budget` rows follow the same rule
  * through the `"budget"` branch, keyed to the budget owner's id rather than the triage ad's own
- * `entity_id` (feature Decisions "Home rows"). `refresh_creative` rows never count as done
- * (feature Decisions: "refresh rows never count as done") — they have no proposal flow, so this
- * falls through to the final `return false` the same way an unhandled class always has. */
+ * `entity_id` (feature Decisions "Home rows"). `refresh_creative` and `insufficient_data` rows
+ * never count as done (feature Decisions: "refresh rows never count as done" /「never done」for
+ * the insufficient-data row) — neither has a proposal flow, so both fall through to the final
+ * `return false` the same way any unhandled kind always has. */
 export function isQueueItemDone(item: QueueItem): boolean {
   if (item.brand_id === null) return false;
   if (item.triage.class === "stop_loss") {
