@@ -9,7 +9,9 @@ export interface MonthlyBudget {
   period_end: string; confirmed_at: string | null; notice: string;
 }
 export type ChangeKind = "copy" | "budget" | "pause";
-export type SettingValues = { body?: string; title?: string; daily_amount?: number; status?: string };
+// `titles`/`bodies` (Contract B, F27-I02): a dynamic-creative copy change carries these instead
+// of `body`/`title`; both are optional so plain single-copy callers/factories need no change.
+export type SettingValues = { body?: string; title?: string; titles?: string[]; bodies?: string[]; daily_amount?: number; status?: string };
 export interface ChangeInput { kind: ChangeKind; target_id: string; after: SettingValues; reason: string }
 export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   kind: ChangeKind | "new_ad" | "launch";
