@@ -11,7 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
 import type {
-  QueueItem, QueuePayload, TriageClass, TriageClosedBlock, TriageClosedItem, TriageItem,
+  CampaignCapacity, QueueCleanup, QueueCleanupProposal, QueueItem, QueuePayload, QueueScale,
+  TriageClass, TriageClosedBlock, TriageClosedItem, TriageItem,
 } from "@/lib/adsTriageApi";
 import { getQueue, getTriage } from "@/lib/adsTriageApi";
 import { CampaignDetailPage } from "./CampaignDetailPage";
@@ -522,6 +523,172 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
       expect(screen.queryByText("沒有廣告資料，這個活動還沒有可以判斷的內容。")).toBeNull();
       // 沒有廣告資料時原本就不印容量卡／設定目標警示，這裡確認沒有連帶跑出來。
       expect(screen.queryByText(/同時在投/)).toBeNull();
+    });
+  });
+
+  describe("F27-I18：容量卡、迷你階梯、audit problem 3（每則廣告只認自己的佇列列）", () => {
+    function cleanupPayload(overrides: Partial<QueueCleanup> = {}): QueueCleanup {
+      return {
+        campaign_id: "cmp_1", campaign_name: "【銷售】1150706 Beast Prime 最高數量",
+        can_support: 4, active_ads: 6,
+        ads: [
+          { entity_id: "ad_low", name: "清倉版", thumbnail_url: null, spend_7d: 120 },
+          { entity_id: "ad_low2", name: "過季版", thumbnail_url: null, spend_7d: 180 },
+        ],
+        ...overrides,
+      };
+    }
+    function cleanupProposal(overrides: Partial<QueueCleanupProposal> = {}): QueueCleanupProposal {
+      return {
+        kind: "cleanup", change_set_id: "set_clean_1", campaign_id: "cmp_1",
+        status: "draft", verification_state: "pending",
+        reason: null, revisit_at: null, multi: true,
+        ...overrides,
+      };
+    }
+
+    it("容量卡：can_support 已知時印「你的預算約撐得起 M 則」，沒有清理列不印按鈕", async () => {
+      const capacity: CampaignCapacity = { daily_budget: 2000, currency: "TWD", target: 450, can_support: 4, active_ads: 1 };
+      vi.mocked(listCampaigns).mockResolvedValue([
+        campaignCardData({ data: { sync: { state: "ok", error: null, last_success_at: null }, capacity } }),
+      ]);
+      vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
+
+      renderPage();
+
+      expect(await screen.findByText("同時在投 1 則")).toBeTruthy();
+      expect(screen.getByText("你的預算約撐得起 4 則")).toBeTruthy();
+      expect(screen.queryByRole("link", { name: /提議暫停/ })).toBeNull();
+    });
+
+    it("容量卡：can_support 算不出來（沒有目標或幣別對不上）印「尚未能計算」，不是留白或 0", async () => {
+      vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
+
+      renderPage();
+
+      expect(await screen.findByText("同時在投 1 則")).toBeTruthy();
+      expect(screen.getByText("尚未能計算")).toBeTruthy();
+    });
+
+    it("容量卡：佇列裡有這個活動的清理列、還沒有提案——印「提議暫停沒在投的 K 則」（K＝清理列自己實際要提議的則數，跟縮圖列一起），連去它的 action_url", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 28, closed: EMPTY_CLOSED,
+        items: [triageItem({ entity_id: "ad_best", class: "better" })],
+      });
+      vi.mocked(getQueue).mockResolvedValue(queue([
+        queueItem({
+          id: "q_clean", triage: triageItem({ entity_id: "ad_best", class: "better" }),
+          kind_key: "cleanup", cleanup: cleanupPayload(), proposal: null,
+          action_url: "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1",
+        }),
+      ]));
+
+      renderPage();
+
+      const btn = await screen.findByRole("link", { name: "提議暫停沒在投的 2 則" });
+      expect(btn.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1");
+    });
+
+    it("容量卡：清理列已經有提案——按鈕標籤跟著提案狀態走（跟 home/QueueRow 同一支 cleanupAction），不是死板的「提議暫停」；multi-item 一律導去活動工作區", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 28, closed: EMPTY_CLOSED,
+        items: [triageItem({ entity_id: "ad_best", class: "better" })],
+      });
+      vi.mocked(getQueue).mockResolvedValue(queue([
+        queueItem({
+          id: "q_clean", triage: triageItem({ entity_id: "ad_best", class: "better" }),
+          kind_key: "cleanup", cleanup: cleanupPayload(),
+          proposal: cleanupProposal({ status: "draft" }),
+        }),
+      ]));
+
+      renderPage();
+
+      const btn = await screen.findByRole("link", { name: "等你核准" });
+      expect(btn.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    });
+
+    it("迷你階梯：變差分類的廣告從 ladder.step 印小階梯；沒有 ladder 資料的變差廣告、以及其他分類都不印", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, closed: EMPTY_CLOSED,
+        items: [
+          triageItem({ entity_id: "ad_worse", class: "worse", label: "變差", ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null } }),
+          triageItem({ entity_id: "ad_worse_bare", class: "worse", label: "變差" }),
+          triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", ladder: { step: 2, copy_changes: 1, image_changes: 1, lineage_from: null } }),
+        ],
+      });
+
+      renderPage();
+      await screen.findByText("・3 則");
+
+      const worseRow = screen.getByTestId("ad-row-ad_worse");
+      expect(within(worseRow).getByText("換圖").closest('[data-slot="ladder"]')).toBeTruthy();
+
+      const worseBareRow = screen.getByTestId("ad-row-ad_worse_bare");
+      expect(worseBareRow.querySelector('[data-slot="ladder"]')).toBeNull();
+
+      const stopRow = screen.getByTestId("ad-row-ad_stop");
+      expect(stopRow.querySelector('[data-slot="ladder"]')).toBeNull();
+    });
+
+    it("audit problem 3：只有真的擁有自己那一列佇列的廣告才有進度按鈕；活動層級的列剛好帶到別的廣告 id 時那則廣告照樣印「看紀錄」，沒進佇列的廣告也是", async () => {
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, closed: EMPTY_CLOSED,
+        items: [
+          triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" }),
+          triageItem({ entity_id: "ad_coincidence", class: "flat", label: "持平", name: "剛好撞 id" }),
+          triageItem({ entity_id: "ad_lonely", class: "flat", label: "持平", name: "沒進佇列" }),
+        ],
+      });
+      vi.mocked(getQueue).mockResolvedValue(queue([
+        queueItem({ id: "q_stop", triage: triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }), kind_key: "stop_loss" }),
+        // 活動層級的補素材列（dedupe key 是整個活動，不是某一則廣告）——`triage` 欄位只是
+        // 契約要求一定要帶著一則廣告當載體，這裡恰好帶到 ad_coincidence，不代表那是它自己的列。
+        queueItem({
+          id: "q_refresh", triage: triageItem({ entity_id: "ad_coincidence", class: "flat", label: "持平" }),
+          kind_key: "refresh_creative",
+          action_url: "/brands/brd_1/ads/campaigns/cmp_1?tab=materials",
+        }),
+      ]));
+
+      renderPage();
+      await screen.findByText("・3 則");
+
+      expect(within(screen.getByTestId("ad-row-ad_stop")).getByRole("link", { name: "去處理" })).toBeTruthy();
+
+      const coincidenceRow = screen.getByTestId("ad-row-ad_coincidence");
+      const coincidenceLink = within(coincidenceRow).getByRole("link", { name: "看紀錄" });
+      expect(coincidenceLink.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=performance&ad=ad_coincidence");
+
+      const lonelyRow = screen.getByTestId("ad-row-ad_lonely");
+      expect(within(lonelyRow).getByRole("link", { name: "看紀錄" }).getAttribute("href"))
+        .toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=performance&ad=ad_lonely");
+    });
+
+    it("audit problem 3：scale_budget 列的按鈕鍵在預算 owner 的 id，不是這則廣告自己的 entity_id", async () => {
+      const scale: QueueScale = {
+        owner: { id: "adset_1", name: "投放組 A", native_kind: "adset", native_id: "n_adset_1", ads_count: 3, currency: "TWD" },
+        from: 1000, to: 1500, cost_per_result: 320, previous_cost_per_result: 400,
+        target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+        window_days: 7, month: { available: 5000, extra_needed: 500 },
+      };
+      vi.mocked(getTriage).mockResolvedValue({
+        window_days: 7, closed: EMPTY_CLOSED,
+        items: [triageItem({ entity_id: "ad_best", class: "better", label: "變好" })],
+      });
+      vi.mocked(getQueue).mockResolvedValue(queue([
+        queueItem({
+          id: "q_scale", triage: triageItem({ entity_id: "ad_best", class: "better" }),
+          kind_key: "scale_budget", scale, proposal: null,
+        }),
+      ]));
+
+      renderPage();
+      await screen.findByText("・1 則");
+
+      const row = screen.getByTestId("ad-row-ad_best");
+      const link = within(row).getByRole("link", { name: "看提議" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/budget/adset_1");
     });
   });
 });
