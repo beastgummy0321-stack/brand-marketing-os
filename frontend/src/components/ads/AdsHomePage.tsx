@@ -4,10 +4,13 @@ import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
 import { refreshQueue } from "@/lib/adsTriageApi";
+import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
+import { formatSyncTime } from "@/lib/format";
 import { ChangeAttention } from "./ChangeAttention";
 import { DecisionQueue, type QueueState } from "./home/DecisionQueue";
 import { CampaignCards } from "./home/CampaignCards";
 import { BudgetCard } from "./home/BudgetCard";
+import { Chip } from "./patterns";
 import { getOrgId } from "@/lib/auth";
 import { isQueueItemDone } from "./home/status";
 
@@ -22,6 +25,9 @@ export { STATUS_LABEL, STATUS_TONE } from "./home/status";
 function AdsHome({ brandId }: { brandId: string }) {
   const [queueState, setQueueState] = useState<QueueState>({ status: "loading" });
   const [reload, setReload] = useState(0);
+  // F24-I02：頁首「最近同步・N 項待處理」晶片——`CampaignCards` 自己打 `listCampaigns`
+  // （review repair (b) 的獨立讀取不變），這裡只被動接收它打完後的同一批結果，不重打一次。
+  const [syncCampaigns, setSyncCampaigns] = useState<CampaignCardData[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -48,6 +54,21 @@ function AdsHome({ brandId }: { brandId: string }) {
     ? (openCount ? `${openCount} 件・由上往下處理就好` : "都處理完了")
     : undefined;
 
+  // F24-I02 Feature Decisions "Header chip"：「最近同步」只看 `state==="ok"` 的時間戳——
+  // 失敗的同步把舊時間戳留在原地（I01 裁決），算進來會把「上次失敗」誤讀成「剛剛才讀過」。
+  // 「異常」件數另外數 failed／disconnected 的活動；「N 項待處理」＝這頁自己的 openCount，
+  // 跟上面佇列標題共用同一個數字，不是另一套計算。
+  const okSyncTimestamps = syncCampaigns
+    .map((c) => c.data?.sync)
+    .filter((sync): sync is NonNullable<typeof sync> => !!sync && sync.state === "ok" && sync.last_success_at !== null)
+    .map((sync) => sync.last_success_at as string);
+  const latestSyncAt = okSyncTimestamps.length > 0
+    ? okSyncTimestamps.reduce((latest, current) => (current > latest ? current : latest))
+    : null;
+  const abnormalSyncCount = syncCampaigns
+    .filter((c) => c.data?.sync?.state === "failed" || c.data?.sync?.state === "disconnected").length;
+  const syncLabel = latestSyncAt ? `最近同步 ${formatSyncTime(latestSyncAt)}` : "尚未同步";
+
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
@@ -55,10 +76,17 @@ function AdsHome({ brandId }: { brandId: string }) {
         description={purpose}
         actions={
           <>
-            {/* review repair (f)：非互動佔位，同 ReservedSlotCard 規則——連 disabled 假按鈕都不做。 */}
-            <span className="inline-flex items-center rounded-full border border-dashed border-border bg-muted px-3 py-1.5 text-sm text-muted-foreground">
-              每月回顧・接上後開放
-            </span>
+            <Button asChild variant="link" className="h-auto gap-2 p-0 hover:no-underline">
+              <Link to={`/brands/${brandId}/ads/connections`} className="flex items-center gap-2">
+                <Chip tone={abnormalSyncCount > 0 ? "warn" : "neutral"}>
+                  {syncLabel}{abnormalSyncCount > 0 ? `・${abnormalSyncCount} 個活動讀取異常` : ""}
+                </Chip>
+                <Chip tone={openCount > 0 ? "warn" : "neutral"}>{openCount} 項待處理</Chip>
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link>
+            </Button>
             <ExistingCampaignDialog brandId={brandId} />
             <Button asChild>
               <Link to={`/brands/${brandId}/ads/new`}>建立投放計畫</Link>
@@ -79,7 +107,7 @@ function AdsHome({ brandId }: { brandId: string }) {
               查看全部活動 →
             </Link>
           </div>
-          <CampaignCards brandId={brandId} />
+          <CampaignCards brandId={brandId} onSync={setSyncCampaigns} />
         </div>
       </div>
     </div>

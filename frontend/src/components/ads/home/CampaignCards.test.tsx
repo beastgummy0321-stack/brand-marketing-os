@@ -2,15 +2,16 @@
  * 的狀態（正常／有廣告但未設定目標／沒有廣告／讀取失敗）、狀態 pill、預算 chip 標籤、五分類
  * 長條的分母與寬度、`no_target` 另開一顆 chip、重試只影響那一張卡。`CampaignCards` 自己打
  * `listCampaigns`，每張卡再各自打 `getTriage`（見 `CampaignCard.tsx` 的 ponytail 註解）。 */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignTriage, TriageData, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
+import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { CampaignCards } from "./CampaignCards";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -21,6 +22,7 @@ vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
   return { ...actual, getTriage: vi.fn() };
 });
+vi.mock("@/lib/adsExternalApi", () => ({ syncCampaign: vi.fn(), syncJob: vi.fn() }));
 
 function campaignCardData(overrides: Partial<CampaignCardData> = {}): CampaignCardData {
   return {
@@ -48,8 +50,8 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-function triage(items: TriageItem[]): CampaignTriage {
-  return { window_days: 7, items };
+function triage(items: TriageItem[], data?: TriageData): CampaignTriage {
+  return { window_days: 7, items, data };
 }
 
 function renderCards() {
@@ -261,5 +263,149 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.getByText("預算待核實")).toBeTruthy();
     expect(screen.getByText("平台預算")).toBeTruthy();
     expect(screen.queryByText("總預算 NT$ 9,000")).toBeNull(); // 匯入活動不假裝讀得到站內總預算
+  });
+  describe("F24-I02：sync 異常態與「資料不足，先不判斷」", () => {
+    it("sync 失敗：灰卡「暫時讀取不到」＋已保存的紀錄都還在；重新讀取＝真同步（syncCampaign→輪詢→重讀這張卡）", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()], {
+        sync: { state: "failed", error: "(#190) token expired", last_success_at: "2026-09-19T14:40:00Z" },
+        coverage: { start: "2026-09-01", end: "2026-09-07" }, missing_days: [],
+      }));
+      vi.mocked(syncCampaign).mockResolvedValue({ job: { id: "job_1", status: "pending", last_success_at: null } });
+      vi.mocked(syncJob).mockResolvedValue({
+        job: { id: "job_1", status: "success", last_success_at: "2026-09-22T00:00:00Z" }, connected: true,
+      });
+
+      renderCards();
+
+      expect(await screen.findByText("暫時讀取不到")).toBeTruthy();
+      expect(screen.getByText("已保存的紀錄都還在")).toBeTruthy();
+      expect(screen.queryByText("預算待核實")).toBeNull();
+
+      const retry = screen.getByRole("button", { name: "重新讀取「測試 Campaign」" });
+      await userEvent.click(retry);
+
+      await waitFor(() => expect(syncCampaign).toHaveBeenCalledWith("brd_1", "cmp_1"));
+      await waitFor(() => expect(syncJob).toHaveBeenCalledWith("brd_1", "job_1"));
+      await waitFor(() => expect(callsFor("cmp_1")).toBe(2));
+    });
+
+    it("sync 進行中：chip「讀取中」，重新讀取按鈕停用", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()], {
+        sync: { state: "syncing", error: null, last_success_at: "2026-09-19T14:40:00Z" },
+        coverage: { start: "2026-09-01", end: "2026-09-07" }, missing_days: [],
+      }));
+
+      renderCards();
+
+      expect(await screen.findByText("讀取中")).toBeTruthy();
+      const retry = screen.getByRole("button", { name: "重新讀取「測試 Campaign」" });
+      expect(retry.hasAttribute("disabled")).toBe(true);
+    });
+
+    it("廣告帳戶未連接：chip「廣告帳戶未連接」，按鈕「去連接」連到資料連線頁（不是重新讀取）", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()], {
+        sync: { state: "disconnected", error: null, last_success_at: null },
+        coverage: null, missing_days: [],
+      }));
+
+      renderCards();
+
+      expect(await screen.findByText("廣告帳戶未連接")).toBeTruthy();
+      const link = screen.getByRole("link", { name: "去連接" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/connections");
+      expect(screen.queryByRole("button", { name: /重新讀取/ })).toBeNull();
+    });
+
+    it("資料不足（缺同步天數）：warn 卡＋「缺 N 天資料」＋「去處理」連到等待頁", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [triageItem({ entity_id: "ad_1", class: "insufficient", reason_code: "below_sample_gate" })],
+        {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          coverage: { start: "2026-09-01", end: "2026-09-14" },
+          missing_days: ["2026-09-17", "2026-09-18"],
+        },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText("資料不足，先不判斷")).toBeTruthy();
+      expect(screen.getByText("缺 2 天資料")).toBeTruthy();
+      const link = screen.getByRole("link", { name: "去處理" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/wait");
+    });
+
+    it("資料不足（從沒同步過成效）：coverage null 印「尚未同步成效」，不是缺天數", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [triageItem({ entity_id: "ad_1", class: "insufficient", reason_code: "below_sample_gate" })],
+        { sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" }, coverage: null, missing_days: [] },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText("資料不足，先不判斷")).toBeTruthy();
+      expect(screen.getByText("尚未同步成效")).toBeTruthy();
+    });
+
+    it("資料不足（已同步，樣本還不夠）：依這批 insufficient 廣告裡多數的 reason_code 印 chip", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [
+          triageItem({ entity_id: "ad_1", class: "insufficient", reason_code: "below_sample_gate" }),
+          triageItem({ entity_id: "ad_2", class: "insufficient", reason_code: "below_sample_gate" }),
+          triageItem({ entity_id: "ad_3", class: "insufficient", reason_code: "no_previous_window" }),
+        ],
+        {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          coverage: { start: "2026-09-01", end: "2026-09-14" },
+          missing_days: [],
+        },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText("資料不足，先不判斷")).toBeTruthy();
+      expect(screen.getByText("樣本還不夠")).toBeTruthy();
+    });
+
+    it("no_target 不是「資料不足」：全部 no_target 仍走既有「尚未設定」卡，不誤判成警示卡", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage(
+        [triageItem({
+          entity_id: "ad_1", class: "no_target",
+          target: { value: null, basis: null, result_kind: null, result_label: "購買", missing: [] },
+        })],
+        {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          coverage: { start: "2026-09-01", end: "2026-09-14" },
+          missing_days: [],
+        },
+      ));
+
+      renderCards();
+
+      expect(await screen.findByText("尚未設定")).toBeTruthy();
+      expect(screen.queryByText("資料不足，先不判斷")).toBeNull();
+    });
+
+    it("沒有 data（手寫 fixture 沒補，視同 never）：跟今天原本的卡一樣，不套新的異常／警示態", async () => {
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+      renderCards();
+      expect(await screen.findByText("450", { exact: true })).toBeTruthy();
+      expect(screen.queryByText("暫時讀取不到")).toBeNull();
+      expect(screen.queryByText("資料不足，先不判斷")).toBeNull();
+    });
+
+    it("onSync：listCampaigns 讀成功後把整批清單回報給上層（F24-I02 頁首同步晶片用）", async () => {
+      const campaigns = [campaignCardData({ id: "cmp_x" })];
+      vi.mocked(listCampaigns).mockResolvedValue(campaigns);
+      vi.mocked(getTriage).mockResolvedValue(triage([]));
+      const onSync = vi.fn();
+
+      render(
+        <MemoryRouter>
+          <CampaignCards brandId="brd_1" onSync={onSync} />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => expect(onSync).toHaveBeenCalledWith(campaigns));
+    });
   });
 });

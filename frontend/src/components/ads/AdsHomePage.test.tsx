@@ -12,6 +12,7 @@ import { listCampaigns } from "@/lib/adsApi";
 import type { QueuePayload, QueueProposal, QueueReviewProposal, TriageItem } from "@/lib/adsTriageApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import { formatSyncTime } from "@/lib/format";
 import { AdsHomePage } from "./AdsHomePage";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -182,13 +183,13 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_1");
   });
 
-  it("每月回顧是非互動的灰階佔位，不是按鈕", async () => {
+  it("每月回顧是真的連結（F24-I02 接上 /month）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
 
     renderPage();
 
-    expect(await screen.findByText("每月回顧・接上後開放")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /每月回顧/ })).toBeNull();
+    const link = await screen.findByRole("link", { name: "每月回顧" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/month");
   });
 
   it("月預算未知：金額顯示「尚待確認」（逐欄核對，不用籠統的 no-0 regex）", async () => {
@@ -269,6 +270,48 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     await userEvent.click(retry);
 
     expect(await screen.findByText("都處理完了")).toBeTruthy();
+  });
+
+  it("頁首同步晶片：只採計 state===\"ok\" 的時間戳，取最新一筆；N 項待處理＝這頁自己的 openCount", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "cmp_a", name: "活動 A", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
+      campaignCard({ id: "cmp_b", name: "活動 B", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-20T01:00:00Z" } } }),
+    ]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "活動 A" });
+    const expected = `最近同步 ${formatSyncTime("2026-09-20T01:00:00Z")}`; // 兩筆都是 ok，取較新的那筆
+    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
+    expect(screen.getByText("1 項待處理", { selector: '[data-slot="chip"]' })).toBeTruthy();
+  });
+
+  it("頁首同步晶片：有失敗／未連接的活動時轉 warn 並附「N 個活動讀取異常」；失敗的舊時間戳不算進最近同步（I01 裁決）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "cmp_ok", name: "活動 OK", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
+      campaignCard({ id: "cmp_failed", name: "活動失敗", data: { sync: { state: "failed", error: "(#190) token expired", last_success_at: "2026-09-25T00:00:00Z" } } }),
+      campaignCard({ id: "cmp_disc", name: "活動未連接", data: { sync: { state: "disconnected", error: null, last_success_at: null } } }),
+    ]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "活動 OK" });
+    // 失敗那筆的 last_success_at（9/25）比 ok 那筆（9/19）新，但失敗態不算「最近同步」，
+    // 否則會把「上次失敗」誤讀成「剛剛才讀過」。
+    const expected = `最近同步 ${formatSyncTime("2026-09-19T14:40:00Z")}・2 個活動讀取異常`;
+    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
+  });
+
+  it("頁首同步晶片：完全沒有 ok 的時間戳印「尚未同步」", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCard({ id: "cmp_never", name: "從沒同步過" })]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "從沒同步過" });
+    expect(screen.getByText("尚未同步", { selector: '[data-slot="chip"]' })).toBeTruthy();
   });
 
   it("移除的舊區塊不再出現（判斷帶／時間軸／建檔檢查表）", async () => {
