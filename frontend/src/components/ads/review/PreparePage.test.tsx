@@ -1,7 +1,8 @@
-/** frontend/src/components/ads/review/PreparePage.test.tsx — F23-I03：`vi.mock` 掉
- * `@/lib/adsReviewApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 3：建議卡與預選方向、換方向
- * 重填原因、三種存檔動作（copy/observe/retire）各自的 `decideReview` 呼叫與下一步、已經 completed
- * 的一輪換方向時略過 decide 呼叫、保留卡不可選、錯的步驟轉去看證據頁。 */
+/** frontend/src/components/ads/review/PreparePage.test.tsx — F23-I03／F27-I12：`vi.mock` 掉
+ * `@/lib/adsReviewApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 3：建議依 `ladder.step`
+ * 預選（除非第一個 AI 建議是 observe）、換方向重填原因、五種存檔動作（copy/image/existing/
+ * observe/retire）各自的 `decideReview` 呼叫與下一步、已經 completed 的一輪換方向時略過 decide
+ * 呼叫、`copy_editable.ok === false` 時只改文案停用且顯示原因、錯的步驟轉去看證據頁。 */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
@@ -67,7 +68,10 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
       window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei" },
       current: period(), previous: period(),
       commerce: { current: commerce(), previous: commerce() },
-      conditions: { history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0 },
+      conditions: {
+        history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0,
+        copy_editable: { ok: true, mode: "single", reason: null },
+      },
       previous_review: null, source_review: null,
       limitations: [], waiting_reasons: [], sources: [],
     },
@@ -85,6 +89,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     previous: { spend: 2000, result_count: 8, cost_per_result: 250, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     change_pct: 1.4,
     sample: { gate: true, spend_multiple: 6.6, days_with_events: 14 },
+    ladder: { step: 0, copy_changes: 0, image_changes: 0, lineage_from: null },
     ...overrides,
   };
 }
@@ -93,7 +98,8 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
     dedupe_key: "k1", category: "ads_triage_worse", kind: null, severity: "rule_warning",
     message: "m", action_url: null, visible_from: null, status: "open",
-    created_at: "2026-09-22T00:00:00Z", resolved_at: null, triage: triage(), proposal: null,
+    created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "worse",
+    triage: triage(), proposal: null,
     ...overrides,
   };
 }
@@ -106,7 +112,8 @@ function PrepareRoute() {
   return <PreparePage brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />;
 }
 function LocationProbe() {
-  return <p data-testid="probe-path">{useLocation().pathname}</p>;
+  const loc = useLocation();
+  return <p data-testid="probe-path">{loc.pathname}{loc.search}</p>;
 }
 function renderAt(path: string) {
   return render(
@@ -125,9 +132,10 @@ beforeEach(() => {
   vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
 });
 
-describe("PreparePage（F23-I03）建議與預選", () => {
-  it("adjust 建議 → 只改文案卡標建議且預選，原因是它的預設值", async () => {
+describe("PreparePage（F27-I12）建議與預選", () => {
+  it("ladder.step 0 → 只改文案卡標建議且預選，原因是它的預設值", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 0, copy_changes: 0, image_changes: 0, lineage_from: null } }) })]));
     renderAt(preparePath());
     await screen.findByDisplayValue("採用建議：保留圖片，測試新文案");
     const copyCard = screen.getByRole("button", { name: /只改文案/ });
@@ -136,10 +144,34 @@ describe("PreparePage（F23-I03）建議與預選", () => {
     expect(screen.getByRole("button", { name: /開始改文案/ })).toBeTruthy();
   });
 
-  it("observe 建議 → 先觀察卡預選，並顯示何時重看", async () => {
+  it("ladder.step 1 → 換一張圖卡標建議且預選，原因是它的預設值", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null } }) })]));
+    renderAt(preparePath());
+    await screen.findByDisplayValue("文案改過仍未改善，換圖");
+    const imageCard = screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement;
+    expect(imageCard.disabled).toBe(false);
+    expect(imageCard.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("建議")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /準備新圖/ })).toBeTruthy();
+  });
+
+  it("ladder.step 2 → 停掉這則卡標建議且預選", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 2, copy_changes: 1, image_changes: 1, lineage_from: null } }) })]));
+    renderAt(preparePath());
+    await screen.findByDisplayValue("多次調整仍未改善");
+    const retireCard = screen.getByRole("button", { name: /停掉這則/ });
+    expect(retireCard.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("建議")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /建立暫停提議/ })).toBeTruthy();
+  });
+
+  it("第一個 AI 建議是 observe → 先觀察卡預選並標建議，蓋過 ladder 步驟，並顯示何時重看", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review({
       result_json: { recommendations: [{ id: "rec_1", target_id: "aex_1", recommendation: "observe", evidence_refs: [], hypothesis: "h", risks: [], next_step: "n" }], limitations: [] },
     }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null } }) })]));
     renderAt(preparePath());
     await screen.findByDisplayValue("資料量還不夠，先觀察");
     const observeCard = screen.getAllByRole("button", { name: /先觀察/ })
@@ -147,12 +179,16 @@ describe("PreparePage（F23-I03）建議與預選", () => {
     expect(observeCard.getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("group", { name: "何時重看" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /保存，先觀察/ })).toBeTruthy();
+    // ladder 步驟本來會指到換一張圖，蓋過去後那張卡不標建議。
+    const imageCard = screen.getByRole("button", { name: /換一張圖/ });
+    expect(imageCard.textContent?.includes("建議")).toBe(false);
   });
 
-  it("沒有建議（retain）→ 預選只改文案，不標建議", async () => {
+  it("找不到對應的 queue 項目（ladder 不明）→ 預選只改文案，不標建議", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review({
       result_json: { recommendations: [{ id: "rec_1", target_id: "aex_1", recommendation: "retain", evidence_refs: [], hypothesis: "h", risks: [], next_step: "n" }], limitations: [] },
     }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
     renderAt(preparePath());
     await screen.findByDisplayValue("採用建議：保留圖片，測試新文案");
     const copyCard = screen.getByRole("button", { name: /只改文案/ });
@@ -160,13 +196,24 @@ describe("PreparePage（F23-I03）建議與預選", () => {
     expect(screen.queryByText("建議")).toBeNull();
   });
 
-  it("保留卡（換一張圖／用現成素材）不可選，標接上後開放", async () => {
-    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+  it("copy_editable.ok=false → 只改文案卡停用並顯示原因，建議挪到換一張圖", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({
+      evidence_json: {
+        ...review().evidence_json,
+        conditions: {
+          history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0,
+          copy_editable: { ok: false, mode: null, reason: "商品目錄素材沒有可改的文字" },
+        },
+      },
+    }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 0, copy_changes: 0, image_changes: 0, lineage_from: null } }) })]));
     renderAt(preparePath());
-    await screen.findByRole("button", { name: /只改文案/ });
-    const imageCard = screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement;
-    expect(imageCard.disabled).toBe(true);
-    expect(screen.getAllByText("接上後開放").length).toBeGreaterThan(0);
+    await screen.findByDisplayValue("文案改過仍未改善，換圖");
+    const copyCard = screen.getByRole("button", { name: /只改文案/ }) as HTMLButtonElement;
+    expect(copyCard.disabled).toBe(true);
+    const imageCard = screen.getByRole("button", { name: /換一張圖/ });
+    expect(imageCard.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getAllByText(/商品目錄素材沒有可改的文字/).length).toBeGreaterThan(0);
   });
 
   it("換方向重填原因為新方向的預設值", async () => {
@@ -174,13 +221,19 @@ describe("PreparePage（F23-I03）建議與預選", () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
     renderAt(preparePath());
     await screen.findByDisplayValue("採用建議：保留圖片，測試新文案");
+    await user.click(screen.getByRole("button", { name: /換一張圖/ }));
+    expect(screen.getByDisplayValue("文案改過仍未改善，換圖")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /準備新圖/ })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /用現成素材/ }));
+    expect(screen.getByDisplayValue("改用現成素材")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /上傳素材/ })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /停掉這則/ }));
     expect(screen.getByDisplayValue("多次調整仍未改善")).toBeTruthy();
     expect(screen.getByRole("button", { name: /建立暫停提議/ })).toBeTruthy();
   });
 });
 
-describe("PreparePage（F23-I03）存檔", () => {
+describe("PreparePage（F23-I03／F27-I12）存檔", () => {
   it("copy：decide completed 後導去改文案", async () => {
     const user = userEvent.setup();
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
@@ -192,6 +245,32 @@ describe("PreparePage（F23-I03）存檔", () => {
       decision: "completed", reason: "採用建議：保留圖片，測試新文案",
     }));
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/copy"));
+  });
+
+  it("image：decide completed 後導去素材頁，mode=workbench_image", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(reviewApi.decideReview).mockResolvedValue(review({ status: "completed", decision: "completed" }));
+    renderAt(preparePath());
+    await user.click(await screen.findByRole("button", { name: /換一張圖/ }));
+    await user.click(screen.getByRole("button", { name: /準備新圖/ }));
+    await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_1", {
+      decision: "completed", reason: "文案改過仍未改善，換圖",
+    }));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/material?mode=workbench_image"));
+  });
+
+  it("existing：decide completed 後導去素材頁，mode=existing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(reviewApi.decideReview).mockResolvedValue(review({ status: "completed", decision: "completed" }));
+    renderAt(preparePath());
+    await user.click(await screen.findByRole("button", { name: /用現成素材/ }));
+    await user.click(screen.getByRole("button", { name: /上傳素材/ }));
+    await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_1", {
+      decision: "completed", reason: "改用現成素材",
+    }));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/material?mode=existing"));
   });
 
   it("已經 completed 的一輪：換方向存檔時略過 decide 呼叫，直接導頁", async () => {

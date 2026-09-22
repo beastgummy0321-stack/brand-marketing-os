@@ -56,7 +56,11 @@ class ListCampaignsSyncDataTest(unittest.TestCase):
         campaign_id = self._campaign()
         card = self._card(campaign_id)
         self.assertEqual(
-            card["data"], {"sync": {"state": "never", "error": None, "last_success_at": None}},
+            card["data"], {
+                "sync": {"state": "never", "error": None, "last_success_at": None},
+                "capacity": {"daily_budget": None, "currency": None, "target": None,
+                             "can_support": None, "active_ads": 0},
+            },
         )
 
     def test_ok_card_carries_ok_state(self):

@@ -14,11 +14,12 @@ import {
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, Segmented,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, Segmented, TodoRow,
 } from "../patterns";
 import {
-  adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatRevisitLabel,
-  formatTargetAmount, formatWindowDate, RECOMMENDATION_TITLE, reviewPosition, reviewRoundPath,
+  adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
+  formatEntryDate, formatRevisitLabel, formatTargetAmount, formatWindowDate, HISTORY_KIND_LABEL,
+  isSalesResultKind, RECOMMENDATION_TITLE, reviewPosition, reviewRoundPath,
 } from "./reviewFlow";
 
 const STEPS = [
@@ -262,6 +263,11 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const first = recommendations[0];
   const commerceCurrent = evidence.commerce?.current ?? null;
   const commercePrevious = evidence.commerce?.previous ?? null;
+  // F27-I11 Contract A / Screens「Review page」: live ladder + 「這條素材的紀錄」 for non-sales
+  // campaigns, replacing the always-on commerce card the placeholder ladder shipped with.
+  const ladder = triageItem?.triage.ladder ?? null;
+  const history = triageItem?.triage.history ?? [];
+  const isSales = isSalesResultKind(triageItem?.triage.target.result_kind ?? null);
 
   const closedChip = review.decision === "deferred"
     ? `${review.revisit_at ? formatRevisitLabel(review.revisit_at) : "已暫緩"}・${review.reason ?? ""}`
@@ -287,7 +293,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         ) : undefined}
         aside={showEvidence ? (
           <div className="flex items-center gap-2">
-            <Ladder steps={["改文案", "換圖", "退役"]} placeholder />
+            {ladder && <Ladder steps={["改文案", "換圖", "退役"]} current={ladder.step} />}
             {closedChip && <Chip tone="neutral">{closedChip}</Chip>}
           </div>
         ) : undefined}
@@ -368,21 +374,43 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
             </div>
           </div>
 
-          {commerceCurrent && commercePrevious && (
+          {isSales ? (
+            commerceCurrent && commercePrevious && (
+              <div className="rounded-xl border border-border bg-card p-5">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <h2 className="font-semibold">商城訂單</h2>
+                  <Chip>品牌整體・分不到單則</Chip>
+                </div>
+                <EvidenceRow label="訂單數" previous={commercePrevious.order_summary.count} current={commerceCurrent.order_summary.count} />
+                <EvidenceRow label="訂單淨額" previous={commercePrevious.order_summary.order_net_amount} current={commerceCurrent.order_summary.order_net_amount} />
+                <EvidenceRow label="已付款淨額" previous={commercePrevious.order_summary.paid_net_amount} current={commerceCurrent.order_summary.paid_net_amount} />
+                {commerceCoverageWarn(commerceCurrent.order_summary) && (
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <Chip tone="warn">報表期間待確認</Chip>
+                    <Button variant="link" asChild><Link to={`/brands/${brandId}/orders`}>補報表</Link></Button>
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
             <div className="rounded-xl border border-border bg-card p-5">
               <div className="mb-1.5 flex items-center justify-between">
-                <h2 className="font-semibold">商城訂單</h2>
-                <Chip>品牌整體・分不到單則</Chip>
+                <h2 className="font-semibold">這條素材的紀錄</h2>
+                <Chip>已處理 {history.length} 次</Chip>
               </div>
-              <EvidenceRow label="訂單數" previous={commercePrevious.order_summary.count} current={commerceCurrent.order_summary.count} />
-              <EvidenceRow label="訂單淨額" previous={commercePrevious.order_summary.order_net_amount} current={commerceCurrent.order_summary.order_net_amount} />
-              <EvidenceRow label="已付款淨額" previous={commercePrevious.order_summary.paid_net_amount} current={commerceCurrent.order_summary.paid_net_amount} />
-              {commerceCoverageWarn(commerceCurrent.order_summary) && (
-                <div className="mt-2.5 flex items-center gap-2">
-                  <Chip tone="warn">報表期間待確認</Chip>
-                  <Button variant="link" asChild><Link to={`/brands/${brandId}/orders`}>補報表</Link></Button>
-                </div>
+              {history.length === 0 ? (
+                <p className="py-3 text-sm text-muted-foreground">這則廣告還沒有處理紀錄。</p>
+              ) : (
+                history.map((h, i) => (
+                  <TodoRow key={h.change_set_id} no={i + 1} done>
+                    <b className="font-medium">{formatEntryDate(h.approved_at)} {HISTORY_KIND_LABEL[h.kind]}</b>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      之後 7 天・每次{resultLabel}成本 {formatCostLabel(h.cost_before)} → {formatCostLabel(h.cost_after)}
+                    </div>
+                  </TodoRow>
+                ))
               )}
+              <div className="mt-2.5"><Chip>這個活動看{resultLabel}，不看商城訂單</Chip></div>
             </div>
           )}
 

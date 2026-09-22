@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from typing import cast
 
 from app.ads import (
+    ad_status,
     budget,
     channels,
     external_models,
@@ -24,6 +25,7 @@ from app.ads import (
     judgment,
     manual_settings,
     result_kinds,
+    triage_scale,
 )
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
@@ -445,6 +447,20 @@ def _bound_account_ids(conn: _AnyConn, org_id: str, brand_id: str, platform: str
     return {account["account_id"] for account in reader.accounts(conn, org_id, brand_id)}
 
 
+def _campaign_platforms(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> set:
+    """This campaign's own distinct platforms (F27-I09 Contract I) -- used only to decide which
+    adapter's `is_auth_error()` a failing section's stored error code goes through
+    (`campaign_sync_state` below). Same table `_campaign_disconnected` already reads its own
+    (platform, source_account) pairs from, a separate query rather than sharing that one because
+    this one runs even when there's no failing section (cheap, no bound-accounts lookup)."""
+    rows = conn.execute(
+        "SELECT DISTINCT platform FROM ads_external_entity "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+        (org_id, brand_id, campaign_id),
+    ).fetchall()
+    return {row["platform"] for row in rows}
+
+
 def _campaign_disconnected(
     conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, accounts_cache: dict,
 ) -> bool:
@@ -471,33 +487,42 @@ def campaign_sync_state(
     conn: _AnyConn, org_id: str, brand_id: str, campaign: dict,
     *, accounts_cache: dict | None = None,
 ) -> dict:
-    """The `data.sync` object (F24-I01, feature Decisions) for one campaign -- read-only, no
-    migration. `campaign` needs `id` and `context_json`. State, in priority order: `"never"`
-    (no `external_sync` section recorded at all) / `"disconnected"` (`_campaign_disconnected`
-    above) / `"failed"` (any section `status` in `_SYNC_FAILED_STATUSES`) / `"syncing"` (any
-    section `status == "syncing"`) / `"ok"`. `error` is the first failing section's own `error`
+    """The `data.sync` object (F24-I01, feature Decisions; `"auth_expired"` added F27-I09 Contract
+    I) for one campaign -- read-only, no migration. `campaign` needs `id` and `context_json`.
+    State, in priority order: `"never"` (no `external_sync` section recorded at all) /
+    `"disconnected"` (`_campaign_disconnected` above) / `"auth_expired"` (the first failing
+    section's own STORED `error_code` -- never a raw provider number, correction 2 -- reads as an
+    auth error to any of this campaign's own platforms' adapters, `adapters.is_auth_error`) /
+    `"failed"` (any other section `status` in `_SYNC_FAILED_STATUSES`) / `"syncing"` (any section
+    `status == "syncing"`) / `"ok"`. `error` is the first failing section's own `error`
     (`_SYNC_SECTION_ORDER`, may be `None`); `last_success_at` is the newest section value across
     all three sections -- a failed section keeps its OLD `last_success_at`/`coverage`
     (`external_repository.record_sync`), so this can read as stale, never "recent", once `state`
-    is `"failed"`. `accounts_cache` -- see `_campaign_disconnected`."""
+    is `"failed"`/`"auth_expired"`. `accounts_cache` -- see `_campaign_disconnected`."""
     cache = {} if accounts_cache is None else accounts_cache
     sections = (campaign.get("context_json") or {}).get("external_sync") or {}
     if not sections:
         return {"state": "never", "error": None, "last_success_at": None}
     ordered = [(name, sections[name]) for name in _SYNC_SECTION_ORDER if name in sections]
-    error = next(
-        (section.get("error") for _, section in ordered
-         if section.get("status") in _SYNC_FAILED_STATUSES),
-        None,
-    )
+    failing = [section for _, section in ordered if section.get("status") in _SYNC_FAILED_STATUSES]
+    error = failing[0].get("error") if failing else None
+    error_code = failing[0].get("error_code") if failing else None
     last_success_at = max(
         (section["last_success_at"] for _, section in ordered if section.get("last_success_at")),
         default=None,
     )
     if _campaign_disconnected(conn, org_id, brand_id, campaign["id"], cache):
         state = "disconnected"
-    elif any(section.get("status") in _SYNC_FAILED_STATUSES for _, section in ordered):
-        state = "failed"
+    elif failing:
+        from app.ads import adapters
+
+        platforms = _campaign_platforms(conn, org_id, brand_id, campaign["id"])
+        if error_code is not None and any(
+            adapters.is_auth_error(platform, error_code) for platform in platforms
+        ):
+            state = "auth_expired"
+        else:
+            state = "failed"
     elif any(section.get("status") == "syncing" for _, section in ordered):
         state = "syncing"
     else:
@@ -505,16 +530,79 @@ def campaign_sync_state(
     return {"state": state, "error": error, "last_success_at": last_success_at}
 
 
+# F27-I09 Done #7: `campaign_objective` for a system-built campaign -- the Chinese objective
+# labels `app/ads/brief.py::_OBJECTIVES` drafts one with, mapped here (ads-owned, never through
+# any adapter). 名單 (leads) and 知名度 (awareness) have no sales/engagement/traffic analogue
+# among the three named families, so -- like any unset/unrecognised label -- they read "other".
+_INTERNAL_OBJECTIVE_FAMILY = {"購買": "sales", "加購物車": "sales", "流量": "traffic"}
+
+
+def objective_family(objective: str | None) -> str:
+    if objective is None:
+        return "other"
+    return _INTERNAL_OBJECTIVE_FAMILY.get(objective, "other")
+
+
+def campaign_objective_family(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> str:
+    """`campaign_objective` (F27-I09 Done #7, for `CampaignChip`) of one campaign -- an imported
+    campaign routes through the Meta adapter's own raw-objective mapping, read off its own root
+    entity (`native_kind='campaign', parent_native_id IS NULL`, the same "this campaign's own
+    platform object" lookup shape `external_routes.py::campaign_sync` and
+    `triage.py::_account_cutoff` already use); a system-built campaign routes through this
+    module's own `objective_family()` over its stored Chinese objective label. No root entity yet
+    (an imported campaign mid-first-sync) -> `"other"`, never a guess."""
+    if campaign.get("origin") == "imported":
+        root = conn.execute(
+            "SELECT platform, objective FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND parent_native_id IS NULL",
+            (org_id, brand_id, campaign["id"]),
+        ).fetchone()
+        if root is None:
+            return "other"
+        from app.ads import adapters
+
+        return adapters.objective_family(root["platform"], root["objective"])
+    return objective_family(campaign.get("objective"))
+
+
+def _campaign_capacity(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, owner_by_entity: dict,
+) -> dict:
+    """F27-I06 Contract F: `data.capacity` for one campaign card -- `items` here are just the
+    campaign's own ACTIVE ad ids (`triage_capacity.capacity_view` only ever reads `entity_id` off
+    each), never a full `triage.classify()` call (this list endpoint stays cheap, no per-ad
+    program judgement here). `targets`/`triage_capacity` imported locally, not at module top --
+    both eventually reach `review_evidence` -> `change_control_data` -> back to this module
+    (`repository.py`), a hard cycle at import time; a function-scoped import is this codebase's
+    own standard way to break that (same precedent `get_campaign_target` above already sets for
+    `targets`, `app/core/settings.py:108`)."""
+    from app.ads import targets, triage_capacity
+
+    rows = conn.execute(
+        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND native_kind='ad'",
+        (org_id, brand_id, campaign["id"]),
+    ).fetchall()
+    items = [
+        {"entity_id": row["id"]} for row in rows if not ad_status.is_closed(row["native_status"])
+    ]
+    target = targets.resolve(conn, org_id, brand_id, campaign)
+    return triage_capacity.capacity_view(items, target["value"], owner_by_entity)
+
+
 def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     """`GET /campaigns` 列表：每筆帶 `budget_total`（推導）、`budget_progress`、一句成效摘要
-    跟 F04-I08 的 `judgment`，F24-I01 起再加 `data.sync`。沒有分頁——`routes.py` 的首頁路由靠
-    這一點在原地數計數（見那邊的註解）。"""
+    跟 F04-I08 的 `judgment`，F24-I01 起再加 `data.sync`，F27-I06 起再加 `data.capacity`。
+    沒有分頁——`routes.py` 的首頁路由靠這一點在原地數計數（見那邊的註解）。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     rows = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s ORDER BY created_at DESC",
         (org_id, brand_id),
     ).fetchall()
     accounts_cache: dict = {}
+    # One brand-wide owner lookup shared by every campaign card below (F27-I06, same
+    # query-sharing shape `accounts_cache` already uses for sync state).
+    owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     entries = []
     for row in rows:
         row = dict(row)
@@ -532,6 +620,7 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "origin": row["origin"], "capabilities": external_models.capabilities(row["origin"]),
             "start_date": row["start_date"], "end_date": row["end_date"],
             "objective": row["objective"],
+            "campaign_objective": campaign_objective_family(conn, org_id, brand_id, row),
             "created_at": row["created_at"], "created_by": row["created_by"],
             "budget_planned": row["budget_planned"],
             "budget_total": budget_total,
@@ -540,9 +629,12 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "outcome": outcome,
             "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
                                                      "spend": spend}, today=today),
-            "data": {"sync": campaign_sync_state(
-                conn, org_id, brand_id, row, accounts_cache=accounts_cache,
-            )},
+            "data": {
+                "sync": campaign_sync_state(
+                    conn, org_id, brand_id, row, accounts_cache=accounts_cache,
+                ),
+                "capacity": _campaign_capacity(conn, org_id, brand_id, row, owner_by_entity),
+            },
         })
     return entries
 

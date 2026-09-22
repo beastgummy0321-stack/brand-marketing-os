@@ -39,14 +39,18 @@ from fastapi import FastAPI
 def register(app: FastAPI) -> None:
     """掛 /api/ads/* 路由（機械式，比照 app/workbench/__init__.py 的延遲 import 慣例）。"""
     from app.ads import (
+        angle_routes,
         change_routes,
         external_routes,
         handoff_routes,
+        learning_routes,
         material_routes,
         month_budget_routes,
+        month_summary_routes,
         review_monitor_routes,
         review_routes,
         runtime_routes,
+        status_routes,
         user_assets_routes,
     )
     from app.ads import routes as ads_routes
@@ -56,22 +60,27 @@ def register(app: FastAPI) -> None:
     app.include_router(user_assets_routes.router)
     app.include_router(change_routes.router)
     app.include_router(month_budget_routes.router)
+    app.include_router(month_summary_routes.router)
     app.include_router(review_routes.router)
     app.include_router(material_routes.router)
     app.include_router(handoff_routes.router)
     app.include_router(review_monitor_routes.router)
     app.include_router(runtime_routes.router)
+    app.include_router(angle_routes.router)
+    app.include_router(learning_routes.router)
+    app.include_router(status_routes.router)
 
 
 def register_tasks() -> None:
     """F03-I12：掛 `background.ads_close_expired`＋每日 periodic dispatch，冪等。名字留著是
     相容既有排入佇列的工作，實際行為（F16-I05 確認）只是替過了 end_date 的 Campaign 排監控
     任務，從不自己結案——結案永遠是使用者動作。見 `app/ads/jobs.py` 檔頭。"""
+    from app.ads import angles, review_jobs
     from app.ads import jobs as ads_jobs
-    from app.ads import review_jobs
 
     ads_jobs.register_tasks()
     review_jobs.register_tasks()
+    angles.register_tasks()
 
 
 def bootstrap_runtime(conn, timestamp: int, *, limit=100) -> dict:

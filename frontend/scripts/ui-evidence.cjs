@@ -66,10 +66,10 @@ function facts() {
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
-  const BLOCKS = { days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
-  const SLOTS = { "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet" };
+  const BLOCKS = { camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet" };
   const VARIANT = { kind: ["stop", "worse", "up", "fresh"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
-  const NOVARIANT = new Set(["day-tiles", "meter", "evidence-row", "ladder", "option-card"]); // colour/state comes from data or a decision, not a prototype class
+  const NOVARIANT = new Set(["campaign-chip", "tag-toggle", "learn-card", "recover-steps", "thumb-tiles", "day-tiles", "meter", "evidence-row", "ladder", "option-card"]); // colour/state comes from data or a decision, not a prototype class
   for (const e of within("[class], [data-slot]")) {
     if (!vis(e)) continue;
     if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${NOVARIANT.has(e.dataset.slot) ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
@@ -77,7 +77,7 @@ function facts() {
     for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
       let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
       if (cls === "todo") v = v ? "done" : "open";
-      if (cls === "opt" || cls === "ev" || cls === "ladder" || cls === "days") v = "";
+      if (["opt", "ev", "ladder", "days", "camp", "tag", "learn", "rec", "tiles"].includes(cls)) v = "";
       if (cls === "old" || cls === "new") v = cls;
       out.push(`${piece} ${v}`.trim() + " |");
     }
@@ -85,7 +85,7 @@ function facts() {
   // Prototype side only: classes on this screen that map to no kit piece. At carve time the lead decides for each:
   // layout only (the worker builds it with tokens) or a missing piece (add it to components/ads/patterns first).
   if (!document.querySelector("#main-content")) {
-    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "fresh", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld", "ev", "l", "bars", "c", "n", "dd", "q", "unk", "ladder", "opt", "pick", "ic", "old", "new", "rv", "grid2", "grid4", "days", "x", "strip", "tiles", "cols3"]);
+    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "fresh", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld", "ev", "l", "bars", "c", "n", "dd", "q", "unk", "ladder", "opt", "pick", "ic", "old", "new", "rv", "grid2", "grid4", "days", "x", "strip", "tiles", "cols3", "camp", "tag", "learn", "rec", "o-sales", "o-engage", "o-traffic", "o-mid", "o-old"]);
     const seen = {};
     for (const e of within("[class]")) if (vis(e)) for (const c of e.classList) if (!known.has(c)) seen[c] = (seen[c] || 0) + 1;
     out.push("", "## prototype classes with no kit mapping (class x count)", Object.entries(seen).map(([c, n]) => `${c} x${n}`).join(", "));

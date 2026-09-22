@@ -1249,3 +1249,204 @@ stored. Decision A (user, 2026-09-22): existing facts only — no per-campaign h
   suggestion backend).
 - Kit: `patterns/ReviewPieces.tsx::DayTiles`, `ResultHero mark` prop. 驗證：`home/CampaignCards.test.tsx`,
   `AdsHomePage.test.tsx`, `wait/*.test.tsx`, `month/*.test.tsx`; 並排證據 `.harness/scratch/F24/I0{2,3,4}/`.
+
+### 6.27 F25-I01 — 佇列剩兩種 kind 落地：program rules A/B、佇列 payload 擴充（settled 2026-09-22）
+
+Two new program rules over the same per-ad `classify()` (`app/ads/triage_scale.py`, kept separate to hold `triage.py`
+under its own file-size convention); both pure reads (no LLM call, no platform write). `app/core/interrupts.py
+::CATEGORIES` 新增兩筆（本票對這支舊檔唯一允許的改動，登記在 F18 兩筆之後）：`ads_triage_scale_budget`／
+`ads_triage_refresh_creative`，兩者皆 `severity=informational`。`QUEUE_CATEGORY`／`KINDS_AVAILABLE`（四種）／
+`KINDS_PENDING`（`[]`）同步更新；四種 kind 共用同一套 `interrupt` 去重／supersede 機制（`_supersede_stale_open_rows`
+不分 kind），沒有另立第二套。
+
+- **Rule A `scale_budget`**（每個預算 owner，即 `budget_type=="daily"` 且 `budget_amount` 非空的 `ads_external_entity`
+  —— 廣告組，或活動自己扛預算時的活動本身）：只看這個 owner 名下**目前活躍**的廣告（`native_status` 不在
+  `{PAUSED,DELETED,ARCHIVED}`——停損流程暫停掉的廣告不永久卡住整個 owner）；每支活躍廣告都要是 `better`／`flat`（任何
+  其他 class 都讓這個 owner 整批不出列）；至少一支活躍廣告；**不跨廣告合併**（各廣告 `window.days` 不同，
+  `triage.py:298-320`）——逐支廣告自己的 `current.cost_per_result` 與 `previous.cost_per_result` 都要 `<= target`；
+  不要求一定要有 `better`（長期穩定的全 `flat` owner 也合格）；活動要有 target。提案：`to = ceil(from * 1.2)`（owner
+  自己的幣別）；只有 `month_budget.view(conn, org, brand, month, additional=[提案 item])` 回傳 `available` 非空
+  且 `>= 0` 才出列——跟 `preflight()` 核准時走的**同一條**路（`month_budget.py:466-470`），列跟核准永遠不會打架；
+  `extra_needed` = 帶提案跟不帶提案兩次 `reserved_increases` 的差。去重鍵 `ads-triage:scale_budget:<owner_id>
+  :<window_end>`。items 本身不帶 `parent_native_id`（見下「已知缺口」），owner 查找是這批唯一一次品牌全域查詢
+  `ads_external_entity`（`triage_scale.py::_owner_lookup`）：廣告的 parent 是廣告組且該廣告組扛日預算 → owner；
+  否則退回看活動自己是否扛日預算 → owner；否則沒有 owner，這批廣告整批跳過（lifetime 預算 owner 永遠不合格）。
+- **Rule B `refresh_creative`**（每個有 target 的活動）：只要有任何一支廣告（不分活躍與否）讀回
+  `reason_code=="needs_resync"` 就整個活動跳過（資料缺口不是素材不夠，那是「資料不足」卡片的地盤）；
+  `readable` = 活躍廣告中 class 屬於 `better|flat|worse` 的數量；`readable <= 2` 且活躍廣告 `>= 3` 才出列。去重鍵
+  `ads-triage:refresh_creative:<campaign_id>:<window_end>`。沒有變更清單，列的按鈕直接去素材工作檯。
+- **佇列 payload**：`_queue_payload` 每列多一個 `kind_key`（四選一，跟 `interrupt.category` 對應但給前端直接判斷
+  用，不用解析 `dedupe_key`）；`scale_budget` 列多帶 `scale: {owner:{id,name,native_kind,native_id,ads_count,
+  currency}, from, to, cost_per_result, previous_cost_per_result, target, window_days, month:{available,
+  extra_needed}}`（`triage` 欄位是這個 owner 名下最好的 `better` 廣告 item，沒有就用第一支活躍廣告）；
+  `refresh_creative` 列多帶 `refresh: {campaign_id, campaign_name, readable_count, classified_count, thumbnails}`
+  （`thumbnails` 最多 4 個，`null` 表示這支廣告沒有縮圖；`triage` 是第一支可判讀廣告，沒有就是第一支活躍廣告——
+  Rule B 的門檻保證至少有 3 支活躍且已分類，永遠不會是 `null`）。`scale_budget` 列的 `proposal` = 這個 owner 所屬活動
+  裡最新一筆非 superseded、items 含 `kind=="budget"` 且 `target_id` 等於 owner id 的變更清單，跟停損提案同一種形狀
+  （`_matching_change_item` 把 F22-I01 的 `_matching_pause_set` 依 `kind` 參數化，`pause`／`budget` 共用同一段
+  walk）；`refresh_creative` 列的 `proposal` 永遠 `null`。
+- **Meta adapter 修正 —— ABO 不動 schema（2026-09-22 裁決）**：`ads_external_entity.budget_type` 欄位是
+  `NOT NULL DEFAULT 'unknown' CHECK (... IN ('daily','lifetime','unknown'))`
+  （`supabase/migrations/20260918000001_ads_external_sources.sql`），`ExternalEntity.budget_type` 也是
+  `Literal["daily","lifetime","unknown"]`（不含 `None`）——這兩個檔都不在本票 `touch`，真的寫 `budget_type=None`
+  會讓每個 ABO 活動的結構同步在 `ExternalEntity.model_validate()` 直接炸掉。改用不動 schema 的訊號：
+  `meta_read.py::_entity` 對「活動物件的 raw payload 既沒有 `daily_budget` 也沒有 `lifetime_budget`」（依 Meta API
+  語意即廣告組扛預算的 ABO 活動）繼續寫 `budget_type="unknown"`（不變），只多加一個
+  `budget_raw.owner="children_verified"` 標記；廣告組（`adset`）永遠不打這個標記（這個訊號只講活動自己缺預算，不
+  帶到任何手足層級）。`month_budget.py:151-161` 的委派條件相應放寬成 `budget_amount is None and budget_type in
+  (None, "unknown") and budget_raw.owner == "children_verified"`——`None` 留給 `calculate()` 既有的純函式 fixture
+  相容（它從不經過 DB／pydantic），`"unknown"` 才是真正的 writer 路徑；一般「從沒同步過」的 `unknown` 列沒有這個
+  標記，照樣落回原本的不確定判定，不會被誤判成已委派。`_entity()` 是 `read_structure()`（正式結構同步）直接呼叫的
+  函式；`verify_native()` 走的是另一條局部讀回路徑（`_verified_snapshot`），它的「局部讀回不可抹掉既有值」規則會在
+  raw 沒有任何預算欄位時整批濾掉 `budget_type`／`budget_raw`，所以驗這個訊號要測 `_entity()` 本身，不能透過
+  `verify_native()`。
+- **已知缺口（誠實揭露，feature Decisions "Gaps kept honest"）**：「這則主打什麼？」標籤仍是 `ReservedSlotCard`；
+  `lifetime` 預算的 owner 永遠不會出 `scale_budget` 列；不跨廣告或跨幣別合計；items 不帶 `parent_native_id`，owner
+  對應改由一次品牌全域 `ads_external_entity` 查詢完成（見上）。
+- **前端型別跟進（本票只做型別，未做畫面——`home/QueueRow.tsx` 等產出畫面留給 I02）**：
+  `frontend/src/lib/adsTriageApi.ts` 新增 `QueueKind`、`QueueBudgetProposal`（`kind:"budget"`，跟
+  `QueuePauseProposal` 同形狀）、`QueueScale`／`QueueScaleOwner`／`QueueRefresh`，`QueueItem` 新增必填
+  `kind_key` 與選填 `scale?`／`refresh?`；`frontend/src/components/ads/**/*.test.tsx` 下 9 支既有測試檔
+  （`AdsHomePage.test.tsx`、`detail/CampaignDetailPage.test.tsx`、`flow/ConfirmPage.test.tsx`、
+  `flow/HandoffPage.test.tsx`、`flow/VerifyPage.test.tsx`、`home/DecisionQueue.test.tsx`、
+  `review/CopyPage.test.tsx`、`review/PreparePage.test.tsx`、`review/ReviewEvidencePage.test.tsx`）的
+  `queueItem()` 假資料工廠各補一行 `kind_key`（依各檔既有 `category` 對應 `"stop_loss"`／`"worse"`；
+  `home/DecisionQueue.test.tsx` 是共用工廠，`kind_key` 隨傳入的 `triage.class` 決定）。
+- 驗證：`app/tests/test_ads_triage_scale.py`（Rule A/B 純函式，正例／每種反例／to 公式／paused 不卡 owner／
+  ABO 委派廣告組 owner／CBO 退回活動 owner／`month_view` 呼叫次數）、`app/tests/test_ads_triage_queue.py
+  ::ScaleRefreshQueueTest`（走完整 `refresh_queue`/`get_queue`：`kind_key`／`scale`／`refresh` 形狀、category／
+  severity、跨窗 supersede、budget 提案配對）、`test_core_interrupts.py`（兩個新類別的 severity／label）、
+  `app/tests/test_ads_external_monthly.py::AboMonthDelegationTest`（ABO 活動＋廣告組扛日預算，
+  `month_budget.view()` 回傳非空 `available`；CBO 活動不變；沒有 `owner` 標記的普通 `unknown` 活動仍讀不確定）、
+  `test_ads_external_monthly.py::MetaMonthlyContractTest::test_campaign_with_neither_budget_field_marks
+  _children_verified_ad_sets_unchanged`（`_entity()` 直測：ABO 活動打標記、廣告組與 CBO 活動都不打）。
+  `docs/verification.md` 既有共用命令未變。
+
+### 6.28 F25 — 佇列的兩種新列：可加預算（三步流程）與補素材（settled 2026-09-22）
+
+Frontend of the rules in §6.27. Queue order is the existing `interrupts._sort_key` (severity, then category
+registration order), so the two `informational` kinds sort after 停損／變差; `refresh_creative` rows are additionally
+forced last and never count as done.
+- `home/QueueRow.tsx` dispatches on `kind_key`: stop_loss/worse unchanged except the stop-loss button now reads 「看提議」
+  (home only; the detail page keeps 去處理); scale rows show `KindMark up`, the owner name, a success Meter of
+  `scale.cost_per_result` vs the target, and 「看提議」 → `propose/budget/:ownerId`; refresh rows show `KindMark fresh`,
+  「能判讀的素材只剩 N 則」, up to four thumbnails (hollow placeholders to four) and 「準備新素材」 → the row's
+  `action_url` (`?tab=assets&material_new=1`).
+- `home/status.ts::proposalAction` gained the `budget` kind (null → propose route; with a set it reuses the pause
+  branch) and `isQueueItemDone` the `scale_budget` branch.
+- `flow/ConfirmPage.tsx` takes `proposeKind`; the budget evidence card is the prototype's: 同組 N 則, 每日預算 from → to
+  +20%, cost meter, 「主力穩定 2 個觀察期」, 「加碼後等 3–5 天再看」, and the month-budget bar with the 這次加碼 segment.
+  A 409 whose message is one of `month_budget.preflight`'s three is shown as-is (no rebuild); other 409s still rebuild
+  with `supersedes_id`.
+- `flow/changeFlow.ts::nextOpenQueueItem` is the single 「下一件」 rule for all four kinds; ConfirmPage and VerifyPage use it.
+- 驗證：`home/DecisionQueue.test.tsx`, `AdsHomePage.test.tsx`, `flow/ConfirmPage.test.tsx`, `flow/VerifyPage.test.tsx`;
+  並排證據 `.harness/scratch/F25/I0{2,3}/`.
+
+### 6.29 F26-I01 — 判讀只看投放中的廣告、`closed` 唯讀擴充、「資料不足」佇列列（settled 2026-09-22）
+
+實測根因（`brd_bughunt` 真資料，2026-09-22）：`triage.classify()` 選廣告只憑 `native_kind='ad'`（`triage.py:54` 舊版），
+20 支廣告全部照判，但只有 5 支投放中（11 暫停、4 已封存）——首頁長條「資料不足 17」多數來自已關閉的廣告。同一時間
+`month_budget.py:131` 已經排除五種狀態，`triage_scale.py:15`（F25）只排除三種，`triage.py` 完全沒排除——一個共用常數、
+三個消費端各自抄一份會漂移。
+
+- **共用常數 `app/ads/ad_status.py`**：`CLOSED_STATUSES = {PAUSED, DELETED, ARCHIVED, ADSET_PAUSED, CAMPAIGN_PAUSED}`
+  （Meta `effective_status` 的原生詞彙，平台中立檔案，不匯入 adapter）、`is_closed(status)`——`None`（未知）永遠不算已關閉。
+  `triage.py`／`triage_scale.py`（取代自己的三值集合）／`month_budget.py`（取代自己內嵌的五值字面集合，行為完全不變）
+  三個消費端改為 import 這一個定義。
+- **`triage.classify()`**：只判讀 `native_status` 不是已關閉的廣告（`items`）；`closed` 區塊帶回其餘廣告——
+  `{paused, archived, other, total, items, truncated}`。`paused`／`archived` 各自算，`DELETED`／`ADSET_PAUSED`／
+  `CAMPAIGN_PAUSED` 併進 `other`（`paused+archived+other===total` 恆成立）。`items` 每筆
+  `{entity_id, name, native_status, thumbnail_url, spend, cost_per_result, result_label}`，數字取自同一支
+  `classify()` 已經讀過的 `ads_external_daily`（`_ad_window`，跟活躍廣告同一次讀，不多打第二次查詢）——固定用最寬的
+  `WINDOW_STEPS[-1]`（28 天，跟 `classify()` 自己回的 `window_days` 一致）；沒有資料的那支廣告 `spend`／
+  `cost_per_result` 就是 `null`，不當機。`items` 上限 50 筆（同一次活動廣告查詢的 `(name, id)` 排序），超過時
+  `truncated=true`。`counts`／`total_ads`（`_queue_payload`）因為只吃 `items` 自動變成只算活躍廣告，程式碼本身不用改。
+- **「資料不足」佇列列**：新類別 `ads_triage_insufficient_data`（`app/core/interrupts.py::CATEGORIES`，本票對這支
+  舊檔唯一允許的改動，`severity=rule_warning`、label「活動資料不足待處理」，登記在既有 `rule_warning` 之後）。
+  `triage.py::_insufficient_candidates`：每個非結案活動、至少一支活躍廣告（`by_campaign` 本身就只含活躍廣告的
+  triage item，天然滿足這個門檻）、`data.missing_days` 非空或 `data.sync.state` 屬於
+  `{"failed","disconnected"}`（複用 `classify()` 同一套 `_data_view`，不碰 `ads_external_daily`，成本低）就出列。
+  `window_end` 用這個活動自己的帳戶 cutoff（跟其他列一樣每天往前移，去重鍵隨之翻新）；去重鍵
+  `ads-triage:insufficient_data:<campaign_id>:<window_end>`。payload：`kind_key:"insufficient_data"`，
+  `insufficient:{campaign_id, campaign_name, missing_days, sync_state, coverage}`；`triage` 是第一支活躍廣告的
+  item；沒有變更清單，`proposal` 恆為 `null`，按鈕留給前端接到既有 F24 等待頁
+  （`/brands/:b/ads/campaigns/:c/wait`）。`QUEUE_CATEGORY`／`KINDS_AVAILABLE`（五種）／既有 supersede 機制
+  （`_supersede_stale_open_rows` 迴圈 `QUEUE_CATEGORY.values()`，本來就不分 kind）同步更新，沒有另立第二套。
+- **前端型別跟進（本票只做型別，未做畫面——`home/CampaignCard.tsx`／`detail/CampaignDetailPage.tsx`／
+  `home/QueueRow.tsx`／`home/status.ts`／`month/MonthReviewPage.tsx` 等產出畫面留給 I02／I03）**：
+  `frontend/src/lib/adsTriageApi.ts` 新增 `TriageClosedItem`／`TriageClosedBlock`，`CampaignTriage.closed` 設成必填
+  （後端永遠會帶，不像 `data` 有 `do_not_touch`-vs-`touch` 衝突要留選填）——`frontend/src/components/ads/**/*.test.tsx`
+  下既有手寫 `getTriage()` fixture（`detail/CampaignDetailPage.test.tsx`、`home/CampaignCards.test.tsx`、
+  `month/MonthReviewPage.test.tsx`、`wait/WaitPage.test.tsx`）各補一個空 `closed` 區塊。`QueueItem` 新增選填
+  `insufficient?: QueueInsufficient`；`QueueKind`／`QueueItem.kind_key` 這次刻意**不**收 `"insufficient_data"`——
+  `home/QueueRow.tsx` 等既有消費端拿它當 `Record<QueueKind, ...>` 的窮舉鍵，不在本票 `touch`，貿然加值會逼著改那些
+  檔案；產出這一列畫面的票再一起把 `QueueKind` 加寬、把那些 `Record`／`switch` 補上第五個分支。
+- **已知缺口（誠實揭露）**：沒有「關掉時間」（Meta entity payload 沒有這個欄位），`closed` 區塊不含任何日期；
+  已關閉廣告的畫面呈現（清單、摺疊、「看紀錄」連結）與「資料不足」列的畫面呈現都留給後續 I02／I03。
+- 驗證：`app/tests/test_ads_triage.py::AdStatusTest`／`TriageClosedAdsTest`（5 活躍+11 暫停+4 已封存的實測形狀、
+  `null` 狀態仍判讀、`other` 桶、items 上限＋`truncated`、無資料廣告不當機）、
+  `app/tests/test_ads_triage_queue.py::InsufficientDataQueueTest`（缺天／同步失敗／斷線都出列、沒有活躍廣告不出列、
+  同窗去重、恢復後 supersede）、`test_ads_triage_scale.py`（`ADSET_PAUSED` 現在也排除 Rule A／B，舊三值集合抓不到
+  的反例）、`test_core_interrupts.py`（新類別 severity／label）。`cd frontend && npm run build`／
+  `npm test -- src/components/ads`。
+
+### 6.30 F26 — 只判讀投放中的廣告（前端）與「資料不足」佇列列（settled 2026-09-22）
+
+Reference: `docs/design/ads/prototype-v8-active-only.html` (user-approved 2026-09-22). Backend rule and payload: §6.29.
+- `home/CampaignCard.tsx`: the count chip reads 「<目標類型>・投放中 N 則」; the five-class strip and legend cover active ads
+  only; a bottom line 「另有 N 則已關閉（暫停 X・已封存 Y），不列入判斷」＋「查看 →」 (omitted when `closed.total === 0`).
+- `detail/CampaignDetailPage.tsx`: purpose line 「只判讀投放中的 N 則；已關閉的廣告保留紀錄，不列入判斷」; class groups from
+  active ads; a grey collapsed 「已關閉」 group listing `closed.items` with an 已暫停／已封存 chip and 「看紀錄」 →
+  `?tab=performance&ad=<entityId>` (user decision A: no new page; the tab does not yet scroll to the ad). A campaign whose ads
+  are ALL closed shows that group instead of the empty state.
+- `home/QueueRow.tsx` + `status.ts`: the `insufficient_data` row — KindMark warning, 「這個活動暫時無法判斷」, `DayTiles` over
+  the 7 days ending at `insufficient.coverage.end` with `missing_days` hollow, captions 「缺 M/D、M/D」 and the sync state,
+  「去處理」 → the wait page; never done.
+- `month/MonthReviewPage.tsx`: 素材 groups are 有效 = active `better`, 無效・已停 = `closed.items` (count `closed.total`),
+  還看不出 = active `flat`+`insufficient`; no 「這個月關掉 N 則」 line (no closed-at date from the platform).
+- 驗證：`home/CampaignCards.test.tsx`, `home/DecisionQueue.test.tsx`, `detail/CampaignDetailPage.test.tsx`,
+  `month/MonthReviewPage.test.tsx`; 並排證據 `.harness/scratch/F26/I0{2,3}/`.
+
+### 6.31 F27 — 原型完全落地（settled 2026-09-22）
+
+User ruling 2026-09-22 (「全部照建議」): every part of `prototype-v7-ads-center.html` / `prototype-v8-active-only.html` works on
+real data; only Google Ads stays a grey card. Contracts below are the authoritative field shapes (the feature file's
+contract text as corrected by its pre-dispatch challenge).
+- A. Ladder & history (`app/ads/triage_ladder.py`): active triage items carry `ladder {step 0|1|2, copy_changes, image_changes,
+  lineage_from}` and `history[]` (items that target this ad or its lineage; budget items excluded; cost 7 d before / after,
+  null when < 7 known days). step 2 if an image replacement was confirmed, else 1 if a copy change was confirmed, else 0.
+  Lineage: `ads_handoff_item.entity_id` of a confirmed new_ad item whose set carries `replaces_entity_id`.
+- B. Copy variants: dynamic creatives edit as `{titles[], bodies[]}` (0–5 each, ≥ 1 non-empty); the Meta adapter parses
+  `asset_feed_spec`, and `change_control_data.copy_fields` derives variants at READ time for creatives stored before the
+  parser existed (`adapters.copy_variants`). `evidence_json.conditions.copy_editable {ok, mode single|variants, reason}` is
+  computed at read time; catalog-only and carousel creatives are not editable. Verify compares variant sets order-free.
+- C/D. Angles & learnings: `GET …/entities/{e}/angles` (one cached background LLM task per ad per copy hash, 3 phrases ≤ 12
+  chars; e2e's scripted provider yields `failed` → 自訂 only). A pause item may carry `angle`; when it is confirmed,
+  `ads_learnings.record_for_item` writes one learning after `check` commits (idempotent by item id; confidence by the count
+  of earlier same-text learnings: observed → likely → validated). `GET …/learnings` lists them.
+- E. Replacement: `POST …/new-ad-handoffs` takes `replaces_entity_id`; the set view exposes `replaces` and, after the new ad
+  is confirmed, `follow_up {kind: pause_old}` until a pause set for the old ad exists. The review link is sent only for a
+  `new_test` recommendation.
+- F. Capacity & cleanup (`triage_capacity.py`): `capacity {daily_budget, currency, target, can_support = floor(daily ÷ (target × 2)),
+  active_ads}` (daily_budget null if any active ad lacks a daily owner); cleanup row (`ads_triage_cleanup`, informational)
+  proposes pausing the lowest 7-day-spend active ads (never a not-fully-covered ad or an open replacement lineage); refresh
+  rows are suppressed while a cleanup row is open. A cleanup set is created with `source: "cleanup"` (pause items only).
+- G. Month summary (`month_summary.py`): calendar-month spend/results of every ad (`metric_scope='ad'`, monthly-budget rows
+  excluded), verdict met/missed/unjudged, orders like-for-like via the existing commerce evidence function, closed-this-month
+  from `status_changed_at`, suggestions (refresh / cleanup / no target) with per-month dismissal in `context_json` (jsonb_set).
+  Only imported campaigns are listed (internal campaigns report through `ads_outcome_daily`) — known limit.
+- H. Timeline (`change_timeline.py`): read-time `spend_stopped` (pause, coverage-aware), `delivery_started` (copy/new_ad),
+  `next_review_at` (budget approved + 3 d, copy/new_ad verified + 7 d). Nothing is scheduled; the daily queue refresh re-judges.
+- I. Daily 06:30 `refresh_queue` for every brand; sync state `auth_expired` from the stored `permission_denied` code (raises
+  the 資料不足 row); `GET …/status-summary` for the top bar; `campaign_objective` family (sales / engagement / traffic / other)
+  on triage items, campaign cards, month summary and learnings — one function, `repository.campaign_objective_family`.
+- J/K. `ads_runtime_event` (tenant-scoped: NOT NULL org_id and brand_id, per the isolation gates) holds a `beat` per active
+  brand per minute and `queue_refresh`; `ads_external_entity.status_changed_at` marks active↔closed flips. `GET …/recovery`
+  reports a > 120-minute gap of the brand's own beats ended within 24 h, with five steps (reconnect, permissions, per-section
+  backfill, re-judge, re-check reported items).
+- Screens: review ladder + non-sales 「這條素材的紀錄」; prepare recommends by ladder (observe overrides); material step page
+  embeds the existing material/user-asset flows (known UX debt: those legacy panels are not v7-styled); copy page variants
+  editor + observed prefill; flow pages render new-ad and multi-item cleanup sets, pause angles, learning card, timeline
+  rail, 「改用平台現在的內容」; home thumbnails, CampaignChip, cleanup row, capacity chips, recovery banner; detail capacity
+  card, mini ladders, own-row-only actions; monthly review fully live; top-bar sync chip; wait-page auth row; performance
+  tab `?ad=` scroll with the disclosure opened.

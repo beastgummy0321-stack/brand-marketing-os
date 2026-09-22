@@ -11,7 +11,7 @@ import { decideReview, getReview, type ReviewRound } from "@/lib/adsReviewApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { proposePausePath } from "../flow/changeFlow";
 import { ActionBar, DecisionSheet, FlowHeader, OptionCard, Segmented } from "../patterns";
-import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
+import { findReviewTriageItem, reviewMaterialPath, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
   { label: "看證據" }, { label: "選方向" }, { label: "改文案" },
@@ -20,24 +20,29 @@ const STEPS = [
 const STEP_PURPOSE = "依這條素材已處理過的次數給建議";
 
 type Branch = "copy" | "image" | "existing" | "observe" | "retire";
-type PickableBranch = "copy" | "observe" | "retire";
+// F27-I12: ladder step → branch, `["copy","image","retire"][ladder.step]` — mirrors the prototype
+// `prepare()`'s own `rec=["copy","image","retire"][a.ladder]` exactly (Contract A `step: 0|1|2`).
+const LADDER_BRANCH = ["copy", "image", "retire"] as const;
 
-const OPTIONS: { key: Branch; icon: string; title: string; note: string; reserved?: boolean }[] = [
+const OPTIONS: { key: Branch; icon: string; title: string; note: string }[] = [
   { key: "copy", icon: "📝", title: "只改文案", note: "圖片不變，換文字" },
-  { key: "image", icon: "✚", title: "換一張圖", note: "訴求保留，做新圖再回來挑", reserved: true },
-  { key: "existing", icon: "🖼", title: "用現成素材", note: "上傳圖片或影片直接用", reserved: true },
+  { key: "image", icon: "✚", title: "換一張圖", note: "訴求保留，做新圖再回來挑" },
+  { key: "existing", icon: "🖼", title: "用現成素材", note: "上傳圖片或影片直接用" },
   { key: "observe", icon: "⏸", title: "先觀察", note: "不調整，到時間再看" },
   { key: "retire", icon: "■", title: "停掉這則", note: "記為無效，不再投" },
 ];
 // 每個方向的預設「原因」（v7 原型 `prepare()` 的 `#pr` 預設值），換方向就照新方向重填，
 // 不沿用使用者在上一個方向打的字（原型同樣行為：`branch()` 換值後整支重繪）。
-const REASON_DEFAULT: Record<PickableBranch, string> = {
+const REASON_DEFAULT: Record<Branch, string> = {
   copy: "採用建議：保留圖片，測試新文案",
+  image: "文案改過仍未改善，換圖",
+  existing: "改用現成素材",
   observe: "資料量還不夠，先觀察",
   retire: "多次調整仍未改善",
 };
-const PRIMARY_LABEL: Record<PickableBranch, string> = {
-  copy: "開始改文案", observe: "保存，先觀察", retire: "建立暫停提議",
+const PRIMARY_LABEL: Record<Branch, string> = {
+  copy: "開始改文案", image: "準備新圖", existing: "上傳素材",
+  observe: "保存，先觀察", retire: "建立暫停提議",
 };
 
 /** 小圖示佔位：跟 `ReviewEvidencePage.tsx` 的 `AdTile` 同樣理由自己刻一份小工具，不是重刻 kit
@@ -55,11 +60,14 @@ function AdTile({ url }: { url?: string | null }) {
   );
 }
 
-/** 選方向頁（F23-I03，v7 原型 `prepare()`）：六步流程第 2 步。`reviewId` 一定已經有一輪檢討——
- * 不是 `ready`（還沒判讀完）也不是 `completed`（已經決定過，回頭看這頁）就轉導回看證據頁
+/** 選方向頁（F23-I03／F27-I12，v7 原型 `prepare()`）：六步流程第 2 步。`reviewId` 一定已經有一輪
+ * 檢討——不是 `ready`（還沒判讀完）也不是 `completed`（已經決定過，回頭看這頁）就轉導回看證據頁
  * （feature Decisions「Wrong step」，`completed` 只能從 `ready` 轉，所以合法狀態只有這兩種）。
- * 三個可選方向 copy/observe/retire 各自對到一次 `decideReview` 呼叫與下一步；image/existing
- * 是保留卡（F23 決策 A：階梯佔位），不可選，卡片本身標「接上後開放」而不是拒絕。 */
+ * 五個方向 copy/image/existing/observe/retire 都可選，各自對到一次 `decideReview` 呼叫與下一步
+ * （F27 Screens「Prepare page」：換一張圖／用現成素材不再是階梯佔位，decide completed 後導去
+ * I14 的素材頁，帶對應 `mode`）。建議依這則廣告的階梯 `ladder.step`（Contract A）決定，除非這一輪
+ * 的第一個 AI 建議是 `observe`；只改文案在 `copy_editable.ok === false`（Contract B／correction 7，
+ * 例如商品目錄素材沒有可改的文字）時停用，原本被建議挪去換一張圖。 */
 export function PreparePage({ brandId, campaignId, reviewId }: {
   brandId: string; campaignId: string; reviewId: string;
 }) {
@@ -72,7 +80,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [selected, setSelected] = useState<PickableBranch | null>(null);
+  const [selected, setSelected] = useState<Branch | null>(null);
   const [reason, setReason] = useState("");
   const [quickPick, setQuickPick] = useState<"3" | "7" | "custom">("7");
   const [customDate, setCustomDate] = useState("");
@@ -102,18 +110,27 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
     }
   }, [brandId, campaignId, review, validStep, navigate]);
 
+  // `triageItem`（連帶 `ladder`）來自 `queue`，跟 `review` 各自一支 fetch——用 `!loading` 而不是
+  // `review` 當 effect 的依據，避免兩支 fetch 誰先回來的競態讓自動預選讀到還沒到位的 `queue`。
+  const triageItem = findReviewTriageItem(queue, review?.entity_id);
+  const ladder = triageItem?.triage.ladder;
   const first = review?.result_json.recommendations?.[0];
-  const recommended: PickableBranch | null =
-    first?.recommendation === "adjust" ? "copy" : first?.recommendation === "observe" ? "observe" : null;
+  // F27 Screens「Prepare page」：建議 = 階梯步驟，除非這一輪第一個建議是 observe。
+  const ladderRecommended: Branch | null = ladder ? LADDER_BRANCH[ladder.step] : null;
+  const recommended: Branch | null = first?.recommendation === "observe" ? "observe" : ladderRecommended;
+  const copyEditable = review?.evidence_json.conditions.copy_editable;
+  const copyDisabled = copyEditable?.ok === false;
+  // 建議指到只改文案，但那張卡停用時，挪去下一步（換一張圖）——不把建議標籤放在不能點的卡上。
+  const effectiveRecommended: Branch | null = recommended === "copy" && copyDisabled ? "image" : recommended;
 
-  // 進頁預選建議方向（沒有建議時預設「只改文案」，安全、可逆的預設）；只在剛讀到這一輪、
+  // 進頁預選建議方向（沒有建議時預設「只改文案」，安全、可逆的預設）；只在資料剛讀完、
   // 還沒選過方向時跑一次。
   useEffect(() => {
-    if (review && validStep && !selected) pick(recommended ?? "copy");
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在 review 剛讀到時跑一次，選過方向後不再跟著 recommended 重算。
-  }, [review, validStep]);
+    if (!loading && review && validStep && !selected) pick(effectiveRecommended ?? "copy");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在資料剛讀完時跑一次，選過方向後不再跟著 effectiveRecommended 重算。
+  }, [loading, review, validStep]);
 
-  function pick(key: PickableBranch) {
+  function pick(key: Branch) {
     setSelected(key);
     setReason(REASON_DEFAULT[key]);
     setQuickPick("7");
@@ -155,9 +172,11 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
       if (review.decision !== "completed") {
         await decideReview(brandId, campaignId, review.id, { decision: "completed", reason: trimmed });
       }
-      navigate(selected === "copy"
-        ? reviewRoundPath(brandId, campaignId, review.id, "copy")
-        : proposePausePath(brandId, campaignId, review.entity_id));
+      // F27 Screens「Prepare page」：copy → 改文案頁；retire → F22 停損提議頁；image/existing →
+      // I14 的素材頁，帶對應 `mode`（decide completed 一定先跑，跟 copy/retire 同一套順序）。
+      if (selected === "copy") navigate(reviewRoundPath(brandId, campaignId, review.id, "copy"));
+      else if (selected === "retire") navigate(proposePausePath(brandId, campaignId, review.entity_id));
+      else navigate(reviewMaterialPath(brandId, campaignId, review.id, selected === "image" ? "workbench_image" : "existing"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
     } finally {
@@ -194,7 +213,6 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
     );
   }
 
-  const triageItem = findReviewTriageItem(queue, review.entity_id);
   const position = reviewPosition(queue, triageItem);
 
   return (
@@ -222,18 +240,24 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
       />
 
       <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-5">
-        {OPTIONS.map((o) => (
-          <OptionCard
-            key={o.key}
-            icon={o.icon}
-            title={o.title}
-            note={o.note}
-            recommended={!o.reserved && o.key === recommended}
-            picked={!o.reserved && o.key === selected}
-            disabled={o.reserved}
-            onClick={o.reserved ? undefined : () => pick(o.key as PickableBranch)}
-          />
-        ))}
+        {OPTIONS.map((o) => {
+          // 只有「只改文案」會停用（Contract B `copy_editable.ok === false`）；image/existing/
+          // observe/retire 一律可選（F27 Screens「Prepare page」，不再有原型的階梯佔位卡）。
+          const disabled = o.key === "copy" && copyDisabled;
+          return (
+            <OptionCard
+              key={o.key}
+              icon={o.icon}
+              title={o.title}
+              note={o.note}
+              recommended={o.key === effectiveRecommended}
+              picked={o.key === selected}
+              disabled={disabled}
+              disabledNote={disabled ? (copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。") : undefined}
+              onClick={disabled ? undefined : () => pick(o.key)}
+            />
+          );
+        })}
       </div>
 
       {selected && (

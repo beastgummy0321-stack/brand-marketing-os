@@ -10,7 +10,19 @@ from collections import defaultdict
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ads import external_sync, repository, result_kinds, review_evidence, targets
+from app.ads import (
+    ad_status,
+    external_sync,
+    month_budget,
+    repository,
+    result_kinds,
+    review_evidence,
+    runtime_events,
+    targets,
+    triage_capacity,
+    triage_ladder,
+    triage_scale,
+)
 from app.ads.adapters.external import SourceReadError
 from app.core import interrupts
 from app.core.db import now_utc
@@ -36,6 +48,11 @@ LABELS = {
 
 
 def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
+    """F26-I01: judges only ACTIVE ads (`ad_status.is_closed` false, including an unknown/null
+    `native_status` -- unknown is never closed) -- a closed ad (paused/deleted/archived/its own
+    adset or campaign paused on the platform) is kept and reported through the `closed` block
+    below, never judged, never silently dropped (measured cause, feature Decisions "I01": the
+    home strip used to read most of its 「資料不足」 count from closed ads)."""
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -47,12 +64,16 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         "AND native_kind='ad' ORDER BY name,id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
+    active_ads = [ad for ad in ads if not ad_status.is_closed(ad["native_status"])]
+    closed_ads = [ad for ad in ads if ad_status.is_closed(ad["native_status"])]
     entity_ids = [ad["id"] for ad in ads]
     rows_by_entity = defaultdict(list)
     if entity_ids:
         # One read for the whole campaign (review fix: was one query per ad per window step) --
         # every window any ad ever needs (current + its equal-length previous window, up to 28
-        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`.
+        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`. Still reads every ad's
+        # rows, closed ones included -- the `closed` block's own numbers (below) reuse this same
+        # read, never a second query.
         range_start = cutoff - timedelta(days=_MAX_LOOKBACK_DAYS)
         rows = conn.execute(
             "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
@@ -61,22 +82,82 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         ).fetchall()
         for row in rows:
             rows_by_entity[row["entity_id"]].append(dict(row))
+    # F27-I09 Done #7: one campaign_objective lookup for the whole campaign (never per ad) --
+    # every ACTIVE ad's own triage item carries the same `campaign_objective` its campaign card
+    # would (`repository.campaign_objective_family`, the one function that tells a system-built
+    # campaign's Chinese label apart from an imported campaign's own platform objective).
+    campaign_objective = repository.campaign_objective_family(conn, org_id, brand_id, campaign)
     items = [
-        _classify_ad(dict(ad), campaign["name"], target, cutoff, coverage,
+        _classify_ad(dict(ad), campaign["name"], campaign_objective, target, cutoff, coverage,
                       rows_by_entity.get(ad["id"], []))
-        for ad in ads
+        for ad in active_ads
     ]
-    return {"window_days": WINDOW_STEPS[-1], "items": items, "data": _data_view(
-        conn, org_id, brand_id, campaign, cutoff, coverage,
-    )}
+    # F27-I01 Contract A: ladder/history attaches to ACTIVE items only, never `_closed_block`.
+    triage_ladder.attach(conn, org_id, brand_id, campaign_id, items)
+    # F27-I06 Contract F: capacity is read over the SAME active-ads-only `items` list above --
+    # never a second, divergent "active ad" query.
+    owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
+    capacity = triage_capacity.capacity_view(items, target["value"], owner_by_entity)
+    return {
+        "window_days": WINDOW_STEPS[-1], "items": items,
+        "closed": _closed_block(closed_ads, rows_by_entity, cutoff),
+        "data": _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity),
+    }
 
 
-def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage):
+_CLOSED_ITEMS_CAP = 50
+
+
+def _closed_item(entity, entity_rows, cutoff):
+    """One closed ad's own last-window numbers (feature Decisions "I01") -- the SAME widest
+    (`WINDOW_STEPS[-1]`-day) window `classify()` reports as its own `window_days`, sliced from the
+    campaign-level read `classify()` already fetched (never a second query)."""
+    days = WINDOW_STEPS[-1]
+    end = cutoff
+    start = end - timedelta(days=days - 1)
+    view, spend = _ad_window(entity_rows, start, end)
+    return {
+        "entity_id": entity["id"], "name": entity.get("name"),
+        "native_status": entity.get("native_status"), "thumbnail_url": _thumbnail_url(entity),
+        "spend": spend, "cost_per_result": view["cost_per_result"] if view else None,
+        "result_label": result_kinds.label(view["result_kind"] if view else None),
+    }
+
+
+def _closed_block(closed_ads, rows_by_entity, cutoff):
+    """The `closed` block of `classify()`'s result (feature Decisions "I01") -- `paused`/
+    `archived` count the two statuses the frontend groups the strip by; every other closed status
+    (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`) falls into `other`, so `paused + archived + other
+    == total` always. `items` is capped at `_CLOSED_ITEMS_CAP`, in the same (name, id) order the
+    campaign's own ad query already returned; `truncated` tells the frontend there's more than the
+    cap without it having to compare lengths itself."""
+    paused = archived = other = 0
+    for ad in closed_ads:
+        status = ad["native_status"]
+        if status == "PAUSED":
+            paused += 1
+        elif status == "ARCHIVED":
+            archived += 1
+        else:
+            other += 1
+    items = [
+        _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff)
+        for ad in closed_ads[:_CLOSED_ITEMS_CAP]
+    ]
+    return {
+        "paused": paused, "archived": archived, "other": other, "total": len(closed_ads),
+        "items": items, "truncated": len(closed_ads) > _CLOSED_ITEMS_CAP,
+    }
+
+
+def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity):
     """The read-only `data` enrichment (F24-I01, feature Decisions) -- `sync` reuses
     `repository.campaign_sync_state` (same DB-only bound-accounts check `external_repository
     .external_view`'s own `connections` list makes); `coverage`/`missing_days` reuse this same
     call's own `cutoff`/`coverage` (never re-derived), so they can never disagree with what
-    `classify()` above actually judged every ad against."""
+    `classify()` above actually judged every ad against. `capacity` (F27-I06 Contract F) is passed
+    in already computed -- `classify()`'s own `items`/`target` are the source, never re-derived
+    here."""
     window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
     return {
         "sync": repository.campaign_sync_state(conn, org_id, brand_id, campaign),
@@ -85,6 +166,7 @@ def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage):
             if coverage else None
         ),
         "missing_days": _missing_days(coverage, window_start, cutoff),
+        "capacity": capacity,
     }
 
 
@@ -261,10 +343,11 @@ def _thumbnail_url(entity):
     return fields.get("thumbnail_url") or fields.get("image_url") or None
 
 
-def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
+def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
         "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
+        "campaign_objective": campaign_objective,
         "thumbnail_url": _thumbnail_url(entity),
     }
 
@@ -347,12 +430,17 @@ def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
 # F18-I03: brand decision queue over program triage, through the existing `interrupts` inbox.
 # ---------------------------------------------------------------------------
 
-# One category per class this batch actually surfaces (feature Decisions: "scale_budget" and
-# "refresh_creative" are reported as pending, never queued -- no interrupts.py entry for them).
-QUEUE_CATEGORY = {"stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse"}
+# One interrupt category per queue kind this batch raises (F27-I06: six kinds are now live).
+QUEUE_CATEGORY = {
+    "stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse",
+    "scale_budget": "ads_triage_scale_budget", "refresh_creative": "ads_triage_refresh_creative",
+    "insufficient_data": "ads_triage_insufficient_data", "cleanup": "ads_triage_cleanup",
+}
 ALL_CLASSES = ("stop_loss", "worse", "better", "flat", "insufficient", "no_target")
-KINDS_AVAILABLE = ["stop_loss", "worse"]
-KINDS_PENDING = ["scale_budget", "refresh_creative"]
+KINDS_AVAILABLE = [
+    "stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
+]
+KINDS_PENDING = []
 _NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10 fixed chars).
 
 
@@ -382,32 +470,242 @@ def _queue_message(cls, name):
     return f"廣告「{_safe_name(name)}」{LABELS[cls]}，待決定"
 
 
-def _dedupe_key(cls, entity_id, window_end):
+def _scale_message(owner_name):
+    return f"「{_safe_name(owner_name)}」可加預算，待決定"
+
+
+def _refresh_message(campaign_name):
+    return f"「{_safe_name(campaign_name)}」素材待補，待決定"
+
+
+def _insufficient_message(campaign_name):
+    return f"「{_safe_name(campaign_name)}」資料不足，待處理"
+
+
+def _cleanup_message(campaign_name):
+    return f"「{_safe_name(campaign_name)}」廣告過多，待決定"
+
+
+def _dedupe_key(kind, identity_id, window_end):
     # Window end in the key (feature Decisions #3): a resolved decision stays resolved until the
-    # window moves on to a new `window_end`, which is a new dedupe key and a fresh open row --
-    # `interrupts.enqueue`'s own dedupe check finds the OLD row by key and status, resolved or
-    # not, and never reopens or duplicates it (see `interrupts.py::enqueue`, no change needed
-    # there beyond the two registered categories above).
-    return f"ads-triage:{cls}:{entity_id}:{window_end.isoformat()}"
+    # window moves on to a new `window_end` -- a fresh dedupe key `interrupts.enqueue` never
+    # confuses with the old, resolved-or-not, row. `identity_id`: the ad's `entity_id` for
+    # `stop_loss`/`worse`, the budget owner's `id` for `scale_budget`, the campaign's `id` for
+    # `refresh_creative`/`insufficient_data`/`cleanup`.
+    return f"ads-triage:{kind}:{identity_id}:{window_end.isoformat()}"
 
 
-def _live_keys(items) -> set:
-    return {
-        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"])
-        for item in items if item["class"] in QUEUE_CATEGORY
-    }
+def _classified_items_by_campaign(items):
+    by_campaign = defaultdict(list)
+    for item in items:
+        by_campaign[item["campaign_id"]].append(item)
+    return by_campaign
+
+
+def _month_view_fn(conn, org_id, brand_id):
+    """`additional_items -> budget dict`, bound to this brand's current month -- the SAME
+    `month_budget.view` seam `preflight()` uses at approve, so a raised row and its own approval
+    can never disagree. A callable so tests can stub it without a real month-budget fixture."""
+    month = today_for_org(conn, org_id=org_id).strftime("%Y-%m")
+    return lambda additional: month_budget.view(
+        conn, org_id, brand_id, month, additional=additional
+    )
+
+
+def _campaign_insufficiency(conn, org_id, brand_id, campaign_id):
+    """This one campaign's own `data` block plus its name (F26-I01, feature Decisions "I01") --
+    reuses `classify()`'s own `_coverage`/`_account_cutoff`/`_data_view` seam, which never touches
+    `ads_external_daily` (only the campaign's own `context_json` and its bound account), so this
+    stays cheap alongside the per-campaign `classify()` call `_classify_brand` already makes.
+    `None` when the campaign no longer exists (defensive -- `_non_closed_campaign_ids` only just
+    listed live ids, but nothing here holds that row locked in between)."""
+    campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        return None
+    coverage = _coverage(campaign)
+    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    # `capacity=None`: this helper only ever reads `missing_days`/`sync`/`coverage` back off
+    # `data` (never serialised to a caller as `TriageData` itself) -- computing a real capacity
+    # here would need `items`/`target`/an owner lookup this lightweight helper doesn't have.
+    data = _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity=None)
+    return {"campaign_name": campaign["name"], "data": data, "cutoff": cutoff, "coverage": coverage}
+
+
+# F27-I09 correction 2: `auth_expired` is a failing-to-sync state exactly like `failed`/
+# `disconnected` (a campaign stuck there needs a human to re-authorize before it can ever sync
+# again) -- same 「資料不足」 queue row either way.
+_SYNC_STATES_RAISING_INSUFFICIENT = {"failed", "disconnected", "auth_expired"}
+
+
+def _insufficient_candidates(conn, org_id, brand_id, by_campaign) -> list:
+    """The campaign-level 「資料不足」 queue row (F26-I01, feature Decisions "I01") -- one
+    candidate per non-closed campaign that has at least one ACTIVE ad (`by_campaign` only ever
+    carries a campaign whose triage items are active ads, `classify()` no longer judges closed
+    ones) whose own `data` block shows `missing_days` non-empty OR `sync.state` failed/
+    disconnected. `window_end` is the campaign's own account cutoff (the same date every other
+    row's window would extend to on this campaign) -- it moves forward daily, so a resolved row
+    stays resolved only until the NEXT day's refresh, same "window moves on" rule every other kind
+    already follows. `triage` is the first active ad's own item (`by_campaign`'s own (name, id)
+    order, same as `classify()`'s query) -- always present, since the >=1-active-ad gate above
+    guarantees a non-empty list."""
+    candidates = []
+    for campaign_id, campaign_items in by_campaign.items():
+        if not campaign_items:
+            continue
+        info = _campaign_insufficiency(conn, org_id, brand_id, campaign_id)
+        if info is None:
+            continue
+        data = info["data"]
+        if not (data["missing_days"] or data["sync"]["state"] in _SYNC_STATES_RAISING_INSUFFICIENT):
+            continue
+        window_end = info["cutoff"]
+        triage_item = campaign_items[0]
+        candidates.append({
+            "kind": "insufficient_data", "identity_id": campaign_id,
+            "window_start": window_end, "window_end": window_end,
+            "message": _insufficient_message(info["campaign_name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}/wait",
+            "payload": {
+                "triage": triage_item,
+                "insufficient": {
+                    "campaign_id": campaign_id, "campaign_name": info["campaign_name"],
+                    "missing_days": data["missing_days"], "sync_state": data["sync"]["state"],
+                    "coverage": data["coverage"],
+                },
+            },
+        })
+    return candidates
+
+
+def _campaign_recent_rows_by_entity(conn, org_id, brand_id, campaign_id, entity_ids, start, end):
+    """This campaign's own ad-scope daily rows over `[start, end]`, sliced per entity -- used only
+    by `_cleanup_candidates` below (Contract F's own 7-day spend, never `classify()`'s wider
+    lookback -- that window belongs to `classify()`'s own per-ad judgement, never re-borrowed
+    here)."""
+    rows_by_entity = defaultdict(list)
+    if not entity_ids:
+        return rows_by_entity
+    rows = conn.execute(
+        "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND metric_scope='ad' AND entity_id = ANY(%s) AND day BETWEEN %s AND %s",
+        (org_id, brand_id, campaign_id, list(entity_ids), start, end),
+    ).fetchall()
+    for row in rows:
+        rows_by_entity[row["entity_id"]].append(dict(row))
+    return rows_by_entity
+
+
+def _cleanup_candidates(conn, org_id, brand_id, by_campaign) -> list:
+    """Contract F's cleanup queue row -- one candidate per campaign whose own capacity
+    (`triage_capacity.capacity_view`) is known and over budget. `owner_lookup` is one brand-wide
+    read shared by every campaign here (never per campaign, same query-sharing shape
+    `triage_scale.scale_candidates`'s own single call already follows). A campaign whose own
+    trailing 7-day window isn't fully synced never raises this row at all (never guessing which
+    ads are "lowest spend" over an incomplete window)."""
+    if not by_campaign:
+        return []
+    owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
+    candidates = []
+    for campaign_id, campaign_items in by_campaign.items():
+        if not campaign_items:
+            continue
+        info = _campaign_insufficiency(conn, org_id, brand_id, campaign_id)
+        if info is None:
+            continue
+        cutoff, coverage = info["cutoff"], info["coverage"]
+        window_start = cutoff - timedelta(days=6)
+        if not _window_covered(coverage, window_start, cutoff):
+            continue
+        target_value = campaign_items[0]["target"].get("value")
+        capacity = triage_capacity.capacity_view(campaign_items, target_value, owner_by_entity)
+        rows_by_entity = _campaign_recent_rows_by_entity(
+            conn, org_id, brand_id, campaign_id,
+            {item["entity_id"] for item in campaign_items}, window_start, cutoff,
+        )
+        cleanup = triage_capacity.cleanup_candidates(
+            conn, org_id, brand_id, campaign_id, info["campaign_name"], campaign_items,
+            rows_by_entity, cutoff, capacity,
+        )
+        if cleanup is None:
+            continue
+        candidates.append({
+            "kind": "cleanup", "identity_id": campaign_id,
+            "window_start": window_start, "window_end": cutoff,
+            "message": _cleanup_message(info["campaign_name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}"
+                          f"/propose/cleanup/{campaign_id}",
+            "payload": {"triage": campaign_items[0], "cleanup": cleanup},
+        })
+    return candidates
+
+
+def _queue_candidates(conn, org_id, brand_id, items) -> list:
+    """Every row this brand's queue could raise, across all six kinds -- one candidate per
+    `stop_loss`/`worse` ad item, plus every qualifying `scale_budget` owner, `cleanup` campaign,
+    and `refresh_creative` campaign (`triage_scale.py`/`triage_capacity.py`). Each candidate
+    carries its `kind`, dedupe identity, window and queue message/action_url, plus the extra
+    payload `_queue_payload` attaches to its row."""
+    by_campaign = _classified_items_by_campaign(items)
+    native_status = _brand_entity_native_status(
+        conn, org_id, brand_id, {item["entity_id"] for item in items}
+    )
+    candidates = []
+    for item in items:
+        if item["class"] not in ("stop_loss", "worse"):
+            continue
+        candidates.append({
+            "kind": item["class"], "identity_id": item["entity_id"],
+            "window_start": item["window"]["start"], "window_end": item["window"]["end"],
+            "message": _queue_message(item["class"], item["name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
+                          f"?ad={item['entity_id']}",
+            "payload": {"triage": item},
+        })
+    month_view = _month_view_fn(conn, org_id, brand_id)
+    for scale in triage_scale.scale_candidates(
+        conn, org_id, brand_id, by_campaign, native_status, month_view
+    ):
+        owner_id = scale["owner_id"]
+        candidates.append({
+            "kind": "scale_budget", "identity_id": owner_id,
+            "window_start": scale["window_start"], "window_end": scale["window_end"],
+            "message": _scale_message(scale["scale"]["owner"]["name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{scale['campaign_id']}/detail"
+                          f"?owner={owner_id}",
+            "payload": {"triage": scale["triage"], "scale": scale["scale"]},
+        })
+    cleanup_candidates = _cleanup_candidates(conn, org_id, brand_id, by_campaign)
+    # Correction 4: while a campaign has an open cleanup row, its refresh_creative row is not
+    # raised (cleanup first) -- `identity_id` is the campaign id for both kinds.
+    cleanup_campaign_ids = {c["identity_id"] for c in cleanup_candidates}
+    candidates.extend(cleanup_candidates)
+    for refresh in triage_scale.refresh_candidates(by_campaign, native_status):
+        campaign_id = refresh["campaign_id"]
+        if campaign_id in cleanup_campaign_ids:
+            continue
+        candidates.append({
+            "kind": "refresh_creative", "identity_id": campaign_id,
+            "window_start": refresh["window_start"], "window_end": refresh["window_end"],
+            "message": _refresh_message(refresh["campaign_name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}"
+                          f"?tab=assets&material_new=1",
+            "payload": {"triage": refresh["triage"], "refresh": refresh["refresh"]},
+        })
+    candidates.extend(_insufficient_candidates(conn, org_id, brand_id, by_campaign))
+    return candidates
 
 
 def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
     """Lead review arbitration (2026-09-21, F18-I03 REQUEST_CHANGES): the same `interrupt` table
     feeds the brand home and `/api/inbox`, and auto-archive only covers `informational` severity
-    -- a stale open `stop_loss`/`worse` row (superseded by a newer window, or the ad moved off
-    both classes) would otherwise sit open forever and keep inflating `brand_health`. Close every
-    OPEN row of this brand in the two triage categories whose `dedupe_key` is no longer live,
-    through the existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads`
-    (architecture boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at
-    most one open row per (class, entity) at any time; a user-resolved key is already not
-    'open', so this loop never touches it and never re-raises it."""
+    -- a stale open row (superseded by a newer window, or its kind no longer qualifying) would
+    otherwise sit open forever and keep inflating `brand_health`. Close every OPEN row of this
+    brand in every triage category (`QUEUE_CATEGORY.values()`, six as of F27-I06) whose
+    `dedupe_key` is no longer live, through the
+    existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads` (architecture
+    boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at most one open row
+    per (kind, identity) at any time; a user-resolved key is already not 'open', so this loop
+    never touches it and never re-raises it."""
     for category in QUEUE_CATEGORY.values():
         stale = [
             row for row in interrupts.list_open(conn, brand_id=brand_id, category=category,
@@ -420,36 +718,42 @@ def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
 
 def refresh_queue(conn, org_id, brand_id) -> dict:
     """`POST .../queue/refresh` (Done #3): classify every non-closed campaign, raise one
-    interrupt per `stop_loss`/`worse` ad. One transaction -- every enqueue below, then a single
-    commit. Afterward, supersede every open row this brand's two triage categories no longer
-    match (`_supersede_stale_open_rows`) -- each call its own `resolve()`, not part of the enqueue
-    transaction. The returned payload is read back afterward, same shape as `get_queue()`."""
+    interrupt per queue-worthy row across all four kinds (`_queue_candidates`). One transaction
+    -- every enqueue below, then a single commit. Afterward, supersede every open row this
+    brand's four triage categories no longer match (`_supersede_stale_open_rows`) -- each call
+    its own `resolve()`, not part of the enqueue transaction. The returned payload is read back
+    afterward, same shape as `get_queue()`.
+
+    F27-I00 Contract J: also records one `queue_refresh` runtime event for this brand (Contract K's
+    recovery step 4, a later F27 issue, reads it back) -- same transaction as the enqueue loop."""
     items = _classify_brand(conn, org_id, brand_id)
-    for item in items:
-        cls = item["class"]
-        if cls not in QUEUE_CATEGORY:
-            continue
+    candidates = _queue_candidates(conn, org_id, brand_id, items)
+    for candidate in candidates:
         interrupts.enqueue(
-            conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[cls],
-            dedupe_key=_dedupe_key(cls, item["entity_id"], item["window"]["end"]),
-            message=_queue_message(cls, item["name"]),
-            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
-                       f"?ad={item['entity_id']}",
+            conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[candidate["kind"]],
+            dedupe_key=_dedupe_key(candidate["kind"], candidate["identity_id"],
+                                    candidate["window_end"]),
+            message=candidate["message"], action_url=candidate["action_url"],
         )
+    runtime_events.record(conn, "queue_refresh", org_id=org_id, brand_id=brand_id)
     conn.commit()
-    _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))
-    return _queue_payload(conn, org_id, brand_id, items)
+    live_keys = {
+        _dedupe_key(c["kind"], c["identity_id"], c["window_end"]) for c in candidates
+    }
+    _supersede_stale_open_rows(conn, org_id, brand_id, live_keys)
+    return _queue_payload(conn, org_id, brand_id, items, candidates)
 
 
 def get_queue(conn, org_id, brand_id) -> dict:
     """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
-    only place that supersedes stale rows (it may not have run yet since the ad's classification
-    last changed). Current classification decides which open interrupt rows are still live: an
-    older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
-    filtered out of this payload the same way, without writing anything. Each listed row carries
-    the current triage item that produced it (F19-I01, `_queue_payload`)."""
+    only place that supersedes stale rows (it may not have run yet since the last classification
+    change). Current classification decides which open interrupt rows are still live: an older
+    window's open row whose kind no longer qualifies (e.g. an ad now flat, or an owner's ads no
+    longer all stable) is filtered out of this payload the same way, without writing anything.
+    Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`)."""
     items = _classify_brand(conn, org_id, brand_id)
-    return _queue_payload(conn, org_id, brand_id, items)
+    candidates = _queue_candidates(conn, org_id, brand_id, items)
+    return _queue_payload(conn, org_id, brand_id, items, candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -588,14 +892,15 @@ def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, tria
     }
 
 
-def _matching_pause_set(sets_by_campaign, campaign_id, entity_id):
-    """The newest non-superseded change set of `campaign_id` whose items include a `pause` item
-    targeting `entity_id`, and that item itself -- `None, None` when there isn't one. A set with
-    an item for a different entity, or living in a different campaign, is never a match."""
+def _matching_change_item(sets_by_campaign, campaign_id, target_id, kind):
+    """The newest non-superseded change set of `campaign_id` whose items include a `kind` item
+    targeting `target_id`, and that item itself -- `None, None` when there isn't one. Generalised
+    by `kind` (F25-I01) so the F22-I01 pause match (`kind="pause"`, ad `entity_id`) and the
+    `scale_budget` row's budget match (`kind="budget"`, the budget owner's `id`) share one walk."""
     for change_set in sets_by_campaign.get(campaign_id, ()):
         item = next(
             (i for i in change_set["plan_json"].get("items", ())
-             if i.get("kind") == "pause" and i.get("target_id") == entity_id),
+             if i.get("kind") == kind and i.get("target_id") == target_id),
             None,
         )
         if item is not None:
@@ -611,8 +916,8 @@ def _row_proposal(sets_by_campaign, action_states, native_status_by_entity, tria
     whose matching item reads back `confirmed` while the entity's own `native_status` is no
     longer paused (triage never reads `native_status` itself -- see `triage.py:228-307` -- so a
     re-enabled ad must get a fresh proposal rather than reusing a stale `confirmed` one)."""
-    change_set, matched_item = _matching_pause_set(
-        sets_by_campaign, triage_item["campaign_id"], triage_item["entity_id"],
+    change_set, matched_item = _matching_change_item(
+        sets_by_campaign, triage_item["campaign_id"], triage_item["entity_id"], kind="pause",
     )
     if change_set is None or matched_item is None:
         return None
@@ -638,13 +943,92 @@ def _row_proposal(sets_by_campaign, action_states, native_status_by_entity, tria
     }
 
 
-def _queue_payload(conn, org_id, brand_id, items) -> dict:
-    # F19-I01: each open row's own triage item, keyed by the same dedupe key the enqueue used --
-    # the frontend never parses `dedupe_key` strings itself. Only `stop_loss`/`worse` items ever
-    # produce a key (see `_live_keys`), so this doubles as the "still live" filter below.
-    items_by_key = {
-        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"]): item
-        for item in items if item["class"] in QUEUE_CATEGORY
+def _row_scale_proposal(sets_by_campaign, action_states, candidate):
+    """The `proposal` for one `scale_budget` row (feature Decisions "Queue payload") -- the
+    newest non-superseded change set whose items include a `budget` item targeting this owner,
+    same shape `_row_proposal` reports for a `stop_loss` row's `pause` item (reuses
+    `_matching_change_item`, generalised by kind); `None` when there is no matching set, or a
+    `deferred` set past its own `revisit_at`, or a `rejected` set whose `created_at` day has
+    fallen outside this row's current window (same rules `_row_proposal` applies)."""
+    triage_item = candidate["payload"]["triage"]
+    change_set, matched_item = _matching_change_item(
+        sets_by_campaign, triage_item["campaign_id"], candidate["identity_id"], kind="budget",
+    )
+    if change_set is None or matched_item is None:
+        return None
+    verification_state = action_states.get(matched_item["id"], "pending")
+    if change_set["status"] == "deferred":
+        revisit_at = change_set["revisit_at"]
+        if revisit_at is not None and revisit_at <= now_utc():
+            return None
+    elif change_set["status"] == "rejected":
+        created_day = change_set["created_at"].date()
+        if not (candidate["window_start"] <= created_day <= candidate["window_end"]):
+            return None
+    return {
+        "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
+        "kind": matched_item["kind"], "status": change_set["status"],
+        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "revisit_at": change_set["revisit_at"],
+        "multi": len(change_set["plan_json"].get("items", ())) > 1,
+    }
+
+
+def _matching_cleanup_set(sets_by_campaign, campaign_id):
+    """The newest non-superseded change set of `campaign_id` whose `plan_json.source == "cleanup"`
+    and that carries at least one `pause` item -- Contract F's own proposal match, never generalised
+    through `_matching_change_item` (that helper matches by a single `target_id`; a cleanup set's
+    own identity is the campaign, not one ad)."""
+    for change_set in sets_by_campaign.get(campaign_id, ()):
+        if change_set["plan_json"].get("source") != "cleanup":
+            continue
+        pause_items = [
+            i for i in change_set["plan_json"].get("items", ()) if i.get("kind") == "pause"
+        ]
+        if pause_items:
+            return change_set, pause_items
+    return None, None
+
+
+def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
+    """The `proposal` for one `cleanup` row (Contract F) -- same shape `_row_proposal` reports for
+    a `stop_loss` row's single `pause` item, `kind` always `"cleanup"` and `multi` always `True`
+    (a cleanup set is inherently the multi-item kind, never computed from item count). A cleanup
+    set carries several `pause` items (one per proposed ad); `verification_state` reads
+    `"confirmed"` only once every one of them does, else the first item's own state that isn't
+    (same "worst state wins" aggregate `handoff_check.py::_finish` uses for one action's own
+    multi-handoff readback)."""
+    change_set, pause_items = _matching_cleanup_set(sets_by_campaign, candidate["identity_id"])
+    if change_set is None or pause_items is None:
+        return None
+    states = [action_states.get(item["id"], "pending") for item in pause_items]
+    verification_state = (
+        "confirmed" if all(s == "confirmed" for s in states)
+        else next((s for s in states if s != "confirmed"), "pending")
+    )
+    if change_set["status"] == "deferred":
+        revisit_at = change_set["revisit_at"]
+        if revisit_at is not None and revisit_at <= now_utc():
+            return None
+    elif change_set["status"] == "rejected":
+        created_day = change_set["created_at"].date()
+        if not (candidate["window_start"] <= created_day <= candidate["window_end"]):
+            return None
+    return {
+        "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
+        "kind": "cleanup", "status": change_set["status"],
+        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "revisit_at": change_set["revisit_at"], "multi": True,
+    }
+
+
+def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
+    # F19-I01/F25-I01: each open row's own triage item (and, for `scale_budget`/`refresh_creative`
+    # rows, their own extra `scale`/`refresh` payload), keyed by the same dedupe key the enqueue
+    # used -- the frontend never parses `dedupe_key` strings itself. Every candidate produces a
+    # key (see `_queue_candidates`), so this doubles as the "still live" filter below.
+    candidates_by_key = {
+        _dedupe_key(c["kind"], c["identity_id"], c["window_end"]): c for c in candidates
     }
     queue_categories = set(QUEUE_CATEGORY.values())
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
@@ -653,14 +1037,14 @@ def _queue_payload(conn, org_id, brand_id, items) -> dict:
     rows = [
         row
         for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
-        if row["category"] in queue_categories and row["dedupe_key"] in items_by_key
+        if row["category"] in queue_categories and row["dedupe_key"] in candidates_by_key
     ]
     # F22-I01: only `stop_loss` rows' own entities need the native_status lookup (only a
     # `confirmed` pause proposal ever reads it).
     stop_loss_entity_ids = {
-        items_by_key[row["dedupe_key"]]["entity_id"]
+        candidates_by_key[row["dedupe_key"]]["identity_id"]
         for row in rows
-        if items_by_key[row["dedupe_key"]]["class"] == "stop_loss"
+        if candidates_by_key[row["dedupe_key"]]["kind"] == "stop_loss"
     }
     sets_by_campaign = _brand_change_sets_by_campaign(conn, org_id, brand_id)
     action_states = _brand_action_verification_states(conn, org_id, brand_id)
@@ -671,19 +1055,29 @@ def _queue_payload(conn, org_id, brand_id, items) -> dict:
     rounds_by_entity = _brand_review_rounds(conn, org_id, brand_id)
     open_rows = []
     for row in rows:
-        triage_item = items_by_key[row["dedupe_key"]]
-        cls = triage_item["class"]
-        if cls == "stop_loss":
+        candidate = candidates_by_key[row["dedupe_key"]]
+        kind = candidate["kind"]
+        triage_item = candidate["payload"]["triage"]
+        if kind == "stop_loss":
             proposal = _row_proposal(
                 sets_by_campaign, action_states, native_status_by_entity, triage_item
             )
-        elif cls == "worse":
+        elif kind == "worse":
             proposal = _row_review_proposal(
                 rounds_by_entity, sets_by_campaign, action_states, triage_item
             )
+        elif kind == "scale_budget":
+            proposal = _row_scale_proposal(sets_by_campaign, action_states, candidate)
+        elif kind == "cleanup":
+            proposal = _row_cleanup_proposal(sets_by_campaign, action_states, candidate)
         else:
+            # refresh_creative/insufficient_data: no change set -- the row's own button goes
+            # elsewhere (the workbench / the F24 wait page) instead.
             proposal = None
-        open_rows.append({**row, "triage": triage_item, "proposal": proposal})
+        extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
+        open_rows.append({
+            **row, "kind_key": kind, "triage": triage_item, **extra, "proposal": proposal,
+        })
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:
         counts[item["class"]] += 1

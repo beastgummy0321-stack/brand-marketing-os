@@ -132,13 +132,23 @@ def _entity(item, kind, account):
         else:
             raw_value = raw.get("lifetime_budget" if budget_type == "lifetime" else "daily_budget")
             amount, conversion = _budget_minor_unit_amount(raw_value, currency)
+        budget_raw = {
+            "values": raw,
+            "unit": "minor_units" if amount is not None else "unknown",
+            "conversion": conversion,
+        }
+        # A campaign whose raw payload carries neither budget field is, by Meta's own API
+        # semantics, an ad-set-budget (ABO) campaign -- the real budget lives on its ad sets.
+        # `budget_type` stays "unknown" (the schema has no `None` to spare, F25-I01 2026-09-22
+        # "ABO without a schema change") -- only this marker distinguishes "verified: no campaign
+        # budget, look at the children" from "unknown: this campaign was simply never read".
+        # Ad sets keep today's behaviour: this signal only ever concerns the campaign's own
+        # missing budget, never a sibling.
+        if kind == "campaign" and not raw:
+            budget_raw["owner"] = "children_verified"
         result.update(
             budget_type=budget_type,
-            budget_raw={
-                "values": raw,
-                "unit": "minor_units" if amount is not None else "unknown",
-                "conversion": conversion,
-            },
+            budget_raw=budget_raw,
             currency=currency,
             budget_source="graph",
             budget_amount=amount,
@@ -216,7 +226,41 @@ def creative_summary(value):
     }
     if dynamic:
         result["unsupported"] = "動態／商品目錄素材無法完整還原。"
+        # Contract B (F27-I02): the only text a dynamic/catalog creative actually exposes for
+        # editing is Meta's own `asset_feed_spec.titles[]/bodies[]` variant arrays -- this is
+        # platform knowledge, so it stays in the adapter rather than leaking `asset_feed_spec`'s
+        # shape into `app/ads/change_control_data.py`. Missing arrays (a creative that only
+        # carries e.g. `promotional_metadata`, real dev data) become empty lists, never an error;
+        # `change_control_data.copy_editable` is what decides whether that's still editable.
+        result["fields"]["copy_variants"] = copy_variants(result) or {"titles": [], "bodies": []}
     return result
+
+
+def _asset_feed_texts(items):
+    return [
+        item["text"]
+        for item in (items or [])
+        if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+    ]
+
+
+def copy_variants(creative):
+    """Platform dispatch target (`app/ads/adapters/__init__.py::copy_variants`, F27-I26): derive
+    `{titles, bodies}` from this creative's own stored `fields.asset_feed_spec` at read time --
+    the same parser `creative_summary` uses at sync time, shared here so it is never duplicated.
+    Read-time reuse matters for any creative synced before F27-I02: `asset_feed_spec` was already
+    captured into `fields` by the `keys` loop above regardless of whether `copy_variants` was
+    ever derived, so this still parses real, not re-synced, dev data. `creative` is the
+    `creative_summary()` shape (`{fields: {...}, ...}`), not a raw platform payload. `None` when
+    there is no `asset_feed_spec` to parse at all (not dynamic, or read before this field was
+    ever captured) -- never a guessed empty dict; callers decide what "no answer" means."""
+    feed = ((creative or {}).get("fields") or {}).get("asset_feed_spec")
+    if feed is None:
+        return None
+    return {
+        "titles": _asset_feed_texts(feed.get("titles")),
+        "bodies": _asset_feed_texts(feed.get("bodies")),
+    }
 
 
 # Meta campaign objective -> this ad's own "result" (F16-I03, docs/architecture/ads.md §6.13).
@@ -324,6 +368,34 @@ def result_kind_for_objective(objective) -> str | None:
         return "purchase"
     mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
     return mapped[0] if mapped else None
+
+
+# F27-I09 Done #7: this campaign's own raw Meta objective string -> `campaign_objective` family
+# for `CampaignChip` ("sales"/"engagement"/"traffic"/"other") -- reuses `_SALES_OBJECTIVES` and
+# `_OBJECTIVE_RESULT_ACTIONS` above (the SAME tables `result_kind_for_objective` keys by), never a
+# second, divergent objective table. Only the three named families ever come out of Meta's own
+# objective vocabulary; every other objective (leads/app/video/message/store, or unmapped/None) is
+# "other", never a guess.
+_RESULT_LABEL_FAMILY = {"engagement": "engagement", "link_click": "traffic"}
+
+
+def objective_family(objective) -> str:
+    if objective in _SALES_OBJECTIVES:
+        return "sales"
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    if mapped is None:
+        return "other"
+    return _RESULT_LABEL_FAMILY.get(mapped[0], "other")
+
+
+# F27-I09 Contract I / pre-dispatch correction 2: this platform's own stored sync error codes
+# that mean the connection's READ PERMISSION itself has been revoked/expired, never a raw Meta
+# Graph error number -- `app/meta/repository.py::read_external_page` already collapses every
+# permission-shaped Graph error into the one stored code `"permission_denied"` before anything in
+# `app/ads` ever sees a raw number; this adapter maps that STORED code, never the numbers
+# themselves (correction 2's own wording).
+def is_auth_error(code) -> bool:
+    return code == "permission_denied"
 
 
 # F22-I01: this adapter's own read-time deep link into Meta Ads Manager, one object kind per

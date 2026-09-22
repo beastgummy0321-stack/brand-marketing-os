@@ -118,6 +118,11 @@ def create(conn, org, brand, campaign, payload, actor):
         payload["revision"],
         payload["destination_entity_id"],
     )
+    replaces_entity_id = payload.get("replaces_entity_id")
+    if replaces_entity_id is not None:
+        old_ad = bindings.entity(conn, org, brand, campaign, replaces_entity_id)
+        if old_ad["native_kind"] != "ad" or old_ad["native_status"] != "ACTIVE":
+            raise ValueError("要取代的廣告必須是本活動目前正在投放中的廣告，請重新選擇。")
     reference = placement_reference(
         conn, org, brand, campaign, payload["placement_id"], payload["revision"]
     )
@@ -172,6 +177,7 @@ def create(conn, org, brand, campaign, payload, actor):
         "handoff_snapshot": frozen,
         "source_entity_id": reference.get("source_entity_id"),
         "existing_native_ids": [r["native_id"] for r in known_ads],
+        "replaces_entity_id": replaces_entity_id,
     }
     content = {"title": payload["title"], "month": month, "items": [item], **reference}
     set_id = db.new_id("acs")

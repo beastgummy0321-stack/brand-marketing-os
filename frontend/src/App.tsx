@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -110,6 +110,14 @@ function App() {
           element={<AdsProposePauseRoute />}
         />
         <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/budget/:entityId"
+          element={<AdsProposeBudgetRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/cleanup/:cleanupCampaignId"
+          element={<AdsProposeCleanupRoute />}
+        />
+        <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId"
           element={<AdsReviewEntryRoute />}
         />
@@ -124,6 +132,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/copy"
           element={<AdsCopyRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/material"
+          element={<AdsMaterialRoute />}
         />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
@@ -505,6 +517,36 @@ function AdsProposePauseRoute() {
   );
 }
 
+/** 加預算提議確認頁（propose route，F25-I03，v7 原型 `confirmPage()` 的 budget 分支）：跟
+ * `AdsProposePauseRoute` 同一支 `ConfirmPage`，只是 `entityId` 換成 `scale.owner.id`（投放組／
+ * 活動，不是廣告）、`proposeKind="budget"` 告訴它比對佇列裡哪一種列、蓋哪一種草稿
+ * （`ConfirmPage` 自己的邏輯，這裡只負責帶參數）。 */
+function AdsProposeBudgetRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ConfirmPage
+      key={`propose-budget-${entityId}`}
+      brandId={brandId ?? ""}
+      campaignId={campaignId ?? ""}
+      entityId={entityId ?? ""}
+      proposeKind="budget"
+    />
+  );
+}
+
+/** 清理提議確認頁（propose route，F27-I15，Contract F）：`queue` 裡的 cleanup 列進來時還沒有
+ * change set，草稿在第一次核准／拒絕／暫緩才即時組出來（同 `AdsProposePauseRoute` 的分工）。
+ * 網址帶了兩段活動 id（`:campaignId/propose/cleanup/:cleanupCampaignId`）只因為後端佇列列自己的
+ * `action_url` 就是兩段一樣的 campaign id（`app/ads/triage.py::_cleanup_candidates`）——這裡只用
+ * 外層的 `campaignId`，第二段不重複讀一次。`key` 用 campaignId，換一個活動要整支重新掛載
+ * （理由同 `AdsTargetRoute`）。 */
+function AdsProposeCleanupRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string; cleanupCampaignId: string }>();
+  return (
+    <ConfirmPage key={`propose-cleanup-${campaignId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} proposeKind="cleanup" />
+  );
+}
+
 /** 六步流程「看證據」的入口（review route，F23-I02，v7 原型 `review()`）：`worse` 列還沒有檢討
  * 回合時進來，找到或建立回合後就轉導去正典的 `reviews/:reviewId` 網址——這裡只負責帶參數，
  * 轉導與建立回合的邏輯在 `ReviewEvidencePage` 自己（同 `AdsProposePauseRoute` 的分工）。 */
@@ -539,6 +581,15 @@ function AdsCopyRoute() {
   const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
   return (
     <CopyPage key={`review-copy-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「準備素材」頁（reviews/:reviewId/material route，F27-I14，無原型畫面）：檢討回合已
+ * 存在時的正典網址；非法步驟由 `MaterialStepPage` 自己轉去看證據頁（同 `AdsCopyRoute` 的分工）。 */
+function AdsMaterialRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <MaterialStepPage key={`review-material-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
   );
 }
 

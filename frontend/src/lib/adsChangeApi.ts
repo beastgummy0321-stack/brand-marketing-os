@@ -9,7 +9,9 @@ export interface MonthlyBudget {
   period_end: string; confirmed_at: string | null; notice: string;
 }
 export type ChangeKind = "copy" | "budget" | "pause";
-export type SettingValues = { body?: string; title?: string; daily_amount?: number; status?: string };
+// `titles`/`bodies` (Contract B, F27-I02): a dynamic-creative copy change carries these instead
+// of `body`/`title`; both are optional so plain single-copy callers/factories need no change.
+export type SettingValues = { body?: string; title?: string; titles?: string[]; bodies?: string[]; daily_amount?: number; status?: string };
 export interface ChangeInput { kind: ChangeKind; target_id: string; after: SettingValues; reason: string }
 export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   kind: ChangeKind | "new_ad" | "launch";
@@ -24,6 +26,14 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   // deep link, or an identifying field is missing; the caller falls back to the target's own
   // name/native id + 「複製編號」.
   platform_url: string | null;
+  // Contract D (F27-I04): read time only, only ever set for a `pause` item that carries an
+  // `angle` -- optional so existing test factories need no change.
+  learning?: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number };
+  // Contract H / correction 1 (F27-I08): read time only, nothing scheduled at approve -- optional
+  // so existing test factories need no change. `spend_stopped` only for `pause`, `delivery_started`
+  // only for `copy`/`new_ad`; `next_review_at` null for `pause`, null until verified for
+  // `copy`/`new_ad`.
+  timeline?: { spend_stopped: boolean | null; delivery_started: boolean | null; next_review_at: string | null };
 }
 export interface ChangeSet {
   id: string; campaign_id: string; title: string; month: string; operation_id: string; content_hash: string;
@@ -33,8 +43,15 @@ export interface ChangeSet {
   can_revise?: boolean;
   review_id?: string | null; recommendation_id?: string | null;
   material_task_id?: string | null; material_revision?: number | null;
+  // Contract E (F27-I05): only ever set when the set's `new_ad` item names an ad it replaces;
+  // `follow_up` only once that item reads back `confirmed` and no pause set for the old ad exists
+  // yet -- optional so existing test factories need no change.
+  replaces?: { entity_id: string; name: string } | null;
+  follow_up?: { kind: "pause_old"; entity_id: string } | null;
 }
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number }
+// `source` (F27-I25, Contract F): only "cleanup" is accepted; names the set as the campaign's
+// cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup" }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

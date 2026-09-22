@@ -186,13 +186,16 @@ class HandoffTest(unittest.TestCase):
         self.conn.commit()
         return placement
 
-    def new_ad(self):
+    def new_ad(self, replace_existing=False):
         external_repository.upsert_entity(self.conn, self.org, self.brand, self.campaign, self.root)
         parent = external_repository.upsert_entity(
             self.conn, self.org, self.brand, self.campaign, self.native_group
         )
         existing = self.node("B", "ad", parent_native_kind="adset", parent_native_id="group")
-        external_repository.upsert_entity(self.conn, self.org, self.brand, self.campaign, existing)
+        saved_existing = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, existing
+        )
+        self.existing_ad_id = saved_existing["id"]
         placement = self.placement()
         payload = {
             "operation_id": db.new_id("op"),
@@ -203,6 +206,8 @@ class HandoffTest(unittest.TestCase):
             "destination_entity_id": parent["id"],
             "reason": "下一個訊息假設",
         }
+        if replace_existing:
+            payload["replaces_entity_id"] = self.existing_ad_id
         draft = handoff_new_ad.create(
             self.conn, self.org, self.brand, self.campaign, payload, "human"
         )

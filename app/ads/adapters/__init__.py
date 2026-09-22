@@ -63,3 +63,45 @@ def platform_url(target: dict) -> str | None:
 
         return meta_read.platform_url(target)
     return None
+
+
+def copy_variants(platform: str | None, creative: dict) -> dict | None:
+    """F27-I26: read-time-only dynamic-creative copy derivation, keyed by `platform` -- the one
+    place a platform name maps to a copy-variant parser (`change_control_data.copy_fields`/
+    `copy_editable` are the only callers, for any stored creative whose `fields.copy_variants`
+    is missing, e.g. synced before F27-I02). Same lazy-import seam as `platform_url` above, to
+    avoid the module-load-time cycle through `manual.py -> change_control_launch.py ->
+    change_control_data.py`. Unknown platform, or a creative with nothing this platform's parser
+    recognises -> `None`, never a guessed empty result -- the caller decides what "no answer"
+    means (`copy_fields`: empty lists; `copy_editable`: still editable unless catalog-only)."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.copy_variants(creative)
+    return None
+
+
+def is_auth_error(platform: str | None, code: str | None) -> bool:
+    """F27-I09 Contract I / correction 2: whether a synced section's own STORED error code (never
+    a raw provider number -- see the Meta adapter's own `is_auth_error`) means this platform
+    connection's own read permission needs re-authorizing, not just a retry. Same lazy-import
+    dispatch seam as `platform_url`/`copy_variants` above. Unknown platform, or a code this
+    platform's adapter doesn't recognise -> `False`, never a guess."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.is_auth_error(code)
+    return False
+
+
+def objective_family(platform: str | None, objective: str | None) -> str:
+    """F27-I09 Done #7: this platform's own raw objective string -> `campaign_objective` family
+    (`"sales"|"engagement"|"traffic"|"other"`), for an IMPORTED campaign only -- a system-built
+    campaign's Chinese objective label routes through `repository.objective_family()` instead,
+    never through here. Same lazy-import dispatch seam as `platform_url`/`copy_variants` above.
+    Unknown platform -> `"other"`, never a guess."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.objective_family(objective)
+    return "other"

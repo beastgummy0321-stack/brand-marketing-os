@@ -33,6 +33,47 @@ def _dispatch_close_expired(timestamp: int) -> None:
     runtime.dispatch(timestamp)
 
 
+def _dispatch_queue_refresh(timestamp: int) -> None:  # noqa: ARG001 -- cron passes a timestamp
+    """Contract I / Done #1: the daily brand-wide triage queue refresh -- runs
+    `triage.refresh_queue` (re-classify + raise/supersede queue rows) for every brand that has at
+    least one non-closed `ads_campaign`, right after the 05:00 external sync periodic
+    (`ads_external_daily`, `_dispatch_close_expired`'s own `_CLOSE_CRON` runs at 04:00 -- this one
+    is offset later so a freshly synced day's numbers are already committed before the queue
+    re-reads them). Same "one distinct (org_id, brand_id) over non-closed campaigns" query shape
+    `_dispatch_runtime_beat` above already uses -- never a second, divergent "active brand" list.
+    """
+    from app.ads import triage
+
+    with connection() as conn:
+        active_brands = conn.execute(
+            "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
+        ).fetchall()
+        for row in active_brands:
+            triage.refresh_queue(conn, row["org_id"], row["brand_id"])
+
+
+def _dispatch_runtime_beat(timestamp: int):
+    """Wraps the existing every-minute `runtime.dispatch` periodic task (F27-I00 Contract J,
+    rescoped by F27-I24 correction 12) -- records one `beat` runtime event per (org_id, brand_id)
+    that currently has at least one non-closed `ads_campaign` (one query per minute; the same
+    `status != 'closed'` shape `triage.py` already uses), proving that brand's own slice of the
+    ads background system is alive. Prunes rows older than 48h once an hour (`timestamp` is a
+    whole-minute epoch second from the cron scheduler, so `% 3600 == 0` fires exactly once per
+    hour), then runs the unchanged `runtime.dispatch(timestamp)`."""
+    from app.ads import runtime, runtime_events
+
+    with connection() as conn:
+        active_brands = conn.execute(
+            "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
+        ).fetchall()
+        for row in active_brands:
+            runtime_events.record(conn, "beat", org_id=row["org_id"], brand_id=row["brand_id"])
+        if timestamp % 3600 == 0:
+            runtime_events.prune(conn)
+        conn.commit()
+    return runtime.dispatch(timestamp)
+
+
 def register_tasks() -> None:
     """掛兩個 task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。"""
     a = background_app()
@@ -52,6 +93,9 @@ def register_tasks() -> None:
     if "ads.external_daily" not in a.tasks:
         a.periodic(cron="0 5 * * *",periodic_id="ads_external_daily")(
             a.task(name="ads.external_daily")(external_sync.dispatch_daily))
+    if "ads.queue_refresh_daily" not in a.tasks:
+        a.periodic(cron="30 6 * * *", periodic_id="ads_queue_refresh_daily")(
+            a.task(name="ads.queue_refresh_daily")(_dispatch_queue_refresh))
 
     from app.ads import user_assets
     if user_assets.TASK not in a.tasks:
@@ -72,4 +116,4 @@ def register_tasks() -> None:
         a.task(name=runtime.TASK)(runtime.run_campaign)
     if "ads.runtime_dispatch" not in a.tasks:
         a.periodic(cron="* * * * *", periodic_id="ads_runtime")(
-            a.task(name="ads.runtime_dispatch")(runtime.dispatch))
+            a.task(name="ads.runtime_dispatch")(_dispatch_runtime_beat))

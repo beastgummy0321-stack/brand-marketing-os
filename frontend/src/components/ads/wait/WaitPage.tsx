@@ -73,6 +73,16 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
       key: "disconnected", emoji: "🔌", title: "廣告帳戶未連接", subtitle: "重新連接後會自動補資料",
       action: { label: "去連接", href: `/brands/${brandId}/ads/connections` },
     });
+  } else if (sync.state === "auth_expired") {
+    // F27-I21: 讀取失敗的段落自己存的 error_code 讀成授權錯誤（`app/ads/repository.py::
+    // campaign_sync_state`，corrections #2）——重新授權走既有的 Meta 連線入口（
+    // `DataConnectionsPage.tsx`／`PublishPage.tsx` 同一個 `/settings?tab=meta`）。目前平台只有
+    // Meta 一家（Feature Decisions），這裡沿用原型與 Screens 決議的固定文字，沒有可用的
+    // per-campaign platform 欄位可從 `data.sync`／`items` 帶出來換字。
+    rows.push({
+      key: "auth_expired", emoji: "🔌", title: "Meta 讀取權限失效", subtitle: "重新授權後會自動補資料",
+      action: { label: "重新授權", href: "/settings?tab=meta" },
+    });
   }
   if (missingDays.length > 0) {
     rows.push({

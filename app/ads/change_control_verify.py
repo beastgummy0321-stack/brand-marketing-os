@@ -9,6 +9,14 @@ from app.core import db
 from app.core.audit import write_audit
 
 
+def _copy_matches(observed, expected):
+    """Contract B point 3: a dynamic ad's variant lists are sets, not sequences -- Meta (and a
+    human re-ordering them) never promises the same order back."""
+    if isinstance(observed, list) and isinstance(expected, list):
+        return sorted(observed) == sorted(expected)
+    return observed == expected
+
+
 def _source_content(row):
     return {k: row.get(k) for k in ExternalEntity.model_fields if k not in {
         "last_success_at", "last_attempt_at", "sync_status", "sync_error"
@@ -109,11 +117,11 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
         known = all(key in values and values[key] is not None for key in expected)
         if not known:
             evidence["message"] = "已讀到指定物件，但來源未提供這項設定，仍待核對。"
-        elif all(values[key] == value for key, value in expected.items()):
+        elif all(_copy_matches(values[key], value) for key, value in expected.items()):
             state, verified = "confirmed", observed
             evidence["setting_matches"] = True
             evidence["message"] = "本次讀回設定符合清單；不代表已開始投遞或已有足夠成效。"
-        elif all(values[key] == action["before"].get(key) for key in expected):
+        elif all(_copy_matches(values[key], action["before"].get(key)) for key in expected):
             state = "pending"
             evidence["setting_matches"] = False
             evidence["message"] = "平台仍是變更前設定，這項操作尚未完成。"
@@ -156,7 +164,7 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
                 key not in expected
                 and value is not None
                 and values.get(key) is not None
-                and values[key] != value
+                and not _copy_matches(values[key], value)
                 for key, value in action["before"].items()
             ):
                 state, verified = "deviated", None
@@ -251,4 +259,11 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
     except Exception:
         conn.rollback()
         raise
+    if state == "confirmed" and action["kind"] == "pause" and action.get("angle"):
+        # Contract D + correction 8: only after this function's own transaction has committed
+        # `confirmed` -- `record_for_item` is idempotent per change ITEM id, so an automatic
+        # runtime re-check of an already-confirmed item (`app/ads/runtime.py`) never duplicates.
+        from app.ads import ads_learnings
+
+        ads_learnings.record_for_item(conn, org, brand, campaign, set_id, action)
     return data.get(conn, org, brand, campaign, set_id)

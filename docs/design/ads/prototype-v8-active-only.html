@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 v8｜只判讀投放中的廣告</title>
+<style>
+/* Disposable prototype, fake data only. Tokens from frontend/src/styles/tokens.css.
+   v3 goal (docs/design-system.md §1.7): layout carries the guidance — one title, one purpose line,
+   one warning max per page, fixed action bar (back left · secondary middle · primary right). */
+:root{--bg:#f6f7fb;--fg:#202237;--card:#fff;--primary:#7055d8;--secondary:#f0edf9;--muted:#f0f2f7;--mfg:#626b80;--accent:#f1edfc;--afg:#6348c5;--border:#e3e6ef;--success:#238169;--warning:#a96711;--danger:#c53945;--r:.75rem}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "Inter","Noto Sans TC","Microsoft JhengHei",sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;color:inherit}button:disabled{cursor:not-allowed;opacity:.45}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0;font-weight:600}p{margin:0}
+.shell{display:flex;max-width:1920px;min-height:100vh}
+.side{width:232px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:24px 16px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.logo{font-weight:700;font-size:16px;margin-bottom:20px}.logo b{color:var(--primary)}
+.brand{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:var(--r);padding:10px;margin-bottom:18px}
+.nav a{display:block;padding:9px 12px;border-radius:.5rem;color:var(--fg);text-decoration:none;margin-bottom:2px}.nav a.on{background:var(--accent);color:var(--afg);font-weight:600}
+.proto{margin-top:auto;border:1px dashed #c9cede;border-radius:.5rem;padding:10px;font-size:11.5px;color:var(--mfg)}.proto b{display:block;margin-bottom:4px}.proto button{background:none;border:0;padding:0;color:var(--primary);font-size:11.5px;text-align:left;display:block;margin-top:4px}
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{height:56px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 32px;color:var(--mfg);font-size:13px}
+.top a{color:var(--mfg);text-decoration:none}.top a:hover{color:var(--primary)}.top b{color:var(--fg);font-weight:600}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-right:6px}
+.page{padding:24px 32px 32px;max-width:1180px;width:100%;flex:1}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;box-shadow:0 2px 6px rgb(32 34 55/.025)}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 10px;border-radius:99px;background:var(--muted);color:var(--mfg);white-space:nowrap}
+.chip.v{background:var(--secondary);color:var(--afg)}.chip.ok{background:#e4f3ee;color:var(--success)}.chip.warn{background:#faefdc;color:var(--warning)}.chip.bad{background:#fbe6e8;color:var(--danger)}
+.btn{border:1px solid var(--border);background:var(--card);padding:10px 18px;border-radius:.5rem;font-weight:600}.btn:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:#fff;padding:12px 26px}.btn.pri:hover:not(:disabled){filter:brightness(1.08);color:#fff}
+.btn.sm{padding:5px 12px;font-size:13px;font-weight:500}.btn.ghost{border-color:transparent;background:none;color:var(--mfg);font-weight:500}
+.lnk{background:none;border:0;padding:0;color:var(--primary);font-size:13px}
+/* step header */
+.sh{margin-bottom:20px}.dots{display:flex;align-items:center;gap:0;margin-bottom:14px}
+.d{width:26px;height:26px;border-radius:50%;border:0;background:var(--muted);color:var(--mfg);font-size:12px;font-weight:600;display:grid;place-items:center;padding:0}
+.d.done{background:var(--primary);color:#fff}.d.on{background:var(--primary);color:#fff;box-shadow:0 0 0 5px var(--accent)}.d:disabled{opacity:1;cursor:default}
+.dl{font-size:12px;color:var(--mfg);margin:0 10px 0 6px}.dl.on{color:var(--fg);font-weight:600}.dots i{width:22px;height:1px;background:var(--border);margin-right:10px}
+.sh .row{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap}.purpose{color:var(--mfg);margin-top:4px;font-size:15px}
+/* action bar */
+.bar{position:sticky;bottom:0;background:rgb(255 255 255/.94);backdrop-filter:blur(6px);border-top:1px solid var(--border);padding:12px 32px;display:flex;align-items:center;gap:12px;z-index:5}
+.bar .mid{margin-left:auto;display:flex;gap:8px;align-items:center;position:relative}.bar small{color:var(--mfg);font-size:12px}
+.menu{position:absolute;bottom:48px;right:0;background:var(--card);border:1px solid var(--border);border-radius:.6rem;box-shadow:0 10px 30px rgb(32 34 55/.14);padding:6px;min-width:180px}
+.menu button{display:block;width:100%;text-align:left;background:none;border:0;padding:9px 12px;border-radius:.4rem}.menu button:hover{background:var(--muted)}
+.sheet{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:16px 20px;margin-top:16px;display:flex;gap:12px;align-items:end;flex-wrap:wrap;box-shadow:0 6px 20px rgb(32 34 55/.06)}
+.sheet label,.fld label{display:block;font-size:12px;color:var(--mfg);margin-bottom:4px}
+input[type=text],textarea,input[type=date],input[type=datetime-local]{border:1px solid #dce0ea;border-radius:.5rem;padding:9px 12px;font:inherit;background:#fff;width:100%}textarea{min-height:150px;resize:vertical}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:.5rem;overflow:hidden}.seg button{border:0;background:#fff;padding:8px 14px}.seg button.on{background:var(--accent);color:var(--afg);font-weight:600}
+/* thumbs */
+.thumb{border-radius:.6rem;background:linear-gradient(135deg,#e9e2d6,#cfc3ae);position:relative;overflow:hidden;flex-shrink:0}
+.thumb:after{content:"";position:absolute;left:36%;top:22%;width:28%;height:60%;background:#f7f3ea;border-radius:12% 12% 18% 18%;box-shadow:0 -6px 0 -1px #b9ad98}
+.thumb.b{background:linear-gradient(135deg,#9db3a0,#56705f)}.thumb.c{background:linear-gradient(135deg,#c9d3e6,#8091b3)}.thumb.gone{background:var(--muted)}.thumb.gone:after{display:none}
+/* ad cards */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.ad{display:flex;gap:14px;text-align:left;width:100%;border:1px solid var(--border);background:var(--card);border-radius:var(--r);padding:12px}
+.ad:hover{border-color:var(--primary)}.ad.pick{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}
+.nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.k{display:flex;gap:20px;margin-top:8px}.k span{display:block;font-size:11.5px;color:var(--mfg)}.k b{font-size:17px;font-variant-numeric:tabular-nums}
+.dt{font-size:11.5px;color:var(--mfg);margin-left:4px;font-weight:500}.unk{color:#9aa1b3;font-weight:500}
+details.f{border:1px solid var(--border);border-radius:.5rem;background:var(--card)}details.f summary{padding:10px 14px;color:var(--mfg);cursor:pointer}details.f>div{padding:0 14px 14px}
+/* evidence */
+.rv{display:grid;grid-template-columns:1.05fr 1fr 1fr;gap:16px;align-items:start}
+.ev{display:grid;grid-template-columns:96px 1fr 84px 52px;gap:10px;align-items:center;padding:11px 0;border-top:1px solid var(--border)}.ev:first-of-type{border-top:0}
+.ev .l{font-size:13px;color:var(--mfg)}.ev .n{text-align:right;font-variant-numeric:tabular-nums}.ev .n b{font-size:16px;display:block}.ev .n small{color:var(--mfg);font-size:11.5px}
+.ev .dd{font-size:12px;text-align:right;color:var(--fg);font-weight:600}
+.bars div{height:7px;border-radius:4px;background:#d6dae6;margin:3px 0}.bars div.c{background:var(--primary)}.bars div.q{background:repeating-linear-gradient(45deg,#e3e6ef,#e3e6ef 4px,#f6f7fb 4px,#f6f7fb 8px)}
+.opt{border:1px solid var(--border);background:var(--card);border-radius:var(--r);padding:20px 16px;text-align:left}.opt:hover{border-color:var(--primary)}
+.opt.pick{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}.opt b{display:block;margin:10px 0 4px;font-size:15px}.opt span{color:var(--mfg);font-size:13px}
+.ic{width:40px;height:40px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-size:18px}
+.old,.new{border-radius:.5rem;padding:14px;white-space:pre-wrap;font-size:13.5px;line-height:1.65}.old{background:var(--muted)}.new{background:var(--accent)}
+mark{background:#fde9bd;color:inherit;border-radius:3px;padding:0 1px}mark.g{background:#d9f0e6}
+/* budget bar */
+.bb{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--muted);margin:12px 0 8px}.bb i{display:block}.lg{display:flex;gap:16px;font-size:12px;color:var(--mfg);flex-wrap:wrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+/* checklist + rail */
+.todo{display:flex;gap:16px;align-items:center;padding:18px 0;border-top:1px solid var(--border)}.todo:first-child{border-top:0}
+.no{width:32px;height:32px;border-radius:50%;background:var(--muted);color:var(--mfg);display:grid;place-items:center;font-weight:700;flex-shrink:0}.todo.ok .no{background:var(--success);color:#fff}.todo b{font-size:15px}
+.rail{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.rail div{padding:14px 16px;border-left:1px solid var(--border);color:var(--mfg)}.rail div:first-child{border-left:0}.rail b{display:block;color:var(--fg);margin-bottom:2px}.rail .ok{background:#eef8f4}.rail .ok b{color:var(--success)}
+.hero{display:flex;gap:16px;align-items:center;border-radius:var(--r);padding:20px}.hero .big{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font-size:22px;color:#fff;flex-shrink:0}
+.hero.ok{background:#eef8f4}.hero.ok .big{background:var(--success)}.hero.warn{background:#fdf3e1}.hero.warn .big{background:#d18a1f}.hero.bad{background:#fcebed}.hero.bad .big{background:var(--danger)}
+table{width:100%;border-collapse:collapse}th{font-size:12px;font-weight:500;color:var(--mfg);background:var(--bg);text-align:left}th,td{padding:12px 16px;border-bottom:1px solid var(--border)}tr:last-child td{border-bottom:0}
+.toast{position:fixed;right:24px;bottom:84px;background:var(--fg);color:#fff;padding:10px 16px;border-radius:.5rem;font-size:13px;opacity:0;transition:opacity .2s;z-index:9}.toast.on{opacity:1}
+@media(max-width:1100px){.rv{grid-template-columns:1fr}.grid4{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+</style>
+<style>
+/* v4 additions */
+.q{display:flex;gap:16px;align-items:center;padding:16px 20px;border-top:1px solid var(--border)}.q:first-child{border-top:0}.q.done{opacity:.55}
+.q .what{flex:1;min-width:0}.q .viz{width:220px;flex-shrink:0}
+.kind{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px}
+.kind.stop{background:#fbe6e8;color:var(--danger)}.kind.worse{background:#faefdc;color:var(--warning)}.kind.up{background:#e4f3ee;color:var(--success)}.kind.fresh{background:var(--secondary);color:var(--afg)}
+.meter{position:relative;height:10px;border-radius:6px;background:var(--muted);margin:6px 0 4px}.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:6px}.meter u{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg)}
+.cap{font-size:11.5px;color:var(--mfg);display:flex;justify-content:space-between}
+.strip{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:10px 0 8px}.strip i{display:block}
+.ladder{display:flex;align-items:center;gap:0;font-size:12px;color:var(--mfg)}.ladder b{padding:4px 12px;border-radius:99px;background:var(--muted);font-weight:500}.ladder b.on{background:var(--primary);color:#fff}.ladder b.past{background:var(--secondary);color:var(--afg)}.ladder s{width:18px;height:1px;background:var(--border);text-decoration:none}
+.learn{display:flex;gap:12px;align-items:center;border:1px dashed #b9aef0;background:#faf8ff;border-radius:var(--r);padding:14px 16px}
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.tiles{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.qpos{font-size:12px;color:var(--mfg);margin-left:auto}
+@media(max-width:1100px){.cols3{grid-template-columns:1fr}.q .viz{display:none}}
+.camp{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mfg);white-space:nowrap}.camp i{font-style:normal;width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;color:#fff}
+.o-sales{background:#7055d8}.o-engage{background:#2ea7af}.o-traffic{background:#397cda}
+.filt{display:flex;gap:6px;margin-bottom:12px}.filt button{border:1px solid var(--border);background:#fff;border-radius:99px;padding:5px 14px;font-size:13px}.filt button.on{background:var(--fg);color:#fff;border-color:var(--fg)}
+.cc{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.tag{border:1px solid var(--border);background:#fff;border-radius:99px;padding:5px 14px;font-size:13px}.tag.on{background:var(--primary);color:#fff;border-color:var(--primary)}
+@media(max-width:1100px){.cc{grid-template-columns:1fr}}
+.o-mid{background:#d18a1f}.o-old{background:#8892a8}
+.conn{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}.cn{display:flex;gap:16px;align-items:center}.cn .big{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;font-size:24px;background:var(--muted);flex-shrink:0}
+.cn.off{opacity:.55;background:var(--muted)}.days{display:flex;gap:4px}.days i{width:22px;height:22px;border-radius:6px;background:var(--primary);display:grid;place-items:center;font-style:normal;font-size:10px;color:#fff}.days i.x{background:#fff;border:1px dashed var(--danger);color:var(--danger)}
+.rec{display:flex;align-items:center;gap:0;margin-top:14px}.rec b{display:flex;align-items:center;gap:8px;font-weight:500;font-size:13px;color:var(--mfg)}.rec b i{font-style:normal;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--muted);font-size:12px}
+.rec b.ok i{background:var(--success);color:#fff}.rec b.on{color:var(--fg);font-weight:600}.rec b.on i{background:var(--primary);color:#fff;box-shadow:0 0 0 4px var(--accent)}.rec s{flex:0 0 36px;height:1px;background:var(--border);margin:0 10px}
+@media(max-width:1100px){.conn{grid-template-columns:1fr}}
+.pickc{border:1px solid var(--border);background:#fff;border-radius:var(--r);padding:16px;text-align:left;display:block;width:100%}.pickc:hover{border-color:var(--primary)}
+.pickc.on{border-color:var(--primary);background:#faf8ff;box-shadow:0 0 0 1px var(--primary)}.pickc b{font-size:22px;display:block;margin:6px 0 2px}.pickc span{font-size:13px;color:var(--mfg)}
+.adrow{display:flex;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--border)}.adrow:first-child{border-top:0}.grp summary{display:flex;align-items:center;gap:10px;padding:14px 20px;cursor:pointer;list-style:none}.grp summary::-webkit-details-marker{display:none}
+.grp{background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:10px}.grp>div{padding:0 20px 10px}.sw{width:12px;height:12px;border-radius:3px}
+.calc{display:flex;align-items:end;gap:10px;flex-wrap:wrap}.calc input{width:120px}.calc .op{font-size:20px;color:var(--mfg);padding-bottom:8px}
+.cname{background:none;border:0;padding:0;text-align:left}.cname:hover{color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><b>▮▮</b> 行銷駕駛艙</div>
+    <div class="brand"><div class="thumb" style="width:36px;height:36px"></div><div><b>示例品牌</b><div style="font-size:12px;color:var(--mfg)">晨光隨行杯</div></div></div>
+    <nav class="nav"><a href="#/">品牌總覽</a><a href="#/">收件匣</a><a href="#/">經營概況</a><a class="on" href="#/">投放中心</a><a href="#/">素材工作檯</a><a href="#/">商品</a><a href="#/">設定</a></nav>
+    <div class="proto"><b>原型備註（不是產品畫面）</b>v8・假資料・數字取自 brd_bughunt 實際狀態（在投 5／暫停 11／已封存 4）。</div>
+  </aside>
+  <main><div class="top"><div id="crumb"></div><button class="lnk" style="color:var(--mfg);display:flex;align-items:center;gap:8px"><span class="dot" style="margin:0"></span>最近同步 09/22 13:00 <span class="chip warn">4 項待處理</span></button></div><div class="page" id="app"></div><div id="bar"></div></main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+// v8 prototype — one change only: judgement reads ACTIVE ads; closed ads stay visible on purpose.
+const $ = (s) => document.querySelector(s);
+const app = $("#app"), bar = $("#bar");
+const AD = (n, cls, thumb, status) => ({ n, cls, thumb, status });
+const CLS = { stop: ["停損", "var(--danger)"], worse: ["變差", "#d18a1f"], better: ["變好", "var(--success)"], flat: ["持平", "#8892a8"], insufficient: ["資料不足", "#d6dae6"] };
+const ADS = [
+  AD("1150803 圖文簡潔", "better", "", "ACTIVE"), AD("撞車1150724", "flat", "b", "ACTIVE"),
+  AD("1150706 健身情境單圖 最多數量", "insufficient", "c", "ACTIVE"), AD("咖啡因軟糖 開箱 15s", "insufficient", "", "ACTIVE"),
+  AD("辦公室情境 A/B", "insufficient", "b", "ACTIVE"),
+  AD("舊版主視覺 0715", "better", "c", "PAUSED"), AD("提問式貼文 0702", "flat", "", "PAUSED"),
+  AD("夏季折扣 0620", "insufficient", "b", "PAUSED"), AD("健身房實拍 0610", "insufficient", "c", "PAUSED"),
+  AD("開箱長版 0605", "insufficient", "", "ARCHIVED"), AD("節慶禮盒 0520", "insufficient", "b", "ARCHIVED"),
+];
+const active = () => ADS.filter((a) => a.status === "ACTIVE");
+const closed = () => ADS.filter((a) => a.status !== "ACTIVE");
+const CLOSED_N = { PAUSED: 11, ARCHIVED: 4 };
+const thumb = (t, s) => `<div class="thumb ${t}" style="width:${s}px;height:${s}px"></div>`;
+const chip = (t, tone = "") => `<span class="chip ${tone}">${t}</span>`;
+const crumb = (p) => { $("#crumb").innerHTML = p.map((x, i) => i === p.length - 1 ? `<b>${x[0]}</b>` : `<a href="${x[1]}">${x[0]}</a>`).join(" &nbsp;›&nbsp; "); };
+function setBar(html) { bar.innerHTML = html ? `<div class="bar">${html}</div>` : ""; }
+function toast(t) { const e = $("#toast"); e.textContent = t; e.classList.add("on"); setTimeout(() => e.classList.remove("on"), 1800); }
+
+// ---------- HOME ----------
+function home() {
+  crumb([["投放中心"]]); setBar("");
+  const counts = { stop: 1, worse: 1, better: 1, flat: 1, insufficient: 3 };
+  const total = 5;
+  const seg = [["stop", "停損", "var(--danger)"], ["worse", "變差", "#d18a1f"], ["better", "變好", "var(--success)"], ["flat", "持平", "#8892a8"], ["insufficient", "資料不足", "#d6dae6"]];
+  const qrow = (kind, mark, tone, title, camp, viz, btn, primary) => `<div class="q">
+    <div class="ic" style="width:52px;height:52px;border-radius:.6rem">${mark[1]}</div>
+    <div class="what"><div style="display:flex;gap:10px;align-items:center"><span class="kind ${tone}">${mark[0]} ${kind}</span><span class="camp"><i class="o-sales">購</i>日常商品推廣・轉換</span></div>
+      <div class="nm" style="margin-top:6px">${title}</div></div>
+    <div class="viz">${viz}</div><button class="btn ${primary ? "pri" : ""}" data-act="${btn[1]}">${btn[0]} →</button></div>`;
+  const meter = (v, max, line, color) => `<div class="meter"><i style="width:${Math.min(100, v / max * 100)}%;background:${color}"></i>${line ? `<u style="left:${line / max * 100}%"></u>` : ""}</div>`;
+  app.innerHTML = `
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px">
+    <div><h1>今天需要你決定的事</h1><p class="purpose">4 件・由上往下處理就好</p></div>
+    <div style="display:flex;gap:10px"><button class="btn" data-act="month">每月回顧</button><button class="btn">加入既有活動</button><button class="btn pri">＋ 建立投放計畫</button></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1.9fr 1fr;gap:16px;align-items:start"><div>
+    <div class="card" style="padding:0">
+      ${qrow("停損", ["■", "🖼"], "stop", "1150803 圖文簡潔", "", `${meter(1420, 2000, 1350, "var(--danger)")}<div class="cap"><span>花了 1,420・0 筆購買</span><span>停損線 1,350</span></div>`, ["看提議", "x"], true)}
+      ${qrow("變差", ["▼", "🖼"], "worse", "撞車1150724", "", `${meter(226, 900, 450, "#d18a1f")}<div class="cap"><span>購買成本 226.94 ▲66%</span><span>目標 450</span></div>`, ["看證據", "x"], false)}
+      ${qrow("可加預算", ["▲", "💰"], "up", "廣告組 G・廣泛受眾", "", `${meter(306, 900, 450, "var(--success)")}<div class="cap"><span>購買成本 306</span><span>目標 450</span></div>`, ["看提議", "x"], false)}
+      <div class="q"><div class="ic" style="width:52px;height:52px;border-radius:.6rem">🔌</div>
+        <div class="what"><div style="display:flex;gap:10px;align-items:center"><span class="kind stop" style="background:#faefdc;color:var(--warning)">！資料不足</span><span class="camp"><i class="o-mid">秋</i>中秋限定活動・轉換</span></div>
+        <div class="nm" style="margin-top:6px">這個活動暫時無法判斷</div></div>
+        <div class="viz"><div class="days">${["13", "14", "15", "16", "17", "18", "19"].map((d, k) => `<i class="${k === 4 || k === 5 ? "x" : ""}">${d}</i>`).join("")}</div><div class="cap" style="margin-top:6px"><span>缺 9/17、9/18</span><span>讀取權限失效</span></div></div>
+        <button class="btn" data-act="x">去處理 →</button></div>
+    </div>
+    <h2 style="margin:26px 0 10px">活動</h2>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+        <button class="cname camp" style="font-size:14px;color:var(--fg);font-weight:600" data-act="detail"><i class="o-sales">購</i>日常商品推廣 ›</button>
+        <span class="chip">轉換・<b style="font-weight:700">投放中 5 則</b></span></div>
+      <div style="margin-top:12px;font-size:12px;color:var(--mfg)">目標購買成本</div>
+      <div style="font-size:20px;font-weight:650">450 <span class="chip" style="font-weight:400">打平值</span> <button class="lnk">調整</button></div>
+      <div class="strip">${seg.map((s) => `<i style="width:${counts[s[0]] / total * 100}%;background:${s[2]}"></i>`).join("")}</div>
+      <div class="lg">${seg.filter((s) => counts[s[0]]).map((s) => `<span><i style="background:${s[2]}"></i>${s[1]} ${counts[s[0]]}</span>`).join("")}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">${chip("每日 2,000")}${chip("約撐得起 10 則")}</div>
+      <div style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span style="font-size:13px;color:var(--mfg)">另有 <b style="color:var(--fg)">15 則已關閉</b>（暫停 11・已封存 4），不列入判斷</span>
+        <button class="lnk" data-act="detail">查看 →</button></div>
+    </div></div>
+    <div class="card"><div class="cap"><span>9 月可新增承諾・全品牌</span><button class="lnk">調整</button></div>
+      <div style="font-size:24px;font-weight:650">10,000 <span style="font-size:13px;color:var(--mfg)">/ 60,000</span></div>
+      <div class="bb"><i style="width:36%;background:#8892a8"></i><i style="width:46%;background:#c9cede"></i><i style="width:18%;background:var(--primary)"></i></div>
+      <div class="lg"><span><i style="background:#8892a8"></i>已花 22,000</span><span><i style="background:#c9cede"></i>預留 28,000</span><span><i style="background:var(--primary)"></i>可用 10,000</span></div></div>
+  </div>`;
+}
+
+// ---------- CAMPAIGN DETAIL ----------
+function detail() {
+  crumb([["投放中心", "#/"], ["日常商品推廣"]]);
+  setBar(`<button class="btn ghost" data-act="home">← 投放中心</button><div class="mid"><button class="btn">全部資料 ›</button></div>`);
+  const row = (a) => `<div class="adrow">${thumb(a.thumb, 40)}<div style="flex:1;min-width:0"><div class="nm" style="font-weight:500">${a.n}</div>
+      <div style="font-size:12px;color:var(--mfg);margin-top:2px">購買成本 ${a.cls === "insufficient" ? "累積中" : "321"}・目標 450</div></div>
+      ${a.status === "ACTIVE" ? "" : chip(a.status === "PAUSED" ? "已暫停" : "已封存")}
+      <button class="btn sm" data-act="${a.status === "ACTIVE" ? "x" : "record"}">${a.status === "ACTIVE" ? "去處理" : "看紀錄"}</button></div>`;
+  const grp = (cls, list) => `<details class="grp" ${cls === "better" ? "open" : ""}><summary><span class="sw" style="background:${CLS[cls][1]}"></span><b>${CLS[cls][0]}</b><span class="chip">${list.length} 則</span></summary><div>${list.map(row).join("")}</div></details>`;
+  const byCls = (cls) => active().filter((a) => a.cls === cls);
+  app.innerHTML = `<div class="sh"><div class="row"><div><h1>日常商品推廣</h1><p class="purpose">只判讀投放中的 5 則；已關閉的廣告保留紀錄，不列入判斷</p></div>
+      <div style="display:flex;gap:8px;align-items:center">${chip("轉換")}${chip("目標 450")}</div></div></div>
+    ${["better", "flat", "insufficient"].filter((c) => byCls(c).length).map((c) => grp(c, byCls(c))).join("")}
+    <details class="grp" style="background:var(--muted)"><summary><span class="sw" style="background:#c9cede"></span><b>已關閉</b><span class="chip">15 則</span>
+        <span style="font-size:12px;color:var(--mfg);margin-left:auto">暫停 11・已封存 4・不列入判斷</span></summary>
+      <div>${closed().map(row).join("")}<div style="padding:10px 0;font-size:12px;color:var(--mfg)">…其餘 9 則</div></div></details>`;
+}
+
+// ---------- MONTHLY REVIEW (materials only) ----------
+function month() {
+  crumb([["投放中心", "#/"], ["每月回顧"]]);
+  setBar(`<button class="btn ghost" data-act="home">← 投放中心</button>`);
+  const led = (l, tone, n, note, ts) => `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2>${l}</h2><span class="chip ${tone}">${n} 則</span></div>
+    <div style="font-size:12px;color:var(--mfg);margin-top:4px">${note}</div><div class="tiles">${ts}</div></div>`;
+  const t = (x, k) => thumb(x, 44);
+  app.innerHTML = `<div style="margin-bottom:20px"><h1>9 月回顧</h1><p class="purpose">活動照常投放，這裡只整理帳</p></div>
+    <h2 style="margin:0 0 10px">素材</h2>
+    <div class="cols3">
+      ${led("有效", "ok", 1, "投放中，成本在目標內", t("") )}
+      ${led("無效・已停", "bad", 15, "已暫停或封存，含這個月關掉的", t("b") + t("c") + t("") + `<span class="chip">＋12</span>`)}
+      ${led("還看不出", "", 4, "投放中，樣本還不夠", t("c") + t("") + t("b") + t(""))}
+    </div>
+    <div class="card" style="margin-top:16px;background:var(--muted)"><div style="display:flex;gap:10px;align-items:center">
+      <span style="font-size:18px">📒</span><div style="flex:1"><b style="font-weight:600">這個月關掉 6 則</b>
+      <div style="font-size:13px;color:var(--mfg)">關掉的原因與當時的成效都留著，下次規劃素材時會避開同樣的方向</div></div>${chip("紀錄保留")}</div></div>`;
+}
+
+const ACT = { home, detail, month, record: () => toast("到活動工作區「成效」分頁，並跳到這則廣告（?tab=performance&ad=…）"), x: () => toast("原型未包含：這顆按鈕在正式頁已經可用") };
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]"); if (!b) return;
+  (ACT[b.dataset.act] || ACT.x)();
+});
+home();
+</script>
+</body>
+</html>
