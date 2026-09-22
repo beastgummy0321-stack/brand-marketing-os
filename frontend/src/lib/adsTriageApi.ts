@@ -5,8 +5,21 @@
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */
 import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
-import type { CampaignCapacity, CampaignSyncState } from "./adsApi";
+import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
+
+/** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
+ * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
+ * `app/ads/triage_scale.py::owner_lookup`) -- `daily_budget`/`currency` are `null` when there are
+ * no active ads, any active ad lacks a daily budget owner, or the qualifying owners don't share
+ * one currency (never a partial sum across currencies). `can_support` is `null` unless both
+ * `daily_budget` and `target` are known and `target > 0`. Shared by `CampaignTriage.data.capacity`
+ * here and `CampaignCard.data.capacity` (`adsApi.ts`, imported back as a type only to keep that
+ * file under the 800-line gate) -- same shape, never re-defined per caller. */
+export interface CampaignCapacity {
+  daily_budget: number | null; currency: string | null; target: number | null;
+  can_support: number | null; active_ads: number;
+}
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 

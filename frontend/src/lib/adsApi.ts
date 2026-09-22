@@ -7,6 +7,10 @@ export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklist
 import { apiFetch, errorMessageFrom } from "./http";
 import type { ExternalCampaignFields } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
+// F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
+// touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
+// here as a type only, so `CampaignData.capacity` keeps the one shared shape.
+import type { CampaignCapacity } from "./adsTriageApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type SuccessMetric = "cpa" | "roas" | "purchases";
@@ -46,18 +50,6 @@ export interface CampaignSyncState {
   state: CampaignSyncStatus;
   error: string | null;
   last_success_at: string | null;
-}
-/** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
- * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
- * `app/ads/triage_scale.py::owner_lookup`) -- `daily_budget`/`currency` are `null` when there are
- * no active ads, any active ad lacks a daily budget owner, or the qualifying owners don't share
- * one currency (never a partial sum across currencies). `can_support` is `null` unless both
- * `daily_budget` and `target` are known and `target > 0`. Shared by `CampaignCard.data.capacity`
- * here and `CampaignTriage.data.capacity` (`adsTriageApi.ts`) -- same shape, never re-defined per
- * caller. */
-export interface CampaignCapacity {
-  daily_budget: number | null; currency: string | null; target: number | null;
-  can_support: number | null; active_ads: number;
 }
 export interface CampaignData {
   sync: CampaignSyncState;
