@@ -2,9 +2,13 @@
  * `listCampaigns`/`getTriage`/`fetchOrders` for its money sections and now reads Contract G's
  * `getMonthSummary` + `getMonthlyBudget` (both refetched together on the month Segmented) for
  * 全品牌花費／商城訂單／各活動／這個月關掉／下月建議; `listCampaigns`+`getTriage` stay only for
- * 素材 (F26 rule, month-independent) and for the 記入品牌學習 list's campaign-chip lookup;
- * `getAdsLearnings` (Contract D) drives 記入品牌學習. `vi.mock`s every one of those, never hits a
- * real API. */
+ * 素材 (F26 rule, month-independent); `getAdsLearnings` (Contract D) drives 記入品牌學習.
+ * `vi.mock`s every one of those, never hits a real API.
+ *
+ * F27-I27: every `CampaignChip` family comes straight from the backend's own
+ * `campaign_objective` field (`app/ads/repository.py::campaign_objective_family`, same rule as
+ * campaign cards/triage items) — never a frontend keyword guess off the raw `objective` string,
+ * and 記入品牌學習 no longer needs its own `listCampaigns` lookup for it. */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
@@ -105,7 +109,7 @@ function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
 
 function monthCampaignRow(overrides: Partial<MonthCampaignRow> = {}): MonthCampaignRow {
   return {
-    campaign_id: "cmp_1", name: "日常商品推廣", objective: "轉換",
+    campaign_id: "cmp_1", name: "日常商品推廣", objective: "轉換", campaign_objective: "sales",
     spend: 18400, result_count: 40, result_label: "購買",
     cost_per_result: 412, target: 450, verdict: "met",
     ...overrides,
@@ -115,7 +119,8 @@ function monthCampaignRow(overrides: Partial<MonthCampaignRow> = {}): MonthCampa
 function monthSuggestion(overrides: Partial<MonthSuggestion> = {}): MonthSuggestion {
   return {
     key: "refresh:cmp_1", kind: "refresh", campaign_id: "cmp_1", campaign_name: "日常商品推廣",
-    objective: "轉換", title: "補 3 則新素材", why: "有效的方向只剩 1 則在投",
+    objective: "轉換", campaign_objective: "sales", title: "補 3 則新素材",
+    why: "有效的方向只剩 1 則在投",
     action_url: "/brands/brd_1/ads/campaigns/cmp_1/detail",
     ...overrides,
   };
@@ -136,7 +141,8 @@ function monthSummary(overrides: Partial<MonthSummary> = {}): MonthSummary {
 function adsLearning(overrides: Partial<AdsLearning> = {}): AdsLearning {
   return {
     id: "lrn_1", text: "「日常出發」生活情境對廣泛受眾有效", confidence: "likely", count: 2,
-    campaign_id: "cmp_1", campaign_name: "日常商品推廣", learned_at: "2026-09-10T00:00:00Z",
+    campaign_id: "cmp_1", campaign_name: "日常商品推廣", campaign_objective: "sales",
+    learned_at: "2026-09-10T00:00:00Z",
     ...overrides,
   };
 }
@@ -223,12 +229,32 @@ describe("MonthReviewPage（F27-I19）商城訂單卡", () => {
   });
 });
 
-describe("MonthReviewPage（F27-I19）各活動", () => {
+describe("MonthReviewPage（F27-I19／F27-I27）各活動", () => {
   it("`verdict=\"met\"`：達標 chip，量尺畫出來", async () => {
     renderPage();
     expect(await screen.findByText("達標")).toBeTruthy();
     expect(screen.getByText("每次購買成本 412")).toBeTruthy();
     expect(screen.getByText("目標 450")).toBeTruthy();
+  });
+
+  it("活動 chip 的家族直接讀 `campaign_objective`，不猜關鍵字", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({
+      campaigns: [monthCampaignRow({ campaign_objective: "engagement" })],
+    }));
+    renderPage();
+    const heading = await screen.findByText("各活動");
+    const chip = heading.parentElement?.querySelector('[data-slot="campaign-chip"]');
+    expect(chip?.getAttribute("data-variant")).toBe("engagement");
+  });
+
+  it("`campaign_objective` 缺值時退回 `other`，不猜關鍵字", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({
+      campaigns: [monthCampaignRow({ campaign_objective: null })],
+    }));
+    renderPage();
+    const heading = await screen.findByText("各活動");
+    const chip = heading.parentElement?.querySelector('[data-slot="campaign-chip"]');
+    expect(chip?.getAttribute("data-variant")).toBe("other");
   });
 
   it("`verdict=\"missed\"`：未達標", async () => {
@@ -311,14 +337,20 @@ describe("MonthReviewPage（F27-I19）這個月關掉", () => {
   });
 });
 
-describe("MonthReviewPage（F27-I19）記入品牌學習", () => {
-  it("印 📒 文字、活動 chip（跟 `listCampaigns` 查到的 objective 配對）、N 次同方向、信心 chip", async () => {
+describe("MonthReviewPage（F27-I19／F27-I27）記入品牌學習", () => {
+  it("印 📒 文字、N 次同方向、信心 chip；活動 chip 的家族直接讀 `campaign_objective`", async () => {
     renderPage();
     expect(await screen.findByText("「日常出發」生活情境對廣泛受眾有效")).toBeTruthy();
-    // 建議卡跟這一列都用同一個查表配出「日常商品推廣・轉換」，畫面上出現兩次。
-    expect(screen.getAllByText("日常商品推廣・轉換").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("2 次同方向")).toBeTruthy();
     expect(screen.getByText("可能成立")).toBeTruthy();
+    // F27-I27: no `listCampaigns` lookup involved -- the chip's family comes straight off
+    // `learning.campaign_objective` ("sales" from the fixture), never a keyword guess, and (with
+    // no raw objective text in Contract D's own response) never a `・<objective>` suffix either.
+    const row = screen.getByText("2 次同方向").closest("div");
+    const chip = row?.querySelector('[data-slot="campaign-chip"][data-variant="sales"]');
+    expect(chip).toBeTruthy();
+    expect(chip?.textContent).toContain("日常商品推廣");
+    expect(chip?.textContent).not.toContain("・");
   });
 
   it("`confidence` 三種都印對應中文", async () => {
@@ -331,8 +363,10 @@ describe("MonthReviewPage（F27-I19）記入品牌學習", () => {
     expect(screen.getByText("成立")).toBeTruthy();
   });
 
-  it("活動不在 `listCampaigns` 查表裡時退回純文字，不硬造 objective", async () => {
-    mockGetAdsLearnings.mockResolvedValue([adsLearning({ campaign_id: "cmp_unknown", campaign_name: "未知活動" })]);
+  it("`campaign_objective` 是 `null`（活動本身查不到）時退回純文字，不硬造家族", async () => {
+    mockGetAdsLearnings.mockResolvedValue([
+      adsLearning({ campaign_id: "cmp_unknown", campaign_name: "未知活動", campaign_objective: null }),
+    ]);
     renderPage();
     expect(await screen.findByText("未知活動")).toBeTruthy();
   });

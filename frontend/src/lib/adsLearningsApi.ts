@@ -3,6 +3,7 @@
  * `app/ads/ads_learnings.py`. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
+import type { CampaignObjectiveFamily } from "./adsTriageApi";
 
 export interface AdsLearning {
   id: string;
@@ -11,6 +12,12 @@ export interface AdsLearning {
   count: number;
   campaign_id: string | null;
   campaign_name: string | null;
+  // F27-I27: same family `app/ads/repository.py::campaign_objective_family` already serves
+  // campaign cards/triage items/month-summary rows with — `null` only when the campaign itself
+  // is unknown/deleted, never a frontend-side guess off a raw objective string. Optional for the
+  // same reason `TriageItem.campaign_objective` is (`adsTriageApi.ts`): real responses always
+  // carry it, existing hand-written test factories may not.
+  campaign_objective?: CampaignObjectiveFamily | null;
   learned_at: string;
 }
 

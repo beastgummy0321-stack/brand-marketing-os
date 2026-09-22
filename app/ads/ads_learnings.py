@@ -89,7 +89,10 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     """Contract D: `GET .../learnings` -- ads-track rows only, newest first, <=50 (the ledger's
     own default). Each row's `campaign_id`/`campaign_name` is looked up through this module's own
     `ads_action` table (keyed by `source_cycle_id` = the change item id) -- `learning_ledger`
-    itself carries no campaign column, and this module never adds one to the legacy table."""
+    itself carries no campaign column, and this module never adds one to the legacy table.
+    `campaign_objective` (F27-I27) reuses `repository.campaign_objective_family` -- `null` only
+    when the campaign itself is unknown/deleted, never a frontend-side guess off the raw
+    objective string."""
     rows = _ads_rows(conn, brand)
     result = []
     for row in rows[:50]:
@@ -101,9 +104,17 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
         if action:
             campaign_id = action["campaign_id"]
         campaign_name = None
+        campaign_objective = None
         if campaign_id:
             campaign = ads_repo.get_campaign(cast(Conn, conn), row["org_id"], brand, campaign_id)
-            campaign_name = campaign["name"] if campaign else None
+            if campaign is not None:
+                campaign_name = campaign["name"]
+                # F27-I27: the same `campaign_objective_family` rule the month summary and
+                # `CampaignChip` elsewhere already use -- never a second, frontend-side guess
+                # off the raw `objective` string.
+                campaign_objective = ads_repo.campaign_objective_family(
+                    cast(Conn, conn), row["org_id"], brand, campaign,
+                )
         count = sum(
             1 for other in rows
             if other["learning_text"] == row["learning_text"]
@@ -116,6 +127,7 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
             "count": count,
             "campaign_id": campaign_id,
             "campaign_name": campaign_name,
+            "campaign_objective": campaign_objective,
             "learned_at": row["learned_at"],
         })
     return result

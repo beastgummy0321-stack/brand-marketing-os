@@ -34,7 +34,15 @@ import re
 from datetime import date, datetime, time, timedelta
 
 from app import orders
-from app.ads import ad_status, result_kinds, review_evidence, targets, triage, triage_scale
+from app.ads import (
+    ad_status,
+    repository,
+    result_kinds,
+    review_evidence,
+    targets,
+    triage,
+    triage_scale,
+)
 from app.core import settings as coresettings
 from app.core.db import jsonb
 
@@ -228,6 +236,7 @@ def _refresh_suggestions(campaigns_by_id: dict, queue_items: list, month: str) -
         out.append({
             "key": key, "kind": "refresh", "campaign_id": refresh["campaign_id"],
             "campaign_name": refresh["campaign_name"], "objective": campaign["objective"],
+            "campaign_objective": campaign["campaign_objective"],
             "title": f"補 {needed} 則新素材",
             "why": f"有效的方向只剩 {refresh['readable_count']} 則在投",
             "action_url": row["action_url"],
@@ -248,6 +257,7 @@ def _cleanup_suggestions(campaigns_by_id: dict, queue_items: list, month: str) -
         out.append({
             "key": key, "kind": "cleanup", "campaign_id": cleanup["campaign_id"],
             "campaign_name": cleanup["campaign_name"], "objective": campaign["objective"],
+            "campaign_objective": campaign["campaign_objective"],
             "title": f"清掉 {len(cleanup['ads'])} 則沒被投放的廣告",
             "why": f"同時 {cleanup['active_ads']} 則，預算約撐 {cleanup['can_support']} 則",
             "action_url": row["action_url"],
@@ -271,6 +281,7 @@ def _no_target_suggestions(conn, org_id, brand_id, campaigns_rows, target_by_cam
         out.append({
             "key": key, "kind": "no_target", "campaign_id": campaign["id"],
             "campaign_name": campaign["name"], "objective": campaign["objective"],
+            "campaign_objective": campaign["campaign_objective"],
             "title": f"替「{campaign['name']}」設目標", "why": "沒有目標，系統無法判斷好壞",
             "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign['id']}/target",
         })
@@ -288,8 +299,16 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         metrics = _campaign_month_metrics(conn, org_id, brand_id, row["id"], start, end)
         target_value = targets.resolve(conn, org_id, brand_id, row)["value"]
         target_by_campaign[row["id"]] = target_value
+        # F27-I27: one objective-family rule, not two -- the same `repository`.
+        # `campaign_objective_family` F27-I09 already added for `CampaignChip` on campaign
+        # cards/triage items, reused here (and via `campaigns_by_id` below for the
+        # suggestions) instead of the frontend re-guessing it from the raw objective string.
+        row["campaign_objective"] = repository.campaign_objective_family(
+            conn, org_id, brand_id, row,
+        )
         campaigns.append({
             "campaign_id": row["id"], "name": row["name"], "objective": row["objective"],
+            "campaign_objective": row["campaign_objective"],
             "spend": metrics["spend"], "result_count": metrics["result_count"],
             "result_label": result_kinds.label(metrics["result_kind"]),
             "cost_per_result": metrics["cost_per_result"], "target": target_value,
