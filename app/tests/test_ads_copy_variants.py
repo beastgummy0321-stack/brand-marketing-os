@@ -10,11 +10,12 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
+from app.ads import adapters, external_sync, review_rounds
 from app.ads import change_control as service
 from app.ads import change_control_data as data
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
-from app.ads import external_sync, review_rounds
+from app.ads.adapters.meta_read import copy_variants as meta_copy_variants
 from app.ads.adapters.meta_read import creative_summary
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
@@ -62,6 +63,35 @@ class CreativeSummaryCopyVariantsTest(unittest.TestCase):
         self.assertNotIn("copy_variants", result["fields"])
 
 
+class CopyVariantsPlatformDispatchTest(unittest.TestCase):
+    """F27-I26 Done 1: a platform dispatch `copy_variants(platform, creative) -> {..}|None`,
+    reusing `creative_summary`'s own asset_feed_spec parser (no duplicated parsing)."""
+
+    def test_meta_dispatch_parses_asset_feed_spec(self):
+        creative = {
+            "fields": {
+                "asset_feed_spec": {
+                    "titles": [{"text": "標題一"}],
+                    "bodies": [{"text": "內文一"}, {"text": "內文二"}],
+                }
+            }
+        }
+        self.assertEqual(
+            adapters.copy_variants("meta", creative),
+            {"titles": ["標題一"], "bodies": ["內文一", "內文二"]},
+        )
+        self.assertEqual(meta_copy_variants(creative), adapters.copy_variants("meta", creative))
+
+    def test_unknown_platform_returns_none(self):
+        creative = {"fields": {"asset_feed_spec": {"titles": [{"text": "x"}]}}}
+        self.assertIsNone(adapters.copy_variants("fixture", creative))
+        self.assertIsNone(adapters.copy_variants(None, creative))
+
+    def test_meta_dispatch_with_no_asset_feed_spec_returns_none(self):
+        self.assertIsNone(adapters.copy_variants("meta", {"fields": {}}))
+        self.assertIsNone(adapters.copy_variants("meta", {}))
+
+
 class CopyEditableTest(unittest.TestCase):
     def test_image_and_video_are_single(self):
         self.assertEqual(
@@ -105,6 +135,56 @@ class CopyEditableTest(unittest.TestCase):
     def test_unknown_or_missing_creative_is_refused(self):
         self.assertFalse(data.copy_editable({})["ok"])
         self.assertFalse(data.copy_editable(None)["ok"])
+
+
+class CopyReadTimeDerivationFromAssetFeedSpecTest(unittest.TestCase):
+    """F27-I26 root cause: `copy_variants` is only written when the adapter parses a creative
+    during sync (F27-I02) -- any creative stored before that (real brd_bughunt ACTIVE dynamic
+    ads) has `fields.asset_feed_spec` with `titles`/`bodies` but no `fields.copy_variants` at
+    all. `copy_fields`/`copy_editable` must derive it at read time instead of waiting for the
+    next daily sync."""
+
+    def _old_shape_entity(self, *, product_set_id=None):
+        feed = {
+            "titles": [{"text": "舊標題一"}, {"text": "舊標題二"}],
+            "bodies": [{"text": "舊內文一"}],
+        }
+        fields = {"asset_feed_spec": feed}
+        if product_set_id:
+            fields["product_set_id"] = product_set_id
+        return {"platform": "meta", "creative": {"kind": "dynamic", "fields": fields}}
+
+    def test_copy_fields_derives_variants_from_asset_feed_spec_when_not_stored(self):
+        entity = self._old_shape_entity()
+        self.assertEqual(
+            data.copy_fields(entity),
+            {"titles": ["舊標題一", "舊標題二"], "bodies": ["舊內文一"]},
+        )
+
+    def test_copy_editable_mode_is_variants_for_old_shape_stored_creative(self):
+        entity = self._old_shape_entity()
+        result = data.copy_editable(entity["creative"], entity["platform"])
+        self.assertEqual(result, {"ok": True, "mode": "variants", "reason": None})
+
+    def test_stored_copy_variants_still_wins_over_asset_feed_spec(self):
+        entity = self._old_shape_entity()
+        entity["creative"]["fields"]["copy_variants"] = {"titles": ["存的標題"], "bodies": []}
+        self.assertEqual(data.copy_fields(entity), {"titles": ["存的標題"], "bodies": []})
+
+    def test_catalog_only_dynamic_creative_is_still_refused_without_stored_copy_variants(self):
+        entity = self._old_shape_entity(product_set_id="123")
+        entity["creative"]["fields"]["asset_feed_spec"] = {
+            "promotional_metadata": {"manual_coupon_codes": ["PRIME"]}
+        }
+        result = data.copy_editable(entity["creative"], entity["platform"])
+        self.assertEqual(
+            result, {"ok": False, "mode": None, "reason": "商品目錄素材沒有可改的文字。"}
+        )
+
+    def test_non_meta_platform_has_no_derivation_and_falls_back_to_empty(self):
+        entity = self._old_shape_entity()
+        entity["platform"] = "fixture"
+        self.assertEqual(data.copy_fields(entity), {"titles": [], "bodies": []})
 
 
 class DynamicCopyChangeControlTest(unittest.TestCase):

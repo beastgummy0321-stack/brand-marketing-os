@@ -63,3 +63,19 @@ def platform_url(target: dict) -> str | None:
 
         return meta_read.platform_url(target)
     return None
+
+
+def copy_variants(platform: str | None, creative: dict) -> dict | None:
+    """F27-I26: read-time-only dynamic-creative copy derivation, keyed by `platform` -- the one
+    place a platform name maps to a copy-variant parser (`change_control_data.copy_fields`/
+    `copy_editable` are the only callers, for any stored creative whose `fields.copy_variants`
+    is missing, e.g. synced before F27-I02). Same lazy-import seam as `platform_url` above, to
+    avoid the module-load-time cycle through `manual.py -> change_control_launch.py ->
+    change_control_data.py`. Unknown platform, or a creative with nothing this platform's parser
+    recognises -> `None`, never a guessed empty result -- the caller decides what "no answer"
+    means (`copy_fields`: empty lists; `copy_editable`: still editable unless catalog-only)."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.copy_variants(creative)
+    return None

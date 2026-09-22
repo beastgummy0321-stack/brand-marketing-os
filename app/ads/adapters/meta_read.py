@@ -232,22 +232,35 @@ def creative_summary(value):
         # shape into `app/ads/change_control_data.py`. Missing arrays (a creative that only
         # carries e.g. `promotional_metadata`, real dev data) become empty lists, never an error;
         # `change_control_data.copy_editable` is what decides whether that's still editable.
-        feed = value.get("asset_feed_spec") or {}
-
-        def _texts(items):
-            return [
-                item["text"]
-                for item in (items or [])
-                if isinstance(item, dict)
-                and isinstance(item.get("text"), str)
-                and item["text"].strip()
-            ]
-
-        result["fields"]["copy_variants"] = {
-            "titles": _texts(feed.get("titles")),
-            "bodies": _texts(feed.get("bodies")),
-        }
+        result["fields"]["copy_variants"] = copy_variants(result) or {"titles": [], "bodies": []}
     return result
+
+
+def _asset_feed_texts(items):
+    return [
+        item["text"]
+        for item in (items or [])
+        if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+    ]
+
+
+def copy_variants(creative):
+    """Platform dispatch target (`app/ads/adapters/__init__.py::copy_variants`, F27-I26): derive
+    `{titles, bodies}` from this creative's own stored `fields.asset_feed_spec` at read time --
+    the same parser `creative_summary` uses at sync time, shared here so it is never duplicated.
+    Read-time reuse matters for any creative synced before F27-I02: `asset_feed_spec` was already
+    captured into `fields` by the `keys` loop above regardless of whether `copy_variants` was
+    ever derived, so this still parses real, not re-synced, dev data. `creative` is the
+    `creative_summary()` shape (`{fields: {...}, ...}`), not a raw platform payload. `None` when
+    there is no `asset_feed_spec` to parse at all (not dynamic, or read before this field was
+    ever captured) -- never a guessed empty dict; callers decide what "no answer" means."""
+    feed = ((creative or {}).get("fields") or {}).get("asset_feed_spec")
+    if feed is None:
+        return None
+    return {
+        "titles": _asset_feed_texts(feed.get("titles")),
+        "bodies": _asset_feed_texts(feed.get("bodies")),
+    }
 
 
 # Meta campaign objective -> this ad's own "result" (F16-I03, docs/architecture/ads.md §6.13).
