@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, VerifyPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -103,6 +103,14 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId"
           element={<AdsProposePauseRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId"
+          element={<AdsReviewEntryRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId"
+          element={<AdsReviewRoundRoute />}
         />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
@@ -468,6 +476,24 @@ function AdsProposePauseRoute() {
   const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
   return (
     <ConfirmPage key={`propose-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 六步流程「看證據」的入口（review route，F23-I02，v7 原型 `review()`）：`worse` 列還沒有檢討
+ * 回合時進來，找到或建立回合後就轉導去正典的 `reviews/:reviewId` 網址——這裡只負責帶參數，
+ * 轉導與建立回合的邏輯在 `ReviewEvidencePage` 自己（同 `AdsProposePauseRoute` 的分工）。 */
+function AdsReviewEntryRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ReviewEvidencePage key={`review-entry-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 六步流程「看證據」的正典網址（reviews/:reviewId route，F23-I02）：檢討回合已存在時直接讀。 */
+function AdsReviewRoundRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <ReviewEvidencePage key={`review-round-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
   );
 }
 
