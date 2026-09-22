@@ -84,6 +84,14 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     previous: { spend: 2000, result_count: 8, cost_per_result: 250, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     change_pct: 1.4,
     sample: { gate: true, spend_multiple: 6.6, days_with_events: 14 },
+    // F27-I11 Contract A: live ladder + history default (step 1 = 改過一次文案) — the sales-variant
+    // tests below never assert on these, only the new non-sales test overrides them.
+    ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null },
+    history: [{
+      change_set_id: "acs_hist_1", kind: "copy",
+      approved_at: "2026-09-06T12:00:00Z", verified_at: "2026-09-13T12:00:00Z",
+      cost_before: 500, cost_after: 450,
+    }],
     ...overrides,
   };
 }
@@ -158,7 +166,7 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
   });
 
-  it("ready：AI 建議、這則廣告（花費用 series 加總、不是 ROAS）、商城訂單、完整 bar", async () => {
+  it("ready：AI 建議、這則廣告（花費用 series 加總、不是 ROAS）、商城訂單、完整 bar、活的處理階梯", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
     renderAt(roundPath());
     expect(await screen.findByText("先觀察一段時間")).toBeTruthy();
@@ -167,9 +175,36 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.getByText("3,000")).toBeTruthy(); // 花費（series 加總，不是 series[0] 的任意選取）
     expect(screen.queryByText(/ROAS/)).toBeNull(); // 沒有可信的單則 ROAS 存取器，三行不是四行
     expect(screen.getByText("商城訂單")).toBeTruthy();
+    expect(screen.queryByText("這條素材的紀錄")).toBeNull(); // 銷售活動不顯示非銷售的紀錄卡
     expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "無法判定" })).toBeTruthy();
     expect(screen.getByRole("link", { name: /選擇處理方向/ })).toBeTruthy();
+    // F27-I11 Contract A：`ladder.step` 帶進活的處理階梯，不再是 F23 那個一律灰階的 placeholder。
+    expect(screen.getByLabelText("處理階梯")).toBeTruthy();
+    expect(screen.queryByLabelText("處理階梯（接上後開放）")).toBeNull();
+  });
+
+  it("ready：非銷售活動（target.result_kind 不是 purchase）顯示「這條素材的紀錄」，不顯示商城訂單", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
+      triage: triage({
+        campaign_name: "【名單】測試活動",
+        target: { value: 300, basis: "own", result_kind: "lead", result_label: "名單", missing: [] },
+        ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null },
+        history: [{
+          change_set_id: "acs_hist_2", kind: "copy",
+          approved_at: "2026-09-06T12:00:00Z", verified_at: "2026-09-13T12:00:00Z",
+          cost_before: 2.0, cost_after: 3.1,
+        }],
+      }),
+    })]));
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    expect(await screen.findByText("這條素材的紀錄")).toBeTruthy();
+    expect(screen.queryByText("商城訂單")).toBeNull();
+    expect(screen.getByText("已處理 1 次")).toBeTruthy();
+    expect(screen.getByText("9/6 改過文案")).toBeTruthy();
+    expect(screen.getByText("之後 7 天・每次名單成本 2 → 3.1")).toBeTruthy();
+    expect(screen.getByText("這個活動看名單，不看商城訂單")).toBeTruthy();
   });
 
   it("deferred：closed chip、bar 只有先不決定按鈕與提示，沒有選擇處理方向", async () => {

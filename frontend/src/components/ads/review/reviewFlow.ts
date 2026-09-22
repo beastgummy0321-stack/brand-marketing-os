@@ -3,7 +3,7 @@
  * `prepare()`/`copy()`). Kept separate from `ReviewEvidencePage.tsx` so I03 (選方向) and I04
  * (改文案) reuse the same path/accessor helpers instead of re-deriving them — same pattern as
  * `flow/changeFlow.ts` for the light flow. */
-import type { QueueItem, QueuePayload } from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, TriageHistoryEntry } from "@/lib/adsTriageApi";
 import type { CommerceEvidence, Recommendation, ReviewPeriod, ReviewResultView } from "@/lib/adsReviewApi";
 
 export type ReviewStepName = "review" | "prepare" | "copy";
@@ -88,4 +88,33 @@ export function commerceCoverageWarn(summary: CommerceEvidence["order_summary"])
 export function formatTargetAmount(value: number | null): string {
   if (value === null) return "尚未設定";
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
+}
+
+/** F27-I11 non-sales 「這條素材的紀錄」 card: whether this campaign is in the sales objective
+ * family — `TriageTargetView.result_kind` is `targets.resolve()`'s own output (`triage.py:58`),
+ * already carrying the internal-campaign fallback (`docs/architecture/ads.md` "result_kind 的
+ * 來源"), never a second, frontend-invented objective vocabulary. `null`/missing (no matched
+ * queue item) reads as non-sales — the honest unknown, not an invented shop attribution. */
+export function isSalesResultKind(resultKind: string | null | undefined): boolean {
+  return resultKind === "purchase";
+}
+
+/** F27-I11 Contract A: `TriageHistoryEntry.kind` label — past tense, matches the prototype's own
+ * 「9/06 改過文案」 wording. `budget` never actually appears here (correction 11: budget items
+ * target owners, not an ad), kept only so the map is total over the type. */
+export const HISTORY_KIND_LABEL: Record<TriageHistoryEntry["kind"], string> = {
+  copy: "改過文案", new_ad: "換過素材", budget: "調過預算", pause: "暫停過廣告",
+};
+
+/** `M/D` for a history entry's `approved_at` (a timezone-carrying ISO instant, browser-local —
+ * same convention as `formatRevisitLabel`). */
+export function formatEntryDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/** `cost_before`/`cost_after` printed value — `null` (fewer than 7 known days, contract A) reads
+ * as the same 「待確認」 unknown label `EvidenceRow` uses, never a guessed number. */
+export function formatCostLabel(value: number | null): string {
+  return value === null ? "待確認" : value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
 }
