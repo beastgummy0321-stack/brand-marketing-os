@@ -41,9 +41,15 @@ def create(conn, org, brand, campaign, payload, actor):
             "recommendation_id",
             "material_task_id",
             "material_revision",
+            "source",
         }
     ):
         raise ValueError("請提供完整的變更清單。")
+    # F27-I25 / Contract F: `source` only ever names the cleanup proposal match; any other value
+    # is refused here too (defence for direct callers that bypass `CreateRequest`'s 422).
+    source = payload.get("source")
+    if source is not None and source != "cleanup":
+        raise ValueError("不支援的清單來源。")
     operation_id, month = data.operation(payload["operation_id"]), data.month(payload["month"])
     if (
         not isinstance(payload["title"], str)
@@ -68,6 +74,8 @@ def create(conn, org, brand, campaign, payload, actor):
             conn.commit()
             return result
         items = [data.build_item(conn, org, brand, campaign, item, c) for item in payload["items"]]
+        if source == "cleanup" and any(i["kind"] != "pause" for i in items):
+            raise ValueError("清理清單只能包含暫停項目。")
         from app.ads import review_rounds
 
         review_reference = review_rounds.proposal_reference(
@@ -105,6 +113,9 @@ def create(conn, org, brand, campaign, payload, actor):
             "items": [{k: v for k, v in i.items() if k != "id"} for i in items],
             **review_reference,
             **material_reference,
+            # Only present when set, so an existing set created before `source` existed keeps its
+            # exact `content_hash`.
+            **({"source": source} if source else {}),
         }
         set_id = db.new_id("acs")
         conn.execute(
@@ -127,6 +138,7 @@ def create(conn, org, brand, campaign, payload, actor):
                         "supersedes_id": supersedes,
                         **review_reference,
                         **material_reference,
+                        **({"source": source} if source else {}),
                     }
                 ),
                 actor,

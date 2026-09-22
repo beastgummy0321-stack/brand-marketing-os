@@ -39,28 +39,25 @@ export function EvidenceRow({ label, previous, current, unknownLabel = "待確�
   );
 }
 
-/** `.ladder`: 改文案 → 換圖 → 退役. `placeholder` (F23 decision A, 2026-09-22): the backend has no
- * per-creative handling count yet, so every step is grey and the whole thing is labelled 接上後開放. */
-export function Ladder({ steps, current, placeholder = false }: { steps: string[]; current?: number; placeholder?: boolean }) {
+/** `.ladder`: 改文案 → 換圖 → 退役, `current` = the creative's step from its handling history. */
+export function Ladder({ steps, current }: { steps: string[]; current?: number }) {
   return (
-    <div data-slot="ladder" data-variant={placeholder ? "placeholder" : "live"} className="flex items-center text-xs text-muted-foreground"
-      title={placeholder ? "這條素材處理過幾次：接上後開放" : undefined} aria-label={placeholder ? "處理階梯（接上後開放）" : "處理階梯"}>
+    <div data-slot="ladder" data-variant="live" className="flex items-center text-xs text-muted-foreground" aria-label="處理階梯">
       {steps.map((s, i) => (
         <span key={s} className="flex items-center">
           {i > 0 && <span className="h-px w-[18px] bg-border" aria-hidden="true" />}
           <b className={cn("rounded-full px-3 py-1 font-medium",
-            !placeholder && i === current ? "bg-primary text-primary-foreground" : !placeholder && current !== undefined && i < current ? "bg-secondary text-secondary-foreground" : "bg-muted")}>{s}</b>
+            i === current ? "bg-primary text-primary-foreground" : current !== undefined && i < current ? "bg-secondary text-secondary-foreground" : "bg-muted")}>{s}</b>
         </span>
       ))}
-      {placeholder && <span className="ml-2">接上後開放</span>}
     </div>
   );
 }
 
-/** `.opt` (+ `.pick`): one direction card on 選方向. `disabled` = reserved (grey, not clickable),
- * label 接上後開放 — never a refusal wording. */
-export function OptionCard({ icon, title, note, picked = false, recommended = false, disabled = false, onClick }: {
-  icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean; disabled?: boolean; onClick?: () => void;
+/** `.opt` (+ `.pick`): one direction card on 選方向. `disabled` = not available here (grey, not
+ * clickable); `disabledNote` says why (default 接上後開放 — never a refusal wording). */
+export function OptionCard({ icon, title, note, picked = false, recommended = false, disabled = false, disabledNote = "接上後開放", onClick }: {
+  icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean; disabled?: boolean; disabledNote?: string; onClick?: () => void;
 }) {
   return (
     <button type="button" data-slot="option-card" data-variant={disabled ? "reserved" : picked ? "picked" : "open"}
@@ -69,7 +66,7 @@ export function OptionCard({ icon, title, note, picked = false, recommended = fa
         disabled ? "cursor-default border-border bg-muted text-muted-foreground" : picked ? "border-primary bg-accent shadow-[0_0_0_1px_var(--primary)]" : "border-border bg-card hover:border-primary")}>
       <div className="text-2xl" aria-hidden="true">{icon}</div>
       <b className="mt-2.5 mb-1 block text-[15px]">{title}{recommended && <span className="ml-1.5 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">建議</span>}</b>
-      <span className="text-[13px] text-muted-foreground">{disabled ? "接上後開放" : note}</span>
+      <span className="text-[13px] text-muted-foreground">{disabled ? disabledNote : note}</span>
     </button>
   );
 }

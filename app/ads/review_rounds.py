@@ -35,6 +35,21 @@ def get(conn, org, brand, campaign, review_id):
     if row is None:
         raise ValueError("找不到此品牌活動的檢討。")
     result = dict(row)
+    # Contract B: `copy_editable` is computed at READ time, never stored in the immutable
+    # `evidence_json` snapshot -- a later re-sync of the ad's creative must change the answer
+    # without touching the evidence hash or anything already approved.
+    try:
+        target = bindings.entity(conn, org, brand, campaign, result["entity_id"])
+        editable = changes.copy_editable(target.get("creative") or {})
+    except ValueError:
+        editable = {"ok": False, "mode": None, "reason": None}
+    result["evidence_json"] = {
+        **result["evidence_json"],
+        "conditions": {
+            **result["evidence_json"].get("conditions", {}),
+            "copy_editable": editable,
+        },
+    }
     result["usage_notice"] = (
         policy.CODEX_NOTICE
         if result["evidence_json"].get("provider") == "codex_cli"

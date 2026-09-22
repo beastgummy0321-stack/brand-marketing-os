@@ -4,6 +4,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
 import { closeCampaign, getPerformance, ingestOutcome } from "@/lib/adsApi";
@@ -145,11 +146,21 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   };
 }
 
-function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn()) {
+// F27-I22：`useSearchParams`（`?ad=` 深連結）要有 Router context 才不會炸掉——即使這次
+// 沒帶 `?ad=`，元件也無條件呼叫這顆 hook，全部測試都要包 `MemoryRouter`。
+function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn(), path = "/") {
   return { onCampaignChange, onChangeTab, ...render(
-    <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
+    <MemoryRouter initialEntries={[path]}>
+      <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />
+    </MemoryRouter>,
   ) };
 }
+
+// jsdom（v30）沒有實作 `Element.prototype.scrollIntoView`（`?ad=` 深連結用它捲到那一列，
+// precedent: `CampaignDetailPage.test.tsx`）——補一個 no-op，測試環境本來就不驗證真的捲動位置。
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 describe("PerformanceTab 結案卡片（F04-I23）", () => {
   beforeEach(() => {
@@ -297,7 +308,11 @@ it("imported shares the KPI layout and sync while disabling internal operations"
       { id: "a", entity_id: "a", day: "2026-09-01", metric_scope: "ad", attribution_key: "7d", currency: "USD", spend: 999, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} },
     ], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {},
   } });
-  render(<PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} />);
+  render(
+    <MemoryRouter>
+      <PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} />
+    </MemoryRouter>,
+  );
   expect(screen.getByText(/活動 · USD · 7d · 2026-09-01 ～ 2026-09-30/)).toBeTruthy();
   expect(screen.getByText("目前成果")).toBeTruthy(); expect(screen.getByText("12 USD")).toBeTruthy(); expect(screen.queryByText(/保守值/)).toBeNull();
   expect((screen.getByRole("button", { name: "立即結案" }) as HTMLButtonElement).disabled).toBe(true);
@@ -313,7 +328,66 @@ it("imported shares the KPI layout and sync while disabling internal operations"
 
 it("native reported zero spend is distinct from missing spend", () => {
   const c = campaign({ origin: "imported", external_view: { entities: [], observations: [{ id: "o", entity_id: "c", day: "2026-09-01", metric_scope: "campaign", attribution_key: "7d", currency: "USD", spend: 0, impressions: 0, clicks: 0, purchases: null, revenue: null, availability: {} }], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {} } });
-  render(<PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />);
+  render(
+    <MemoryRouter>
+      <PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+    </MemoryRouter>,
+  );
   expect(screen.getByText("已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。")).toBeTruthy();
   expect(screen.getByText("0 USD")).toBeTruthy();
+});
+
+// F27-I22（Feature Screens「Performance tab」）：`?ad=<entity_id>` 深連結——「廣告花費占比」
+// 那張表才有「這則廣告」的一列，比對到就展開次要資料區塊、捲到並高亮那一列；比對不到就印
+// 一行誠實訊息，不是靜默失敗或當機。
+function outcomeAdRow(overrides: Partial<CampaignPerformance["ads"][number]> = {}): CampaignPerformance["ads"][number] {
+  return {
+    ad_id: "aex_1", name: "廣告一", spend: 500, impressions: 1000, clicks: 20,
+    purchases: 2, revenue: 1500, cpa: 250, ctr: 0.02, roas: 3, roas_conservative: 3,
+    spend_share: 1,
+    ...overrides,
+  };
+}
+
+describe("PerformanceTab `?ad=` 深連結（F27-I22）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPerformance).mockResolvedValue({
+      ...performance(),
+      ads: [outcomeAdRow({ ad_id: "aex_01M2T3J698SPKTJMBV5A6SN80Z", name: "廣告一" })],
+    });
+  });
+
+  it("比對到：次要資料區塊自動展開，那一列被捲到並高亮", async () => {
+    renderTab(
+      campaign({ status: "live" }),
+      vi.fn(),
+      vi.fn(),
+      "/?tab=performance&ad=aex_01M2T3J698SPKTJMBV5A6SN80Z",
+    );
+
+    const row = await screen.findByTestId("ad-perf-row-aex_01M2T3J698SPKTJMBV5A6SN80Z");
+    expect(row.className).toMatch(/ring-primary/);
+    // 次要資料的 Disclosure 沒有另外點開也看得到（`defaultOpen`），這裡用只在展開後才會
+    // 出現的「點擊率」欄位當作展開的證據，跟既有測試「先顯示主要成果」同一套斷言方式。
+    expect(screen.getAllByText("點擊率").length).toBeGreaterThan(0);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(screen.queryByText("這則廣告沒有成效資料")).toBeNull();
+  });
+
+  it("比對不到：印一行「這則廣告沒有成效資料」，次要資料維持收合", async () => {
+    renderTab(campaign({ status: "live" }), vi.fn(), vi.fn(), "/?tab=performance&ad=not_this_ad");
+
+    expect(await screen.findByText("這則廣告沒有成效資料")).toBeTruthy();
+    expect(screen.queryByText("點擊率")).toBeNull();
+    expect(screen.queryByTestId("ad-perf-row-aex_01M2T3J698SPKTJMBV5A6SN80Z")).toBeNull();
+  });
+
+  it("沒有 `?ad=`：不印訊息、次要資料維持既有的收合預設", async () => {
+    renderTab(campaign({ status: "live" }));
+
+    await screen.findByRole("heading", { name: "目前成果" });
+    expect(screen.queryByText("這則廣告沒有成效資料")).toBeNull();
+    expect(screen.queryByText("點擊率")).toBeNull();
+  });
 });

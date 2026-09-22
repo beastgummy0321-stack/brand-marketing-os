@@ -190,9 +190,31 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     const heading = await screen.findByRole("heading", { name: longName });
     const link = within(heading).getByRole("link", { name: longName });
     expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail");
-    // 「›」永遠在（shrink-0），只有名稱那格 truncate；用 title 存住完整名稱。
+    // 「›」永遠在（shrink-0），只有名稱那格 truncate；title 存在 <Link> 本身（F27-I17：名稱換成
+    // `CampaignChip`，這顆共用元件沒有 title 插槽）。
     expect(within(link).getByText("›", { exact: true })).toBeTruthy();
-    expect(within(link).getByText(longName, { exact: true }).getAttribute("title")).toBe(longName);
+    expect(link.getAttribute("title")).toBe(longName);
+  });
+
+  it("F27-I17：標題用共用 CampaignChip，family 從 campaign_objective 讀", async () => {
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({ campaign_objective: "sales" })]);
+    vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+    const { container } = renderCards();
+    await screen.findByText("測試 Campaign", { exact: true });
+
+    const chip = container.querySelector('[data-slot="campaign-chip"]');
+    expect(chip?.getAttribute("data-variant")).toBe("sales");
+  });
+
+  it("F27-I17：campaign_objective 沒帶（手寫 fixture 沒補）時 CampaignChip 退回 other，不是掛掉", async () => {
+    vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+    const { container } = renderCards();
+    await screen.findByText("測試 Campaign", { exact: true });
+
+    const chip = container.querySelector('[data-slot="campaign-chip"]');
+    expect(chip?.getAttribute("data-variant")).toBe("other");
   });
 
   it("有廣告但未設定目標：印「尚未設定」，次要按鈕（outline，非主按鈕）連到設定目標頁，missing 印成 chip", async () => {
@@ -279,6 +301,59 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.getByText("預算待核實")).toBeTruthy();
     expect(screen.getByText("平台預算")).toBeTruthy();
     expect(screen.queryByText("總預算 NT$ 9,000")).toBeNull(); // 匯入活動不假裝讀得到站內總預算
+  });
+
+  // F27-I17 Contract F: capacity 是 `CampaignCard.data.capacity`（`listCampaigns`
+  // ／`repository.py::list_campaigns` 直接帶的，`adsApi.ts` 上的欄位），跟同名但另一支 API
+  // （`getTriage`／`triage.py::_data_view`）的 `TriageData.capacity` 是兩個各自獨立的讀——這裡
+  // 用 `campaignCardData` 掛，不是 `triage()` 的 `data`。
+  describe("F27-I17 Contract F：容量 chip「每日 X」／「約撐得起 N 則」", () => {
+    it("兩個數字都在，且同時在投超過撐得起的則數：兩顆 chip 都印，撐得起那顆轉 warn", async () => {
+      vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({
+        data: {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          capacity: { daily_budget: 900, currency: "TWD", target: 450, can_support: 2, active_ads: 3 },
+        },
+      })]);
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+      renderCards();
+
+      expect(await screen.findByText("每日 900 TWD")).toBeTruthy();
+      const supportChip = screen.getByText(textOf("約撐得起 2 則"));
+      expect(supportChip.getAttribute("data-tone")).toBe("warn");
+    });
+
+    it("撐得起的則數還夠用（active_ads ≤ can_support）：chip 是 neutral，不是 warn", async () => {
+      vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({
+        data: {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          capacity: { daily_budget: 900, currency: "TWD", target: 450, can_support: 4, active_ads: 3 },
+        },
+      })]);
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+      renderCards();
+
+      const supportChip = await screen.findByText(textOf("約撐得起 4 則"));
+      expect(supportChip.getAttribute("data-tone")).toBe("neutral");
+    });
+
+    it("daily_budget／can_support 都是 null：不印容量 chip，只留原本的預算 chip", async () => {
+      vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({
+        data: {
+          sync: { state: "ok", error: null, last_success_at: "2026-09-21T00:00:00Z" },
+          capacity: { daily_budget: null, currency: null, target: null, can_support: null, active_ads: 3 },
+        },
+      })]);
+      vi.mocked(getTriage).mockResolvedValue(triage([triageItem()]));
+
+      renderCards();
+
+      await screen.findByText("450", { exact: true });
+      expect(screen.queryByText(/^每日 /)).toBeNull();
+      expect(screen.queryByText(/^約撐得起 /)).toBeNull();
+    });
   });
   describe("F24-I02：sync 異常態與「資料不足，先不判斷」", () => {
     it("sync 失敗：灰卡「暫時讀取不到」＋已保存的紀錄都還在；重新讀取＝真同步（syncCampaign→輪詢→重讀這張卡）", async () => {

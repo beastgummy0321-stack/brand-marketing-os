@@ -11,10 +11,11 @@ import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import {
   getQueue, getTriage,
-  type QueueItem, type TriageClass, type TriageClosedBlock, type TriageClosedItem, type TriageItem,
+  type CampaignCapacity, type QueueItem, type TriageClass, type TriageClosedBlock, type TriageClosedItem,
+  type TriageItem,
 } from "@/lib/adsTriageApi";
-import { Chip, ReservedSlotCard } from "../patterns";
-import { proposalAction } from "../home/status";
+import { Chip, Ladder, Meter, ThumbTiles } from "../patterns";
+import { cleanupAction, proposalAction } from "../home/status";
 
 // 跟 `home/CampaignCard.tsx` 的 `BASIS_LABEL` 同一份小工具——那支檔案沒有匯出，
 // 這頁又不在 `frontend/src/lib/**`（do_not_touch），沿用既有先例各自留一份（precedent:
@@ -34,6 +35,11 @@ function formatTargetAmount(value: number | null): string {
   if (value === null) return "尚未設定";
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
 }
+
+// v7 `rowOf()`'s mini ladder (prototype ≈ 346) and `ReviewEvidencePage.tsx`'s full `Ladder` share
+// this exact three-step vocabulary; `patterns/**` doesn't export it as a constant (`Ladder` only
+// takes `steps: string[]`) so this file keeps its own copy, same precedent as `BASIS_LABEL` above.
+const LADDER_STEPS = ["改文案", "換圖", "退役"];
 
 // v7 `campPage()` 的五個分類（prototype ≈ 343）＋後端真實存在、prototype 假資料沒示範過的
 // `no_target`（`app/ads/triage.py::LABELS`）：活動還沒設定目標時，每一則廣告都落在這一類，
@@ -90,41 +96,63 @@ function AdThumb({ url }: { url: string | null }) {
   );
 }
 
-/** 一列廣告（v7 `rowOf()`，prototype ≈ 346–348）：縮圖・名稱・花費・每次成果成本・
- * 在佇列裡才有的「去處理」。ladder／「14 天幾乎沒投」照 Feature Decisions 省略，不是漏做。
+/** F27-I18 audit problem 3: a proposal-driven button only belongs to the ad whose queue row this
+ * genuinely IS — matched by `triage.entity_id` already (`queueByEntity`), narrowed further to the
+ * three kinds that ever answer one specific ad (`stop_loss`／`worse`／`scale_budget`).
+ * `refresh_creative`／`insufficient_data`／`cleanup` are campaign-level rows that can share a
+ * `triage.entity_id` with some ad by coincidence (the dedupe key is per-campaign, not per-ad) —
+ * never that ad's own row, so they fall through to `null` here and the row shows 「看紀錄」
+ * instead (feature Decisions "audit problem 3"). `scale_budget`'s entry point keys off the budget
+ * OWNER's id, not this ad's own `entity_id` (`home/status.ts::proposeBudgetPath`) — everything
+ * else keys off the ad itself, same as before this issue. */
+function ownQueueAction(brandId: string, campaignId: string, entityId: string, queueItem?: QueueItem) {
+  if (!queueItem) return null;
+  switch (queueItem.kind_key) {
+    case "stop_loss":
+      return proposalAction(brandId, campaignId, entityId, queueItem.proposal, "pause");
+    case "worse":
+      return proposalAction(brandId, campaignId, entityId, queueItem.proposal, "review");
+    case "scale_budget":
+      return queueItem.scale
+        ? proposalAction(brandId, campaignId, queueItem.scale.owner.id, queueItem.proposal, "budget")
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** 一列廣告（v7 `rowOf()`，prototype ≈ 346–348）：縮圖・名稱（＋變差分類的迷你階梯）・花費・
+ * 每次成果成本・按鈕。
  *
- * lead 裁決（review fix）：「去處理」不能連 `queueItem.action_url`——F20-I01 把佇列的
+ * lead 裁決（review fix，F20-I02）：按鈕不能連 `queueItem.action_url`——F20-I01 把佇列的
  * `action_url` 改指到「這一頁」（`.../detail?ad=<id>`），這裡再用它會原地繞一圈、按了
- * 沒反應。六步驟審核流程還沒重建前，這顆按鈕連去既有工作區的「成效」分頁（現有的處理
- * 入口）；還是不是在佇列裡（`queueItem` 有沒有值）決定要不要印這顆按鈕。
+ * 沒反應。
  *
- * F22-I05：停損分類的廣告改走 `proposalAction`（跟 `home/QueueRow.tsx` 同一支），按鈕印目前
- * 進度而不是固定的「去處理」。F23-I05：`worse` 分類現在也走同一支（`kind: "review"`）——
- * 這批唯一還留著舊「去處理」規則的分類只剩不在 stop_loss／worse 的其他項（目前沒有，這裡
- * 留一個誠實的 fallback，不是預期路徑）。 */
+ * F22-I05／F23-I05：停損／變差分類的廣告走 `proposalAction`（跟 `home/QueueRow.tsx` 同一支），
+ * 按鈕印目前進度。F27-I18（audit problem 3）：只有真的擁有自己那一列佇列（`ownQueueAction`）
+ * 的廣告才印這顆進度按鈕；其餘每一則投放中的廣告（不在佇列裡、或佇列列其實是別的活動層級
+ * 事件恰好帶到這則廣告的 id）一律印「看紀錄」連去既有工作區的成效分頁——跟已關閉分組
+ * （`ClosedAdRow`）同一顆按鈕、同一種連結形狀。 */
 function AdRow({
   brandId,
+  campaignId,
   item,
   queueItem,
-  reviewHref,
+  workspaceHref,
   highlighted,
   rowRef,
 }: {
   brandId: string;
+  campaignId: string;
   item: TriageItem;
   queueItem?: QueueItem;
-  reviewHref: string;
+  workspaceHref: string;
   highlighted: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
 }) {
   const name = item.name ?? "（未命名廣告）";
   const costLabel = `每次${item.current.result_label}成本`;
-  const action = queueItem && (item.class === "stop_loss" || item.class === "worse")
-    ? proposalAction(
-        brandId, item.campaign_id, item.entity_id, queueItem.proposal,
-        item.class === "worse" ? "review" : "pause",
-      )
-    : null;
+  const action = ownQueueAction(brandId, campaignId, item.entity_id, queueItem);
   return (
     <div
       ref={rowRef}
@@ -135,9 +163,21 @@ function AdRow({
       )}
     >
       <AdThumb url={item.thumbnail_url} />
-      <p className="min-w-40 flex-1 truncate text-sm font-medium" title={name}>
-        {name}
-      </p>
+      <div className="min-w-40 flex-1">
+        <p className="truncate text-sm font-medium" title={name}>
+          {name}
+        </p>
+        {/* F27-I01 Contract A／Screens "Detail page": mini `Ladder` on `worse` rows only, from
+           this ad's own `ladder.step` — optional on the type for hand-written fixtures that
+           don't set it (real responses always carry it), so a `worse` row without one just skips
+           the ladder rather than crashing. Scaled down (prototype `transform:scale(.85)`) since
+           `Ladder`（do_not_touch）has no size prop of its own. */}
+        {item.class === "worse" && item.ladder && (
+          <div className="mt-1 origin-left scale-[0.85]">
+            <Ladder steps={LADDER_STEPS} current={item.ladder.step} />
+          </div>
+        )}
+      </div>
       <div className="w-24 shrink-0 text-right">
         <p className="text-[11.5px] text-muted-foreground">花費</p>
         <p className="numeric text-sm font-semibold">{formatAmount(item.current.spend)}</p>
@@ -152,11 +192,9 @@ function AdRow({
             <Link to={action.href}>{action.label}</Link>
           </Button>
         ) : (
-          queueItem && (
-            <Button asChild size="sm" variant="outline">
-              <Link to={reviewHref}>去處理</Link>
-            </Button>
-          )
+          <Button asChild size="sm" variant="outline">
+            <Link to={`${workspaceHref}?tab=performance&ad=${item.entity_id}`}>看紀錄</Link>
+          </Button>
         )}
       </div>
     </div>
@@ -170,20 +208,22 @@ function AdRow({
  * `<details>` 的可及性（鍵盤、螢幕報讀器）本來就到位，不用另外補。 */
 function Group({
   brandId,
+  campaignId,
   cls,
   items,
   queueByEntity,
-  reviewHref,
+  workspaceHref,
   open,
   onToggle,
   highlightId,
   registerRow,
 }: {
   brandId: string;
+  campaignId: string;
   cls: TriageClass;
   items: TriageItem[];
   queueByEntity: Map<string, QueueItem>;
-  reviewHref: string;
+  workspaceHref: string;
   open: boolean;
   onToggle: (open: boolean) => void;
   highlightId: string | null;
@@ -212,9 +252,10 @@ function Group({
           <AdRow
             key={item.entity_id}
             brandId={brandId}
+            campaignId={campaignId}
             item={item}
             queueItem={queueByEntity.get(item.entity_id)}
-            reviewHref={reviewHref}
+            workspaceHref={workspaceHref}
             highlighted={item.entity_id === highlightId}
             rowRef={(el) => registerRow(item.entity_id, el)}
           />
@@ -304,6 +345,52 @@ function ClosedGroup({
         )}
       </div>
     </details>
+  );
+}
+
+/** 容量卡（v7 `campPage()` 的 `c.cap` 區塊，prototype ≈ 353，設計規格＝原型本身，不是 Contract
+ * 段落的轉述）：這個活動同時在投幾則、預算約撐得起幾則——量尺的 max 用「則數本身」（投放中
+ * ／撐得起兩者取大），不是原型那個沒有對應真實語意的示範常數 24。`can_support` 算不出來（沒有
+ * 目標，或幾個投放組的預算幣別對不上，Contract F）就老實印「尚未能計算」，量尺也不畫（不是
+ * 硬湊一個假滿格）。只有佇列裡真的有一則清理待決定（`can_support>=1 && active_ads>can_support`
+ * 才會產生，Contract F）才印縮圖列與按鈕；沒有清理列時完全不印——不臆造一個沒佇列撐著的動作
+ * （Screens "Detail page"："hide when there is no cleanup row"）。還沒有提案的清理列印
+ * 「提議暫停沒在投的 K 則」（K 用清理列自己實際要提議的則數 `cleanup.ads.length`，永遠 ≤ 公式
+ * 差額——Correction 4：沒被涵蓋滿 7 天或卡在替換中的廣告不會被選進來，不是重新用公式現算）；
+ * 已經有提案時改走它自己的核准／到平台步驟（`cleanupAction`，跟 `home/QueueRow.tsx` 同一支），
+ * 標籤跟著提案狀態走，不是死板的「提議暫停」。 */
+function CapacityCard({
+  brandId, campaignId, activeAds, capacity, cleanupItem,
+}: {
+  brandId: string; campaignId: string; activeAds: number;
+  capacity?: CampaignCapacity; cleanupItem?: QueueItem;
+}) {
+  const canSupport = capacity?.can_support ?? null;
+  const meterMax = canSupport !== null ? Math.max(activeAds, canSupport) : null;
+  const cleanup = cleanupItem?.cleanup;
+  const action = cleanupItem && cleanup
+    ? cleanupAction(brandId, campaignId, cleanupItem.proposal, cleanupItem.action_url)
+    : null;
+  return (
+    <div className="surface flex flex-wrap items-center gap-5 p-5">
+      <div className="min-w-[260px] flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[15px] font-semibold">同時在投 {activeAds} 則</h2>
+          <span className="text-xs text-muted-foreground">
+            {canSupport !== null ? `你的預算約撐得起 ${canSupport} 則` : "尚未能計算"}
+          </span>
+        </div>
+        <Meter value={activeAds} max={meterMax} marker={canSupport} tone="warning" />
+      </div>
+      {cleanup && <ThumbTiles items={cleanup.ads.map((ad) => ad.thumbnail_url)} size={34} />}
+      {action && cleanupItem && cleanup && (
+        <Button asChild size="sm" variant={action.done ? "ghost" : "outline"}>
+          <Link to={action.href}>
+            {cleanupItem.proposal === null ? `提議暫停沒在投的 ${cleanup.ads.length} 則` : action.label}
+          </Link>
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -410,6 +497,15 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     }
     return map;
   }, [state]);
+
+  // F27-I06 Contract F / Screens "Detail page": the campaign-level cleanup row, if the brand's
+  // queue currently has one for THIS campaign (`cleanup.campaign_id`, not `triage.entity_id` —
+  // a cleanup row's own `triage` is just the dedupe seam's carrier ad, never this campaign's own
+  // key, same distinction `ownQueueAction` above draws).
+  const cleanupQueueItem = useMemo(() => {
+    if (state.status !== "ready") return undefined;
+    return state.queue.find((q) => q.kind_key === "cleanup" && q.cleanup?.campaign_id === campaignId);
+  }, [state, campaignId]);
 
   const homeHref = `/brands/${brandId}/ads`;
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
@@ -530,12 +626,16 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
           {items.length > 0 && (
             <>
-              {/* 容量卡（Feature Decisions）：`「同時在投 N 則／提議暫停」` 這個能力還沒接上——
-                 一張佔位卡，不是假出一個「撐得起幾則」的數字。 */}
-              <ReservedSlotCard
-                title={`同時在投 ${items.length} 則`}
-                description="預算能撐得起幾則廣告、要不要提議暫停沒在投的廣告，這個判斷還沒接上。"
-                tag="接上後開放"
+              {/* F27-I18 Contract F / Screens "Detail page": the capacity card is real now —
+                 `campaign.data?.capacity` (same shape `home/CampaignCard.tsx`'s own chips read),
+                 the cleanup button only when the brand's queue actually has a cleanup row for
+                 this campaign. */}
+              <CapacityCard
+                brandId={brandId}
+                campaignId={campaignId}
+                activeAds={items.length}
+                capacity={campaign.data?.capacity}
+                cleanupItem={cleanupQueueItem}
               />
 
               <div className="flex flex-col gap-2.5">
@@ -543,10 +643,11 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
                   <Group
                     key={cls}
                     brandId={brandId}
+                    campaignId={campaignId}
                     cls={cls}
                     items={groupedItems.get(cls)!}
                     queueByEntity={queueByEntity}
-                    reviewHref={`${workspaceHref}?tab=performance`}
+                    workspaceHref={workspaceHref}
                     open={openGroups.has(cls)}
                     onToggle={(isOpen) =>
                       setOpenGroups((prev) => {

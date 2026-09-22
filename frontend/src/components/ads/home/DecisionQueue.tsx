@@ -98,8 +98,14 @@ function FilterPill({ name, count, active, onClick }: { name: string; count: num
  * 殼、活動篩選、空狀態跟 `kinds_pending` 佔位列）。`queue.items` 已經是「還需要你決定」的停損／
  * 變差廣告——後端只回還開著、分類仍成立的列（`app/ads/triage.py::_queue_payload`），這支不再
  * 自己過濾分類，只再依選定活動篩一次。loading／error 由呼叫端（`AdsHomePage`）的 `refreshQueue`
- * 讀取狀態驅動（review repair (b)：三個插槽各自獨立失敗，不拖累彼此）。 */
-export function DecisionQueue({ state, onRetry }: { state: QueueState; onRetry: () => void }) {
+ * 讀取狀態驅動（review repair (b)：三個插槽各自獨立失敗，不拖累彼此）。
+ *
+ * F27-I17: `recovering`（`AdsHomePage.tsx` 自己打 `getRecovery` 算出來的，這支只是原樣往下
+ * 傳）為真時，每一列都換成同一顆「補完資料後更新」佔位（見 `QueueRow.tsx` 自己的說明），
+ * 選填、預設 `false`——既有呼叫端／測試不必為此另外補這個 prop。 */
+export function DecisionQueue({ state, onRetry, recovering = false }: {
+  state: QueueState; onRetry: () => void; recovering?: boolean;
+}) {
   // Hooks 前必須跑在每次 render，不能被下面的 loading／error 提早 return 擋住。
   const [filter, setFilter] = useState<string>("all");
 
@@ -146,7 +152,9 @@ export function DecisionQueue({ state, onRetry }: { state: QueueState; onRetry: 
         {/* 空佇列不重複印「都處理完了」——`AdsHomePage` 的頁首已經講過一次；這裡只留
          * `kinds_pending` 佔位列（review fix：同一頁一句話只講一次）。primary 只落在「篩選後」
          * 第一列（Done #4）——換篩選時主按鈕跟著換,不是永遠釘在未篩選的第一列。 */}
-        {visible.map((item, index) => <QueueRow key={item.id} item={item} primary={index === 0} />)}
+        {visible.map((item, index) => (
+          <QueueRow key={item.id} item={item} primary={index === 0} recovering={recovering} />
+        ))}
         {kinds_pending.map((kind) => (
           <PendingRow key={kind} kind={kind} />
         ))}

@@ -1,7 +1,11 @@
 /** frontend/src/components/ads/AdsHomePage.test.tsx — F19-I02：v7 首頁版面重寫，取代 F04-I09
  * 的舊版判斷帶／時間軸／建檔檢查表斷言（issue 授權）。首頁只負責讀 `refreshQueue`（header 件數
  * ＋ `DecisionQueue`），`CampaignCards`／`BudgetCard`／`ChangeAttention` 各自打自己的 API——
- * review repair (b)：一塊讀取失敗不拖累另外兩塊，這裡驗證三塊真的互相獨立。 */
+ * review repair (b)：一塊讀取失敗不拖累另外兩塊，這裡驗證三塊真的互相獨立。
+ *
+ * F27-I17：頁首「最近同步・N 項待處理」晶片搬到頂欄（F27-I20），這支移除了三則原本斷言它的
+ * 測試，換成頁首自己新讀的 `getRecovery`（恢復期橫幅、往下傳給 `DecisionQueue` 的
+ * `recovering`）。 */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -14,7 +18,7 @@ import type {
 } from "@/lib/adsTriageApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
-import { formatSyncTime } from "@/lib/format";
+import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -29,6 +33,21 @@ vi.mock("@/lib/adsChangeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
   return { ...actual, getChangeControlSummary: vi.fn(), getMonthlyBudget: vi.fn() };
 });
+vi.mock("@/lib/adsStatusApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsStatusApi")>("@/lib/adsStatusApi");
+  return { ...actual, getRecovery: vi.fn() };
+});
+
+function notRecovering(): AdsRecovery {
+  return { recovering: false, gap: null, steps: [] };
+}
+
+// 跟元件自己的 `formatHM` 同一套換算（瀏覽器／測試執行環境的本地時區）——不直接寫死
+// 「09:10」這種字面值，避免測試機時區跟元件算出來的不一樣。
+function hm(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 function unknownBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
   return {
@@ -133,6 +152,7 @@ beforeEach(() => {
   vi.mocked(getChangeControlSummary).mockResolvedValue({ pending_count: 0, items: [], truncated: false });
   vi.mocked(getMonthlyBudget).mockResolvedValue(unknownBudget());
   vi.mocked(listCampaigns).mockResolvedValue([]);
+  vi.mocked(getRecovery).mockResolvedValue(notRecovering());
 });
 
 describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
@@ -349,46 +369,67 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(await screen.findByText("都處理完了")).toBeTruthy();
   });
 
-  it("頁首同步晶片：只採計 state===\"ok\" 的時間戳，取最新一筆；N 項待處理＝這頁自己的 openCount", async () => {
-    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
-    vi.mocked(listCampaigns).mockResolvedValue([
-      campaignCard({ id: "cmp_a", name: "活動 A", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
-      campaignCard({ id: "cmp_b", name: "活動 B", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-20T01:00:00Z" } } }),
-    ]);
-
-    renderPage();
-
-    await screen.findByRole("heading", { name: "活動 A" });
-    const expected = `最近同步 ${formatSyncTime("2026-09-20T01:00:00Z")}`; // 兩筆都是 ok，取較新的那筆
-    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
-    expect(screen.getByText("1 項待處理", { selector: '[data-slot="chip"]' })).toBeTruthy();
-  });
-
-  it("頁首同步晶片：有失敗／未連接的活動時轉 warn 並附「N 個活動讀取異常」；失敗的舊時間戳不算進最近同步（I01 裁決）", async () => {
+  it("F27-I17：頁首不再印「最近同步・N 項待處理」晶片（搬到頂欄，F27-I20）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
     vi.mocked(listCampaigns).mockResolvedValue([
-      campaignCard({ id: "cmp_ok", name: "活動 OK", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
-      campaignCard({ id: "cmp_failed", name: "活動失敗", data: { sync: { state: "failed", error: "(#190) token expired", last_success_at: "2026-09-25T00:00:00Z" } } }),
-      campaignCard({ id: "cmp_disc", name: "活動未連接", data: { sync: { state: "disconnected", error: null, last_success_at: null } } }),
+      campaignCard({ id: "cmp_never", name: "從沒同步過" }),
     ]);
-
-    renderPage();
-
-    await screen.findByRole("heading", { name: "活動 OK" });
-    // 失敗那筆的 last_success_at（9/25）比 ok 那筆（9/19）新，但失敗態不算「最近同步」，
-    // 否則會把「上次失敗」誤讀成「剛剛才讀過」。
-    const expected = `最近同步 ${formatSyncTime("2026-09-19T14:40:00Z")}・2 個活動讀取異常`;
-    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
-  });
-
-  it("頁首同步晶片：完全沒有 ok 的時間戳印「尚未同步」", async () => {
-    vi.mocked(refreshQueue).mockResolvedValue(queue());
-    vi.mocked(listCampaigns).mockResolvedValue([campaignCard({ id: "cmp_never", name: "從沒同步過" })]);
 
     renderPage();
 
     await screen.findByRole("heading", { name: "從沒同步過" });
-    expect(screen.getByText("尚未同步", { selector: '[data-slot="chip"]' })).toBeTruthy();
+    expect(screen.queryByText("尚未同步")).toBeNull();
+    expect(screen.queryByRole("link", { name: /最近同步/ })).toBeNull();
+  });
+
+  describe("F27-I17：系統剛恢復（getRecovery）", () => {
+    it("recovering 為 false：不印恢復橫幅", async () => {
+      vi.mocked(refreshQueue).mockResolvedValue(queue());
+      vi.mocked(getRecovery).mockResolvedValue(notRecovering());
+
+      renderPage();
+
+      await screen.findByText("都處理完了");
+      expect(screen.queryByText(/系統暫停了/)).toBeNull();
+    });
+
+    it("recovering 為 true：印橫幅（時數／分鐘、缺口時間、warn chip、RecoverSteps），佇列列的按鈕換成佔位", async () => {
+      vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+      vi.mocked(getRecovery).mockResolvedValue({
+        recovering: true,
+        gap: { start: "2026-09-22T09:10:00Z", end: "2026-09-22T11:30:00Z", minutes: 140 },
+        steps: [
+          { key: "reconnect", label: "重新連線", state: "done" },
+          { key: "auth", label: "確認讀取權限", state: "done" },
+          { key: "resync", label: "補 2 小時的資料", state: "active" },
+          { key: "requeue", label: "重新判斷廣告", state: "todo" },
+          { key: "verify", label: "核對你回報的操作", state: "todo" },
+        ],
+      });
+
+      renderPage();
+
+      expect(await screen.findByText("系統暫停了 2 小時 20 分，正在補資料")).toBeTruthy();
+      const gapStart = hm("2026-09-22T09:10:00Z");
+      const gapEnd = hm("2026-09-22T11:30:00Z");
+      expect(screen.getByText(`${gapStart} – ${gapEnd} 沒有檢查・下面的數字補完後會更新`)).toBeTruthy();
+      expect(screen.getByText("這段時間平台可能照常花費")).toBeTruthy();
+      expect(screen.getByText("重新判斷廣告")).toBeTruthy();
+      // 佇列列的按鈕在恢復期間換成同一顆佔位（`DecisionQueue`／`QueueRow` 的斷面，這裡只驗證
+      // 頁面真的把 `recovering` 傳下去）。
+      expect(screen.queryByRole("link", { name: "看提議" })).toBeNull();
+      expect(screen.getByText("補完資料後更新")).toBeTruthy();
+    });
+
+    it("getRecovery 讀取失敗：不擋頁面其他部分（review repair 同一條規則）", async () => {
+      vi.mocked(refreshQueue).mockResolvedValue(queue());
+      vi.mocked(getRecovery).mockRejectedValue(new Error("讀取系統恢復狀態失敗。"));
+
+      renderPage();
+
+      expect(await screen.findByText("都處理完了")).toBeTruthy();
+      expect(screen.queryByText(/系統暫停了/)).toBeNull();
+    });
   });
 
   it("移除的舊區塊不再出現（判斷帶／時間軸／建檔檢查表）", async () => {

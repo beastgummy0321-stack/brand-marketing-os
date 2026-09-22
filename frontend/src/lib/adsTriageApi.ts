@@ -8,6 +8,26 @@ import { BASE } from "./adsApi";
 import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
 
+/** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
+ * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
+ * `app/ads/triage_scale.py::owner_lookup`) -- `daily_budget`/`currency` are `null` when there are
+ * no active ads, any active ad lacks a daily budget owner, or the qualifying owners don't share
+ * one currency (never a partial sum across currencies). `can_support` is `null` unless both
+ * `daily_budget` and `target` are known and `target > 0`. Shared by `CampaignTriage.data.capacity`
+ * here and `CampaignCard.data.capacity` (`adsApi.ts`, imported back as a type only to keep that
+ * file under the 800-line gate) -- same shape, never re-defined per caller. */
+export interface CampaignCapacity {
+  daily_budget: number | null; currency: string | null; target: number | null;
+  can_support: number | null; active_ads: number;
+}
+
+/** F27-I09 Done #7: `CampaignChip`'s own family, derived read-time from either a system-built
+ * campaign's Chinese objective label (`app/ads/repository.py::objective_family`) or an imported
+ * campaign's own platform objective string (`app/ads/adapters.objective_family`) -- shared by
+ * `TriageItem.campaign_objective` here and `CampaignCard.campaign_objective` (`adsApi.ts`,
+ * imported back as a type only to keep that file under the 800-line gate). */
+export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "other";
+
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
@@ -35,6 +55,20 @@ export interface TriageMetricsView {
 export interface TriageSampleView {
   gate: boolean; spend_multiple: number | null; days_with_events: number;
 }
+/** F27-I01 Contract A: one handling-history entry for an ad or its lineage predecessors, per
+ * `app/ads/triage_ladder.py::_entry` — `kind` is never `"budget"` in practice (budget items
+ * target owners, not an ad; correction 11), the union just mirrors the contract's own type. */
+export interface TriageHistoryEntry {
+  change_set_id: string; kind: "copy" | "new_ad" | "budget" | "pause";
+  approved_at: string; verified_at: string | null;
+  cost_before: number | null; cost_after: number | null;
+}
+/** F27-I01 Contract A: this ad's own handling ladder, per `app/ads/triage_ladder.py::attach` —
+ * `step` 2 once any confirmed `new_ad` replacement exists in its lineage, else 1 once any
+ * confirmed `copy` change exists, else 0. `lineage_from` is the ad this ad directly replaced. */
+export interface TriageLadder {
+  step: 0 | 1 | 2; copy_changes: number; image_changes: number; lineage_from: string | null;
+}
 export interface TriageItem {
   entity_id: string; native_id: string; name: string | null; campaign_id: string;
   // F19-I07: the campaign's own name; always sent (`app/ads/triage.py::classify`).
@@ -45,6 +79,12 @@ export interface TriageItem {
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
+  // F27-I01: optional -- existing hand-written test factories don't set these (real responses
+  // always carry them, same `do_not_touch`-vs-`touch` reasoning as `TriageData` below).
+  ladder?: TriageLadder; history?: TriageHistoryEntry[];
+  // F27-I09 Done #7: optional for the same reason -- real responses always carry it
+  // (`app/ads/triage.py::classify`).
+  campaign_objective?: CampaignObjectiveFamily;
 }
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
@@ -56,6 +96,12 @@ export interface TriageData {
   sync: CampaignSyncState;
   coverage: { start: string; end: string } | null;
   missing_days: string[];
+  // F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict `CampaignData
+  // .capacity` (`adsApi.ts`) notes -- existing hand-written `data: {sync, coverage, missing_days}`
+  // fixtures (`CampaignCards.test.tsx`/`WaitPage.test.tsx`) can't be reached to add it. Real
+  // responses always carry it (`triage.py::_data_view`, capacity=None only on the internal
+  // `_campaign_insufficiency` seam, never on a real `classify()`/`GET .../triage` response).
+  capacity?: CampaignCapacity;
 }
 // F24-I01: `data` is optional here for the same `do_not_touch`-vs-`touch` scope conflict noted on
 // `adsApi.ts::CampaignCard.data` -- existing hand-written `*.test.tsx` fixtures can't be reached
@@ -130,13 +176,31 @@ export interface QueueReviewProposal {
   multi: boolean;
 }
 
-export type QueueProposal = QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal;
+/** F27-I06 Contract F: the change set (if any) that currently answers a `cleanup` row, per
+ * `app/ads/triage.py::_row_cleanup_proposal` -- same shape as `QueuePauseProposal`, `kind` always
+ * `"cleanup"`, `multi` always `true` (a cleanup set is inherently the multi-item kind, never
+ * computed from item count). `verification_state` is `"confirmed"` only once every one of the
+ * set's several `pause` items reads back that way. */
+export interface QueueCleanupProposal {
+  kind: "cleanup";
+  change_set_id: string; campaign_id: string;
+  status: "draft" | "approved" | "rejected" | "deferred";
+  verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  reason: string | null; revisit_at: string | null; multi: boolean;
+}
+
+export type QueueProposal =
+  | QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal | QueueCleanupProposal;
 
 // F26-I02: `QueueKind`/`QueueItem.kind_key` now carry the real backend's fifth kind
 // (`app/ads/triage.py`'s `insufficient_data`) -- F26-I01 left this at four values on purpose
 // (see the removed comment here) since its own touch didn't cover `home/QueueRow.tsx`'s
 // exhaustive `Record<QueueKind, ...>` switches; this issue's touch does, so both widen together.
-export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data";
+// F27-I17 Done 0: widened again with the real backend's sixth kind (`app/ads/triage.py`'s
+// `"cleanup"`, Contract F) -- `home/QueueRow.tsx`'s exhaustive switches and `home/status.ts`'s
+// `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
+export type QueueKind =
+  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
@@ -172,6 +236,16 @@ export interface QueueInsufficient {
   sync_state: CampaignSyncState["state"];
   coverage: { start: string; end: string } | null;
 }
+/** F27-I06 Contract F: the `cleanup` row's own payload -- `ads` is the proposed cut, lowest
+ * 7-day spend first, at most `active_ads - can_support` entries (fewer only when fewer ads were
+ * actually eligible, `app/ads/triage_capacity.py::cleanup_candidates`). */
+export interface QueueCleanupAd {
+  entity_id: string; name: string | null; thumbnail_url: string | null; spend_7d: number;
+}
+export interface QueueCleanup {
+  campaign_id: string; campaign_name: string; can_support: number; active_ads: number;
+  ads: QueueCleanupAd[];
+}
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
@@ -188,6 +262,7 @@ export interface QueueItem {
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
+  cleanup?: QueueCleanup;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

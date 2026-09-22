@@ -126,6 +126,9 @@ class TriageTest(unittest.TestCase):
         # F19-I07: every item carries the campaign's own name (GET .../triage returns this shape
         # unwrapped -- `triage_routes.py::get_campaign_triage` calls `classify()` directly).
         self.assertEqual(item["campaign_name"], "既有活動")
+        # F27-I09 Done #7: every item also carries `campaign_objective` -- this fixture's root
+        # entity (setUp) never sets its own `objective`, so it reads "other" (never a guess).
+        self.assertEqual(item["campaign_objective"], "other")
         return item
 
     # -- no_target ------------------------------------------------------------------------------
@@ -531,7 +534,9 @@ class TriageDataViewTest(unittest.TestCase):
     def test_never_synced(self):
         self.assertEqual(
             self.data(), {"sync": {"state": "never", "error": None, "last_success_at": None},
-                          "coverage": None, "missing_days": []},
+                          "coverage": None, "missing_days": [],
+                          "capacity": {"daily_budget": None, "currency": None, "target": None,
+                                       "can_support": None, "active_ads": 0}},
         )
 
     def test_ok(self):
@@ -557,6 +562,24 @@ class TriageDataViewTest(unittest.TestCase):
         sync = self.data()["sync"]
         self.assertEqual(sync["state"], "failed")
         self.assertEqual(sync["error"], "讀取失敗")
+
+    def test_auth_expired_from_permission_denied_error_code(self):
+        # F27-I09 Contract I / correction 2: the STORED error code (`app/meta/repository.py`'s own
+        # collapse of every permission-shaped Graph error), never a raw provider number.
+        self.set_section(
+            "observations", status="error", error="沒有讀取權限", error_code="permission_denied",
+            last_attempt_at=db.now_utc().isoformat(),
+        )
+        sync = self.data()["sync"]
+        self.assertEqual(sync["state"], "auth_expired")
+        self.assertEqual(sync["error"], "沒有讀取權限")
+
+    def test_other_error_code_still_reads_as_failed(self):
+        self.set_section(
+            "observations", status="error", error="暫時失敗", error_code="source_error",
+            last_attempt_at=db.now_utc().isoformat(),
+        )
+        self.assertEqual(self.data()["sync"]["state"], "failed")
 
     def test_failed_with_null_error_keeps_old_last_success_at(self):
         old_success = db.now_utc().isoformat()
@@ -761,6 +784,53 @@ class TriageClosedAdsTest(unittest.TestCase):
             result_attribution="7d_click+1d_view",
         )
         self.conn.commit()
+
+
+class CampaignObjectiveFamilyClassifyTest(TriageTest):
+    """F27-I09 Done #7: `classify()`'s own items carry `campaign_objective`, routed through the
+    Meta adapter's own raw-objective mapping for an imported campaign's own root entity -- reuses
+    `TriageTest.setUp`'s fixture (an imported campaign whose root entity carries no `objective` by
+    default, already falsified as `"other"` by `classify_one()` above)."""
+
+    def _set_root_objective(self, objective):
+        self.conn.execute(
+            "UPDATE ads_external_entity SET objective=%s WHERE org_id=%s AND brand_id=%s AND "
+            "campaign_id=%s AND native_kind='campaign' AND parent_native_id IS NULL",
+            (objective, self.org, self.brand, self.campaign),
+        )
+        self.conn.commit()
+
+    def test_meta_sales_objective_maps_to_sales_family(self):
+        self._set_root_objective("OUTCOME_SALES")
+        item = self.classify_one_without_default_assertion()
+        self.assertEqual(item["campaign_objective"], "sales")
+
+    def test_meta_engagement_objective_maps_to_engagement_family(self):
+        self._set_root_objective("POST_ENGAGEMENT")
+        item = self.classify_one_without_default_assertion()
+        self.assertEqual(item["campaign_objective"], "engagement")
+
+    def test_meta_leads_objective_has_no_named_family_and_reads_other(self):
+        self._set_root_objective("OUTCOME_LEADS")
+        item = self.classify_one_without_default_assertion()
+        self.assertEqual(item["campaign_objective"], "other")
+
+    def classify_one_without_default_assertion(self):
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(len(result["items"]), 1)
+        return result["items"][0]
+
+
+class SyncStatesRaisingInsufficientTest(unittest.TestCase):
+    """F27-I09 correction 2: `auth_expired` must raise the same 「資料不足」 queue row a `failed`/
+    `disconnected` sync already does -- a campaign stuck needing re-authorization is exactly as
+    un-judgeable as one whose sync is outright failing."""
+
+    def test_auth_expired_is_in_the_raising_set(self):
+        self.assertIn("auth_expired", triage._SYNC_STATES_RAISING_INSUFFICIENT)
+        self.assertEqual(
+            triage._SYNC_STATES_RAISING_INSUFFICIENT, {"failed", "disconnected", "auth_expired"},
+        )
 
 
 if __name__ == "__main__":
