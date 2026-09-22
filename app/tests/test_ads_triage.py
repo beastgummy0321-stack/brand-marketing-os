@@ -531,7 +531,9 @@ class TriageDataViewTest(unittest.TestCase):
     def test_never_synced(self):
         self.assertEqual(
             self.data(), {"sync": {"state": "never", "error": None, "last_success_at": None},
-                          "coverage": None, "missing_days": []},
+                          "coverage": None, "missing_days": [],
+                          "capacity": {"daily_budget": None, "currency": None, "target": None,
+                                       "can_support": None, "active_ads": 0}},
         )
 
     def test_ok(self):

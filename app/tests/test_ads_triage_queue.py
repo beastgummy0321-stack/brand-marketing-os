@@ -143,13 +143,14 @@ class QueueEndToEndTest(unittest.TestCase):
         self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
         self.assertEqual(worse_row["triage"]["campaign_name"], "活動一")
 
-        # F26-I01: all five kinds are live now -- neither of these two campaigns' owners/ads
-        # qualifies for `scale_budget`/`refresh_creative` (no budget owner configured, too few
+        # F27-I06: six kinds are live now -- neither of these two campaigns' owners/ads qualifies
+        # for `scale_budget`/`refresh_creative`/`cleanup` (no budget owner configured, too few
         # ads), and this campaign's own sync is fully covered (`setUp`'s `record_sync`), so
-        # `kinds_available` growing to five doesn't itself raise more rows here.
+        # `kinds_available` growing to six doesn't itself raise more rows here.
         self.assertEqual(
             result["kinds_available"],
-            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"],
+            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data",
+             "cleanup"],
         )
         self.assertEqual(result["kinds_pending"], [])
         self.assertEqual(result["counts"]["stop_loss"], 1)
@@ -448,7 +449,8 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["total_ads"], 0)
         self.assertEqual(
             queue["kinds_available"],
-            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"],
+            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data",
+             "cleanup"],
         )
         self.assertEqual(queue["kinds_pending"], [])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))
@@ -1127,6 +1129,188 @@ class InsufficientDataQueueTest(unittest.TestCase):
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_insufficient_data"],
             {"severity": "rule_warning", "label": "活動資料不足待處理"},
+        )
+
+
+class CleanupQueueTest(unittest.TestCase):
+    """F27-I06: Contract F's `cleanup` row through the full `refresh_queue`/`get_queue` pipeline.
+    `triage._classify_brand` stays patched to fixed items (`_cleanup_candidates` only needs its
+    OWN real DB reads -- owner lookup, sync coverage, daily rows -- never a full real `classify()`
+    per-ad judgement), but the campaign/account/entities are real (same reason
+    `ScaleRefreshQueueTest` uses a real campaign/ad pair for Rule A's owner lookup). Item classes
+    stay off `{"better", "flat"}` on purpose so `triage_scale.scale_candidates` (always run inside
+    `_queue_candidates`, real owner lookup finds these real entities) skips this owner's cost
+    checks entirely rather than crashing on the fake items' empty `current`/`previous`."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="清理佇列端到端測試", actor="test", client_name=None,
+        )["id"]
+        patcher = patch.object(channels, "external_reader", return_value=_Reader())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動一",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1", "name": "活動一", "budget_type": "daily", "budget_amount": 200,
+             "currency": "TWD"},
+        )
+        self.ad1 = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告甲", "native_status": "ACTIVE",
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )["id"]
+        self.ad2 = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad2", "name": "廣告乙", "native_status": "ACTIVE",
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )["id"]
+        self.cutoff = (
+            db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
+        ).date()
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={
+                "last_success_at": db.now_utc().isoformat(),
+                "coverage": {"start": (self.cutoff - timedelta(days=90)).isoformat(),
+                             "end": self.cutoff.isoformat()},
+            },
+        )
+        self.conn.commit()
+        # ad1: 10/day (lowest, 70 total); ad2: 50/day (350 total) -- can_support=1 (200/(100*2)),
+        # active_ads=2, so exactly one gets proposed: ad1.
+        for offset in range(7):
+            self.obs(self.ad1, self.cutoff - timedelta(days=offset), spend=10)
+            self.obs(self.ad2, self.cutoff - timedelta(days=offset), spend=50)
+
+    def obs(self, entity_id, day, *, spend):
+        external.upsert_observation(
+            self.conn, self.org, self.brand, self.campaign,
+            {"entity_id": entity_id, "day": day, "metric_scope": "ad",
+             "attribution_key": f"{entity_id}-{day}", "currency": "TWD", "source": "meta",
+             "spend": spend, "impressions": 100, "purchases": None},
+            result_kind="purchase", result_count=1, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _item(entity_id, campaign_id, *, cls="insufficient", target_value=100, name="廣告"):
+        return {
+            "entity_id": entity_id, "native_id": entity_id, "name": name,
+            "campaign_id": campaign_id, "campaign_name": "活動一", "thumbnail_url": None,
+            "class": cls, "label": triage.LABELS[cls], "reason_code": "x",
+            "window": {"start": date(2026, 1, 1), "end": date(2026, 1, 7), "days": 7,
+                       "previous_start": None, "previous_end": None, "extended_from": None},
+            "target": {"value": target_value, "basis": "own", "result_kind": "purchase",
+                       "missing": [], "result_label": "購買"},
+            "current": {}, "previous": {}, "change_pct": None, "sample": {},
+        }
+
+    def _items(self):
+        return [
+            self._item(self.ad1, self.campaign, name="廣告甲"),
+            self._item(self.ad2, self.campaign, name="廣告乙"),
+        ]
+
+    def _refresh(self, items=None):
+        with patch.object(triage, "_classify_brand", return_value=items or self._items()):
+            return triage.refresh_queue(self.conn, self.org, self.brand)
+
+    def _cleanup_row(self, result):
+        rows = [r for r in result["items"] if r["kind_key"] == "cleanup"]
+        return rows[0] if rows else None
+
+    def test_cleanup_row_shape_kind_key_category_and_payload(self):
+        result = self._refresh()
+        row = self._cleanup_row(result)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["category"], "ads_triage_cleanup")
+        self.assertEqual(row["severity"], "informational")
+        self.assertEqual(
+            row["action_url"],
+            f"/brands/{self.brand}/ads/campaigns/{self.campaign}/propose/cleanup/{self.campaign}",
+        )
+        self.assertEqual(row["cleanup"]["campaign_id"], self.campaign)
+        self.assertEqual(row["cleanup"]["can_support"], 1)
+        self.assertEqual(row["cleanup"]["active_ads"], 2)
+        self.assertEqual(len(row["cleanup"]["ads"]), 1)
+        self.assertEqual(row["cleanup"]["ads"][0]["entity_id"], self.ad1)  # lowest 7-day spend
+        self.assertEqual(row["cleanup"]["ads"][0]["spend_7d"], 70.0)
+        self.assertIsNone(row["proposal"])
+
+    def test_cleanup_row_is_idempotent(self):
+        first_id = self._cleanup_row(self._refresh())["id"]
+        again_id = self._cleanup_row(self._refresh())["id"]
+        self.assertEqual(first_id, again_id)
+
+    def test_refresh_creative_suppressed_while_cleanup_row_is_open(self):
+        """Correction 4: while a campaign has an open cleanup row, its own refresh_creative row
+        is not raised (cleanup first)."""
+        third = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad3", "name": "廣告丙", "native_status": "ACTIVE",
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )["id"]
+        for offset in range(7):
+            self.obs(third, self.cutoff - timedelta(days=offset), spend=5)
+        items = [
+            self._item(self.ad1, self.campaign, name="廣告甲"),
+            self._item(self.ad2, self.campaign, name="廣告乙"),
+            self._item(third, self.campaign, cls="worse", name="廣告丙"),
+        ]
+        result = self._refresh(items)
+        categories = {r["category"] for r in result["items"]}
+        self.assertIn("ads_triage_cleanup", categories)
+        self.assertNotIn("ads_triage_refresh_creative", categories)
+
+    def test_cleanup_row_supersedes_once_campaign_returns_within_capacity(self):
+        first_id = self._cleanup_row(self._refresh())["id"]
+
+        # Both ads now `no_target` (target unresolved) -- `capacity_view`'s own `can_support`
+        # goes null, so the campaign no longer qualifies at all.
+        items = [
+            self._item(self.ad1, self.campaign, cls="no_target", target_value=None, name="廣告甲"),
+            self._item(self.ad2, self.campaign, cls="no_target", target_value=None, name="廣告乙"),
+        ]
+        second = self._refresh(items)
+        self.assertIsNone(self._cleanup_row(second))
+        row = self.conn.execute(
+            "SELECT status FROM interrupt WHERE id=%s", (first_id,),
+        ).fetchone()
+        self.assertEqual(row["status"], "resolved")
+
+    def test_cleanup_row_proposal_matches_a_cleanup_pause_set(self):
+        pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": self.ad1,
+                      "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "測試清單",
+             "2026-01", "draft", db.jsonb({"source": "cleanup", "items": [pause_item]}), "test"),
+        )
+        self.conn.commit()
+        row = self._cleanup_row(self._refresh())
+        proposal = row["proposal"]
+        self.assertEqual(proposal["change_set_id"], set_id)
+        self.assertEqual(proposal["kind"], "cleanup")
+        self.assertEqual(proposal["status"], "draft")
+        self.assertEqual(proposal["verification_state"], "pending")
+        self.assertTrue(proposal["multi"])
+
+    def test_category_registered_with_expected_severity_and_label(self):
+        self.assertEqual(
+            core_interrupts.CATEGORIES["ads_triage_cleanup"],
+            {"severity": "informational", "label": "廣告清理待決定"},
         )
 
 

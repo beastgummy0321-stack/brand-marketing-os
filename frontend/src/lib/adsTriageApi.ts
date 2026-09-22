@@ -8,6 +8,19 @@ import { BASE } from "./adsApi";
 import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
 
+/** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
+ * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
+ * `app/ads/triage_scale.py::owner_lookup`) -- `daily_budget`/`currency` are `null` when there are
+ * no active ads, any active ad lacks a daily budget owner, or the qualifying owners don't share
+ * one currency (never a partial sum across currencies). `can_support` is `null` unless both
+ * `daily_budget` and `target` are known and `target > 0`. Shared by `CampaignTriage.data.capacity`
+ * here and `CampaignCard.data.capacity` (`adsApi.ts`, imported back as a type only to keep that
+ * file under the 800-line gate) -- same shape, never re-defined per caller. */
+export interface CampaignCapacity {
+  daily_budget: number | null; currency: string | null; target: number | null;
+  can_support: number | null; active_ads: number;
+}
+
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
@@ -73,6 +86,12 @@ export interface TriageData {
   sync: CampaignSyncState;
   coverage: { start: string; end: string } | null;
   missing_days: string[];
+  // F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict `CampaignData
+  // .capacity` (`adsApi.ts`) notes -- existing hand-written `data: {sync, coverage, missing_days}`
+  // fixtures (`CampaignCards.test.tsx`/`WaitPage.test.tsx`) can't be reached to add it. Real
+  // responses always carry it (`triage.py::_data_view`, capacity=None only on the internal
+  // `_campaign_insufficiency` seam, never on a real `classify()`/`GET .../triage` response).
+  capacity?: CampaignCapacity;
 }
 // F24-I01: `data` is optional here for the same `do_not_touch`-vs-`touch` scope conflict noted on
 // `adsApi.ts::CampaignCard.data` -- existing hand-written `*.test.tsx` fixtures can't be reached
@@ -147,12 +166,33 @@ export interface QueueReviewProposal {
   multi: boolean;
 }
 
-export type QueueProposal = QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal;
+/** F27-I06 Contract F: the change set (if any) that currently answers a `cleanup` row, per
+ * `app/ads/triage.py::_row_cleanup_proposal` -- same shape as `QueuePauseProposal`, `kind` always
+ * `"cleanup"`, `multi` always `true` (a cleanup set is inherently the multi-item kind, never
+ * computed from item count). `verification_state` is `"confirmed"` only once every one of the
+ * set's several `pause` items reads back that way. */
+export interface QueueCleanupProposal {
+  kind: "cleanup";
+  change_set_id: string; campaign_id: string;
+  status: "draft" | "approved" | "rejected" | "deferred";
+  verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  reason: string | null; revisit_at: string | null; multi: boolean;
+}
+
+export type QueueProposal =
+  | QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal | QueueCleanupProposal;
 
 // F26-I02: `QueueKind`/`QueueItem.kind_key` now carry the real backend's fifth kind
 // (`app/ads/triage.py`'s `insufficient_data`) -- F26-I01 left this at four values on purpose
 // (see the removed comment here) since its own touch didn't cover `home/QueueRow.tsx`'s
 // exhaustive `Record<QueueKind, ...>` switches; this issue's touch does, so both widen together.
+// F27-I06: the real backend can now also enqueue a `"cleanup"` row (Contract F) -- `QueueKind`
+// and `QueueItem.kind_key` stay at their current five values here on purpose, same reason F26-I01
+// left `insufficient_data` out of this type for one issue: `home/QueueRow.tsx`'s own exhaustive
+// `Record<QueueKind, ...>` (and its sibling switches in `flow/changeFlow.ts`/`home/status.ts`)
+// sit outside this issue's touch, so widening this type here would force edits there too. The
+// `cleanup` payload/proposal shapes exist ahead of that (`cleanup`/`QueueCleanupProposal` below)
+// -- only `kind_key`'s own type is deferred to the frontend issue that builds that row's UI.
 export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
@@ -189,6 +229,16 @@ export interface QueueInsufficient {
   sync_state: CampaignSyncState["state"];
   coverage: { start: string; end: string } | null;
 }
+/** F27-I06 Contract F: the `cleanup` row's own payload -- `ads` is the proposed cut, lowest
+ * 7-day spend first, at most `active_ads - can_support` entries (fewer only when fewer ads were
+ * actually eligible, `app/ads/triage_capacity.py::cleanup_candidates`). */
+export interface QueueCleanupAd {
+  entity_id: string; name: string | null; thumbnail_url: string | null; spend_7d: number;
+}
+export interface QueueCleanup {
+  campaign_id: string; campaign_name: string; can_support: number; active_ads: number;
+  ads: QueueCleanupAd[];
+}
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
@@ -202,9 +252,13 @@ export interface QueueItem {
   dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
+  // F27-I06: real responses may carry `kind_key: "cleanup"`, one value wider than `QueueKind`
+  // itself on purpose (see `QueueKind`'s own comment) -- never widened here without also fixing
+  // `home/QueueRow.tsx`'s exhaustive switches.
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
+  cleanup?: QueueCleanup;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

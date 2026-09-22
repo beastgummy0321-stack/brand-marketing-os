@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from typing import cast
 
 from app.ads import (
+    ad_status,
     budget,
     channels,
     external_models,
@@ -24,6 +25,7 @@ from app.ads import (
     judgment,
     manual_settings,
     result_kinds,
+    triage_scale,
 )
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
@@ -505,16 +507,44 @@ def campaign_sync_state(
     return {"state": state, "error": error, "last_success_at": last_success_at}
 
 
+def _campaign_capacity(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, owner_by_entity: dict,
+) -> dict:
+    """F27-I06 Contract F: `data.capacity` for one campaign card -- `items` here are just the
+    campaign's own ACTIVE ad ids (`triage_capacity.capacity_view` only ever reads `entity_id` off
+    each), never a full `triage.classify()` call (this list endpoint stays cheap, no per-ad
+    program judgement here). `targets`/`triage_capacity` imported locally, not at module top --
+    both eventually reach `review_evidence` -> `change_control_data` -> back to this module
+    (`repository.py`), a hard cycle at import time; a function-scoped import is this codebase's
+    own standard way to break that (same precedent `get_campaign_target` above already sets for
+    `targets`, `app/core/settings.py:108`)."""
+    from app.ads import targets, triage_capacity
+
+    rows = conn.execute(
+        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND native_kind='ad'",
+        (org_id, brand_id, campaign["id"]),
+    ).fetchall()
+    items = [
+        {"entity_id": row["id"]} for row in rows if not ad_status.is_closed(row["native_status"])
+    ]
+    target = targets.resolve(conn, org_id, brand_id, campaign)
+    return triage_capacity.capacity_view(items, target["value"], owner_by_entity)
+
+
 def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     """`GET /campaigns` 列表：每筆帶 `budget_total`（推導）、`budget_progress`、一句成效摘要
-    跟 F04-I08 的 `judgment`，F24-I01 起再加 `data.sync`。沒有分頁——`routes.py` 的首頁路由靠
-    這一點在原地數計數（見那邊的註解）。"""
+    跟 F04-I08 的 `judgment`，F24-I01 起再加 `data.sync`，F27-I06 起再加 `data.capacity`。
+    沒有分頁——`routes.py` 的首頁路由靠這一點在原地數計數（見那邊的註解）。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     rows = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s ORDER BY created_at DESC",
         (org_id, brand_id),
     ).fetchall()
     accounts_cache: dict = {}
+    # One brand-wide owner lookup shared by every campaign card below (F27-I06, same
+    # query-sharing shape `accounts_cache` already uses for sync state).
+    owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     entries = []
     for row in rows:
         row = dict(row)
@@ -540,9 +570,12 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "outcome": outcome,
             "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
                                                      "spend": spend}, today=today),
-            "data": {"sync": campaign_sync_state(
-                conn, org_id, brand_id, row, accounts_cache=accounts_cache,
-            )},
+            "data": {
+                "sync": campaign_sync_state(
+                    conn, org_id, brand_id, row, accounts_cache=accounts_cache,
+                ),
+                "capacity": _campaign_capacity(conn, org_id, brand_id, row, owner_by_entity),
+            },
         })
     return entries
 

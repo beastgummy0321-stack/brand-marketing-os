@@ -7,6 +7,10 @@ export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklist
 import { apiFetch, errorMessageFrom } from "./http";
 import type { ExternalCampaignFields } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
+// F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
+// touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
+// here as a type only, so `CampaignData.capacity` keeps the one shared shape.
+import type { CampaignCapacity } from "./adsTriageApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type SuccessMetric = "cpa" | "roas" | "purchases";
@@ -49,6 +53,10 @@ export interface CampaignSyncState {
 }
 export interface CampaignData {
   sync: CampaignSyncState;
+  /** F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict noted on `data`
+   * below -- existing hand-written `data: {sync: ...}` fixtures can't be reached to add it. Real
+   * responses always carry it (`repository.py::list_campaigns`). */
+  capacity?: CampaignCapacity;
 }
 
 /** F05-I12：`app/ads/judgment.py::conversion_labels()`——這個品牌的「購買」該叫什麼名字。
