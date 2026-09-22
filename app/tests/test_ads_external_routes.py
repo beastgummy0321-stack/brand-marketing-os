@@ -57,3 +57,21 @@ class ExternalRoutesTest(unittest.TestCase):
                 },
             )
             self.assertEqual(response.status_code, 409, response.text)
+
+
+class CampaignWithoutRootTest(unittest.TestCase):
+    setUp = ExternalRoutesTest.setUp
+
+    def test_campaign_not_yet_on_platform_refreshes_the_bound_account(self):
+        # Drill 5: a first-launch handoff has no native root; refreshing candidates must read the
+        # brand's bound account (where the just-built campaign is listed), not 409.
+        from app.ads import repository
+
+        campaign = repository.create_campaign(self.conn, self.org, self.brand, {
+            "name": "新活動", "goal_text": "賣商品", "objective": "購買", "success_metric": "roas",
+        })["id"]
+        self.conn.commit()
+        with patch.object(sync, "request_sync", return_value={"id": "job"}) as request:
+            response = self.client.post(self.url + f"/campaigns/{campaign}/sync", json={})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual({c.args[4] for c in request.call_args_list}, {"account"})

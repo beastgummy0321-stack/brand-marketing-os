@@ -164,7 +164,22 @@ def campaign_sync(request: Request, brand_id: str, campaign_id: str, body: Windo
             (actor.org_id, brand_id, campaign_id),
         ).fetchone()
         if source is None:
-            raise ValueError("此工作區沒有可同步的原生來源。")
+            # A campaign not yet on the platform (first launch handoff) has no native root: its
+            # candidates come from the brand's bound account listing, so refresh that account
+            # (drill 5: the handoff could never see the campaign the user had just built).
+            accounts = [
+                (channel["key"], account["account_id"])
+                for channel in channels.CHANNELS
+                if (reader := channels.external_reader(channel["key"]))
+                for account in reader.accounts(web.conn, actor.org_id, brand_id)
+            ]
+            if not accounts:
+                raise ValueError("此工作區沒有可同步的原生來源。")
+            jobs = [
+                sync.request_sync(web.conn, actor.org_id, brand_id, platform, account)
+                for platform, account in accounts
+            ]
+            return {"job": jobs[0]}
         return {
             "job": sync.request_sync(
                 web.conn, actor.org_id, brand_id, **dict(source), **body.model_dump()
