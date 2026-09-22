@@ -71,6 +71,7 @@ function MaterialThumb({ url }: { url: string | null }) {
   const showImage = url !== null && !failed;
   return (
     <div
+      data-testid="material-thumb"
       className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted"
       aria-hidden="true"
     >
@@ -242,6 +243,11 @@ const MATERIAL_GROUPS: { key: string; title: string; tone: "ok" | "bad" | "neutr
   { key: "flat_insufficient", title: "還看不出", tone: "neutral", classes: ["flat", "insufficient"] },
 ];
 
+// 一組最多畫幾張縮圖（coordinator 一步修正 2026-09-22）：原型只示範個位數，真實品牌一個
+// class 常有 20＋則廣告，全印成磚牆不是設計。超過的量不丟掉，摺成一顆中性 Chip；group
+// 標頭的計數 chip 仍印全部則數，不受這個上限影響。
+const MATERIAL_TILE_LIMIT = 12;
+
 /** 素材：依 Feature Decisions 只分三組（有效／無效已停／還看不出），`worse`／`no_target` 不在
  * 這裡列——那兩類在活動卡與佇列已經有自己的處理入口。 */
 function MaterialGroups({ items }: { items: TriageItem[] }) {
@@ -249,6 +255,8 @@ function MaterialGroups({ items }: { items: TriageItem[] }) {
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
       {MATERIAL_GROUPS.map((group) => {
         const groupItems = items.filter((item) => group.classes.includes(item.class));
+        const shown = groupItems.slice(0, MATERIAL_TILE_LIMIT);
+        const hidden = groupItems.length - shown.length;
         return (
           <div key={group.key} className="surface p-5">
             <div className="flex items-center justify-between gap-2">
@@ -259,7 +267,10 @@ function MaterialGroups({ items }: { items: TriageItem[] }) {
               {groupItems.length === 0 ? (
                 <p className="text-xs text-muted-foreground">目前沒有廣告落在這一類。</p>
               ) : (
-                groupItems.map((item) => <MaterialThumb key={item.entity_id} url={item.thumbnail_url} />)
+                <>
+                  {shown.map((item) => <MaterialThumb key={item.entity_id} url={item.thumbnail_url} />)}
+                  {hidden > 0 && <Chip tone="neutral">＋{hidden} 則</Chip>}
+                </>
               )}
             </div>
           </div>

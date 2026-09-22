@@ -226,6 +226,18 @@ describe("MonthReviewPage（F24-I04）素材", () => {
     expect(screen.getAllByText("1 則").length).toBe(2); // 有效、無效・已停 各 1 則
     expect(screen.getByText("2 則")).toBeTruthy(); // 還看不出 flat+insufficient
   });
+
+  it("同一組超過 12 則時最多畫 12 張縮圖，其餘摺成「＋N 則」，標頭計數仍印全部則數", async () => {
+    mockListCampaigns.mockResolvedValue([campaignCard()]);
+    mockGetTriage.mockResolvedValue(triage(
+      Array.from({ length: 13 }, (_, i) => triageItem({ entity_id: `ad_${i}`, class: "better" })),
+    ));
+    renderPage();
+    await screen.findByText("素材");
+    expect(screen.getByText("13 則")).toBeTruthy(); // 標頭計數不受上限影響
+    expect(screen.getAllByTestId("material-thumb").length).toBe(12);
+    expect(screen.getByText("＋1 則")).toBeTruthy();
+  });
 });
 
 describe("MonthReviewPage（F24-I04）記入品牌學習／下月建議", () => {
