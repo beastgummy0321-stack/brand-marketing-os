@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from app.ads import asset_binding_repository as bindings
 from app.ads import repository as campaigns
@@ -118,7 +119,12 @@ def operation(value):
     return value
 
 
-def copy_fields(entity):
+def copy_fields(entity) -> dict[str, Any]:
+    # Contract B: the return shape depends on the creative's own kind ({titles,bodies} lists for
+    # dynamic, {body,title} strings otherwise) -- callers outside this module (e.g.
+    # `handoff_check._settings`, which only ever sees non-dynamic new-ad creatives) still treat
+    # every value as opaque, so a plain `dict[str, Any]` return type is the honest contract here,
+    # not a narrower union pyright would otherwise infer and then reject mutation against.
     creative = entity.get("creative") or {}
     fields = creative.get("fields") or {}
     if creative.get("kind") == "dynamic":
