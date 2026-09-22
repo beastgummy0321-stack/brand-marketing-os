@@ -7,6 +7,7 @@ export { CampaignTargetPage } from "./target/CampaignTargetPage";
 export { CampaignDetailPage } from "./detail/CampaignDetailPage";
 export { DataConnectionsPage } from "./connections/DataConnectionsPage";
 export { WaitPage } from "./wait/WaitPage";
+export { MonthReviewPage } from "./month/MonthReviewPage";
 export { ConfirmPage } from "./flow/ConfirmPage";
 export { HandoffPage } from "./flow/HandoffPage";
 export { VerifyPage } from "./flow/VerifyPage";
