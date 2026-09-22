@@ -1406,3 +1406,47 @@ Reference: `docs/design/ads/prototype-v8-active-only.html` (user-approved 2026-0
   還看不出 = active `flat`+`insufficient`; no 「這個月關掉 N 則」 line (no closed-at date from the platform).
 - 驗證：`home/CampaignCards.test.tsx`, `home/DecisionQueue.test.tsx`, `detail/CampaignDetailPage.test.tsx`,
   `month/MonthReviewPage.test.tsx`; 並排證據 `.harness/scratch/F26/I0{2,3}/`.
+
+### 6.31 F27 — 原型完全落地（settled 2026-09-22）
+
+User ruling 2026-09-22 (「全部照建議」): every part of `prototype-v7-ads-center.html` / `prototype-v8-active-only.html` works on
+real data; only Google Ads stays a grey card. Contracts below are the authoritative field shapes (the feature file's
+contract text as corrected by its pre-dispatch challenge).
+- A. Ladder & history (`app/ads/triage_ladder.py`): active triage items carry `ladder {step 0|1|2, copy_changes, image_changes,
+  lineage_from}` and `history[]` (items that target this ad or its lineage; budget items excluded; cost 7 d before / after,
+  null when < 7 known days). step 2 if an image replacement was confirmed, else 1 if a copy change was confirmed, else 0.
+  Lineage: `ads_handoff_item.entity_id` of a confirmed new_ad item whose set carries `replaces_entity_id`.
+- B. Copy variants: dynamic creatives edit as `{titles[], bodies[]}` (0–5 each, ≥ 1 non-empty); the Meta adapter parses
+  `asset_feed_spec`, and `change_control_data.copy_fields` derives variants at READ time for creatives stored before the
+  parser existed (`adapters.copy_variants`). `evidence_json.conditions.copy_editable {ok, mode single|variants, reason}` is
+  computed at read time; catalog-only and carousel creatives are not editable. Verify compares variant sets order-free.
+- C/D. Angles & learnings: `GET …/entities/{e}/angles` (one cached background LLM task per ad per copy hash, 3 phrases ≤ 12
+  chars; e2e's scripted provider yields `failed` → 自訂 only). A pause item may carry `angle`; when it is confirmed,
+  `ads_learnings.record_for_item` writes one learning after `check` commits (idempotent by item id; confidence by the count
+  of earlier same-text learnings: observed → likely → validated). `GET …/learnings` lists them.
+- E. Replacement: `POST …/new-ad-handoffs` takes `replaces_entity_id`; the set view exposes `replaces` and, after the new ad
+  is confirmed, `follow_up {kind: pause_old}` until a pause set for the old ad exists. The review link is sent only for a
+  `new_test` recommendation.
+- F. Capacity & cleanup (`triage_capacity.py`): `capacity {daily_budget, currency, target, can_support = floor(daily ÷ (target × 2)),
+  active_ads}` (daily_budget null if any active ad lacks a daily owner); cleanup row (`ads_triage_cleanup`, informational)
+  proposes pausing the lowest 7-day-spend active ads (never a not-fully-covered ad or an open replacement lineage); refresh
+  rows are suppressed while a cleanup row is open. A cleanup set is created with `source: "cleanup"` (pause items only).
+- G. Month summary (`month_summary.py`): calendar-month spend/results of every ad (`metric_scope='ad'`, monthly-budget rows
+  excluded), verdict met/missed/unjudged, orders like-for-like via the existing commerce evidence function, closed-this-month
+  from `status_changed_at`, suggestions (refresh / cleanup / no target) with per-month dismissal in `context_json` (jsonb_set).
+  Only imported campaigns are listed (internal campaigns report through `ads_outcome_daily`) — known limit.
+- H. Timeline (`change_timeline.py`): read-time `spend_stopped` (pause, coverage-aware), `delivery_started` (copy/new_ad),
+  `next_review_at` (budget approved + 3 d, copy/new_ad verified + 7 d). Nothing is scheduled; the daily queue refresh re-judges.
+- I. Daily 06:30 `refresh_queue` for every brand; sync state `auth_expired` from the stored `permission_denied` code (raises
+  the 資料不足 row); `GET …/status-summary` for the top bar; `campaign_objective` family (sales / engagement / traffic / other)
+  on triage items, campaign cards, month summary and learnings — one function, `repository.campaign_objective_family`.
+- J/K. `ads_runtime_event` (tenant-scoped: NOT NULL org_id and brand_id, per the isolation gates) holds a `beat` per active
+  brand per minute and `queue_refresh`; `ads_external_entity.status_changed_at` marks active↔closed flips. `GET …/recovery`
+  reports a > 120-minute gap of the brand's own beats ended within 24 h, with five steps (reconnect, permissions, per-section
+  backfill, re-judge, re-check reported items).
+- Screens: review ladder + non-sales 「這條素材的紀錄」; prepare recommends by ladder (observe overrides); material step page
+  embeds the existing material/user-asset flows (known UX debt: those legacy panels are not v7-styled); copy page variants
+  editor + observed prefill; flow pages render new-ad and multi-item cleanup sets, pause angles, learning card, timeline
+  rail, 「改用平台現在的內容」; home thumbnails, CampaignChip, cleanup row, capacity chips, recovery banner; detail capacity
+  card, mini ladders, own-row-only actions; monthly review fully live; top-bar sync chip; wait-page auth row; performance
+  tab `?ad=` scroll with the disclosure opened.
