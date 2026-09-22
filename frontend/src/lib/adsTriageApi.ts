@@ -132,15 +132,11 @@ export interface QueueReviewProposal {
 
 export type QueueProposal = QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal;
 
-// F26-I01: the real backend can now also enqueue an `"insufficient_data"` row (`triage.py`'s new
-// `insufficient_data` kind) -- `QueueKind` and `QueueItem.kind_key` stay at their four existing
-// values here on purpose: every current consumer (`home/QueueRow.tsx`, `home/status.ts`, …) keys
-// an exhaustive `Record<QueueKind, ...>` off this type outside this issue's own `touch`, so
-// widening it here would force edits there too. The frontend issue that actually builds the
-// insufficient-data row's own UI widens this type and updates those switches together (`insufficient`
-// below is added now so its payload shape exists ahead of that -- only `kind_key`'s own type
-// is deferred).
-export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative";
+// F26-I02: `QueueKind`/`QueueItem.kind_key` now carry the real backend's fifth kind
+// (`app/ads/triage.py`'s `insufficient_data`) -- F26-I01 left this at four values on purpose
+// (see the removed comment here) since its own touch didn't cover `home/QueueRow.tsx`'s
+// exhaustive `Record<QueueKind, ...>` switches; this issue's touch does, so both widen together.
+export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`

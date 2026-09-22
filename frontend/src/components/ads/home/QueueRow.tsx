@@ -5,8 +5,8 @@ import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { QueueItem, QueueKind, QueueScale } from "@/lib/adsTriageApi";
-import { KindMark } from "../patterns";
+import type { QueueInsufficient, QueueItem, QueueKind, QueueScale } from "@/lib/adsTriageApi";
+import { DayTiles, KindMark } from "../patterns";
 import { proposalAction } from "./status";
 
 // F25-I02: `scale_budget`／`refresh_creative` join `stop_loss`／`worse` as the queue's four row
@@ -14,30 +14,60 @@ import { proposalAction } from "./status";
 // `KindMark` variant, keyed off `item.kind_key` (the row's own identity) rather than
 // `item.triage.class` (the *ad's* classification, which for a `scale_budget`/`refresh_creative`
 // row is its best/first ad's own class — `better`/`flat`/etc, never one of these four).
+// F26-I02: `insufficient_data` maps to `"worse"` here for type-completeness only — its own chip
+// (`InsufficientKindMark` below) never reads this table; see that component's own comment for why.
 const KIND_VARIANT: Record<QueueKind, "stop" | "worse" | "up" | "fresh"> = {
-  stop_loss: "stop", worse: "worse", scale_budget: "up", refresh_creative: "fresh",
+  stop_loss: "stop", worse: "worse", scale_budget: "up", refresh_creative: "fresh", insufficient_data: "worse",
 };
 // `scale_budget`／`refresh_creative` 列的分類文字是這一列本身的身份（可加預算／補素材），不是
 // best ad 自己的 `triage.label`（對這兩種列印的是「變好」「持平」之類）——跟 v7 `home()` 的
 // `row()` 一樣直接掛中文，不從後端另要一個欄位（`DecisionQueue.tsx` 的 `PENDING_LABEL` 用同一組
-// 字，只是那邊是接上前的佔位列）。
+// 字，只是那邊是接上前的佔位列）。F26-I02：`insufficient_data` 同一條規則，固定字串（原型行
+// 177 手寫的 「！資料不足」，不是 best ad 的 `triage.label`）。
 function kindLabel(item: QueueItem): string {
   switch (item.kind_key) {
     case "scale_budget": return "可加預算";
     case "refresh_creative": return "補素材";
+    case "insufficient_data": return "資料不足";
     default: return item.triage.label;
   }
 }
 // scale_budget 列的標題是預算擁有者名稱（adset 或活動自己，`QueueScaleOwner.name` 可能是
 // `null`）；refresh_creative 列的標題是句子本身，不是廣告名稱（`refresh.readable_count`）。兩者
 // 都防禦 `item.scale`／`item.refresh` 缺席（型別上是選用欄位，實際上永遠隨 `kind_key` 一起出現
-// ——`adsTriageApi.ts` 的欄位註解），退回廣告名稱那條路不會讓列空白。
+// ——`adsTriageApi.ts` 的欄位註解），退回廣告名稱那條路不會讓列空白。F26-I02：
+// `insufficient_data` 的標題固定是這句話（原型 178 行），不是廣告或活動名稱——那一列已經有自己
+// 的活動 chip，標題重複活動名稱沒有新資訊。
 function rowTitle(item: QueueItem): string {
+  if (item.kind_key === "insufficient_data") return "這個活動暫時無法判斷";
   if (item.kind_key === "scale_budget" && item.scale) return item.scale.owner.name ?? "（未命名）";
   if (item.kind_key === "refresh_creative" && item.refresh) {
     return `能判讀的素材只剩 ${item.refresh.readable_count} 則`;
   }
   return item.triage.name ?? "（未命名廣告）";
+}
+
+/** F26-I02: the 「！資料不足」 row's own kind chip — the prototype hand-writes this one row
+ * (not through its `qrow()` helper) with `class="kind stop"` but an inline colour override that's
+ * pixel-identical to `.kind.worse` (`background:#faefdc;color:var(--warning)`, prototype lines
+ * 91/177) and a single literal label "！資料不足" (no separate mark glyph, unlike every other row,
+ * which prints `${mark[0]} ${kind}` — e.g. "■ 停損"). The shared `KindMark` (`patterns/**`,
+ * do_not_touch) only exposes the four variants it always prepends its own aria-hidden mark glyph
+ * for (■/▼/▲/＋); there's no "！" mark to ask for, and it always renders alongside the label
+ * (`kind="worse"` would show "▼ ！資料不足", two marks). This reproduces the same DOM contract
+ * (`data-slot="kind-mark"` / `data-variant="worse"`, the closest existing warning-tone variant
+ * `frontend/scripts/ui-evidence.cjs` already recognises) without KindMark's own icon glyph, so the
+ * visible text matches the prototype exactly. */
+function InsufficientKindMark() {
+  return (
+    <span
+      data-slot="kind-mark"
+      data-variant="worse"
+      className="inline-flex w-fit items-center gap-1.5 rounded-full bg-warning/10 px-2.5 py-[3px] text-xs font-semibold text-warning"
+    >
+      ！資料不足
+    </span>
+  );
 }
 
 /** `▲12%`／`▼12%`／`持平`；`change_pct` 是比值（`app/ads/triage.py::_compare`），null 就不印
@@ -209,6 +239,64 @@ function RefreshTiles({ thumbnails }: { thumbnails: (string | null)[] }) {
   );
 }
 
+// F26-I02: local calendar-date helpers for the 「！資料不足」 row's `DayTiles` — same precedent as
+// `wait/WaitPage.tsx` (its own header comment: `do_not_touch` files outside `frontend/src/lib/**`
+// each keep their own copy rather than share one). `coverage`/`missing_days` are plain "YYYY-MM-DD"
+// strings (never a timezone-carrying instant, unlike `revisit_at` elsewhere on this page).
+function parseLocalDateParts(iso: string): { y: number; m: number; d: number } {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { y, m, d };
+}
+function formatMD(iso: string): string {
+  const { m, d } = parseLocalDateParts(iso);
+  return `${m}/${d}`;
+}
+function addDaysLocal(iso: string, days: number): string {
+  const { y, m, d } = parseLocalDateParts(iso);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+function todayLocalString(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+function last7Days(endIso: string): string[] {
+  const days: string[] = [];
+  for (let i = 6; i >= 0; i -= 1) days.push(addDaysLocal(endIso, -i));
+  return days;
+}
+
+// F26-I02: the right-hand caption's sync-state label (coordinator's exact wording) — `disconnected`
+// and `failed` are the two states that alone can raise this row (feature Decisions "I01 also
+// raises..."); `ok`/`syncing`/`never` only reach here paired with non-empty `missing_days`, so they
+// share one honest catch-all rather than three more invented sentences.
+function insufficientSyncLabel(state: QueueInsufficient["sync_state"]): string {
+  if (state === "disconnected") return "讀取權限失效";
+  if (state === "failed") return "讀取失敗";
+  return "缺資料";
+}
+
+/** F26-I02: the 「！資料不足」 row's own viz (feature Decisions "I01 also raises...") — `DayTiles`
+ * over the 7 days ending at `insufficient.coverage.end` (`coverage` can be `null` when this
+ * campaign has never synced; `todayLocalString()` is the same honest fallback `WaitPage.tsx` uses
+ * for the identical case), missing days hollow. Captions: 「缺 M/D、M/D」 on the left (omitted when
+ * there's nothing missing — `sync_state` alone raised the row), the sync state on the right. */
+function InsufficientViz({ insufficient }: { insufficient: QueueInsufficient }) {
+  const end = insufficient.coverage?.end ?? todayLocalString();
+  const days = last7Days(end);
+  const missing = new Set(insufficient.missing_days);
+  return (
+    <div className={VIZ_CLASS}>
+      <DayTiles days={days} missing={missing} size={22} />
+      <div className={cn(CAPTION_CLASS, "mt-1.5")}>
+        <span>{insufficient.missing_days.length > 0 ? `缺 ${insufficient.missing_days.map(formatMD).join("、")}` : ""}</span>
+        <span>{insufficientSyncLabel(insufficient.sync_state)}</span>
+      </div>
+    </div>
+  );
+}
+
 /** 佇列一列（F19-I03，v7 `home()` 的 `row`，prototype ≈ 195–203；F25-I02 加上 `scale_budget`／
  * `refresh_creative` 兩種）：圖示格・分類 chip（`KindMark`）・活動 chip・標題・量尺（或補素材列的
  * 縮圖格）・一個按鈕。v7 的活動 chip 帶彩色字母圖示（`CAMP[c].cls`/`.ic`）——這裡沒有這份資料，
@@ -259,7 +347,9 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
          * 「…」，不會擠到換行或被外層裁掉右邊框。 */}
         <div className="flex flex-nowrap items-center gap-1.5">
           <span className="shrink-0">
-            <KindMark kind={KIND_VARIANT[item.kind_key]}>{kindLabel(item)}</KindMark>
+            {item.kind_key === "insufficient_data"
+              ? <InsufficientKindMark />
+              : <KindMark kind={KIND_VARIANT[item.kind_key]}>{kindLabel(item)}</KindMark>}
           </span>
           {t.campaign_name && (
             // Badge 本身是 `inline-flex justify-center`——直接把 `truncate` 放在 Badge 上，
@@ -286,6 +376,16 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
               <Link to={item.action_url}>準備新素材</Link>
             </Button>
           )
+        ) : item.kind_key === "insufficient_data" ? (
+          // 同一條規則：固定「去處理」，不看回合狀態，永遠不算完成（feature Decisions "I01 also
+          // raises..."："never done"，跟 `home/status.ts::isQueueItemDone` 沒有這個 kind 的分支
+          // 一致——落到那支的預設 `return false`）。`action_url` 已經是 F24 的等待頁
+          // （`app/ads/triage.py::_queue_candidates`），不必自己組。
+          item.action_url && (
+            <Button asChild size="sm" variant={primary ? "default" : "outline"}>
+              <Link to={item.action_url}>去處理</Link>
+            </Button>
+          )
         ) : action ? (
           <Button asChild size="sm" variant={action.done ? "ghost" : primary ? "default" : "outline"}>
             <Link to={action.href}>{action.label}</Link>
@@ -302,6 +402,8 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
         ? <RefreshTiles thumbnails={item.refresh?.thumbnails ?? []} />
         : item.kind_key === "scale_budget" && item.scale
         ? <ScaleViz scale={item.scale} />
+        : item.kind_key === "insufficient_data" && item.insufficient
+        ? <InsufficientViz insufficient={item.insufficient} />
         : <Viz item={item} />}
     </div>
   );

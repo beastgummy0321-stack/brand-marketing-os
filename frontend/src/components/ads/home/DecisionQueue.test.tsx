@@ -12,8 +12,8 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import type {
-  QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal, QueueRefresh,
-  QueueReviewProposal, QueueScale, TriageItem,
+  QueueInsufficient, QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal,
+  QueueRefresh, QueueReviewProposal, QueueScale, TriageItem,
 } from "@/lib/adsTriageApi";
 import { DecisionQueue, type QueueState } from "./DecisionQueue";
 import { isQueueItemDone, proposalAction } from "./status";
@@ -40,7 +40,10 @@ function queueItem(
   id: string,
   overrides: Partial<TriageItem> = {},
   proposal: QueueProposal | null = null,
-  extra: { kind_key?: QueueKind; scale?: QueueScale; refresh?: QueueRefresh; action_url?: string } = {},
+  extra: {
+    kind_key?: QueueKind; scale?: QueueScale; refresh?: QueueRefresh; action_url?: string;
+    insufficient?: QueueInsufficient;
+  } = {},
 ): QueueItem {
   const triage = triageItem(overrides);
   return {
@@ -49,7 +52,7 @@ function queueItem(
     message: "待決定", action_url: extra.action_url ?? `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`,
     visible_from: null, status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
     kind_key: extra.kind_key ?? (triage.class === "worse" ? "worse" : "stop_loss"),
-    triage, proposal, scale: extra.scale, refresh: extra.refresh,
+    triage, proposal, scale: extra.scale, refresh: extra.refresh, insufficient: extra.insufficient,
   };
 }
 
@@ -72,6 +75,14 @@ function refresh(overrides: Partial<QueueRefresh> = {}): QueueRefresh {
   return {
     campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市",
     readable_count: 2, classified_count: 5, thumbnails: ["https://cdn.example/a.jpg", null],
+    ...overrides,
+  };
+}
+function insufficient(overrides: Partial<QueueInsufficient> = {}): QueueInsufficient {
+  return {
+    campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市",
+    missing_days: ["2026-09-17", "2026-09-18"], sync_state: "disconnected",
+    coverage: { start: "2026-08-24", end: "2026-09-22" },
     ...overrides,
   };
 }
@@ -583,6 +594,80 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
 
     it("永遠不算完成——isQueueItemDone 恆 false（沒有提案流程，也沒有「已完成」樣式）", () => {
       const item = queueItem("q1", {}, null, { kind_key: "refresh_creative", refresh: refresh() });
+      expect(isQueueItemDone(item)).toBe(false);
+    });
+  });
+
+  describe("F26-I02：資料不足列（insufficient_data，feature Decisions \"I01 also raises...\"）", () => {
+    it("分類 chip「！資料不足」、標題「這個活動暫時無法判斷」、DayTiles＋缺天數／同步狀態兩行文案、按鈕「去處理」導向 item.action_url，非 ghost", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "insufficient_data",
+          insufficient: insufficient(),
+          action_url: "/brands/brd_1/ads/campaigns/cmp_1/wait",
+        })],
+      }));
+
+      expect(screen.getByText("！資料不足")).toBeTruthy();
+      expect(screen.getByText("這個活動暫時無法判斷")).toBeTruthy();
+      expect(screen.getByText("缺 9/17、9/18")).toBeTruthy();
+      expect(screen.getByText("讀取權限失效")).toBeTruthy(); // sync_state: "disconnected"
+      const days = document.querySelector('[data-slot="day-tiles"]');
+      expect(days).toBeTruthy();
+      expect(days!.children).toHaveLength(7);
+
+      const link = screen.getByRole("link", { name: "去處理" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/wait");
+      expect(link.getAttribute("data-variant")).not.toBe("ghost");
+    });
+
+    it.each([
+      ["disconnected", "讀取權限失效"],
+      ["failed", "讀取失敗"],
+      ["ok", "缺資料"],
+      ["syncing", "缺資料"],
+      ["never", "缺資料"],
+    ] as const)("sync_state=%s：右側文案「%s」", (state, label) => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "insufficient_data", insufficient: insufficient({ sync_state: state }),
+        })],
+      }));
+
+      expect(screen.getByText(label)).toBeTruthy();
+    });
+
+    it("missing_days 空（單純同步異常，不是缺天）：左側「缺 …」不印，右側同步狀態照印", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "insufficient_data",
+          insufficient: insufficient({ missing_days: [], sync_state: "failed" }),
+        })],
+      }));
+
+      expect(screen.queryByText(/^缺 /)).toBeNull();
+      expect(screen.getByText("讀取失敗")).toBeTruthy();
+    });
+
+    it("coverage 是 null（從沒同步過）：DayTiles 照常畫 7 格（用今天當右邊界），不當機", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "insufficient_data",
+          insufficient: insufficient({ coverage: null, missing_days: [], sync_state: "disconnected" }),
+        })],
+      }));
+
+      const days = document.querySelector('[data-slot="day-tiles"]');
+      expect(days).toBeTruthy();
+      expect(days!.children).toHaveLength(7);
+    });
+
+    it("永遠不算完成——isQueueItemDone 恆 false（沒有提案流程，也沒有「已完成」樣式）", () => {
+      const item = queueItem("q1", {}, null, { kind_key: "insufficient_data", insufficient: insufficient() });
       expect(isQueueItemDone(item)).toBe(false);
     });
   });
