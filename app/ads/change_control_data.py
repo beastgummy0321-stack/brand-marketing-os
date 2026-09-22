@@ -251,8 +251,25 @@ def after(kind, value, copy_mode=None):
     return {"daily_amount": float(amount)}
 
 
+def angle(kind, value):
+    """Contract C: a `pause` item may carry a free-text angle (<=40 chars, trimmed); part of the
+    item itself, so it flows into `content_hash`/`premise_hash` like every other item field."""
+    if value is None:
+        return None
+    if kind != "pause":
+        raise ValueError("只有暫停動作可以標記這則廣告主打什麼。")
+    if not isinstance(value, str):
+        raise ValueError("主打內容格式無效。")
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > 40:
+        raise ValueError("主打內容最多四十字。")
+    return text
+
+
 def build_item(conn, org, brand, campaign_id, item, c):
-    if not isinstance(item, dict) or set(item) - {"kind", "target_id", "after", "reason"}:
+    if not isinstance(item, dict) or set(item) - {"kind", "target_id", "after", "reason", "angle"}:
         raise ValueError("請重新載入變更內容，不接受自行填寫平台現況。")
     kind = item.get("kind")
     entity = bindings.entity(conn, org, brand, campaign_id, item.get("target_id"))
@@ -267,6 +284,7 @@ def build_item(conn, org, brand, campaign_id, item, c):
     if editable is not None and not editable["ok"]:
         raise ValueError(editable["reason"] or "此素材沒有可改的文字。")
     result = after(kind, item.get("after"), editable["mode"] if editable else None)
+    marked_angle = angle(kind, item.get("angle"))
     bindings.root(conn, org, brand, campaign_id, entity)
     if (kind == "copy" and entity["native_kind"] != "ad") or (
         kind == "budget" and entity["native_kind"] not in {"campaign", "adset"}
@@ -283,6 +301,7 @@ def build_item(conn, org, brand, campaign_id, item, c):
         "before": before(entity, kind),
         "after": result,
         "reason": reason.strip(),
+        "angle": marked_angle,
         "context": context(c, kind),
         "media_identity": media_identity(entity) if kind == "copy" else None,
         "creative_snapshot": entity.get("creative") or {} if kind == "copy" else {},
