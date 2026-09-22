@@ -1,0 +1,182 @@
+"""app/tests/test_ads_status_summary.py — F27-I09 Contract I falsifiers: the brand-wide
+`status_summary.get_status_summary()` (`last_success_at`/`failing_campaigns`/`open_items`), plus
+Done #7's `campaign_objective` on `repository.list_campaigns()`'s own cards (the triage-item side
+of Done #7 is falsified in `test_ads_triage.py`, alongside `classify()`'s other read-only
+enrichments).
+"""
+
+import unittest
+from unittest.mock import patch
+
+from app.ads import channels, repository, status_summary
+from app.ads import external_repository as external
+from app.brand_intelligence import repository as brands
+from app.core import db, interrupts
+
+
+class _Reader:
+    """Reports one bound account, `act_1` (same stand-in shape as `test_ads_triage.py::_Reader`/
+    `test_ads_repository.py::_Reader`)."""
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": "act_1", "currency": "TWD", "name": "來源",
+                  "timezone_name": "Asia/Taipei"}]
+
+
+class StatusSummaryTest(unittest.TestCase):
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="F27-I09 status-summary 測試", actor="test",
+            client_name=None,
+        )["id"]
+        self.reader = _Reader()
+        patcher = patch.object(
+            channels, "external_reader", side_effect=lambda platform: self.reader,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _campaign(self, *, native_id, account="act_1", name="狀態測試活動"):
+        campaign_id = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name=name,
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, campaign_id,
+            {"platform": "meta", "source_account": account, "native_kind": "campaign",
+             "native_id": native_id},
+        )
+        self.conn.commit()
+        return campaign_id
+
+    def summary(self):
+        return status_summary.get_status_summary(self.conn, self.org, self.brand)
+
+    def test_no_campaigns_reads_null_and_zero(self):
+        self.assertEqual(
+            self.summary(), {"last_success_at": None, "failing_campaigns": 0, "open_items": 0},
+        )
+
+    def test_never_synced_campaign_counts_as_failing_with_no_last_success(self):
+        self._campaign(native_id="c1")
+        summary = self.summary()
+        self.assertIsNone(summary["last_success_at"])
+        self.assertEqual(summary["failing_campaigns"], 1)
+
+    def test_ok_campaign_contributes_last_success_at_and_no_failure(self):
+        campaign_id = self._campaign(native_id="c1")
+        external.record_sync(
+            self.conn, self.org, self.brand, campaign_id, section="observations",
+            state={"status": "success", "last_success_at": db.now_utc().isoformat(),
+                   "coverage": {"start": "2026-08-01", "end": "2026-08-30"}},
+        )
+        self.conn.commit()
+        summary = self.summary()
+        self.assertIsNotNone(summary["last_success_at"])
+        self.assertEqual(summary["failing_campaigns"], 0)
+
+    def test_auth_expired_campaign_counts_as_failing(self):
+        campaign_id = self._campaign(native_id="c1")
+        external.record_sync(
+            self.conn, self.org, self.brand, campaign_id, section="observations",
+            state={"status": "error", "error": "沒有讀取權限", "error_code": "permission_denied"},
+        )
+        self.conn.commit()
+        self.assertEqual(self.summary()["failing_campaigns"], 1)
+
+    def test_newest_ok_last_success_at_wins_across_campaigns(self):
+        older = self._campaign(native_id="c1", name="舊的")
+        newer = self._campaign(native_id="c2", name="新的")
+        external.record_sync(
+            self.conn, self.org, self.brand, older, section="observations",
+            state={"status": "success", "last_success_at": "2026-01-01T00:00:00+00:00",
+                   "coverage": {"start": "2025-12-01", "end": "2025-12-30"}},
+        )
+        external.record_sync(
+            self.conn, self.org, self.brand, newer, section="observations",
+            state={"status": "success", "last_success_at": "2026-06-01T00:00:00+00:00",
+                   "coverage": {"start": "2026-05-01", "end": "2026-05-30"}},
+        )
+        self.conn.commit()
+        self.assertEqual(self.summary()["last_success_at"], "2026-06-01T00:00:00+00:00")
+
+    def test_closed_campaign_is_excluded_entirely(self):
+        campaign_id = self._campaign(native_id="c1")
+        self.conn.execute(
+            "UPDATE ads_campaign SET status='closed' WHERE id=%s", (campaign_id,),
+        )
+        self.conn.commit()
+        self.assertEqual(
+            self.summary(), {"last_success_at": None, "failing_campaigns": 0, "open_items": 0},
+        )
+
+    def test_open_items_counts_only_ads_triage_categories(self):
+        self.conn.commit()
+        interrupts.enqueue(
+            self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_stop_loss",
+            dedupe_key="status-summary-test:stop_loss:1", message="廣告「測試」停損，待決定",
+        )
+        # A non-`ads_triage_*` category must never inflate `open_items` -- this summary is scoped
+        # to the brand decision queue, not every interrupt category this brand could ever raise.
+        interrupts.enqueue(
+            self.conn, org_id=self.org, brand_id=self.brand, category="ads_review_ready",
+            dedupe_key="status-summary-test:review_ready:1", message="廣告檢討已備妥",
+        )
+        self.conn.commit()
+        self.assertEqual(self.summary()["open_items"], 1)
+
+
+class CampaignObjectiveFamilyCardTest(unittest.TestCase):
+    """F27-I09 Done #7: `repository.list_campaigns()`'s own cards carry `campaign_objective` --
+    the triage-item side of the same Done item is falsified in `test_ads_triage.py`."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="F27-I09 campaign_objective 卡片測試", actor="test",
+            client_name=None,
+        )["id"]
+
+    def _card(self, campaign_id):
+        cards = repository.list_campaigns(self.conn, self.org, self.brand)
+        return next(card for card in cards if card["id"] == campaign_id)
+
+    def test_internal_objective_family_mapping(self):
+        self.assertEqual(repository.objective_family("購買"), "sales")
+        self.assertEqual(repository.objective_family("加購物車"), "sales")
+        self.assertEqual(repository.objective_family("流量"), "traffic")
+        self.assertEqual(repository.objective_family("名單"), "other")
+        self.assertEqual(repository.objective_family("知名度"), "other")
+        self.assertEqual(repository.objective_family(None), "other")
+
+    def test_internal_campaign_card_carries_sales_family(self):
+        campaign = repository.create_campaign(
+            self.conn, self.org, self.brand,
+            {"name": "內部購買活動", "goal_text": "目標", "objective": "購買",
+             "success_metric": "cpa"},
+        )
+        self.conn.commit()
+        self.assertEqual(self._card(campaign["id"])["campaign_objective"], "sales")
+
+    def test_imported_campaign_card_routes_through_meta_adapter(self):
+        campaign_id = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="匯入銷售活動",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, campaign_id,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1", "objective": "OUTCOME_SALES"},
+        )
+        self.conn.commit()
+        self.assertEqual(self._card(campaign_id)["campaign_objective"], "sales")
+
+    def test_imported_campaign_with_no_root_entity_yet_reads_other(self):
+        campaign_id = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="還沒同步的匯入活動",
+        )["id"]
+        self.conn.commit()
+        self.assertEqual(self._card(campaign_id)["campaign_objective"], "other")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,13 @@ export interface CampaignCapacity {
   can_support: number | null; active_ads: number;
 }
 
+/** F27-I09 Done #7: `CampaignChip`'s own family, derived read-time from either a system-built
+ * campaign's Chinese objective label (`app/ads/repository.py::objective_family`) or an imported
+ * campaign's own platform objective string (`app/ads/adapters.objective_family`) -- shared by
+ * `TriageItem.campaign_objective` here and `CampaignCard.campaign_objective` (`adsApi.ts`,
+ * imported back as a type only to keep that file under the 800-line gate). */
+export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "other";
+
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
@@ -75,6 +82,9 @@ export interface TriageItem {
   // F27-I01: optional -- existing hand-written test factories don't set these (real responses
   // always carry them, same `do_not_touch`-vs-`touch` reasoning as `TriageData` below).
   ladder?: TriageLadder; history?: TriageHistoryEntry[];
+  // F27-I09 Done #7: optional for the same reason -- real responses always carry it
+  // (`app/ads/triage.py::classify`).
+  campaign_objective?: CampaignObjectiveFamily;
 }
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).

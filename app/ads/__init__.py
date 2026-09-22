@@ -50,6 +50,7 @@ def register(app: FastAPI) -> None:
         review_monitor_routes,
         review_routes,
         runtime_routes,
+        status_routes,
         user_assets_routes,
     )
     from app.ads import routes as ads_routes
@@ -67,6 +68,7 @@ def register(app: FastAPI) -> None:
     app.include_router(runtime_routes.router)
     app.include_router(angle_routes.router)
     app.include_router(learning_routes.router)
+    app.include_router(status_routes.router)
 
 
 def register_tasks() -> None:

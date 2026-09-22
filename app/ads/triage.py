@@ -82,8 +82,13 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         ).fetchall()
         for row in rows:
             rows_by_entity[row["entity_id"]].append(dict(row))
+    # F27-I09 Done #7: one campaign_objective lookup for the whole campaign (never per ad) --
+    # every ACTIVE ad's own triage item carries the same `campaign_objective` its campaign card
+    # would (`repository.campaign_objective_family`, the one function that tells a system-built
+    # campaign's Chinese label apart from an imported campaign's own platform objective).
+    campaign_objective = repository.campaign_objective_family(conn, org_id, brand_id, campaign)
     items = [
-        _classify_ad(dict(ad), campaign["name"], target, cutoff, coverage,
+        _classify_ad(dict(ad), campaign["name"], campaign_objective, target, cutoff, coverage,
                       rows_by_entity.get(ad["id"], []))
         for ad in active_ads
     ]
@@ -338,10 +343,11 @@ def _thumbnail_url(entity):
     return fields.get("thumbnail_url") or fields.get("image_url") or None
 
 
-def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
+def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
         "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
+        "campaign_objective": campaign_objective,
         "thumbnail_url": _thumbnail_url(entity),
     }
 
@@ -525,7 +531,10 @@ def _campaign_insufficiency(conn, org_id, brand_id, campaign_id):
     return {"campaign_name": campaign["name"], "data": data, "cutoff": cutoff, "coverage": coverage}
 
 
-_SYNC_STATES_RAISING_INSUFFICIENT = {"failed", "disconnected"}
+# F27-I09 correction 2: `auth_expired` is a failing-to-sync state exactly like `failed`/
+# `disconnected` (a campaign stuck there needs a human to re-authorize before it can ever sync
+# again) -- same 「資料不足」 queue row either way.
+_SYNC_STATES_RAISING_INSUFFICIENT = {"failed", "disconnected", "auth_expired"}
 
 
 def _insufficient_candidates(conn, org_id, brand_id, by_campaign) -> list:
