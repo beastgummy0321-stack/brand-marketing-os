@@ -13,44 +13,20 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { ActionBar, Disclosure, FlowHeader, TodoRow } from "../patterns";
+import { CleanupHandoffRows } from "./CleanupHandoffRows";
+import { NewAdHandoffPanel } from "./NewAdHandoffPanel";
+import { PlatformButton } from "./PlatformButton";
 import {
   campaignChangesPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isCleanupTriageItem,
   stepFromChangeSet,
 } from "./changeFlow";
 
 const STEP_PURPOSE = "照清單手動修改";
-
-/** 「↗ 打開平台」：有 `platform_url` 就在新分頁開啟；沒有（今天還沒有這個能力，或缺識別欄位）
- * 就换成標的名稱＋原生編號＋「複製編號」（feature Decisions「Agent choice — ↗ 打開平台」）。
- * 兩種情況都會回報 `onOpen`——這一步「打開平台」在畫面上算不算做完，退回複製編號版一樣算。 */
-function PlatformButton({ platformUrl, target, onOpen }: {
-  platformUrl: string | null; target: ChangeItem["target"]; onOpen: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  if (platformUrl) {
-    return (
-      <Button variant="outline" asChild>
-        <a href={platformUrl} target="_blank" rel="noreferrer" onClick={onOpen}>↗ 打開平台</a>
-      </Button>
-    );
-  }
-  async function copyId() {
-    try { await navigator.clipboard.writeText(target.native_id); } catch { /* 沒有剪貼簿權限也不擋操作 */ }
-    setCopied(true);
-    onOpen();
-  }
-  return (
-    <div className="flex flex-col items-end gap-1 text-right text-xs text-muted-foreground">
-      <span className="max-w-[10rem] truncate" title={target.name ?? undefined}>{target.name ?? "（未命名）"}</span>
-      <span className="numeric">{target.native_id}</span>
-      <Button variant="outline" size="sm" onClick={() => void copyId()}>{copied ? "已複製" : "複製編號"}</Button>
-    </div>
-  );
-}
 
 /** 到平台完成頁（F22-I03，v7 原型 `handoff()`）：三步驟輕流程第二步，只走 `changes/:setId/handoff`
  * 這條正典網址——這一步一定已經有 change set（第一步核准時才建立），不像 `ConfirmPage` 還要
@@ -71,6 +47,8 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
   const [opened, setOpened] = useState(false);
   const [acted, setActed] = useState(false);
+  // F27-I15 Contract F: cleanup 的「打開平台」是逐則廣告各自一顆，不是單一的 `opened` 布林值。
+  const [cleanupOpened, setCleanupOpened] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -127,6 +105,33 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     }
   }
 
+  /** F27-I15 Contract F: cleanup 版本的「我做完了」——對清單裡每一則廣告各自 report／check
+   * 一次，同 `handleDone` 一顆錯誤處理與「check 失敗仍然前進」規則，只是逐項跑；中途失敗就停在
+   * 已完成的進度，錯誤訊息留在這一頁，不整批重試（同 `VerifyPage.tsx::handleCheckAll` 的做法）。 */
+  async function handleCleanupDone(items: ChangeItem[]) {
+    if (busy || !changeSet) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      let current = changeSet;
+      for (const row of items) {
+        current = await actOnChangeItem(brandId, campaignId, current.id, row.id, "report");
+        setChangeSet(current);
+        try {
+          current = await actOnChangeItem(brandId, campaignId, current.id, row.id, "check");
+          setChangeSet(current);
+        } catch {
+          // 同 `handleDone`：單則 check 失敗仍然繼續下一則，核對結果頁會顯示「核對中」。
+        }
+      }
+      navigate(changeStepPath(brandId, campaignId, current.id, "verify"));
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-4">
@@ -159,11 +164,15 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     );
   }
 
+  // F27-I15 Contract F: recognised only through the queue's own `cleanup` row (`ConfirmPage.tsx`/
+  // `VerifyPage.tsx` share the same lookup) — never guessed from item shape.
+  const cleanupSet = isCleanupTriageItem(triageItem);
   const item: ChangeItem | undefined = changeSet.items.length === 1 ? changeSet.items[0] : undefined;
-  const kind = item ? item.kind : "pause";
-  const blocked = changeSet.items.length !== 1 || (kind !== "pause" && kind !== "copy" && kind !== "budget");
+  const kind = cleanupSet ? "cleanup" : item ? item.kind : "pause";
+  const blocked = !cleanupSet
+    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
 
-  if (blocked || !item) {
+  if (blocked || (!cleanupSet && !item)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
@@ -183,6 +192,65 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     { label: "到平台完成" },
     { label: "核對結果" },
   ];
+  const headerContext = triageItem ? (
+    <>
+      <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
+        <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
+      </Badge>
+      {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
+    </>
+  ) : undefined;
+
+  // F27-I15 Screens「Flow pages, new-ad and multi-item」: 「handoff = the existing
+  // ManualHandoffPanel steps for that item」——沒有既有的一連串 TodoRow 可套，整段換掉。
+  if (kind === "new_ad") {
+    return (
+      <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+        <Breadcrumb items={crumb} />
+        <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+        <NewAdHandoffPanel brandId={brandId} campaignId={campaignId} />
+        {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+        <div className="flex-1" />
+        <ActionBar
+          back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
+          hint="核對結果由上面的交接面板決定"
+        >
+          <Button onClick={() => setReloadKey((k) => k + 1)}>看目前核對結果 →</Button>
+        </ActionBar>
+      </div>
+    );
+  }
+
+  // F27-I15 Contract F: 「handoff one TodoRow per ad with 打開平台 per item」——每一則各自一列，
+  // 底下一顆合併的「我都做完了」才真的呼叫 report／check（`handleCleanupDone`）。
+  if (kind === "cleanup") {
+    return (
+      <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+        <Breadcrumb items={crumb} />
+        <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+        <div className="rounded-xl border border-border bg-card px-6">
+          <CleanupHandoffRows
+            items={changeSet.items}
+            opened={cleanupOpened}
+            onOpen={(id) => setCleanupOpened((prev) => new Set(prev).add(id))}
+          />
+        </div>
+        {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+        <div className="flex-1" />
+        <ActionBar
+          back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
+          hint="系統會逐則讀回平台核對"
+        >
+          <Button disabled={busy} onClick={() => void handleCleanupDone(changeSet.items)}>{busy ? "處理中…" : "我都做完了，開始核對 →"}</Button>
+        </ActionBar>
+      </div>
+    );
+  }
+
+  // Unreachable in practice — the guard above already returned when `!cleanupSet && !item`, and
+  // `new_ad`/`cleanup` both returned their own JSX earlier; this narrows `item` for the type
+  // checker without re-deriving that guard's logic a second time.
+  if (!item) return null;
   const platformButton = <PlatformButton platformUrl={item.platform_url} target={item.target} onOpen={() => setOpened(true)} />;
 
   let rows: ReactNode;
@@ -231,20 +299,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={crumb} />
-      <FlowHeader
-        steps={steps}
-        current={1}
-        title="到平台完成"
-        purpose={STEP_PURPOSE}
-        context={triageItem ? (
-          <>
-            <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
-              <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
-            </Badge>
-            {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
-          </>
-        ) : undefined}
-      />
+      <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
 
       <div className="rounded-xl border border-border bg-card px-6">
         {rows}

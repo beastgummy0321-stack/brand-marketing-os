@@ -348,3 +348,113 @@ describe("VerifyPage（F22-I04）步驟導正與例外", () => {
     expect(await screen.findByText("找不到這份變更清單")).toBeTruthy();
   });
 });
+
+describe("VerifyPage（F27-I15）new_ad kind", () => {
+  function newAdItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
+    return changeItem({
+      id: "item_new", kind: "new_ad", target_id: "plc_1",
+      target: { id: "plc_1", name: "1150710 夏季新裝（新廣告）", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_new_1" },
+      before: {}, after: { daily_amount: 0 },
+      evidence_json: { setting_matches: true, observed_at: "2026-09-22T02:13:00Z", message: "本次讀回設定符合清單；不代表已開始投遞或已有足夠成效。" },
+      ...overrides,
+    });
+  }
+  it("已核對：平台上這則新廣告已經核對完成，rail 顯示已對應廣告物件", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [newAdItem()] })] });
+    renderAt(verifyPath());
+    expect(await screen.findByText("平台上這則新廣告已經核對完成")).toBeTruthy();
+    expect(screen.getByText("已對應平台上的廣告物件")).toBeTruthy();
+  });
+
+  it("follow_up 存在：verify 頁出現「暫停舊廣告」主按鈕，連去 propose/pause/<old>", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [newAdItem()],
+        replaces: { entity_id: "aex_old", name: "1150650 舊版單圖" },
+        follow_up: { kind: "pause_old", entity_id: "aex_old" },
+      })],
+    });
+    renderAt(verifyPath());
+    const cta = await screen.findByRole("link", { name: "暫停舊廣告 →" });
+    expect((cta as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_old");
+  });
+
+  it("deviated：不套用 copy／pause／budget 的逐行對照表，只顯示訊息", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [newAdItem({ verification_state: "deviated", evidence_json: { message: "平台設定與核准內容不同，請檢視差異後重新決定。" } })],
+      })],
+    });
+    renderAt(verifyPath());
+    expect(await screen.findByText("平台上這則新廣告和核准的內容不一樣")).toBeTruthy();
+    expect(screen.queryByText("你核准的")).toBeNull();
+  });
+});
+
+describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
+  const CLEANUP_KIND = "cleanup" as unknown as QueueItem["kind_key"];
+  function cleanupQueueItem(): QueueItem {
+    return queueItem({
+      kind_key: CLEANUP_KIND, category: "ads_triage_cleanup",
+      proposal: { kind: "cleanup", change_set_id: "acs_1", campaign_id: "cmp_1", status: "approved", verification_state: "pending", reason: null, revisit_at: null, multi: true },
+    });
+  }
+  function lowItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
+    return changeItem({
+      id: "item_low1", target_id: "aex_low1",
+      target: { id: "aex_low1", name: "1150701 情境圖 A", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low1" },
+      ...overrides,
+    });
+  }
+
+  it("全部已核對：摘要 hero 顯示都已經關閉，逐列各自狀態", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [lowItem(), lowItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" } })],
+      })],
+    });
+    renderAt(verifyPath());
+    expect(await screen.findByText("這批要清理的廣告都已經關閉")).toBeTruthy();
+    expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
+    expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
+    expect(screen.getAllByText("已核對，已關閉")).toHaveLength(2);
+  });
+
+  it("其中一則已回報但還在核對：摘要 hero 挑第一個不是 confirmed 的狀態（不是嚴重度排序）", async () => {
+    // `verification_state:"pending"` 且 `reported_at===null` 的項目會讓
+    // `changeFlow.ts::stepFromChangeSet` 整份都還算「到平台完成」，導回 handoff 頁——這裡要留在
+    // verify 頁測「摘要挑第一個非 confirmed」，兩則都要先過 reported。
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [
+          lowItem({ verification_state: "reported" }),
+          lowItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" } }),
+        ],
+      })],
+    });
+    renderAt(verifyPath());
+    expect(await screen.findByText("還在等系統核對")).toBeTruthy();
+    expect(screen.getByText("已回報，核對中")).toBeTruthy();
+    expect(screen.getByText("已核對，已關閉")).toBeTruthy();
+  });
+
+  it("⟳ 全部重新核對：對每一則各呼叫一次 check", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    const baseSet = changeSet({
+      items: [
+        lowItem({ verification_state: "reported" }),
+        lowItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" }, verification_state: "reported" }),
+      ],
+    });
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [baseSet] });
+    vi.mocked(changeApi.actOnChangeItem).mockResolvedValueOnce(baseSet).mockResolvedValueOnce(baseSet);
+    renderAt(verifyPath());
+    await user.click(await screen.findByRole("button", { name: "⟳ 全部重新核對" }));
+    await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[0]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low1", "check"]);
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[1]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low2", "check"]);
+  });
+});

@@ -14,12 +14,14 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { ActionBar, FlowHeader, ResultHero, StatusRail, type RailCell } from "../patterns";
+import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
 import {
   campaignChangesPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isCleanupTriageItem,
   nextOpenQueueItem,
   proposePausePath,
   queueItemEntityId,
@@ -27,7 +29,7 @@ import {
 } from "./changeFlow";
 
 const STEP_PURPOSE = "系統讀回平台確認";
-type Kind = "pause" | "copy" | "budget";
+type Kind = "pause" | "copy" | "budget" | "new_ad";
 
 const STATUS_LABEL: Record<string, string> = { ACTIVE: "啟用", PAUSED: "暫停", ARCHIVED: "已封存", DELETED: "已刪除" };
 function statusLabel(value: string | null | undefined): string {
@@ -53,17 +55,22 @@ const CONFIRMED_TITLE: Record<Kind, (item: ChangeItem) => string> = {
   copy: () => "平台上的文案和你核准的一樣",
   pause: () => "平台上這則廣告已經關閉",
   budget: (item) => `平台上的每日預算已經是 ${formatTargetAmount(item.after.daily_amount ?? null)}`,
+  // F27-I15: a `new_ad` item's own readback is the ManualHandoffPanel/`ads_handoff_item` aggregate
+  // (`app/ads/handoff_check.py::_finish`), never a settings diff like the other three kinds.
+  new_ad: () => "平台上這則新廣告已經核對完成",
 };
 const DEVIATED_TITLE: Record<Kind, string> = {
   copy: "平台上的內文和核准的不一樣",
   pause: "平台上的狀態和核准的不一樣",
   budget: "平台上的每日預算和核准的不一樣",
+  new_ad: "平台上這則新廣告和核准的內容不一樣",
 };
 /** StatusRail 只畫有資料來源的格子：`設定相符` 讀 `evidence_json.setting_matches`；花費停止／
  * 學習期／成效回看／已記入品牌學習都沒有後端支撐，整格省略（feature Decisions「Gaps」）。 */
 function confirmedRailNote(item: ChangeItem, kind: Kind): string {
   if (kind === "copy") return "標題、內文";
   if (kind === "budget") return `每日 ${formatTargetAmount(item.after.daily_amount ?? null)}`;
+  if (kind === "new_ad") return "已對應平台上的廣告物件";
   return `狀態：${statusLabel(item.after.status)}`;
 }
 
@@ -182,6 +189,27 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     }
   }
 
+  /** F27-I15 Contract F: cleanup 沒有一次核對整批的後端動作，逐項呼叫既有的單項 `check`——跟
+   * `handleCheck` 同一顆錯誤處理，只是對每個 item 各跑一次；每一次回應都整份更新
+   * `changeSet`（後端 `change_control_data.get` 本來就重算全部 items），中途失敗就停在已完成的
+   * 進度，不整批重來。 */
+  async function handleCheckAll() {
+    if (busy || !changeSet) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      let current = changeSet;
+      for (const row of current.items) {
+        current = await actOnChangeItem(brandId, campaignId, current.id, row.id, "check");
+        setChangeSet(current);
+      }
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-4">
@@ -214,11 +242,17 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   }
 
+  // F27-I15 Contract F: a cleanup set is only ever recognised through the queue's own `cleanup`
+  // row (`isCleanupTriageItem`, same lookup `ConfirmPage`/`HandoffPage` use) — never guessed from
+  // item shape, so a generic multi-`pause` set with no cleanup row behind it still falls through
+  // to the existing "多項變更" workspace link below, unchanged from before this issue.
+  const cleanupSet = isCleanupTriageItem(triageItem);
   const item: ChangeItem | undefined = changeSet.items.length === 1 ? changeSet.items[0] : undefined;
-  const kindRaw = item ? item.kind : "pause";
-  const blocked = changeSet.items.length !== 1 || (kindRaw !== "pause" && kindRaw !== "copy" && kindRaw !== "budget");
+  const kindRaw = cleanupSet ? "cleanup" : item ? item.kind : "pause";
+  const blocked = !cleanupSet
+    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kindRaw));
 
-  if (blocked || !item) {
+  if (blocked || (!cleanupSet && !item)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
@@ -233,7 +267,6 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   }
 
-  const kind = kindRaw as Kind;
   const steps = [
     { label: "確認提議", to: changeStepPath(brandId, campaignId, changeSet.id, "confirm") },
     { label: "到平台完成", to: changeStepPath(brandId, campaignId, changeSet.id, "handoff") },
@@ -252,7 +285,43 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   // （feature Decisions「下一件」——`changeFlow.ts::nextOpenQueueItem`，涵蓋全部四種 kind）。
   const currentEntityId = triageItem ? queueItemEntityId(triageItem) : undefined;
   const nextAction = nextOpenQueueItem(queue, currentEntityId);
+  const nextOrHome = nextAction
+    ? <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
+    : <Button asChild><Link to={homeHref}>回投放中心 →</Link></Button>;
 
+  // F27-I15 Contract F Screens「Flow pages, new-ad and multi-item」: 「verify... one row per item
+  // with its own state and a summary hero by the worst state」——整支跟單項 kind 的
+  // confirmed/deviated/stale/pending-old/checking 分支是不同的畫法（沒有單一 `before/after` 可比
+  // 較），提早分支，不硬套下面的單項邏輯。
+  if (cleanupSet) {
+    const overall = cleanupOverallState(changeSet.items);
+    const hero = (
+      <ResultHero
+        tone={overall === "confirmed" ? "ok" : overall === "deviated" || overall === "stale" ? "bad" : "warn"}
+        title={CLEANUP_HERO_TITLE[overall]}
+      />
+    );
+    return (
+      <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+        <Breadcrumb items={crumb} />
+        <FlowHeader steps={steps} current={2} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+        {hero}
+        <CleanupVerifyRows items={changeSet.items} />
+        {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+        <div className="flex-1" />
+        <ActionBar>
+          <Button variant="outline" disabled={busy} onClick={() => void handleCheckAll()}>{busy ? "核對中…" : "⟳ 全部重新核對"}</Button>
+          {nextOrHome}
+        </ActionBar>
+      </div>
+    );
+  }
+
+  // Unreachable in practice — the guard above already returned when `!cleanupSet && !item`; this
+  // narrows `item` for the type checker without re-deriving the guard's own logic a second time.
+  if (!item) return null;
+
+  const kind = kindRaw as Kind;
   const again = (
     <Button variant="outline" disabled={busy} onClick={() => void handleCheck(item)}>
       {busy ? "核對中…" : "⟳ 重新核對"}
@@ -289,7 +358,11 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   } else if (state === "deviated") {
     hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={`讀回於 ${observedAtText(item)}`} />;
-    compare = <DeviatedCompare item={item} kind={kind} />;
+    // F27-I15: `DeviatedCompare`'s before/after table only makes sense for a plain settings diff
+    // (copy/pause/budget) — a `new_ad` item's evidence is the handoff aggregate, no `observed`/
+    // `expected` settings pair to line up (`messageOf(item)` in the hero note is the only signal
+    // this kind's evidence carries).
+    if (kind !== "new_ad") compare = <DeviatedCompare item={item} kind={kind} />;
     bar = (
       <ActionBar>
         {again}
@@ -332,6 +405,16 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       {hero}
       {rail}
       {compare}
+
+      {/* Contract E / F27-I05: only ever set on a `new_ad` set's own `follow_up` once that item
+          reads back confirmed and no pause set for the old ad already exists — a plain read, no
+          local "is this ready" logic duplicated here. */}
+      {changeSet.follow_up && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+          <p className="text-sm text-muted-foreground">新廣告已經確認在平台上，接著可以暫停原本那則廣告。</p>
+          <Button asChild><Link to={proposePausePath(brandId, campaignId, changeSet.follow_up.entity_id)}>暫停舊廣告 →</Link></Button>
+        </div>
+      )}
 
       {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
 

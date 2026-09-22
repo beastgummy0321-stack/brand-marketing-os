@@ -69,6 +69,27 @@ function scaleQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     ...overrides,
   });
 }
+// F27-I15 Contract F: `QueueKind`/`QueueItem.kind_key` (`adsTriageApi.ts`, out of this issue's
+// touch) deliberately hasn't widened to include `"cleanup"` yet (that file's own comment defers
+// it to this issue) — same double-assertion workaround `changeFlow.ts::isCleanupKind` documents,
+// needed here too since test fixtures are plain `QueueItem`-typed object literals.
+const CLEANUP_KIND = "cleanup" as unknown as QueueItem["kind_key"];
+function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
+  return queueItem({
+    kind_key: CLEANUP_KIND,
+    dedupe_key: "ads-triage:cleanup:cmp_1:2026-09-21",
+    category: "ads_triage_cleanup",
+    triage: triage(),
+    cleanup: {
+      campaign_id: "cmp_1", campaign_name: "【銷售】測試活動", can_support: 3, active_ads: 5,
+      ads: [
+        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120 },
+        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340 },
+      ],
+    },
+    ...overrides,
+  });
+}
 function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
   return {
     id: "item_1", kind: "pause", target_id: "aex_1",
@@ -96,6 +117,10 @@ function ProposeBudgetRoute() {
   const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
   return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} proposeKind="budget" />;
 }
+function ProposeCleanupRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} proposeKind="cleanup" />;
+}
 function SetConfirmRoute() {
   const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
   return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
@@ -109,6 +134,7 @@ function renderAt(path: string) {
       <Routes>
         <Route path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId" element={<ProposeRoute />} />
         <Route path="/brands/:brandId/ads/campaigns/:campaignId/propose/budget/:entityId" element={<ProposeBudgetRoute />} />
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/propose/cleanup/:cleanupCampaignId" element={<ProposeCleanupRoute />} />
         <Route path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm" element={<SetConfirmRoute />} />
         <Route path="*" element={<LocationProbe />} />
       </Routes>
@@ -117,6 +143,7 @@ function renderAt(path: string) {
 }
 const proposePath = "/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1";
 const proposeBudgetPath = "/brands/brd_1/ads/campaigns/cmp_1/propose/budget/aex_owner_G";
+const proposeCleanupPath = "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1";
 const confirmPath = (id = "acs_1") => `/brands/brd_1/ads/campaigns/cmp_1/changes/${id}/confirm`;
 
 beforeEach(() => {
@@ -419,5 +446,100 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(2));
     expect(vi.mocked(changeApi.createChangeSet).mock.calls[1][2].supersedes_id).toBe("acs_1");
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("ConfirmPage（F27-I15）new_ad kind", () => {
+  function newAdItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
+    return changeItem({
+      id: "item_new", kind: "new_ad", target_id: "plc_1",
+      target: { id: "plc_1", name: "1150710 夏季新裝（新廣告）", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "" },
+      before: {}, after: { daily_amount: 0 }, reason: "新測試建議",
+      handoff_snapshot: {
+        filename: "1150710.mp4", revision: 1,
+        copy: { headline: "夏季新裝上市", body: "限時 79 折，今天就試穿" },
+        destination: { native_id: "23900", name: "廣告組 H・興趣受眾" },
+        budget_owner: { budget_amount: 1000, currency: "TWD" },
+      },
+      ...overrides,
+    });
+  }
+  it("確認新廣告提議：畫出創意預覽、加入的投放組與核准文案", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [newAdItem()] })] });
+    renderAt(confirmPath());
+    expect(await screen.findByText("確認新廣告提議")).toBeTruthy();
+    expect(screen.getByText("1150710 夏季新裝（新廣告）")).toBeTruthy();
+    expect(screen.getByText("廣告組 H・興趣受眾")).toBeTruthy();
+    expect(screen.getByText("夏季新裝上市")).toBeTruthy();
+    expect(screen.getByText("限時 79 折，今天就試穿")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /核准新廣告，接著到平台操作/ })).toBeTruthy();
+  });
+});
+
+describe("ConfirmPage（F27-I15 Contract F）cleanup propose 路由", () => {
+  it("畫出清理卡片：每則廣告的縮圖、名稱與 7 天花費", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    renderAt(proposeCleanupPath);
+    expect(await screen.findByText("提議：清理這個活動的廣告")).toBeTruthy();
+    expect(screen.getByText("清理")).toBeTruthy();
+    expect(screen.getByText("同時在投 5 則・預算約撐得起 3 則")).toBeTruthy();
+    expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
+    expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
+    expect(screen.getByText(/7 天花 120/)).toBeTruthy();
+    expect(screen.getByText(/7 天花 340/)).toBeTruthy();
+  });
+
+  it("找不到這個活動的清理提議", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
+    renderAt(proposeCleanupPath);
+    expect(await screen.findByText("找不到這個活動的清理提議")).toBeTruthy();
+  });
+
+  it("第一次核准才建立草稿：每則廣告一個 pause item，並帶上 source=cleanup", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    const draft = changeSet({
+      status: "approved",
+      items: [
+        changeItem({ id: "item_low1", target_id: "aex_low1", verification_state: "pending", reported_at: null }),
+        changeItem({ id: "item_low2", target_id: "aex_low2", verification_state: "pending", reported_at: null }),
+      ],
+    });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
+    renderAt(proposeCleanupPath);
+    await user.click(await screen.findByRole("button", { name: /核准清理，接著到平台操作/ }));
+
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2] as unknown as {
+      operation_id: string; title: string; items: { kind: string; target_id: string }[]; source?: string;
+    };
+    expect(body.operation_id).toMatch(/^triage-cleanup:cmp_1:/);
+    expect(body.title).toBe("清理「【銷售】測試活動」");
+    expect(body.items).toEqual([
+      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則" },
+      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則" },
+    ]);
+    expect(body.source).toBe("cleanup");
+    await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff"));
+  });
+
+  it("既有清理清單：畫出多列廣告，核准後有下一件可看", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [
+          changeItem({ id: "item_low1", target_id: "aex_low1", verification_state: "pending", reported_at: null }),
+          changeItem({ id: "item_low2", target_id: "aex_low2", verification_state: "pending", reported_at: null }),
+        ],
+      })],
+    });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({
+      proposal: { kind: "cleanup", change_set_id: "acs_1", campaign_id: "cmp_1", status: "draft", verification_state: "pending", reason: null, revisit_at: null, multi: true },
+    })]));
+    renderAt(confirmPath());
+    expect(await screen.findByText("提議：清理這個活動的廣告")).toBeTruthy();
+    expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
+    expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
   });
 });
