@@ -467,10 +467,33 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
     state["campaigns"] = others("campaigns") + campaigns
     state["adsets"] = others("adsets") + adsets
     state["ads"] = others("ads") + ads
+    _verify_mirrored(campaigns, adsets, ads)
     save(state)
     print(f"鏡射完成：活動 {len(campaigns)}、組合 {len(adsets)}、廣告 {len(ads)}")
     for ad in ads:
         print(f"  廣告 {ad['id']}  {ad['name']}")
+
+
+def _verify_mirrored(campaigns: list, adsets: list, ads: list) -> None:
+    """Every field the product's launch readback compares, checked at mirror time. Drill 5 lost
+    four persona round trips finding these one at a time (letters in ids, then a missing
+    objective, then missing dates and budgets) — each only surfaced when a readback said
+    "unknown". Failing here costs seconds instead."""
+    problems = []
+    for node in [*campaigns, *adsets, *ads]:
+        if not node["id"].isdigit():
+            problems.append(f"{node['id']} 不是純數字 id（graph.external_page 會拒絕）")
+        if not node.get("account_id"):
+            problems.append(f"{node['id']} 缺 account_id")
+    for campaign in campaigns:
+        for key in ("objective", "start_time", "stop_time"):
+            if not campaign.get(key):
+                problems.append(f"活動 {campaign['id']} 缺 {key}（讀回會判 unknown）")
+    for adset in adsets:
+        if not adset.get("daily_budget"):
+            problems.append(f"組合 {adset['id']} 缺 daily_budget（讀回會判 unknown）")
+    if problems:
+        raise SystemExit("鏡射結果無法被讀回核對：\n  " + "\n  ".join(problems))
 
 
 def cmd_spend(brand_id: str, round_no: int, days: int, daily_total: float = 1000.0,

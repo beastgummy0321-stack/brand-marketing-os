@@ -74,6 +74,10 @@ persona adopts changes what they are offered next.
 .venv/Scripts/python.exe -m scripts.drill.fake_meta pull <org_id> --since <month start>
 ```
 
+重啟 worker 會留下狀態 `doing` 的工作，procrastinate 不會自己收回；重啟後跑一次
+`docker exec supabase_db_marketing psql -U postgres -tAc "set search_path to public__queue, public; update procrastinate_jobs set status='todo' where status='doing'"`，
+否則那個品牌的素材／檢討會永遠停在「排隊中」（drill 5 遇到三次）。
+
 Personas run one at a time. Reports land in `.scratch/drill/<persona>/` — scratch, not history.
 What survives a drill is the issue files it produced; the raw run logs are disposable.
 
