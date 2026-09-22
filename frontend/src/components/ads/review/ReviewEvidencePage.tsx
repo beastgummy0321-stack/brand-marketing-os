@@ -318,8 +318,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       )}
 
       {showEvidence && (
-        <div className="grid items-start gap-4 xl:grid-cols-[1.2fr_1fr]">
-          <div className="col-span-full rounded-xl border border-primary/20 bg-accent p-5">
+        <div className="grid items-start gap-4 xl:grid-cols-[1.05fr_1fr_1fr]">
+          <div className="rounded-xl border border-primary/20 bg-accent p-5">
             <div className="mb-3.5 flex items-center gap-3">
               <AdTile url={triageItem?.triage.thumbnail_url} />
               <p className="line-clamp-2 min-w-0 flex-1 font-semibold">{evidence.target.name ?? "（未命名廣告）"}</p>
