@@ -66,7 +66,10 @@ function budget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
   };
 }
 function orderItem(overrides: Partial<OrdersPageData["orders"]["items"][number]> = {}) {
-  return { id: "ord_1", order_number: "#1", order_date: "2026-09-21", total_amount: 100, order_status: "Open", voucher_code: null, ...overrides };
+  // Relative to today: a hard-coded date silently turned this card warn once the clock passed it,
+  // and the page test then counted one card too many.
+  const yesterday = new Date(Date.now() - 86_400_000).toLocaleDateString("sv-SE");
+  return { id: "ord_1", order_number: "#1", order_date: yesterday, total_amount: 100, order_status: "Open", voucher_code: null, ...overrides };
 }
 function orders(items: OrdersPageData["orders"]["items"] = [orderItem()], total = items.length): OrdersPageData {
   return {
