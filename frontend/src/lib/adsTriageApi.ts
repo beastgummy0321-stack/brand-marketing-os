@@ -75,6 +75,17 @@ export interface QueuePauseProposal {
   reason: string | null; revisit_at: string | null; multi: boolean;
 }
 
+/** F25-I01: the change set (if any) that currently answers a `scale_budget` row, per
+ * `app/ads/triage.py::_row_scale_proposal` — same shape as `QueuePauseProposal`, `kind` always
+ * `"budget"` (`_matching_change_item` generalised by kind, feature Decisions "Queue payload"). */
+export interface QueueBudgetProposal {
+  kind: "budget";
+  change_set_id: string; campaign_id: string;
+  status: "draft" | "approved" | "rejected" | "deferred";
+  verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  reason: string | null; revisit_at: string | null; multi: boolean;
+}
+
 /** F23-I01: the review round (if any) that currently answers a `worse` row, per
  * `app/ads/triage.py::_row_review_proposal` (feature Decisions "Queue row state") — `null` when
  * there is no round whose `window_end` falls inside the row's current triage window. `status` is
@@ -97,18 +108,50 @@ export interface QueueReviewProposal {
   multi: boolean;
 }
 
-export type QueueProposal = QueuePauseProposal | QueueReviewProposal;
+export type QueueProposal = QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal;
+
+export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative";
+
+/** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
+ * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
+ * is the owner's whole ad group, paused ads included (a budget change affects every ad sitting
+ * under this owner). */
+export interface QueueScaleOwner {
+  id: string; name: string | null; native_kind: string; native_id: string;
+  ads_count: number; currency: string | null;
+}
+/** F25-I01: the `scale_budget` row's own payload (feature Decisions "Queue payload") --
+ * `cost_per_result`/`previous_cost_per_result`/`window_days` are the row's own `triage` (best)
+ * ad's numbers, never pooled across the owner's other ads. */
+export interface QueueScale {
+  owner: QueueScaleOwner; from: number; to: number;
+  cost_per_result: number | null; previous_cost_per_result: number | null;
+  target: TriageTargetView; window_days: number;
+  month: { available: number | null; extra_needed: number };
+}
+/** F25-I01: the `refresh_creative` row's own payload -- `thumbnails` is at most 4 entries (never
+ * padded to 4; the frontend adds hollow tiles for the remainder), each `null` when that ad has
+ * none (`app/ads/triage_scale.py::refresh_candidates`). */
+export interface QueueRefresh {
+  campaign_id: string; campaign_name: string;
+  readable_count: number; classified_count: number;
+  thumbnails: (string | null)[];
+}
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
- * enqueue used. A row whose ad has moved off `stop_loss`/`worse` since it was raised is filtered
- * out of the payload rather than listed without a match, so `triage` is always present here. */
+ * enqueue used. A row whose kind has since stopped qualifying (e.g. an ad moved off
+ * `stop_loss`/`worse`, or an owner's ads are no longer all stable) is filtered out of the payload
+ * rather than listed without a match, so `triage` is always present here. `scale`/`refresh` are
+ * present only on their own `kind_key` (F25-I01, feature Decisions "Queue payload"). */
 export interface QueueItem {
   id: string; org_id: string; brand_id: string | null; campaign_period_id: string | null;
   dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
+  kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
+  scale?: QueueScale; refresh?: QueueRefresh;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

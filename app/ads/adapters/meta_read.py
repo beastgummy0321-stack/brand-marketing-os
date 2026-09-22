@@ -132,13 +132,23 @@ def _entity(item, kind, account):
         else:
             raw_value = raw.get("lifetime_budget" if budget_type == "lifetime" else "daily_budget")
             amount, conversion = _budget_minor_unit_amount(raw_value, currency)
+        budget_raw = {
+            "values": raw,
+            "unit": "minor_units" if amount is not None else "unknown",
+            "conversion": conversion,
+        }
+        # A campaign whose raw payload carries neither budget field is, by Meta's own API
+        # semantics, an ad-set-budget (ABO) campaign -- the real budget lives on its ad sets.
+        # `budget_type` stays "unknown" (the schema has no `None` to spare, F25-I01 2026-09-22
+        # "ABO without a schema change") -- only this marker distinguishes "verified: no campaign
+        # budget, look at the children" from "unknown: this campaign was simply never read".
+        # Ad sets keep today's behaviour: this signal only ever concerns the campaign's own
+        # missing budget, never a sibling.
+        if kind == "campaign" and not raw:
+            budget_raw["owner"] = "children_verified"
         result.update(
             budget_type=budget_type,
-            budget_raw={
-                "values": raw,
-                "unit": "minor_units" if amount is not None else "unknown",
-                "conversion": conversion,
-            },
+            budget_raw=budget_raw,
             currency=currency,
             budget_source="graph",
             budget_amount=amount,

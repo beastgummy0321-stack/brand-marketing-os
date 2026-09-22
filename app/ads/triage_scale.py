@@ -1,0 +1,201 @@
+"""app/ads/triage_scale.py — F25-I01: program rules A (scale_budget) and B (refresh_creative)
+over the same per-ad triage `classify()` already produced (`app/ads/triage.py`). Split into its
+own file to keep `triage.py` under the module's file-size cap.
+
+Both rules are pure reads: no LLM call, no platform write (ARCHITECTURE.md §0 "程式整理，LLM
+判斷"). Rule A additionally asks `app/ads/month_budget.py::view()` the SAME question
+`preflight()` asks at approve time (the identical `additional=[proposed item]` seam), so a raised
+row and its own approval can never disagree (feature Decisions "Rule A").
+"""
+
+import math
+from collections import defaultdict
+
+# Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in).
+_ACTIVE_EXCLUDED_STATUSES = {"PAUSED", "DELETED", "ARCHIVED"}
+_STABLE_CLASSES = {"better", "flat"}
+_READABLE_CLASSES = {"better", "flat", "worse"}
+SCALE_FACTOR = 1.2
+MIN_ACTIVE_ADS_FOR_REFRESH_GATE = 3
+MAX_READABLE_FOR_REFRESH_ROW = 2
+
+
+def _is_active(item, native_status_by_entity):
+    return native_status_by_entity.get(item["entity_id"]) not in _ACTIVE_EXCLUDED_STATUSES
+
+
+def _owner_lookup(conn, org_id, brand_id):
+    """One brand-wide read: for every ad entity, its budget owner -- the `ads_external_entity`
+    that carries `budget_type == 'daily'` and a non-null `budget_amount`: the ad's own parent
+    when it's an adset carrying a daily budget, else the campaign entity when IT carries a daily
+    budget (CBO), else `None` (a lifetime-budget owner, an unresolved/ABO campaign budget, or a
+    genuine data gap -- see "Gaps kept honest"). Items never carry `parent_native_id`
+    themselves, so this is the one query that reads it (feature Decisions)."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,native_kind,native_id,parent_native_kind,parent_native_id,name,"
+        "budget_type,budget_amount,currency,start_date,end_date FROM ads_external_entity "
+        "WHERE org_id=%s AND brand_id=%s AND native_kind IN ('ad','adset','campaign')",
+        (org_id, brand_id),
+    ).fetchall()
+    ads = []
+    adsets_by_campaign = defaultdict(dict)  # campaign_id -> {native_id: row}
+    campaign_owner_by_campaign = {}  # campaign_id -> row
+    for row in rows:
+        row = dict(row)
+        if row["native_kind"] == "ad":
+            ads.append(row)
+        elif row["native_kind"] == "adset":
+            adsets_by_campaign[row["campaign_id"]][row["native_id"]] = row
+        elif row["native_kind"] == "campaign":
+            campaign_owner_by_campaign[row["campaign_id"]] = row
+
+    def _has_daily_budget(row):
+        return (
+            row is not None and row["budget_type"] == "daily" and row["budget_amount"] is not None
+        )
+
+    owner_by_entity = {}
+    for ad in ads:
+        owner = None
+        if ad["parent_native_kind"] == "adset":
+            adset = adsets_by_campaign.get(ad["campaign_id"], {}).get(ad["parent_native_id"])
+            if _has_daily_budget(adset):
+                owner = adset
+        if owner is None:
+            campaign_owner = campaign_owner_by_campaign.get(ad["campaign_id"])
+            if _has_daily_budget(campaign_owner):
+                owner = campaign_owner
+        if owner is not None:
+            owner_by_entity[ad["id"]] = owner
+    return owner_by_entity
+
+
+def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, native_status_by_entity,
+                      month_view):
+    """Rule A -- one candidate per budget owner (adset, or the campaign when the campaign holds
+    the budget) whose every ACTIVE ad is `better` or `flat`, with at least one active ad, each
+    ad's own current AND previous `cost_per_result` at or under target (no pooling across ads --
+    `triage.py:298-320`), and whose proposed +20% raise still leaves this month's budget
+    `available` not null and >= 0 through the SAME `month_budget.view(..., additional=[...])`
+    seam `preflight()` uses at approve. `month_view` is `additional_items -> budget dict`,
+    already bound to this brand/month (`triage.py::_month_view_fn`) -- kept as a callable so this
+    function never needs its own month string or a second `conn`/`org`/`brand` triple, and so
+    tests can stub it without a real month-budget fixture."""
+    owner_by_entity = _owner_lookup(conn, org_id, brand_id)
+    items_by_owner = defaultdict(list)
+    owner_by_id = {}
+    for items in classified_items_by_campaign.values():
+        for item in items:
+            owner = owner_by_entity.get(item["entity_id"])
+            if owner is None:
+                continue
+            items_by_owner[owner["id"]].append(item)
+            owner_by_id[owner["id"]] = owner
+
+    # Qualify every owner against the ad-level rule first (cheap, no DB) -- `month_view` is only
+    # ever called for owners that already pass, and the baseline (no proposed item) is computed
+    # at most once, never per owner.
+    qualified = []
+    for owner_id, items in items_by_owner.items():
+        owner = owner_by_id[owner_id]
+        target = items[0]["target"]
+        if target.get("value") is None:
+            continue
+        active = [item for item in items if _is_active(item, native_status_by_entity)]
+        if not active:
+            continue
+        if any(item["class"] not in _STABLE_CLASSES for item in active):
+            continue
+        target_value = target["value"]
+        ok = True
+        for item in active:
+            current_cost = item["current"]["cost_per_result"]
+            previous_cost = item["previous"]["cost_per_result"]
+            if current_cost is None or previous_cost is None:
+                ok = False
+                break
+            if current_cost > target_value or previous_cost > target_value:
+                ok = False
+                break
+        if not ok:
+            continue
+        qualified.append((owner, items, active, target))
+
+    if not qualified:
+        return []
+
+    baseline = month_view([])
+    candidates = []
+    for owner, items, active, target in qualified:
+        from_amount = float(owner["budget_amount"])
+        to_amount = math.ceil(from_amount * SCALE_FACTOR)
+        proposed_item = {
+            "kind": "budget", "target_id": owner["id"],
+            "target": {"start_date": owner.get("start_date"), "end_date": owner.get("end_date")},
+            "before": {"daily_amount": from_amount}, "after": {"daily_amount": to_amount},
+        }
+        budget = month_view([proposed_item])
+        if budget.get("available") is None or budget["available"] < 0:
+            continue
+        extra_needed = budget["reserved_increases"] - baseline["reserved_increases"]
+        # A `better` ad is not required (a long-stable all-flat owner qualifies too) -- prefer one
+        # for display when there is one, else the first active ad in `classify()`'s own
+        # (name, id) order.
+        best_item = next((item for item in active if item["class"] == "better"), active[0])
+        owner_view = {
+            "id": owner["id"], "name": owner.get("name"), "native_kind": owner["native_kind"],
+            "native_id": owner["native_id"],
+            # This owner's whole ad group, not just the currently-active subset -- a budget
+            # change affects every ad sitting under this owner, paused ones included.
+            "ads_count": len(items), "currency": owner.get("currency"),
+        }
+        candidates.append({
+            "owner_id": owner["id"], "campaign_id": best_item["campaign_id"],
+            "window_start": best_item["window"]["start"], "window_end": best_item["window"]["end"],
+            "triage": best_item,
+            "scale": {
+                "owner": owner_view, "from": from_amount, "to": to_amount,
+                "cost_per_result": best_item["current"]["cost_per_result"],
+                "previous_cost_per_result": best_item["previous"]["cost_per_result"],
+                "target": target, "window_days": best_item["window"]["days"],
+                "month": {"available": budget["available"], "extra_needed": extra_needed},
+            },
+        })
+    return candidates
+
+
+def refresh_candidates(classified_items_by_campaign, native_status_by_entity):
+    """Rule B -- one candidate per campaign (with a target) whose readable active ads
+    (`better`/`flat`/`worse`) have thinned to 2 or fewer while at least 3 active ads exist with
+    some classification -- skipped entirely when any ad (active or not) reads `needs_resync`
+    (feature Decisions: a data gap is not a creative shortage, the 資料不足 card owns that)."""
+    candidates = []
+    for campaign_id, items in classified_items_by_campaign.items():
+        if not items:
+            continue
+        if any(item["class"] == "insufficient" and item["reason_code"] == "needs_resync"
+               for item in items):
+            continue
+        target = items[0]["target"]
+        if target.get("value") is None:
+            continue
+        active = [item for item in items if _is_active(item, native_status_by_entity)]
+        if len(active) < MIN_ACTIVE_ADS_FOR_REFRESH_GATE:
+            continue
+        readable = [item for item in active if item["class"] in _READABLE_CLASSES]
+        if len(readable) > MAX_READABLE_FOR_REFRESH_ROW:
+            continue
+        # Never null: the gate above already guarantees >= 3 active, classified ads.
+        triage_item = readable[0] if readable else active[0]
+        thumbnails = [item["thumbnail_url"] for item in active[:4]]
+        candidates.append({
+            "campaign_id": campaign_id, "campaign_name": items[0]["campaign_name"],
+            "window_start": active[0]["window"]["start"], "window_end": active[0]["window"]["end"],
+            "triage": triage_item,
+            "refresh": {
+                "campaign_id": campaign_id, "campaign_name": items[0]["campaign_name"],
+                "readable_count": len(readable), "classified_count": len(active),
+                "thumbnails": thumbnails,
+            },
+        })
+    return candidates

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
 from app.ads import month_budget
+from app.ads.adapters import meta_read
 from app.ads.adapters.external import SourcePage, SourceReadError
 from app.ads.adapters.meta_read import MetaReader
 from app.core import db
@@ -268,6 +269,104 @@ class MonthlySyncTest(unittest.TestCase):
         )
 
 
+class AboMonthDelegationTest(unittest.TestCase):
+    """F25-I01 "ABO without a schema change" (2026-09-22): `meta_read.py::_entity` marks a
+    verified-ABO campaign's `budget_raw.owner="children_verified"` while keeping
+    `budget_type="unknown"` (the schema has no spare `None`); `month_budget.py`'s delegation
+    condition widened to accept `budget_type in (None, "unknown")`. Proves the two ends actually
+    meet through a real `month_budget.view()` call (not just `calculate()`'s pure-fixture path,
+    already covered elsewhere) -- same working sync recipe as `MonthlySyncTest` above (fixture
+    channel reader, a real completed monthly sync job), plus a confirmed `ads_month_budget` row
+    so `available` has an `amount` to compute against at all."""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.org, self.brand = setup_brand(self.conn)
+        self.reader = MonthlyReader(self.brand)
+        for mock in (
+            patch.object(
+                sync.channels, "external_reader",
+                side_effect=lambda key: self.reader if key == "fixture" else None,
+            ),
+            patch.object(sync.channels, "CHANNELS", [{"key": "fixture"}]),
+            patch.object(sync.background, "enqueue", return_value=True),
+            patch.object(sync.background, "is_active", return_value=False),
+            patch.object(sync.settings, "today_for_org", return_value=date(2026, 9, 19)),
+            patch.object(sync.settings, "org_timezone", return_value="Asia/Taipei"),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
+        self.conn.execute(
+            "INSERT INTO ads_month_budget(id,org_id,brand_id,month,currency,amount,confirmed_by) "
+            "VALUES(%s,%s,%s,%s,'TWD',1000000,'test')",
+            (db.new_id("amb"), self.org, self.brand, date(2026, 9, 1)),
+        )
+        self.conn.commit()
+
+    def _campaign(self, native_id, **fields):
+        campaign = repo.create_imported_campaign(self.conn, self.org, self.brand, name="月預算測試")
+        entity = repo.upsert_entity(
+            self.conn, self.org, self.brand, campaign["id"],
+            {
+                "platform": "fixture", "source_account": self.brand, "native_kind": "campaign",
+                "native_id": native_id, "native_status": "ACTIVE", "currency": "TWD",
+                **fields,
+            },
+        )
+        self.conn.commit()
+        return campaign, entity
+
+    def _sync(self):
+        job = sync.request_sync(self.conn, self.org, self.brand, "fixture", self.brand)
+        for _ in range(10):
+            sync.run_sync(self.org, self.brand, job["id"])
+            job = repo.get_job(self.conn, self.org, self.brand, job["id"])
+            if job["status"] not in {"pending", "running"}:
+                return job
+        self.fail("bounded pages did not finish")
+
+    def test_abo_campaign_with_daily_budget_adset_yields_non_null_available(self):
+        # Campaign carries no budget of its own -- ACTIVE, not PAUSED, so it actually reaches the
+        # delegation check below rather than being skipped as a non-contributor either way.
+        campaign, _ = self._campaign(
+            "abo1", budget_type="unknown", budget_raw={"owner": "children_verified"},
+        )
+        repo.upsert_entity(
+            self.conn, self.org, self.brand, campaign["id"],
+            {
+                "platform": "fixture", "source_account": self.brand, "native_kind": "adset",
+                "native_id": "as1", "native_status": "ACTIVE", "currency": "TWD",
+                "budget_type": "daily", "budget_amount": 100,
+                "parent_native_kind": "campaign", "parent_native_id": "abo1",
+            },
+        )
+        self.conn.commit()
+        self.reader.pages = [[row("abo1")]]
+        self._sync()
+        budget = month_budget.view(self.conn, self.org, self.brand, "2026-09")
+        self.assertEqual(budget["uncertainties"], [])
+        self.assertIsNotNone(budget["available"])
+
+    def test_cbo_campaign_unchanged(self):
+        self._campaign("cbo1", budget_type="daily", budget_amount=100)
+        self.reader.pages = [[row("cbo1")]]
+        self._sync()
+        budget = month_budget.view(self.conn, self.org, self.brand, "2026-09")
+        self.assertEqual(budget["uncertainties"], [])
+        self.assertIsNotNone(budget["available"])
+
+    def test_unknown_budget_without_the_owner_marker_still_reads_uncertain(self):
+        """The widened `budget_type in (None, "unknown")` clause alone is not the escape hatch --
+        an ordinary "never synced" `unknown` row (no `budget_raw.owner` marker) still falls
+        through to the existing uncertainty, same as before this issue."""
+        self._campaign("plain1", budget_type="unknown")
+        self.reader.pages = [[row("plain1")]]
+        self._sync()
+        budget = month_budget.view(self.conn, self.org, self.brand, "2026-09")
+        self.assertTrue(budget["uncertainties"])
+        self.assertIsNone(budget["available"])
+
+
 class MetaMonthlyContractTest(unittest.TestCase):
     def setUp(self):
         self.reader = MetaReader()
@@ -380,3 +479,32 @@ class MetaMonthlyContractTest(unittest.TestCase):
             result["entity"]["budget_raw"]["conversion"], "currency_not_in_offset_table"
         )
         self.assertEqual(result["continuous_intervals"], [])
+
+    def test_campaign_with_neither_budget_field_marks_children_verified_ad_sets_unchanged(self):
+        """F25-I01 "ABO without a schema change": a campaign whose raw payload carries neither
+        `daily_budget` nor `lifetime_budget` is, by Meta's own API semantics, an ad-set-budget
+        (ABO) campaign -- `budget_type` stays `"unknown"` (the schema has no spare `None`), but
+        `budget_raw.owner` gets the `"children_verified"` marker `month_budget.py` now reads. An
+        ad set in the exact same shape is NEVER marked (this signal only ever concerns a
+        campaign's own missing budget). `_entity()` directly -- the real structure-sync write
+        path (`read_structure` -> `_entity()` -> `upsert_entity`); `verify_native()`'s own
+        partial-read filter (`_verified_snapshot`) strips every budget field whenever the raw
+        payload carries neither `daily_budget` nor `lifetime_budget` (by design: a partial read
+        must never erase a previously-known value), so it is never the right seam to prove this
+        signal actually reaches `ads_external_entity`."""
+        campaign_raw = {"id": "2", "account_id": "1", "campaign_id": "2"}
+        campaign_entity = meta_read._entity(campaign_raw, "campaign", self.account)
+        self.assertEqual(campaign_entity["budget_type"], "unknown")
+        self.assertIsNone(campaign_entity["budget_amount"])
+        self.assertEqual(campaign_entity["budget_raw"]["owner"], "children_verified")
+
+        adset_raw = {"id": "3", "account_id": "1", "campaign_id": "2"}
+        adset_entity = meta_read._entity(adset_raw, "adset", self.account)
+        self.assertEqual(adset_entity["budget_type"], "unknown")
+        self.assertNotIn("owner", adset_entity["budget_raw"])
+
+        # A campaign that DOES carry a budget field is CBO -- never marked either.
+        cbo_raw = {"id": "4", "account_id": "1", "campaign_id": "2", "daily_budget": "1000"}
+        cbo_entity = meta_read._entity(cbo_raw, "campaign", self.account)
+        self.assertEqual(cbo_entity["budget_type"], "daily")
+        self.assertNotIn("owner", cbo_entity["budget_raw"])

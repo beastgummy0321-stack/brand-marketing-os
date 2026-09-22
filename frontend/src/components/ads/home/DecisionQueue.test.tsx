@@ -34,12 +34,17 @@ function queueItem(
   overrides: Partial<TriageItem> = {},
   proposal: QueueProposal | null = null,
 ): QueueItem {
+  const triage = triageItem(overrides);
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
     category: "ads_triage", kind: null, severity: "rule_warning",
     message: "待決定", action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`,
     visible_from: null, status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    triage: triageItem(overrides), proposal,
+    // F25-I01: `kind_key` is a new required top-level field -- this fixture only ever builds
+    // stop_loss/worse rows (the only two kinds this component already renders), so it mirrors
+    // `triage.class` directly.
+    kind_key: triage.class === "worse" ? "worse" : "stop_loss",
+    triage, proposal,
   };
 }
 

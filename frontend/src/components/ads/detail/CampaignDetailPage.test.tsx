@@ -57,7 +57,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k_1", category: "triage", kind: "stop_loss", severity: "rule_warning",
     message: "廣告可能該停損了", action_url: `/brands/brd_1/ads/campaigns/cmp_1/detail?ad=${triage.entity_id}`,
     visible_from: null, status: "open", created_at: "2026-09-21T00:00:00Z", resolved_at: null,
-    proposal: null, ...overrides, triage,
+    kind_key: "stop_loss", proposal: null, ...overrides, triage,
   };
 }
 

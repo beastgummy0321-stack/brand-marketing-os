@@ -1249,3 +1249,75 @@ stored. Decision A (user, 2026-09-22): existing facts only — no per-campaign h
   suggestion backend).
 - Kit: `patterns/ReviewPieces.tsx::DayTiles`, `ResultHero mark` prop. 驗證：`home/CampaignCards.test.tsx`,
   `AdsHomePage.test.tsx`, `wait/*.test.tsx`, `month/*.test.tsx`; 並排證據 `.harness/scratch/F24/I0{2,3,4}/`.
+
+### 6.27 F25-I01 — 佇列剩兩種 kind 落地：program rules A/B、佇列 payload 擴充（settled 2026-09-22）
+
+Two new program rules over the same per-ad `classify()` (`app/ads/triage_scale.py`, kept separate to hold `triage.py`
+under its own file-size convention); both pure reads (no LLM call, no platform write). `app/core/interrupts.py
+::CATEGORIES` 新增兩筆（本票對這支舊檔唯一允許的改動，登記在 F18 兩筆之後）：`ads_triage_scale_budget`／
+`ads_triage_refresh_creative`，兩者皆 `severity=informational`。`QUEUE_CATEGORY`／`KINDS_AVAILABLE`（四種）／
+`KINDS_PENDING`（`[]`）同步更新；四種 kind 共用同一套 `interrupt` 去重／supersede 機制（`_supersede_stale_open_rows`
+不分 kind），沒有另立第二套。
+
+- **Rule A `scale_budget`**（每個預算 owner，即 `budget_type=="daily"` 且 `budget_amount` 非空的 `ads_external_entity`
+  —— 廣告組，或活動自己扛預算時的活動本身）：只看這個 owner 名下**目前活躍**的廣告（`native_status` 不在
+  `{PAUSED,DELETED,ARCHIVED}`——停損流程暫停掉的廣告不永久卡住整個 owner）；每支活躍廣告都要是 `better`／`flat`（任何
+  其他 class 都讓這個 owner 整批不出列）；至少一支活躍廣告；**不跨廣告合併**（各廣告 `window.days` 不同，
+  `triage.py:298-320`）——逐支廣告自己的 `current.cost_per_result` 與 `previous.cost_per_result` 都要 `<= target`；
+  不要求一定要有 `better`（長期穩定的全 `flat` owner 也合格）；活動要有 target。提案：`to = ceil(from * 1.2)`（owner
+  自己的幣別）；只有 `month_budget.view(conn, org, brand, month, additional=[提案 item])` 回傳 `available` 非空
+  且 `>= 0` 才出列——跟 `preflight()` 核准時走的**同一條**路（`month_budget.py:466-470`），列跟核准永遠不會打架；
+  `extra_needed` = 帶提案跟不帶提案兩次 `reserved_increases` 的差。去重鍵 `ads-triage:scale_budget:<owner_id>
+  :<window_end>`。items 本身不帶 `parent_native_id`（見下「已知缺口」），owner 查找是這批唯一一次品牌全域查詢
+  `ads_external_entity`（`triage_scale.py::_owner_lookup`）：廣告的 parent 是廣告組且該廣告組扛日預算 → owner；
+  否則退回看活動自己是否扛日預算 → owner；否則沒有 owner，這批廣告整批跳過（lifetime 預算 owner 永遠不合格）。
+- **Rule B `refresh_creative`**（每個有 target 的活動）：只要有任何一支廣告（不分活躍與否）讀回
+  `reason_code=="needs_resync"` 就整個活動跳過（資料缺口不是素材不夠，那是「資料不足」卡片的地盤）；
+  `readable` = 活躍廣告中 class 屬於 `better|flat|worse` 的數量；`readable <= 2` 且活躍廣告 `>= 3` 才出列。去重鍵
+  `ads-triage:refresh_creative:<campaign_id>:<window_end>`。沒有變更清單，列的按鈕直接去素材工作檯。
+- **佇列 payload**：`_queue_payload` 每列多一個 `kind_key`（四選一，跟 `interrupt.category` 對應但給前端直接判斷
+  用，不用解析 `dedupe_key`）；`scale_budget` 列多帶 `scale: {owner:{id,name,native_kind,native_id,ads_count,
+  currency}, from, to, cost_per_result, previous_cost_per_result, target, window_days, month:{available,
+  extra_needed}}`（`triage` 欄位是這個 owner 名下最好的 `better` 廣告 item，沒有就用第一支活躍廣告）；
+  `refresh_creative` 列多帶 `refresh: {campaign_id, campaign_name, readable_count, classified_count, thumbnails}`
+  （`thumbnails` 最多 4 個，`null` 表示這支廣告沒有縮圖；`triage` 是第一支可判讀廣告，沒有就是第一支活躍廣告——
+  Rule B 的門檻保證至少有 3 支活躍且已分類，永遠不會是 `null`）。`scale_budget` 列的 `proposal` = 這個 owner 所屬活動
+  裡最新一筆非 superseded、items 含 `kind=="budget"` 且 `target_id` 等於 owner id 的變更清單，跟停損提案同一種形狀
+  （`_matching_change_item` 把 F22-I01 的 `_matching_pause_set` 依 `kind` 參數化，`pause`／`budget` 共用同一段
+  walk）；`refresh_creative` 列的 `proposal` 永遠 `null`。
+- **Meta adapter 修正 —— ABO 不動 schema（2026-09-22 裁決）**：`ads_external_entity.budget_type` 欄位是
+  `NOT NULL DEFAULT 'unknown' CHECK (... IN ('daily','lifetime','unknown'))`
+  （`supabase/migrations/20260918000001_ads_external_sources.sql`），`ExternalEntity.budget_type` 也是
+  `Literal["daily","lifetime","unknown"]`（不含 `None`）——這兩個檔都不在本票 `touch`，真的寫 `budget_type=None`
+  會讓每個 ABO 活動的結構同步在 `ExternalEntity.model_validate()` 直接炸掉。改用不動 schema 的訊號：
+  `meta_read.py::_entity` 對「活動物件的 raw payload 既沒有 `daily_budget` 也沒有 `lifetime_budget`」（依 Meta API
+  語意即廣告組扛預算的 ABO 活動）繼續寫 `budget_type="unknown"`（不變），只多加一個
+  `budget_raw.owner="children_verified"` 標記；廣告組（`adset`）永遠不打這個標記（這個訊號只講活動自己缺預算，不
+  帶到任何手足層級）。`month_budget.py:151-161` 的委派條件相應放寬成 `budget_amount is None and budget_type in
+  (None, "unknown") and budget_raw.owner == "children_verified"`——`None` 留給 `calculate()` 既有的純函式 fixture
+  相容（它從不經過 DB／pydantic），`"unknown"` 才是真正的 writer 路徑；一般「從沒同步過」的 `unknown` 列沒有這個
+  標記，照樣落回原本的不確定判定，不會被誤判成已委派。`_entity()` 是 `read_structure()`（正式結構同步）直接呼叫的
+  函式；`verify_native()` 走的是另一條局部讀回路徑（`_verified_snapshot`），它的「局部讀回不可抹掉既有值」規則會在
+  raw 沒有任何預算欄位時整批濾掉 `budget_type`／`budget_raw`，所以驗這個訊號要測 `_entity()` 本身，不能透過
+  `verify_native()`。
+- **已知缺口（誠實揭露，feature Decisions "Gaps kept honest"）**：「這則主打什麼？」標籤仍是 `ReservedSlotCard`；
+  `lifetime` 預算的 owner 永遠不會出 `scale_budget` 列；不跨廣告或跨幣別合計；items 不帶 `parent_native_id`，owner
+  對應改由一次品牌全域 `ads_external_entity` 查詢完成（見上）。
+- **前端型別跟進（本票只做型別，未做畫面——`home/QueueRow.tsx` 等產出畫面留給 I02）**：
+  `frontend/src/lib/adsTriageApi.ts` 新增 `QueueKind`、`QueueBudgetProposal`（`kind:"budget"`，跟
+  `QueuePauseProposal` 同形狀）、`QueueScale`／`QueueScaleOwner`／`QueueRefresh`，`QueueItem` 新增必填
+  `kind_key` 與選填 `scale?`／`refresh?`；`frontend/src/components/ads/**/*.test.tsx` 下 9 支既有測試檔
+  （`AdsHomePage.test.tsx`、`detail/CampaignDetailPage.test.tsx`、`flow/ConfirmPage.test.tsx`、
+  `flow/HandoffPage.test.tsx`、`flow/VerifyPage.test.tsx`、`home/DecisionQueue.test.tsx`、
+  `review/CopyPage.test.tsx`、`review/PreparePage.test.tsx`、`review/ReviewEvidencePage.test.tsx`）的
+  `queueItem()` 假資料工廠各補一行 `kind_key`（依各檔既有 `category` 對應 `"stop_loss"`／`"worse"`；
+  `home/DecisionQueue.test.tsx` 是共用工廠，`kind_key` 隨傳入的 `triage.class` 決定）。
+- 驗證：`app/tests/test_ads_triage_scale.py`（Rule A/B 純函式，正例／每種反例／to 公式／paused 不卡 owner／
+  ABO 委派廣告組 owner／CBO 退回活動 owner／`month_view` 呼叫次數）、`app/tests/test_ads_triage_queue.py
+  ::ScaleRefreshQueueTest`（走完整 `refresh_queue`/`get_queue`：`kind_key`／`scale`／`refresh` 形狀、category／
+  severity、跨窗 supersede、budget 提案配對）、`test_core_interrupts.py`（兩個新類別的 severity／label）、
+  `app/tests/test_ads_external_monthly.py::AboMonthDelegationTest`（ABO 活動＋廣告組扛日預算，
+  `month_budget.view()` 回傳非空 `available`；CBO 活動不變；沒有 `owner` 標記的普通 `unknown` 活動仍讀不確定）、
+  `test_ads_external_monthly.py::MetaMonthlyContractTest::test_campaign_with_neither_budget_field_marks
+  _children_verified_ad_sets_unchanged`（`_entity()` 直測：ABO 活動打標記、廣告組與 CBO 活動都不打）。
+  `docs/verification.md` 既有共用命令未變。

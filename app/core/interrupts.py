@@ -38,6 +38,10 @@ CATEGORIES = {
     "ads_triage_stop_loss": {"severity": "money_loss", "label": "廣告停損待決定"},
     "ads_triage_worse": {"severity": "rule_warning", "label": "廣告變差待決定"},
     "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
+    # F25-I01: the two remaining queue kinds -- program proposals, not yet losses or warnings
+    # (feature Decisions "Rule A"/"Rule B"), so both rank informational, after the F18 entries.
+    "ads_triage_scale_budget": {"severity": "informational", "label": "可加預算待決定"},
+    "ads_triage_refresh_creative": {"severity": "informational", "label": "素材待補待決定"},
     "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
