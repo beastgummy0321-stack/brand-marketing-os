@@ -7,7 +7,7 @@ proven on F21. This file is context, not execution permission: show the plan onc
 - Branch `feature/ads-center-v7-home` (main tree, clean, nothing pushed). F20 and F21 are closed into it. **F19 is still
   open** (human acceptance pending; do not close it for the user).
 - Built: home `#/`, campaign detail `#/camp/<id>`, target `#/target/<id>`, data connections `#/connections`; batch A (F22,
-  2026-09-22): steps 4–6 + sheet for the `pause` kind (`docs/architecture/ads.md` §6.22–6.23). Screens 4–7 below are done for pause; batch B (F23, 2026-09-22): screens 1–3 + review sheet (§6.24), ladder = placeholder (A).
+  2026-09-22): steps 4–6 + sheet for the `pause` kind (`docs/architecture/ads.md` §6.22–6.23). Screens 4–7 below are done for pause; batch B (F23, 2026-09-22): screens 1–3 + review sheet (§6.24), ladder = placeholder (A); batches C+D (F24, 2026-09-22): screens 8, 10, 11 + failed card (§6.26); screen 9's recover banner not built (no signal), the 「沒收到回應」 state lives in the copy page. Every prototype screen is now built; remaining grey placeholders need backends (ladder count, brand-learning tags/list, image/existing-asset directions, next-month suggestions, adoptPlatform).
 - Decisions: `docs/architecture/ads.md` §6.17–6.21. Measurements and root causes: `discovery-creative-lifecycle-and-triage.md`
   §5d–5g. UI rules: `docs/design-system.md` §1.7 (order of work, self-check 1–11). CLAUDE.md: 「先根因、後表象」 and the carve rule.
 - harness 3.0.9 is committed in the plugin source (`D:/0UserProfile/Desktop/Default/Planner`, `92ee408`, 85 tests green)

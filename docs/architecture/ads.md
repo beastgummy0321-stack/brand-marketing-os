@@ -1226,3 +1226,26 @@ F22 `changes/:setId/confirm`. Step logic in `review/reviewFlow.ts`.
   做 optional-safe 讀取。
 - 驗證：`app/tests/test_ads_triage.py::TriageDataViewTest`、`app/tests/test_ads_repository.py::ListCampaignsSyncDataTest`。
   `.harness/scratch/F23/I0{2,3,4}/`.
+
+### 6.26 F24 — 異常狀態、等待頁、每月回顧、頁首同步晶片（settled 2026-09-22）
+
+Data source = the read-only `data` block of §6.25 (sync state / coverage / missing_days) plus existing GETs; nothing new is
+stored. Decision A (user, 2026-09-22): existing facts only — no per-campaign health table, no 「系統剛恢復」 banner (no signal).
+- Home card (`home/CampaignCard.tsx`): `sync.state` failed/syncing/disconnected → grey 「暫時讀取不到」 card (chip by state;
+  重新讀取 = existing `syncCampaign({})` + job poll until status ∉ {pending, running} + reload; disconnected → 去連接); otherwise
+  「資料不足，先不判斷」 when every classified ad is `insufficient` or `missing_days` is non-empty (chip: 缺 N 天資料 /
+  尚未同步成效 / by dominant `reason_code`); `no_target`-only campaigns keep the 設定目標 card.
+- Header chip (`AdsHomePage.tsx`): newest `last_success_at` among campaigns with `state === "ok"` only (a failed sync keeps its
+  old timestamp), warn + 「N 個活動讀取異常」 when any is failed/disconnected; 「N 項待處理」 = open queue rows; links to
+  connections.
+- Wait page `/brands/:brandId/ads/campaigns/:campaignId/wait` (`components/ads/wait/`): rows only for existing facts —
+  disconnected, missing days, orders latest date before `coverage.end` (F21 rule), and one row per insufficient `reason_code`
+  (below_sample_gate / no_previous_window / result_unknown_days); `DayTiles` over the 7 days ending at `coverage.end`;
+  重新檢查 = the same sync + poll.
+- Monthly review `/brands/:brandId/ads/month` (`components/ads/month/`): budget card by selected month (`known_spend` null →
+  花費未核實; `amount` null → hatched); orders card labelled with the stats window (`until − 30 … until`); campaign rows sum
+  triage `current.spend` only when every ad shares `window.days`, else 「各廣告期間不同，未合計」, no currency; 素材 groups by
+  triage class, ≤ 12 tiles + 「＋N 則」; 記入品牌學習 and 下月建議 are `ReservedSlotCard`s (no brand-level learnings GET, no
+  suggestion backend).
+- Kit: `patterns/ReviewPieces.tsx::DayTiles`, `ResultHero mark` prop. 驗證：`home/CampaignCards.test.tsx`,
+  `AdsHomePage.test.tsx`, `wait/*.test.tsx`, `month/*.test.tsx`; 並排證據 `.harness/scratch/F24/I0{2,3,4}/`.
