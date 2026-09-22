@@ -316,7 +316,7 @@ def get(conn, org, brand, campaign_id, set_id):
     # same reason).
     from app.ads import adapters
 
-    campaign(conn, org, brand, campaign_id)
+    camp = campaign(conn, org, brand, campaign_id)
     row = conn.execute(
         "SELECT * FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
         (org, brand, campaign_id, set_id),
@@ -372,6 +372,14 @@ def get(conn, org, brand, campaign_id, set_id):
                 "message": "執行月份已改變，新增花費需重新核對月預算與核准。",
             }
         result["items"].append(view)
+    # Contract H / correction 1: read-time only, nothing written or scheduled here -- lazy import,
+    # same seam as `adapters` above (`change_timeline` -> `triage` -> `review_evidence` -> this
+    # module would be an import-time cycle if this were a module-level import).
+    from app.ads import change_timeline
+
+    change_timeline.attach(
+        conn, org, brand, campaign_id, camp, result["approved_at"], result["items"]
+    )
     result["reason"] = result.pop("decision_reason")
     result["can_revise"] = can_revise(result)
     result["review_id"] = result["plan_json"].get("review_id")
