@@ -145,6 +145,24 @@ describe("WaitPage（F24-I03）事實列", () => {
     expect(screen.queryByText("缺前一期可比資料")).toBeNull();
   });
 
+  it("授權失效時列「Meta 讀取權限失效」，按鈕連到 /settings?tab=meta（F27-I21）", async () => {
+    mockGetTriage.mockResolvedValue(triage({
+      data: {
+        sync: { state: "auth_expired", error: "拒絕存取", last_success_at: "2026-09-19T14:40:00+00:00" },
+        coverage: { start: "2026-08-25", end: "2026-09-19" },
+        missing_days: ["2026-09-17", "2026-09-18"],
+      },
+    }));
+    renderPage();
+    expect(await screen.findByText("Meta 讀取權限失效")).toBeTruthy();
+    expect(screen.getByText("重新授權後會自動補資料")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "重新授權 →" }).getAttribute("href")).toBe("/settings?tab=meta");
+    // 缺天列仍然並存（授權失效不擋掉其他事實列）。
+    expect(screen.getByText("缺 9/17、9/18（2 天）")).toBeTruthy();
+    // 授權失效跟未連接互斥，不會同時出現「廣告帳戶未連接」。
+    expect(screen.queryByText("廣告帳戶未連接")).toBeNull();
+  });
+
   it("沒有缺天、全部資料不足時，依 reason_code 各列一則（固定順序）", async () => {
     mockGetTriage.mockResolvedValue(triage({
       items: [
