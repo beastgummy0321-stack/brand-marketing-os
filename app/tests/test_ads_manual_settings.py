@@ -32,6 +32,35 @@ class TestManualSettings(PlanTestBase):
             f"/groups/{self.group['id']}/manual-settings"
         )
 
+    def test_same_second_ads_have_a_stable_order(self):
+        # Drill 5: a plan's ads share created_at, so ordering by it alone flipped between reads
+        # and the launch snapshot looked changed, sending a half-done handoff stale.
+        created = [
+            repo.create_ad(
+                web.conn, self.org_id, self.brand_id, self.cid, self.group["id"],
+                name=f"廣告{i}", coordinates={}, coordinates_snapshot={},
+            )["id"]
+            for i in range(4)
+        ]
+        # Ties on created_at, and ids deliberately the reverse of the insertion order: only an
+        # ordering that names a tie-breaker can answer the same way twice.
+        made = sorted(created, reverse=True)
+        for old, new in zip(created, made, strict=True):
+            web.conn.execute("UPDATE ads_ad SET id = %s WHERE id = %s", (new + "_t", old))
+        made = [ad + "_t" for ad in made]
+        web.conn.execute(
+            "UPDATE ads_ad SET created_at = now() WHERE campaign_id = %s", (self.cid,)
+        )
+        web.conn.commit()
+        listed = [
+            [ad["id"] for group in repo.campaign_detail(
+                web.conn, self.org_id, self.brand_id, self.cid)["groups"] for ad in group["ads"]]
+            for _ in range(3)
+        ]
+        self.assertEqual(listed[0], listed[1])
+        self.assertEqual(listed[1], listed[2])
+        self.assertEqual([i for i in listed[0] if i in made], sorted(made))
+
     def test_save_reload_checklist_and_unverified_id(self):
         values = {f["key"]: "已確認設定" for f in manual_settings.FIELDS if f["required"]}
         values.update(

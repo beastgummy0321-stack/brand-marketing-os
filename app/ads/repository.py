@@ -418,8 +418,11 @@ def _empty_external_outcome() -> dict:
 
 def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> list:
     rows = conn.execute(
+        # `id` breaks the tie: a plan's groups/ads are all inserted in one transaction and share
+        # `created_at`, so ordering by it alone returns them in arbitrary order -- which changed
+        # the launch snapshot between two reads and sent a half-finished handoff stale (drill 5).
         "SELECT * FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s"
-        " AND campaign_id = %s ORDER BY created_at",
+        " AND campaign_id = %s ORDER BY created_at, id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -714,7 +717,7 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     groups = _groups_for_campaign(conn, org_id, brand_id, campaign_id)
     ad_rows = conn.execute(
         "SELECT * FROM ads_ad WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
-        " ORDER BY created_at",
+        " ORDER BY created_at, id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
     ads_by_group: dict[str, list] = {}
@@ -1049,7 +1052,7 @@ def list_ads_for_campaign(conn: _AnyConn, org_id: str, brand_id: str,
     查法，複製一份而非要求呼叫端拆解巢狀結構。"""
     rows = conn.execute(
         "SELECT * FROM ads_ad WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
-        " ORDER BY created_at",
+        " ORDER BY created_at, id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
     return [dict(r) for r in rows]
