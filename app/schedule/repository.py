@@ -20,10 +20,13 @@ Five tables (supabase/migrations/20260901000002_schedule_creative_coordinates.sq
                                period; `brand_coordinate.disabled_at` is the screen switch,
                                `feedback` is the loop's own judgement (station ① decision 1).
 
-Who seeds a new brand: this module, lazily, on first read of that brand's coordinates
-(`ensure_coordinates_seeded`) — not a trigger on `brand`, not a call from
-`app.brand_intelligence.repository.create_brand()` (ADR 0049 rule 3: one module never writes
-another module's territory). Brands that already existed when this ticket's migration ran
+Who seeds a new brand: this module — at creation, through the public
+`app.schedule.seed_brand_vocabulary`, which `app.intake` (the only brand creator) calls right after
+`create_brand()`; and still lazily on first read (`ensure_coordinates_seeded`). Not a trigger on
+`brand` (ADR 0049 rule 3: one module never writes another module's territory). Drill 5
+(2026-09-23): the read-only lazy path alone left every new brand without vocabulary, because the
+ads loop reads `brand_coordinate` raw and never passes through schedule's reads.
+Brands that already existed when this ticket's migration ran
 were back-filled by the migration itself, with the same 35 rows.
 """
 

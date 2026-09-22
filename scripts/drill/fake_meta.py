@@ -220,8 +220,23 @@ def _find_by_id(state: dict, entity_id: str) -> dict | None:
 
 
 def fake_fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
-    """Drop-in for `app.meta.graph.fetch_page`. Returns one page, never a `paging.next` —
-    the drill's data is small enough that paging adds nothing but a way to be wrong.
+    """Drop-in for `app.meta.graph.fetch_page`. Pages list answers like Graph does: `limit` rows
+    per page (the client refuses a page over 100 — drill 5 hit that with 560 ad-level insight
+    rows), `paging.next` + `cursors.after` while rows remain; `after` is an opaque offset."""
+    body = _answer(url, params=params, headers=headers)
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return body
+    limit = int((params or {}).get("limit") or 100)
+    start = int(str((params or {}).get("after") or "o0").removeprefix("o"))
+    page = {"data": data[start:start + limit]}
+    if start + limit < len(data):
+        page["paging"] = {"next": url, "cursors": {"after": f"o{start + limit}"}}
+    return page
+
+
+def _answer(url: str, *, params: dict | None, headers: dict) -> dict:
+    """One unpaged answer for `url`.
 
     Serves two generations of URL shape, disambiguated by node/edge, never by which CLI command
     wrote the data: the old internal-campaign functions (`list_campaigns`/`list_ad_sets`/
@@ -778,7 +793,8 @@ def cmd_advance_days(n: int, spend_scale: float) -> None:
         day = last_day + timedelta(days=offset)
 
         def rate_of(ad, spend_scale=spend_scale):
-            return ad["_daily_spend_recent"] * spend_scale, ad["_daily_purchases_recent"] * spend_scale
+            return (ad["_daily_spend_recent"] * spend_scale,
+                    ad["_daily_purchases_recent"] * spend_scale)
 
         for campaign_id, ads in by_campaign.items():
             campaign = next(c for c in state["campaigns"] if c["id"] == campaign_id)
@@ -803,7 +819,8 @@ def cmd_selfcheck_imported() -> None:
     `cmd_pull` does it), even though nothing called below actually needs a database."""
     import app.main  # noqa: F401 — .env load, same reason as cmd_pull's __main__
     from app.ads.adapters import meta_read
-    from app.meta import graph, repository as meta_repository
+    from app.meta import graph
+    from app.meta import repository as meta_repository
 
     install()
     state = load()

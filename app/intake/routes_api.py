@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import Response
 
+from app import schedule
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
 from app.brand_intelligence import background_job
@@ -100,6 +101,7 @@ async def brand_start(request: Request):
     client_name = clean(str(form.get("client_name") or ""))
     brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
                                client_name=client_name or None, actor=str(actor.user_id))
+    schedule.seed_brand_vocabulary(web.conn, actor.org_id, brand["id"])
     state.start_draft(web.conn, brand["id"], brand_name, description=description,
                       urls=urls, photos=photos, actor=str(actor.user_id))
     # quick 恆為 False（2026-09-14 起草稿永遠建立）；留著這個鍵只因為

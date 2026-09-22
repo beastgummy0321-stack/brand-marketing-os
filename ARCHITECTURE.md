@@ -74,7 +74,8 @@
       "root": "app/intake",
       "public": "app/intake/__init__.py",
       "may_depend_on": [
-        "ads"
+        "ads",
+        "schedule"
       ],
       "owns": [
         "app/intake/**",
@@ -526,7 +527,10 @@ already existed and were simply undeclared: `app/core/net.py`, `app/brand_intell
 (they reach into intake internals to seed rows). No code moved. Declaring those four facades records
 what was already true; it is not permission for `ads`／`workbench`／`schedule` to start reaching for
 them. `intake` reaches `ads` (`may_depend_on`) for one thing only — the 可投放檢查表 (§8) — and today
-that call is made by the browser, not by a Python import.
+that call is made by the browser, not by a Python import. It reaches `schedule` for one call only
+(2026-09-23, drill 5): `app.schedule.seed_brand_vocabulary` right after creating a brand, so the
+coordinate vocabulary the ads plan requires exists from the brand's first minute; when
+`brand_coordinate` moves to `ads` (§4) this call moves with it.
 
 Everything else under `app/` (core, shared, llm, identity, meta, brand_intelligence, brand_web,
 orders, dashboard, storage, background, tools) plus `scripts/` is **legacy**: it works, it

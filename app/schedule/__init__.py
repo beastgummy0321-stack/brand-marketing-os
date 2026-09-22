@@ -49,6 +49,15 @@ def register_tasks() -> None:
     schedule_jobs.register_tasks()
 
 
+def seed_brand_vocabulary(conn, org_id: str, brand_id: str) -> None:
+    """Seed a new brand's seven-dimension coordinate vocabulary (idempotent). Called by the
+    module that creates brands (`app.intake`) — the ads plan needs the vocabulary before anyone
+    opens a screen that reads it (drill 5: every new brand failed at the delivery plan)."""
+    from app.schedule import repository as schedule_repo
+
+    schedule_repo.ensure_coordinates_seeded(conn, org_id, brand_id)
+
+
 def imported_ad_count(conn, org_id: str, brand_id: str) -> int:
     """票 past-ads/03（ADR 0067）：這個品牌已經標了幾則老廣告——延遲 import，比照
     `register()`。"""

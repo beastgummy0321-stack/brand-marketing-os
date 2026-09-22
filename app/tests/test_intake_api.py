@@ -131,6 +131,15 @@ class QuickPathTest(_Base):
         draft_resp = self.client.get(f"/api/intake/brands/{body['brand_id']}/draft")
         self.assertEqual(draft_resp.status_code, 200)
 
+    def test_new_brand_has_coordinate_vocabulary(self):
+        # Drill 5: the ads delivery plan needs the vocabulary; nothing else seeds it for a new brand.
+        from app.core.db import connection
+        bid = self._create_full()
+        with connection() as conn:
+            dims = {r["dimension"] for r in conn.execute(
+                "SELECT DISTINCT dimension FROM brand_coordinate WHERE brand_id = %s", (bid,)).fetchall()}
+        self.assertEqual(dims, {"audience", "pain", "angle", "hook", "proof", "offer", "format"})
+
     def test_json_with_description_creates_draft(self):
         bid = self._create_full()
         self.assertIsNotNone(state.get_draft(bid))
