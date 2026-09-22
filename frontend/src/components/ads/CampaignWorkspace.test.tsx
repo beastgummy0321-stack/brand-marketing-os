@@ -47,4 +47,24 @@ it("does not request external data for internal campaigns", async () => {
   expect(completeExternalView).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "選擇上架方式" })).toBeTruthy();
 });
+it("opens the platform performance disclosure by default when the URL highlights an ad", async () => {
+  render(
+    <MemoryRouter initialEntries={["/?tab=performance&ad=ad_1"]}>
+      <CampaignWorkspace brandId="b" campaignId="c" />
+    </MemoryRouter>,
+  );
+  await screen.findByText("單則廣告檢討");
+  expect(await screen.findByText("共用成效")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "查看平台原始成效圖表" }).getAttribute("aria-expanded")).toBe("true");
+});
+it("keeps the platform performance disclosure collapsed without an ad highlight", async () => {
+  render(
+    <MemoryRouter initialEntries={["/?tab=performance"]}>
+      <CampaignWorkspace brandId="b" campaignId="c" />
+    </MemoryRouter>,
+  );
+  await screen.findByText("單則廣告檢討");
+  expect(screen.getByRole("button", { name: "查看平台原始成效圖表" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByText("共用成效")).toBeNull();
+});
 

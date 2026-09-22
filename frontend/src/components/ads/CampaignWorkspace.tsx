@@ -257,7 +257,7 @@ function Workspace({
           ) : (
             <div className="space-y-4">
               <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
-              <Disclosure label="查看平台原始成效圖表"><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
+              <Disclosure label="查看平台原始成效圖表" defaultOpen={searchParams.has("ad")}><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
             </div>
           )}
         </>
