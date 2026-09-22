@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -132,6 +132,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/copy"
           element={<AdsCopyRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/material"
+          element={<AdsMaterialRoute />}
         />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
@@ -577,6 +581,15 @@ function AdsCopyRoute() {
   const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
   return (
     <CopyPage key={`review-copy-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「準備素材」頁（reviews/:reviewId/material route，F27-I14，無原型畫面）：檢討回合已
+ * 存在時的正典網址；非法步驟由 `MaterialStepPage` 自己轉去看證據頁（同 `AdsCopyRoute` 的分工）。 */
+function AdsMaterialRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <MaterialStepPage key={`review-material-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
   );
 }
 

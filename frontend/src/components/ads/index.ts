@@ -14,4 +14,5 @@ export { VerifyPage } from "./flow/VerifyPage";
 export { ReviewEvidencePage } from "./review/ReviewEvidencePage";
 export { PreparePage } from "./review/PreparePage";
 export { CopyPage } from "./review/CopyPage";
+export { MaterialStepPage } from "./review/MaterialStepPage";
 export { ReadinessList } from "./patterns/ReadinessList";

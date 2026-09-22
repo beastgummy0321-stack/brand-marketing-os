@@ -40,6 +40,9 @@ export interface HandoffIdentity {
 export interface NewAdHandoffRequest {
   operation_id: string; title: string; month: string; placement_id: string; revision: number;
   destination_entity_id: string; reason: string; review_id?: string; recommendation_id?: string;
+  /** F27-I14 Contract E: the ACTIVE ad this new ad replaces (same campaign) — carried only when
+   * this handoff answers a review round's material step, never guessed from context. */
+  replaces_entity_id?: string;
 }
 export class HandoffRequestRejected extends Error {}
 const path = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}`;
