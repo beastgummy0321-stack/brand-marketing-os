@@ -51,7 +51,22 @@ export interface CampaignTriage { window_days: number; items: TriageItem[] }
  * `app/ads/triage.py::_row_proposal` (feature Decisions "Queue row state") — `null` when there
  * is none, or the matching set doesn't currently "count" (deferred past `revisit_at`, rejected
  * outside the row's current window, or confirmed while the entity has left `native_status`
- * paused). Always `null` on a `worse` row this batch. */
+ * paused). Always `null` on a `worse` row this batch.
+ *
+ * F23-I01 backend note: `app/ads/triage.py::_row_review_proposal` now gives `worse` rows their
+ * own `{kind:"review", ...}` proposal shape too (see that function's docstring for the exact
+ * fields) — NOT yet reflected in this type. Turning `QueueProposal` into a `kind`-discriminated
+ * union breaks two do_not_touch files with real evidence (`cd frontend && npm run build`):
+ * `home/status.ts:53,60,62` (its existing switch assumes `proposal.status` is exactly
+ * `"draft"|"approved"|"rejected"|"deferred"` and calls `changePath(..., proposal.change_set_id,
+ * ...)` assuming `string`, not `string | null`; any field named `status` shared with a review
+ * variant either breaks that switch's exhaustiveness (`TS2366`) or, if renamed, removes the
+ * property from the union so `status.ts` can no longer read it at all (`TS2339`)) and
+ * `home/DecisionQueue.test.tsx:45` (its `proposal()` fixture builds a plain object typed as the
+ * union via `{...defaults, ...(overrides: Partial<QueueProposal>)}`, which no longer resolves to
+ * a single member once `QueueProposal` is a union). Left as the single flat interface pending an
+ * orchestrator decision (widen touch to co-edit those two files, or defer the FE type to the
+ * issue that builds the review pages). */
 export interface QueueProposal {
   change_set_id: string; campaign_id: string; kind: string;
   status: "draft" | "approved" | "rejected" | "deferred";

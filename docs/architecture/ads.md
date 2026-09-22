@@ -1107,8 +1107,8 @@ never-pulled accounts.
 Two read-only payload additions for the v7 停損提案三步流程 (F22-I02/I03); no migration, no platform write, no new
 route. Neither field is stored — both are computed at read time on every call.
 
-- `app/ads/triage.py::_queue_payload` (`GET/POST .../queue`): every open row gains `proposal`. `null` on every `worse`
-  row this batch (`worse` proposals are out of scope). On a `stop_loss` row: the newest (`created_at DESC`)
+- `app/ads/triage.py::_queue_payload` (`GET/POST .../queue`): every open row gains `proposal`. `null` on a `worse` row
+  unless a review round matches (F23-I01, below). On a `stop_loss` row: the newest (`created_at DESC`)
   non-superseded `ads_change_set` of the row's own campaign whose items include a `pause` item targeting
   `triage.entity_id` (`_matching_pause_set`) — `null` when there is none. That set "counts" (returns a `proposal`)
   unless: it's `deferred` and its own `revisit_at <= now()`; it's `rejected` and its `created_at` calendar day (UTC)
@@ -1135,6 +1135,26 @@ route. Neither field is stored — both are computed at read time on every call.
   rejected 在窗內外／deferred 過期／superseded／別支廣告的清單／別個活動的清單／multi）、
   `app/tests/test_ads_change_control.py::ChangeControlPlatformUrlTest`（meta 目標有連結／未知平台是 `null`／
   `content_hash` 不受影響）。
+- F23-I01 加做：`worse` 列的 `proposal`（`_row_review_proposal`）——這支廣告在目前 triage 窗內（`window_end` 落在
+  `[triage.window.start, triage.window.end]`，因為窗尾每天在動，不能用精確相等）最新一筆 `ads_review_round`；沒有就
+  `null`。有的話：`{kind:"review", review_id, status, decision, reason, revisit_at, recommendation_id, change_set_id,
+  change_set_status, verification_state, multi}`——`status/decision/reason/revisit_at` 是這回檢討自己的欄位；
+  `recommendation_id` 是 `result_json.recommendations[]` 第一筆 `recommendation=="adjust"` 的 `id`，沒有就 `null`；
+  `change_set_id/change_set_status/verification_state/multi` 來自最新一筆非 superseded、`plan_json.review_id` 等於
+  這回 `id` 的變更清單（`change_control.py::create` 把 `review_id` 平放進 `plan_json`，跟
+  `review_evidence.py:276`／`change_control_data.py:279` 讀法一致），沒有清單時四者皆 `null`／`false`。一次品牌查
+  `ads_review_round`（`_brand_review_rounds`，依 `created_at DESC` 分組成 `(campaign_id, entity_id)`），複用 F22-I01
+  已經查好的 `sets_by_campaign`／`action_states`，不新增查詢。驗證：
+  `app/tests/test_ads_triage_queue.py::QueueReviewProposalTest`（無回合／queued 無清單／ready 取第一個 adjust
+  建議／ready 無 adjust 建議／completed 帶文案清單／completed 無清單／deferred／unjudgeable／failed／窗外不匹配／
+  `stop_loss` 列不受影響）。
+- 前端型別未跟進：`frontend/src/lib/adsTriageApi.ts::QueueProposal` 這批仍是單一介面（只有 `stop_loss` 形狀），
+  未改成 `kind` 判別聯集。改聯集會讓 `home/status.ts`（do_not_touch）的既有 switch 斷編譯——不管新欄位叫什麼名字：
+  沿用 `status` 這個名字會讓那支 switch 從詳盡變不詳盡（`TS2366`，`npm run build` 已實測）；改名不共用又會讓
+  `status.ts` 讀不到 `proposal.status` 這個屬性（`TS2339`）；`home/DecisionQueue.test.tsx`（同樣 do_not_touch）的
+  `proposal()` 測試工廠用 `{...defaults, ...(overrides: Partial<QueueProposal>)}` 組物件，`QueueProposal` 一旦變聯
+  集也連帶斷掉（`TS2322`）。這兩個檔都在 F23-I01 的 `do_not_touch` 範圍外，需要另外授權才能改；哪個之後要蓋
+  「看證據」等頁面的票，再一併決定型別設計並改這兩檔。
 
 ### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
 

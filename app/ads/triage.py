@@ -417,10 +417,12 @@ def get_queue(conn, org_id, brand_id) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# F22-I01: each queue row's own `proposal` -- the change set (if any) that currently answers a
-# `stop_loss` row's ad, per the "Queue row state" rule (feature Decisions). Read-only, brand-wide
-# (one query for every non-superseded change set, one for every `ads_action` verification_state,
-# one for the handful of entities whose matching item reads back `confirmed`) -- never per row.
+# F22-I01/F23-I01: each queue row's own `proposal`, per the "Queue row state" rule (feature
+# Decisions) -- on a `stop_loss` row, the change set (if any) that currently answers its ad
+# (F22-I01); on a `worse` row, the matching `ads_review_round` (if any), plus its own copy change
+# set when one exists (F23-I01). Read-only, brand-wide (one query for every non-superseded change
+# set, one for every `ads_action` verification_state, one for every review round, one for the
+# handful of entities whose matching pause item reads back `confirmed`) -- never per row.
 # ---------------------------------------------------------------------------
 
 
@@ -464,6 +466,90 @@ def _brand_entity_native_status(conn, org_id, brand_id, entity_ids) -> dict:
         (org_id, brand_id, list(entity_ids)),
     ).fetchall()
     return {row["id"]: row["native_status"] for row in rows}
+
+
+def _brand_review_rounds(conn, org_id, brand_id) -> dict:
+    """Every `ads_review_round` of this brand, newest (`created_at`) first -- one query for the
+    whole brand (F23-I01 Done #1, same shape as `_brand_change_sets_by_campaign`). Grouped by
+    `(campaign_id, entity_id)` in Python; the SQL-level `ORDER BY created_at DESC` is preserved
+    inside each group, so "the newest round of this entity" is the first match while walking it."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,entity_id,window_end,status,decision,reason,revisit_at,result_json "
+        "FROM ads_review_round WHERE org_id=%s AND brand_id=%s ORDER BY created_at DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    by_entity = defaultdict(list)
+    for row in rows:
+        by_entity[(row["campaign_id"], row["entity_id"])].append(dict(row))
+    return by_entity
+
+
+def _matching_review_round(rounds_by_entity, campaign_id, entity_id, window):
+    """The newest round of this entity whose own `window_end` still lies inside the row's
+    CURRENT triage window (feature Decisions "Queue row state") -- the window's own `end` moves
+    forward every day (`triage.py:120,264`), so an exact `window_end == window["end"]` match would
+    lose the round the very next morning; `None` when no round's `window_end` falls in range."""
+    for round_ in rounds_by_entity.get((campaign_id, entity_id), ()):
+        if window["start"] <= round_["window_end"] <= window["end"]:
+            return round_
+    return None
+
+
+def _matching_review_change_set(sets_by_campaign, campaign_id, review_id):
+    """The newest non-superseded change set of `campaign_id` whose own `plan_json.review_id`
+    matches this round (`change_control.py::create` stores it flat, never nested -- see
+    `plan_json->>'review_id'` reused the same way by `review_evidence.py:276`) -- `None` when
+    there isn't one."""
+    for change_set in sets_by_campaign.get(campaign_id, ()):
+        if change_set["plan_json"].get("review_id") == review_id:
+            return change_set
+    return None
+
+
+def _first_adjust_recommendation_id(result_json):
+    for recommendation in (result_json or {}).get("recommendations", ()):
+        if recommendation.get("recommendation") == "adjust":
+            return recommendation.get("id")
+    return None
+
+
+def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, triage_item):
+    """The `proposal` for one `worse` row (F23-I01, feature Decisions "Queue row state") -- the
+    newest `ads_review_round` of this entity whose `window_end` lies inside the row's current
+    triage window, or `None` when there is none. The optional copy change set is the newest
+    non-superseded set whose `plan_json.review_id` names this round; its `verification_state`
+    reads back the matching `copy` item targeting this same entity (reusing the F22 brand-wide
+    `sets_by_campaign`/`action_states` maps, never a fresh query per row)."""
+    campaign_id, entity_id = triage_item["campaign_id"], triage_item["entity_id"]
+    round_ = _matching_review_round(rounds_by_entity, campaign_id, entity_id, triage_item["window"])
+    if round_ is None:
+        return None
+    change_set = _matching_review_change_set(sets_by_campaign, campaign_id, round_["id"])
+    change_set_id = change_set_status = verification_state = None
+    multi = False
+    if change_set is not None:
+        items = change_set["plan_json"].get("items", ())
+        item = next(
+            (i for i in items if i.get("kind") == "copy" and i.get("target_id") == entity_id),
+            None,
+        )
+        change_set_id = change_set["id"]
+        change_set_status = change_set["status"]
+        verification_state = action_states.get(item["id"], "pending") if item else "pending"
+        multi = len(items) > 1
+    return {
+        "kind": "review",
+        "review_id": round_["id"],
+        "status": round_["status"],
+        "decision": round_["decision"],
+        "reason": round_["reason"],
+        "revisit_at": round_["revisit_at"],
+        "recommendation_id": _first_adjust_recommendation_id(round_["result_json"]),
+        "change_set_id": change_set_id,
+        "change_set_status": change_set_status,
+        "verification_state": verification_state,
+        "multi": multi,
+    }
 
 
 def _matching_pause_set(sets_by_campaign, campaign_id, entity_id):
@@ -533,8 +619,8 @@ def _queue_payload(conn, org_id, brand_id, items) -> dict:
         for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
         if row["category"] in queue_categories and row["dedupe_key"] in items_by_key
     ]
-    # F22-I01: `worse` rows never get a proposal this batch -- only their own entities need the
-    # native_status lookup narrowed to `stop_loss` rows.
+    # F22-I01: only `stop_loss` rows' own entities need the native_status lookup (only a
+    # `confirmed` pause proposal ever reads it).
     stop_loss_entity_ids = {
         items_by_key[row["dedupe_key"]]["entity_id"]
         for row in rows
@@ -545,14 +631,22 @@ def _queue_payload(conn, org_id, brand_id, items) -> dict:
     native_status_by_entity = _brand_entity_native_status(
         conn, org_id, brand_id, stop_loss_entity_ids
     )
+    # F23-I01: `worse` rows' own proposal -- the matching review round (if any), brand-wide.
+    rounds_by_entity = _brand_review_rounds(conn, org_id, brand_id)
     open_rows = []
     for row in rows:
         triage_item = items_by_key[row["dedupe_key"]]
-        proposal = (
-            _row_proposal(sets_by_campaign, action_states, native_status_by_entity, triage_item)
-            if triage_item["class"] == "stop_loss"
-            else None
-        )
+        cls = triage_item["class"]
+        if cls == "stop_loss":
+            proposal = _row_proposal(
+                sets_by_campaign, action_states, native_status_by_entity, triage_item
+            )
+        elif cls == "worse":
+            proposal = _row_review_proposal(
+                rounds_by_entity, sets_by_campaign, action_states, triage_item
+            )
+        else:
+            proposal = None
         open_rows.append({**row, "triage": triage_item, "proposal": proposal})
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:
