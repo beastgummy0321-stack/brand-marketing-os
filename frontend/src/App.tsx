@@ -114,6 +114,10 @@ function App() {
           element={<AdsProposeBudgetRoute />}
         />
         <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/cleanup/:cleanupCampaignId"
+          element={<AdsProposeCleanupRoute />}
+        />
+        <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId"
           element={<AdsReviewEntryRoute />}
         />
@@ -523,6 +527,19 @@ function AdsProposeBudgetRoute() {
       entityId={entityId ?? ""}
       proposeKind="budget"
     />
+  );
+}
+
+/** 清理提議確認頁（propose route，F27-I15，Contract F）：`queue` 裡的 cleanup 列進來時還沒有
+ * change set，草稿在第一次核准／拒絕／暫緩才即時組出來（同 `AdsProposePauseRoute` 的分工）。
+ * 網址帶了兩段活動 id（`:campaignId/propose/cleanup/:cleanupCampaignId`）只因為後端佇列列自己的
+ * `action_url` 就是兩段一樣的 campaign id（`app/ads/triage.py::_cleanup_candidates`）——這裡只用
+ * 外層的 `campaignId`，第二段不重複讀一次。`key` 用 campaignId，換一個活動要整支重新掛載
+ * （理由同 `AdsTargetRoute`）。 */
+function AdsProposeCleanupRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string; cleanupCampaignId: string }>();
+  return (
+    <ConfirmPage key={`propose-cleanup-${campaignId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} proposeKind="cleanup" />
   );
 }
 

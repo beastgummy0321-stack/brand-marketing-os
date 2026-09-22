@@ -11,6 +11,8 @@ import * as changeApi from "@/lib/adsChangeApi";
 import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import * as handoffApi from "@/lib/adsHandoffApi";
+import * as externalApi from "@/lib/adsExternalApi";
 import { HandoffPage } from "./HandoffPage";
 
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
@@ -20,6 +22,18 @@ vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
 vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
   ...(await importOriginal<typeof triageApi>()),
   getQueue: vi.fn(),
+}));
+// F27-I15: `new_ad`'s handoff step embeds `ManualHandoffPanel` (`NewAdHandoffPanel.tsx`), which
+// calls these directly — mocked here purely so that branch mounts without hitting a real API,
+// same mocks (and `useWorkspace` stand-in) `ManualHandoffPanel.test.tsx` already uses.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org" }) }));
+vi.mock("@/lib/adsHandoffApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof handoffApi>()),
+  getHandoff: vi.fn(),
+}));
+vi.mock("@/lib/adsExternalApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof externalApi>()),
+  existingCampaigns: vi.fn(), externalView: vi.fn(),
 }));
 
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
@@ -228,5 +242,84 @@ describe("HandoffPage（F22-I03）步驟導正與例外", () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
     renderAt(handoffPath());
     expect(await screen.findByText("找不到這份變更清單")).toBeTruthy();
+  });
+});
+
+describe("HandoffPage（F27-I15）new_ad kind：嵌入既有的 ManualHandoffPanel", () => {
+  it("畫出交接面板，「看目前核對結果」重新讀取清單", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({ id: "item_new", kind: "new_ad", target_id: "plc_1" })] })],
+    });
+    vi.mocked(handoffApi.getHandoff).mockResolvedValue({
+      items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
+      notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
+    });
+    vi.mocked(externalApi.existingCampaigns).mockResolvedValue({ items: [], sources: [], next_cursor: null, job: null });
+    vi.mocked(externalApi.externalView).mockResolvedValue({
+      entities: [], observations: [], next_entity_cursor: null, next_observation_cursor: null,
+      window: { start: "2026-09-01", end: "2026-09-21" }, connections: [], sync: {}, coverage: {},
+    });
+    renderAt(handoffPath());
+    expect(await screen.findByText("人工交接與平台核對")).toBeTruthy();
+    expect(await screen.findByText(/物件存在、設定相符與素材核對分別記錄/)).toBeTruthy();
+    expect(changeApi.getChangeControl).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "看目前核對結果 →" }));
+    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
+  function cleanupChangeSet(): ChangeSet {
+    return changeSet({
+      items: [
+        changeItem({ id: "item_low1", target_id: "aex_low1", target: { id: "aex_low1", name: "1150701 情境圖 A", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low1" }, platform_url: "https://adsmanager.facebook.com/x?id=low1" }),
+        changeItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" }, platform_url: null }),
+      ],
+    });
+  }
+  const CLEANUP_KIND = "cleanup" as unknown as QueueItem["kind_key"];
+  function cleanupQueueItem(): QueueItem {
+    return queueItem({
+      kind_key: CLEANUP_KIND, category: "ads_triage_cleanup",
+      proposal: { kind: "cleanup", change_set_id: "acs_1", campaign_id: "cmp_1", status: "approved", verification_state: "pending", reason: null, revisit_at: null, multi: true },
+    });
+  }
+
+  it("一則廣告一個 TodoRow，各自的打開平台按鈕", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanupChangeSet()] });
+    renderAt(handoffPath());
+    expect(await screen.findByText(/打開平台上的「1150701 情境圖 A」，把開關關掉/)).toBeTruthy();
+    expect(screen.getByText(/打開平台上的「1150702 情境圖 B」，把開關關掉/)).toBeTruthy();
+    const opened = screen.getAllByRole("link", { name: "↗ 打開平台" });
+    expect(opened).toHaveLength(1);
+    expect((opened[0] as HTMLAnchorElement).getAttribute("href")).toBe("https://adsmanager.facebook.com/x?id=low1");
+    expect(screen.getByRole("button", { name: "複製編號" })).toBeTruthy();
+    expect(screen.getByText("native_low2")).toBeTruthy();
+  });
+
+  it("「我都做完了」依序對每一則呼叫 report／check，成功後導去核對結果", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanupChangeSet()] });
+    vi.mocked(changeApi.actOnChangeItem)
+      .mockResolvedValueOnce(cleanupChangeSet())
+      .mockResolvedValueOnce(cleanupChangeSet())
+      .mockResolvedValueOnce(cleanupChangeSet())
+      .mockResolvedValueOnce(changeSet({
+        items: [
+          changeItem({ id: "item_low1", target_id: "aex_low1", verification_state: "confirmed", reported_at: "2026-09-22T00:00:00Z" }),
+          changeItem({ id: "item_low2", target_id: "aex_low2", verification_state: "confirmed", reported_at: "2026-09-22T00:00:00Z" }),
+        ],
+      }));
+    renderAt(handoffPath());
+    await user.click(await screen.findByRole("button", { name: "我都做完了，開始核對 →" }));
+    await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(4));
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[0]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low1", "report"]);
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[1]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low1", "check"]);
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[2]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low2", "report"]);
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[3]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low2", "check"]);
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
   });
 });

@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Image as ImageIcon } from "lucide-react";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -15,6 +14,7 @@ import {
   getChangeControl,
   getMonthlyBudget,
   ChangeRequestRejected,
+  type ChangeDraft,
   type ChangeItem,
   type ChangeSet,
   type MonthlyBudget,
@@ -23,12 +23,18 @@ import { getQueue, type QueueItem, type QueuePayload, type QueueScale, type Tria
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, Meter, ReservedSlotCard, Segmented } from "../patterns";
+import { CleanupEvidence } from "./CleanupEvidence";
+import { NewAdEvidence } from "./NewAdEvidence";
+import { Tile } from "./Tile";
 import {
   buildBudgetDraftItem,
+  buildCleanupDraftItems,
   buildPauseDraftItem,
   budgetTitle,
   campaignChangesPath,
   changeStepPath,
+  cleanupTitle,
+  isCleanupTriageItem,
   isMonthBudgetRejection,
   nextOpenQueueItem,
   pauseTitle,
@@ -41,26 +47,6 @@ import {
 
 const STEPS = [{ label: "確認提議" }, { label: "到平台完成" }, { label: "核對結果" }];
 const STEP_PURPOSE = "核准後才到平台操作";
-
-/** 廣告／投放組縮圖：`null`、還沒讀到或載入失敗都落到同一顆中性佔位圖示，不是空白或破圖示
- * （同 `detail/CampaignDetailPage.tsx` 的 `AdThumb` 慣例；那支沒有 export，這裡另一份小工具，
- * 不是重刻 kit 零件——facts 把 `.thumb` 分在「沒有對應 kit 零件」，layout 用 token 自己刻）。 */
-function Tile({ url, icon, size = "lg" }: { url?: string | null; icon?: ReactNode; size?: "lg" | "sm" }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [url]);
-  const showImage = !!url && !failed;
-  const dim = size === "sm" ? "size-8" : "size-16";
-  return (
-    <div className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted`} aria-hidden="true">
-      {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element -- 這裡不是 Next.js 專案。
-        <img src={url ?? undefined} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
-      ) : (
-        icon ?? <ImageIcon className={size === "sm" ? "size-4 text-muted-foreground" : "size-6 text-muted-foreground"} />
-      )}
-    </div>
-  );
-}
 
 /** 暫停提議的證據卡：有 triage 就是完整量尺版；triage 已經不在佇列裡（entered by :setId 且
  * 廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。 */
@@ -265,7 +251,7 @@ type QuickPick = "3" | "7" | "custom";
  * confirm 的步驟都由這裡導去正確步驟（`changeFlow.ts::stepFromChangeSet`），也同時把 propose
  * 網址收斂成正典的 changes 網址。 */
 export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind = "pause" }: {
-  brandId: string; campaignId: string; entityId?: string; setId?: string; proposeKind?: "pause" | "budget";
+  brandId: string; campaignId: string; entityId?: string; setId?: string; proposeKind?: "pause" | "budget" | "cleanup";
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -277,11 +263,13 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [operationId] = useState(() =>
-    entityId && proposeKind === "budget"
-      ? `triage-budget:${entityId}:${crypto.randomUUID()}`
-      : `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`,
-  );
+  // F27-I15 Contract F: `propose/cleanup/:campaignId` never carries an `entityId` (the campaign
+  // id is already a prop) — a third branch alongside the existing budget/pause ones.
+  const [operationId] = useState(() => {
+    if (entityId && proposeKind === "budget") return `triage-budget:${entityId}:${crypto.randomUUID()}`;
+    if (proposeKind === "cleanup") return `triage-cleanup:${campaignId}:${crypto.randomUUID()}`;
+    return `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`;
+  });
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -321,12 +309,22 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       }
       return queue.items.find((i) => i.triage.entity_id === entityId) ?? null;
     }
+    // F27-I15 Contract F: the cleanup propose route has no `entityId` — its own identity is the
+    // campaign, matched through the queue's `cleanup` row directly (`item.cleanup.campaign_id`,
+    // same field `changeFlow.ts::queueItemEntityId` reads for this `kind_key`).
+    if (!setId && proposeKind === "cleanup") {
+      return queue.items.find((i) => isCleanupTriageItem(i) && i.cleanup?.campaign_id === campaignId) ?? null;
+    }
     const targetId = changeSet?.items[0]?.target_id;
     return queue.items.find((i) =>
       (changeSet && i.proposal?.change_set_id === changeSet.id) || i.triage.entity_id === targetId || i.scale?.owner.id === targetId,
     ) ?? null;
-  }, [queue, entityId, proposeKind, changeSet]);
+  }, [queue, entityId, proposeKind, changeSet, setId, campaignId]);
   const position = queue && triageItem ? { pos: queue.items.indexOf(triageItem) + 1, total: queue.items.length } : null;
+  // F27-I15 Contract F: recognised only through the queue's own `cleanup` row — see
+  // `isCleanupTriageItem`'s own doc comment (`changeFlow.ts`) for why this isn't a shape guess.
+  const cleanupSet = isCleanupTriageItem(triageItem);
+  const isCleanupPropose = !entityId && !setId && proposeKind === "cleanup";
 
   // feature Decisions「Step from a change set」：非 confirm 步驟的清單，或還沒對到正典
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
@@ -365,6 +363,23 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         items: [buildBudgetDraftItem(scale.owner.id, scale.to)],
       });
     }
+    if (proposeKind === "cleanup") {
+      const cleanup = triageItem?.cleanup;
+      if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
+      // F27-I15 Contract F / coordinator correction: the backend only accepts `source: "cleanup"`
+      // on create once F27-I25 lands its own `ChangeDraft.source?`/`CreateRequest.source` widening
+      // (out of this issue's touch, `frontend/src/lib/adsChangeApi.ts`). Widen the type locally at
+      // the call site rather than editing that file or stopping — `createChangeSet` just
+      // `JSON.stringify`s `body` as-is, so the extra key reaches the backend regardless of the
+      // narrower `ChangeDraft` type.
+      return createChangeSet(brandId, campaignId, {
+        operation_id: operationId,
+        title: cleanupTitle(cleanup.campaign_name),
+        month: currentBudgetMonth(),
+        items: buildCleanupDraftItems(cleanup.ads),
+        source: "cleanup",
+      } as ChangeDraft & { source: "cleanup" });
+    }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     return createChangeSet(brandId, campaignId, {
       operation_id: operationId,
@@ -385,13 +400,17 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       // 直接把後端訊息顯示出來，不重建（feature Decisions「a 409 from approve about the month
       // budget shows the backend message and does NOT rebuild」）。
       if (err instanceof ChangeRequestRejected && !rebuilt && !isMonthBudgetRejection(err.message)) {
+        // F27-I15: a cleanup set's rebuild must carry `source: "cleanup"` again — otherwise the
+        // rebuilt draft would silently stop being the campaign's cleanup proposal (Contract F's
+        // own `_matching_cleanup_set` only matches on `plan_json.source`).
         const rebuiltSet = await createChangeSet(brandId, campaignId, {
           operation_id: crypto.randomUUID(),
           title: target.title,
           month: target.month,
           items: target.items.map(toChangeInput),
           supersedes_id: target.id,
-        });
+          ...(cleanupSet ? { source: "cleanup" as const } : {}),
+        } as ChangeDraft & { source?: "cleanup" });
         setChangeSet(rebuiltSet);
         return approveWithRebuild(rebuiltSet, true);
       }
@@ -479,12 +498,12 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       </div>
     );
   }
-  if (entityId && !triageItem) {
+  if ((entityId || isCleanupPropose) && !triageItem) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
         <EmptyState
-          title={proposeKind === "budget" ? "找不到這個投放組的加預算提議" : "找不到這則廣告的停損提議"}
+          title={proposeKind === "budget" ? "找不到這個投放組的加預算提議" : isCleanupPropose ? "找不到這個活動的清理提議" : "找不到這則廣告的停損提議"}
           description="可能已經處理過，或資料剛好還沒同步到投放中心。"
           actionHref={homeHref}
           actionLabel="回投放中心"
@@ -512,9 +531,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const item = changeSet && changeSet.items.length === 1 ? changeSet.items[0] : undefined;
   // `item` 在 propose 模式、change set 還沒建立前是 `undefined`（草稿延遲建立），這時 kind 由
   // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
-  // propose kind 只有 pause，這裡是新加的分支）。
-  const kind = item ? item.kind : entityId ? proposeKind : "pause";
-  const blocked = changeSet !== null && (changeSet.items.length !== 1 || (kind !== "pause" && kind !== "copy" && kind !== "budget"));
+  // propose kind 只有 pause，這裡是新加的分支）。F27-I15：cleanup 是多項清單，沒有單一 `item`
+  // 可讀，`cleanupSet`（佇列比對，不是內容猜測）優先於這整套 `item`／`proposeKind` 判斷。
+  const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
+  const blocked = changeSet !== null && !cleanupSet
+    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
 
   if (blocked && changeSet) {
     return (
@@ -531,8 +552,16 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     );
   }
 
-  const title = kind === "copy" ? "確認變更" : kind === "budget" ? "提議：加預算" : "提議：暫停這則廣告";
-  const approveLabel = kind === "copy" ? "核准，接著到平台操作" : kind === "budget" ? "核准加碼，接著到平台操作" : "核准暫停，接著到平台操作";
+  const title = kind === "copy" ? "確認變更"
+    : kind === "budget" ? "提議：加預算"
+    : kind === "new_ad" ? "確認新廣告提議"
+    : kind === "cleanup" ? "提議：清理這個活動的廣告"
+    : "提議：暫停這則廣告";
+  const approveLabel = kind === "copy" ? "核准，接著到平台操作"
+    : kind === "budget" ? "核准加碼，接著到平台操作"
+    : kind === "new_ad" ? "核准新廣告，接著到平台操作"
+    : kind === "cleanup" ? "核准清理，接著到平台操作"
+    : "核准暫停，接著到平台操作";
   const closedLabel = changeSet
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
     : "";
@@ -581,6 +610,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           scale={triageItem?.scale ?? null}
           bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
           brandId={brandId}
+        />
+      )}
+      {kind === "new_ad" && item && <NewAdEvidence item={item} />}
+      {kind === "cleanup" && (
+        <CleanupEvidence
+          cleanup={triageItem?.cleanup ?? null}
+          items={changeSet?.items ?? []}
+          campaignName={triageItem?.triage.campaign_name ?? null}
         />
       )}
 

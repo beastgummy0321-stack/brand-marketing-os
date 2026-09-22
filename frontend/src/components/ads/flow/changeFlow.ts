@@ -3,7 +3,7 @@
  * Kept separate from `ConfirmPage.tsx` so I03 (到平台完成) and I04 (核對結果) reuse the same
  * step rule and paths instead of re-deriving them. */
 import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsChangeApi";
-import type { QueueItem, QueuePayload } from "@/lib/adsTriageApi";
+import type { QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 // F25-I03: 「下一件」跨 kind 共用同一顆判斷——home 列表跟這裡的 handoff/verify 頁不能各算各的
 // （feature Decisions「下一件」）。只 import，不改 `home/status.ts`（F25-I02 同時在改那支檔）。
 import { isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
@@ -19,18 +19,42 @@ export interface FlowStep {
 
 /** Which of the three v7 screens a change set currently belongs on, mirroring the prototype's
  * `state(q)` for the `light` flow (the six-step `review` flow is a different feature). Approved
- * sets split on the single item's `verification_state`/`reported_at` per feature Decisions —
- * multi-item sets are handled by the caller (they link out instead of rendering). */
+ * sets split on `verification_state`/`reported_at` per feature Decisions — F27-I15 generalises
+ * this from "the single item" to "every item" so a multi-item cleanup set (Contract F) routes the
+ * same way a single-item set always has: still on "handoff" while ANY item hasn't even been
+ * reported yet, "verify" once every item has (a `new_ad` item's own `reported_at` never gets set
+ * by this flow at all — its handoff goes through `ads_handoff_item`/`ManualHandoffPanel` instead,
+ * see `NewAdHandoffPanel.tsx` — so it only ever leaves "pending" once its readback aggregate
+ * lands, which is exactly when `verification_state` itself stops being `"pending"`). For a
+ * single-item set this is byte-for-byte the same rule the code had before. */
 export function stepFromChangeSet(set: ChangeSet): FlowStep {
   if (set.status === "draft") return { step: "confirm", closed: false };
   if (set.status === "rejected" || set.status === "deferred" || set.status === "superseded") {
     return { step: "confirm", closed: true };
   }
-  const item = set.items[0];
-  if (item && item.verification_state === "pending" && item.reported_at === null) {
-    return { step: "handoff", closed: false };
-  }
-  return { step: "verify", closed: false };
+  if (set.items.length === 0) return { step: "verify", closed: false };
+  const stillHandoff = set.items.some((i) => i.verification_state === "pending" && i.reported_at === null);
+  return { step: stillHandoff ? "handoff" : "verify", closed: false };
+}
+
+/** F27-I15 Contract F: `QueueKind`/`QueueItem.kind_key`'s own TypeScript type in `adsTriageApi.ts`
+ * (out of this issue's touch) is deliberately one value narrower than what real responses carry —
+ * that file's own comment says widening it to include `"cleanup"` is "deferred to the frontend
+ * issue that builds that row's UI", which is this one. Comparing `kind_key` straight to the
+ * literal `"cleanup"` would fail to compile (TS2367, the two types have no overlap) until that
+ * type widens; routing the value through a `string`-typed parameter first type-checks without a
+ * cast at every call site, and without editing `adsTriageApi.ts`. */
+function isCleanupKind(kindKey: string): boolean {
+  return kindKey === "cleanup";
+}
+
+/** F27-I15 Contract F: a multi-item cleanup set is only ever recognised through the queue's own
+ * `cleanup` row (matched the same way `findFlowTriageItem` already matches any kind) — never by
+ * guessing from the set's own item shape. A generic multi-`pause` set (different ads, no cleanup
+ * row behind it) must keep falling through to the existing "多項變更" workspace link, so this is
+ * a lookup, not a `items.every(kind==="pause")` heuristic. */
+export function isCleanupTriageItem(item: QueueItem | null): boolean {
+  return !!item && isCleanupKind(item.kind_key);
 }
 
 const brandPath = (brandId: string) => `/brands/${encodeURIComponent(brandId)}`;
@@ -53,6 +77,15 @@ export function proposePausePath(brandId: string, campaignId: string, entityId: 
  * budget propose mode"). */
 export function proposeBudgetPath(brandId: string, campaignId: string, ownerId: string): string {
   return `${campaignPath(brandId, campaignId)}/propose/budget/${encodeURIComponent(ownerId)}`;
+}
+
+/** `propose/cleanup/:campaignId` — F27-I15 Contract F. The backend's own queue row already sends
+ * the campaign id twice (`app/ads/triage.py::_cleanup_candidates` — `.../campaigns/{c}/propose/
+ * cleanup/{c}`, pre-dispatch correction); the route carries a second, unused param only so that
+ * exact link works, this builder mirrors the same shape rather than only emitting the first
+ * segment. */
+export function cleanupProposePath(brandId: string, campaignId: string): string {
+  return `${campaignPath(brandId, campaignId)}/propose/cleanup/${encodeURIComponent(campaignId)}`;
 }
 
 /** F25-I01 Home rows Decisions: a `refresh_creative` row's button always goes here — there is no
@@ -80,8 +113,25 @@ export function pauseTitle(adName: string | null): string {
   return `暫停「${truncate(adName ?? "未命名廣告", 60)}」`;
 }
 
-export function buildPauseDraftItem(entityId: string): ChangeInput {
-  return { kind: "pause", target_id: entityId, after: { status: "PAUSED" }, reason: PAUSE_REASON };
+export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REASON): ChangeInput {
+  return { kind: "pause", target_id: entityId, after: { status: "PAUSED" }, reason };
+}
+
+/** F27-I15 Contract F: the one fixed reason every pause item of a lazily-created cleanup set
+ * proposes (same "one fixed reason per lazy-create kind" convention `PAUSE_REASON`/`BUDGET_REASON`
+ * already follow). */
+export const CLEANUP_PAUSE_REASON = "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則";
+
+/** `title = 清理「<campaign name, cut to 60 chars; null → 未命名活動>」`，同 `pauseTitle`／
+ * `budgetTitle` 的做法。 */
+export function cleanupTitle(campaignName: string | null): string {
+  return `清理「${truncate(campaignName ?? "未命名活動", 60)}」`;
+}
+
+/** F27-I15 Contract F: the lazily-created cleanup set's own items — one `pause` item per proposed
+ * ad, in the same (lowest-spend-first) order the queue row's own `cleanup.ads` already carries. */
+export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
+  return ads.map((ad) => buildPauseDraftItem(ad.entity_id, CLEANUP_PAUSE_REASON));
 }
 
 /** F25-I03: the one fixed reason a `scale_budget` row proposes (feature Decisions "Confirm page
@@ -154,6 +204,10 @@ export function flowPosition(queue: QueuePayload | null, item: QueueItem | null)
 export function queueItemEntityId(item: QueueItem): string {
   if (item.kind_key === "scale_budget" && item.scale) return item.scale.owner.id;
   if (item.kind_key === "refresh_creative" && item.refresh) return item.refresh.campaign_id;
+  // F27-I15 Contract F: a `cleanup` row's own identity is the campaign, not any one ad
+  // (`app/ads/triage.py::_cleanup_candidates`'s `identity_id`) — same reasoning as the two kinds
+  // above.
+  if (isCleanupKind(item.kind_key) && item.cleanup) return item.cleanup.campaign_id;
   return item.triage.entity_id;
 }
 
@@ -175,6 +229,16 @@ export function nextOpenQueueItem(queue: QueuePayload | null, currentEntityId: s
   }
   if (next.kind_key === "scale_budget" && next.proposal === null) {
     return { label: "看提議", href: proposeBudgetPath(next.brand_id, next.triage.campaign_id, queueItemEntityId(next)), done: false };
+  }
+  // F27-I15 Contract F: same "null-proposal owns its own link" shape as `scale_budget` above —
+  // `proposalAction`'s null-proposal branch is hard-coded to `propose/pause` (that branch's
+  // existing behaviour belongs to `stop_loss`, not touched here). Once a cleanup set exists,
+  // `isQueueItemDone` still never marks a `cleanup` row done (`home/status.ts`, out of this
+  // issue's touch), so it would otherwise loop back here forever with a `pause`-shaped
+  // `proposalAction` call; fall through to that generic call for its label/step only when the row
+  // already has a proposal, same as every other kind.
+  if (isCleanupKind(next.kind_key) && next.proposal === null) {
+    return { label: "看提議", href: cleanupProposePath(next.brand_id, next.triage.campaign_id), done: false };
   }
   const kind = next.kind_key === "worse" ? "review" : "pause";
   return proposalAction(next.brand_id, next.triage.campaign_id, queueItemEntityId(next), next.proposal, kind);
