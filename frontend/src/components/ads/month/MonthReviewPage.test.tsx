@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignTriage, TriageClosedBlock, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
 import type { OrdersPageData } from "@/lib/ordersApi";
 import { fetchOrders } from "@/lib/ordersApi";
@@ -66,8 +66,14 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
+// F26-I01: `closed` is always sent by the real backend -- an empty block here (this page's own
+// F26-I03 「已關閉」 handling is a separate issue, not covered by this factory yet).
+const EMPTY_CLOSED: TriageClosedBlock = {
+  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
+};
+
 function triage(items: TriageItem[]): CampaignTriage {
-  return { window_days: 7, items };
+  return { window_days: 7, items, closed: EMPTY_CLOSED };
 }
 
 function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {

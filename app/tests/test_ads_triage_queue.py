@@ -143,11 +143,13 @@ class QueueEndToEndTest(unittest.TestCase):
         self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
         self.assertEqual(worse_row["triage"]["campaign_name"], "活動一")
 
-        # F25-I01: all four kinds are live now -- neither of these two campaigns' owners/ads
+        # F26-I01: all five kinds are live now -- neither of these two campaigns' owners/ads
         # qualifies for `scale_budget`/`refresh_creative` (no budget owner configured, too few
-        # ads), so `kinds_available` growing to four doesn't itself raise more rows here.
+        # ads), and this campaign's own sync is fully covered (`setUp`'s `record_sync`), so
+        # `kinds_available` growing to five doesn't itself raise more rows here.
         self.assertEqual(
-            result["kinds_available"], ["stop_loss", "worse", "scale_budget", "refresh_creative"]
+            result["kinds_available"],
+            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"],
         )
         self.assertEqual(result["kinds_pending"], [])
         self.assertEqual(result["counts"]["stop_loss"], 1)
@@ -445,7 +447,8 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["items"], [])
         self.assertEqual(queue["total_ads"], 0)
         self.assertEqual(
-            queue["kinds_available"], ["stop_loss", "worse", "scale_budget", "refresh_creative"]
+            queue["kinds_available"],
+            ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"],
         )
         self.assertEqual(queue["kinds_pending"], [])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))
@@ -998,6 +1001,133 @@ class ScaleRefreshQueueTest(unittest.TestCase):
         ]
         result = self._refresh_queue(items)
         self.assertEqual(result["items"], [])
+
+
+class InsufficientDataQueueTest(unittest.TestCase):
+    """F26-I01: the campaign-level 「資料不足」 queue row -- real `classify()` pipeline (needs a
+    real campaign/account for `_account_cutoff`/`campaign_sync_state`, same reason
+    `QueueEndToEndTest` above never patches `_classify_brand`)."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="資料不足佇列測試", actor="test", client_name=None,
+        )["id"]
+        self.reader = _Reader()
+        patcher = patch.object(
+            channels, "external_reader", side_effect=lambda platform: self.reader,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動一",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1"},
+        )
+        self.ad = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告A",
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )
+        self.conn.commit()
+        self.cutoff = (
+            db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
+        ).date()
+
+    def set_coverage(self, start, end):
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={"last_success_at": db.now_utc().isoformat(),
+                   "coverage": {"start": start.isoformat(), "end": end.isoformat()}},
+        )
+        self.conn.commit()
+
+    def _insufficient_rows(self, result):
+        return [r for r in result["items"] if r["category"] == "ads_triage_insufficient_data"]
+
+    def test_missing_days_raises_the_row(self):
+        self.set_coverage(self.cutoff - timedelta(days=10), self.cutoff)  # < 28-day window
+        result = triage.refresh_queue(self.conn, self.org, self.brand)
+        rows = self._insufficient_rows(result)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["kind_key"], "insufficient_data")
+        self.assertEqual(row["severity"], "rule_warning")
+        self.assertIsNone(row["proposal"])
+        self.assertEqual(
+            row["action_url"], f"/brands/{self.brand}/ads/campaigns/{self.campaign}/wait",
+        )
+        self.assertEqual(row["insufficient"]["campaign_id"], self.campaign)
+        self.assertEqual(row["insufficient"]["campaign_name"], "活動一")
+        self.assertTrue(row["insufficient"]["missing_days"])
+        self.assertEqual(row["insufficient"]["sync_state"], "ok")
+        self.assertIn("insufficient_data", result["kinds_available"])
+
+    def test_failed_sync_raises_the_row_even_with_full_coverage(self):
+        self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={"status": "error", "error": "讀取失敗",
+                   "last_attempt_at": db.now_utc().isoformat()},
+        )
+        self.conn.commit()
+        rows = self._insufficient_rows(triage.refresh_queue(self.conn, self.org, self.brand))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["insufficient"]["sync_state"], "failed")
+        self.assertEqual(rows[0]["insufficient"]["missing_days"], [])
+
+    def test_disconnected_raises_the_row(self):
+        self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)
+        self.reader.accounts = lambda conn, org, brand: []
+        rows = self._insufficient_rows(triage.refresh_queue(self.conn, self.org, self.brand))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["insufficient"]["sync_state"], "disconnected")
+
+    def test_full_coverage_and_ok_sync_never_raises(self):
+        self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)
+        rows = self._insufficient_rows(triage.refresh_queue(self.conn, self.org, self.brand))
+        self.assertEqual(rows, [])
+
+    def test_never_raised_without_an_active_ad(self):
+        # The only ad is closed -- `classify()` never judges it, so this campaign contributes no
+        # items to `by_campaign` at all, and the row never fires no matter how bad the sync is.
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告A", "native_status": "PAUSED",
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )
+        self.conn.commit()  # never synced at all -- would otherwise definitely qualify
+        rows = self._insufficient_rows(triage.refresh_queue(self.conn, self.org, self.brand))
+        self.assertEqual(rows, [])
+
+    def test_deduped_within_the_same_window_and_superseded_when_it_recovers(self):
+        self.set_coverage(self.cutoff - timedelta(days=10), self.cutoff)
+        first_row = self._insufficient_rows(
+            triage.refresh_queue(self.conn, self.org, self.brand),
+        )[0]
+        again_row = self._insufficient_rows(
+            triage.refresh_queue(self.conn, self.org, self.brand),
+        )[0]
+        self.assertEqual(again_row["id"], first_row["id"])  # same window -> no duplicate row
+
+        self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)  # recovers
+        recovered = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(self._insufficient_rows(recovered), [])
+        row = self.conn.execute(
+            "SELECT status FROM interrupt WHERE id=%s", (first_row["id"],),
+        ).fetchone()
+        self.assertEqual(row["status"], "resolved")
+
+    def test_category_registered_with_expected_severity_and_label(self):
+        self.assertEqual(
+            core_interrupts.CATEGORIES["ads_triage_insufficient_data"],
+            {"severity": "rule_warning", "label": "活動資料不足待處理"},
+        )
 
 
 if __name__ == "__main__":

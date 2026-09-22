@@ -11,8 +11,13 @@ row and its own approval can never disagree (feature Decisions "Rule A").
 import math
 from collections import defaultdict
 
-# Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in).
-_ACTIVE_EXCLUDED_STATUSES = {"PAUSED", "DELETED", "ARCHIVED"}
+from app.ads import ad_status
+
+# Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in). F26-I01: the
+# active/closed line now comes from the shared `ad_status.CLOSED_STATUSES` (five values) rather
+# than this file's own three-value copy -- `classify()` already excludes closed ads from `items`
+# entirely, so this filter is now mostly a defensive no-op against `native_status_by_entity`
+# reading a status `classify()` didn't see (never re-diverges from the one true definition).
 _STABLE_CLASSES = {"better", "flat"}
 _READABLE_CLASSES = {"better", "flat", "worse"}
 SCALE_FACTOR = 1.2
@@ -21,7 +26,7 @@ MAX_READABLE_FOR_REFRESH_ROW = 2
 
 
 def _is_active(item, native_status_by_entity):
-    return native_status_by_entity.get(item["entity_id"]) not in _ACTIVE_EXCLUDED_STATUSES
+    return not ad_status.is_closed(native_status_by_entity.get(item["entity_id"]))
 
 
 def _owner_lookup(conn, org_id, brand_id):

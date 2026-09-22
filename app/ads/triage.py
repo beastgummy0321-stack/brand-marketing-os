@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
+    ad_status,
     external_sync,
     month_budget,
     repository,
@@ -44,6 +45,11 @@ LABELS = {
 
 
 def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
+    """F26-I01: judges only ACTIVE ads (`ad_status.is_closed` false, including an unknown/null
+    `native_status` -- unknown is never closed) -- a closed ad (paused/deleted/archived/its own
+    adset or campaign paused on the platform) is kept and reported through the `closed` block
+    below, never judged, never silently dropped (measured cause, feature Decisions "I01": the
+    home strip used to read most of its 「資料不足」 count from closed ads)."""
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -55,12 +61,16 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         "AND native_kind='ad' ORDER BY name,id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
+    active_ads = [ad for ad in ads if not ad_status.is_closed(ad["native_status"])]
+    closed_ads = [ad for ad in ads if ad_status.is_closed(ad["native_status"])]
     entity_ids = [ad["id"] for ad in ads]
     rows_by_entity = defaultdict(list)
     if entity_ids:
         # One read for the whole campaign (review fix: was one query per ad per window step) --
         # every window any ad ever needs (current + its equal-length previous window, up to 28
-        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`.
+        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`. Still reads every ad's
+        # rows, closed ones included -- the `closed` block's own numbers (below) reuse this same
+        # read, never a second query.
         range_start = cutoff - timedelta(days=_MAX_LOOKBACK_DAYS)
         rows = conn.execute(
             "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
@@ -72,11 +82,58 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     items = [
         _classify_ad(dict(ad), campaign["name"], target, cutoff, coverage,
                       rows_by_entity.get(ad["id"], []))
-        for ad in ads
+        for ad in active_ads
     ]
-    return {"window_days": WINDOW_STEPS[-1], "items": items, "data": _data_view(
-        conn, org_id, brand_id, campaign, cutoff, coverage,
-    )}
+    return {
+        "window_days": WINDOW_STEPS[-1], "items": items,
+        "closed": _closed_block(closed_ads, rows_by_entity, cutoff),
+        "data": _data_view(conn, org_id, brand_id, campaign, cutoff, coverage),
+    }
+
+
+_CLOSED_ITEMS_CAP = 50
+
+
+def _closed_item(entity, entity_rows, cutoff):
+    """One closed ad's own last-window numbers (feature Decisions "I01") -- the SAME widest
+    (`WINDOW_STEPS[-1]`-day) window `classify()` reports as its own `window_days`, sliced from the
+    campaign-level read `classify()` already fetched (never a second query)."""
+    days = WINDOW_STEPS[-1]
+    end = cutoff
+    start = end - timedelta(days=days - 1)
+    view, spend = _ad_window(entity_rows, start, end)
+    return {
+        "entity_id": entity["id"], "name": entity.get("name"),
+        "native_status": entity.get("native_status"), "thumbnail_url": _thumbnail_url(entity),
+        "spend": spend, "cost_per_result": view["cost_per_result"] if view else None,
+        "result_label": result_kinds.label(view["result_kind"] if view else None),
+    }
+
+
+def _closed_block(closed_ads, rows_by_entity, cutoff):
+    """The `closed` block of `classify()`'s result (feature Decisions "I01") -- `paused`/
+    `archived` count the two statuses the frontend groups the strip by; every other closed status
+    (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`) falls into `other`, so `paused + archived + other
+    == total` always. `items` is capped at `_CLOSED_ITEMS_CAP`, in the same (name, id) order the
+    campaign's own ad query already returned; `truncated` tells the frontend there's more than the
+    cap without it having to compare lengths itself."""
+    paused = archived = other = 0
+    for ad in closed_ads:
+        status = ad["native_status"]
+        if status == "PAUSED":
+            paused += 1
+        elif status == "ARCHIVED":
+            archived += 1
+        else:
+            other += 1
+    items = [
+        _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff)
+        for ad in closed_ads[:_CLOSED_ITEMS_CAP]
+    ]
+    return {
+        "paused": paused, "archived": archived, "other": other, "total": len(closed_ads),
+        "items": items, "truncated": len(closed_ads) > _CLOSED_ITEMS_CAP,
+    }
 
 
 def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage):
@@ -355,13 +412,14 @@ def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
 # F18-I03: brand decision queue over program triage, through the existing `interrupts` inbox.
 # ---------------------------------------------------------------------------
 
-# One interrupt category per queue kind this batch raises (F25-I01: all four kinds are now live).
+# One interrupt category per queue kind this batch raises (F26-I01: five kinds are now live).
 QUEUE_CATEGORY = {
     "stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse",
     "scale_budget": "ads_triage_scale_budget", "refresh_creative": "ads_triage_refresh_creative",
+    "insufficient_data": "ads_triage_insufficient_data",
 }
 ALL_CLASSES = ("stop_loss", "worse", "better", "flat", "insufficient", "no_target")
-KINDS_AVAILABLE = ["stop_loss", "worse", "scale_budget", "refresh_creative"]
+KINDS_AVAILABLE = ["stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"]
 KINDS_PENDING = []
 _NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10 fixed chars).
 
@@ -400,6 +458,10 @@ def _refresh_message(campaign_name):
     return f"「{_safe_name(campaign_name)}」素材待補，待決定"
 
 
+def _insufficient_message(campaign_name):
+    return f"「{_safe_name(campaign_name)}」資料不足，待處理"
+
+
 def _dedupe_key(kind, identity_id, window_end):
     # Window end in the key (feature Decisions #3): a resolved decision stays resolved until the
     # window moves on to a new `window_end` -- a fresh dedupe key `interrupts.enqueue` never
@@ -424,6 +486,65 @@ def _month_view_fn(conn, org_id, brand_id):
     return lambda additional: month_budget.view(
         conn, org_id, brand_id, month, additional=additional
     )
+
+
+def _campaign_insufficiency(conn, org_id, brand_id, campaign_id):
+    """This one campaign's own `data` block plus its name (F26-I01, feature Decisions "I01") --
+    reuses `classify()`'s own `_coverage`/`_account_cutoff`/`_data_view` seam, which never touches
+    `ads_external_daily` (only the campaign's own `context_json` and its bound account), so this
+    stays cheap alongside the per-campaign `classify()` call `_classify_brand` already makes.
+    `None` when the campaign no longer exists (defensive -- `_non_closed_campaign_ids` only just
+    listed live ids, but nothing here holds that row locked in between)."""
+    campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        return None
+    coverage = _coverage(campaign)
+    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    data = _data_view(conn, org_id, brand_id, campaign, cutoff, coverage)
+    return {"campaign_name": campaign["name"], "data": data, "cutoff": cutoff}
+
+
+_SYNC_STATES_RAISING_INSUFFICIENT = {"failed", "disconnected"}
+
+
+def _insufficient_candidates(conn, org_id, brand_id, by_campaign) -> list:
+    """The campaign-level 「資料不足」 queue row (F26-I01, feature Decisions "I01") -- one
+    candidate per non-closed campaign that has at least one ACTIVE ad (`by_campaign` only ever
+    carries a campaign whose triage items are active ads, `classify()` no longer judges closed
+    ones) whose own `data` block shows `missing_days` non-empty OR `sync.state` failed/
+    disconnected. `window_end` is the campaign's own account cutoff (the same date every other
+    row's window would extend to on this campaign) -- it moves forward daily, so a resolved row
+    stays resolved only until the NEXT day's refresh, same "window moves on" rule every other kind
+    already follows. `triage` is the first active ad's own item (`by_campaign`'s own (name, id)
+    order, same as `classify()`'s query) -- always present, since the >=1-active-ad gate above
+    guarantees a non-empty list."""
+    candidates = []
+    for campaign_id, campaign_items in by_campaign.items():
+        if not campaign_items:
+            continue
+        info = _campaign_insufficiency(conn, org_id, brand_id, campaign_id)
+        if info is None:
+            continue
+        data = info["data"]
+        if not (data["missing_days"] or data["sync"]["state"] in _SYNC_STATES_RAISING_INSUFFICIENT):
+            continue
+        window_end = info["cutoff"]
+        triage_item = campaign_items[0]
+        candidates.append({
+            "kind": "insufficient_data", "identity_id": campaign_id,
+            "window_start": window_end, "window_end": window_end,
+            "message": _insufficient_message(info["campaign_name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}/wait",
+            "payload": {
+                "triage": triage_item,
+                "insufficient": {
+                    "campaign_id": campaign_id, "campaign_name": info["campaign_name"],
+                    "missing_days": data["missing_days"], "sync_state": data["sync"]["state"],
+                    "coverage": data["coverage"],
+                },
+            },
+        })
+    return candidates
 
 
 def _queue_candidates(conn, org_id, brand_id, items) -> list:
@@ -470,6 +591,7 @@ def _queue_candidates(conn, org_id, brand_id, items) -> list:
                           f"?tab=assets&material_new=1",
             "payload": {"triage": refresh["triage"], "refresh": refresh["refresh"]},
         })
+    candidates.extend(_insufficient_candidates(conn, org_id, brand_id, by_campaign))
     return candidates
 
 
@@ -478,7 +600,8 @@ def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
     feeds the brand home and `/api/inbox`, and auto-archive only covers `informational` severity
     -- a stale open row (superseded by a newer window, or its kind no longer qualifying) would
     otherwise sit open forever and keep inflating `brand_health`. Close every OPEN row of this
-    brand in the four triage categories whose `dedupe_key` is no longer live, through the
+    brand in every triage category (`QUEUE_CATEGORY.values()`, five as of F26-I01) whose
+    `dedupe_key` is no longer live, through the
     existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads` (architecture
     boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at most one open row
     per (kind, identity) at any time; a user-resolved key is already not 'open', so this loop
@@ -793,7 +916,9 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
             )
         elif kind == "scale_budget":
             proposal = _row_scale_proposal(sets_by_campaign, action_states, candidate)
-        else:  # refresh_creative: no change set, the row's button goes to the workbench instead.
+        else:
+            # refresh_creative/insufficient_data: no change set -- the row's own button goes
+            # elsewhere (the workbench / the F24 wait page) instead.
             proposal = None
         extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
         open_rows.append({

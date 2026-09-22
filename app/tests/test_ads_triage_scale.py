@@ -229,6 +229,22 @@ class ScaleCandidatesTest(_CandidateFixture):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["scale"]["owner"]["ads_count"], 2)
 
+    def test_adset_paused_ad_never_blocks_the_owner(self):
+        """F26-I01: `ADSET_PAUSED` (the ad's own parent adset paused on the platform) now comes
+        from the shared `ad_status.CLOSED_STATUSES` (five values) rather than this file's old
+        three-value set -- same "never blocks the owner" rule `test_paused_ad_never_blocks_the_
+        owner` proves for `PAUSED`."""
+        self.campaign_entity(budget_type="daily", budget_amount=1000)
+        adset_paused = self.ad_entity(native_id="ad1")["id"]
+        active = self.ad_entity(native_id="ad2")["id"]
+        items = [
+            self.item(entity_id=adset_paused, cls="worse", campaign_id=self.campaign),
+            self.item(entity_id=active, cls="flat", campaign_id=self.campaign),
+        ]
+        candidates = self.candidates(items, native_status={adset_paused: "ADSET_PAUSED"})
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["scale"]["owner"]["ads_count"], 2)
+
     def test_owner_with_only_paused_ads_never_qualifies(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
@@ -365,6 +381,23 @@ class RefreshCandidatesTest(_CandidateFixture):
         # d is paused -- active becomes {a,b,c} (still meets the >=3 gate), readable becomes
         # {a,b} (2, at the gate) instead of {a,b,d} (3, over it).
         candidates = self.candidates(items, native_status={d: "PAUSED"})
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["refresh"]["classified_count"], 3)
+        self.assertEqual(candidates[0]["refresh"]["readable_count"], 2)
+
+    def test_adset_paused_ads_excluded_too(self):
+        """F26-I01: same exclusion as `test_paused_ads_excluded_from_both_counts`, but for
+        `ADSET_PAUSED` -- only reachable now that the shared `ad_status.CLOSED_STATUSES` (five
+        values) replaces this file's old three-value set."""
+        a, b, c, d = self._ad("a1"), self._ad("a2"), self._ad("a3"), self._ad("a4")
+        items = [
+            self.item(entity_id=a, cls="worse", campaign_id=self.campaign),
+            self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
+            self.item(entity_id=c, cls="insufficient", reason_code="below_sample_gate",
+                     campaign_id=self.campaign),
+            self.item(entity_id=d, cls="worse", campaign_id=self.campaign),
+        ]
+        candidates = self.candidates(items, native_status={d: "ADSET_PAUSED"})
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["refresh"]["classified_count"], 3)
         self.assertEqual(candidates[0]["refresh"]["readable_count"], 2)

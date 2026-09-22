@@ -1341,3 +1341,51 @@ forced last and never count as done.
 - `flow/changeFlow.ts::nextOpenQueueItem` is the single 「下一件」 rule for all four kinds; ConfirmPage and VerifyPage use it.
 - 驗證：`home/DecisionQueue.test.tsx`, `AdsHomePage.test.tsx`, `flow/ConfirmPage.test.tsx`, `flow/VerifyPage.test.tsx`;
   並排證據 `.harness/scratch/F25/I0{2,3}/`.
+
+### 6.29 F26-I01 — 判讀只看投放中的廣告、`closed` 唯讀擴充、「資料不足」佇列列（settled 2026-09-22）
+
+實測根因（`brd_bughunt` 真資料，2026-09-22）：`triage.classify()` 選廣告只憑 `native_kind='ad'`（`triage.py:54` 舊版），
+20 支廣告全部照判，但只有 5 支投放中（11 暫停、4 已封存）——首頁長條「資料不足 17」多數來自已關閉的廣告。同一時間
+`month_budget.py:131` 已經排除五種狀態，`triage_scale.py:15`（F25）只排除三種，`triage.py` 完全沒排除——一個共用常數、
+三個消費端各自抄一份會漂移。
+
+- **共用常數 `app/ads/ad_status.py`**：`CLOSED_STATUSES = {PAUSED, DELETED, ARCHIVED, ADSET_PAUSED, CAMPAIGN_PAUSED}`
+  （Meta `effective_status` 的原生詞彙，平台中立檔案，不匯入 adapter）、`is_closed(status)`——`None`（未知）永遠不算已關閉。
+  `triage.py`／`triage_scale.py`（取代自己的三值集合）／`month_budget.py`（取代自己內嵌的五值字面集合，行為完全不變）
+  三個消費端改為 import 這一個定義。
+- **`triage.classify()`**：只判讀 `native_status` 不是已關閉的廣告（`items`）；`closed` 區塊帶回其餘廣告——
+  `{paused, archived, other, total, items, truncated}`。`paused`／`archived` 各自算，`DELETED`／`ADSET_PAUSED`／
+  `CAMPAIGN_PAUSED` 併進 `other`（`paused+archived+other===total` 恆成立）。`items` 每筆
+  `{entity_id, name, native_status, thumbnail_url, spend, cost_per_result, result_label}`，數字取自同一支
+  `classify()` 已經讀過的 `ads_external_daily`（`_ad_window`，跟活躍廣告同一次讀，不多打第二次查詢）——固定用最寬的
+  `WINDOW_STEPS[-1]`（28 天，跟 `classify()` 自己回的 `window_days` 一致）；沒有資料的那支廣告 `spend`／
+  `cost_per_result` 就是 `null`，不當機。`items` 上限 50 筆（同一次活動廣告查詢的 `(name, id)` 排序），超過時
+  `truncated=true`。`counts`／`total_ads`（`_queue_payload`）因為只吃 `items` 自動變成只算活躍廣告，程式碼本身不用改。
+- **「資料不足」佇列列**：新類別 `ads_triage_insufficient_data`（`app/core/interrupts.py::CATEGORIES`，本票對這支
+  舊檔唯一允許的改動，`severity=rule_warning`、label「活動資料不足待處理」，登記在既有 `rule_warning` 之後）。
+  `triage.py::_insufficient_candidates`：每個非結案活動、至少一支活躍廣告（`by_campaign` 本身就只含活躍廣告的
+  triage item，天然滿足這個門檻）、`data.missing_days` 非空或 `data.sync.state` 屬於
+  `{"failed","disconnected"}`（複用 `classify()` 同一套 `_data_view`，不碰 `ads_external_daily`，成本低）就出列。
+  `window_end` 用這個活動自己的帳戶 cutoff（跟其他列一樣每天往前移，去重鍵隨之翻新）；去重鍵
+  `ads-triage:insufficient_data:<campaign_id>:<window_end>`。payload：`kind_key:"insufficient_data"`，
+  `insufficient:{campaign_id, campaign_name, missing_days, sync_state, coverage}`；`triage` 是第一支活躍廣告的
+  item；沒有變更清單，`proposal` 恆為 `null`，按鈕留給前端接到既有 F24 等待頁
+  （`/brands/:b/ads/campaigns/:c/wait`）。`QUEUE_CATEGORY`／`KINDS_AVAILABLE`（五種）／既有 supersede 機制
+  （`_supersede_stale_open_rows` 迴圈 `QUEUE_CATEGORY.values()`，本來就不分 kind）同步更新，沒有另立第二套。
+- **前端型別跟進（本票只做型別，未做畫面——`home/CampaignCard.tsx`／`detail/CampaignDetailPage.tsx`／
+  `home/QueueRow.tsx`／`home/status.ts`／`month/MonthReviewPage.tsx` 等產出畫面留給 I02／I03）**：
+  `frontend/src/lib/adsTriageApi.ts` 新增 `TriageClosedItem`／`TriageClosedBlock`，`CampaignTriage.closed` 設成必填
+  （後端永遠會帶，不像 `data` 有 `do_not_touch`-vs-`touch` 衝突要留選填）——`frontend/src/components/ads/**/*.test.tsx`
+  下既有手寫 `getTriage()` fixture（`detail/CampaignDetailPage.test.tsx`、`home/CampaignCards.test.tsx`、
+  `month/MonthReviewPage.test.tsx`、`wait/WaitPage.test.tsx`）各補一個空 `closed` 區塊。`QueueItem` 新增選填
+  `insufficient?: QueueInsufficient`；`QueueKind`／`QueueItem.kind_key` 這次刻意**不**收 `"insufficient_data"`——
+  `home/QueueRow.tsx` 等既有消費端拿它當 `Record<QueueKind, ...>` 的窮舉鍵，不在本票 `touch`，貿然加值會逼著改那些
+  檔案；產出這一列畫面的票再一起把 `QueueKind` 加寬、把那些 `Record`／`switch` 補上第五個分支。
+- **已知缺口（誠實揭露）**：沒有「關掉時間」（Meta entity payload 沒有這個欄位），`closed` 區塊不含任何日期；
+  已關閉廣告的畫面呈現（清單、摺疊、「看紀錄」連結）與「資料不足」列的畫面呈現都留給後續 I02／I03。
+- 驗證：`app/tests/test_ads_triage.py::AdStatusTest`／`TriageClosedAdsTest`（5 活躍+11 暫停+4 已封存的實測形狀、
+  `null` 狀態仍判讀、`other` 桶、items 上限＋`truncated`、無資料廣告不當機）、
+  `app/tests/test_ads_triage_queue.py::InsufficientDataQueueTest`（缺天／同步失敗／斷線都出列、沒有活躍廣告不出列、
+  同窗去重、恢復後 supersede）、`test_ads_triage_scale.py`（`ADSET_PAUSED` 現在也排除 Rule A／B，舊三值集合抓不到
+  的反例）、`test_core_interrupts.py`（新類別 severity／label）。`cd frontend && npm run build`／
+  `npm test -- src/components/ads`。

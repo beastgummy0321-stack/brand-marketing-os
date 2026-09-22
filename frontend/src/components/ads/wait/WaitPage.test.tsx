@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignTriage, TriageClosedBlock, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
 import type { OrdersPageData } from "@/lib/ordersApi";
 import { fetchOrders } from "@/lib/ordersApi";
@@ -65,10 +65,17 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
+// F26-I01: `closed` is always sent by the real backend -- an empty block here (this page's own
+// closed-ad handling is out of this issue's scope).
+const EMPTY_CLOSED: TriageClosedBlock = {
+  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
+};
+
 function triage(overrides: Partial<CampaignTriage> = {}): CampaignTriage {
   return {
     window_days: 28,
     items: [triageItem()],
+    closed: EMPTY_CLOSED,
     data: {
       sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
       coverage: { start: "2026-08-25", end: "2026-09-19" },
@@ -191,7 +198,7 @@ describe("WaitPage（F24-I03）事實列", () => {
   });
 
   it("`data` 缺漏時視為從沒同步過、沒有覆蓋範圍", async () => {
-    mockGetTriage.mockResolvedValue({ window_days: 28, items: [] });
+    mockGetTriage.mockResolvedValue({ window_days: 28, items: [], closed: EMPTY_CLOSED });
     renderPage();
     await screen.findByText("資料不足，這個活動先不判斷");
     expect(screen.getByText("尚未同步")).toBeTruthy();

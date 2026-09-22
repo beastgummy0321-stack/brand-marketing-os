@@ -38,6 +38,10 @@ CATEGORIES = {
     "ads_triage_stop_loss": {"severity": "money_loss", "label": "廣告停損待決定"},
     "ads_triage_worse": {"severity": "rule_warning", "label": "廣告變差待決定"},
     "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
+    # F26-I01: the campaign-level "insufficient data" row (missing sync days, or a failed/
+    # disconnected sync, over an otherwise-live campaign) -- a rule about the data itself, not yet
+    # a loss, so it ranks after the other rule_warning entries.
+    "ads_triage_insufficient_data": {"severity": "rule_warning", "label": "活動資料不足待處理"},
     # F25-I01: the two remaining queue kinds -- program proposals, not yet losses or warnings
     # (feature Decisions "Rule A"/"Rule B"), so both rank informational, after the F18 entries.
     "ads_triage_scale_budget": {"severity": "informational", "label": "可加預算待決定"},

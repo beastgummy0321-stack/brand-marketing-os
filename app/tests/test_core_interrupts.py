@@ -168,6 +168,14 @@ class InterruptQueueTest(unittest.TestCase):
             {"severity": "informational", "label": "素材待補待決定"},
         )
 
+    def test_ads_triage_insufficient_data_category_registered(self):
+        """F26-I01: the campaign-level 「資料不足」 row -- rule_warning (a rule about the data
+        itself, not yet a loss), registered after the other rule_warning entries."""
+        self.assertEqual(
+            core_interrupts.CATEGORIES["ads_triage_insufficient_data"],
+            {"severity": "rule_warning", "label": "活動資料不足待處理"},
+        )
+
     def test_row_with_deregistered_category_still_lists_and_sorts(self):
         """票 dead-code-sweep 05：CATEGORIES 清掉了一批沒有生產呼叫端的類別，但舊 DB 列
         可能還留著已刪掉的類別字串（本測試直接寫欄位繞過 enqueue() 的登記檢查，模擬那種

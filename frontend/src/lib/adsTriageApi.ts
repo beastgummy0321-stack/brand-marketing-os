@@ -60,7 +60,29 @@ export interface TriageData {
 // F24-I01: `data` is optional here for the same `do_not_touch`-vs-`touch` scope conflict noted on
 // `adsApi.ts::CampaignCard.data` -- existing hand-written `*.test.tsx` fixtures can't be reached
 // to add it. Real responses always carry it (`triage.py::_data_view`).
-export interface CampaignTriage { window_days: number; items: TriageItem[]; data?: TriageData }
+/** F26-I01: one closed ad's own last-window numbers, per `app/ads/triage.py::_closed_item` --
+ * `spend`/`cost_per_result` are `null` when this ad has no rows inside that window (never a
+ * second, different-shaped query from `TriageMetricsView`). */
+export interface TriageClosedItem {
+  entity_id: string; name: string | null; native_status: string | null;
+  thumbnail_url: string | null; spend: number | null; cost_per_result: number | null;
+  result_label: string;
+}
+/** F26-I01: `classify()`'s own `closed` block (feature Decisions "I01") -- every ad of this
+ * campaign whose `native_status` reads closed, kept and reported, never judged (`items` never
+ * appears in `CampaignTriage.items` above). `paused`/`archived` are the two statuses the frontend
+ * groups the strip by; every other closed status (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`)
+ * falls into `other`, so `paused + archived + other === total` always. `items` is capped at 50,
+ * in the same (name, id) order the campaign's own ad query returns; `truncated` says whether
+ * there's more than that cap. Real responses always carry this (`triage.py::classify`), same
+ * reason it's required here unlike `data` above. */
+export interface TriageClosedBlock {
+  paused: number; archived: number; other: number; total: number;
+  items: TriageClosedItem[]; truncated: boolean;
+}
+export interface CampaignTriage {
+  window_days: number; items: TriageItem[]; closed: TriageClosedBlock; data?: TriageData;
+}
 
 /** F22-I01: the change set (if any) that currently answers a `stop_loss` row, per
  * `app/ads/triage.py::_row_proposal` (feature Decisions "Queue row state") — `null` when there
@@ -110,6 +132,14 @@ export interface QueueReviewProposal {
 
 export type QueueProposal = QueuePauseProposal | QueueReviewProposal | QueueBudgetProposal;
 
+// F26-I01: the real backend can now also enqueue an `"insufficient_data"` row (`triage.py`'s new
+// `insufficient_data` kind) -- `QueueKind` and `QueueItem.kind_key` stay at their four existing
+// values here on purpose: every current consumer (`home/QueueRow.tsx`, `home/status.ts`, …) keys
+// an exhaustive `Record<QueueKind, ...>` off this type outside this issue's own `touch`, so
+// widening it here would force edits there too. The frontend issue that actually builds the
+// insufficient-data row's own UI widens this type and updates those switches together (`insufficient`
+// below is added now so its payload shape exists ahead of that -- only `kind_key`'s own type
+// is deferred).
 export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
@@ -137,13 +167,23 @@ export interface QueueRefresh {
   readable_count: number; classified_count: number;
   thumbnails: (string | null)[];
 }
+/** F26-I01: the `insufficient_data` row's own payload -- `missing_days`/`coverage` are the SAME
+ * window `classify()` judges every ad of this campaign with (`app/ads/triage.py::_data_view`),
+ * `sync_state` the campaign's own `data.sync.state` (`app/ads/repository.py::campaign_sync_state`
+ * — never re-derived, always one of the values that field can read). */
+export interface QueueInsufficient {
+  campaign_id: string; campaign_name: string; missing_days: string[];
+  sync_state: CampaignSyncState["state"];
+  coverage: { start: string; end: string } | null;
+}
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
  * enqueue used. A row whose kind has since stopped qualifying (e.g. an ad moved off
  * `stop_loss`/`worse`, or an owner's ads are no longer all stable) is filtered out of the payload
- * rather than listed without a match, so `triage` is always present here. `scale`/`refresh` are
- * present only on their own `kind_key` (F25-I01, feature Decisions "Queue payload"). */
+ * rather than listed without a match, so `triage` is always present here. `scale`/`refresh`/
+ * `insufficient` are present only on their own `kind_key` (F25-I01/F26-I01, feature Decisions
+ * "Queue payload"). */
 export interface QueueItem {
   id: string; org_id: string; brand_id: string | null; campaign_period_id: string | null;
   dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
@@ -151,7 +191,7 @@ export interface QueueItem {
   status: string; created_at: string; resolved_at: string | null;
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
-  scale?: QueueScale; refresh?: QueueRefresh;
+  scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;
