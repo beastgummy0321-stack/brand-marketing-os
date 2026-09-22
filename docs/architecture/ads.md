@@ -1102,3 +1102,58 @@ One card per source; one failed GET fails only its card. Rules (each checked aga
 Not built: shell header 「最近同步・N 項待處理」 (no brand-level sync endpoint); `last_pull_at` is a `min()` that ignores
 never-pulled accounts.
 
+### 6.22 F22-I01 — Queue row `proposal` and change item `platform_url`（settled 2026-09-22）
+
+Two read-only payload additions for the v7 停損提案三步流程 (F22-I02/I03); no migration, no platform write, no new
+route. Neither field is stored — both are computed at read time on every call.
+
+- `app/ads/triage.py::_queue_payload` (`GET/POST .../queue`): every open row gains `proposal`. `null` on every `worse`
+  row this batch (`worse` proposals are out of scope). On a `stop_loss` row: the newest (`created_at DESC`)
+  non-superseded `ads_change_set` of the row's own campaign whose items include a `pause` item targeting
+  `triage.entity_id` (`_matching_pause_set`) — `null` when there is none. That set "counts" (returns a `proposal`)
+  unless: it's `deferred` and its own `revisit_at <= now()`; it's `rejected` and its `created_at` calendar day (UTC)
+  falls outside the row's current `triage.window.start..end`; or its matching item's `verification_state` reads back
+  `confirmed` while the entity's own `ads_external_entity.native_status` is no longer `"PAUSED"` (triage itself never
+  reads `native_status` — `triage.py:228-307` — so a re-enabled ad needs the row to read as if there were no
+  proposal, not a stale `confirmed` one). When it counts: `{change_set_id, campaign_id, kind, status,
+  verification_state, reason, revisit_at, multi}` — `kind`/`verification_state` are the matching item's own,
+  `reason` is the set's `decision_reason`, `multi` is `len(items) > 1` (a multi-item set is not rendered by the
+  three-step pages; the row links to the campaign workspace instead).
+  Three queries for the whole brand, never per row: every non-superseded change set (grouped by `campaign_id` in
+  Python), every `ads_action.verification_state` of the brand, and `native_status` for exactly the `stop_loss` rows'
+  own entities (only a `confirmed` match ever reads it).
+- `app/ads/change_control_data.py::get`: every item view gains `platform_url: str | None`, computed from the item's
+  own `target` through `app/ads/adapters::platform_url(target)` — a one-line dispatch on `target["platform"]`, lazily
+  importing `app/ads/adapters/meta_read.py::platform_url` (same lazy-import seam `channels.py::external_reader`
+  already uses, to dodge the `adapters/__init__.py -> manual.py -> change_control_launch.py ->
+  change_control_data.py` import-time cycle). Meta: `https://adsmanager.facebook.com/adsmanager/manage/
+  {campaigns|adsets|ads}?act={source_account}&selected_{campaign|adset|ad}_ids={native_id}` — `null` when the native
+  kind isn't one of those three, or `native_id`/`source_account` is missing. Unknown platform → `null`. Never written
+  to `plan_json`; no hash (`content_hash`, `premise_hash`) ever depends on it. `null` → the "↗ 打開平台" button is
+  replaced by the target's own name + native id + 「複製編號」 (F22-I03).
+- 驗證：`app/tests/test_ads_triage_queue.py::QueueProposalTest`（null／draft／approved-pending／confirmed 及其失效／
+  rejected 在窗內外／deferred 過期／superseded／別支廣告的清單／別個活動的清單／multi）、
+  `app/tests/test_ads_change_control.py::ChangeControlPlatformUrlTest`（meta 目標有連結／未知平台是 `null`／
+  `content_hash` 不受影響）。
+
+### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
+
+Routes (`components/ads/flow/`, v7 `confirmPage()`/`handoff()`/`verify()`): `/brands/:brandId/ads/campaigns/:campaignId/
+propose/pause/:entityId` (no change set yet) and `.../changes/:setId/confirm|handoff|verify`. A page opened on the wrong step
+redirects to the step the set is in (`flow/changeFlow.ts::stepFromChangeSet`). Only `pause` has an entry this batch (home
+stop-loss row / detail 「去處理」, `home/status.ts::proposalAction`); the pages render `budget`/`copy` sets too.
+- Draft is created lazily on the first write (核准／拒絕／暫緩), reusing `proposal.change_set_id` when the row has one;
+  `operation_id = triage-pause:<entityId>:<uuid held in page state>` so a lost response is retried with the same body.
+  A refused approve (409) rebuilds once with a new `operation_id` + `supersedes_id`, then asks again.
+- Step rule: draft → confirm; rejected/deferred/superseded → confirm, closed; approved + pending + `reported_at` null →
+  handoff; pending with `reported_at` (read-back found the old setting) → verify 「平台上還是原本的設定」; reported/unknown →
+  verify 「核對中」; confirmed/deviated/stale → verify ok/warn/bad. 「讀回於」 = `evidence_json.observed_at`. Rail cells
+  only from real fields (設定相符 = `setting_matches === true`); 花費停止／學習期／品牌學習 cells are omitted (no data).
+- Handoff: 「打開平台」 = `platform_url` (§6.22) in a new tab, else name + native id + 「複製編號」; tick state is local;
+  「我做完了」 = `report` then `check`, navigating to verify even when `check` fails.
+- Gaps kept honest: brand-learning tags = one `ReservedSlotCard`; `adoptPlatform` waits for the copy step (batch B);
+  a multi-item set links to the campaign workspace. Home 「N 件」 counts only rows whose proposal is not done.
+- Kit: `patterns/FlowPieces.tsx` (FlowHeader, KindMark, Meter, TodoRow, ResultHero, StatusRail, Segmented,
+  DecisionSheet, ActionBar); `frontend/scripts/ui-evidence.cjs --acts` reaches later prototype steps.
+- 驗證：`frontend/src/components/ads/flow/*.test.tsx`、`home/DecisionQueue.test.tsx`、`AdsHomePage.test.tsx`、
+  `detail/CampaignDetailPage.test.tsx`；並排證據 `.harness/scratch/F22/I0{2,3,4}/`。

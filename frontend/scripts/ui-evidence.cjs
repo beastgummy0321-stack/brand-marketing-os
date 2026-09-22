@@ -7,6 +7,7 @@
  *
  *   node scripts/ui-evidence.cjs --proto ../docs/design/ads/prototype-v7-ads-center.html --hash camp/sales \
  *     --name with-target --out ../.harness/scratch/F21/I01 \
+ *     [--acts approve,report]   prototype-only: click these data-act buttons first (a step reachable only through earlier steps)
  *     [--app brands/brd_bughunt/ads/campaigns/cmp_x/detail --base http://127.0.0.1:8732 --mocks mocks.json]
  *
  * --mocks: JSON object { "<url glob>": <response json> }, e.g. { "**" + "/api/ads/brands/*" + "/queue": {...} }.
@@ -51,7 +52,7 @@ function facts() {
   // Prototype vocabulary -> kit piece. The reference side prints what to build with; the built side prints what was used.
   out.push("", "## pieces (kit component to use | text)");
   for (const e of within("button, a, .chip, [data-slot=chip], [data-slot=badge]")) {
-    if (!vis(e) || e.closest("nav")) continue; // the app breadcrumb stands in for the prototype's crumb/back bar, which live outside #app
+    if (!vis(e) || e.closest("nav") || e.closest(".dots, [data-slot=flow-header]")) continue; // step dots belong to FlowHeader // the app breadcrumb stands in for the prototype's crumb/back bar, which live outside #app
     const c = e.classList;
     let piece = null;
     if (e.dataset.slot === "button") piece = `Button ${e.dataset.variant}`;
@@ -63,10 +64,24 @@ function facts() {
     else if (e.tagName === "A" || e.tagName === "BUTTON") piece = "(hand-rolled control)";
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
+  // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
+  const BLOCKS = { dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const SLOTS = { "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet" };
+  const VARIANT = { kind: ["stop", "worse", "up"], todo: ["ok"], hero: ["ok", "warn", "bad"] };
+  for (const e of within("[class], [data-slot]")) {
+    if (!vis(e)) continue;
+    if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${e.dataset.slot === "meter" ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
+    if (document.querySelector("#main-content")) continue;
+    for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
+      let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
+      if (cls === "todo") v = v ? "done" : "open";
+      out.push(`${piece} ${v}`.trim() + " |");
+    }
+  }
   // Prototype side only: classes on this screen that map to no kit piece. At carve time the lead decides for each:
   // layout only (the worker builds it with tokens) or a missing piece (add it to components/ads/patterns first).
   if (!document.querySelector("#main-content")) {
-    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v"]);
+    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld"]);
     const seen = {};
     for (const e of within("[class]")) if (vis(e)) for (const c of e.classList) if (!known.has(c)) seen[c] = (seen[c] || 0) + 1;
     out.push("", "## prototype classes with no kit mapping (class x count)", Object.entries(seen).map(([c, n]) => `${c} x${n}`).join(", "));
@@ -75,7 +90,7 @@ function facts() {
   return out.join("\n");
 }
 
-async function shoot(context, url, kind, setup) {
+async function shoot(context, url, kind, setup, acts = []) {
   let text = "";
   for (const width of WIDTHS) {
     const page = await context.newPage();
@@ -85,6 +100,8 @@ async function shoot(context, url, kind, setup) {
     await page.goto(url);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(400);
+    // --acts: prototype `data-act` names clicked in order to REACH a screen that only exists after earlier steps.
+    for (const act of acts) { await page.locator(`[data-act="${act}"]`).first().click(); await page.waitForTimeout(300); }
     await page.screenshot({ path: `${OUT}/${kind}-${args.name}-${width}.png`, fullPage: true });
     text += `# ${kind} ${args.name} @${width}\n${await page.evaluate(facts)}\n\n`;
     await page.close();
@@ -96,7 +113,7 @@ async function shoot(context, url, kind, setup) {
 async function main() {
   const browser = await chromium.launch();
   const context = await browser.newContext();
-  await shoot(context, "file:///" + path.resolve(args.proto).replace(/\\/g, "/") + HASH, "reference");
+  await shoot(context, "file:///" + path.resolve(args.proto).replace(/\\/g, "/") + HASH, "reference", null, (args.acts || "").split(",").filter(Boolean));
 
   if (args.app) {
     const mocks = args.mocks ? JSON.parse(fs.readFileSync(args.mocks, "utf-8")) : {};

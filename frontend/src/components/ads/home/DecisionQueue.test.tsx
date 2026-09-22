@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, QueueProposal, TriageItem } from "@/lib/adsTriageApi";
 import { DecisionQueue, type QueueState } from "./DecisionQueue";
 
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
@@ -26,13 +26,27 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-function queueItem(id: string, overrides: Partial<TriageItem> = {}): QueueItem {
+function queueItem(
+  id: string,
+  overrides: Partial<TriageItem> = {},
+  proposal: QueueProposal | null = null,
+): QueueItem {
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
     category: "ads_triage", kind: null, severity: "rule_warning",
     message: "待決定", action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`,
     visible_from: null, status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    triage: triageItem(overrides),
+    triage: triageItem(overrides), proposal,
+  };
+}
+
+// F22-I05: `QueueProposal` 的一則骨架，測試各個狀態時只覆寫要斷言的欄位。
+function proposal(overrides: Partial<QueueProposal> = {}): QueueProposal {
+  return {
+    change_set_id: "set_1", campaign_id: "cmp_1", kind: "pause",
+    status: "draft", verification_state: "pending",
+    reason: null, revisit_at: null, multi: false,
+    ...overrides,
   };
 }
 
@@ -136,13 +150,13 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.getByRole("link", { name: "看證據" })).toBeTruthy();
   });
 
-  it("停損列另外有一顆暫停提議的灰階佔位 chip", () => {
+  it("停損列不再印靜態的「暫停提議・接上後開放」——proposal 已經接上，按鈕本身就是進度", () => {
     renderQueue(ready({ items: [queueItem("q1")] }));
 
-    expect(screen.getByText("暫停提議・接上後開放")).toBeTruthy();
+    expect(screen.queryByText("暫停提議・接上後開放")).toBeNull();
   });
 
-  it("只有第一列是主要按鈕樣式，其餘是次要", () => {
+  it("只有第一列是主要按鈕樣式，其餘是次要（停損列沒有提案時印「去處理」，變差列維持「看證據」）", () => {
     renderQueue(ready({
       items: [
         queueItem("q1"),
@@ -150,10 +164,93 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
       ],
     }));
 
-    const links = screen.getAllByRole("link", { name: "看證據" });
-    expect(links).toHaveLength(2);
-    expect(links[0].getAttribute("data-variant")).toBe("default");
-    expect(links[1].getAttribute("data-variant")).toBe("outline");
+    const goLink = screen.getByRole("link", { name: "去處理" });
+    const evidenceLink = screen.getByRole("link", { name: "看證據" });
+    expect(goLink.getAttribute("data-variant")).toBe("default");
+    expect(evidenceLink.getAttribute("data-variant")).toBe("outline");
+  });
+
+  describe("F22-I05：停損列的按鈕由 item.proposal 決定", () => {
+    it("none（沒有提案）：「去處理」導向提議頁", () => {
+      renderQueue(ready({ items: [queueItem("q1", { entity_id: "ad_1", campaign_id: "cmp_1" })] }));
+
+      const link = screen.getByRole("link", { name: "去處理" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/ad_1");
+      expect(link.getAttribute("data-variant")).toBe("default");
+    });
+
+    it("draft：「等你核准」導向 confirm", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "draft" }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "等你核准" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/confirm");
+    });
+
+    it("approved + pending：「到平台完成」導向 handoff", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "approved", verification_state: "pending" }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "到平台完成" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/handoff");
+    });
+
+    it.each([
+      ["reported", "核對中"],
+      ["unknown", "核對中"],
+      ["deviated", "與核准不符"],
+      ["stale", "需重新檢討"],
+    ] as const)("approved + %s：「%s」導向 verify", (state, label) => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "approved", verification_state: state }))],
+      }));
+
+      const link = screen.getByRole("link", { name: label });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/verify");
+      expect(link.getAttribute("data-variant")).not.toBe("ghost");
+    });
+
+    it("confirmed：「已核對」是 ghost 按鈕（已完成）", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "approved", verification_state: "confirmed" }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "已核對" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/verify");
+      expect(link.getAttribute("data-variant")).toBe("ghost");
+    });
+
+    it("rejected：「已拒絕」是 ghost 按鈕", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "rejected" }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "已拒絕" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/set_1/confirm");
+      expect(link.getAttribute("data-variant")).toBe("ghost");
+    });
+
+    it("deferred：標籤是 revisit_at 換算的「M/D 重看」（瀏覽器本地時區），ghost 按鈕", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "deferred", revisit_at: "2026-10-03T02:00:00Z" }))],
+      }));
+
+      const d = new Date("2026-10-03T02:00:00Z");
+      const expected = `${d.getMonth() + 1}/${d.getDate()} 重看`;
+      const link = screen.getByRole("link", { name: expected });
+      expect(link.getAttribute("data-variant")).toBe("ghost");
+    });
+
+    it("multi：連去活動工作區，不是特定步驟頁", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", {}, proposal({ status: "draft", multi: true }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "等你核准" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    });
   });
 
   it("篩選鈕：單一活動也照印「全部 N」＋那顆活動 pill（v7 行為），不印 id 充當名稱", () => {
@@ -211,8 +308,8 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(all.getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByText("廣告B")).toBeTruthy();
     expect(screen.queryByText("廣告A")).toBeNull();
-    // primary 按鈕跟著篩選後的第一列走。
-    expect(screen.getByRole("link", { name: "看證據" }).getAttribute("data-variant")).toBe("default");
+    // primary 按鈕跟著篩選後的第一列走（兩則都是預設停損列、沒有提案 → 「去處理」）。
+    expect(screen.getByRole("link", { name: "去處理" }).getAttribute("data-variant")).toBe("default");
   });
 
   it("篩選中的活動在重新整理後消失（分流結果換了）：自動退回「全部」，不留一個誰都沒按著的篩選鈕", async () => {
@@ -261,7 +358,7 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText("some_future_kind")).toBeNull();
   });
 
-  it("鍵盤順序：Tab 先落在篩選鈕（全部→逐活動），再依序落在每一列的「看證據」連結", async () => {
+  it("鍵盤順序：Tab 先落在篩選鈕（全部→逐活動），再依序落在每一列的按鈕", async () => {
     const user = userEvent.setup();
     renderQueue(ready({
       items: [
@@ -275,8 +372,8 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "晨光隨行杯上市 2" }));
     await user.tab();
-    expect(document.activeElement).toBe(screen.getAllByRole("link", { name: "看證據" })[0]);
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: "去處理" }));
     await user.tab();
-    expect(document.activeElement).toBe(screen.getAllByRole("link", { name: "看證據" })[1]);
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: "看證據" }));
   });
 });

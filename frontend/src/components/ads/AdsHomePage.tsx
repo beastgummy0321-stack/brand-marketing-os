@@ -9,6 +9,7 @@ import { DecisionQueue, type QueueState } from "./home/DecisionQueue";
 import { CampaignCards } from "./home/CampaignCards";
 import { BudgetCard } from "./home/BudgetCard";
 import { getOrgId } from "@/lib/auth";
+import { isQueueItemDone } from "./home/status";
 
 export { STATUS_LABEL, STATUS_TONE } from "./home/status";
 
@@ -37,8 +38,14 @@ function AdsHome({ brandId }: { brandId: string }) {
     return () => controller.abort();
   }, [brandId, reload]);
 
+  // F22-I05 rescope：件數只算還「開著」的列——已核對／已拒絕／已暫緩的停損列已經是完成
+  // 狀態（`isQueueItemDone`，跟列自己的按鈕同一個判斷），不該再催使用者去處理。全部完成時
+  // （open 件數 0）文案還是「都處理完了」，即使 `queue.items` 本身不是空的。
+  const openCount = queueState.status === "ready"
+    ? queueState.queue.items.filter((item) => !isQueueItemDone(item)).length
+    : 0;
   const purpose = queueState.status === "ready"
-    ? (queueState.queue.items.length ? `${queueState.queue.items.length} 件・由上往下處理就好` : "都處理完了")
+    ? (openCount ? `${openCount} 件・由上往下處理就好` : "都處理完了")
     : undefined;
 
   return (

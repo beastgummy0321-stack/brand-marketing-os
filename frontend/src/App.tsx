@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, DataConnectionsPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, VerifyPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -100,6 +100,22 @@ function App() {
           element={<AdsCampaignDetailRoute />}
         />
         <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId"
+          element={<AdsProposePauseRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
+          element={<AdsChangeConfirmRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/handoff"
+          element={<AdsChangeHandoffRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/verify"
+          element={<AdsChangeVerifyRoute />}
+        />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
     </Routes>
@@ -442,6 +458,39 @@ function AdsCampaignDetailRoute() {
 function AdsConnectionsRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return <DataConnectionsPage brandId={brandId ?? ""} />;
+}
+
+/** 停損提議確認頁（propose route，F22-I02，v7 原型 `confirmPage()`）：三步驟輕流程第一步，
+ * `queue` 裡的停損列進來時還沒有 change set，草稿在第一次核准／拒絕／暫緩才即時組出來
+ * （`ConfirmPage` 自己的邏輯，這裡只負責帶參數）。`key` 用 entityId，換一則廣告要整支重新
+ * 掛載（理由同 `AdsTargetRoute`）。 */
+function AdsProposePauseRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ConfirmPage key={`propose-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 三步驟輕流程的「確認提議」頁（changes/:setId route，F22-I02）：change set 已存在時的正典
+ * 網址；非 confirm 步驟的清單由 `ConfirmPage` 自己導去正確步驟（`flow/changeFlow.ts`）。 */
+function AdsChangeConfirmRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <ConfirmPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「到平台完成」頁（changes/:setId/handoff route，F22-I03）：change set 一定
+ * 已核准，草稿與 propose 網址都是上一步（`AdsChangeConfirmRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeHandoffRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <HandoffPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「核對結果」頁（changes/:setId/verify route，F22-I04）：change set 一定已核准
+ * 且至少回報過一次，草稿、核准與到平台完成都是前兩步（`AdsChangeConfirmRoute`／
+ * `AdsChangeHandoffRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeVerifyRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <VerifyPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */

@@ -48,3 +48,18 @@ _ADAPTERS = {
 def get_adapter(name: str):
     """`manual`／`auto_meta`／`simulated` or `None`（未知名字）。"""
     return _ADAPTERS.get(name)
+
+
+def platform_url(target: dict) -> str | None:
+    """F22-I01: read-time-only deep link into a change item's own platform object, keyed by
+    `target["platform"]` -- the one place a platform name maps to a read-side URL builder
+    (`app/ads/change_control_data.py::get()` is the only caller). Lazy import, same seam
+    `app/ads/channels.py::external_reader` already uses for the same module, to avoid a
+    module-load-time cycle through `manual.py -> change_control_launch.py ->
+    change_control_data.py`. Unknown platform, or an adapter with no such builder -> `None`,
+    never a guessed link (`plan_json` never stores this -- no hash impact)."""
+    if target.get("platform") == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.platform_url(target)
+    return None
