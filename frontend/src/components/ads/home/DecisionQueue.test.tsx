@@ -9,8 +9,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import type { QueueItem, QueuePayload, QueueProposal, TriageItem } from "@/lib/adsTriageApi";
+import type {
+  QueueItem, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, TriageItem,
+} from "@/lib/adsTriageApi";
 import { DecisionQueue, type QueueState } from "./DecisionQueue";
+import { isQueueItemDone, proposalAction } from "./status";
 
 function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
@@ -40,12 +43,22 @@ function queueItem(
   };
 }
 
-// F22-I05: `QueueProposal` 的一則骨架，測試各個狀態時只覆寫要斷言的欄位。
-function proposal(overrides: Partial<QueueProposal> = {}): QueueProposal {
+// F22-I05: `QueuePauseProposal` 的一則骨架，測試各個狀態時只覆寫要斷言的欄位。
+function proposal(overrides: Partial<QueuePauseProposal> = {}): QueuePauseProposal {
   return {
-    change_set_id: "set_1", campaign_id: "cmp_1", kind: "pause",
+    kind: "pause", change_set_id: "set_1", campaign_id: "cmp_1",
     status: "draft", verification_state: "pending",
     reason: null, revisit_at: null, multi: false,
+    ...overrides,
+  };
+}
+
+// F23-I01: `QueueReviewProposal` 的一則骨架，同上只覆寫要斷言的欄位。
+function reviewProposal(overrides: Partial<QueueReviewProposal> = {}): QueueReviewProposal {
+  return {
+    kind: "review", review_id: "arv_1", status: "ready", decision: null,
+    reason: null, revisit_at: null, recommendation_id: null,
+    change_set_id: null, change_set_status: null, verification_state: null, multi: false,
     ...overrides,
   };
 }
@@ -250,6 +263,117 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
 
       const link = screen.getByRole("link", { name: "等你核准" });
       expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    });
+  });
+
+  // F23-I01：`worse` 列的按鈕邏輯（`status.ts::proposalAction`／`isQueueItemDone` 的 review 分支，
+  // feature Decisions "Queue row state for `worse` rows"）——`home/QueueRow.tsx` 這批還沒把
+  // `worse` 列接上這支 helper（維持既有的 `action_url`／「看證據」靜態列，見上面「只有第一列是
+  // 主要按鈕樣式」那則測試），所以這裡直接呼叫 `proposalAction`／`isQueueItemDone`，不透過
+  // `DecisionQueue` 畫面——邏輯已經備妥，等實際接線的票直接複用。
+  describe("F23-I01：worse 列的 review 分支（proposalAction／isQueueItemDone）", () => {
+    const call = (p: QueueReviewProposal | null) =>
+      proposalAction("brd_1", "cmp_1", "ad_1", p, "review");
+
+    it("none（沒有回合）：「看證據」導向 review/:entityId", () => {
+      const action = call(null);
+      expect(action).toEqual({
+        label: "看證據", href: "/brands/brd_1/ads/campaigns/cmp_1/review/ad_1", done: false,
+      });
+    });
+
+    it.each(["queued", "running"] as const)("%s：「整理證據中」導向 reviews/:id", (status) => {
+      const action = call(reviewProposal({ status }));
+      expect(action).toEqual({
+        label: "整理證據中", href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1", done: false,
+      });
+    });
+
+    it("waiting：「資料不足」導向 reviews/:id", () => {
+      const action = call(reviewProposal({ status: "waiting" }));
+      expect(action).toEqual({
+        label: "資料不足", href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1", done: false,
+      });
+    });
+
+    it.each(["failed", "unknown"] as const)("%s：「證據沒整理成」導向 reviews/:id", (status) => {
+      const action = call(reviewProposal({ status }));
+      expect(action).toEqual({
+        label: "證據沒整理成", href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1", done: false,
+      });
+    });
+
+    it("ready：「等你決定」導向 reviews/:id", () => {
+      const action = call(reviewProposal({ status: "ready" }));
+      expect(action).toEqual({
+        label: "等你決定", href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1", done: false,
+      });
+    });
+
+    it("completed 無文案清單：「選方向」導向 reviews/:id/prepare", () => {
+      const action = call(reviewProposal({ status: "completed", decision: "completed" }));
+      expect(action).toEqual({
+        label: "選方向",
+        href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/prepare",
+        done: false,
+      });
+    });
+
+    it("completed 帶文案清單（draft）：沿用停損那支的 label／連結（changes/:id/confirm）", () => {
+      const action = call(reviewProposal({
+        status: "completed", decision: "completed",
+        change_set_id: "set_9", change_set_status: "draft", verification_state: "pending",
+      }));
+      expect(action).toEqual({
+        label: "等你核准",
+        href: "/brands/brd_1/ads/campaigns/cmp_1/changes/set_9/confirm",
+        done: false,
+      });
+    });
+
+    it("completed 帶文案清單（approved+confirmed）：ghost、已完成", () => {
+      const action = call(reviewProposal({
+        status: "completed", decision: "completed",
+        change_set_id: "set_9", change_set_status: "approved", verification_state: "confirmed",
+      }));
+      expect(action).toEqual({
+        label: "已核對",
+        href: "/brands/brd_1/ads/campaigns/cmp_1/changes/set_9/verify",
+        done: true,
+      });
+    });
+
+    it("deferred：標籤是 revisit_at 換算的「M/D 重看」，已完成", () => {
+      const action = call(reviewProposal({
+        status: "deferred", decision: "deferred", revisit_at: "2026-10-03T02:00:00Z",
+      }));
+      const d = new Date("2026-10-03T02:00:00Z");
+      expect(action).toEqual({
+        label: `${d.getMonth() + 1}/${d.getDate()} 重看`,
+        href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1",
+        done: true,
+      });
+    });
+
+    it("unjudgeable：「無法判定」，已完成", () => {
+      const action = call(reviewProposal({ status: "unjudgeable", decision: "unjudgeable" }));
+      expect(action).toEqual({
+        label: "無法判定", href: "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1", done: true,
+      });
+    });
+
+    it("isQueueItemDone：worse 列 ready 未完成、deferred 已完成，跟按鈕的 done 一致", () => {
+      const readyItem = queueItem("q1", { class: "worse" }, reviewProposal({ status: "ready" }));
+      const deferredItem = queueItem(
+        "q2", { class: "worse" }, reviewProposal({ status: "deferred", decision: "deferred" }),
+      );
+      expect(isQueueItemDone(readyItem)).toBe(false);
+      expect(isQueueItemDone(deferredItem)).toBe(true);
+    });
+
+    it("isQueueItemDone：worse 列沒有提案時未完成", () => {
+      const item = queueItem("q1", { class: "worse" }, null);
+      expect(isQueueItemDone(item)).toBe(false);
     });
   });
 
