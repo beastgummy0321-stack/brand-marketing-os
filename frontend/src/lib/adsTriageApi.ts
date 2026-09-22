@@ -196,14 +196,11 @@ export type QueueProposal =
 // (`app/ads/triage.py`'s `insufficient_data`) -- F26-I01 left this at four values on purpose
 // (see the removed comment here) since its own touch didn't cover `home/QueueRow.tsx`'s
 // exhaustive `Record<QueueKind, ...>` switches; this issue's touch does, so both widen together.
-// F27-I06: the real backend can now also enqueue a `"cleanup"` row (Contract F) -- `QueueKind`
-// and `QueueItem.kind_key` stay at their current five values here on purpose, same reason F26-I01
-// left `insufficient_data` out of this type for one issue: `home/QueueRow.tsx`'s own exhaustive
-// `Record<QueueKind, ...>` (and its sibling switches in `flow/changeFlow.ts`/`home/status.ts`)
-// sit outside this issue's touch, so widening this type here would force edits there too. The
-// `cleanup` payload/proposal shapes exist ahead of that (`cleanup`/`QueueCleanupProposal` below)
-// -- only `kind_key`'s own type is deferred to the frontend issue that builds that row's UI.
-export type QueueKind = "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data";
+// F27-I17 Done 0: widened again with the real backend's sixth kind (`app/ads/triage.py`'s
+// `"cleanup"`, Contract F) -- `home/QueueRow.tsx`'s exhaustive switches and `home/status.ts`'s
+// `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
+export type QueueKind =
+  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
@@ -262,9 +259,6 @@ export interface QueueItem {
   dedupe_key: string; category: string; kind: string | null; severity: AlertSeverity;
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string; resolved_at: string | null;
-  // F27-I06: real responses may carry `kind_key: "cleanup"`, one value wider than `QueueKind`
-  // itself on purpose (see `QueueKind`'s own comment) -- never widened here without also fixing
-  // `home/QueueRow.tsx`'s exhaustive switches.
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
