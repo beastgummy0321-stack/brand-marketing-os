@@ -129,7 +129,17 @@ def copy_fields(entity) -> dict[str, Any]:
     creative = entity.get("creative") or {}
     fields = creative.get("fields") or {}
     if creative.get("kind") == "dynamic":
-        variants = fields.get("copy_variants") or {}
+        # A stored `copy_variants` still wins; otherwise derive it at read time through the
+        # platform dispatch (F27-I26 root cause: `copy_variants` is only written when the
+        # adapter parses a creative during sync -- any creative stored before F27-I02, e.g. real
+        # brd_bughunt dynamic ads, has `asset_feed_spec` but no `copy_variants` until the next
+        # sync). Lazy import: avoids the module-load-time cycle through
+        # `adapters/manual.py -> change_control_launch.py -> change_control_data.py`.
+        variants = fields.get("copy_variants")
+        if variants is None:
+            from app.ads import adapters
+
+            variants = adapters.copy_variants(entity.get("platform"), creative) or {}
         return {
             "titles": list(variants.get("titles") or []),
             "bodies": list(variants.get("bodies") or []),
@@ -142,17 +152,26 @@ def copy_fields(entity) -> dict[str, Any]:
     }
 
 
-def copy_editable(creative):
+def copy_editable(creative, platform=None):
     """Contract B / correction 7 -- computed fresh from the creative's own kind and fields,
     never stored: a later re-sync (creative kind changes, or Meta finally returns titles/bodies)
-    must change the answer without touching anything already approved."""
+    must change the answer without touching anything already approved. `platform` (the entity's
+    own `platform` column) is optional only for callers that already know `mode` doesn't turn on
+    variant derivation (existing direct-creative tests) -- every real caller has an entity and
+    passes `entity.get("platform")`."""
     creative = creative or {}
     kind = creative.get("kind")
     if kind in {"image", "video"}:
         return {"ok": True, "mode": "single", "reason": None}
     if kind == "dynamic":
         fields = creative.get("fields") or {}
-        variants = fields.get("copy_variants") or {}
+        # A stored `copy_variants` still wins; otherwise derive at read time (F27-I26, same
+        # reasoning as `copy_fields` above).
+        variants = fields.get("copy_variants")
+        if variants is None:
+            from app.ads import adapters
+
+            variants = adapters.copy_variants(platform, creative) or {}
         catalog_only = fields.get("product_set_id") and not variants.get("titles") and not (
             variants.get("bodies")
         )
@@ -278,7 +297,7 @@ def build_item(conn, org, brand, campaign_id, item, c):
     # through to the existing single-copy validation below and is caught by the native_kind check
     # after `bindings.root()`, same as before this contract.
     editable = (
-        copy_editable(entity.get("creative") or {})
+        copy_editable(entity.get("creative") or {}, entity.get("platform"))
         if kind == "copy" and entity["native_kind"] == "ad"
         else None
     )
