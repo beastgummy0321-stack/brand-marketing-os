@@ -88,3 +88,20 @@ export function CopyBlock({ tone, title, body, marks }: { tone: "old" | "new"; t
     </div>
   );
 }
+
+/** `.days`: one tile per calendar day of a short range; `missing` days are hollow with a dashed
+ * danger border (prototype `.days i.x`). Labels are the day-of-month. */
+export function DayTiles({ days, missing, size = 40 }: { days: string[]; missing: Set<string>; size?: number }) {
+  return (
+    <div data-slot="day-tiles" className="flex flex-wrap gap-1" aria-label="每日資料">
+      {days.map((d) => {
+        const gap = missing.has(d);
+        return (
+          <i key={d} title={gap ? `${d} 缺資料` : d} aria-label={gap ? `${d} 缺資料` : d}
+            className={cn("grid place-items-center rounded-md text-[13px] not-italic", gap ? "border border-dashed border-danger bg-card text-danger" : "bg-primary text-primary-foreground")}
+            style={{ width: size, height: size }}>{Number(d.slice(-2))}</i>
+        );
+      })}
+    </div>
+  );
+}
