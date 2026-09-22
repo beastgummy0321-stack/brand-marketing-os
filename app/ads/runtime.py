@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from app import background
 from app.ads import change_control_data as changes
-from app.ads import external_sync, month_budget
+from app.ads import channels, external_sync, month_budget
 from app.core import db, interrupts, settings
 
 TASK = "background.ads_runtime_campaign"
@@ -313,6 +313,47 @@ def run_campaign(org_id, brand_id, campaign_id):
             conn.commit()
 
 
+def _sync_brand_accounts(conn, now):
+    """Keep every brand's bound ad accounts read, imported campaigns or not. The month-budget
+    guard needs the account's month-to-date spend (`monthly:` task, fresh within 24 h) before it
+    approves any new spend; that task was only requested for imported campaigns or when someone
+    opened the import list, so a brand that only builds new campaigns could never launch
+    (drill 5). Same due rule as `_sync_sources`."""
+    count = 0
+    # ponytail: scans every brand with a campaign each tick (two small reads per account); order
+    # by staleness and cap once brand counts make the minute tick slow.
+    brands = conn.execute(
+        "SELECT DISTINCT org_id,brand_id FROM ads_campaign ORDER BY org_id,brand_id"
+    ).fetchall()
+    for brand in brands:
+        org, brand_id = brand["org_id"], brand["brand_id"]
+        for channel in channels.CHANNELS:
+            reader = channels.external_reader(channel["key"])
+            if not reader:
+                continue
+            try:
+                accounts = reader.accounts(conn, org, brand_id)
+            except Exception:
+                conn.rollback()
+                continue
+            for account in accounts:
+                job = conn.execute(
+                    "SELECT status,updated_at FROM ads_external_sync_job WHERE org_id=%s "
+                    "AND brand_id=%s AND platform=%s AND source_account=%s",
+                    (org, brand_id, channel["key"], account["account_id"]),
+                ).fetchone()
+                if job and (job["status"] in {"pending", "running"}
+                            or not _due(job["updated_at"], now, SYNC_SECONDS)):
+                    continue
+                try:
+                    external_sync.request_sync(conn, org, brand_id, channel["key"],
+                                               account["account_id"])
+                    count += 1
+                except Exception:
+                    conn.rollback()  # disconnected/unreadable: the campaign path records backoff
+    return count
+
+
 def dispatch(timestamp, *, limit=100):
     from app.ads import review_jobs, review_monitor
 
@@ -321,6 +362,7 @@ def dispatch(timestamp, *, limit=100):
     with db.connection() as conn:
         recovered = review_jobs.recover(conn, timestamp, limit=limit)
         monitors = review_monitor.dispatch_due(conn, timestamp, limit=limit)
+        accounts_enqueued = _sync_brand_accounts(conn, now)
         rows = conn.execute(
             "SELECT c.id,c.org_id,c.brand_id,c.context_json FROM ads_campaign c WHERE "
             "EXISTS(SELECT 1 FROM ads_external_entity e WHERE e.campaign_id=c.id) "
@@ -340,7 +382,7 @@ def dispatch(timestamp, *, limit=100):
                 )
     return {**recovered, "reviews_enqueued": recovered["reviews_enqueued"]
             + monitors["reviews_enqueued"], "monitors_checked": monitors["monitors_checked"],
-            "sync_enqueued": enqueued, "health_checked": 0,
+            "sync_enqueued": enqueued + accounts_enqueued, "health_checked": 0,
             "has_more": len(rows) > limit or recovered["has_more"] or monitors["has_more"]}
 
 

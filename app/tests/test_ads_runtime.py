@@ -44,6 +44,32 @@ class RuntimeTest(unittest.TestCase):
         )
         self.conn.commit()
 
+    def test_bound_account_is_read_even_without_imported_campaigns(self):
+        # Drill 5: a new-campaign-only brand never got the account's month spend, so the
+        # month-budget guard blocked its first launch forever.
+        class Reader:
+            def accounts(self, conn, org_id, brand_id):
+                return [{"account_id": "acct-1"}] if brand_id == brand else []
+
+        brand = self.brand
+        now = db.now_utc()
+        with (
+            patch.object(runtime.channels, "external_reader", return_value=Reader()),
+            patch.object(runtime.external_sync, "request_sync") as request,
+        ):
+            runtime._sync_brand_accounts(self.conn, now)
+            calls = [c.args[2:] for c in request.call_args_list if c.args[2] == brand]
+            self.assertIn((brand, runtime.channels.CHANNELS[0]["key"], "acct-1"), calls)
+            for channel in runtime.channels.CHANNELS:
+                self.conn.execute(
+                    "INSERT INTO ads_external_sync_job(id,org_id,brand_id,platform,source_account,"
+                    "status) VALUES (%s,%s,%s,%s,'acct-1','succeeded')",
+                    (db.new_id("aes"), self.org, brand, channel["key"]),
+                )
+            request.reset_mock()
+            runtime._sync_brand_accounts(self.conn, now)
+            self.assertFalse([c for c in request.call_args_list if c.args[2] == brand])
+
     def test_run_saves_health_and_reopen_does_not_execute_platform_or_ai(self):
         with patch.object(runtime, "_sync_sources", return_value=1) as sync:
             runtime.run_campaign(self.org, self.brand, self.campaign)
