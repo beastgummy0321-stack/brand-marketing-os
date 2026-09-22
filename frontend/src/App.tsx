@@ -110,6 +110,10 @@ function App() {
           element={<AdsProposePauseRoute />}
         />
         <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/budget/:entityId"
+          element={<AdsProposeBudgetRoute />}
+        />
+        <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId"
           element={<AdsReviewEntryRoute />}
         />
@@ -502,6 +506,23 @@ function AdsProposePauseRoute() {
   const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
   return (
     <ConfirmPage key={`propose-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 加預算提議確認頁（propose route，F25-I03，v7 原型 `confirmPage()` 的 budget 分支）：跟
+ * `AdsProposePauseRoute` 同一支 `ConfirmPage`，只是 `entityId` 換成 `scale.owner.id`（投放組／
+ * 活動，不是廣告）、`proposeKind="budget"` 告訴它比對佇列裡哪一種列、蓋哪一種草稿
+ * （`ConfirmPage` 自己的邏輯，這裡只負責帶參數）。 */
+function AdsProposeBudgetRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ConfirmPage
+      key={`propose-budget-${entityId}`}
+      brandId={brandId ?? ""}
+      campaignId={campaignId ?? ""}
+      entityId={entityId ?? ""}
+      proposeKind="budget"
+    />
   );
 }
 
