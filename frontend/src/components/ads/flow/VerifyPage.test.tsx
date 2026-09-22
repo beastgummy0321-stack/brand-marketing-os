@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as changeApi from "@/lib/adsChangeApi";
 import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
-import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, QueueScale, QueueRefresh, TriageItem } from "@/lib/adsTriageApi";
 import { VerifyPage } from "./VerifyPage";
 
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
@@ -47,6 +47,18 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
 }
 function queue(items: QueueItem[] = []): QueuePayload {
   return { items, counts: { stop_loss: items.length, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: items.length, kinds_available: ["stop_loss"], kinds_pending: [] };
+}
+function scale(overrides: Partial<QueueScale> = {}): QueueScale {
+  return {
+    owner: { id: "aex_owner_G", name: "廣告組 G・廣泛受眾", native_kind: "adset", native_id: "23851", ads_count: 8, currency: "TWD" },
+    from: 1000, to: 1200, cost_per_result: 306, previous_cost_per_result: 330,
+    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+    window_days: 14, month: { available: 10000, extra_needed: 1800 },
+    ...overrides,
+  };
+}
+function refresh(overrides: Partial<QueueRefresh> = {}): QueueRefresh {
+  return { campaign_id: "cmp_3", campaign_name: "【銷售】測試活動三", readable_count: 2, classified_count: 9, thumbnails: [null, null], ...overrides };
 }
 function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
   return {
@@ -117,6 +129,34 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     renderAt(verifyPath());
     const next = await screen.findByRole("link", { name: "下一件 →" });
     expect((next as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_2/propose/pause/aex_2");
+  });
+
+  it("下一件跨到 scale_budget（F25-I03）：還沒建草稿時連去 propose/budget", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem(),
+      queueItem({
+        id: "int_2", kind_key: "scale_budget",
+        triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2", class: "better" }),
+        proposal: null, scale: scale(),
+      }),
+    ]));
+    renderAt(verifyPath());
+    const next = await screen.findByRole("link", { name: "下一件 →" });
+    expect((next as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_2/propose/budget/aex_owner_G");
+  });
+
+  it("下一件跨到 refresh_creative（F25-I03）：連去素材工作檯", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem(),
+      queueItem({
+        id: "int_3", kind_key: "refresh_creative",
+        triage: triage({ entity_id: "aex_3", campaign_id: "cmp_3", class: "flat" }),
+        proposal: null, refresh: refresh(),
+      }),
+    ]));
+    renderAt(verifyPath());
+    const next = await screen.findByRole("link", { name: "下一件 →" });
+    expect((next as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_3?tab=assets&material_new=1");
   });
 
   it("已完成的下一項不會被當成下一件（isQueueItemDone）", async () => {

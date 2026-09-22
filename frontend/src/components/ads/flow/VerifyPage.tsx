@@ -14,14 +14,15 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { ActionBar, FlowHeader, ResultHero, StatusRail, type RailCell } from "../patterns";
-import { isQueueItemDone, proposalAction } from "../home/status";
 import {
   campaignChangesPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  nextOpenQueueItem,
   proposePausePath,
+  queueItemEntityId,
   stepFromChangeSet,
 } from "./changeFlow";
 
@@ -247,14 +248,10 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     </>
   ) : undefined;
 
-  // 「下一件」＝佇列裡下一個還沒完成的項目（`home/status.ts::isQueueItemDone`，跟首頁同一顆
-  // 判斷），不是只挑「還沒決定」的項目——feature Decisions「下一件＝下一個 open 佇列項目」。
-  const nextItem = queue?.items.find((i) =>
-    i.id !== triageItem?.id && i.triage.class === "stop_loss" && i.brand_id !== null && !isQueueItemDone(i)
-  ) ?? null;
-  const nextAction = nextItem && nextItem.brand_id
-    ? proposalAction(nextItem.brand_id, nextItem.triage.campaign_id, nextItem.triage.entity_id, nextItem.proposal)
-    : null;
+  // 「下一件」（F25-I03）：跟 ConfirmPage 的關閉態共用同一顆判斷，不各自算各自的
+  // （feature Decisions「下一件」——`changeFlow.ts::nextOpenQueueItem`，涵蓋全部四種 kind）。
+  const currentEntityId = triageItem ? queueItemEntityId(triageItem) : undefined;
+  const nextAction = nextOpenQueueItem(queue, currentEntityId);
 
   const again = (
     <Button variant="outline" disabled={busy} onClick={() => void handleCheck(item)}>

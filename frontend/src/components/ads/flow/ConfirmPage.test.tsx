@@ -1,15 +1,16 @@
-/** frontend/src/components/ads/flow/ConfirmPage.test.tsx — F22-I02：`vi.mock` 掉
+/** frontend/src/components/ads/flow/ConfirmPage.test.tsx — F22-I02／F25-I03：`vi.mock` 掉
  * `@/lib/adsChangeApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 4：三種 kind 都能畫、
  * 草稿延遲建立的 payload、核准導去到平台完成、暫緩要未來時間、拒絕、保存沒收到回應時沿用
- * 同一個 operation_id 重試、走錯步驟自動導正、多項變更清單連去既有變更與核對。 */
+ * 同一個 operation_id 重試、走錯步驟自動導正、多項變更清單連去既有變更與核對；F25-I03 加了
+ * 加預算 propose 路由的完整證據卡、budget 草稿 payload、月預算放不下的 409 不重建。 */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as changeApi from "@/lib/adsChangeApi";
-import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
+import { ChangeRequestRejected, type ChangeItem, type ChangeSet } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
-import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import { ConfirmPage } from "./ConfirmPage";
 
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
@@ -49,6 +50,25 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
 function queue(items: QueueItem[] = []): QueuePayload {
   return { items, counts: { stop_loss: items.length, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: items.length, kinds_available: ["stop_loss"], kinds_pending: [] };
 }
+function scale(overrides: Partial<QueueScale> = {}): QueueScale {
+  return {
+    owner: { id: "aex_owner_G", name: "廣告組 G・廣泛受眾", native_kind: "adset", native_id: "23851", ads_count: 8, currency: "TWD" },
+    from: 1000, to: 1200, cost_per_result: 306, previous_cost_per_result: 330,
+    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+    window_days: 14, month: { available: 10000, extra_needed: 1800 },
+    ...overrides,
+  };
+}
+function scaleQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
+  return queueItem({
+    kind_key: "scale_budget",
+    dedupe_key: "ads-triage:scale_budget:aex_owner_G:2026-09-21",
+    category: "ads_triage_scale_budget",
+    triage: triage({ class: "better", label: "變好" }),
+    scale: scale(),
+    ...overrides,
+  });
+}
 function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
   return {
     id: "item_1", kind: "pause", target_id: "aex_1",
@@ -72,6 +92,10 @@ function ProposeRoute() {
   const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
   return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />;
 }
+function ProposeBudgetRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} proposeKind="budget" />;
+}
 function SetConfirmRoute() {
   const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
   return <ConfirmPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
@@ -84,6 +108,7 @@ function renderAt(path: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId" element={<ProposeRoute />} />
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/propose/budget/:entityId" element={<ProposeBudgetRoute />} />
         <Route path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm" element={<SetConfirmRoute />} />
         <Route path="*" element={<LocationProbe />} />
       </Routes>
@@ -91,6 +116,7 @@ function renderAt(path: string) {
   );
 }
 const proposePath = "/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1";
+const proposeBudgetPath = "/brands/brd_1/ads/campaigns/cmp_1/propose/budget/aex_owner_G";
 const confirmPath = (id = "acs_1") => `/brands/brd_1/ads/campaigns/cmp_1/changes/${id}/confirm`;
 
 beforeEach(() => {
@@ -299,5 +325,99 @@ describe("ConfirmPage（F22-I02）步驟導正", () => {
     renderAt(confirmPath());
     expect(await screen.findByText("已拒絕・資料還不夠")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "拒絕／暫緩" })).toBeNull();
+  });
+});
+
+describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
+  it("畫出完整證據卡：同組則數、每日預算＋漲幅、購買成本量尺、主力穩定、本月預算放得下", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
+      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    });
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("提議：加預算")).toBeTruthy();
+    expect(screen.getByText("可加預算")).toBeTruthy();
+    expect(screen.getByText("廣告組 G・廣泛受眾・同組 8 則一起受影響")).toBeTruthy();
+    expect(screen.getByText(/1,000/)).toBeTruthy();
+    expect(screen.getByText(/1,200/)).toBeTruthy();
+    expect(screen.getByText("+20%")).toBeTruthy();
+    expect(screen.getByText(/購買成本 306/)).toBeTruthy();
+    expect(screen.getByText(/目標 450/)).toBeTruthy();
+    expect(screen.getByText("主力穩定 2 個觀察期")).toBeTruthy();
+    expect(screen.getByText("加碼後等 3–5 天再看")).toBeTruthy();
+    expect(await screen.findByText("本月預算放得下")).toBeTruthy();
+    expect(screen.getByText(/這次加碼/)).toBeTruthy();
+    expect(screen.getByText(/TWD 1,800/)).toBeTruthy();
+  });
+
+  it("找不到這個 owner 的加預算提議：不誤用暫停提議的措辭", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("找不到這個投放組的加預算提議")).toBeTruthy();
+  });
+
+  it("第一次核准才建立 budget 草稿，payload 照 feature Decisions 的欄位", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
+      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    });
+    const draft = changeSet({
+      title: "加碼「廣告組 G・廣泛受眾」",
+      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
+    });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(draft);
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue({ ...draft, status: "approved" });
+    renderAt(proposeBudgetPath);
+    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.operation_id).toMatch(/^triage-budget:aex_owner_G:/);
+    expect(body.title).toBe("加碼「廣告組 G・廣泛受眾」");
+    expect(body.items).toEqual([{ kind: "budget", target_id: "aex_owner_G", after: { daily_amount: 1200 }, reason: "近兩期成本都在目標內，加碼 20% 擴量" }]);
+    await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
+  });
+
+  it("月預算放不下的 409：顯示後端訊息，不重建草稿", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
+      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet({
+      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
+    }));
+    vi.mocked(changeApi.approveChangeSet).mockRejectedValue(
+      new ChangeRequestRejected("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。"),
+    );
+    renderAt(proposeBudgetPath);
+    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+    expect(await screen.findByText("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。")).toBeTruthy();
+    expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("前提變了的 409（非月預算訊息）：仍照既有規則重建一次再核准", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
+      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    });
+    const draft = changeSet({
+      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
+    });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce({ ...draft, id: "acs_rebuilt" });
+    vi.mocked(changeApi.approveChangeSet)
+      .mockRejectedValueOnce(new ChangeRequestRejected("這項變更所依據的設定已改變，請依現況重新建立清單。"))
+      .mockResolvedValueOnce({ ...draft, id: "acs_rebuilt", status: "approved" });
+    renderAt(proposeBudgetPath);
+    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(changeApi.createChangeSet).mock.calls[1][2].supersedes_id).toBe("acs_1");
+    await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(2));
   });
 });

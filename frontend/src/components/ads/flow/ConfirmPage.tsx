@@ -19,16 +19,20 @@ import {
   type ChangeSet,
   type MonthlyBudget,
 } from "@/lib/adsChangeApi";
-import { getQueue, type QueueItem, type QueuePayload, type TriageItem } from "@/lib/adsTriageApi";
+import { getQueue, type QueueItem, type QueuePayload, type QueueScale, type TriageItem } from "@/lib/adsTriageApi";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, Meter, ReservedSlotCard, Segmented } from "../patterns";
 import {
+  buildBudgetDraftItem,
   buildPauseDraftItem,
+  budgetTitle,
   campaignChangesPath,
   changeStepPath,
+  isMonthBudgetRejection,
+  nextOpenQueueItem,
   pauseTitle,
-  proposePausePath,
+  queueItemEntityId,
   stepFromChangeSet,
   toChangeInput,
   formatAmount,
@@ -41,17 +45,18 @@ const STEP_PURPOSE = "核准後才到平台操作";
 /** 廣告／投放組縮圖：`null`、還沒讀到或載入失敗都落到同一顆中性佔位圖示，不是空白或破圖示
  * （同 `detail/CampaignDetailPage.tsx` 的 `AdThumb` 慣例；那支沒有 export，這裡另一份小工具，
  * 不是重刻 kit 零件——facts 把 `.thumb` 分在「沒有對應 kit 零件」，layout 用 token 自己刻）。 */
-function Tile({ url, icon }: { url?: string | null; icon?: ReactNode }) {
+function Tile({ url, icon, size = "lg" }: { url?: string | null; icon?: ReactNode; size?: "lg" | "sm" }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [url]);
   const showImage = !!url && !failed;
+  const dim = size === "sm" ? "size-8" : "size-16";
   return (
-    <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted" aria-hidden="true">
+    <div className={`flex ${dim} shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted`} aria-hidden="true">
       {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element -- 這裡不是 Next.js 專案。
         <img src={url ?? undefined} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
       ) : (
-        icon ?? <ImageIcon className="size-6 text-muted-foreground" />
+        icon ?? <ImageIcon className={size === "sm" ? "size-4 text-muted-foreground" : "size-6 text-muted-foreground"} />
       )}
     </div>
   );
@@ -134,13 +139,24 @@ function CopyEvidence({ item }: { item: ChangeItem }) {
   );
 }
 
-/** 三段可用度長條，跟 `home/BudgetCard.tsx` 同一份色碼與誠實未知邏輯，但這裡只需要一小條
- * （原型 `budgetBar()` 位置），不是整張「可新增承諾」卡（那張有自己的標題與「調整」入口，
- * 跟這張證據卡的版位不同，不整張借用）。 */
-function MiniBudgetBar({ budget }: { budget: MonthlyBudget }) {
+// 圖例色點跟長條分段同一組 token，跟 `home/BudgetCard.tsx::Swatch` 同一份色碼（design-system
+// §2.1，v7 原型的 `.lg i`）——不 import 那支：`home/`／`flow/` 是同一個功能資料夾底下的兩顆小零
+// 件，各自留一份比為了一顆兩行的 dot 特地打通兩邊耦合合理。
+const SWATCH_TONE = { "chart-rest": "bg-chart-rest", border: "bg-border", success: "bg-success", primary: "bg-primary" } as const;
+function Swatch({ tone }: { tone: keyof typeof SWATCH_TONE }) {
+  return <span aria-hidden="true" className={`inline-block size-2 rounded-sm ${SWATCH_TONE[tone]}`} />;
+}
+
+/** 三段可用度長條＋圖例，跟 `home/BudgetCard.tsx` 同一份色碼與誠實未知邏輯（原型 `budgetBar()`）。
+ * `extra`（這次加碼，F25-I03 `scale.month.extra_needed`）> 0 時多畫一段成功色，「可用」跟著扣掉
+ * `extra`（原型 `available-extra`）——沒有 `extra` 的既有（非 scale）預算變更清單維持原本兩段。
+ * 圖例固定印已花／預留／可用（`extra` 才印這次加碼），即使長條本身因為總額未知只能畫灰階，
+ * 數字仍照實印（design-system §7「誠實的空狀態」，同 `home/BudgetCard.tsx` 的做法）。 */
+function MiniBudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: number }) {
   const { amount, known_spend, ongoing_estimate, available, currency } = budget;
   const known = amount !== null && amount > 0 && known_spend !== null && ongoing_estimate !== null && available !== null;
   const pct = (v: number) => Math.max(0, Math.min(100, (v / (amount as number)) * 100));
+  const availableAfterExtra = available === null ? null : available - extra;
   return (
     <div className="mt-2 space-y-1.5">
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
@@ -148,18 +164,30 @@ function MiniBudgetBar({ budget }: { budget: MonthlyBudget }) {
           <>
             <div className="bg-chart-rest" style={{ width: `${pct(known_spend as number)}%` }} />
             <div className="bg-border" style={{ width: `${pct(ongoing_estimate as number)}%` }} />
-            <div className="bg-primary" style={{ width: `${pct(available as number)}%` }} />
+            {extra > 0 && <div className="bg-success" style={{ width: `${pct(extra)}%` }} />}
+            <div className="bg-primary" style={{ width: `${pct(Math.max(0, availableAfterExtra as number))}%` }} />
           </>
         )}
       </div>
-      <p className="numeric text-xs text-muted-foreground">
-        已花 {budgetMoney(known_spend, currency)}・可用 {budgetMoney(available, currency)}
-      </p>
+      <div className="numeric flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {budgetMoney(known_spend, currency)}</span>
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="border" />預留 {budgetMoney(ongoing_estimate, currency)}</span>
+        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone="success" />這次加碼 {budgetMoney(extra, currency)}</span>}
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />可用 {budgetMoney(availableAfterExtra, currency)}</span>
+      </div>
     </div>
   );
 }
 
-function BudgetEvidence({ item, brandId }: { item: ChangeItem; brandId: string }) {
+/** 加預算提議的證據卡（F25-I03，v7 原型 `confirmPage()` 的 budget 分支）。`scale` 有值（propose
+ * 網址進來，或 `:setId` 進來但這個提議的擁有者還在佇列裡）畫完整版：同組則數、購買成本量尺、
+ * 主力廣告穩定 2 期、本月預算放得下（含這次加碼段）；`scale` 是 `null`（提議的擁有者已經離開
+ * 佇列，同 `PauseEvidence` 的 fallback）就退回只有名稱／金額／原因的版本——`item` 這時才派上用場
+ * （`scale` 有值時一律讀 `scale`/`triage` 這組即時資料，不讀凍結在 `item.before/after` 的舊值，
+ * 這樣第一次進頁面、`item` 都還沒建立時也能完整顯示提議內容）。 */
+function BudgetEvidence({ item, scale, bestAdThumbnailUrl, brandId }: {
+  item: ChangeItem | undefined; scale: QueueScale | null; bestAdThumbnailUrl: string | null; brandId: string;
+}) {
   const [budget, setBudget] = useState<MonthlyBudget | null>(null);
   const [budgetError, setBudgetError] = useState(false);
   useEffect(() => {
@@ -169,46 +197,75 @@ function BudgetEvidence({ item, brandId }: { item: ChangeItem; brandId: string }
       .catch(() => { if (!cancelled) setBudgetError(true); });
     return () => { cancelled = true; };
   }, [brandId]);
-  const before = item.before.daily_amount ?? null;
-  const after = item.after.daily_amount ?? null;
+  const before = scale ? scale.from : item?.before.daily_amount ?? null;
+  const after = scale ? scale.to : item?.after.daily_amount ?? null;
   const pct = before !== null && after !== null && before > 0 ? Math.round(((after - before) / before) * 100) : null;
+  const extra = scale?.month.extra_needed ?? 0;
+  const targetValue = scale?.target.value ?? null;
+  const meterMax = targetValue !== null && targetValue > 0 ? targetValue * 1.5 : null;
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center gap-4">
-        <Tile icon={<span aria-hidden="true" className="text-2xl">💰</span>} />
-        <div className="min-w-0 flex-1">
-          <KindMark kind="up">可加預算</KindMark>
-          <p className="mt-1.5 truncate text-[15px] font-semibold">{item.target.name ?? "（未命名投放組）"}</p>
+    <>
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-center gap-4">
+          <Tile icon={<span aria-hidden="true" className="text-2xl">💰</span>} />
+          <div className="min-w-0 flex-1">
+            <KindMark kind="up">可加預算</KindMark>
+            <p className="mt-1.5 truncate text-[15px] font-semibold">
+              {scale
+                ? `${scale.owner.name ?? "未命名投放組"}・同組 ${scale.owner.ads_count} 則一起受影響`
+                : (item?.target.name ?? "（未命名投放組）")}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-muted-foreground">每日預算</p>
+            <p className="numeric flex items-center gap-2 text-lg font-semibold">
+              <span>{formatTargetAmount(before)} → {formatTargetAmount(after)}</span>
+              {pct !== null && <Chip tone="ok">{pct > 0 ? "+" : ""}{pct}%</Chip>}
+            </p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-muted-foreground">每日預算</p>
-          <p className="numeric flex items-center gap-2 text-lg font-semibold">
-            <span>{formatTargetAmount(before)} → {formatTargetAmount(after)}</span>
-            {pct !== null && <Chip tone="ok">{pct > 0 ? "+" : ""}{pct}%</Chip>}
-          </p>
-        </div>
+        {scale && (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <Meter
+              value={scale.cost_per_result}
+              max={meterMax}
+              marker={targetValue}
+              tone="success"
+              left={<>{scale.target.result_label}成本 {formatAmount(scale.cost_per_result)}</>}
+              right={<>目標 {formatTargetAmount(targetValue)}</>}
+            />
+            <div className="flex items-center gap-2">
+              <Tile url={bestAdThumbnailUrl} size="sm" />
+              <span className="text-sm">主力穩定 2 個觀察期</span>
+            </div>
+            <div className="flex items-center text-sm text-muted-foreground">加碼後等 3–5 天再看</div>
+          </div>
+        )}
+        {!scale && <p className="mt-3 text-sm text-muted-foreground">原因：{item?.reason}</p>}
       </div>
-      <p className="mt-3 text-sm text-muted-foreground">原因：{item.reason}</p>
-      <div className="mt-4 rounded-md border border-border p-3">
-        <h3 className="text-sm font-medium">本月預算放得下</h3>
+      <div className="rounded-xl border border-border bg-card p-5">
+        <h2 className="text-sm font-medium">本月預算放得下</h2>
         {budgetError && <p className="mt-2 text-sm text-warning">月預算暫時讀取不到，不影響上面的核准內容。</p>}
         {!budgetError && !budget && <p className="mt-2 text-sm text-muted-foreground">正在整理月預算…</p>}
-        {budget && <MiniBudgetBar budget={budget} />}
+        {budget && <MiniBudgetBar budget={budget} extra={extra} />}
       </div>
-    </div>
+    </>
   );
 }
 
 type DecisionKind = "rejected" | "deferred";
 type QuickPick = "3" | "7" | "custom";
 
-/** 確認提議頁（F22-I02，v7 原型 `confirmPage()`＋拒絕／暫緩 sheet）。兩條路由共用同一支元件：
- * `entityId`（propose route）還沒有 change set，草稿只在第一次核准／拒絕／暫緩時才建立
- * （feature Decisions「Agent choice — the draft is created lazily」，never on page load）；
- * `setId`（changes route）已經有 change set，直接讀。任何非 confirm 的步驟都由這裡導去正確
- * 步驟（`changeFlow.ts::stepFromChangeSet`），也同時把 propose 網址收斂成正典的 changes 網址。 */
-export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
-  brandId: string; campaignId: string; entityId?: string; setId?: string;
+/** 確認提議頁（F22-I02，v7 原型 `confirmPage()`＋拒絕／暫緩 sheet；budget 分支 F25-I03）。兩條
+ * 路由共用同一支元件：`entityId`（propose route）還沒有 change set，草稿只在第一次核准／拒絕／
+ * 暫緩時才建立（feature Decisions「Agent choice — the draft is created lazily」，never on page
+ * load）；`setId`（changes route）已經有 change set，直接讀。`proposeKind` 只在 `entityId` 進來、
+ * 還沒有 change set 時分辨這是暫停提議還是加預算提議（`item` 這時還不存在，不能靠
+ * `item.kind` 分支）——`setId` 進來時一律讀 `changeSet` 自己的 kind，不受這個參數影響。任何非
+ * confirm 的步驟都由這裡導去正確步驟（`changeFlow.ts::stepFromChangeSet`），也同時把 propose
+ * 網址收斂成正典的 changes 網址。 */
+export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind = "pause" }: {
+  brandId: string; campaignId: string; entityId?: string; setId?: string; proposeKind?: "pause" | "budget";
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -220,7 +277,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [operationId] = useState(() => `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`);
+  const [operationId] = useState(() =>
+    entityId && proposeKind === "budget"
+      ? `triage-budget:${entityId}:${crypto.randomUUID()}`
+      : `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`,
+  );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -251,10 +312,20 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
 
   const triageItem: QueueItem | null = useMemo(() => {
     if (!queue) return null;
-    if (entityId) return queue.items.find((i) => i.triage.entity_id === entityId) ?? null;
+    if (entityId) {
+      // F25-I03：加預算的 propose 網址帶的是 `scale.owner.id`（投放組／活動），不是廣告的
+      // `triage.entity_id`——兩種 id 空間不同，不能沿用暫停提議那顆比對式（feature Decisions
+      // 「Confirm page budget propose mode」：route 讀 `scale.owner.id === entityId`）。
+      if (proposeKind === "budget") {
+        return queue.items.find((i) => i.kind_key === "scale_budget" && i.scale?.owner.id === entityId) ?? null;
+      }
+      return queue.items.find((i) => i.triage.entity_id === entityId) ?? null;
+    }
     const targetId = changeSet?.items[0]?.target_id;
-    return queue.items.find((i) => (changeSet && i.proposal?.change_set_id === changeSet.id) || i.triage.entity_id === targetId) ?? null;
-  }, [queue, entityId, changeSet]);
+    return queue.items.find((i) =>
+      (changeSet && i.proposal?.change_set_id === changeSet.id) || i.triage.entity_id === targetId || i.scale?.owner.id === targetId,
+    ) ?? null;
+  }, [queue, entityId, proposeKind, changeSet]);
   const position = queue && triageItem ? { pos: queue.items.indexOf(triageItem) + 1, total: queue.items.length } : null;
 
   // feature Decisions「Step from a change set」：非 confirm 步驟的清單，或還沒對到正典
@@ -273,7 +344,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
 
   /** 拿到可以動作的 change set：`changeSet` 已經有就直接用；propose 模式第一次寫入時，
    * 先看佇列列有沒有既有提議（`proposal.change_set_id`），有就重用，沒有才建立新草稿
-   * （feature Decisions「first reuse proposal.change_set_id when the queue row has one」）。 */
+   * （feature Decisions「first reuse proposal.change_set_id when the queue row has one」）。
+   * 草稿內容依 `proposeKind` 分支：budget 一定要有 `triageItem.scale`（propose 網址只會比對到
+   * `kind_key==="scale_budget"` 的列，見上面 `triageItem` 的 `useMemo`），沒有就是資料還沒讀到。 */
   async function ensureWorkingSet(): Promise<ChangeSet> {
     if (changeSet) return changeSet;
     const existingId = triageItem?.proposal?.change_set_id;
@@ -281,6 +354,16 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
       const data = await getChangeControl(brandId, campaignId);
       const found = data.change_sets.find((s) => s.id === existingId);
       if (found) return found;
+    }
+    if (proposeKind === "budget") {
+      const scale = triageItem?.scale;
+      if (!scale) throw new Error("這個投放組的資料還沒讀到，請重新整理後再試。");
+      return createChangeSet(brandId, campaignId, {
+        operation_id: operationId,
+        title: budgetTitle(scale.owner.name),
+        month: currentBudgetMonth(),
+        items: [buildBudgetDraftItem(scale.owner.id, scale.to)],
+      });
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     return createChangeSet(brandId, campaignId, {
@@ -297,7 +380,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
     } catch (err) {
       // feature Decisions「When approve answers 409 because the premise changed」：只重建一次，
       // 用新的 operation_id 帶 supersedes_id 再核准一次；再失敗就照一般錯誤處理，不無限重試。
-      if (err instanceof ChangeRequestRejected && !rebuilt) {
+      // 月預算放不下的 409（`isMonthBudgetRejection`）不是「前提變了」，是「這個月的餘額真的不夠」
+      // ——重建一份一樣內容的草稿再核准一次只會得到同一個錯誤，還多留一份沒用的草稿；這種 409
+      // 直接把後端訊息顯示出來，不重建（feature Decisions「a 409 from approve about the month
+      // budget shows the backend message and does NOT rebuild」）。
+      if (err instanceof ChangeRequestRejected && !rebuilt && !isMonthBudgetRejection(err.message)) {
         const rebuiltSet = await createChangeSet(brandId, campaignId, {
           operation_id: crypto.randomUUID(),
           title: target.title,
@@ -397,7 +484,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
         <EmptyState
-          title="找不到這則廣告的停損提議"
+          title={proposeKind === "budget" ? "找不到這個投放組的加預算提議" : "找不到這則廣告的停損提議"}
           description="可能已經處理過，或資料剛好還沒同步到投放中心。"
           actionHref={homeHref}
           actionLabel="回投放中心"
@@ -423,7 +510,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
 
   const { closed } = changeSet ? stepFromChangeSet(changeSet) : { closed: false };
   const item = changeSet && changeSet.items.length === 1 ? changeSet.items[0] : undefined;
-  const kind = item ? item.kind : "pause";
+  // `item` 在 propose 模式、change set 還沒建立前是 `undefined`（草稿延遲建立），這時 kind 由
+  // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
+  // propose kind 只有 pause，這裡是新加的分支）。
+  const kind = item ? item.kind : entityId ? proposeKind : "pause";
   const blocked = changeSet !== null && (changeSet.items.length !== 1 || (kind !== "pause" && kind !== "copy" && kind !== "budget"));
 
   if (blocked && changeSet) {
@@ -446,7 +536,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
   const closedLabel = changeSet
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
     : "";
-  const nextPauseItem = queue?.items.find((i) => i.id !== triageItem?.id && i.triage.class === "stop_loss" && !i.proposal);
+  // 「下一件」（F25-I03）：跟 VerifyPage 共用同一顆判斷，不各自算各自的（feature Decisions
+  // 「下一件」）。目前這件的識別碼：propose 網址就是 `entityId` 本身；`setId` 網址（含已關閉的
+  // 清單）從比對到的 `triageItem` 反推。
+  const currentEntityId = entityId ?? (triageItem ? queueItemEntityId(triageItem) : undefined);
+  const nextAction = closed ? nextOpenQueueItem(queue, currentEntityId) : null;
   // 改文案清單、還沒關閉（草稿）、承接自某一輪檢討：返回鍵改成「修改內容」回那一輪的改文案頁
   // （v7 原型 `confirmPage()` 的 `back:i.kind==="copy"?["修改內容",...]`）；已關閉或核准之後的清單
   // （`stepFromChangeSet` 這裡不會再回傳 confirm 步驟）都留原本的「投放中心」（issue Done 3）。
@@ -481,7 +575,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
         />
       )}
       {kind === "copy" && item && <CopyEvidence item={item} />}
-      {kind === "budget" && item && <BudgetEvidence item={item} brandId={brandId} />}
+      {kind === "budget" && (
+        <BudgetEvidence
+          item={item}
+          scale={triageItem?.scale ?? null}
+          bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
+          brandId={brandId}
+        />
+      )}
 
       {kind === "pause" && (
         <ReservedSlotCard
@@ -503,10 +604,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId }: {
         )}
         {!closed ? (
           <Button disabled={busy} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
-        ) : nextPauseItem ? (
-          <Button asChild>
-            <Link to={proposePausePath(brandId, nextPauseItem.triage.campaign_id, nextPauseItem.triage.entity_id)}>下一件 →</Link>
-          </Button>
+        ) : nextAction ? (
+          <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
         ) : null}
       </ActionBar>
 
