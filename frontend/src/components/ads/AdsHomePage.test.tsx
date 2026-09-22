@@ -1,72 +1,85 @@
-/** frontend/src/components/ads/AdsHomePage.test.tsx — F04-I09: 首頁四塊全部照 `getAdsHome`
- * 給的字串印，前端不重拼判斷句、不算百分比、不印假 0。 */
-import { render, screen } from "@testing-library/react";
+/** frontend/src/components/ads/AdsHomePage.test.tsx — F19-I02：v7 首頁版面重寫，取代 F04-I09
+ * 的舊版判斷帶／時間軸／建檔檢查表斷言（issue 授權）。首頁只負責讀 `refreshQueue`（header 件數
+ * ＋ `DecisionQueue`），`CampaignCards`／`BudgetCard`／`ChangeAttention` 各自打自己的 API——
+ * review repair (b)：一塊讀取失敗不拖累另外兩塊，這裡驗證三塊真的互相獨立。 */
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AdsHome, CampaignCard } from "@/lib/adsApi";
-import { getAdsHome } from "@/lib/adsApi";
-import type { LaunchReadiness } from "@/lib/adsLaunchApi";
-import { fetchLaunchReadiness } from "@/lib/adsLaunchApi";
+import type { CampaignCard } from "@/lib/adsApi";
+import { listCampaigns } from "@/lib/adsApi";
+import type { QueuePayload, QueueProposal, QueueReviewProposal, TriageItem } from "@/lib/adsTriageApi";
+import { refreshQueue } from "@/lib/adsTriageApi";
+import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import { formatSyncTime } from "@/lib/format";
 import { AdsHomePage } from "./AdsHomePage";
-import { getChangeControlSummary, getMonthlyBudget } from "@/lib/adsChangeApi";
-vi.mock("@/lib/adsChangeApi", () => ({ getChangeControlSummary: vi.fn(), getMonthlyBudget: vi.fn() }));
-beforeEach(() => {
-  vi.mocked(getChangeControlSummary).mockResolvedValue({ pending_count: 0, items: [], truncated: false });
-  vi.mocked(getMonthlyBudget).mockResolvedValue({ month: "2026-09", currency: "TWD", amount: null, revision: 0, known_spend: null, ongoing_estimate: null, reserved_increases: 0, available: null, uncertainties: ["待補資料"], can_increase: false, period_end: "2026-09-30", confirmed_at: null, notice: "餘額未知" });
-});
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
-  return { ...actual, getAdsHome: vi.fn() };
+  return { ...actual, listCampaigns: vi.fn() };
+});
+vi.mock("@/lib/adsTriageApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
+  return { ...actual, refreshQueue: vi.fn() };
+});
+vi.mock("@/lib/adsChangeApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
+  return { ...actual, getChangeControlSummary: vi.fn(), getMonthlyBudget: vi.fn() };
 });
 
-vi.mock("@/lib/adsLaunchApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsLaunchApi")>("@/lib/adsLaunchApi");
-  return { ...actual, fetchLaunchReadiness: vi.fn() };
-});
-
-function readiness(overrides: Partial<LaunchReadiness> = {}): LaunchReadiness {
+function unknownBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
   return {
-    state: "green",
-    items: [
-      { key: "offering", label: "賣的東西", state: "green", reason: "已經填好", fix_label: "去改", fix_href: "/brands/brd_1/intake" },
-      { key: "goal", label: "廣告目標", state: "green", reason: "已經設定", fix_label: "去改", fix_href: "/brands/brd_1/intake" },
-      { key: "account", label: "廣告帳戶", state: "green", reason: "已經接上", fix_label: "去接廣告帳戶", fix_href: "/brands/brd_1/intake" },
-    ],
-    notes: [],
-    primary: { label: "開始建立", href: "/brands/brd_1/ads/new" },
-    secondary: null,
+    month: "2026-09", currency: "TWD", amount: null, revision: 0,
+    known_spend: null, ongoing_estimate: null, reserved_increases: 0,
+    available: null, uncertainties: ["待補資料"], can_increase: false,
+    period_end: "2026-09-30", confirmed_at: null, notice: "餘額未知",
+    ...overrides,
+  };
+}
+
+function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
+  return {
+    entity_id: "ad_1", native_id: "native_1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1",
+    campaign_name: "晨光隨行杯上市", thumbnail_url: null,
+    class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
+    window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
+    target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
+    current: { spend: 5200, result_count: 0, cost_per_result: null, result_kind: "purchase", result_label: "購買", derived_zero_days: 7, reason: null },
+    previous: { spend: 4900, result_count: 15, cost_per_result: 326.7, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    change_pct: null, sample: { gate: true, spend_multiple: 3.2, days_with_events: 7 },
+    ...overrides,
+  };
+}
+
+function queueItem(id: string, overrides: Partial<TriageItem> = {}, proposal: QueueProposal | null = null) {
+  return {
+    id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
+    category: "ads_triage_stop_loss", kind: null, severity: "rule_warning" as const,
+    message: `廣告「${overrides.name ?? "晨光隨行杯・日常出發"}」停損，待決定`,
+    action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`, visible_from: null,
+    status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
+    triage: triageItem(overrides), proposal,
+  };
+}
+
+function queue(overrides: Partial<QueuePayload> = {}): QueuePayload {
+  return {
+    items: [], counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 },
+    total_ads: 0, kinds_available: ["stop_loss", "worse"], kinds_pending: ["scale_budget", "refresh_creative"],
     ...overrides,
   };
 }
 
 function campaignCard(overrides: Partial<CampaignCard> = {}): CampaignCard {
   return {
-    id: "cmp_1",
-    name: "測試 Campaign",
-    status: "live",
-    start_date: "2026-01-01",
-    end_date: "2026-01-31",
-    objective: "conversion",
-    created_at: "2026-01-01T00:00:00Z",
-    created_by: null,
-    budget_planned: null,
-    budget_total: null,
+    id: "cmp_1", name: "測試 Campaign", status: "live",
+    start_date: "2026-01-01", end_date: "2026-01-31", objective: "conversion",
+    created_at: "2026-01-01T00:00:00Z", created_by: null,
+    budget_planned: null, budget_total: null,
     budget_progress: { spent: null, total: null, pct: null },
     judgment: { tone: "neutral", text: "投放中", detail: "還沒有花費資料" },
     outcome: { spend: 0, purchases: 0, revenue: 0 },
-    ...overrides,
-  };
-}
-
-function home(overrides: Partial<AdsHome> = {}): AdsHome {
-  return {
-    headline: { text: "本月投放整體正常", facts: "3 個 Campaign 進行中" },
-    counts: { running: 0, upcoming: 0, ended: 0, needs_decision: 0 },
-    campaigns: [],
-    actions: [],
     ...overrides,
   };
 }
@@ -79,131 +92,236 @@ function renderPage() {
   );
 }
 
-describe("AdsHomePage（F04-I09）", () => {
-  beforeEach(() => {
-    vi.mocked(fetchLaunchReadiness).mockResolvedValue(readiness());
-  });
+beforeEach(() => {
+  // 重置每個 mock 的呼叫紀錄，讓「refreshQueue 每次掛載只呼叫一次」這類斷言不受測試順序影響。
+  vi.clearAllMocks();
+  vi.mocked(getChangeControlSummary).mockResolvedValue({ pending_count: 0, items: [], truncated: false });
+  vi.mocked(getMonthlyBudget).mockResolvedValue(unknownBudget());
+  vi.mocked(listCampaigns).mockResolvedValue([]);
+});
 
-  it("空資料：三個空狀態句子都出現，畫面上沒有任何一格印 0", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home({ campaigns: [], actions: [] }));
-
-    renderPage();
-
-    expect(await screen.findByText("目前沒有待確認的變更清單")).toBeTruthy();
-    expect(screen.getByText("目前沒有進行中的活動。")).toBeTruthy();
-    expect(screen.queryByText("還沒有任何紀錄。")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "查看歷史操作紀錄" }));
-    expect(screen.getByText("還沒有任何紀錄。")).toBeTruthy();
-    expect(screen.queryByText("0")).toBeNull();
-  });
-
-  it("有 judgment.text 的 Campaign：那句話原樣出現，前端沒有自己重拼", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(
-      home({
-        campaigns: [
-          campaignCard({
-            judgment: { tone: "warn", text: "投放中，預算花得比時間快", detail: "第 5／31 天" },
-          }),
-        ],
-      }),
+describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
+  it("header 件數：多件時印出「N 件」（含 refreshQueue 每次掛載只呼叫一次）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({ items: [queueItem("q1"), queueItem("q2", { name: "晨光隨行杯・辦公室一角" }), queueItem("q3", { name: "晨光隨行杯・隨時有你" })] }),
     );
 
     renderPage();
 
-    expect(await screen.findByText("投放中，預算花得比時間快")).toBeTruthy();
+    expect(await screen.findByText("3 件・由上往下處理就好")).toBeTruthy();
+    expect(vi.mocked(refreshQueue).mock.calls.length).toBe(1);
   });
 
-  it("優先呈現月總額與真實待辦，不再用自動執行保留卡佔首屏", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home());
-
-    renderPage();
-
-    expect(await screen.findByRole("region", { name: "每月品牌廣告預算" })).toBeTruthy();
-    expect(screen.getByRole("region", { name: "需要你決定的事" })).toBeTruthy();
-    expect(screen.queryByText("自動執行接上後開放")).toBeNull();
-  });
-
-  it("Campaign 卡格線在 1024／1280 是兩欄、1536 以上才三欄", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home({ campaigns: [campaignCard()] }));
-
-    renderPage();
-
-    const grid = await screen.findByTestId("campaign-grid");
-    expect(grid.className).toContain("sm:grid-cols-2");
-    expect(grid.className).toContain("2xl:grid-cols-3");
-    expect(grid.className).not.toContain("lg:grid-cols-3");
-  });
-});
-
-describe("AdsHomePage 建立 Campaign 卡的可投放檢查表（F05-I10）", () => {
-  it("green：沒有檢查表，按鈕仍是「開始建立」", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home());
-    vi.mocked(fetchLaunchReadiness).mockResolvedValue(readiness({ state: "green" }));
-
-    renderPage();
-
-    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
-    expect(await screen.findByText("開始建立")).toBeTruthy();
-    expect(screen.queryByText(/還缺/)).toBeNull();
-  });
-
-  it("red：三句 reason 都印出來、主要按鈕是「先補齊地基」、次要「還是要先建立」沒有 disabled", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home());
-    vi.mocked(fetchLaunchReadiness).mockResolvedValue(
-      readiness({
-        state: "red",
+  it("header 件數：已核對的停損列不算開著的——一件已完成、一件還開著只印「1 件」（F22-I05 rescope）", async () => {
+    const doneProposal: QueueProposal = {
+      change_set_id: "set_1", campaign_id: "cmp_1", kind: "pause",
+      status: "approved", verification_state: "confirmed",
+      reason: null, revisit_at: null, multi: false,
+    };
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
         items: [
-          { key: "offering", label: "賣的東西", state: "red", reason: "還沒有填任何一項商品或服務。", fix_label: "去填", fix_href: "/brands/brd_1/intake" },
-          { key: "goal", label: "廣告目標", state: "red", reason: "還沒有設定成效目標。", fix_label: "去設定", fix_href: "/brands/brd_1/intake" },
-          { key: "account", label: "廣告帳戶", state: "red", reason: "還沒接上廣告帳戶。", fix_label: "去接廣告帳戶", fix_href: "/brands/brd_1/intake" },
+          queueItem("q1", { name: "已核對的廣告" }, doneProposal),
+          queueItem("q2", { name: "還沒處理的廣告" }),
         ],
-        primary: { label: "先補齊地基", href: "/brands/brd_1/intake" },
-        secondary: { label: "還是要先建立", href: "/brands/brd_1/ads/new" },
       }),
     );
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
-    expect(await screen.findByText("還沒有填任何一項商品或服務。")).toBeTruthy();
-    expect(screen.getByText("還沒有設定成效目標。")).toBeTruthy();
-    expect(screen.getByText("還沒接上廣告帳戶。")).toBeTruthy();
-    const secondaryButton = screen.getByText("還是要先建立").closest("button");
-    expect(secondaryButton).toBeTruthy();
-    expect(secondaryButton?.hasAttribute("disabled")).toBe(false);
-    expect(screen.getByText("先補齊地基")).toBeTruthy();
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
   });
 
-  it("yellow：主要按鈕是「進入投放中心（有假設值）」且沒有次要按鈕", async () => {
-    vi.mocked(getAdsHome).mockResolvedValue(home());
-    vi.mocked(fetchLaunchReadiness).mockResolvedValue(
-      readiness({
-        state: "yellow",
+  it("header 件數：已暫緩的變差列不算開著的——`isQueueItemDone` 的 review 分支（F23-I05），一件已暫緩、一件還開著只印「1 件」", async () => {
+    const deferredProposal: QueueReviewProposal = {
+      kind: "review", review_id: "arv_1", status: "deferred", decision: "deferred",
+      reason: null, revisit_at: "2026-10-03T02:00:00Z", recommendation_id: null,
+      change_set_id: null, change_set_status: null, verification_state: null, multi: false,
+    };
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
         items: [
-          { key: "offering", label: "賣的東西", state: "yellow", reason: "用的是假設成交率 20%。", fix_label: "去改", fix_href: "/brands/brd_1/intake" },
-          { key: "goal", label: "廣告目標", state: "green", reason: "已經設定。", fix_label: "去改", fix_href: "/brands/brd_1/intake" },
-          { key: "account", label: "廣告帳戶", state: "green", reason: "已經接上。", fix_label: "去接廣告帳戶", fix_href: "/brands/brd_1/intake" },
+          queueItem("q1", { class: "worse", label: "變差", name: "已暫緩的廣告" }, deferredProposal),
+          queueItem("q2", { class: "worse", label: "變差", name: "還沒處理的廣告" }),
         ],
-        primary: { label: "進入投放中心（有假設值）", href: "/brands/brd_1/ads/new" },
-        secondary: null,
       }),
     );
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "查看新活動的建檔準備" }));
-    expect(await screen.findByText("進入投放中心（有假設值）")).toBeTruthy();
-    expect(screen.queryByText("還是要先建立")).toBeNull();
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
+  });
+
+  it("空佇列：header 印「都處理完了」（誠實空狀態句由 DecisionQueue 的佔位列自己扛，這支只管頁首）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+
+    renderPage();
+
+    expect(await screen.findByText("都處理完了")).toBeTruthy();
+  });
+
+  it("佇列列真的照 payload 渲染（分類、名稱、連結）——列的細節斷言在 DecisionQueue.test.tsx，這支只驗頁面接得到資料", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+
+    renderPage();
+
+    expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
+    expect(screen.getByText("停損")).toBeTruthy();
+    // 停損列沒有 proposal（F22-I05）：按鈕走提議頁，不是靜態的「看證據」。
+    expect(screen.getByRole("link", { name: "去處理" })).toBeTruthy();
+  });
+
+  it("變差列不看 action_url——F23-I05 接上 proposalAction 後，就算 action_url 是 null 也照樣給「看證據」", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({ items: [{ ...queueItem("q1", { class: "worse", label: "變差" }), action_url: null }] }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "看證據" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_1");
+  });
+
+  it("每月回顧是真的連結（F24-I02 接上 /month）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "每月回顧" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/month");
+  });
+
+  it("月預算未知：金額顯示「尚待確認」（逐欄核對，不用籠統的 no-0 regex）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(getMonthlyBudget).mockResolvedValue(unknownBudget());
+
+    renderPage();
+
+    const region = await screen.findByRole("region", { name: "本月可新增承諾" });
+    await waitFor(() => expect(region.textContent).toContain("尚待確認"));
+    expect(region.textContent).toContain("已花 尚待確認");
+    expect(region.textContent).toContain("預留 尚待確認");
+    expect(region.textContent).toContain("可用 尚待確認");
+  });
+
+  it("月預算已知：分段長條可見（不是灰色佔位條）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(getMonthlyBudget).mockResolvedValue(
+      unknownBudget({ amount: 60000, known_spend: 22000, ongoing_estimate: 28000, available: 10000, can_increase: true }),
+    );
+
+    renderPage();
+
+    const region = await screen.findByRole("region", { name: "本月可新增承諾" });
+    await waitFor(() => expect(region.textContent).toContain("TWD 10,000"));
+    expect(region.textContent).toContain("已花 TWD 22,000");
+    expect(region.textContent).toContain("預留 TWD 28,000");
+  });
+
+  it("兩個插槽都掛上：佇列列與活動卡同時出現", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCard()]);
+
+    renderPage();
+
+    expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "測試 Campaign" })).toBeTruthy();
+    expect(screen.getByTestId("campaign-grid")).toBeTruthy();
+  });
+
+  it("活動卡只列未結案的 Campaign，已結案的靠「查看全部活動」連結", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "cmp_live", name: "進行中活動" }),
+      campaignCard({ id: "cmp_closed", name: "已結案活動", status: "closed" }),
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "進行中活動" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "已結案活動" })).toBeNull();
+    expect(screen.getByRole("link", { name: "查看全部活動 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns");
+  });
+
+  it("活動卡讀取失敗不拖累佇列卡（三塊各自獨立）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+    vi.mocked(listCampaigns).mockRejectedValue(new Error("活動讀取失敗，請稍後再試。"));
+
+    renderPage();
+
+    expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
+    expect(await screen.findByText("活動讀取失敗，請稍後再試。")).toBeTruthy();
+  });
+
+  it("佇列讀取失敗：顯示錯誤與重試，不拖累月預算卡或活動卡；按下重試後恢復", async () => {
+    vi.mocked(refreshQueue).mockRejectedValueOnce(new Error("讀取失敗，請稍後再試。"));
+    vi.mocked(getMonthlyBudget).mockResolvedValue(unknownBudget({ amount: 60000, known_spend: 1000, ongoing_estimate: 0, available: 59000 }));
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCard()]);
+
+    renderPage();
+
+    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "測試 Campaign" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "本月可新增承諾" })).toBeTruthy();
+
+    const retry = screen.getByRole("button", { name: "重新讀取" });
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    await userEvent.click(retry);
+
+    expect(await screen.findByText("都處理完了")).toBeTruthy();
+  });
+
+  it("頁首同步晶片：只採計 state===\"ok\" 的時間戳，取最新一筆；N 項待處理＝這頁自己的 openCount", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue({ items: [queueItem("q1")] }));
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "cmp_a", name: "活動 A", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
+      campaignCard({ id: "cmp_b", name: "活動 B", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-20T01:00:00Z" } } }),
+    ]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "活動 A" });
+    const expected = `最近同步 ${formatSyncTime("2026-09-20T01:00:00Z")}`; // 兩筆都是 ok，取較新的那筆
+    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
+    expect(screen.getByText("1 項待處理", { selector: '[data-slot="chip"]' })).toBeTruthy();
+  });
+
+  it("頁首同步晶片：有失敗／未連接的活動時轉 warn 並附「N 個活動讀取異常」；失敗的舊時間戳不算進最近同步（I01 裁決）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "cmp_ok", name: "活動 OK", data: { sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00Z" } } }),
+      campaignCard({ id: "cmp_failed", name: "活動失敗", data: { sync: { state: "failed", error: "(#190) token expired", last_success_at: "2026-09-25T00:00:00Z" } } }),
+      campaignCard({ id: "cmp_disc", name: "活動未連接", data: { sync: { state: "disconnected", error: null, last_success_at: null } } }),
+    ]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "活動 OK" });
+    // 失敗那筆的 last_success_at（9/25）比 ok 那筆（9/19）新，但失敗態不算「最近同步」，
+    // 否則會把「上次失敗」誤讀成「剛剛才讀過」。
+    const expected = `最近同步 ${formatSyncTime("2026-09-19T14:40:00Z")}・2 個活動讀取異常`;
+    expect(screen.getByText(expected, { selector: '[data-slot="chip"]' })).toBeTruthy();
+  });
+
+  it("頁首同步晶片：完全沒有 ok 的時間戳印「尚未同步」", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+    vi.mocked(listCampaigns).mockResolvedValue([campaignCard({ id: "cmp_never", name: "從沒同步過" })]);
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "從沒同步過" });
+    expect(screen.getByText("尚未同步", { selector: '[data-slot="chip"]' })).toBeTruthy();
+  });
+
+  it("移除的舊區塊不再出現（判斷帶／時間軸／建檔檢查表）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(queue());
+
+    renderPage();
+
+    await screen.findByText("都處理完了");
+    expect(screen.queryByRole("heading", { name: "進行中的活動" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看歷史操作紀錄" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看新活動的建檔準備" })).toBeNull();
   });
 });
-
-it("renders imported campaign in the existing campaign grid", async () => {
-  vi.mocked(getAdsHome).mockResolvedValue(home({ imported_campaigns: [campaignCard({ id: "imported1", name: "BP AD existing", origin: "imported", status: "draft" })] }));
-  vi.mocked(fetchLaunchReadiness).mockResolvedValue(readiness());
-  renderPage();
-  expect(await screen.findByRole("heading", { name: "BP AD existing" })).toBeTruthy();
-  expect(screen.getByTestId("campaign-grid").textContent).toContain("BP AD existing");
-  expect(screen.queryByText("已納入的既有平台活動")).toBeNull();
-  expect(screen.queryByText("草稿")).toBeNull();
-});
-

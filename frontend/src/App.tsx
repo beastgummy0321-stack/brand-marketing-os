@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -90,6 +90,52 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId"
           element={<AdsCampaignRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/target"
+          element={<AdsTargetRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/detail"
+          element={<AdsCampaignDetailRoute />}
+        />
+        <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
+        <Route path="/brands/:brandId/ads/month" element={<AdsMonthRoute />} />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/wait"
+          element={<AdsWaitRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId"
+          element={<AdsProposePauseRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId"
+          element={<AdsReviewEntryRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId"
+          element={<AdsReviewRoundRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/prepare"
+          element={<AdsPrepareRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/copy"
+          element={<AdsCopyRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
+          element={<AdsChangeConfirmRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/handoff"
+          element={<AdsChangeHandoffRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/verify"
+          element={<AdsChangeVerifyRoute />}
         />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
@@ -404,6 +450,118 @@ function AdsCampaignRoute() {
       <CampaignWorkspace brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
     </>
   );
+}
+
+/** 活動目標設定頁（F19-I05，v7 原型「設定目標」畫面）：判斷這個活動好壞的成果與成本門檻，
+ * `AdsCampaignRoute` 卡片的「設定目標／調整目標」連結會導來這裡。`key={campaignId}` 讓
+ * react-router 換活動時整支重新掛載——同一條 route element，不換這個就會沿用同一個元件
+ * instance，上一個活動的草稿／baseline 會被誤帶到下一個活動（F19 repair #6）。 */
+function AdsTargetRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return (
+    <>
+      <CampaignTargetPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
+    </>
+  );
+}
+
+/** 活動詳情頁（F20-I02，v7 原型 `campPage()`）：家頁的活動卡名稱與佇列的「看證據」都落在
+ * 這裡；原本的五分頁工作區網址（`AdsCampaignRoute`）不變、由這頁的「全部資料 ›」進入。
+ * `key={campaignId}` 理由同 `AdsTargetRoute`——換活動要整支重新掛載，不沿用上一個活動的
+ * 展開／高亮狀態。 */
+function AdsCampaignDetailRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return <CampaignDetailPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
+}
+
+/** 資料連線頁（F21-I02，v7 原型 `connections()`）：投放中心倚賴的五個資料來源各自的狀態，
+ * 家頁與月預算卡的「查看資料連線」都落在這裡。 */
+function AdsConnectionsRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <DataConnectionsPage brandId={brandId ?? ""} />;
+}
+
+/** 每月回顧（F24-I04，v7 原型 `month()`）：內部投放計畫用來整理帳，平台原生物件不受影響。 */
+function AdsMonthRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <MonthReviewPage brandId={brandId ?? ""} />;
+}
+
+/** 資料不足 wait page（F24-I03，v7 原型 `waitPage()`）：首頁卡片「去處理」與活動工作區的
+ * `sync.state==="disconnected"` 都落在這裡。`key={campaignId}` 理由同 `AdsTargetRoute`。 */
+function AdsWaitRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return <WaitPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
+}
+
+/** 停損提議確認頁（propose route，F22-I02，v7 原型 `confirmPage()`）：三步驟輕流程第一步，
+ * `queue` 裡的停損列進來時還沒有 change set，草稿在第一次核准／拒絕／暫緩才即時組出來
+ * （`ConfirmPage` 自己的邏輯，這裡只負責帶參數）。`key` 用 entityId，換一則廣告要整支重新
+ * 掛載（理由同 `AdsTargetRoute`）。 */
+function AdsProposePauseRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ConfirmPage key={`propose-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 六步流程「看證據」的入口（review route，F23-I02，v7 原型 `review()`）：`worse` 列還沒有檢討
+ * 回合時進來，找到或建立回合後就轉導去正典的 `reviews/:reviewId` 網址——這裡只負責帶參數，
+ * 轉導與建立回合的邏輯在 `ReviewEvidencePage` 自己（同 `AdsProposePauseRoute` 的分工）。 */
+function AdsReviewEntryRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return (
+    <ReviewEvidencePage key={`review-entry-${entityId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />
+  );
+}
+
+/** 六步流程「看證據」的正典網址（reviews/:reviewId route，F23-I02）：檢討回合已存在時直接讀。 */
+function AdsReviewRoundRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <ReviewEvidencePage key={`review-round-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「選方向」頁（reviews/:reviewId/prepare route，F23-I03，v7 原型 `prepare()`）：檢討
+ * 回合已存在時的正典網址；非法步驟（還沒判讀完、已經暫緩／無法判定）由 `PreparePage` 自己轉去
+ * 看證據頁（同 `AdsReviewRoundRoute` 的分工）。 */
+function AdsPrepareRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <PreparePage key={`review-prepare-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「改文案」頁（reviews/:reviewId/copy route，F23-I04，v7 原型 `copy()`）：檢討回合已
+ * 存在時的正典網址；非法步驟由 `CopyPage` 自己轉去看證據頁（同 `AdsPrepareRoute` 的分工）。 */
+function AdsCopyRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <CopyPage key={`review-copy-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 三步驟輕流程的「確認提議」頁（changes/:setId route，F22-I02）：change set 已存在時的正典
+ * 網址；非 confirm 步驟的清單由 `ConfirmPage` 自己導去正確步驟（`flow/changeFlow.ts`）。 */
+function AdsChangeConfirmRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <ConfirmPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「到平台完成」頁（changes/:setId/handoff route，F22-I03）：change set 一定
+ * 已核准，草稿與 propose 網址都是上一步（`AdsChangeConfirmRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeHandoffRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <HandoffPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「核對結果」頁（changes/:setId/verify route，F22-I04）：change set 一定已核准
+ * 且至少回報過一次，草稿、核准與到平台完成都是前兩步（`AdsChangeConfirmRoute`／
+ * `AdsChangeHandoffRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeVerifyRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <VerifyPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */

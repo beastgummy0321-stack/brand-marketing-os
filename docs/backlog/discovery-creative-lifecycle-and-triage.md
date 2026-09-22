@@ -180,6 +180,143 @@ Known limits for the next batch:
   `no_target / target_unresolved` (`missing: product` plus `needs_resync` / `result_unknown_days`) — acceptance needs a
   re-sync (which derives zeros) and a target cost set through `PUT …/target` first.
 
+## 5c. v7 front end batch 1 — F19 (2026-09-21)
+
+Built (seven issues, feature `F19`, branch `feature/ads-center-v7-home`): v7 home (brand-level decision queue with
+to-target meters, per-campaign filter, month budget card, campaign cards with target + five-class strip) and the
+target page (`/brands/:brandId/ads/campaigns/:campaignId/target`). Small backend additions that followed the screens:
+queue items carry their `triage` item; `app/ads/result_kinds.py` (`result_label`, `result_kinds`, PUT validation);
+`campaign_name` on triage items. Rules are in `docs/design-system.md` §5.1–5.3 and `docs/architecture/ads.md` §6.17–6.19.
+
+Known gaps, not built (each needs its own screen or a backend field; none is faked):
+- 「看證據」 lands on the campaign's performance tab, not on the ad: the workspace keeps the selected ad in local state,
+  there is no query-string selection. Belongs to the campaign-detail batch.
+- Target page shows a number only for the basis in force; per-basis preview numbers (v7 shows three) need a backend
+  "candidates" field. The v7 actual-vs-target gauge is omitted for the same reason.
+- Cost / target numbers print without a currency symbol: triage and target responses carry no currency and
+  `formatCurrency` hard-codes NT$. Add `currency` to those responses before printing a symbol.
+- Zero-ad campaigns (drafts) show no target and no entry to the target page on their card (reach it through the workspace).
+- Revision conflict on the target page reloads server values; local edits are not merged.
+- Placeholders 「接上後開放」: pause proposal, 可加預算, 補素材, 每月回顧. Not built: campaign detail, data-connection page,
+  six-step repair restyle, "系統暫停補資料" banner, "資料不足先不判斷" card state (no backend state).
+- One `getTriage` request per campaign card; add a brand-level summary endpoint when a brand has > 10 campaigns.
+- Queue meter clamps at 1.5 ×, so 1.5 × and 4 × over look equally full; the numbers carry the difference.
+
+## 5d. v7 front end batch 2 — F20 campaign detail page, measured trial of harness 3.0.6 (2026-09-22)
+
+Built (two issues, branch `feature/ads-center-v7-detail`, base `feature/ads-center-v7-home`): triage items carry
+`thumbnail_url` (from `creative.fields`); new queue rows' `action_url` lands on `/brands/:b/ads/campaigns/:c/detail?ad=<entity>`;
+the detail page itself (groups by class, 停損／變差 open — else the first non-empty group, rows with thumbnail / spend / cost,
+去處理 for queued ads → workspace `?tab=performance` until the six-step flow is rebuilt, capacity card as one grey placeholder).
+Omitted, no backend: ladder, 「14 天幾乎沒投」, 「平台設定」 chip, the 3× amount in the 資料不足 hint. Closes §5c gap 1.
+Noted, not fixed: every detail-page open calls `getQueue`, which re-classifies the whole brand.
+
+Measured (`.harness/runtime/metrics.jsonl` + agent durations), authorize 00:48 → second merge 02:23 = 95 min:
+- Environment, 21 min: Docker would not start (undeletable `.sock` files after a Windows update; workaround = rename two folders).
+- I01 (backend, 40 lines + tests), 14 min: worker 6 min + 3 min; finish 69 s; merge 66 s. ~8 min of it was lead error:
+  wrong test path in `touch` (carve typo), build broke on three test factories outside `touch`, and a skipped `attach`
+  after a re-claim blocked the issue. No code was returned by review.
+- I02 (screen, 415 + 334 lines), 59 min: worker 34 min first pass; lead screenshot compare returned it once (content
+  max-width, summary hints, all-folded page) 9 min; finish 28 s; Opus adversarial review 5 min returned it once with three
+  real defects (去處理 looped to the same page — caused by the I01 plan, queue failure killed the page, `?ad=` scroll
+  replayed) 6 min; finish 25 s; merge 44 s.
+- Documents a worker was told to read: the issue, the feature file, design-system §1.7, the prototype function. No long .md.
+- Takeaways: each touch-list correction costs a save-patch → release → edit → claim → apply → attach round (~2–3 min and
+  easy to get wrong) — this is the missing `rescope`; carve must `ls` every path it writes into `touch`/`verify`; a type
+  field added to a shared API type needs its test factories in `touch`; a link changed in one issue must be traced to
+  every consumer planned in the next.
+
+## 5e. Handoff — cut UI-worker time and review bounces (written 2026-09-22; result in §5f)
+
+Goal (user-chosen, before the remaining v7 screens): make a UI issue cheaper. In F20 the screen issue took 59 of 95 min:
+worker first pass 34 min, two bounces 20 min (lead screenshot compare 9, Opus review 5 + repair 6). Tooling fixes
+(harness 3.0.8: `rescope`, unattached finish refused, leftovers moved aside, new-directory note) save ~12 min and do not
+touch this. Gates are not the cost: finish ≤ 69 s, merge ≤ 66 s.
+
+Measured, I02 worker (Sonnet), whole life incl. both repairs: 240 tool calls, ~513k tokens. 70 Reads over 48 distinct
+files (its own page 10×, 18 image reads of its own screenshots), 34 Edits, ~125 shell calls (13 playwright, 16 node
+helper scripts, 13 git, 8 npm test, 4 builds, 3 sleeps, ~57 uncategorised). First pass alone: 174 calls, 367k tokens.
+I01 worker (backend, 40 lines): 49 + 27 calls, 6 + 3 min. Opus review: 29 calls, 5 min, three real defects.
+Raw transcripts (git-ignored, do not read whole — tally with a script): `.harness/runtime/logs/F20-transcripts/`
+(only `I02-worker.jsonl` survived; the other three copied empty).
+
+What the bounces were, by origin:
+- Plan defect (lead): 去處理 looped to the same page because I01 changed `action_url` and I02 was told to use it.
+- Spec not reaching the worker: content `max-width:1180px` and the two summary hints are in the prototype HTML/CSS; the
+  worker missed them and also expanded the prototype's groups by hand before shooting, hiding the fold mismatch.
+- Missing general knowledge: queue failure killing the page, scroll effect replaying — both already solved once on the
+  home page (`AdsHomePage.tsx:19-20`), not carried to the next screen.
+
+Hypotheses, none verified — measure before changing anything:
+1. A lead-side pre-pass that extracts the prototype screen's facts mechanically (container widths, every text node,
+   default open/closed state, each control's target) into the issue would have prevented bounce 1 entirely.
+2. A short per-project "screen pitfalls" list fed by past review findings (independent blocks fail independently;
+   effects keyed on fresh objects; focus ring clipping; zero vs unknown) would have prevented bounce 2's two generic defects.
+3. 48 distinct files read suggests orientation cost; a per-screen context pack (the 5–8 files a new ads screen always
+   needs: a sibling page, its test, the API type file, patterns index, tokens) could replace exploration.
+4. Evidence capture is expensive (13 playwright + 16 helper scripts + 18 image reads): one reusable side-by-side
+   script in the repo, parameterised by prototype hash and app route, instead of each worker writing its own.
+5. Model choice is unmeasured: Opus as worker may cost more per minute but fewer bounces. Needs an A/B on one screen.
+
+Rejected / constraints: do not add approval rounds, new reports or mandatory reading (user rule); do not replace design
+with explanatory text; the HTML prototype stays the spec; a new gate must be replayed against real history before it is
+installed (3.0.7's path check failed that: 17 of 334 false refusals). User instruction in force: if a returned worker
+fails again, pause and show the user the cause instead of returning it a third time.
+
+State: F20 closed into `feature/ads-center-v7-home` (main tree is on it, clean). F19 still open (human acceptance
+pending). Nothing pushed. harness 3.0.8 installed from Planner `2d5ef0c`; loads in a new session; Codex copy not updated.
+Remaining v7 screens (evidence／six-step repair, data connections, three abnormal states, monthly review) wait for this.
+Docker on this machine needs the two-folder rename before each start (memory `docker-stale-sockets-block-start`).
+
+Next step: tally `I02-worker.jsonl` by phase (orientation → build → evidence → repair) with timestamps to see which of
+hypotheses 1–4 owns the most minutes; then try the cheapest one on the next single screen and compare against 59 min / 2 bounces.
+
+## 5f. Result of the §5e tally and the first change (2026-09-22)
+
+Tally of `I02-worker.jsonl` by timestamp (56 min incl. 8 min idle waiting for the lead): orientation 11.6 min (of which
+~4.5 min was finding how to serve the app, the port and the login); build + tests/lint/build 6 min; evidence ~19 min
+across three rounds (13 + 2.5 + 3.5: six throw-away scripts, heredoc/encoding probes, 18 image reads); repair edits ~11 min.
+The worker first opened the prototype in a browser at minute 27, after the page was built — it had only grepped the
+HTML. That, not missing prose, is why `max-width:1180px`, the summary hints and the default folds were missed.
+
+Change made (hypotheses 1 + 4 in one file, no gate, no new reading): `frontend/scripts/ui-evidence.cjs`. Replayed on
+F20: prototype-only run 2.5 s, full run (login, mocked `/api`, both widths, side-by-side) 10 s; its facts file lists
+`div#app.page max-width:1180px`, `CLOSED 資料不足 10 則 還沒花到可判讀的金額（1,350）` and the OPEN/CLOSED default of
+every group — all three items of bounce 1. design-system §1.7 points to it and gained self-check items 9–10 (the two
+generic defects of bounce 2). Hypothesis 3 is partly covered (the script header answers serve/port/login); a context
+pack is not built. Hypothesis 5 (Opus as worker) untested. Plan defects (bounce 2's loop) are a carve matter, see §5d.
+
+## 5g. F21 data-connections page — A/B of the UI workflow and two root causes (2026-09-22)
+
+Same screen, same model (Sonnet), built twice. Baseline F20-I02: worker first pass 34 min / 174 calls / 367k tokens,
+2 bounces, 59 min in total.
+- v1 (prototype-first facts + context pack, old order): 15.6 min / 108 calls / 233k. Layout right first time; 2
+  mismatches found by the lead's eye (warn buttons rendered primary; an ok card labelled 「重新授權」 — plan defect).
+- v2 (pieces mapping + `Chip` kit piece + static-first order + mechanical diff): 15.1 min / 105 calls / 218k. 0 visual
+  mismatches; `diff-*.txt` needed no prose from the lead. finish 23 s, merge 42 s.
+- Post-build Opus review of v2: 3.4 min / 125k, 6 real defects — ALL in data→state rules, none visual. Replay of a
+  pre-build challenge on the plan alone (no code): 80 s / 61k, found the same 6 plus 3 more. Rule repair by the same
+  worker: 6.3 min / 22 calls.
+
+Root causes (symptoms in brackets):
+1. The prototype's vocabulary (`btn`, `chip`, `card`) had no counterpart in the kit, and fidelity was checked last, so
+   every worker re-decided emphasis by judgement and reviews re-told the prototype in prose [purple buttons; chip
+   hand-rolled three times; F20 bounce 1]. Fixed: `Chip` pattern, `pieces` + `diff` in `ui-evidence.cjs`, order of work
+   in design-system §1.7.
+2. The prototype specifies appearance only; "which field → which state/number" was written by the planner from field
+   names and never checked against the code that produces the field; the worker implements it literally and writes the
+   tests from the same rule, so only a post-build review can catch it [NULL-first ordering, never-set budget shown as
+   verified, UTC "yesterday", zero accounts shown connected, variants counted as products, failures not counted; F20's
+   looping 去處理]. Fixed: CLAUDE.md carve rule — challenge each rule against the backend before dispatch.
+3. Tests awaited a container that exists in every state and then asserted a state synchronously: green alone (issue
+   verify runs one file), red under the full suite (integrate). Cost one 3-min integrate. Fixed: §1.7 self-check 11.
+Totals for F21 (authorize 03:21 → integrate green 04:33, incl. building both versions and the tooling): worker 15.1 +
+6.3 min, finish 23 s + 24 s, merge 42 s, integrate 2.7 min red + 3.0 min green.
+Still open: worktrees lack `.env`/`frontend/.env` (`harness env` does not copy untracked config; lead copied by hand);
+issues put `patterns/**` in `do_not_touch`, which is what forced local copies — a missing kit piece must be added by
+the lead before dispatch; Opus-as-worker A/B not run. Next screens: run the pre-build challenge for real and compare
+against v2 + 6.3 min repair.
+
 ## 6. Still open
 
 Exact numeric defaults (fatigue definition, "almost no delivery"), wording of learning sentences,

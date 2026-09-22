@@ -1,7 +1,7 @@
 """app/tests/test_ads_triage_queue.py — F18-I03 falsifiers: the brand decision queue over
 program triage, through the existing `interrupts` inbox.
 
-Two fixture styles:
+Three fixture styles:
 - `QueueEndToEndTest` proves the real wiring (classify -> enqueue -> message/action_url/category)
   through the actual `triage.classify()` pipeline (same fixture shape as test_ads_triage.py),
   plus the non-closed / has-imported-ads campaign scoping.
@@ -9,6 +9,11 @@ Two fixture styles:
   filtering, counts) against `triage._classify_brand` patched to fixed items -- classify()'s own
   class/reason-code logic is already exhaustively covered by test_ads_triage.py, not re-proven
   here.
+- `QueueProposalTest` (F22-I01) proves the `proposal` field of a `stop_loss` row against real
+  `ads_change_set`/`ads_action` rows, inserted directly (not through `change_control.create()`
+  /`approve()`) so each scenario's status/`revisit_at`/`created_at` can be set precisely without
+  driving the whole approval workflow -- `triage._classify_brand` stays patched to fixed items,
+  same isolation as `QueuePlumbingTest`.
 """
 
 import unittest
@@ -117,15 +122,26 @@ class QueueEndToEndTest(unittest.TestCase):
         self.assertIn("…", stop_row["message"])  # long name truncated
         self.assertNotIn("Meta", stop_row["message"])
         self.assertNotIn("meta", stop_row["message"])
+        # F20-I01: newly enqueued rows land on the detail page, anchored on the ad that fired.
         self.assertEqual(
             stop_row["action_url"],
-            f"/brands/{self.brand}/ads/campaigns/{self.campaign}?tab=performance",
+            f"/brands/{self.brand}/ads/campaigns/{self.campaign}/detail?ad={self.ad_stop['id']}",
         )
+        # F19-I01: each queue row carries the current triage item that produced it (matched by
+        # the same dedupe key the enqueue used) -- never null, it's filtered to only live rows.
+        self.assertEqual(stop_row["triage"]["class"], "stop_loss")
+        self.assertEqual(stop_row["triage"]["entity_id"], self.ad_stop["id"])
+        # F19-I07: the queue is brand-level across campaigns -- each row's triage item carries
+        # its own campaign's name so the frontend can label/filter rows by campaign.
+        self.assertEqual(stop_row["triage"]["campaign_name"], "活動一")
 
         worse_row = by_category["ads_triage_worse"]
         self.assertEqual(worse_row["severity"], "rule_warning")
         self.assertIn("廣告變差用", worse_row["message"])
         self.assertLessEqual(len(worse_row["message"]), core_interrupts.MAX_MESSAGE_LEN)
+        self.assertEqual(worse_row["triage"]["class"], "worse")
+        self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
+        self.assertEqual(worse_row["triage"]["campaign_name"], "活動一")
 
         self.assertEqual(result["kinds_available"], ["stop_loss", "worse"])
         self.assertEqual(result["kinds_pending"], ["scale_budget", "refresh_creative"])
@@ -300,6 +316,15 @@ class QueuePlumbingTest(unittest.TestCase):
         # call (see test_refresh_closes_open_row_when_ad_recovers_to_flat below).
         self.assertEqual(row["status"], "open")
 
+    def test_get_queue_attaches_the_matching_triage_item_by_dedupe_key(self):
+        window_end = date(2026, 1, 7)
+        item = self._item("worse", window_end=window_end)
+        with patch.object(triage, "_classify_brand", return_value=[item]):
+            triage.refresh_queue(self.conn, self.org, self.brand)  # raises the open row
+            queue = triage.get_queue(self.conn, self.org, self.brand)
+        self.assertEqual(len(queue["items"]), 1)
+        self.assertEqual(queue["items"][0]["triage"], item)
+
     def _stop_loss_at(self, window_end):
         return patch.object(triage, "_classify_brand",
                              return_value=[self._item("stop_loss", window_end=window_end)])
@@ -417,6 +442,371 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["kinds_available"], ["stop_loss", "worse"])
         self.assertEqual(queue["kinds_pending"], ["scale_budget", "refresh_creative"])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))
+
+
+class QueueProposalTest(unittest.TestCase):
+    """F22-I01: `proposal` on a `stop_loss` row -- against real `ads_change_set`/`ads_action`
+    rows, inserted directly so each scenario's status/`revisit_at`/`created_at` is exact."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="停損提案測試", actor="test", client_name=None,
+        )["id"]
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動一",
+        )["id"]
+        self.other_campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動二",
+        )["id"]
+
+    def _item(self, *, entity_id="ent_1", campaign_id=None, window_end=None, cls="stop_loss"):
+        window_end = window_end or date(2026, 1, 7)
+        campaign_id = campaign_id or self.campaign
+        return {
+            "entity_id": entity_id, "native_id": "n1", "name": "廣告A", "campaign_id": campaign_id,
+            "class": cls, "label": triage.LABELS[cls], "reason_code": "x",
+            "window": {"start": window_end - timedelta(days=6), "end": window_end, "days": 7,
+                       "previous_start": None, "previous_end": None, "extended_from": None},
+            "target": {"value": 1}, "current": {}, "previous": {}, "change_pct": None,
+            "sample": {},
+        }
+
+    @staticmethod
+    def _pause_item(target_id):
+        # `ads_action.id` is a global primary key (not scoped per brand/test) -- a fresh id every
+        # call, never a literal like "i1" reused across test methods in the same shared dev DB.
+        return {"id": db.new_id("adx"), "kind": "pause", "target_id": target_id, "target": {},
+                "before": {"status": "ACTIVE"}, "after": {"status": "PAUSED"}, "reason": "x"}
+
+    def _insert_set(self, *, campaign_id, status, items, revisit_at=None, decision_reason=None,
+                     created_at=None):
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,revisit_at,decision_reason,"
+            "created_by,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, campaign_id, set_id, set_id, set_id, "測試清單",
+             "2026-01", status, db.jsonb({"items": items}), revisit_at, decision_reason, "test",
+             created_at or db.now_utc()),
+        )
+        self.conn.commit()
+        return set_id
+
+    def _insert_action(self, action_id, set_id, campaign_id, target_id, verification_state):
+        self.conn.execute(
+            "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,kind,"
+            "change_set_id,verification_state) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (action_id, self.org, self.brand, campaign_id, "ad", target_id, "pause", set_id,
+             verification_state),
+        )
+        self.conn.commit()
+
+    def _queue(self, items):
+        # `refresh_queue()`, not `get_queue()`: the row has to actually exist as an open
+        # `interrupt` row before `_queue_payload` will report it at all (same reason
+        # `QueuePlumbingTest` calls `refresh_queue()` first).
+        with patch.object(triage, "_classify_brand", return_value=items):
+            return triage.refresh_queue(self.conn, self.org, self.brand)
+
+    def test_no_matching_set_is_null(self):
+        item = self._item()
+        queue = self._queue([item])
+        self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_worse_row_is_always_null_even_with_a_matching_set(self):
+        item = self._item(cls="worse")
+        self._insert_set(
+            campaign_id=self.campaign, status="draft",
+            items=[self._pause_item(item["entity_id"])],
+        )
+        queue = self._queue([item])
+        self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_draft_set_counts_with_pending_verification_state(self):
+        item = self._item()
+        set_id = self._insert_set(
+            campaign_id=self.campaign, status="draft",
+            items=[self._pause_item(item["entity_id"])],
+        )
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal, {
+            "change_set_id": set_id, "campaign_id": self.campaign, "kind": "pause",
+            "status": "draft", "verification_state": "pending", "reason": None,
+            "revisit_at": None, "multi": False,
+        })
+
+    def test_approved_pending_readback_counts(self):
+        item = self._item()
+        pause = self._pause_item(item["entity_id"])
+        set_id = self._insert_set(campaign_id=self.campaign, status="approved", items=[pause])
+        self._insert_action(pause["id"], set_id, self.campaign, item["entity_id"], "pending")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "approved")
+        self.assertEqual(proposal["verification_state"], "pending")
+
+    def test_confirmed_counts_only_while_entity_still_paused(self):
+        entity = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告A", "native_status": "PAUSED"},
+        )
+        self.conn.commit()
+        item = self._item(entity_id=entity["id"])
+        pause = self._pause_item(entity["id"])
+        set_id = self._insert_set(campaign_id=self.campaign, status="approved", items=[pause])
+        self._insert_action(pause["id"], set_id, self.campaign, entity["id"], "confirmed")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["verification_state"], "confirmed")
+
+        # The entity has since been reactivated on the platform -- triage never reads
+        # native_status itself, so only this proposal lookup can tell the ad needs a fresh one.
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告A", "native_status": "ACTIVE"},
+        )
+        self.conn.commit()
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_rejected_counts_only_inside_the_current_triage_window(self):
+        item = self._item(window_end=date(2026, 1, 7))
+        self._insert_set(
+            campaign_id=self.campaign, status="rejected",
+            items=[self._pause_item(item["entity_id"])],
+            decision_reason="先觀察",
+            created_at=db.now_utc().replace(year=2026, month=1, day=5),
+        )
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "rejected")
+        self.assertEqual(proposal["reason"], "先觀察")
+
+        # Same rejected set, but the window has since moved past it entirely.
+        later_item = self._item(window_end=date(2026, 2, 20))
+        self.assertIsNone(self._queue([later_item])["items"][0]["proposal"])
+
+    def test_deferred_counts_only_before_revisit_at(self):
+        item = self._item()
+        self._insert_set(
+            campaign_id=self.campaign, status="deferred",
+            items=[self._pause_item(item["entity_id"])],
+            decision_reason="等一週", revisit_at=db.now_utc() + timedelta(days=7),
+        )
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "deferred")
+
+        past_item = self._item(entity_id="ent_past")
+        self._insert_set(
+            campaign_id=self.campaign, status="deferred",
+            items=[self._pause_item(past_item["entity_id"])],
+            decision_reason="等一週", revisit_at=db.now_utc() - timedelta(days=1),
+        )
+        self.assertIsNone(self._queue([past_item])["items"][0]["proposal"])
+
+    def test_superseded_set_never_counts(self):
+        item = self._item()
+        self._insert_set(
+            campaign_id=self.campaign, status="superseded",
+            items=[self._pause_item(item["entity_id"])],
+        )
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_another_entitys_set_does_not_match(self):
+        item = self._item(entity_id="ent_mine")
+        self._insert_set(
+            campaign_id=self.campaign, status="draft",
+            items=[self._pause_item("ent_someone_else")],
+        )
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_another_campaigns_set_does_not_match(self):
+        item = self._item(entity_id="ent_1", campaign_id=self.campaign)
+        self._insert_set(
+            campaign_id=self.other_campaign, status="draft",
+            items=[self._pause_item("ent_1")],
+        )
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_multi_item_set_is_reported_as_multi(self):
+        item = self._item()
+        self._insert_set(
+            campaign_id=self.campaign, status="draft",
+            items=[
+                self._pause_item(item["entity_id"]),
+                {"id": db.new_id("adx"), "kind": "budget", "target_id": "ent_other",
+                 "target": {}, "before": {}, "after": {"daily_amount": 100}, "reason": "x"},
+            ],
+        )
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertTrue(proposal["multi"])
+
+
+class QueueReviewProposalTest(unittest.TestCase):
+    """F23-I01: `proposal` on a `worse` row -- against real `ads_review_round`/`ads_change_set`
+    rows, inserted directly (same isolation style as `QueueProposalTest`)."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="檢討提案測試", actor="test", client_name=None,
+        )["id"]
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="活動一",
+        )["id"]
+        self.entity = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "ad1", "name": "廣告A"},
+        )["id"]
+
+    def _item(self, *, entity_id=None, window_end=None):
+        window_end = window_end or date(2026, 1, 7)
+        return {
+            "entity_id": entity_id or self.entity, "native_id": "n1", "name": "廣告A",
+            "campaign_id": self.campaign, "class": "worse", "label": triage.LABELS["worse"],
+            "reason_code": "x",
+            "window": {"start": window_end - timedelta(days=6), "end": window_end, "days": 7,
+                       "previous_start": None, "previous_end": None, "extended_from": None},
+            "target": {"value": 1}, "current": {}, "previous": {}, "change_pct": None,
+            "sample": {},
+        }
+
+    def _round(self, *, entity_id=None, window_end=None, status="ready", decision=None,
+               reason=None, revisit_at=None, result_json=None, created_at=None):
+        entity_id = entity_id or self.entity
+        window_end = window_end or date(2026, 1, 7)
+        round_id = db.new_id("arv")
+        self.conn.execute(
+            "INSERT INTO ads_review_round(id,org_id,brand_id,campaign_id,entity_id,window_start,"
+            "window_end,evidence_json,evidence_hash,result_json,status,decision,reason,revisit_at,"
+            "created_by,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (round_id, self.org, self.brand, self.campaign, entity_id,
+             window_end - timedelta(days=6), window_end, db.jsonb({}), round_id,
+             db.jsonb(result_json or {}), status, decision, reason, revisit_at, "test",
+             created_at or db.now_utc()),
+        )
+        self.conn.commit()
+        return round_id
+
+    @staticmethod
+    def _copy_item(target_id):
+        return {"id": db.new_id("adx"), "kind": "copy", "target_id": target_id, "target": {},
+                "before": {"title": "old"}, "after": {"title": "new"}, "reason": "x"}
+
+    def _insert_review_set(self, *, review_id, status, items):
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "測試清單",
+             "2026-01", status, db.jsonb({"items": items, "review_id": review_id}), "test"),
+        )
+        self.conn.commit()
+        return set_id
+
+    def _queue(self, items):
+        # `refresh_queue()`, not `get_queue()`: same reason `QueueProposalTest` uses it -- the row
+        # has to exist as an open `interrupt` row before `_queue_payload` reports it at all.
+        with patch.object(triage, "_classify_brand", return_value=items):
+            return triage.refresh_queue(self.conn, self.org, self.brand)
+
+    def test_no_round_is_null(self):
+        item = self._item()
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_queued_round_without_change_set(self):
+        item = self._item()
+        round_id = self._round(status="queued")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal, {
+            "kind": "review", "review_id": round_id, "status": "queued", "decision": None,
+            "reason": None, "revisit_at": None, "recommendation_id": None,
+            "change_set_id": None, "change_set_status": None, "verification_state": None,
+            "multi": False,
+        })
+
+    def test_ready_round_recommendation_id_is_first_adjust(self):
+        item = self._item()
+        self._round(status="ready", result_json={"recommendations": [
+            {"id": "recommendation-1", "target_id": self.entity, "recommendation": "observe"},
+            {"id": "recommendation-2", "target_id": self.entity, "recommendation": "adjust"},
+        ]})
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "ready")
+        self.assertEqual(proposal["recommendation_id"], "recommendation-2")
+
+    def test_ready_round_with_no_adjust_recommendation_has_null_recommendation_id(self):
+        item = self._item()
+        self._round(status="ready", result_json={"recommendations": [
+            {"id": "recommendation-1", "target_id": self.entity, "recommendation": "retain"},
+        ]})
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertIsNone(proposal["recommendation_id"])
+
+    def test_completed_with_copy_set_reports_change_set_fields(self):
+        item = self._item()
+        round_id = self._round(status="completed", decision="completed", reason="改文案")
+        set_id = self._insert_review_set(
+            review_id=round_id, status="draft", items=[self._copy_item(self.entity)],
+        )
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["decision"], "completed")
+        self.assertEqual(proposal["change_set_id"], set_id)
+        self.assertEqual(proposal["change_set_status"], "draft")
+        self.assertEqual(proposal["verification_state"], "pending")
+        self.assertFalse(proposal["multi"])
+
+    def test_completed_without_copy_set_leaves_change_set_fields_null(self):
+        item = self._item()
+        self._round(status="completed", decision="completed", reason="先觀察")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["decision"], "completed")
+        self.assertIsNone(proposal["change_set_id"])
+        self.assertIsNone(proposal["change_set_status"])
+        self.assertIsNone(proposal["verification_state"])
+
+    def test_deferred_round_carries_reason_and_revisit_at(self):
+        item = self._item()
+        revisit = db.now_utc() + timedelta(days=7)
+        self._round(status="deferred", decision="deferred", reason="等一週", revisit_at=revisit)
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "deferred")
+        self.assertEqual(proposal["reason"], "等一週")
+        self.assertIsNotNone(proposal["revisit_at"])
+
+    def test_unjudgeable_round(self):
+        item = self._item()
+        self._round(status="unjudgeable", decision="unjudgeable", reason="資料不足")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "unjudgeable")
+
+    def test_failed_round_has_no_decision(self):
+        item = self._item()
+        self._round(status="failed")
+        proposal = self._queue([item])["items"][0]["proposal"]
+        self.assertEqual(proposal["status"], "failed")
+        self.assertIsNone(proposal["decision"])
+
+    def test_round_outside_current_window_does_not_match(self):
+        item = self._item(window_end=date(2026, 2, 20))
+        self._round(status="ready", window_end=date(2026, 1, 7))
+        self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_stop_loss_row_unaffected_by_a_matching_review_round(self):
+        # Same entity/window a `worse` row would match on -- proves `_queue_payload` branches by
+        # `triage.class`, never letting a review round leak into a `stop_loss` row's own proposal.
+        self._round(status="ready")
+        stop_item = {
+            "entity_id": self.entity, "native_id": "n1", "name": "廣告A",
+            "campaign_id": self.campaign, "class": "stop_loss",
+            "label": triage.LABELS["stop_loss"], "reason_code": "x",
+            "window": {"start": date(2026, 1, 1), "end": date(2026, 1, 7), "days": 7,
+                       "previous_start": None, "previous_end": None, "extended_from": None},
+            "target": {"value": 1}, "current": {}, "previous": {}, "change_pct": None,
+            "sample": {},
+        }
+        self.assertIsNone(self._queue([stop_item])["items"][0]["proposal"])
 
 
 if __name__ == "__main__":

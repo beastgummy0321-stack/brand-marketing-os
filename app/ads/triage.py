@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ads import external_sync, repository, review_evidence, targets
+from app.ads import external_sync, repository, result_kinds, review_evidence, targets
 from app.ads.adapters.external import SourceReadError
 from app.core import interrupts
 from app.core.db import now_utc
@@ -62,10 +62,47 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         for row in rows:
             rows_by_entity[row["entity_id"]].append(dict(row))
     items = [
-        _classify_ad(dict(ad), target, cutoff, coverage, rows_by_entity.get(ad["id"], []))
+        _classify_ad(dict(ad), campaign["name"], target, cutoff, coverage,
+                      rows_by_entity.get(ad["id"], []))
         for ad in ads
     ]
-    return {"window_days": WINDOW_STEPS[-1], "items": items}
+    return {"window_days": WINDOW_STEPS[-1], "items": items, "data": _data_view(
+        conn, org_id, brand_id, campaign, cutoff, coverage,
+    )}
+
+
+def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage):
+    """The read-only `data` enrichment (F24-I01, feature Decisions) -- `sync` reuses
+    `repository.campaign_sync_state` (same DB-only bound-accounts check `external_repository
+    .external_view`'s own `connections` list makes); `coverage`/`missing_days` reuse this same
+    call's own `cutoff`/`coverage` (never re-derived), so they can never disagree with what
+    `classify()` above actually judged every ad against."""
+    window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
+    return {
+        "sync": repository.campaign_sync_state(conn, org_id, brand_id, campaign),
+        "coverage": (
+            {"start": coverage[0].isoformat(), "end": coverage[1].isoformat()}
+            if coverage else None
+        ),
+        "missing_days": _missing_days(coverage, window_start, cutoff),
+    }
+
+
+def _missing_days(coverage, start, end):
+    """The days of `[start, end]` outside the recorded `coverage` range, oldest first, capped at
+    31 (F24-I01, feature Decisions) -- empty when `coverage` is `None` (never synced), since a
+    campaign that has never synced says so through `sync.state == "never"`, not a wall of missing
+    dates."""
+    if coverage is None:
+        return []
+    coverage_start, coverage_end = coverage
+    days = []
+    day = start
+    while day <= end:
+        if day < coverage_start or day > coverage_end:
+            days.append(day.isoformat())
+        day += timedelta(days=1)
+    return days[:31]
 
 
 def _coverage(campaign):
@@ -164,11 +201,13 @@ def _metrics_view(view, spend):
     if view is None:
         return {
             "spend": spend, "result_count": None, "cost_per_result": None,
-            "result_kind": None, "derived_zero_days": 0, "reason": "result_unknown_days",
+            "result_kind": None, "result_label": result_kinds.label(None),
+            "derived_zero_days": 0, "reason": "result_unknown_days",
         }
     return {
         "spend": spend, "result_count": view["result_count"],
         "cost_per_result": view["cost_per_result"], "result_kind": view["result_kind"],
+        "result_label": result_kinds.label(view["result_kind"]),
         "derived_zero_days": view["derived_zero_days"], "reason": view["reason"],
     }
 
@@ -213,10 +252,20 @@ def _compare(current_cost, previous_cost):
     return "flat", "cost_per_result_flat", change_pct
 
 
-def _classify_ad(entity, target, cutoff, coverage, entity_rows):
+def _thumbnail_url(entity):
+    """This ad's own creative thumbnail, read from the already-loaded `ads_external_entity
+    .creative` jsonb -- `creative.fields.thumbnail_url` first, else `.image_url`, else `None`
+    (issue Done #1). Same field set `adapters/meta_read.py::creative_summary` writes; no new
+    query, no platform branch."""
+    fields = (entity.get("creative") or {}).get("fields") or {}
+    return fields.get("thumbnail_url") or fields.get("image_url") or None
+
+
+def _classify_ad(entity, campaign_name, target, cutoff, coverage, entity_rows):
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
-        "campaign_id": entity["campaign_id"],
+        "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
+        "thumbnail_url": _thumbnail_url(entity),
     }
 
     def finish(cls, reason_code, start, end, days, extended_from, view, spend, change_pct=None,
@@ -228,7 +277,8 @@ def _classify_ad(entity, target, cutoff, coverage, entity_rows):
         gate = _sample_gate(spend, view, target["value"], days)
         return {
             **base, "class": cls, "label": LABELS[cls], "reason_code": reason_code,
-            "window": _window_view(start, end, days, extended_from), "target": target,
+            "window": _window_view(start, end, days, extended_from),
+            "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
             "change_pct": change_pct,
             "sample": _sample_view(spend, view, target["value"], days, gate),
@@ -383,11 +433,12 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
             conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[cls],
             dedupe_key=_dedupe_key(cls, item["entity_id"], item["window"]["end"]),
             message=_queue_message(cls, item["name"]),
-            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}?tab=performance",
+            action_url=f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
+                       f"?ad={item['entity_id']}",
         )
     conn.commit()
     _supersede_stale_open_rows(conn, org_id, brand_id, _live_keys(items))
-    return _queue_payload(conn, brand_id, items)
+    return _queue_payload(conn, org_id, brand_id, items)
 
 
 def get_queue(conn, org_id, brand_id) -> dict:
@@ -395,21 +446,244 @@ def get_queue(conn, org_id, brand_id) -> dict:
     only place that supersedes stale rows (it may not have run yet since the ad's classification
     last changed). Current classification decides which open interrupt rows are still live: an
     older window's open row whose ad has since moved off `stop_loss`/`worse` (e.g. now flat) is
-    filtered out of this payload the same way, without writing anything."""
+    filtered out of this payload the same way, without writing anything. Each listed row carries
+    the current triage item that produced it (F19-I01, `_queue_payload`)."""
     items = _classify_brand(conn, org_id, brand_id)
-    return _queue_payload(conn, brand_id, items)
+    return _queue_payload(conn, org_id, brand_id, items)
 
 
-def _queue_payload(conn, brand_id, items) -> dict:
-    live_keys = _live_keys(items)
+# ---------------------------------------------------------------------------
+# F22-I01/F23-I01: each queue row's own `proposal`, per the "Queue row state" rule (feature
+# Decisions) -- on a `stop_loss` row, the change set (if any) that currently answers its ad
+# (F22-I01); on a `worse` row, the matching `ads_review_round` (if any), plus its own copy change
+# set when one exists (F23-I01). Read-only, brand-wide (one query for every non-superseded change
+# set, one for every `ads_action` verification_state, one for every review round, one for the
+# handful of entities whose matching pause item reads back `confirmed`) -- never per row.
+# ---------------------------------------------------------------------------
+
+
+def _brand_change_sets_by_campaign(conn, org_id, brand_id) -> dict:
+    """Every non-superseded change set of this brand, newest (`created_at`) first -- one query
+    for the whole brand. Grouped by `campaign_id` in Python; the SQL-level `ORDER BY created_at
+    DESC` is preserved inside each campaign's own sublist (stable grouping), so "the newest
+    change set of the row's campaign" is just "the first match found while walking that list"."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,status,plan_json,decision_reason,revisit_at,created_at "
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND status != 'superseded' "
+        "ORDER BY created_at DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    by_campaign = defaultdict(list)
+    for row in rows:
+        by_campaign[row["campaign_id"]].append(dict(row))
+    return by_campaign
+
+
+def _brand_action_verification_states(conn, org_id, brand_id) -> dict:
+    """`ads_action.id -> verification_state` for this whole brand -- one query. A change-set
+    item with no matching row here has never been approved, so it reads back `data.get()`'s own
+    default of `"pending"` at the call site, not here."""
+    rows = conn.execute(
+        "SELECT id,verification_state FROM ads_action WHERE org_id=%s AND brand_id=%s",
+        (org_id, brand_id),
+    ).fetchall()
+    return {row["id"]: row["verification_state"] for row in rows}
+
+
+def _brand_entity_native_status(conn, org_id, brand_id, entity_ids) -> dict:
+    """`ads_external_entity.id -> native_status` for exactly the entities this refresh might need
+    it for (only a `confirmed` pause proposal ever reads it -- see `_row_proposal`) -- one bounded
+    query, never per row."""
+    if not entity_ids:
+        return {}
+    rows = conn.execute(
+        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND id = ANY(%s)",
+        (org_id, brand_id, list(entity_ids)),
+    ).fetchall()
+    return {row["id"]: row["native_status"] for row in rows}
+
+
+def _brand_review_rounds(conn, org_id, brand_id) -> dict:
+    """Every `ads_review_round` of this brand, newest (`created_at`) first -- one query for the
+    whole brand (F23-I01 Done #1, same shape as `_brand_change_sets_by_campaign`). Grouped by
+    `(campaign_id, entity_id)` in Python; the SQL-level `ORDER BY created_at DESC` is preserved
+    inside each group, so "the newest round of this entity" is the first match while walking it."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,entity_id,window_end,status,decision,reason,revisit_at,result_json "
+        "FROM ads_review_round WHERE org_id=%s AND brand_id=%s ORDER BY created_at DESC",
+        (org_id, brand_id),
+    ).fetchall()
+    by_entity = defaultdict(list)
+    for row in rows:
+        by_entity[(row["campaign_id"], row["entity_id"])].append(dict(row))
+    return by_entity
+
+
+def _matching_review_round(rounds_by_entity, campaign_id, entity_id, window):
+    """The newest round of this entity whose own `window_end` still lies inside the row's
+    CURRENT triage window (feature Decisions "Queue row state") -- the window's own `end` moves
+    forward every day (`triage.py:120,264`), so an exact `window_end == window["end"]` match would
+    lose the round the very next morning; `None` when no round's `window_end` falls in range."""
+    for round_ in rounds_by_entity.get((campaign_id, entity_id), ()):
+        if window["start"] <= round_["window_end"] <= window["end"]:
+            return round_
+    return None
+
+
+def _matching_review_change_set(sets_by_campaign, campaign_id, review_id):
+    """The newest non-superseded change set of `campaign_id` whose own `plan_json.review_id`
+    matches this round (`change_control.py::create` stores it flat, never nested -- see
+    `plan_json->>'review_id'` reused the same way by `review_evidence.py:276`) -- `None` when
+    there isn't one."""
+    for change_set in sets_by_campaign.get(campaign_id, ()):
+        if change_set["plan_json"].get("review_id") == review_id:
+            return change_set
+    return None
+
+
+def _first_adjust_recommendation_id(result_json):
+    for recommendation in (result_json or {}).get("recommendations", ()):
+        if recommendation.get("recommendation") == "adjust":
+            return recommendation.get("id")
+    return None
+
+
+def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, triage_item):
+    """The `proposal` for one `worse` row (F23-I01, feature Decisions "Queue row state") -- the
+    newest `ads_review_round` of this entity whose `window_end` lies inside the row's current
+    triage window, or `None` when there is none. The optional copy change set is the newest
+    non-superseded set whose `plan_json.review_id` names this round; its `verification_state`
+    reads back the matching `copy` item targeting this same entity (reusing the F22 brand-wide
+    `sets_by_campaign`/`action_states` maps, never a fresh query per row)."""
+    campaign_id, entity_id = triage_item["campaign_id"], triage_item["entity_id"]
+    round_ = _matching_review_round(rounds_by_entity, campaign_id, entity_id, triage_item["window"])
+    if round_ is None:
+        return None
+    change_set = _matching_review_change_set(sets_by_campaign, campaign_id, round_["id"])
+    change_set_id = change_set_status = verification_state = None
+    multi = False
+    if change_set is not None:
+        items = change_set["plan_json"].get("items", ())
+        item = next(
+            (i for i in items if i.get("kind") == "copy" and i.get("target_id") == entity_id),
+            None,
+        )
+        change_set_id = change_set["id"]
+        change_set_status = change_set["status"]
+        verification_state = action_states.get(item["id"], "pending") if item else "pending"
+        multi = len(items) > 1
+    return {
+        "kind": "review",
+        "review_id": round_["id"],
+        "status": round_["status"],
+        "decision": round_["decision"],
+        "reason": round_["reason"],
+        "revisit_at": round_["revisit_at"],
+        "recommendation_id": _first_adjust_recommendation_id(round_["result_json"]),
+        "change_set_id": change_set_id,
+        "change_set_status": change_set_status,
+        "verification_state": verification_state,
+        "multi": multi,
+    }
+
+
+def _matching_pause_set(sets_by_campaign, campaign_id, entity_id):
+    """The newest non-superseded change set of `campaign_id` whose items include a `pause` item
+    targeting `entity_id`, and that item itself -- `None, None` when there isn't one. A set with
+    an item for a different entity, or living in a different campaign, is never a match."""
+    for change_set in sets_by_campaign.get(campaign_id, ()):
+        item = next(
+            (i for i in change_set["plan_json"].get("items", ())
+             if i.get("kind") == "pause" and i.get("target_id") == entity_id),
+            None,
+        )
+        if item is not None:
+            return change_set, item
+    return None, None
+
+
+def _row_proposal(sets_by_campaign, action_states, native_status_by_entity, triage_item):
+    """The `proposal` for one `stop_loss` row (feature Decisions "Queue row state", pre-dispatch
+    challenge corrections folded in) -- `None` when there is no matching set, or the matching set
+    doesn't currently "count": a `deferred` set past its own `revisit_at`, a `rejected` set whose
+    `created_at` day has fallen outside this row's current triage window, or an `approved` set
+    whose matching item reads back `confirmed` while the entity's own `native_status` is no
+    longer paused (triage never reads `native_status` itself -- see `triage.py:228-307` -- so a
+    re-enabled ad must get a fresh proposal rather than reusing a stale `confirmed` one)."""
+    change_set, matched_item = _matching_pause_set(
+        sets_by_campaign, triage_item["campaign_id"], triage_item["entity_id"],
+    )
+    if change_set is None or matched_item is None:
+        return None
+    verification_state = action_states.get(matched_item["id"], "pending")
+    if change_set["status"] == "deferred":
+        revisit_at = change_set["revisit_at"]
+        if revisit_at is not None and revisit_at <= now_utc():
+            return None
+    elif change_set["status"] == "rejected":
+        window = triage_item["window"]
+        created_day = change_set["created_at"].date()
+        if not (window["start"] <= created_day <= window["end"]):
+            return None
+    elif verification_state == "confirmed":
+        if native_status_by_entity.get(triage_item["entity_id"]) != "PAUSED":
+            return None
+    return {
+        "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
+        "kind": matched_item["kind"], "status": change_set["status"],
+        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "revisit_at": change_set["revisit_at"],
+        "multi": len(change_set["plan_json"].get("items", ())) > 1,
+    }
+
+
+def _queue_payload(conn, org_id, brand_id, items) -> dict:
+    # F19-I01: each open row's own triage item, keyed by the same dedupe key the enqueue used --
+    # the frontend never parses `dedupe_key` strings itself. Only `stop_loss`/`worse` items ever
+    # produce a key (see `_live_keys`), so this doubles as the "still live" filter below.
+    items_by_key = {
+        _dedupe_key(item["class"], item["entity_id"], item["window"]["end"]): item
+        for item in items if item["class"] in QUEUE_CATEGORY
+    }
     queue_categories = set(QUEUE_CATEGORY.values())
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
-    open_rows = [
-        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
-        if row["category"] in queue_categories and row["dedupe_key"] in live_keys
+    rows = [
+        row
+        for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        if row["category"] in queue_categories and row["dedupe_key"] in items_by_key
     ]
+    # F22-I01: only `stop_loss` rows' own entities need the native_status lookup (only a
+    # `confirmed` pause proposal ever reads it).
+    stop_loss_entity_ids = {
+        items_by_key[row["dedupe_key"]]["entity_id"]
+        for row in rows
+        if items_by_key[row["dedupe_key"]]["class"] == "stop_loss"
+    }
+    sets_by_campaign = _brand_change_sets_by_campaign(conn, org_id, brand_id)
+    action_states = _brand_action_verification_states(conn, org_id, brand_id)
+    native_status_by_entity = _brand_entity_native_status(
+        conn, org_id, brand_id, stop_loss_entity_ids
+    )
+    # F23-I01: `worse` rows' own proposal -- the matching review round (if any), brand-wide.
+    rounds_by_entity = _brand_review_rounds(conn, org_id, brand_id)
+    open_rows = []
+    for row in rows:
+        triage_item = items_by_key[row["dedupe_key"]]
+        cls = triage_item["class"]
+        if cls == "stop_loss":
+            proposal = _row_proposal(
+                sets_by_campaign, action_states, native_status_by_entity, triage_item
+            )
+        elif cls == "worse":
+            proposal = _row_review_proposal(
+                rounds_by_entity, sets_by_campaign, action_states, triage_item
+            )
+        else:
+            proposal = None
+        open_rows.append({**row, "triage": triage_item, "proposal": proposal})
     counts = dict.fromkeys(ALL_CLASSES, 0)
     for item in items:
         counts[item["class"]] += 1

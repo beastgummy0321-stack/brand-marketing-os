@@ -221,6 +221,11 @@ def build_item(conn, org, brand, campaign_id, item, c):
 
 
 def get(conn, org, brand, campaign_id, set_id):
+    # Lazy: `app.ads.adapters` -> `manual` -> `change_control_launch` -> this module would be an
+    # import-time cycle if this were a module-level import (same seam `channels.py` uses for the
+    # same reason).
+    from app.ads import adapters
+
     campaign(conn, org, brand, campaign_id)
     row = conn.execute(
         "SELECT * FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
@@ -245,6 +250,10 @@ def get(conn, org, brand, campaign_id, set_id):
             **{k: action.get(k) for k in ("reported_at", "first_observed_at", "verified_at")},
             "verification_state": action.get("verification_state", "pending"),
             "evidence_json": action.get("evidence_json", {}),
+            # F22-I01: read-time only, never part of `item` itself -- `plan_json` and every hash
+            # derived from it (`content_hash`, `premise_hash`) are computed before this point and
+            # never touched here.
+            "platform_url": adapters.platform_url(item["target"]),
         }
         increases = item["kind"] in {"launch", "new_ad"} or (
             item["kind"] == "budget"

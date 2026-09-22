@@ -32,6 +32,25 @@ export interface CampaignBudgetProgress {
   pct: number | null;
 }
 
+/** F24-I01: campaign-level sync status, read-only from `context_json.external_sync` plus the
+ * platform-bound-accounts check (`app/ads/repository.py::campaign_sync_state`). Priority order
+ * `never` (no `external_sync` recorded at all) / `disconnected` (a (platform, source_account)
+ * pair of the campaign's entities isn't among the reader's bound accounts) / `failed` (any
+ * section `status` was `"error"`/`"partial"`) / `syncing` / `ok`. `error` is the first failing
+ * section's own error (may be `null`); `last_success_at` is the newest section value across
+ * sections — a failed sync keeps the OLD value, so this can be stale, never "recent", when
+ * `state` is `"failed"`. Shared by `CampaignCard.data.sync` here and `CampaignTriage.data.sync`
+ * (`adsTriageApi.ts`) — same shape, never re-defined per caller. */
+export type CampaignSyncStatus = "ok" | "syncing" | "failed" | "disconnected" | "never";
+export interface CampaignSyncState {
+  state: CampaignSyncStatus;
+  error: string | null;
+  last_success_at: string | null;
+}
+export interface CampaignData {
+  sync: CampaignSyncState;
+}
+
 /** F05-I12：`app/ads/judgment.py::conversion_labels()`——這個品牌的「購買」該叫什麼名字。
  * 每一個 Campaign payload（列表／詳情）都跟著出去，畫面不再自己寫死「購買」。 */
 export interface CampaignLabels {
@@ -59,6 +78,11 @@ export interface CampaignCard extends ExternalCampaignFields {
   /** F05-I12：後端一律回傳；選填只是為了不逼著既有的手寫測試 fixture（`AdsHomePage.test.tsx`
    * ／`AllCampaignsPage.test.tsx`，`do_not_touch`）都補上這個新欄位——同 `judgment` 的先例。 */
   labels?: CampaignLabels;
+  /** F24-I01：後端一律回傳（`repository.py::list_campaigns`）；選填只是同 `labels` 的先例——
+   * 這次 `do_not_touch`（`frontend/src/components/ads/**\/*.tsx`）在 harness 的 `scopeDenial`
+   * 裡比 `touch` 的 `**\/*.test.tsx` 先判，蓋掉了原本該給的例外，既有的手寫測試 fixture 補不了
+   * 這個新欄位（issue 已回報，不擴權限硬改）。 */
+  data?: CampaignData;
 }
 
 /** Shared by all three binding levels (campaign / group / ad) — same five columns,

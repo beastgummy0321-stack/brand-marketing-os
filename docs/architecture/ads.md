@@ -909,7 +909,9 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `ads_external_entity` 各出一個 item；class 六選一
   `stop_loss｜worse｜better｜flat｜insufficient｜no_target`，中文標籤
   停損／變差／變好／持平／資料不足／尚未設定目標 由這支檔案自己產生（feature Decisions 凍結的
-  共用契約，逐字實作）。
+  共用契約，逐字實作）。每個 item 另帶 `campaign_name`（F19-I07：這個 Campaign 自己的
+  `name`，`classify()` 已經讀過的那筆 `campaign` row 上直接取，不是第二次查詢），供品牌層佇列
+  （跨多個 Campaign）標示每列所屬活動、逐活動篩選用。
 - **窗口與截止日**：`WINDOW_STEPS=(7,14,28)`；`window_days`（回傳最外層）固定是這三步裡最大的一個
   （28）——只代表「最多可能看多遠」，每個 item 實際用到的窗長要看自己的 `window.days`。第一個窗口
   的結束日是**這個 Campaign 所接帳戶自己時區**的「昨天」（沿用 §6.15、
@@ -1009,14 +1011,241 @@ F07: the fingerprint on every item (§5.7) and which item became the hero (the �
   `total_ads`：全部 item 數；`kinds_available=["stop_loss","worse"]`、
   `kinds_pending=["scale_budget","refresh_creative"]` 兩個路由固定回傳，永遠不是空清單冒充「沒事要
   做」。
+- **F19-I01：`items` 每一列自帶 `triage`**——用同一把 `_dedupe_key(class, entity_id, window_end)`
+  比對出「當下是哪個 program triage item 產生了這筆待決定」（形狀同 `triage.py:229-235`），前端不解析
+  `dedupe_key` 字串；因為只有通過上面「仍等於這次分流結果」過濾的列才會出現在 `items` 裡，`triage`
+  永遠比對得到、不是 `null`。
 - 訊息：`廣告「{name}」{停損|變差}，待決定`，`name` 超過 20 字截斷加「…」，確保全句 ≤
   `interrupts.MAX_MESSAGE_LEN`（30 全形字）；不出現任何平台字面字串。`action_url`
   沿用既有慣例（同 `app/ads/runtime.py::_health` 的 `ads_runtime_attention`）：
   `/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=performance`。
 - 驗證：`app/tests/test_ads_triage_queue.py`（真資料端到端一則、queue 機制用固定 item 隔離測試：同窗
-  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、六類計數、
+  重跑不重複、已 resolve 保持 resolve、窗口換了才補新 item、GET 過濾陳舊 open 列、比對得上的列附正確
+  `triage` item、六類計數、
   `kinds_available`／`kinds_pending` 恆在、非結案／有廣告的 Campaign 篩選、窗口連續前進兩次同一支廣
   告仍是 `stop_loss` 時只留一筆 open、舊列以 `"system"` actor resolve、廣告恢復 `flat` 後開回 0
   筆 open、supersede 不動別的類別或別的品牌、使用者手動 resolve 的列同窗不會被重新打開）、
   `app/tests/test_core_interrupts.py`、`app/tests/test_dashboard_overview.py`（確認新登記類別不影響
   既有跨品牌總覽排序／健康燈號斷言）。
+
+### 6.19 F19-I06 — `result_kind` 的中文詞彙與可選清單（settled 2026-09-21）
+
+- 問題：F19-I02／I05 都發現沒有任何既有 API 或共用常數回答「這個 `result_kind` 中文叫什麼」「這個
+  Campaign 能選哪些 `result_kind`」——I05 只能先做唯讀顯示（自己一份小 map），I03／I04 等這票補上
+  共用詞彙才能接。
+- `app/ads/result_kinds.py`（新檔）：平台中立——不 import 任何 adapter、不出現平台字面字串。
+  `LABELS: dict[str, str]` 是目前 Meta adapter 唯一會產生的八種 `result_kind` → 中文名詞
+  （`purchase`＝購買、`engagement`＝互動、`link_click`＝點擊、`lead`＝名單、`app_install`＝安裝、
+  `video_view`＝觀看、`message`＝訊息、`store_visit`＝到店），詞彙選字都能套進「每次<標籤>成本」這
+  個固定句型。`label(kind)`：`None` 或不在表裡一律回泛用的「成果」，絕不回傳原始代碼。
+  `options()`：`[{"kind","label"}, ...]`，`LABELS` 的插入順序（穩定），target 頁的分段選單直接讀這
+  份清單，不自己排序或另編一份。
+- **反向檢查在測試裡，不在這支檔案裡**：`app/tests/test_ads_result_kinds.py` 直接讀
+  `app/ads/adapters/meta_read.py` 自己的 `_SALES_OBJECTIVES`／`_OBJECTIVE_RESULT_ACTIONS`
+  （唯讀，不改 adapter）重新推導出「這個 adapter 實際會產生的每一種 `result_kind`」，斷言每一種都在
+  `LABELS` 裡有標籤——adapter 加一種新的目標對照，這支測試就會因為少了標籤而紅，而不是 silently
+  drift 成一份跟 adapter 脫鉤的清單。
+- `app/ads/triage.py`：`target`（`_classify_ad::finish` 組出的那份 `targets.resolve()` 結果）、
+  `current`／`previous`（`_metrics_view`）三個地方各自加一個 `result_label` 欄位（各自的
+  `result_kind` 對照 `result_kinds.label()`），`triage.classify()`／`get_queue()`／`refresh_queue()`
+  的回傳形狀因此連帶都多這個欄位，路由層沒有另外改一行。
+- `app/ads/repository.py::_campaign_target_view()`：`GET`／`PUT .../target` 回應在既有欄位之外多
+  `result_label`（這個 Campaign 目前 `resolve()` 出的 `result_kind` 對照的中文）跟 `result_kinds`
+  （固定的 `result_kinds.options()` 清單，跟這個 Campaign 目前選了什麼無關，前端拿它畫分段選單的每
+  一個選項）。
+- **`PUT .../target` 的 trust-boundary 檢查**：`repository.save_campaign_target()` 在寫入前多一道
+  `result_kind not in result_kinds.LABELS` ⇒ `ValueError("result_kind_unknown")`（`None` 維持既有
+  語意「不改」，永遠合法），跟 `target_basis_unknown`／`target_value_unknown` 同一種寫法；路由層
+  （`app/ads/routes.py::_TARGET_ERRORS`）對應 400。拒絕發生在任何 `UPDATE` 之前、同一個交易裡，不會
+  半寫。
+- `frontend/src/lib/adsTriageApi.ts`：`TriageTargetView`／`TriageMetricsView` 加 `result_label:
+  string`；`CampaignTarget` 加 `result_label: string` 與 `result_kinds: { kind: string; label:
+  string }[]`。`putTarget` 的錯誤現在讀後端 `error.code`（`TriageRequestRejected.code`），不再靠比對
+  中文錯誤訊息字串認版本衝突——`target_conflict` 的訊息文字未來改了也不會讓前端誤判成別種錯誤。
+- `frontend/src/components/ads/target/CampaignTargetPage.tsx`（Card 1「看什麼成果」）：從唯讀徽章／
+  「尚未知道」文字改成 v7 原型的分段選單（`prototype-v7-ads-center.html:329` 的 `.seg`），選項讀
+  `target.result_kinds`；沒有任何一個 `result_kind` 已知時，選單裡沒有一顆按鈕預選（誠實的未選狀
+  態，不是猜一個預設）。刪掉頁面本地的 `RESULT_KIND_LABEL`／`resultKindLabel`，各處標題／own 欄位
+  文案一律讀 `result_kinds` 對應的 `label`。改選會讓表單 dirty，跟其他欄位一起經既有的
+  `putTarget(expected_revision=...)` 存檔；存檔後用回應更新畫面（不本地假算）。
+- 驗證：`app/tests/test_ads_result_kinds.py`（詞彙涵蓋每種 adapter 會產生的 kind、`None`／未知代碼
+  回泛用標籤、`options()` 順序、`PUT` 拒絕清單外的 `result_kind` 且什麼都不寫入、`GET .../target`
+  回應帶 `result_label`／`result_kinds`）、`app/tests/test_ads_triage.py`、
+  `app/tests/test_ads_triage_queue.py`（既有斷言在新增欄位下仍通過，不需要改動舊斷言本身）、
+  `app/tests/test_architecture_boundaries.py`、`frontend/src/components/ads/target/
+  CampaignTargetPage.test.tsx`、`frontend/e2e/ads-target.spec.ts`。
+
+### 6.20 F20 — 活動詳情頁與「看證據」落點（settled 2026-09-22）
+
+- 路由：`/brands/:brandId/ads/campaigns/:campaignId/detail`（`frontend/src/components/ads/detail/`）。既有五分頁工作區
+  的網址 `/brands/:brandId/ads/campaigns/:campaignId` 不變，由詳情頁的「全部資料 ›」進入；首頁活動卡名稱與設定目標頁的
+  麵包屑指向詳情頁。
+- `app/ads/triage.py`：triage item 多一個 `thumbnail_url`（`creative.fields.thumbnail_url` → `image_url` → `None`，
+  不另查詢、無平台分支）；`refresh_queue` 新寫入的 `action_url` ＝ `…/detail?ad=<entity_id>`，既有開放列不改寫。
+- 詳情頁的「去處理」不使用 `action_url`（那會指回本頁），在六步流程改版前連到工作區 `?tab=performance`。
+- 佇列讀取失敗不拖垮詳情頁（只少「去處理」按鈕）；沒有停損／變差時展開第一個有廣告的分類。
+
+### 6.21 F21 — 資料連線頁（settled 2026-09-22）
+
+Route `/brands/:brandId/ads/connections` (`components/ads/connections/`), v7 `connections()`. The frontend composes
+existing GETs — no aggregation endpoint, no backend change (`app/orders` is legacy and may not gain capability).
+One card per source; one failed GET fails only its card. Rules (each checked against the code that produces the field):
+- accounts: bound = accounts whose `bound_brand_ids` include the brand; 0 → warn 「尚未連接」; else ok. No expired-auth
+  state — the backend has no such data (gap).
+- budget: `amount === null` → warn 「尚未設定」; `currency === null` → warn 「預算待核實」; else ok. `uncertainties` never
+  make the card warn (almost always non-empty, not fixable from this button).
+- orders: latest = first NON-NULL `order_date` on page 1 (`ORDER BY order_date DESC` puts NULLs first); before
+  yesterday → warn. Dates compare as local-calendar `YYYY-MM-DD` strings, never UTC getters.
+- products: only `status === "active"` rows that are not another row's parent (the set the product page shows).
+- history: requested only with ≥ 1 bound account (the backfill GET answers 409 otherwise).
+- header N = warn cards + failed cards. Button emphasis: warn → `outline`, ok/neutral → `ghost`; ok label 「查看」.
+Not built: shell header 「最近同步・N 項待處理」 (no brand-level sync endpoint); `last_pull_at` is a `min()` that ignores
+never-pulled accounts.
+
+### 6.22 F22-I01 — Queue row `proposal` and change item `platform_url`（settled 2026-09-22）
+
+Two read-only payload additions for the v7 停損提案三步流程 (F22-I02/I03); no migration, no platform write, no new
+route. Neither field is stored — both are computed at read time on every call.
+
+- `app/ads/triage.py::_queue_payload` (`GET/POST .../queue`): every open row gains `proposal`. `null` on a `worse` row
+  unless a review round matches (F23-I01, below). On a `stop_loss` row: the newest (`created_at DESC`)
+  non-superseded `ads_change_set` of the row's own campaign whose items include a `pause` item targeting
+  `triage.entity_id` (`_matching_pause_set`) — `null` when there is none. That set "counts" (returns a `proposal`)
+  unless: it's `deferred` and its own `revisit_at <= now()`; it's `rejected` and its `created_at` calendar day (UTC)
+  falls outside the row's current `triage.window.start..end`; or its matching item's `verification_state` reads back
+  `confirmed` while the entity's own `ads_external_entity.native_status` is no longer `"PAUSED"` (triage itself never
+  reads `native_status` — `triage.py:228-307` — so a re-enabled ad needs the row to read as if there were no
+  proposal, not a stale `confirmed` one). When it counts: `{change_set_id, campaign_id, kind, status,
+  verification_state, reason, revisit_at, multi}` — `kind`/`verification_state` are the matching item's own,
+  `reason` is the set's `decision_reason`, `multi` is `len(items) > 1` (a multi-item set is not rendered by the
+  three-step pages; the row links to the campaign workspace instead).
+  Three queries for the whole brand, never per row: every non-superseded change set (grouped by `campaign_id` in
+  Python), every `ads_action.verification_state` of the brand, and `native_status` for exactly the `stop_loss` rows'
+  own entities (only a `confirmed` match ever reads it).
+- `app/ads/change_control_data.py::get`: every item view gains `platform_url: str | None`, computed from the item's
+  own `target` through `app/ads/adapters::platform_url(target)` — a one-line dispatch on `target["platform"]`, lazily
+  importing `app/ads/adapters/meta_read.py::platform_url` (same lazy-import seam `channels.py::external_reader`
+  already uses, to dodge the `adapters/__init__.py -> manual.py -> change_control_launch.py ->
+  change_control_data.py` import-time cycle). Meta: `https://adsmanager.facebook.com/adsmanager/manage/
+  {campaigns|adsets|ads}?act={source_account}&selected_{campaign|adset|ad}_ids={native_id}` — `null` when the native
+  kind isn't one of those three, or `native_id`/`source_account` is missing. Unknown platform → `null`. Never written
+  to `plan_json`; no hash (`content_hash`, `premise_hash`) ever depends on it. `null` → the "↗ 打開平台" button is
+  replaced by the target's own name + native id + 「複製編號」 (F22-I03).
+- 驗證：`app/tests/test_ads_triage_queue.py::QueueProposalTest`（null／draft／approved-pending／confirmed 及其失效／
+  rejected 在窗內外／deferred 過期／superseded／別支廣告的清單／別個活動的清單／multi）、
+  `app/tests/test_ads_change_control.py::ChangeControlPlatformUrlTest`（meta 目標有連結／未知平台是 `null`／
+  `content_hash` 不受影響）。
+- F23-I01 加做：`worse` 列的 `proposal`（`_row_review_proposal`）——這支廣告在目前 triage 窗內（`window_end` 落在
+  `[triage.window.start, triage.window.end]`，因為窗尾每天在動，不能用精確相等）最新一筆 `ads_review_round`；沒有就
+  `null`。有的話：`{kind:"review", review_id, status, decision, reason, revisit_at, recommendation_id, change_set_id,
+  change_set_status, verification_state, multi}`——`status/decision/reason/revisit_at` 是這回檢討自己的欄位；
+  `recommendation_id` 是 `result_json.recommendations[]` 第一筆 `recommendation=="adjust"` 的 `id`，沒有就 `null`；
+  `change_set_id/change_set_status/verification_state/multi` 來自最新一筆非 superseded、`plan_json.review_id` 等於
+  這回 `id` 的變更清單（`change_control.py::create` 把 `review_id` 平放進 `plan_json`，跟
+  `review_evidence.py:276`／`change_control_data.py:279` 讀法一致），沒有清單時四者皆 `null`／`false`。一次品牌查
+  `ads_review_round`（`_brand_review_rounds`，依 `created_at DESC` 分組成 `(campaign_id, entity_id)`），複用 F22-I01
+  已經查好的 `sets_by_campaign`／`action_states`，不新增查詢。驗證：
+  `app/tests/test_ads_triage_queue.py::QueueReviewProposalTest`（無回合／queued 無清單／ready 取第一個 adjust
+  建議／ready 無 adjust 建議／completed 帶文案清單／completed 無清單／deferred／unjudgeable／failed／窗外不匹配／
+  `stop_loss` 列不受影響）。
+- 前端型別跟進：`frontend/src/lib/adsTriageApi.ts::QueueProposal` 改成 `kind` 判別聯集——`QueuePauseProposal`
+  （`kind:"pause"`，欄位跟改動前一樣）／`QueueReviewProposal`（`kind:"review"`，欄位同上一條）。
+  `home/status.ts::proposalAction` 先用 `proposal.kind` 窄化：`review` 分支照 feature Decisions "Queue row state
+  for `worse` rows" 給 label／連結（none→看證據；queued/running→整理證據中；waiting→資料不足；failed/unknown→
+  證據沒整理成；ready→等你決定；completed 帶文案清單→組一個 `QueuePauseProposal` 重用停損那支 switch 算出
+  label／連結，指到 `changes/:change_set_id/<step>`；completed 無清單→選方向／`reviews/:id/prepare`；deferred→
+  「M/D 重看」done；unjudgeable→無法判定 done）；`pause` 分支欄位型別不變，原本的 switch 邏輯／輸出沒有變動。
+  沒有提案時（`proposal===null`）靠新增的第 5 個選填參數 `kind`（預設 `"pause"`）分流，既有 4-arg 呼叫點
+  （`home/QueueRow.tsx`／`detail/CampaignDetailPage.tsx`／`flow/VerifyPage.tsx`，這批仍只對 `stop_loss` 呼叫）
+  不用改。`isQueueItemDone` 現在也覆蓋 `worse` 列。`home/QueueRow.tsx` 這批還沒把 `worse` 列接上這支 helper
+  （沿用既有的 `action_url`／靜態「看證據」）——邏輯已備妥、驗證見
+  `home/DecisionQueue.test.tsx`（review 分支的 `proposalAction`／`isQueueItemDone` 直接單元測試，未透過畫面）。
+
+### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
+
+Routes (`components/ads/flow/`, v7 `confirmPage()`/`handoff()`/`verify()`): `/brands/:brandId/ads/campaigns/:campaignId/
+propose/pause/:entityId` (no change set yet) and `.../changes/:setId/confirm|handoff|verify`. A page opened on the wrong step
+redirects to the step the set is in (`flow/changeFlow.ts::stepFromChangeSet`). Only `pause` has an entry this batch (home
+stop-loss row / detail 「去處理」, `home/status.ts::proposalAction`); the pages render `budget`/`copy` sets too.
+- Draft is created lazily on the first write (核准／拒絕／暫緩), reusing `proposal.change_set_id` when the row has one;
+  `operation_id = triage-pause:<entityId>:<uuid held in page state>` so a lost response is retried with the same body.
+  A refused approve (409) rebuilds once with a new `operation_id` + `supersedes_id`, then asks again.
+- Step rule: draft → confirm; rejected/deferred/superseded → confirm, closed; approved + pending + `reported_at` null →
+  handoff; pending with `reported_at` (read-back found the old setting) → verify 「平台上還是原本的設定」; reported/unknown →
+  verify 「核對中」; confirmed/deviated/stale → verify ok/warn/bad. 「讀回於」 = `evidence_json.observed_at`. Rail cells
+  only from real fields (設定相符 = `setting_matches === true`); 花費停止／學習期／品牌學習 cells are omitted (no data).
+- Handoff: 「打開平台」 = `platform_url` (§6.22) in a new tab, else name + native id + 「複製編號」; tick state is local;
+  「我做完了」 = `report` then `check`, navigating to verify even when `check` fails.
+- Gaps kept honest: brand-learning tags = one `ReservedSlotCard`; `adoptPlatform` waits for the copy step (batch B);
+  a multi-item set links to the campaign workspace. Home 「N 件」 counts only rows whose proposal is not done.
+- Kit: `patterns/FlowPieces.tsx` (FlowHeader, KindMark, Meter, TodoRow, ResultHero, StatusRail, Segmented,
+  DecisionSheet, ActionBar); `frontend/scripts/ui-evidence.cjs --acts` reaches later prototype steps.
+- 驗證：`frontend/src/components/ads/flow/*.test.tsx`、`home/DecisionQueue.test.tsx`、`AdsHomePage.test.tsx`、
+  `detail/CampaignDetailPage.test.tsx`；並排證據 `.harness/scratch/F22/I0{2,3,4}/`。
+
+### 6.24 F23 — 變差廣告六步流程的前三步（settled 2026-09-22）
+
+Routes (`components/ads/review/`, v7 `review()`/`prepare()`/`copy()`): `.../review/:entityId` (entry from a 變差 row: uses
+`proposal.review_id` when present, else `createReview` with the row's triage window — the window end moves daily, so the
+round is never re-created from the window alone) → `.../reviews/:reviewId` (看證據) → `/prepare` (選方向) → `/copy` (改文案) →
+F22 `changes/:setId/confirm`. Step logic in `review/reviewFlow.ts`.
+- Round states: queued/running → async card with polling; waiting → 「資料還不夠」 + `waiting_reasons` (never advances by
+  itself); failed/unknown → error card, no retry (evidence dedupe returns the same round); ready → evidence; deferred /
+  unjudgeable → closed, 改變決定 offers only 暫緩／無法判定 (`completed` is legal only from `ready`).
+- Evidence cards: AI 建議 = first recommendation (title by kind, why = `hypothesis`, 依據與風險 = `risks` + `next_step`);
+  這則廣告 = 花費 (sum of `series` with `metric_scope == "ad"`, mirrors `triage._ad_spend`), 成果數／單次成本 from the
+  `result_views` ad entry — ROAS omitted; 商城訂單 from `commerce.*.order_summary` (`coverage` is a constant, the warn chip
+  keys on `unknown_*_count > 0`).
+- 選方向: 只改文案／先觀察 (deferred, requires `revisit_at`)／停掉這則 (→ F22 propose/pause); 換一張圖／用現成素材 are reserved
+  cards; the ladder 改文案→換圖→退役 is a grey placeholder (decision A, 2026-09-22: no per-creative handling count yet).
+- 改文案: 目前 from `creative_snapshot.copy_fields`, 新版 from `suggested_copy`; createChangeSet sends only non-empty
+  fields, the review pair only when the recommendation is `adjust`; `operation_id = review-copy:<reviewId>:<uuid>`.
+- Queue `proposal` for `worse` rows (`kind:"review"`, §6.22) drives `home/status.ts::proposalAction`; the confirm page's back
+  button becomes 「修改內容」 for a copy set carrying `review_id`.
+- Kit: `patterns/ReviewPieces.tsx` (EvidenceRow, Ladder, OptionCard, CopyBlock); `ui-evidence.cjs --settle`.
+- 驗證：`frontend/src/components/ads/review/*.test.tsx`、`flow/ConfirmPage.test.tsx`、`home/DecisionQueue.test.tsx`；並排證據
+
+### 6.25 F24-I01 — `data` 唯讀擴充：`triage`／`campaigns` 卡片帶同步狀態（settled 2026-09-22）
+
+`triage.classify()`（因此 `GET .../triage`）新增 `data: {sync, coverage, missing_days}`；`repository.py::list_campaigns` 每張卡另加
+`data: {sync}`——同一支 `repository.py::campaign_sync_state`（`_bound_account_ids`／`_campaign_disconnected` 私有輔助），不建 migration，
+不打平台。`sync.state` 判斷順序（優先序固定）：`never`（`context_json.external_sync` 完全沒寫過）／`disconnected`（活動任一
+`(platform, source_account)` 不在 reader 的已綁定帳戶——純 DB 讀，跟 `external_repository.external_view` 的 `connections` 同一種檢查，
+只是換一個地方算，因為 `external_repository.py` 不在這張票的 touch 範圍內）／`failed`（任一 section `status` 是 `record_sync`
+實際會寫的 `"error"`／`"partial"`——section 層級從沒有字面 `"failed"`，那個字專屬彙總後的 `sync.state`）／`syncing`／`ok`。
+`error` 取第一個失敗 section 自己的 `error`（固定用 `structure`／`creatives`／`observations` 順序當 tie-break，因為 Python `set`
+與 Postgres jsonb 鍵序都不保證順序）；`last_success_at` 取三個 section 裡最新的一個——失敗的那次同步保留舊值
+（`external_repository.record_sync`），所以 `state` 是 `"failed"` 時這個時間可能是舊的，不代表「剛剛」。
+`coverage`／`missing_days` 只在 `triage` 的 `data` 出現，用 `classify()` 判每則廣告的同一個視窗（`cutoff` 往回
+`WINDOW_STEPS[-1]`＝28 天）；`missing_days` 是這個視窗裡落在 `coverage` 之外的日期，`coverage` 為 `null` 時固定回 `[]`
+（那個情境已經由 `sync.state === "never"` 表達，不用一長串缺日期）。
+- 前端型別：`adsApi.ts::CampaignCard.data`／`adsTriageApi.ts::CampaignTriage.data`，共用 `CampaignSyncState`。兩者都設成選填
+  （`data?:`）——`do_not_touch`（`frontend/src/components/ads/**/*.tsx`）在 harness 的 `scopeDenial` 比 `touch` 的
+  `**/*.test.tsx` 先判定，蓋掉了原本該給、可以改測試 fixture 的例外，既有的手寫 `*.test.tsx` fixture 補不了這個必填欄位
+  （同 `CampaignCard.labels?` 的先例）；下一張碰這些畫面的票要嘛拿到能編輯這些檔案的授權，要嘛在讀取端對 `data`／`data.sync`
+  做 optional-safe 讀取。
+- 驗證：`app/tests/test_ads_triage.py::TriageDataViewTest`、`app/tests/test_ads_repository.py::ListCampaignsSyncDataTest`。
+  `.harness/scratch/F23/I0{2,3,4}/`.
+
+### 6.26 F24 — 異常狀態、等待頁、每月回顧、頁首同步晶片（settled 2026-09-22）
+
+Data source = the read-only `data` block of §6.25 (sync state / coverage / missing_days) plus existing GETs; nothing new is
+stored. Decision A (user, 2026-09-22): existing facts only — no per-campaign health table, no 「系統剛恢復」 banner (no signal).
+- Home card (`home/CampaignCard.tsx`): `sync.state` failed/syncing/disconnected → grey 「暫時讀取不到」 card (chip by state;
+  重新讀取 = existing `syncCampaign({})` + job poll until status ∉ {pending, running} + reload; disconnected → 去連接); otherwise
+  「資料不足，先不判斷」 when every classified ad is `insufficient` or `missing_days` is non-empty (chip: 缺 N 天資料 /
+  尚未同步成效 / by dominant `reason_code`); `no_target`-only campaigns keep the 設定目標 card.
+- Header chip (`AdsHomePage.tsx`): newest `last_success_at` among campaigns with `state === "ok"` only (a failed sync keeps its
+  old timestamp), warn + 「N 個活動讀取異常」 when any is failed/disconnected; 「N 項待處理」 = open queue rows; links to
+  connections.
+- Wait page `/brands/:brandId/ads/campaigns/:campaignId/wait` (`components/ads/wait/`): rows only for existing facts —
+  disconnected, missing days, orders latest date before `coverage.end` (F21 rule), and one row per insufficient `reason_code`
+  (below_sample_gate / no_previous_window / result_unknown_days); `DayTiles` over the 7 days ending at `coverage.end`;
+  重新檢查 = the same sync + poll.
+- Monthly review `/brands/:brandId/ads/month` (`components/ads/month/`): budget card by selected month (`known_spend` null →
+  花費未核實; `amount` null → hatched); orders card labelled with the stats window (`until − 30 … until`); campaign rows sum
+  triage `current.spend` only when every ad shares `window.days`, else 「各廣告期間不同，未合計」, no currency; 素材 groups by
+  triage class, ≤ 12 tiles + 「＋N 則」; 記入品牌學習 and 下月建議 are `ReservedSlotCard`s (no brand-level learnings GET, no
+  suggestion backend).
+- Kit: `patterns/ReviewPieces.tsx::DayTiles`, `ResultHero mark` prop. 驗證：`home/CampaignCards.test.tsx`,
+  `AdsHomePage.test.tsx`, `wait/*.test.tsx`, `month/*.test.tsx`; 並排證據 `.harness/scratch/F24/I0{2,3,4}/`.

@@ -113,3 +113,29 @@ describe("ads patterns（F04-I07）", () => {
     expect(card.className).toContain("bg-muted");
   });
 });
+
+describe("flow pieces（F22）", () => {
+  it("Meter 不知道數值就不畫量尺，只留說明；TodoRow done 換成勾", async () => {
+    const { Meter, TodoRow } = await import("./FlowPieces");
+    const { container, rerender } = render(<Meter value={null} max={100} tone="danger" left="累積中" />);
+    expect(container.querySelector("[aria-hidden]")).toBeNull();
+    expect(screen.getByText("累積中")).toBeTruthy();
+    rerender(<Meter value={500} max={100} marker={90} tone="danger" />);
+    expect((container.querySelector("[aria-hidden] > div") as HTMLElement).style.width).toBe("100%");
+    render(<TodoRow no={2} done>關掉開關</TodoRow>);
+    expect(screen.getByLabelText("已完成")).toBeTruthy();
+  });
+});
+
+describe("review pieces（F23）", () => {
+  it("EvidenceRow：current null 印待確認、沒有百分比；有值算 ▲/▼；OptionCard reserved 不可點", async () => {
+    const { EvidenceRow, OptionCard } = await import("./ReviewPieces");
+    render(<EvidenceRow label="已付款" previous={100} current={null} />);
+    expect(screen.getByText("待確認")).toBeTruthy();
+    render(<EvidenceRow label="花費" previous={2900} current={3000} />);
+    expect(screen.getByText("▲3%")).toBeTruthy();
+    render(<OptionCard icon="✚" title="換一張圖" note="x" disabled />);
+    expect((screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("接上後開放")).toBeTruthy();
+  });
+});

@@ -1,0 +1,231 @@
+/** frontend/src/components/ads/flow/HandoffPage.test.tsx — F22-I03：`vi.mock` 掉
+ * `@/lib/adsChangeApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 4：三種 kind 各自畫出對應
+ * 手動步驟、「↗ 打開平台」沒有 `platform_url` 時退回複製編號、打勾狀態只在頁面上（不送後端）、
+ * 「我做完了」依序呼叫 report／check 並導去核對結果（check 失敗仍導去）、走錯步驟自動導正、
+ * 多項變更清單連去既有變更與核對。 */
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as changeApi from "@/lib/adsChangeApi";
+import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
+import * as triageApi from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import { HandoffPage } from "./HandoffPage";
+
+vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof changeApi>()),
+  getChangeControl: vi.fn(), actOnChangeItem: vi.fn(),
+}));
+vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof triageApi>()),
+  getQueue: vi.fn(),
+}));
+
+function triage(overrides: Partial<TriageItem> = {}): TriageItem {
+  return {
+    entity_id: "aex_1", native_id: "native_1", name: "1150706 健身情境單圖", campaign_id: "cmp_1",
+    campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "stop_loss", label: "停損",
+    reason_code: "spend_over_stop_loss",
+    window: { start: "2026-08-25", end: "2026-09-21", days: 9, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: null },
+    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+    current: { spend: 1420, result_count: 0, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: null },
+    previous: { spend: null, result_count: null, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: null },
+    change_pct: null,
+    sample: { gate: false, spend_multiple: null, days_with_events: 0 },
+    ...overrides,
+  };
+}
+function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
+  return {
+    id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
+    dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
+    message: "m", action_url: null, visible_from: null, status: "open",
+    created_at: "2026-09-22T00:00:00Z", resolved_at: null, triage: triage(), proposal: null,
+    ...overrides,
+  };
+}
+function queue(items: QueueItem[] = []): QueuePayload {
+  return { items, counts: { stop_loss: items.length, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: items.length, kinds_available: ["stop_loss"], kinds_pending: [] };
+}
+function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
+  return {
+    id: "item_1", kind: "pause", target_id: "aex_1",
+    target: { id: "aex_1", name: "1150706 健身情境單圖", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
+    before: { status: "PAUSED" }, after: { status: "PAUSED" }, reason: "花費超過停損線（目標 × 3）仍未達成目標",
+    verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null,
+    platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
+    ...overrides,
+  };
+}
+function changeSet(overrides: Partial<ChangeSet> = {}): ChangeSet {
+  return {
+    id: "acs_1", campaign_id: "cmp_1", title: "暫停「1150706 健身情境單圖」", month: "2026-09",
+    operation_id: "op_1", content_hash: "hash_1", status: "approved", reason: null, revisit_at: null,
+    approval_id: "apv_1", created_at: "2026-09-21T00:00:00Z", approved_at: "2026-09-21T00:00:00Z", items: [changeItem()],
+    can_revise: false,
+    ...overrides,
+  };
+}
+
+function HandoffRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <HandoffPage brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+function LocationProbe() {
+  return <p data-testid="probe-path">{useLocation().pathname}</p>;
+}
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/handoff" element={<HandoffRoute />} />
+        <Route path="*" element={<LocationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+const handoffPath = (id = "acs_1") => `/brands/brd_1/ads/campaigns/cmp_1/changes/${id}/handoff`;
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+  vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet()] });
+});
+
+describe("HandoffPage（F22-I03）三種 kind", () => {
+  it("pause：打開平台＋我關了兩個手動步驟", async () => {
+    renderAt(handoffPath());
+    expect(await screen.findByText("打開平台上的這則廣告")).toBeTruthy();
+    expect(screen.getByText("把這則廣告的開關關掉")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "↗ 打開平台" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(changeItem().platform_url);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.getByRole("button", { name: "我關了" })).toBeTruthy();
+    expect(screen.getByText("回來按「我做完了」")).toBeTruthy();
+    expect(screen.getByText("第 1 件／共 1 件")).toBeTruthy();
+  });
+
+  it("copy：先複製新文案，再到平台貼上，並有看舊文案的收合", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "新內文" },
+      })] })],
+    });
+    renderAt(handoffPath());
+    expect(await screen.findByText("複製新文案")).toBeTruthy();
+    expect(screen.getByText("新標題")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "複製標題" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "複製內文" })).toBeTruthy();
+    expect(screen.getByText("在平台編輯這則廣告，貼上")).toBeTruthy();
+    expect(screen.queryByText("舊標題")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "看舊文案" }));
+    expect(screen.getByText("舊標題")).toBeTruthy();
+  });
+
+  it("budget：打開平台後複製每日預算金額", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "budget", before: { daily_amount: 1000 }, after: { daily_amount: 1200 },
+        target: { id: "adset_1", name: "日常商品推廣・轉換", platform: "meta", source_account: "acc_1", native_kind: "adset", native_id: "native_adset_1" },
+      })] })],
+    });
+    renderAt(handoffPath());
+    expect(await screen.findByText("打開平台上的「日常商品推廣・轉換」")).toBeTruthy();
+    expect(screen.getByText("1,200")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "複製金額" })).toBeTruthy();
+  });
+});
+
+describe("HandoffPage（F22-I03）沒有 platform_url 時退回複製編號", () => {
+  it("換成標的名稱＋原生編號＋複製編號按鈕，沒有「打開平台」連結", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({ platform_url: null })] })],
+    });
+    renderAt(handoffPath());
+    await screen.findByText("打開平台上的這則廣告");
+    expect(screen.queryByRole("link", { name: "↗ 打開平台" })).toBeNull();
+    expect(screen.getByText("1150706 健身情境單圖")).toBeTruthy();
+    expect(screen.getByText("native_1")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "複製編號" })).toBeTruthy();
+  });
+});
+
+describe("HandoffPage（F22-I03）打勾狀態只在頁面上", () => {
+  it("按「我關了」把第二步標成已完成", async () => {
+    const user = userEvent.setup();
+    renderAt(handoffPath());
+    await screen.findByText("把這則廣告的開關關掉");
+    expect(screen.queryByLabelText("已完成")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "我關了" }));
+    expect(screen.getByLabelText("已完成")).toBeTruthy();
+  });
+});
+
+describe("HandoffPage（F22-I03）我做完了，開始核對", () => {
+  it("依序呼叫 report、check，成功後導去核對結果", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.actOnChangeItem)
+      .mockResolvedValueOnce(changeSet({ items: [changeItem({ verification_state: "reported" })] }))
+      .mockResolvedValueOnce(changeSet({ items: [changeItem({ verification_state: "confirmed", reported_at: "2026-09-22T00:00:00Z" })] }));
+    renderAt(handoffPath());
+    await user.click(await screen.findByRole("button", { name: "我做完了，開始核對 →" }));
+    await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[0]).toEqual(["brd_1", "cmp_1", "acs_1", "item_1", "report"]);
+    expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[1]).toEqual(["brd_1", "cmp_1", "acs_1", "item_1", "check"]);
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+  });
+
+  it("report 成功但 check 失敗仍然導去核對結果（那裡顯示核對中）", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.actOnChangeItem)
+      .mockResolvedValueOnce(changeSet({ items: [changeItem({ verification_state: "reported" })] }))
+      .mockRejectedValueOnce(new Error("未收到伺服器回應，結果尚未確認。請沿用原操作重試，不要重做平台操作。"));
+    renderAt(handoffPath());
+    await user.click(await screen.findByRole("button", { name: "我做完了，開始核對 →" }));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+  });
+
+  it("report 失敗留在頁面上並顯示錯誤，不呼叫 check", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.actOnChangeItem).mockRejectedValueOnce(new Error("目前無法完成，已保存的內容會保留。請稍後重試。"));
+    renderAt(handoffPath());
+    await user.click(await screen.findByRole("button", { name: "我做完了，開始核對 →" }));
+    expect(await screen.findByText("目前無法完成，已保存的內容會保留。請稍後重試。")).toBeTruthy();
+    expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HandoffPage（F22-I03）步驟導正與例外", () => {
+  it("清單還是草稿，導去確認提議頁", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ status: "draft", approved_at: null, items: [changeItem({ verification_state: "pending", reported_at: null })] })],
+    });
+    renderAt(handoffPath());
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm"));
+  });
+
+  it("已經回報過，導去核對結果頁", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({ verification_state: "confirmed", reported_at: "2026-09-21T01:00:00Z" })] })],
+    });
+    renderAt(handoffPath());
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+  });
+
+  it("多項變更的清單連去既有變更與核對", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem(), changeItem({ id: "item_2", target_id: "aex_2" })] })],
+    });
+    renderAt(handoffPath());
+    expect(await screen.findByText("這份清單有多項變更")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "前往變更與核對" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toContain("tab=changes");
+  });
+
+  it("找不到這份變更清單", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+    renderAt(handoffPath());
+    expect(await screen.findByText("找不到這份變更清單")).toBeTruthy();
+  });
+});
