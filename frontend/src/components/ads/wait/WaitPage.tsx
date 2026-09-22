@@ -256,7 +256,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <ResultHero tone="warn" title="資料不足，這個活動先不判斷" note={campaignName} />
+          <ResultHero tone="warn" mark="…" title="資料不足，這個活動先不判斷" note={campaignName} />
         </div>
         <Chip tone="warn" className="shrink-0">平台照常投放，不受影響</Chip>
       </div>

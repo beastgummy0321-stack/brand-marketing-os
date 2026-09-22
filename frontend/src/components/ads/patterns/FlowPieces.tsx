@@ -105,10 +105,10 @@ const HERO = {
   neutral: { box: "bg-muted", big: "bg-muted-foreground", mark: "…" },
 } as const;
 /** `.hero.ok/.warn/.bad` (+ `neutral` for 核對中, which the prototype does not draw). */
-export function ResultHero({ tone, title, note }: { tone: keyof typeof HERO; title: string; note?: ReactNode }) {
+export function ResultHero({ tone, title, note, mark }: { tone: keyof typeof HERO; title: string; note?: ReactNode; mark?: string }) {
   return (
     <div data-slot="result-hero" data-variant={tone} role="status" className={cn("flex items-center gap-4 rounded-xl p-5", HERO[tone].box)}>
-      <div className={cn("flex size-12 shrink-0 items-center justify-center rounded-full text-[22px] text-white", HERO[tone].big)} aria-hidden="true">{HERO[tone].mark}</div>
+      <div className={cn("flex size-12 shrink-0 items-center justify-center rounded-full text-[22px] text-white", HERO[tone].big)} aria-hidden="true">{mark ?? HERO[tone].mark}</div>
       <div className="min-w-0 flex-1">
         <h2 className="text-xl font-semibold">{title}</h2>
         {note && <p className="mt-1 text-[15px] text-muted-foreground">{note}</p>}
