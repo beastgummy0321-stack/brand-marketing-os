@@ -34,6 +34,6 @@ select o.id org_id, b.id brand_id, b.name from brand b join org o on o.id=b.org_
    注意：角色的 Campaign 日期若在未來（例如 9 月但今天是 9/13），成效只會補到今天；spend 的 `today` 預設今天。
 3. 結案後：查 learning_ledger；第二圈建立後查 basis.learnings。
 
-## 演練中不修程式
+## 演練中不修程式（例外見 README）
 
-任何缺陷：記進 `<persona>/findings.md`（症狀、截圖、查證 SQL 結果、初判成因），演練結束再由規劃師寫 backlog。
+例外只有一個（`docs/drills/README.md`「Roles」）：同一站會擋住每個角色的缺陷當場修，被擋的角色在修好的版本上重走該站，結果要註明。其餘缺陷：記進 `<persona>/findings.md`（症狀、截圖、查證 SQL 結果、初判成因），演練結束再由規劃師寫 backlog。
