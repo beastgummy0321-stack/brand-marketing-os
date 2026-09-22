@@ -12,8 +12,11 @@ export type QueueState =
   | { status: "error"; message: string }
   | { status: "ready"; queue: QueuePayload };
 
-// `app/ads/triage.py::KINDS_PENDING` — 固定兩個，永遠回這兩個代碼，中文說法只在前端。未認得
-// 的代碼（例如以後新增但這支還沒更新）印「其他」，不要把原始代碼漏給使用者看。
+// `app/ads/triage.py::KINDS_PENDING` 過去固定兩個代碼；F25-I02 把 `scale_budget`／
+// `refresh_creative` 接上真的列（`QueueRow.tsx`）後，後端一律回 `kinds_pending: []`（feature
+// Decisions "Queue payload"）——這支留著，佔位列自然不再出現（`kinds_pending.map` 對空陣列本來
+// 就印不出東西），不用另外判斷「陣列是空的」。未認得的代碼（例如以後又新增但這支還沒更新）印
+// 「其他」，不要把原始代碼漏給使用者看。
 const PENDING_LABEL: Record<string, string> = {
   scale_budget: "可加預算",
   refresh_creative: "補素材",
@@ -53,6 +56,16 @@ function campaignGroups(items: QueueItem[]): { id: string; name: string; count: 
     }
   }
   return order.map((id) => ({ id, ...byId.get(id)! }));
+}
+
+/** F25-I02（feature Decisions "Home rows"："refresh rows never count as done and are last in
+ * order"）：`refresh_creative` 列永遠排在篩選後清單的最後——這是畫面自己的排序，不是後端 payload
+ * 的順序（`triage.py::_queue_candidates` 沒有這個保證）。穩定分割（其餘列保持原順序），只把
+ * `refresh_creative` 挪到尾端。 */
+function orderedRows(items: QueueItem[]): QueueItem[] {
+  const primary = items.filter((item) => item.kind_key !== "refresh_creative");
+  const refresh = items.filter((item) => item.kind_key === "refresh_creative");
+  return [...primary, ...refresh];
 }
 
 /** 單一顆篩選鈕：真按鈕（鍵盤可達，原生 Tab 順序），`aria-pressed` 帶狀態，不是純視覺樣式
@@ -116,7 +129,8 @@ export function DecisionQueue({ state, onRetry }: { state: QueueState; onRetry: 
   // 解釋為什麼。`active` 每次 render 重新從目前的 `groups` derive，選到的活動還在才用它，
   // 不然自動退回「全部」；不直接改 `filter` 這個 state，下次同一個活動的資料回來時篩選還在。
   const active = groups.some((g) => g.id === filter) ? filter : "all";
-  const visible = active === "all" ? items : items.filter((item) => item.triage.campaign_id === active);
+  const filtered = active === "all" ? items : items.filter((item) => item.triage.campaign_id === active);
+  const visible = orderedRows(filtered);
   return (
     <div className="flex flex-col gap-3">
       {/* 空佇列不印「全部 0」——沒有東西好篩。 */}

@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueuePayload, QueueProposal, QueueReviewProposal, TriageItem } from "@/lib/adsTriageApi";
+import type {
+  QueueKind, QueuePayload, QueueProposal, QueueRefresh, QueueReviewProposal, QueueScale, TriageItem,
+} from "@/lib/adsTriageApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { formatSyncTime } from "@/lib/format";
@@ -52,22 +54,54 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-function queueItem(id: string, overrides: Partial<TriageItem> = {}, proposal: QueueProposal | null = null) {
+// F25-I02: `extra` carries the scale_budget／refresh_creative-only fields — `kind_key` defaults to
+// mirroring `triage.class` (stop_loss／worse-only tests never need to pass it, same precedent as
+// `DecisionQueue.test.tsx`'s `queueItem`), but scale_budget／refresh_creative fixtures always
+// override it explicitly since their `triage.class` is the *ad's* own class (e.g. `better`),
+// never one of the two row kinds.
+function queueItem(
+  id: string,
+  overrides: Partial<TriageItem> = {},
+  proposal: QueueProposal | null = null,
+  extra: { kind_key?: QueueKind; scale?: QueueScale; refresh?: QueueRefresh; action_url?: string } = {},
+) {
+  const triage = triageItem(overrides);
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
     category: "ads_triage_stop_loss", kind: null, severity: "rule_warning" as const,
     message: `廣告「${overrides.name ?? "晨光隨行杯・日常出發"}」停損，待決定`,
-    action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`, visible_from: null,
+    action_url: extra.action_url ?? `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`, visible_from: null,
     status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    kind_key: "stop_loss" as const,
-    triage: triageItem(overrides), proposal,
+    kind_key: extra.kind_key ?? (triage.class === "worse" ? "worse" : "stop_loss"),
+    triage, proposal, scale: extra.scale, refresh: extra.refresh,
+  };
+}
+
+function scaleOwner(overrides: Partial<QueueScale["owner"]> = {}): QueueScale["owner"] {
+  return { id: "adset_1", name: "晨光隨行杯・投放組", native_kind: "adset", native_id: "native_adset_1", ads_count: 3, currency: "TWD", ...overrides };
+}
+function scale(overrides: Partial<QueueScale> = {}): QueueScale {
+  return {
+    owner: scaleOwner(), from: 500, to: 600,
+    cost_per_result: 300, previous_cost_per_result: 310,
+    target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
+    window_days: 7, month: { available: 12000, extra_needed: 700 },
+    ...overrides,
+  };
+}
+function refresh(overrides: Partial<QueueRefresh> = {}): QueueRefresh {
+  return {
+    campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市",
+    readable_count: 2, classified_count: 5, thumbnails: [null, null],
+    ...overrides,
   };
 }
 
 function queue(overrides: Partial<QueuePayload> = {}): QueuePayload {
   return {
     items: [], counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 },
-    total_ads: 0, kinds_available: ["stop_loss", "worse"], kinds_pending: ["scale_budget", "refresh_creative"],
+    // F25-I01: all four kinds are live now, `kinds_pending` is always empty.
+    total_ads: 0, kinds_available: ["stop_loss", "worse", "scale_budget", "refresh_creative"], kinds_pending: [],
     ...overrides,
   };
 }
@@ -153,6 +187,46 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
   });
 
+  it("header 件數：可加預算列算跟停損列一樣——已核對不算開著，沒有提案還開著（feature Decisions「header count counts scale rows like pause rows」）", async () => {
+    const confirmedBudget: QueueProposal = {
+      kind: "budget", change_set_id: "set_9", campaign_id: "cmp_1",
+      status: "approved", verification_state: "confirmed",
+      reason: null, revisit_at: null, multi: false,
+    };
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
+        items: [
+          queueItem("q1", { class: "better", label: "變好", name: "已核對的加碼" }, confirmedBudget, {
+            kind_key: "scale_budget", scale: scale({ owner: scaleOwner({ id: "adset_done" }) }),
+          }),
+          queueItem("q2", { class: "flat", label: "持平", name: "還沒處理的加碼" }, null, {
+            kind_key: "scale_budget", scale: scale({ owner: scaleOwner({ id: "adset_open" }) }),
+          }),
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
+  });
+
+  it("header 件數：補素材列永遠算開著——沒有提案、也沒有「完成」狀態可言（feature Decisions「refresh rows never count as done」）", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
+        items: [
+          queueItem("q1", { class: "flat", label: "持平", name: "素材不足的活動" }, null, {
+            kind_key: "refresh_creative", refresh: refresh(), action_url: "/brands/brd_1/ads/campaigns/cmp_1?tab=assets&material_new=1",
+          }),
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
+  });
+
   it("空佇列：header 印「都處理完了」（誠實空狀態句由 DecisionQueue 的佔位列自己扛，這支只管頁首）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
 
@@ -168,8 +242,10 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
 
     expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
     expect(screen.getByText("停損")).toBeTruthy();
-    // 停損列沒有 proposal（F22-I05）：按鈕走提議頁，不是靜態的「看證據」。
-    expect(screen.getByRole("link", { name: "去處理" })).toBeTruthy();
+    // 停損列沒有 proposal（F22-I05）：按鈕走提議頁。F25-I02：home 這一列的字樣是「看提議」，
+    // 不是 detail 頁那顆「去處理」（feature Decisions "Home rows"："detail-page 「去處理」
+    // unchanged"）。
+    expect(screen.getByRole("link", { name: "看提議" })).toBeTruthy();
   });
 
   it("變差列不看 action_url——F23-I05 接上 proposalAction 後，就算 action_url 是 null 也照樣給「看證據」", async () => {
