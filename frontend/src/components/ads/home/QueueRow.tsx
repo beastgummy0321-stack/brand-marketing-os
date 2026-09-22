@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import { Link } from "react-router-dom";
-import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { QueueInsufficient, QueueItem, QueueKind, QueueScale } from "@/lib/adsTriageApi";
-import { DayTiles, KindMark } from "../patterns";
-import { proposalAction } from "./status";
+import { CampaignChip, Chip, DayTiles, KindMark, ThumbTiles } from "../patterns";
+import { cleanupAction, proposalAction } from "./status";
 
 // F25-I02: `scale_budget`／`refresh_creative` join `stop_loss`／`worse` as the queue's four row
 // kinds (feature Decisions "Home rows", prototype `home()`'s `row()`) — every row now carries a
@@ -16,8 +15,11 @@ import { proposalAction } from "./status";
 // row is its best/first ad's own class — `better`/`flat`/etc, never one of these four).
 // F26-I02: `insufficient_data` maps to `"worse"` here for type-completeness only — its own chip
 // (`InsufficientKindMark` below) never reads this table; see that component's own comment for why.
+// F27-I17: `cleanup` shares `refresh_creative`'s `"fresh"` KindMark tone (contract's own wording,
+// "KindMark fresh 「清理」") — a different label (`kindLabel` below), same visual variant.
 const KIND_VARIANT: Record<QueueKind, "stop" | "worse" | "up" | "fresh"> = {
-  stop_loss: "stop", worse: "worse", scale_budget: "up", refresh_creative: "fresh", insufficient_data: "worse",
+  stop_loss: "stop", worse: "worse", scale_budget: "up", refresh_creative: "fresh",
+  insufficient_data: "worse", cleanup: "fresh",
 };
 // `scale_budget`／`refresh_creative` 列的分類文字是這一列本身的身份（可加預算／補素材），不是
 // best ad 自己的 `triage.label`（對這兩種列印的是「變好」「持平」之類）——跟 v7 `home()` 的
@@ -29,6 +31,7 @@ function kindLabel(item: QueueItem): string {
     case "scale_budget": return "可加預算";
     case "refresh_creative": return "補素材";
     case "insufficient_data": return "資料不足";
+    case "cleanup": return "清理";
     default: return item.triage.label;
   }
 }
@@ -43,6 +46,12 @@ function rowTitle(item: QueueItem): string {
   if (item.kind_key === "scale_budget" && item.scale) return item.scale.owner.name ?? "（未命名）";
   if (item.kind_key === "refresh_creative" && item.refresh) {
     return `能判讀的素材只剩 ${item.refresh.readable_count} 則`;
+  }
+  // F27-I17 Contract F: the cleanup row's own title, per the contract's exact wording —
+  // `cleanup.active_ads`／`cleanup.can_support` (never a re-derivation of the campaign card's own
+  // capacity numbers, which read from `CampaignCard.data.capacity` instead).
+  if (item.kind_key === "cleanup" && item.cleanup) {
+    return `同時 ${item.cleanup.active_ads} 則，預算約撐 ${item.cleanup.can_support} 則`;
   }
   return item.triage.name ?? "（未命名廣告）";
 }
@@ -218,6 +227,31 @@ function RefreshTile({ url }: { url: string | null }) {
   );
 }
 
+/** F27-I17 Done 1: the row's own leading tile (order-1, 48px) — `triage.thumbnail_url` first (a
+ * Meta CDN link that may expire, or `null`), a neutral icon tile on either — same null/error
+ * contract `RefreshTile` above already follows, kept as its own component rather than merged into
+ * it (different size/rounding, and this one only ever renders one specific ad's thumbnail, never
+ * an array). Only used for the "default" row kinds (`stop_loss`/`worse`) — the others already have
+ * their own leading tile (`cleanup`'s 🧹, the rest keep the existing generic icon below). */
+function RowThumb({ url }: { url: string | null }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+  const showImage = url !== null && !failed;
+  return (
+    <div
+      className="order-1 flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted"
+      aria-hidden="true"
+    >
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element -- 這裡不是 Next.js 專案。
+        <img src={url} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        <ImageIcon className="size-5 text-muted-foreground" />
+      )}
+    </div>
+  );
+}
+
 /** `refresh.thumbnails` 最多 4 則，不足的份自己補中空虛線格到 4（feature Decisions "Home rows"：
  * "tiles from `refresh.thumbnails` padded with hollow dashed tiles to 4"）——後端從不補，這裡
  * 補，不是後端漏做。 */
@@ -306,8 +340,14 @@ function InsufficientViz({ insufficient }: { insufficient: QueueInsufficient }) 
  * F22-I05：停損列不再印靜態的「暫停提議・接上後開放」佔位——`item.proposal` 已經接上真的
  * 三步流程，按鈕本身（`proposalAction`）就是誠實的目前進度，旁邊再放一顆「接上後開放」反而
  * 是舊話。F23-I05：變差列現在也接上同一支 `proposalAction`（`kind: "review"`，見
- * `home/status.ts`「Queue row state for `worse` rows」）——不再看 `item.action_url`。 */
-export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean }) {
+ * `home/status.ts`「Queue row state for `worse` rows」）——不再看 `item.action_url`。
+ *
+ * F27-I17: `recovering`（來自 `getRecovery().recovering`，`AdsHomePage.tsx` → `DecisionQueue`
+ * 一路往下傳）為真時，不管 `kind_key` 是什麼，按鈕區一律換成「補完資料後更新」的 `Chip`——
+ * 這段時間任何回合／提案的進度都可能被還沒補完的資料蓋過去，不能再讓使用者照著舊按鈕做決定。 */
+export function QueueRow({ item, primary, recovering = false }: {
+  item: QueueItem; primary: boolean; recovering?: boolean;
+}) {
   const t = item.triage;
   const title = rowTitle(item);
 
@@ -338,13 +378,32 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
-      <div className="order-1 flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted" aria-hidden="true">
-        <ImageIcon className="size-5 text-muted-foreground" />
-      </div>
+      {/* F27-I17 Done 1: 「清理」列有自己固定的圖示（🧹，contract 原文），可加預算／補素材／
+       * 資料不足三種列沒有單一廣告可以掛，維持原本的中性 ImageIcon；其餘（停損／變差）列現在
+       * 是這則廣告自己的縮圖（`RowThumb`，`triage.thumbnail_url`，null／讀圖失敗都退回同一顆
+       * 中性圖示）。 */}
+      {item.kind_key === "cleanup" ? (
+        <div
+          className="order-1 grid size-12 shrink-0 place-items-center rounded-lg bg-muted text-lg"
+          aria-hidden="true"
+        >
+          🧹
+        </div>
+      ) : item.kind_key === "refresh_creative" || item.kind_key === "scale_budget"
+        || item.kind_key === "insufficient_data" ? (
+        <div className="order-1 flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted" aria-hidden="true">
+          <ImageIcon className="size-5 text-muted-foreground" />
+        </div>
+      ) : (
+        <RowThumb url={t.thumbnail_url} />
+      )}
       <div className="order-2 min-w-0 flex-1">
         {/* Lead review fix 2026-09-21：分類 chip／活動 chip 同一行不換行——活動 chip 是
-         * `min-w-0 shrink` 把 Badge 預設的 `w-fit shrink-0` 蓋掉，長名稱在自己框裡截斷成
-         * 「…」，不會擠到換行或被外層裁掉右邊框。 */}
+         * `min-w-0 shrink`，長名稱在自己框裡截斷成「…」，不會擠到換行或被外層裁掉右邊框。
+         * F27-I17 Done 1: 活動 chip 換成共用的 `CampaignChip`（`patterns/LoopPieces.tsx`），
+         * family 從 `triage.campaign_objective` 讀（手寫測試 fixture 沒補時退回 `"other"`，同
+         * `adsTriageApi.ts` 上該欄位選填的理由）——`title` 挪到外層 `<span>`，`CampaignChip`
+         * 本身（do_not_touch）沒有 title 這個插槽。 */}
         <div className="flex flex-nowrap items-center gap-1.5">
           <span className="shrink-0">
             {item.kind_key === "insufficient_data"
@@ -352,12 +411,16 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
               : <KindMark kind={KIND_VARIANT[item.kind_key]}>{kindLabel(item)}</KindMark>}
           </span>
           {t.campaign_name && (
-            // Badge 本身是 `inline-flex justify-center`——直接把 `truncate` 放在 Badge 上，
-            // 溢出的文字會被置中裁切（左右各切一段、看不到「…」），要另包一層佔滿寬度的
-            // `<span>` 自己 truncate 才會在右邊出現省略號（lead review fix 2026-09-21）。
-            <Badge variant="outline" className="min-w-0 max-w-[14rem] shrink" title={t.campaign_name}>
-              <span className="min-w-0 w-full truncate">{t.campaign_name}</span>
-            </Badge>
+            // `max-w`/`shrink` only constrain a box flexbox actually sizes — a plain `<span>`
+            // defaults to `display:inline`, which CSS never applies `max-width` to (the old
+            // `Badge` this replaced was `inline-flex` itself, so its own `className` could carry
+            // the cap directly; `CampaignChip`, do_not_touch, has no `max-width` of its own).
+            // `inline-flex` here is what makes the cap — and `CampaignChip`'s inner `truncate`
+            // span — actually take effect (found in 1024px evidence: without it the name ran on
+            // uncapped and visibly cut off mid-character against the row's button, no ellipsis).
+            <span className="inline-flex min-w-0 max-w-[14rem] shrink" title={t.campaign_name}>
+              <CampaignChip objective={t.campaign_objective ?? "other"} name={t.campaign_name} />
+            </span>
           )}
         </div>
         <p className="mt-1.5 truncate text-sm font-semibold" title={title}>{title}</p>
@@ -367,7 +430,12 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
        * Lead review fix 2026-09-21：xl 給固定寬度、內容靠右——停損列多一顆暫停提議 chip，
        * 沒有它的變差列不能因此把量尺往右推，兩種列的量尺欄在 xl 要對齊同一個 x 座標。 */}
       <div className="order-3 flex shrink-0 items-center gap-2 xl:order-4 xl:w-56 xl:justify-end">
-        {item.kind_key === "refresh_creative" ? (
+        {recovering ? (
+          // F27-I17: 系統剛恢復期間，不管這一列原本走到哪一步，按鈕一律換成這顆誠實佔位
+          // （contract："every queue row's button is replaced by Chip"）——連固定按鈕的補素材／
+          // 資料不足列都不例外，資料還沒補完，連「這一列還開不開」都不確定。
+          <Chip>補完資料後更新</Chip>
+        ) : item.kind_key === "refresh_creative" ? (
           // 補素材列的按鈕固定「準備新素材」，不看回合狀態——沒有提案，也永遠不會完成
           // （feature Decisions "Home rows"："refresh rows never count as done"）。`action_url`
           // 已經是活動工作區的素材分頁（`app/ads/triage.py::_queue_candidates`），不必自己組。
@@ -386,6 +454,19 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
               <Link to={item.action_url}>去處理</Link>
             </Button>
           )
+        ) : item.kind_key === "cleanup" ? (
+          // F27-I17 Contract F / Done 0：清理列的按鈕由 `cleanupAction` 決定（沒有提案→
+          // 「看提議」走 `item.action_url`；有提案→跟其餘 multi-item 變更清單同一套 label／
+          // 連結，`cleanupAction` 內部落到 `proposalAction` 的泛用開關）。
+          (() => {
+            if (item.brand_id === null) return null;
+            const a = cleanupAction(item.brand_id, t.campaign_id, item.proposal, item.action_url);
+            return a && (
+              <Button asChild size="sm" variant={a.done ? "ghost" : primary ? "default" : "outline"}>
+                <Link to={a.href}>{a.label}</Link>
+              </Button>
+            );
+          })()
         ) : action ? (
           <Button asChild size="sm" variant={action.done ? "ghost" : primary ? "default" : "outline"}>
             <Link to={action.href}>{action.label}</Link>
@@ -404,6 +485,15 @@ export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean 
         ? <ScaleViz scale={item.scale} />
         : item.kind_key === "insufficient_data" && item.insufficient
         ? <InsufficientViz insufficient={item.insufficient} />
+        // F27-I17 Contract F: cleanup 列的 viz 是它提議暫停的那批廣告縮圖（`ThumbTiles`，最多
+        // 4 則——contract 原文 "ThumbTiles of cleanup.ads (max 4)"，超過的則數留給 `ThumbTiles`
+        // 自己的「＋N 則」摺疊，不是這裡再算一次）。
+        : item.kind_key === "cleanup" && item.cleanup
+        ? (
+          <div className={VIZ_CLASS}>
+            <ThumbTiles items={item.cleanup.ads.map((ad) => ad.thumbnail_url)} size={34} max={4} />
+          </div>
+        )
         : <Viz item={item} />}
     </div>
   );

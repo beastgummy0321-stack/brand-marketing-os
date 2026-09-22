@@ -181,15 +181,30 @@ export function proposalAction(
   }
 }
 
-/** F22-I05/F23-I01/F25-I02/F26-I02: whether a queue row still counts as "open" for the home header
- * count (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
+/** F27-I17 Contract F / Done 0: the `cleanup` row's own action — no proposal yet uses the row's
+ * own `action_url` (backend's `/propose/cleanup/:campaignId`, `app/ads/triage.py
+ * ::_cleanup_candidates`, never reconstructed here — same trust `home/QueueRow.tsx` already gives
+ * the `refresh_creative`/`insufficient_data` rows' own `action_url`); once a cleanup change set
+ * exists it's the same multi-item change-set step every other kind uses through `proposalAction`'s
+ * own generic switch (`kind` only matters for the null-proposal branch, irrelevant once `proposal`
+ * itself carries one — a cleanup set's `multi` is always `true`, Contract F). */
+export function cleanupAction(
+  brandId: string, campaignId: string, proposal: QueueProposal | null, actionUrl: string | null,
+): ProposalAction | null {
+  if (proposal === null) return actionUrl ? { label: "看提議", href: actionUrl, done: false } : null;
+  return proposalAction(brandId, campaignId, campaignId, proposal);
+}
+
+/** F22-I05/F23-I01/F25-I02/F26-I02/F27-I17: whether a queue row still counts as "open" for the
+ * home header count (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
  * `proposalAction(...).done` is true — same rule the row's own button already renders, kept in
  * one place so the header and the button can't disagree. `scale_budget` rows follow the same rule
  * through the `"budget"` branch, keyed to the budget owner's id rather than the triage ad's own
- * `entity_id` (feature Decisions "Home rows"). `refresh_creative` and `insufficient_data` rows
- * never count as done (feature Decisions: "refresh rows never count as done" /「never done」for
- * the insufficient-data row) — neither has a proposal flow, so both fall through to the final
- * `return false` the same way any unhandled kind always has. */
+ * `entity_id` (feature Decisions "Home rows"). `cleanup` rows follow `cleanupAction` above — not
+ * done while there's no proposal yet, or its change set's `.done` once there is. `refresh_creative`
+ * and `insufficient_data` rows never count as done (feature Decisions: "refresh rows never count
+ * as done" /「never done」for the insufficient-data row) — neither has a proposal flow, so both
+ * fall through to the final `return false` the same way any unhandled kind always has. */
 export function isQueueItemDone(item: QueueItem): boolean {
   if (item.brand_id === null) return false;
   if (item.triage.class === "stop_loss") {
@@ -204,6 +219,9 @@ export function isQueueItemDone(item: QueueItem): boolean {
     return proposalAction(
       item.brand_id, item.triage.campaign_id, item.scale.owner.id, item.proposal, "budget",
     ).done;
+  }
+  if (item.kind_key === "cleanup") {
+    return cleanupAction(item.brand_id, item.triage.campaign_id, item.proposal, item.action_url)?.done ?? false;
   }
   return false;
 }

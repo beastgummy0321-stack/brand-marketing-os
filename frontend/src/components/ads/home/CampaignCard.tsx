@@ -4,8 +4,8 @@ import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { cn } from "@/lib/utils";
-import { Chip } from "../patterns";
-import { formatCurrency } from "@/lib/format";
+import { CampaignChip, Chip } from "../patterns";
+import { formatCurrency, formatMoney } from "@/lib/format";
 import type { CampaignCard as CampaignCardData, CampaignSyncState } from "@/lib/adsApi";
 import { getTriage, type TriageClass, type TriageClosedBlock, type TriageData, type TriageItem } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
@@ -332,6 +332,23 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
       ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip>
       : <Chip tone="warn">預算待核實</Chip>;
 
+  // F27-I17 Contract F: this campaign's own capacity (`CampaignCard.data.capacity`, ACTIVE ads'
+  // own daily-budget owners) — 「每日 X」 only once a shared daily budget is actually known
+  // (`daily_budget` is `null` on any currency mismatch or missing owner, `triage_capacity.py`),
+  // 「約撐得起 N 則」 only once `can_support` is known (needs both `daily_budget` and a target),
+  // warn-toned exactly when the campaign is already carrying more active ads than that.
+  const capacity = campaign.data?.capacity;
+  const capacityDailyChip = capacity && capacity.daily_budget !== null && (
+    <Chip>
+      每日 {capacity.currency ? formatMoney(capacity.daily_budget, capacity.currency) : formatPlainNumber(capacity.daily_budget)}
+    </Chip>
+  );
+  const capacitySupportChip = capacity && capacity.can_support !== null && (
+    <Chip tone={capacity.active_ads > capacity.can_support ? "warn" : "neutral"}>
+      約撐得起 {capacity.can_support} 則
+    </Chip>
+  );
+
   return (
     <article
       className={cn(
@@ -346,9 +363,16 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
       <div className="flex items-start justify-between gap-2">
         <h3 className="min-w-0 flex-1 text-[15px] font-semibold">
           {/* h3／連結本身是 flex row：長名稱只讓名稱那格 truncate，「›」永遠是 shrink-0、
-             不被擠掉（review 裁決）；整個 <Link> 還是同一個點擊區域。 */}
-          <Link to={detailHref} className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline">
-            <span className="min-w-0 truncate" title={campaign.name}>{campaign.name}</span>
+             不被擠掉（review 裁決）；整個 <Link> 還是同一個點擊區域。F27-I17：名稱換成共用
+             `CampaignChip`（family 從 `campaign.campaign_objective` 讀，手寫 fixture 沒補時退回
+             `"other"`）——`title` 挪到 `<Link>` 本身，`CampaignChip`（do_not_touch）沒有 title
+             插槽。 */}
+          <Link
+            to={detailHref}
+            title={campaign.name}
+            className="flex min-w-0 items-center gap-0.5 hover:text-primary hover:underline"
+          >
+            <CampaignChip objective={campaign.campaign_objective ?? "other"} name={campaign.name} strong />
             {/* aria-hidden：只是「這裡可以點」的視覺提示，不進可及名稱——名稱連結要留純活動
                名稱給 e2e／accessible name 用（review 裁決）。 */}
             <span aria-hidden="true" className="shrink-0 text-muted-foreground">›</span>
@@ -424,7 +448,11 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
          （review 裁決）。新的 sync 灰卡／資料不足 warn 卡照 prototype `ccard` 的 state 分支不
          印這列（那個分支從來沒帶預算 chip），只有既有的 `isError`／`ready` 卡維持原樣。 */}
       {!isSyncAbnormal && !isInsufficient && (
-        <div className="flex flex-wrap items-center gap-2">{budgetChip}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {budgetChip}
+          {capacityDailyChip}
+          {capacitySupportChip}
+        </div>
       )}
 
       {/* F26-I02 (prototype `home()` ccard bottom line, feature Decisions "I02"): closed ads are a
