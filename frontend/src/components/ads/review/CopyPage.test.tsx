@@ -239,7 +239,9 @@ describe("CopyPage（F23-I04）保存", () => {
     const user = userEvent.setup();
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
     renderAt(copyPath());
-    const bodyInput = await screen.findByLabelText("新內文");
+    // 先等預填內容到位再清空：預填是讀到檢討後才寫進 textarea，太早清會被預填蓋回去。
+    await screen.findByDisplayValue("輕鬆帶走，每天剛剛好");
+    const bodyInput = screen.getByLabelText("新內文");
     await user.clear(bodyInput);
     await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
     expect(await screen.findByText("請填寫新內文。")).toBeTruthy();
