@@ -1,6 +1,6 @@
-# Handoff — build every remaining v7 ads-centre screen (written 2026-09-22)
+# Handoff — v7 ads-centre screens: DONE 2026-09-22 (F19–F24); what is left is backend-gated placeholders
 
-Goal (user instruction 2026-09-22): finish the rest of `docs/design/ads/prototype-v7-ads-center.html` with the workflow
+Status: every prototype screen is built and human-accepted (F22 pause flow, F23 review flow steps 1–3, F24 abnormal states + monthly review + header chip); F19 is the only feature still open (its acceptance item covers home / campaign card / target page). Original goal (user instruction 2026-09-22): finish the rest of `docs/design/ads/prototype-v7-ads-center.html` with the workflow
 proven on F21. This file is context, not execution permission: show the plan once, then run the whole queue.
 
 ## State
