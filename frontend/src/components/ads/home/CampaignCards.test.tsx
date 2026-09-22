@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageData, TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignTriage, TriageClosedBlock, TriageData, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { CampaignCards } from "./CampaignCards";
@@ -50,8 +50,14 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
+// F26-I01: `closed` is always sent by the real backend -- an empty block for every test here
+// unless a scenario overrides it directly (none of `CampaignCards`'s own assertions read it yet).
+const EMPTY_CLOSED: TriageClosedBlock = {
+  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
+};
+
 function triage(items: TriageItem[], data?: TriageData): CampaignTriage {
-  return { window_days: 7, items, data };
+  return { window_days: 7, items, closed: EMPTY_CLOSED, data };
 }
 
 function renderCards() {

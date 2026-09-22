@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app.ads import channels, repository, result_kinds, tracked_zero, triage
+from app.ads import ad_status, channels, repository, result_kinds, tracked_zero, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -611,6 +611,156 @@ class TriageDataViewTest(unittest.TestCase):
         self.assertEqual(
             data["coverage"], {"start": coverage_start.isoformat(), "end": self.cutoff.isoformat()},
         )
+
+
+# ---------------------------------------------------------------------------
+# F26-I01: `ad_status.is_closed` (the shared predicate) and `classify()`'s own `closed` block --
+# judgement reads ACTIVE ads only, closed ads are kept and reported, never judged.
+# ---------------------------------------------------------------------------
+
+
+class AdStatusTest(unittest.TestCase):
+    def test_none_is_never_closed(self):
+        self.assertFalse(ad_status.is_closed(None))
+
+    def test_active_is_not_closed(self):
+        self.assertFalse(ad_status.is_closed("ACTIVE"))
+
+    def test_every_registered_status_is_closed(self):
+        for status in ad_status.CLOSED_STATUSES:
+            self.assertTrue(ad_status.is_closed(status))
+
+    def test_unrecognised_status_is_not_closed(self):
+        self.assertFalse(ad_status.is_closed("SOME_FUTURE_STATUS"))
+
+
+class TriageClosedAdsTest(unittest.TestCase):
+    """Ground truth (issue Blocked-if evidence): a campaign of 5 active + 11 paused + 4 archived
+    ads judges 5, reports `closed.total == 15` with the paused/archived split, and never a second
+    query against `ads_external_daily` (the closed items' own numbers reuse the one read
+    `classify()` already makes for its active ads)."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="F26 已關閉廣告測試", actor="test", client_name=None,
+        )["id"]
+        patcher = patch.object(channels, "external_reader", return_value=_Reader())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="投放中活動",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1"},
+        )
+        self.conn.commit()
+
+    def make_ad(self, native_id, *, native_status=None, name=None):
+        return external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": native_id, "name": name or native_id, "native_status": native_status,
+             "parent_native_kind": "campaign", "parent_native_id": "c1"},
+        )
+
+    def test_five_active_eleven_paused_four_archived(self):
+        for i in range(5):
+            self.make_ad(f"active_{i}", native_status="ACTIVE")
+        for i in range(11):
+            self.make_ad(f"paused_{i}", native_status="PAUSED")
+        for i in range(4):
+            self.make_ad(f"archived_{i}", native_status="ARCHIVED")
+        self.conn.commit()
+
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(len(result["items"]), 5)
+        self.assertEqual(result["closed"], {
+            "paused": 11, "archived": 4, "other": 0, "total": 15,
+            "items": result["closed"]["items"], "truncated": False,
+        })
+        self.assertEqual(len(result["closed"]["items"]), 15)
+
+    def test_null_status_is_active_never_closed(self):
+        self.make_ad("no_status", native_status=None)
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["closed"]["total"], 0)
+
+    def test_other_bucket_covers_deleted_and_the_two_cascade_pauses(self):
+        self.make_ad("d1", native_status="DELETED")
+        self.make_ad("d2", native_status="ADSET_PAUSED")
+        self.make_ad("d3", native_status="CAMPAIGN_PAUSED")
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(result["closed"], {
+            "paused": 0, "archived": 0, "other": 3, "total": 3,
+            "items": result["closed"]["items"], "truncated": False,
+        })
+
+    def test_closed_item_shape_carries_its_own_last_window_numbers(self):
+        ad = self.make_ad("paused_1", native_status="PAUSED", name="停了的廣告")
+        self.set_coverage_for(self.cutoff() - timedelta(days=90), self.cutoff())
+        for offset in range(7):
+            self.obs(ad["id"], self.cutoff() - timedelta(days=offset), spend=10, result_count=2)
+        self.conn.commit()
+
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        item = result["closed"]["items"][0]
+        self.assertEqual(item["entity_id"], ad["id"])
+        self.assertEqual(item["name"], "停了的廣告")
+        self.assertEqual(item["native_status"], "PAUSED")
+        self.assertIsNone(item["thumbnail_url"])
+        self.assertEqual(item["spend"], 70)
+        self.assertIsNotNone(item["cost_per_result"])
+        self.assertEqual(item["result_label"], result_kinds.label("purchase"))
+
+    def test_no_data_closed_item_reads_null_never_crashes(self):
+        ad = self.make_ad("paused_no_data", native_status="PAUSED")
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        item = result["closed"]["items"][0]
+        self.assertEqual(item["entity_id"], ad["id"])
+        self.assertIsNone(item["spend"])
+        self.assertIsNone(item["cost_per_result"])
+        self.assertEqual(item["result_label"], result_kinds.label(None))
+
+    def test_closed_items_capped_with_truncated_flag(self):
+        for i in range(3):
+            self.make_ad(f"paused_{i}", native_status="PAUSED")
+        self.conn.commit()
+        with patch.object(triage, "_CLOSED_ITEMS_CAP", 2):
+            result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(len(result["closed"]["items"]), 2)
+        self.assertEqual(result["closed"]["total"], 3)
+        self.assertTrue(result["closed"]["truncated"])
+
+    def cutoff(self):
+        return (db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)).date()
+
+    def set_coverage_for(self, start, end):
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={
+                "last_success_at": db.now_utc().isoformat(),
+                "coverage": {"start": start.isoformat(), "end": end.isoformat()},
+            },
+        )
+        self.conn.commit()
+
+    def obs(self, ad_id, day, *, spend, result_count):
+        external.upsert_observation(
+            self.conn, self.org, self.brand, self.campaign,
+            {"entity_id": ad_id, "day": day, "metric_scope": "ad",
+             "attribution_key": f"{ad_id}-{day.isoformat()}", "currency": "TWD", "source": "meta",
+             "spend": spend, "impressions": 1000, "purchases": None},
+            result_kind="purchase", result_count=result_count, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        self.conn.commit()
 
 
 if __name__ == "__main__":

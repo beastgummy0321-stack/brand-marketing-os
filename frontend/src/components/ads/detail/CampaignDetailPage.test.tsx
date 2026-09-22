@@ -10,7 +10,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueueItem, QueuePayload, TriageClass, TriageItem } from "@/lib/adsTriageApi";
+import type {
+  QueueItem, QueuePayload, TriageClass, TriageClosedBlock, TriageItem,
+} from "@/lib/adsTriageApi";
 import { getQueue, getTriage } from "@/lib/adsTriageApi";
 import { CampaignDetailPage } from "./CampaignDetailPage";
 
@@ -61,6 +63,12 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
   };
 }
 
+// F26-I01: `closed` is always sent by the real backend -- an empty block for every `getTriage`
+// fixture here (this page's own 「已關閉」 group is a separate issue, not built yet).
+const EMPTY_CLOSED: TriageClosedBlock = {
+  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
+};
+
 function queue(items: QueueItem[]): QueuePayload {
   const counts = { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 } as Record<TriageClass, number>;
   return { items, counts, total_ads: items.length, kinds_available: [], kinds_pending: [] };
@@ -90,7 +98,7 @@ beforeEach(() => {
 
 describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
   it("有目標：頭部印目標數字、依據、預算、objective・則數；調整目標／全部資料 › 指對網址", async () => {
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
 
     renderPage();
 
@@ -110,7 +118,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
   it("objective chip：跟 `home/CampaignCard.tsx` 同一種處理——只有 objective 自己截斷，「・N 則」不被擠到換行", async () => {
     const longObjective = "提高 Beast Prime 的購買數量，以購買次數為主要成效，這是一整句很長的匯入活動目標敘述用來測試截斷";
     vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({ objective: longObjective })]);
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
 
     renderPage();
     await screen.findByText("・1 則");
@@ -126,7 +134,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("沒有目標：每一則都算 no_target，印警告 chip、警告條與「設定目標」（不是「調整目標」）", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 28,
+      window_days: 28, closed: EMPTY_CLOSED,
       items: [triageItem({ class: "no_target", label: "尚未設定目標", target: { value: null, basis: null, result_kind: null, result_label: "成果", missing: [] } })],
     });
 
@@ -143,7 +151,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("分類分組：停損／變差預設展開，其餘收合；標籤照後端 label，不是自己拼字", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "a1", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "a2", class: "worse", label: "變差" }),
@@ -170,7 +178,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("佇列裡的停損廣告：「去處理」走 F22-I05 的提案流程（沒有 proposal 就是提議頁），不連 queue 的 action_url（那會繞回這一頁）", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" }),
         triageItem({ entity_id: "ad_flat", class: "flat", label: "持平", name: "持平廣告" }),
@@ -196,7 +204,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("停損廣告已有提案：按鈕標籤／連結跟著 proposal 狀態走（跟 home/QueueRow 同一支 helper）", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損", name: "停損廣告" })],
     });
     vi.mocked(getQueue).mockResolvedValue(queue([
@@ -221,7 +229,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("`getQueue`失敗：不拖累整頁——目標／分類／列照常顯示，只是沒有「去處理」", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" })],
     });
     vi.mocked(getQueue).mockRejectedValue(new Error("佇列讀取失敗"));
@@ -236,7 +244,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("縮圖：null 落到中性佔位，有網址先顯示圖片，載入失敗改回佔位", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "ad_null", thumbnail_url: null }),
         triageItem({ entity_id: "ad_img", thumbnail_url: "https://cdn.example/thumb.jpg" }),
@@ -261,7 +269,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("`?ad=` 深連結：那一則所在分類展開並高亮那一列；不認得的 id 忽略", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
@@ -280,7 +288,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("`?ad=` 深連結只捲動一次：之後摺疊／展開別的分類不會再觸發 scrollIntoView", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
@@ -303,7 +311,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("不認得的 `?ad=` id：忽略，維持預設展開狀態，不當機", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "ad_stop", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "ad_flat", class: "flat", label: "持平" }),
@@ -320,7 +328,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("分類 summary 右側提示：持平印「照常投放」，資料不足印「還沒花到可判讀的金額」（不帶金額），其餘分類不印", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "a1", class: "stop_loss", label: "停損" }),
         triageItem({ entity_id: "a2", class: "flat", label: "持平" }),
@@ -340,7 +348,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("沒有停損／變差（今天真實 Beast Prime 資料的形狀）：預設展開第一個有廣告的分類，不是整頁收合", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "a1", class: "better", label: "變好" }),
         triageItem({ entity_id: "a2", class: "flat", label: "持平" }),
@@ -359,7 +367,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("尚未設定目標（唯一分類是 no_target）：預設展開那一類，不是整頁只剩一條收合列", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 7,
+      window_days: 7, closed: EMPTY_CLOSED,
       items: [
         triageItem({ entity_id: "a1", class: "no_target", label: "尚未設定目標", target: { value: null, basis: null, result_kind: null, result_label: "成果", missing: [] } }),
       ],
@@ -374,7 +382,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
   });
 
   it("版面寬度照 v7 `.page{max-width:1180px}`：外層容器帶同一個上限，不跟著殼撐到全寬", async () => {
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
 
     const { container } = renderPage();
     await screen.findByText("・1 則");
@@ -383,7 +391,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
   });
 
   it("沒有廣告資料：不催設定目標，只留全部資料 ›", async () => {
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [] });
 
     renderPage();
 
@@ -401,7 +409,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
     expect(await screen.findByText("讀取失敗")).toBeTruthy();
     expect(screen.getByText("網路錯誤")).toBeTruthy();
 
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [triageItem()] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [triageItem()] });
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
 
     expect(await screen.findByText("・1 則")).toBeTruthy();
@@ -409,7 +417,7 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
 
   it("清單裡找不到這個 Campaign：讀取失敗態，訊息是「找不到這個 Campaign。」", async () => {
     vi.mocked(listCampaigns).mockResolvedValue([campaignCardData({ id: "cmp_other" })]);
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, items: [] });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 28, closed: EMPTY_CLOSED, items: [] });
 
     renderPage();
 
