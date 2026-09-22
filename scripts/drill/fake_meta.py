@@ -345,14 +345,16 @@ def _tree_nodes(brand_id: str) -> tuple[str, list]:
             raise SystemExit(f"找不到品牌 {brand_id}")
         org_id = row["org_id"]
         campaigns = conn.execute(
-            "SELECT id, name FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
+            "SELECT id, name, objective, start_date, end_date FROM ads_campaign"
+            " WHERE org_id = %s AND brand_id = %s"
             " AND status IN ('ready', 'live') AND local_state = 'unbound'"
             " ORDER BY created_at", (org_id, brand_id)).fetchall()
         if campaigns:
             nodes = []
             for campaign in campaigns:
                 groups = conn.execute(
-                    "SELECT id, name FROM ads_delivery_group WHERE campaign_id = %s"
+                    "SELECT id, name, daily_budget FROM ads_delivery_group"
+                    " WHERE campaign_id = %s"
                     " ORDER BY created_at", (campaign["id"],)).fetchall()
                 children = []
                 for group in groups:
@@ -360,9 +362,15 @@ def _tree_nodes(brand_id: str) -> tuple[str, list]:
                         "SELECT name FROM ads_ad WHERE group_id = %s ORDER BY created_at",
                         (group["id"],)).fetchall()
                     children.append({"name": group["name"],
+                                     "daily_budget": group["daily_budget"],
                                      "children": [{"name": a["name"], "children": []}
                                                   for a in ads]})
-                nodes.append({"name": campaign["name"], "children": children})
+                # Platform fields the readback compares (objective, dates, budget): a mirrored
+                # node without them reads back "unknown", never "confirmed" (drill 5).
+                nodes.append({"name": campaign["name"], "children": children,
+                              "objective": campaign["objective"],
+                              "start_date": campaign["start_date"],
+                              "end_date": campaign["end_date"]})
             return org_id, nodes
         from app.schedule import state as schedule_state
         from app.schedule import tree as tree_mod
@@ -424,16 +432,27 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
     campaigns, adsets, ads = [], [], []
     for node in nodes:
         cid = new_id("120")
+        start = node.get("start_date")
+        stop = node.get("end_date")
         campaigns.append({"id": cid, "account_id": account_id, "brand_id": brand_id,
-                          "name": node["name"], "effective_status": "PAUSED"})
+                          "name": node["name"], "effective_status": "PAUSED",
+                          "objective": SALES_OBJECTIVE if node.get("objective") == "購買"
+                          else "OUTCOME_ENGAGEMENT",
+                          **({"start_time": f"{start}T00:00:00+0800"} if start else {}),
+                          **({"stop_time": f"{stop}T23:59:59+0800"} if stop else {})})
         for child in node["children"]:
             sid = new_id("230")
             adsets.append({"id": sid, "campaign_id": cid, "brand_id": brand_id,
-                           "name": child["name"], "effective_status": "PAUSED"})
+                           "account_id": account_id, "name": child["name"],
+                           "effective_status": "PAUSED",
+                           **({"daily_budget": str(int(float(child["daily_budget"])))}
+                              if child.get("daily_budget") is not None else {}),
+                           **({"start_time": f"{start}T00:00:00+0800"} if start else {}),
+                           **({"end_time": f"{stop}T23:59:59+0800"} if stop else {})})
             for grandchild in child["children"]:
                 ads.append({"id": new_id("340"), "adset_id": sid, "campaign_id": cid,
-                            "brand_id": brand_id, "name": grandchild["name"],
-                            "effective_status": "PAUSED"})
+                            "account_id": account_id, "brand_id": brand_id,
+                            "name": grandchild["name"], "effective_status": "PAUSED"})
 
     # Replace only this brand's entities. Every persona shares one invented account, so a
     # wholesale overwrite would delete the previous persona's platform out from under them.
