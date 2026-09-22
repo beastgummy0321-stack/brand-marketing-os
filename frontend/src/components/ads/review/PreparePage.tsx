@@ -249,22 +249,16 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
               key={o.key}
               icon={o.icon}
               title={o.title}
-              note={disabled ? (copyEditable?.reason ?? o.note) : o.note}
+              note={o.note}
               recommended={o.key === effectiveRecommended}
               picked={o.key === selected}
               disabled={disabled}
+              disabledNote={disabled ? (copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。") : undefined}
               onClick={disabled ? undefined : () => pick(o.key)}
             />
           );
         })}
       </div>
-      {/* `OptionCard` 停用時固定顯示「接上後開放」（`patterns/ReviewPieces.tsx` 沒有自訂停用文案的
-          props），這裡在卡片外再補一行 Contract B 的真正原因，不是重刻 kit 零件。 */}
-      {copyDisabled && (
-        <p className="text-xs text-muted-foreground">
-          只改文案暫時關閉：{copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。"}
-        </p>
-      )}
 
       {selected && (
         <DecisionSheet actions={null}>
