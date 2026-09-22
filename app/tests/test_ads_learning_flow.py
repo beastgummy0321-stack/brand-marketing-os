@@ -211,6 +211,10 @@ class AdsLearningFlowTest(unittest.TestCase):
             self.assertIsNotNone(row["campaign_name"])
             self.assertEqual(row["confidence"], "observed")
             self.assertEqual(row["count"], 1)
+            # F27-I27: same `repository.campaign_objective_family` rule the month summary and
+            # `CampaignChip` elsewhere already use -- this fixture's root entity is platform
+            # "fake" (never "meta"), so the family always falls back to "other", never a guess.
+            self.assertEqual(row["campaign_objective"], "other")
 
 
 if __name__ == "__main__":

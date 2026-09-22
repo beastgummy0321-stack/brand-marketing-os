@@ -5,11 +5,19 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
+import type { CampaignObjectiveFamily } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
 
+// `campaign_objective` (F27-I27): the SAME family `app/ads/repository.py::campaign_objective_family`
+// already serves campaign cards/triage items with (F27-I09, `CampaignObjectiveFamily` from
+// `adsTriageApi.ts`, same reuse precedent as `adsApi.ts::CampaignCard`) — reused here so
+// `CampaignChip` never has to be driven by a second, frontend-side guess off the raw `objective`
+// string. Optional/nullable only for defensiveness against an older cached response shape; the
+// backend always sets it.
 export interface MonthCampaignRow {
   campaign_id: string; name: string; objective: string;
+  campaign_objective?: CampaignObjectiveFamily | null;
   spend: number | null; result_count: number | null; result_label: string;
   cost_per_result: number | null; target: number | null; verdict: MonthVerdict;
 }
@@ -20,7 +28,8 @@ export interface MonthOrders {
 export type SuggestionKind = "refresh" | "cleanup" | "no_target";
 export interface MonthSuggestion {
   key: string; kind: SuggestionKind; campaign_id: string; campaign_name: string;
-  objective: string; title: string; why: string; action_url: string | null;
+  objective: string; campaign_objective?: CampaignObjectiveFamily | null;
+  title: string; why: string; action_url: string | null;
 }
 export interface MonthSummary {
   month: string; currency: string | null; total_spend: number | null;

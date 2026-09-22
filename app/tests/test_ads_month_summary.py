@@ -29,13 +29,13 @@ def _month_start(conn, org):
     return date.fromisoformat(_month(conn, org) + "-01")
 
 
-def _campaign(conn, org, brand, *, name, native_id):
+def _campaign(conn, org, brand, *, name, native_id, objective=None):
     campaign_id = external.create_imported_campaign(conn, org, brand, name=name)["id"]
-    external.upsert_entity(
-        conn, org, brand, campaign_id,
-        {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
-         "native_id": native_id},
-    )
+    root = {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+            "native_id": native_id}
+    if objective is not None:
+        root["objective"] = objective
+    external.upsert_entity(conn, org, brand, campaign_id, root)
     return campaign_id
 
 
@@ -71,7 +71,12 @@ class MonthSummarySpendVerdictTest(unittest.TestCase):
         self.day = _month_start(self.conn, self.org)
 
         # 達標：一則主廣告 + 一則已關閉廣告，兩則都要算進整月合計（Contract G）。
-        self.met = _campaign(self.conn, self.org, self.brand, name="達標活動", native_id="cmet")
+        # F27-I27: 根 entity 的 `objective` 帶 Meta 銷售類值，驗證 `campaign_objective` 走
+        # `repository.campaign_objective_family` 這一條規則，不再是前端自己猜的關鍵字。
+        self.met = _campaign(
+            self.conn, self.org, self.brand, name="達標活動", native_id="cmet",
+            objective="OUTCOME_SALES",
+        )
         ad_met = _ad(self.conn, self.org, self.brand, self.met, "ad_met",
                      campaign_native_id="cmet")
         ad_met_closed = _ad(self.conn, self.org, self.brand, self.met, "ad_met_closed",
@@ -118,11 +123,16 @@ class MonthSummarySpendVerdictTest(unittest.TestCase):
         self.assertEqual(met_row["result_label"], "購買")
         self.assertEqual(met_row["target"], 10)
         self.assertEqual(met_row["verdict"], "met")
+        # F27-I27: `campaign_objective` is the SAME family `repository.campaign_objective_family`
+        # already serves campaign cards/triage items with -- not a second, frontend-side guess.
+        self.assertEqual(met_row["campaign_objective"], "sales")
 
         missed_row = by_id[self.missed]
         self.assertEqual(missed_row["spend"], 200)
         self.assertEqual(missed_row["cost_per_result"], 20)
         self.assertEqual(missed_row["verdict"], "missed")
+        # No objective was ever synced for this campaign's root entity -> "other", never a guess.
+        self.assertEqual(missed_row["campaign_objective"], "other")
 
         unjudged_row = by_id[self.unjudged]
         self.assertEqual(unjudged_row["spend"], 30)
@@ -284,8 +294,11 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
         self.cutoff = coresettings.today_for_org(self.conn, org_id=self.org) - timedelta(days=2)
 
         # --- 活動 A：素材待補（refresh）——3 則活躍廣告，可讀出結果的只剩 1 則。
+        # F27-I27: `objective="OUTCOME_TRAFFIC"` so the suggestion's `campaign_objective` can be
+        # told apart from the other two campaigns below (both left unset -> "other").
         self.refresh_campaign = _campaign(
             self.conn, self.org, self.brand, name="待補素材活動", native_id="cref",
+            objective="OUTCOME_TRAFFIC",
         )
         external.record_sync(
             self.conn, self.org, self.brand, self.refresh_campaign, section="observations",
@@ -365,18 +378,22 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
         needed = max(triage_scale.MIN_ACTIVE_ADS_FOR_REFRESH_GATE - 1, 1)
         self.assertEqual(refresh["title"], f"補 {needed} 則新素材")
         self.assertEqual(refresh["key"], f"refresh:{self.refresh_campaign}")
+        # F27-I27: reused `campaign_objective_family`, not a frontend keyword guess.
+        self.assertEqual(refresh["campaign_objective"], "traffic")
 
         self.assertIn("cleanup", by_kind)
         cleanup = by_kind["cleanup"]
         self.assertEqual(cleanup["campaign_id"], self.cleanup_campaign)
         self.assertEqual(cleanup["title"], "清掉 2 則沒被投放的廣告")
         self.assertEqual(cleanup["key"], f"cleanup:{self.cleanup_campaign}")
+        self.assertEqual(cleanup["campaign_objective"], "other")
 
         self.assertIn("no_target", by_kind)
         no_target = by_kind["no_target"]
         self.assertEqual(no_target["campaign_id"], self.no_target_campaign)
         self.assertEqual(no_target["title"], "替「沒目標活動」設目標")
         self.assertEqual(no_target["key"], f"no_target:{self.no_target_campaign}")
+        self.assertEqual(no_target["campaign_objective"], "other")
 
         # correction 4: cleanup 活動同時具備 refresh 的資格條件，但佇列先讓 cleanup 蓋過。
         self.assertFalse(

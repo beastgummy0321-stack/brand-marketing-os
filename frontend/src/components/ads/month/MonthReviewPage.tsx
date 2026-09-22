@@ -55,18 +55,14 @@ function formatChangePct(pct: number | null): string {
   return `${pct > 0 ? "▲" : "▼"}${rounded}%`;
 }
 
-// 目標的家族分類（Feature Decisions「objective-derived campaign chips」：銷售 購／互動 互／
-// 流量 流／其餘交給 `CampaignChip` 自己退到名稱首字）。`ads_campaign.objective` 對系統建立的
-// Campaign 是 `app/ads/brief.py::_OBJECTIVES`（購買／加購物車／名單／流量／知名度）之一，
-// 對匯入的 Campaign 是使用者自己填的自由文字（`app/ads/repository.py::update_campaign` 對
-// `origin='imported'` 只要求非空字串）——所以這裡用關鍵字歸類，不能假設是一組固定枚舉。
-function objectiveFamily(objective: string): ObjectiveKey {
-  if (objective.includes("購買") || objective.includes("購物車") || objective.includes("轉換") || objective.includes("銷售")) {
-    return "sales";
-  }
-  if (objective.includes("互動")) return "engagement";
-  if (objective.includes("流量")) return "traffic";
-  return "other";
+// F27-I27: one objective-family rule, not two -- every `campaign_objective` field below comes
+// straight from `app/ads/repository.py::campaign_objective_family` (the SAME function
+// `CampaignChip` on campaign cards/triage items already reads through, F27-I09). No more local
+// keyword guessing off the raw `objective` string; this helper only supplies `CampaignChip`'s
+// required, non-null prop when the backend value is `null`/`undefined` (unknown campaign, or an
+// older hand-written test fixture that never set it) -- never a different classification.
+function chipObjective(family?: ObjectiveKey | null): ObjectiveKey {
+  return family ?? "other";
 }
 
 const VERDICT: Record<MonthCampaignRow["verdict"], { label: string; tone: "ok" | "warn" | "neutral" }> = {
@@ -201,7 +197,7 @@ function CampaignRow({ brandId, row }: { brandId: string; row: MonthCampaignRow 
         title={row.name}
         className="flex w-full max-w-[220px] min-w-0 shrink-0 items-center hover:text-primary hover:underline sm:w-52"
       >
-        <CampaignChip objective={objectiveFamily(row.objective)} name={row.name} strong />
+        <CampaignChip objective={chipObjective(row.campaign_objective)} name={row.name} strong />
       </Link>
       <div className="min-w-28 shrink-0 text-right">
         <p className="text-[11.5px] text-muted-foreground">花費</p>
@@ -294,17 +290,10 @@ function MaterialGroups({ items, closedItems, closedTotal }: {
 
 interface CampaignRowTriage { campaign: CampaignCardData; items: TriageItem[]; closed: TriageClosedBlock }
 
-/** `記入品牌學習` 每一列的活動 chip 需要這個活動的目標文字（家族圖示＋原文字尾巴，
- * 例：「日常商品推廣・轉換」）——`GET .../learnings`（Contract D）只回 `campaign_id`／
- * `campaign_name`，沒有 `objective`；素材分組本來就要打 `listCampaigns` 給全品牌的 Campaign
- * （含已關閉的，跟月摘要的月度／imported-only 範圍不同），這裡就地多留一個
- * `campaign_id -> objective` 的查表，不重打一次 API。 */
-interface CampaignInfo { objective: string }
-
 type MaterialState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; rows: CampaignRowTriage[]; campaignById: Record<string, CampaignInfo> };
+  | { status: "ready"; rows: CampaignRowTriage[] };
 
 type LearningsState =
   | { status: "loading" }
@@ -328,18 +317,20 @@ function ClosedThisMonthNote({ closedThisMonth, trackingSince }: { closedThisMon
 /** 一則品牌學習：📒 圖示＋文字＋（活動已知才印）活動 chip＋「N 次同方向」＋信心 chip。跟
  * `CampaignRow` 一樣自己組 flex row，不套 `TodoRow`（原型的 `.todo` 只是列樣式，兩邊都沒有
  * 編號圈）。「N 次同方向」統一用這個文字模板（Feature Decisions 的字面字），不跟原型範例
- * 資料的手寫文案（`"1 次"`、無「同方向」）走。 */
-function LearningRow({ learning, campaignById }: { learning: AdsLearning; campaignById: Record<string, CampaignInfo> }) {
+ * 資料的手寫文案（`"1 次"`、無「同方向」）走。F27-I27：活動 chip 的家族直接讀
+ * `learning.campaign_objective`（`GET .../learnings` 自己就帶，見 `ads_learnings.py`），不再
+ * 另打 `listCampaigns` 查表猜關鍵字；`campaign_objective` 是 `null` 只代表這則學習的活動本身
+ * 已經查不到（已刪除／未知），退回純文字，不硬造一個家族。 */
+function LearningRow({ learning }: { learning: AdsLearning }) {
   const conf = CONFIDENCE[learning.confidence];
-  const info = learning.campaign_id ? campaignById[learning.campaign_id] : undefined;
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-3.5 first:border-t-0">
       <span className="text-lg" aria-hidden="true">📒</span>
       <p className="min-w-0 flex-1 text-sm font-medium">{learning.text}</p>
       {learning.campaign_id && learning.campaign_name && (
-        info ? (
+        learning.campaign_objective ? (
           <span className="w-44 shrink-0">
-            <CampaignChip objective={objectiveFamily(info.objective)} name={learning.campaign_name} suffix={info.objective} />
+            <CampaignChip objective={chipObjective(learning.campaign_objective)} name={learning.campaign_name} />
           </span>
         ) : (
           <span className="w-44 shrink-0 truncate text-xs text-muted-foreground" title={learning.campaign_name}>
@@ -380,7 +371,7 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
 
   return (
     <div className="surface p-5">
-      <CampaignChip objective={objectiveFamily(suggestion.objective)} name={suggestion.campaign_name} suffix={suggestion.objective} />
+      <CampaignChip objective={chipObjective(suggestion.campaign_objective)} name={suggestion.campaign_name} suffix={suggestion.objective} />
       <p className="mt-2.5 mb-1 text-[15px] font-semibold">{SUGGESTION_ICON[suggestion.kind]} {suggestion.title}</p>
       <p className="mb-3.5 text-[13px] text-muted-foreground">{suggestion.why}</p>
       {error && <p role="alert" className="mb-2 text-xs text-warning">{error}</p>}
@@ -443,7 +434,8 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
   }, [brandId, selectedMonth, monthReload]);
 
   // 素材分組（F26 規則，跟月份無關——永遠讀「現在」投放中／已關的廣告）：一次讀全品牌的
-  // Campaign，順便留一份 `campaign_id -> objective` 查表給「記入品牌學習」的活動 chip 用。
+  // Campaign，再逐一打 triage（F27-I27 起不再順便留查表——「記入品牌學習」的活動 chip 家族
+  // 直接讀 `learning.campaign_objective`，見 `LearningRow`）。
   const [materialState, setMaterialState] = useState<MaterialState>({ status: "loading" });
   const [materialReload, setMaterialReload] = useState(0);
 
@@ -452,18 +444,15 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
     setMaterialState({ status: "loading" });
     listCampaigns(brandId)
       .then((campaigns) => {
-        const campaignById = Object.fromEntries(
-          campaigns.map((c) => [c.id, { objective: c.objective }]),
-        ) as Record<string, CampaignInfo>;
         const open = campaigns.filter((c) => c.status !== "closed");
         return Promise.all(
           open.map((campaign) =>
             getTriage(brandId, campaign.id).then((triage) => ({ campaign, items: triage.items, closed: triage.closed })),
           ),
-        ).then((rows) => ({ rows, campaignById }));
+        );
       })
-      .then(({ rows, campaignById }) => {
-        if (!cancelled) setMaterialState({ status: "ready", rows, campaignById });
+      .then((rows) => {
+        if (!cancelled) setMaterialState({ status: "ready", rows });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -502,7 +491,6 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
   const allItems = materialState.status === "ready" ? materialState.rows.flatMap((r) => r.items) : [];
   const allClosedItems = materialState.status === "ready" ? materialState.rows.flatMap((r) => r.closed.items) : [];
   const closedTotal = materialState.status === "ready" ? materialState.rows.reduce((sum, r) => sum + r.closed.total, 0) : 0;
-  const campaignById = materialState.status === "ready" ? materialState.campaignById : {};
 
   return (
     <div className="flex max-w-[1180px] flex-col gap-5">
@@ -606,7 +594,7 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
             ) : (
               <div className="surface px-5">
                 {learningsState.learnings.map((learning) => (
-                  <LearningRow key={learning.id} learning={learning} campaignById={campaignById} />
+                  <LearningRow key={learning.id} learning={learning} />
                 ))}
               </div>
             )
