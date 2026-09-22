@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import type { EChartsOption } from "echarts";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -180,6 +181,10 @@ export function PerformanceTab({
   syncing?: boolean;
 }) {
   const { scope: draftScope } = useWorkspace();
+  const [searchParams] = useSearchParams();
+  // F27-I22：`?ad=<entity_id>` 深連結（review／已關閉列都會帶這個參數）——捲到並高亮
+  // 「廣告花費占比」那一列；比對不到就印一行「這則廣告沒有成效資料」，不是靜默失敗。
+  const highlightAd = searchParams.get("ad");
   const imported = c.origin === "imported";
   const scopes = useMemo(() => nativeMetricScopes(c.external_view), [c.external_view]);
   const [scopeKey, setScopeKey] = useState<string>();
@@ -271,7 +276,8 @@ export function PerformanceTab({
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
           onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null}
           scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${c.external_view?.window.start ?? "未知"} ～ ${c.external_view?.window.end ?? "未知"}`}
-          scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null} />
+          scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
+          highlightAd={highlightAd} />
       ) : state.status === "loading" ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
@@ -280,7 +286,8 @@ export function PerformanceTab({
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
-          data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()} />
+          data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()}
+          highlightAd={highlightAd} />
       )}
 
       {(imported || c.status === "live" || c.status === "ended") && (
@@ -344,6 +351,7 @@ function PerformanceReady({
   scopeControl,
   scopeCaption,
   refreshDisabled = false,
+  highlightAd = null,
 }: {
   simulated: boolean;
   data: PerformanceView;
@@ -355,6 +363,7 @@ function PerformanceReady({
   scopeControl?: React.ReactNode;
   scopeCaption?: string;
   refreshDisabled?: boolean;
+  highlightAd?: string | null;
 }) {
   const t = data.totals;
   const money = (value: number | null) => native ? nativeMoney(value, currency) : formatCurrency(value);
@@ -364,6 +373,17 @@ function PerformanceReady({
   const roas = (value: number | null) => native && value === null ? "未知" : formatMetaRoas(value);
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
+  // F27-I22：`廣告花費占比` 那張表才有「這則廣告」的列——比對不到就是這次資料範圍裡沒有它
+  // （不同資料範圍／幣別／歸因，或這則廣告根本沒有花費資料），不是程式錯誤，印一行誠實訊息。
+  const matchedAd = highlightAd !== null ? data.ads.find((a) => a.ad_id === highlightAd) ?? null : null;
+  const adNotFound = highlightAd !== null && matchedAd === null;
+  const highlightRowRef = useRef<HTMLTableRowElement | null>(null);
+  const scrolledToRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!matchedAd || scrolledToRef.current === matchedAd.ad_id) return;
+    highlightRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrolledToRef.current = matchedAd.ad_id;
+  }, [matchedAd]);
   const outcome = t.spend === null ? "尚無完整花費資料，暫時無法判讀成效。" : t.spend <= 0
     ? (native ? "已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。" : "尚無花費資料，暫時無法判讀成效。")
     : t.purchases === null || t.revenue === null
@@ -399,7 +419,9 @@ function PerformanceReady({
         <Kpi label="ROAS" value={roas(native ? t.roas : t.roas_conservative)} caption={native ? "同一資料範圍營收 ÷ 花費" : `保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
       </div>
 
-      <Disclosure label="查看每日資料、次要指標與公式">
+      {adNotFound && <p className="text-sm text-muted-foreground">這則廣告沒有成效資料</p>}
+
+      <Disclosure label="查看每日資料、次要指標與公式" defaultOpen={matchedAd !== null}>
         <div className="flex flex-col gap-4">
           {scopeControl}
           {native && <p className="text-xs text-muted-foreground">目前指標只計算所選層級、幣別與歸因；不同層級不相加。缺少資料顯示未知，不推算缺漏天數。</p>}
@@ -513,7 +535,15 @@ function PerformanceReady({
                 </tr>
               ) : (
                 data.ads.map((a) => (
-                  <tr key={a.ad_id} className="border-t border-border">
+                  <tr
+                    key={a.ad_id}
+                    ref={a.ad_id === highlightAd ? highlightRowRef : undefined}
+                    data-testid={`ad-perf-row-${a.ad_id}`}
+                    className={cn(
+                      "border-t border-border",
+                      a.ad_id === highlightAd && "bg-accent/60 ring-1 ring-inset ring-primary",
+                    )}
+                  >
                     <td className="px-3 py-2">{a.name}</td>
                     <td className="px-3 py-2">{money(a.spend)}</td>
                     <td className="px-3 py-2">{percent(a.spend_share)}</td>
