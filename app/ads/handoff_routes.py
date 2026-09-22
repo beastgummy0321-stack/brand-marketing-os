@@ -43,6 +43,7 @@ class NewAdRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
     review_id: str | None = None
     recommendation_id: str | None = None
+    replaces_entity_id: str | None = None
 
 
 class ReconsiderRequest(BaseModel):
