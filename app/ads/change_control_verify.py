@@ -259,4 +259,11 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
     except Exception:
         conn.rollback()
         raise
+    if state == "confirmed" and action["kind"] == "pause" and action.get("angle"):
+        # Contract D + correction 8: only after this function's own transaction has committed
+        # `confirmed` -- `record_for_item` is idempotent per change ITEM id, so an automatic
+        # runtime re-check of an already-confirmed item (`app/ads/runtime.py`) never duplicates.
+        from app.ads import ads_learnings
+
+        ads_learnings.record_for_item(conn, org, brand, campaign, set_id, action)
     return data.get(conn, org, brand, campaign, set_id)

@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.ads import ads_learnings
 from app.ads import asset_binding_repository as bindings
 from app.ads import repository as campaigns
 from app.core import db, settings
@@ -343,6 +344,14 @@ def get(conn, org, brand, campaign_id, set_id):
             # derived from it (`content_hash`, `premise_hash`) are computed before this point and
             # never touched here.
             "platform_url": adapters.platform_url(item["target"]),
+            # Contract D: only a `pause` item can ever carry an `angle` (`build_item`'s
+            # `angle()` refuses one on any other kind), so every other item's learning is
+            # trivially "not recorded" without a lookup.
+            "learning": (
+                ads_learnings.view_for_item(conn, brand, item["id"])
+                if item["kind"] == "pause" and item.get("angle")
+                else {"recorded": False, "confidence": None, "count": 0}
+            ),
         }
         increases = item["kind"] in {"launch", "new_ad"} or (
             item["kind"] == "budget"
