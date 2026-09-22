@@ -1148,12 +1148,18 @@ route. Neither field is stored — both are computed at read time on every call.
   `app/tests/test_ads_triage_queue.py::QueueReviewProposalTest`（無回合／queued 無清單／ready 取第一個 adjust
   建議／ready 無 adjust 建議／completed 帶文案清單／completed 無清單／deferred／unjudgeable／failed／窗外不匹配／
   `stop_loss` 列不受影響）。
-- 前端型別未跟進：`frontend/src/lib/adsTriageApi.ts::QueueProposal` 這批仍是單一介面（只有 `stop_loss` 形狀），
-  未改成 `kind` 判別聯集——設計已經定案（`status.ts::proposalAction` 先用 `proposal.kind` 窄化再各自處理，解掉
-  詳盡性衝突），但改動落在 `home/status.ts`／`home/DecisionQueue.test.tsx`／`AdsHomePage.test.tsx`／
-  `detail/CampaignDetailPage.test.tsx` 四個檔，F23-I01 這次的 lease（`.harness/runtime/leases/F23-I01.json`）跟
-  `.work/doing/F23-I01.md` 的 frontmatter 都還沒把它們移出 `do_not_touch`（Edit 工具直接擋下，訊息 "is in
-  do_not_touch"），需要實際跑過 rescope 才能繼續。
+- 前端型別跟進：`frontend/src/lib/adsTriageApi.ts::QueueProposal` 改成 `kind` 判別聯集——`QueuePauseProposal`
+  （`kind:"pause"`，欄位跟改動前一樣）／`QueueReviewProposal`（`kind:"review"`，欄位同上一條）。
+  `home/status.ts::proposalAction` 先用 `proposal.kind` 窄化：`review` 分支照 feature Decisions "Queue row state
+  for `worse` rows" 給 label／連結（none→看證據；queued/running→整理證據中；waiting→資料不足；failed/unknown→
+  證據沒整理成；ready→等你決定；completed 帶文案清單→組一個 `QueuePauseProposal` 重用停損那支 switch 算出
+  label／連結，指到 `changes/:change_set_id/<step>`；completed 無清單→選方向／`reviews/:id/prepare`；deferred→
+  「M/D 重看」done；unjudgeable→無法判定 done）；`pause` 分支欄位型別不變，原本的 switch 邏輯／輸出沒有變動。
+  沒有提案時（`proposal===null`）靠新增的第 5 個選填參數 `kind`（預設 `"pause"`）分流，既有 4-arg 呼叫點
+  （`home/QueueRow.tsx`／`detail/CampaignDetailPage.tsx`／`flow/VerifyPage.tsx`，這批仍只對 `stop_loss` 呼叫）
+  不用改。`isQueueItemDone` 現在也覆蓋 `worse` 列。`home/QueueRow.tsx` 這批還沒把 `worse` 列接上這支 helper
+  （沿用既有的 `action_url`／靜態「看證據」）——邏輯已備妥、驗證見
+  `home/DecisionQueue.test.tsx`（review 分支的 `proposalAction`／`isQueueItemDone` 直接單元測試，未透過畫面）。
 
 ### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
 

@@ -51,26 +51,38 @@ export interface CampaignTriage { window_days: number; items: TriageItem[] }
  * `app/ads/triage.py::_row_proposal` (feature Decisions "Queue row state") — `null` when there
  * is none, or the matching set doesn't currently "count" (deferred past `revisit_at`, rejected
  * outside the row's current window, or confirmed while the entity has left `native_status`
- * paused). Always `null` on a `worse` row this batch.
- *
- * F23-I01 status: the backend (`app/ads/triage.py::_row_review_proposal`) already gives `worse`
- * rows their own `{kind:"review", ...}` proposal — NOT yet reflected here. A coordinator message
- * mid-issue said this file's `do_not_touch` had been widened to include
- * `frontend/src/components/ads/home/status.ts` (needed to consume a `kind`-discriminated
- * `QueueProposal` — see that message for the full design, already worked out: `status.ts`
- * narrows on `proposal.kind` first via an early-return, which resolves the exhaustive-switch
- * conflict the first attempt hit). The Edit tool rejected the `status.ts` edit with "is in
- * do_not_touch" — the enforced lease (`.harness/runtime/leases/F23-I01.json`) and
- * `.work/doing/F23-I01.md`'s own frontmatter both still carry the ORIGINAL scope (verified by
- * re-reading both files and by a fresh `attach` after the message). The rescope was announced but
- * never actually landed (`.work/doing/F23-I01.md` frontmatter unedited, no `rescope` run) — so
- * this file is left as the single flat interface again, pending that rescope actually happening. */
-export interface QueueProposal {
-  change_set_id: string; campaign_id: string; kind: string;
+ * paused). `kind` is always `"pause"` (`_matching_pause_set` only ever matches a `pause` item). */
+export interface QueuePauseProposal {
+  kind: "pause";
+  change_set_id: string; campaign_id: string;
   status: "draft" | "approved" | "rejected" | "deferred";
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
   reason: string | null; revisit_at: string | null; multi: boolean;
 }
+
+/** F23-I01: the review round (if any) that currently answers a `worse` row, per
+ * `app/ads/triage.py::_row_review_proposal` (feature Decisions "Queue row state") — `null` when
+ * there is no round whose `window_end` falls inside the row's current triage window. `status` is
+ * the round's own workflow status; the matching copy change set's own status is the separate
+ * `change_set_status` field (never `status` — a `worse` row's round and its optional copy change
+ * set carry two different, independently-evolving statuses). `change_set_id`,
+ * `change_set_status`, and `verification_state` are all `null` together when no copy change set
+ * matches this round yet. */
+export interface QueueReviewProposal {
+  kind: "review";
+  review_id: string;
+  status: "waiting" | "queued" | "running" | "ready" | "completed" | "deferred" | "unjudgeable"
+    | "failed" | "unknown";
+  decision: "completed" | "deferred" | "unjudgeable" | null;
+  reason: string | null; revisit_at: string | null;
+  recommendation_id: string | null;
+  change_set_id: string | null;
+  change_set_status: "draft" | "approved" | "rejected" | "deferred" | null;
+  verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale" | null;
+  multi: boolean;
+}
+
+export type QueueProposal = QueuePauseProposal | QueueReviewProposal;
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
