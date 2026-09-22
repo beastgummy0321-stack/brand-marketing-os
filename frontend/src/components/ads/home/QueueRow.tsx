@@ -49,7 +49,7 @@ function rowTitle(item: QueueItem): string {
 
 /** F26-I02: the 「！資料不足」 row's own kind chip — the prototype hand-writes this one row
  * (not through its `qrow()` helper) with `class="kind stop"` but an inline colour override that's
- * pixel-identical to `.kind.worse` (`background:#faefdc;color:var(--warning)`, prototype lines
+ * pixel-identical to `.kind.worse` (the same warning background/foreground pair, prototype lines
  * 91/177) and a single literal label "！資料不足" (no separate mark glyph, unlike every other row,
  * which prints `${mark[0]} ${kind}` — e.g. "■ 停損"). The shared `KindMark` (`patterns/**`,
  * do_not_touch) only exposes the four variants it always prepends its own aria-hidden mark glyph
