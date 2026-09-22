@@ -9,7 +9,10 @@ import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
-import { getQueue, getTriage, type QueueItem, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
+import {
+  getQueue, getTriage,
+  type QueueItem, type TriageClass, type TriageClosedBlock, type TriageClosedItem, type TriageItem,
+} from "@/lib/adsTriageApi";
 import { Chip, ReservedSlotCard } from "../patterns";
 import { proposalAction } from "../home/status";
 
@@ -221,10 +224,99 @@ function Group({
   );
 }
 
+// F26-I02: the closed group's own status chip (prototype `row()`'s `a.status === "PAUSED" ? "已暫停"
+// : "已封存"`, feature Decisions "an 「已暫停／已封存」 chip") -- `ADSET_PAUSED`/`CAMPAIGN_PAUSED`
+// are pause-family statuses at a different level, folded into the same label; `DELETED` and an
+// unrecognised/`null` status fall back to a still-honest, still-generic "已關閉" rather than a raw
+// enum value or a fabricated third label the decision never named.
+const CLOSED_STATUS_LABEL: Record<string, string> = {
+  PAUSED: "已暫停", ADSET_PAUSED: "已暫停", CAMPAIGN_PAUSED: "已暫停", ARCHIVED: "已封存",
+};
+function closedStatusLabel(status: string | null): string {
+  return (status && CLOSED_STATUS_LABEL[status]) || "已關閉";
+}
+
+/** 一列已關閉的廣告（v7 `row()`，prototype ≈ 207–210 的 `status!=="ACTIVE"` 分支）：跟 `AdRow`
+ * 同一顆縮圖／同一組花費・每次成果成本欄位，但沒有「去處理」（已關閉的廣告從沒進過佇列，
+ * F26-I01）——换成狀態 chip ＋「看紀錄」連去既有工作區的成效分頁，帶 `?ad=` 供未來捲動用
+ * （Feature Decisions "Gaps kept honest"：分頁目前不會真的捲過去，先把參數留著）。 */
+function ClosedAdRow({ item, workspaceHref }: { item: TriageClosedItem; workspaceHref: string }) {
+  const name = item.name ?? "（未命名廣告）";
+  const costLabel = `每次${item.result_label}成本`;
+  return (
+    <div
+      data-testid={`closed-ad-row-${item.entity_id}`}
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border px-4 py-3 first:border-t-0"
+    >
+      <AdThumb url={item.thumbnail_url} />
+      <p className="min-w-40 flex-1 truncate text-sm font-medium" title={name}>
+        {name}
+      </p>
+      <div className="w-24 shrink-0 text-right">
+        <p className="text-[11.5px] text-muted-foreground">花費</p>
+        <p className="numeric text-sm font-semibold">{formatAmount(item.spend)}</p>
+      </div>
+      <div className="w-28 shrink-0 text-right">
+        <p className="truncate text-[11.5px] text-muted-foreground" title={costLabel}>{costLabel}</p>
+        <p className="numeric text-sm font-semibold">{formatAmount(item.cost_per_result)}</p>
+      </div>
+      <Chip>{closedStatusLabel(item.native_status)}</Chip>
+      <div className="w-24 shrink-0 text-right">
+        <Button asChild size="sm" variant="outline">
+          <Link to={`${workspaceHref}?tab=performance&ad=${item.entity_id}`}>看紀錄</Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 已關閉分組（v7 `campPage()` 末尾的灰色 `<details class="grp">`，prototype ≈ 216–218）：跟
+ * `Group` 同一種殼，但色塊固定灰（`bg-border`，跟既有 `insufficient`／`no_target` 同一個灰階）、
+ * 標籤是固定字串「已關閉」（不是後端 label）、右側多一句「暫停 X・已封存 Y・不列入判斷」。
+ * 預設收合（issue Done #1：「the closed group is a `<details>`; shoot it closed, that is its
+ * default」），跟其餘分類的展開／收合狀態分開管理，不進 `openGroups`（那個 Set 只收
+ * `TriageClass`，已關閉不是判斷分類）。 */
+function ClosedGroup({
+  closed, workspaceHref, open, onToggle,
+}: { closed: TriageClosedBlock; workspaceHref: string; open: boolean; onToggle: (open: boolean) => void }) {
+  const remaining = closed.total - closed.items.length;
+  return (
+    <details
+      open={open}
+      onToggle={(e) => onToggle(e.currentTarget.open)}
+      className="group surface bg-muted"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <span aria-hidden="true" className="size-2.5 shrink-0 rounded-sm bg-border" />
+        <span className="text-sm font-semibold">已關閉</span>
+        <Badge variant="secondary">{closed.total} 則</Badge>
+        <span className="ml-auto truncate text-xs text-muted-foreground">
+          暫停 {closed.paused}・已封存 {closed.archived}・不列入判斷
+        </span>
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-border">
+        {closed.items.map((item) => (
+          <ClosedAdRow key={item.entity_id} item={item} workspaceHref={workspaceHref} />
+        ))}
+        {closed.truncated && (
+          <p className="px-4 py-2.5 text-xs text-muted-foreground">…其餘 {remaining} 則</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
 type State =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; campaign: CampaignCardData | null; items: TriageItem[]; queue: QueueItem[] };
+  | {
+      status: "ready";
+      campaign: CampaignCardData | null;
+      items: TriageItem[];
+      queue: QueueItem[];
+      closed: TriageClosedBlock;
+    };
 
 /** 活動詳情頁（F20-I02，v7 原型 `campPage()`，prototype ≈ 341–355）：這個活動的廣告按判斷
  * 分類分組，停損／變差預設展開；佇列裡的廣告多一顆「去處理」。名稱／目標／預算沿用
@@ -237,6 +329,9 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   const [state, setState] = useState<State>({ status: "loading" });
   const [reload, setReload] = useState(0);
   const [openGroups, setOpenGroups] = useState<Set<TriageClass>>(() => new Set(DEFAULT_OPEN));
+  // F26-I02: the closed group's own fold state -- default collapsed (issue Done #1), tracked
+  // separately from `openGroups` (a `Set<TriageClass>`; 已關閉 isn't a judgement class).
+  const [closedOpen, setClosedOpen] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
 
@@ -259,6 +354,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
           campaign: campaigns.find((c) => c.id === campaignId) ?? null,
           items: triage.items,
           queue: queue.items,
+          closed: triage.closed,
         });
         setOpenGroups(initialOpenGroups(triage.items));
       })
@@ -339,7 +435,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     );
   }
 
-  const { campaign, items } = state;
+  const { campaign, items, closed } = state;
 
   if (campaign === null) {
     return (
@@ -372,6 +468,12 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold" title={campaign.name}>{campaign.name}</h1>
+          {/* F26-I02 (prototype `detail()` purpose line, feature Decisions "I02"): `items` is
+             already active-only (`triage.classify()`, F26-I01) — printed unconditionally like the
+             prototype, including when it's 0 (no active ads is still an honest fact to state). */}
+          <p className="mt-1 text-[15px] text-muted-foreground">
+            只判讀投放中的 {items.length} 則；已關閉的廣告保留紀錄，不列入判斷
+          </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {/* review fix：跟 `home/CampaignCard.tsx:215-221` 同一顆欄位同一種處理——匯入
                活動的 objective 是一整句話，只有它自己截斷，「・N 則」永遠印得出來，
@@ -407,13 +509,16 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
         </div>
       </div>
 
-      {items.length === 0 ? (
+      {/* F26-I02: the truly-empty state now also needs `closed.total === 0` -- a campaign whose
+         every ad got closed (`items.length === 0` but `closed.total > 0`, exactly the shape F26
+         fixes) still has something to show: the closed group below, not this "no ad data" message. */}
+      {items.length === 0 && closed.total === 0 ? (
         <div className="surface p-5">
           <p className="text-sm text-muted-foreground">沒有廣告資料，這個活動還沒有可以判斷的內容。</p>
         </div>
       ) : (
         <>
-          {!hasTarget && (
+          {items.length > 0 && !hasTarget && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/10 p-4">
               <span aria-hidden="true" className="text-lg">🎯</span>
               <p className="flex-1 text-sm font-medium text-warning">沒有目標，這個活動的廣告都還不會被判斷</p>
@@ -423,40 +528,55 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
             </div>
           )}
 
-          {/* 容量卡（Feature Decisions）：`「同時在投 N 則／提議暫停」` 這個能力還沒接上——
-             一張佔位卡，不是假出一個「撐得起幾則」的數字。 */}
-          <ReservedSlotCard
-            title={`同時在投 ${items.length} 則`}
-            description="預算能撐得起幾則廣告、要不要提議暫停沒在投的廣告，這個判斷還沒接上。"
-            tag="接上後開放"
-          />
-
-          <div className="flex flex-col gap-2.5">
-            {GROUP_ORDER.filter((cls) => (groupedItems.get(cls)?.length ?? 0) > 0).map((cls) => (
-              <Group
-                key={cls}
-                brandId={brandId}
-                cls={cls}
-                items={groupedItems.get(cls)!}
-                queueByEntity={queueByEntity}
-                reviewHref={`${workspaceHref}?tab=performance`}
-                open={openGroups.has(cls)}
-                onToggle={(isOpen) =>
-                  setOpenGroups((prev) => {
-                    const next = new Set(prev);
-                    if (isOpen) next.add(cls);
-                    else next.delete(cls);
-                    return next;
-                  })
-                }
-                highlightId={highlightId}
-                registerRow={(id, el) => {
-                  if (el) rowRefs.current.set(id, el);
-                  else rowRefs.current.delete(id);
-                }}
+          {items.length > 0 && (
+            <>
+              {/* 容量卡（Feature Decisions）：`「同時在投 N 則／提議暫停」` 這個能力還沒接上——
+                 一張佔位卡，不是假出一個「撐得起幾則」的數字。 */}
+              <ReservedSlotCard
+                title={`同時在投 ${items.length} 則`}
+                description="預算能撐得起幾則廣告、要不要提議暫停沒在投的廣告，這個判斷還沒接上。"
+                tag="接上後開放"
               />
-            ))}
-          </div>
+
+              <div className="flex flex-col gap-2.5">
+                {GROUP_ORDER.filter((cls) => (groupedItems.get(cls)?.length ?? 0) > 0).map((cls) => (
+                  <Group
+                    key={cls}
+                    brandId={brandId}
+                    cls={cls}
+                    items={groupedItems.get(cls)!}
+                    queueByEntity={queueByEntity}
+                    reviewHref={`${workspaceHref}?tab=performance`}
+                    open={openGroups.has(cls)}
+                    onToggle={(isOpen) =>
+                      setOpenGroups((prev) => {
+                        const next = new Set(prev);
+                        if (isOpen) next.add(cls);
+                        else next.delete(cls);
+                        return next;
+                      })
+                    }
+                    highlightId={highlightId}
+                    registerRow={(id, el) => {
+                      if (el) rowRefs.current.set(id, el);
+                      else rowRefs.current.delete(id);
+                    }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* F26-I02: the closed group is a sibling of the active groups, not nested inside
+             `items.length > 0` -- a campaign that's entirely closed still shows it. */}
+          {closed.total > 0 && (
+            <ClosedGroup
+              closed={closed}
+              workspaceHref={workspaceHref}
+              open={closedOpen}
+              onToggle={setClosedOpen}
+            />
+          )}
         </>
       )}
     </div>
