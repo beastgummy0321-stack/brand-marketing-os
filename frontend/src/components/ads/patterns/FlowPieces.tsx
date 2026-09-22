@@ -52,6 +52,7 @@ const KIND = {
   stop: { mark: "■", cls: "bg-danger/10 text-danger" },
   worse: { mark: "▼", cls: "bg-warning/10 text-warning" },
   up: { mark: "▲", cls: "bg-success/10 text-success" },
+  fresh: { mark: "＋", cls: "bg-secondary text-secondary-foreground" },
 } as const;
 /** `.kind.stop/.worse/.up`. */
 export function KindMark({ kind, children }: { kind: keyof typeof KIND; children: ReactNode }) {
