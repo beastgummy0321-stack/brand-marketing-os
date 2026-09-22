@@ -150,7 +150,7 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText(/停損線 0/)).toBeNull();
   });
 
-  it("量尺畫不出來（目標未知）不影響按鈕：action_url 還在，「看證據」就還在（lead review fix 1）", () => {
+  it("量尺畫不出來（目標未知）不影響按鈕：proposal 沒有回合時「看證據」就還在（lead review fix 1）", () => {
     renderQueue(ready({
       items: [queueItem("q1", {
         class: "worse", label: "變差",
@@ -267,10 +267,10 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
   });
 
   // F23-I01：`worse` 列的按鈕邏輯（`status.ts::proposalAction`／`isQueueItemDone` 的 review 分支，
-  // feature Decisions "Queue row state for `worse` rows"）——`home/QueueRow.tsx` 這批還沒把
-  // `worse` 列接上這支 helper（維持既有的 `action_url`／「看證據」靜態列，見上面「只有第一列是
-  // 主要按鈕樣式」那則測試），所以這裡直接呼叫 `proposalAction`／`isQueueItemDone`，不透過
-  // `DecisionQueue` 畫面——邏輯已經備妥，等實際接線的票直接複用。
+  // feature Decisions "Queue row state for `worse` rows"）——純函式層級的完整狀態機斷言，直接
+  // 呼叫 `proposalAction`／`isQueueItemDone`，不透過 `DecisionQueue` 畫面。F23-I05 把
+  // `home/QueueRow.tsx` 接上這支 helper 後，下面「F23-I05」那個 describe 補畫面層級的斷言
+  // （none／ready／completed／deferred），這裡繼續留著當狀態機的完整覆蓋，不重複。
   describe("F23-I01：worse 列的 review 分支（proposalAction／isQueueItemDone）", () => {
     const call = (p: QueueReviewProposal | null) =>
       proposalAction("brd_1", "cmp_1", "ad_1", p, "review");
@@ -374,6 +374,57 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     it("isQueueItemDone：worse 列沒有提案時未完成", () => {
       const item = queueItem("q1", { class: "worse" }, null);
       expect(isQueueItemDone(item)).toBe(false);
+    });
+  });
+
+  // F23-I05：`home/QueueRow.tsx` 現在把 `worse` 列接上 `proposalAction(..., "review")`（不再看
+  // `item.action_url`）——上面 F23-I01 已經覆蓋狀態機本身，這裡只確認畫面真的接上：連結文字／
+  // href／按鈕樣式（primary/ghost 跟停損列同一條規則：`action.done ? "ghost" : primary ? "default" : "outline"`）。
+  describe("F23-I05：worse 列在畫面上接上 review 分支", () => {
+    it("none（沒有回合）：「看證據」導向 review/:entityId，非 ghost", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", { class: "worse", label: "變差", entity_id: "ad_1", campaign_id: "cmp_1" }, null)],
+      }));
+
+      const link = screen.getByRole("link", { name: "看證據" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_1");
+      expect(link.getAttribute("data-variant")).not.toBe("ghost");
+    });
+
+    it("ready：「等你決定」導向 reviews/:id", () => {
+      renderQueue(ready({
+        items: [queueItem("q1", { class: "worse", label: "變差" }, reviewProposal({ status: "ready" }))],
+      }));
+
+      const link = screen.getByRole("link", { name: "等你決定" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1");
+      expect(link.getAttribute("data-variant")).not.toBe("ghost");
+    });
+
+    it("completed 無文案清單：「選方向」導向 reviews/:id/prepare", () => {
+      renderQueue(ready({
+        items: [queueItem(
+          "q1", { class: "worse", label: "變差" },
+          reviewProposal({ status: "completed", decision: "completed" }),
+        )],
+      }));
+
+      const link = screen.getByRole("link", { name: "選方向" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/prepare");
+    });
+
+    it("deferred：標籤是 revisit_at 換算的「M/D 重看」，ghost 按鈕（已完成）", () => {
+      renderQueue(ready({
+        items: [queueItem(
+          "q1", { class: "worse", label: "變差" },
+          reviewProposal({ status: "deferred", decision: "deferred", revisit_at: "2026-10-03T02:00:00Z" }),
+        )],
+      }));
+
+      const d = new Date("2026-10-03T02:00:00Z");
+      const link = screen.getByRole("link", { name: `${d.getMonth() + 1}/${d.getDate()} 重看` });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1");
+      expect(link.getAttribute("data-variant")).toBe("ghost");
     });
   });
 
