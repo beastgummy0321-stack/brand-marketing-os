@@ -139,3 +139,17 @@ describe("review pieces（F23）", () => {
     expect(screen.getByText("接上後開放")).toBeTruthy();
   });
 });
+
+describe("loop pieces（F27）", () => {
+  it("CampaignChip 依目標出字；ThumbTiles 超過 max 摺成＋N 則；RecoverSteps 標示進行中", async () => {
+    const { CampaignChip, ThumbTiles, RecoverSteps } = await import("./LoopPieces");
+    render(<CampaignChip objective="sales" name="日常商品推廣" suffix="轉換" />);
+    expect(screen.getByText("購")).toBeTruthy();
+    render(<CampaignChip objective="other" name="中秋限定活動" />);
+    expect(screen.getByText("中")).toBeTruthy();
+    render(<ThumbTiles items={[null, null, null]} max={2} />);
+    expect(screen.getByText("＋1 則")).toBeTruthy();
+    render(<RecoverSteps steps={[{ label: "重新連線", state: "done" }, { label: "補資料", state: "active" }]} />);
+    expect(screen.getByText("補資料")).toBeTruthy();
+  });
+});
