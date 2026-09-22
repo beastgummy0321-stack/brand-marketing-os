@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueuePayload, QueueProposal, TriageItem } from "@/lib/adsTriageApi";
+import type { QueuePayload, QueueProposal, QueueReviewProposal, TriageItem } from "@/lib/adsTriageApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getChangeControlSummary, getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { AdsHomePage } from "./AdsHomePage";
@@ -131,6 +131,26 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
   });
 
+  it("header 件數：已暫緩的變差列不算開著的——`isQueueItemDone` 的 review 分支（F23-I05），一件已暫緩、一件還開著只印「1 件」", async () => {
+    const deferredProposal: QueueReviewProposal = {
+      kind: "review", review_id: "arv_1", status: "deferred", decision: "deferred",
+      reason: null, revisit_at: "2026-10-03T02:00:00Z", recommendation_id: null,
+      change_set_id: null, change_set_status: null, verification_state: null, multi: false,
+    };
+    vi.mocked(refreshQueue).mockResolvedValue(
+      queue({
+        items: [
+          queueItem("q1", { class: "worse", label: "變差", name: "已暫緩的廣告" }, deferredProposal),
+          queueItem("q2", { class: "worse", label: "變差", name: "還沒處理的廣告" }),
+        ],
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("1 件・由上往下處理就好")).toBeTruthy();
+  });
+
   it("空佇列：header 印「都處理完了」（誠實空狀態句由 DecisionQueue 的佔位列自己扛，這支只管頁首）", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(queue());
 
@@ -150,7 +170,7 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     expect(screen.getByRole("link", { name: "去處理" })).toBeTruthy();
   });
 
-  it("變差列沒有 action_url：不給連結（不落回 /brands//ads）——停損列的按鈕不看 action_url，見上一則測試", async () => {
+  it("變差列不看 action_url——F23-I05 接上 proposalAction 後，就算 action_url 是 null 也照樣給「看證據」", async () => {
     vi.mocked(refreshQueue).mockResolvedValue(
       queue({ items: [{ ...queueItem("q1", { class: "worse", label: "變差" }), action_url: null }] }),
     );
@@ -158,7 +178,8 @@ describe("AdsHomePage（F19-I02，v7 首頁版面）", () => {
     renderPage();
 
     expect(await screen.findByText("晨光隨行杯・日常出發")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "看證據" })).toBeNull();
+    const link = screen.getByRole("link", { name: "看證據" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_1");
   });
 
   it("每月回顧是非互動的灰階佔位，不是按鈕", async () => {

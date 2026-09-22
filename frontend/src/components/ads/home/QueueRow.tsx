@@ -111,20 +111,20 @@ function Viz({ item }: { item: QueueItem }) {
 /** 佇列一列（F19-I03，v7 `home()` 的 `row`，prototype ≈ 195–203）：圖示格・分類 chip・活動
  * chip・廣告名稱・量尺・一個按鈕。v7 的活動 chip 帶彩色字母圖示（`CAMP[c].cls`/`.ic`）——這裡
  * 沒有這份資料，只印中性 chip＋活動名稱（F19-I07，見 feature Decisions：不臆造圖示）。
- * 只有第一列是主要按鈕樣式（`primary`），其餘都是次要——呼叫端負責傳對 index。「看證據」只
- * 看 `action_url` 有沒有，跟量尺畫不畫得出來無關——量尺不知道，不代表證據頁面不存在。
+ * 只有第一列是主要按鈕樣式（`primary`），其餘都是次要——呼叫端負責傳對 index。
  *
  * F22-I05：停損列不再印靜態的「暫停提議・接上後開放」佔位——`item.proposal` 已經接上真的
  * 三步流程，按鈕本身（`proposalAction`）就是誠實的目前進度，旁邊再放一顆「接上後開放」反而
- * 是舊話。變差列沒有這條提案流程，維持原本的 `action_url`／「看證據」。 */
+ * 是舊話。F23-I05：變差列現在也接上同一支 `proposalAction`（`kind: "review"`，見
+ * `home/status.ts`「Queue row state for `worse` rows」）——不再看 `item.action_url`。 */
 export function QueueRow({ item, primary }: { item: QueueItem; primary: boolean }) {
   const t = item.triage;
   const kind = t.class === "stop_loss" || t.class === "worse" ? KIND[t.class] : null;
   // `item.brand_id` 這批（品牌底下的佇列查詢）一律有值；型別留 `null` 是沿用 `interrupt` 表
   // 的共用欄位定義——沒有值就組不出 `/brands/:brandId/...` 連結，誠實地退回今天的
   // `action_url` 這條路，不假造品牌 id。
-  const action = t.class === "stop_loss" && item.brand_id !== null
-    ? proposalAction(item.brand_id, t.campaign_id, t.entity_id, item.proposal)
+  const action = (t.class === "stop_loss" || t.class === "worse") && item.brand_id !== null
+    ? proposalAction(item.brand_id, t.campaign_id, t.entity_id, item.proposal, t.class === "worse" ? "review" : "pause")
     : null;
 
   return (
