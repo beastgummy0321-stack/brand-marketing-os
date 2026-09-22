@@ -33,6 +33,22 @@ def _dispatch_close_expired(timestamp: int) -> None:
     runtime.dispatch(timestamp)
 
 
+def _dispatch_runtime_beat(timestamp: int):
+    """Wraps the existing every-minute `runtime.dispatch` periodic task (F27-I00 Contract J) --
+    records one `beat` runtime event (org_id/brand_id both `None`: a beat proves the whole ads
+    background system is alive, never any one brand's own worker), prunes rows older than 48h once
+    an hour (`timestamp` is a whole-minute epoch second from the cron scheduler, so `% 3600 == 0`
+    fires exactly once per hour), then runs the unchanged `runtime.dispatch(timestamp)`."""
+    from app.ads import runtime, runtime_events
+
+    with connection() as conn:
+        runtime_events.record(conn, "beat")
+        if timestamp % 3600 == 0:
+            runtime_events.prune(conn)
+        conn.commit()
+    return runtime.dispatch(timestamp)
+
+
 def register_tasks() -> None:
     """掛兩個 task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。"""
     a = background_app()
@@ -72,4 +88,4 @@ def register_tasks() -> None:
         a.task(name=runtime.TASK)(runtime.run_campaign)
     if "ads.runtime_dispatch" not in a.tasks:
         a.periodic(cron="* * * * *", periodic_id="ads_runtime")(
-            a.task(name="ads.runtime_dispatch")(runtime.dispatch))
+            a.task(name="ads.runtime_dispatch")(_dispatch_runtime_beat))
