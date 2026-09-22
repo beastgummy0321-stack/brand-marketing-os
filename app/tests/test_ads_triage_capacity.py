@@ -296,14 +296,28 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(len(proposed), 2)  # active_ads(4) - can_support(2)
         self.assertEqual(proposed, {b, c})  # the two lowest-spend ads only
 
-    def test_stop_loss_ad_never_proposed_even_if_lowest_spend(self):
+    def test_stop_loss_ad_counts_as_leaving(self):
+        # 2 active, room for 1, one is already stop_loss: pausing it fixes capacity -- no row.
         a, b = self.make_ad("a1"), self.make_ad("a2")
         self.full_week(a, spend=100)
-        self.full_week(b, spend=1)  # lowest, but already its own stop_loss row
+        self.full_week(b, spend=1)
         result = self.candidates(
             [self.item(a), self.item(b, cls="stop_loss")], can_support=1, active_ads=2,
         )
-        self.assertEqual([row["entity_id"] for row in result["ads"]], [a])
+        self.assertIsNone(result)
+
+    def test_stop_loss_ad_never_proposed_and_highest_spend_kept(self):
+        # Drill 5: 4 active, room for 1, one stop_loss -> pause the 2 lowest, keep the top spender.
+        a, b, c, d = (self.make_ad(f"a{i}") for i in range(1, 5))
+        self.full_week(a, spend=400)
+        self.full_week(b, spend=10)
+        self.full_week(c, spend=20)
+        self.full_week(d, spend=1)  # lowest, but its own stop_loss row
+        result = self.candidates(
+            [self.item(a), self.item(b), self.item(c), self.item(d, cls="stop_loss")],
+            can_support=1, active_ads=4,
+        )
+        self.assertEqual({row["entity_id"] for row in result["ads"]}, {b, c})
 
     def test_ad_with_incomplete_seven_day_window_never_proposed(self):
         a, b = self.make_ad("a1"), self.make_ad("a2")
@@ -330,13 +344,13 @@ class CleanupCandidatesTest(unittest.TestCase):
     def test_partial_proposal_when_fewer_ads_are_eligible_than_the_excess(self):
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
         self.full_week(a, spend=10)
-        self.full_week(b, spend=20)
-        # c is a stop_loss row -- excess wants 2, only a/b are eligible.
+        self.obs(b, WINDOW_END, spend=1)  # incomplete window -- ineligible
+        self.obs(c, WINDOW_END, spend=1)  # incomplete window -- ineligible
+        # excess wants 2, only a is eligible.
         result = self.candidates(
-            [self.item(a), self.item(b), self.item(c, cls="stop_loss")],
-            can_support=1, active_ads=3,
+            [self.item(a), self.item(b), self.item(c)], can_support=1, active_ads=3,
         )
-        self.assertEqual({row["entity_id"] for row in result["ads"]}, {a, b})
+        self.assertEqual({row["entity_id"] for row in result["ads"]}, {a})
 
     # -- open replacement lineage (correction 4) ----------------------------------------------
 

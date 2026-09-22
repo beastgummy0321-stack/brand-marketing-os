@@ -152,8 +152,10 @@ def cleanup_candidates(
 ) -> dict | None:
     """Contract F cleanup rule -- `None` when `can_support` is unknown, `< 1`, or the campaign
     isn't over capacity; else the payload for a `cleanup` queue row, proposing to pause the
-    (`active_ads - can_support`) active ads with the lowest 7-day spend, excluding a `stop_loss`
-    ad (already its own row), an ad in an open replacement lineage (correction 4), or an ad whose
+    (`active_ads - can_support - stop_loss ads`) active ads with the lowest 7-day spend. A
+    `stop_loss` ad is never a candidate and already counts as leaving (drill 5: counting it as
+    staying proposed pausing the best ad too and kept the 0-purchase one); also excluded:
+    an ad in an open replacement lineage (correction 4), or an ad whose
     own 7-day window isn't fully covered. When fewer ads are eligible than the excess calls for,
     this proposes however many ARE eligible (never nothing just because the ideal count isn't
     reachable) -- `None` only when NO ad is eligible at all."""
@@ -161,7 +163,9 @@ def cleanup_candidates(
     active_ads = capacity["active_ads"]
     if can_support is None or can_support < 1 or active_ads <= can_support:
         return None
-    excess = active_ads - can_support
+    excess = active_ads - can_support - sum(1 for item in items if item["class"] == "stop_loss")
+    if excess <= 0:
+        return None
     open_lineage = _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
     start = cutoff - timedelta(days=_CLEANUP_WINDOW_DAYS - 1)
     eligible = []
