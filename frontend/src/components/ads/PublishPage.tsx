@@ -237,6 +237,9 @@ function ManualPublish({
   const [confirming, setConfirming] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  // The confirm step's own error: sharing `bindError` hid it inside the collapsed pairing panel
+  // (drill 5: a 409 from the month-budget guard looked like a dead button).
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const [bindMessage, setBindMessage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
 
@@ -248,9 +251,9 @@ function ManualPublish({
   const platformNames = platforms.map((platform) => platform.label).join("、") || "平台";
 
   async function confirmPreparation() {
-    if (!describe.content_hash) { setBindError("目前內容尚未取得可核准版本，請重新開啟本頁。"); return; }
+    if (!describe.content_hash) { setConfirmError("目前內容尚未取得可核准版本，請重新開啟本頁。"); return; }
     setConfirming(true);
-    setBindError(null);
+    setConfirmError(null);
     try {
       operation.current ??= sessionStorage.getItem(operationKey) ?? crypto.randomUUID();
       sessionStorage.setItem(operationKey, operation.current);
@@ -258,7 +261,7 @@ function ManualPublish({
       setConfirmed(true);
       onCampaignChange(await getCampaign(brandId, c.id));
     } catch (err) {
-      setBindError(err instanceof Error ? err.message : "確認失敗，請稍後再試。");
+      setConfirmError(err instanceof Error ? err.message : "確認失敗，請稍後再試。");
     } finally { setConfirming(false); }
   }
 
@@ -288,6 +291,7 @@ function ManualPublish({
         <p>這次核准是品牌月總額內的分配；持續投放及其他已核准安排會一起計算。</p>
         {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
         {!confirmed ? <Button disabled={confirming || !describe.content_hash} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
+        {confirmError && <p role="alert" className="text-danger">{confirmError}</p>}
       </div>
       {describe.checklist.map((node) => (
         <NodeCard key={`${node.level}:${node.id}`} node={node} />

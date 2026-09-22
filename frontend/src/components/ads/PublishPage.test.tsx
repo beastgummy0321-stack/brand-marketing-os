@@ -246,3 +246,11 @@ describe("PublishPage（F06-I04）", () => {
     expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
     expect(bindCampaign).not.toHaveBeenCalled();
   });
+
+  it("confirm rejected by the server shows its message next to the button (drill 5)", async () => {
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
+    vi.mocked(publishCampaign).mockRejectedValue(new Error("餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。"));
+    renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
+    await userEvent.click(await screen.findByRole("button", { name: "確認並記錄手動上架準備" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("餘額尚不確定");
+  });
