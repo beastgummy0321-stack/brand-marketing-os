@@ -1,20 +1,25 @@
-/** frontend/src/components/ads/month/MonthReviewPage.test.tsx — F24-I04：`vi.mock` 掉
- * `@/lib/adsApi`／`@/lib/adsTriageApi`／`@/lib/ordersApi`／`@/lib/adsChangeApi`，不打真的 API。
- * 覆蓋 Feature Decisions「Monthly review」：月選單只驅動全品牌花費卡（不重打活動／訂單）、
- * `known_spend===null`／`amount===null` 兩種未知態、訂單卡讀取失敗時整張省略、各活動花費只在
- * `window.days` 一致時合計、達標／未達標／未判斶三種 chip、素材依 class 分三組。 */
+/** frontend/src/components/ads/month/MonthReviewPage.test.tsx — F27-I19: the page moved off
+ * `listCampaigns`/`getTriage`/`fetchOrders` for its money sections and now reads Contract G's
+ * `getMonthSummary` + `getMonthlyBudget` (both refetched together on the month Segmented) for
+ * 全品牌花費／商城訂單／各活動／這個月關掉／下月建議; `listCampaigns`+`getTriage` stay only for
+ * 素材 (F26 rule, month-independent) and for the 記入品牌學習 list's campaign-chip lookup;
+ * `getAdsLearnings` (Contract D) drives 記入品牌學習. `vi.mock`s every one of those, never hits a
+ * real API. */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
 import type { CampaignTriage, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
-import type { OrdersPageData } from "@/lib/ordersApi";
-import { fetchOrders } from "@/lib/ordersApi";
 import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import {
+  dismissSuggestion, getMonthSummary,
+  type MonthCampaignRow, type MonthSuggestion, type MonthSummary,
+} from "@/lib/adsMonthApi";
+import { getAdsLearnings, type AdsLearning } from "@/lib/adsLearningsApi";
 import { MonthReviewPage } from "./MonthReviewPage";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -25,19 +30,25 @@ vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
   return { ...actual, getTriage: vi.fn() };
 });
-vi.mock("@/lib/ordersApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/ordersApi")>("@/lib/ordersApi");
-  return { ...actual, fetchOrders: vi.fn() };
-});
 vi.mock("@/lib/adsChangeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
   return { ...actual, getMonthlyBudget: vi.fn() };
 });
+vi.mock("@/lib/adsMonthApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsMonthApi")>("@/lib/adsMonthApi");
+  return { ...actual, getMonthSummary: vi.fn(), dismissSuggestion: vi.fn() };
+});
+vi.mock("@/lib/adsLearningsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsLearningsApi")>("@/lib/adsLearningsApi");
+  return { ...actual, getAdsLearnings: vi.fn() };
+});
 
 const mockListCampaigns = vi.mocked(listCampaigns);
 const mockGetTriage = vi.mocked(getTriage);
-const mockFetchOrders = vi.mocked(fetchOrders);
 const mockGetMonthlyBudget = vi.mocked(getMonthlyBudget);
+const mockGetMonthSummary = vi.mocked(getMonthSummary);
+const mockDismissSuggestion = vi.mocked(dismissSuggestion);
+const mockGetAdsLearnings = vi.mocked(getAdsLearnings);
 
 function campaignCard(overrides: Partial<CampaignCardData> = {}): CampaignCardData {
   return {
@@ -66,8 +77,6 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-// F26-I01: `closed` is always sent by the real backend -- an empty block by default, overridable
-// per test (F26-I03 「無效・已停」 now reads this block instead of `stop_loss`-classed items).
 const EMPTY_CLOSED: TriageClosedBlock = {
   paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
 };
@@ -94,24 +103,54 @@ function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
   };
 }
 
-function orders(overrides: Partial<OrdersPageData["summary"]> = {}): OrdersPageData {
+function monthCampaignRow(overrides: Partial<MonthCampaignRow> = {}): MonthCampaignRow {
   return {
-    brand: { id: "brd_1", name: "示例品牌" },
-    summary: {
-      since: "2026-08-23", until: "2026-09-22", has_history: true, order_count: 99,
-      net_revenue: 91861, average_order_value: 927.89, new_customers: 93, existing_customers: 4,
-      repurchase_rate: 0.0619, repurchase_sample_size: 97, sku_margins: [],
-      ...overrides,
-    },
-    orders: { items: [], page: 1, page_size: 12, total: 0 },
-    policy_changes: [], channel_entries: [],
+    campaign_id: "cmp_1", name: "日常商品推廣", objective: "轉換",
+    spend: 18400, result_count: 40, result_label: "購買",
+    cost_per_result: 412, target: 450, verdict: "met",
+    ...overrides,
   };
+}
+
+function monthSuggestion(overrides: Partial<MonthSuggestion> = {}): MonthSuggestion {
+  return {
+    key: "refresh:cmp_1", kind: "refresh", campaign_id: "cmp_1", campaign_name: "日常商品推廣",
+    objective: "轉換", title: "補 3 則新素材", why: "有效的方向只剩 1 則在投",
+    action_url: "/brands/brd_1/ads/campaigns/cmp_1/detail",
+    ...overrides,
+  };
+}
+
+function monthSummary(overrides: Partial<MonthSummary> = {}): MonthSummary {
+  return {
+    month: "2026-09", currency: "TWD", total_spend: 22000,
+    campaigns: [monthCampaignRow()],
+    orders: { this_net: 43470, this_count: 51, previous_net: 61200, previous_count: 60, change_pct: -0.29 },
+    closed_this_month: 2, closed_tracking_since: "2026-09-22",
+    suggestions: [monthSuggestion()],
+    days_covered: 30, days_elapsed: 21,
+    ...overrides,
+  };
+}
+
+function adsLearning(overrides: Partial<AdsLearning> = {}): AdsLearning {
+  return {
+    id: "lrn_1", text: "「日常出發」生活情境對廣泛受眾有效", confidence: "likely", count: 2,
+    campaign_id: "cmp_1", campaign_name: "日常商品推廣", learned_at: "2026-09-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}</div>;
 }
 
 function renderPage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/brands/brd_1/ads/month"]}>
       <MonthReviewPage brandId="brd_1" />
+      <LocationDisplay />
     </MemoryRouter>,
   );
 }
@@ -120,111 +159,102 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListCampaigns.mockResolvedValue([campaignCard()]);
   mockGetTriage.mockResolvedValue(triage([triageItem()]));
-  mockFetchOrders.mockResolvedValue(orders());
   mockGetMonthlyBudget.mockResolvedValue(monthlyBudget());
+  mockGetMonthSummary.mockResolvedValue(monthSummary());
+  mockDismissSuggestion.mockResolvedValue({ ok: true });
+  mockGetAdsLearnings.mockResolvedValue([adsLearning()]);
 });
 
-describe("MonthReviewPage（F24-I04）全品牌花費卡", () => {
-  it("正常狀態：已花／月總額都有值時畫量尺", async () => {
+describe("MonthReviewPage（F27-I19）全品牌花費卡", () => {
+  it("正常狀態：`total_spend`／`budget.amount` 都有值時畫量尺", async () => {
     renderPage();
     expect(await screen.findByText("TWD 22,000")).toBeTruthy();
     expect(screen.getByText("月總額 TWD 60,000")).toBeTruthy();
   });
 
-  it("`amount===null`：印「月總額 尚未設定」，打斜紋量尺，不是一般量尺", async () => {
+  it("`budget.amount===null`：印「月總額 尚未設定」", async () => {
     mockGetMonthlyBudget.mockResolvedValue(monthlyBudget({ amount: null }));
     renderPage();
     expect(await screen.findByText("月總額 尚未設定")).toBeTruthy();
     expect(screen.getByText("TWD 22,000")).toBeTruthy();
   });
 
-  it("`known_spend===null`：印「花費未核實」＋第一條 uncertainties，沒有量尺", async () => {
-    mockGetMonthlyBudget.mockResolvedValue(
-      monthlyBudget({ known_spend: null, uncertainties: ["帳戶仍有未承接的活動，品牌花費歸屬尚不完整。", "第二條不印"] }),
-    );
+  it("`total_spend===null`：印「花費未核實」，沒有量尺", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ total_spend: null }));
     renderPage();
     expect(await screen.findByText("花費未核實")).toBeTruthy();
-    expect(screen.getByText("帳戶仍有未承接的活動，品牌花費歸屬尚不完整。")).toBeTruthy();
-    expect(screen.queryByText("第二條不印")).toBeNull();
   });
 
-  it("月選單只重打全品牌花費卡，不重打活動／訂單", async () => {
+  it("月選單一起重打月摘要＋月預算，不重打素材／品牌學習", async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText("TWD 22,000");
+    expect(mockGetMonthSummary).toHaveBeenCalledTimes(1);
     expect(mockGetMonthlyBudget).toHaveBeenCalledTimes(1);
-    const thisMonth = mockGetMonthlyBudget.mock.calls[0][1];
+    const thisMonth = mockGetMonthSummary.mock.calls[0][1];
 
-    mockGetMonthlyBudget.mockResolvedValue(monthlyBudget({ known_spend: 5000, amount: null }));
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ total_spend: 5000 }));
+    mockGetMonthlyBudget.mockResolvedValue(monthlyBudget({ amount: null }));
     await user.click(screen.getByRole("button", { name: /月/, pressed: false }));
 
-    await waitFor(() => expect(mockGetMonthlyBudget).toHaveBeenCalledTimes(2));
-    const lastMonth = mockGetMonthlyBudget.mock.calls[1][1];
+    await waitFor(() => expect(mockGetMonthSummary).toHaveBeenCalledTimes(2));
+    expect(mockGetMonthlyBudget).toHaveBeenCalledTimes(2);
+    const lastMonth = mockGetMonthSummary.mock.calls[1][1];
     expect(lastMonth).not.toBe(thisMonth);
-    // 活動／訂單只在掛載時各打一次，月選單切換不重打。
     expect(mockListCampaigns).toHaveBeenCalledTimes(1);
-    expect(mockFetchOrders).toHaveBeenCalledTimes(1);
+    expect(mockGetAdsLearnings).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("MonthReviewPage（F24-I04）商城訂單卡", () => {
-  it("用回應自己的 since／until 標窗口", async () => {
+describe("MonthReviewPage（F27-I19）商城訂單卡", () => {
+  it("印本月至今天數、上月淨額、▼ 變化", async () => {
     renderPage();
-    expect(await screen.findByText("8/23–9/22 實收")).toBeTruthy();
-    expect(screen.getByText("91,861")).toBeTruthy();
+    expect(await screen.findByText("43,470")).toBeTruthy();
+    expect(screen.getByText("▼29%")).toBeTruthy();
+    expect(screen.getByText("上月 61,200")).toBeTruthy();
+    expect(screen.getByText("本月至今（21 天）")).toBeTruthy();
   });
 
-  it("讀取失敗時整張卡省略，不拖累其餘卡片", async () => {
-    mockFetchOrders.mockRejectedValue(new Error("讀取失敗"));
+  it("`orders===null`：整張卡省略", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ orders: null }));
     renderPage();
     await screen.findByText("TWD 22,000");
     expect(screen.queryByText("商城訂單淨額・品牌整體")).toBeNull();
   });
 });
 
-describe("MonthReviewPage（F24-I04）各活動", () => {
-  it("同一活動所有廣告 `window.days` 一致時合計花費，量尺達標", async () => {
-    mockGetTriage.mockResolvedValue(triage([
-      triageItem({ entity_id: "ad_1", current: { spend: 600, result_count: 2, cost_per_result: 300, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null } }),
-      triageItem({ entity_id: "ad_2", current: { spend: 400, result_count: 2, cost_per_result: 200, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null } }),
-    ]));
+describe("MonthReviewPage（F27-I19）各活動", () => {
+  it("`verdict=\"met\"`：達標 chip，量尺畫出來", async () => {
     renderPage();
-    expect(await screen.findByText("花費・近 7 天")).toBeTruthy();
-    expect(screen.getByText("1,000")).toBeTruthy();
-    expect(screen.getByText("達標")).toBeTruthy();
+    expect(await screen.findByText("達標")).toBeTruthy();
+    expect(screen.getByText("每次購買成本 412")).toBeTruthy();
+    expect(screen.getByText("目標 450")).toBeTruthy();
   });
 
-  it("`window.days` 不一致時不合計，印「各廣告期間不同，未合計」，未判斶", async () => {
-    mockGetTriage.mockResolvedValue(triage([
-      triageItem({ entity_id: "ad_1", window: { start: "2026-09-15", end: "2026-09-21", days: 7, previous_start: "2026-09-08", previous_end: "2026-09-14", extended_from: null } }),
-      triageItem({ entity_id: "ad_2", window: { start: "2026-08-25", end: "2026-09-21", days: 28, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: 14 } }),
-    ]));
-    renderPage();
-    expect(await screen.findByText("各廣告期間不同，未合計")).toBeTruthy();
-    expect(screen.getByText("未判斷")).toBeTruthy();
-  });
-
-  it("沒有目標時未判斶，量尺打斜紋、右邊寫「尚未設定目標」", async () => {
-    mockGetTriage.mockResolvedValue(triage([
-      triageItem({ target: { value: null, basis: null, result_kind: null, result_label: "點擊", missing: ["result_kind"] } }),
-    ]));
-    renderPage();
-    expect(await screen.findByText("尚未設定目標")).toBeTruthy();
-    expect(screen.getByText("未判斷")).toBeTruthy();
-  });
-
-  it("成本高於目標時未達標", async () => {
-    mockGetTriage.mockResolvedValue(triage([
-      triageItem({ current: { spend: 1000, result_count: 1, cost_per_result: 1000, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null } }),
-    ]));
+  it("`verdict=\"missed\"`：未達標", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ campaigns: [monthCampaignRow({ verdict: "missed", cost_per_result: 600 })] }));
     renderPage();
     expect(await screen.findByText("未達標")).toBeTruthy();
+  });
+
+  it("`verdict=\"unjudged\"`／`target===null`：未判斷，量尺打斜紋、印「尚未設定目標」", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({
+      campaigns: [monthCampaignRow({ verdict: "unjudged", target: null, cost_per_result: null })],
+    }));
+    renderPage();
+    expect(await screen.findByText("未判斷")).toBeTruthy();
+    expect(screen.getByText("尚未設定目標")).toBeTruthy();
+  });
+
+  it("沒有活動時顯示空狀態", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ campaigns: [] }));
+    renderPage();
+    expect(await screen.findByText("沒有可回顧的活動")).toBeTruthy();
   });
 });
 
 describe("MonthReviewPage（F26-I03）素材", () => {
   it("有效／還看不出讀投放中的 class；無效・已停改讀 closed 區塊，不再算仍在投放的 stop_loss", async () => {
-    mockListCampaigns.mockResolvedValue([campaignCard()]);
     mockGetTriage.mockResolvedValue(triage(
       [
         triageItem({ entity_id: "ad_1", class: "better", label: "變好" }),
@@ -243,55 +273,118 @@ describe("MonthReviewPage（F26-I03）素材", () => {
     await screen.findByText("素材");
     expect(screen.getByText("有效")).toBeTruthy();
     expect(screen.getByText("無效・已停")).toBeTruthy();
-    expect(screen.getByText("投放中，成本在目標內")).toBeTruthy();
-    expect(screen.getByText("已暫停或封存，含這個月關掉的")).toBeTruthy();
-    expect(screen.getByText("投放中，樣本還不夠")).toBeTruthy();
     expect(screen.getByText("還看不出")).toBeTruthy();
-    expect(screen.getByText("1 則")).toBeTruthy(); // 有效 1 則（仍在投放的 stop_loss 不算進「無效・已停」）
-    expect(screen.getByText("3 則")).toBeTruthy(); // 無效・已停＝closed.total，不是仍在投放的 stop_loss 數
-    expect(screen.getByText("2 則")).toBeTruthy(); // 還看不出＝flat+insufficient
+    expect(screen.getByText("1 則")).toBeTruthy();
+    expect(screen.getByText("3 則")).toBeTruthy();
+    expect(screen.getByText("2 則")).toBeTruthy();
   });
 
-  it("同一組超過 12 則時最多畫 12 張縮圖，其餘摺成「＋N 則」，標頭計數仍印全部則數", async () => {
-    mockListCampaigns.mockResolvedValue([campaignCard()]);
+  it("同一組超過 12 則時最多畫 12 張縮圖，其餘摺成「＋N 則」", async () => {
     mockGetTriage.mockResolvedValue(triage(
       Array.from({ length: 13 }, (_, i) => triageItem({ entity_id: `ad_${i}`, class: "better" })),
     ));
     renderPage();
     await screen.findByText("素材");
-    expect(screen.getByText("13 則")).toBeTruthy(); // 標頭計數不受上限影響
+    expect(screen.getByText("13 則")).toBeTruthy();
     expect(screen.getAllByTestId("material-thumb").length).toBe(12);
     expect(screen.getByText("＋1 則")).toBeTruthy();
   });
 
-  it("無效・已停超過 12 則時也照樣摺成「＋N 則」，標頭計數用 closed.total（不是 items.length）", async () => {
-    mockListCampaigns.mockResolvedValue([campaignCard()]);
-    mockGetTriage.mockResolvedValue(triage(
-      [],
-      {
-        paused: 15, archived: 0, other: 0, total: 15, truncated: false,
-        items: Array.from({ length: 15 }, (_, i) => closedItem({ entity_id: `closed_${i}` })),
-      },
-    ));
+  it("讀取失敗時可重新讀取，不拖累已經畫好的月摘要區塊", async () => {
+    mockListCampaigns.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
     renderPage();
-    await screen.findByText("素材");
-    expect(screen.getByText("15 則")).toBeTruthy();
-    expect(screen.getAllByTestId("material-thumb").length).toBe(12);
-    expect(screen.getByText("＋3 則")).toBeTruthy();
+    await screen.findByText("TWD 22,000");
+    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
   });
 });
 
-describe("MonthReviewPage（F24-I04）記入品牌學習／下月建議", () => {
-  it("兩個章節都是灰階佔位卡（沒有後端可讀）", async () => {
+describe("MonthReviewPage（F27-I19）這個月關掉", () => {
+  it("`closed_this_month !== null`：LearnCard 印「這個月關掉 N 則」", async () => {
+    renderPage();
+    expect(await screen.findByText("這個月關掉 2 則")).toBeTruthy();
+  });
+
+  it("`closed_this_month === null`：灰字印「關閉時間從 <since> 起記錄」", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ closed_this_month: null, closed_tracking_since: "2026-09-22" }));
+    renderPage();
+    expect(await screen.findByText("關閉時間從 2026/9/22 起記錄")).toBeTruthy();
+  });
+});
+
+describe("MonthReviewPage（F27-I19）記入品牌學習", () => {
+  it("印 📒 文字、活動 chip（跟 `listCampaigns` 查到的 objective 配對）、N 次同方向、信心 chip", async () => {
+    renderPage();
+    expect(await screen.findByText("「日常出發」生活情境對廣泛受眾有效")).toBeTruthy();
+    // 建議卡跟這一列都用同一個查表配出「日常商品推廣・轉換」，畫面上出現兩次。
+    expect(screen.getAllByText("日常商品推廣・轉換").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("2 次同方向")).toBeTruthy();
+    expect(screen.getByText("可能成立")).toBeTruthy();
+  });
+
+  it("`confidence` 三種都印對應中文", async () => {
+    mockGetAdsLearnings.mockResolvedValue([
+      adsLearning({ id: "l1", confidence: "observed" }),
+      adsLearning({ id: "l2", confidence: "validated", text: "第二筆" }),
+    ]);
+    renderPage();
+    expect(await screen.findByText("觀察到")).toBeTruthy();
+    expect(screen.getByText("成立")).toBeTruthy();
+  });
+
+  it("活動不在 `listCampaigns` 查表裡時退回純文字，不硬造 objective", async () => {
+    mockGetAdsLearnings.mockResolvedValue([adsLearning({ campaign_id: "cmp_unknown", campaign_name: "未知活動" })]);
+    renderPage();
+    expect(await screen.findByText("未知活動")).toBeTruthy();
+  });
+
+  it("沒有紀錄時印「還沒有記錄。」", async () => {
+    mockGetAdsLearnings.mockResolvedValue([]);
+    renderPage();
+    expect(await screen.findByText("還沒有記錄。")).toBeTruthy();
+  });
+
+  it("讀取失敗時可重新讀取", async () => {
+    mockGetAdsLearnings.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
     renderPage();
     await screen.findByText("記入品牌學習");
-    expect(screen.getAllByText("接上後開放").length).toBe(2);
+    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
   });
 });
 
-describe("MonthReviewPage（F24-I04）讀取失敗", () => {
-  it("活動讀取失敗時可重新讀取", async () => {
-    mockListCampaigns.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
+describe("MonthReviewPage（F27-I19）✦ 下月建議", () => {
+  it("採用導去 action_url", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "採用" }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail"));
+  });
+
+  it("`action_url===null` 時採用按鈕停用", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ suggestions: [monthSuggestion({ action_url: null })] }));
+    renderPage();
+    const adopt = await screen.findByRole("button", { name: "採用" }) as HTMLButtonElement;
+    expect(adopt.disabled).toBe(true);
+  });
+
+  it("略過呼叫 dismissSuggestion 成功後從清單移掉這張卡", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("🖼 補 3 則新素材");
+    await user.click(screen.getByRole("button", { name: "略過" }));
+    await waitFor(() => expect(mockDismissSuggestion).toHaveBeenCalledWith("brd_1", "2026-09", "refresh:cmp_1"));
+    await waitFor(() => expect(screen.queryByText("🖼 補 3 則新素材")).toBeNull());
+  });
+
+  it("沒有建議時印一行說明", async () => {
+    mockGetMonthSummary.mockResolvedValue(monthSummary({ suggestions: [] }));
+    renderPage();
+    expect(await screen.findByText("這個月沒有下月建議。")).toBeTruthy();
+  });
+});
+
+describe("MonthReviewPage（F27-I19）讀取失敗", () => {
+  it("月摘要讀取失敗時可重新讀取", async () => {
+    mockGetMonthSummary.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
     renderPage();
     expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
   });

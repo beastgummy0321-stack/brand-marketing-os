@@ -1,23 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import {
+  dismissSuggestion, getMonthSummary,
+  type MonthCampaignRow, type MonthOrders, type MonthSuggestion, type MonthSummary, type SuggestionKind,
+} from "@/lib/adsMonthApi";
+import { getAdsLearnings, type AdsLearning } from "@/lib/adsLearningsApi";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { getTriage, type TriageClosedBlock, type TriageClosedItem, type TriageItem } from "@/lib/adsTriageApi";
-import { fetchOrders, type OrderSummary } from "@/lib/ordersApi";
-import { ActionBar, Chip, Meter, ReservedSlotCard, Segmented } from "../patterns";
+import { ActionBar, CampaignChip, Chip, LearnCard, Meter, Segmented, type ObjectiveKey } from "../patterns";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
 
-/** 每月回顧（F24-I04，v7 原型 `month()`）：活動照常投放，這頁只整理帳——內部投放計畫與平台
- * 原生物件不受影響，這裡不寫任何東西回廣告平台。 */
+/** 每月回顧（F24-I04 起，F27-I19 改由 Contract G 的月摘要驅動；v7 原型 `month()`）：活動照常
+ * 投放，這頁只整理帳——內部投放計畫與平台原生物件不受影響，這裡不寫任何東西回廣告平台。
+ * 全品牌花費／訂單／各活動／這個月關掉／下月建議都讀 `getMonthSummary`＋`getMonthlyBudget`
+ * （月選單切換時兩個一起重打）；素材分組跟品牌學習清單各自留自己的資料來源（見下方對應
+ * 區塊的說明），一個失敗不拖累其他區塊（design-system §1.7 worker self-check #9）。 */
 
-// 純數字，最多兩位小數，不四捨五入到整數（`triage`／`orders` 沒有回幣別／不需要幣別的量測值，
-// 同 `home/CampaignCard.tsx`／`detail/CampaignDetailPage.tsx` 各自留一份的先例，這支不在
+// 純數字，最多兩位小數，不四捨五入到整數（各活動列的花費／成本／目標沒有個別幣別，跟
+// `home/CampaignCard.tsx`／`detail/CampaignDetailPage.tsx` 各自留一份的先例一樣，這支不在
 // `frontend/src/lib/**`，不能共用一份）。未知的量測值＝「累積中」（design-system §7）。
 function formatAmount(value: number | null): string {
   if (value === null) return "累積中";
@@ -29,15 +36,52 @@ function parseLocalDateParts(iso: string): { y: number; m: number; d: number } {
   const [y, m, d] = iso.split("-").map(Number);
   return { y, m, d };
 }
-function formatMD(iso: string): string {
-  const { m, d } = parseLocalDateParts(iso);
-  return `${m}/${d}`;
+function formatYMD(iso: string): string {
+  const { y, m, d } = parseLocalDateParts(iso);
+  return `${y}/${m}/${d}`;
 }
 function shiftMonth(base: string, delta: number): string {
   const [y, m] = base.split("-").map(Number);
   const d = new Date(y, m - 1 + delta, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
+
+// `▲12%`／`▼12%`／`持平`；同 `home/QueueRow.tsx::formatDeltaPct` 的先例（各自留一份，那支不在
+// `frontend/src/lib/**`）。`change_pct` 是比值，`null` 就不印（沒有前一期資料可比）。
+function formatChangePct(pct: number | null): string {
+  if (pct === null) return "";
+  const rounded = Math.round(Math.abs(pct) * 100);
+  if (rounded === 0) return "持平";
+  return `${pct > 0 ? "▲" : "▼"}${rounded}%`;
+}
+
+// 目標的家族分類（Feature Decisions「objective-derived campaign chips」：銷售 購／互動 互／
+// 流量 流／其餘交給 `CampaignChip` 自己退到名稱首字）。`ads_campaign.objective` 對系統建立的
+// Campaign 是 `app/ads/brief.py::_OBJECTIVES`（購買／加購物車／名單／流量／知名度）之一，
+// 對匯入的 Campaign 是使用者自己填的自由文字（`app/ads/repository.py::update_campaign` 對
+// `origin='imported'` 只要求非空字串）——所以這裡用關鍵字歸類，不能假設是一組固定枚舉。
+function objectiveFamily(objective: string): ObjectiveKey {
+  if (objective.includes("購買") || objective.includes("購物車") || objective.includes("轉換") || objective.includes("銷售")) {
+    return "sales";
+  }
+  if (objective.includes("互動")) return "engagement";
+  if (objective.includes("流量")) return "traffic";
+  return "other";
+}
+
+const VERDICT: Record<MonthCampaignRow["verdict"], { label: string; tone: "ok" | "warn" | "neutral" }> = {
+  met: { label: "達標", tone: "ok" },
+  missed: { label: "未達標", tone: "warn" },
+  unjudged: { label: "未判斷", tone: "neutral" },
+};
+
+const CONFIDENCE: Record<AdsLearning["confidence"], { label: string; tone: "neutral" | "accent" | "ok" }> = {
+  observed: { label: "觀察到", tone: "neutral" },
+  likely: { label: "可能成立", tone: "accent" },
+  validated: { label: "成立", tone: "ok" },
+};
+
+const SUGGESTION_ICON: Record<SuggestionKind, string> = { refresh: "🖼", cleanup: "🧹", no_target: "🎯" };
 
 /** 未知態的量尺（`Meter`／`patterns/**` 是這張票的 `do_not_touch`，不能加一個「打斜紋」變體
  * 進共用元件）——同 `home/CampaignCard.tsx` 的 `HatchedStrip` 先例，這支自己留一份，尺寸跟
@@ -87,152 +131,100 @@ function MaterialThumb({ url }: { url: string | null }) {
 
 type MonthChoice = "this" | "last";
 
-type BudgetState = { status: "loading" } | { status: "error" } | { status: "ready"; budget: MonthlyBudget };
+type MonthState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; summary: MonthSummary; budget: MonthlyBudget };
 
-/** 全品牌花費卡：月選單只驅動這張卡（Feature Decisions）。`known_spend === null`（月預算的
- * `issues`沒有花費證據）沒有量尺，只印「花費未核實」＋第一條不確定原因；`amount === null`
- * （月總額還沒設定）打斜紋量尺；兩者都有值才是真的量尺。 */
-function SpendCard({ brandId, month }: { brandId: string; month: string }) {
-  const [state, setState] = useState<BudgetState>({ status: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ status: "loading" });
-    getMonthlyBudget(brandId, month, controller.signal)
-      .then((budget) => {
-        if (!controller.signal.aborted) setState({ status: "ready", budget });
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setState({ status: "error" });
-      });
-    return () => controller.abort();
-  }, [brandId, month]);
-
+/** 全品牌花費卡：月選單驅動這張卡＋商城訂單卡＋各活動／這個月關掉／下月建議（月摘要＋月
+ * 預算一起重打，見 `MonthReviewPage` 的 `monthState`）。`total_spend === null`（這個月有已知
+ * 天數缺花費，或跨幣別）沒有量尺，只印「花費未核實」；`budget.amount === null`（月總額還沒
+ * 設定）打斜紋量尺；兩者都有值才是真的量尺。 */
+function SpendCard({ summary, budget }: { summary: MonthSummary; budget: MonthlyBudget }) {
   return (
     <div className="surface p-5">
       <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
         <span>全品牌花費</span>
-        <span>
-          {state.status === "ready" &&
-            (state.budget.amount === null
-              ? "月總額 尚未設定"
-              : `月總額 ${budgetMoney(state.budget.amount, state.budget.currency)}`)}
-        </span>
+        <span>{budget.amount === null ? "月總額 尚未設定" : `月總額 ${budgetMoney(budget.amount, budget.currency)}`}</span>
       </div>
-      {state.status === "loading" && <Skeleton className="mt-2 h-8 w-32" />}
-      {state.status === "error" && <p role="alert" className="mt-2 text-sm text-warning">花費暫時讀取不到。</p>}
-      {state.status === "ready" && (() => {
-        const { known_spend, amount, currency, uncertainties } = state.budget;
-        if (known_spend === null) {
-          return (
-            <>
-              <p className="mt-1 text-2xl font-semibold text-muted-foreground">花費未核實</p>
-              {uncertainties.length > 0 && (
-                <p className="mt-2 text-xs text-muted-foreground">{uncertainties[0]}</p>
-              )}
-            </>
-          );
-        }
-        return (
-          <>
-            <p className="numeric mt-1 text-2xl font-semibold">{budgetMoney(known_spend, currency)}</p>
-            {amount === null ? (
-              <HatchedMeter />
-            ) : (
-              <Meter value={known_spend} max={amount} tone="success" />
-            )}
-          </>
-        );
-      })()}
+      {summary.total_spend === null ? (
+        <p className="mt-1 text-2xl font-semibold text-muted-foreground">花費未核實</p>
+      ) : (
+        <>
+          <p className="numeric mt-1 text-2xl font-semibold">{budgetMoney(summary.total_spend, summary.currency)}</p>
+          {budget.amount === null ? (
+            <HatchedMeter />
+          ) : (
+            <Meter value={summary.total_spend} max={budget.amount} tone="success" />
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-/** 商城訂單卡：跟預算月選單無關，一律印自己回應的實際區間（`since`／`until`）；沒有前一個月
- * 可比（Feature Decisions「no previous-month comparison」），量尺沒有上限就不畫填色，只留軸
- * （`Meter` 自己的誠實空狀態），不硬湊一個假的比較基準。 */
-function OrdersCard({ summary }: { summary: OrderSummary }) {
-  const windowLabel = summary.since && summary.until
-    ? `${formatMD(summary.since)}–${formatMD(summary.until)} 實收`
-    : "近 31 天實收";
+/** 商城訂單卡：讀月摘要自己的 `orders`（calendar month，跟 `spend` 同一顆 `monthState`）；
+ * 「本月至今（N 天）」用 `days_elapsed`，上月淨額跟 ▲/▼ 變化都是回應本來就有的欄位，這裡
+ * 不再自己拿現在跟上一期比（Feature Decisions「like-for-like」已經在後端做完）。 */
+function OrdersCard({ orders, daysElapsed }: { orders: MonthOrders; daysElapsed: number }) {
+  const delta = formatChangePct(orders.change_pct);
   return (
     <div className="surface p-5">
       <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
         <span>商城訂單淨額・品牌整體</span>
-        <span>{windowLabel}</span>
+        <span>上月 {formatAmount(orders.previous_net)}</span>
       </div>
-      <p className="numeric mt-1 text-2xl font-semibold">{formatAmount(summary.net_revenue)}</p>
-      <Meter value={summary.net_revenue} max={null} tone="success" />
+      <p className="numeric mt-1 flex items-baseline gap-2 text-2xl font-semibold">
+        {formatAmount(orders.this_net)}
+        {delta && <span className="text-sm font-semibold">{delta}</span>}
+      </p>
+      <Meter value={orders.this_net} max={orders.previous_net} tone="success" />
+      <p className="mt-1 text-[11.5px] text-muted-foreground">本月至今（{daysElapsed} 天）</p>
     </div>
   );
 }
 
 /** 一個活動一列（Feature Decisions「各活動 rows」）：這一列是版面，不是共用元件——`TodoRow`
- * 的編號插槽塞不進活動 chip，這裡自己組 flex row（objective 明講不要硬套 `TodoRow`）。 */
-function CampaignRow({
-  brandId, campaign, items,
-}: { brandId: string; campaign: CampaignCardData; items: TriageItem[] }) {
-  const detailHref = `/brands/${brandId}/ads/campaigns/${campaign.id}/detail`;
-  const windowDays = new Set(items.map((item) => item.window.days));
-  const sameWindow = items.length > 0 && windowDays.size === 1;
-  const totalSpend = items.reduce((sum, item) => sum + (item.current.spend ?? 0), 0);
-  const totalResults = items.reduce((sum, item) => sum + (item.current.result_count ?? 0), 0);
-  const spendValue = sameWindow ? totalSpend : null;
-  const cost = sameWindow && totalResults > 0 ? totalSpend / totalResults : null;
-  const targetValue = items.length > 0 ? items[0].target.value : null;
-  const resultLabel = items.length > 0 ? items[0].current.result_label : "成果";
-  const costLabel = `每次${resultLabel}成本`;
-
-  const judged = targetValue !== null && cost !== null;
-  const ok = judged && (cost as number) <= (targetValue as number);
-  const chipTone = !judged ? "neutral" : ok ? "ok" : "warn";
-  const chipLabel = !judged ? "未判斷" : ok ? "達標" : "未達標";
-  const canBar = judged && (targetValue as number) > 0;
-
-  let spendCaption: string;
-  let spendText: string;
-  if (items.length === 0) {
-    spendCaption = "花費";
-    spendText = "累積中";
-  } else if (sameWindow) {
-    spendCaption = `花費・近 ${items[0].window.days} 天`;
-    spendText = formatAmount(spendValue);
-  } else {
-    spendCaption = "花費";
-    spendText = "各廣告期間不同，未合計";
-  }
+ * 的編號插槽塞不進活動 chip（原型的 `.todo` 只是「有上邊界＋間距」的通用列樣式，這裡跟
+ * `記入品牌學習` 的 `LearningRow` 一樣自己組 flex row，兩邊都沒有編號圈／勾選圈）。verdict
+ * 直接讀月摘要回應（後端已經判過達標／未達標／未判斷），這裡只負責畫，不再自己重算。 */
+function CampaignRow({ brandId, row }: { brandId: string; row: MonthCampaignRow }) {
+  const detailHref = `/brands/${brandId}/ads/campaigns/${row.campaign_id}/detail`;
+  const costLabel = `每次${row.result_label}成本`;
+  const canBar = row.target !== null && row.target > 0 && row.cost_per_result !== null;
+  const verdict = VERDICT[row.verdict];
 
   return (
     <div className="flex flex-wrap items-center gap-4 border-t border-border py-3.5 first:border-t-0">
       <Link
         to={detailHref}
-        className="w-full max-w-[220px] shrink-0 truncate text-sm font-semibold hover:text-primary hover:underline sm:w-52"
-        title={campaign.name}
+        title={row.name}
+        className="flex w-full max-w-[220px] min-w-0 shrink-0 items-center hover:text-primary hover:underline sm:w-52"
       >
-        {campaign.name}
+        <CampaignChip objective={objectiveFamily(row.objective)} name={row.name} strong />
       </Link>
       <div className="min-w-28 shrink-0 text-right">
-        <p className="text-[11.5px] text-muted-foreground">{spendCaption}</p>
-        <p className="numeric text-sm font-semibold">{spendText}</p>
+        <p className="text-[11.5px] text-muted-foreground">花費</p>
+        <p className="numeric text-sm font-semibold">{formatAmount(row.spend)}</p>
       </div>
       <div className="min-w-[200px] flex-1">
         {canBar ? (
           <Meter
-            value={cost as number}
-            max={(targetValue as number) * 2}
-            marker={targetValue}
-            tone={ok ? "success" : "warning"}
-            left={`${costLabel} ${formatAmount(cost)}`}
-            right={`目標 ${formatAmount(targetValue)}`}
+            value={row.cost_per_result}
+            max={(row.target as number) * 2}
+            marker={row.target}
+            tone={row.verdict === "met" ? "success" : "warning"}
+            left={`${costLabel} ${formatAmount(row.cost_per_result)}`}
+            right={`目標 ${formatAmount(row.target)}`}
           />
         ) : (
           <HatchedMeter
-            left={`${costLabel} ${formatAmount(cost)}`}
-            right={targetValue === null ? "尚未設定目標" : `目標 ${formatAmount(targetValue)}`}
+            left={`${costLabel} ${formatAmount(row.cost_per_result)}`}
+            right={row.target === null ? "尚未設定目標" : `目標 ${formatAmount(row.target)}`}
           />
         )}
       </div>
-      <Chip tone={chipTone} className="w-16 shrink-0 justify-center">{chipLabel}</Chip>
+      <Chip tone={verdict.tone} className="w-16 shrink-0 justify-center">{verdict.label}</Chip>
     </div>
   );
 }
@@ -276,9 +268,10 @@ function MaterialGroupCard({ title, tone, note, count, tiles }: {
  * `items`（F26-I01 起 `classify()` 只判讀活躍廣告，class 篩選照舊有效）；無效・已停改讀每個
  * 活動自己的 `closed` 區塊——已暫停或已封存的廣告，不論這個月才關掉還是更早都在裡面；不再讀
  * 仍在投放的 `stop_loss`，那一類交給佇列的 stop_loss 列處理，這裡不重複判斷。`worse`／
- * `no_target` 同 F24，不在這裡列——那兩類在活動卡與佇列已經有自己的處理入口。沒有關掉時間
- * （Meta 原生物件不帶 closed-at），所以不加「這個月關掉 N 則」那行（Feature Decisions
- * 「Gaps kept honest」），三張卡自己的 note 已經誠實帶到「含這個月關掉的」。 */
+ * `no_target` 同 F24，不在這裡列——那兩類在活動卡與佇列已經有自己的處理入口。這個月確切
+ * 關掉幾則（`closed_this_month`）是月摘要自己的欄位，畫在「記入品牌學習」區塊上方
+ * （`ClosedThisMonthNote`），不在這裡重複——三張卡自己的 note 仍然只講「含這個月關掉的」，
+ * 不重複月摘要那一行的確切數字。 */
 function MaterialGroups({ items, closedItems, closedTotal }: {
   items: TriageItem[]; closedItems: TriageClosedItem[]; closedTotal: number;
 }) {
@@ -299,37 +292,125 @@ function MaterialGroups({ items, closedItems, closedTotal }: {
   );
 }
 
-interface CampaignRowData { campaign: CampaignCardData; items: TriageItem[]; closed: TriageClosedBlock }
+interface CampaignRowTriage { campaign: CampaignCardData; items: TriageItem[]; closed: TriageClosedBlock }
 
-type RowsState =
+/** `記入品牌學習` 每一列的活動 chip 需要這個活動的目標文字（家族圖示＋原文字尾巴，
+ * 例：「日常商品推廣・轉換」）——`GET .../learnings`（Contract D）只回 `campaign_id`／
+ * `campaign_name`，沒有 `objective`；素材分組本來就要打 `listCampaigns` 給全品牌的 Campaign
+ * （含已關閉的，跟月摘要的月度／imported-only 範圍不同），這裡就地多留一個
+ * `campaign_id -> objective` 的查表，不重打一次 API。 */
+interface CampaignInfo { objective: string }
+
+type MaterialState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; rows: CampaignRowData[] };
+  | { status: "ready"; rows: CampaignRowTriage[]; campaignById: Record<string, CampaignInfo> };
 
-type OrdersState = { status: "loading" } | { status: "unavailable" } | { status: "ready"; summary: OrderSummary };
+type LearningsState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; learnings: AdsLearning[] };
 
-/** 訂單卡自己打自己的 API（review 先例：`AdsHomePage.tsx` 佇列／月預算／活動卡三塊各自獨立
- * 讀取，一塊失敗不拖累另外兩塊；design-system §1.7 worker self-check #9）——不跟「各活動」的
- * `listCampaigns`／`getTriage` 串在同一條 promise 鏈，這樣活動讀取失敗也不會連累這張卡。 */
-function OrdersCardContainer({ brandId }: { brandId: string }) {
-  const [state, setState] = useState<OrdersState>({ status: "loading" });
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    fetchOrders(brandId)
-      .then((data) => {
-        if (!cancelled) setState({ status: "ready", summary: data.summary });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ status: "unavailable" });
+/** 這個月關掉幾則：`closed_this_month !== null` 印 `LearnCard`；`null`（這個月落在
+ * `closed_tracking_since` 之前，還沒開始記錄）印一行灰字說明從什麼時候起才有紀錄
+ * （Feature Decisions「這個月關掉 N 則」／else 分支）。 */
+function ClosedThisMonthNote({ closedThisMonth, trackingSince }: { closedThisMonth: number | null; trackingSince: string }) {
+  if (closedThisMonth !== null) {
+    return (
+      <div className="mb-3">
+        <LearnCard title={`這個月關掉 ${closedThisMonth} 則`} />
+      </div>
+    );
+  }
+  return <p className="mb-3 text-xs text-muted-foreground">關閉時間從 {formatYMD(trackingSince)} 起記錄</p>;
+}
+
+/** 一則品牌學習：📒 圖示＋文字＋（活動已知才印）活動 chip＋「N 次同方向」＋信心 chip。跟
+ * `CampaignRow` 一樣自己組 flex row，不套 `TodoRow`（原型的 `.todo` 只是列樣式，兩邊都沒有
+ * 編號圈）。「N 次同方向」統一用這個文字模板（Feature Decisions 的字面字），不跟原型範例
+ * 資料的手寫文案（`"1 次"`、無「同方向」）走。 */
+function LearningRow({ learning, campaignById }: { learning: AdsLearning; campaignById: Record<string, CampaignInfo> }) {
+  const conf = CONFIDENCE[learning.confidence];
+  const info = learning.campaign_id ? campaignById[learning.campaign_id] : undefined;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-border py-3.5 first:border-t-0">
+      <span className="text-lg" aria-hidden="true">📒</span>
+      <p className="min-w-0 flex-1 text-sm font-medium">{learning.text}</p>
+      {learning.campaign_id && learning.campaign_name && (
+        info ? (
+          <span className="w-44 shrink-0">
+            <CampaignChip objective={objectiveFamily(info.objective)} name={learning.campaign_name} suffix={info.objective} />
+          </span>
+        ) : (
+          <span className="w-44 shrink-0 truncate text-xs text-muted-foreground" title={learning.campaign_name}>
+            {learning.campaign_name}
+          </span>
+        )
+      )}
+      <span className="w-24 shrink-0 text-right text-xs text-muted-foreground">{learning.count} 次同方向</span>
+      <Chip tone={conf.tone} className="w-20 shrink-0 justify-center">{conf.label}</Chip>
+    </div>
+  );
+}
+
+/** ✦ 下月建議一張卡：`採用` 導去 `action_url`（沒有就停用按鈕，型別容許 `null`）；`略過` 呼叫
+ * `dismissSuggestion` 成功後從清單移掉這張卡（Feature Decisions「dismissSuggestion then remove
+ * the card」）。`採用` 是 `Button variant="outline"`（原型 `class="btn sm"`，沒有 `.pri`，跟
+ * 一般主要動作的 `.btn.pri` 不同——`ui-evidence.cjs` 的 pieces 對照已經印出這個對應）。 */
+function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
+  brandId: string; month: string; suggestion: MonthSuggestion; onDismissed: (key: string) => void;
+}) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function adopt() {
+    if (suggestion.action_url) navigate(suggestion.action_url);
+  }
+  function skip() {
+    setBusy(true);
+    setError("");
+    dismissSuggestion(brandId, month, suggestion.key)
+      .then(() => onDismissed(suggestion.key))
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(err instanceof Error ? err.message : "略過失敗，請稍後再試。");
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [brandId]);
+  }
 
-  if (state.status !== "ready") return null;
-  return <OrdersCard summary={state.summary} />;
+  return (
+    <div className="surface p-5">
+      <CampaignChip objective={objectiveFamily(suggestion.objective)} name={suggestion.campaign_name} suffix={suggestion.objective} />
+      <p className="mt-2.5 mb-1 text-[15px] font-semibold">{SUGGESTION_ICON[suggestion.kind]} {suggestion.title}</p>
+      <p className="mb-3.5 text-[13px] text-muted-foreground">{suggestion.why}</p>
+      {error && <p role="alert" className="mb-2 text-xs text-warning">{error}</p>}
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" disabled={busy || !suggestion.action_url} onClick={adopt}>採用</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={skip}>略過</Button>
+      </div>
+    </div>
+  );
+}
+
+/** 下月建議整節：本地留一份可變清單（初始＝`monthState` 給的 `suggestions`），略過後從這份
+ * 清單移掉，月份切換（`monthState` 整顆重打）會連著重新初始化。 */
+function SuggestionsSection({ brandId, month, suggestions }: { brandId: string; month: string; suggestions: MonthSuggestion[] }) {
+  const [visible, setVisible] = useState(suggestions);
+  useEffect(() => setVisible(suggestions), [suggestions]);
+
+  if (visible.length === 0) {
+    return <p className="text-sm text-muted-foreground">這個月沒有下月建議。</p>;
+  }
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      {visible.map((suggestion) => (
+        <SuggestionCard
+          key={suggestion.key} brandId={brandId} month={month} suggestion={suggestion}
+          onDismissed={(key) => setVisible((prev) => prev.filter((s) => s.key !== key))}
+        />
+      ))}
+    </div>
+  );
 }
 
 export function MonthReviewPage({ brandId }: { brandId: string }) {
@@ -339,48 +420,96 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
   const [monthChoice, setMonthChoice] = useState<MonthChoice>("this");
   const selectedMonth = monthChoice === "this" ? thisMonth : lastMonth;
 
-  const [state, setState] = useState<RowsState>({ status: "loading" });
-  const [reload, setReload] = useState(0);
+  // 月摘要＋月預算：驅動全品牌花費卡／訂單卡／各活動／這個月關掉／下月建議，月選單切換
+  // 兩個一起重打（Feature Decisions「the month Segmented ... refetches the summary AND the
+  // budget」）。
+  const [monthState, setMonthState] = useState<MonthState>({ status: "loading" });
+  const [monthReload, setMonthReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
+    setMonthState({ status: "loading" });
+    Promise.all([getMonthSummary(brandId, selectedMonth), getMonthlyBudget(brandId, selectedMonth)])
+      .then(([summary, budget]) => {
+        if (!cancelled) setMonthState({ status: "ready", summary, budget });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setMonthState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId, selectedMonth, monthReload]);
+
+  // 素材分組（F26 規則，跟月份無關——永遠讀「現在」投放中／已關的廣告）：一次讀全品牌的
+  // Campaign，順便留一份 `campaign_id -> objective` 查表給「記入品牌學習」的活動 chip 用。
+  const [materialState, setMaterialState] = useState<MaterialState>({ status: "loading" });
+  const [materialReload, setMaterialReload] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMaterialState({ status: "loading" });
     listCampaigns(brandId)
       .then((campaigns) => {
+        const campaignById = Object.fromEntries(
+          campaigns.map((c) => [c.id, { objective: c.objective }]),
+        ) as Record<string, CampaignInfo>;
         const open = campaigns.filter((c) => c.status !== "closed");
         return Promise.all(
           open.map((campaign) =>
             getTriage(brandId, campaign.id).then((triage) => ({ campaign, items: triage.items, closed: triage.closed })),
           ),
-        );
+        ).then((rows) => ({ rows, campaignById }));
       })
-      .then((rows) => {
-        if (!cancelled) setState({ status: "ready", rows });
+      .then(({ rows, campaignById }) => {
+        if (!cancelled) setMaterialState({ status: "ready", rows, campaignById });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+        setMaterialState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
       });
     return () => {
       cancelled = true;
     };
-  }, [brandId, reload]);
+  }, [brandId, materialReload]);
 
-  const now = new Date();
-  const titleMonth = now.getMonth() + 1;
-  const lastCalendarMonth = titleMonth === 1 ? 12 : titleMonth - 1;
-  const nextCalendarMonth = titleMonth === 12 ? 1 : titleMonth + 1;
+  // 品牌學習清單（Contract D，跟月份無關——這個品牌至今累積的紀錄，最多 50 筆）。
+  const [learningsState, setLearningsState] = useState<LearningsState>({ status: "loading" });
+  const [learningsReload, setLearningsReload] = useState(0);
 
-  const allItems = state.status === "ready" ? state.rows.flatMap((r) => r.items) : [];
-  const allClosedItems = state.status === "ready" ? state.rows.flatMap((r) => r.closed.items) : [];
-  const closedTotal = state.status === "ready" ? state.rows.reduce((sum, r) => sum + r.closed.total, 0) : 0;
+  useEffect(() => {
+    let cancelled = false;
+    setLearningsState({ status: "loading" });
+    getAdsLearnings(brandId)
+      .then((learnings) => {
+        if (!cancelled) setLearningsState({ status: "ready", learnings });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLearningsState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId, learningsReload]);
+
+  const titleMonthNum = Number(selectedMonth.split("-")[1]);
+  const lastMonthNum = Number(lastMonth.split("-")[1]);
+  const thisMonthNum = Number(thisMonth.split("-")[1]);
+  const nextMonthNum = Number(shiftMonth(selectedMonth, 1).split("-")[1]);
+
+  const allItems = materialState.status === "ready" ? materialState.rows.flatMap((r) => r.items) : [];
+  const allClosedItems = materialState.status === "ready" ? materialState.rows.flatMap((r) => r.closed.items) : [];
+  const closedTotal = materialState.status === "ready" ? materialState.rows.reduce((sum, r) => sum + r.closed.total, 0) : 0;
+  const campaignById = materialState.status === "ready" ? materialState.campaignById : {};
 
   return (
     <div className="flex max-w-[1180px] flex-col gap-5">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "每月回顧" }]} />
 
       <PageHeader
-        title={`${titleMonth} 月回顧`}
+        title={`${titleMonthNum} 月回顧`}
         description="活動照常投放，這裡只整理帳"
         actions={
           <Segmented
@@ -388,70 +517,109 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
             value={monthChoice}
             onChange={setMonthChoice}
             options={[
-              { value: "last", label: `${lastCalendarMonth} 月` },
-              { value: "this", label: `${titleMonth} 月` },
+              { value: "last", label: `${lastMonthNum} 月` },
+              { value: "this", label: `${thisMonthNum} 月` },
             ]}
           />
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <SpendCard brandId={brandId} month={selectedMonth} />
-        <OrdersCardContainer brandId={brandId} />
-      </div>
+      {monthState.status === "loading" && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="surface p-5"><Skeleton className="h-24 w-full" /></div>
+          <div className="surface p-5"><Skeleton className="h-24 w-full" /></div>
+        </div>
+      )}
+      {monthState.status === "error" && (
+        <EmptyState
+          title="讀取失敗"
+          description={monthState.message}
+          onAction={() => setMonthReload((v) => v + 1)}
+          actionLabel="重新讀取"
+        />
+      )}
+      {monthState.status === "ready" && (
+        <>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <SpendCard summary={monthState.summary} budget={monthState.budget} />
+            {monthState.summary.orders && (
+              <OrdersCard orders={monthState.summary.orders} daysElapsed={monthState.summary.days_elapsed} />
+            )}
+          </div>
+
+          <div>
+            <h2 className="mb-3 text-[15px] font-semibold">各活動</h2>
+            {monthState.summary.campaigns.length === 0 ? (
+              <EmptyState title="沒有可回顧的活動" description="這個月沒有從廣告平台匯入的活動可回顧。" />
+            ) : (
+              <div className="surface px-5">
+                {monthState.summary.campaigns.map((row) => (
+                  <CampaignRow key={row.campaign_id} brandId={brandId} row={row} />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <div>
-        <h2 className="mb-3 text-[15px] font-semibold">各活動</h2>
-        {state.status === "loading" && (
+        <h2 className="mb-3 text-[15px] font-semibold">素材</h2>
+        {materialState.status === "loading" && (
           <div className="surface p-5">
             <Skeleton className="h-24 w-full" />
           </div>
         )}
-        {state.status === "error" && (
+        {materialState.status === "error" && (
           <EmptyState
             title="讀取失敗"
-            description={state.message}
-            onAction={() => setReload((v) => v + 1)}
+            description={materialState.message}
+            onAction={() => setMaterialReload((v) => v + 1)}
             actionLabel="重新讀取"
           />
         )}
-        {state.status === "ready" && (
-          state.rows.length === 0 ? (
-            <EmptyState title="還沒有 Campaign" description="建立第一個 Campaign 後，這裡會列出每個活動的花費與判斷。" />
-          ) : (
-            <div className="surface px-5">
-              {state.rows.map(({ campaign, items }) => (
-                <CampaignRow key={campaign.id} brandId={brandId} campaign={campaign} items={items} />
-              ))}
-            </div>
-          )
+        {materialState.status === "ready" && (
+          <MaterialGroups items={allItems} closedItems={allClosedItems} closedTotal={closedTotal} />
         )}
       </div>
 
-      {state.status === "ready" && (
+      {monthState.status === "ready" && (
         <div>
-          <h2 className="mb-3 text-[15px] font-semibold">素材</h2>
-          <MaterialGroups items={allItems} closedItems={allClosedItems} closedTotal={closedTotal} />
+          <h2 className="mb-3 text-[15px] font-semibold">記入品牌學習</h2>
+          <ClosedThisMonthNote
+            closedThisMonth={monthState.summary.closed_this_month}
+            trackingSince={monthState.summary.closed_tracking_since}
+          />
+          {learningsState.status === "loading" && (
+            <div className="surface p-5"><Skeleton className="h-16 w-full" /></div>
+          )}
+          {learningsState.status === "error" && (
+            <EmptyState
+              title="讀取失敗"
+              description={learningsState.message}
+              onAction={() => setLearningsReload((v) => v + 1)}
+              actionLabel="重新讀取"
+            />
+          )}
+          {learningsState.status === "ready" && (
+            learningsState.learnings.length === 0 ? (
+              <p className="text-sm text-muted-foreground">還沒有記錄。</p>
+            ) : (
+              <div className="surface px-5">
+                {learningsState.learnings.map((learning) => (
+                  <LearningRow key={learning.id} learning={learning} campaignById={campaignById} />
+                ))}
+              </div>
+            )
+          )}
         </div>
       )}
 
-      <div>
-        <h2 className="mb-3 text-[15px] font-semibold">記入品牌學習</h2>
-        <ReservedSlotCard
-          title="品牌學習紀錄"
-          description="系統會整理每一次的判斷結果，記錄哪些方向對這個品牌有效或無效。"
-          tag="接上後開放"
-        />
-      </div>
-
-      <div>
-        <h2 className="mb-3 text-[15px] font-semibold">✦ {nextCalendarMonth} 月建議</h2>
-        <ReservedSlotCard
-          title="下月建議"
-          description="依這個月的判斷結果，整理下個月可以先做的素材與設定調整。"
-          tag="接上後開放"
-        />
-      </div>
+      {monthState.status === "ready" && (
+        <div>
+          <h2 className="mb-3 text-[15px] font-semibold">✦ {nextMonthNum} 月建議</h2>
+          <SuggestionsSection brandId={brandId} month={selectedMonth} suggestions={monthState.summary.suggestions} />
+        </div>
+      )}
 
       <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>} />
     </div>
