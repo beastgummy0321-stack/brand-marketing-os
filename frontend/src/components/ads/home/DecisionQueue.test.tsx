@@ -1,16 +1,19 @@
 /** frontend/src/components/ads/home/DecisionQueue.test.tsx — F19-I03：v7 `home()` 的 `row`
  * （prototype ≈ 195–203）落地後的列內容斷言。殼／loading／error 已經是 F19-I02 的範圍
  * （`AdsHomePage.test.tsx` 蓋），這支只管 `DecisionQueue`／`QueueRow` 自己印出來的東西：
- * 兩種分類各自的量尺文案＋寬度、金額格式（最多兩位小數、不四捨五入到整數）、未知數字的兩種
+ * 四種分類各自的量尺文案＋寬度、金額格式（最多兩位小數、不四捨五入到整數）、未知數字的兩種
  * 誠實句（量測值「累積中」／配置值「尚未設定」）、只有第一列主要按鈕、按鈕不看量尺畫不畫得
- * 出來、篩選鈕、空狀態不重複頁首那句話＋佔位列同時可見、未認得的 pending 代碼、鍵盤順序。 */
+ * 出來、篩選鈕、空狀態不重複頁首那句話＋佔位列同時可見、未認得的 pending 代碼、鍵盤順序。
+ * F25-I02：加上 `scale_budget`（可加預算）／`refresh_creative`（補素材）兩種列，以及
+ * `refresh_creative` 永遠排最後、`kinds_pending` 空陣列時佔位列全消失。 */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import type {
-  QueueItem, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, TriageItem,
+  QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal, QueueRefresh,
+  QueueReviewProposal, QueueScale, TriageItem,
 } from "@/lib/adsTriageApi";
 import { DecisionQueue, type QueueState } from "./DecisionQueue";
 import { isQueueItemDone, proposalAction } from "./status";
@@ -29,22 +32,47 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
+// F25-I02: `extra` carries the scale_budget／refresh_creative-only fields — `kind_key` defaults to
+// mirroring `triage.class` (unchanged for every existing stop_loss／worse fixture below), scale
+// and refresh fixtures always pass an explicit `kind_key` since their `triage.class` is the *ad's*
+// own classification (e.g. `better`), never one of the two row kinds.
 function queueItem(
   id: string,
   overrides: Partial<TriageItem> = {},
   proposal: QueueProposal | null = null,
+  extra: { kind_key?: QueueKind; scale?: QueueScale; refresh?: QueueRefresh; action_url?: string } = {},
 ): QueueItem {
   const triage = triageItem(overrides);
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`,
     category: "ads_triage", kind: null, severity: "rule_warning",
-    message: "待決定", action_url: `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`,
+    message: "待決定", action_url: extra.action_url ?? `/brands/brd_1/ads/campaigns/cmp_1?tab=performance`,
     visible_from: null, status: "open", created_at: "2026-09-19T00:00:00Z", resolved_at: null,
-    // F25-I01: `kind_key` is a new required top-level field -- this fixture only ever builds
-    // stop_loss/worse rows (the only two kinds this component already renders), so it mirrors
-    // `triage.class` directly.
-    kind_key: triage.class === "worse" ? "worse" : "stop_loss",
-    triage, proposal,
+    kind_key: extra.kind_key ?? (triage.class === "worse" ? "worse" : "stop_loss"),
+    triage, proposal, scale: extra.scale, refresh: extra.refresh,
+  };
+}
+
+function scaleOwner(overrides: Partial<QueueScale["owner"]> = {}): QueueScale["owner"] {
+  return {
+    id: "adset_1", name: "晨光隨行杯・投放組", native_kind: "adset", native_id: "native_adset_1",
+    ads_count: 3, currency: "TWD", ...overrides,
+  };
+}
+function scale(overrides: Partial<QueueScale> = {}): QueueScale {
+  return {
+    owner: scaleOwner(), from: 500, to: 600,
+    cost_per_result: 300, previous_cost_per_result: 310,
+    target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
+    window_days: 7, month: { available: 12000, extra_needed: 700 },
+    ...overrides,
+  };
+}
+function refresh(overrides: Partial<QueueRefresh> = {}): QueueRefresh {
+  return {
+    campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市",
+    readable_count: 2, classified_count: 5, thumbnails: ["https://cdn.example/a.jpg", null],
+    ...overrides,
   };
 }
 
@@ -174,7 +202,7 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(screen.queryByText("暫停提議・接上後開放")).toBeNull();
   });
 
-  it("只有第一列是主要按鈕樣式，其餘是次要（停損列沒有提案時印「去處理」，變差列維持「看證據」）", () => {
+  it("只有第一列是主要按鈕樣式，其餘是次要（停損列沒有提案時印「看提議」，變差列維持「看證據」）", () => {
     renderQueue(ready({
       items: [
         queueItem("q1"),
@@ -182,17 +210,17 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
       ],
     }));
 
-    const goLink = screen.getByRole("link", { name: "去處理" });
+    const goLink = screen.getByRole("link", { name: "看提議" });
     const evidenceLink = screen.getByRole("link", { name: "看證據" });
     expect(goLink.getAttribute("data-variant")).toBe("default");
     expect(evidenceLink.getAttribute("data-variant")).toBe("outline");
   });
 
   describe("F22-I05：停損列的按鈕由 item.proposal 決定", () => {
-    it("none（沒有提案）：「去處理」導向提議頁", () => {
+    it("none（沒有提案）：「看提議」導向提議頁（F25-I02：home 這一列的字樣，不是 detail 頁的「去處理」）", () => {
       renderQueue(ready({ items: [queueItem("q1", { entity_id: "ad_1", campaign_id: "cmp_1" })] }));
 
-      const link = screen.getByRole("link", { name: "去處理" });
+      const link = screen.getByRole("link", { name: "看提議" });
       expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/ad_1");
       expect(link.getAttribute("data-variant")).toBe("default");
     });
@@ -433,6 +461,158 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     });
   });
 
+  // F25-I02：proposalAction 的 "budget" 分支——同 F23-I01 的做法，直接呼叫純函式做完整狀態機
+  // 覆蓋，不透過 DOM（下面「可加預算列」describe 補畫面層級的斷言）。
+  describe("F25-I02：proposalAction 的 budget 分支（scale_budget 列，跟 pause 分支共用同一套狀態機）", () => {
+    const call = (p: QueueProposal | null) => proposalAction("brd_1", "cmp_1", "adset_1", p, "budget");
+
+    it("none（沒有提案）：「看提議」導向 propose/budget/:ownerId", () => {
+      expect(call(null)).toEqual({
+        label: "看提議", href: "/brands/brd_1/ads/campaigns/cmp_1/propose/budget/adset_1", done: false,
+      });
+    });
+
+    it("draft：「等你核准」導向 confirm（跟 pause 分支同一套 label／連結，budget 分支＝pause 分支）", () => {
+      const budgetProposal: QueueProposal = {
+        kind: "budget", change_set_id: "set_5", campaign_id: "cmp_1",
+        status: "draft", verification_state: "pending", reason: null, revisit_at: null, multi: false,
+      };
+      expect(call(budgetProposal)).toEqual({
+        label: "等你核准", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/set_5/confirm", done: false,
+      });
+    });
+
+    it("approved + pending：「到平台完成」導向 handoff", () => {
+      const budgetProposal: QueueProposal = {
+        kind: "budget", change_set_id: "set_5", campaign_id: "cmp_1",
+        status: "approved", verification_state: "pending", reason: null, revisit_at: null, multi: false,
+      };
+      expect(call(budgetProposal)).toEqual({
+        label: "到平台完成", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/set_5/handoff", done: false,
+      });
+    });
+
+    it("approved + confirmed：「已核對」ghost、已完成", () => {
+      const budgetProposal: QueueProposal = {
+        kind: "budget", change_set_id: "set_5", campaign_id: "cmp_1",
+        status: "approved", verification_state: "confirmed", reason: null, revisit_at: null, multi: false,
+      };
+      expect(call(budgetProposal)).toEqual({
+        label: "已核對", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/set_5/verify", done: true,
+      });
+    });
+  });
+
+  describe("F25-I02：可加預算列（scale_budget，feature Decisions \"Home rows\"）", () => {
+    it("KindMark 可加預算、標題是預算擁有者名稱、量尺 tone success、文案「<成果標籤>成本 X」／「目標 Y」，沒有提案時「看提議」導向 propose/budget/:ownerId", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", { class: "flat", label: "持平" }, null, {
+          kind_key: "scale_budget", scale: scale(),
+        })],
+      }));
+
+      expect(screen.getByText("可加預算")).toBeTruthy();
+      expect(screen.getByText("晨光隨行杯・投放組")).toBeTruthy();
+      expect(screen.getByText("購買成本 300")).toBeTruthy();
+      expect(screen.getByText("目標 450")).toBeTruthy();
+      expect(screen.getByTestId("meter-fill").className).toContain("bg-success");
+
+      const link = screen.getByRole("link", { name: "看提議" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/budget/adset_1");
+    });
+
+    it("owner.name 是 null：標題退回「（未命名）」，不是空白", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "scale_budget", scale: scale({ owner: scaleOwner({ name: null }) }),
+        })],
+      }));
+
+      expect(screen.getByText("（未命名）")).toBeTruthy();
+    });
+
+    it("成本或目標未知：不畫量尺，文案照印誠實句（量測值「累積中」／配置值「尚未設定」）", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "scale_budget",
+          scale: scale({
+            cost_per_result: null,
+            target: { value: null, basis: null, result_kind: "purchase", result_label: "購買", missing: ["target"] },
+          }),
+        })],
+      }));
+
+      expect(screen.queryByTestId("meter")).toBeNull();
+      expect(screen.getByText("購買成本 累積中")).toBeTruthy();
+      expect(screen.getByText("目標 尚未設定")).toBeTruthy();
+    });
+  });
+
+  describe("F25-I02：補素材列（refresh_creative，feature Decisions \"Home rows\"）", () => {
+    it("KindMark 補素材、標題「能判讀的素材只剩 N 則」、縮圖格補到 4 格，按鈕「準備新素材」導向 item.action_url，非 ghost", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, {
+          kind_key: "refresh_creative",
+          refresh: refresh({ readable_count: 2, thumbnails: ["https://cdn.example/a.jpg", null] }),
+          action_url: "/brands/brd_1/ads/campaigns/cmp_1?tab=assets&material_new=1",
+        })],
+      }));
+
+      expect(screen.getByText("補素材")).toBeTruthy();
+      expect(screen.getByText("能判讀的素材只剩 2 則")).toBeTruthy();
+      // 2 則 thumbnails（一則有圖、一則沒有但仍是「真的一格」）＋ 2 格補到 4 格的中空虛線。
+      expect(screen.getAllByTestId("refresh-tile-hollow")).toHaveLength(2);
+
+      const link = screen.getByRole("link", { name: "準備新素材" });
+      expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets&material_new=1");
+      expect(link.getAttribute("data-variant")).not.toBe("ghost");
+    });
+
+    it("縮圖全空：4 格都印中空虛線（不是後端漏做，是前端自己補）", () => {
+      renderQueue(ready({
+        kinds_pending: [],
+        items: [queueItem("q1", {}, null, { kind_key: "refresh_creative", refresh: refresh({ thumbnails: [] }) })],
+      }));
+
+      expect(screen.getAllByTestId("refresh-tile-hollow")).toHaveLength(4);
+    });
+
+    it("永遠不算完成——isQueueItemDone 恆 false（沒有提案流程，也沒有「已完成」樣式）", () => {
+      const item = queueItem("q1", {}, null, { kind_key: "refresh_creative", refresh: refresh() });
+      expect(isQueueItemDone(item)).toBe(false);
+    });
+  });
+
+  it("順序：refresh_creative 列永遠排在篩選後清單最後，primary 按鈕落在它前面那列，不管 payload 順序（feature Decisions \"Home rows\"：\"refresh rows...are last in order\"）", () => {
+    renderQueue(ready({
+      kinds_pending: [],
+      items: [
+        queueItem("q_refresh", { name: "補素材活動" }, null, {
+          kind_key: "refresh_creative", refresh: refresh(),
+          action_url: "/brands/brd_1/ads/campaigns/cmp_1?tab=assets&material_new=1",
+        }),
+        queueItem("q_stop", { name: "停損廣告" }),
+      ],
+    }));
+
+    const stopLink = screen.getByRole("link", { name: "看提議" });
+    const refreshLink = screen.getByRole("link", { name: "準備新素材" });
+    expect(stopLink.getAttribute("data-variant")).toBe("default");
+    expect(refreshLink.getAttribute("data-variant")).toBe("outline");
+  });
+
+  it("kinds_pending 空陣列：佔位列完全消失（F25-I01 之後後端一律回 []）", () => {
+    renderQueue(ready({ kinds_pending: [] }));
+
+    expect(screen.queryByText("可加預算")).toBeNull();
+    expect(screen.queryByText("補素材")).toBeNull();
+    expect(screen.queryByText("接上後開放")).toBeNull();
+  });
+
   it("篩選鈕：單一活動也照印「全部 N」＋那顆活動 pill（v7 行為），不印 id 充當名稱", () => {
     // Lead review fix 2026-09-21：名稱／計數分成兩個 <span>（見下一則測試），DOM 上不再有單一
     // 元素印出「全部 2」這串完整字——可存取名稱（aria-label）還是「名稱 計數」，用 role 查。
@@ -488,8 +668,8 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     expect(all.getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByText("廣告B")).toBeTruthy();
     expect(screen.queryByText("廣告A")).toBeNull();
-    // primary 按鈕跟著篩選後的第一列走（兩則都是預設停損列、沒有提案 → 「去處理」）。
-    expect(screen.getByRole("link", { name: "去處理" }).getAttribute("data-variant")).toBe("default");
+    // primary 按鈕跟著篩選後的第一列走（兩則都是預設停損列、沒有提案 → 「看提議」）。
+    expect(screen.getByRole("link", { name: "看提議" }).getAttribute("data-variant")).toBe("default");
   });
 
   it("篩選中的活動在重新整理後消失（分流結果換了）：自動退回「全部」，不留一個誰都沒按著的篩選鈕", async () => {
@@ -552,7 +732,7 @@ describe("DecisionQueue／QueueRow（F19-I03）", () => {
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "晨光隨行杯上市 2" }));
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("link", { name: "去處理" }));
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: "看提議" }));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("link", { name: "看證據" }));
   });
