@@ -229,7 +229,7 @@ def fake_fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
         return body
     limit = int((params or {}).get("limit") or 100)
     start = int(str((params or {}).get("after") or "o0").removeprefix("o"))
-    page = {"data": data[start:start + limit]}
+    page: dict = {"data": data[start:start + limit]}
     if start + limit < len(data):
         page["paging"] = {"next": url, "cursors": {"after": f"o{start + limit}"}}
     return page
