@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -115,6 +115,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/prepare"
           element={<AdsPrepareRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/copy"
+          element={<AdsCopyRoute />}
         />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
@@ -508,6 +512,15 @@ function AdsPrepareRoute() {
   const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
   return (
     <PreparePage key={`review-prepare-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「改文案」頁（reviews/:reviewId/copy route，F23-I04，v7 原型 `copy()`）：檢討回合已
+ * 存在時的正典網址；非法步驟由 `CopyPage` 自己轉去看證據頁（同 `AdsPrepareRoute` 的分工）。 */
+function AdsCopyRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <CopyPage key={`review-copy-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
   );
 }
 
