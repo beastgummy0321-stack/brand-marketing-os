@@ -378,4 +378,27 @@ def get(conn, org, brand, campaign_id, set_id):
     result["recommendation_id"] = result["plan_json"].get("recommendation_id")
     result["material_task_id"] = result["plan_json"].get("material_task_id")
     result["material_revision"] = result["plan_json"].get("material_revision")
+    # Contract E: a `new_ad` item may name the ACTIVE ad it replaces (validated at creation,
+    # `handoff_new_ad.create`) -- `replaces` is read live (the old ad's name may since have
+    # changed); `follow_up` only once that item's own verification reads back `confirmed`, and
+    # only while no non-superseded change set of this campaign already carries a `pause` item
+    # targeting the old ad (the user may have proposed that pause through any route).
+    new_ad_item = next(
+        (i for i in result["plan_json"]["items"] if i["kind"] == "new_ad"), None
+    )
+    result["replaces"] = None
+    result["follow_up"] = None
+    if new_ad_item and new_ad_item.get("replaces_entity_id"):
+        old_entity_id = new_ad_item["replaces_entity_id"]
+        old = bindings.entity(conn, org, brand, campaign_id, old_entity_id)
+        result["replaces"] = {"entity_id": old["id"], "name": old.get("name") or old["native_id"]}
+        item_view = next(v for v in result["items"] if v["id"] == new_ad_item["id"])
+        if item_view["verification_state"] == "confirmed" and not conn.execute(
+            "SELECT 1 FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+            "AND status != 'superseded' AND EXISTS (SELECT 1 FROM jsonb_array_elements("
+            "plan_json->'items') AS elem WHERE elem->>'kind'='pause' AND elem->>'target_id'=%s) "
+            "LIMIT 1",
+            (org, brand, campaign_id, old_entity_id),
+        ).fetchone():
+            result["follow_up"] = {"kind": "pause_old", "entity_id": old_entity_id}
     return result

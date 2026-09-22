@@ -38,6 +38,11 @@ export interface ChangeSet {
   can_revise?: boolean;
   review_id?: string | null; recommendation_id?: string | null;
   material_task_id?: string | null; material_revision?: number | null;
+  // Contract E (F27-I05): only ever set when the set's `new_ad` item names an ad it replaces;
+  // `follow_up` only once that item reads back `confirmed` and no pause set for the old ad exists
+  // yet -- optional so existing test factories need no change.
+  replaces?: { entity_id: string; name: string } | null;
+  follow_up?: { kind: "pause_old"; entity_id: string } | null;
 }
 export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
