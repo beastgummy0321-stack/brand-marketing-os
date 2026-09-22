@@ -1182,3 +1182,26 @@ stop-loss row / detail 「去處理」, `home/status.ts::proposalAction`); the p
   DecisionSheet, ActionBar); `frontend/scripts/ui-evidence.cjs --acts` reaches later prototype steps.
 - 驗證：`frontend/src/components/ads/flow/*.test.tsx`、`home/DecisionQueue.test.tsx`、`AdsHomePage.test.tsx`、
   `detail/CampaignDetailPage.test.tsx`；並排證據 `.harness/scratch/F22/I0{2,3,4}/`。
+
+### 6.24 F23 — 變差廣告六步流程的前三步（settled 2026-09-22）
+
+Routes (`components/ads/review/`, v7 `review()`/`prepare()`/`copy()`): `.../review/:entityId` (entry from a 變差 row: uses
+`proposal.review_id` when present, else `createReview` with the row's triage window — the window end moves daily, so the
+round is never re-created from the window alone) → `.../reviews/:reviewId` (看證據) → `/prepare` (選方向) → `/copy` (改文案) →
+F22 `changes/:setId/confirm`. Step logic in `review/reviewFlow.ts`.
+- Round states: queued/running → async card with polling; waiting → 「資料還不夠」 + `waiting_reasons` (never advances by
+  itself); failed/unknown → error card, no retry (evidence dedupe returns the same round); ready → evidence; deferred /
+  unjudgeable → closed, 改變決定 offers only 暫緩／無法判定 (`completed` is legal only from `ready`).
+- Evidence cards: AI 建議 = first recommendation (title by kind, why = `hypothesis`, 依據與風險 = `risks` + `next_step`);
+  這則廣告 = 花費 (sum of `series` with `metric_scope == "ad"`, mirrors `triage._ad_spend`), 成果數／單次成本 from the
+  `result_views` ad entry — ROAS omitted; 商城訂單 from `commerce.*.order_summary` (`coverage` is a constant, the warn chip
+  keys on `unknown_*_count > 0`).
+- 選方向: 只改文案／先觀察 (deferred, requires `revisit_at`)／停掉這則 (→ F22 propose/pause); 換一張圖／用現成素材 are reserved
+  cards; the ladder 改文案→換圖→退役 is a grey placeholder (decision A, 2026-09-22: no per-creative handling count yet).
+- 改文案: 目前 from `creative_snapshot.copy_fields`, 新版 from `suggested_copy`; createChangeSet sends only non-empty
+  fields, the review pair only when the recommendation is `adjust`; `operation_id = review-copy:<reviewId>:<uuid>`.
+- Queue `proposal` for `worse` rows (`kind:"review"`, §6.22) drives `home/status.ts::proposalAction`; the confirm page's back
+  button becomes 「修改內容」 for a copy set carrying `review_id`.
+- Kit: `patterns/ReviewPieces.tsx` (EvidenceRow, Ladder, OptionCard, CopyBlock); `ui-evidence.cjs --settle`.
+- 驗證：`frontend/src/components/ads/review/*.test.tsx`、`flow/ConfirmPage.test.tsx`、`home/DecisionQueue.test.tsx`；並排證據
+  `.harness/scratch/F23/I0{2,3,4}/`.
