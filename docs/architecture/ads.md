@@ -1389,3 +1389,20 @@ forced last and never count as done.
   同窗去重、恢復後 supersede）、`test_ads_triage_scale.py`（`ADSET_PAUSED` 現在也排除 Rule A／B，舊三值集合抓不到
   的反例）、`test_core_interrupts.py`（新類別 severity／label）。`cd frontend && npm run build`／
   `npm test -- src/components/ads`。
+
+### 6.30 F26 — 只判讀投放中的廣告（前端）與「資料不足」佇列列（settled 2026-09-22）
+
+Reference: `docs/design/ads/prototype-v8-active-only.html` (user-approved 2026-09-22). Backend rule and payload: §6.29.
+- `home/CampaignCard.tsx`: the count chip reads 「<目標類型>・投放中 N 則」; the five-class strip and legend cover active ads
+  only; a bottom line 「另有 N 則已關閉（暫停 X・已封存 Y），不列入判斷」＋「查看 →」 (omitted when `closed.total === 0`).
+- `detail/CampaignDetailPage.tsx`: purpose line 「只判讀投放中的 N 則；已關閉的廣告保留紀錄，不列入判斷」; class groups from
+  active ads; a grey collapsed 「已關閉」 group listing `closed.items` with an 已暫停／已封存 chip and 「看紀錄」 →
+  `?tab=performance&ad=<entityId>` (user decision A: no new page; the tab does not yet scroll to the ad). A campaign whose ads
+  are ALL closed shows that group instead of the empty state.
+- `home/QueueRow.tsx` + `status.ts`: the `insufficient_data` row — KindMark warning, 「這個活動暫時無法判斷」, `DayTiles` over
+  the 7 days ending at `insufficient.coverage.end` with `missing_days` hollow, captions 「缺 M/D、M/D」 and the sync state,
+  「去處理」 → the wait page; never done.
+- `month/MonthReviewPage.tsx`: 素材 groups are 有效 = active `better`, 無效・已停 = `closed.items` (count `closed.total`),
+  還看不出 = active `flat`+`insufficient`; no 「這個月關掉 N 則」 line (no closed-at date from the platform).
+- 驗證：`home/CampaignCards.test.tsx`, `home/DecisionQueue.test.tsx`, `detail/CampaignDetailPage.test.tsx`,
+  `month/MonthReviewPage.test.tsx`; 並排證據 `.harness/scratch/F26/I0{2,3}/`.
