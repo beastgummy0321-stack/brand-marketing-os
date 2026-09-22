@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
-import { getTriage, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
+import { getTriage, type TriageClosedBlock, type TriageClosedItem, type TriageItem } from "@/lib/adsTriageApi";
 import { fetchOrders, type OrderSummary } from "@/lib/ordersApi";
 import { ActionBar, Chip, Meter, ReservedSlotCard, Segmented } from "../patterns";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
@@ -237,50 +237,69 @@ function CampaignRow({
   );
 }
 
-const MATERIAL_GROUPS: { key: string; title: string; tone: "ok" | "bad" | "neutral"; classes: TriageClass[] }[] = [
-  { key: "better", title: "有效", tone: "ok", classes: ["better"] },
-  { key: "stop_loss", title: "無效・已停", tone: "bad", classes: ["stop_loss"] },
-  { key: "flat_insufficient", title: "還看不出", tone: "neutral", classes: ["flat", "insufficient"] },
-];
-
 // 一組最多畫幾張縮圖（coordinator 一步修正 2026-09-22）：原型只示範個位數，真實品牌一個
 // class 常有 20＋則廣告，全印成磚牆不是設計。超過的量不丟掉，摺成一顆中性 Chip；group
 // 標頭的計數 chip 仍印全部則數，不受這個上限影響。
 const MATERIAL_TILE_LIMIT = 12;
 
-/** 素材：依 Feature Decisions 只分三組（有效／無效已停／還看不出），`worse`／`no_target` 不在
- * 這裡列——那兩類在活動卡與佇列已經有自己的處理入口。 */
-function MaterialGroups({ items }: { items: TriageItem[] }) {
+interface MaterialTile { entity_id: string; thumbnail_url: string | null }
+
+/** 一個素材分組卡：標頭計數用 `count`（不受 12 張縮圖上限影響），`note` 是這一組的白話說明
+ * （v8 原型 `month()` 每張卡標題下都有一行）。 */
+function MaterialGroupCard({ title, tone, note, count, tiles }: {
+  title: string; tone: "ok" | "bad" | "neutral"; note: string; count: number; tiles: MaterialTile[];
+}) {
+  const shown = tiles.slice(0, MATERIAL_TILE_LIMIT);
+  const hidden = count - shown.length;
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      {MATERIAL_GROUPS.map((group) => {
-        const groupItems = items.filter((item) => group.classes.includes(item.class));
-        const shown = groupItems.slice(0, MATERIAL_TILE_LIMIT);
-        const hidden = groupItems.length - shown.length;
-        return (
-          <div key={group.key} className="surface p-5">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-[15px] font-semibold">{group.title}</h3>
-              <Chip tone={group.tone}>{groupItems.length} 則</Chip>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {groupItems.length === 0 ? (
-                <p className="text-xs text-muted-foreground">目前沒有廣告落在這一類。</p>
-              ) : (
-                <>
-                  {shown.map((item) => <MaterialThumb key={item.entity_id} url={item.thumbnail_url} />)}
-                  {hidden > 0 && <Chip tone="neutral">＋{hidden} 則</Chip>}
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })}
+    <div className="surface p-5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[15px] font-semibold">{title}</h3>
+        <Chip tone={tone}>{count} 則</Chip>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {count === 0 ? (
+          <p className="text-xs text-muted-foreground">目前沒有廣告落在這一類。</p>
+        ) : (
+          <>
+            {shown.map((item) => <MaterialThumb key={item.entity_id} url={item.thumbnail_url} />)}
+            {hidden > 0 && <Chip tone="neutral">＋{hidden} 則</Chip>}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-interface CampaignRowData { campaign: CampaignCardData; items: TriageItem[] }
+/** 素材（F26-I03，依 Feature Decisions「I03」重分三組）：有效／還看不出兩組仍讀「投放中」的
+ * `items`（F26-I01 起 `classify()` 只判讀活躍廣告，class 篩選照舊有效）；無效・已停改讀每個
+ * 活動自己的 `closed` 區塊——已暫停或已封存的廣告，不論這個月才關掉還是更早都在裡面；不再讀
+ * 仍在投放的 `stop_loss`，那一類交給佇列的 stop_loss 列處理，這裡不重複判斷。`worse`／
+ * `no_target` 同 F24，不在這裡列——那兩類在活動卡與佇列已經有自己的處理入口。沒有關掉時間
+ * （Meta 原生物件不帶 closed-at），所以不加「這個月關掉 N 則」那行（Feature Decisions
+ * 「Gaps kept honest」），三張卡自己的 note 已經誠實帶到「含這個月關掉的」。 */
+function MaterialGroups({ items, closedItems, closedTotal }: {
+  items: TriageItem[]; closedItems: TriageClosedItem[]; closedTotal: number;
+}) {
+  const better = items.filter((item) => item.class === "better");
+  const flatInsufficient = items.filter((item) => item.class === "flat" || item.class === "insufficient");
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <MaterialGroupCard title="有效" tone="ok" note="投放中，成本在目標內" count={better.length} tiles={better} />
+      <MaterialGroupCard
+        title="無效・已停" tone="bad" note="已暫停或封存，含這個月關掉的"
+        count={closedTotal} tiles={closedItems}
+      />
+      <MaterialGroupCard
+        title="還看不出" tone="neutral" note="投放中，樣本還不夠"
+        count={flatInsufficient.length} tiles={flatInsufficient}
+      />
+    </div>
+  );
+}
+
+interface CampaignRowData { campaign: CampaignCardData; items: TriageItem[]; closed: TriageClosedBlock }
 
 type RowsState =
   | { status: "loading" }
@@ -331,7 +350,7 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
         const open = campaigns.filter((c) => c.status !== "closed");
         return Promise.all(
           open.map((campaign) =>
-            getTriage(brandId, campaign.id).then((triage) => ({ campaign, items: triage.items })),
+            getTriage(brandId, campaign.id).then((triage) => ({ campaign, items: triage.items, closed: triage.closed })),
           ),
         );
       })
@@ -353,6 +372,8 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
   const nextCalendarMonth = titleMonth === 12 ? 1 : titleMonth + 1;
 
   const allItems = state.status === "ready" ? state.rows.flatMap((r) => r.items) : [];
+  const allClosedItems = state.status === "ready" ? state.rows.flatMap((r) => r.closed.items) : [];
+  const closedTotal = state.status === "ready" ? state.rows.reduce((sum, r) => sum + r.closed.total, 0) : 0;
 
   return (
     <div className="flex max-w-[1180px] flex-col gap-5">
@@ -410,7 +431,7 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
       {state.status === "ready" && (
         <div>
           <h2 className="mb-3 text-[15px] font-semibold">素材</h2>
-          <MaterialGroups items={allItems} />
+          <MaterialGroups items={allItems} closedItems={allClosedItems} closedTotal={closedTotal} />
         </div>
       )}
 
