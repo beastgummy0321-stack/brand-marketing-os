@@ -57,6 +57,7 @@ CLI:
     python -m scripts.drill.fake_meta selfcheck-imported
 """
 
+import hashlib
 import json
 import os
 from datetime import date, timedelta
@@ -411,9 +412,14 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
     existing = len([e for e in state["campaigns"] + state["adsets"] + state["ads"]
                     if e.get("brand_id") == brand_id]) if append else 0
 
+    # Digits only, like a real Meta id: `graph.external_page` refuses anything else, so a mirrored
+    # node built with the brand's own (alphanumeric) id suffix could be listed but never read back
+    # (drill 5: the launch handoff's readback answered "no such object").
+    brand_digits = int(hashlib.sha1(brand_id.encode()).hexdigest()[:8], 16) % 1_000_000
+
     def new_id(kind: str) -> str:
         seq[0] += 1
-        return f"{kind}{brand_id[-6:]}{existing + seq[0]:04d}"
+        return f"{kind}{brand_digits:06d}{existing + seq[0]:04d}"
 
     campaigns, adsets, ads = [], [], []
     for node in nodes:
