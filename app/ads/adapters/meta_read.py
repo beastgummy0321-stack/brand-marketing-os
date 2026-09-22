@@ -226,6 +226,27 @@ def creative_summary(value):
     }
     if dynamic:
         result["unsupported"] = "動態／商品目錄素材無法完整還原。"
+        # Contract B (F27-I02): the only text a dynamic/catalog creative actually exposes for
+        # editing is Meta's own `asset_feed_spec.titles[]/bodies[]` variant arrays -- this is
+        # platform knowledge, so it stays in the adapter rather than leaking `asset_feed_spec`'s
+        # shape into `app/ads/change_control_data.py`. Missing arrays (a creative that only
+        # carries e.g. `promotional_metadata`, real dev data) become empty lists, never an error;
+        # `change_control_data.copy_editable` is what decides whether that's still editable.
+        feed = value.get("asset_feed_spec") or {}
+
+        def _texts(items):
+            return [
+                item["text"]
+                for item in (items or [])
+                if isinstance(item, dict)
+                and isinstance(item.get("text"), str)
+                and item["text"].strip()
+            ]
+
+        result["fields"]["copy_variants"] = {
+            "titles": _texts(feed.get("titles")),
+            "bodies": _texts(feed.get("bodies")),
+        }
     return result
 
 

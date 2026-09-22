@@ -762,7 +762,9 @@ class ChangeControlTest(unittest.TestCase):
                 "test",
             )
 
-    def test_dynamic_copy_is_rejected_but_original_creative_snapshot_is_retained(self):
+    def test_carousel_copy_is_rejected_but_original_creative_snapshot_is_retained(self):
+        # Contract B (F27-I02): dynamic creatives are now SUPPORTED (see test_ads_copy_variants.py)
+        # -- only carousel still refuses a single-copy edit outright.
         first = self.create()
         self.assertEqual(first["items"][0]["creative_snapshot"], self.ad["creative"])
         self.entity(
@@ -770,10 +772,10 @@ class ChangeControlTest(unittest.TestCase):
             "ad",
             parent_native_kind="adset",
             parent_native_id="2",
-            creative={"kind": "dynamic", "fields": {"body": "one variation"}},
+            creative={"kind": "carousel", "fields": {"body": "one variation"}},
         )
         self.conn.commit()
-        with self.assertRaisesRegex(ValueError, "動態"):
+        with self.assertRaisesRegex(ValueError, "輪播"):
             self.create()
         self.assertEqual(
             data.get(self.conn, self.org, self.brand, self.campaign, first["id"])["items"][0][

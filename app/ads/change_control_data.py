@@ -121,12 +121,44 @@ def operation(value):
 def copy_fields(entity):
     creative = entity.get("creative") or {}
     fields = creative.get("fields") or {}
+    if creative.get("kind") == "dynamic":
+        variants = fields.get("copy_variants") or {}
+        return {
+            "titles": list(variants.get("titles") or []),
+            "bodies": list(variants.get("bodies") or []),
+        }
     spec = fields.get("object_story_spec") or {}
     link, video = spec.get("link_data") or {}, spec.get("video_data") or {}
     return {
         "body": fields.get("body", link.get("message", video.get("message"))),
         "title": fields.get("title", link.get("name", video.get("title"))),
     }
+
+
+def copy_editable(creative):
+    """Contract B / correction 7 -- computed fresh from the creative's own kind and fields,
+    never stored: a later re-sync (creative kind changes, or Meta finally returns titles/bodies)
+    must change the answer without touching anything already approved."""
+    creative = creative or {}
+    kind = creative.get("kind")
+    if kind in {"image", "video"}:
+        return {"ok": True, "mode": "single", "reason": None}
+    if kind == "dynamic":
+        fields = creative.get("fields") or {}
+        variants = fields.get("copy_variants") or {}
+        catalog_only = fields.get("product_set_id") and not variants.get("titles") and not (
+            variants.get("bodies")
+        )
+        if catalog_only:
+            return {"ok": False, "mode": None, "reason": "商品目錄素材沒有可改的文字。"}
+        return {"ok": True, "mode": "variants", "reason": None}
+    if kind == "carousel":
+        return {
+            "ok": False,
+            "mode": None,
+            "reason": "此廣告包含多組輪播素材，不能用單一文案代表整組，請先檢視素材結構。",
+        }
+    return {"ok": False, "mode": None, "reason": "尚未讀到可辨識的素材，暫不能改文字。"}
 
 
 def media_identity(entity):
@@ -168,7 +200,31 @@ def premise(entity, kind, c):
     return result
 
 
-def after(kind, value):
+def _copy_variants_after(value):
+    """Correction 7: 0-5 items per list (Meta's own per-type maximum), at least one non-empty
+    item overall -- not the original 1-10-each-required shape."""
+    if not isinstance(value, dict) or not value or set(value) - {"titles", "bodies"}:
+        raise ValueError("變更內容包含不支援的欄位。")
+    result, total = {}, 0
+    for key in ("titles", "bodies"):
+        items = value.get(key, [])
+        if not isinstance(items, list) or len(items) > 5:
+            raise ValueError("每組文案最多 5 則。")
+        cleaned = []
+        for text in items:
+            if not isinstance(text, str) or not text.strip() or len(text) > 10000:
+                raise ValueError("請填寫要修改的文案。")
+            cleaned.append(text)
+        total += len(cleaned)
+        result[key] = cleaned
+    if total == 0:
+        raise ValueError("請至少填寫一則文案。")
+    return result
+
+
+def after(kind, value, copy_mode=None):
+    if kind == "copy" and copy_mode == "variants":
+        return _copy_variants_after(value)
     keys = {"copy": {"body", "title"}, "budget": {"daily_amount"}, "pause": {"status"}}
     if kind not in keys or not isinstance(value, dict) or not value or set(value) - keys[kind]:
         raise ValueError("變更內容包含不支援的欄位。")
@@ -193,10 +249,18 @@ def build_item(conn, org, brand, campaign_id, item, c):
     if not isinstance(item, dict) or set(item) - {"kind", "target_id", "after", "reason"}:
         raise ValueError("請重新載入變更內容，不接受自行填寫平台現況。")
     kind = item.get("kind")
-    result = after(kind, item.get("after"))
     entity = bindings.entity(conn, org, brand, campaign_id, item.get("target_id"))
-    if kind == "copy" and (entity.get("creative") or {}).get("kind") in {"dynamic", "carousel"}:
-        raise ValueError("此廣告包含多組動態或輪播素材，不能用單一文案代表整組，請先檢視素材結構。")
+    # Only an "ad" carries a creative at all -- a wrong-level submission (campaign/adset) falls
+    # through to the existing single-copy validation below and is caught by the native_kind check
+    # after `bindings.root()`, same as before this contract.
+    editable = (
+        copy_editable(entity.get("creative") or {})
+        if kind == "copy" and entity["native_kind"] == "ad"
+        else None
+    )
+    if editable is not None and not editable["ok"]:
+        raise ValueError(editable["reason"] or "此素材沒有可改的文字。")
+    result = after(kind, item.get("after"), editable["mode"] if editable else None)
     bindings.root(conn, org, brand, campaign_id, entity)
     if (kind == "copy" and entity["native_kind"] != "ad") or (
         kind == "budget" and entity["native_kind"] not in {"campaign", "adset"}
