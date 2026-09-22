@@ -148,9 +148,16 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
             continue
         # Only explicit source evidence may delegate to child budget owners.
         # Missing amount or raw fields is not proof of an absent parent budget.
+        # `budget_type in (None, "unknown")`: the schema has no spare `None` for this (F25-I01
+        # 2026-09-22 "ABO without a schema change") -- the real writer (`meta_read.py::_entity`)
+        # marks a verified ABO campaign as `budget_type="unknown"` with `budget_raw.owner`, so
+        # `"unknown"` counts here too; `None` stays accepted for a pure-function `calculate()`
+        # fixture that predates the schema constraint. Either way `budget_raw.owner` still has to
+        # read `"children_verified"` -- an ordinary "never synced" `unknown` row carries no such
+        # marker and still falls through to the uncertainty below.
         if (
             entity.get("budget_amount") is None
-            and entity.get("budget_type") is None
+            and entity.get("budget_type") in (None, "unknown")
             and (entity.get("budget_raw") or {}).get("owner") == "children_verified"
         ) and any(
             e.get("parent_native_id") == entity["native_id"]

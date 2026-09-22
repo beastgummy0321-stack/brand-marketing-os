@@ -111,7 +111,8 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
     dedupe_key: "k1", category: "ads_triage_worse", kind: null, severity: "rule_warning",
     message: "m", action_url: null, visible_from: null, status: "open",
-    created_at: "2026-09-22T00:00:00Z", resolved_at: null, triage: triage(), proposal: null,
+    created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "worse",
+    triage: triage(), proposal: null,
     ...overrides,
   };
 }
