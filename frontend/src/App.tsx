@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, VerifyPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -111,6 +111,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/handoff"
           element={<AdsChangeHandoffRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/verify"
+          element={<AdsChangeVerifyRoute />}
         />
         <Route path="*" element={<NotFoundRoute />} />
       </Route>
@@ -479,6 +483,14 @@ function AdsChangeConfirmRoute() {
 function AdsChangeHandoffRoute() {
   const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
   return <HandoffPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
+}
+
+/** 三步驟輕流程的「核對結果」頁（changes/:setId/verify route，F22-I04）：change set 一定已核准
+ * 且至少回報過一次，草稿、核准與到平台完成都是前兩步（`AdsChangeConfirmRoute`／
+ * `AdsChangeHandoffRoute`）的事，這裡只負責帶參數。 */
+function AdsChangeVerifyRoute() {
+  const { brandId, campaignId, setId } = useParams<{ brandId: string; campaignId: string; setId: string }>();
+  return <VerifyPage key={`set-${setId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} setId={setId ?? ""} />;
 }
 
 /** 顧問分析報告（S13，票 03-brand-report-migration）。 */
