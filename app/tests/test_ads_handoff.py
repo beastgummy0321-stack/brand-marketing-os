@@ -261,6 +261,32 @@ class HandoffTest(unittest.TestCase):
         )["items"][0]
         self.assertFalse(action["evidence_json"]["delivery_confirmed"])
 
+    def test_platform_objective_code_matches_the_planned_objective(self):
+        # Drill 5: the plan says 購買, Meta says OUTCOME_SALES -- comparing the raw strings made
+        # every real campaign read back as deviated.
+        self.conn.execute(
+            "UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,)
+        )
+        self.root["platform"] = "meta"
+        self.root["objective"] = "OUTCOME_SALES"
+        self.conn.commit()
+        _result, nodes = self.launch()
+        root = self.check(nodes["campaign"], "campaign", "root", platform="meta")
+        self.assertEqual(root["status"], "confirmed", root["evidence_json"])
+        self.assertIn("objective", root["evidence_json"]["matched_fields"])
+
+    def test_platform_objective_of_another_family_is_a_deviation(self):
+        self.conn.execute(
+            "UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,)
+        )
+        self.root["platform"] = "meta"
+        self.root["objective"] = "OUTCOME_TRAFFIC"
+        self.conn.commit()
+        _result, nodes = self.launch()
+        root = self.check(nodes["campaign"], "campaign", "root", platform="meta")
+        self.assertEqual(root["status"], "deviated", root["evidence_json"])
+        self.assertIn("objective", root["evidence_json"]["deviated_fields"])
+
     def test_report_does_not_confirm_and_child_requires_parent(self):
         _, nodes = self.launch()
         reported = handoff_data.report(

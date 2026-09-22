@@ -2,7 +2,7 @@
 
 import json
 
-from app.ads import asset_binding, change_control_launch, external_sync, handoff_data
+from app.ads import adapters, asset_binding, change_control_launch, external_sync, handoff_data
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
 from app.ads import external_repository as external
@@ -107,6 +107,21 @@ def _settings(item, node, material):
             elif str(node[key]) != str(value):
                 if key == "budget_amount" and float(node[key]) == float(value):
                     known[key] = value
+                elif key == "objective":
+                    # The plan holds this product's own objective label, the platform its own code
+                    # ("購買" vs "OUTCOME_SALES"): fall back to comparing the families, or every
+                    # real campaign reads back deviated (drill 5). Either side unrecognised ->
+                    # unproven, never a deviation.
+                    planned = campaigns.objective_family(value)
+                    observed = adapters.objective_family(
+                        node.get("platform"), node.get("objective")
+                    )
+                    if planned == "other" or observed == "other":
+                        missing.append(key)
+                    elif planned != observed:
+                        differences.append(key)
+                    else:
+                        known[key] = value
                 else:
                     differences.append(key)
             else:
