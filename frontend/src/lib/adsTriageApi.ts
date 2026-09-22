@@ -35,6 +35,20 @@ export interface TriageMetricsView {
 export interface TriageSampleView {
   gate: boolean; spend_multiple: number | null; days_with_events: number;
 }
+/** F27-I01 Contract A: one handling-history entry for an ad or its lineage predecessors, per
+ * `app/ads/triage_ladder.py::_entry` — `kind` is never `"budget"` in practice (budget items
+ * target owners, not an ad; correction 11), the union just mirrors the contract's own type. */
+export interface TriageHistoryEntry {
+  change_set_id: string; kind: "copy" | "new_ad" | "budget" | "pause";
+  approved_at: string; verified_at: string | null;
+  cost_before: number | null; cost_after: number | null;
+}
+/** F27-I01 Contract A: this ad's own handling ladder, per `app/ads/triage_ladder.py::attach` —
+ * `step` 2 once any confirmed `new_ad` replacement exists in its lineage, else 1 once any
+ * confirmed `copy` change exists, else 0. `lineage_from` is the ad this ad directly replaced. */
+export interface TriageLadder {
+  step: 0 | 1 | 2; copy_changes: number; image_changes: number; lineage_from: string | null;
+}
 export interface TriageItem {
   entity_id: string; native_id: string; name: string | null; campaign_id: string;
   // F19-I07: the campaign's own name; always sent (`app/ads/triage.py::classify`).
@@ -45,6 +59,9 @@ export interface TriageItem {
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
+  // F27-I01: optional -- existing hand-written test factories don't set these (real responses
+  // always carry them, same `do_not_touch`-vs-`touch` reasoning as `TriageData` below).
+  ladder?: TriageLadder; history?: TriageHistoryEntry[];
 }
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
