@@ -340,8 +340,20 @@ def snapshot(
                 )
             }
         )
+    # Lazy: both modules import this one. The target is the one the ads centre shows and sets
+    # (`targets.resolve`), and an imported campaign's objective is its platform objective --
+    # drill 5: reading only the wizard's goal_text/objective made every imported campaign
+    # "missing a goal" right after the user set one on the target page.
+    from app.ads import repository as ads_repo
+    from app.ads import targets
+
+    target = targets.resolve(conn, org, brand, campaign)
+    objective = campaign.get("objective") or (
+        ads_repo.campaign_objective_family(conn, org, brand, campaign)
+        if campaign.get("origin") == "imported" else None
+    )
     waiting = []
-    if not campaign.get("goal_text") or not campaign.get("objective"):
+    if not (campaign.get("goal_text") or target["value"] is not None) or not objective:
         waiting.append("請先補活動目標與目的，再重新建立檢討。")
     if not any(
         (s["metrics"]["impressions"] or 0) > 0
@@ -416,8 +428,10 @@ def snapshot(
         "brand_version": version,
         "knowledge_ids": knowledge,
         "campaign": {
-            k: campaign.get(k)
-            for k in ("goal_text", "objective", "success_metric", "success_target", "success_basis")
+            **{k: campaign.get(k) for k in ("goal_text", "success_metric", "success_target",
+                                           "success_basis")},
+            "objective": objective,
+            "target": target,
         },
         "premise": premise(entity, campaign),
     }

@@ -159,6 +159,22 @@ class ReviewCycleTest(unittest.TestCase):
             "closed",
         )
 
+    def test_imported_campaign_target_set_on_target_page_counts_as_a_goal(self):
+        # Drill 5: target set on the ads-centre target page, no wizard goal_text/objective.
+        goal_missing = "請先補活動目標與目的，再重新建立檢討。"
+        self.conn.execute(
+            "UPDATE ads_campaign SET goal_text=NULL, objective=NULL WHERE id=%s", (self.campaign,)
+        )
+        self.assertIn(goal_missing, self.request()["evidence_json"]["waiting_reasons"])
+        self.conn.execute(
+            "UPDATE ads_campaign SET target_basis='own', target_cost=450 WHERE id=%s",
+            (self.campaign,),
+        )
+        self.conn.execute("DELETE FROM ads_review_round WHERE campaign_id=%s", (self.campaign,))
+        row = self.request()
+        self.assertNotIn(goal_missing, row["evidence_json"]["waiting_reasons"])
+        self.assertEqual(row["evidence_json"]["campaign"]["target"]["value"], 450)
+
     def test_gateway_once_and_proposal_link_human_edit_then_next_review_actual_evidence(self):
         prior_end = self.end - timedelta(days=1)
         self.observation(prior_end)
