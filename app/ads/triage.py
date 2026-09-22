@@ -17,6 +17,7 @@ from app.ads import (
     repository,
     result_kinds,
     review_evidence,
+    runtime_events,
     targets,
     triage_scale,
 )
@@ -622,7 +623,10 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
     -- every enqueue below, then a single commit. Afterward, supersede every open row this
     brand's four triage categories no longer match (`_supersede_stale_open_rows`) -- each call
     its own `resolve()`, not part of the enqueue transaction. The returned payload is read back
-    afterward, same shape as `get_queue()`."""
+    afterward, same shape as `get_queue()`.
+
+    F27-I00 Contract J: also records one `queue_refresh` runtime event for this brand (Contract K's
+    recovery step 4, a later F27 issue, reads it back) -- same transaction as the enqueue loop."""
     items = _classify_brand(conn, org_id, brand_id)
     candidates = _queue_candidates(conn, org_id, brand_id, items)
     for candidate in candidates:
@@ -632,6 +636,7 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
                                     candidate["window_end"]),
             message=candidate["message"], action_url=candidate["action_url"],
         )
+    runtime_events.record(conn, "queue_refresh", org_id=org_id, brand_id=brand_id)
     conn.commit()
     live_keys = {
         _dedupe_key(c["kind"], c["identity_id"], c["window_end"]) for c in candidates

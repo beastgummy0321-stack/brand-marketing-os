@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from app.ads import channels
+from app.ads import ad_status, channels
 from app.ads.external_models import ExternalEntity, ExternalObservation
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings
@@ -53,7 +53,7 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     changed = model.model_fields_set
     # Native keys cannot silently move between workspaces.
     existing = conn.execute(
-        "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "SELECT campaign_id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
         "AND platform=%s AND source_account=%s AND native_kind=%s AND native_id=%s",
         (
             org_id,
@@ -66,20 +66,36 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     ).fetchone()
     if existing and existing["campaign_id"] != campaign_id:
         raise ValueError("external_entity_already_imported")
+    # F27-I00 Done #4: `status_changed_at` only moves when this write actually crosses the
+    # active/closed boundary -- a first insert (no `existing` row) or an unchanged category never
+    # touches it. Both the previously stored and the newly written `native_status` must be known
+    # (contract J: "both non-null") -- an unknown -> known transition is not evidence the ad
+    # itself changed category, only that it became observable.
+    status_changed = bool(
+        existing is not None
+        and "native_status" in changed
+        and existing["native_status"] is not None
+        and data.get("native_status") is not None
+        and ad_status.is_closed(existing["native_status"])
+        != ad_status.is_closed(data["native_status"])
+    )
     columns = list(data)
     values = [
         jsonb(value) if key in ("availability", "creative", "budget_raw") else value
         for key, value in data.items()
     ]
+    set_clause = ",".join(key + "=EXCLUDED." + key for key in columns if key in changed)
+    set_clause += ",updated_at=now()"
+    if status_changed:
+        set_clause += ",status_changed_at=now()"
     row = conn.execute(
         "INSERT INTO ads_external_entity (id,org_id,brand_id,campaign_id,"
         + ",".join(columns)
         + ") "
         "VALUES (" + ",".join(["%s"] * (4 + len(columns))) + ") "
         "ON CONFLICT (org_id,brand_id,platform,source_account,native_kind,native_id) DO UPDATE SET "
-        + ",".join(key + "=EXCLUDED." + key for key in columns if key in changed)
-        + ",updated_at=now() "
-        "WHERE ads_external_entity.campaign_id=EXCLUDED.campaign_id RETURNING *",
+        + set_clause
+        + " WHERE ads_external_entity.campaign_id=EXCLUDED.campaign_id RETURNING *",
         (new_id("aex"), org_id, brand_id, campaign_id, *values),
     ).fetchone()
     if row is None:
