@@ -126,3 +126,16 @@ describe("flow pieces（F22）", () => {
     expect(screen.getByLabelText("已完成")).toBeTruthy();
   });
 });
+
+describe("review pieces（F23）", () => {
+  it("EvidenceRow：current null 印待確認、沒有百分比；有值算 ▲/▼；OptionCard reserved 不可點", async () => {
+    const { EvidenceRow, OptionCard } = await import("./ReviewPieces");
+    render(<EvidenceRow label="已付款" previous={100} current={null} />);
+    expect(screen.getByText("待確認")).toBeTruthy();
+    render(<EvidenceRow label="花費" previous={2900} current={3000} />);
+    expect(screen.getByText("▲3%")).toBeTruthy();
+    render(<OptionCard icon="✚" title="換一張圖" note="x" disabled />);
+    expect((screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("接上後開放")).toBeTruthy();
+  });
+});

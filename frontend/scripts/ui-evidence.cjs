@@ -7,6 +7,7 @@
  *
  *   node scripts/ui-evidence.cjs --proto ../docs/design/ads/prototype-v7-ads-center.html --hash camp/sales \
  *     --name with-target --out ../.harness/scratch/F21/I01 \
+ *     [--settle 1500] wait longer before shooting (prototype async demo states, e.g. 「AI 正在整理證據」)
  *     [--acts approve,report]   prototype-only: click these data-act buttons first (a step reachable only through earlier steps)
  *     [--app brands/brd_bughunt/ads/campaigns/cmp_x/detail --base http://127.0.0.1:8732 --mocks mocks.json]
  *
@@ -65,23 +66,26 @@ function facts() {
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
-  const BLOCKS = { dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
-  const SLOTS = { "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet" };
-  const VARIANT = { kind: ["stop", "worse", "up"], todo: ["ok"], hero: ["ok", "warn", "bad"] };
+  const BLOCKS = { ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const SLOTS = { "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet" };
+  const VARIANT = { kind: ["stop", "worse", "up"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
+  const NOVARIANT = new Set(["meter", "evidence-row", "ladder", "option-card"]); // colour/state comes from data or a decision, not a prototype class
   for (const e of within("[class], [data-slot]")) {
     if (!vis(e)) continue;
-    if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${e.dataset.slot === "meter" ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
+    if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${NOVARIANT.has(e.dataset.slot) ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
     if (document.querySelector("#main-content")) continue;
     for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
       let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
       if (cls === "todo") v = v ? "done" : "open";
+      if (cls === "opt" || cls === "ev" || cls === "ladder") v = "";
+      if (cls === "old" || cls === "new") v = cls;
       out.push(`${piece} ${v}`.trim() + " |");
     }
   }
   // Prototype side only: classes on this screen that map to no kit piece. At carve time the lead decides for each:
   // layout only (the worker builds it with tokens) or a missing piece (add it to components/ads/patterns first).
   if (!document.querySelector("#main-content")) {
-    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld"]);
+    const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld", "ev", "l", "bars", "c", "n", "dd", "q", "unk", "ladder", "opt", "pick", "ic", "old", "new", "rv", "grid2", "grid4"]);
     const seen = {};
     for (const e of within("[class]")) if (vis(e)) for (const c of e.classList) if (!known.has(c)) seen[c] = (seen[c] || 0) + 1;
     out.push("", "## prototype classes with no kit mapping (class x count)", Object.entries(seen).map(([c, n]) => `${c} x${n}`).join(", "));
@@ -99,7 +103,7 @@ async function shoot(context, url, kind, setup, acts = []) {
     if (setup) await setup(page);
     await page.goto(url);
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(Number(args.settle) || 400); // --settle <ms>: a prototype screen that finishes an async demo state
     // --acts: prototype `data-act` names clicked in order to REACH a screen that only exists after earlier steps.
     for (const act of acts) { await page.locator(`[data-act="${act}"]`).first().click(); await page.waitForTimeout(300); }
     await page.screenshot({ path: `${OUT}/${kind}-${args.name}-${width}.png`, fullPage: true });
