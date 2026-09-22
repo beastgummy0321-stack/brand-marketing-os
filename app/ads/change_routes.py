@@ -1,5 +1,7 @@
 """Brand-scoped local approvals and explicitly read-only platform checks."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,6 +32,9 @@ class CreateRequest(BaseModel):
     recommendation_id: str | None = None
     material_task_id: str | None = None
     material_revision: int | None = None
+    # F27-I25: only this literal is accepted (Contract F's cleanup proposal match); anything else
+    # is a 422 from pydantic before `change_control.create` ever sees it.
+    source: Literal["cleanup"] | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -60,13 +65,18 @@ def workspace(request: Request, brand_id: str, campaign_id: str):
 
 @router.post("/change-sets")
 def create(request: Request, brand_id: str, campaign_id: str, body: CreateRequest):
+    # F27-I25: keep the dumped payload's key set identical to before this field existed when
+    # `source` is unset, so existing sets' `request_hash`/`content_hash` are unaffected.
+    payload = body.model_dump()
+    if payload.get("source") is None:
+        payload.pop("source", None)
     return {
         "change_set": _run(
             request,
             brand_id,
             campaign_id,
             service.create,
-            body.model_dump(),
+            payload,
             str(web.require_actor(request).user_id),
         )
     }

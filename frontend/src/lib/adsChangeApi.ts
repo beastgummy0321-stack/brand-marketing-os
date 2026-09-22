@@ -49,7 +49,9 @@ export interface ChangeSet {
   replaces?: { entity_id: string; name: string } | null;
   follow_up?: { kind: "pause_old"; entity_id: string } | null;
 }
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number }
+// `source` (F27-I25, Contract F): only "cleanup" is accepted; names the set as the campaign's
+// cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup" }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

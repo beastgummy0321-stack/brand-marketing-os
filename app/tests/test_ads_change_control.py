@@ -905,6 +905,98 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(reopened["status"], "approved")
         self.assertEqual(reopened["content_hash"], created["content_hash"])
 
+    def test_source_cleanup_is_stored_and_matched_by_the_queue_proposal(self):
+        """F27-I25 / Contract F: `POST .../change-sets` can now carry `source: "cleanup"`, which
+        `triage._matching_cleanup_set` reads straight off `plan_json`."""
+        from app.ads import triage
+
+        created = self.create(
+            items=[
+                {
+                    "kind": "pause",
+                    "target_id": self.ad["id"],
+                    "after": {"status": "PAUSED"},
+                    "reason": "清理超量廣告",
+                }
+            ],
+            source="cleanup",
+        )
+        self.assertEqual(created["plan_json"]["source"], "cleanup")
+        change_set, pause_items = triage._matching_cleanup_set(
+            {self.campaign: [created]}, self.campaign
+        )
+        self.assertEqual(change_set["id"], created["id"])
+        self.assertEqual([i["id"] for i in pause_items], [created["items"][0]["id"]])
+
+    def test_source_cleanup_refuses_a_non_pause_item(self):
+        with self.assertRaisesRegex(ValueError, "只能包含暫停項目"):
+            self.create(source="cleanup")  # default create() item is a `copy`
+
+    def test_unknown_source_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.create(source="not-cleanup")
+
+    def test_omitted_and_explicit_none_source_keep_the_same_content_hash(self):
+        """Existing sets without `source` must keep their exact hashes -- the key is only added
+        to `frozen`/`plan_json` when actually present."""
+        first = self.create(operation_id=db.new_id("op"))
+        second = self.create(operation_id=db.new_id("op"), source=None)
+        self.assertEqual(first["content_hash"], second["content_hash"])
+        self.assertNotIn("source", first["plan_json"])
+        self.assertNotIn("source", second["plan_json"])
+
+    def test_source_other_than_cleanup_is_422_over_http(self):
+        from app.main import app
+
+        client = TestClient(app)
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        result = client.post(
+            base + "/change-sets",
+            json={
+                "operation_id": "bad-source",
+                "title": "測試",
+                "month": self.month,
+                "items": [
+                    {
+                        "kind": "copy",
+                        "target_id": self.ad["id"],
+                        "after": {"body": "新文案"},
+                        "reason": "test",
+                    }
+                ],
+                "source": "not-cleanup",
+            },
+        )
+        self.assertEqual(result.status_code, 422, result.text)
+
+    def test_http_create_without_source_is_unaffected_by_the_new_optional_field(self):
+        """The route dumps every `CreateRequest` field including unset ones; `source` must be
+        popped when `None` so the payload shape -- and therefore the hash -- matches a direct
+        `service.create()` call that never mentions `source` at all."""
+        from app.main import app
+
+        client = TestClient(app)
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        via_http = client.post(
+            base + "/change-sets",
+            json={
+                "operation_id": "http-no-source",
+                "title": "只改原 B 文案",
+                "month": self.month,
+                "items": [
+                    {
+                        "kind": "copy",
+                        "target_id": self.ad["id"],
+                        "after": {"body": "新文案"},
+                        "reason": "驗證新訴求，未聲稱因果",
+                    }
+                ],
+            },
+        ).json()["change_set"]
+        via_service = self.create(operation_id=db.new_id("op"))
+        self.assertEqual(via_http["content_hash"], via_service["content_hash"])
+        self.assertNotIn("source", via_http["plan_json"])
+
 
 class ChangeControlPlatformUrlTest(unittest.TestCase):
     """F22-I01: `platform_url` on every item `data.get()` returns -- computed at read time from
