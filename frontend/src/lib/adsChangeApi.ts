@@ -29,6 +29,11 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   // Contract D (F27-I04): read time only, only ever set for a `pause` item that carries an
   // `angle` -- optional so existing test factories need no change.
   learning?: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number };
+  // Contract H / correction 1 (F27-I08): read time only, nothing scheduled at approve -- optional
+  // so existing test factories need no change. `spend_stopped` only for `pause`, `delivery_started`
+  // only for `copy`/`new_ad`; `next_review_at` null for `pause`, null until verified for
+  // `copy`/`new_ad`.
+  timeline?: { spend_stopped: boolean | null; delivery_started: boolean | null; next_review_at: string | null };
 }
 export interface ChangeSet {
   id: string; campaign_id: string; title: string; month: string; operation_id: string; content_hash: string;
