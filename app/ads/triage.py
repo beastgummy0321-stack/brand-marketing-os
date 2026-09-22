@@ -19,6 +19,7 @@ from app.ads import (
     review_evidence,
     runtime_events,
     targets,
+    triage_ladder,
     triage_scale,
 )
 from app.ads.adapters.external import SourceReadError
@@ -85,6 +86,8 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                       rows_by_entity.get(ad["id"], []))
         for ad in active_ads
     ]
+    # F27-I01 Contract A: ladder/history attaches to ACTIVE items only, never `_closed_block`.
+    triage_ladder.attach(conn, org_id, brand_id, campaign_id, items)
     return {
         "window_days": WINDOW_STEPS[-1], "items": items,
         "closed": _closed_block(closed_ads, rows_by_entity, cutoff),
