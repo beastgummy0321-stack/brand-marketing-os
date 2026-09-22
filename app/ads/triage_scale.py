@@ -29,13 +29,17 @@ def _is_active(item, native_status_by_entity):
     return not ad_status.is_closed(native_status_by_entity.get(item["entity_id"]))
 
 
-def _owner_lookup(conn, org_id, brand_id):
+def owner_lookup(conn, org_id, brand_id):
     """One brand-wide read: for every ad entity, its budget owner -- the `ads_external_entity`
     that carries `budget_type == 'daily'` and a non-null `budget_amount`: the ad's own parent
     when it's an adset carrying a daily budget, else the campaign entity when IT carries a daily
     budget (CBO), else `None` (a lifetime-budget owner, an unresolved/ABO campaign budget, or a
     genuine data gap -- see "Gaps kept honest"). Items never carry `parent_native_id`
-    themselves, so this is the one query that reads it (feature Decisions)."""
+    themselves, so this is the one query that reads it (feature Decisions).
+
+    F27-I06: public on purpose -- `triage_capacity.py`'s own `capacity_view` needs the exact same
+    "daily budget owner" definition (never a second, divergent copy), so this is no longer
+    module-private."""
     rows = conn.execute(
         "SELECT id,campaign_id,native_kind,native_id,parent_native_kind,parent_native_id,name,"
         "budget_type,budget_amount,currency,start_date,end_date FROM ads_external_entity "
@@ -86,7 +90,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
     already bound to this brand/month (`triage.py::_month_view_fn`) -- kept as a callable so this
     function never needs its own month string or a second `conn`/`org`/`brand` triple, and so
     tests can stub it without a real month-budget fixture."""
-    owner_by_entity = _owner_lookup(conn, org_id, brand_id)
+    owner_by_entity = owner_lookup(conn, org_id, brand_id)
     items_by_owner = defaultdict(list)
     owner_by_id = {}
     for items in classified_items_by_campaign.values():

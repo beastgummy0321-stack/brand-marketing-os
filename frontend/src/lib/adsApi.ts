@@ -47,8 +47,24 @@ export interface CampaignSyncState {
   error: string | null;
   last_success_at: string | null;
 }
+/** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
+ * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
+ * `app/ads/triage_scale.py::owner_lookup`) -- `daily_budget`/`currency` are `null` when there are
+ * no active ads, any active ad lacks a daily budget owner, or the qualifying owners don't share
+ * one currency (never a partial sum across currencies). `can_support` is `null` unless both
+ * `daily_budget` and `target` are known and `target > 0`. Shared by `CampaignCard.data.capacity`
+ * here and `CampaignTriage.data.capacity` (`adsTriageApi.ts`) -- same shape, never re-defined per
+ * caller. */
+export interface CampaignCapacity {
+  daily_budget: number | null; currency: string | null; target: number | null;
+  can_support: number | null; active_ads: number;
+}
 export interface CampaignData {
   sync: CampaignSyncState;
+  /** F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict noted on `data`
+   * below -- existing hand-written `data: {sync: ...}` fixtures can't be reached to add it. Real
+   * responses always carry it (`repository.py::list_campaigns`). */
+  capacity?: CampaignCapacity;
 }
 
 /** F05-I12：`app/ads/judgment.py::conversion_labels()`——這個品牌的「購買」該叫什麼名字。
