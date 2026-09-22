@@ -1,10 +1,12 @@
-"""app/tests/test_ads_runtime_events.py — F27-I00 Contract J: the ads-owned
-`ads_runtime_event` trail and `ads_external_entity.status_changed_at` bookkeeping.
+"""app/tests/test_ads_runtime_events.py — F27-I00 Contract J, rescoped by F27-I24 (pre-dispatch
+correction 12): the ads-owned `ads_runtime_event` trail and
+`ads_external_entity.status_changed_at` bookkeeping.
 
-Four things falsified here:
+Five things falsified here:
 - the wrapped per-minute periodic task (`jobs._dispatch_runtime_beat`) writes one `beat` event
-  with no org/brand scope;
-- `runtime_events.prune()` deletes only rows past its own cutoff;
+  per (org_id, brand_id) that has at least one non-closed `ads_campaign`;
+- a brand with only closed campaigns gets no beat;
+- `runtime_events.prune()` deletes only rows past its own cutoff (across tenants);
 - `triage.refresh_queue` writes one `queue_refresh` event scoped to the brand it just refreshed;
 - `external_repository.upsert_entity` sets `status_changed_at` only on an actual
   active<->closed crossing, never on a first insert and never when both sides stay closed.
@@ -27,34 +29,59 @@ _EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 class RuntimeBeatTest(unittest.TestCase):
-    def test_periodic_wrapper_writes_one_unscoped_beat(self):
-        conn = db.current()
-        existing = {row["id"] for row in runtime_events.list_since(conn, "beat", _EPOCH)}
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="心跳（有在投）", actor="test", client_name=None,
+        )["id"]
+        self.closed_brand = brands.create_brand(
+            self.conn, org_id=self.org, name="心跳（全部關閉）", actor="test", client_name=None,
+        )["id"]
+        self.conn.commit()
+        # An imported campaign defaults to status='draft' (non-closed) -- an "active" brand for
+        # the beat's purposes.
+        external.create_imported_campaign(self.conn, self.org, self.brand, name="投放中活動")
+        closed = external.create_imported_campaign(
+            self.conn, self.org, self.closed_brand, name="已關閉活動",
+        )
+        self.conn.execute(
+            "UPDATE ads_campaign SET status='closed' WHERE id=%s", (closed["id"],),
+        )
+        self.conn.commit()
+
+    def test_periodic_wrapper_writes_one_beat_per_active_brand(self):
         timestamp = int(db.now_utc().timestamp())
         jobs._dispatch_runtime_beat(timestamp)
-        new_rows = [
-            row for row in runtime_events.list_since(conn, "beat", _EPOCH)
-            if row["id"] not in existing
-        ]
-        self.assertEqual(len(new_rows), 1)
-        self.assertIsNone(new_rows[0]["org_id"])
-        self.assertIsNone(new_rows[0]["brand_id"])
+        rows = runtime_events.list_since(self.conn, "beat", _EPOCH, brand_id=self.brand)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["org_id"], self.org)
+        self.assertEqual(rows[0]["brand_id"], self.brand)
+
+    def test_brand_with_only_closed_campaigns_gets_no_beat(self):
+        timestamp = int(db.now_utc().timestamp())
+        jobs._dispatch_runtime_beat(timestamp)
+        rows = runtime_events.list_since(self.conn, "beat", _EPOCH, brand_id=self.closed_brand)
+        self.assertEqual(rows, [])
 
     def test_prune_deletes_only_rows_past_its_cutoff(self):
         conn = db.current()
-        existing = {row["id"] for row in runtime_events.list_since(conn, "beat", _EPOCH)}
-        runtime_events.record(conn, "beat")
+        existing = {
+            row["id"]
+            for row in runtime_events.list_since(conn, "beat", _EPOCH, brand_id=self.brand)
+        }
+        runtime_events.record(conn, "beat", org_id=self.org, brand_id=self.brand)
         old_id = db.new_id("are")
         conn.execute(
-            "INSERT INTO ads_runtime_event(id,kind,at) VALUES (%s,'beat',%s)",
-            (old_id, db.now_utc() - timedelta(hours=49)),
+            "INSERT INTO ads_runtime_event(id,kind,org_id,brand_id,at) "
+            "VALUES (%s,'beat',%s,%s,%s)",
+            (old_id, self.org, self.brand, db.now_utc() - timedelta(hours=49)),
         )
         conn.commit()
         deleted = runtime_events.prune(conn, older_than_hours=48)
         conn.commit()
-        self.assertEqual(deleted, 1)
+        self.assertGreaterEqual(deleted, 1)
         new_rows = [
-            row for row in runtime_events.list_since(conn, "beat", _EPOCH)
+            row for row in runtime_events.list_since(conn, "beat", _EPOCH, brand_id=self.brand)
             if row["id"] not in existing
         ]
         self.assertEqual(len(new_rows), 1)

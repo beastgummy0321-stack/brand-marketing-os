@@ -34,15 +34,21 @@ def _dispatch_close_expired(timestamp: int) -> None:
 
 
 def _dispatch_runtime_beat(timestamp: int):
-    """Wraps the existing every-minute `runtime.dispatch` periodic task (F27-I00 Contract J) --
-    records one `beat` runtime event (org_id/brand_id both `None`: a beat proves the whole ads
-    background system is alive, never any one brand's own worker), prunes rows older than 48h once
-    an hour (`timestamp` is a whole-minute epoch second from the cron scheduler, so `% 3600 == 0`
-    fires exactly once per hour), then runs the unchanged `runtime.dispatch(timestamp)`."""
+    """Wraps the existing every-minute `runtime.dispatch` periodic task (F27-I00 Contract J,
+    rescoped by F27-I24 correction 12) -- records one `beat` runtime event per (org_id, brand_id)
+    that currently has at least one non-closed `ads_campaign` (one query per minute; the same
+    `status != 'closed'` shape `triage.py` already uses), proving that brand's own slice of the
+    ads background system is alive. Prunes rows older than 48h once an hour (`timestamp` is a
+    whole-minute epoch second from the cron scheduler, so `% 3600 == 0` fires exactly once per
+    hour), then runs the unchanged `runtime.dispatch(timestamp)`."""
     from app.ads import runtime, runtime_events
 
     with connection() as conn:
-        runtime_events.record(conn, "beat")
+        active_brands = conn.execute(
+            "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
+        ).fetchall()
+        for row in active_brands:
+            runtime_events.record(conn, "beat", org_id=row["org_id"], brand_id=row["brand_id"])
         if timestamp % 3600 == 0:
             runtime_events.prune(conn)
         conn.commit()
