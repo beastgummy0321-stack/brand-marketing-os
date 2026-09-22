@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -100,6 +100,10 @@ function App() {
           element={<AdsCampaignDetailRoute />}
         />
         <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/wait"
+          element={<AdsWaitRoute />}
+        />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/propose/pause/:entityId"
           element={<AdsProposePauseRoute />}
@@ -474,6 +478,13 @@ function AdsCampaignDetailRoute() {
 function AdsConnectionsRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return <DataConnectionsPage brandId={brandId ?? ""} />;
+}
+
+/** 資料不足 wait page（F24-I03，v7 原型 `waitPage()`）：首頁卡片「去處理」與活動工作區的
+ * `sync.state==="disconnected"` 都落在這裡。`key={campaignId}` 理由同 `AdsTargetRoute`。 */
+function AdsWaitRoute() {
+  const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
+  return <WaitPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
 }
 
 /** 停損提議確認頁（propose route，F22-I02，v7 原型 `confirmPage()`）：三步驟輕流程第一步，
