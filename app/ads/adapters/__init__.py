@@ -79,3 +79,29 @@ def copy_variants(platform: str | None, creative: dict) -> dict | None:
 
         return meta_read.copy_variants(creative)
     return None
+
+
+def is_auth_error(platform: str | None, code: str | None) -> bool:
+    """F27-I09 Contract I / correction 2: whether a synced section's own STORED error code (never
+    a raw provider number -- see the Meta adapter's own `is_auth_error`) means this platform
+    connection's own read permission needs re-authorizing, not just a retry. Same lazy-import
+    dispatch seam as `platform_url`/`copy_variants` above. Unknown platform, or a code this
+    platform's adapter doesn't recognise -> `False`, never a guess."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.is_auth_error(code)
+    return False
+
+
+def objective_family(platform: str | None, objective: str | None) -> str:
+    """F27-I09 Done #7: this platform's own raw objective string -> `campaign_objective` family
+    (`"sales"|"engagement"|"traffic"|"other"`), for an IMPORTED campaign only -- a system-built
+    campaign's Chinese objective label routes through `repository.objective_family()` instead,
+    never through here. Same lazy-import dispatch seam as `platform_url`/`copy_variants` above.
+    Unknown platform -> `"other"`, never a guess."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.objective_family(objective)
+    return "other"

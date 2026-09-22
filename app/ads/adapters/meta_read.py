@@ -370,6 +370,34 @@ def result_kind_for_objective(objective) -> str | None:
     return mapped[0] if mapped else None
 
 
+# F27-I09 Done #7: this campaign's own raw Meta objective string -> `campaign_objective` family
+# for `CampaignChip` ("sales"/"engagement"/"traffic"/"other") -- reuses `_SALES_OBJECTIVES` and
+# `_OBJECTIVE_RESULT_ACTIONS` above (the SAME tables `result_kind_for_objective` keys by), never a
+# second, divergent objective table. Only the three named families ever come out of Meta's own
+# objective vocabulary; every other objective (leads/app/video/message/store, or unmapped/None) is
+# "other", never a guess.
+_RESULT_LABEL_FAMILY = {"engagement": "engagement", "link_click": "traffic"}
+
+
+def objective_family(objective) -> str:
+    if objective in _SALES_OBJECTIVES:
+        return "sales"
+    mapped = _OBJECTIVE_RESULT_ACTIONS.get(objective)
+    if mapped is None:
+        return "other"
+    return _RESULT_LABEL_FAMILY.get(mapped[0], "other")
+
+
+# F27-I09 Contract I / pre-dispatch correction 2: this platform's own stored sync error codes
+# that mean the connection's READ PERMISSION itself has been revoked/expired, never a raw Meta
+# Graph error number -- `app/meta/repository.py::read_external_page` already collapses every
+# permission-shaped Graph error into the one stored code `"permission_denied"` before anything in
+# `app/ads` ever sees a raw number; this adapter maps that STORED code, never the numbers
+# themselves (correction 2's own wording).
+def is_auth_error(code) -> bool:
+    return code == "permission_denied"
+
+
 # F22-I01: this adapter's own read-time deep link into Meta Ads Manager, one object kind per
 # entry point Ads Manager can select directly by id (campaign/adset/ad) -- an object kind absent
 # from this table (or, in practice, none today) has no defined link and stays unmapped, never a

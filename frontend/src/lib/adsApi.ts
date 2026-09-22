@@ -10,7 +10,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
-import type { CampaignCapacity } from "./adsTriageApi";
+import type { CampaignCapacity, CampaignObjectiveFamily } from "./adsTriageApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type SuccessMetric = "cpa" | "roas" | "purchases";
@@ -39,13 +39,13 @@ export interface CampaignBudgetProgress {
 /** F24-I01: campaign-level sync status, read-only from `context_json.external_sync` plus the
  * platform-bound-accounts check (`app/ads/repository.py::campaign_sync_state`). Priority order
  * `never` (no `external_sync` recorded at all) / `disconnected` (a (platform, source_account)
- * pair of the campaign's entities isn't among the reader's bound accounts) / `failed` (any
- * section `status` was `"error"`/`"partial"`) / `syncing` / `ok`. `error` is the first failing
- * section's own error (may be `null`); `last_success_at` is the newest section value across
- * sections — a failed sync keeps the OLD value, so this can be stale, never "recent", when
- * `state` is `"failed"`. Shared by `CampaignCard.data.sync` here and `CampaignTriage.data.sync`
- * (`adsTriageApi.ts`) — same shape, never re-defined per caller. */
-export type CampaignSyncStatus = "ok" | "syncing" | "failed" | "disconnected" | "never";
+ * pair of the campaign's entities isn't among the reader's bound accounts) / `auth_expired`
+ * (F27-I09: the failing section's own stored error code reads as an auth error) / `failed` (any
+ * other section `status` was `"error"`/`"partial"`) / `syncing` / `ok`. `last_success_at` is the
+ * newest section value across sections — a failed sync keeps the OLD value, so this can be
+ * stale, never "recent", when `state` is `"failed"`/`"auth_expired"`. Shared by
+ * `CampaignCard.data.sync` here and `CampaignTriage.data.sync` (`adsTriageApi.ts`). */
+export type CampaignSyncStatus = "ok" | "syncing" | "failed" | "disconnected" | "never" | "auth_expired";
 export interface CampaignSyncState {
   state: CampaignSyncStatus;
   error: string | null;
@@ -75,8 +75,8 @@ export interface CampaignCard extends ExternalCampaignFields {
   status: CampaignStatus;
   start_date: string | null;
   end_date: string | null;
-  objective: string;
-  created_at: string;
+  objective: string; // F27-I09: `campaign_objective` optional, see `adsTriageApi.ts`.
+  campaign_objective?: CampaignObjectiveFamily; created_at: string;
   created_by: string | null;
   budget_planned: number | null;
   budget_total: number | null;
