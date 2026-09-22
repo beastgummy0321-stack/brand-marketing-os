@@ -5,6 +5,7 @@
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */
 import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
+import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
@@ -45,7 +46,21 @@ export interface TriageItem {
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
 }
-export interface CampaignTriage { window_days: number; items: TriageItem[] }
+/** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
+ * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
+ * `coverage` is this campaign's own recorded sync coverage, `null` when never synced.
+ * `missing_days` are the days of the SAME window `classify()` judges every ad with (`window_days`
+ * back from the account cutoff) that fall outside `coverage` — always `[]` when `coverage` is
+ * `null` (that case reads through `sync.state === "never"`, not a wall of missing dates). */
+export interface TriageData {
+  sync: CampaignSyncState;
+  coverage: { start: string; end: string } | null;
+  missing_days: string[];
+}
+// F24-I01: `data` is optional here for the same `do_not_touch`-vs-`touch` scope conflict noted on
+// `adsApi.ts::CampaignCard.data` -- existing hand-written `*.test.tsx` fixtures can't be reached
+// to add it. Real responses always carry it (`triage.py::_data_view`).
+export interface CampaignTriage { window_days: number; items: TriageItem[]; data?: TriageData }
 
 /** F22-I01: the change set (if any) that currently answers a `stop_loss` row, per
  * `app/ads/triage.py::_row_proposal` (feature Decisions "Queue row state") — `null` when there

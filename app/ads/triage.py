@@ -66,7 +66,43 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                       rows_by_entity.get(ad["id"], []))
         for ad in ads
     ]
-    return {"window_days": WINDOW_STEPS[-1], "items": items}
+    return {"window_days": WINDOW_STEPS[-1], "items": items, "data": _data_view(
+        conn, org_id, brand_id, campaign, cutoff, coverage,
+    )}
+
+
+def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage):
+    """The read-only `data` enrichment (F24-I01, feature Decisions) -- `sync` reuses
+    `repository.campaign_sync_state` (same DB-only bound-accounts check `external_repository
+    .external_view`'s own `connections` list makes); `coverage`/`missing_days` reuse this same
+    call's own `cutoff`/`coverage` (never re-derived), so they can never disagree with what
+    `classify()` above actually judged every ad against."""
+    window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
+    return {
+        "sync": repository.campaign_sync_state(conn, org_id, brand_id, campaign),
+        "coverage": (
+            {"start": coverage[0].isoformat(), "end": coverage[1].isoformat()}
+            if coverage else None
+        ),
+        "missing_days": _missing_days(coverage, window_start, cutoff),
+    }
+
+
+def _missing_days(coverage, start, end):
+    """The days of `[start, end]` outside the recorded `coverage` range, oldest first, capped at
+    31 (F24-I01, feature Decisions) -- empty when `coverage` is `None` (never synced), since a
+    campaign that has never synced says so through `sync.state == "never"`, not a wall of missing
+    dates."""
+    if coverage is None:
+        return []
+    coverage_start, coverage_end = coverage
+    days = []
+    day = start
+    while day <= end:
+        if day < coverage_start or day > coverage_end:
+            days.append(day.isoformat())
+        day += timedelta(days=1)
+    return days[:31]
 
 
 def _coverage(campaign):

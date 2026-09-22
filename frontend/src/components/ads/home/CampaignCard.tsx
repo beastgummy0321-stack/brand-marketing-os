@@ -6,8 +6,9 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { cn } from "@/lib/utils";
 import { Chip } from "../patterns";
 import { formatCurrency } from "@/lib/format";
-import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
-import { getTriage, type TriageClass, type TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignCard as CampaignCardData, CampaignSyncState } from "@/lib/adsApi";
+import { getTriage, type TriageClass, type TriageData, type TriageItem } from "@/lib/adsTriageApi";
+import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { STATUS_LABEL, STATUS_TONE } from "./status";
 
 type Basis = "own" | "break_even" | "trailing_30";
@@ -21,7 +22,7 @@ type TargetView = TriageItem["target"];
 type CardState =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "ready"; items: TriageItem[] };
+  | { status: "ready"; items: TriageItem[]; data?: TriageData };
 
 const SEGMENTS: { cls: Exclude<TriageClass, "no_target">; label: string; swatch: string }[] = [
   { cls: "stop_loss", label: "停損", swatch: "bg-danger" },
@@ -80,6 +81,81 @@ function HatchedStrip() {
           "repeating-linear-gradient(45deg, var(--color-border), var(--color-border) 4px, transparent 4px, transparent 8px)",
       }}
     />
+  );
+}
+
+const REASON_CODE_LABEL: Record<string, string> = {
+  below_sample_gate: "樣本還不夠",
+  no_previous_window: "缺前一期可比資料",
+  result_unknown_days: "成果數未知",
+};
+
+/** 「資料不足，先不判斷」卡片的 chip 文案（F24 Feature Decisions "Home card state"）：
+ * 缺同步天數 > 還沒同步過成效 > 這批 insufficient 廣告裡最多的 reason_code。 */
+function insufficientChip(data: TriageData, items: TriageItem[]): string {
+  if (data.missing_days.length > 0) return `缺 ${data.missing_days.length} 天資料`;
+  if (data.coverage === null) return "尚未同步成效";
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    if (item.class !== "insufficient") continue;
+    counts.set(item.reason_code, (counts.get(item.reason_code) ?? 0) + 1);
+  }
+  let dominant: string | null = null;
+  let max = 0;
+  for (const [code, count] of counts) {
+    if (count > max) { max = count; dominant = code; }
+  }
+  return (dominant && REASON_CODE_LABEL[dominant]) || "資料不足";
+}
+
+/** 灰卡（prototype ccard `state:"failed"`，F24 擴充到 `syncing`／`disconnected`）：同一張灰卡、
+ * 同一句「暫時讀取不到」與打斜紋，只有 chip 文案跟按鈕依 `sync.state` 換（Feature Decisions
+ * "Home card state"）。`disconnected` 沒有「重新讀取」能修的東西——去連接頁才對。 */
+function SyncAbnormalBody({
+  sync, campaignName, connectionsHref, retrying, onRetry,
+}: { sync: CampaignSyncState; campaignName: string; connectionsHref: string; retrying: boolean; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[15px] font-semibold text-muted-foreground">暫時讀取不到</p>
+      <HatchedStrip />
+      <div className="flex flex-wrap items-center gap-2">
+        <Chip>
+          {sync.state === "syncing" ? "讀取中" : sync.state === "disconnected" ? "廣告帳戶未連接" : "已保存的紀錄都還在"}
+        </Chip>
+        {sync.state === "disconnected" ? (
+          <Button asChild variant="outline" size="sm">
+            <Link to={connectionsHref}>去連接</Link>
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={`重新讀取「${campaignName}」`}
+            disabled={sync.state === "syncing" || retrying}
+            onClick={onRetry}
+          >
+            重新讀取
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Warn 卡（prototype ccard `state:"waiting"`）：「資料不足，先不判斷」，按鈕一律去等待頁
+ * （F24-I03 `wait()`，這裡只給連結）。 */
+function InsufficientBody({ data, items, waitHref }: { data: TriageData; items: TriageItem[]; waitHref: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[15px] font-semibold text-warning">資料不足，先不判斷</p>
+      <HatchedStrip />
+      <div className="flex flex-wrap items-center gap-2">
+        <Chip tone="warn">{insufficientChip(data, items)}</Chip>
+        <Button asChild variant="outline" size="sm">
+          <Link to={waitHref}>去處理</Link>
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -154,16 +230,60 @@ function TargetBody({
 export function CampaignCard({ brandId, campaign }: { brandId: string; campaign: CampaignCardData }) {
   const [state, setState] = useState<CardState>({ status: "loading" });
   const [reload, setReload] = useState(0);
+  // F24-I02：這張卡自己觸發的真同步（跟 `sync.state==="syncing"` 是兩件事——那是後端已經在
+  // 跑的別的工作；這個 flag 是「這次按下重新讀取還沒收到終態」），避免使用者連點造成重複
+  // 送出。同步 job 收斂後才 `setReload`，觸發下面的 effect 重打一次 `getTriage`（拿最新的
+  // `data.sync`／`coverage`／`missing_days`，不必額外再打一支 campaign 清單）。
+  const [retrying, setRetrying] = useState(false);
+  const [syncJobId, setSyncJobId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
     // ponytail: one triage call per card; add a brand-level summary endpoint when a brand has >10 campaigns
     getTriage(brandId, campaign.id)
-      .then((triage) => { if (!cancelled) setState({ status: "ready", items: triage.items }); })
+      .then((triage) => { if (!cancelled) setState({ status: "ready", items: triage.items, data: triage.data }); })
       .catch(() => { if (!cancelled) setState({ status: "error" }); });
     return () => { cancelled = true; };
   }, [brandId, campaign.id, reload]);
+
+  // F24-I02「重新讀取」（sync 失敗／never 之外的真實失敗態）＝既有的 `syncCampaign` helper
+  // （預設 body `{}`，30 天涵蓋 28 天判斷窗），送出後輪詢 `GET .../sync-jobs/:id` 直到
+  // `status` 離開 pending/running，再重讀這張卡（Feature Decisions "Home card state"）。
+  async function retrySync() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const result = await syncCampaign(brandId, campaign.id);
+      setSyncJobId(result.job.id);
+    } catch {
+      setRetrying(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!syncJobId) return;
+    const jobId = syncJobId; // narrow to `string` for the `poll` closure below
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const result = await syncJob(brandId, jobId);
+        if (cancelled) return;
+        if (result.job.status === "pending" || result.job.status === "running") {
+          timer = setTimeout(() => void poll(), 3000);
+        } else {
+          setSyncJobId(null);
+          setRetrying(false);
+          setReload((v) => v + 1);
+        }
+      } catch {
+        if (!cancelled) { setSyncJobId(null); setRetrying(false); }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [syncJobId, brandId]);
 
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaign.id}`;
   // F20-I02：卡片名稱現在落在新的活動詳情頁（v7 `campPage()`），不是五分頁工作區——
@@ -171,7 +291,26 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
   // 仍照舊指向工作區（那個空狀態本身就是工作區才有意義的路，跟詳情頁重複沒有新資訊）。
   const detailHref = `${workspaceHref}/detail`;
   const targetHref = `${workspaceHref}/target`;
+  const waitHref = `${workspaceHref}/wait`;
+  const connectionsHref = `/brands/${brandId}/ads/connections`;
   const isError = state.status === "error";
+
+  // F24-I02：sync 失敗／帳戶未連接（灰卡）跟「資料不足，先不判斷」（warn 卡）都是「triage 讀
+  // 成功了，但這批數字不能信」——跟 `isError`（triage 這支 API 本身打不到）是不同的事實來源，
+  // 「Triage request failure keeps today's error state」（Feature Decisions），所以只在
+  // `state.status==="ready"` 時才看 `data.sync`／`missing_days`。缺 `data`（手寫測試 fixture
+  // 沒補、do_not_touch 衝突見 `adsApi.ts` 註解）視同 `"never"`，走今天原本那張卡。
+  const items = state.status === "ready" ? state.items : [];
+  const triageData = state.status === "ready" ? state.data : undefined;
+  const sync: CampaignSyncState = triageData?.sync ?? { state: "never", error: null, last_success_at: null };
+  const isSyncAbnormal = state.status === "ready"
+    && (sync.state === "failed" || sync.state === "syncing" || sync.state === "disconnected");
+  // `!!triageData` 一起判斷：沒有 `data`（手寫 fixture 沒補、視同 "never"）不能只靠
+  // `items.every(insufficient)` 就判定資料不足，否則下面渲染會因為拿不到 `triageData` 而
+  // 整段空白——沒有 `data` 一律照今天的卡（review 自我檢查）。
+  const isInsufficient = state.status === "ready" && !isSyncAbnormal && !!triageData
+    && ((items.length > 0 && items.every((i) => i.class === "insufficient"))
+      || triageData.missing_days.length > 0);
 
   const statusLabel = campaign.origin === "imported" ? "平台活動" : STATUS_LABEL[campaign.status];
   const statusTone = STATUS_TONE[campaign.status];
@@ -192,8 +331,9 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
       className={cn(
         // `.surface`（tokens.css，unlayered）比 Tailwind utilities 層的 `bg-muted` 優先權高，
         // `cn()` 疊上去蓋不掉——讀取失敗態乾脆不套 `.surface`，直接用同樣的邊框／圓角／背景
-        // 工具類組出來（review 裁決）。
-        isError ? "min-w-0 rounded-xl border border-border bg-muted" : "surface",
+        // 工具類組出來（review 裁決）。isSyncAbnormal（prototype `state:"failed"`）套同一張
+        // 灰卡；isInsufficient（`state:"waiting"`）維持白底（prototype 只有 failed 是灰的）。
+        isError || isSyncAbnormal ? "min-w-0 rounded-xl border border-border bg-muted" : "surface",
         "flex flex-col gap-3 p-5",
       )}
     >
@@ -251,13 +391,30 @@ export function CampaignCard({ brandId, campaign }: { brandId: string; campaign:
         </div>
       )}
 
-      {state.status === "ready" && (
-        <TargetBody items={state.items} targetHref={targetHref} workspaceHref={workspaceHref} />
+      {state.status === "ready" && isSyncAbnormal && (
+        <SyncAbnormalBody
+          sync={sync}
+          campaignName={campaign.name}
+          connectionsHref={connectionsHref}
+          retrying={retrying}
+          onRetry={() => void retrySync()}
+        />
+      )}
+
+      {state.status === "ready" && !isSyncAbnormal && isInsufficient && triageData && (
+        <InsufficientBody data={triageData} items={items} waitHref={waitHref} />
+      )}
+
+      {state.status === "ready" && !isSyncAbnormal && !isInsufficient && (
+        <TargetBody items={items} targetHref={targetHref} workspaceHref={workspaceHref} />
       )}
 
       {/* 預算來自 Campaign 清單本身，不是這張卡的 triage 讀取——讀取失敗也照樣看得到
-         （review 裁決）。 */}
-      <div className="flex flex-wrap items-center gap-2">{budgetChip}</div>
+         （review 裁決）。新的 sync 灰卡／資料不足 warn 卡照 prototype `ccard` 的 state 分支不
+         印這列（那個分支從來沒帶預算 chip），只有既有的 `isError`／`ready` 卡維持原樣。 */}
+      {!isSyncAbnormal && !isInsufficient && (
+        <div className="flex flex-wrap items-center gap-2">{budgetChip}</div>
+      )}
     </article>
   );
 }
