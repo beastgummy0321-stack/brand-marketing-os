@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageClosedBlock, TriageItem } from "@/lib/adsTriageApi";
+import type { CampaignTriage, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
 import { getTriage } from "@/lib/adsTriageApi";
 import type { OrdersPageData } from "@/lib/ordersApi";
 import { fetchOrders } from "@/lib/ordersApi";
@@ -66,14 +66,22 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
   };
 }
 
-// F26-I01: `closed` is always sent by the real backend -- an empty block here (this page's own
-// F26-I03 「已關閉」 handling is a separate issue, not covered by this factory yet).
+// F26-I01: `closed` is always sent by the real backend -- an empty block by default, overridable
+// per test (F26-I03 「無效・已停」 now reads this block instead of `stop_loss`-classed items).
 const EMPTY_CLOSED: TriageClosedBlock = {
   paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
 };
 
-function triage(items: TriageItem[]): CampaignTriage {
-  return { window_days: 7, items, closed: EMPTY_CLOSED };
+function closedItem(overrides: Partial<TriageClosedItem> = {}): TriageClosedItem {
+  return {
+    entity_id: "closed_1", name: "1150706 已下架單圖", native_status: "PAUSED",
+    thumbnail_url: null, spend: 300, cost_per_result: 150, result_label: "購買",
+    ...overrides,
+  };
+}
+
+function triage(items: TriageItem[], closed: TriageClosedBlock = EMPTY_CLOSED): CampaignTriage {
+  return { window_days: 7, items, closed };
 }
 
 function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
@@ -214,23 +222,34 @@ describe("MonthReviewPage（F24-I04）各活動", () => {
   });
 });
 
-describe("MonthReviewPage（F24-I04）素材", () => {
-  it("依 class 分三組：有效／無效已停／還看不出（flat+insufficient 合併）", async () => {
+describe("MonthReviewPage（F26-I03）素材", () => {
+  it("有效／還看不出讀投放中的 class；無效・已停改讀 closed 區塊，不再算仍在投放的 stop_loss", async () => {
     mockListCampaigns.mockResolvedValue([campaignCard()]);
-    mockGetTriage.mockResolvedValue(triage([
-      triageItem({ entity_id: "ad_1", class: "better", label: "變好" }),
-      triageItem({ entity_id: "ad_2", class: "stop_loss", label: "停損" }),
-      triageItem({ entity_id: "ad_3", class: "flat", label: "持平" }),
-      triageItem({ entity_id: "ad_4", class: "insufficient", label: "資料不足" }),
-      triageItem({ entity_id: "ad_5", class: "worse", label: "變差" }),
-    ]));
+    mockGetTriage.mockResolvedValue(triage(
+      [
+        triageItem({ entity_id: "ad_1", class: "better", label: "變好" }),
+        triageItem({ entity_id: "ad_2", class: "stop_loss", label: "停損" }),
+        triageItem({ entity_id: "ad_3", class: "flat", label: "持平" }),
+        triageItem({ entity_id: "ad_4", class: "insufficient", label: "資料不足" }),
+        triageItem({ entity_id: "ad_5", class: "worse", label: "變差" }),
+      ],
+      { paused: 2, archived: 1, other: 0, total: 3, truncated: false, items: [
+        closedItem({ entity_id: "closed_1", native_status: "PAUSED" }),
+        closedItem({ entity_id: "closed_2", native_status: "PAUSED" }),
+        closedItem({ entity_id: "closed_3", native_status: "ARCHIVED" }),
+      ] },
+    ));
     renderPage();
     await screen.findByText("素材");
     expect(screen.getByText("有效")).toBeTruthy();
     expect(screen.getByText("無效・已停")).toBeTruthy();
+    expect(screen.getByText("投放中，成本在目標內")).toBeTruthy();
+    expect(screen.getByText("已暫停或封存，含這個月關掉的")).toBeTruthy();
+    expect(screen.getByText("投放中，樣本還不夠")).toBeTruthy();
     expect(screen.getByText("還看不出")).toBeTruthy();
-    expect(screen.getAllByText("1 則").length).toBe(2); // 有效、無效・已停 各 1 則
-    expect(screen.getByText("2 則")).toBeTruthy(); // 還看不出 flat+insufficient
+    expect(screen.getByText("1 則")).toBeTruthy(); // 有效 1 則（仍在投放的 stop_loss 不算進「無效・已停」）
+    expect(screen.getByText("3 則")).toBeTruthy(); // 無效・已停＝closed.total，不是仍在投放的 stop_loss 數
+    expect(screen.getByText("2 則")).toBeTruthy(); // 還看不出＝flat+insufficient
   });
 
   it("同一組超過 12 則時最多畫 12 張縮圖，其餘摺成「＋N 則」，標頭計數仍印全部則數", async () => {
@@ -243,6 +262,22 @@ describe("MonthReviewPage（F24-I04）素材", () => {
     expect(screen.getByText("13 則")).toBeTruthy(); // 標頭計數不受上限影響
     expect(screen.getAllByTestId("material-thumb").length).toBe(12);
     expect(screen.getByText("＋1 則")).toBeTruthy();
+  });
+
+  it("無效・已停超過 12 則時也照樣摺成「＋N 則」，標頭計數用 closed.total（不是 items.length）", async () => {
+    mockListCampaigns.mockResolvedValue([campaignCard()]);
+    mockGetTriage.mockResolvedValue(triage(
+      [],
+      {
+        paused: 15, archived: 0, other: 0, total: 15, truncated: false,
+        items: Array.from({ length: 15 }, (_, i) => closedItem({ entity_id: `closed_${i}` })),
+      },
+    ));
+    renderPage();
+    await screen.findByText("素材");
+    expect(screen.getByText("15 則")).toBeTruthy();
+    expect(screen.getAllByTestId("material-thumb").length).toBe(12);
+    expect(screen.getByText("＋3 則")).toBeTruthy();
   });
 });
 
