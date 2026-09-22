@@ -1,0 +1,283 @@
+/** frontend/src/components/ads/review/ReviewEvidencePage.test.tsx — F23-I02：`vi.mock` 掉
+ * `@/lib/adsReviewApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 4：running/waiting/failed/
+ * ready/deferred/unjudgeable/completed 各自的卡片與 bar，completed 導去正確的下一步；暫緩要未來
+ * 時間、無法判定不用；entry route 沿用既有 proposal 或即時建立一輪並轉導。 */
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as reviewApi from "@/lib/adsReviewApi";
+import type { CommerceEvidence, ReviewPeriod, ReviewRound } from "@/lib/adsReviewApi";
+import * as triageApi from "@/lib/adsTriageApi";
+import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
+import { ReviewEvidencePage } from "./ReviewEvidencePage";
+
+vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof reviewApi>()),
+  getReview: vi.fn(), createReview: vi.fn(), decideReview: vi.fn(),
+}));
+vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof triageApi>()),
+  getQueue: vi.fn(),
+}));
+
+function period(overrides: Partial<ReviewPeriod> = {}): ReviewPeriod {
+  return {
+    row_count: 14, days_present: 14, days_expected: 14, missing_days: 0,
+    series: [{
+      metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph",
+      row_count: 14, days_present: 14,
+      metrics: { spend: 3000, impressions: 100, clicks: 10, purchases: 5, revenue: 4000, ctr: 1, cpc: 1, cpa: 600, roas: 1.3 },
+      known_counts: {},
+    }],
+    result_views: [{
+      metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase",
+      result_attribution: "7d_click", result_count: 5, cost_per_result: 600, days_present: 14, days_known: 14, reason: null,
+    }],
+    ...overrides,
+  };
+}
+function commerce(overrides: Partial<CommerceEvidence> = {}): CommerceEvidence {
+  return {
+    scope: "brand", start: "2026-09-08", end: "2026-09-21",
+    order_summary: {
+      count: 29, non_void_count: 29, order_net_amount: 24921, paid_net_amount: 18432,
+      unknown_payment_count: 9, currency: "TWD", currency_basis: "unknown", coverage: "unknown",
+      latest_import_at: null, unknown_amount_count: 0,
+    },
+    channels: [], limitations: [], attribution: "unavailable",
+    ...overrides,
+  };
+}
+function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
+  return {
+    id: "arv_1", entity_id: "aex_1", window_start: "2026-09-08", window_end: "2026-09-21", previous_id: null,
+    status: "ready", evidence_hash: "hash_1", llm_task_id: null, error: null,
+    decision: null, reason: null, revisit_at: null, created_at: "2026-09-22T00:00:00Z",
+    result_json: {
+      recommendations: [{
+        id: "rec_1", target_id: "aex_1", recommendation: "observe",
+        evidence_refs: ["current"], hypothesis: "花費持平但購買下降。", risks: ["樣本量有限。"], next_step: "先觀察一段時間。",
+      }],
+      limitations: [],
+    },
+    evidence_json: {
+      target: { id: "aex_1", name: "撞車1150724", platform: "meta", source_account: "acc_1", native_id: "native_1" },
+      window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei" },
+      current: period(), previous: period({ series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
+      commerce: { current: commerce(), previous: commerce({ order_summary: { ...commerce().order_summary, count: 65, order_net_amount: 61700, paid_net_amount: 60645 } }) },
+      conditions: { history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0 },
+      previous_review: null, source_review: null,
+      limitations: [], waiting_reasons: [], sources: [],
+    },
+    ...overrides,
+  };
+}
+function triage(overrides: Partial<TriageItem> = {}): TriageItem {
+  return {
+    entity_id: "aex_1", native_id: "native_1", name: "撞車1150724", campaign_id: "cmp_1",
+    campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "worse", label: "變差",
+    reason_code: "cost_per_result_up",
+    window: { start: "2026-09-08", end: "2026-09-21", days: 14, previous_start: "2026-08-25", previous_end: "2026-09-07", extended_from: null },
+    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+    current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    previous: { spend: 2000, result_count: 8, cost_per_result: 250, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    change_pct: 1.4,
+    sample: { gate: true, spend_multiple: 6.6, days_with_events: 14 },
+    ...overrides,
+  };
+}
+function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
+  return {
+    id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
+    dedupe_key: "k1", category: "ads_triage_worse", kind: null, severity: "rule_warning",
+    message: "m", action_url: null, visible_from: null, status: "open",
+    created_at: "2026-09-22T00:00:00Z", resolved_at: null, triage: triage(), proposal: null,
+    ...overrides,
+  };
+}
+function queue(items: QueueItem[] = [queueItem()]): QueuePayload {
+  return { items, counts: { stop_loss: 0, worse: items.length, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: items.length, kinds_available: ["worse"], kinds_pending: [] };
+}
+
+function EntryRoute() {
+  const { brandId, campaignId, entityId } = useParams<{ brandId: string; campaignId: string; entityId: string }>();
+  return <ReviewEvidencePage brandId={brandId ?? ""} campaignId={campaignId ?? ""} entityId={entityId ?? ""} />;
+}
+function RoundRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return <ReviewEvidencePage brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />;
+}
+function LocationProbe() {
+  return <p data-testid="probe-path">{useLocation().pathname}</p>;
+}
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/review/:entityId" element={<EntryRoute />} />
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId" element={<RoundRoute />} />
+        <Route path="*" element={<LocationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+const entryPath = "/brands/brd_1/ads/campaigns/cmp_1/review/aex_1";
+const roundPath = (id = "arv_1") => `/brands/brd_1/ads/campaigns/cmp_1/reviews/${id}`;
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
+});
+
+describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
+  it("running：只有整理證據卡片，bar 只有返回", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "running" }));
+    renderAt(roundPath());
+    expect(await screen.findByText("AI 正在整理證據")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "暫緩" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /選擇處理方向/ })).toBeNull();
+  });
+
+  it("waiting：列出 waiting_reasons，只有先不決定沒有選擇處理方向", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "waiting", evidence_json: { ...review().evidence_json, waiting_reasons: ["缺 9/17 的資料"] } }));
+    renderAt(roundPath());
+    expect(await screen.findByText("資料還不夠，這回先不判")).toBeTruthy();
+    expect(screen.getByText("缺 9/17 的資料")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /選擇處理方向/ })).toBeNull();
+  });
+
+  it("failed：顯示 error 訊息，沒有重試按鈕", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "failed", error: "模型逾時" }));
+    renderAt(roundPath());
+    expect(await screen.findByText("本次未完成")).toBeTruthy();
+    expect(screen.getByText("模型逾時")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重試" })).toBeNull();
+    expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
+  });
+
+  it("ready：AI 建議、這則廣告（花費用 series 加總、不是 ROAS）、商城訂單、完整 bar", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    expect(await screen.findByText("先觀察一段時間")).toBeTruthy();
+    expect(screen.getByText("花費持平但購買下降。")).toBeTruthy();
+    expect(screen.getByText("這則廣告")).toBeTruthy();
+    expect(screen.getByText("3,000")).toBeTruthy(); // 花費（series 加總，不是 series[0] 的任意選取）
+    expect(screen.queryByText(/ROAS/)).toBeNull(); // 沒有可信的單則 ROAS 存取器，三行不是四行
+    expect(screen.getByText("商城訂單")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "無法判定" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /選擇處理方向/ })).toBeTruthy();
+  });
+
+  it("deferred：closed chip、bar 只有先不決定按鈕與提示，沒有選擇處理方向", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "deferred", decision: "deferred", reason: "等資料更完整", revisit_at: "2099-01-07T12:00:00Z" }));
+    renderAt(roundPath());
+    expect(await screen.findByText(/1\/7 重看・等資料更完整/)).toBeTruthy();
+    expect(screen.getByText("要改文案請等下一回證據")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /選擇處理方向/ })).toBeNull();
+  });
+
+  it("unjudgeable：closed chip 是「無法判定」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "unjudgeable", decision: "unjudgeable", reason: "資料缺漏" }));
+    renderAt(roundPath());
+    expect(await screen.findByText(/無法判定・資料缺漏/)).toBeTruthy();
+  });
+
+  it("completed：沒有比對到佇列的 review proposal 時，連去選方向；比對到時走佇列的下一步", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "completed", decision: "completed" }));
+    renderAt(roundPath());
+    const link = await screen.findByRole("link", { name: /選擇處理方向/ });
+    expect((link as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/prepare");
+    expect(screen.queryByRole("button", { name: "暫緩" })).toBeNull();
+
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
+      proposal: {
+        kind: "review", review_id: "arv_1", status: "completed", decision: "completed", reason: null, revisit_at: null,
+        recommendation_id: "rec_1", change_set_id: "acs_1", change_set_status: "draft", verification_state: "pending", multi: false,
+      },
+    })]));
+    renderAt(roundPath());
+    const changeLink = await screen.findByRole("link", { name: /等你核准/ });
+    expect((changeLink as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+  });
+});
+
+describe("ReviewEvidencePage（F23-I02）先不決定 sheet", () => {
+  it("暫緩要選一個之後的時間，過去的自訂日期不送出", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    await user.click(await screen.findByRole("button", { name: "暫緩" }));
+    await user.click(screen.getByRole("button", { name: "自訂" }));
+    const dateInput = screen.getByLabelText("重看日期");
+    await user.clear(dateInput);
+    await user.type(dateInput, "2020-01-01");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("請選一個之後的時間。")).toBeTruthy();
+    expect(reviewApi.decideReview).not.toHaveBeenCalled();
+
+    await user.clear(dateInput);
+    await user.type(dateInput, "2099-01-01");
+    vi.mocked(reviewApi.decideReview).mockResolvedValue(review({ status: "deferred", decision: "deferred", reason: "等資料更完整", revisit_at: "2099-01-01T00:00:00Z" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalled());
+    const call = vi.mocked(reviewApi.decideReview).mock.calls[0][3];
+    expect(call.decision).toBe("deferred");
+    expect(call.revisit_at?.startsWith("2099-01-01")).toBe(true);
+  });
+
+  it("無法判定不需要重看時間", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    await user.click(await screen.findByRole("button", { name: "無法判定" }));
+    expect(screen.queryByLabelText("重看日期")).toBeNull();
+    vi.mocked(reviewApi.decideReview).mockResolvedValue(review({ status: "unjudgeable", decision: "unjudgeable", reason: "資料缺漏，無法比較" }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalled());
+    const call = vi.mocked(reviewApi.decideReview).mock.calls[0][3];
+    expect(call).toEqual({ decision: "unjudgeable", reason: "資料缺漏，無法比較" });
+  });
+});
+
+describe("ReviewEvidencePage（F23-I02）entry route", () => {
+  it("佇列列已有 proposal.review_id 時直接轉導，不建立新的一輪", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
+      proposal: {
+        kind: "review", review_id: "arv_existing", status: "ready", decision: null, reason: null, revisit_at: null,
+        recommendation_id: null, change_set_id: null, change_set_status: null, verification_state: null, multi: false,
+      },
+    })]));
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ id: "arv_existing" }));
+    renderAt(entryPath);
+    // `reviews/:reviewId` 也在 renderAt 的路由表裡，轉導後直接掛載 round 模式，不落到 catch-all——
+    // 用實際讀到的回合內容證明轉導對象正確，同時確認沒有多送一次建立請求。
+    await screen.findByText("先觀察一段時間");
+    expect(reviewApi.getReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_existing");
+    expect(reviewApi.createReview).not.toHaveBeenCalled();
+  });
+
+  it("沒有既有提議時，用佇列列的觀察窗建立一輪並轉導", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    vi.mocked(reviewApi.createReview).mockResolvedValue(review({ id: "arv_new" }));
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ id: "arv_new" }));
+    renderAt(entryPath);
+    await waitFor(() => expect(reviewApi.createReview).toHaveBeenCalled());
+    const body = vi.mocked(reviewApi.createReview).mock.calls[0][2];
+    expect(body).toEqual({ entity_id: "aex_1", start: "2026-09-08", end: "2026-09-21" });
+    await screen.findByText("先觀察一段時間");
+    expect(reviewApi.getReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_new");
+  });
+
+  it("建立失敗顯示後端訊息，並提供回投放中心", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    vi.mocked(reviewApi.createReview).mockRejectedValue(new Error("活動已結案，本回未送出。"));
+    renderAt(entryPath);
+    expect(await screen.findByText("活動已結案，本回未送出。")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "回投放中心" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+});
