@@ -1204,4 +1204,25 @@ F22 `changes/:setId/confirm`. Step logic in `review/reviewFlow.ts`.
   button becomes 「修改內容」 for a copy set carrying `review_id`.
 - Kit: `patterns/ReviewPieces.tsx` (EvidenceRow, Ladder, OptionCard, CopyBlock); `ui-evidence.cjs --settle`.
 - 驗證：`frontend/src/components/ads/review/*.test.tsx`、`flow/ConfirmPage.test.tsx`、`home/DecisionQueue.test.tsx`；並排證據
+
+### 6.25 F24-I01 — `data` 唯讀擴充：`triage`／`campaigns` 卡片帶同步狀態（settled 2026-09-22）
+
+`triage.classify()`（因此 `GET .../triage`）新增 `data: {sync, coverage, missing_days}`；`repository.py::list_campaigns` 每張卡另加
+`data: {sync}`——同一支 `repository.py::campaign_sync_state`（`_bound_account_ids`／`_campaign_disconnected` 私有輔助），不建 migration，
+不打平台。`sync.state` 判斷順序（優先序固定）：`never`（`context_json.external_sync` 完全沒寫過）／`disconnected`（活動任一
+`(platform, source_account)` 不在 reader 的已綁定帳戶——純 DB 讀，跟 `external_repository.external_view` 的 `connections` 同一種檢查，
+只是換一個地方算，因為 `external_repository.py` 不在這張票的 touch 範圍內）／`failed`（任一 section `status` 是 `record_sync`
+實際會寫的 `"error"`／`"partial"`——section 層級從沒有字面 `"failed"`，那個字專屬彙總後的 `sync.state`）／`syncing`／`ok`。
+`error` 取第一個失敗 section 自己的 `error`（固定用 `structure`／`creatives`／`observations` 順序當 tie-break，因為 Python `set`
+與 Postgres jsonb 鍵序都不保證順序）；`last_success_at` 取三個 section 裡最新的一個——失敗的那次同步保留舊值
+（`external_repository.record_sync`），所以 `state` 是 `"failed"` 時這個時間可能是舊的，不代表「剛剛」。
+`coverage`／`missing_days` 只在 `triage` 的 `data` 出現，用 `classify()` 判每則廣告的同一個視窗（`cutoff` 往回
+`WINDOW_STEPS[-1]`＝28 天）；`missing_days` 是這個視窗裡落在 `coverage` 之外的日期，`coverage` 為 `null` 時固定回 `[]`
+（那個情境已經由 `sync.state === "never"` 表達，不用一長串缺日期）。
+- 前端型別：`adsApi.ts::CampaignCard.data`／`adsTriageApi.ts::CampaignTriage.data`，共用 `CampaignSyncState`。兩者都設成選填
+  （`data?:`）——`do_not_touch`（`frontend/src/components/ads/**/*.tsx`）在 harness 的 `scopeDenial` 比 `touch` 的
+  `**/*.test.tsx` 先判定，蓋掉了原本該給、可以改測試 fixture 的例外，既有的手寫 `*.test.tsx` fixture 補不了這個必填欄位
+  （同 `CampaignCard.labels?` 的先例）；下一張碰這些畫面的票要嘛拿到能編輯這些檔案的授權，要嘛在讀取端對 `data`／`data.sync`
+  做 optional-safe 讀取。
+- 驗證：`app/tests/test_ads_triage.py::TriageDataViewTest`、`app/tests/test_ads_repository.py::ListCampaignsSyncDataTest`。
   `.harness/scratch/F23/I0{2,3,4}/`.

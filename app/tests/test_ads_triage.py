@@ -486,5 +486,132 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(one_ad_reads, five_ad_reads)
 
 
+# ---------------------------------------------------------------------------
+# F24-I01: the read-only `data` enrichment on `classify()`'s own result -- `sync.state`
+# priority order (never/disconnected/failed/syncing/ok), `error`/`last_success_at` semantics,
+# and `coverage`/`missing_days` against the SAME window `classify()` judges every ad with.
+# A fresh campaign per test (no `ad`-kind entity needed -- `data` doesn't depend on `items`).
+# ---------------------------------------------------------------------------
+
+
+class TriageDataViewTest(unittest.TestCase):
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="F24 data 測試", actor="test", client_name=None,
+        )["id"]
+        self.reader = _Reader()
+        patcher = patch.object(
+            channels, "external_reader", side_effect=lambda platform: self.reader,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="資料同步測試",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1"},
+        )
+        self.conn.commit()
+        self.cutoff = (
+            db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
+        ).date()
+
+    def data(self):
+        return triage.classify(self.conn, self.org, self.brand, self.campaign)["data"]
+
+    def set_section(self, section, **state):
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section=section, state=state,
+        )
+        self.conn.commit()
+
+    def test_never_synced(self):
+        self.assertEqual(
+            self.data(), {"sync": {"state": "never", "error": None, "last_success_at": None},
+                          "coverage": None, "missing_days": []},
+        )
+
+    def test_ok(self):
+        self.set_section(
+            "observations", status="success", last_success_at=db.now_utc().isoformat(),
+            coverage={"start": (self.cutoff - timedelta(days=90)).isoformat(),
+                      "end": self.cutoff.isoformat()},
+        )
+        sync = self.data()["sync"]
+        self.assertEqual(sync["state"], "ok")
+        self.assertIsNone(sync["error"])
+        self.assertIsNotNone(sync["last_success_at"])
+
+    def test_syncing(self):
+        self.set_section("observations", status="syncing", last_attempt_at=db.now_utc().isoformat())
+        self.assertEqual(self.data()["sync"]["state"], "syncing")
+
+    def test_failed_with_error(self):
+        self.set_section(
+            "observations", status="error", error="讀取失敗",
+            last_attempt_at=db.now_utc().isoformat(),
+        )
+        sync = self.data()["sync"]
+        self.assertEqual(sync["state"], "failed")
+        self.assertEqual(sync["error"], "讀取失敗")
+
+    def test_failed_with_null_error_keeps_old_last_success_at(self):
+        old_success = db.now_utc().isoformat()
+        self.set_section(
+            "observations", status="success", last_success_at=old_success,
+            coverage={"start": (self.cutoff - timedelta(days=10)).isoformat(),
+                      "end": self.cutoff.isoformat()},
+        )
+        self.set_section(
+            "observations", status="error", error=None, last_attempt_at=db.now_utc().isoformat(),
+        )
+        sync = self.data()["sync"]
+        self.assertEqual(sync["state"], "failed")
+        self.assertIsNone(sync["error"])
+        self.assertEqual(sync["last_success_at"], old_success)
+
+    def test_partial_counts_as_failed(self):
+        self.set_section("observations", status="partial", error="部分頁面失敗")
+        self.assertEqual(self.data()["sync"]["state"], "failed")
+
+    def test_disconnected(self):
+        # act_1 is no longer among the bound accounts this reader reports -- `state` reads
+        # `disconnected` even though the section itself synced cleanly (priority order: never /
+        # disconnected / failed / syncing / ok).
+        self.reader.accounts = lambda conn, org, brand: []
+        self.set_section(
+            "observations", status="success", last_success_at=db.now_utc().isoformat(),
+            coverage={"start": (self.cutoff - timedelta(days=10)).isoformat(),
+                      "end": self.cutoff.isoformat()},
+        )
+        self.assertEqual(self.data()["sync"]["state"], "disconnected")
+
+    def test_coverage_null_gives_empty_missing_days(self):
+        data = self.data()
+        self.assertIsNone(data["coverage"])
+        self.assertEqual(data["missing_days"], [])
+
+    def test_window_partly_outside_coverage_lists_exact_missing_dates(self):
+        coverage_start = self.cutoff - timedelta(days=10)
+        self.set_section(
+            "observations", status="success", last_success_at=db.now_utc().isoformat(),
+            coverage={"start": coverage_start.isoformat(), "end": self.cutoff.isoformat()},
+        )
+        data = self.data()
+        window_start = self.cutoff - timedelta(days=triage.WINDOW_STEPS[-1] - 1)
+        missing = data["missing_days"]
+        self.assertEqual(len(missing), (coverage_start - window_start).days)
+        self.assertEqual(missing[0], window_start.isoformat())
+        self.assertEqual(missing[-1], (coverage_start - timedelta(days=1)).isoformat())
+        self.assertNotIn(self.cutoff.isoformat(), missing)
+        self.assertNotIn(coverage_start.isoformat(), missing)
+        self.assertEqual(
+            data["coverage"], {"start": coverage_start.isoformat(), "end": self.cutoff.isoformat()},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

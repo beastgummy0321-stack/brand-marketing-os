@@ -423,15 +423,98 @@ def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id
     return [dict(r) for r in rows]
 
 
+# F24-I01: canonical order for "the first failing section" in `campaign_sync_state` below --
+# matches `record_sync`'s own validation order (`external_repository.py:170`, a Python `set`
+# literal with no order of its own). `jsonb` key order from Postgres isn't a contract either, so
+# this tuple is the one place that order is actually pinned.
+_SYNC_SECTION_ORDER = ("structure", "creatives", "observations")
+# The two section-level statuses `record_sync` (written by `external_sync.py:446,552`) ever
+# writes for a sync attempt that didn't cleanly finish -- there is no literal `"failed"` at the
+# section level (that word is reserved for the aggregate `data.sync.state` derived from them).
+_SYNC_FAILED_STATUSES = frozenset({"error", "partial"})
+
+
+def _bound_account_ids(conn: _AnyConn, org_id: str, brand_id: str, platform: str) -> set:
+    """This platform's own bound source accounts -- a DB read only (`MetaReader.accounts` ->
+    `source.external_bound_accounts`), never a platform API call. Same check
+    `external_repository.external_view`'s own `connections` list makes, kept here (not moved
+    into `external_repository.py`) because this issue's touch scope doesn't cover that file."""
+    reader = channels.external_reader(platform)
+    if reader is None:
+        return set()
+    return {account["account_id"] for account in reader.accounts(conn, org_id, brand_id)}
+
+
+def _campaign_disconnected(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, accounts_cache: dict,
+) -> bool:
+    """Whether any of this campaign's own (platform, source_account) pairs sits outside the
+    platform reader's bound accounts (F24-I01, feature Decisions) -- same DB-only check
+    `external_view`'s own `connections` list makes, just for one campaign. `accounts_cache` (a
+    plain `dict`, mutated in place) lets `list_campaigns` below share one `_bound_account_ids`
+    read per platform across every campaign in the list, never once per campaign."""
+    pairs = conn.execute(
+        "SELECT DISTINCT platform, source_account FROM ads_external_entity "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+        (org_id, brand_id, campaign_id),
+    ).fetchall()
+    for row in pairs:
+        platform, account = row["platform"], row["source_account"]
+        if platform not in accounts_cache:
+            accounts_cache[platform] = _bound_account_ids(conn, org_id, brand_id, platform)
+        if account not in accounts_cache[platform]:
+            return True
+    return False
+
+
+def campaign_sync_state(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign: dict,
+    *, accounts_cache: dict | None = None,
+) -> dict:
+    """The `data.sync` object (F24-I01, feature Decisions) for one campaign -- read-only, no
+    migration. `campaign` needs `id` and `context_json`. State, in priority order: `"never"`
+    (no `external_sync` section recorded at all) / `"disconnected"` (`_campaign_disconnected`
+    above) / `"failed"` (any section `status` in `_SYNC_FAILED_STATUSES`) / `"syncing"` (any
+    section `status == "syncing"`) / `"ok"`. `error` is the first failing section's own `error`
+    (`_SYNC_SECTION_ORDER`, may be `None`); `last_success_at` is the newest section value across
+    all three sections -- a failed section keeps its OLD `last_success_at`/`coverage`
+    (`external_repository.record_sync`), so this can read as stale, never "recent", once `state`
+    is `"failed"`. `accounts_cache` -- see `_campaign_disconnected`."""
+    cache = {} if accounts_cache is None else accounts_cache
+    sections = (campaign.get("context_json") or {}).get("external_sync") or {}
+    if not sections:
+        return {"state": "never", "error": None, "last_success_at": None}
+    ordered = [(name, sections[name]) for name in _SYNC_SECTION_ORDER if name in sections]
+    error = next(
+        (section.get("error") for _, section in ordered
+         if section.get("status") in _SYNC_FAILED_STATUSES),
+        None,
+    )
+    last_success_at = max(
+        (section["last_success_at"] for _, section in ordered if section.get("last_success_at")),
+        default=None,
+    )
+    if _campaign_disconnected(conn, org_id, brand_id, campaign["id"], cache):
+        state = "disconnected"
+    elif any(section.get("status") in _SYNC_FAILED_STATUSES for _, section in ordered):
+        state = "failed"
+    elif any(section.get("status") == "syncing" for _, section in ordered):
+        state = "syncing"
+    else:
+        state = "ok"
+    return {"state": state, "error": error, "last_success_at": last_success_at}
+
+
 def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     """`GET /campaigns` 列表：每筆帶 `budget_total`（推導）、`budget_progress`、一句成效摘要
-    跟 F04-I08 的 `judgment`。沒有分頁——`routes.py` 的首頁路由靠這一點在原地數計數（見那邊
-    的註解）。"""
+    跟 F04-I08 的 `judgment`，F24-I01 起再加 `data.sync`。沒有分頁——`routes.py` 的首頁路由靠
+    這一點在原地數計數（見那邊的註解）。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     rows = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s ORDER BY created_at DESC",
         (org_id, brand_id),
     ).fetchall()
+    accounts_cache: dict = {}
     entries = []
     for row in rows:
         row = dict(row)
@@ -457,6 +540,9 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "outcome": outcome,
             "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
                                                      "spend": spend}, today=today),
+            "data": {"sync": campaign_sync_state(
+                conn, org_id, brand_id, row, accounts_cache=accounts_cache,
+            )},
         })
     return entries
 
