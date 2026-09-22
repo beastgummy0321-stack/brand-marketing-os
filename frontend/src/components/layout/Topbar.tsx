@@ -43,20 +43,24 @@ function SyncStatus({ brandId }: { brandId: string }) {
   const { summary } = state;
   const failing = summary.failing_campaigns > 0;
   const syncedText = summary.last_success_at ? `最近同步 ${formatSyncedAt(summary.last_success_at)}` : "尚未同步";
+  const fullText = `${syncedText}${failing ? `・${summary.failing_campaigns} 個活動讀取異常` : ""}`;
 
+  // Merge smoke red (1024, ADR 0051 rule 4): the right group has to shrink, not this link — so
+  // this can only give up its OWN width first. `min-w-0` (no `shrink-0`) lets the flex algorithm
+  // actually shrink it; below `xl` (1280, same cutover `tokens.css` already uses for the sidebar)
+  // the sync text folds away and only the dot + the open-items chip remain, `title` keeping the
+  // full sentence reachable (hover / screen reader) instead of silently dropping it.
   return (
     <Link
       to={`/brands/${brandId}/ads/connections`}
-      className="flex shrink-0 items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+      title={fullText}
+      className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       <span
         aria-hidden="true"
         className={cn("inline-block h-2 w-2 shrink-0 rounded-full", failing ? "bg-warning" : "bg-success")}
       />
-      <span className="whitespace-nowrap">
-        {syncedText}
-        {failing ? `・${summary.failing_campaigns} 個活動讀取異常` : ""}
-      </span>
+      <span className="hidden max-w-[220px] truncate whitespace-nowrap xl:inline">{fullText}</span>
       {summary.open_items > 0 && (
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-2.5 py-1 text-xs text-warning">
           {summary.open_items} 項待處理
@@ -124,15 +128,23 @@ export function Topbar({
           <span className="truncate font-medium">{label}</span>
         </nav>
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {brandId && <SyncStatus brandId={brandId} />}
         <ActiveJobsBell />
-        <OrgMenu
-          identity={identity}
-          onIdentityChanged={() => {
-            void queryClient.invalidateQueries({ queryKey: ["identity"] });
-          }}
-        />
+        {/* OrgMenu (components/auth, out of this issue's touch) prints the org name uncapped —
+         * for a first-login personal org that's literally the sign-up email (`app/identity/
+         * __init__.py`), which can be far longer than any real org name. This wrapper is the only
+         * lever this file has on it: `min-w-0` lets it take the shrink instead of forcing the row
+         * wider, `overflow-hidden` contains whatever doesn't fit instead of letting it push
+         * `#root`'s scrollWidth past the viewport (the merge-smoke gate). */}
+        <div className="min-w-0 overflow-hidden">
+          <OrgMenu
+            identity={identity}
+            onIdentityChanged={() => {
+              void queryClient.invalidateQueries({ queryKey: ["identity"] });
+            }}
+          />
+        </div>
       </div>
     </header>
   );
