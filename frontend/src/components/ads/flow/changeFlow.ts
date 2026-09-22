@@ -113,8 +113,25 @@ export function pauseTitle(adName: string | null): string {
   return `暫停「${truncate(adName ?? "未命名廣告", 60)}」`;
 }
 
-export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REASON): ChangeInput {
-  return { kind: "pause", target_id: entityId, after: { status: "PAUSED" }, reason };
+/** Contract C: `angle` lives beside `kind`/`target_id`/`after`/`reason` on a pause item itself
+ * (`app/ads/change_control_data.py::build_item`'s key whitelist, correction 7) -- part of
+ * `content_hash`/`premise_hash` like every other item field, but never inside `after`
+ * (`SettingValues`). `adsChangeApi.ts`'s `ChangeInput`/`ChangeItem` (out of this issue's touch)
+ * don't carry it in their TS shape yet; read/write it through a local widening at the call site,
+ * same technique `ConfirmPage.tsx`'s `source: "cleanup"` widening already uses (F27-I15) rather
+ * than editing that file. */
+export type ChangeItemAngle = ChangeItem & { angle?: string | null };
+export function itemAngle(item: ChangeItem | undefined | null): string | null {
+  if (!item) return null;
+  return (item as ChangeItemAngle).angle ?? null;
+}
+
+export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REASON, angle?: string | null): ChangeInput {
+  const trimmed = angle?.trim();
+  return {
+    kind: "pause", target_id: entityId, after: { status: "PAUSED" }, reason,
+    ...(trimmed ? { angle: trimmed } : {}),
+  } as ChangeInput;
 }
 
 /** F27-I15 Contract F: the one fixed reason every pause item of a lazily-created cleanup set
@@ -166,7 +183,11 @@ export function isMonthBudgetRejection(message: string): boolean {
 /** Rebuilding a draft after approve answers a conflict (feature Decisions: "the page rebuilds the
  * draft once with a NEW operation_id and supersedes_id = the old set") resends the same items. */
 export function toChangeInput(item: ChangeItem): ChangeInput {
-  return { kind: item.kind as ChangeKind, target_id: item.target_id, after: item.after, reason: item.reason };
+  const angle = itemAngle(item);
+  return {
+    kind: item.kind as ChangeKind, target_id: item.target_id, after: item.after, reason: item.reason,
+    ...(angle ? { angle } : {}),
+  } as ChangeInput;
 }
 
 /** Money formatting for the pause card's meter caption — same honest-null convention as

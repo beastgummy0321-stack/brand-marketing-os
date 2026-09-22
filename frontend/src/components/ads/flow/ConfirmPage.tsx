@@ -20,9 +20,10 @@ import {
   type MonthlyBudget,
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueueItem, type QueuePayload, type QueueScale, type TriageItem } from "@/lib/adsTriageApi";
+import { getAngles, type AnglesResponse, type AnglesStatus } from "@/lib/adsAnglesApi";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
-import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, Meter, ReservedSlotCard, Segmented } from "../patterns";
+import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, LearnCard, Meter, Segmented, TagToggle } from "../patterns";
 import { CleanupEvidence } from "./CleanupEvidence";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { Tile } from "./Tile";
@@ -36,6 +37,7 @@ import {
   cleanupTitle,
   isCleanupTriageItem,
   isMonthBudgetRejection,
+  itemAngle,
   nextOpenQueueItem,
   pauseTitle,
   queueItemEntityId,
@@ -95,6 +97,49 @@ function PauseEvidence({ triage, fallbackName, fallbackReason }: {
         />
       </div>
     </div>
+  );
+}
+
+const ANGLE_MAX = 40;
+
+/** 暫停提議的「這則主打什麼？」卡（Contract C/D，v7 原型 `confirmPage()` 的 `.learn`）：`angles`
+ * 還在跑（LLM 任務排隊中，正常會走到的第一個狀態）畫骨架佔位；判斷完成就是三顆 TagToggle；判斷
+ * 失敗（或 e2e 腳本化供應商不認得這個新工作類型，correction 9）只剩「＋ 自訂」——兩種狀態都能
+ * 再點「＋ 自訂」換成手動輸入，不是互斥的兩套 UI。選到的內容（含自訂）就是要送出的 `angle`，
+ * 不選就是 `undefined`（`buildPauseDraftItem` 對空字串／未選一律不送這個欄位）。 */
+function PauseLearnCard({ status, candidates, angle, customOpen, disabled, onSelect, onOpenCustom, onCustomChange }: {
+  status: AnglesStatus; candidates: string[]; angle: string; customOpen: boolean; disabled: boolean;
+  onSelect: (value: string) => void; onOpenCustom: () => void; onCustomChange: (value: string) => void;
+}) {
+  const trimmed = angle.trim();
+  return (
+    <LearnCard
+      title="這則主打什麼？"
+      aside={trimmed
+        ? <>暫停後記入品牌學習<br /><b className="text-foreground">「{trimmed}」對這群受眾無效</b></>
+        : "選一個，暫停後記入品牌學習"}
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        {status === "pending" && [0, 1, 2].map((i) => <Skeleton key={i} className="h-7 w-16 rounded-full" />)}
+        {status === "ready" && candidates.map((c) => (
+          <TagToggle key={c} on={!customOpen && angle === c} disabled={disabled} onClick={() => onSelect(c)}>{c}</TagToggle>
+        ))}
+        {status !== "pending" && (
+          <TagToggle on={customOpen} disabled={disabled} onClick={onOpenCustom}>＋ 自訂</TagToggle>
+        )}
+      </div>
+      {customOpen && (
+        <Input
+          className="mt-2 h-8 max-w-[220px] text-sm"
+          aria-label="自訂主打"
+          value={angle}
+          maxLength={ANGLE_MAX}
+          disabled={disabled}
+          onChange={(e) => onCustomChange(e.target.value)}
+          placeholder="輸入這則廣告主打什麼"
+        />
+      )}
+    </LearnCard>
   );
 }
 
@@ -326,6 +371,44 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const cleanupSet = isCleanupTriageItem(triageItem);
   const isCleanupPropose = !entityId && !setId && proposeKind === "cleanup";
 
+  // F27-I16: `closed`／`item`／`kind`／`blocked` used to be computed after the loading／error
+  // guards below (they only ever needed `changeSet`, never the guards' own state) — moved up here
+  // so the angle-fetching hooks right after them can read `kind`／`closed` too, without a hook
+  // ending up after a conditional `return` (React's hook-order rule; `useEffect` can't move below
+  // the guards instead).
+  const { closed } = changeSet ? stepFromChangeSet(changeSet) : { closed: false };
+  const item = changeSet && changeSet.items.length === 1 ? changeSet.items[0] : undefined;
+  // `item` 在 propose 模式、change set 還沒建立前是 `undefined`（草稿延遲建立），這時 kind 由
+  // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
+  // propose kind 只有 pause，這裡是新加的分支）。F27-I15：cleanup 是多項清單，沒有單一 `item`
+  // 可讀，`cleanupSet`（佇列比對，不是內容猜測）優先於這整套 `item`／`proposeKind` 判斷。
+  const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
+  const blocked = changeSet !== null && !cleanupSet
+    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
+
+  // Contract C / correction 9: 「一則廣告一次 copy hash 一顆 LLM call，暫停提議頁一開就打」——
+  // `entityId`（propose 網址）或既有草稿的 `item.target_id` 都是同一則廣告的 id；`!closed` 只是
+  // 不在已經拒絕／暫緩、不會再送出的清單上浪費呼叫（核准之後這頁本來就會被 `stepFromChangeSet`
+  // 導去 handoff／verify，不會停留在這裡）。
+  const pauseEntityId = kind === "pause" ? (entityId ?? item?.target_id ?? triageItem?.triage.entity_id ?? null) : null;
+  const [angleData, setAngleData] = useState<AnglesResponse | null>(null);
+  const [angleChoice, setAngleChoice] = useState("");
+  const [angleCustomOpen, setAngleCustomOpen] = useState(false);
+  useEffect(() => {
+    setAngleChoice(itemAngle(item) ?? "");
+    setAngleCustomOpen(false);
+    setAngleData(null);
+    if (kind !== "pause" || closed || !pauseEntityId) return;
+    let cancelled = false;
+    getAngles(brandId, campaignId, pauseEntityId)
+      .then((res) => { if (!cancelled) setAngleData(res); })
+      .catch(() => { if (!cancelled) setAngleData({ status: "failed", candidates: [], error: null }); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `item` narrowed to `item?.id`：整個
+    // `item` 物件每次 `getChangeControl` 重新讀取都是新的參照，只有身分（id）真的換了才需要重置
+    // 選取狀態或重打一次 `getAngles`。
+  }, [kind, closed, pauseEntityId, brandId, campaignId, item?.id]);
+
   // feature Decisions「Step from a change set」：非 confirm 步驟的清單，或還沒對到正典
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
   // 才會真的把人送到那兩頁；這批只加了 propose 與 confirm 兩條路由。
@@ -381,11 +464,13 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       } as ChangeDraft & { source: "cleanup" });
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
+    // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
+    // this first write — `undefined` reason keeps `buildPauseDraftItem`'s own default.
     return createChangeSet(brandId, campaignId, {
       operation_id: operationId,
       title: pauseTitle(triageItem.triage.name),
       month: currentBudgetMonth(),
-      items: [buildPauseDraftItem(triageItem.triage.entity_id)],
+      items: [buildPauseDraftItem(triageItem.triage.entity_id, undefined, angleChoice)],
     });
   }
 
@@ -527,16 +612,6 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     );
   }
 
-  const { closed } = changeSet ? stepFromChangeSet(changeSet) : { closed: false };
-  const item = changeSet && changeSet.items.length === 1 ? changeSet.items[0] : undefined;
-  // `item` 在 propose 模式、change set 還沒建立前是 `undefined`（草稿延遲建立），這時 kind 由
-  // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
-  // propose kind 只有 pause，這裡是新加的分支）。F27-I15：cleanup 是多項清單，沒有單一 `item`
-  // 可讀，`cleanupSet`（佇列比對，不是內容猜測）優先於這整套 `item`／`proposeKind` 判斷。
-  const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
-  const blocked = changeSet !== null && !cleanupSet
-    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
-
   if (blocked && changeSet) {
     return (
       <div className="flex flex-col gap-4">
@@ -621,11 +696,18 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         />
       )}
 
-      {kind === "pause" && (
-        <ReservedSlotCard
-          title="這則主打什麼？"
-          description="暫停後把這則廣告主打的訴求記入品牌學習，這個判斷還沒接上。"
-          tag="接上後開放"
+      {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
+          暫緩), the angle chosen (or not) is already fixed and nothing more will be recorded. */}
+      {kind === "pause" && !closed && (
+        <PauseLearnCard
+          status={angleData?.status ?? "pending"}
+          candidates={angleData?.candidates ?? []}
+          angle={angleChoice}
+          customOpen={angleCustomOpen}
+          disabled={busy}
+          onSelect={(c) => { setAngleChoice(c); setAngleCustomOpen(false); }}
+          onOpenCustom={() => { setAngleCustomOpen(true); setAngleChoice(""); }}
+          onCustomChange={(v) => setAngleChoice(v.slice(0, ANGLE_MAX))}
         />
       )}
 
