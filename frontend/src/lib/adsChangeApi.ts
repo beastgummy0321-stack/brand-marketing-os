@@ -26,6 +26,9 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   // deep link, or an identifying field is missing; the caller falls back to the target's own
   // name/native id + 「複製編號」.
   platform_url: string | null;
+  // Contract D (F27-I04): read time only, only ever set for a `pause` item that carries an
+  // `angle` -- optional so existing test factories need no change.
+  learning?: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number };
 }
 export interface ChangeSet {
   id: string; campaign_id: string; title: string; month: string; operation_id: string; content_hash: string;
