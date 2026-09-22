@@ -1321,3 +1321,23 @@ under its own file-size convention); both pure reads (no LLM call, no platform w
   `test_ads_external_monthly.py::MetaMonthlyContractTest::test_campaign_with_neither_budget_field_marks
   _children_verified_ad_sets_unchanged`（`_entity()` 直測：ABO 活動打標記、廣告組與 CBO 活動都不打）。
   `docs/verification.md` 既有共用命令未變。
+
+### 6.28 F25 — 佇列的兩種新列：可加預算（三步流程）與補素材（settled 2026-09-22）
+
+Frontend of the rules in §6.27. Queue order is the existing `interrupts._sort_key` (severity, then category
+registration order), so the two `informational` kinds sort after 停損／變差; `refresh_creative` rows are additionally
+forced last and never count as done.
+- `home/QueueRow.tsx` dispatches on `kind_key`: stop_loss/worse unchanged except the stop-loss button now reads 「看提議」
+  (home only; the detail page keeps 去處理); scale rows show `KindMark up`, the owner name, a success Meter of
+  `scale.cost_per_result` vs the target, and 「看提議」 → `propose/budget/:ownerId`; refresh rows show `KindMark fresh`,
+  「能判讀的素材只剩 N 則」, up to four thumbnails (hollow placeholders to four) and 「準備新素材」 → the row's
+  `action_url` (`?tab=assets&material_new=1`).
+- `home/status.ts::proposalAction` gained the `budget` kind (null → propose route; with a set it reuses the pause
+  branch) and `isQueueItemDone` the `scale_budget` branch.
+- `flow/ConfirmPage.tsx` takes `proposeKind`; the budget evidence card is the prototype's: 同組 N 則, 每日預算 from → to
+  +20%, cost meter, 「主力穩定 2 個觀察期」, 「加碼後等 3–5 天再看」, and the month-budget bar with the 這次加碼 segment.
+  A 409 whose message is one of `month_budget.preflight`'s three is shown as-is (no rebuild); other 409s still rebuild
+  with `supersedes_id`.
+- `flow/changeFlow.ts::nextOpenQueueItem` is the single 「下一件」 rule for all four kinds; ConfirmPage and VerifyPage use it.
+- 驗證：`home/DecisionQueue.test.tsx`, `AdsHomePage.test.tsx`, `flow/ConfirmPage.test.tsx`, `flow/VerifyPage.test.tsx`;
+  並排證據 `.harness/scratch/F25/I0{2,3}/`.
