@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, DataConnectionsPage, HandoffPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -111,6 +111,10 @@ function App() {
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId"
           element={<AdsReviewRoundRoute />}
+        />
+        <Route
+          path="/brands/:brandId/ads/campaigns/:campaignId/reviews/:reviewId/prepare"
+          element={<AdsPrepareRoute />}
         />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/changes/:setId/confirm"
@@ -494,6 +498,16 @@ function AdsReviewRoundRoute() {
   const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
   return (
     <ReviewEvidencePage key={`review-round-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
+  );
+}
+
+/** 六步流程「選方向」頁（reviews/:reviewId/prepare route，F23-I03，v7 原型 `prepare()`）：檢討
+ * 回合已存在時的正典網址；非法步驟（還沒判讀完、已經暫緩／無法判定）由 `PreparePage` 自己轉去
+ * 看證據頁（同 `AdsReviewRoundRoute` 的分工）。 */
+function AdsPrepareRoute() {
+  const { brandId, campaignId, reviewId } = useParams<{ brandId: string; campaignId: string; reviewId: string }>();
+  return (
+    <PreparePage key={`review-prepare-${reviewId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} reviewId={reviewId ?? ""} />
   );
 }
 
