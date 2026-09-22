@@ -26,6 +26,15 @@ export function reviewRoundPath(
   return `${campaignPath(brandId, campaignId)}/reviews/${reviewId}${step ? `/${step}` : ""}`;
 }
 
+/** `reviews/:reviewId/material?mode=…` — F27-I12 Prepare page's 換一張圖／用現成素材 destination
+ * (the page itself is built by F27-I14; this issue only needs the href). `mode` mirrors
+ * `adsMaterialApi.ts::MaterialMode`, narrowed to the two Prepare page ever links to. */
+export function reviewMaterialPath(
+  brandId: string, campaignId: string, reviewId: string, mode: "workbench_image" | "existing",
+): string {
+  return `${reviewRoundPath(brandId, campaignId, reviewId)}/material?mode=${mode}`;
+}
+
 /** Which queue row a review round's entity belongs to (mirrors `flow/changeFlow.ts::findFlowTriageItem`). */
 export function findReviewTriageItem(queue: QueuePayload | null, entityId: string | undefined): QueueItem | null {
   if (!queue || !entityId) return null;
