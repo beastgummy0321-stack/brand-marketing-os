@@ -13,7 +13,7 @@ import type { CommerceEvidence, ReviewPeriod, ReviewRound } from "@/lib/adsRevie
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
 import * as changeApi from "@/lib/adsChangeApi";
-import type { ChangeSet } from "@/lib/adsChangeApi";
+import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import { formatSyncTime } from "@/lib/format";
 import { CopyPage } from "./CopyPage";
 
@@ -28,6 +28,7 @@ vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof changeApi>()),
   createChangeSet: vi.fn(),
+  getChangeControl: vi.fn(),
 }));
 
 function period(overrides: Partial<ReviewPeriod> = {}): ReviewPeriod {
@@ -126,6 +127,39 @@ function changeSet(overrides: Partial<ChangeSet> = {}): ChangeSet {
     approval_id: null, created_at: "2026-09-22T00:00:00Z", approved_at: null, items: [],
     ...overrides,
   };
+}
+function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
+  return {
+    id: "adx_1", kind: "copy", target_id: "aex_1", after: {}, reason: "文案偏離",
+    target: { id: "aex_1", name: "晨光隨行杯・隨時有你", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
+    before: {}, verification_state: "deviated", evidence_json: {}, reported_at: null,
+    first_observed_at: null, verified_at: null, platform_url: null,
+    ...overrides,
+  };
+}
+// F27-I13：真實回應（動態素材 `copy_editable.mode==="variants"`，真的打過本機後端 GET 一輪已存在
+// 檢討，見 `.harness/scratch/F27/F27-I13/real-review.json`——campaign `adc_01M2T370NSGZDS0YXWTATKCN3T`
+// 的每一則廣告都是 dynamic）確認 `copy_fields` 缺陣列時就是空陣列，不是報錯；這裡另外放兩個非空
+// 版本做差異標記／清單編輯的行為測試，跟真實回應一樣走同一組鍵、只是內容非空。
+function variantsReview(overrides: Partial<ReviewRound> = {}): ReviewRound {
+  const base = review();
+  return review({
+    evidence_json: {
+      ...base.evidence_json,
+      conditions: {
+        ...base.evidence_json.conditions,
+        // `adsReviewApi.ts` 的 `copy_fields` 型別還是舊的 `Record<string, string | null>`（不在這張
+        // 票的 touch 內，跟 `CopyPage.tsx` 的 `CopyFields` 就地放寬同一個理由）——真實回應（contract
+        // B）動態素材是 `{titles,bodies}` 陣列，這裡照真實形狀就地放寬型別，不改到那支檔案。
+        creative_snapshot: {
+          kind: "dynamic",
+          copy_fields: { titles: ["標題A", "標題B"], bodies: ["內文A 第一行\n內文A 第二行", "內文B"] } as unknown as Record<string, string | null>,
+        },
+        copy_editable: { ok: true, mode: "variants", reason: null },
+      },
+    },
+    ...overrides,
+  });
 }
 
 function CopyRoute() {
@@ -309,5 +343,129 @@ describe("CopyPage（F23-I04）錯的步驟／狀態", () => {
     renderAt(copyPath());
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1"));
     expect(screen.queryByRole("button", { name: /加入變更清單/ })).toBeNull();
+  });
+});
+
+describe("CopyPage（F27-I13）variants 模式：copy_editable.mode===\"variants\"", () => {
+  it("目前依標題／內文分兩組列每一則變體；新版是留白的清單編輯器（各一列可打字）", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    renderAt(copyPath());
+    await screen.findByText("標題（2 則）");
+    expect(screen.getByText("內文（2 則）")).toBeTruthy();
+    expect(screen.getByText("標題A")).toBeTruthy();
+    expect(screen.getByText("標題B")).toBeTruthy();
+    // 新版沒有 prefill、也沒有可用的 variants 建議（`suggested_copy` 只有單一模式的形狀）→ 各一列空白。
+    expect((screen.getByLabelText("新標題 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("新內文 1") as HTMLTextAreaElement).value).toBe("");
+    // 這一輪本來就有 adjust 建議，所以草稿仍會連回檢討，不顯示「沒有可承接的建議」。
+    expect(screen.queryByText("沒有可承接的建議，這份清單不會連回這輪檢討。")).toBeNull();
+  });
+
+  it("新版沿用其中一則標題，另一則沒被沿用 → 目前卡片只標記沒被沿用的那一則（整段每一行）", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    renderAt(copyPath());
+    await screen.findByText("標題A");
+    await user.type(screen.getByLabelText("新標題 1"), "標題A");
+    const kept = screen.getByText("標題A");
+    expect(kept.tagName).not.toBe("MARK");
+    const dropped = screen.getByText("標題B");
+    expect(dropped.tagName).toBe("MARK");
+    // 內文沒被沿用（新版內文欄還是空的）→ 多行變體的每一行都標記。
+    const droppedLine1 = screen.getByText("內文A 第一行");
+    const droppedLine2 = screen.getByText("內文A 第二行");
+    expect(droppedLine1.tagName).toBe("MARK");
+    expect(droppedLine2.tagName).toBe("MARK");
+  });
+
+  it("新增／刪除標題列：滿 5 則停用新增，刪除後重新開放", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    renderAt(copyPath());
+    await screen.findByLabelText("新標題 1");
+    const addTitle = screen.getByRole("button", { name: "+ 新增標題" });
+    for (let i = 0; i < 4; i++) await user.click(addTitle);
+    expect(screen.getByLabelText("新標題 5")).toBeTruthy();
+    expect((addTitle as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "刪除標題 5" }));
+    expect(screen.queryByLabelText("新標題 5")).toBeNull();
+    expect((addTitle as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("保存：after 只送非空、去頭尾空白的 titles/bodies，附 review_id／recommendation_id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet());
+    renderAt(copyPath());
+    await screen.findByLabelText("新標題 1");
+    await user.type(screen.getByLabelText("新標題 1"), "  新標題1  ");
+    await user.click(screen.getByRole("button", { name: "+ 新增標題" }));
+    // 第二列留白：保存時濾掉，不送空字串。
+    await user.type(screen.getByLabelText("新內文 1"), "新內文1");
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.items).toEqual([{
+      kind: "copy", target_id: "aex_1",
+      after: { titles: ["新標題1"], bodies: ["新內文1"] },
+      reason: "測試新的文案訴求",
+    }]);
+    expect(body.review_id).toBe("arv_1");
+    expect(body.recommendation_id).toBe("rec_1");
+  });
+
+  it("標題與內文都留白（或整段空白字元）不給存", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    renderAt(copyPath());
+    await screen.findByLabelText("新標題 1");
+    await user.type(screen.getByLabelText("新內文 1"), "   ");
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    expect(await screen.findByText("請至少填寫一則標題或內文。")).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+  });
+});
+
+describe("CopyPage（F27-I13）?prefill=observed&set= 從偏離項目的平台現況預填新版", () => {
+  it("variants 模式：從指定清單裡對到這則廣告的項目讀 evidence_json.observed，覆蓋原本的留白", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [],
+      change_sets: [changeSet({
+        id: "acs_9",
+        items: [changeItem({
+          target_id: "aex_1",
+          evidence_json: { observed: { titles: ["觀察到的標題"], bodies: ["觀察到的內文"] } },
+        })],
+      })],
+    });
+    renderAt(`${copyPath()}?prefill=observed&set=acs_9`);
+    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalledWith("brd_1", "cmp_1"));
+    expect(await screen.findByDisplayValue("觀察到的標題")).toBeTruthy();
+    expect((screen.getByLabelText("新內文 1") as HTMLTextAreaElement).value).toBe("觀察到的內文");
+  });
+
+  it("single 模式：一樣從 evidence_json.observed 覆蓋預設的 adjust 建議", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [],
+      change_sets: [changeSet({
+        id: "acs_9",
+        items: [changeItem({
+          target_id: "aex_1",
+          evidence_json: { observed: { title: "平台現在的標題", body: "平台現在的內文" } },
+        })],
+      })],
+    });
+    renderAt(`${copyPath()}?prefill=observed&set=acs_9`);
+    expect(await screen.findByDisplayValue("平台現在的標題")).toBeTruthy();
+    expect((screen.getByLabelText("新內文") as HTMLTextAreaElement).value).toBe("平台現在的內文");
+  });
+
+  it("讀取變更清單失敗：不擋頁面，照舊留白／承接建議", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(changeApi.getChangeControl).mockRejectedValue(new Error("網路錯誤"));
+    renderAt(`${copyPath()}?prefill=observed&set=acs_9`);
+    expect(await screen.findByDisplayValue("輕鬆帶走，每天剛剛好")).toBeTruthy();
   });
 });
