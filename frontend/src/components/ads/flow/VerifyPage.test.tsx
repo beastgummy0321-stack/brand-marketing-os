@@ -113,12 +113,79 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(screen.getByText(/讀回於/)).toBeTruthy();
     expect(screen.getByText("✓ 設定相符")).toBeTruthy();
     expect(screen.getByText("狀態：暫停")).toBeTruthy();
-    // 沒有沒被記錄過學習的 rail cell、沒有花費停止／品牌學習格子（沒有資料來源）
-    expect(screen.queryByText("花費停止")).toBeNull();
-    expect(screen.queryByText("品牌學習")).toBeNull();
+    // F27-I16 Contract H/D：沒有 `timeline`／`learning`（既有 factory 沒帶這兩個欄位）當作
+    // 「還不知道」，跟「明天確認」／「沒標主打，未記入」畫同一格，不是省略整格。
+    expect(screen.getByText("花費停止")).toBeTruthy();
+    expect(screen.getByText("明天確認")).toBeTruthy();
+    expect(screen.getByText("品牌學習")).toBeTruthy();
+    expect(screen.getByText("沒標主打，未記入")).toBeTruthy();
     expect(screen.getByRole("button", { name: "⟳ 重新核對" })).toBeTruthy();
     const home = screen.getByRole("link", { name: "回投放中心 →" }) as HTMLAnchorElement;
     expect(home.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+
+  it("pause：花費真的停止＋已記入品牌學習時，rail 顯示 ✓ 並附上完整品牌學習卡", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        timeline: { spend_stopped: true, delivery_started: null, next_review_at: null },
+        learning: { recorded: true, confidence: "observed", count: 1 },
+        angle: "日常出發情境",
+      } as Partial<ChangeItem> & { angle: string })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上這則廣告已經關閉");
+    expect(screen.getByText("✓ 花費停止")).toBeTruthy();
+    expect(screen.getByText("已確認停止")).toBeTruthy();
+    expect(screen.getByText("✓ 已記入品牌學習")).toBeTruthy();
+    expect(screen.getByText("第 1 次觀察")).toBeTruthy();
+    expect(screen.getByText("「日常出發情境」對這群受眾無效")).toBeTruthy();
+    expect(screen.getByText("觀察到")).toBeTruthy();
+    expect(screen.getByText(/再出現 1 次同方向結果會升為「可能成立」/)).toBeTruthy();
+  });
+
+  it("pause：已成立（count 3）不再顯示升級提示", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        learning: { recorded: true, confidence: "validated", count: 3 },
+        angle: "日常出發情境",
+      } as Partial<ChangeItem> & { angle: string })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上這則廣告已經關閉");
+    expect(screen.getByText("成立")).toBeTruthy();
+    expect(screen.getByText("下次規劃素材時會避開")).toBeTruthy();
+    expect(screen.queryByText(/再出現/)).toBeNull();
+  });
+
+  it("budget：學習期固定文字＋成效回看讀 timeline.next_review_at", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "budget", before: { daily_amount: 1000 }, after: { daily_amount: 1200 },
+        timeline: { spend_stopped: null, delivery_started: null, next_review_at: "2026-09-25" },
+      })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上的每日預算已經是 1,200");
+    expect(screen.getByText("學習期")).toBeTruthy();
+    expect(screen.getByText("3–5 天")).toBeTruthy();
+    expect(screen.getByText("成效回看")).toBeTruthy();
+    expect(screen.getByText("9/25")).toBeTruthy();
+  });
+
+  it("copy：開始投遞＋成效累積，未讀到 delivery 前不是 ok", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "新內文" },
+        timeline: { spend_stopped: null, delivery_started: false, next_review_at: "2026-09-29" },
+      })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上的文案和你核准的一樣");
+    expect(screen.getByText("開始投遞")).toBeTruthy();
+    expect(screen.getByText("等待中")).toBeTruthy();
+    expect(screen.getByText("成效累積")).toBeTruthy();
+    expect(screen.getByText("9/29 自動重看")).toBeTruthy();
+    expect(screen.queryByText("✓ 開始投遞")).toBeNull();
   });
 
   it("有下一件開放項目時，主按鈕變成下一件", async () => {
@@ -240,6 +307,36 @@ describe("VerifyPage（F22-I04）deviated", () => {
     renderAt(verifyPath());
     expect(await screen.findByText("平台上的內文和核准的不一樣")).toBeTruthy();
     expect(screen.getByText("改過的行二")).toBeTruthy();
+  });
+
+  it("copy：有 review_id 時多一顆「改用平台現在的內容」連去改文案頁並帶 prefill/set", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        review_id: "arv_1",
+        items: [changeItem({
+          kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "行一\n行二" },
+          verification_state: "deviated",
+          evidence_json: { observed_at: "2026-09-22T05:00:00Z", observed: { title: "新標題", body: "行一\n改過的行二" } },
+        })],
+      })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上的內文和核准的不一樣");
+    const link = screen.getByRole("link", { name: "改用平台現在的內容" }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/copy?prefill=observed&set=acs_1");
+  });
+
+  it("copy：沒有 review_id 就不畫「改用平台現在的內容」", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "copy", before: { title: "舊標題", body: "舊內文" }, after: { title: "新標題", body: "行一\n行二" },
+        verification_state: "deviated",
+        evidence_json: { observed_at: "2026-09-22T05:00:00Z", observed: { title: "新標題", body: "行一\n改過的行二" } },
+      })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上的內文和核准的不一樣");
+    expect(screen.queryByRole("link", { name: "改用平台現在的內容" })).toBeNull();
   });
 });
 

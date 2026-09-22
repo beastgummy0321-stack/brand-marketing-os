@@ -11,6 +11,7 @@ import * as changeApi from "@/lib/adsChangeApi";
 import { ChangeRequestRejected, type ChangeItem, type ChangeSet } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
+import * as anglesApi from "@/lib/adsAnglesApi";
 import { ConfirmPage } from "./ConfirmPage";
 
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
@@ -21,6 +22,12 @@ vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
 vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
   ...(await importOriginal<typeof triageApi>()),
   getQueue: vi.fn(),
+}));
+// F27-I16 Contract C: 每一頁暫停提議都會打一次 `getAngles`（correction 9）——不 mock 會打到真的
+// `fetch`，預設先給一個 `ready` 三候選，個別測試需要別的狀態再自己覆寫。
+vi.mock("@/lib/adsAnglesApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof anglesApi>()),
+  getAngles: vi.fn(),
 }));
 
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
@@ -150,6 +157,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
   vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+  vi.mocked(anglesApi.getAngles).mockResolvedValue({ status: "ready", candidates: ["日常出發情境", "辦公室情境", "提問式貼文"], error: null });
 });
 
 describe("ConfirmPage（F22-I02）三種 kind", () => {
@@ -262,6 +270,72 @@ describe("ConfirmPage（F22-I02）propose 路由：延遲建立草稿", () => {
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
     expect(changeApi.createChangeSet).not.toHaveBeenCalled();
     expect(vi.mocked(changeApi.approveChangeSet).mock.calls[0][2].id).toBe("acs_existing");
+  });
+});
+
+describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
+  it("pending：畫骨架佔位，沒有任何 TagToggle", async () => {
+    vi.mocked(anglesApi.getAngles).mockReturnValue(new Promise(() => {})); // 永遠不 resolve，停在 pending
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    renderAt(proposePath);
+    await screen.findByText("這則主打什麼？");
+    expect(screen.queryByRole("button", { name: "＋ 自訂" })).toBeNull();
+    expect(screen.getByText("選一個，暫停後記入品牌學習")).toBeTruthy();
+  });
+
+  it("ready：三顆候選＋自訂，選一顆會更新右側文字", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    renderAt(proposePath);
+    const tag = await screen.findByRole("button", { name: "日常出發情境" });
+    expect(screen.getByRole("button", { name: "辦公室情境" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "提問式貼文" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "＋ 自訂" })).toBeTruthy();
+    expect(screen.getByText("選一個，暫停後記入品牌學習")).toBeTruthy();
+    await user.click(tag);
+    expect(tag.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("「日常出發情境」對這群受眾無效")).toBeTruthy();
+  });
+
+  it("failed：只剩「＋ 自訂」，點開變成輸入框", async () => {
+    const user = userEvent.setup();
+    vi.mocked(anglesApi.getAngles).mockResolvedValue({ status: "failed", candidates: [], error: "讀取失敗" });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    renderAt(proposePath);
+    await screen.findByText("這則主打什麼？");
+    expect(screen.queryByRole("button", { name: "日常出發情境" })).toBeNull();
+    const custom = screen.getByRole("button", { name: "＋ 自訂" });
+    await user.click(custom);
+    const input = screen.getByLabelText("自訂主打");
+    await user.type(input, "夏季限定");
+    expect(screen.getByText("「夏季限定」對這群受眾無效")).toBeTruthy();
+  });
+
+  it("選了候選再核准：payload 帶上 angle", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    const draft = changeSet({ status: "approved", items: [changeItem({ verification_state: "pending", reported_at: null })] });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
+    renderAt(proposePath);
+    await user.click(await screen.findByRole("button", { name: "辦公室情境" }));
+    await user.click(await screen.findByRole("button", { name: /核准暫停，接著到平台操作/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.items).toEqual([{
+      kind: "pause", target_id: "aex_1", after: { status: "PAUSED" },
+      reason: "花費超過停損線（目標 × 3）仍未達成目標", angle: "辦公室情境",
+    }]);
+  });
+
+  it("已拒絕／暫緩的清單不再畫這張卡（已經決定完了）", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ status: "rejected", reason: "先觀察" })],
+    });
+    renderAt(confirmPath());
+    await screen.findByText("提議：暫停這則廣告");
+    expect(screen.queryByText("這則主打什麼？")).toBeNull();
+    expect(anglesApi.getAngles).not.toHaveBeenCalled();
   });
 });
 

@@ -13,7 +13,8 @@ import {
   type SettingValues,
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, FlowHeader, ResultHero, StatusRail, type RailCell } from "../patterns";
+import { ActionBar, Chip, FlowHeader, LearnCard, ResultHero, StatusRail, type RailCell } from "../patterns";
+import { reviewRoundPath } from "../review/reviewFlow";
 import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
 import {
   campaignChangesPath,
@@ -22,6 +23,7 @@ import {
   flowPosition,
   formatTargetAmount,
   isCleanupTriageItem,
+  itemAngle,
   nextOpenQueueItem,
   proposePausePath,
   queueItemEntityId,
@@ -65,13 +67,79 @@ const DEVIATED_TITLE: Record<Kind, string> = {
   budget: "平台上的每日預算和核准的不一樣",
   new_ad: "平台上這則新廣告和核准的內容不一樣",
 };
-/** StatusRail 只畫有資料來源的格子：`設定相符` 讀 `evidence_json.setting_matches`；花費停止／
- * 學習期／成效回看／已記入品牌學習都沒有後端支撐，整格省略（feature Decisions「Gaps」）。 */
+/** StatusRail「設定相符」格：讀 `evidence_json.setting_matches`（省略整格，不是空字串，當這個
+ * 布林不是 `true` 時——feature Decisions「Gaps」）。其餘格子（花費停止／學習期／成效回看／
+ * 開始投遞／已記入品牌學習）現在有 Contract H／D 的 `timeline`／`learning` 撐著，見
+ * `timelineRailCells` 下面。 */
 function confirmedRailNote(item: ChangeItem, kind: Kind): string {
   if (kind === "copy") return "標題、內文";
   if (kind === "budget") return `每日 ${formatTargetAmount(item.after.daily_amount ?? null)}`;
   if (kind === "new_ad") return "已對應平台上的廣告物件";
   return `狀態：${statusLabel(item.after.status)}`;
+}
+
+/** `M/D`，瀏覽器本地時區——跟 `observedAtText` 同一份「讀不到就說讀不到」慣例，`date` 是
+ * `timeline.next_review_at`（一個 `YYYY-MM-DD` 或 `null`）。 */
+function formatReviewDate(date: string | null): string | null {
+  if (!date) return null;
+  const d = new Date(`${date}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/** Contract H（correction 1）／D：confirmed 狀態下 `設定相符` 之外的格子，v7 原型 `verify()`
+ * 的固定文案，數字讀 `item.timeline`／`item.learning`（都是讀時計算，見 `app/ads/change_timeline
+ * .py`／`app/ads/ads_learnings.py`）。`pause` 多一格「花費停止」＋一格品牌學習；`budget` 是
+ * 「學習期」固定文字＋「成效回看」；`copy`／`new_ad` 是「開始投遞」＋「成效累積」。 */
+function timelineRailCells(item: ChangeItem, kind: Kind): RailCell[] {
+  const t = item.timeline;
+  if (kind === "pause") {
+    return [
+      t?.spend_stopped === true
+        ? { title: "花費停止", note: "已確認停止", ok: true }
+        : { title: "花費停止", note: "明天確認" },
+      item.learning?.recorded
+        ? { title: "已記入品牌學習", note: `第 ${item.learning.count} 次觀察`, ok: true }
+        : { title: "品牌學習", note: "沒標主打，未記入" },
+    ];
+  }
+  if (kind === "budget") {
+    return [
+      { title: "學習期", note: "3–5 天" },
+      { title: "成效回看", note: formatReviewDate(t?.next_review_at ?? null) ?? "尚未排定" },
+    ];
+  }
+  const nextReview = formatReviewDate(t?.next_review_at ?? null);
+  return [
+    t?.delivery_started === true
+      ? { title: "開始投遞", note: "已開始", ok: true }
+      : { title: "開始投遞", note: "等待中" },
+    { title: "成效累積", note: nextReview ? `${nextReview} 自動重看` : "尚未排定" },
+  ];
+}
+
+const CONFIDENCE_LABEL: Record<string, string> = { observed: "觀察到", likely: "可能成立", validated: "成立" };
+// `learning.count`（Contract D，1-indexed：第一次記錄就是 1）跟 promotion 門檻一一對應——
+// `app/ads/ads_learnings.py::_confidence_for_count` 是 `prior>=2 -> validated / prior>=1 -> likely
+// / 否則 observed`，`prior` 正好是這次寫入前已有的同文字筆數，也就是「這次的 count − 1」；門檻
+// 剛好每次只差 1，所以「再出現幾次會升級」永遠是 1 次，不用另外算距離。
+const NEXT_CONFIDENCE_LABEL: Record<string, string> = { observed: "可能成立", likely: "成立" };
+
+/** 暫停確認已核對、且這則廣告有標主打時的品牌學習卡（v7 原型 `verify()` confirmed 分支的
+ * `.learn`，跟 rail 的「已記入品牌學習」格是同一份資料的兩種畫法）。 */
+function PauseLearningCard({ item }: { item: ChangeItem }) {
+  const angle = itemAngle(item);
+  const confidence = item.learning?.confidence ?? "observed";
+  const nextLabel = NEXT_CONFIDENCE_LABEL[confidence];
+  return (
+    <LearnCard
+      title={<>「{angle ?? ""}」對這群受眾無效</>}
+      aside={<Chip>{CONFIDENCE_LABEL[confidence] ?? confidence}</Chip>}
+    >
+      <p className="text-[13px] text-muted-foreground">
+        下次規劃素材時會避開{nextLabel && <>・再出現 1 次同方向結果會升為「{nextLabel}」</>}
+      </p>
+    </LearnCard>
+  );
 }
 
 /** deviated 的「你核准的 / 平台目前」對照：文案是逐行標記差異（跟 `ConfirmPage`／`handoff()`
@@ -338,14 +406,21 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   let hero: ReactNode;
   let rail: ReactNode = null;
   let compare: ReactNode = null;
+  let learnCard: ReactNode = null;
   let bar: ReactNode;
 
   if (state === "confirmed") {
     hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item)}`} />;
-    const cells: RailCell[] = item.evidence_json.setting_matches === true
-      ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
-      : [];
+    const cells: RailCell[] = [
+      ...(item.evidence_json.setting_matches === true
+        ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
+        : []),
+      ...timelineRailCells(item, kind),
+    ];
     rail = <StatusRail cells={cells} />;
+    // v7 原型 verify() confirmed 分支：`i.kind==="pause"&&A[q.ad]?.angle` 才畫這張卡——跟 rail 的
+    // 「已記入品牌學習」格同一個資料來源（`item.learning.recorded`），只是這裡是展開版。
+    if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
     bar = (
       <ActionBar>
         {again}
@@ -363,9 +438,17 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     // `expected` settings pair to line up (`messageOf(item)` in the hero note is the only signal
     // this kind's evidence carries).
     if (kind !== "new_ad") compare = <DeviatedCompare item={item} kind={kind} />;
+    // v7 原型 verify() deviated 分支：`data-act="adoptPlatform"` 的「改用平台現在的內容」——這批
+    // 只有文案清單有「用平台現在的內容重新起草」這條路（改文案頁本來就能整段接手平台現況，見
+    // `CopyPage.tsx` 的 `?prefill=observed&set=` 分支，F27-I13）；沒有 `review_id`（這份清單不是
+    // 從某一輪檢討來的）就沒有改文案頁可以回去，不畫這顆按鈕。
+    const adoptHref = kind === "copy" && changeSet.review_id
+      ? `${reviewRoundPath(brandId, campaignId, changeSet.review_id, "copy")}?prefill=observed&set=${encodeURIComponent(changeSet.id)}`
+      : null;
     bar = (
       <ActionBar>
         {again}
+        {adoptHref && <Button variant="ghost" asChild><Link to={adoptHref}>改用平台現在的內容</Link></Button>}
         <Button asChild>
           <Link to={changeStepPath(brandId, campaignId, changeSet.id, "handoff")}>回平台改成核准內容 →</Link>
         </Button>
@@ -404,6 +487,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
       {hero}
       {rail}
+      {learnCard}
       {compare}
 
       {/* Contract E / F27-I05: only ever set on a `new_ad` set's own `follow_up` once that item
