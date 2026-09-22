@@ -15,7 +15,7 @@ const verificationLabels: Record<ChangeItem["verification_state"], string> = {
 };
 const setLabels: Record<ChangeSet["status"], string> = { draft: "待核准", approved: "已核准，逐項處理", rejected: "已拒絕", deferred: "已暫緩", superseded: "已有修訂清單，保留歷史" };
 function Values({ value }: { value: SettingValues }) {
-  const labels: Record<keyof SettingValues, string> = { title: "標題", body: "內文", daily_amount: "每日預算", status: "投放狀態" };
+  const labels: Record<keyof SettingValues, string> = { title: "標題", body: "內文", titles: "標題（多則）", bodies: "內文（多則）", daily_amount: "每日預算", status: "投放狀態" };
   const fields = Object.entries(value).filter(([key]) => key in labels);
   if (!fields.length) return <p className="text-sm text-muted-foreground">尚未取得可核對設定</p>;
   return <dl className="space-y-2 text-sm">{fields.map(([key, val]) => <div key={key}><dt className="text-xs text-muted-foreground">{labels[key as keyof SettingValues]}</dt><dd className="whitespace-pre-wrap break-words">{key === "status" ? ({ ACTIVE: "啟用", PAUSED: "暫停", ARCHIVED: "已封存", DELETED: "已刪除" }[String(val)] ?? "尚待確認") : String(val ?? "未知")}</dd></div>)}</dl>;
