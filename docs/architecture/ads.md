@@ -1136,3 +1136,24 @@ route. Neither field is stored — both are computed at read time on every call.
   `app/tests/test_ads_change_control.py::ChangeControlPlatformUrlTest`（meta 目標有連結／未知平台是 `null`／
   `content_hash` 不受影響）。
 
+### 6.23 F22 — 停損提案三步流程（settled 2026-09-22）
+
+Routes (`components/ads/flow/`, v7 `confirmPage()`/`handoff()`/`verify()`): `/brands/:brandId/ads/campaigns/:campaignId/
+propose/pause/:entityId` (no change set yet) and `.../changes/:setId/confirm|handoff|verify`. A page opened on the wrong step
+redirects to the step the set is in (`flow/changeFlow.ts::stepFromChangeSet`). Only `pause` has an entry this batch (home
+stop-loss row / detail 「去處理」, `home/status.ts::proposalAction`); the pages render `budget`/`copy` sets too.
+- Draft is created lazily on the first write (核准／拒絕／暫緩), reusing `proposal.change_set_id` when the row has one;
+  `operation_id = triage-pause:<entityId>:<uuid held in page state>` so a lost response is retried with the same body.
+  A refused approve (409) rebuilds once with a new `operation_id` + `supersedes_id`, then asks again.
+- Step rule: draft → confirm; rejected/deferred/superseded → confirm, closed; approved + pending + `reported_at` null →
+  handoff; pending with `reported_at` (read-back found the old setting) → verify 「平台上還是原本的設定」; reported/unknown →
+  verify 「核對中」; confirmed/deviated/stale → verify ok/warn/bad. 「讀回於」 = `evidence_json.observed_at`. Rail cells
+  only from real fields (設定相符 = `setting_matches === true`); 花費停止／學習期／品牌學習 cells are omitted (no data).
+- Handoff: 「打開平台」 = `platform_url` (§6.22) in a new tab, else name + native id + 「複製編號」; tick state is local;
+  「我做完了」 = `report` then `check`, navigating to verify even when `check` fails.
+- Gaps kept honest: brand-learning tags = one `ReservedSlotCard`; `adoptPlatform` waits for the copy step (batch B);
+  a multi-item set links to the campaign workspace. Home 「N 件」 counts only rows whose proposal is not done.
+- Kit: `patterns/FlowPieces.tsx` (FlowHeader, KindMark, Meter, TodoRow, ResultHero, StatusRail, Segmented,
+  DecisionSheet, ActionBar); `frontend/scripts/ui-evidence.cjs --acts` reaches later prototype steps.
+- 驗證：`frontend/src/components/ads/flow/*.test.tsx`、`home/DecisionQueue.test.tsx`、`AdsHomePage.test.tsx`、
+  `detail/CampaignDetailPage.test.tsx`；並排證據 `.harness/scratch/F22/I0{2,3,4}/`。
