@@ -1,33 +1,31 @@
-import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
+import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
-import { ChangeAttention } from "./ChangeAttention";
-import { DecisionQueue, type QueueState } from "./home/DecisionQueue";
-import { CampaignCards } from "./home/CampaignCards";
-import { BudgetCard } from "./home/BudgetCard";
-import { Chip, RecoverSteps } from "./patterns";
 import { getOrgId } from "@/lib/auth";
-import { isQueueItemDone } from "./home/status";
+import { Chip, RecoverSteps } from "./patterns";
+import { CampaignRows } from "./home/CampaignRows";
+import { MonthMoney, monthNumber } from "./home/MonthMoney";
+import { NextDates, type TodayNote } from "./home/NextDates";
+import { QualityBand } from "./home/QualityBand";
+import { TodayDecisions, homeDecisions, type QueueState } from "./home/TodayDecisions";
+import { proposalAction } from "./home/status";
 
 export { STATUS_LABEL, STATUS_TONE } from "./home/status";
 
 type RecoveryState = { status: "loading" } | { status: "error" } | { status: "ready"; recovery: AdsRecovery };
+type HomeState = { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
 
-/** 瀏覽器本地時區的 HH:MM——`gap.start`／`gap.end` 一律是帶時區的 ISO instant（同
- * `home/status.ts::formatRevisitLabel` 的先例），這裡只印時分，不印日期（同一次缺口通常同一
- * 天，`title` 講的是「幾點到幾點」，不是「哪天」）。 */
+/** 瀏覽器本地時區的 HH:MM——`gap.start`／`gap.end` 一律是帶時區的 ISO instant。 */
 function formatHM(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** F27-I17（feature Decisions "recovery banner on a > 2 h worker gap"）：`getRecovery` 的卡片，
- * 只在 `recovering` 為真時出現；`steps` 原樣轉給 `RecoverSteps`（`patterns/LoopPieces.tsx`），
- * 文案／順序都是後端算好的（`app/ads/recovery.py`），這裡不重新推導。 */
+/** F27-I17 recovery banner on a > 2 h worker gap: only while `recovering`; steps come from the backend as-is. */
 function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
   if (!recovery.recovering || !recovery.gap) return null;
   const hours = Math.floor(recovery.gap.minutes / 60);
@@ -48,21 +46,25 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
   );
 }
 
-/** 投放中心首頁（F19-I02）：v7 版面——今天需要你決定的事（品牌層決定佇列＋月預算）在上，
- * 活動卡在下。照 `docs/design/ads/prototype-v7-ads-center.html` 的 `home()`，不沿用舊版
- * 判斷帶／時間軸／建檔檢查表那一套（那些留給各自的元件檔，首頁不再引用）。
- *
- * Review repair (b)：佇列／月預算／活動卡三塊各自獨立讀取，一塊失敗不拖累另外兩塊——這支
- * 只管佇列（header 的件數也來自它）跟其餘兩塊各自的元件檔自己打自己的 API。
- *
- * F27-I17：頁首原本的「最近同步・N 項待處理」晶片搬到頂欄（F27-I20 的 `layout/Topbar.tsx`，
- * 這張票只負責移除），這支不再打 `listCampaigns` 湊那份同步摘要。改自己獨立打一次
- * `getRecovery`（同樣的「一塊失敗不拖累其他塊」規則——讀不到就不畫這張卡，不擋頁面其他部
- * 分），把 `recovering` 往下傳給 `DecisionQueue`，讓每一列在系統剛恢復期間換成同一顆佔位。 */
+/** 投放中心首頁 = board D (F28-I08; prototype `docs/design/ads/prototype-v9-ads-center.html` `home()`): the month's
+ * title, 接下來, the money card with the budget pace, the money-quality band, today's decisions and the campaign
+ * rows. Two independent requests: `GET …/home` (title, dates, money, pace, band, rows — each block null on its own
+ * failure) and the brand queue (decisions); one failing never blanks the other (design-system §1.7 item 9). */
 function AdsHome({ brandId }: { brandId: string }) {
+  const [homeState, setHomeState] = useState<HomeState>({ status: "loading" });
+  const [homeReload, setHomeReload] = useState(0);
   const [queueState, setQueueState] = useState<QueueState>({ status: "loading" });
-  const [reload, setReload] = useState(0);
+  const [queueReload, setQueueReload] = useState(0);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>({ status: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setHomeState((s) => (s.status === "ready" ? s : { status: "loading" }));
+    getHomeOverview(brandId, undefined, controller.signal)
+      .then((home) => { if (!controller.signal.aborted) setHomeState({ status: "ready", home }); })
+      .catch(() => { if (!controller.signal.aborted) setHomeState({ status: "error" }); });
+    return () => controller.abort();
+  }, [brandId, homeReload]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -71,13 +73,10 @@ function AdsHome({ brandId }: { brandId: string }) {
       .then((queue) => { if (!controller.signal.aborted) setQueueState({ status: "ready", queue }); })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setQueueState({
-          status: "error",
-          message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
-        });
+        setQueueState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
       });
     return () => controller.abort();
-  }, [brandId, reload]);
+  }, [brandId, queueReload]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,51 +86,61 @@ function AdsHome({ brandId }: { brandId: string }) {
     return () => controller.abort();
   }, [brandId]);
 
-  // F22-I05 rescope：件數只算還「開著」的列——已核對／已拒絕／已暫緩的停損列已經是完成
-  // 狀態（`isQueueItemDone`，跟列自己的按鈕同一個判斷），不該再催使用者去處理。全部完成時
-  // （open 件數 0）文案還是「都處理完了」，即使 `queue.items` 本身不是空的。
-  const openCount = queueState.status === "ready"
-    ? queueState.queue.items.filter((item) => !isQueueItemDone(item)).length
-    : 0;
-  const purpose = queueState.status === "ready"
-    ? (openCount ? `${openCount} 件・由上往下處理就好` : "都處理完了")
-    : undefined;
+  const home = homeState.status === "ready" ? homeState.home : null;
+  const syncing = (home?.campaigns ?? []).some((c) => c.draft === null && c.sync_state === "syncing");
+  const decisions = queueState.status === "ready" ? homeDecisions(brandId, queueState.queue) : null;
+  const note: TodayNote = syncing ? { kind: "syncing" }
+    : queueState.status === "loading" ? { kind: "loading" }
+    : queueState.status === "error" ? { kind: "error" }
+    : decisions && decisions.open.length ? { kind: "open", count: decisions.open.length } : { kind: "none" };
+
+  // 「看加預算建議」: the first open `scale_budget` row's own step (budget owner id, `home/status.ts` "budget" branch).
+  const scaleHref = (() => {
+    if (queueState.status !== "ready") return null;
+    for (const item of queueState.queue.items) {
+      if (item.kind_key !== "scale_budget" || !item.scale) continue;
+      const action = proposalAction(brandId, item.triage.campaign_id, item.scale.owner.id, item.proposal, "budget");
+      if (!action.done) return action.href;
+    }
+    return null;
+  })();
+
+  const jump = useCallback(() => {
+    const target = document.getElementById("decide");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    target?.focus({ preventScroll: true });
+  }, []);
+  const retryHome = () => setHomeReload((v) => v + 1);
+  const monthNo = monthNumber(home?.month);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex max-w-[1260px] flex-col gap-5">
       <PageHeader
-        title="今天需要你決定的事"
-        description={purpose}
+        title={`${monthNo} 月的廣告`}
+        description={home ? `第 ${home.day_of_month} 天／共 ${home.days_in_month} 天` : undefined}
         actions={
           <>
+            <Button asChild variant="outline"><Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link></Button>
             <Button asChild variant="outline">
-              <Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link>
-            </Button>
-            <ExistingCampaignDialog brandId={brandId} />
-            <Button asChild>
-              <Link to={`/brands/${brandId}/ads/new`}>建立投放計畫</Link>
+              <Link to={`/brands/${brandId}/ads/new`}><span aria-hidden="true">＋</span> 建立活動</Link>
             </Button>
           </>
         }
       />
-      <div className="flex flex-col gap-6">
-        <ChangeAttention brandId={brandId} />
-        {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
-          <DecisionQueue state={queueState} onRetry={() => setReload((v) => v + 1)} recovering={recovering} />
-          <BudgetCard brandId={brandId} />
-        </div>
-        <div>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-[15px] font-semibold">活動</h2>
-            <Link to={`/brands/${brandId}/ads/campaigns`} className="text-sm text-primary hover:underline">
-              查看全部活動 →
-            </Link>
-          </div>
-          <CampaignCards brandId={brandId} />
-        </div>
-      </div>
+      {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
+      <NextDates home={home} note={note} onJump={jump} />
+      <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={retryHome} />
+      <QualityBand state={homeState} onRetry={retryHome} />
+      <TodayDecisions
+        brandId={brandId}
+        state={queueState}
+        syncing={syncing}
+        recovering={recovering}
+        sync={home?.sync ?? null}
+        onRetry={() => setQueueReload((v) => v + 1)}
+      />
+      <CampaignRows brandId={brandId} state={homeState} onRetry={retryHome} />
     </div>
   );
 }
