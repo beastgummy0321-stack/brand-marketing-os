@@ -98,3 +98,9 @@ The user says the v9 home is a to-do centre, not an operations view, and still f
 ## Deferred from F28 planning (user 2026-09-25: save for a later /dig, F28 uses the defaults)
 1. **白花 closes through cleanup, so its brand learning is lost.** The cleanup flow has no 「這則主打什麼？」 step (F27 Contract D), so closing a 白花 ad no longer writes a learning. F28 accepts this. Restore it in the learning-loop /dig (item 4 above).
 2. **變貴 (`worse`) rows are still triggered by the trend vs the previous window**, although the ruling makes trend a note only. F28 keeps them. Decide in the next feature, which owns the worse/stop decision flows, whether 變貴 should instead mean "moved from 划算 to 偏貴/太貴 against the cap".
+
+## Left open after F28 (2026-09-25)
+- **Pending handoffs are not on the home page.** Home D dropped the ChangeAttention card: approved lists waiting for 到平台完成 or 核對 show only on the campaign's 變更與核對 tab. The next feature should decide how home surfaces them, e.g. a campaign-row state.
+- **暫用打平 lacks the product cost field.** The cap view has no `cost`, so the screen shows 售價 and ROAS 參考 but not the prototype's formula 「售價 − 成本含運 = 打平」.
+- **No cap means no visible 推薦.** Without a budget cap, the 推薦 scenario can be a row whose amount is unknown, so the tag is not visible.
+- **Old open cleanup rows keep the informational severity** until their daily key rolls over. This is test data only.

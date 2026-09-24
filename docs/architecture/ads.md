@@ -1451,11 +1451,12 @@ contract text as corrected by its pre-dispatch challenge).
   card, mini ladders, own-row-only actions; monthly review fully live; top-bar sync chip; wait-page auth row; performance
   tab `?ad=` scroll with the disclosure opened.
 
-### 6.32 一個上限、對上限分級、預算上限、核准失效出口、卡住的背景工作（ruled 2026-09-23；F28 施工中）
+### 6.32 一個上限、對上限分級、預算上限、核准失效出口、卡住的背景工作（ruled 2026-09-23；implemented by F28）
 Drill 5 root causes R1／R2／R3／R6. Decided by the user in the 2026-09-23 /dig (the first four bullets) and taken as
 reversible agent defaults in the same session (the last two). This section is the rule; the F28 feature file holds the
-contract names. Until F28 closes, §6.14's trailing-30 fallback and §6.17's previous-window-only judgement still describe
-the running code.
+contract names. This section supersedes §6.14's trailing-30 fallback, §6.17's previous-window-only judgement, and every
+earlier mention of `stop_loss` queue rows (§6.17, §6.18, §6.22, §6.23): no new `stop_loss` row is raised; a 白花 ad is
+closed through the cleanup decision, whose interrupt `ads_triage_cleanup` now carries `money_loss` severity.
 - **One cap per campaign, cost per result only** (screen word 上限). Stored once, in `ads_campaign.target_cost` with
   `target_basis='own'`; `success_metric`／`success_target`／`success_basis` are retired (columns kept, never read or
   written). Set only on the strategy tab — every campaign, imported ones included; every other screen shows it read-only
@@ -1470,10 +1471,16 @@ the running code.
 - **Budget cap is a soft warning** (`constraints_json.budget`): a scenario above it is never preselected, the 推薦 tag
   moves to 照預算上限, and choosing one needs an explicit confirmation the API checks and records, with the amount over
   shown on screen. The cap stays editable after the wizard, in any status (ruled 2026-09-25). It is an internal planning
-  number: changing it never writes the platform, never changes the saved scenario, and never makes a handoff stale.
+  number: changing it never writes the platform, never changes the saved scenario, never makes a handoff stale, and never
+  invalidates a confirmed experiment (the experiment snapshot keeps only `constraints_json.platform`). Scenario rows carry
+  `over_cap` (0 = within the cap, null = no cap or the total is unknown); the 照預算上限 row is the second row. Edit:
+  `PUT …/strategy/budget-cap` (internal campaigns only; imported ones have no scenarios).
 - **Stale launch has an exit:** the handoff shows approved vs now; 用現在的方案重新核准 re-freezes the plan as a new
   version (verified, unchanged items keep their result; the month-budget check runs again); 改回核准時的設定 writes the
-  approved values back after one confirm.
+  approved values back after one confirm. Re-approval moves the platform bindings of unchanged items to the new version.
+  The 上架紀錄 fields (platform ids, ad mapping, execution notes) are not part of the frozen content, so recording them
+  never makes a launch stale. While a launch is stale, a material may be re-assigned (e.g. revised after approval) and
+  then re-approved; a fresh approved launch still refuses re-assignment.
 - **Stuck background jobs:** at worker start every interrupted job that is not read-only is re-queued once; a job
   interrupted a second time ends `failed` and is shown as failed. This replaces the earlier start-up rule that paid work
   is never re-sent (`app/worker.py`).
