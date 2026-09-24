@@ -153,3 +153,156 @@ describe("loop pieces（F27）", () => {
     expect(screen.getByText("補資料")).toBeTruthy();
   });
 });
+
+describe("v9 pieces（F28-I07）", () => {
+  // The prototype's 日常商品推廣 (cap 450 own, break-even 520): cost per purchase = spend ÷ purchases.
+  const daily = [
+    { id: "a1", name: "晨光隨行杯・日常出發", grade: "on_target" as const, costPerResult: 48, spend: 1440 },
+    { id: "a2", name: "晨光隨行杯・隨時有你", grade: "on_target" as const, costPerResult: 50.25, spend: 1407 },
+    { id: "a3", name: "辦公室一角・質感桌面", grade: "on_target" as const, costPerResult: 52, spend: 1300 },
+    { id: "a4", name: "開箱 15 秒・單手開蓋", grade: "on_target" as const, costPerResult: 55, spend: 1100 },
+    { id: "a5", name: "健身情境・保冷 12 小時", grade: "on_target" as const, costPerResult: 431.25, spend: 3450 },
+    { id: "a6", name: "再行銷・兩入組", grade: "watch" as const, costPerResult: 520, spend: 3120 },
+    { id: "a7", name: "提問式貼文", grade: "over" as const, costPerResult: 617.5, spend: 2470 },
+    { id: "a8", name: "秋季新色預告", grade: "wasted" as const, costPerResult: null, spend: 1480 },
+  ];
+
+  it("TargetRuler 依每筆成本放點，上限線與打平線落在原型算出的位置", async () => {
+    const { TargetRuler, rulerScale } = await import("./TargetRuler");
+    // Prototype: max = max(1.6 × 450, 617.5 × 1.08) = 720 → cap at 62.5%, 打平 520 at 72.22%.
+    const { max, pos } = rulerScale(450, daily.flatMap((a) => (a.costPerResult === null ? [] : [a.costPerResult])));
+    expect(max).toBe(720);
+    expect(pos(450)).toBe(62.5);
+    const { container } = render(<TargetRuler ads={daily} cap={{ value: 450, basis: "own" }} breakEven={520} size="full" />);
+    const cap = container.querySelector('[data-part="cap-mark"]') as HTMLElement;
+    expect(cap.style.left).toBe("62.5%");
+    expect(cap.textContent).toBe("上限 450");
+    expect((container.querySelector('[data-part="break-even-mark"]') as HTMLElement).style.left).toBe(`${(520 / 720) * 100}%`);
+    const dot = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}｜`) });
+    expect(dot("提問式貼文").style.left).toBe(`${(617.5 / 720) * 100}%`);
+    expect(dot("晨光隨行杯・日常出發").style.left).toBe(`${(48 / 720) * 100}%`);
+    // a1–a4 sit within 4.8% of each other: they stack one level (33px) apart; a4 is the fourth.
+    expect(dot("開箱 15 秒・單手開蓋").style.bottom).toBe("99px");
+    // 白花 has no cost: it sits in the box, not on the axis.
+    expect(dot("秋季新色預告").style.left).toBe("");
+    expect(screen.getByRole("group", { name: "對照上限：上限 450；白花 1、太貴 1、偏貴 1、划算 5" })).toBeTruthy();
+  });
+
+  it("TargetRuler 沒上限畫空狀態；暫用打平標在上限位置；清理標出要關的；還太新的花費未知不印 0", async () => {
+    const { TargetRuler } = await import("./TargetRuler");
+    const { container, rerender } = render(<TargetRuler ads={daily} cap={null} size="mid" />);
+    expect(container.querySelector('[data-variant="empty"]')).toBeTruthy();
+    expect(screen.getByText("沒設上限，先不分等級")).toBeTruthy();
+    rerender(<TargetRuler ads={daily} cap={{ value: 520, basis: "break_even" }} breakEven={520} size="mid" highlight={{ mode: "close", ids: ["a7", "a8"] }} />);
+    expect(container.querySelector('[data-part="cap-mark"]')?.textContent).toBe("暫用打平 520");
+    expect(container.querySelector('[data-part="break-even-mark"]')).toBeNull();
+    expect(screen.getAllByText("關")).toHaveLength(2);
+    rerender(<TargetRuler ads={[{ id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", gradeLabel: null, costPerResult: null, spend: null }]} cap={{ value: 450, basis: "own" }} size="full" />);
+    expect(screen.getByText("還太新、看不準 1 則")).toBeTruthy();
+    expect(screen.getByText(/已花 未知／1,350 元/)).toBeTruthy();
+  });
+
+  it("GradeChip 依等級出字與色調；null 印未判斷；API 的 grade_label 優先", async () => {
+    const { GradeChip } = await import("./Chip");
+    render(<><GradeChip grade="on_target" /><GradeChip grade="wasted" /><GradeChip grade={null} /><GradeChip grade="insufficient" label="資料不足" /></>);
+    expect(screen.getByText("划算").dataset.tone).toBe("ok");
+    expect(screen.getByText("白花").dataset.tone).toBe("stop");
+    expect(screen.getByText("未判斷").dataset.tone).toBe("neutral");
+    expect(screen.getByText("資料不足")).toBeTruthy();
+  });
+
+  it("GradeBand 划算比例＝划算金額÷已花；已花未知時比例也未知", async () => {
+    const { GradeBand } = await import("./GradeBand");
+    const buckets = [
+      { grade: "on_target" as const, amount: 11000, count: 6, ads: [] },
+      { grade: "wasted" as const, amount: 1480, count: 1, ads: [{ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend: 1480 }] },
+      { grade: "ungraded" as const, amount: 520, count: 0, ads: [] },
+    ];
+    const { rerender } = render(<GradeBand buckets={buckets} spent={22000} spentLabel="9 月已花" cap={{ value: 450, basis: "own" }} />);
+    expect(screen.getByText("50%")).toBeTruthy();
+    expect(screen.getByText("秋季新色預告…")).toBeTruthy();
+    expect(screen.getByText("未分級 520 元")).toBeTruthy();
+    rerender(<GradeBand buckets={buckets} spent={null} spentLabel="9 月已花" cap={null} />);
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("9 月已花 未知")).toBeTruthy();
+    expect(screen.getByText("划算＝在各活動上限內")).toBeTruthy();
+  });
+
+  it("MoneyMeter 上限線在 75%；超過 1.2 倍上限變紅；不知道數值只畫空軌", async () => {
+    const { MoneyMeter } = await import("./MoneyMeter");
+    const { container, rerender } = render(<MoneyMeter value={600} cap={{ value: 450, basis: "own" }} size="lg" />);
+    expect(container.querySelector("u")?.className).toContain("left-3/4");
+    const fill = container.querySelector("i") as HTMLElement;
+    expect(fill.className).toContain("bg-danger");
+    expect(fill.style.width).toBe("100%");
+    expect(screen.getByText("上限 450")).toBeTruthy();
+    rerender(<MoneyMeter value={null} cap={{ value: 450, basis: "own" }} size="sm" />);
+    expect(container.querySelector("i")).toBeNull();
+  });
+
+  it("PaceChart 沒月預算不畫速度線；已花未知不印已花", async () => {
+    const { PaceChart } = await import("./PaceChart");
+    const days = [{ day: 10, cumulative: 8000 }, { day: 23, cumulative: 22000 }];
+    const { container, rerender } = render(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={60000} spent={22000} daily={days} projected={28696} />);
+    expect(screen.getByRole("img", { name: "預算 60,000，已花 22,000，照預算今天應花到 46,000" })).toBeTruthy();
+    expect(container.querySelector('[data-part="pace-line"]')).toBeTruthy();
+    rerender(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={null} spent={null} daily={[]} projected={null} />);
+    expect(container.querySelector('[data-part="pace-line"]')).toBeNull();
+    expect(screen.getByText("沒設月預算")).toBeTruthy();
+    expect(screen.queryByText(/^已花/)).toBeNull();
+  });
+
+  it("ScenarioBars 超出預算上限的列畫斜紋段與超出金額；算不出的列不能選", async () => {
+    const { ScenarioBars } = await import("./ScenarioBars");
+    const onSelect = vi.fn();
+    const rows = [
+      { key: "cons", label: "保守", total: 18000, overCap: null },
+      { key: "cap", label: "照預算上限", total: 30000, overCap: null, recommended: true, saved: true },
+      { key: "agg", label: "積極", total: 111600, overCap: 81600 },
+      { key: "grow", label: "穩定成長", total: null, overCap: null },
+    ];
+    const { container } = render(<ScenarioBars rows={rows} budgetCap={30000} selected="cap" onSelect={onSelect} resultCap={450} />);
+    expect(screen.getByText("超出 81,600")).toBeTruthy();
+    expect(screen.getByText("約 40 筆購買")).toBeTruthy();
+    expect(container.querySelectorAll('[data-part="over"]')).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: /照預算上限/ }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("radio", { name: /穩定成長/ })).toBeNull();
+    expect(screen.getByText("要先設上限")).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("radio", { name: /積極/ }));
+    expect(onSelect).toHaveBeenCalledWith("agg");
+  });
+
+  it("ConfirmSheet 超出預算上限拆成上限內與超出；改回版列出每個值", async () => {
+    const { ConfirmSheet, WarnButton } = await import("./ConfirmSheet");
+    const { rerender } = render(
+      <ConfirmSheet variant="over-cap" title="選「積極 111,600」會超出預算上限 81,600 元" split={{ within: 30000, over: 81600 }} actions={<WarnButton>超出預算上限也要用</WarnButton>} />,
+    );
+    expect(screen.getByRole("alertdialog", { name: /會超出預算上限/ })).toBeTruthy();
+    expect(screen.getByText("預算上限內 30,000")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "超出預算上限也要用" }).dataset.variant).toBe("warn");
+    rerender(<ConfirmSheet variant="revert" title="改回核准時的設定？" actions={<WarnButton>改回</WarnButton>}>每日預算：600 → 500</ConfirmSheet>);
+    expect(screen.getByRole("alertdialog", { name: "改回核准時的設定？" }).dataset.variant).toBe("revert");
+    expect(screen.getByText("每日預算：600 → 500")).toBeTruthy();
+  });
+
+  it("DiffRow 空值印未設定；數字走格式化", async () => {
+    const { DiffRow } = await import("./DiffRow");
+    render(<><DiffRow field="每日預算" item="廣告組・#2" before={500} after={1200.5} /><DiffRow field="廣告名稱" before={null} after="秋季新色・限量" /></>);
+    expect(screen.getByText("1,200.5")).toBeTruthy();
+    expect(screen.getByText("未設定")).toBeTruthy();
+  });
+
+  it("CapDots、ProgressSegments、AllocationBar 依數量畫；總額未知不印金額", async () => {
+    const { CapDots } = await import("./CapDots");
+    const { ProgressSegments } = await import("./ProgressSegments");
+    const { AllocationBar } = await import("./ScenarioBars");
+    const { container } = render(<CapDots keep={6} close={2} label="留 6 則、關 2 則" />);
+    expect(container.querySelectorAll('[data-part="keep"]')).toHaveLength(6);
+    expect(container.querySelectorAll('[data-part="close"]')).toHaveLength(2);
+    render(<ProgressSegments label="3／11 已核對" segments={[{ key: "1", state: "ok" }, { key: "2", state: "changed" }, { key: "3", state: "todo" }]} />);
+    expect(screen.getByRole("img", { name: "3／11 已核對" }).querySelectorAll("[data-state]")).toHaveLength(3);
+    render(<AllocationBar parts={[{ key: "new", label: "新客", pct: 70 }, { key: "re", label: "再行銷", pct: 20 }, { key: "x", label: "探索", pct: 10 }]} total={null} />);
+    expect(screen.getByText("新客 70%", { selector: "i" })).toBeTruthy();
+    expect(screen.queryByText(/・/)).toBeNull();
+  });
+});
