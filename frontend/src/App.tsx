@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignTargetPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -464,22 +464,16 @@ function AdsCampaignRoute() {
   );
 }
 
-/** 活動目標設定頁（F19-I05，v7 原型「設定目標」畫面）：判斷這個活動好壞的成果與成本門檻，
- * `AdsCampaignRoute` 卡片的「設定目標／調整目標」連結會導來這裡。`key={campaignId}` 讓
- * react-router 換活動時整支重新掛載——同一條 route element，不換這個就會沿用同一個元件
- * instance，上一個活動的草稿／baseline 會被誤帶到下一個活動（F19 repair #6）。 */
+/** F28-I09: the cap is edited in the strategy tab's 「一個上限」 card; the old target page's address (month-summary links,
+ * bookmarks) lands there. `replace` keeps the dead address out of history. */
 function AdsTargetRoute() {
   const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
-  return (
-    <>
-      <CampaignTargetPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />
-    </>
-  );
+  return <Navigate replace to={`/brands/${brandId ?? ""}/ads/campaigns/${campaignId ?? ""}?tab=strategy`} />;
 }
 
 /** 活動詳情頁（F20-I02，v7 原型 `campPage()`）：家頁的活動卡名稱與佇列的「看證據」都落在
  * 這裡；原本的五分頁工作區網址（`AdsCampaignRoute`）不變、由這頁的「全部資料 ›」進入。
- * `key={campaignId}` 理由同 `AdsTargetRoute`——換活動要整支重新掛載，不沿用上一個活動的
+ * `key={campaignId}`：換活動要整支重新掛載，不沿用上一個活動的
  * 展開／高亮狀態。 */
 function AdsCampaignDetailRoute() {
   const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
