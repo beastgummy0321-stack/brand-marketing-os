@@ -38,13 +38,6 @@ function useLoad<T>(load: () => Promise<T>, deps: unknown[]): [Load<T>, () => vo
   return [state, () => setReload((v) => v + 1)];
 }
 
-/** Triage `target` is the F28 cap view (`app/ads/targets.py::resolve`): it carries `break_even` even when an own cap
- * wins (the ruler's 打平 mark). `TriageTargetView` in `lib/` does not declare it, so it is read defensively here. */
-function breakEvenOf(target: TriageTargetView): number | null {
-  const value = (target as TriageTargetView & { break_even?: number | null }).break_even;
-  return typeof value === "number" ? value : null;
-}
-
 function capOf(target: TriageTargetView | undefined): RulerCap | null {
   if (!target || target.value === null || target.basis === null) return null;
   return { value: target.value, basis: target.basis };
@@ -113,7 +106,7 @@ function RulerCard({ items, missingDays, strategyHref, onAdClick }: {
           </Button>
         </div>
       </div>
-      <TargetRuler ads={ads} cap={cap} breakEven={breakEvenOf(target)} size="full" onAdClick={onAdClick} />
+      <TargetRuler ads={ads} cap={cap} breakEven={target.break_even ?? null} size="full" onAdClick={onAdClick} />
     </section>
   );
 }

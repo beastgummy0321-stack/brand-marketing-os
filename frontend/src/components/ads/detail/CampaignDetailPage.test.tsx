@@ -46,8 +46,7 @@ function ad(id: string, name: string, grade: TriageItem["grade"], spend: number 
     entity_id: id, native_id: `n_${id}`, name, campaign_id: "cmp_1", campaign_name: CAMPAIGN_NAME, thumbnail_url: null,
     class: "flat", label: "持平", reason_code: "", grade, grade_label: labels[grade],
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
-    // The real triage `target` is the full cap view (break_even included); `TriageTargetView` only declares a subset.
-    target: { value: cap.value, basis: cap.basis, result_kind: "purchase", result_label: "購買", missing: [], break_even: cap.break_even ?? null } as TriageItem["target"],
+    target: { value: cap.value, basis: cap.basis, result_kind: "purchase", result_label: "購買", missing: [], break_even: cap.break_even ?? null },
     current: metrics, previous: { ...metrics, spend: null, result_count: null, cost_per_result: null }, change_pct: null,
     sample: { gate: grade !== "insufficient", spend_multiple: null, days_with_events: 10 },
     ...extra,

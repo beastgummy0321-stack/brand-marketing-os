@@ -146,7 +146,9 @@ export function cleanupTitle(campaignName: string | null): string {
 }
 
 /** F27-I15 Contract F: the lazily-created cleanup set's own items — one `pause` item per proposed
- * ad, in the same (lowest-spend-first) order the queue row's own `cleanup.ads` already carries. */
+ * ad, in the order the queue row's own `cleanup.ads` already carries (F28-I02, ads.md §6.32:
+ * every 白花 ad first, then the over-cap ads 太貴 before 偏貴, most expensive per result first;
+ * 划算 and ungraded ads are never in the list). */
 export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
   return ads.map((ad) => buildPauseDraftItem(ad.entity_id, CLEANUP_PAUSE_REASON));
 }

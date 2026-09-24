@@ -300,6 +300,19 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     expect(screen.getByText("native_low2")).toBeTruthy();
   });
 
+  it("F28-I14：四步驟 提議／確認／到平台完成／核對結果，目前在第三步，確認可回去", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanupChangeSet()] });
+    renderAt(handoffPath());
+    const current = await screen.findByRole("listitem", { current: "step" });
+    const labels = screen.getAllByRole("listitem").map((li) => li.textContent?.replace(/^\d/, ""));
+    expect(labels).toEqual(["提議", "確認", "到平台完成", "核對結果"]);
+    expect(current.textContent).toContain("到平台完成");
+    expect(screen.queryByText("確認提議")).toBeNull();
+    expect(screen.getByRole("link", { name: "回到確認" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+    expect(screen.queryByRole("link", { name: "回到提議" })).toBeNull();
+  });
+
   it("「我都做完了」依序對每一則呼叫 report／check，成功後導去核對結果", async () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));

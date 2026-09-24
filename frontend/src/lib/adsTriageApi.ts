@@ -55,6 +55,9 @@ export interface TriageTargetView {
   // F19-I06: always sent by the backend (`app/ads/result_kinds.py::label()`).
   result_label: string;
   missing: string[];
+  // F28-I14: the triage `target` is the full cap view, so these always arrive (ruler 打平 mark,
+  // ROAS 參考 = price ÷ cap); optional only because older hand-written test factories omit them.
+  break_even?: number | null; price?: number | null;
 }
 /** F28-I01 cap view (`app/ads/targets.py::resolve`): campaign detail `cap`, triage `target`.
  * `break_even`/`price` are sent even when an own cap wins (打平 mark, ROAS 參考 = price ÷ cap). */
