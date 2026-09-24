@@ -859,6 +859,28 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     return row
 
 
+def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                   budget_cap: int | None) -> dict:
+    """F28-I03: write only `constraints_json.budget` (set or removed) and flip
+    `context_json.field_sources.budget` to the user's -- in any status, no status or binding
+    check, and no other column (`budget_planned`／`budget_scenario`／`budget_basis_json` stay as
+    saved). The caller validated the value. Both documents are edited in place in SQL, so a
+    concurrent edit of another key in them is never overwritten."""
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
+    conn.execute(
+        "UPDATE ads_campaign SET"
+        " constraints_json = (COALESCE(constraints_json, '{}'::jsonb) - 'budget') || %s,"
+        " context_json = jsonb_set(COALESCE(context_json, '{}'::jsonb), '{field_sources}',"
+        "   COALESCE(context_json->'field_sources', '{}'::jsonb) || '{\"budget\": \"user\"}')"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb({} if budget_cap is None else {"budget": budget_cap}),
+         org_id, brand_id, campaign_id),
+    )
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
+    return row
+
+
 # -- F03-I06: 採用策略寫投放組／廣告，以及後續編輯 ------------------------------------------
 
 

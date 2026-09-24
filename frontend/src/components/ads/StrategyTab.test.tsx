@@ -116,12 +116,13 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
       scenarios: {
         mode: "cold_start",
         scenarios: [
-          { key: "minimum", label: "保守", daily: 1000, total: 15000, caption: "最低可行" },
-          { key: "recommended", label: "推薦", daily: 2000, total: 30000, caption: "建議規模" },
-          { key: "aggressive", label: "積極", daily: 3000, total: 45000, caption: "衝刺規模" },
+          { key: "minimum", label: "保守", daily: 1000, total: 15000, caption: "最低可行", over_cap: null },
+          { key: "recommended", label: "推薦", daily: 2000, total: 30000, caption: "建議規模", over_cap: null },
+          { key: "aggressive", label: "積極", daily: 3000, total: 45000, caption: "衝刺規模", over_cap: null },
         ],
         recommended: "recommended",
         basis: {},
+        budget_cap: null,
       },
       basis: {
         knowledge_item_ids: [],
@@ -469,10 +470,11 @@ it("shows the current cap, preserves selected money and labels scenarios beyond 
     start_date: "2026-09-01", end_date: "2026-09-14", constraints_json: { budget: 15000 } });
   if (!c.budget_basis_json.scenarios) throw new Error("scenario fixture missing");
   c.budget_basis_json.scenarios.scenarios = [
-    { key: "minimum", label: "最低", daily: 600, total: 8400, caption: "CPA × 2" },
-    { key: "recommended", label: "推薦", daily: 1500, total: 21000, caption: "CPA × 5" },
-    { key: "aggressive", label: "積極", daily: 3000, total: 42000, caption: "CPA × 10" },
+    { key: "minimum", label: "最低", daily: 600, total: 8400, caption: "CPA × 2", over_cap: 0 },
+    { key: "recommended", label: "推薦", daily: 1500, total: 21000, caption: "CPA × 5", over_cap: 6000 },
+    { key: "aggressive", label: "積極", daily: 3000, total: 42000, caption: "CPA × 10", over_cap: 27000 },
   ];
+  c.budget_basis_json.scenarios.budget_cap = 15000;
   renderTab(c);
   await userEvent.click(screen.getByRole("button", { name: "調整建議" }));
   expect(screen.getByText(/計算依據：目前上限 NT\$ 300/).textContent).toContain("14 天");

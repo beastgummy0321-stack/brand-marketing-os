@@ -240,16 +240,22 @@ def _build_proposal(conn, org_id, brand_id, campaign_id, detail):
         "daily_budget": float(group["daily_budget"]),
         "objective": detail["objective"],
     }
+    constraints = detail.get("constraints_json") or {}
     snapshot = {
         "campaign": {
-            k: detail.get(k)
-            for k in (
-                "objective",
-                "start_date",
-                "end_date",
-                "budget_planned",
-                "constraints_json",
-            )
+            **{
+                k: detail.get(k)
+                for k in (
+                    "objective",
+                    "start_date",
+                    "end_date",
+                    "budget_planned",
+                )
+            },
+            # F28-I03: only the platform is a comparison condition. The budget cap is an
+            # internal planning number, editable in any status, and never makes a confirmed
+            # comparison stale (ads.md §6.32).
+            "constraints_json": {k: constraints[k] for k in ("platform",) if k in constraints},
         },
         "manual_delivery": (detail.get("context_json") or {}).get("manual_delivery"),
         "groups": [
