@@ -43,6 +43,7 @@ def register(app: FastAPI) -> None:
         change_routes,
         external_routes,
         handoff_routes,
+        home_overview_routes,
         learning_routes,
         material_routes,
         month_budget_routes,
@@ -55,6 +56,9 @@ def register(app: FastAPI) -> None:
     )
     from app.ads import routes as ads_routes
 
+    # F28-I06: mounted before `routes.py`, whose F04-I08 `GET /brands/{b}/home` (no frontend
+    # caller left) answers the same path -- the home-overview contract owns it now.
+    app.include_router(home_overview_routes.router)
     app.include_router(ads_routes.router)
     app.include_router(external_routes.router)
     app.include_router(user_assets_routes.router)
