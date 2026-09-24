@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -23,8 +23,9 @@ import { getQueue, type QueueItem, type QueuePayload, type QueueScale, type Tria
 import { getAngles, type AnglesResponse, type AnglesStatus } from "@/lib/adsAnglesApi";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
-import { ActionBar, Chip, DecisionSheet, FlowHeader, KindMark, LearnCard, Meter, Segmented, TagToggle } from "../patterns";
+import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, KindMark, LearnCard, Meter, Segmented, TagToggle } from "../patterns";
 import { CleanupEvidence } from "./CleanupEvidence";
+import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { Tile } from "./Tile";
 import {
@@ -34,6 +35,7 @@ import {
   budgetTitle,
   campaignChangesPath,
   changeStepPath,
+  cleanupProposePath,
   cleanupTitle,
   isCleanupTriageItem,
   isMonthBudgetRejection,
@@ -300,6 +302,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const homeHref = `/brands/${brandId}/ads`;
 
   const [queue, setQueue] = useState<QueuePayload | null>(null);
@@ -629,15 +632,27 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     );
   }
 
+  // F28-I11: the cleanup light flow opens on its proposal step (提議 → 確認 → …); `?step=confirm` is the confirm step
+  // of the same propose URL, so the browser's back returns to the proposal. Nothing is written before 核准.
+  if (isCleanupPropose && triageItem?.cleanup && searchParams.get("step") !== "confirm") {
+    return (
+      <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "清理" }]} />
+        <CleanupProposal brandId={brandId} campaignId={campaignId} item={{ ...triageItem, cleanup: triageItem.cleanup }} position={position} homeHref={homeHref} />
+      </div>
+    );
+  }
+  const cleanupBackHref = kind === "cleanup" && !closed ? cleanupProposePath(brandId, campaignId) : null;
+
   const title = kind === "copy" ? "確認變更"
     : kind === "budget" ? "提議：加預算"
     : kind === "new_ad" ? "確認新廣告提議"
-    : kind === "cleanup" ? "提議：清理這個活動的廣告"
+    : kind === "cleanup" ? "確認清理"
     : "提議：暫停這則廣告";
   const approveLabel = kind === "copy" ? "核准，接著到平台操作"
     : kind === "budget" ? "核准加碼，接著到平台操作"
     : kind === "new_ad" ? "核准新廣告，接著到平台操作"
-    : kind === "cleanup" ? "核准清理，接著到平台操作"
+    : kind === "cleanup" ? "核准清理"
     : "核准暫停，接著到平台操作";
   const closedLabel = changeSet
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
@@ -657,67 +672,67 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
-      <FlowHeader
-        steps={STEPS}
-        current={0}
-        title={title}
-        purpose={STEP_PURPOSE}
-        aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : undefined}
-        context={triageItem ? (
-          <>
-            <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
-              <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
-            </Badge>
-            {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
-          </>
-        ) : undefined}
-      />
+      <div className={kind === "cleanup" ? "flex max-w-[1260px] flex-col gap-4" : "flex flex-col gap-4"}>
+        <FlowHeader
+          steps={kind === "cleanup" ? cleanupSteps(cleanupBackHref ?? undefined) : STEPS}
+          current={kind === "cleanup" ? 1 : 0}
+          title={title}
+          purpose={STEP_PURPOSE}
+          aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : undefined}
+          context={triageItem ? (
+            <>
+              {kind === "cleanup" ? (
+                <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
+              ) : <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
+                <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
+              </Badge>}
+              {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
+            </>
+          ) : undefined}
+        />
 
-      {kind === "pause" && (
-        <PauseEvidence
-          triage={triageItem?.triage ?? null}
-          fallbackName={item?.target.name ?? "（未命名廣告）"}
-          fallbackReason={item?.reason ?? ""}
-        />
-      )}
-      {kind === "copy" && item && <CopyEvidence item={item} />}
-      {kind === "budget" && (
-        <BudgetEvidence
-          item={item}
-          scale={triageItem?.scale ?? null}
-          bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
-          brandId={brandId}
-        />
-      )}
-      {kind === "new_ad" && item && <NewAdEvidence item={item} />}
-      {kind === "cleanup" && (
-        <CleanupEvidence
-          cleanup={triageItem?.cleanup ?? null}
-          items={changeSet?.items ?? []}
-          campaignName={triageItem?.triage.campaign_name ?? null}
-        />
-      )}
+        {kind === "pause" && (
+          <PauseEvidence
+            triage={triageItem?.triage ?? null}
+            fallbackName={item?.target.name ?? "（未命名廣告）"}
+            fallbackReason={item?.reason ?? ""}
+          />
+        )}
+        {kind === "copy" && item && <CopyEvidence item={item} />}
+        {kind === "budget" && (
+          <BudgetEvidence
+            item={item}
+            scale={triageItem?.scale ?? null}
+            bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
+            brandId={brandId}
+          />
+        )}
+        {kind === "new_ad" && item && <NewAdEvidence item={item} />}
+        {kind === "cleanup" && (
+          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} />
+        )}
 
-      {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
-          暫緩), the angle chosen (or not) is already fixed and nothing more will be recorded. */}
-      {kind === "pause" && !closed && (
-        <PauseLearnCard
-          status={angleData?.status ?? "pending"}
-          candidates={angleData?.candidates ?? []}
-          angle={angleChoice}
-          customOpen={angleCustomOpen}
-          disabled={busy}
-          onSelect={(c) => { setAngleChoice(c); setAngleCustomOpen(false); }}
-          onOpenCustom={() => { setAngleCustomOpen(true); setAngleChoice(""); }}
-          onCustomChange={(v) => setAngleChoice(v.slice(0, ANGLE_MAX))}
-        />
-      )}
+        {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
+            暫緩), the angle chosen (or not) is already fixed and nothing more will be recorded. */}
+        {kind === "pause" && !closed && (
+          <PauseLearnCard
+            status={angleData?.status ?? "pending"}
+            candidates={angleData?.candidates ?? []}
+            angle={angleChoice}
+            customOpen={angleCustomOpen}
+            disabled={busy}
+            onSelect={(c) => { setAngleChoice(c); setAngleCustomOpen(false); }}
+            onOpenCustom={() => { setAngleCustomOpen(true); setAngleChoice(""); }}
+            onCustomChange={(v) => setAngleChoice(v.slice(0, ANGLE_MAX))}
+          />
+        )}
 
-      {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+        {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
+      </div>
 
       <div className="flex-1" />
       <ActionBar
-        back={<Button variant="ghost" asChild><Link to={editCopyHref ?? homeHref}>← {editCopyHref ? "修改內容" : "投放中心"}</Link></Button>}
+        back={<Button variant="ghost" asChild><Link to={editCopyHref ?? cleanupBackHref ?? homeHref}>← {editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : "投放中心"}</Link></Button>}
         hint={!closed ? "核准不會改動平台" : undefined}
       >
         {!closed && (
