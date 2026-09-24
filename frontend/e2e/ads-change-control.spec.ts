@@ -31,9 +31,9 @@ test("A: normal entry, save/reopen/approve, lost response replay and independent
   await expect(brandLink).toBeVisible();
   await brandLink.click();
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
-  // F19-I02 起首頁是 v7 版面：h1「今天需要你決定的事」，月預算編輯要先按右側卡片的
-  // 「調整」才會換成既有 `MonthlyBudgetPanel`（design-system.md §5.1「F19 現況」）。
-  await expect(page.getByRole("heading", { name: "今天需要你決定的事", exact: true })).toBeVisible();
+  // F28-I08 起首頁是 v9 board D：h1「N 月的廣告」，月預算編輯要先按預算進度卡的
+  // 「調整」才會展開既有 `MonthlyBudgetPanel`。
+  await expect(page.getByRole("heading", { level: 1, name: /^\d{1,2} 月的廣告$/ })).toBeVisible();
   await screenshot(page, evidence, "home");
   await page.getByRole("button", { name: "調整", exact: true }).click();
   await expect(page.getByRole("heading", { name: "本月廣告預算", exact: true })).toBeVisible();

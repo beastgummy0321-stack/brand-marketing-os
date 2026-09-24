@@ -206,7 +206,14 @@ test("一般流程保留必要操作；受控 loading/error、empty、深連結�
   await page.goto(`/app/brands/${brandId}/workbench`);
   await expect(page.getByText("目前沒有任務包")).toBeVisible();
   await page.goto(`/app/brands/${brandId}/ads`);
-  await expect(page.getByText("還沒有 Campaign")).toBeVisible();
+  // F28-I08: a brand with no campaign gets one honest empty card (no money, band or decisions that could only print
+  // zeros) whose one primary action is ＋ 建立活動.
+  const empty = page.getByRole("region", { name: "還沒有進行中的活動" });
+  await expect(empty).toBeVisible();
+  await expect(empty.getByRole("link", { name: "建立活動", exact: true })).toHaveAttribute("href", `/app/brands/${brandId}/ads/new`);
+  await expect(page.getByRole("link", { name: "建立活動", exact: true })).toHaveCount(1);
+  await expect(page.getByText("的廣告費花得划算")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /^需要你決定/ })).toHaveCount(0);
 
   for (const viewport of [
     { width: 1920, height: 1080, label: "wide" },

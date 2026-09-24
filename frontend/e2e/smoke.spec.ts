@@ -57,11 +57,11 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page.getByRole("link", { name: "前往投放中心" })).toBeVisible();
 
   // --- 投放中心：缺陷 3 —— 品牌頁要有真的入口，不是只能手打網址 -------------------
-  // F19-I02 起首頁是 v7 版面，h1 是「今天需要你決定的事」——「投放中心」只在外殼麵包屑，
+  // F28-I08 起首頁是 v9 board D，h1 是「N 月的廣告」——「投放中心」只在外殼麵包屑，
   // 不是頁面 heading（design-system.md §5.1）。
   await page.getByRole("link", { name: "前往投放中心" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads$`));
-  await expect(page.getByRole("heading", { name: "今天需要你決定的事", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /^\d{1,2} 月的廣告$/ })).toBeVisible();
 
   // --- 素材工作檯（F02 大重置，ARCHITECTURE.md §5.1-§5.3）：入口 → 自由創作 → 任務包頁 →
   // 素材組 studio 的完整走查（F02-I11）。跑在沒有 worker、沒有 provider key 的 e2e 後端上
