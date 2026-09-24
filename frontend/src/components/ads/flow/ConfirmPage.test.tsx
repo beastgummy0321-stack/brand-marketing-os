@@ -21,7 +21,7 @@ vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
 }));
 vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
   ...(await importOriginal<typeof triageApi>()),
-  getQueue: vi.fn(),
+  getQueue: vi.fn(), getTriage: vi.fn(),
 }));
 // F27-I16 Contract C: 每一頁暫停提議都會打一次 `getAngles`（correction 9）——不 mock 會打到真的
 // `fetch`，預設先給一個 `ready` 三候選，個別測試需要別的狀態再自己覆寫。
@@ -94,7 +94,12 @@ function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
         { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7 },
         { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7 },
       ],
-      keep: [], short: 0, daily_saving: 460 / 7, scale_owner_id: null,
+      keep: [
+        { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7 },
+        { entity_id: "aex_keep2", name: "健身情境・保冷 12 小時", thumbnail_url: null, spend_7d: 700, grade: "on_target", cost_per_result: 431.25, spend: 3450, result_count: 8, daily_spend: 100 },
+        { entity_id: "aex_keep3", name: "辦公室一角・質感桌面", thumbnail_url: null, spend_7d: 280, grade: "on_target", cost_per_result: 52, spend: 1300, result_count: 25, daily_spend: 40 },
+      ],
+      short: 0, daily_saving: 460 / 7, scale_owner_id: null,
     },
     ...overrides,
   });
@@ -158,6 +163,8 @@ const confirmPath = (id = "acs_1") => `/brands/brd_1/ads/campaigns/cmp_1/changes
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
+  // F28-I11: the cleanup proposal reads the campaign triage for its daily budget only; a failure is tolerated.
+  vi.mocked(triageApi.getTriage).mockRejectedValue(new Error("not needed"));
   vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
   vi.mocked(anglesApi.getAngles).mockResolvedValue({ status: "ready", candidates: ["日常出發情境", "辦公室情境", "提問式貼文"], error: null });
 });
@@ -576,17 +583,26 @@ describe("ConfirmPage（F27-I15）new_ad kind", () => {
   });
 });
 
-describe("ConfirmPage（F27-I15 Contract F）cleanup propose 路由", () => {
-  it("畫出清理卡片：每則廣告的縮圖、名稱與 7 天花費", async () => {
+describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", () => {
+  it("先是提議步驟，下一步到確認：關的清單有等級、成本與「不會新增花費」，不再寫「花費最低」", async () => {
+    const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
     renderAt(proposeCleanupPath);
-    expect(await screen.findByText("提議：清理這個活動的廣告")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "關 2 則、留 3 則" })).toBeTruthy();
+    expect(screen.getByText("關的順序")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /核准清理/ })).toBeNull();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("link", { name: "下一步：確認 →" }));
+    expect(await screen.findByRole("heading", { name: "確認清理" })).toBeTruthy();
     expect(screen.getByText("清理")).toBeTruthy();
-    expect(screen.getByText("同時在投 5 則・預算約撐得起 3 則")).toBeTruthy();
-    expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
-    expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
-    expect(screen.getByText(/7 天花 120/)).toBeTruthy();
-    expect(screen.getByText(/7 天花 340/)).toBeTruthy();
+    expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
+    expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
+    const rows = screen.getAllByRole("listitem").filter((li) => li.textContent?.endsWith("關"));
+    expect(rows.map((r) => r.textContent)).toEqual(["1150701 情境圖 A白花購買0 筆關", "1150702 情境圖 B太貴每賣一筆620 元關"]);
+    expect(screen.queryByText(/花費最低/)).toBeNull();
+    expect(screen.getByRole("link", { name: "← 提議" }).getAttribute("href")).toBe(proposeCleanupPath);
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
   });
 
   it("找不到這個活動的清理提議", async () => {
@@ -607,8 +623,8 @@ describe("ConfirmPage（F27-I15 Contract F）cleanup propose 路由", () => {
     });
     vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
     vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
-    renderAt(proposeCleanupPath);
-    await user.click(await screen.findByRole("button", { name: /核准清理，接著到平台操作/ }));
+    renderAt(`${proposeCleanupPath}?step=confirm`);
+    await user.click(await screen.findByRole("button", { name: "核准清理 →" }));
 
     await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
     const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2] as unknown as {
@@ -638,8 +654,11 @@ describe("ConfirmPage（F27-I15 Contract F）cleanup propose 路由", () => {
       proposal: { kind: "cleanup", change_set_id: "acs_1", campaign_id: "cmp_1", status: "draft", verification_state: "pending", reason: null, revisit_at: null, multi: true },
     })]));
     renderAt(confirmPath());
-    expect(await screen.findByText("提議：清理這個活動的廣告")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "確認清理" })).toBeTruthy();
     expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
     expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
+    expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
+    // The draft's own items are the close list; the proposal step is one link back.
+    expect(screen.getByRole("link", { name: "回到提議" }).getAttribute("href")).toBe(proposeCleanupPath);
   });
 });
