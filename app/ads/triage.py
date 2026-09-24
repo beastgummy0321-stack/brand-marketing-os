@@ -1024,6 +1024,13 @@ def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
         created_day = change_set["created_at"].date()
         if not (candidate["window_start"] <= created_day <= candidate["window_end"]):
             return None
+    elif verification_state == "confirmed":
+        # F28-I02: carried over from the retired stop-loss proposal -- a confirmed pause whose ad
+        # is active again (it is back in this row's close list, and `classify()` only judges
+        # active ads) needs a fresh proposal, never the old "done" one.
+        closing = {ad["entity_id"] for ad in candidate["payload"]["cleanup"]["ads"]}
+        if any(item.get("target_id") in closing for item in pause_items):
+            return None
     return {
         "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
         "kind": "cleanup", "status": change_set["status"],

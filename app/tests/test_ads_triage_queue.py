@@ -1199,6 +1199,40 @@ class CleanupQueueTest(unittest.TestCase):
         self.assertEqual(proposal["verification_state"], "pending")
         self.assertTrue(proposal["multi"])
 
+    def _cleanup_set_with_action(self, target_id, *, verification_state):
+        pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": target_id,
+                      "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "測試清單",
+             "2026-01", "approved", db.jsonb({"source": "cleanup", "items": [pause_item]}),
+             "test"),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,kind,"
+            "change_set_id,verification_state) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (pause_item["id"], self.org, self.brand, self.campaign, "ad", target_id, "pause",
+             set_id, verification_state),
+        )
+        self.conn.commit()
+        return set_id
+
+    def test_confirmed_cleanup_counts_while_its_paused_ads_stay_out_of_the_close_list(self):
+        # The confirmed set paused ad2; today's close list is ad1 only -- the set still answers.
+        set_id = self._cleanup_set_with_action(self.ad2, verification_state="confirmed")
+        proposal = self._cleanup_row(self._refresh())["proposal"]
+        self.assertEqual(proposal["change_set_id"], set_id)
+        self.assertEqual(proposal["verification_state"], "confirmed")
+
+    def test_confirmed_cleanup_whose_ad_is_active_again_needs_a_fresh_proposal(self):
+        # Carried over from the retired stop-loss proposal: the confirmed set paused ad1, yet ad1
+        # is active and back in the close list -- never report the old set as done.
+        self._cleanup_set_with_action(self.ad1, verification_state="confirmed")
+        self.assertIsNone(self._cleanup_row(self._refresh())["proposal"])
+
     def test_category_registered_with_expected_severity_and_label(self):
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_cleanup"],
