@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { GRADE_FILL, GRADE_LABEL, formatAmount, type Grade } from "./Chip";
 
@@ -147,14 +148,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
             <i className={cn("block h-full", GRADE_FILL.watch)} style={{ width: `${pos(T * 1.2) - pos(T)}%` }} />
             <i className={cn("block h-full flex-1", GRADE_FILL.over)} />
           </div>
-          {!mini && (
-            <div className="relative h-[18px] text-[11.5px] font-semibold" aria-hidden="true">
-              <span className="absolute top-[3px] left-0 whitespace-nowrap text-success">划算</span>
-              <span className="absolute top-[3px] whitespace-nowrap text-warning" style={{ left: `${pos(T) + 1}%` }}>偏貴</span>
-              <span className="absolute top-[3px] whitespace-nowrap text-danger/90" style={{ left: `${pos(T * 1.2) + 1}%` }}>太貴</span>
-              <span className="absolute top-[3px] right-0 whitespace-nowrap font-medium text-muted-foreground">每賣一筆花多少 →</span>
-            </div>
-          )}
+          {!mini && <ZoneLabels starts={[0, pos(T) + 1, pos(T * 1.2) + 1]} />}
           {showBreakEven && (
             <Mark at={pos(breakEven as number)} bottom={markBottom} side={(breakEven as number) < T ? "left" : "right"} dashed label={mini ? null : `打平 ${formatAmount(breakEven)}`} />
           )}
@@ -204,6 +198,73 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
   );
 }
 
+const ZONE_WORDS = [
+  { word: "划算", cls: "text-success" },
+  { word: "偏貴", cls: "text-warning" },
+  { word: "太貴", cls: "text-danger/90" },
+] as const;
+const ZONE_GAP = 6;
+
+/** Where the zone words go on a row `width` px wide. Each word starts at its zone's start (`starts`, px); a word that
+ * would run into the one before it moves right just past it (it stays inside its own zone or the next, never on top of
+ * another word). The axis caption is right-aligned and only shown when it clears the last word. */
+export function zoneLabelLayout(width: number, starts: number[], widths: number[], captionWidth: number, gap = ZONE_GAP) {
+  const lefts: number[] = [];
+  let edge = Number.NEGATIVE_INFINITY;
+  starts.forEach((start, i) => {
+    const left = Math.max(start, edge + gap);
+    lefts.push(left);
+    edge = left + widths[i];
+  });
+  return { lefts, caption: width - captionWidth >= edge + gap };
+}
+
+/** The zone-word row under the track (prototype `.rl .zl`). The prototype places the words by percent only, which
+ * collides in narrow rulers (the strategy tab at 1024 px); here the row measures itself and applies `zoneLabelLayout`.
+ * Before the first measurement (or without layout, e.g. jsdom) the words keep the prototype's percent positions. */
+function ZoneLabels({ starts }: { starts: number[] }) {
+  const row = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [layout, setLayout] = useState<{ lefts: number[]; caption: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setWidth(el.clientWidth));
+    observer.observe(el);
+    setWidth(el.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+  const key = starts.join(",");
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el || !width) { setLayout(null); return; }
+    const spans = [...el.querySelectorAll<HTMLElement>("[data-zone]")];
+    const caption = el.querySelector<HTMLElement>("[data-part='axis-caption']");
+    setLayout(zoneLabelLayout(width, starts.map((pct) => (pct / 100) * width), spans.map((sp) => sp.offsetWidth), caption?.offsetWidth ?? 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` names `starts` by value.
+  }, [width, key]);
+  return (
+    <div ref={row} className="relative h-[18px] text-[11.5px] font-semibold" aria-hidden="true">
+      {ZONE_WORDS.map(({ word, cls }, i) => (
+        <span
+          key={word}
+          data-zone={word}
+          className={cn("absolute top-[3px] whitespace-nowrap", cls)}
+          style={{ left: layout ? `${layout.lefts[i]}px` : `${starts[i]}%` }}
+        >
+          {word}
+        </span>
+      ))}
+      <span
+        data-part="axis-caption"
+        className={cn("absolute top-[3px] right-0 whitespace-nowrap font-medium text-muted-foreground", layout && !layout.caption && "invisible")}
+      >
+        每賣一筆花多少 →
+      </span>
+    </div>
+  );
+}
+
 function Mark({ at, bottom, side, dashed = false, label }: { at: number; bottom: number; side: "left" | "right"; dashed?: boolean; label: string | null }) {
   return (
     <div
@@ -218,8 +279,11 @@ function Mark({ at, bottom, side, dashed = false, label }: { at: number; bottom:
   );
 }
 
+/** Ad image, or a neutral placeholder when there is none or it fails to load (Meta image URLs expire), so an expired
+ * URL never shows the browser's broken-image icon. */
 function Thumb({ url, className }: { url?: string | null; className?: string }) {
-  return url
-    ? <img src={url} alt="" className={cn("block object-cover", className)} />
-    : <span className={cn("block bg-border", className)} aria-hidden="true" />;
+  const [failed, setFailed] = useState<string | null>(null);
+  return url && failed !== url
+    ? <img src={url} alt="" className={cn("block object-cover", className)} onError={() => setFailed(url)} />
+    : <span className={cn("block bg-border", className)} aria-hidden="true" data-part="thumb-placeholder" />;
 }

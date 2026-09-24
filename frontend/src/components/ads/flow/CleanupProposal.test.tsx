@@ -69,7 +69,7 @@ function row(c: QueueCleanup): QueueItem & { cleanup: QueueCleanup } {
     id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "ads_triage_cleanup",
     kind: null, severity: "money_loss", message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "cleanup",
-    triage: { ...t, target: { ...t.target, break_even: 520 } as TriageItem["target"] }, proposal: null, cleanup: c,
+    triage: { ...t, target: { ...t.target, break_even: 520 } }, proposal: null, cleanup: c,
   };
 }
 

@@ -519,6 +519,19 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     expect(screen.getAllByText("已核對，已關閉")).toHaveLength(2);
   });
 
+  it("F28-I14：四步驟 提議／確認／到平台完成／核對結果，目前在最後一步，確認與到平台完成可回去", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [lowItem()] })] });
+    renderAt(verifyPath());
+    const current = await screen.findByRole("listitem", { current: "step" });
+    const labels = screen.getAllByRole("listitem").map((li) => li.textContent?.replace(/^\d/, ""));
+    expect(labels).toEqual(["提議", "確認", "到平台完成", "核對結果"]);
+    expect(current.textContent).toContain("核對結果");
+    expect(screen.getByRole("link", { name: "回到確認" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+    expect(screen.getByRole("link", { name: "回到到平台完成" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff");
+    expect(screen.queryByRole("link", { name: "回到提議" })).toBeNull();
+  });
+
   it("其中一則已回報但還在核對：摘要 hero 挑第一個不是 confirmed 的狀態（不是嚴重度排序）", async () => {
     // `verification_state:"pending"` 且 `reported_at===null` 的項目會讓
     // `changeFlow.ts::stepFromChangeSet` 整份都還算「到平台完成」，導回 handoff 頁——這裡要留在

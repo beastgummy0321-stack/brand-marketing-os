@@ -45,11 +45,6 @@ export function CostCell({ ad, label, withCaption = false }: { ad: QueueCleanupA
 function capOf(target: TriageTargetView): RulerCap | null {
   return target.value === null || target.basis === null ? null : { value: target.value, basis: target.basis };
 }
-/** Triage `target` is the F28 cap view; `break_even` is not declared on `TriageTargetView` (same read as I10). */
-function breakEvenOf(target: TriageTargetView): number | null {
-  const value = (target as TriageTargetView & { break_even?: number | null }).break_even;
-  return typeof value === "number" ? value : null;
-}
 
 /** 「每日 1,200 撐 6 則」: the daily budget is only on the campaign triage (`data.capacity`), read on its own so a
  * failure leaves the words without the amount, never the page blank. Grade words of 還太新 vs 資料不足 come from the
@@ -130,7 +125,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
               {cap && <span>{cap.basis === "break_even" ? "暫用打平" : "上限"} {formatAmount(cap.value)}</span>}
             </div>
           </div>
-          <TargetRuler ads={rulerAds} cap={cap} breakEven={breakEvenOf(triage.target)} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
+          <TargetRuler ads={rulerAds} cap={cap} breakEven={triage.target.break_even ?? null} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
         </section>
 
         {cleanup.short > 0 && (

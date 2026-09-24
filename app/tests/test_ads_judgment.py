@@ -60,13 +60,6 @@ class CampaignJudgmentDraftTest(unittest.TestCase):
         self.assertEqual(result["text"], "策略已產生，還沒採用")
 
 
-class BrandHeadlineTest(unittest.TestCase):
-    def test_all_zero_says_no_decision_needed(self):
-        counts = {"running": 0, "upcoming": 0, "ended": 0, "needs_decision": 0}
-        result = judgment.brand_headline(counts)
-        self.assertIn("目前沒有需要你決定的事", result["facts"])
-
-
 class ActionLineTest(unittest.TestCase):
     def test_budget_change_formats_before_after_as_money(self):
         action = {

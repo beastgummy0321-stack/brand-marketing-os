@@ -1,6 +1,6 @@
 /** frontend/src/components/ads/patterns/patterns.test.tsx — F04-I07: 最便宜的證偽，五個斷言。
  * 每個 pattern 是 pure presentational component，這裡不 mock fetch，直接餵 props。 */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sparkles } from "lucide-react";
 import { describe, expect, it, vi } from "vitest";
@@ -233,6 +233,34 @@ describe("v9 pieces（F28-I07）", () => {
     rerender(<TargetRuler ads={[{ id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", gradeLabel: null, costPerResult: null, spend: null }]} cap={{ value: 450, basis: "own" }} size="full" />);
     expect(screen.getByText("還太新、看不準 1 則")).toBeTruthy();
     expect(screen.getByText(/已花 未知／1,350 元/)).toBeTruthy();
+  });
+
+  it("F28-I14：TargetRuler 圖片載入失敗（Meta 網址過期）換成中性佔位，不出破圖", async () => {
+    const { TargetRuler } = await import("./TargetRuler");
+    const ads = [{ ...daily[0], thumbnailUrl: "https://scontent.example/expired.jpg" }];
+    const { container } = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own" }} size="full" />);
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("https://scontent.example/expired.jpg");
+    expect(container.querySelector('[data-part="thumb-placeholder"]')).toBeNull();
+    fireEvent.error(img);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector('[data-part="thumb-placeholder"]')).toBeTruthy();
+  });
+
+  it("F28-I14：區段字互不重疊——撞到就往右推，放不下時藏起軸說明", async () => {
+    const { zoneLabelLayout } = await import("./TargetRuler");
+    // Strategy tab at 1024: a ~300px ruler, cap at 62.5% and 1.2 × cap at 75% (+1% each), words 23px, caption 96px.
+    const narrow = zoneLabelLayout(300, [0, 190.5, 228], [23, 23, 23], 96);
+    expect(narrow.lefts).toEqual([0, 190.5, 228]);
+    expect(narrow.caption).toBe(false);
+    // Wide detail ruler: everything keeps its zone start and the caption fits.
+    const wide = zoneLabelLayout(900, [0, 571.5, 684], [23, 23, 23], 96);
+    expect(wide.lefts).toEqual([0, 571.5, 684]);
+    expect(wide.caption).toBe(true);
+    // One very expensive ad squeezes 偏貴／太貴 together: 太貴 moves right past 偏貴 (6px gap), never on top of it.
+    const squeezed = zoneLabelLayout(400, [0, 22, 26], [23, 23, 23], 96);
+    expect(squeezed.lefts).toEqual([0, 29, 58]);
+    for (let i = 1; i < 3; i++) expect(squeezed.lefts[i]).toBeGreaterThanOrEqual(squeezed.lefts[i - 1] + 23);
   });
 
   it("GradeChip 依等級出字與色調；null 印未判斷；API 的 grade_label 優先", async () => {

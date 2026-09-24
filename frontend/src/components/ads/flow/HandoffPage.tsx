@@ -12,8 +12,9 @@ import {
   type ChangeSet,
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, Disclosure, FlowHeader, TodoRow } from "../patterns";
+import { ActionBar, CampaignChip, Disclosure, FlowHeader, TodoRow, type FlowStep } from "../patterns";
 import { CleanupHandoffRows } from "./CleanupHandoffRows";
+import { cleanupSteps } from "./CleanupProposal";
 import { NewAdHandoffPanel } from "./NewAdHandoffPanel";
 import { PlatformButton } from "./PlatformButton";
 import {
@@ -187,16 +188,19 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     );
   }
 
-  const steps = [
-    { label: "確認提議", to: changeStepPath(brandId, campaignId, changeSet.id, "confirm") },
-    { label: "到平台完成" },
-    { label: "核對結果" },
-  ];
+  const confirmHref = changeStepPath(brandId, campaignId, changeSet.id, "confirm");
+  // F28-I14: cleanup keeps its own four-step light flow (提議／確認／到平台完成／核對結果, prototype v9 `#/d/clean/*`,
+  // same steps as `ConfirmPage`). 提議 stays unlinked once approved — the prototype forwards it to 確認 then.
+  const steps: FlowStep[] = kind === "cleanup"
+    ? cleanupSteps().map((step) => (step.label === "確認" ? { ...step, to: confirmHref } : step))
+    : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成" }, { label: "核對結果" }];
   const headerContext = triageItem ? (
     <>
-      <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
+      {kind === "cleanup" ? (
+        <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
+      ) : <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
         <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
-      </Badge>
+      </Badge>}
       {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
     </>
   ) : undefined;
@@ -227,7 +231,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     return (
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
-        <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+        <FlowHeader steps={steps} current={2} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
         <div className="rounded-xl border border-border bg-card px-6">
           <CleanupHandoffRows
             items={changeSet.items}

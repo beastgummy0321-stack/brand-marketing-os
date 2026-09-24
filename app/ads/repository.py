@@ -662,30 +662,6 @@ def _target_name(conn: _AnyConn, org_id: str, brand_id: str, action: dict,
     return row["name"] if row is not None else None
 
 
-def recent_actions(conn: _AnyConn, org_id: str, brand_id: str, *, limit: int = 20) -> list:
-    """F04-I08：這個品牌**跨 Campaign** 的最近操作——首頁「最近做了什麼」時間軸。每一列帶
-    `campaign_id`／`campaign_name`（JOIN `ads_campaign`）跟 `judgment.action_line()` 組好的
-    三個字串。"""
-    today = coresettings.today_for_org(conn, org_id=org_id)
-    rows = conn.execute(
-        "SELECT a.*, c.name AS campaign_name FROM ads_action a"
-        " JOIN ads_campaign c ON c.id = a.campaign_id"
-        " WHERE a.org_id = %s AND a.brand_id = %s ORDER BY a.created_at DESC LIMIT %s",
-        (org_id, brand_id, limit),
-    ).fetchall()
-    entries = []
-    for row in rows:
-        row = dict(row)
-        target_name = _target_name(conn, org_id, brand_id, row, campaign_name=row["campaign_name"])
-        line = judgment.action_line(
-            row, campaign_name=row["campaign_name"], target_name=target_name, today=today,
-        )
-        entries.append({
-            "campaign_id": row["campaign_id"], "campaign_name": row["campaign_name"], **line,
-        })
-    return entries
-
-
 def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     """`GET /campaigns/{c}`：整個五分頁工作區要讀的一份 dict——campaign 本身 + 投放組 +
     廣告（掛在各自的投放組下）+ 每個節點最新一筆 action + 成效小計 + F04-I08 的
