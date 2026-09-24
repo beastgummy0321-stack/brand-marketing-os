@@ -125,6 +125,39 @@ describe("flow pieces（F22）", () => {
     render(<TodoRow no={2} done>關掉開關</TodoRow>);
     expect(screen.getByLabelText("已完成")).toBeTruthy();
   });
+
+  it("KindMark cut 印「✂ 清理」，用 kind-cut token（F28-I13）", async () => {
+    const { KindMark } = await import("./FlowPieces");
+    render(<KindMark kind="cut">清理</KindMark>);
+    const mark = screen.getByText("清理").closest("[data-slot='kind-mark']") as HTMLElement;
+    expect(mark.dataset.variant).toBe("cut");
+    expect(mark.textContent).toBe("✂清理");
+    expect(mark.className).toContain("bg-kind-cut");
+    expect(mark.className).toContain("text-kind-cut-foreground");
+  });
+});
+
+describe("grade tokens（F28-I13）", () => {
+  it("等級 chip 與填色用 tokens.css 的等級／區間 token，不再用透明度近似", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { GradeChip, GRADE_FILL } = await import("./Chip");
+    render(<><GradeChip grade="on_target" /><GradeChip grade="watch" /><GradeChip grade="over" /><GradeChip grade="wasted" /></>);
+    expect(screen.getByText("划算").className).toContain("bg-zone-ok");
+    expect(screen.getByText("偏貴").className).toContain("bg-zone-watch");
+    expect(screen.getByText("太貴").className).toContain("bg-zone-over");
+    expect(screen.getByText("太貴").className).toContain("text-grade-over-foreground");
+    expect(screen.getByText("白花").className).toContain("bg-grade-wasted-soft");
+    expect(GRADE_FILL).toMatchObject({ watch: "bg-grade-watch", over: "bg-grade-over", wasted: "bg-grade-wasted", insufficient: "bg-grade-thin" });
+    // Every grade/zone/kind utility the kit uses resolves to a token that tokens.css defines.
+    const css = readFileSync(join(__dirname, "../../../styles/tokens.css"), "utf8");
+    const used = [...Object.values(GRADE_FILL), ...[...document.querySelectorAll("[data-slot='chip']")].flatMap((el) => el.className.split(" "))]
+      .map((cls) => cls.match(/^(?:bg|text)-((?:grade|zone|kind)-[a-z-]+)$/)?.[1])
+      .filter((name): name is string => Boolean(name));
+    expect(used.length).toBeGreaterThan(0);
+    for (const name of used) expect(css).toContain(`--color-${name}:`);
+    expect(css).toContain("--color-grade-watch: #d18a1f;");
+  });
 });
 
 describe("review pieces（F23）", () => {

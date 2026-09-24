@@ -4,13 +4,13 @@ import { cn } from "@/lib/utils";
 const TONE = {
   neutral: "bg-muted text-muted-foreground",
   accent: "bg-secondary text-secondary-foreground",
-  ok: "bg-success/10 text-success",
-  warn: "bg-warning/10 text-warning",
-  bad: "bg-destructive/10 text-destructive",
+  ok: "bg-zone-ok text-success",
+  warn: "bg-zone-watch text-warning",
+  bad: "bg-zone-over text-danger",
   /** v9 `.chip.over` (太貴): the over-cap zone colour, one step softer than 白花. */
-  over: "bg-danger/10 text-danger/90",
+  over: "bg-zone-over text-grade-over-foreground",
   /** v9 `.chip.stop` (白花): the strongest red chip. */
-  stop: "bg-danger/20 font-semibold text-danger",
+  stop: "bg-grade-wasted-soft text-grade-wasted-foreground",
 } as const;
 export type ChipTone = keyof typeof TONE;
 
@@ -50,13 +50,13 @@ export const GRADE_TONE: Record<Grade, ChipTone> = {
   no_target: "neutral",
 };
 
-/** Fill per grade for dots, swatches and band segments (prototype `--g-*`), from the existing tokens only. */
+/** Fill per grade for dots, swatches and band segments (prototype `--g-*`; 划算 = success, 未判斷 = `--c5`). */
 export const GRADE_FILL: Record<Grade, string> = {
   on_target: "bg-success",
-  watch: "bg-warning/80",
-  over: "bg-danger/65",
-  wasted: "bg-danger",
-  insufficient: "bg-muted-foreground/30",
+  watch: "bg-grade-watch",
+  over: "bg-grade-over",
+  wasted: "bg-grade-wasted",
+  insufficient: "bg-grade-thin",
   no_target: "bg-chart-rest",
 };
 
@@ -64,8 +64,8 @@ export const GRADE_FILL: Record<Grade, string> = {
 export const GRADE_TEXT: Record<Grade, string> = {
   on_target: "text-success",
   watch: "text-warning",
-  over: "text-danger/90",
-  wasted: "text-danger",
+  over: "text-grade-over-foreground",
+  wasted: "text-grade-wasted",
   insufficient: "text-muted-foreground",
   no_target: "text-muted-foreground",
 };

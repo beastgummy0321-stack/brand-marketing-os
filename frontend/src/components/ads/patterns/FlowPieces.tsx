@@ -49,12 +49,13 @@ export function FlowHeader({ steps, current, context, title, purpose, aside }: {
 }
 
 const KIND = {
-  stop: { mark: "■", cls: "bg-danger/10 text-danger" },
-  worse: { mark: "▼", cls: "bg-warning/10 text-warning" },
-  up: { mark: "▲", cls: "bg-success/10 text-success" },
+  stop: { mark: "■", cls: "bg-zone-over text-danger" },
+  worse: { mark: "▼", cls: "bg-zone-watch text-warning" },
+  up: { mark: "▲", cls: "bg-zone-ok text-success" },
   fresh: { mark: "＋", cls: "bg-secondary text-secondary-foreground" },
+  cut: { mark: "✂", cls: "bg-kind-cut text-kind-cut-foreground" },
 } as const;
-/** `.kind.stop/.worse/.up`. */
+/** `.kind.stop/.worse/.up/.cut` (v9 cleanup mark 「✂ 清理」; zone tokens as in the prototype). */
 export function KindMark({ kind, children }: { kind: keyof typeof KIND; children: ReactNode }) {
   return (
     <span data-slot="kind-mark" data-variant={kind} className={cn("inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-[3px] text-xs font-semibold", KIND[kind].cls)}>
