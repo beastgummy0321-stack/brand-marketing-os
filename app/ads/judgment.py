@@ -6,7 +6,7 @@ today_for_org` 的慣例）。私有：`app/ads/` 自己的檔案（`repository.
 `app.ads.__init__` 的公開入口。
 
 `conversion_labels`（F05-I12）：這個品牌的「購買」該叫什麼——「每筆名單成本」與 CPA 是同一個
-算式（花費÷轉換數）的兩個名字，不新增 `success_metric` 的值（ARCHITECTURE.md §8 第 4 條）。
+算式（花費÷轉換數）的兩個名字，只換 label、不新增指標（ARCHITECTURE.md §8 第 4 條）。
 
 `campaign_judgment` 吃的是「一整列 campaign row，外加呼叫端算好的 `budget_total`／`spend`」，
 不是重新去 DB 查——`repository.py` 已經把這兩個數字算出來一次（`_budget_total`／
@@ -159,7 +159,7 @@ def brand_headline(counts: dict[str, int]) -> dict:
 
 
 # F05-I12：「每筆名單成本」與 CPA 是同一個算式（花費÷轉換數）的兩個名字——不新增
-# success_metric 的值，只換 label（§8 第 4 條）。`purchase`／`None`／未知值一律落在購買這行。
+# 指標，只換 label（§8 第 4 條）。`purchase`／`None`／未知值一律落在購買這行。
 _CONVERSION_LABELS = {
     "purchase": {"conversion": "購買", "count": "購買數", "cpa": "每次購買成本"},
     "lead": {"conversion": "名單", "count": "名單數", "cpa": "每筆名單成本"},

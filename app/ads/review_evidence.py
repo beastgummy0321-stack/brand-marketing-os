@@ -204,10 +204,9 @@ def premise(entity, campaign):
     }
     # Match jsonb's numeric encoding before hashing both live and persisted premises.
     # Otherwise Decimal('2') hashes as the string '2', but reads back as numeric 2.0.
-    for scope, key in (("entity", "budget_amount"), ("goal", "success_target")):
-        value = result[scope].get(key)
-        if value is not None:
-            result[scope][key] = float(value)
+    value = result["entity"].get("budget_amount")
+    if value is not None:
+        result["entity"]["budget_amount"] = float(value)
     for key in ("start_date", "end_date"):
         value = result["entity"].get(key)
         if isinstance(value, date):
@@ -428,8 +427,7 @@ def snapshot(
         "brand_version": version,
         "knowledge_ids": knowledge,
         "campaign": {
-            **{k: campaign.get(k) for k in ("goal_text", "success_metric", "success_target",
-                                           "success_basis")},
+            "goal_text": campaign.get("goal_text"),
             "objective": objective,
             "target": target,
         },

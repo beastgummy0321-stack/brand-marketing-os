@@ -12,7 +12,7 @@ of what the user adopted — after 採用策略 the group daily budgets are the 
 ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
 """
 
-from app.ads import budget, judgment
+from app.ads import budget, judgment, targets
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -272,6 +272,11 @@ def _apply_amounts(allocation: list[dict], total: float | None) -> list[dict]:
     ]
 
 
+def _cap_text(cap: float | None) -> str:
+    """The one cap as the strategy prompt reads it (F28-I01) -- `未設定`, never a guessed number."""
+    return "未設定" if cap is None else f"{round(cap):,}"
+
+
 def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
     """組context、打模型、套 `budget.scenarios()`／`budget.split()`，整包寫進
     `ads_campaign.budget_basis_json`。失敗（provider 出錯或回覆解不出來）一律 `ValueError`，
@@ -296,11 +301,14 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
 
     history = ads_repo.budget_history(conn, org_id, brand_id)
     days = _days(campaign["start_date"], campaign["end_date"])
+    cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
     scenario_result = budget.scenarios(
         conn, org_id, brand_id, product_ids=product_ids, days=days, history=history,
-        conversion_label=labels["conversion"],
+        conversion_label=labels["conversion"], cap=cap,
     )
-    scenario_result = budget.current_scenarios(scenario_result, campaign, labels["conversion"])
+    scenario_result = budget.current_scenarios(
+        scenario_result, campaign, labels["conversion"], cap=cap,
+    )
     scenarios_text = _scenarios_section(scenario_result)
 
     knowledge_item_ids = (
@@ -315,8 +323,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n## 這次投放\n\n"
         + f"目標句子：{campaign['goal_text']}\n"
         + f"objective：{campaign['objective']}\n"
-        + f"success_metric：{campaign['success_metric']}\n"
-        + f"success_target：{campaign.get('success_target')}\n"
+        + f"上限（每筆購買成本）：{_cap_text(cap)}\n"
         + f"期間：{campaign['start_date']} ~ {campaign['end_date']}"
         + "\n\n" + facts_text
         + "\n\n" + products_text

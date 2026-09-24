@@ -94,10 +94,9 @@ def campaign(conn, org, brand, campaign_id):
 def context(value, kind: str | None = "copy"):
     if kind not in {"copy", "launch"}:
         return {}
-    return {
-        key: value.get(key)
-        for key in ("goal_text", "objective", "success_metric", "success_target")
-    }
+    # F28-I01: the cap is not a platform setting, so it is never part of an approved premise --
+    # changing it never makes a handoff or a review stale.
+    return {key: value.get(key) for key in ("goal_text", "objective")}
 
 
 def month(value):

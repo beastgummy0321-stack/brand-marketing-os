@@ -85,20 +85,18 @@ class OutcomeTestBase(unittest.TestCase):
         self._account_row_id = row["id"]
         return row["id"]  # ad_account_id（`daily_entity_spend` 要的是這個內部 id）
 
-    def _bound_campaign(self, *, start_date=None, end_date=None, success_metric="cpa",
-                         success_target=300) -> tuple[dict, str, str]:
+    def _bound_campaign(self, *, start_date=None, end_date=None,
+                         cap=300) -> tuple[dict, str, str]:
         """回傳 (campaign_detail, group_external_id, ad_external_id)，campaign/group/ad 三層
         都已經精準名稱比對綁定完成（跟 `test_ads_publish_manual.py::FullMatchTest` 同一套）。
         每個平台實體 id 都是這次呼叫自己造的（`uuid`），不同測試、不同 Campaign 之間不會撞名。
-        `success_metric`／`success_target` 預設跟原本一樣，F16-I05 的結案整合測試需要判
-        `purchases` 才覆寫。"""
+        `cap`（F28-I01 唯一的上限，每筆成果成本）預設 300，F16-I05 的結案整合測試才覆寫。"""
         start_date = start_date or self.today
         end_date = end_date or self.today
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
-            "objective": "購買", "success_metric": success_metric,
-            "success_target": success_target,
+            "objective": "購買", "target_cost": cap,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": 500, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -235,7 +233,7 @@ class ConflictingBindingRefusesTest(OutcomeTestBase):
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign_b = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": "第二個 Campaign", "goal_text": "另一個活動", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300, "start_date": self.today,
+            "target_cost": 300, "start_date": self.today,
             "end_date": self.today, "status": "draft", "budget_planned": 500,
             "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -531,7 +529,7 @@ class IngestEndpointDispatchTest(OutcomeTestBase):
     def test_simulated_campaign_ingest_adds_the_missing_day_without_touching_meta(self):
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": "模擬 Campaign", "goal_text": "測試模擬 ingest", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
             "start_date": self.today - timedelta(days=1), "end_date": self.today,
             "status": "draft",
         }, created_by=ACTOR)
@@ -600,11 +598,11 @@ class RealMetaPurchasesReachCloseoutTest(OutcomeTestBase):
 
         detail, group_ext, _ad_ext = self._bound_campaign(
             start_date=self.today - timedelta(days=2), end_date=self.today,
-            success_metric="purchases", success_target=8,
+            cap=150,
         )
         account_id = self._account_row_id
-        # 三天各 4 個真的購買（omni_purchase，跟真實資料同一組同義字），合計 12 >= target(8)、
-        # 也 >= 樣本門檻(10)，天數 3 天 >= 3——樣本門檻通過，不是「看不出」。
+        # 三天各 4 個真的購買（omni_purchase，跟真實資料同一組同義字），合計 12、每筆 1200/12=100
+        # <= 上限 150，也 >= 樣本門檻(10)，天數 3 天 >= 3——樣本門檻通過，不是「看不出」。
         meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
             self._spend_row(level="adset", entity_id=group_ext, campaign_ext="camp-1",
                              day=self.today - timedelta(days=i), spend=400.0, roas=None,
@@ -620,7 +618,7 @@ class RealMetaPurchasesReachCloseoutTest(OutcomeTestBase):
         closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
 
         self.assertEqual(closed["verdict"], "達成")
-        self.assertEqual(closed["verdict_json"]["actual"], 12)
+        self.assertEqual(closed["verdict_json"]["actual"], 100)
         self.assertEqual(closed["verdict_json"]["sample_bucket"], "中")
 
     def test_bound_campaign_with_real_purchase_actions_below_target_closes_as_missed(self):
@@ -628,7 +626,7 @@ class RealMetaPurchasesReachCloseoutTest(OutcomeTestBase):
 
         detail, group_ext, _ad_ext = self._bound_campaign(
             start_date=self.today - timedelta(days=2), end_date=self.today,
-            success_metric="purchases", success_target=20,
+            cap=80,
         )
         account_id = self._account_row_id
         meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [
@@ -645,8 +643,8 @@ class RealMetaPurchasesReachCloseoutTest(OutcomeTestBase):
 
         closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
 
-        self.assertEqual(closed["verdict"], "未達成")
-        self.assertEqual(closed["verdict_json"]["actual"], 12)
+        self.assertEqual(closed["verdict"], "未達成")  # 100 > 80
+        self.assertEqual(closed["verdict_json"]["actual"], 100)
 
 
 if __name__ == "__main__":

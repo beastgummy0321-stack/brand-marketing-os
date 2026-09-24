@@ -743,7 +743,7 @@ class ExternalSyncTest(unittest.TestCase):
             self.conn,
             self.org,
             self.brand,
-            {"name": "內部", "goal_text": "目標", "objective": "購買", "success_metric": "cpa"},
+            {"name": "內部", "goal_text": "目標", "objective": "購買"},
         )
         repository.bind_campaign(
             self.conn,

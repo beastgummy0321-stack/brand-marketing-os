@@ -9,13 +9,17 @@ confirmed brand facts, `app.brand_intelligence.repository` for products and toda
 brand/product/economics rows fed the call.
 
 Never dead-ends (same rule as `app/workbench/free_parse.py`'s `free_parse.parse()`): a failed,
-timed-out or unparseable call still writes a usable draft — `objective='購買'`,
-`success_metric='roas'`, `success_target=None`, `success_basis` explaining the sentence could not
-be parsed — and the response carries `parsed: false` instead of raising.
+timed-out or unparseable call still writes a usable draft — `objective='購買'` and no cap —
+and the response carries `parsed: false` instead of raising.
+
+F28-I01: the sentence only ever yields one number for judging, the cost-per-purchase cap
+(`cap`, stored as `target_cost` with `target_basis='own'`). A ROAS or a count in the sentence is
+not converted into a cap; a reply without `cap` still parses (no cap).
 """
 
 import calendar
 import json
+import math
 from datetime import date, timedelta
 
 from app.ads import channels
@@ -33,17 +37,14 @@ DEPARTMENT_PATH = APP_DIR / "departments" / "ads" / "brief_parse.md"
 PROVIDER = providers.AnthropicProvider()
 
 _OBJECTIVES = frozenset({"購買", "加購物車", "名單", "流量", "知名度"})
-_SUCCESS_METRICS = frozenset({"cpa", "roas", "purchases"})
 
-NOT_PARSED_BASIS = "AI 沒能整理出可信的目標，這是預設值，請自己填一個成功條件。"
 DATES_REQUIRED_MESSAGE = (
     "投放的開始與結束日期請一起填，或兩個都留空讓行銷駕駛艙從你的描述判斷。"
 )
 END_BEFORE_START_MESSAGE = "結束日期不能早於開始日期。"
 
 _FALLBACK_PARSED = {
-    "objective": "購買", "success_metric": "roas", "success_target": None,
-    "success_basis": NOT_PARSED_BASIS, "product_ids": [], "audience_hint": None, "notes": None,
+    "objective": "購買", "cap": None, "product_ids": [], "audience_hint": None, "notes": None,
     "budget_cap": None, "platform": None, "period": None,
 }
 
@@ -166,20 +167,15 @@ def _validate_reply(data) -> dict | None:
     objective = data.get("objective")
     if objective not in _OBJECTIVES:
         return None
-    success_metric = data.get("success_metric")
-    if success_metric not in _SUCCESS_METRICS:
-        return None
-    success_target = data.get("success_target")
-    if success_target is not None and (
-        isinstance(success_target, bool) or not isinstance(success_target, (int, float))
-    ):
-        return None
+    cap = data.get("cap")
+    if (isinstance(cap, bool) or not isinstance(cap, (int, float)) or not math.isfinite(cap)
+            or cap <= 0):
+        cap = None  # missing or unparsed -> no cap; never a ROAS, never a guessed number
     product_ids = data.get("product_ids")
     if not isinstance(product_ids, list) or not all(isinstance(p, str) for p in product_ids):
         product_ids = []
     audience_hint = data.get("audience_hint")
     notes = data.get("notes")
-    success_basis = data.get("success_basis")
     budget_cap = data.get("budget_cap")
     if isinstance(budget_cap, bool) or not isinstance(budget_cap, (int, float)) or budget_cap <= 0:
         budget_cap = None
@@ -187,9 +183,8 @@ def _validate_reply(data) -> dict | None:
     if platform not in {c["key"] for c in channels.CHANNELS}:
         platform = None
     return {
-        "objective": objective, "success_metric": success_metric,
-        "success_target": float(success_target) if success_target is not None else None,
-        "success_basis": success_basis if isinstance(success_basis, str) else None,
+        "objective": objective,
+        "cap": float(cap) if cap is not None else None,
         "product_ids": product_ids,
         "budget_cap": float(budget_cap) if budget_cap is not None else None,
         "platform": platform,
@@ -310,9 +305,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         "name": _draft_name(goal_text),
         "goal_text": goal_text,
         "objective": fields["objective"],
-        "success_metric": fields["success_metric"],
-        "success_target": fields["success_target"],
-        "success_basis": fields["success_basis"],
+        "target_cost": fields["cap"],
         "start_date": start,
         "end_date": end,
         "status": "draft",

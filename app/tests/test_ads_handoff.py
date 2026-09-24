@@ -37,8 +37,6 @@ class HandoffTest(unittest.TestCase):
                 "name": "既有內部計畫",
                 "goal_text": "檢驗訊息",
                 "objective": "awareness",
-                "success_metric": "purchases",
-                "success_target": 2,
                 "start_date": self.today,
                 "end_date": self.today + timedelta(days=7),
             },
@@ -709,7 +707,7 @@ class HandoffTest(unittest.TestCase):
                 )
             review["window_end"] = self.today
             self.conn.execute(
-                "UPDATE ads_campaign SET success_target=3 WHERE id=%s", (self.campaign,)
+                "UPDATE ads_campaign SET goal_text='改過的目標' WHERE id=%s", (self.campaign,)
             )
             with self.assertRaisesRegex(ValueError, "目標已變更"):
                 handoff_new_ad._review(
@@ -868,8 +866,6 @@ class HandoffTest(unittest.TestCase):
                 "name": "另一計畫",
                 "goal_text": "比較",
                 "objective": "awareness",
-                "success_metric": "purchases",
-                "success_target": 2,
             },
             created_by="test",
         )["id"]

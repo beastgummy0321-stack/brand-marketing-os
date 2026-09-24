@@ -16,8 +16,6 @@ database.
 
 from app.brand_intelligence import repository as bi_repo
 
-TARGET_CPA_RATIO = 0.7  # 2026-09-12 ruling 4: 目標 CPA = 打平 CPA x 0.7
-
 # key, 中文 label, 每天想要的購買數 — ruling 4: 最低 2 / 推薦 5 / 積極 10
 _COLD_START_EVENTS = (
     ("minimum", "最低", 2), ("recommended", "推薦", 5), ("aggressive", "積極", 10),
@@ -45,13 +43,6 @@ def breakeven_cpa(economics: dict | None) -> float | None:
     value = float(price) - float(unit_cost) - float(shipping)
     close_rate = economics.get("close_rate")
     return value if close_rate is None else value * float(close_rate)
-
-
-def target_cpa(breakeven: float | None) -> float | None:
-    """目標 CPA = 打平 CPA x TARGET_CPA_RATIO."""
-    if breakeven is None:
-        return None
-    return breakeven * TARGET_CPA_RATIO
 
 
 def _round_money(value: float | None) -> float | None:
@@ -95,32 +86,32 @@ def economics_for(
 
 
 def scenarios(conn, org_id, brand_id, *, product_ids: list[str] | None, days: int,
-              history: dict | None, conversion_label: str = "購買") -> dict:
+              history: dict | None, conversion_label: str = "購買",
+              cap: float | None = None) -> dict:
     """Three budget scenarios for the strategy tab. `history` truthy (has a `last_daily_budget`)
-    means this brand has settled spend to scale from; otherwise cold start applies (ruling 4: "沒
-    投放過" falls back to target-CPA x purchase-count, even if `history` is passed but empty).
-    `conversion_label` 是這個品牌的「購買」該叫什麼（`judgment.conversion_labels()["conversion"]`）
-    ——只換冷啟動 caption 裡的名詞，算式一個字都不動。"""
+    means this brand has settled spend to scale from; otherwise cold start applies: the
+    campaign's one cap (`targets.resolve()["value"]`, F28-I01 -- no ratio on top of it) x
+    purchases per day. `conversion_label` 是這個品牌的「購買」該叫什麼
+    （`judgment.conversion_labels()["conversion"]`）——只換冷啟動 caption 裡的名詞。"""
     if history and history.get("last_daily_budget") is not None:
         return _history_scenarios(history, days)
-    economics, product_id = _economics_for(conn, brand_id, product_ids)
-    target = target_cpa(breakeven_cpa(economics))
-    return _cold_start_scenarios(target, product_id, days, conversion_label)
+    _economics, product_id = _economics_for(conn, brand_id, product_ids)
+    return _cold_start_scenarios(cap, product_id, days, conversion_label)
 
 
 def _cold_start_scenarios(
-    target: float | None, product_id: str | None, days: int, conversion_label: str,
+    cap: float | None, product_id: str | None, days: int, conversion_label: str,
 ) -> dict:
     scenario_rows = []
     for key, label, events in _COLD_START_EVENTS:
-        daily = _round_money(target * events) if target is not None else None
+        daily = _round_money(cap * events) if cap is not None else None
         total = _round_money(daily * days) if daily is not None and days else None
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
-            "caption": f"冷啟動估算：目標 CPA x 每天 {events} 筆{conversion_label}",
+            "caption": f"冷啟動估算：上限 x 每天 {events} 筆{conversion_label}",
         })
     basis = {
-        "mode": "cold_start", "product_id": product_id, "target_cpa": target,
+        "mode": "cold_start", "product_id": product_id, "cap": cap,
         "assumption": "每天購買數（2／5／10）是假設，非實測",
     }
     return {
@@ -170,26 +161,20 @@ def split(total: float, weights: dict) -> list:
     return [{"label": label, "amount": amounts[label]} for label in weights]
 
 
-def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購買") -> dict:
+def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購買",
+                      *, cap: float | None = None) -> dict:
     """Project recommendations from current inputs, without changing adopted money.
 
-    History rows retain their observed daily basis; cold starts use the campaign's
-    explicit CPA. Missing/non-CPA targets are unknown, not the old product estimate.
-    Called on every detail/selection read so pre-fix stored snapshots also reconcile.
+    History rows retain their observed daily basis; cold starts use the campaign's one cap
+    (`cap`, resolved by the caller through `targets.resolve`). No cap is unknown, never an
+    old product estimate. Called on every detail/selection read so stored snapshots reconcile.
     """
-    import math
-    from decimal import Decimal
-
     start, end = campaign.get("start_date"), campaign.get("end_date")
     days = max((end - start).days + 1, 0) if start and end else 0
     if stored.get("mode") == "cold_start":
-        value = campaign.get("success_target")
-        target = (float(value) if campaign.get("success_metric") == "cpa"
-                  and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
-                  and math.isfinite(value) and value > 0 else None)
-        result = _cold_start_scenarios(target, None, days, conversion_label)
+        result = _cold_start_scenarios(cap, None, days, conversion_label)
         result["basis"].update({
-            "days": days, "source_text": "目前成功條件的 CPA" if target else "尚無有效 CPA 目標",
+            "days": days, "source_text": "目前的上限" if cap else "尚未設定上限",
         })
         return result
     result = {**stored, "basis": {**stored.get("basis", {}), "days": days}}
@@ -200,13 +185,14 @@ def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購
     return result
 
 
-def reconcile_campaign(campaign: dict, conversion_label: str = "購買") -> dict:
+def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
+                       *, cap: float | None = None) -> dict:
     """Return an up-to-date projection. Never write budget_planned or group budgets."""
     basis = campaign.get("budget_basis_json") or {}
     stored = basis.get("scenarios")
     if not stored:
         return campaign
-    scenarios_now = current_scenarios(stored, campaign, conversion_label)
+    scenarios_now = current_scenarios(stored, campaign, conversion_label, cap=cap)
     strategy_now = dict(basis.get("strategy") or {})
     allocation = strategy_now.get("allocation") or []
     selected = campaign.get("budget_planned")

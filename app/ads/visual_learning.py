@@ -109,9 +109,9 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
-    metric = detail["success_metric"]
-    metric_labels = {"cpa": labels["cpa"], "roas": "ROAS", "purchases": labels["count"]}
-    metric_label = metric_labels.get(metric, metric)
+    # F28-I01: every campaign is judged on cost per result against its one cap.
+    metric = "cpa"
+    metric_label = labels["cpa"]
 
     ads = [ad for group in detail["groups"] for ad in group["ads"]]
     fingerprints = _kept_ads(conn, org_id, brand_id, campaign_id, ads)

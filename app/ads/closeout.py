@@ -1,4 +1,4 @@
-"""app/ads/closeout.py — F03-I12: the campaign is judged against its own success criterion and
+"""app/ads/closeout.py — F03-I12: the campaign is judged against its one cap (F28-I01) and
 leaves one sentence the next campaign can read (§0 the "verdict -> learning -> next goal" link
 — this is where the golden path closes). Private to app/ads (container contract §1): only
 `routes.py`/`jobs.py` import this.
@@ -7,7 +7,7 @@ leaves one sentence the next campaign can read (§0 the "verdict -> learning -> 
 deriver's `0` for a Meta-sourced campaign is a missing purchase count wearing a number, not a
 real zero (§0 "F03-I12's 結案 verdict reads outcome.summary()'s totals, never
 _outcome_totals"). 看不出 is a real verdict, not a rounding of an unknown into a pass or a fail
-— it is what gets written whenever the success target was never set, the sample bucket is 低,
+— it is what gets written whenever no cap resolves, the sample bucket is 低,
 or the metric being judged is itself untracked; it never falls back to 未達成.
 
 Duplicate guard: `ads_campaign.status = 'closed'` on the row itself — a second `close()` call is
@@ -18,15 +18,12 @@ guard stays status='closed' on the campaign row; do not query the ledger for it"
 from datetime import timedelta
 
 from app.ads import learning as ads_learning
-from app.ads import outcome, repository, simulation_mode, visual_learning
+from app.ads import outcome, repository, simulation_mode, targets, visual_learning
 from app.ads.judgment import conversion_labels
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy, jsonb
 
 _AnyConn = Conn | ConnProxy
-
-# CPA 是花費/購買，越低越好；ROAS／購買數是越高越好——兩種比對方向,不是同一個算子。
-_LOWER_IS_BETTER = frozenset({"cpa"})
 
 
 def _days(start_date, end_date) -> int:
@@ -35,38 +32,29 @@ def _days(start_date, end_date) -> int:
     return (end_date - start_date).days + 1
 
 
-def _metric_value(metric: str, totals: dict) -> float | None:
-    if metric == "cpa":
-        return totals["cpa"]
-    if metric == "roas":
-        return totals["roas_conservative"]  # 主數字是保守值（§0 ruling 7），不是樂觀的 roas
-    return totals["purchases"]
-
-
-def _judge(campaign: dict, totals: dict, sample_bucket: str, labels: dict) -> tuple[str, dict]:
-    """回傳 (verdict, verdict_json)。`verdict_json` 一律帶 `metric`／`target`／`actual`／
-    `window`／`sample_bucket`；只有 `看不出` 才多一個 `missing`，說清楚少了什麼。`labels` 是
-    `judgment.conversion_labels()` 的回傳——這個品牌的「購買」該叫什麼名字。"""
-    metric = campaign["success_metric"]
-    target = campaign["success_target"]
-    actual = _metric_value(metric, totals)
-    metric_labels = {"cpa": labels["cpa"], "roas": "ROAS", "purchases": labels["count"]}
+def _judge(cap: dict, campaign: dict, totals: dict, sample_bucket: str,
+           labels: dict) -> tuple[str, dict]:
+    """F28-I01: cost per result against the campaign's one cap (`targets.resolve`) -- lower is
+    better, 達成 when at or under the cap. Returns (verdict, verdict_json); `verdict_json`
+    always carries `metric`/`target`/`basis`/`actual`/`window`/`sample_bucket`, plus `missing`
+    only for 看不出, naming what was missing. `labels` is `judgment.conversion_labels()`."""
+    target = cap["value"]
+    actual = totals["cpa"]
     verdict_json = {
-        "metric": metric, "target": target, "actual": actual,
+        "metric": "cpa", "target": target, "basis": cap["basis"], "actual": actual,
         "window": {"start": campaign["start_date"], "end": campaign["end_date"]},
         "sample_bucket": sample_bucket,
     }
     if target is None:
-        verdict_json["missing"] = "success_target 沒有設定，成功條件本身沒有數字可比對"
+        verdict_json["missing"] = "上限沒有設定，沒有數字可比對"
         return "看不出", verdict_json
     if actual is None:
-        verdict_json["missing"] = f"{metric_labels.get(metric, metric)}未追蹤，沒有數字可以比對"
+        verdict_json["missing"] = f"{labels['cpa']}未追蹤，沒有數字可以比對"
         return "看不出", verdict_json
     if sample_bucket == "低":
         verdict_json["missing"] = "樣本太小（低），比對出來的結果不可靠"
         return "看不出", verdict_json
-    achieved = actual <= target if metric in _LOWER_IS_BETTER else actual >= target
-    return ("達成" if achieved else "未達成"), verdict_json
+    return ("達成" if actual <= target else "未達成"), verdict_json
 
 
 def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
@@ -102,7 +90,8 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     purchases_for_bucket = totals["purchases"] if totals["purchases"] is not None else 0
     sample_bucket = outcome.sample_bucket(purchases_for_bucket, days)
 
-    verdict, verdict_json = _judge(campaign, totals, sample_bucket, labels)
+    cap = targets.resolve(conn, org_id, brand_id, campaign)
+    verdict, verdict_json = _judge(cap, campaign, totals, sample_bucket, labels)
     if simulation_mode.enabled(conn, org_id, brand_id):
         verdict_json["data_source"] = "isolated_simulation"
         verdict_json["simulation_receipts"] = recovery.get("days", {}) if recovery else {}
@@ -123,7 +112,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         verdict_json["close_reason"] = reason
 
     learning_row = ads_learning.write_learning(
-        conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor, labels=labels,
+        conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor,
     )
     visual_rows = [] if incomplete_simulation else visual_learning.write_visual_learnings(
         conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
