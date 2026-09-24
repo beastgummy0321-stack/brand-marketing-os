@@ -118,6 +118,73 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
             )
 
 
+def carry_launch(conn, org, brand, campaign, old_set, new_set, action_id):
+    """Re-approval (F28 "Stale launch"): the new set's items were just installed pending. An item
+    whose expected fields and material are unchanged keeps the old item's platform binding,
+    verification and evidence; a changed item stays pending with no binding; a removed one is
+    simply not in the new set. The old items keep their rows; only the binding moves (one
+    platform object answers one live handoff item), recorded in their evidence."""
+    rows = conn.execute(
+        "SELECT * FROM ads_handoff_item WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND change_set_id IN (%s,%s)",
+        (org, brand, campaign, old_set, new_set),
+    ).fetchall()
+    old = {(r["planned_kind"], r["planned_id"]): r for r in rows if r["change_set_id"] == old_set}
+    carried = []
+    for new in (r for r in rows if r["change_set_id"] == new_set):
+        previous = old.get((new["planned_kind"], new["planned_id"]))
+        if previous is None:
+            continue
+        same = (previous["expected_json"], previous["placement_id"], previous["placement_revision"])
+        if same != (new["expected_json"], new["placement_id"], new["placement_revision"]):
+            continue
+        carried.append((previous, new))
+    for previous in old.values():
+        if previous["entity_id"] is not None:
+            conn.execute(
+                "UPDATE ads_handoff_item SET entity_id=NULL,"
+                "evidence_json=evidence_json || %s::jsonb,updated_at=now() WHERE id=%s",
+                (
+                    db.jsonb({"superseded_by": new_set, "entity_id": previous["entity_id"]}),
+                    previous["id"],
+                ),
+            )
+    for previous, new in carried:
+        # A readback that went stale because of the plan change proved nothing about this item;
+        # it keeps the binding and waits for a fresh check.
+        keep = previous["status"] != "stale"
+        conn.execute(
+            "UPDATE ads_handoff_item SET entity_id=%s,status=%s,evidence_json=%s,"
+            "reported_at=%s,observed_at=%s,updated_at=now() WHERE id=%s",
+            (
+                previous["entity_id"],
+                previous["status"] if keep else "pending",
+                db.jsonb(previous["evidence_json"] if keep else {}),
+                previous["reported_at"] if keep else None,
+                previous["observed_at"] if keep else None,
+                new["id"],
+            ),
+        )
+    peers = conn.execute(
+        "SELECT status FROM ads_handoff_item WHERE action_id=%s", (action_id,)
+    ).fetchall()
+    if peers and all(r["status"] == "confirmed" for r in peers):
+        conn.execute(
+            "UPDATE ads_action SET verification_state='confirmed',verified_at=now(),"
+            "first_observed_at=COALESCE(first_observed_at,now()),evidence_json=%s WHERE id=%s",
+            (
+                db.jsonb(
+                    {
+                        "setting_matches": True,
+                        "delivery_confirmed": False,
+                        "message": "重新核准後各項沿用先前核對結果；不代表已投遞或成效改善。",
+                    }
+                ),
+                action_id,
+            ),
+        )
+
+
 def get(conn, org, brand, campaign, item_id):
     changes.campaign(conn, org, brand, campaign)
     row = conn.execute(
@@ -141,10 +208,16 @@ def get(conn, org, brand, campaign, item_id):
 
 
 def workspace(conn, org, brand, campaign):
+    # Lazy: `change_control_launch` imports this module inside its own functions.
+    from app.ads import change_control_launch
+
     changes.campaign(conn, org, brand, campaign)
     rows = conn.execute(
-        "SELECT id FROM ads_handoff_item WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "ORDER BY created_at,id LIMIT 501",
+        # A re-approved launch leaves its superseded set's items as history, not work.
+        "SELECT h.id FROM ads_handoff_item h JOIN ads_change_set c ON c.id=h.change_set_id "
+        "AND c.org_id=h.org_id AND c.brand_id=h.brand_id AND c.campaign_id=h.campaign_id "
+        "WHERE h.org_id=%s AND h.brand_id=%s AND h.campaign_id=%s AND c.status<>'superseded' "
+        "ORDER BY h.created_at,h.id LIMIT 501",
         (org, brand, campaign),
     ).fetchall()
     placements = assets.list_placements(conn, org, brand, campaign)
@@ -163,6 +236,7 @@ def workspace(conn, org, brand, campaign):
         ],
         "destinations": [dict(r) for r in destinations[:500]],
         "destinations_truncated": len(destinations) > 500,
+        "launch_stale": change_control_launch.stale(conn, org, brand, campaign),
         "notice": "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
     }
 

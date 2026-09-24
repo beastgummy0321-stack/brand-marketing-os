@@ -127,7 +127,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 function handoff(overrides: Partial<handoffApi.HandoffWorkspace> = {}): handoffApi.HandoffWorkspace {
   return {
     items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
-    notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
+    launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
     ...overrides,
   };
 }

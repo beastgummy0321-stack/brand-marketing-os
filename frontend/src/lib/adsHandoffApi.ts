@@ -28,11 +28,23 @@ export interface HandoffPlacement {
   id: string; revision: number; filename: string; purpose: string;
   destination_entity_id: string | null;
 }
+/** F28 "Stale launch": one approved-vs-now difference. `item_id` is the approved set's handoff
+ * item for that node, null for a group/ad added after the approval. */
+export interface LaunchDiffRow {
+  kind: "campaign" | "group" | "ad"; item_id: string | null; name: string | null;
+  field: string; field_label: string; before: unknown; after: unknown;
+}
+/** Computed on every read of the handoff; null while the approved launch still matches the plan. */
+export interface LaunchStale {
+  change_set_id: string; approved_at: string; changed_at: string | null; content_hash: string;
+  diff: LaunchDiffRow[]; unchanged_count: number; revertible: boolean; revert_blocker: string | null;
+}
 export interface HandoffWorkspace {
   items: HandoffItem[]; items_truncated: boolean;
   ready_placements: HandoffPlacement[]; destinations: NativeEntity[];
-  destinations_truncated: boolean; notice: string;
+  destinations_truncated: boolean; launch_stale: LaunchStale | null; notice: string;
 }
+export interface LaunchDecision { change_set_id: string; content_hash: string }
 export interface HandoffIdentity {
   platform: string; source_account: string; native_kind: string; native_id: string;
   user_verified: boolean;
@@ -74,6 +86,10 @@ export async function createNewAdHandoff(brand: string, campaign: string, body: 
 export async function reconsiderHandoff(brand: string, campaign: string, id: string, reason: string, signal?: AbortSignal) {
   return (await request<{ item: HandoffItem }>(`${path(brand, campaign)}/handoff/${encodeURIComponent(id)}/reconsider`, "POST", { reason }, signal)).item;
 }
+/** Re-freeze the current plan as the next launch version; answers with the refreshed handoff. */
+export const reapproveLaunch = (brand: string, campaign: string, body: LaunchDecision, signal?: AbortSignal) => request<HandoffWorkspace>(`${path(brand, campaign)}/handoff/launch/reapprove`, "POST", body, signal);
+/** Write the approved values back to the plan; the original approval stands. */
+export const revertLaunch = (brand: string, campaign: string, body: LaunchDecision, signal?: AbortSignal) => request<HandoffWorkspace>(`${path(brand, campaign)}/handoff/launch/revert`, "POST", body, signal);
 export const refreshHandoffSources = (brand: string, campaign: string, signal?: AbortSignal) => request(`${path(brand, campaign)}/sync`, "POST", {}, signal);
 
 export interface PlannedMaterialAd {

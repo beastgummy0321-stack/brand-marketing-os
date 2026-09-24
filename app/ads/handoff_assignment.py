@@ -85,11 +85,15 @@ def assign(conn, org, brand, campaign, ad_id, placement_id, revision):
     ).fetchone()
     if not ad:
         raise ValueError("找不到此品牌活動的計畫廣告。")
-    if conn.execute(
-        "SELECT id FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND status='approved' AND plan_json ? 'launch_snapshot' LIMIT 1",
-        (org, brand, campaign),
-    ).fetchone():
+    # Lazy: `change_control_launch` imports this module at load time.
+    from app.ads import change_control_launch
+
+    # An approved launch freezes its materials -- unless the plan already changed since (F28
+    # "Stale launch"): then re-pointing a revised material is how the user reaches a plan that
+    # can be re-approved, instead of a dead end between a refused re-approval and this refusal.
+    if change_control_launch.launch_set(
+        conn, org, brand, campaign
+    ) and not change_control_launch.is_stale(conn, org, brand, campaign):
         raise ValueError("首次投放清單已核准，不能改寫原交接素材；請先處理原核准清單。")
     if (placement_id is None) != (revision is None):
         raise ValueError("素材安排與版本必須一起提供，或一起清除。")

@@ -254,7 +254,7 @@ describe("HandoffPage（F27-I15）new_ad kind：嵌入既有的 ManualHandoffPan
     });
     vi.mocked(handoffApi.getHandoff).mockResolvedValue({
       items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
-      notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
+      launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
     });
     vi.mocked(externalApi.existingCampaigns).mockResolvedValue({ items: [], sources: [], next_cursor: null, job: null });
     vi.mocked(externalApi.externalView).mockResolvedValue({
