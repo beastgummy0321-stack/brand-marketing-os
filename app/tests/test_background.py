@@ -296,6 +296,30 @@ class WorkerProcessTest(unittest.TestCase):
         recover.assert_called_once_with(limit=100)
         self.assertEqual(receipt["deferred_ids"], [1])
 
+    def test_startup_line_names_each_job_stranded_a_second_time(self):
+        import app.worker
+
+        receipt = {
+            "retried_ids": [3],
+            "failed_ids": [7],
+            "aborted_ids": [],
+            "deferred_ids": [],
+            "stranded_again": [{"id": 7, "task_name": "background.workbench_generate"}],
+        }
+        with (
+            mock.patch.object(background_module, "recover_interrupted_jobs", return_value=receipt),
+            mock.patch("builtins.print") as report,
+        ):
+            recovered = app.worker._recover_queue_backlog()
+        self.assertEqual(recovered["stranded_again"], receipt["stranded_again"])
+        lines = [call.args[0] for call in report.call_args_list]
+        self.assertTrue(any("重送一次" in line for line in lines))
+        self.assertFalse(any("付費工作不自動重送" in line for line in lines))
+        named = [line for line in lines if "background.workbench_generate" in line]
+        self.assertEqual(len(named), 1)
+        self.assertIn("7", named[0])
+        self.assertIn("失敗", named[0])
+
     def test_startup_failure_does_not_start_worker_and_releases_lock(self):
         import app.worker
 
@@ -440,21 +464,71 @@ class OrphanRecoveryTest(unittest.TestCase):
     def status(self, job_id):
         return background_module._sync_app_for_defer().job_manager.get_job_status(job_id)
 
-    def test_only_exact_known_tasks_recover_and_same_job_args_are_kept(self):
+    def strand(self, job_id):
+        """A worker picked the re-queued job up and died again."""
+        with psycopg.connect(self.dsn) as conn:
+            conn.execute("UPDATE procrastinate_jobs SET status='doing' WHERE id=%s", (job_id,))
+
+    def job(self, job_id):
+        return background_module._sync_app_for_defer().job_manager.list_jobs(id=job_id)[0]
+
+    def test_every_stranded_task_is_handled_and_same_job_args_are_kept(self):
         read = self.seed("background.ads_external_sync", lock=self.lock)
         (review_task,) = FAILED_TASKS
         review = self.seed(review_task)
-        paid = self.seed("background.ads_asset_suggestion")
-        lookalike = self.seed("background.ads_external_sync_paid")
+        paid = self.seed("background.workbench_generate")
+        unknown = self.seed("background.ads_external_sync_paid")
         receipt = background_module.recover_interrupted_jobs()
         self.assertIn(read, receipt["retried_ids"])
         self.assertIn(review, receipt["failed_ids"])
-        self.assertEqual(self.status(paid), Status.DOING)
-        self.assertEqual(self.status(lookalike), Status.DOING)
-        job = background_module._sync_app_for_defer().job_manager.list_jobs(id=read)[0]
+        self.assertEqual(self.status(review), Status.FAILED)
+        for job_id in (paid, unknown):
+            self.assertIn(job_id, receipt["retried_ids"])
+            self.assertEqual(self.status(job_id), Status.TODO)
+        self.assertEqual(receipt["stranded_again"], [])
+        job = self.job(read)
         self.assertEqual(job.task_kwargs, {"org_id": db.DEV_ORG_ID})
         self.assertEqual(job.queueing_lock, self.lock)
         self.assertEqual(job.attempts, 1)
+
+    def test_non_read_only_task_is_requeued_once_then_failed_on_second_strand(self):
+        paid = self.seed("background.workbench_generate", lock=self.lock)
+        unknown = self.seed("background.unregistered_task")
+        first = background_module.recover_interrupted_jobs()
+        self.assertEqual(sorted(first["retried_ids"]), sorted([paid, unknown]))
+        self.assertEqual(self.job(paid).queueing_lock, self.lock)
+        self.strand(paid)
+        self.strand(unknown)
+        second = background_module.recover_interrupted_jobs()
+        self.assertEqual(second["retried_ids"], [])
+        self.assertEqual(sorted(second["failed_ids"]), sorted([paid, unknown]))
+        self.assertEqual(
+            sorted(second["stranded_again"], key=lambda job: job["id"]),
+            sorted(
+                [
+                    {"id": paid, "task_name": "background.workbench_generate"},
+                    {"id": unknown, "task_name": "background.unregistered_task"},
+                ],
+                key=lambda job: job["id"],
+            ),
+        )
+        for job_id in (paid, unknown):
+            self.assertEqual(self.status(job_id), Status.FAILED)  # kept, not deleted
+        third = background_module.recover_interrupted_jobs()
+        self.assertNotIn(paid, third["failed_ids"] + third["retried_ids"])
+
+    def test_read_only_and_review_round_keep_their_paths_on_every_strand(self):
+        read = self.seed("background.ads_external_sync")
+        (review_task,) = FAILED_TASKS
+        review = self.seed(review_task)
+        background_module.recover_interrupted_jobs()
+        self.strand(read)
+        receipt = background_module.recover_interrupted_jobs()
+        self.assertIn(read, receipt["retried_ids"])
+        self.assertEqual(self.status(read), Status.TODO)
+        self.assertEqual(self.job(read).attempts, 2)
+        self.assertEqual(receipt["stranded_again"], [])
+        self.assertEqual(self.status(review), Status.FAILED)
 
     def test_abort_is_terminal_and_existing_todo_wins_collision(self):
         aborted = self.seed("background.ads_external_sync", abort=True)

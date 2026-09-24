@@ -35,10 +35,12 @@ with it.
 
 Startup recovery runs only after that lock, before taking any job. The LLM sweep handles
 only rows explicitly marked as worker-owned; foreground web calls and legacy unmarked
-rows are not inferred dead. Queue recovery then retries exact known read-only tasks and
-terminates interrupted review queue entries before ads restores saved results or safely
-queues never-sent reviews. The gateway worker_execution context covers job threads, not
-the web process. No blanket paid retry is performed.
+rows are not inferred dead. Queue recovery then re-queues read-only tasks, terminates
+interrupted review queue entries before ads restores saved results or safely queues
+never-sent reviews, and re-queues every other interrupted job once: a job interrupted a
+second time ends `failed` and its task name and job id are printed (docs/architecture/ads.md
+§6.32; the count lives on procrastinate's own job row, see `app/background/recovery.py`).
+The gateway worker_execution context covers job threads, not the web process.
 
 Signal handling stays procrastinate's own default (`install_signal_handlers=True`, what
 `App.run_worker()` already defaults to) — do **not** pass `install_signal_handlers=False`: that
@@ -72,11 +74,12 @@ def _advisory_lock_key(schema: str) -> int:
 
 def _recover_queue_backlog() -> dict:
     """Up to 1,000 captured orphans under the schema lock, never a live-job sweep."""
-    recovered: dict[str, list[int]] = {
+    recovered: dict[str, list] = {
         "retried_ids": [],
         "failed_ids": [],
         "aborted_ids": [],
         "deferred_ids": [],
+        "stranded_again": [],
     }
     seen: set[int] = set()
     for _ in range(10):
@@ -86,12 +89,17 @@ def _recover_queue_backlog() -> dict:
             fresh = [job_id for job_id in receipt[key] if job_id not in seen]
             recovered[key].extend(fresh)
             changed.update(fresh)
+        recovered["stranded_again"].extend(
+            job for job in receipt.get("stranded_again", []) if job["id"] in changed
+        )
         seen.update(changed)
         recovered["deferred_ids"] = receipt["deferred_ids"]
         if not receipt["deferred_ids"] or not changed:
             break
     if seen:
-        print(f"已處理 {len(seen)} 件已知中斷佇列工作，付費工作不自動重送。")
+        print(f"已處理 {len(seen)} 件中斷的佇列工作：中斷的工作重送一次，第二次中斷就標記失敗。")
+    for job in recovered["stranded_again"]:
+        print(f"工作 {job['task_name']}（編號 {job['id']}）第二次中斷，已標記失敗，不再重送。")
     if recovered["deferred_ids"]:
         print(
             f"仍有 {len(recovered['deferred_ids'])} 件已知中斷工作未恢復；"
