@@ -9,6 +9,7 @@ import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, r
 import { formatSyncTime } from "@/lib/format";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 import { Disclosure } from "./patterns/Disclosure";
+import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
 
 type Props = { brandId: string; campaignId: string; mode?: "all" | "items" | "new-ad"; refreshKey?: number };
 const states: Record<string, string> = { pending: "待操作", reported: "已回報，待讀回", confirmed: "設定已核對", deviated: "設定有差異", unknown: "尚未能確認", stale: "需重新確認" };
@@ -44,6 +45,7 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0 }: Pro
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState("");
   const [activeItemId, setActiveItemId] = useState("");
+  const [launchOutcome, setLaunchOutcome] = useState<LaunchOutcome | null>(null);
   const lifetime = useRef(new AbortController());
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
   useEffect(() => {
@@ -102,16 +104,26 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0 }: Pro
   }
   const candidates = mergeNodes([...nodes, ...roots]);
   const selectedSource = sources.find(row => `${row.platform}:${row.account_id}` === source);
-  const pendingItems = data?.items.filter(item => item.status !== "confirmed") ?? [];
+  // F28 "Stale launch": while the approved launch no longer matches the plan, its items wait for a decision
+  // (re-approve or revert) in LaunchStalePanel; per-item checks stay available only for other handoffs.
+  const stale = mode !== "new-ad" ? data?.launch_stale ?? null : null;
+  const workItems = (stale ? data?.items.filter(item => item.change_set_id !== stale.change_set_id) : data?.items) ?? [];
+  const pendingItems = workItems.filter(item => item.status !== "confirmed");
+  const confirmedItems = workItems.filter(item => item.status === "confirmed");
   const activeItem = pendingItems.find(item => item.id === activeItemId) ?? pendingItems[0];
   const renderItem = (item: HandoffItem) => <HandoffRow key={`${item.id}:${item.entity_id ?? ""}:${data?.items.find(row => row.id === item.parent_item_id)?.entity_id ?? ""}:${source}`} item={item} parent={data?.items.find(row => row.id === item.parent_item_id)} nodes={candidates} source={selectedSource} busy={Boolean(busy)} onReport={() => void act(item)} onCheck={identity => void act(item, identity)} onReconsider={reason => void act(item, undefined, reason)} />;
+  const regular = !stale || workItems.length > 0;
   return <section className="space-y-4" aria-label="人工交接與平台核對">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">人工交接與平台核對</h2><p className="text-sm text-muted-foreground">平台操作完成後，逐項回報並讀回核對；找不到物件時保留待核對，不要再建立一次。</p></div><Button variant="outline" disabled={Boolean(busy)} onClick={() => { setCandidateError(""); setReload(n => n + 1); }}>重新讀取</Button></div>
+    {launchOutcome && <p role={launchOutcome.tone === "error" ? "alert" : "status"} className={launchOutcome.tone === "error" ? "rounded-lg bg-destructive/5 p-3 text-sm text-destructive" : "rounded-lg bg-success/10 p-3 text-sm text-success"}>{launchOutcome.text}</p>}
+    {data && stale && <LaunchStalePanel brandId={brandId} campaignId={campaignId} stale={stale} items={data.items}
+      onDecided={(value, outcome) => { setData(value); setLaunchOutcome(outcome); setReload(n => n + 1); }}
+      onReload={outcome => { setLaunchOutcome(outcome ?? null); setReload(n => n + 1); }} />}
+    {regular && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">人工交接與平台核對</h2><p className="text-sm text-muted-foreground">平台操作完成後，逐項回報並讀回核對；找不到物件時保留待核對，不要再建立一次。</p></div><Button variant="outline" disabled={Boolean(busy)} onClick={() => { setCandidateError(""); setLaunchOutcome(null); setReload(n => n + 1); }}>重新讀取</Button></div>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {!data && !error && <p role="status">讀取交接內容…</p>}
     {data && <>
-      <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{data.notice}</p>
-      {mode !== "new-ad" && <>
+      {regular && <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{data.notice}</p>}
+      {mode !== "new-ad" && regular && <>
         <div className="flex flex-wrap items-end gap-3">
           {sources.length > 0 && <label className="text-sm">候選來源帳戶<select className="mt-1 block w-full" value={source} disabled={Boolean(busy)} onChange={e => void loadSource(e.target.value)}>{sources.map(row => <option key={`${row.platform}:${row.account_id}`} value={`${row.platform}:${row.account_id}`}>{row.label} · {row.name || row.account_id}</option>)}</select></label>}
           {rootCursor && <Button variant="outline" disabled={Boolean(busy)} onClick={() => void loadSource(source, rootCursor)}>更多平台活動</Button>}
@@ -121,11 +133,11 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0 }: Pro
         {syncNotice && <p role="status" className="text-sm text-muted-foreground">{syncNotice}</p>}
         {candidateError && <p role="alert" className="text-sm text-warning">候選清單暫時不完整：{candidateError}。可重讀或展開進階欄位核對識別。</p>}
         {data.items_truncated && <p className="text-sm text-warning">交接項目超過本次顯示範圍，目前清單不代表全部完成。</p>}
-        {!data.items.length && <p className="text-sm text-muted-foreground">核准首次投放或新增廣告清單後，這裡會列出逐項交接內容。</p>}
-        {data.items.length > 0 && <p className="text-sm font-medium">{data.items.filter(item => item.status !== "confirmed").length} 項待處理 · {data.items.filter(item => item.status === "confirmed").length} 項設定已核對</p>}
+        {!workItems.length && <p className="text-sm text-muted-foreground">核准首次投放或新增廣告清單後，這裡會列出逐項交接內容。</p>}
+        {workItems.length > 0 && <p className="text-sm font-medium">{pendingItems.length} 項待處理 · {confirmedItems.length} 項設定已核對</p>}
         {pendingItems.length > 1 && <label className="block text-sm font-medium">選擇這次要核對的項目<select className="mt-2 block w-full" value={activeItem?.id ?? ""} disabled={Boolean(busy)} onChange={event => setActiveItemId(event.target.value)}>{pendingItems.map(item => <option key={item.id} value={item.id}>{item.name} · {states[item.status] ?? "待確認"}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">一次處理一項；其他項目的進度會保留。上層物件須先讀回，才能核對下層。</span></label>}
         {activeItem && renderItem(activeItem)}
-        {data.items.some(item => item.status === "confirmed") && <Disclosure label={`查看已核對的 ${data.items.filter(item => item.status === "confirmed").length} 項與證據`}><div className="space-y-3">{data.items.filter(item => item.status === "confirmed").map(renderItem)}</div></Disclosure>}
+        {confirmedItems.length > 0 && <Disclosure label={`查看已核對的 ${confirmedItems.length} 項與證據`}><div className="space-y-3">{confirmedItems.map(renderItem)}</div></Disclosure>}
       </>}
       {mode !== "items" && <NewAdForm key={`${scope}:${brandId}:${campaignId}`} brandId={brandId} campaignId={campaignId} scope={scope} data={data} />}
     </>}
