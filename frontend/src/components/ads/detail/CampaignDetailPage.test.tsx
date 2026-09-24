@@ -44,6 +44,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖 最多數量",
     campaign_id: "cmp_1", campaign_name: "【銷售】1150706 Beast Prime 最高數量", thumbnail_url: null,
     class: "insufficient", label: "資料不足", reason_code: "below_sample_gate",
+    grade: "insufficient", grade_label: "還太新、看不準",
     window: { start: "2026-08-25", end: "2026-09-21", days: 28, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: 14 },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: null, result_count: null, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: "result_unknown_days" },
@@ -532,9 +533,10 @@ describe("CampaignDetailPage（F20-I02，v7 campPage()）", () => {
         campaign_id: "cmp_1", campaign_name: "【銷售】1150706 Beast Prime 最高數量",
         can_support: 4, active_ads: 6,
         ads: [
-          { entity_id: "ad_low", name: "清倉版", thumbnail_url: null, spend_7d: 120 },
-          { entity_id: "ad_low2", name: "過季版", thumbnail_url: null, spend_7d: 180 },
+          { entity_id: "ad_low", name: "清倉版", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7 },
+          { entity_id: "ad_low2", name: "過季版", thumbnail_url: null, spend_7d: 180, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 180 / 7 },
         ],
+        keep: [], short: 0, daily_saving: 300 / 7, scale_owner_id: null,
         ...overrides,
       };
     }

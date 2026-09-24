@@ -56,6 +56,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖",
     campaign_id: "cmp_1", campaign_name: "【銷售】1150706 Beast Prime 最高數量", thumbnail_url: null,
     class: "insufficient", label: "資料不足", reason_code: "below_sample_gate",
+    grade: "insufficient", grade_label: "還太新、看不準",
     window: { start: "2026-08-25", end: "2026-09-21", days: 28, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: 14 },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: null, result_count: null, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: "result_unknown_days" },

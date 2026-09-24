@@ -18,7 +18,6 @@ from app.ads import ad_status
 # than this file's own three-value copy -- `classify()` already excludes closed ads from `items`
 # entirely, so this filter is now mostly a defensive no-op against `native_status_by_entity`
 # reading a status `classify()` didn't see (never re-diverges from the one true definition).
-_STABLE_CLASSES = {"better", "flat"}
 _READABLE_CLASSES = {"better", "flat", "worse"}
 SCALE_FACTOR = 1.2
 MIN_ACTIVE_ADS_FOR_REFRESH_GATE = 3
@@ -27,6 +26,19 @@ MAX_READABLE_FOR_REFRESH_ROW = 2
 
 def _is_active(item, native_status_by_entity):
     return not ad_status.is_closed(native_status_by_entity.get(item["entity_id"]))
+
+
+def _too_new(item):
+    """還太新、看不準 (F28-I02): below the sample gate -- the one ungraded state that never blocks
+    a scale-up. Any other ungraded ad (資料不足／未判斷) does."""
+    return item.get("grade") == "insufficient" and item["reason_code"] == "below_sample_gate"
+
+
+def _cheapest_on_target(active):
+    """The owner's 划算 ad with the lowest cost per result (ties: `classify()`'s own (name, id)
+    order) -- the row's own display item."""
+    on_target = [item for item in active if item.get("grade") == "on_target"]
+    return min(on_target, key=lambda item: item["current"]["cost_per_result"])
 
 
 def owner_lookup(conn, org_id, brand_id):
@@ -82,9 +94,10 @@ def owner_lookup(conn, org_id, brand_id):
 def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, native_status_by_entity,
                       month_view):
     """Rule A -- one candidate per budget owner (adset, or the campaign when the campaign holds
-    the budget) whose every ACTIVE ad is `better` or `flat`, with at least one active ad, each
-    ad's own current AND previous `cost_per_result` at or under target (no pooling across ads --
-    `triage.py:298-320`), and whose proposed +20% raise still leaves this month's budget
+    the budget) whose every ACTIVE graded ad is 划算 (F28-I02, ads.md §6.32: `grade ==
+    "on_target"`; 還太新 is allowed, any other grade or ungraded state blocks), with at least one
+    划算 ad -- the trend (`class`/`previous`) is a note only, never a gate -- and whose proposed
+    +20% raise still leaves this month's budget
     `available` not null and >= 0 through the SAME `month_budget.view(..., additional=[...])`
     seam `preflight()` uses at approve. `month_view` is `additional_items -> budget dict`,
     already bound to this brand/month (`triage.py::_month_view_fn`) -- kept as a callable so this
@@ -113,20 +126,9 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
         active = [item for item in items if _is_active(item, native_status_by_entity)]
         if not active:
             continue
-        if any(item["class"] not in _STABLE_CLASSES for item in active):
+        if any(item.get("grade") != "on_target" and not _too_new(item) for item in active):
             continue
-        target_value = target["value"]
-        ok = True
-        for item in active:
-            current_cost = item["current"]["cost_per_result"]
-            previous_cost = item["previous"]["cost_per_result"]
-            if current_cost is None or previous_cost is None:
-                ok = False
-                break
-            if current_cost > target_value or previous_cost > target_value:
-                ok = False
-                break
-        if not ok:
+        if not any(item.get("grade") == "on_target" for item in active):
             continue
         qualified.append((owner, items, active, target))
 
@@ -147,10 +149,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
         if budget.get("available") is None or budget["available"] < 0:
             continue
         extra_needed = budget["reserved_increases"] - baseline["reserved_increases"]
-        # A `better` ad is not required (a long-stable all-flat owner qualifies too) -- prefer one
-        # for display when there is one, else the first active ad in `classify()`'s own
-        # (name, id) order.
-        best_item = next((item for item in active if item["class"] == "better"), active[0])
+        best_item = _cheapest_on_target(active)
         owner_view = {
             "id": owner["id"], "name": owner.get("name"), "native_kind": owner["native_kind"],
             "native_id": owner["native_id"],

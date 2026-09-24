@@ -2,7 +2,8 @@
 candidate ads for the brand queue. Read-only, no LLM call, no platform write
 (ARCHITECTURE.md §0 "程式整理，LLM 判斷"). Reuses `triage_scale.owner_lookup` for the per-ad
 daily budget owner (never a second, divergent definition of "daily budget owner", feature
-Decisions "Gaps kept honest").
+Decisions "Gaps kept honest"). F28-I02: which ads close is decided by `classify()`'s own
+per-ad grade against the one cap (ads.md §6.32), no longer by lowest 7-day spend.
 
 Cleanup never touches an ad in an "open replacement lineage" (pre-dispatch correction 4): a
 replacement ad whose own `new_ad` item hasn't reached `confirmed` yet, or an old ad a confirmed
@@ -131,10 +132,9 @@ def _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id) -> set:
 
 def _ad_spend_7d(rows_by_entity, entity_id, start, end):
     """This ad's own known spend over `[start, end]` -- `None` unless every day of that window is
-    known (never a partial-window guess, same "7-day window not fully covered" rule correction 4
-    names), single currency, ad scope only (same shape `triage.py::_ad_spend` uses for its own
-    windows -- not imported directly, `triage.py` is this module's own caller, never the other way
-    around)."""
+    known (never a partial-window guess), single currency, ad scope only (same shape
+    `triage.py::_ad_spend` uses for its own windows -- not imported directly, `triage.py` is this
+    module's own caller, never the other way around)."""
     rows = [r for r in rows_by_entity.get(entity_id, []) if start <= r["day"] <= end]
     aggregated = review_evidence.aggregate(rows, start, end)
     if aggregated["missing_days"]:
@@ -147,48 +147,97 @@ def _ad_spend_7d(rows_by_entity, entity_id, start, end):
     return sum(s["metrics"]["spend"] for s in entries)
 
 
+
+
+# F28-I02 (ads.md §6.32): close order -- 白花 always first, then 太貴 before 偏貴. 划算 and every
+# ungraded ad (還太新／資料不足／未判斷) never close through cleanup.
+_CLOSE_RANK = {"wasted": 0, "over": 1, "watch": 2}
+_KEEP_RANK = {"wasted": 0, "over": 1, "watch": 2, "on_target": 3, "insufficient": 4, "no_target": 5}
+
+
+def _cost_desc(item):
+    """Highest cost per result first; an unknown cost sorts after every known one."""
+    cost = item["current"].get("cost_per_result")
+    return (cost is None, -(cost or 0))
+
+
+def _spend_desc(item):
+    spend = item["current"].get("spend")
+    return (spend is None, -(spend or 0))
+
+
+def _ad_view(item, spend_7d):
+    """One cleanup `ads`/`keep` entry (F28 Contract "Queue"): the existing keys plus the ad's grade
+    and its graded-window numbers (`classify()`'s own `current`, never re-derived). `daily_spend`
+    is the last 7 days' average, `None` whenever that 7-day spend isn't fully known."""
+    current = item["current"]
+    return {
+        "entity_id": item["entity_id"], "name": item["name"],
+        "thumbnail_url": item["thumbnail_url"], "spend_7d": spend_7d,
+        "grade": item["grade"], "cost_per_result": current.get("cost_per_result"),
+        "spend": current.get("spend"), "result_count": current.get("result_count"),
+        "daily_spend": spend_7d / _CLEANUP_WINDOW_DAYS if spend_7d is not None else None,
+    }
+
+
 def cleanup_candidates(
     conn, org_id, brand_id, campaign_id, campaign_name, items, rows_by_entity, cutoff, capacity,
+    scale_owner_id=None,
 ) -> dict | None:
-    """Contract F cleanup rule -- `None` when `can_support` is unknown, `< 1`, or the campaign
-    isn't over capacity; else the payload for a `cleanup` queue row, proposing to pause the
-    (`active_ads - can_support - stop_loss ads`) active ads with the lowest 7-day spend. A
-    `stop_loss` ad is never a candidate and already counts as leaving (drill 5: counting it as
-    staying proposed pausing the best ad too and kept the 0-purchase one); also excluded:
-    an ad in an open replacement lineage (correction 4), or an ad whose
-    own 7-day window isn't fully covered. When fewer ads are eligible than the excess calls for,
-    this proposes however many ARE eligible (never nothing just because the ideal count isn't
-    reachable) -- `None` only when NO ad is eligible at all."""
+    """F28-I02 cleanup rule (ads.md §6.32) over `classify()`'s own grades: every 白花 ad closes;
+    then, while the active ads still exceed `can_support`, 太貴 then 偏貴 close, highest cost per
+    result first (ties: higher spend, then entity id). 划算 and every ungraded ad never close. An ad
+    in an open replacement lineage (correction 4) never closes either -- it stays in `keep`.
+
+    `None` when nothing would close: a campaign over capacity with only 划算／ungraded ads left
+    raises no cleanup row -- its budget owner's `scale_budget` row is the proposal instead.
+    `short` is how many ads stay over capacity after the close list (0 when capacity is unknown or
+    below one ad -- then only 白花 closes, capacity never drives a close). `scale_owner_id` is
+    echoed only while `short > 0` (the caller passes the campaign's qualifying budget owner)."""
     can_support = capacity["can_support"]
     active_ads = capacity["active_ads"]
-    if can_support is None or can_support < 1 or active_ads <= can_support:
-        return None
-    excess = active_ads - can_support - sum(1 for item in items if item["class"] == "stop_loss")
-    if excess <= 0:
-        return None
     open_lineage = _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
-    start = cutoff - timedelta(days=_CLEANUP_WINDOW_DAYS - 1)
-    eligible = []
-    for item in items:
-        entity_id = item["entity_id"]
-        if item["class"] == "stop_loss" or entity_id in open_lineage:
-            continue
-        spend = _ad_spend_7d(rows_by_entity, entity_id, start, cutoff)
-        if spend is None:
-            continue
-        eligible.append((spend, item))
-    if not eligible:
+    closable = [
+        item for item in items
+        if item.get("grade") in _CLOSE_RANK and item["entity_id"] not in open_lineage
+    ]
+    wasted = sorted(
+        (item for item in closable if item["grade"] == "wasted"),
+        key=lambda item: (_spend_desc(item), item["entity_id"]),
+    )
+    costly = sorted(
+        (item for item in closable if item["grade"] != "wasted"),
+        key=lambda item: (
+            _CLOSE_RANK[item["grade"]], _cost_desc(item), _spend_desc(item), item["entity_id"],
+        ),
+    )
+    capacity_known = can_support is not None and can_support >= 1
+    excess = active_ads - can_support if capacity_known else 0
+    close = wasted + costly[:max(0, excess - len(wasted))]
+    if not close:
         return None
-    eligible.sort(key=lambda pair: (pair[0], pair[1]["entity_id"]))
-    chosen = eligible[:excess]
+    short = max(0, excess - len(close))
+    start = cutoff - timedelta(days=_CLEANUP_WINDOW_DAYS - 1)
+    spend_7d = {
+        item["entity_id"]: _ad_spend_7d(rows_by_entity, item["entity_id"], start, cutoff)
+        for item in items
+    }
+    closing_ids = {item["entity_id"] for item in close}
+    keep = sorted(
+        (item for item in items if item["entity_id"] not in closing_ids),
+        key=lambda item: (
+            _KEEP_RANK.get(item.get("grade"), len(_KEEP_RANK)), _cost_desc(item),
+            item["entity_id"],
+        ),
+    )
+    ads = [_ad_view(item, spend_7d[item["entity_id"]]) for item in close]
+    daily = [ad["daily_spend"] for ad in ads]
     return {
         "campaign_id": campaign_id, "campaign_name": campaign_name,
         "can_support": can_support, "active_ads": active_ads,
-        "ads": [
-            {
-                "entity_id": item["entity_id"], "name": item["name"],
-                "thumbnail_url": item["thumbnail_url"], "spend_7d": spend,
-            }
-            for spend, item in chosen
-        ],
+        "ads": ads,
+        "keep": [_ad_view(item, spend_7d[item["entity_id"]]) for item in keep],
+        "short": short,
+        "daily_saving": sum(daily) if all(d is not None for d in daily) else None,
+        "scale_owner_id": scale_owner_id if short > 0 else None,
     }

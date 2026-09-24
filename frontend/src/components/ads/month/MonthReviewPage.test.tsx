@@ -72,6 +72,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖",
     campaign_id: "cmp_1", campaign_name: "日常商品推廣", thumbnail_url: null,
     class: "better", label: "變好", reason_code: "cost_per_result_down",
+    grade: "on_target", grade_label: "划算",
     window: { start: "2026-09-15", end: "2026-09-21", days: 7, previous_start: "2026-09-08", previous_end: "2026-09-14", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 1000, result_count: 5, cost_per_result: 200, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },

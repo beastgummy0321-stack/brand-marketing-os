@@ -1,5 +1,6 @@
 """app/tests/test_ads_triage_capacity.py — F27-I06 falsifiers: Contract F, per-campaign capacity
-and the cleanup candidate ads.
+and the cleanup candidate ads; F28-I02: the cut is chosen by grade against the one cap (白花
+always, then 太貴 before 偏貴, highest cost first; 划算 and ungraded ads never).
 
 `CapacityViewTest` proves `capacity_view()` in isolation (pure function, no DB) -- items are built
 by hand (same isolation style as `test_ads_triage_scale.py::_CandidateFixture`). `CleanupCandidates
@@ -144,8 +145,15 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.obs(entity_id, end - timedelta(days=offset), spend=spend)
 
     @staticmethod
-    def item(entity_id, *, name="廣告", cls="flat", thumbnail_url=None):
-        return {"entity_id": entity_id, "name": name, "class": cls, "thumbnail_url": thumbnail_url}
+    def item(entity_id, grade, *, cost=None, spend=None, result_count=None, name="廣告",
+             thumbnail_url=None):
+        """The fields `cleanup_candidates` reads off one `classify()` item (F28-I02): `grade`
+        plus the graded window's own `current` numbers."""
+        return {
+            "entity_id": entity_id, "name": name, "thumbnail_url": thumbnail_url,
+            "grade": grade,
+            "current": {"cost_per_result": cost, "spend": spend, "result_count": result_count},
+        }
 
     def rows_by_entity(self, start, end):
         rows = self.conn.execute(
@@ -158,7 +166,8 @@ class CleanupCandidatesTest(unittest.TestCase):
             by_entity.setdefault(row["entity_id"], []).append(dict(row))
         return by_entity
 
-    def candidates(self, items, *, can_support, active_ads=None, window_end=WINDOW_END):
+    def candidates(self, items, *, can_support, active_ads=None, window_end=WINDOW_END,
+                   scale_owner_id=None):
         capacity = {
             "can_support": can_support,
             "active_ads": active_ads if active_ads is not None else len(items),
@@ -167,7 +176,12 @@ class CleanupCandidatesTest(unittest.TestCase):
         return triage_capacity.cleanup_candidates(
             self.conn, self.org, self.brand, self.campaign, "活動一", items,
             self.rows_by_entity(start, window_end), window_end, capacity,
+            scale_owner_id=scale_owner_id,
         )
+
+    @staticmethod
+    def ids(entries):
+        return [entry["entity_id"] for entry in entries]
 
     # -- lineage fixture helpers (same shape test_ads_triage_ladder.py uses) ---------------------
 
@@ -232,151 +246,210 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.conn.commit()
         return set_id, item_id
 
-    # -- gates: no row -----------------------------------------------------------------------
+    # -- no row -------------------------------------------------------------------------------
 
-    def test_no_row_when_can_support_is_null(self):
-        ad = self.make_ad("ad1")
-        self.full_week(ad, spend=10)
-        result = self.candidates([self.item(ad)], can_support=None, active_ads=1)
-        self.assertIsNone(result)
-
-    def test_no_row_when_can_support_below_one(self):
-        ad = self.make_ad("ad1")
-        self.full_week(ad, spend=10)
-        result = self.candidates([self.item(ad)], can_support=0, active_ads=1)
-        self.assertIsNone(result)
-
-    def test_no_row_when_within_capacity(self):
-        a, b = self.make_ad("a1"), self.make_ad("a2")
-        for ad in (a, b):
-            self.full_week(ad, spend=10)
-        result = self.candidates([self.item(a), self.item(b)], can_support=2, active_ads=2)
-        self.assertIsNone(result)
-
-    def test_no_row_when_no_ad_is_eligible_at_all(self):
-        # can_support=1, active_ads=2 (over capacity), but the only judged item is its own
-        # stop_loss row -- nothing left to propose, so the whole row is suppressed (not an
-        # empty `ads: []`).
-        ad = self.make_ad("ad1")
-        self.full_week(ad, spend=10)
-        result = self.candidates(
-            [self.item(ad, cls="stop_loss")], can_support=1, active_ads=2,
-        )
-        self.assertIsNone(result)
-
-    # -- selection: lowest 7-day spend, excess count ------------------------------------------
-
-    def test_picks_the_excess_count_of_lowest_spend_ads(self):
+    def test_no_row_when_over_capacity_but_only_on_target_ads_remain(self):
+        # 划算 never closes: over capacity with nothing closable raises no cleanup row -- the
+        # owner's scale_budget row is the proposal instead.
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
-        self.full_week(a, spend=100)
-        self.full_week(b, spend=10)   # lowest
-        self.full_week(c, spend=50)
-        result = self.candidates(
-            [self.item(a), self.item(b), self.item(c)], can_support=2, active_ads=3,
-        )
-        self.assertIsNotNone(result)
-        self.assertEqual(result["can_support"], 2)
-        self.assertEqual(result["active_ads"], 3)
-        self.assertEqual([row["entity_id"] for row in result["ads"]], [b])
-        self.assertEqual(result["ads"][0]["spend_7d"], 70.0)
+        items = [self.item(ad, "on_target", cost=50, spend=350) for ad in (a, b, c)]
+        self.assertIsNone(self.candidates(items, can_support=1))
 
-    def test_ads_kept_up_to_can_support_never_proposed(self):
-        a, b, c, d = (
-            self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3"), self.make_ad("a4")
-        )
-        self.full_week(a, spend=100)
-        self.full_week(b, spend=10)
-        self.full_week(c, spend=20)
-        self.full_week(d, spend=90)
-        result = self.candidates(
-            [self.item(a), self.item(b), self.item(c), self.item(d)],
-            can_support=2, active_ads=4,
-        )
-        proposed = {row["entity_id"] for row in result["ads"]}
-        self.assertEqual(len(proposed), 2)  # active_ads(4) - can_support(2)
-        self.assertEqual(proposed, {b, c})  # the two lowest-spend ads only
-
-    def test_stop_loss_ad_counts_as_leaving(self):
-        # 2 active, room for 1, one is already stop_loss: pausing it fixes capacity -- no row.
+    def test_no_row_when_within_capacity_and_nothing_is_wasted(self):
         a, b = self.make_ad("a1"), self.make_ad("a2")
-        self.full_week(a, spend=100)
-        self.full_week(b, spend=1)
-        result = self.candidates(
-            [self.item(a), self.item(b, cls="stop_loss")], can_support=1, active_ads=2,
-        )
-        self.assertIsNone(result)
+        items = [self.item(a, "over", cost=700, spend=4900), self.item(b, "watch", cost=500)]
+        self.assertIsNone(self.candidates(items, can_support=2))
 
-    def test_stop_loss_ad_never_proposed_and_highest_spend_kept(self):
-        # Drill 5: 4 active, room for 1, one stop_loss -> pause the 2 lowest, keep the top spender.
-        a, b, c, d = (self.make_ad(f"a{i}") for i in range(1, 5))
-        self.full_week(a, spend=400)
-        self.full_week(b, spend=10)
-        self.full_week(c, spend=20)
-        self.full_week(d, spend=1)  # lowest, but its own stop_loss row
-        result = self.candidates(
-            [self.item(a), self.item(b), self.item(c), self.item(d, cls="stop_loss")],
-            can_support=1, active_ads=4,
-        )
-        self.assertEqual({row["entity_id"] for row in result["ads"]}, {b, c})
+    def test_no_row_for_ungraded_ads_even_far_over_capacity(self):
+        # 還太新／資料不足（unknown cost）／未判斷 never close, whatever the capacity says.
+        a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
+        items = [
+            self.item(a, "insufficient", cost=None, spend=100, result_count=0),
+            self.item(b, "insufficient", cost=None, spend=None),
+            self.item(c, "no_target", cost=80, spend=560),
+        ]
+        self.assertIsNone(self.candidates(items, can_support=1))
 
-    def test_ad_with_incomplete_seven_day_window_never_proposed(self):
+    # -- 白花 always closes ---------------------------------------------------------------------
+
+    def test_wasted_closes_even_when_capacity_is_unknown(self):
         a, b = self.make_ad("a1"), self.make_ad("a2")
-        self.full_week(a, spend=100)
-        self.obs(b, WINDOW_END, spend=1)  # only 1 of 7 days known -- lowest total, but incomplete
-        result = self.candidates([self.item(a), self.item(b)], can_support=1, active_ads=2)
-        self.assertEqual([row["entity_id"] for row in result["ads"]], [a])
+        self.full_week(a, spend=220)
+        items = [
+            self.item(a, "wasted", cost=None, spend=1540, result_count=0, name="白花廣告"),
+            self.item(b, "over", cost=700, spend=4900),
+        ]
+        result = self.candidates(items, can_support=None)  # null daily budget / no owner
+        self.assertEqual(self.ids(result["ads"]), [a])
+        self.assertIsNone(result["can_support"])
+        self.assertEqual(result["short"], 0)
+        self.assertEqual(self.ids(result["keep"]), [b])
 
-    def test_thumbnail_and_name_carried_from_the_item(self):
+    def test_wasted_closes_even_within_capacity(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        items = [
+            self.item(a, "wasted", spend=1540, result_count=0),
+            self.item(b, "on_target", cost=50, spend=1400),
+        ]
+        result = self.candidates(items, can_support=5)
+        self.assertEqual(self.ids(result["ads"]), [a])
+        self.assertEqual(result["short"], 0)
+
+    def test_capacity_below_one_ad_closes_only_wasted(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        items = [
+            self.item(a, "over", cost=700, spend=4900),
+            self.item(b, "wasted", spend=1540, result_count=0),
+        ]
+        result = self.candidates(items, can_support=0)
+        self.assertEqual(self.ids(result["ads"]), [b])
+        self.assertEqual(result["short"], 0)
+
+    def test_several_wasted_close_most_spend_first(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        items = [
+            self.item(a, "wasted", spend=1400, result_count=0),
+            self.item(b, "wasted", spend=2000, result_count=0),
+        ]
+        self.assertEqual(self.ids(self.candidates(items, can_support=5)["ads"]), [b, a])
+
+    # -- capacity order: 太貴 before 偏貴, highest cost first, 划算 never -------------------------
+
+    def test_over_before_watch_highest_cost_first(self):
+        ads = [self.make_ad(f"a{i}") for i in range(5)]
+        items = [
+            self.item(ads[0], "on_target", cost=50, spend=1400),
+            self.item(ads[1], "watch", cost=500, spend=3500),
+            self.item(ads[2], "over", cost=600, spend=4200),
+            self.item(ads[3], "over", cost=700, spend=4900),
+            self.item(ads[4], "on_target", cost=60, spend=1200),
+        ]
+        result = self.candidates(items, can_support=2)  # excess 3
+        self.assertEqual(self.ids(result["ads"]), [ads[3], ads[2], ads[1]])
+        self.assertEqual(result["short"], 0)
+        result = self.candidates(items, can_support=3)  # excess 2
+        self.assertEqual(self.ids(result["ads"]), [ads[3], ads[2]])
+
+    def test_wasted_counts_toward_the_excess(self):
+        ads = [self.make_ad(f"a{i}") for i in range(5)]
+        items = [
+            self.item(ads[0], "wasted", spend=1540, result_count=0),
+            self.item(ads[1], "over", cost=617, spend=4319),
+            self.item(ads[2], "watch", cost=520, spend=3640),
+            self.item(ads[3], "on_target", cost=50, spend=1400),
+            self.item(ads[4], "on_target", cost=48, spend=1344),
+        ]
+        result = self.candidates(items, can_support=3)  # excess 2: the 白花 + one more
+        self.assertEqual(self.ids(result["ads"]), [ads[0], ads[1]])
+        # keep: 偏貴 first (closest to closing), then 划算 by cost, highest first.
+        self.assertEqual(self.ids(result["keep"]), [ads[2], ads[3], ads[4]])
+
+    def test_short_counts_what_stays_over_capacity_and_echoes_the_scale_owner(self):
+        ads = [self.make_ad(f"a{i}") for i in range(4)]
+        items = [
+            self.item(ads[0], "over", cost=700, spend=4900),
+            self.item(ads[1], "on_target", cost=50, spend=1400),
+            self.item(ads[2], "on_target", cost=60, spend=1200),
+            self.item(ads[3], "insufficient", spend=100, result_count=0),  # 還太新
+        ]
+        result = self.candidates(items, can_support=1, scale_owner_id="own_1")  # excess 3
+        self.assertEqual(self.ids(result["ads"]), [ads[0]])
+        self.assertEqual(result["short"], 2)
+        self.assertEqual(result["scale_owner_id"], "own_1")
+
+    def test_scale_owner_id_null_when_nothing_stays_over_capacity(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        items = [self.item(a, "over", cost=700, spend=4900),
+                 self.item(b, "on_target", cost=50, spend=1400)]
+        result = self.candidates(items, can_support=1, scale_owner_id="own_1")
+        self.assertEqual(result["short"], 0)
+        self.assertIsNone(result["scale_owner_id"])
+
+    def test_equal_cost_ties_close_the_higher_spend_then_entity_id(self):
+        a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
+        items = [
+            self.item(a, "over", cost=600, spend=3000),
+            self.item(b, "over", cost=600, spend=4200),
+            self.item(c, "on_target", cost=50, spend=1400),
+        ]
+        self.assertEqual(self.ids(self.candidates(items, can_support=2)["ads"]), [b])
+        items[0]["current"]["spend"] = 4200  # same cost, same spend -> entity id order
+        self.assertEqual(
+            self.ids(self.candidates(items, can_support=2)["ads"]), [min(a, b)],
+        )
+
+    # -- payload --------------------------------------------------------------------------------
+
+    def test_entry_shape_and_daily_saving(self):
         a = self.make_ad("a1", name="廣告甲", thumbnail_url="https://x/1.jpg")
         b = self.make_ad("a2", name="廣告乙")
-        self.full_week(a, spend=5)
-        self.full_week(b, spend=50)
+        c = self.make_ad("a3")
+        self.full_week(a, spend=220)
+        self.full_week(b, spend=617)
+        self.full_week(c, spend=200)
         items = [
-            self.item(a, name="廣告甲", thumbnail_url="https://x/1.jpg"),
-            self.item(b, name="廣告乙"),
+            self.item(a, "wasted", spend=1540, result_count=0, name="廣告甲",
+                      thumbnail_url="https://x/1.jpg"),
+            self.item(b, "over", cost=617, spend=4319, result_count=7, name="廣告乙"),
+            self.item(c, "on_target", cost=50, spend=1400, result_count=28),
         ]
-        result = self.candidates(items, can_support=1, active_ads=2)
-        row = result["ads"][0]
-        self.assertEqual(row["entity_id"], a)
-        self.assertEqual(row["name"], "廣告甲")
-        self.assertEqual(row["thumbnail_url"], "https://x/1.jpg")
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(result["ads"][0], {
+            "entity_id": a, "name": "廣告甲", "thumbnail_url": "https://x/1.jpg",
+            "spend_7d": 1540.0, "grade": "wasted", "cost_per_result": None, "spend": 1540,
+            "result_count": 0, "daily_spend": 220.0,
+        })
+        self.assertEqual(result["ads"][1]["grade"], "over")
+        self.assertEqual(result["ads"][1]["cost_per_result"], 617)
+        self.assertEqual(result["keep"][0]["entity_id"], c)
+        self.assertEqual(result["keep"][0]["daily_spend"], 200.0)
+        self.assertEqual(result["daily_saving"], 220.0 + 617.0)
+        self.assertEqual(result["can_support"], 1)
+        self.assertEqual(result["active_ads"], 3)
+        self.assertEqual(result["campaign_id"], self.campaign)
+        self.assertEqual(result["campaign_name"], "活動一")
 
-    def test_partial_proposal_when_fewer_ads_are_eligible_than_the_excess(self):
+    def test_incomplete_seven_day_spend_still_closes_but_saving_is_unknown(self):
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
-        self.full_week(a, spend=10)
-        self.obs(b, WINDOW_END, spend=1)  # incomplete window -- ineligible
-        self.obs(c, WINDOW_END, spend=1)  # incomplete window -- ineligible
-        # excess wants 2, only a is eligible.
-        result = self.candidates(
-            [self.item(a), self.item(b), self.item(c)], can_support=1, active_ads=3,
-        )
-        self.assertEqual({row["entity_id"] for row in result["ads"]}, {a})
+        self.full_week(a, spend=220)
+        self.obs(b, WINDOW_END, spend=617)  # 1 of 7 days -- the 7-day average is unknown
+        items = [
+            self.item(a, "wasted", spend=1540, result_count=0),
+            self.item(b, "over", cost=617, spend=4319),
+            self.item(c, "on_target", cost=50, spend=1400),
+        ]
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(self.ids(result["ads"]), [a, b])
+        self.assertIsNone(result["ads"][1]["spend_7d"])
+        self.assertIsNone(result["ads"][1]["daily_spend"])
+        self.assertIsNone(result["daily_saving"])
 
     # -- open replacement lineage (correction 4) ----------------------------------------------
 
-    def test_new_ad_not_yet_verified_never_proposed(self):
+    def test_new_ad_not_yet_verified_never_closes(self):
         old = self.make_ad("old1")
         new = self.make_ad("new1")
         self.replace_ad(old, new, state="pending")  # not confirmed yet
         other = self.make_ad("other1")
-        for ad in (new, other):
-            self.full_week(ad, spend=1)  # new looks cheapest, but must be skipped
-        result = self.candidates(
-            [self.item(new), self.item(other)], can_support=1, active_ads=2,
-        )
-        self.assertEqual([row["entity_id"] for row in result["ads"]], [other])
+        items = [
+            self.item(new, "wasted", spend=1540, result_count=0),
+            self.item(other, "over", cost=600, spend=4200),
+        ]
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(self.ids(result["ads"]), [other])
+        self.assertEqual(self.ids(result["keep"]), [new])
 
-    def test_old_ad_awaiting_followup_pause_never_proposed(self):
+    def test_old_ad_awaiting_followup_pause_never_closes(self):
         old = self.make_ad("old2")
         new = self.make_ad("new2")
         self.replace_ad(old, new, state="confirmed")  # replacement is live
         other = self.make_ad("other2")
-        for ad in (old, other):
-            self.full_week(ad, spend=1)  # old looks cheapest, but its own follow-up is pending
-        result = self.candidates(
-            [self.item(old), self.item(other)], can_support=1, active_ads=2,
-        )
-        self.assertEqual([row["entity_id"] for row in result["ads"]], [other])
+        items = [
+            self.item(old, "over", cost=900, spend=6300),  # the most expensive, but pending
+            self.item(other, "over", cost=600, spend=4200),
+        ]
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(self.ids(result["ads"]), [other])
 
     def test_old_ad_eligible_again_once_its_own_followup_pause_exists(self):
         old = self.make_ad("old3")
@@ -384,12 +457,12 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.replace_ad(old, new, state="confirmed")
         self.insert_pause_item(old)  # the follow-up has happened (any non-superseded status)
         other = self.make_ad("other3")
-        self.full_week(old, spend=1)  # cheapest -- now eligible, so it's the one proposed
-        self.full_week(other, spend=100)
-        result = self.candidates(
-            [self.item(old), self.item(other)], can_support=1, active_ads=2,
-        )
-        self.assertEqual({row["entity_id"] for row in result["ads"]}, {old})
+        items = [
+            self.item(old, "over", cost=900, spend=6300),
+            self.item(other, "over", cost=600, spend=4200),
+        ]
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(self.ids(result["ads"]), [old])
 
     def test_new_ad_lineage_without_replaces_entity_id_is_not_open_lineage(self):
         """A fresh, non-replacement `new_ad` item (no `replaces_entity_id`) is out of scope for
@@ -411,10 +484,12 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.conn.commit()
         self._insert_action(item_id, set_id, fresh, state="pending")
         self._insert_handoff(item_id, set_id, fresh)
-        self.full_week(fresh, spend=1)  # cheapest -- proposed only if NOT wrongly excluded
-        self.full_week(other, spend=100)
-        result = self.candidates([self.item(fresh), self.item(other)], can_support=1, active_ads=2)
-        self.assertEqual({row["entity_id"] for row in result["ads"]}, {fresh})
+        items = [
+            self.item(fresh, "over", cost=900, spend=6300),
+            self.item(other, "over", cost=600, spend=4200),
+        ]
+        result = self.candidates(items, can_support=1)
+        self.assertEqual(self.ids(result["ads"]), [fresh])
 
 
 if __name__ == "__main__":
