@@ -24,7 +24,6 @@ import {
   type CampaignDetail,
   type CampaignLabels,
   type CampaignPerformance,
-  type SuccessMetric,
 } from "@/lib/adsApi";
 import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
@@ -36,7 +35,11 @@ import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./n
 // （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
 const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
 
-function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
+/** F28-I01: new close-outs always judge cost per result (`"cpa"`) against the one cap; the other
+ * two only remain on verdicts written before it, read back from `verdict_json.metric`. */
+type VerdictMetric = "cpa" | "roas" | "purchases";
+
+function metricLabel(metric: VerdictMetric, labels: CampaignLabels): string {
   if (metric === "cpa") return labels.cpa;
   if (metric === "purchases") return labels.count;
   return "ROAS";
@@ -51,14 +54,14 @@ function fmtPurchases(v: number | null): string {
 function fmtCpa(v: number | null): string {
   return v === null ? "算不出來" : formatCurrency(v);
 }
-function fmtMetricValue(metric: SuccessMetric, v: number | null): string {
+function fmtMetricValue(metric: VerdictMetric, v: number | null): string {
   if (metric === "cpa") return fmtCpa(v);
   if (metric === "purchases") return fmtPurchases(v);
   return formatMetaRoas(v);
 }
 
 interface AdsVerdictJson {
-  metric?: SuccessMetric;
+  metric?: VerdictMetric;
   target?: number | null;
   actual?: number | null;
   window?: { start: string | null; end: string | null };
@@ -73,13 +76,12 @@ interface AdsVerdictJson {
 function learningSentence(c: CampaignDetail): string | null {
   if (!c.verdict) return null;
   const vj = c.verdict_json as AdsVerdictJson;
-  const label = metricLabel(c.success_metric, c.labels ?? DEFAULT_LABELS);
   const sample = vj.sample_bucket ?? "";
   if (c.verdict === "看不出") {
-    return `「${c.name}」這次投放${vj.missing ?? ""}（樣本${sample}），${label} 目標暫時看不出達成與否。`;
+    return `「${c.name}」這次投放${vj.missing ?? ""}（樣本${sample}），每筆成本上限暫時看不出達成與否。`;
   }
-  const actual = typeof vj.actual === "number" ? Math.round(vj.actual * 100) / 100 : vj.actual;
-  return `「${c.name}」${label} 目標 ${vj.target ?? "－"}，實際 ${actual ?? "－"}，結果${c.verdict}（樣本${sample}）。`;
+  const num = (v: number | null | undefined) => (typeof v === "number" ? Math.round(v * 100) / 100 : v);
+  return `「${c.name}」每筆成本上限 ${num(vj.target) ?? "－"}，實際 ${num(vj.actual) ?? "－"}，結果${c.verdict}（樣本${sample}）。`;
 }
 
 /** F04-I23：結案卡與確認對話框共用同一句，`live` 時都要看到——只宣告一次，不抽成新元件。 */
@@ -567,6 +569,7 @@ function PerformanceReady({
 
 function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: CampaignDetail }) {
   const vj = c.verdict_json as AdsVerdictJson;
+  const metric: VerdictMetric = vj.metric ?? "cpa";
   const verdict = c.verdict ?? "看不出";
   const sentence = learningSentence(c);
   return (
@@ -581,17 +584,17 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="field-card">
             <div className="text-xs text-muted-foreground">判定指標</div>
-            <div className="text-sm font-semibold">{metricLabel(c.success_metric, c.labels ?? DEFAULT_LABELS)}</div>
+            <div className="text-sm font-semibold">{metricLabel(metric, c.labels ?? DEFAULT_LABELS)}</div>
           </div>
           <div className="field-card">
-            <div className="text-xs text-muted-foreground">目標</div>
+            <div className="text-xs text-muted-foreground">上限</div>
             <div className="text-sm font-semibold">
-              {vj.target == null ? "未設定" : fmtMetricValue(c.success_metric, vj.target)}
+              {vj.target == null ? "未設定" : fmtMetricValue(metric, vj.target)}
             </div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">實際</div>
-            <div className="text-sm font-semibold">{fmtMetricValue(c.success_metric, vj.actual ?? null)}</div>
+            <div className="text-sm font-semibold">{fmtMetricValue(metric, vj.actual ?? null)}</div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">樣本</div>

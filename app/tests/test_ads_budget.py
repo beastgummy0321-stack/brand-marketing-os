@@ -1,7 +1,7 @@
-"""app/tests/test_ads_budget.py — F03-I04 falsifiers: breakeven/target CPA never guess a margin,
-cold-start scenarios are 2/5/10x target CPA with the 冷啟動估算 flag, history scenarios are
-x0.6/x1/x1.6 of the previous daily budget with the sample named, and `split` always sums exactly
-to the total.
+"""app/tests/test_ads_budget.py — F03-I04 falsifiers: breakeven never guesses a margin,
+cold-start scenarios are 2/5/10x the one cap (F28-I01) with the 冷啟動估算 flag, history
+scenarios are x0.6/x1/x1.6 of the previous daily budget with the sample named, and `split`
+always sums exactly to the total.
 """
 
 import unittest
@@ -28,11 +28,10 @@ class BreakevenCpaTest(unittest.TestCase):
     def test_missing_economics_row_returns_none(self):
         self.assertIsNone(budget.breakeven_cpa(None))
 
-    def test_target_cpa_is_070_of_breakeven(self):
-        self.assertAlmostEqual(budget.target_cpa(300), 210)
-
-    def test_target_cpa_of_none_is_none(self):
-        self.assertIsNone(budget.target_cpa(None))
+    def test_no_ratio_constant_survives(self):
+        # F28-I01: cold start multiplies the resolved cap itself -- no 0.7 on top of it.
+        self.assertFalse(hasattr(budget, "TARGET_CPA_RATIO"))
+        self.assertFalse(hasattr(budget, "target_cpa"))
 
 
 class ScenariosTest(unittest.TestCase):
@@ -46,27 +45,34 @@ class ScenariosTest(unittest.TestCase):
         self.product_id = bi_repo.create_product(
             web.conn, self.brand_id, name="測試商品", actor="測試員")["id"]
 
-    def test_cold_start_scenarios_are_2_5_10x_target_cpa_and_flagged(self):
+    def test_cold_start_scenarios_are_2_5_10x_the_cap_and_flagged(self):
         bi_repo.save_product_economics(
             web.conn, self.brand_id, self.product_id, selling_price=500, currency="TWD",
             confirmed_by="測試員", actor="測試員", unit_variable_cost=150, shipping_cost=50,
         )
         result = budget.scenarios(
             web.conn, self.org_id, self.brand_id, product_ids=[self.product_id], days=10,
-            history=None,
+            history=None, cap=300,
         )
         self.assertEqual(result["mode"], "cold_start")
         by_key = {row["key"]: row for row in result["scenarios"]}
-        target = budget.target_cpa(300)  # 210
-        self.assertAlmostEqual(by_key["minimum"]["daily"], round(target * 2))
-        self.assertAlmostEqual(by_key["recommended"]["daily"], round(target * 5))
-        self.assertAlmostEqual(by_key["aggressive"]["daily"], round(target * 10))
+        self.assertEqual(by_key["minimum"]["daily"], 600)
+        self.assertEqual(by_key["recommended"]["daily"], 1500)
+        self.assertEqual(by_key["aggressive"]["daily"], 3000)
         for row in result["scenarios"]:
             self.assertIn("冷啟動估算", row["caption"])
+            self.assertIn("上限", row["caption"])
             self.assertEqual(row["total"], row["daily"] * 10)
         self.assertEqual(result["recommended"], "recommended")
+        self.assertEqual(result["basis"]["cap"], 300)
+        self.assertEqual(result["basis"]["product_id"], self.product_id)
 
-    def test_missing_economics_yields_no_fabricated_scenario_numbers(self):
+    def test_no_cap_yields_no_fabricated_scenario_numbers(self):
+        # Product economics alone never turn into a number here: the caller resolves the cap.
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, self.product_id, selling_price=500, currency="TWD",
+            confirmed_by="測試員", actor="測試員", unit_variable_cost=150, shipping_cost=50,
+        )
         result = budget.scenarios(
             web.conn, self.org_id, self.brand_id, product_ids=[self.product_id], days=10,
             history=None,

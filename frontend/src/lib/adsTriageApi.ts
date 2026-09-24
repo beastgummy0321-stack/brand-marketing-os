@@ -39,12 +39,21 @@ export interface TriageWindow {
   previous_start: string; previous_end: string;
   extended_from: number | null;
 }
+/** F28-I01: the one cost-per-result cap (screen word 上限) -- the user's own, else break-even
+ * using product economics; never a trailing actual. */
+export type CapBasis = "own" | "break_even";
 export interface TriageTargetView {
-  value: number | null; basis: "own" | "break_even" | "trailing_30" | null;
+  value: number | null; basis: CapBasis | null;
   result_kind: string | null;
   // F19-I06: always sent by the backend (`app/ads/result_kinds.py::label()`).
   result_label: string;
   missing: string[];
+}
+/** F28-I01 cap view (`app/ads/targets.py::resolve`): campaign detail `cap`, triage `target`.
+ * `break_even`/`price` are sent even when an own cap wins (打平 mark, ROAS 參考 = price ÷ cap). */
+export interface CapView extends TriageTargetView {
+  own_value: number | null; break_even: number | null; price: number | null;
+  product_id: string | null; revision: number;
 }
 export interface TriageMetricsView {
   spend: number | null; result_count: number | null; cost_per_result: number | null;
@@ -269,14 +278,11 @@ export interface QueuePayload {
   kinds_available: string[]; kinds_pending: string[];
 }
 
-export interface CampaignTarget {
-  campaign_id: string; product_ids: string[]; own_value: number | null; revision: number;
-  value: number | null; basis: "own" | "break_even" | "trailing_30" | null;
-  result_kind: string | null; result_label: string; result_kinds: ResultKindOption[];
-  missing: string[];
+export interface CampaignTarget extends CapView {
+  campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
 }
 export interface TargetRequest {
-  result_kind?: string | null; basis?: "own" | "break_even" | "trailing_30" | null;
+  result_kind?: string | null; basis?: CapBasis | null;
   value?: number | null; product_id?: string | null; price?: number | null;
   variable_cost?: number | null; expected_revision: number;
 }

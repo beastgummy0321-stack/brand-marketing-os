@@ -87,7 +87,7 @@ class StrategyTestBase(unittest.TestCase):
     def _create_campaign(self, **overrides) -> dict:
         campaign = {
             "name": "測試 Campaign", "goal_text": "幫夜跑背心衝購買",
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "objective": "購買", "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-10", "status": "draft",
             "context_json": {"product_ids": [self.product["id"]]},
         }
@@ -152,7 +152,8 @@ class ScenarioAmountUnknownTest(StrategyTestBase):
 
     def setUp(self):
         super().setUp()
-        self.campaign = self._create_campaign(success_target=None)
+        # No own cap and no product -> no cap resolves, so every amount stays unknown.
+        self.campaign = self._create_campaign(target_cost=None, context_json={"product_ids": []})
         strategy.PROVIDER = _fake(_VALID_REPLY)
         detail = self._generate()
         budget_basis_json = dict(detail["budget_basis_json"])
@@ -766,13 +767,13 @@ if __name__ == "__main__":
 
 class CurrentCpaScenariosTest(StrategyTestBase):
     def test_edit_refresh_and_selection_keep_adopted_amount(self):
-        self.campaign = self._create_campaign(end_date="2026-10-14", success_target=210)
+        self.campaign = self._create_campaign(end_date="2026-10-14", target_cost=210)
         strategy.PROVIDER = _fake(_VALID_REPLY)
         self._generate()
         strategy.select_scenario(web.conn, self.org_id, self.brand_id, self.campaign["id"],
                                  scenario_key="recommended", actor=ACTOR)
-        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"],
-                                 {"success_target": 300})
+        ads_repo.save_campaign_target(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                      basis="own", value=300, expected_revision=0, actor=ACTOR)
         for _ in range(2):
             detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
                                               self.campaign["id"])
@@ -780,11 +781,22 @@ class CurrentCpaScenariosTest(StrategyTestBase):
             assert detail["budget_planned"] == 14700
             rows = detail["budget_basis_json"]["scenarios"]["scenarios"]
             assert [r["total"] for r in rows] == [8400, 21000, 42000]
-            assert detail["budget_planned"] / detail["success_target"] == 49
-        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"],
-                                 {"success_metric": "roas", "success_target": 2})
+            assert float(detail["budget_planned"]) / detail["cap"]["value"] == 49
+        # Dropping the own cap falls back to break-even (1000 - 300 - 100 = 600) for the
+        # projection only; the adopted amount never moves.
+        ads_repo.save_campaign_target(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                      basis="break_even", expected_revision=1, actor=ACTOR)
         detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         assert detail is not None
         rows = detail["budget_basis_json"]["scenarios"]["scenarios"]
-        assert all(r["total"] is None for r in rows)
+        assert [r["total"] for r in rows] == [16800, 42000, 84000]
         assert detail["budget_planned"] == 14700
+
+    def test_prompt_names_the_one_cap(self):
+        self.campaign = self._create_campaign(target_cost=450)
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        self._generate()
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("上限（每筆購買成本）：450", prompt)
+        self.assertNotIn("success_", prompt)

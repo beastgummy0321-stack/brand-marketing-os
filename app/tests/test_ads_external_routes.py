@@ -68,7 +68,7 @@ class CampaignWithoutRootTest(unittest.TestCase):
         from app.ads import repository
 
         campaign = repository.create_campaign(self.conn, self.org, self.brand, {
-            "name": "新活動", "goal_text": "賣商品", "objective": "購買", "success_metric": "roas",
+            "name": "新活動", "goal_text": "賣商品", "objective": "購買",
         })["id"]
         self.conn.commit()
         with patch.object(sync, "request_sync", return_value={"id": "job"}) as request:

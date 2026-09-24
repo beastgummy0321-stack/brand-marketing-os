@@ -27,7 +27,6 @@ class JobsOriginTest(unittest.TestCase):
                 "name": "內部",
                 "goal_text": "目標",
                 "objective": "購買",
-                "success_metric": "cpa",
                 "status": "ended",
                 "start_date": date(2000, 1, 1),
                 "end_date": date(2000, 1, 2),

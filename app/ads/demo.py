@@ -37,7 +37,7 @@ def _create_campaign(conn, org_id: str, brand_id: str, *, days: int) -> dict:
     start = today - timedelta(days=max(days - 1, 0))
     campaign = ads_repo.create_campaign(conn, org_id, brand_id, {
         "name": CAMPAIGN_NAME, "goal_text": "示範投放中心整個閉環，從發布走到成效",
-        "objective": "購買", "success_metric": "cpa", "success_target": 300,
+        "objective": "購買", "target_cost": 300,
         "start_date": start, "end_date": today, "status": "draft",
     }, created_by=ACTOR)
     group = plan.create_group(

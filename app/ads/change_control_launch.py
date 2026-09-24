@@ -16,8 +16,6 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
         "name",
         "goal_text",
         "objective",
-        "success_metric",
-        "success_target",
         "start_date",
         "end_date",
         "budget_planned",

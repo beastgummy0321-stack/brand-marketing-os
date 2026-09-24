@@ -28,8 +28,7 @@ def _campaign_payload(**overrides) -> dict:
         "name": "測試 Campaign",
         "goal_text": "想在雙十一前把新品衝出去",
         "objective": "衝購買",
-        "success_metric": "cpa",
-        "success_target": 350,
+        "target_cost": 350,
         "start_date": "2026-11-01",
         "end_date": "2026-11-10",
     }
@@ -88,23 +87,33 @@ class CampaignRoundTripTest(_AdsModelTestBase):
         self.assertEqual(detail["budget_total"], 5000)
         self.assertIsNone(detail["budget_planned"])
 
-    def test_null_success_target_round_trips(self):
+    def test_null_cap_round_trips(self):
         campaign = ads_repo.create_campaign(
             web.conn, self.org_id, self.brand_id,
-            _campaign_payload(success_target=None), created_by=ACTOR,
+            _campaign_payload(target_cost=None), created_by=ACTOR,
         )
         web.conn.commit()
 
         detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
-        self.assertIsNone(detail["success_target"])
+        self.assertIsNone(detail["cap"]["own_value"])
 
-    def test_non_numeric_success_target_rejected(self):
+    def test_cap_round_trips_as_the_own_cap(self):
+        campaign = ads_repo.create_campaign(
+            web.conn, self.org_id, self.brand_id, _campaign_payload(), created_by=ACTOR,
+        )
+        web.conn.commit()
+
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(detail["cap"]["value"], 350)
+        self.assertEqual(detail["cap"]["basis"], "own")
+
+    def test_non_numeric_cap_rejected(self):
         with self.assertRaises(ValueError) as ctx:
             ads_repo.create_campaign(
                 web.conn, self.org_id, self.brand_id,
-                _campaign_payload(success_target="便宜一點"), created_by=ACTOR,
+                _campaign_payload(target_cost="便宜一點"), created_by=ACTOR,
             )
-        self.assertEqual(str(ctx.exception), "success_target_unknown")
+        self.assertEqual(str(ctx.exception), "target_value_unknown")
 
 
 class BrandIsolationTest(_AdsModelTestBase):

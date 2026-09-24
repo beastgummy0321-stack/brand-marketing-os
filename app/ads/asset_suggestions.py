@@ -6,6 +6,7 @@ import math
 from app import background
 from app.ads import asset_suggestion_policy as policy
 from app.ads import repository as campaigns
+from app.ads import targets
 from app.ads import user_assets_repository as assets
 from app.core import db, settings
 from app.llm import context_compiler, gateway, providers
@@ -123,15 +124,14 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
                 "name",
                 "goal_text",
                 "objective",
-                "success_metric",
-                "success_target",
-                "success_basis",
                 "budget_total",
                 "start_date",
                 "end_date",
                 "updated_at",
             )
-        },
+        }
+        # F28-I01: the one cap (cost per result), resolved like every other reader.
+        | {"cap": targets.resolve(conn, org, brand, campaign)["value"]},
         "native": [dict(n) for n in native],
         "native_overflow": len(native) > 100,
     }
@@ -305,8 +305,8 @@ def _result(conn, org, brand, data, item, answer):
     if not campaign["goal_text"] or not campaign["objective"]:
         problems.append("請補活動目標，才能確認此批用途。")
     notes = []
-    if not campaign["success_metric"] or campaign["success_target"] is None:
-        notes.append("成功條件待補，不保證曝光或花費。")
+    if campaign["cap"] is None:
+        notes.append("上限待補，不保證曝光或花費。")
     if item["media_status"] != "ready":
         problems.append(item["media_error"] or "原檔預覽尚未完成，請先完成媒體處理。")
     if any(not str(effective.get(k) or "").strip() for k in policy.FIELDS):

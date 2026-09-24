@@ -11,8 +11,8 @@ import { getTriage, type TriageClass, type TriageClosedBlock, type TriageData, t
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { STATUS_LABEL, STATUS_TONE } from "./status";
 
-type Basis = "own" | "break_even" | "trailing_30";
-const BASIS_LABEL: Record<Basis, string> = { own: "自訂", break_even: "損益兩平", trailing_30: "近 30 天" };
+type Basis = "own" | "break_even";
+const BASIS_LABEL: Record<Basis, string> = { own: "自訂", break_even: "暫用打平" };
 
 /** 目標視圖：直接沿用 `TriageItem.target`（`TriageTargetView`）的形狀——campaign 沒有廣告時
  * (`items.length===0`) 這張卡完全不顯示目標（review 裁決 #2），所以不再需要另外打
@@ -34,9 +34,8 @@ const SEGMENTS: { cls: Exclude<TriageClass, "no_target">; label: string; swatch:
 
 /** 目標／成本數字：後端不回幣別，`formatCurrency` 又是寫死 NT$——套在可能來自非台幣帳戶的
  * 數字上是錯的標籤（design-system §7、review 裁決）。v7 原型也只印數字本身（「450」），這裡
- * 照樣不印符號，只留千分位＋等寬數字。`trailing_30` 依據是 spend/result_count 現算出來的，
- * 常是小數（例如 5200/15＝346.67）——不用 `Math.round`，最多留兩位小數，3.1 還是印 3.1，不
- * 印成 3。金額類的總預算不受影響，那是系統自己算的 TWD 整數，繼續用 `formatCurrency`。 */
+ * 照樣不印符號，只留千分位＋等寬數字。打平依據是售價減成本現算出來的，可能是小數——
+ * 不用 `Math.round`，最多留兩位小數，3.1 還是印 3.1，不印成 3。金額類的總預算不受影響，那是系統自己算的 TWD 整數，繼續用 `formatCurrency`。 */
 function formatPlainNumber(value: number): string {
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
 }

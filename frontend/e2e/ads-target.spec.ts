@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-/** F19-I05／F19-I06 e2e：設定目標頁的最小走查——建一個活動、選一個成果＋own 依據存一個目標值、
+/** F19-I05／F19-I06 e2e（F28-I01 更新：系統自建的活動一律算購買，成果已預選；存的是唯一的
+ * 每筆成本上限）：設定目標頁的最小走查——建一個活動、用 own 依據存一個上限、
  * 存檔後回投放中心、回這頁與整頁重新整理後成果與數字都還在。跟 `smoke.spec.ts` 同一種寫法：每次
  * 跑用一個新帳號＋新品牌，不依賴任何隔離 fixture（那些 `F1[3-9]*_E2E_CONTEXT` 只在設了對應環境
  * 變數才跑，這支任何時候都跑，包含 CI 的 `npm run e2e`）。webServer 已經是
@@ -38,18 +39,15 @@ test("設定目標：own 依據存檔後，回投放中心、重新整理都還�
 
   const targetUrl = `/app/brands/${brandId}/ads/campaigns/${campaignId}/target`;
 
-  // --- 打開設定目標頁：新活動還沒有成果可算，「看什麼成果」分段選單沒有任何按鈕預選 ----------
+  // --- 打開設定目標頁：系統自建的活動一律算購買（F28-I01），成果已預選；還沒有上限可存 -------
   await page.goto(targetUrl);
   await expect(page.getByRole("heading", { name: "這個活動的目標", exact: true })).toBeVisible();
   const resultGroup = page.getByRole("group", { name: "看什麼成果", exact: true });
-  await expect(resultGroup.getByRole("button", { name: "購買", exact: true })).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByText("每次成果最多花多少", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "儲存目標", exact: true })).toBeDisabled();
-
-  // --- F19-I06：選一個成果（購買）——標題即時換成「每次購買最多花多少」，表單變 dirty --------
-  await resultGroup.getByRole("button", { name: "購買", exact: true }).click();
   await expect(resultGroup.getByRole("button", { name: "購買", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText("每次購買最多花多少", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "儲存目標", exact: true })).toBeDisabled();
+  // 近 30 天的實際成本不再是依據（F28-I01）。
+  await expect(page.getByText("自己近 30 天", { exact: true })).toHaveCount(0);
 
   // --- 選「自訂」依據，填一個目標值，存檔 -------------------------------------------------
   await page.getByRole("button", { name: /^自訂/ }).click();
@@ -64,7 +62,10 @@ test("設定目標：own 依據存檔後，回投放中心、重新整理都還�
   const savedResponse = await saved;
   expect(savedResponse.ok(), await savedResponse.text()).toBe(true);
   const savedBody = await savedResponse.request().postDataJSON();
-  expect(savedBody.result_kind).toBe("purchase");
+  // 成果沒動就不送 result_kind（不把推導值凍結成使用者選擇）；存的是 own 上限 120。
+  expect(savedBody.basis).toBe("own");
+  expect(savedBody.value).toBe(120);
+  expect(savedBody.result_kind).toBeUndefined();
 
   // --- 存檔後回投放中心（沒有另一個確認畫面，回到列表本身就是「已儲存」的證明）--------------
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads$`));

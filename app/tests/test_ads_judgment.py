@@ -145,7 +145,7 @@ class CampaignDetailJudgmentTest(unittest.TestCase):
         )["id"]
         campaign = {
             "name": "判斷句測試 Campaign", "goal_text": "驗證判斷句", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
         }
         campaign_id = ads_repo.create_campaign(
             web.conn, org_id, brand_id, campaign, created_by=ACTOR,
@@ -205,7 +205,7 @@ class AdsHomeRouteTest(unittest.TestCase):
 
 class ConversionLabelsTest(unittest.TestCase):
     """F05-I12：「每筆名單成本」與 CPA 是同一個算式的兩個名字——只換 label，不新增
-    `success_metric` 的值（§8 第 4 條）。"""
+    指標（§8 第 4 條）。"""
 
     def test_purchase_goal(self):
         labels = judgment.conversion_labels("purchase")

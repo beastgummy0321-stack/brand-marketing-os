@@ -102,7 +102,7 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     // 純數字，沒有 NT$（後端不回幣別，formatCurrency 的 NT$ 是錯的標籤）。
     expect(screen.getByText("450", { exact: true })).toBeTruthy();
     expect(screen.queryByText(/NT\$/)).toBeNull();
-    expect(screen.getByText("損益兩平")).toBeTruthy();
+    expect(screen.getByText("暫用打平")).toBeTruthy();
     // F26-I02: the count chip now reads 「・投放中 N 則」 (`state.items` is active-only since
     // F26-I01) instead of the old bare 「・N 則」.
     expect(screen.getByText(textOf("・投放中 5 則"))).toBeTruthy();
@@ -118,16 +118,16 @@ describe("CampaignCards（F19-I04，v7 活動卡）", () => {
     expect(screen.queryByText(/資料不足/)).toBeNull();
   });
 
-  it("目標數字可能是算出來的小數（trailing_30＝spend/result_count）：最多兩位小數，不用 Math.round", async () => {
+  it("目標數字可能是算出來的小數（打平＝售價減成本）：最多兩位小數，不用 Math.round", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage([
-      triageItem({ target: { value: 5200 / 15, basis: "trailing_30", result_kind: "purchase", result_label: "購買", missing: [] } }),
+      triageItem({ target: { value: 5200 / 15, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] } }),
     ]));
 
     renderCards();
 
     expect(await screen.findByText("346.67", { exact: true })).toBeTruthy();
     expect(screen.queryByText("347")).toBeNull();
-    expect(screen.getByText("近 30 天")).toBeTruthy();
+    expect(screen.getByText("暫用打平")).toBeTruthy();
   });
 
   it("五分類長條：寬度＝該分類則數／已判斷則數（1/2/1/1/0 of 5 → 20/40/20/20/0%）", async () => {

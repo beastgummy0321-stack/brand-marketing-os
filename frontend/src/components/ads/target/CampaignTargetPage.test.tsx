@@ -39,9 +39,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     name: "日常商品推廣",
     goal_text: null,
     objective: "購買",
-    success_metric: "cpa",
-    success_target: null,
-    success_basis: null,
+    cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: null,
     end_date: null,
     status: "live",
@@ -85,6 +83,9 @@ function target(overrides: Partial<CampaignTarget> = {}): CampaignTarget {
     revision: 0,
     value: null,
     basis: null,
+    break_even: null,
+    price: null,
+    product_id: null,
     result_kind: null,
     result_label: "成果",
     result_kinds: RESULT_KINDS,
@@ -123,7 +124,9 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("載入後顯示目前的成果與已解出的目標線；建議 chip 落在目前生效的依據卡上", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValue(target({ basis: "trailing_30", value: 380, result_kind: "purchase" }));
+    mockGetTarget.mockResolvedValue(
+      target({ basis: "break_even", value: 380, break_even: 380, result_kind: "purchase", product_ids: ["prd_1"] }),
+    );
     renderPage();
 
     expect(await screen.findByText("購買")).toBeTruthy();
@@ -132,7 +135,9 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect((screen.getByRole("button", { name: "儲存目標" }) as HTMLButtonElement).disabled).toBe(true);
 
     const badge = screen.getByText("建議");
-    expect(badge.closest("button")?.textContent).toContain("自己近 30 天");
+    expect(badge.closest("button")?.textContent).toContain("打平值");
+    // F28-I01: this campaign's own trailing-30-day actual is no longer a basis.
+    expect(screen.queryByText("自己近 30 天")).toBeNull();
   });
 
   it("target.basis 是 break_even 時，建議只落在打平值卡", async () => {
@@ -144,7 +149,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
     expect(badge.closest("button")?.textContent).toContain("打平值");
   });
 
-  it("依據是 own（使用者自訂覆寫）時：任何一張卡都不顯示「建議」——resolve() 提早回傳，根本沒評估過 break_even／trailing_30", async () => {
+  it("依據是 own（使用者自訂覆寫）時：任何一張卡都不顯示「建議」——resolve() 提早回傳，「建議」只落在生效中的打平值", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
     mockGetTarget.mockResolvedValue(target({ basis: "own", value: 200, own_value: 200, missing: [] }));
     renderPage();
@@ -168,7 +173,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("選一個成果：畫面即時換標題、表單變 dirty、存檔會把 result_kind 一起送出", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
+    mockGetTarget.mockResolvedValue(target({ missing: ["result_kind"] }));
     mockPutTarget.mockResolvedValue(
       target({ basis: "own", value: 50, own_value: 50, revision: 1, result_kind: "lead", result_label: "名單" }),
     );
@@ -194,7 +199,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("own 依據：輸入金額後可以儲存，成功後回投放中心", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
+    mockGetTarget.mockResolvedValue(target({ missing: ["result_kind"] }));
     mockPutTarget.mockResolvedValue(target({ basis: "own", value: 120, own_value: 120, revision: 1 }));
     renderPage();
 
@@ -215,10 +220,10 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("review fix：已知（推導出）的成果會預選，但只改 own 數字不碰選單時，存檔不送 result_kind——避免把 resolve() 推導值凍結進使用者選擇，擋住之後的同步", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    // trailing_30 推導出的 result_kind：`ads_campaign.result_kind` 本身仍可能是 NULL（見
-    // `app/ads/targets.py::resolve()`／`external_sync.py` 的 `... AND result_kind IS NULL`）。
+    // 系統自建活動推導出的 result_kind：`ads_campaign.result_kind` 本身仍可能是 NULL（見
+    // `app/ads/targets.py::effective_result_kind()`／`external_sync.py` 的 `... AND result_kind IS NULL`）。
     mockGetTarget.mockResolvedValue(
-      target({ basis: "trailing_30", value: 380, result_kind: "purchase", missing: [] }),
+      target({ basis: "break_even", value: 380, break_even: 380, result_kind: "purchase", missing: [], product_ids: ["prd_1"] }),
     );
     mockPutTarget.mockResolvedValue(
       target({ basis: "own", value: 500, own_value: 500, revision: 1, result_kind: "purchase" }),
@@ -241,7 +246,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("own 依據：0 不是有效目標，按鈕不開、旁邊顯示缺什麼", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
+    mockGetTarget.mockResolvedValue(target({ missing: ["result_kind"] }));
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /自訂/ }));
@@ -309,7 +314,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("版本衝突：用錯誤信封的 code 認出來，不靠比對中文訊息（F19-I06：訊息文字換了也認得出）", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValueOnce(target({ missing: ["trailing_30"] }));
+    mockGetTarget.mockResolvedValueOnce(target({ missing: ["result_kind"] }));
     // 訊息文字刻意跟 `_TARGET_ERRORS["target_conflict"]` 不一樣——只靠 `code` 判斷才會通過。
     mockPutTarget.mockRejectedValueOnce(new TriageRequestRejected("換了一句不一樣的訊息", "target_conflict"));
     renderPage();
@@ -327,7 +332,7 @@ describe("CampaignTargetPage（F19-I05）", () => {
 
   it("未儲存離開有保護：離開整頁連結會先確認", async () => {
     mockGetCampaign.mockResolvedValue(campaign());
-    mockGetTarget.mockResolvedValue(target({ missing: ["trailing_30"] }));
+    mockGetTarget.mockResolvedValue(target({ missing: ["result_kind"] }));
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPage();
 

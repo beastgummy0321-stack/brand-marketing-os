@@ -152,8 +152,7 @@ class CampaignObjectiveFamilyCardTest(unittest.TestCase):
     def test_internal_campaign_card_carries_sales_family(self):
         campaign = repository.create_campaign(
             self.conn, self.org, self.brand,
-            {"name": "內部購買活動", "goal_text": "目標", "objective": "購買",
-             "success_metric": "cpa"},
+            {"name": "內部購買活動", "goal_text": "目標", "objective": "購買"},
         )
         self.conn.commit()
         self.assertEqual(self._card(campaign["id"])["campaign_objective"], "sales")

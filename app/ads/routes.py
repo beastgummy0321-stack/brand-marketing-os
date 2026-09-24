@@ -229,26 +229,25 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
 
 
 class PatchCampaignRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    # `extra="allow"` only so the handler can answer an unknown key AFTER the tenant checks:
+    # a retired goal key gets its own 400, any other unknown key the usual 422 (F28-I01).
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
     goal_text: str | None = None
     name: str | None = None
     objective: str | None = None
-    success_metric: str | None = None
-    success_target: float | None = None
-    success_basis: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     constraints_json: dict | None = None
     product_ids: list[str] | None = None
 
 
+RETIRED_GOAL_MESSAGE = "成功條件已改成一個上限（每筆成果成本），請在策略頁設定上限。"
+
 _PATCH_CAMPAIGN_ERRORS = {
     external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "name_unknown": (400, "名稱不能是空白。"),
     "objective_unknown": (400, "目標不能是空白。"),
-    "success_metric_unknown": (400, "成功指標只能是 cpa／roas／purchases。"),
-    "success_target_unknown": (400, "成功條件的目標值必須是數字。"),
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
     "campaign_bound": (
@@ -263,10 +262,16 @@ _PATCH_CAMPAIGN_ERRORS = {
 @router.patch("/brands/{brand_id}/campaigns/{campaign_id}")
 def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: PatchCampaignRequest):
     """F03-I03：草稿欄位的一般編輯——不是 `ads_action`（還沒有任何東西綁定到平台，§0）。
-    只送使用者真的填過的欄位（`exclude_unset`），沒填的欄位維持原樣，`success_target`／
-    `success_basis` 因此可以被明確清成 `null`（使用者送 `null` 也算「填過」）。"""
+    只送使用者真的填過的欄位（`exclude_unset`），沒填的欄位維持原樣（使用者送 `null` 也算
+    「填過」）。F28-I01：舊的成功條件欄位（`success_` 開頭）已退役——上限只在策略頁的
+    `PUT .../target` 設定，送來一律 400，不悄悄忽略。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    unknown = sorted(body.model_extra or {})
+    if any(key.startswith("success_") for key in unknown):
+        raise web.ApiError(400, "goal_fields_retired", RETIRED_GOAL_MESSAGE)
+    if unknown:
+        raise web.ApiError(422, "field_unknown", "不認得的欄位：" + "、".join(unknown))
     updates = body.model_dump(exclude_unset=True)
     try:
         repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
@@ -860,8 +865,8 @@ class TargetRequest(BaseModel):
 _TARGET_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "target_conflict": (409, "目標設定已被更新，請重新載入後再試一次。"),
-    "target_basis_unknown": (400, "basis 只能是 own／break_even／trailing_30。"),
-    "target_value_unknown": (400, "own 目標值必須是數字。"),
+    "target_basis_unknown": (400, "basis 只能是 own／break_even。"),
+    "target_value_unknown": (400, "上限必須是大於 0 的數字。"),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
     "product_economics_unknown": (400, "這個商品還沒有售價可以核對，請先補售價。"),
     # F19-I06: result_kind is a trust-boundary value -- `app/ads/result_kinds.py::LABELS` is the

@@ -96,7 +96,7 @@ class PublishTestBase(unittest.TestCase):
         ]
         campaign = {
             "name": "測試 Campaign", "goal_text": "幫產品衝購買",
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "objective": "購買", "target_cost": 300,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": budget_planned, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},

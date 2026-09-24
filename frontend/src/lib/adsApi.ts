@@ -10,10 +10,9 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
-import type { CampaignCapacity, CampaignObjectiveFamily } from "./adsTriageApi";
+import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
-export type SuccessMetric = "cpa" | "roas" | "purchases";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
 
 export interface CampaignOutcomeTotals {
@@ -159,9 +158,8 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   name: string;
   goal_text: string | null;
   objective: string;
-  success_metric: SuccessMetric;
-  success_target: number | null;
-  success_basis: string | null;
+  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`). */
+  cap: CapView;
   start_date: string | null;
   end_date: string | null;
   status: CampaignStatus;
@@ -262,14 +260,11 @@ export interface CreateCampaignInput {
 }
 
 /** `PATCH /campaigns/{id}` 的請求體——草稿欄位的一般編輯，不是 `ads_action`。所有欄位選填，
- * 沒帶到的欄位維持原樣；`success_target`／`success_basis` 可以明確傳 `null` 清空。 */
+ * 沒帶到的欄位維持原樣。上限不在這裡改（F28-I01：`PUT .../target`）。 */
 export interface PatchCampaignInput {
   goal_text?: string;
   name?: string;
   objective?: string;
-  success_metric?: SuccessMetric;
-  success_target?: number | null;
-  success_basis?: string | null;
   start_date?: string;
   end_date?: string;
   constraints_json?: Record<string, unknown>;

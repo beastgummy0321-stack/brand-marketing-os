@@ -38,7 +38,7 @@ class SimulatedPublishTestBase(unittest.TestCase):
                   ads_per_group: int = 2) -> dict:
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": "測試 Campaign", "goal_text": "測試模擬發布", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
             "start_date": start_date, "end_date": end_date, "status": "draft",
         }, created_by=ACTOR)
         for g in range(groups):

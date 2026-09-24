@@ -43,7 +43,7 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
     if (busy || !selected.length || selected.length > 10) return;
     setBusy(true); setError("");
     const selectedRows = rows.filter(p => p.is_current && selected.includes(p.id));
-    const signature = JSON.stringify({ placements: selectedRows.map(p => [p.id, p.revision]), summary, goal: campaign.goal_text, objective: campaign.objective, target: campaign.success_target });
+    const signature = JSON.stringify({ placements: selectedRows.map(p => [p.id, p.revision]), summary, goal: campaign.goal_text, objective: campaign.objective, target: campaign.cap.value });
     if (requestKey.current?.signature !== signature) requestKey.current = { signature, key: crypto.randomUUID() };
     try {
       const result = await suggestAssets(brandId, campaign.id, selectedRows, requestKey.current.key, summary);

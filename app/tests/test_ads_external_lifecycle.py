@@ -35,13 +35,13 @@ class ExternalLifecycleTest(unittest.TestCase):
         for key in (
             "goal_text",
             "objective",
-            "success_metric",
-            "success_target",
             "start_date",
             "end_date",
             "budget_total",
         ):
             self.assertIsNone(campaign[key], key)
+        self.assertFalse([key for key in campaign if key.startswith("success_")])
+        self.assertIsNone(campaign["cap"]["value"])
         self.assertEqual(campaign["origin"], "imported")
         self.assertEqual(campaign["groups"], [])
         self.assertEqual(campaign["external_view"]["observations"], [])
@@ -131,8 +131,6 @@ class ExternalLifecycleTest(unittest.TestCase):
                 "name": "internal",
                 "goal_text": "目標",
                 "objective": "購買",
-                "success_metric": "cpa",
-                "success_target": None,
             },
         )
         detail = repository.campaign_detail(self.conn, self.org, self.brand, row["id"])
@@ -146,11 +144,12 @@ class ExternalLifecycleTest(unittest.TestCase):
             json={
                 "goal_text": "增加詢問",
                 "objective": "詢問",
-                "success_metric": "cpa",
-                "success_target": 100,
             },
         )
         self.assertEqual(result.status_code, 200, result.text)
+        retired = self.client.patch(self.url, json={"success_target": 100})
+        self.assertEqual(retired.status_code, 400, retired.text)
+        self.assertEqual(retired.json()["error"]["code"], "goal_fields_retired")
         self.assertEqual(result.json()["campaign"]["objective"], "詢問")
         self.assertIsNone(result.json()["campaign"]["start_date"])
         result = self.client.patch(

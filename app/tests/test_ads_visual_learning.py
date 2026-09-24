@@ -41,12 +41,12 @@ class VisualLearningTestBase(unittest.TestCase):
         self.today = coresettings.today_for_org(self.conn, org_id=self.org_id)
         self.conn.commit()
 
-    def _campaign(self, *, metric="cpa", target=999999.0, start_date=None, end_date=None) -> dict:
+    def _campaign(self, *, target=999999.0, start_date=None, end_date=None) -> dict:
         start_date = start_date or (self.today - timedelta(days=2))
         end_date = end_date or self.today
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": f"測試 視覺學習 {start_date}", "goal_text": "衝一波", "objective": "購買",
-            "success_metric": metric, "success_target": target,
+            "target_cost": target,
             "start_date": start_date, "end_date": end_date, "status": "live",
         }, created_by=ACTOR)
         self.conn.commit()

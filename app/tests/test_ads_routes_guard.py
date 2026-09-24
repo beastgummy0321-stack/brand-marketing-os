@@ -134,7 +134,7 @@ class AdsRoutesValidationStillFiresTest(unittest.TestCase):
         )["id"]
         campaign = {
             "name": "守門測試 Campaign", "goal_text": "驗證欄位守門",
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "objective": "購買", "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
             "budget_planned": 1400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": []}},
@@ -191,8 +191,7 @@ def _fake(rendered_output: str) -> providers.FakeProvider:
 
 
 _BRIEF_REPLY = json.dumps({
-    "objective": "購買", "success_metric": "cpa", "success_target": 500,
-    "success_basis": "依過去 CPA 推算", "product_ids": [], "audience_hint": None, "notes": None,
+    "objective": "購買", "cap": 500, "product_ids": [], "audience_hint": None, "notes": None,
 }, ensure_ascii=False)
 
 _STRATEGY_REPLY = json.dumps({
@@ -279,7 +278,7 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
 
         patch = self.client.patch(
             f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}",
-            json={"success_target": 400}, headers=self.headers,
+            json={"goal_text": "幫夜跑背心衝購買"}, headers=self.headers,
         )
         self._assert_shape(patch)
 
