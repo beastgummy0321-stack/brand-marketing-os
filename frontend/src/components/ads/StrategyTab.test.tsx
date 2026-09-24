@@ -8,8 +8,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { adoptStrategy, selectScenario, patchCampaign, generateStrategy } from "@/lib/adsApi";
+import { adoptStrategy, selectScenario, patchCampaign, generateStrategy, getCampaign } from "@/lib/adsApi";
+import { putTarget, type CapView } from "@/lib/adsTriageApi";
 import { StrategyTab } from "./StrategyTab";
+
+vi.mock("@/lib/adsTriageApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
+  return { ...actual, putTarget: vi.fn() };
+});
+
+/** F28-I01: the one cost-per-result cap, as `campaign.cap` carries it. */
+function cap(value: number | null, basis: CapView["basis"] = value === null ? null : "own"): CapView {
+  return {
+    value, basis, own_value: basis === "own" ? value : null, break_even: null, price: null,
+    product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 0,
+  };
+}
 
 function renderWithRouter(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -20,6 +34,7 @@ vi.mock("@/lib/adsApi", async () => {
   return {
     ...actual,
     generateStrategy: vi.fn(),
+    getCampaign: vi.fn(),
     patchCampaign: vi.fn(),
     selectScenario: vi.fn(),
     setAllocation: vi.fn(),
@@ -80,9 +95,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     name: "測試 Campaign",
     goal_text: "想在雙十一衝一波業績",
     objective: "增加新客購買",
-    success_metric: "cpa",
-    success_target: null,
-    success_basis: null,
+    cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: "2026-01-01",
     end_date: "2026-01-15",
     status: "draft",
@@ -189,36 +202,36 @@ describe("StrategyTab（F04-I14）", () => {
     expect(adoptStrategy).toHaveBeenCalledTimes(1);
   });
 
-  it("cpa／300／30000：印「預估購買 100 筆」與推估說明；roas 時改印算不出推估購買", () => {
+  it("上限 300／30000：印「預估購買 100 筆」與推估說明；沒有上限時改印算不出推估購買", () => {
     const { rerender } = renderWithRouter(
       <StrategyTab
         brandId="brd_1"
-        campaign={campaign({ success_metric: "cpa", success_target: 300, budget_planned: 30000 })}
+        campaign={campaign({ cap: cap(300), budget_planned: 30000 })}
         onCampaignChange={vi.fn()}
         onChangeTab={vi.fn()}
       />,
     );
     expect(screen.getByText(/預估購買 100 筆/)).toBeTruthy();
-    expect(screen.getByText("推估（CPA 不變的算術）")).toBeTruthy();
+    expect(screen.getByText("推估（每筆成本等於上限的算術）")).toBeTruthy();
 
     rerender(
       <MemoryRouter>
         <StrategyTab
           brandId="brd_1"
-          campaign={campaign({ success_metric: "roas", success_target: 3, budget_planned: 30000 })}
+          campaign={campaign({ cap: cap(null), budget_planned: 30000 })}
           onCampaignChange={vi.fn()}
           onChangeTab={vi.fn()}
         />
       </MemoryRouter>,
     );
     expect(screen.queryByText(/預估購買/)).toBeNull();
-    expect(screen.getByText("目標不是 CPA，或還沒有總預算，算不出推估購買。")).toBeTruthy();
+    expect(screen.getByText("還沒有上限或總預算，算不出推估購買。")).toBeTruthy();
   });
 
   it("labels 是名單時：預估文字改印「名單」，不是寫死的「購買」", () => {
     renderTab(
       campaign({
-        success_metric: "cpa", success_target: 300, budget_planned: 30000,
+        cap: cap(300), budget_planned: 30000,
         labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
       }),
     );
@@ -227,18 +240,56 @@ describe("StrategyTab（F04-I14）", () => {
     expect(screen.queryByText(/預估購買/)).toBeNull();
   });
 
-  it("labels 是名單時：編輯成功條件的下拉選單印「每筆名單成本（CPA）」", async () => {
+  it("labels 是名單時：上限輸入框印「每筆名單成本上限」，沒有指標下拉選單", async () => {
     const user = userEvent.setup();
     renderTab(
       campaign({
-        success_metric: "cpa", success_target: 300, budget_planned: 30000,
+        cap: cap(300), budget_planned: 30000,
         labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
       }),
     );
 
     await user.click(screen.getByRole("button", { name: "調整建議" }));
     await user.click(screen.getByRole("button", { name: "編輯" }));
-    expect(screen.getByText("每筆名單成本（CPA）")).toBeTruthy();
+    expect(screen.getByLabelText(/每筆名單成本上限/)).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("演練五：只輸入 450、其他都不動，存的就是每筆成本上限 450（PUT target，不是 ROAS）", async () => {
+    const user = userEvent.setup();
+    const refreshed = campaign({ cap: cap(450) });
+    vi.mocked(putTarget).mockResolvedValue({ ...cap(450), campaign_id: "cmp_1", product_ids: [], result_kinds: [] });
+    vi.mocked(getCampaign).mockResolvedValue(refreshed);
+    const { onCampaignChange } = renderTab(campaign({ cap: { ...cap(null), revision: 2 } }));
+
+    await user.click(screen.getByRole("button", { name: "調整建議" }));
+    await user.click(screen.getByRole("button", { name: "編輯" }));
+    await user.type(screen.getByLabelText(/成本上限/), "450");
+    await user.click(screen.getByRole("button", { name: "儲存" }));
+
+    expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 450, expected_revision: 2 });
+    expect(patchCampaign).not.toHaveBeenCalled();
+    expect(onCampaignChange).toHaveBeenCalledWith(refreshed);
+  });
+
+  it("上限只收大於 0 的整數：小數不能存", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign());
+
+    await user.click(screen.getByRole("button", { name: "調整建議" }));
+    await user.click(screen.getByRole("button", { name: "編輯" }));
+    await user.type(screen.getByLabelText(/成本上限/), "12.5");
+
+    expect(screen.getByText("請輸入大於 0 的整數。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "儲存" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("上限是打平暫用值時印「暫用打平」", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({ cap: cap(600, "break_even") }));
+
+    await user.click(screen.getByRole("button", { name: "調整建議" }));
+    expect(screen.getByText("暫用打平 NT$ 600")).toBeTruthy();
   });
 
   it("有假設值時：策略依據面板印出 assumption_note 那句話", async () => {
@@ -382,7 +433,7 @@ describe("StrategyTab（F04-I14）", () => {
 
     await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
 
-    expect(screen.getByText(/要估金額需要有效的 CPA 成功條件與活動期間/)).toBeTruthy();
+    expect(screen.getByText(/要估金額需要上限與活動期間/)).toBeTruthy();
     const link = screen.getByRole("link", { name: "去補商品數字" });
     expect(link.getAttribute("href")).toContain("/products/");
   });
@@ -413,8 +464,8 @@ describe("StrategyTab（F04-I14）", () => {
 });
 
 
-it("shows current CPA, preserves selected money and labels scenarios beyond the cap", async () => {
-  const c = campaign({ success_target: 300, budget_planned: 14700, budget_scenario: "recommended",
+it("shows the current cap, preserves selected money and labels scenarios beyond the budget cap", async () => {
+  const c = campaign({ cap: cap(300), budget_planned: 14700, budget_scenario: "recommended",
     start_date: "2026-09-01", end_date: "2026-09-14", constraints_json: { budget: 15000 } });
   if (!c.budget_basis_json.scenarios) throw new Error("scenario fixture missing");
   c.budget_basis_json.scenarios.scenarios = [
@@ -424,7 +475,7 @@ it("shows current CPA, preserves selected money and labels scenarios beyond the 
   ];
   renderTab(c);
   await userEvent.click(screen.getByRole("button", { name: "調整建議" }));
-  expect(screen.getByText(/計算依據：目前 CPA/).textContent).toContain("14 天");
+  expect(screen.getByText(/計算依據：目前上限 NT\$ 300/).textContent).toContain("14 天");
   expect(screen.getByText(/已選預算.*14,700/)).toBeTruthy();
   expect(screen.getAllByText(/超過預算上限/)).toHaveLength(2);
 });
@@ -449,8 +500,8 @@ it("keeps imported strategy in the existing disclosures and saves only the inter
   expect(generateStrategy).not.toHaveBeenCalled();
   expect(adoptStrategy).not.toHaveBeenCalled();
   expect(selectScenario).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", {name: "編輯成功條件"}));
-  expect(screen.getByLabelText("目標值（留空＝尚未設定）")).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "編輯上限"}));
+  expect(screen.getByLabelText(/成本上限/)).toBeTruthy();
 });
 
 it("opens an imported campaign whose goal was never set", async () => {

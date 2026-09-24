@@ -20,21 +20,17 @@ import { useAssetDraftGuard } from "../useAssetDraftGuard";
 
 type Basis = NonNullable<CampaignTarget["basis"]>;
 
-// 三種依據直接照抄 `adsTriageApi.ts` 的 `CampaignTarget["basis"]`／`TargetRequest["basis"]`
-// 聯集型別——不是另外發明的清單，跟契約同一份詞彙。
+// 兩種依據直接照抄 `adsTriageApi.ts` 的 `CapBasis` 聯集型別——不是另外發明的清單，跟契約
+// 同一份詞彙（F28-I01：近 30 天實際成本不再是依據）。
 const BASIS_OPTIONS: { key: Basis; label: string; hint: string }[] = [
   { key: "break_even", label: "打平值", hint: "賣一件剛好不虧" },
-  { key: "trailing_30", label: "自己近 30 天", hint: "近 30 天的實際成本" },
   { key: "own", label: "自訂", hint: "自己填一個更嚴格的數字" },
 ];
 
 const MISSING_LABEL: Record<string, string> = {
   product: "尚未選商品",
   product_cost: "商品還沒有成本",
-  trailing_30: "近 30 天資料不足",
-  mixed_result_definition: "近期成果定義不一致",
-  needs_resync: "資料需要重新同步",
-  result_unknown_days: "這段期間看不出成果",
+  result_kind: "還不知道這個活動算哪一種成果",
 };
 function missingLabel(reason: string): string {
   return MISSING_LABEL[reason] ?? reason;
@@ -54,23 +50,21 @@ interface Draft {
 }
 
 function draftFrom(target: CampaignTarget): Draft {
-  const basis: Basis = target.basis ?? "trailing_30";
+  const basis: Basis = target.basis ?? "own";
   return {
     basis,
     resultKind: target.result_kind,
-    ownValue: basis === "own" && target.value !== null ? String(target.value) : "",
+    ownValue: target.own_value !== null ? String(target.own_value) : "",
     productId: target.product_ids[0] ?? "",
     price: "",
     variableCost: "",
   };
 }
 
-// F19 re-review A：「建議」只准落在後端這次真的算出來、目前生效的依據上——`target.basis`
-// 是 break_even 或 trailing_30 時才有「建議」，own（使用者自訂覆寫）一律不顯示，因為 own
-// 生效時 `resolve()` 直接提早回傳（`app/ads/targets.py:88`），根本沒有評估過 break_even／
-// trailing_30，這時候在任何一張卡上放「建議」都是編出來的、不是後端真的推薦了什麼。
+// F19 re-review A：「建議」只准落在後端這次真的算出來、目前生效的依據上——只有 `target.basis`
+// 是 break_even 時才有「建議」；own（使用者自訂覆寫）生效時不放，免得「建議」變成編出來的。
 function recommendedBasis(target: CampaignTarget): Basis | null {
-  return target.basis === "break_even" || target.basis === "trailing_30" ? target.basis : null;
+  return target.basis === "break_even" ? "break_even" : null;
 }
 
 /** 設定目標頁（F19-I05，v7 原型 ≈ 326–345 行）：這個活動被判斷用的成果與目標成本，純畫面，
@@ -86,7 +80,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [draft, setDraft] = useState<Draft>({ basis: "trailing_30", resultKind: null, ownValue: "", productId: "", price: "", variableCost: "" });
+  const [draft, setDraft] = useState<Draft>({ basis: "own", resultKind: null, ownValue: "", productId: "", price: "", variableCost: "" });
   const [baseline, setBaseline] = useState("");
 
   const [saving, setSaving] = useState(false);
@@ -147,7 +141,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
     setConflict(false);
     const body: TargetRequest = { basis: draft.basis, expected_revision: target.revision };
     // review fix: `target.result_kind` may already be a *derived* value (`resolve()` returns
-    // `"purchase"` for break_even, or the observed kind for trailing_30, even while
+    // `"purchase"` for a system-built campaign, even while
     // `ads_campaign.result_kind` is still NULL) — the segmented control pre-selects it so the
     // heading reads right, but re-sending it on every save would freeze that derived guess into
     // the column and permanently block `external_sync.py`'s `... AND result_kind IS NULL` from
@@ -265,7 +259,7 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
           <h2 id="target-cost-heading">{selectedLabel ? `每次${selectedLabel}最多花多少` : "每次成果最多花多少"}</h2>
         </div>
         <div className="surface-body flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="目標依據">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="group" aria-label="目標依據">
             {BASIS_OPTIONS.map((option) => (
               <button
                 key={option.key}
@@ -279,7 +273,6 @@ export function CampaignTargetPage({ brandId, campaignId }: { brandId: string; c
                 {/* min-h 保留固定高度：不管這張卡有沒有 chip，標題都對齊同一條基線。 */}
                 <div className="flex min-h-5 flex-wrap items-center gap-1.5">
                   {option.key === recommended && <Badge variant="secondary">建議</Badge>}
-                  {option.key === "trailing_30" && <Badge variant="outline">暫定</Badge>}
                 </div>
                 <p className="mt-2 text-sm font-semibold">{option.label}</p>
                 {/* own 卡的數字只在「不是目前編輯中的依據」時顯示一次；選到 own 時輸入框與

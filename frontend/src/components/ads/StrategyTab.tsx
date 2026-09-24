@@ -7,18 +7,19 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SidePanel } from "@/components/layout/SidePanel";
-import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
+import { formatCurrency } from "@/lib/format";
 import {
   adoptStrategy,
   generateStrategy,
+  getCampaign,
   patchCampaign,
   selectScenario,
   setAllocation,
   type CampaignDetail,
   type CampaignLabels,
   type StrategyRole,
-  type SuccessMetric,
 } from "@/lib/adsApi";
+import { putTarget, type CapView } from "@/lib/adsTriageApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { Disclosure, JudgmentBand, KpiStrip, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
@@ -27,21 +28,13 @@ import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextSte
 // （同 `OverviewTab.tsx`／`PerformanceTab.tsx` 的先例）。
 const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
 
-function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
-  if (metric === "cpa") return `${labels.cpa}（CPA）`;
-  if (metric === "purchases") return labels.count;
-  return "ROAS（廣告投報率）";
+/** F28-I01: the one cap as this tab prints it -- 暫用打平 when it is the break-even fallback. */
+function capText(cap: CapView): string {
+  if (cap.value === null) return "未設定";
+  return cap.basis === "break_even" ? `暫用打平 ${formatCurrency(cap.value)}` : formatCurrency(cap.value);
 }
-
-const SUCCESS_METRICS: SuccessMetric[] = ["cpa", "roas", "purchases"];
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
-
-function formatTarget(metric: SuccessMetric, value: number): string {
-  if (metric === "cpa") return formatCurrency(value);
-  if (metric === "roas") return formatRoas(value);
-  return formatCount(value);
-}
 
 /** ISO 日期（`YYYY-MM-DD`）→ `MM/DD`，只給這個分頁的日期 KPI 格用。 */
 function mmdd(iso: string): string {
@@ -255,10 +248,9 @@ export function StrategyTab({
     : `/brands/${brandId}/products`;
   const missingHandoff = c.manual_handoff?.groups.filter((group) => group.missing.length > 0) ?? [];
 
+  const capValue = c.cap.value;
   const estimatedPurchases =
-    c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 && total !== null
-      ? Math.floor(total / c.success_target)
-      : null;
+    capValue !== null && capValue > 0 && total !== null ? Math.floor(total / capValue) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -281,10 +273,10 @@ export function StrategyTab({
             {imported ? "平台資料未包含原始策略建議，不推估配置與購買數。" : estimatedPurchases !== null ? (
               <>
                 預估{labels.conversion} {estimatedPurchases} 筆
-                <span className="ml-1">推估（CPA 不變的算術）</span>
+                <span className="ml-1">推估（每筆成本等於上限的算術）</span>
               </>
             ) : (
-              "目標不是 CPA，或還沒有總預算，算不出推估購買。"
+              "還沒有上限或總預算，算不出推估購買。"
             )}
           </p>
           <div>
@@ -388,7 +380,7 @@ export function StrategyTab({
                 <p className="mb-2 text-sm text-muted-foreground">依你的目標與資源，選擇最適合的預算規模。</p>
                 <p className="mb-2 text-sm text-muted-foreground">
                   {scenarios.mode === "cold_start"
-                    ? `計算依據：目前 CPA ${c.success_metric === "cpa" && c.success_target !== null && c.success_target > 0 ? formatCurrency(c.success_target) : "未設定"} × 每天 2／5／10 筆 × ${days ?? "未設定"} 天。`
+                    ? `計算依據：目前上限 ${capText(c.cap)} × 每天 2／5／10 筆 × ${days ?? "未設定"} 天。`
                     : `計算依據：各情境所列歷史日預算 × ${days ?? "未設定"} 天。`}
                   {constraintBudget !== null && ` 預算上限 ${formatCurrency(constraintBudget)}。`}
                 </p>
@@ -424,7 +416,7 @@ export function StrategyTab({
                 </div>
                 {amountsUnknown && (
                   <p className="mt-3 text-sm text-muted-foreground">
-                    要估金額需要有效的 CPA 成功條件與活動期間。商品數字可作為設定依據。{" "}
+                    要估金額需要上限與活動期間。商品數字可算出暫用的打平上限。{" "}
                     <Link to={productEconomicsHref} className="text-primary hover:underline">
                       去補商品數字
                     </Link>
@@ -464,23 +456,15 @@ export function StrategyTab({
 
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-sm font-medium">成功條件</h3>
+                <h3 className="text-sm font-medium">上限（每筆{labels.conversion}成本）</h3>
                 <Button variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
                   編輯
                 </Button>
               </div>
-              {c.success_target === null ? (
-                <div>
-                  <p className="text-sm font-medium">尚未設定成功條件</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{c.success_basis ?? "AI 沒有足夠依據推出一個數字。"}</p>
-                </div>
+              {c.cap.value === null ? (
+                <p className="text-sm font-medium">尚未設定上限</p>
               ) : (
-                <div>
-                  <p className="text-base font-semibold">
-                    {metricLabel(c.success_metric, labels)} 目標 {formatTarget(c.success_metric, c.success_target)}
-                  </p>
-                  {c.success_basis && <p className="mt-1 text-sm text-muted-foreground">{c.success_basis}</p>}
-                </div>
+                <p className="text-base font-semibold">{capText(c.cap)}</p>
               )}
             </div>
           </div>
@@ -530,8 +514,8 @@ export function StrategyTab({
             finally { setGoalSaving(false); }
           }}>{goalSaving ? "儲存中…" : "儲存目標"}</Button>
           {goalError && <p role="alert" className="text-sm text-danger">{goalError}</p>}
-          <p className="text-sm">成功條件：{c.success_target === null ? "尚未設定" : `${metricLabel(c.success_metric, labels)} ${formatTarget(c.success_metric, c.success_target)}`}</p>
-          <Button variant="outline" onClick={() => setEditOpen(true)}>編輯成功條件</Button>
+          <p className="text-sm">上限：{c.cap.value === null ? "尚未設定" : capText(c.cap)}</p>
+          <Button variant="outline" onClick={() => setEditOpen(true)}>編輯上限</Button>
         </div> : <>
           <p className="mb-2 text-sm text-muted-foreground">人工上架可在投放結構保存受眾、版位、出價、追蹤與平台 ID 對應。</p>
           <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
@@ -602,7 +586,7 @@ export function StrategyTab({
       )}
 
       {editOpen && (
-        <SuccessCriterionEditor
+        <CapEditor
           brandId={brandId}
           campaign={c}
           onClose={() => setEditOpen(false)}
@@ -616,7 +600,9 @@ export function StrategyTab({
   );
 }
 
-function SuccessCriterionEditor({
+/** F28-I01: one NT$ integer cap, PUT to `.../target` (the one store) -- no metric dropdown, so
+ * typing 450 can only ever mean a 450 cost cap (drill 5). Empty clears the own cap. */
+function CapEditor({
   brandId,
   campaign: c,
   onClose,
@@ -628,68 +614,44 @@ function SuccessCriterionEditor({
   onSaved: (campaign: CampaignDetail) => void;
 }) {
   const labels = c.labels ?? DEFAULT_LABELS;
-  const [metric, setMetric] = useState<SuccessMetric>(c.success_metric);
-  const [target, setTarget] = useState(c.success_target === null ? "" : String(c.success_target));
-  const [basisText, setBasisText] = useState(c.success_basis ?? "");
+  const [value, setValue] = useState(c.cap.own_value === null ? "" : String(c.cap.own_value));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const trimmed = value.trim();
+  const valid = trimmed === "" || /^[1-9]\d*$/.test(trimmed);
 
   async function handleSave() {
     setSaving(true);
     setError(null);
     try {
-      const updated = await patchCampaign(brandId, c.id, {
-        success_metric: metric,
-        success_target: target === "" ? null : Number(target),
-        success_basis: basisText === "" ? null : basisText,
-      });
-      onSaved(updated);
+      await putTarget(brandId, c.id, trimmed === ""
+        ? { basis: "break_even", expected_revision: c.cap.revision }
+        : { basis: "own", value: Number(trimmed), expected_revision: c.cap.revision });
+      onSaved(await getCampaign(brandId, c.id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新成功條件失敗，請稍後再試。");
+      setError(err instanceof Error ? err.message : "更新上限失敗，請稍後再試。");
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <SidePanel ariaLabel="編輯成功條件" onClose={onClose}>
+    <SidePanel ariaLabel="編輯上限" onClose={onClose}>
       <div className="flex flex-col gap-4">
-        <h3 className="text-lg font-semibold">編輯成功條件</h3>
+        <h3 className="text-lg font-semibold">編輯上限</h3>
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="success-metric">
-            指標
+          <label className="text-sm font-medium" htmlFor="cap-value">
+            每筆{labels.conversion}成本上限（NT$，留空＝不設定）
           </label>
-          <select
-            id="success-metric"
-            className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-            value={metric}
-            onChange={(e) => setMetric(e.target.value as SuccessMetric)}
-          >
-            {SUCCESS_METRICS.map((key) => (
-              <option key={key} value={key}>
-                {metricLabel(key, labels)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="success-target">
-            目標值（留空＝尚未設定）
-          </label>
-          <Input id="success-target" type="number" value={target} onChange={(e) => setTarget(e.target.value)} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="success-basis">
-            依據
-          </label>
-          <Textarea id="success-basis" value={basisText} onChange={(e) => setBasisText(e.target.value)} rows={3} />
+          <Input id="cap-value" type="number" inputMode="numeric" min={1} step={1} value={value} onChange={(e) => setValue(e.target.value)} />
+          {!valid && <p className="text-sm text-danger">請輸入大於 0 的整數。</p>}
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
+          <Button onClick={() => void handleSave()} disabled={saving || !valid}>
             {saving ? "儲存中…" : "儲存"}
           </Button>
         </div>

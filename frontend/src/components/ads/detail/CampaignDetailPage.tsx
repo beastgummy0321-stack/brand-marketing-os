@@ -20,8 +20,8 @@ import { cleanupAction, proposalAction } from "../home/status";
 // 跟 `home/CampaignCard.tsx` 的 `BASIS_LABEL` 同一份小工具——那支檔案沒有匯出，
 // 這頁又不在 `frontend/src/lib/**`（do_not_touch），沿用既有先例各自留一份（precedent:
 // `QueueRow.tsx`／`CampaignCard.tsx` 都各留一份自己的格式化小工具，不強行共用一個 lib）。
-type Basis = "own" | "break_even" | "trailing_30";
-const BASIS_LABEL: Record<Basis, string> = { own: "自訂", break_even: "損益兩平", trailing_30: "近 30 天" };
+type Basis = "own" | "break_even";
+const BASIS_LABEL: Record<Basis, string> = { own: "自訂", break_even: "暫用打平" };
 
 // 花費／每次成果成本沒有幣別（`triage`／`queue` 不回幣別，見 `QueueRow.tsx` 同名函式的
 // 註解）——純數字，最多兩位小數，不用 `Math.round`；未知的量測值＝「累積中」。

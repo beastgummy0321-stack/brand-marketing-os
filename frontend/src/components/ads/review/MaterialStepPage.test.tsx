@@ -115,7 +115,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
       observations: [], next_entity_cursor: null, next_observation_cursor: null,
       window: { start: "2026-09-08", end: "2026-09-21" }, connections: [], sync: {}, coverage: {},
     },
-    name: "測試活動", goal_text: null, objective: "銷售", success_metric: "purchases", success_target: null, success_basis: null,
+    name: "測試活動", goal_text: null, objective: "銷售", cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: null, end_date: null, status: "live", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null,
     context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-01-01",
     groups: [], actions: [], outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { total: 0, ready_count: 0 },
