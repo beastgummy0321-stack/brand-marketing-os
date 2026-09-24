@@ -177,7 +177,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     renderPage();
     expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
     expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
-    expect(screen.getByText("約 NT$60,000")).toBeTruthy();
+    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
     expect(screen.getByText("65%")).toBeTruthy();
     expect(screen.getByRole("link", { name: "日常商品推廣・轉換" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
