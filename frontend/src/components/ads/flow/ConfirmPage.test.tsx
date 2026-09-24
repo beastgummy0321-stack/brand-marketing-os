@@ -633,8 +633,8 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(body.operation_id).toMatch(/^triage-cleanup:cmp_1:/);
     expect(body.title).toBe("清理「【銷售】測試活動」");
     expect(body.items).toEqual([
-      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則" },
-      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則" },
+      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
+      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
     ]);
     expect(body.source).toBe("cleanup");
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());

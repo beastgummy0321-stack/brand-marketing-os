@@ -137,7 +137,7 @@ export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REA
 /** F27-I15 Contract F: the one fixed reason every pause item of a lazily-created cleanup set
  * proposes (same "one fixed reason per lazy-create kind" convention `PAUSE_REASON`/`BUDGET_REASON`
  * already follow). */
-export const CLEANUP_PAUSE_REASON = "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則";
+export const CLEANUP_PAUSE_REASON = "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動";
 
 /** `title = 清理「<campaign name, cut to 60 chars; null → 未命名活動>」`，同 `pauseTitle`／
  * `budgetTitle` 的做法。 */
