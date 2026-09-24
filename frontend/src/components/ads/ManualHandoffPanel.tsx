@@ -11,7 +11,12 @@ import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 import { Disclosure } from "./patterns/Disclosure";
 import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
 
-type Props = { brandId: string; campaignId: string; mode?: "all" | "items" | "new-ad"; refreshKey?: number };
+type Props = {
+  brandId: string; campaignId: string; mode?: "all" | "items" | "new-ad"; refreshKey?: number;
+  /** Tells the host whether this handoff has anything to verify (items or a stale launch), so the host never
+   * shows its own "nothing to verify" state beside a handoff that lists items. */
+  onHandoffWork?: (hasWork: boolean) => void;
+};
 const states: Record<string, string> = { pending: "待操作", reported: "已回報，待讀回", confirmed: "設定已核對", deviated: "設定有差異", unknown: "尚未能確認", stale: "需重新確認" };
 const materials: Record<string, string> = { unknown: "未知", user_verified: "使用者人工核對", media_verified: "媒體來源已核對" };
 const kinds: Record<string, string> = { campaign: "活動", group: "投放組", adset: "廣告組", ad: "廣告" };
@@ -30,7 +35,7 @@ export function ManualHandoffPanel(props: Props) {
   return <Panel key={`${scope}:${props.brandId}:${props.campaignId}`} {...props} scope={scope} />;
 }
 
-function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0 }: Props & { scope: string }) {
+function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork }: Props & { scope: string }) {
   const [data, setData] = useState<HandoffWorkspace | null>(null);
   const [nodes, setNodes] = useState<NativeEntity[]>([]);
   const [roots, setRoots] = useState<NativeEntity[]>([]);
@@ -48,6 +53,10 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0 }: Pro
   const [launchOutcome, setLaunchOutcome] = useState<LaunchOutcome | null>(null);
   const lifetime = useRef(new AbortController());
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
+  const hasWork = data ? data.items.length > 0 || data.launch_stale !== null : null;
+  const reportWork = useRef(onHandoffWork);
+  reportWork.current = onHandoffWork;
+  useEffect(() => { if (hasWork !== null) reportWork.current?.(hasWork); }, [hasWork]);
   useEffect(() => {
     const controller = new AbortController();
     setError("");
