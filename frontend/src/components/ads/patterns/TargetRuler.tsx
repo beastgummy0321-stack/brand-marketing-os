@@ -221,5 +221,5 @@ function Mark({ at, bottom, side, dashed = false, label }: { at: number; bottom:
 function Thumb({ url, className }: { url?: string | null; className?: string }) {
   return url
     ? <img src={url} alt="" className={cn("block object-cover", className)} />
-    : <span className={cn("block bg-muted", className)} aria-hidden="true" />;
+    : <span className={cn("block bg-border", className)} aria-hidden="true" />;
 }

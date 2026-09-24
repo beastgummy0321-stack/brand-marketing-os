@@ -58,5 +58,5 @@ export function ConfirmSheet({ variant, title, split, children, actions }: {
 
 /** The prototype's `.btn.warnp`: the one amber-filled "yes, even so" button inside a ConfirmSheet. */
 export function WarnButton({ className, ...props }: ComponentProps<typeof Button>) {
-  return <Button {...props} data-variant="warn" className={cn("bg-warning/85 text-white hover:bg-warning", className)} />;
+  return <Button {...props} data-variant="warn" className={cn("bg-warning text-white hover:bg-warning/90", className)} />;
 }
