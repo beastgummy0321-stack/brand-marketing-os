@@ -49,6 +49,7 @@
         "frontend/src/lib/adsHandoffApi.ts",
         "frontend/src/lib/adsPublishTypes.ts",
         "frontend/src/lib/adsTriageApi.ts",
+        "frontend/src/lib/adsHomeApi.ts",
         "supabase/migrations/*_ads_*.sql"
       ]
     },
