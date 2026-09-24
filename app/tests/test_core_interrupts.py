@@ -177,12 +177,14 @@ class InterruptQueueTest(unittest.TestCase):
         )
 
     def test_ads_triage_cleanup_category_registered(self):
-        """F27-I06: Contract F's cleanup row -- informational (a program proposal, not yet a loss
-        or warning), registered right after the other two informational ads_triage entries."""
+        """F28-I06: the cleanup row carries the 白花 ads that used to raise `stop_loss`, so its
+        weight never drops below it -- money_loss, ranked right after stop_loss."""
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_cleanup"],
-            {"severity": "informational", "label": "廣告清理待決定"},
+            {"severity": "money_loss", "label": "花錢沒效的廣告待決定"},
         )
+        order = list(core_interrupts.CATEGORIES)
+        self.assertEqual(order.index("ads_triage_cleanup"), order.index("ads_triage_stop_loss") + 1)
 
     def test_row_with_deregistered_category_still_lists_and_sorts(self):
         """票 dead-code-sweep 05：CATEGORIES 清掉了一批沒有生產呼叫端的類別，但舊 DB 列
