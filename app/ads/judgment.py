@@ -131,33 +131,6 @@ def campaign_judgment(campaign: dict[str, Any], *, today: date) -> dict:
     return {"tone": "neutral", "text": "還沒產生策略", "detail": "下一步：產生策略建議"}
 
 
-def brand_headline(counts: dict[str, int]) -> dict:
-    """回 `{"text": str, "facts": str}`。`counts` 是 `{"running", "upcoming", "ended",
-    "needs_decision"}` 四個數字。"""
-    running = counts.get("running", 0)
-    upcoming = counts.get("upcoming", 0)
-    ended = counts.get("ended", 0)
-    needs_decision = counts.get("needs_decision", 0)
-
-    if running > 0:
-        text = f"目前有 {running} 個 Campaign 進行中"
-    elif upcoming > 0:
-        text = f"還沒有進行中的 Campaign，有 {upcoming} 個即將上線"
-    else:
-        text = "這個品牌還沒有 Campaign"
-
-    parts = []
-    if upcoming:
-        parts.append(f"{upcoming} 個即將上線")
-    if ended:
-        parts.append(f"{ended} 個已結束")
-    if needs_decision:
-        parts.append(f"{needs_decision} 件需要你決定的事")
-    else:
-        parts.append("目前沒有需要你決定的事")
-    return {"text": text, "facts": "・".join(parts)}
-
-
 # F05-I12：「每筆名單成本」與 CPA 是同一個算式（花費÷轉換數）的兩個名字——不新增
 # 指標，只換 label（§8 第 4 條）。`purchase`／`None`／未知值一律落在購買這行。
 _CONVERSION_LABELS = {
