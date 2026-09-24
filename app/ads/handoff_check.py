@@ -1,7 +1,5 @@
 """Fresh read-only native verification with scoped ownership and late-response protection."""
 
-import json
-
 from app.ads import adapters, asset_binding, change_control_launch, external_sync, handoff_data
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
@@ -9,15 +7,6 @@ from app.ads import external_repository as external
 from app.ads import repository as campaigns
 from app.ads.external_models import ExternalEntity
 from app.core import db
-from app.shared.web import to_json_value
-
-
-def _canonical(value):
-    if isinstance(value, dict):
-        return {k: _canonical(v) for k, v in value.items() if k != "external_id"}
-    if isinstance(value, list):
-        return [_canonical(v) for v in value]
-    return value
 
 
 def _launch_current(conn, org, brand, campaign, change_set):
@@ -25,11 +14,8 @@ def _launch_current(conn, org, brand, campaign, change_set):
     if original is None:
         return True
     current = change_control_launch.snapshot(conn, org, brand, campaign)
-
-    def encode(value):
-        return json.dumps(_canonical(value), default=to_json_value, sort_keys=True)
-
-    return encode(current) == encode(original)
+    # The same comparison `GET …/handoff` reports as `launch_stale`.
+    return change_control_launch.normalized(current) == change_control_launch.normalized(original)
 
 
 def _parent(conn, org, brand, campaign, item):

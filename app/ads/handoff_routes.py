@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.ads import (
+    change_control_launch,
     handoff_assignment,
     handoff_check,
     handoff_data,
@@ -51,6 +52,12 @@ class ReconsiderRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class LaunchDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    change_set_id: str = Field(min_length=1, max_length=128)
+    content_hash: str = Field(min_length=64, max_length=64)
+
+
 class AssignmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     placement_id: str | None
@@ -68,6 +75,32 @@ def _run(request, brand, campaign, function, *args):
 @router.get("/handoff")
 def workspace(request: Request, brand_id: str, campaign_id: str):
     return _run(request, brand_id, campaign_id, handoff_data.workspace)
+
+
+def _launch_decision(request, brand_id, campaign_id, function, body):
+    """Stale launch exits (F28): both answer with the refreshed handoff workspace."""
+    _run(
+        request,
+        brand_id,
+        campaign_id,
+        function,
+        body.change_set_id,
+        body.content_hash,
+        str(web.require_actor(request).user_id),
+    )
+    return _run(request, brand_id, campaign_id, handoff_data.workspace)
+
+
+@router.post("/handoff/launch/reapprove")
+def reapprove_launch(
+    request: Request, brand_id: str, campaign_id: str, body: LaunchDecisionRequest
+):
+    return _launch_decision(request, brand_id, campaign_id, change_control_launch.reapprove, body)
+
+
+@router.post("/handoff/launch/revert")
+def revert_launch(request: Request, brand_id: str, campaign_id: str, body: LaunchDecisionRequest):
+    return _launch_decision(request, brand_id, campaign_id, change_control_launch.revert, body)
 
 
 @router.get("/launch-materials")
