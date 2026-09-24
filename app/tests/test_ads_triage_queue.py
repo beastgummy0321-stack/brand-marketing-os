@@ -1057,7 +1057,7 @@ class CleanupQueueTest(unittest.TestCase):
         row = self._cleanup_row(result)
         self.assertIsNotNone(row)
         self.assertEqual(row["category"], "ads_triage_cleanup")
-        self.assertEqual(row["severity"], "informational")
+        self.assertEqual(row["severity"], "money_loss")
         self.assertEqual(
             row["action_url"],
             f"/brands/{self.brand}/ads/campaigns/{self.campaign}/propose/cleanup/{self.campaign}",
@@ -1236,7 +1236,7 @@ class CleanupQueueTest(unittest.TestCase):
     def test_category_registered_with_expected_severity_and_label(self):
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_cleanup"],
-            {"severity": "informational", "label": "廣告清理待決定"},
+            {"severity": "money_loss", "label": "花錢沒效的廣告待決定"},
         )
 
 

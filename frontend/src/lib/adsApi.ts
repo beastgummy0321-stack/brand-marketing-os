@@ -773,28 +773,3 @@ export async function closeCampaign(
   return data.campaign;
 }
 
-// -- F04-I08：首頁四塊 -------------------------------------------------------------------------
-
-export interface AdsHomeCounts {
-  imported?: number;
-  running: number;
-  upcoming: number;
-  ended: number;
-  needs_decision: number;
-}
-
-/** `GET /home` 的整包 payload——一句整體判斷、四個計數、進行中的 Campaign（最多 6 張）、
- * 最近做了什麼（最多 6 筆）。不含成效、不打模型。 */
-export interface AdsHome {
-  headline: { text: string; facts: string };
-  counts: AdsHomeCounts;
-  imported_campaigns?: CampaignCard[];
-  campaigns: CampaignCard[];
-  actions: AdsActionLine[];
-}
-
-export async function getAdsHome(brandId: string): Promise<AdsHome> {
-  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/home`);
-  const data = await parseJsonOrThrow<{ home: AdsHome }>(res, "讀取投放中心首頁失敗。");
-  return data.home;
-}
