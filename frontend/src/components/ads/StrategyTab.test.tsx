@@ -1,514 +1,222 @@
-/** frontend/src/components/ads/StrategyTab.test.tsx — F04-I14: 策略分頁重做成一張建議卡
- * ＋一顆主要按鈕，其餘全部收在 Disclosure 裡（R9）。這支測試是「預設看不到進階內容」的
- * 機器證明，以及主要按鈕依 `budget_scenario` 走對 API 順序。 */
+/** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
+ * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
+ * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
 import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { adoptStrategy, selectScenario, patchCampaign, generateStrategy, getCampaign } from "@/lib/adsApi";
-import { putTarget, type CapView } from "@/lib/adsTriageApi";
+import type { BudgetScenarioRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
+import { adoptStrategy, patchCampaign, selectScenario } from "@/lib/adsApi";
+import { getTriage, type CapView } from "@/lib/adsTriageApi";
 import { StrategyTab } from "./StrategyTab";
-
-vi.mock("@/lib/adsTriageApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
-  return { ...actual, putTarget: vi.fn() };
-});
-
-/** F28-I01: the one cost-per-result cap, as `campaign.cap` carries it. */
-function cap(value: number | null, basis: CapView["basis"] = value === null ? null : "own"): CapView {
-  return {
-    value, basis, own_value: basis === "own" ? value : null, break_even: null, price: null,
-    product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 0,
-  };
-}
-
-function renderWithRouter(ui: ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
-}
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
   return {
-    ...actual,
-    generateStrategy: vi.fn(),
-    getCampaign: vi.fn(),
-    patchCampaign: vi.fn(),
-    selectScenario: vi.fn(),
-    setAllocation: vi.fn(),
-    adoptStrategy: vi.fn(),
+    ...actual, generateStrategy: vi.fn(), getCampaign: vi.fn(), patchCampaign: vi.fn(), selectScenario: vi.fn(),
+    setAllocation: vi.fn(), adoptStrategy: vi.fn(), setBudgetCap: vi.fn(),
   };
 });
+vi.mock("@/lib/adsTriageApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
+  return { ...actual, putTarget: vi.fn(), getTarget: vi.fn(), getTriage: vi.fn() };
+});
 
-function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
+function cap(value: number | null, basis: CapView["basis"] = value === null ? null : "own", extra: Partial<CapView> = {}): CapView {
   return {
-    id: "grp_1",
-    campaign_id: "cmp_1",
-    channel_key: "meta",
-    name: "投放組",
-    role: "new",
-    daily_budget: 1000,
-    start_date: null,
-    end_date: null,
-    ads: [],
-    external_id: null,
-    external_name: null,
-    external_status: null,
-    local_state: "unbound",
-    bound_at: null,
-    ...overrides,
+    value, basis, own_value: basis === "own" ? value : null, break_even: null, price: null,
+    product_id: null, result_kind: "purchase", result_label: "購買", missing: value === null ? ["product_cost"] : [], revision: 0, ...extra,
   };
 }
 
-function ad(overrides: Partial<AdRow> = {}): AdRow {
+/** Cold start, cap 450, 31 days, budget cap 30,000 — the API's own rows (`budget._with_budget_cap`). */
+const ROWS: BudgetScenarioRow[] = [
+  { key: "minimum", label: "最低", daily: 900, total: 27900, caption: "冷啟動估算：上限 x 每天 2 筆購買", over_cap: 0 },
+  { key: "cap", label: "照預算上限", daily: 968, total: 30000, caption: "用滿你設的預算上限 NT$30,000", over_cap: 0 },
+  { key: "recommended", label: "穩定成長", daily: 2250, total: 69750, caption: "冷啟動估算：上限 x 每天 5 筆購買", over_cap: 39750 },
+  { key: "aggressive", label: "積極", daily: 4500, total: 139500, caption: "冷啟動估算：上限 x 每天 10 筆購買", over_cap: 109500 },
+];
+
+function group(): DeliveryGroupRow {
   return {
-    id: "ad_1",
-    campaign_id: "cmp_1",
-    group_id: "grp_1",
-    name: "廣告一",
-    audience_key: null,
-    pain_key: null,
-    angle_key: null,
-    hook_key: null,
-    proof_key: null,
-    offer_key: null,
-    format_key: null,
-    coordinates_snapshot_json: {},
-    product_id: null,
-    asset_ready_source: null,
-    asset_ready_by: null,
-    asset_ready_at: null,
-    external_id: null,
-    external_name: null,
-    external_status: null,
-    local_state: "unbound",
-    bound_at: null,
-    ...overrides,
+    id: "grp_1", campaign_id: "cmp_1", channel_key: "meta", name: "投放組", role: "new", daily_budget: 1000, start_date: null,
+    end_date: null, ads: [], external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
   };
 }
 
 function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   return {
-    id: "cmp_1",
-    name: "測試 Campaign",
-    goal_text: "想在雙十一衝一波業績",
-    objective: "增加新客購買",
-    cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
-    start_date: "2026-01-01",
-    end_date: "2026-01-15",
-    status: "draft",
-    budget_planned: null,
-    budget_scenario: null,
+    id: "cmp_1", name: "日常商品推廣・轉換", goal_text: "通勤族保溫杯", objective: "購買", cap: cap(450),
+    start_date: "2026-09-08", end_date: "2026-10-08", status: "draft", budget_planned: null, budget_scenario: null,
     budget_basis_json: {
       strategy: {
         allocation: [
-          { role: "new", label: "新客", pct: 70, rationale: null, amount: 21000 },
-          { role: "retarget", label: "再行銷", pct: 20, rationale: null, amount: 6000 },
-          { role: "explore", label: "探索", pct: 10, rationale: null, amount: 3000 },
+          { role: "new", label: "新客", pct: 60, rationale: null, amount: null },
+          { role: "retarget", label: "再行銷", pct: 30, rationale: null, amount: null },
+          { role: "explore", label: "探索", pct: 10, rationale: null, amount: null },
         ],
-        why: ["你的產品在相似受眾中有高轉換表現"],
-        unknowns: ["新受眾的實際轉換率仍需驗證"],
-        alternatives: [],
-        learning_goals: [],
+        why: ["新客比例高：通勤情境近 30 天在新客的每筆成本最低"], unknowns: ["新受眾的實際轉換率仍需驗證"], alternatives: [], learning_goals: [],
       },
-      scenarios: {
-        mode: "cold_start",
-        scenarios: [
-          { key: "minimum", label: "保守", daily: 1000, total: 15000, caption: "最低可行", over_cap: null },
-          { key: "recommended", label: "推薦", daily: 2000, total: 30000, caption: "建議規模", over_cap: null },
-          { key: "aggressive", label: "積極", daily: 3000, total: 45000, caption: "衝刺規模", over_cap: null },
-        ],
-        recommended: "recommended",
-        basis: {},
-        budget_cap: null,
-      },
-      basis: {
-        knowledge_item_ids: [],
-        llm_task_id: "task_1",
-        input_context_hash: "hash",
-        brand_facts: [],
-        prices: [],
-        learnings: [],
-        estimated_fields: [],
-      },
+      scenarios: { mode: "cold_start", scenarios: ROWS, recommended: "cap", basis: {}, budget_cap: 30000 },
+      basis: { knowledge_item_ids: [], llm_task_id: "t", input_context_hash: "h", brand_facts: [], prices: [], learnings: [], estimated_fields: [] },
     },
-    budget_total: null,
-    context_json: {},
-    constraints_json: {},
-    verdict: null,
-    verdict_json: {},
-    closed_at: null,
-    created_by: null,
-    created_at: "2026-01-01T00:00:00Z",
-    groups: [],
-    actions: [],
-    outcome: { spend: 0, purchases: 0, revenue: 0 },
-    asset_readiness: { ready_count: 0, total: 0 },
-    judgment: { tone: "neutral", text: "投放中", detail: "還沒有花費資料" },
-    action_lines: [],
-    external_id: null,
-    external_name: null,
-    external_status: null,
-    local_state: "unbound",
-    bound_at: null,
-    ...overrides,
-  };
+    budget_total: null, context_json: {}, constraints_json: { budget: 30000 }, verdict: null, verdict_json: {}, closed_at: null,
+    created_by: null, created_at: "2026-09-01T00:00:00Z", groups: [], actions: [], outcome: { spend: 0, purchases: 0, revenue: 0 },
+    asset_readiness: { ready_count: 0, total: 0 }, external_id: null, external_name: null, external_status: null,
+    local_state: "unbound", bound_at: null, ...overrides,
+  } as CampaignDetail;
 }
 
-function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn()) {
-  return { onCampaignChange, onChangeTab, ...renderWithRouter(
-    <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />,
-  ) };
+function renderTab(c: CampaignDetail) {
+  const onCampaignChange = vi.fn();
+  const onChangeTab = vi.fn();
+  const ui: ReactElement = <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />;
+  return { onCampaignChange, onChangeTab, ...render(<MemoryRouter>{ui}</MemoryRouter>) };
 }
 
-describe("StrategyTab（F04-I14）", () => {
+const bar = () => screen.getByRole("button", { name: /照這個方式進行|儲存預算|查看成效|安排自帶素材|前往/ });
+
+describe("StrategyTab (F28-I09)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false } });
   });
 
-  it("預設畫面上看不到「平台結構」「預算情境」「合計」——三個收合都是關的", () => {
+  it("shows the three cards in prototype order; the folds start closed", async () => {
     renderTab(campaign());
-    expect(screen.queryByText("平台結構")).toBeNull();
-    expect(screen.queryByText("預算情境選擇")).toBeNull();
-    expect(screen.queryByText(/合計 \d+%/)).toBeNull();
+    const headings = (await screen.findAllByRole("heading", { level: 2 })).map((h) => h.textContent);
+    expect(headings).toEqual(["一個上限", "這一期的總預算", "預算怎麼分"]);
+    for (const label of ["為什麼是這幾個數字", "自己填總額", "為什麼這樣建議", "進階設定"]) {
+      expect(screen.getByRole("button", { name: label }).getAttribute("aria-expanded")).toBe("false");
+    }
   });
 
-  it("budget_scenario 是 null：按下主要按鈕先 selectScenario 再 adoptStrategy", async () => {
-    const user = userEvent.setup();
-    vi.mocked(selectScenario).mockResolvedValue(campaign({ budget_scenario: "recommended" }));
-    vi.mocked(adoptStrategy).mockResolvedValue(campaign({ budget_scenario: "recommended", groups: [group()] }));
-    const { onChangeTab } = renderTab(campaign({ budget_scenario: null }));
-
-    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
-
-    expect(selectScenario).toHaveBeenCalledTimes(1);
-    expect(adoptStrategy).toHaveBeenCalledTimes(1);
-    const scenarioOrder = vi.mocked(selectScenario).mock.invocationCallOrder[0];
-    const adoptOrder = vi.mocked(adoptStrategy).mock.invocationCallOrder[0];
-    expect(scenarioOrder).toBeLessThan(adoptOrder);
-    expect(onChangeTab).toHaveBeenCalledTimes(1);
-    expect(onChangeTab).toHaveBeenCalledWith("structure");
-  });
-
-  it("budget_scenario 已經是 recommended：按下主要按鈕不呼叫 selectScenario", async () => {
-    const user = userEvent.setup();
-    vi.mocked(adoptStrategy).mockResolvedValue(campaign({ budget_scenario: "recommended", groups: [group()] }));
-    renderTab(campaign({ budget_scenario: "recommended" }));
-
-    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
-
+  it("nothing is preselected: no row is checked and adopting waits for a budget the user chose", async () => {
+    renderTab(campaign());
+    await screen.findByText("一個上限");
+    expect(screen.getAllByRole("radio").every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(bar().textContent).toBe("照這個方式進行 →");
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("先選一個預算")).toBeTruthy();
+    expect(screen.getByText("選好預算後算金額")).toBeTruthy();
     expect(selectScenario).not.toHaveBeenCalled();
-    expect(adoptStrategy).toHaveBeenCalledTimes(1);
   });
 
-  it("上限 300／30000：印「預估購買 100 筆」與推估說明；沒有上限時改印算不出推估購買", () => {
-    const { rerender } = renderWithRouter(
-      <StrategyTab
-        brandId="brd_1"
-        campaign={campaign({ cap: cap(300), budget_planned: 30000 })}
-        onCampaignChange={vi.fn()}
-        onChangeTab={vi.fn()}
-      />,
-    );
-    expect(screen.getByText(/預估購買 100 筆/)).toBeTruthy();
-    expect(screen.getByText("推估（每筆成本等於上限的算術）")).toBeTruthy();
-
-    rerender(
-      <MemoryRouter>
-        <StrategyTab
-          brandId="brd_1"
-          campaign={campaign({ cap: cap(null), budget_planned: 30000 })}
-          onCampaignChange={vi.fn()}
-          onChangeTab={vi.fn()}
-        />
-      </MemoryRouter>,
-    );
-    expect(screen.queryByText(/預估購買/)).toBeNull();
-    expect(screen.getByText("還沒有上限或總預算，算不出推估購買。")).toBeTruthy();
+  it("no cap: adopting waits for the cap first", async () => {
+    renderTab(campaign({ cap: cap(null), budget_planned: 30000, budget_scenario: "cap" }));
+    await screen.findByText("先設上限");
+    expect(bar().hasAttribute("disabled")).toBe(true);
   });
 
-  it("labels 是名單時：預估文字改印「名單」，不是寫死的「購買」", () => {
-    renderTab(
-      campaign({
-        cap: cap(300), budget_planned: 30000,
-        labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
-      }),
-    );
-
-    expect(screen.getByText(/預估名單 100 筆/)).toBeTruthy();
-    expect(screen.queryByText(/預估購買/)).toBeNull();
-  });
-
-  it("labels 是名單時：上限輸入框印「每筆名單成本上限」，沒有指標下拉選單", async () => {
+  it("an in-cap pick is saved by the bar as the user's choice, then adopting is the next action", async () => {
     const user = userEvent.setup();
-    renderTab(
-      campaign({
-        cap: cap(300), budget_planned: 30000,
-        labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: "調整建議" }));
-    await user.click(screen.getByRole("button", { name: "編輯" }));
-    expect(screen.getByLabelText(/每筆名單成本上限/)).toBeTruthy();
-    expect(screen.queryByRole("combobox")).toBeNull();
+    const saved = campaign({ budget_planned: 27900, budget_scenario: "minimum" });
+    vi.mocked(selectScenario).mockResolvedValue(saved);
+    const { onCampaignChange } = renderTab(campaign());
+    await user.click(await screen.findByRole("radio", { name: /最低/ }));
+    expect(screen.getByRole("radio", { name: /最低/ }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("以 27,900 計")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "儲存預算 27,900" }));
+    expect(selectScenario).toHaveBeenCalledWith("brd_1", "cmp_1", { scenario_key: "minimum", custom_total: null });
+    expect(onCampaignChange).toHaveBeenCalledWith(saved);
   });
 
-  it("演練五：只輸入 450、其他都不動，存的就是每筆成本上限 450（PUT target，不是 ROAS）", async () => {
+  it("an over-cap row opens the confirm sheet, the bar's save stays disabled, and confirming sends confirm_over_cap", async () => {
     const user = userEvent.setup();
-    const refreshed = campaign({ cap: cap(450) });
-    vi.mocked(putTarget).mockResolvedValue({ ...cap(450), campaign_id: "cmp_1", product_ids: [], result_kinds: [] });
-    vi.mocked(getCampaign).mockResolvedValue(refreshed);
-    const { onCampaignChange } = renderTab(campaign({ cap: { ...cap(null), revision: 2 } }));
-
-    await user.click(screen.getByRole("button", { name: "調整建議" }));
-    await user.click(screen.getByRole("button", { name: "編輯" }));
-    await user.type(screen.getByLabelText(/成本上限/), "450");
-    await user.click(screen.getByRole("button", { name: "儲存" }));
-
-    expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 450, expected_revision: 2 });
-    expect(patchCampaign).not.toHaveBeenCalled();
-    expect(onCampaignChange).toHaveBeenCalledWith(refreshed);
+    const saved = campaign({ budget_planned: 69750, budget_scenario: "recommended" });
+    vi.mocked(selectScenario).mockResolvedValue(saved);
+    renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    await user.click(await screen.findByRole("radio", { name: /穩定成長/ }));
+    const sheet = await screen.findByRole("alertdialog");
+    expect(sheet.textContent).toContain("選「穩定成長 69,750」會超出預算上限 39,750 元");
+    expect(screen.getByRole("button", { name: "儲存預算" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("先在上方確認要不要超出預算上限")).toBeTruthy();
+    // The over-cap row is not picked while the sheet is open; the saved row stays the checked one.
+    expect(screen.getByRole("radio", { name: /照預算上限/ }).getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement?.textContent).toBe("維持 30,000");
+    await user.click(screen.getByRole("button", { name: "超出預算上限也要用" }));
+    expect(selectScenario).toHaveBeenCalledWith("brd_1", "cmp_1", { scenario_key: "recommended", custom_total: null }, { confirmOverCap: true });
   });
 
-  it("上限只收大於 0 的整數：小數不能存", async () => {
+  it("維持 closes the sheet without saving anything", async () => {
     const user = userEvent.setup();
-    renderTab(campaign());
-
-    await user.click(screen.getByRole("button", { name: "調整建議" }));
-    await user.click(screen.getByRole("button", { name: "編輯" }));
-    await user.type(screen.getByLabelText(/成本上限/), "12.5");
-
-    expect(screen.getByText("請輸入大於 0 的整數。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "儲存" }).hasAttribute("disabled")).toBe(true);
-  });
-
-  it("上限是打平暫用值時印「暫用打平」", async () => {
-    const user = userEvent.setup();
-    renderTab(campaign({ cap: cap(600, "break_even") }));
-
-    await user.click(screen.getByRole("button", { name: "調整建議" }));
-    expect(screen.getByText("暫用打平 NT$ 600")).toBeTruthy();
-  });
-
-  it("有假設值時：策略依據面板印出 assumption_note 那句話", async () => {
-    const user = userEvent.setup();
-    const base = campaign();
-    renderTab(
-      campaign({
-        budget_basis_json: {
-          ...base.budget_basis_json,
-          basis: {
-            ...base.budget_basis_json.basis!,
-            assumption_note: "用的是假設：單品的成交率假設 20%——之後用真實數字取代。",
-          },
-        },
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
-    await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
-    expect(screen.getByText(/用的是假設：單品的成交率假設 20%/)).toBeTruthy();
-  });
-
-  it("learning_goals 收在詳情，展開後空陣列與三條內容都如實顯示", async () => {
-    const user = userEvent.setup();
-    const c = campaign();
-    const { rerender } = renderWithRouter(
-      <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />,
-    );
-    expect(screen.queryByText("這一輪沒有設定學習目標")).toBeNull();
-
-    const withGoals = campaign({
-      budget_basis_json: {
-        ...c.budget_basis_json,
-        strategy: {
-          ...c.budget_basis_json.strategy!,
-          learning_goals: ["學習目標一", "學習目標二", "學習目標三"],
-        },
-      },
-    });
-    rerender(
-      <MemoryRouter>
-        <StrategyTab brandId="brd_1" campaign={withGoals} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
-      </MemoryRouter>,
-    );
-    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
-    expect(screen.getByText("學習目標一")).toBeTruthy();
-    expect(screen.getByText("學習目標二")).toBeTruthy();
-    expect(screen.getByText("學習目標三")).toBeTruthy();
-  });
-
-  it("主要原因與學習目標收在完整判斷；影響判讀的未知直接顯示", async () => {
-    const user = userEvent.setup();
-    renderTab(campaign());
-    expect(screen.getByText("新受眾的實際轉換率仍需驗證")).toBeTruthy();
-    expect(screen.queryByText("主要原因")).toBeNull();
-    expect(screen.queryByText("這一輪沒有設定學習目標")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "查看完整判斷" }));
-    expect(screen.getByText("主要原因")).toBeTruthy();
-    expect(screen.getByText("這一輪沒有設定學習目標")).toBeTruthy();
-  });
-
-  it("人工上架必填缺漏直接列出 entity 與欄位，按鈕只承諾前往投放結構", async () => {
-    const user = userEvent.setup();
-    const { onChangeTab } = renderTab(campaign({
-      manual_handoff: {
-        fields: [], pending_count: 1,
-        groups: [{ id: "grp_1", name: "新客組", values: {}, missing: ["版位", "歸因期間"],
-          status: "待補", saved_at: null, saved_by: null, ads: [] }],
-      },
-    }));
-    expect(screen.getByText("新客組：版位、歸因期間")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "前往投放結構補齊" }));
-    expect(onChangeTab).toHaveBeenCalledWith("structure");
-  });
-
-  it("已刪掉的永遠 disabled 採用按鈕不再出現", () => {
-    renderTab(campaign());
-    expect(screen.queryByText("採用流程將在下一步開放")).toBeNull();
-    expect(screen.queryByText("採用策略（建立投放結構）")).toBeNull();
-  });
-
-  it("budget_planned 與 scenarios 都是 null：預算格印「尚未設定」，不印「累積中」", () => {
-    const c = campaign();
-    renderTab(
-      campaign({
-        budget_planned: null,
-        budget_basis_json: { ...c.budget_basis_json, scenarios: undefined },
-      }),
-    );
-    expect(screen.getByText("尚未設定")).toBeTruthy();
-    expect(screen.queryByText("累積中")).toBeNull();
-  });
-
-  it("有一個投放組、一則廣告、還沒交棒：不出現「調整建議」收合，改印預算改在投放結構分頁；" +
-     "主要按鈕是「前往投放結構 →」，按下去呼叫 onChangeTab(\"structure\")", async () => {
-    const user = userEvent.setup();
-    const { onChangeTab } = renderTab(
-      campaign({ groups: [group({ ads: [ad()] })], asset_readiness: { ready_count: 0, total: 1 } }),
-    );
-    expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
-    expect(screen.getByText(/投放結構已經建立，預算改在投放結構分頁的每個投放組日預算。/)).toBeTruthy();
-    const button = screen.getByRole("button", { name: "前往投放結構 →" });
-    await user.click(button);
-    expect(onChangeTab).toHaveBeenCalledWith("structure");
-  });
-
-  function campaignWithUnknownAmounts(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
-    const c = campaign();
-    return campaign({
-      budget_scenario: null,
-      context_json: { product_ids: ["prd_1"] },
-      constraints_json: { budget: 28000 },
-      budget_basis_json: {
-        ...c.budget_basis_json,
-        scenarios: {
-          ...c.budget_basis_json.scenarios!,
-          scenarios: c.budget_basis_json.scenarios!.scenarios.map((s) => ({ ...s, daily: null, total: null })),
-        },
-      },
-      ...overrides,
-    });
-  }
-
-  it("三個情境都算不出金額：按主要按鈕不打 API，展開自訂預算框並預填 constraints_json.budget", async () => {
-    const user = userEvent.setup();
-    const { onChangeTab } = renderTab(campaignWithUnknownAmounts());
-
-    await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
-
+    renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    await user.click(await screen.findByRole("radio", { name: /積極/ }));
+    await user.click(await screen.findByRole("button", { name: "維持 30,000" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(selectScenario).not.toHaveBeenCalled();
-    expect(adoptStrategy).not.toHaveBeenCalled();
-    expect(onChangeTab).not.toHaveBeenCalled();
-    const input = screen.getByPlaceholderText("輸入自訂預算") as HTMLInputElement;
-    expect(input.value).toBe("28000");
-    expect(document.activeElement).toBe(input);
   });
 
-  it("算不出金額時看得到補商品數字的提示與連到商品頁的連結", async () => {
+  it("adopt: saved budget + cap → adoptStrategy, then the structure tab", async () => {
     const user = userEvent.setup();
-    renderTab(campaignWithUnknownAmounts());
-
-    await user.click(screen.getByRole("button", { name: "先設定預算 →" }));
-
-    expect(screen.getByText(/要估金額需要上限與活動期間/)).toBeTruthy();
-    const link = screen.getByRole("link", { name: "去補商品數字" });
-    expect(link.getAttribute("href")).toContain("/products/");
-  });
-
-  it("budget_scenario 是 custom：主要按鈕直接 adoptStrategy，不重新 selectScenario", async () => {
-    const user = userEvent.setup();
-    vi.mocked(adoptStrategy).mockResolvedValue(campaign({ budget_scenario: "custom", groups: [group()] }));
-    renderTab(campaignWithUnknownAmounts({ budget_scenario: "custom", budget_planned: 28000 }));
-
-    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
-
+    const adopted = campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] });
+    vi.mocked(adoptStrategy).mockResolvedValue(adopted);
+    const { onChangeTab } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
     expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(selectScenario).not.toHaveBeenCalled();
+    expect(onChangeTab).toHaveBeenCalledWith("structure");
   });
 
-  it("status live、沒投放組：規則的答案是查看成效，不是採用；沒有「照這個方式進行 →」與「調整建議」", async () => {
+  it("after adoption the bar is the workspace's next step and the allocation is no longer editable", async () => {
+    renderTab(campaign({ status: "live", budget_planned: 30000, budget_scenario: "cap", groups: [group()] }));
+    expect((await screen.findByRole("button", { name: "查看成效 →" })).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("button", { name: "調整比例" })).toBeNull();
+    expect(screen.getByText("以 30,000 計")).toBeTruthy();
+  });
+
+  it("history mode: the API's own labels and 推薦 are printed as sent", async () => {
+    const c = campaign({ budget_planned: 30976, budget_scenario: "recommended" });
+    c.budget_basis_json.scenarios = {
+      mode: "history", recommended: "recommended", basis: {}, budget_cap: null,
+      scenarios: [
+        { key: "conservative", label: "保守", daily: 1162, total: 18592, caption: "上一期日預算 NT$1936 ×0.6", over_cap: null },
+        { key: "recommended", label: "照上一期", daily: 1936, total: 30976, caption: "上一期日預算 NT$1936 ×1", over_cap: null },
+        { key: "aggressive", label: "積極", daily: 3098, total: 49568, caption: "上一期日預算 NT$1936 ×1.6", over_cap: null },
+      ],
+    };
+    renderTab(c);
+    const row = await screen.findByRole("radio", { name: /照上一期/ });
+    expect(row.getAttribute("aria-checked")).toBe("true");
+    expect(row.textContent).toContain("推薦");
+    expect(row.textContent).toContain("已儲存");
+    expect(screen.getByText("沒設預算上限")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "設預算上限" })).toBeTruthy();
+  });
+
+  it("the why fold carries the reasons and unknowns", async () => {
     const user = userEvent.setup();
-    const { onChangeTab } = renderTab(campaign({ status: "live", groups: [] }));
-
-    const button = screen.getByRole("button", { name: "查看成效 →" });
-    expect(screen.queryByRole("button", { name: "照這個方式進行 →" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "調整建議" })).toBeNull();
-
-    await user.click(button);
-
-    expect(onChangeTab).toHaveBeenCalledWith("performance");
+    renderTab(campaign());
+    await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+    expect(screen.getByText("新客比例高：通勤情境近 30 天在新客的每筆成本最低")).toBeTruthy();
+    expect(screen.getByText("新受眾的實際轉換率仍需驗證")).toBeTruthy();
   });
-});
 
+  it("imported: the cap block is shown, the budget and allocation cards are not, the internal goal saves", async () => {
+    const user = userEvent.setup();
+    const imported = campaign({ origin: "imported", budget_basis_json: {}, status: "live" });
+    vi.mocked(patchCampaign).mockResolvedValue({ ...imported, goal_text: "內部管理目標" });
+    const { onCampaignChange } = renderTab(imported);
+    expect(await screen.findByText("一個上限")).toBeTruthy();
+    expect(screen.queryByText("這一期的總預算")).toBeNull();
+    expect(screen.queryByText("預算怎麼分")).toBeNull();
+    expect(screen.queryByText("改預算上限")).toBeNull();
+    expect(bar().textContent).toBe("安排自帶素材 →");
+    await user.click(screen.getByRole("button", { name: "進階設定" }));
+    await user.clear(screen.getByLabelText("內部活動目標"));
+    await user.type(screen.getByLabelText("內部活動目標"), "內部管理目標");
+    await user.click(screen.getByRole("button", { name: "儲存目標" }));
+    expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { goal_text: "內部管理目標", objective: "內部管理目標" });
+    expect(onCampaignChange).toHaveBeenCalled();
+    expect(selectScenario).not.toHaveBeenCalled();
+  });
 
-it("shows the current cap, preserves selected money and labels scenarios beyond the budget cap", async () => {
-  const c = campaign({ cap: cap(300), budget_planned: 14700, budget_scenario: "recommended",
-    start_date: "2026-09-01", end_date: "2026-09-14", constraints_json: { budget: 15000 } });
-  if (!c.budget_basis_json.scenarios) throw new Error("scenario fixture missing");
-  c.budget_basis_json.scenarios.scenarios = [
-    { key: "minimum", label: "最低", daily: 600, total: 8400, caption: "CPA × 2", over_cap: 0 },
-    { key: "recommended", label: "推薦", daily: 1500, total: 21000, caption: "CPA × 5", over_cap: 6000 },
-    { key: "aggressive", label: "積極", daily: 3000, total: 42000, caption: "CPA × 10", over_cap: 27000 },
-  ];
-  c.budget_basis_json.scenarios.budget_cap = 15000;
-  renderTab(c);
-  await userEvent.click(screen.getByRole("button", { name: "調整建議" }));
-  expect(screen.getByText(/計算依據：目前上限 NT\$ 300/).textContent).toContain("14 天");
-  expect(screen.getByText(/已選預算.*14,700/)).toBeTruthy();
-  expect(screen.getAllByText(/超過預算上限/)).toHaveLength(2);
-});
-
-
-it("keeps imported strategy in the existing disclosures and saves only the internal goal", async () => {
-  vi.clearAllMocks();
-  const user = userEvent.setup();
-  const imported = campaign({origin: "imported", groups: [], budget_basis_json: {}});
-  const changed = vi.fn();
-  vi.mocked(patchCampaign).mockResolvedValue({...imported, goal_text: "內部管理目標"});
-  renderWithRouter(<StrategyTab brandId="brd_1" campaign={imported} onCampaignChange={changed} onChangeTab={vi.fn()} />);
-  expect(screen.getByText("這個 Campaign 尚無內部策略建議")).toBeTruthy();
-  await user.click(screen.getByText("調整建議"));
-  expect(screen.getByRole("button", {name: "產生策略"}).hasAttribute("disabled")).toBe(true);
-  await user.click(screen.getByText("進階設定"));
-  await user.clear(screen.getByLabelText("內部活動目標"));
-  await user.type(screen.getByLabelText("內部活動目標"), "內部管理目標");
-  await user.click(screen.getByRole("button", {name: "儲存目標"}));
-  expect(patchCampaign).toHaveBeenCalledWith("brd_1", imported.id, {goal_text: "內部管理目標", objective: "內部管理目標"});
-  expect(changed).toHaveBeenCalled();
-  expect(generateStrategy).not.toHaveBeenCalled();
-  expect(adoptStrategy).not.toHaveBeenCalled();
-  expect(selectScenario).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", {name: "編輯上限"}));
-  expect(screen.getByLabelText(/成本上限/)).toBeTruthy();
-});
-
-it("opens an imported campaign whose goal was never set", async () => {
-  const imported = campaign({origin: "imported", groups: [], budget_basis_json: {}, goal_text: null});
-  renderWithRouter(<StrategyTab brandId="brd_1" campaign={imported} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />);
-  await userEvent.setup().click(screen.getByText("進階設定"));
-  expect((screen.getByLabelText("內部活動目標") as HTMLTextAreaElement).value).toBe("");
+  it("no strategy yet: the cap block still shows above the generate empty state, and the bar offers no step", async () => {
+    renderTab(campaign({ budget_basis_json: {} }));
+    expect(await screen.findByText("這個活動還沒有策略建議")).toBeTruthy();
+    expect(screen.getByText("一個上限")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /照這個方式進行/ })).toBeNull();
+  });
 });

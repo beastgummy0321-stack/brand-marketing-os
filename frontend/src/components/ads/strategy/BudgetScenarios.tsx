@@ -33,13 +33,13 @@ function periodDays(start: string | null, end: string | null): number | null {
 
 /** The row the campaign has saved: same key AND the same money. A cap row whose total moved with a new budget cap is
  * no longer what was saved, so it does not wear 已儲存 (the header chip prints the saved amount instead). */
-export function savedRowKey(c: CampaignDetail): string | null {
+function savedRowKey(c: CampaignDetail): string | null {
   const rows = c.budget_basis_json.scenarios?.scenarios ?? [];
   const row = rows.find((r) => r.key === c.budget_scenario && r.total !== null && r.total === c.budget_planned);
   return row ? row.key : null;
 }
 
-export function scenarioRow(c: CampaignDetail, key: string | null): BudgetScenarioRow | null {
+function scenarioRow(c: CampaignDetail, key: string | null): BudgetScenarioRow | null {
   if (!key) return null;
   return c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === key) ?? null;
 }
@@ -198,7 +198,8 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
           split={budgetCap !== null ? { within: budgetCap, over: pending.over } : undefined}
           actions={(
             <>
-              <Button variant="outline" disabled={confirming} onClick={() => { onPending(null); setError(null); }}>
+              {/* Focus moves into the sheet once it opens (prototype `pickSc`), so a keyboard user lands on the safe choice. */}
+              <Button variant="outline" autoFocus disabled={confirming} onClick={() => { onPending(null); setError(null); }}>
                 {keepTotal !== null ? `維持 ${fmt(keepTotal)}` : "先不選"}
               </Button>
               <WarnButton disabled={confirming} onClick={() => void confirmOver()}>{confirming ? "儲存中…" : "超出預算上限也要用"}</WarnButton>

@@ -18,7 +18,7 @@ import {
 import { ActionBar, AllocationBar, Disclosure, formatAmount } from "./patterns";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
-import { BudgetScenarios, scenarioRow, type OverCapPending } from "./strategy/BudgetScenarios";
+import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
@@ -57,7 +57,7 @@ export function StrategyTab({
   const strategy = imported ? undefined : c.budget_basis_json.strategy;
   const basis = c.budget_basis_json.basis;
   const step = nextStep(c);
-  const pickedRow = scenarioRow(c, picked);
+  const pickedRow = picked ? c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === picked) ?? null : null;
 
   async function handleGenerate() {
     setGenerating(true);
