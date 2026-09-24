@@ -382,7 +382,8 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIsNone(response.json()["launch_stale"])
 
-    def test_revert_refuses_when_the_approved_material_revision_is_gone(self):
+    def assigned_material(self):
+        """Assign a confirmed material (revision 1) to the planned ad, before any launch."""
         asset = db.new_id("aua")
         self.conn.execute(
             "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
@@ -406,7 +407,10 @@ class LaunchStaleTest(unittest.TestCase):
         handoff_assignment.assign(
             self.conn, self.org, self.brand, self.campaign, self.ad, placement["id"], 1
         )
-        set_id = self.launch()
+        return placement
+
+    def revise(self, placement):
+        """Revise the approved material after the launch; the new revision is confirmed."""
         assets.revise(
             self.conn,
             self.org,
@@ -417,7 +421,25 @@ class LaunchStaleTest(unittest.TestCase):
             {"copy_fields": {"body": "新版本"}},
             "human",
         )
-        self.conn.commit()
+        self.sql(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' "
+            "WHERE id=%s AND is_current",
+            placement["id"],
+        )
+        return self.conn.execute(
+            "SELECT revision FROM ads_asset_placement WHERE id=%s AND is_current",
+            (placement["id"],),
+        ).fetchone()["revision"]
+
+    def assign(self, placement_id, revision):
+        return handoff_assignment.assign(
+            self.conn, self.org, self.brand, self.campaign, self.ad, placement_id, revision
+        )
+
+    def test_revert_refuses_when_the_approved_material_revision_is_gone(self):
+        placement = self.assigned_material()
+        set_id = self.launch()
+        self.revise(placement)
 
         stale = self.workspace()["launch_stale"]
         row = next(r for r in stale["diff"] if r["field"] == "material")
@@ -428,6 +450,57 @@ class LaunchStaleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "素材版本已修訂或不存在"):
             self.revert(stale)
         self.assertEqual(self.change_set(set_id)["status"], "approved")
+
+    def test_fresh_approved_launch_still_freezes_its_materials(self):
+        placement = self.assigned_material()
+        self.launch()
+        self.assertIsNone(self.workspace()["launch_stale"])
+        with self.assertRaisesRegex(ValueError, "首次投放清單已核准"):
+            self.assign(None, None)
+        with self.assertRaisesRegex(ValueError, "首次投放清單已核准"):
+            self.assign(placement["id"], 1)
+        ad = campaigns.get_ad(self.conn, self.org, self.brand, self.ad)
+        self.assertEqual(
+            (ad["material_placement_id"], ad["material_placement_revision"]), (placement["id"], 1)
+        )
+
+    def test_revised_material_is_repointed_then_reapproved(self):
+        placement = self.assigned_material()
+        old_set = self.launch()
+        revision = self.revise(placement)
+        self.assertEqual(revision, 2)
+        stale = self.workspace()["launch_stale"]
+        self.assertFalse(stale["revertible"])
+        # Re-approving the revised-but-unassigned material is refused as before ...
+        with (
+            patch.object(
+                change_control_launch.month_budget,
+                "preflight",
+                return_value={"can_increase": True},
+            ),
+            self.assertRaisesRegex(ValueError, "尚未確認或已修訂"),
+        ):
+            self.reapprove(stale)
+        # ... but the stale launch no longer freezes the assignment, so it can be re-pointed.
+        planned = self.assign(placement["id"], revision)["planned_ads"][0]
+        self.assertEqual(
+            (planned["placement_revision"], planned["assignment_status"]), (revision, "confirmed")
+        )
+        stale = self.workspace()["launch_stale"]
+        row = next(r for r in stale["diff"] if r["field"] == "material")
+        self.assertEqual((row["before"], row["after"]), ("fall.png・第 1 版", "fall.png・第 2 版"))
+        with patch.object(
+            change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
+        ):
+            new_set = self.reapprove(stale)["change_set_id"]
+        self.assertEqual(self.change_set(old_set)["status"], "superseded")
+        self.assertIsNone(self.workspace()["launch_stale"])
+        ad_item = self.items()["ad"]
+        self.assertEqual(ad_item["change_set_id"], new_set)
+        self.assertEqual((ad_item["placement_revision"], ad_item["status"]), (revision, "pending"))
+        # The new approval freezes the materials again.
+        with self.assertRaisesRegex(ValueError, "首次投放清單已核准"):
+            self.assign(None, None)
 
     def test_added_ad_is_listed_and_blocks_revert(self):
         self.launch()

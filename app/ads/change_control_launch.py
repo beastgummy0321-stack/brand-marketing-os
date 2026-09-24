@@ -544,6 +544,14 @@ def _compare(change_set, frozen):
     return original, _rows(original, current)
 
 
+def is_stale(conn, org, brand, campaign_id):
+    """True when the current approved launch no longer matches the plan."""
+    change_set = launch_set(conn, org, brand, campaign_id)
+    if change_set is None:
+        return False
+    return _compare(change_set, snapshot(conn, org, brand, campaign_id))[1] is not None
+
+
 def stale(conn, org, brand, campaign_id):
     """`launch_stale` of `GET …/handoff`, computed on read; None while the approved launch still
     matches the plan (or there is no approved launch)."""
