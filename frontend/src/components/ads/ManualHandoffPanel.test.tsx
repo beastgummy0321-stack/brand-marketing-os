@@ -72,6 +72,16 @@ describe("manual handoff", () => {
     expect(await screen.findByText("需重新確認")).toBeTruthy();
     expect(createNewAdHandoff).not.toHaveBeenCalled();
   });
+  it("tells the host whether the handoff has anything to verify", async () => {
+    const onHandoffWork = vi.fn();
+    const ui = render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onHandoffWork={onHandoffWork} /></MemoryRouter>);
+    await waitFor(() => expect(onHandoffWork).toHaveBeenLastCalledWith(true));
+    ui.unmount();
+    vi.mocked(getHandoff).mockResolvedValue(workspace([]));
+    const empty = vi.fn();
+    render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onHandoffWork={empty} /></MemoryRouter>);
+    await waitFor(() => expect(empty).toHaveBeenLastCalledWith(false));
+  });
   it("aborts old reads and ignores late responses when the brand changes with the same campaign id", async () => {
     let resolveOld!: (value: HandoffWorkspace) => void;
     vi.mocked(getHandoff).mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
