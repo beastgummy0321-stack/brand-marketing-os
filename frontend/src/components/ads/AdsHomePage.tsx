@@ -6,6 +6,7 @@ import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { getOrgId } from "@/lib/auth";
+import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { Chip, RecoverSteps } from "./patterns";
 import { CampaignRows } from "./home/CampaignRows";
 import { MonthMoney, monthNumber } from "./home/MonthMoney";
@@ -122,6 +123,8 @@ function AdsHome({ brandId }: { brandId: string }) {
         actions={
           <>
             <Button asChild variant="outline"><Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link></Button>
+            {/* Not in the v9 prototype: the only home entry to bring an existing platform campaign in (kept). */}
+            <ExistingCampaignDialog brandId={brandId} />
             <Button asChild variant="outline">
               <Link to={`/brands/${brandId}/ads/new`}><span aria-hidden="true">＋</span> 建立活動</Link>
             </Button>

@@ -57,7 +57,7 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   await page.getByRole("button", { name: "登入", exact: true }).click();
   await page.getByRole("link", { name: "F13 隔離驗收品牌", exact: true }).click();
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
-  await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
+  await page.getByRole("link", { name: "建立活動", exact: true }).click();
   await expect(page.getByRole("heading", { name: "建立投放計畫", exact: true })).toBeVisible();
   const filename = "fixture-I2.png";
   await page.getByRole("checkbox", { name: `選取 ${filename}`, exact: true }).check();
