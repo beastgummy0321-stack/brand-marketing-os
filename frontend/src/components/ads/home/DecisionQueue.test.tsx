@@ -23,6 +23,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1",
     campaign_name: "晨光隨行杯上市", thumbnail_url: null,
     class: "stop_loss", label: "停損", reason_code: "spend_over_stop_loss",
+    grade: "wasted", grade_label: "白花",
     window: { start: "2026-09-01", end: "2026-09-07", days: 7, previous_start: "2026-08-25", previous_end: "2026-08-31", extended_from: null },
     target: { value: 450, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 5200, result_count: 0, cost_per_result: null, result_kind: "purchase", result_label: "購買", derived_zero_days: 7, reason: null },
@@ -63,9 +64,10 @@ function cleanupPayload(overrides: Partial<QueueCleanup> = {}): QueueCleanup {
   return {
     campaign_id: "cmp_1", campaign_name: "晨光隨行杯上市", can_support: 4, active_ads: 6,
     ads: [
-      { entity_id: "ad_low", name: "晨光隨行杯・清倉版", thumbnail_url: "https://cdn.example/low.jpg", spend_7d: 120 },
-      { entity_id: "ad_low2", name: "晨光隨行杯・過季版", thumbnail_url: null, spend_7d: 180 },
+      { entity_id: "ad_low", name: "晨光隨行杯・清倉版", thumbnail_url: "https://cdn.example/low.jpg", spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7 },
+      { entity_id: "ad_low2", name: "晨光隨行杯・過季版", thumbnail_url: null, spend_7d: 180, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 180 / 7 },
     ],
+    keep: [], short: 0, daily_saving: 300 / 7, scale_owner_id: null,
     ...overrides,
   };
 }
