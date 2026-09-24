@@ -348,12 +348,14 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.cleanup_campaign, result_kind="purchase",
             basis="own", value=100, expected_revision=0, actor="test",
         )
-        for idx, daily_spend in enumerate((10, 20, 30)):
+        # F28-I02: graded against the cap 100 -- 白花 (350 spent, 0 purchases), 太貴 (150 a
+        # purchase), 划算 (50 a purchase). Two over capacity: the 白花 and the 太貴 close.
+        for idx, (daily_spend, daily_count) in enumerate(((50, 0), (150, 1), (50, 1))):
             ad = _ad(self.conn, self.org, self.brand, self.cleanup_campaign, f"ad_cln{idx}",
                      campaign_native_id="ccln")
             for offset in range(7):
                 _obs(self.conn, self.org, self.brand, self.cleanup_campaign, ad["id"],
-                     self.cutoff - timedelta(days=offset), spend=daily_spend, count=None,
+                     self.cutoff - timedelta(days=offset), spend=daily_spend, count=daily_count,
                      key=f"cln{idx}-{offset}")
 
         # --- 活動 C：沒有目標（no_target）——有一則活躍廣告，從沒設過目標。
@@ -384,7 +386,8 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
         self.assertIn("cleanup", by_kind)
         cleanup = by_kind["cleanup"]
         self.assertEqual(cleanup["campaign_id"], self.cleanup_campaign)
-        self.assertEqual(cleanup["title"], "清掉 2 則沒被投放的廣告")
+        self.assertEqual(cleanup["title"], "關掉 2 則花錢沒效的廣告")
+        self.assertEqual(cleanup["why"], "同時 3 則，預算約撐 1 則")
         self.assertEqual(cleanup["key"], f"cleanup:{self.cleanup_campaign}")
         self.assertEqual(cleanup["campaign_objective"], "other")
 
@@ -432,6 +435,39 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
             month_summary.dismiss_suggestion(
                 self.conn, self.org, self.brand, self.month, "refresh:unknown-campaign",
             )
+
+
+class MonthSummaryWastedOnlyCleanupTest(unittest.TestCase):
+    def test_wasted_ad_without_a_daily_budget_owner_names_the_waste_not_capacity(self):
+        # F28-I02: a 白花 ad raises the cleanup even when capacity is unknown (no daily budget
+        # owner -> `can_support` null) -- the reason must not print a null capacity.
+        conn, org = db.current(), db.DEV_ORG_ID
+        brand = brands.create_brand(
+            conn, org_id=org, name="每月回顧白花清理測試", actor="test", client_name=None,
+        )["id"]
+        month = _month(conn, org)
+        cutoff = coresettings.today_for_org(conn, org_id=org) - timedelta(days=2)
+        campaign = _campaign(conn, org, brand, name="白花活動", native_id="cwaste")
+        external.record_sync(
+            conn, org, brand, campaign, section="observations",
+            state={"last_success_at": db.now_utc().isoformat(),
+                   "coverage": {"start": (cutoff - timedelta(days=90)).isoformat(),
+                                "end": cutoff.isoformat()}},
+        )
+        repository.save_campaign_target(
+            conn, org, brand, campaign, result_kind="purchase", basis="own", value=100,
+            expected_revision=0, actor="test",
+        )
+        ad = _ad(conn, org, brand, campaign, "ad_waste", campaign_native_id="cwaste")
+        for offset in range(7):
+            _obs(conn, org, brand, campaign, ad["id"], cutoff - timedelta(days=offset),
+                 spend=50, count=0, key=f"w{offset}")
+        triage.refresh_queue(conn, org, brand)
+
+        summary = month_summary.get_summary(conn, org, brand, month)
+        cleanup = next(s for s in summary["suggestions"] if s["kind"] == "cleanup")
+        self.assertEqual(cleanup["title"], "關掉 1 則花錢沒效的廣告")
+        self.assertEqual(cleanup["why"], "1 則花了上限 3 倍以上還沒有成果")
 
 
 class MonthSummaryRouteTest(unittest.TestCase):
