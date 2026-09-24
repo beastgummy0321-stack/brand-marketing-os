@@ -87,7 +87,7 @@ function facts() {
     [".confirm", () => "ConfirmSheet over-cap"], [".sheet:has(.warnp)", () => "ConfirmSheet revert"], // over-cap confirm, act.revertOpen
     [".diff", () => "DiffRow"], [".capdots", () => "CapDots"], [".prog", () => "ProgressSegments"],
   ];
-  for (const e of within("[class], [data-slot], svg[role=img]")) { // the pace chart is a bare <svg>
+  for (const e of within("[class], [data-slot], svg[role=img], [role=radiogroup]")) { // the pace chart and the scenario radiogroup carry no class
     if (!vis(e)) continue;
     if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${NOVARIANT.has(e.dataset.slot) ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
     if (document.querySelector("#main-content")) continue;
