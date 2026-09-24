@@ -219,6 +219,33 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(vi.mocked(getHomeOverview)).toHaveBeenCalledTimes(2);
   });
 
+  it("zero campaigns and nothing spent: one empty card whose primary action is 建立活動; no board that could only print zeros", async () => {
+    vi.mocked(getHomeOverview).mockResolvedValue(home({
+      spent: null, campaigns: [], quality: null, timeline: [{ date: "2026-09-23", kind: "today", campaign_id: null, name: null, ready: null }],
+      money: { purchases: null, cost_per_purchase: null, cap: null, earn: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
+      pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
+    }));
+    renderPage();
+    const empty = await screen.findByRole("region", { name: "還沒有進行中的活動" });
+    const create = within(empty).getByRole("link", { name: "建立活動" });
+    expect(create.getAttribute("href")).toBe("/brands/brd_1/ads/new");
+    expect(create.getAttribute("data-variant")).toBe("default");
+    expect(screen.getAllByRole("link", { name: "建立活動" })).toHaveLength(1);
+    expect(within(empty).getByRole("button", { name: "加入既有活動" })).toBeTruthy();
+    expect(screen.queryByText("的廣告費花得划算")).toBeNull();
+    expect(screen.queryByRole("region", { name: /需要你決定/ })).toBeNull();
+    expect(screen.queryByText(/算不出來|還沒有購買|NT\$0|0 筆/)).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "9 月的廣告" })).toBeTruthy();
+  });
+
+  it("no open campaign but spend this month (a campaign closed mid-month): the board still shows that spend", async () => {
+    vi.mocked(getHomeOverview).mockResolvedValue(home({ campaigns: [] }));
+    renderPage();
+    expect(await screen.findByText("9 月已花 22,000 元")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "還沒有進行中的活動" })).toBeNull();
+    expect(screen.getByText("還沒有活動")).toBeTruthy();
+  });
+
   describe("F27-I17 recovery (getRecovery)", () => {
     it("recovering: the banner shows and every decision action is replaced by the placeholder", async () => {
       vi.mocked(refreshQueue).mockResolvedValue(queue([item("w1", "worse")]));

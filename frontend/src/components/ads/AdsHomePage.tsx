@@ -115,12 +115,16 @@ function AdsHome({ brandId }: { brandId: string }) {
   const monthNo = monthNumber(home?.month);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
+  // Zero campaigns and nothing spent this month: the prototype draws no first-run board, so the page shows one honest
+  // empty card whose clear action is ＋ 建立活動 — no money card, band or decisions that could only print zeros.
+  const empty = home !== null && home.campaigns !== null && home.campaigns.length === 0 && !home.spent;
+
   return (
     <div className="flex max-w-[1260px] flex-col gap-5">
       <PageHeader
         title={`${monthNo} 月的廣告`}
         description={home ? `第 ${home.day_of_month} 天／共 ${home.days_in_month} 天` : undefined}
-        actions={
+        actions={empty ? undefined : (
           <>
             <Button asChild variant="outline"><Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link></Button>
             {/* Not in the v9 prototype: the only home entry to bring an existing platform campaign in (kept). */}
@@ -129,22 +133,42 @@ function AdsHome({ brandId }: { brandId: string }) {
               <Link to={`/brands/${brandId}/ads/new`}><span aria-hidden="true">＋</span> 建立活動</Link>
             </Button>
           </>
-        }
+        )}
       />
       {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
-      <NextDates home={home} note={note} onJump={jump} />
-      <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={retryHome} />
-      <QualityBand state={homeState} onRetry={retryHome} />
-      <TodayDecisions
-        brandId={brandId}
-        state={queueState}
-        syncing={syncing}
-        recovering={recovering}
-        sync={home?.sync ?? null}
-        onRetry={() => setQueueReload((v) => v + 1)}
-      />
-      <CampaignRows brandId={brandId} state={homeState} onRetry={retryHome} />
+      {empty ? <EmptyBoard brandId={brandId} /> : <>
+        <NextDates home={home} note={note} onJump={jump} />
+        <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={retryHome} />
+        <QualityBand state={homeState} onRetry={retryHome} />
+        <TodayDecisions
+          brandId={brandId}
+          state={queueState}
+          syncing={syncing}
+          recovering={recovering}
+          sync={home?.sync ?? null}
+          onRetry={() => setQueueReload((v) => v + 1)}
+        />
+        <CampaignRows brandId={brandId} state={homeState} onRetry={retryHome} />
+      </>}
     </div>
+  );
+}
+
+/** First run: no campaign yet. One primary action; bringing an existing platform campaign in stays secondary. */
+function EmptyBoard({ brandId }: { brandId: string }) {
+  return (
+    <section aria-labelledby="ads-empty" className="surface flex flex-wrap items-center gap-5 px-7 py-8">
+      <div className="min-w-0 flex-1">
+        <h2 id="ads-empty" className="text-lg font-semibold">還沒有進行中的活動</h2>
+        <p className="mt-1 text-sm text-muted-foreground">建立第一個活動後，這裡會開始算這個月花了多少、划不划算</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <ExistingCampaignDialog brandId={brandId} />
+        <Button asChild>
+          <Link to={`/brands/${brandId}/ads/new`}><span aria-hidden="true">＋</span> 建立活動</Link>
+        </Button>
+      </div>
+    </section>
   );
 }
 
