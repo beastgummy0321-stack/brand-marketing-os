@@ -417,6 +417,24 @@ class ExperimentTest(SimulatedPublishTestBase):
         self.assertEqual(unknown.json()["error"]["code"], "comparison_settings_invalid")
 
 
+    def test_budget_cap_edit_keeps_a_confirmed_comparison_fresh_but_platform_does_not(self):
+        """F28-I03: the budget cap is an internal planning number (ads.md §6.32) -- setting or
+        clearing it through `PUT .../strategy/budget-cap` never makes a confirmation stale; the
+        platform is still a comparison condition."""
+        self.confirm()
+        web.conn.commit()
+        client = TestClient(main.app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{self.args[-1]}/strategy/budget-cap"
+        for value in (12345, 999, None):
+            response = client.put(url, json={"budget_cap": value})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(experiments.read(*self.args)["stale"], value)
+        constraints = repository.get_campaign(*self.args)["constraints_json"]
+        repository.update_campaign(
+            *self.args, {"constraints_json": {**constraints, "platform": "other"}},
+        )
+        self.assertTrue(experiments.read(*self.args)["stale"])
+
     def test_query_order_is_not_a_material_change(self):
         self.confirm()
         detail = repository.campaign_detail(*self.args)
