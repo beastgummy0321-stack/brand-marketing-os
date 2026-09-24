@@ -26,6 +26,21 @@
   --color-warning: #a96711;
   --color-danger: #c53945;
   --color-alert-irreversible: #ba591c;
+  /* Ads grades against the one cap (prototype v9 `--g-*`; 划算 = --color-success). */
+  --color-grade-watch: #d18a1f;
+  --color-grade-over: #e0707a;
+  --color-grade-over-foreground: #b8444f;
+  --color-grade-wasted: #c53945;
+  --color-grade-wasted-soft: #f7d3d6;
+  --color-grade-wasted-foreground: #b0303b;
+  --color-grade-thin: #c9cede;
+  /* Ruler zone fills and soft chip backgrounds (prototype v9 `--z-*`). */
+  --color-zone-ok: #e4f3ee;
+  --color-zone-watch: #faefdc;
+  --color-zone-over: #fbe6e8;
+  /* Cleanup mark 「✂ 清理」 (prototype v9 `.kind.cut`). */
+  --color-kind-cut: #eceef4;
+  --color-kind-cut-foreground: #3b3f5c;
   --color-chart-revenue: #7055d8;
   --color-chart-spend: #397cda;
   --color-chart-aqua: #2ea7af;
