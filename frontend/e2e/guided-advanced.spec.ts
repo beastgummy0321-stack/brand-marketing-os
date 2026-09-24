@@ -112,8 +112,10 @@ async function createCampaignInUi(page: Page, brandId: string): Promise<string> 
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
   await page.getByRole("button", { name: "產生策略建議 →" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/${campaignId}\\?tab=strategy`));
-  await expect(page.getByText("行銷駕駛艙建議這樣投")).toBeVisible();
-  await expect(page.getByRole("button", { name: "調整建議" })).toHaveAttribute("aria-expanded", "false");
+  // F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分; the reasons sit in a fold that starts closed.
+  await expect(page.getByRole("heading", { name: "一個上限", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "這一期的總預算", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "為什麼這樣建議", exact: true })).toHaveAttribute("aria-expanded", "false");
   await captureDesktopEvidence(page, "strategy-general");
   return campaignId;
 }
