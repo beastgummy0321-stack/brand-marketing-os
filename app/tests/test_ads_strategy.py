@@ -11,14 +11,19 @@ import unittest
 from datetime import timedelta
 from uuid import uuid4
 
+from fastapi.testclient import TestClient
+
+import app.main as main
 import app.shared.web as web
-from app.ads import budget, plan, strategy
+from app.ads import budget, change_control_launch, plan, strategy
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import providers
 from app.meta import repository as meta_repo
+
+from .identity_test_helpers import mint_hs256
 
 ACTOR = "測試員"
 
@@ -800,3 +805,202 @@ class CurrentCpaScenariosTest(StrategyTestBase):
         prompt = provider.calls[0]["messages"][0]["content"]
         self.assertIn("上限（每筆購買成本）：450", prompt)
         self.assertNotIn("success_", prompt)
+
+
+class BudgetCapSelectionTest(StrategyTestBase):
+    """F28-I03: a total above the budget cap (`constraints_json.budget`) is saved only with an
+    explicit confirmation, which is recorded; within the cap, or with no cap, as before.
+    Cap 300 x 2/5/10 x 10 days -> 6000 / 15000 / 30000."""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign(constraints_json={"budget": 20000})
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        self._generate()
+
+    def _select(self, key, **kwargs):
+        return strategy.select_scenario(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"],
+            scenario_key=key, actor=ACTOR, **kwargs,
+        )
+
+    def _planned(self):
+        row = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        assert row is not None
+        return row
+
+    def test_over_cap_without_confirmation_is_refused_with_the_amount(self):
+        with self.assertRaises(strategy.OverCapUnconfirmed) as ctx:
+            self._select("aggressive")
+        self.assertEqual(str(ctx.exception), "over_cap_unconfirmed")
+        self.assertEqual((ctx.exception.total, ctx.exception.cap, ctx.exception.over),
+                         (30000, 20000, 10000))
+        self.assertIsNone(self._planned()["budget_planned"])
+
+    def test_confirmed_over_cap_is_saved_and_recorded(self):
+        detail = self._select("aggressive", confirm_over_cap=True)
+        self.assertEqual(detail["budget_planned"], 30000)
+        confirmation = detail["budget_basis_json"]["over_cap_confirmation"]
+        self.assertEqual({k: confirmation[k] for k in ("by", "total", "cap", "over")},
+                         {"by": ACTOR, "total": 30000, "cap": 20000, "over": 10000})
+        self.assertTrue(confirmation["at"])
+        row = next(r for r in detail["budget_basis_json"]["scenarios"]["scenarios"]
+                   if r["key"] == "aggressive")
+        self.assertEqual(row["over_cap"], 10000)
+
+    def test_custom_total_over_cap_needs_the_same_confirmation(self):
+        with self.assertRaises(strategy.OverCapUnconfirmed):
+            self._select("custom", custom_total=20001)
+        detail = self._select("custom", custom_total=20001, confirm_over_cap=True)
+        self.assertEqual(detail["budget_planned"], 20001)
+        self.assertEqual(detail["budget_basis_json"]["over_cap_confirmation"]["over"], 1)
+
+    def test_within_cap_and_the_cap_row_need_no_confirmation(self):
+        self._select("aggressive", confirm_over_cap=True)
+        detail = self._select("recommended")
+        self.assertEqual(detail["budget_planned"], 15000)
+        self.assertNotIn("over_cap_confirmation", detail["budget_basis_json"])
+        detail = self._select("cap")
+        self.assertEqual(detail["budget_planned"], 20000)
+        self.assertEqual(detail["budget_scenario"], "cap")
+
+    def test_no_cap_behaves_as_before(self):
+        self.campaign = self._create_campaign()
+        self._generate()
+        detail = self._select("aggressive")
+        self.assertEqual(detail["budget_planned"], 30000)
+        self.assertIsNone(detail["budget_basis_json"]["scenarios"]["budget_cap"])
+        self.assertNotIn("over_cap_confirmation", detail["budget_basis_json"])
+
+    def test_generated_allocation_splits_the_cap_when_the_recommendation_is_over(self):
+        self.campaign = self._create_campaign(constraints_json={"budget": 12000})
+        detail = self._generate()
+        scenarios = detail["budget_basis_json"]["scenarios"]
+        self.assertEqual(scenarios["recommended"], "cap")
+        allocation = detail["budget_basis_json"]["strategy"]["allocation"]
+        self.assertEqual(sum(item["amount"] for item in allocation), 12000)
+
+
+class BudgetCapRoutesTest(StrategyTestBase):
+    """F28-I03 HTTP contract: 409 `over_cap_unconfirmed`, and `PUT .../strategy/budget-cap`
+    (user ruling 2026-09-25: editable after the wizard, in any status, internal only)."""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        user = uuid4()
+        token = mint_hs256(sub=str(user), email=f"adscap-{user.hex[:8]}@example.com")
+        self.headers = {"Authorization": f"Bearer {token}"}
+        org_id = self.client.get("/api/identity/me", headers=self.headers).json()["org"]["id"]
+        self._orig_provider = strategy.PROVIDER
+        self.org_id = org_id
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=org_id, name="測試品牌：預算上限", client_name=None, actor=ACTOR,
+        )["id"]
+        self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        self.campaign = self._create_campaign(constraints_json={"budget": 20000})
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+        self._generate()
+        web.conn.commit()
+
+    def _url(self, suffix: str = "", campaign_id: str | None = None) -> str:
+        cid = campaign_id or self.campaign["id"]
+        return f"/api/ads/brands/{self.brand_id}/campaigns/{cid}{suffix}"
+
+    def _put(self, body, campaign_id: str | None = None):
+        return self.client.put(
+            self._url("/strategy/budget-cap", campaign_id), json=body, headers=self.headers,
+        )
+
+    def _read(self) -> dict:
+        response = self.client.get(self._url(), headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["campaign"]
+
+    def _choose(self, key: str, **extra):
+        return self.client.post(
+            self._url("/strategy/scenario"), json={"scenario_key": key, **extra},
+            headers=self.headers,
+        )
+
+    def test_scenario_over_cap_is_409_until_confirmed(self):
+        response = self._choose("aggressive")
+        self.assertEqual(response.status_code, 409, response.text)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "over_cap_unconfirmed")
+        self.assertIn("10,000", error["message"])
+        response = self._choose("aggressive", confirm_over_cap=True)
+        self.assertEqual(response.status_code, 200, response.text)
+        campaign = response.json()["campaign"]
+        self.assertEqual(campaign["budget_planned"], 30000)
+        self.assertEqual(campaign["budget_basis_json"]["over_cap_confirmation"]["over"], 10000)
+
+    def test_set_and_clear_the_cap(self):
+        response = self._put({"budget_cap": 25000})
+        self.assertEqual(response.status_code, 200, response.text)
+        campaign = response.json()["campaign"]
+        self.assertEqual(campaign["constraints_json"]["budget"], 25000)
+        self.assertEqual(campaign["context_json"]["field_sources"]["budget"], "user")
+        self.assertEqual(campaign["budget_basis_json"]["scenarios"]["budget_cap"], 25000)
+
+        response = self._put({"budget_cap": None})
+        self.assertEqual(response.status_code, 200, response.text)
+        campaign = response.json()["campaign"]
+        self.assertNotIn("budget", campaign["constraints_json"])
+        scenarios = campaign["budget_basis_json"]["scenarios"]
+        self.assertIsNone(scenarios["budget_cap"])
+        self.assertNotIn("cap", [r["key"] for r in scenarios["scenarios"]])
+
+    def test_invalid_values_are_422_and_change_nothing(self):
+        for body in ({"budget_cap": 0}, {"budget_cap": -5}, {"budget_cap": 1.5},
+                     {"budget_cap": "100"}, {"budget_cap": True}, {}):
+            with self.subTest(body=body):
+                response = self._put(body)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(response.json()["error"]["code"], "budget_cap_invalid")
+        self.assertEqual(self._read()["constraints_json"]["budget"], 20000)
+
+    def test_saved_scenario_now_over_the_cap_stays_saved_and_shows_over(self):
+        self.assertEqual(self._choose("recommended").status_code, 200)
+        before = self._read()
+        response = self._put({"budget_cap": 12000})
+        self.assertEqual(response.status_code, 200, response.text)
+        after = response.json()["campaign"]
+        self.assertEqual(after["budget_planned"], 15000)
+        self.assertEqual(after["budget_scenario"], "recommended")
+        self.assertEqual(after["budget_basis_json"]["strategy"],
+                         before["budget_basis_json"]["strategy"])
+        scenarios = after["budget_basis_json"]["scenarios"]
+        row = next(r for r in scenarios["scenarios"] if r["key"] == "recommended")
+        self.assertEqual(row["over_cap"], 3000)
+        self.assertEqual(scenarios["recommended"], "cap")
+
+    def test_non_draft_campaign_cap_is_editable_and_the_launch_snapshot_is_unchanged(self):
+        self.assertEqual(self._choose("recommended").status_code, 200)
+        orig_plan_provider = plan.PROVIDER
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        try:
+            adopted = self.client.post(self._url("/plan"), headers=self.headers)
+        finally:
+            plan.PROVIDER = orig_plan_provider
+        self.assertEqual(adopted.status_code, 200, adopted.text)
+        self.assertEqual(adopted.json()["campaign"]["status"], "ready")
+        snapshot_before = change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"])
+
+        response = self._put({"budget_cap": 9000})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["campaign"]["status"], "ready")
+        self.assertEqual(response.json()["campaign"]["budget_planned"], 15000)
+        self.assertEqual(
+            change_control_launch.snapshot(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"]),
+            snapshot_before,
+        )
+
+    def test_live_campaign_cap_is_editable(self):
+        live = self._create_campaign(status="live", constraints_json={})
+        web.conn.commit()
+        response = self._put({"budget_cap": 50000}, live["id"])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["campaign"]["constraints_json"], {"budget": 50000})

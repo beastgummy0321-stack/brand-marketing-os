@@ -309,6 +309,8 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
 class SelectScenarioRequest(BaseModel):
     scenario_key: str = ""
     custom_total: float | None = None
+    # F28-I03: required to save a total above the campaign's budget cap.
+    confirm_over_cap: bool = False
 
 
 _SELECT_SCENARIO_ERRORS = {
@@ -326,18 +328,60 @@ _SELECT_SCENARIO_ERRORS = {
 def select_strategy_scenario(
     request: Request, brand_id: str, campaign_id: str, body: SelectScenarioRequest,
 ):
-    """F03-I05：採用最低／推薦／積極其中一個情境，或手打一個總額——寫 `budget_planned`。"""
+    """F03-I05：採用其中一個情境，或手打一個總額——寫 `budget_planned`。F28-I03：超過預算
+    上限要帶 `confirm_over_cap: true`，否則 409 `over_cap_unconfirmed`，訊息寫出超出多少。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
         campaign = strategy.select_scenario(
             web.conn, actor.org_id, brand_id, campaign_id,
             scenario_key=body.scenario_key, custom_total=body.custom_total,
+            confirm_over_cap=body.confirm_over_cap, actor=str(actor.user_id),
+        )
+    except strategy.OverCapUnconfirmed as exc:
+        raise web.ApiError(
+            409, "over_cap_unconfirmed",
+            f"這個預算 NT${round(exc.total):,} 超出你設的預算上限 NT${exc.cap:,}，"
+            f"多了 NT${exc.over:,}。確定要超出，請再確認一次。",
+            {"total": exc.total, "cap": exc.cap, "over": exc.over},
+        ) from exc
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
+
+
+class BudgetCapRequest(BaseModel):
+    # `object`, not `int`: a string or a fraction must reach the handler (after the tenant
+    # checks) and be refused there, never silently coerced by the model.
+    budget_cap: object = None
+
+
+_BUDGET_CAP_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
+    "budget_cap_invalid": (422, "預算上限要是大於 0 的整數；要取消上限請送 null。"),
+}
+
+
+@router.put("/brands/{brand_id}/campaigns/{campaign_id}/strategy/budget-cap")
+def put_budget_cap(request: Request, brand_id: str, campaign_id: str, body: BudgetCapRequest):
+    """F28-I03（使用者裁決 2026-09-25）：精靈之後、任何狀態都能改預算上限。只寫
+    `constraints_json.budget`——不寫平台、不動已存的情境與 `budget_planned`、不讓交接過期。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if "budget_cap" not in body.model_fields_set:  # a missing key is not "clear the cap"
+        status, message = _BUDGET_CAP_ERRORS["budget_cap_invalid"]
+        raise web.ApiError(status, "budget_cap_invalid", message)
+    try:
+        campaign = strategy.set_budget_cap(
+            web.conn, actor.org_id, brand_id, campaign_id, budget_cap=body.budget_cap,
             actor=str(actor.user_id),
         )
     except ValueError as exc:
         code = str(exc)
-        status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
+        status, message = _BUDGET_CAP_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"campaign": _with_readiness(actor, brand_id, campaign)}
 

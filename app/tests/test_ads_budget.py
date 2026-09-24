@@ -5,6 +5,7 @@ always sums exactly to the total.
 """
 
 import unittest
+from datetime import date
 
 import app.shared.web as web
 from app.ads import budget
@@ -145,3 +146,107 @@ class SplitTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BudgetCapScenariosTest(unittest.TestCase):
+    """F28-I03 (ads.md §6.32 "Budget cap is a soft warning"): `current_scenarios` reads the
+    campaign's budget cap (`constraints_json.budget`) on every read -- `budget_cap`, per-row
+    `over_cap`, the 照預算上限 row, and `recommended` moving to it when the old pick is over."""
+
+    START, END = date(2026, 10, 1), date(2026, 10, 10)  # 10 days
+
+    def _campaign(self, budget_cap=None, *, dates=True) -> dict:
+        constraints = {} if budget_cap is None else {"budget": budget_cap}
+        return {
+            "start_date": self.START if dates else None, "end_date": self.END if dates else None,
+            "constraints_json": constraints,
+        }
+
+    def _cold(self, budget_cap=None, *, cap=300, dates=True) -> dict:
+        return budget.current_scenarios(
+            {"mode": "cold_start"}, self._campaign(budget_cap, dates=dates), cap=cap,
+        )
+
+    def test_no_cap_unset_zero_negative_or_junk_adds_nothing(self):
+        for value in (None, 0, -5, "abc", True, float("nan")):
+            with self.subTest(value=value):
+                result = self._cold(value)
+                self.assertIsNone(result["budget_cap"])
+                self.assertEqual([r["key"] for r in result["scenarios"]],
+                                 ["minimum", "recommended", "aggressive"])
+                self.assertTrue(all(r["over_cap"] is None for r in result["scenarios"]))
+                self.assertEqual(result["recommended"], "recommended")
+
+    def test_cold_start_labels(self):
+        labels = [r["label"] for r in self._cold()["scenarios"]]
+        self.assertEqual(labels, ["最低", "穩定成長", "積極"])
+
+    def test_cap_row_and_over_amounts_when_the_recommendation_fits(self):
+        # 300 x 2/5/10 x 10 days = 6000 / 15000 / 30000
+        result = self._cold(20000)
+        self.assertEqual(result["budget_cap"], 20000)
+        rows = result["scenarios"]
+        self.assertEqual([r["key"] for r in rows],
+                         ["minimum", "cap", "recommended", "aggressive"])
+        cap_row = rows[1]
+        self.assertEqual((cap_row["label"], cap_row["daily"], cap_row["total"]),
+                         ("照預算上限", 2000, 20000))
+        self.assertEqual([r["over_cap"] for r in rows], [0, 0, 0, 10000])
+        self.assertEqual(result["recommended"], "recommended")
+
+    def test_recommended_moves_to_cap_when_it_is_over(self):
+        result = self._cold(12000)
+        self.assertEqual(result["recommended"], "cap")
+        by_key = {r["key"]: r for r in result["scenarios"]}
+        self.assertEqual(by_key["recommended"]["over_cap"], 3000)
+
+    def test_cap_exactly_equal_to_a_total_is_not_over(self):
+        result = self._cold(15000)
+        by_key = {r["key"]: r for r in result["scenarios"]}
+        self.assertEqual(by_key["recommended"]["over_cap"], 0)
+        self.assertEqual(result["recommended"], "recommended")
+
+    def test_unknown_totals_are_never_over(self):
+        result = self._cold(12000, cap=None)  # no cost-per-result cap -> no amounts
+        by_key = {r["key"]: r for r in result["scenarios"]}
+        self.assertIsNone(by_key["recommended"]["total"])
+        self.assertIsNone(by_key["recommended"]["over_cap"])
+        self.assertEqual(by_key["cap"]["total"], 12000)
+        self.assertEqual(result["recommended"], "recommended")
+
+    def test_days_unknown_keeps_the_cap_total_without_a_daily(self):
+        result = self._cold(12000, dates=False)
+        by_key = {r["key"]: r for r in result["scenarios"]}
+        self.assertIsNone(by_key["cap"]["daily"])
+        self.assertEqual(by_key["cap"]["total"], 12000)
+        self.assertIsNone(by_key["aggressive"]["over_cap"])
+
+    def test_numeric_string_cap_from_the_wizard_is_read(self):
+        self.assertEqual(self._cold("20,000")["budget_cap"], 20000)
+
+    def test_stored_history_snapshot_reconciles_idempotently_with_new_labels(self):
+        stored = {
+            "mode": "history", "recommended": "cap", "basis": {},
+            "scenarios": [
+                {"key": "conservative", "label": "保守", "daily": 600, "total": 1, "caption": "x"},
+                {"key": "cap", "label": "照預算上限", "daily": 1, "total": 1, "caption": "x"},
+                {"key": "recommended", "label": "推薦", "daily": 1000, "total": 1, "caption": "x"},
+                {"key": "aggressive", "label": "積極", "daily": 1600, "total": 1, "caption": "x"},
+            ],
+        }
+        campaign = self._campaign(20000)
+        once = budget.current_scenarios(stored, campaign)
+        twice = budget.current_scenarios(once, campaign)
+        self.assertEqual(once, twice)
+        self.assertEqual([r["key"] for r in once["scenarios"]],
+                         ["conservative", "cap", "recommended", "aggressive"])
+        self.assertEqual([r["label"] for r in once["scenarios"]],
+                         ["保守", "照預算上限", "照上一期", "積極"])
+        self.assertEqual([r["total"] for r in once["scenarios"]], [6000, 20000, 10000, 16000])
+        self.assertEqual(once["recommended"], "recommended")  # 10000 fits under 20000
+        # Lowering the cap moves the recommendation; clearing it drops the row again.
+        lower = budget.current_scenarios(once, self._campaign(8000))
+        self.assertEqual(lower["recommended"], "cap")
+        cleared = budget.current_scenarios(lower, self._campaign(None))
+        self.assertNotIn("cap", [r["key"] for r in cleared["scenarios"]])
+        self.assertEqual(cleared["recommended"], "recommended")
