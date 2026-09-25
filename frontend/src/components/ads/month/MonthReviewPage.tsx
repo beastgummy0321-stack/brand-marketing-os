@@ -118,7 +118,7 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
       <b className="mt-2.5 mb-0.5 block text-[15px] font-semibold [overflow-wrap:anywhere]">{suggestion.title}</b>
       <div className="mb-3.5 text-[13px] text-muted-foreground">{suggestion.why}</div>
       {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
-      <div className="mt-auto flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {suggestion.action_url
           ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>看提議（核准或拒絕）→</Link></Button>
           : <Button size="sm" variant="outline" disabled>看提議（核准或拒絕）→</Button>}

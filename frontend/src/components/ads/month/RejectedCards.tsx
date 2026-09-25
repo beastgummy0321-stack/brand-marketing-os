@@ -30,7 +30,7 @@ export function RejectedCard({ brandId, card, objective, onSkip }: {
       <div className="mt-0.5 mb-3.5 text-xs text-muted-foreground">
         {mmdd(card.at)} 拒絕{card.reason ? `・原因：${card.reason}` : ""}
       </div>
-      <div className="mt-auto flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" asChild><Link to={cleanupHref(brandId, card.campaign_id)}>看提議（核准或拒絕）→</Link></Button>
         <Button size="sm" variant="ghost" onClick={onSkip}>先不要</Button>
       </div>

@@ -73,7 +73,7 @@ function merge(buckets: PeriodGradeBucket[], grades: TriageGrade[]) {
 /** The four bucket cards (prototype `bucket()`); `withAmounts` adds 「・花 X 元」 to each caption. */
 export function GradeBuckets({ grades, withAmounts }: { grades: Grades; withAmounts: boolean }) {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 min-[1100px]:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {BUCKETS.map((spec) => {
         const b = merge(grades.buckets, spec.grades);
         const spend = b.amount === null ? "花費未知" : `花 ${money(b.amount)}`;
