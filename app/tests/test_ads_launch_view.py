@@ -1,0 +1,473 @@
+"""F30 Contract G: one launch view and the batch readback, unreport and per-field confirm. The
+launch batch holds only ads whose material is ready; the rest wait in the plan for a later
+version. Every platform read is faked; nothing here (or in the code under test) writes to a
+platform."""
+
+import copy
+import unittest
+from datetime import timedelta
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+from app.ads import (
+    change_control_data,
+    change_control_launch,
+    channels,
+    external_sync,
+    handoff_assignment,
+    handoff_data,
+    launch_view,
+)
+from app.ads import repository as campaigns
+from app.ads import user_assets_repository as assets
+from app.ads.adapters.external import SourcePage
+from app.brand_intelligence import repository as brands
+from app.core import db, settings
+
+
+class LaunchViewTest(unittest.TestCase):
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="上架檢視品牌", actor="test", client_name=None
+        )["id"]
+        self.today = settings.today_for_org(self.conn, org_id=self.org)
+        # Platform objects belong to one campaign across the shared test database: every test
+        # reads its own account.
+        self.account = db.new_id("account")
+        self.campaign = campaigns.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": "秋季預購",
+                "goal_text": "賣出秋季禮盒",
+                "objective": "awareness",
+                "start_date": self.today,
+                "end_date": self.today + timedelta(days=7),
+            },
+            created_by="test",
+        )["id"]
+        self.group, self.ad, self.waiting = db.new_id("adg"), db.new_id("ada"), db.new_id("ada")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture','新客',300,'new')",
+            (self.group, self.org, self.brand, self.campaign),
+        )
+        for ad_id, name in ((self.ad, "禮盒主圖"), (self.waiting, "禮盒影片")):
+            self.conn.execute(
+                "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (ad_id, self.org, self.brand, self.campaign, self.group, name),
+            )
+        self.conn.commit()
+        self.assign(self.ad)
+
+        # The platform as the fake reader shows it: one campaign, its ad set, one ad.
+        self.campaigns = [self.node("C1", "campaign", "秋季預購", objective="awareness")]
+        self.structure = [
+            self.node(
+                "G1",
+                "adset",
+                "新客",
+                parent_native_kind="campaign",
+                parent_native_id="C1",
+                budget_type="daily",
+                budget_amount=300,
+            ),
+            self.node(
+                "A1",
+                "ad",
+                "禮盒主圖",
+                parent_native_kind="adset",
+                parent_native_id="G1",
+                creative={
+                    "kind": "image",
+                    "fields": {"title": "標題", "body": "文案", "description": "說明"},
+                },
+            ),
+        ]
+        self.reads = []
+        outer = self
+
+        class Reader:
+            def accounts(self, conn, org, brand):
+                return [{"account_id": outer.account}]
+
+            def binding_kinds(self):
+                return ("ad",)
+
+            def list_existing(self, conn, org, brand, account, *, cursor=None, **kwargs):
+                # Two pages: the matcher must follow the cursor.
+                outer.reads.append(("list", cursor))
+                items = copy.deepcopy(outer.campaigns)
+                if cursor is None:
+                    return SourcePage(items[:1], {"after": "2"})
+                return SourcePage(items[1:])
+
+            def read_structure(self, conn, org, brand, account, *, native_id, cursor=None, **kw):
+                outer.reads.append(("structure", native_id))
+                return SourcePage(copy.deepcopy(outer.structure))
+
+            def verify_native(self, conn, org, brand, account, **kwargs):
+                every = {n["native_id"]: n for n in [*outer.campaigns, *outer.structure]}
+                node = copy.deepcopy(every[kwargs["native_id"]])
+                parents = []
+                parent = node.get("parent_native_id")
+                while parent is not None:
+                    parents.append(copy.deepcopy(every[parent]))
+                    parent = every[parent].get("parent_native_id")
+                return {"entity": node, "parents": parents, "timezone_name": "Asia/Taipei"}
+
+        reader = Reader()
+        patch.object(channels, "external_reader", return_value=reader).start()
+        patch.object(
+            external_sync, "account_reader", return_value=(reader, {"account_id": self.account})
+        ).start()
+        self.addCleanup(patch.stopall)
+        self.client = TestClient(__import__("app.main", fromlist=["app"]).app)
+        self.base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/launch"
+
+    def node(self, native_id, kind, name, **extra):
+        return {
+            "platform": "fixture",
+            "source_account": self.account,
+            "native_kind": kind,
+            "native_id": f"{self.account}-{native_id}",
+            "name": name,
+            "parent_native_kind": extra.pop("parent_native_kind", None),
+            "parent_native_id": (
+                f"{self.account}-{extra.pop('parent_native_id')}"
+                if "parent_native_id" in extra
+                else None
+            ),
+            "native_status": "ACTIVE",
+            "currency": "TWD",
+            "start_date": self.today,
+            "end_date": self.today + timedelta(days=7),
+            "last_success_at": db.now_utc(),
+            **extra,
+        }
+
+    # -- helpers ---------------------------------------------------------------------------------
+
+    def assign(self, ad_id):
+        asset = db.new_id("aua")
+        self.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) "
+            "VALUES(%s,%s,%s,%s,%s,'gift.png','image/png',1,'ready')",
+            (asset, self.org, self.brand, asset, f"{self.org}/{asset}"),
+        )
+        placement = assets.attach(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            asset,
+            {"headline": "標題", "body": "文案", "description": "說明"},
+            "human",
+        )
+        self.conn.execute(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
+            (placement["id"],),
+        )
+        self.conn.commit()
+        handoff_assignment.assign(
+            self.conn, self.org, self.brand, self.campaign, ad_id, placement["id"], 1
+        )
+
+    def approve(self):
+        frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        with patch.object(
+            change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
+        ):
+            return change_control_launch.publish(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                "human",
+                db.new_id("op"),
+                change_control_data.digest(frozen),
+            )["change_set_id"]
+
+    def view(self):
+        response = self.client.get(self.base)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def items(self, view=None):
+        return {i["name"]: i for i in (view or self.view())["items"]}
+
+    def report_all(self):
+        for item in self.view()["items"]:
+            handoff_data.report(self.conn, self.org, self.brand, self.campaign, item["id"])
+
+    def readback(self):
+        response = self.client.post(self.base + "/readback")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def post(self, path, **body):
+        return self.client.post(self.base + path, json=body or None)
+
+    # -- tests -----------------------------------------------------------------------------------
+
+    def test_before_approval_the_list_holds_only_ads_with_ready_material(self):
+        view = self.view()
+        self.assertEqual(view["step"], "list")
+        self.assertIsNone(view["version"])
+        self.assertEqual(
+            [(i["kind"], i["name"], i["state"]) for i in view["items"]],
+            [
+                ("campaign", "秋季預購", "todo"),
+                ("group", "新客", "todo"),
+                ("ad", "禮盒主圖", "todo"),
+            ],
+        )
+        self.assertEqual(
+            view["deferred_ads"],
+            [{"ad_id": self.waiting, "name": "禮盒影片", "group_name": "新客"}],
+        )
+        summary = view["summary"]
+        self.assertEqual(
+            {k: summary[k] for k in ("campaigns", "groups", "ads", "daily_total", "cap")},
+            {"campaigns": 1, "groups": 1, "ads": 1, "daily_total": 300.0, "cap": None},
+        )
+        self.assertEqual((summary["slots_ready"], summary["slots_total"]), (1, 2))
+        ad = self.items(view)["禮盒主圖"]
+        fields = {f["key"]: f["value"] for f in ad["fields"]}
+        self.assertEqual(fields["group"], "新客")
+        self.assertEqual(fields["material"], "gift.png・第 1 版")
+        self.assertEqual(fields["copy.body"], "文案")
+        self.assertEqual(ad["parent_name"], "新客")
+        self.assertIsNone(view["settings_readback"])
+
+    def test_a_deferred_ad_takes_its_material_and_goes_out_with_the_next_version(self):
+        self.approve()
+        view = self.view()
+        self.assertEqual((view["step"], view["version"]), ("platform", 1))
+        self.assertIsNotNone(view["approved_at"])
+        self.assertEqual(len(view["items"]), 3)
+        self.assertEqual([d["ad_id"] for d in view["deferred_ads"]], [self.waiting])
+        # The approval froze the ready ad only: the deferred one may still take its material.
+        with self.assertRaisesRegex(ValueError, "首次投放清單已核准"):
+            handoff_assignment.assign(
+                self.conn, self.org, self.brand, self.campaign, self.ad, None, None
+            )
+        self.assign(self.waiting)
+        stale = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)[
+            "launch_stale"
+        ]
+        self.assertEqual(
+            [(d["field"], d["after"]) for d in stale["diff"]], [("presence", "禮盒影片")]
+        )
+        view = self.view()
+        self.assertEqual(view["step"], "stale")
+        self.assertEqual(view["deferred_ads"], [])
+        self.assertEqual({i["state"] for i in view["items"]}, {"todo"})
+        with patch.object(
+            change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
+        ):
+            change_control_launch.reapprove(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                stale["change_set_id"],
+                stale["content_hash"],
+                "human",
+            )
+        view = self.view()
+        self.assertEqual((view["step"], view["version"]), ("platform", 2))
+        self.assertEqual(
+            [i["name"] for i in view["items"]], ["秋季預購", "新客", "禮盒主圖", "禮盒影片"]
+        )
+        self.assertEqual(view["summary"]["ads"], 2)
+
+    def test_readback_matches_by_exact_name_and_confirm_reaches_verified(self):
+        self.approve()
+        self.report_all()
+        self.assertEqual({i["state"] for i in self.view()["items"]}, {"built"})
+        view = self.readback()
+        self.assertEqual(view["step"], "verify")
+        self.assertIsNotNone(view["read_at"])
+        # The campaign list was read across both pages, the structure once for the whole batch.
+        self.assertEqual(
+            self.reads,
+            [("list", None), ("list", {"after": "2"}), ("structure", f"{self.account}-C1")],
+        )
+        items = self.items(view)
+        self.assertEqual(items["秋季預購"]["state"], "verified")
+        group, ad = items["新客"], items["禮盒主圖"]
+        self.assertEqual(group["state"], "unknown")
+        self.assertEqual(
+            group["unreadable"],
+            [{"key": "manual_settings.landing_url", "label": "落地頁網址", "confirmed": False}],
+        )
+        self.assertEqual(ad["state"], "unknown")
+        self.assertEqual(
+            ad["unreadable"], [{"key": "material", "label": "圖片或影片版本", "confirmed": False}]
+        )
+
+        # Only a field the read could not see can be confirmed.
+        refused = self.post(f"/items/{group['id']}/confirm", key="budget_amount")
+        self.assertEqual(refused.status_code, 409, refused.text)
+        confirmed = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        group = self.items(confirmed.json())["新客"]
+        self.assertEqual(group["state"], "verified")
+        self.assertEqual(group["unreadable"][0]["confirmed"], True)
+        again = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
+        self.assertEqual(again.status_code, 409, again.text)
+
+        done = self.post(f"/items/{ad['id']}/confirm", key="material").json()
+        self.assertEqual({i["state"] for i in done["items"]}, {"verified"})
+        launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        action = self.conn.execute(
+            "SELECT verification_state FROM ads_action WHERE change_set_id=%s", (launch["id"],)
+        ).fetchone()
+        self.assertEqual(action["verification_state"], "confirmed")
+
+    def test_a_mismatch_keeps_observed_values_and_a_confirmation_outlives_a_fresh_read(self):
+        self.approve()
+        self.report_all()
+        self.structure[0]["budget_amount"] = 400
+        group = self.items(self.readback())["新客"]
+        self.assertEqual(group["state"], "mismatch")
+        self.assertEqual(
+            group["mismatches"],
+            [{"key": "budget_amount", "label": "每日預算", "expected": 300, "observed": 400}],
+        )
+        # The unreadable landing URL may be confirmed while the budget still differs.
+        view = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url").json()
+        group = self.items(view)["新客"]
+        self.assertEqual(group["state"], "mismatch")
+        self.assertTrue(group["unreadable"][0]["confirmed"])
+        # The user fixes the budget on the platform and reads again: the confirmation stays.
+        self.structure[0]["budget_amount"] = 300
+        group = self.items(self.readback())["新客"]
+        self.assertEqual(group["state"], "verified")
+        self.assertEqual(group["mismatches"], [])
+        self.assertTrue(group["unreadable"][0]["confirmed"])
+
+    def test_missing_or_ambiguous_names_leave_the_item_built_with_a_reason(self):
+        self.approve()
+        self.report_all()
+        self.campaigns[0]["name"] = "秋季預購 "  # a trailing space is another name
+        items = self.items(self.readback())
+        campaign = items["秋季預購"]
+        self.assertEqual(campaign["state"], "built")
+        self.assertIn("找不到", campaign["reason"])
+        self.assertEqual(items["新客"]["state"], "built")
+        self.assertIn("上一層還沒讀回", items["新客"]["reason"])
+
+        self.campaigns[0]["name"] = "秋季預購"
+        self.campaigns.append(self.node("C2", "campaign", "秋季預購", objective="awareness"))
+        campaign = self.items(self.readback())["秋季預購"]
+        self.assertEqual(campaign["state"], "built")
+        self.assertIn("2 個", campaign["reason"])
+
+        # An ad set named alike under another campaign is never taken for this one.
+        self.campaigns.pop()
+        self.structure.append(
+            self.node(
+                "G9",
+                "adset",
+                "新客",
+                parent_native_kind="campaign",
+                parent_native_id="C9",
+                budget_type="daily",
+                budget_amount=300,
+            )
+        )
+        items = self.items(self.readback())
+        self.assertEqual(items["秋季預購"]["state"], "verified")
+        self.assertEqual(items["新客"]["state"], "unknown")
+
+    def test_unreport_clears_a_report_until_the_item_is_verified(self):
+        self.approve()
+        campaign = self.items()["秋季預購"]
+        handoff_data.report(self.conn, self.org, self.brand, self.campaign, campaign["id"])
+        self.assertEqual(self.items()["秋季預購"]["state"], "built")
+        response = self.post(f"/items/{campaign['id']}/unreport")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.items(response.json())["秋季預購"]["state"], "todo")
+        # Not reported: a readback leaves it alone.
+        self.assertEqual(self.items(self.readback())["秋季預購"]["state"], "todo")
+
+        handoff_data.report(self.conn, self.org, self.brand, self.campaign, campaign["id"])
+        self.assertEqual(self.items(self.readback())["秋季預購"]["state"], "verified")
+        refused = self.post(f"/items/{campaign['id']}/unreport")
+        self.assertEqual(refused.status_code, 409, refused.text)
+
+    def test_a_new_ad_handoff_is_not_counted(self):
+        self.approve()
+        set_id, action_id = db.new_id("acs"), db.new_id("adx")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,request_hash,"
+            "content_hash,title,month,plan_json,created_by,status,approved_at) "
+            "VALUES(%s,%s,%s,%s,%s,'h','h','新增廣告',%s,%s,'test','approved',now())",
+            (
+                set_id,
+                self.org,
+                self.brand,
+                self.campaign,
+                db.new_id("op"),
+                self.today.strftime("%Y-%m"),
+                db.jsonb({"items": []}),
+            ),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,kind,"
+            "change_set_id,verification_state) "
+            "VALUES(%s,%s,%s,%s,'campaign',%s,'creative',%s,'pending')",
+            (action_id, self.org, self.brand, self.campaign, self.campaign, set_id),
+        )
+        new_item = handoff_data.insert(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            set_id,
+            action_id,
+            "ad",
+            db.new_id("ada"),
+            "新測試廣告",
+            {"copy_text": "新文案"},
+        )
+        handoff_data.report(self.conn, self.org, self.brand, self.campaign, new_item)
+        view = self.view()
+        self.assertEqual(len(view["items"]), 3)
+        self.assertNotIn("新測試廣告", self.items(view))
+        response = self.post(f"/items/{new_item}/unreport")
+        self.assertEqual(response.status_code, 409, response.text)
+
+    def test_a_plan_edit_after_approval_makes_the_view_stale(self):
+        self.approve()
+        self.report_all()
+        self.conn.execute(
+            "UPDATE ads_delivery_group SET daily_budget=500,updated_at=now() WHERE id=%s",
+            (self.group,),
+        )
+        self.conn.commit()
+        view = self.view()
+        self.assertEqual(view["step"], "stale")
+        states = {i["name"]: i["state"] for i in view["items"]}
+        self.assertEqual(states, {"秋季預購": "built", "新客": "changed", "禮盒主圖": "built"})
+        self.assertEqual(view["summary"]["daily_total"], 300.0, "the approved batch's total")
+        refused = self.client.post(self.base + "/readback")
+        self.assertEqual(refused.status_code, 409, refused.text)
+
+    def test_the_view_refuses_another_brands_campaign(self):
+        other = brands.create_brand(
+            self.conn, org_id=self.org, name="別的品牌", actor="test", client_name=None
+        )["id"]
+        with self.assertRaises(ValueError):
+            launch_view.view(self.conn, self.org, other, self.campaign)
+
+
+if __name__ == "__main__":
+    unittest.main()
