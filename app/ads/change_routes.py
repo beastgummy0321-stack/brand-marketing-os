@@ -35,6 +35,8 @@ class CreateRequest(BaseModel):
     # F27-I25: only this literal is accepted (Contract F's cleanup proposal match); anything else
     # is a 422 from pydantic before `change_control.create` ever sees it.
     source: Literal["cleanup"] | None = None
+    # F29-I01 Contract B: the proposed cleanup ads the user unticked (only with `source`).
+    declined_ids: list[str] | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -65,11 +67,13 @@ def workspace(request: Request, brand_id: str, campaign_id: str):
 
 @router.post("/change-sets")
 def create(request: Request, brand_id: str, campaign_id: str, body: CreateRequest):
-    # F27-I25: keep the dumped payload's key set identical to before this field existed when
-    # `source` is unset, so existing sets' `request_hash`/`content_hash` are unaffected.
+    # F27-I25/F29-I01: keep the dumped payload's key set identical to before these fields existed
+    # when `source`/`declined_ids` are unset, so existing sets' `request_hash`/`content_hash` are
+    # unaffected.
     payload = body.model_dump()
-    if payload.get("source") is None:
-        payload.pop("source", None)
+    for key in ("source", "declined_ids"):
+        if payload.get(key) is None:
+            payload.pop(key, None)
     return {
         "change_set": _run(
             request,

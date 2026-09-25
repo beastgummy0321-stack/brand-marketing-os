@@ -70,7 +70,12 @@ class _CandidateFixture(unittest.TestCase):
     @staticmethod
     def item(*, entity_id, cls="flat", cost=80, previous=90, target_value=100,
              window_end=WINDOW_END, window_days=14, campaign_id=None, campaign_name="活動一",
-             reason_code="cost_per_result_flat", thumbnail_url=None, grade="on_target"):
+             reason_code="cost_per_result_flat", thumbnail_url=None, grade=None):
+        # F29-I01: an unspecified grade follows the class the way `classify()` pairs them (a thin
+        # or unknown ad is ungraded, the old stop_loss is 沒賣出, every trend class is 划算 here).
+        if grade is None:
+            grade = {"insufficient": "insufficient", "no_target": "no_target",
+                     "stop_loss": "wasted"}.get(cls, "on_target")
         return {
             "entity_id": entity_id, "native_id": entity_id, "name": "廣告",
             "campaign_id": campaign_id, "campaign_name": campaign_name,
@@ -143,7 +148,8 @@ class ScaleCandidatesTest(_CandidateFixture):
             self.item(entity_id=ad1, cls="worse", cost=90, previous=60,
                       reason_code="cost_per_result_up", campaign_id=self.campaign),
             self.item(entity_id=ad2, cls="insufficient", cost=80, previous=None,
-                      reason_code="no_previous_window", campaign_id=self.campaign),
+                      reason_code="no_previous_window", grade="on_target",
+                      campaign_id=self.campaign),
         ]
         candidates = self.candidates(items)
         self.assertEqual(len(candidates), 1)
@@ -179,7 +185,7 @@ class ScaleCandidatesTest(_CandidateFixture):
         self.assertEqual(candidates[0]["scale"]["to"], math.ceil(999 * 1.2))
 
     def test_every_other_grade_among_active_ads_blocks_the_owner(self):
-        # 偏貴／太貴／白花 and 資料不足／未判斷 each block; only 划算 and 還太新 pass.
+        # 偏貴／太貴／沒賣出 and 資料不足／未判斷 each block; only 划算 and 剛開始 pass.
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
         ad2 = self.ad_entity(native_id="ad2")["id"]
@@ -446,6 +452,21 @@ class RefreshCandidatesTest(_CandidateFixture):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["refresh"]["readable_count"], 0)
         self.assertEqual(candidates[0]["triage"]["entity_id"], a)  # first classified, in order
+
+    def test_readability_follows_the_grade_never_the_trend_class(self):
+        # F29-I01 (ads.md §6.33 "One ruler"): a graded ad with no previous window (trend class
+        # insufficient) is readable; a trend-"flat" ad graded 沒賣出 or 剛開始 is not.
+        a, b, c = self._ad("a1"), self._ad("a2"), self._ad("a3")
+        items = [
+            self.item(entity_id=a, cls="insufficient", reason_code="no_previous_window",
+                      grade="over", campaign_id=self.campaign),
+            self.item(entity_id=b, cls="flat", grade="wasted", campaign_id=self.campaign),
+            self.item(entity_id=c, cls="flat", grade="insufficient", campaign_id=self.campaign),
+        ]
+        candidates = self.candidates(items)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["refresh"]["readable_count"], 1)
+        self.assertEqual(candidates[0]["triage"]["entity_id"], a)
 
     def test_thumbnails_capped_at_four(self):
         ids = [self._ad(f"a{i}") for i in range(5)]

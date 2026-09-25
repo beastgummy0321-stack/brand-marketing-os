@@ -187,7 +187,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "stop_loss")
         self.assertEqual(item["reason_code"], "spend_over_target_no_result")
-        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "白花"))
+        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "沒賣出"))
         self.assertEqual(item["current"]["result_count"], 0)
         self.assertGreater(item["current"]["derived_zero_days"], 0)
         self.assertEqual(item["window"]["days"], 7)
@@ -201,7 +201,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "result_unknown_days")
-        # Unknown cost: 資料不足, never a grade and never 還太新.
+        # Unknown cost: 資料不足, never a grade and never 剛開始.
         self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     # -- coverage gate (review blocker) ----------------------------------------------------------
@@ -272,10 +272,10 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["reason_code"], "below_sample_gate")
         self.assertEqual(item["window"]["days"], 28)
         self.assertEqual(item["window"]["extended_from"], 14)
-        # Known zero results but below 3 x cap: 還太新, never 白花.
+        # Known zero results but below 3 x cap: 剛開始, never 沒賣出.
         self.assertEqual(item["current"]["result_count"], 0)
         self.assertEqual(
-            (item["grade"], item["grade_label"]), ("insufficient", "還太新、看不準"),
+            (item["grade"], item["grade_label"]), ("insufficient", "剛開始、數字還不夠"),
         )
 
     # -- insufficient: mixed_result_definition / needs_resync / no_previous_window --------------

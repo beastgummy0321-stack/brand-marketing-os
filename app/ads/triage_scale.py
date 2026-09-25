@@ -18,7 +18,9 @@ from app.ads import ad_status
 # than this file's own three-value copy -- `classify()` already excludes closed ads from `items`
 # entirely, so this filter is now mostly a defensive no-op against `native_status_by_entity`
 # reading a status `classify()` didn't see (never re-diverges from the one true definition).
-_READABLE_CLASSES = {"better", "flat", "worse"}
+# F29-I01 (ads.md §6.33 "One ruler"): an ad is readable once the cap ruler gives it a cost grade
+# (划算／偏貴／太貴) -- the trend note (`class`) no longer decides it.
+_READABLE_GRADES = {"on_target", "watch", "over"}
 SCALE_FACTOR = 1.2
 MIN_ACTIVE_ADS_FOR_REFRESH_GATE = 3
 MAX_READABLE_FOR_REFRESH_ROW = 2
@@ -29,7 +31,7 @@ def _is_active(item, native_status_by_entity):
 
 
 def _too_new(item):
-    """還太新、看不準 (F28-I02): below the sample gate -- the one ungraded state that never blocks
+    """剛開始、數字還不夠 (F28-I02, F29-I01 words): below the sample gate -- the one ungraded state that never blocks
     a scale-up. Any other ungraded ad (資料不足／未判斷) does."""
     return item.get("grade") == "insufficient" and item["reason_code"] == "below_sample_gate"
 
@@ -95,7 +97,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
                       month_view):
     """Rule A -- one candidate per budget owner (adset, or the campaign when the campaign holds
     the budget) whose every ACTIVE graded ad is 划算 (F28-I02, ads.md §6.32: `grade ==
-    "on_target"`; 還太新 is allowed, any other grade or ungraded state blocks), with at least one
+    "on_target"`; 剛開始 is allowed, any other grade or ungraded state blocks), with at least one
     划算 ad -- the trend (`class`/`previous`) is a note only, never a gate -- and whose proposed
     +20% raise still leaves this month's budget
     `available` not null and >= 0 through the SAME `month_budget.view(..., additional=[...])`
@@ -173,16 +175,15 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
 
 
 def refresh_candidates(classified_items_by_campaign, native_status_by_entity):
-    """Rule B -- one candidate per campaign (with a target) whose readable active ads
-    (`better`/`flat`/`worse`) have thinned to 2 or fewer while at least 3 active ads exist with
-    some classification -- skipped entirely when any ad (active or not) reads `needs_resync`
+    """Rule B -- one candidate per campaign (with a target) whose readable active ads (a cost
+    grade 划算／偏貴／太貴, F29-I01) have thinned to 2 or fewer while at least 3 active ads exist
+    with some classification -- skipped entirely when any ad (active or not) reads `needs_resync`
     (feature Decisions: a data gap is not a creative shortage, the 資料不足 card owns that)."""
     candidates = []
     for campaign_id, items in classified_items_by_campaign.items():
         if not items:
             continue
-        if any(item["class"] == "insufficient" and item["reason_code"] == "needs_resync"
-               for item in items):
+        if any(item["reason_code"] == "needs_resync" for item in items):
             continue
         target = items[0]["target"]
         if target.get("value") is None:
@@ -190,7 +191,7 @@ def refresh_candidates(classified_items_by_campaign, native_status_by_entity):
         active = [item for item in items if _is_active(item, native_status_by_entity)]
         if len(active) < MIN_ACTIVE_ADS_FOR_REFRESH_GATE:
             continue
-        readable = [item for item in active if item["class"] in _READABLE_CLASSES]
+        readable = [item for item in active if item.get("grade") in _READABLE_GRADES]
         if len(readable) > MAX_READABLE_FOR_REFRESH_ROW:
             continue
         # Never null: the gate above already guarantees >= 3 active, classified ads.

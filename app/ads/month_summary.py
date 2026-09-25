@@ -36,11 +36,13 @@ from datetime import date, datetime, time, timedelta
 from app import orders
 from app.ads import (
     ad_status,
+    period_grades,
     repository,
     result_kinds,
     review_evidence,
     targets,
     triage,
+    triage_capacity,
     triage_scale,
 )
 from app.core import settings as coresettings
@@ -254,8 +256,8 @@ def _cleanup_suggestions(campaigns_by_id: dict, queue_items: list, month: str) -
         key = f"cleanup:{cleanup['campaign_id']}"
         if campaign is None or key in _dismissed_keys(campaign, month):
             continue
-        # F28-I02: the cut is chosen by grade (白花 first, then the most expensive over the cap),
-        # no longer the lowest-spend ads -- and a 白花 ad alone raises it even when capacity is
+        # F28-I02: the cut is chosen by grade (沒賣出 first, then the most expensive over the cap),
+        # no longer the lowest-spend ads -- and a 沒賣出 ad alone raises it even when capacity is
         # unknown (`can_support` null), so the reason names whichever applies.
         can_support = cleanup["can_support"]
         over_capacity = can_support is not None and cleanup["active_ads"] > can_support
@@ -297,6 +299,51 @@ def _no_target_suggestions(conn, org_id, brand_id, campaigns_rows, target_by_cam
     return out
 
 
+def _grades_view(conn, org_id, brand_id, start, end) -> dict:
+    """Contract C `grades`: every ad that spent this month graded by the one ruler
+    (`period_grades.grade_period`, the same rows a settle of this month reads) -- 有效 is the
+    `on_target` bucket only (ads.md §6.33)."""
+    rows = period_grades.grade_period(conn, org_id, brand_id, start, end)
+    return {
+        **period_grades.summarize(rows), "rows": rows,
+        "missing": period_grades.missing(conn, org_id, brand_id, start, end),
+    }
+
+
+def _rejected_view(conn, org_id, brand_id, items) -> dict:
+    """Contract C `rejected`: every remembered decision (Contract B, newest per ad) grouped back by
+    the change set it came from. A set with at least one still-active ad whose grade now ranks
+    worse than when the user said no is listed in `worse` (those ads only); every other set with a
+    still-active remembered ad only counts in `same_count` -- it is not raised again."""
+    memory = triage.decision_memory(conn, org_id, brand_id)
+    items_by_entity = {item["entity_id"]: item for item in items}
+    by_set = {}
+    for entity_id, entry in memory.items():
+        item = items_by_entity.get(entity_id)
+        if item is None:
+            continue  # closed since (or its campaign closed) -- nothing left to decide
+        group = by_set.setdefault(entry["change_set_id"], {"entry": entry, "ads": []})
+        if triage_capacity.got_worse(entry, item["grade"]):
+            group["ads"].append({
+                "entity_id": entity_id, "name": item["name"],
+                "thumbnail_url": item["thumbnail_url"], "was": entry["grade"], "now": item["grade"],
+            })
+    worse, same_count = [], 0
+    for change_set_id, group in by_set.items():
+        entry = group["entry"]
+        if not group["ads"]:
+            same_count += 1
+            continue
+        campaign = items_by_entity[group["ads"][0]["entity_id"]]
+        worse.append({
+            "change_set_id": change_set_id, "campaign_id": entry["campaign_id"],
+            "campaign_name": campaign["campaign_name"], "title": entry["title"],
+            "at": entry["at"], "reason": entry["reason"], "ads": group["ads"],
+        })
+    worse.sort(key=lambda card: card["at"], reverse=True)
+    return {"worse": worse, "same_count": same_count}
+
+
 def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
     month = _require_month(month)
     start, end, days_covered, days_elapsed = _month_window(conn, org_id, month)
@@ -331,7 +378,10 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
     )
 
     campaigns_by_id = {row["id"]: row for row in campaigns_rows}
-    queue_items = triage.get_queue(conn, org_id, brand_id)["items"]
+    # One brand classification serves the queue (whose cleanup rows already obey the rejection
+    # memory, Contract B) and the `rejected` block.
+    brand_items = triage.brand_items(conn, org_id, brand_id)
+    queue_items = triage.get_queue(conn, org_id, brand_id, items=brand_items)["items"]
     suggestions = [
         *_refresh_suggestions(campaigns_by_id, queue_items, month),
         *_cleanup_suggestions(campaigns_by_id, queue_items, month),
@@ -345,6 +395,8 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         "closed_tracking_since": closed_tracking_since.isoformat(),
         "suggestions": suggestions,
         "days_covered": days_covered, "days_elapsed": days_elapsed,
+        "grades": _grades_view(conn, org_id, brand_id, start, end),
+        "rejected": _rejected_view(conn, org_id, brand_id, brand_items),
     }
 
 

@@ -397,7 +397,7 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(result["ads"][0], {
             "entity_id": a, "name": "廣告甲", "thumbnail_url": "https://x/1.jpg",
             "spend_7d": 1540.0, "grade": "wasted", "cost_per_result": None, "spend": 1540,
-            "result_count": 0, "daily_spend": 220.0,
+            "result_count": 0, "daily_spend": 220.0, "rejected_before": None,
         })
         self.assertEqual(result["ads"][1]["grade"], "over")
         self.assertEqual(result["ads"][1]["cost_per_result"], 617)
