@@ -11,24 +11,16 @@ through `app.meta.repository.register_parent_owner_check` at import time.
 Any recorded id counts, whatever its `local_state`: a detached or retired row still names an
 object living in that org's ad account.
 
-Known limit (measured 2026-09-26, same as the `channel_entity_map` half of the guard): every
-`ads_*` table has org-isolation RLS, and a request connection runs as `authenticated` scoped to
-the caller's org after `require_actor()`. There, other orgs' rows are invisible, so this query
-finds nothing; it only sees them on an unscoped connection. Closing that needs a database-side
-lookup (e.g. a SECURITY DEFINER function), which is a migration outside this issue.
+F31-I13: the lookup is the SECURITY DEFINER function `ads_external_id_owned_elsewhere`
+(`supabase/migrations/20260927000021_ads_external_owner_fn.sql`), which returns only a boolean.
+A plain SELECT found nothing on a request connection: every `ads_*` table has org-isolation
+RLS and a request runs as `authenticated` scoped to the caller's org.
 """
-
-_OTHER_ORG_HOLDS_ID = (
-    "SELECT 1 FROM ads_campaign WHERE external_id = %(id)s AND org_id <> %(org)s"
-    " UNION ALL SELECT 1 FROM ads_delivery_group WHERE external_id = %(id)s AND org_id <> %(org)s"
-    " UNION ALL SELECT 1 FROM ads_ad WHERE external_id = %(id)s AND org_id <> %(org)s"
-    " UNION ALL SELECT 1 FROM ads_external_entity"
-    "   WHERE platform = 'meta' AND native_id = %(id)s AND org_id <> %(org)s"
-    " LIMIT 1"
-)
 
 
 def owned_by_another_org(conn, org_id: str, external_id: str) -> bool:
     """True when another org bound or lists `external_id` in the ads center."""
-    row = conn.execute(_OTHER_ORG_HOLDS_ID, {"id": external_id, "org": org_id}).fetchone()
-    return row is not None
+    row = conn.execute(
+        "SELECT ads_external_id_owned_elsewhere(%s, %s) AS owned", (external_id, org_id),
+    ).fetchone()
+    return bool(row and row["owned"])

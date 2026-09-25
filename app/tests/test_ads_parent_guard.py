@@ -111,5 +111,88 @@ class AdsCenterParentGuardTest(unittest.TestCase):
         self.assertEqual(fake_list_ad_sets.call_count, 1)
 
 
+class TenantScopedParentGuardTest(AdsCenterParentGuardTest):
+    """F31-I13: the guard on a request-shaped connection. Every API request (and every scoped
+    job) runs `db.set_tenant_scope`, which switches to role `authenticated` with org-isolation
+    RLS in effect, so other orgs' `ads_*` rows are invisible to a plain SELECT. The guard must
+    still see that org B holds the id (through the ads module's SECURITY DEFINER boolean lookup)
+    and refuse before any Graph call. The `channel_entity_map` half is the schedule module's
+    table and is tested from a schedule-owned test file.
+
+    Inherits the ads-center fixture (org B's `ads_campaign` + `ads_delivery_group`) but not its
+    tests: `test_*` below replace them for this class only."""
+
+    test_ads_bound_campaign_of_another_org_refused_before_meta = None
+    test_ads_bound_group_of_another_org_refused_before_meta = None
+    test_listed_external_entity_of_another_org_refused = None
+    test_own_ads_binding_is_not_refused = None
+
+    def _scoped(self, org_id, call):
+        with db.connection() as conn:
+            db.set_tenant_scope(conn, org_id)
+            try:
+                # Precondition: RLS really hides other orgs' rows here, so a refusal below is
+                # the SECURITY DEFINER lookup at work, not an unscoped connection.
+                hidden = conn.execute(
+                    "SELECT count(*) AS n FROM ads_campaign"
+                    " WHERE external_id = %(camp)s AND org_id <> %(org)s",
+                    {"camp": self.camp_id, "org": org_id},
+                ).fetchone()
+                self.assertEqual(hidden["n"], 0, "RLS must hide other orgs' rows here")
+                return call(conn)
+            finally:
+                conn.rollback()
+                conn.execute("RESET ROLE")
+                conn.execute("RESET app.org_id")
+                conn._tenant_org_id = None
+                conn.commit()  # pooled connection must not go back scoped
+
+    def test_ads_campaign_of_another_org_refused_on_scoped_connection(self):
+        with mock.patch.object(graph, "list_ad_sets") as fake_list_ad_sets:
+            with self.assertRaises(web.ApiError) as caught:
+                self._scoped(self.org_a, lambda conn: meta_repo.ad_set_ids_by_exact_name(
+                    conn, self.org_a, self.camp_id, "隨便什麼名字",
+                ))
+            self.assertEqual(fake_list_ad_sets.call_count, 0)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.code, "campaign_not_owned")
+
+    def test_own_ids_pass_on_scoped_connection(self):
+        meta_repo.save_token(web.conn, self.org_b, TOKEN)
+        web.conn.commit()
+        with mock.patch.object(graph, "list_ad_sets", return_value=[]) as fake_list_ad_sets:
+            self._scoped(self.org_b, lambda conn: meta_repo.ad_set_ids_by_exact_name(
+                conn, self.org_b, self.camp_id, "隨便什麼名字",
+            ))
+        self.assertEqual(fake_list_ad_sets.call_count, 1)
+
+    def test_lookups_are_not_callable_by_anon(self):
+        with db.connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT p.proname,"
+                    " has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec,"
+                    " has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth_exec,"
+                    " p.prosecdef, p.proconfig, pg_get_function_result(p.oid) AS result"
+                    " FROM pg_proc p WHERE p.pronamespace = current_schema()::regnamespace"
+                    " AND p.proname IN ('schedule_channel_entity_owned_elsewhere',"
+                    "                   'ads_external_id_owned_elsewhere')"
+                    " ORDER BY p.proname"
+                ).fetchall()
+            finally:
+                conn.rollback()
+        self.assertEqual(
+            [r["proname"] for r in rows],
+            ["ads_external_id_owned_elsewhere", "schedule_channel_entity_owned_elsewhere"],
+        )
+        for r in rows:
+            self.assertFalse(r["anon_exec"], r["proname"])
+            self.assertTrue(r["auth_exec"], r["proname"])
+            self.assertTrue(r["prosecdef"], r["proname"])
+            self.assertEqual(r["result"], "boolean", r["proname"])
+            path = next(c for c in r["proconfig"] if c.startswith("search_path="))
+            self.assertTrue(path.endswith("pg_temp"), path)
+
+
 if __name__ == "__main__":
     unittest.main()
