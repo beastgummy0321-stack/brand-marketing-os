@@ -1,450 +1,343 @@
-/** frontend/src/components/ads/month/MonthReviewPage.test.tsx — F27-I19: the page moved off
- * `listCampaigns`/`getTriage`/`fetchOrders` for its money sections and now reads Contract G's
- * `getMonthSummary` + `getMonthlyBudget` (both refetched together on the month Segmented) for
- * 全品牌花費／商城訂單／各活動／這個月關掉／下月建議; `listCampaigns`+`getTriage` stay only for
- * 素材 (F26 rule, month-independent); `getAdsLearnings` (Contract D) drives 記入品牌學習.
- * `vi.mock`s every one of those, never hits a real API.
- *
- * F27-I27: every `CampaignChip` family comes straight from the backend's own
- * `campaign_objective` field (`app/ads/repository.py::campaign_objective_family`, same rule as
- * campaign cards/triage items) — never a frontend keyword guess off the raw `objective` string,
- * and 記入品牌學習 no longer needs its own `listCampaigns` lookup for it. */
-import { render, screen, waitFor } from "@testing-library/react";
+/** F29-I15: the month review rebuilt to v10 (prototype `month()`, `#/month` and `#/month/8`). Two reads, each
+ * mocked and each failing on its own: `getMonthSummary` (Contract C `grades` / `rejected`, suggestions, closed
+ * count) and `getHomeOverview` (weekly pace, same-days-last-month trend). Fixtures use real-shaped rows. */
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
-import { listCampaigns } from "@/lib/adsApi";
-import type { CampaignTriage, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
-import { getTriage } from "@/lib/adsTriageApi";
-import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import {
   dismissSuggestion, getMonthSummary,
-  type MonthCampaignRow, type MonthSuggestion, type MonthSummary,
+  type MonthGrades, type MonthRejectedCard, type MonthSuggestion, type MonthSummary, type PeriodGradeBucket, type PeriodGradeRow,
 } from "@/lib/adsMonthApi";
-import { getAdsLearnings, type AdsLearning } from "@/lib/adsLearningsApi";
+import type { TriageGrade } from "@/lib/adsTriageApi";
+import { downloadCsv, toCsv } from "../patterns";
+import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { MonthReviewPage } from "./MonthReviewPage";
+import { monthCsvName, monthCsvRows, shiftMonth, weekBars } from "./monthCsv";
 
-vi.mock("@/lib/adsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
-  return { ...actual, listCampaigns: vi.fn() };
-});
-vi.mock("@/lib/adsTriageApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
-  return { ...actual, getTriage: vi.fn() };
-});
-vi.mock("@/lib/adsChangeApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
-  return { ...actual, getMonthlyBudget: vi.fn() };
-});
 vi.mock("@/lib/adsMonthApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsMonthApi")>("@/lib/adsMonthApi");
   return { ...actual, getMonthSummary: vi.fn(), dismissSuggestion: vi.fn() };
 });
-vi.mock("@/lib/adsLearningsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsLearningsApi")>("@/lib/adsLearningsApi");
-  return { ...actual, getAdsLearnings: vi.fn() };
+vi.mock("@/lib/adsHomeApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsHomeApi")>("@/lib/adsHomeApi");
+  return { ...actual, getHomeOverview: vi.fn() };
+});
+vi.mock("../patterns", async () => {
+  const actual = await vi.importActual<typeof import("../patterns")>("../patterns");
+  return { ...actual, downloadCsv: vi.fn() };
 });
 
-const mockListCampaigns = vi.mocked(listCampaigns);
-const mockGetTriage = vi.mocked(getTriage);
-const mockGetMonthlyBudget = vi.mocked(getMonthlyBudget);
-const mockGetMonthSummary = vi.mocked(getMonthSummary);
-const mockDismissSuggestion = vi.mocked(dismissSuggestion);
-const mockGetAdsLearnings = vi.mocked(getAdsLearnings);
+const mockSummary = vi.mocked(getMonthSummary);
+const mockHome = vi.mocked(getHomeOverview);
+const mockDismiss = vi.mocked(dismissSuggestion);
+const mockDownload = vi.mocked(downloadCsv);
 
-function campaignCard(overrides: Partial<CampaignCardData> = {}): CampaignCardData {
+const THIS = currentBudgetMonth();
+const LAST = shiftMonth(THIS, -1);
+const N = Number(THIS.slice(5));
+const NEXT = Number(shiftMonth(THIS, 1).slice(5));
+const PREV = Number(LAST.slice(5));
+
+function row(overrides: Partial<PeriodGradeRow> = {}): PeriodGradeRow {
   return {
-    id: "cmp_1", name: "日常商品推廣", status: "live",
-    start_date: "2026-08-01", end_date: null, objective: "轉換",
-    created_at: "2026-08-01T00:00:00Z", created_by: null,
-    budget_planned: null, budget_total: null,
-    budget_progress: { spent: null, total: null, pct: null },
-    judgment: { tone: "neutral", text: "投放中", detail: "" },
-    outcome: { spend: null, purchases: null, revenue: null },
+    campaign_id: "cmp_daily", campaign_name: "日常商品推廣", origin: "internal",
+    entity_id: "ad_1", name: "1150706 健身情境單圖", group_name: "廣泛受眾",
+    thumbnail_url: null, spend: 2400, results: 6, cost_per_result: 400,
+    cap: 450, break_even: 520, grade: "on_target", grade_label: "划算", currency: "TWD",
     ...overrides,
   };
 }
 
-function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
+const ORDER: TriageGrade[] = ["on_target", "watch", "over", "wasted", "insufficient", "no_target"];
+
+/** Buckets the way `period_grades.summarize` builds them: every grade listed, amount null when a spend is unknown. */
+function gradesOf(rows: PeriodGradeRow[], overrides: Partial<MonthGrades> = {}): MonthGrades {
+  const sum = (list: PeriodGradeRow[]) => (list.some((r) => r.spend === null) ? null : list.reduce((s, r) => s + (r.spend as number), 0));
+  const buckets: PeriodGradeBucket[] = ORDER.map((grade) => {
+    const members = rows.filter((r) => r.grade === grade);
+    return {
+      grade, amount: members.length ? sum(members) : 0, count: members.length,
+      ads: members.map((r) => ({ entity_id: r.entity_id, name: r.name, thumbnail_url: r.thumbnail_url, spend: r.spend })),
+    };
+  });
+  return { spent: sum(rows), buckets, rows, missing: [], ...overrides };
+}
+
+const MIXED_ROWS: PeriodGradeRow[] = [
+  row({ entity_id: "ad_ok1", name: "通勤情境單圖", spend: 8000, results: 20, cost_per_result: 400 }),
+  row({ entity_id: "ad_ok2", name: "早晨第一口影片", spend: 6300, results: 15, cost_per_result: 420 }),
+  row({ entity_id: "ad_watch", name: "提問式貼文", spend: 3120, results: 6, cost_per_result: 520, grade: "watch", grade_label: "偏貴" }),
+  row({ entity_id: "ad_over", name: "開箱輪播", spend: 2470, results: 4, cost_per_result: 617.5, grade: "over", grade_label: "太貴" }),
+  row({ entity_id: "ad_stop", name: "節慶限定圖", spend: 1480, results: 0, cost_per_result: null, grade: "wasted", grade_label: "沒賣出" }),
+  row({ entity_id: "ad_thin", name: "新上的短影音", spend: 630, results: 1, cost_per_result: 630, grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
+];
+
+function suggestion(overrides: Partial<MonthSuggestion> = {}): MonthSuggestion {
   return {
-    entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖",
-    campaign_id: "cmp_1", campaign_name: "日常商品推廣", thumbnail_url: null,
-    class: "better", label: "變好", reason_code: "cost_per_result_down",
-    grade: "on_target", grade_label: "划算", previous_grade: null, grade_move: null,
-    window: { start: "2026-09-15", end: "2026-09-21", days: 7, previous_start: "2026-09-08", previous_end: "2026-09-14", extended_from: null },
-    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
-    current: { spend: 1000, result_count: 5, cost_per_result: 200, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    previous: { spend: 900, result_count: 4, cost_per_result: 225, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    change_pct: -0.11, sample: { gate: true, spend_multiple: 2.2, days_with_events: 5 },
+    key: "refresh:cmp_daily", kind: "refresh", campaign_id: "cmp_daily", campaign_name: "日常商品推廣",
+    objective: "轉換", campaign_objective: "sales", title: "補 2 則新素材", why: "有效的方向只剩 2 則在投",
+    action_url: "/brands/brd_bughunt/ads/campaigns/cmp_daily/materials", ...overrides,
+  };
+}
+
+function rejectedCard(overrides: Partial<MonthRejectedCard> = {}): MonthRejectedCard {
+  return {
+    change_set_id: "chg_1", campaign_id: "cmp_daily", campaign_name: "日常商品推廣",
+    title: "關掉：提問式貼文・早晨第一口是什麼？", at: `${THIS}-05T02:00:00Z`, reason: "想再多看幾天",
+    ads: [{ entity_id: "ad_watch", name: "提問式貼文", thumbnail_url: null, was: "watch", now: "over" }],
     ...overrides,
   };
 }
 
-const EMPTY_CLOSED: TriageClosedBlock = {
-  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
-};
-
-function closedItem(overrides: Partial<TriageClosedItem> = {}): TriageClosedItem {
+function summary(overrides: Partial<MonthSummary> = {}): MonthSummary {
   return {
-    entity_id: "closed_1", name: "1150706 已下架單圖", native_status: "PAUSED",
-    thumbnail_url: null, spend: 300, cost_per_result: 150, result_label: "購買",
+    month: THIS, currency: "TWD", total_spend: 22000,
+    campaigns: [{
+      campaign_id: "cmp_daily", name: "日常商品推廣", objective: "轉換", campaign_objective: "sales",
+      spend: 22000, result_count: 46, result_label: "購買", cost_per_result: 478, target: 450, verdict: "missed",
+    }],
+    orders: null, closed_this_month: 6, closed_tracking_since: "2026-06-01",
+    suggestions: [suggestion()], days_covered: 30, days_elapsed: 23,
+    grades: gradesOf(MIXED_ROWS),
+    rejected: { worse: [rejectedCard()], same_count: 2 },
     ...overrides,
   };
 }
 
-function triage(items: TriageItem[], closed: TriageClosedBlock = EMPTY_CLOSED): CampaignTriage {
-  return { window_days: 7, items, closed };
+function days(month: string, daily: number[]): { day: string; cumulative: number | null }[] {
+  let total = 0;
+  return daily.map((spend, i) => {
+    total += spend;
+    return { day: `${month}-${String(i + 1).padStart(2, "0")}`, cumulative: total };
+  });
 }
 
-function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
+function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
-    month: "2026-09", currency: "TWD", amount: 60000, revision: 2,
-    known_spend: 22000, ongoing_estimate: 0, reserved_increases: 0,
-    available: 38000, uncertainties: [], can_increase: true,
-    period_end: "2026-09-30", confirmed_at: "2026-09-19T14:39:22Z", notice: "",
-    ...overrides,
-  };
-}
-
-function monthCampaignRow(overrides: Partial<MonthCampaignRow> = {}): MonthCampaignRow {
-  return {
-    campaign_id: "cmp_1", name: "日常商品推廣", objective: "轉換", campaign_objective: "sales",
-    spend: 18400, result_count: 40, result_label: "購買",
-    cost_per_result: 412, target: 450, verdict: "met",
-    ...overrides,
-  };
-}
-
-function monthSuggestion(overrides: Partial<MonthSuggestion> = {}): MonthSuggestion {
-  return {
-    key: "refresh:cmp_1", kind: "refresh", campaign_id: "cmp_1", campaign_name: "日常商品推廣",
-    objective: "轉換", campaign_objective: "sales", title: "補 3 則新素材",
-    why: "有效的方向只剩 1 則在投",
-    action_url: "/brands/brd_1/ads/campaigns/cmp_1/detail",
-    ...overrides,
-  };
-}
-
-function monthSummary(overrides: Partial<MonthSummary> = {}): MonthSummary {
-  return {
-    month: "2026-09", currency: "TWD", total_spend: 22000,
-    campaigns: [monthCampaignRow()],
-    orders: { this_net: 43470, this_count: 51, previous_net: 61200, previous_count: 60, change_pct: -0.29 },
-    closed_this_month: 2, closed_tracking_since: "2026-09-22",
-    suggestions: [monthSuggestion()],
-    days_covered: 30, days_elapsed: 21,
-    // F29-I01 Contract C: the month's spend split by the one ruler; one remembered "no" got worse.
-    grades: {
-      spent: 22000,
-      buckets: [
-        { grade: "on_target", amount: 15400, count: 1, ads: [{ entity_id: "ad_1", name: "1150706 健身情境單圖", thumbnail_url: null, spend: 15400 }] },
-        { grade: "watch", amount: 0, count: 0, ads: [] },
-        { grade: "over", amount: 3000, count: 1, ads: [{ entity_id: "ad_2", name: "提問式貼文", thumbnail_url: null, spend: 3000 }] },
-        { grade: "wasted", amount: 1480, count: 1, ads: [{ entity_id: "ad_3", name: "秋季新色預告", thumbnail_url: null, spend: 1480 }] },
-        { grade: "insufficient", amount: 2120, count: 2, ads: [] },
-        { grade: "no_target", amount: 0, count: 0, ads: [] },
-      ],
-      rows: [],
-      missing: [{ campaign_id: "cmp_1", name: "日常商品推廣", missing_days: ["2026-09-17", "2026-09-18"] }],
+    month: THIS, day_of_month: 24, days_in_month: 30, currency: "TWD", spent: 22000,
+    money: {
+      purchases: 158, cost_per_purchase: 139, cap: null, earn: null, earn_missing: [], excluded: [],
+      previous_same_period: { days: 23, purchases: 118, cost_per_purchase: 221 },
     },
-    rejected: {
-      worse: [{
-        change_set_id: "acs_1", campaign_id: "cmp_1", campaign_name: "日常商品推廣", title: "清理：日常商品推廣",
-        at: "2026-09-12T02:00:00+00:00", reason: "季節性", ads: [{ entity_id: "ad_2", name: "提問式貼文", thumbnail_url: null, was: "watch", now: "over" }],
-      }],
-      same_count: 1,
+    pace: {
+      budget_amount: 60000, available: 38000, projected_month_end: 28700,
+      // 23 complete days: weeks 1–3 full, week 4 through day 23.
+      daily: days(THIS, [...Array(7).fill(600), ...Array(7).fill(900), ...Array(7).fill(1000), 1500, 1700]),
     },
+    quality: null, timeline: null, campaigns: null, sync: null,
     ...overrides,
   };
 }
 
-function adsLearning(overrides: Partial<AdsLearning> = {}): AdsLearning {
-  return {
-    id: "lrn_1", text: "「日常出發」生活情境對廣泛受眾有效", confidence: "likely", count: 2,
-    campaign_id: "cmp_1", campaign_name: "日常商品推廣", campaign_objective: "sales",
-    learned_at: "2026-09-10T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function LocationDisplay() {
-  const location = useLocation();
-  return <div data-testid="location">{location.pathname}</div>;
-}
-
-function renderPage() {
+function renderPage(url = "/brands/brd_bughunt/ads/month") {
   return render(
-    <MemoryRouter initialEntries={["/brands/brd_1/ads/month"]}>
-      <MonthReviewPage brandId="brd_1" />
-      <LocationDisplay />
+    <MemoryRouter initialEntries={[url]}>
+      <MonthReviewPage brandId="brd_bughunt" />
     </MemoryRouter>,
   );
 }
 
+function bucket(label: string) {
+  return screen.getByRole("region", { name: label });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mockListCampaigns.mockResolvedValue([campaignCard()]);
-  mockGetTriage.mockResolvedValue(triage([triageItem()]));
-  mockGetMonthlyBudget.mockResolvedValue(monthlyBudget());
-  mockGetMonthSummary.mockResolvedValue(monthSummary());
-  mockDismissSuggestion.mockResolvedValue({ ok: true });
-  mockGetAdsLearnings.mockResolvedValue([adsLearning()]);
+  mockSummary.mockResolvedValue(summary());
+  mockHome.mockResolvedValue(home());
+  mockDismiss.mockResolvedValue({ ok: true });
 });
 
-describe("MonthReviewPage（F27-I19）全品牌花費卡", () => {
-  it("正常狀態：`total_spend`／`budget.amount` 都有值時畫量尺", async () => {
+describe("MonthReviewPage — current month", () => {
+  it("splits the spend by grade and counts only 划算 as 有效", async () => {
     renderPage();
-    expect(await screen.findByText("TWD 22,000")).toBeTruthy();
-    expect(screen.getByText("月總額 TWD 60,000")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: `${N} 月回顧` })).toBeTruthy();
+    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+    expect(mockSummary).toHaveBeenCalledWith("brd_bughunt", THIS, expect.anything());
+    expect(mockHome).toHaveBeenCalledWith("brd_bughunt", THIS, expect.anything());
+
+    const good = bucket("有效（只算划算）");
+    expect(within(good).getByText("2 則")).toBeTruthy();
+    expect(within(good).getByText("每筆在上限內・花 14,300 元")).toBeTruthy();
+    expect(within(bucket("偏貴")).getByText("1 則")).toBeTruthy();
+    const bad = bucket("太貴・沒賣出");
+    expect(within(bad).getByText("2 則")).toBeTruthy();
+    expect(within(bad).getByText(/花 3,950 元/)).toBeTruthy();
+    expect(within(bucket("剛開始、數字還不夠")).getByText("1 則")).toBeTruthy();
+
+    expect(screen.getByText("這個月關掉 6 則")).toBeTruthy();
   });
 
-  it("`budget.amount===null`：印「月總額 尚未設定」", async () => {
-    mockGetMonthlyBudget.mockResolvedValue(monthlyBudget({ amount: null }));
+  it("draws the weekly spend against the budget pace, with the unfinished weeks marked", async () => {
     renderPage();
-    expect(await screen.findByText("月總額 尚未設定")).toBeTruthy();
-    expect(screen.getByText("TWD 22,000")).toBeTruthy();
+    const weekly = await screen.findByRole("region", { name: "每週花費 vs 預算步調" });
+    expect(within(weekly).getByText("月預算 60,000 的步調")).toBeTruthy();
+    expect(within(weekly).getByText("已花 22,000")).toBeTruthy();
+    expect(within(weekly).getByText("4,200")).toBeTruthy(); // 7 × 600
+    expect(within(weekly).getByText("3,200")).toBeTruthy(); // week 4 through day 23
+    expect(within(weekly).getByText(`到 ${THIS.slice(5)}/23`)).toBeTruthy();
+    expect(within(weekly).getByText("還沒到")).toBeTruthy();
   });
 
-  it("`total_spend===null`：印「花費未核實」，沒有量尺", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ total_spend: null }));
-    renderPage();
-    expect(await screen.findByText("花費未核實")).toBeTruthy();
-  });
-
-  it("月選單一起重打月摘要＋月預算，不重打素材／品牌學習", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findByText("TWD 22,000");
-    expect(mockGetMonthSummary).toHaveBeenCalledTimes(1);
-    expect(mockGetMonthlyBudget).toHaveBeenCalledTimes(1);
-    const thisMonth = mockGetMonthSummary.mock.calls[0][1];
-
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ total_spend: 5000 }));
-    mockGetMonthlyBudget.mockResolvedValue(monthlyBudget({ amount: null }));
-    await user.click(screen.getByRole("button", { name: /月/, pressed: false }));
-
-    await waitFor(() => expect(mockGetMonthSummary).toHaveBeenCalledTimes(2));
-    expect(mockGetMonthlyBudget).toHaveBeenCalledTimes(2);
-    const lastMonth = mockGetMonthSummary.mock.calls[1][1];
-    expect(lastMonth).not.toBe(thisMonth);
-    expect(mockListCampaigns).toHaveBeenCalledTimes(1);
-    expect(mockGetAdsLearnings).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("MonthReviewPage（F27-I19）商城訂單卡", () => {
-  it("印本月至今天數、上月淨額、▼ 變化", async () => {
-    renderPage();
-    expect(await screen.findByText("43,470")).toBeTruthy();
-    expect(screen.getByText("▼29%")).toBeTruthy();
-    expect(screen.getByText("上月 61,200")).toBeTruthy();
-    expect(screen.getByText("本月至今（21 天）")).toBeTruthy();
-  });
-
-  it("`orders===null`：整張卡省略", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ orders: null }));
-    renderPage();
-    await screen.findByText("TWD 22,000");
-    expect(screen.queryByText("商城訂單淨額・品牌整體")).toBeNull();
-  });
-});
-
-describe("MonthReviewPage（F27-I19／F27-I27）各活動", () => {
-  it("`verdict=\"met\"`：達標 chip，量尺畫出來", async () => {
-    renderPage();
-    expect(await screen.findByText("達標")).toBeTruthy();
-    expect(screen.getByText("每次購買成本 412")).toBeTruthy();
-    expect(screen.getByText("目標 450")).toBeTruthy();
-  });
-
-  it("活動 chip 的家族直接讀 `campaign_objective`，不猜關鍵字", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({
-      campaigns: [monthCampaignRow({ campaign_objective: "engagement" })],
+  it("says where the missing days are and that they do not count", async () => {
+    mockSummary.mockResolvedValue(summary({
+      grades: gradesOf(MIXED_ROWS, { missing: [{ campaign_id: "cmp_mid", name: "中秋限定活動", missing_days: [`${THIS}-17`, `${THIS}-18`] }] }),
     }));
     renderPage();
-    const heading = await screen.findByText("各活動");
-    const chip = heading.parentElement?.querySelector('[data-slot="campaign-chip"]');
-    expect(chip?.getAttribute("data-variant")).toBe("engagement");
+    const m = THIS.slice(5);
+    expect(await screen.findByText(`中秋限定活動缺 ${m}/17、${m}/18 兩天資料，這兩天不計；其他天照常算`)).toBeTruthy();
   });
 
-  it("`campaign_objective` 缺值時退回 `other`，不猜關鍵字", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({
-      campaigns: [monthCampaignRow({ campaign_objective: null })],
-    }));
-    renderPage();
-    const heading = await screen.findByText("各活動");
-    const chip = heading.parentElement?.querySelector('[data-slot="campaign-chip"]');
-    expect(chip?.getAttribute("data-variant")).toBe("other");
-  });
-
-  it("`verdict=\"missed\"`：未達標", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ campaigns: [monthCampaignRow({ verdict: "missed", cost_per_result: 600 })] }));
-    renderPage();
-    expect(await screen.findByText("未達標")).toBeTruthy();
-  });
-
-  it("`verdict=\"unjudged\"`／`target===null`：未判斷，量尺打斜紋、印「尚未設定目標」", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({
-      campaigns: [monthCampaignRow({ verdict: "unjudged", target: null, cost_per_result: null })],
-    }));
-    renderPage();
-    expect(await screen.findByText("未判斷")).toBeTruthy();
-    expect(screen.getByText("尚未設定目標")).toBeTruthy();
-  });
-
-  it("沒有活動時顯示空狀態", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ campaigns: [] }));
-    renderPage();
-    expect(await screen.findByText("沒有可回顧的活動")).toBeTruthy();
-  });
-});
-
-describe("MonthReviewPage（F26-I03）素材", () => {
-  it("有效只算划算、還看不出＝還沒分級（F29-I01 一把尺，不看趨勢 class）；無效・已停讀 closed 區塊", async () => {
-    mockGetTriage.mockResolvedValue(triage(
-      [
-        // 趨勢變差但仍在上限內：划算，算有效。
-        triageItem({ entity_id: "ad_1", class: "worse", label: "變差", grade: "on_target", grade_label: "划算" }),
-        triageItem({ entity_id: "ad_2", class: "stop_loss", label: "停損", grade: "wasted", grade_label: "沒賣出" }),
-        triageItem({ entity_id: "ad_3", class: "insufficient", label: "資料不足", reason_code: "below_sample_gate", grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
-        triageItem({ entity_id: "ad_4", class: "insufficient", label: "資料不足", reason_code: "result_unknown_days", grade: "insufficient", grade_label: "資料不足" }),
-        // 趨勢變好但超過上限：太貴，不算有效。
-        triageItem({ entity_id: "ad_5", class: "better", label: "變好", grade: "over", grade_label: "太貴" }),
-        triageItem({ entity_id: "ad_6", class: "flat", label: "持平", grade: "watch", grade_label: "偏貴" }),
-      ],
-      { paused: 2, archived: 1, other: 0, total: 3, truncated: false, items: [
-        closedItem({ entity_id: "closed_1", native_status: "PAUSED" }),
-        closedItem({ entity_id: "closed_2", native_status: "PAUSED" }),
-        closedItem({ entity_id: "closed_3", native_status: "ARCHIVED" }),
-      ] },
-    ));
-    renderPage();
-    await screen.findByText("素材");
-    expect(screen.getByText("有效")).toBeTruthy();
-    expect(screen.getByText("無效・已停")).toBeTruthy();
-    expect(screen.getByText("還看不出")).toBeTruthy();
-    expect(screen.getByText("1 則")).toBeTruthy();
-    expect(screen.getByText("3 則")).toBeTruthy();
-    expect(screen.getByText("2 則")).toBeTruthy();
-  });
-
-  it("同一組超過 12 則時最多畫 12 張縮圖，其餘摺成「＋N 則」", async () => {
-    mockGetTriage.mockResolvedValue(triage(
-      Array.from({ length: 13 }, (_, i) => triageItem({ entity_id: `ad_${i}`, class: "better" })),
-    ));
-    renderPage();
-    await screen.findByText("素材");
-    expect(screen.getByText("13 則")).toBeTruthy();
-    expect(screen.getAllByTestId("material-thumb").length).toBe(12);
-    expect(screen.getByText("＋1 則")).toBeTruthy();
-  });
-
-  it("讀取失敗時可重新讀取，不拖累已經畫好的月摘要區塊", async () => {
-    mockListCampaigns.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
-    renderPage();
-    await screen.findByText("TWD 22,000");
-    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
-  });
-});
-
-describe("MonthReviewPage（F27-I19）這個月關掉", () => {
-  it("`closed_this_month !== null`：LearnCard 印「這個月關掉 N 則」", async () => {
-    renderPage();
-    expect(await screen.findByText("這個月關掉 2 則")).toBeTruthy();
-  });
-
-  it("`closed_this_month === null`：灰字印「關閉時間從 <since> 起記錄」", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ closed_this_month: null, closed_tracking_since: "2026-09-22" }));
-    renderPage();
-    expect(await screen.findByText("關閉時間從 2026/9/22 起記錄")).toBeTruthy();
-  });
-});
-
-describe("MonthReviewPage（F27-I19／F27-I27）記入品牌學習", () => {
-  it("印 📒 文字、N 次同方向、信心 chip；活動 chip 的家族直接讀 `campaign_objective`", async () => {
-    renderPage();
-    expect(await screen.findByText("「日常出發」生活情境對廣泛受眾有效")).toBeTruthy();
-    expect(screen.getByText("2 次同方向")).toBeTruthy();
-    expect(screen.getByText("可能成立")).toBeTruthy();
-    // F27-I27: no `listCampaigns` lookup involved -- the chip's family comes straight off
-    // `learning.campaign_objective` ("sales" from the fixture), never a keyword guess, and (with
-    // no raw objective text in Contract D's own response) never a `・<objective>` suffix either.
-    const row = screen.getByText("2 次同方向").closest("div");
-    const chip = row?.querySelector('[data-slot="campaign-chip"][data-variant="sales"]');
-    expect(chip).toBeTruthy();
-    expect(chip?.textContent).toContain("日常商品推廣");
-    expect(chip?.textContent).not.toContain("・");
-  });
-
-  it("`confidence` 三種都印對應中文", async () => {
-    mockGetAdsLearnings.mockResolvedValue([
-      adsLearning({ id: "l1", confidence: "observed" }),
-      adsLearning({ id: "l2", confidence: "validated", text: "第二筆" }),
-    ]);
-    renderPage();
-    expect(await screen.findByText("觀察到")).toBeTruthy();
-    expect(screen.getByText("成立")).toBeTruthy();
-  });
-
-  it("`campaign_objective` 是 `null`（活動本身查不到）時退回純文字，不硬造家族", async () => {
-    mockGetAdsLearnings.mockResolvedValue([
-      adsLearning({ campaign_id: "cmp_unknown", campaign_name: "未知活動", campaign_objective: null }),
-    ]);
-    renderPage();
-    expect(await screen.findByText("未知活動")).toBeTruthy();
-  });
-
-  it("沒有紀錄時印「還沒有記錄。」", async () => {
-    mockGetAdsLearnings.mockResolvedValue([]);
-    renderPage();
-    expect(await screen.findByText("還沒有記錄。")).toBeTruthy();
-  });
-
-  it("讀取失敗時可重新讀取", async () => {
-    mockGetAdsLearnings.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
-    renderPage();
-    await screen.findByText("記入品牌學習");
-    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
-  });
-});
-
-describe("MonthReviewPage（F27-I19）✦ 下月建議", () => {
-  it("採用導去 action_url", async () => {
+  it("uses the flow verbs on suggestions, and 先不要 dismisses one for the month", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(await screen.findByRole("button", { name: "採用" }));
-    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/detail"));
+    expect(await screen.findByRole("heading", { name: `${NEXT} 月建議` })).toBeTruthy();
+    const card = screen.getByRole("region", { name: "補 2 則新素材" });
+    expect(within(card).getByRole("link", { name: "看提議（核准或拒絕）→" }).getAttribute("href")).toBe("/brands/brd_bughunt/ads/campaigns/cmp_daily/materials");
+    await user.click(within(card).getByRole("button", { name: "先不要" }));
+    expect(mockDismiss).toHaveBeenCalledWith("brd_bughunt", THIS, "refresh:cmp_daily");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "補 2 則新素材" })).toBeNull());
   });
 
-  it("`action_url===null` 時採用按鈕停用", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ suggestions: [monthSuggestion({ action_url: null })] }));
-    renderPage();
-    const adopt = await screen.findByRole("button", { name: "採用" }) as HTMLButtonElement;
-    expect(adopt.disabled).toBe(true);
-  });
-
-  it("略過呼叫 dismissSuggestion 成功後從清單移掉這張卡", async () => {
+  it("brings a rejected cleanup back only when it got worse, and counts the rest in the footnote", async () => {
     const user = userEvent.setup();
     renderPage();
-    await screen.findByText("🖼 補 3 則新素材");
-    await user.click(screen.getByRole("button", { name: "略過" }));
-    await waitFor(() => expect(mockDismissSuggestion).toHaveBeenCalledWith("brd_1", "2026-09", "refresh:cmp_1"));
-    await waitFor(() => expect(screen.queryByText("🖼 補 3 則新素材")).toBeNull());
+    const card = await screen.findByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" });
+    expect(within(card).getByText("上次你拒絕時是偏貴，現在變太貴")).toBeTruthy();
+    expect(within(card).getByText(`${THIS.slice(5)}/05 拒絕・原因：想再多看幾天`)).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "看提議（核准或拒絕）→" }).getAttribute("href"))
+      .toBe("/brands/brd_bughunt/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily");
+    expect(screen.getByText("你拒絕過的另外 2 件沒有變差，這裡不再提。")).toBeTruthy();
+    expect(screen.getByText(`比 ${PREV} 月同期（只當參考，不影響判斷）：購買多 40 筆・每筆便宜 37%`)).toBeTruthy();
+
+    await user.click(within(card).getByRole("button", { name: "先不要" }));
+    expect(screen.queryByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" })).toBeNull();
+    expect(mockDismiss).not.toHaveBeenCalled();
   });
 
-  it("沒有建議時印一行說明", async () => {
-    mockGetMonthSummary.mockResolvedValue(monthSummary({ suggestions: [] }));
+  it("shows no rejected card or footnote line when every remembered no stayed the same", async () => {
+    mockSummary.mockResolvedValue(summary({ rejected: { worse: [], same_count: 0 }, suggestions: [] }));
+    mockHome.mockResolvedValue(home({ money: null }));
     renderPage();
-    expect(await screen.findByText("這個月沒有下月建議。")).toBeTruthy();
+    expect(await screen.findByText("這個月沒有要給下個月的建議。")).toBeTruthy();
+    expect(screen.queryByText(/上次你拒絕時/)).toBeNull();
+    expect(screen.queryByText(/這裡不再提/)).toBeNull();
+  });
+
+  it("a month with only thin ads has nothing 有效", async () => {
+    const thin = [
+      row({ entity_id: "t1", spend: 300, results: 1, grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
+      row({ entity_id: "t2", spend: 120, results: 0, cost_per_result: null, grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
+    ];
+    mockSummary.mockResolvedValue(summary({ grades: gradesOf(thin), rejected: { worse: [], same_count: 0 } }));
+    renderPage();
+    const good = await screen.findByRole("region", { name: "有效（只算划算）" });
+    expect(within(good).getByText("0 則", { selector: "[data-slot=chip]" })).toBeTruthy();
+    expect(within(bucket("剛開始、數字還不夠")).getByText("2 則")).toBeTruthy();
+    expect(within(bucket("剛開始、數字還不夠")).getByText("還沒花到上限 × 3・花 420 元")).toBeTruthy();
+  });
+
+  it("mixed currencies: unknown spend reads as unknown, never 0", async () => {
+    const mixed = [row({ entity_id: "a", spend: null, currency: null }), row({ entity_id: "b", grade: "watch", grade_label: "偏貴", spend: 900 })];
+    mockSummary.mockResolvedValue(summary({ currency: null, total_spend: null, grades: gradesOf(mixed) }));
+    mockHome.mockResolvedValue(home({ spent: null, pace: { budget_amount: null, available: null, projected_month_end: null, daily: days(THIS, [1, 1]).map((d) => ({ ...d, cumulative: null })) } }));
+    renderPage();
+    expect(await screen.findByText(`${N} 月的花費分到這幾格`)).toBeTruthy();
+    expect(screen.getByText(/總額未知/)).toBeTruthy();
+    expect(within(bucket("有效（只算划算）")).getByText("每筆在上限內・花費未知")).toBeTruthy();
+    expect(screen.getByText("已花 未知")).toBeTruthy();
+    expect(screen.getByText("沒設月預算，不畫步調")).toBeTruthy();
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
+    // Only a genuinely empty bucket may read 0; the unknown total and the bucket holding the unknown ad never do.
+    expect(screen.queryByText(/已花 0/)).toBeNull();
+    expect(within(bucket("有效（只算划算）")).queryByText(/花 0 元/)).toBeNull();
   });
 });
 
-describe("MonthReviewPage（F27-I19）讀取失敗", () => {
-  it("月摘要讀取失敗時可重新讀取", async () => {
-    mockGetMonthSummary.mockRejectedValue(new Error("讀取失敗，請稍後再試。"));
+describe("MonthReviewPage — past month", () => {
+  it("reads the previous month from ?month= and shows its books without next-month suggestions", async () => {
+    mockSummary.mockResolvedValue(summary({ month: LAST }));
+    mockHome.mockResolvedValue(home({ month: LAST, days_in_month: 31, pace: { budget_amount: 60000, available: 0, projected_month_end: 48500, daily: days(LAST, Array(31).fill(1500)) } }));
+    renderPage(`/brands/brd_bughunt/ads/month?month=${LAST}`);
+    expect(await screen.findByRole("heading", { level: 1, name: `${PREV} 月回顧` })).toBeTruthy();
+    expect(mockSummary).toHaveBeenCalledWith("brd_bughunt", LAST, expect.anything());
+    expect(await screen.findByRole("region", { name: "有效（只算划算）" })).toBeTruthy();
+    expect(screen.getByText("每筆在上限內")).toBeTruthy();
+    expect(screen.queryByText(/分到這幾格/)).toBeNull();
+    expect(screen.queryByText(/月建議/)).toBeNull();
+    expect(screen.queryByText(/上次你拒絕時/)).toBeNull();
+    expect(screen.queryByText("還沒到")).toBeNull();
+    expect(screen.getByRole("button", { name: `${PREV} 月` }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("the month buttons switch the month", async () => {
+    const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByText("讀取失敗，請稍後再試。")).toBeTruthy();
+    await screen.findByRole("heading", { level: 1, name: `${N} 月回顧` });
+    await user.click(screen.getByRole("button", { name: `${PREV} 月` }));
+    expect(await screen.findByRole("heading", { level: 1, name: `${PREV} 月回顧` })).toBeTruthy();
+    await waitFor(() => expect(mockSummary).toHaveBeenLastCalledWith("brd_bughunt", LAST, expect.anything()));
+  });
+});
+
+describe("MonthReviewPage — read failures", () => {
+  it("a failed month summary is its own state, not an empty month; the weekly spend still shows", async () => {
+    mockSummary.mockRejectedValueOnce(new Error("伺服器忙碌"));
+    renderPage();
+    expect(await screen.findByText(/這個月的分級與建議讀不到/)).toBeTruthy();
+    expect(screen.queryByText("0 則")).toBeNull();
+    expect(await screen.findByRole("region", { name: "每週花費 vs 預算步調" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下載 CSV" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.setup().click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+  });
+
+  it("a failed weekly read fails alone; the grades still show", async () => {
+    mockHome.mockRejectedValue(new Error("逾時"));
+    renderPage();
+    expect(await screen.findByText(/每週花費讀不到/)).toBeTruthy();
+    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+    expect(screen.queryByText(/同期/)).toBeNull();
+  });
+});
+
+describe("month CSV", () => {
+  it("writes one line per ad from grades.rows, unknown numbers as empty cells", async () => {
+    const rows = [...MIXED_ROWS, row({ entity_id: "u", name: "跨幣別,廣告", spend: null, results: null, cost_per_result: null, cap: null, grade: "no_target", grade_label: "未判斷" })];
+    const csv = toCsv(monthCsvRows(rows));
+    const lines = csv.trimEnd().split("\r\n");
+    expect(lines[0]).toBe("活動,廣告,花費,購買,每賣一筆,上限,等級");
+    expect(lines[1]).toBe("日常商品推廣,通勤情境單圖,8000,20,400,450,划算");
+    expect(lines[5]).toBe("日常商品推廣,節慶限定圖,1480,0,,450,沒賣出");
+    expect(lines[7]).toBe('日常商品推廣,"跨幣別,廣告",,,,,未判斷');
+    expect(lines).toHaveLength(8);
+    expect(monthCsvName("2026-08")).toBe("2026-08回顧.csv");
+  });
+
+  it("the 下載 CSV button saves the month's rows, a past month included", async () => {
+    const user = userEvent.setup();
+    mockSummary.mockResolvedValue(summary({ month: LAST }));
+    renderPage(`/brands/brd_bughunt/ads/month?month=${LAST}`);
+    await screen.findByRole("region", { name: "有效（只算划算）" });
+    await user.click(screen.getByRole("button", { name: "下載 CSV" }));
+    expect(mockDownload).toHaveBeenCalledWith(`${LAST}回顧.csv`, monthCsvRows(MIXED_ROWS));
+  });
+});
+
+describe("weekBars", () => {
+  it("splits cumulative spend into weeks; a null cumulative makes its week unknown", () => {
+    const daily = days("2026-09", [100, 100, 100, 100, 100, 100, 100, 50, 50]);
+    const bars = weekBars("2026-09", 30, daily, 30000);
+    expect(bars.map((b) => b.label)).toEqual(["09/01–07", "09/08–14", "09/15–21", "09/22–28", "09/29–30"]);
+    expect(bars[0]).toMatchObject({ state: "known", spend: 700, pace: 7000, through: null });
+    expect(bars[1]).toMatchObject({ state: "known", spend: 100, through: "到 09/09" });
+    expect(bars[2]).toMatchObject({ state: "future", spend: null });
+    expect(bars[4].pace).toBe(2000);
+    const unknown = weekBars("2026-09", 30, daily.map((d, i) => (i === 3 ? { ...d, cumulative: null } : d)), null);
+    expect(unknown[0]).toMatchObject({ state: "unknown", spend: null, pace: null });
+    expect(unknown[1].state).toBe("known");
   });
 });
