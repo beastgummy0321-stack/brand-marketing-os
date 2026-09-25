@@ -11,7 +11,9 @@ Sources, in screen order:
   (listed last).
 - `orders` through the orders facade (`app/orders/repository.py`), `product_costs` through the
   products facade (the wizard's own product list, `wizard_options.options`, so "has a cost" means
-  exactly what the wizard means).
+  exactly what the wizard means). Orders coverage ends at the later of the latest order date and
+  the day before the latest import (org timezone), so an imported day with no orders is `ok`
+  (F31-I07); the wait page reads this same source.
 
 An account's days come from pull coverage, never from spend rows (a day read with no spend is
 `ok`). Coverage is the union of the account's `monthly:*` reads in `ads_external_sync_job`
@@ -45,7 +47,7 @@ from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 
 LOOKBACK_DAYS = 28
-_ORDER_PAGE = 200
+_ORDER_PAGE = 1000
 _FAILING = {"failed", "auth_expired"}
 _ATTENTION_FREE = {"ok", "unsupported"}
 
@@ -243,27 +245,41 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     return source, row
 
 
-def _order_dates(conn, brand_id) -> tuple[date, date] | None:
-    """(earliest, latest) non-null order dates through the orders facade, `None` when there is
-    none. `list_orders` sorts `order_date DESC` with NULLs first, so the last row is the
-    earliest date and the first dated row is the latest."""
+def _order_span(conn, brand_id, zone) -> tuple[date, date, date | None] | None:
+    """(earliest order date, latest order date, day of the latest import in `zone`) through the
+    orders facade in one pass; `None` when no order has a date. The import moment is the newest
+    `updated_at` / `created_at` of the brand's order rows (an import rewrites every row it
+    carries, so the newest stamp is the latest import)."""
     total = orders_repo.count_orders(conn, brand_id)
-    latest, offset = None, 0
-    while latest is None and offset < total:
+    earliest = latest = imported = None
+    offset = 0
+    while offset < total:
         page = orders_repo.list_orders(conn, brand_id, limit=_ORDER_PAGE, offset=offset)
         if not page:
             break
-        latest = next((row["order_date"] for row in page if row["order_date"] is not None), None)
+        for row in page:
+            day = row.get("order_date")
+            if day is not None:
+                earliest = day if earliest is None else min(earliest, day)
+                latest = day if latest is None else max(latest, day)
+            for moment in (row.get("updated_at"), row.get("created_at")):
+                if isinstance(moment, datetime):
+                    imported = moment if imported is None else max(imported, moment)
         offset += len(page)
-    if latest is None:
+    if earliest is None or latest is None:
         return None
-    earliest = orders_repo.list_orders(conn, brand_id, limit=1, offset=total - 1)[0]["order_date"]
-    return (earliest or latest), latest
+    return earliest, latest, imported.astimezone(zone).date() if imported else None
 
 
-def _orders(conn, brand_id, span):
+def _orders(conn, org_id, brand_id, span):
+    """Orders coverage runs from the earliest order date to the later of the latest order date
+    and the day before the latest import (org timezone): an import is a full export up to the
+    moment it ran, so a day with no orders that it covered is read, not missing -- the spend
+    rule "a read proves a day once the day was over when the read finished". Complete days after
+    that end are missing. Risk kept on purpose: importing an old export last marks later empty
+    days ok."""
     today, window_start = span["today"], span["window_start"]
-    dates = _order_dates(conn, brand_id)
+    dates = _order_span(conn, brand_id, coresettings.org_timezone(conn, org_id=org_id))
     href = {"label": "補報表", "href": f"/brands/{brand_id}/orders"}
     if dates is None:
         source = _source("orders", "orders", None, "商城訂單報表", "never", "還沒有匯入訂單",
@@ -271,27 +287,31 @@ def _orders(conn, brand_id, span):
         days = [{"date": d.isoformat(), "state": "future" if d > today else "none"}
                 for d in span["month_days"]]
         return source, {"source_key": "orders", "label": "商城訂單報表", "days": days}
-    earliest, latest = dates
+    earliest, latest, imported = dates
+    end = latest
+    if imported is not None and imported - timedelta(days=1) > latest:
+        end = imported - timedelta(days=1)
     missing_days = [
         day.isoformat()
         for day in _days(max(window_start, earliest), today - timedelta(days=1))
-        if day > latest
+        if day > end
     ]
-    note = f"最新到 {_md(latest)}"
+    note = f"最新匯入 {_md(imported)}" if imported is not None and end > latest \
+        else f"最新到 {_md(latest)}"
     if missing_days:
         state = "missing_days"
-        note += f"，缺 {_md(latest + timedelta(days=1))} 之後"
+        note += f"，缺 {_md(end + timedelta(days=1))} 之後"
     else:
         state = "ok"
     source = _source("orders", "orders", None, "商城訂單報表", state, note,
                      missing_days=missing_days, action=href if missing_days else None)
 
     def day_state(day: date) -> str:
-        if day > today or (day == today and day > latest):
+        if day > today or (day == today and day > end):
             return "future"
         if day < earliest:
             return "none"
-        return "ok" if day <= latest else "missing"
+        return "ok" if day <= end else "missing"
 
     days = [{"date": d.isoformat(), "state": day_state(d)} for d in span["month_days"]]
     return source, {"source_key": "orders", "label": "商城訂單報表", "days": days}
@@ -343,7 +363,7 @@ def get_connections(conn, org_id: str, brand_id: str) -> dict:
             source, row = _account(conn, org_id, brand_id, channel, account, span, accounts_cache)
             sources.append(source)
             rows.append(row)
-    order_source, order_row = _orders(conn, brand_id, span)
+    order_source, order_row = _orders(conn, org_id, brand_id, span)
     sources += [order_source, _product_costs(conn, org_id, brand_id), *unsupported]
     rows.append(order_row)
     return {
