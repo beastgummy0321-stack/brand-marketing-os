@@ -9,6 +9,8 @@ import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { adoptStrategy, dispatchPack, getCampaign, patchGroup } from "@/lib/adsApi";
+import { fetchCoordinates } from "@/lib/coordinatesApi";
+import { fetchChannels } from "@/lib/adsLaunchApi";
 import { DeliveryTab } from "./DeliveryTab";
 
 function renderWithRouter(ui: ReactElement) {
@@ -399,4 +401,36 @@ it("uses the existing structure tree for native groups and keeps native edits un
   expect(screen.getByText("預算：未知")).toBeTruthy();
   expect(screen.getByRole("button", {name: "儲存"}).hasAttribute("disabled")).toBe(true);
   expect(screen.queryByText("採用時的計畫")).toBeNull();
+});
+
+describe("DeliveryTab failed reads (F29-I10 Contract K)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+  });
+
+  it("a failed coordinates or channels read shows the error line with 重試 (never a silent empty list); 重試 re-requests only what failed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchCoordinates).mockRejectedValueOnce(new Error("x"));
+    vi.mocked(fetchChannels).mockRejectedValueOnce(new Error("y"));
+    renderTab(campaign());
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("座標選項、通路連線狀態讀取失敗");
+    expect(screen.getByRole("button", { name: "開始做素材 →" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    expect(vi.mocked(fetchCoordinates)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fetchChannels)).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("only the channels read fails: the line names it and 重試 does not re-read the coordinates", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchChannels).mockRejectedValueOnce(new Error("y"));
+    renderTab(campaign());
+    expect((await screen.findByRole("alert")).textContent).toContain("通路連線狀態讀取失敗");
+    expect(screen.getByRole("alert").textContent).not.toContain("座標選項");
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    expect(vi.mocked(fetchCoordinates)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchChannels)).toHaveBeenCalledTimes(2);
+  });
 });

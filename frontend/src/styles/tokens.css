@@ -26,6 +26,10 @@
   --color-warning: #a96711;
   --color-danger: #c53945;
   --color-alert-irreversible: #ba591c;
+  /* Stronger text shades for small type on white (prototype v10 `.ok-t` 有賺／對上了, `.warn-t` 不一樣);
+     `.bad-t` 在虧 reuses --color-grade-wasted-foreground. */
+  --color-success-strong: #1d6e59;
+  --color-warning-strong: #8f560d;
   /* Ads grades against the one cap (prototype v9 `--g-*`; 划算 = --color-success). */
   --color-grade-watch: #d18a1f;
   --color-grade-over: #e0707a;

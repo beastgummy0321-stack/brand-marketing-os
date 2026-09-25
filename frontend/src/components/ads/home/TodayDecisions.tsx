@@ -1,16 +1,20 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { QueueCleanupAd, QueueItem, QueueKind, QueuePayload } from "@/lib/adsTriageApi";
-import { Chip, Disclosure, GradeChip, ResultHero, ThumbTiles, formatAmount } from "../patterns";
+import type { GradeMove, QueueCleanupAd, QueueItem, QueueKind, QueuePayload, SettleQueueRow } from "@/lib/adsTriageApi";
+import { Chip, Disclosure, GRADE_LABEL, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount } from "../patterns";
+import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
 import { shortName } from "./NextDates";
 import { QueueRow, decisionTitle, homeAction } from "./QueueRow";
+import { SettleCard, SettleRow, settleRange } from "./SettleCard";
+import { settleAction } from "./status";
 
-/** Board D 「需要你決定」 (prototype v9 `homeDecide()`): the brand queue's open `cleanup`, `worse` and
- * `refresh_creative` rows, in that order; three as cards, the rest behind one fold; decisions already handled
- * behind a second fold. The queue is its own request: loading, syncing and failure only change this block. */
+/** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open `cleanup`, `worse`, period `settle`
+ * and `refresh_creative` rows, in that order; three as cards (the settle card spans the row), the rest behind one
+ * fold; decisions already handled behind 「今天處理過」. The queue is its own request: loading, syncing and failure
+ * only change this block. */
 
 export type QueueState =
   | { status: "loading" }
@@ -20,7 +24,8 @@ export type QueueState =
 const ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];
 const SHOWN = 3;
 
-/** The home decisions of a queue, split into open and handled, in board order. */
+/** The ad-level home decisions of a queue, split into open and handled, in board order (the settle row is not an ad
+ * row; `homeBoard` adds it). Also read by the settle page for its 「第 N 件」 position. */
 export function homeDecisions(brandId: string, queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
   const rows = queue.items
     .filter((item) => ORDER.includes(item.kind_key))
@@ -33,6 +38,29 @@ export function homeDecisions(brandId: string, queue: QueuePayload): { open: Que
   };
 }
 
+/** One entry of the home board: an ad-level queue row, or the brand's period-settle row. */
+export type HomeDecision = { kind: "item"; item: QueueItem } | { kind: "settle"; row: SettleQueueRow };
+
+/** Board order (prototype): cleanup, worse, settle, refresh_creative. The count on 「今天」 is `open.length`. */
+export function homeBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[] } {
+  const items = homeDecisions(brandId, queue);
+  const place = (list: QueueItem[], settle: SettleQueueRow | null): HomeDecision[] => {
+    const entries: HomeDecision[] = list.map((item) => ({ kind: "item", item }));
+    if (!settle) return entries;
+    const at = entries.findIndex((e) => e.kind === "item" && e.item.kind_key === "refresh_creative");
+    entries.splice(at < 0 ? entries.length : at, 0, { kind: "settle", row: settle });
+    return entries;
+  };
+  const settle = queue.settle ?? null;
+  const settleDone = settle ? settleAction(brandId, settle).done : false;
+  return {
+    open: place(items.open, settle && !settleDone ? settle : null),
+    done: place(items.done, settle && settleDone ? settle : null),
+  };
+}
+
+const keyOf = (d: HomeDecision) => (d.kind === "settle" ? `settle-${d.row.id}` : d.item.id);
+
 /** 「09/22 22:40」 in the browser's time zone (prototype `SYNC_AT`). */
 export function stamp(iso: string): string {
   const d = new Date(iso);
@@ -43,6 +71,12 @@ export function stamp(iso: string): string {
 function hm(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** 「從划算變偏貴」 from the backend's own `grade_move`; no move → the prototype's plain 「每筆變多了」 (never a move
+ * guessed from the trend or from `previous_grade`). */
+function moveText(move: GradeMove | null): string {
+  return move ? `從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "每筆變多了";
 }
 
 type Props = {
@@ -57,9 +91,9 @@ type Props = {
 };
 
 export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRetry }: Props) {
-  const decisions = state.status === "ready" ? homeDecisions(brandId, state.queue) : null;
-  const open = decisions?.open ?? [];
-  const done = decisions?.done ?? [];
+  const board = state.status === "ready" ? homeBoard(brandId, state.queue) : null;
+  const open = board?.open ?? [];
+  const done = board?.done ?? [];
   const chip = syncing
     ? <Chip tone="accent">同步中・完成後才判斷</Chip>
     : state.status === "ready" && open.length ? <Chip>{open.length} 件</Chip> : null;
@@ -110,11 +144,15 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
     body = (
       <>
         <div className="grid grid-cols-1 gap-3.5 min-[1100px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-          {shown.map((item, i) => <DecisionCardFor key={item.id} brandId={brandId} item={item} primary={i === 0} recovering={recovering} />)}
+          {shown.map((d) => (d.kind === "settle"
+            ? <SettleCard key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} />
+            : <DecisionCardFor key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} />))}
         </div>
         {rest.length > 0 && (
           <Disclosure label={`還有 ${rest.length} 件要決定`}>
-            {rest.map((item) => <QueueRow key={item.id} brandId={brandId} item={item} recovering={recovering} />)}
+            {rest.map((d) => (d.kind === "settle"
+              ? <SettleRow key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} />
+              : <QueueRow key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} />))}
           </Disclosure>
         )}
         <HandledFold brandId={brandId} done={done} recovering={recovering} />
@@ -130,11 +168,29 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
   );
 }
 
-function HandledFold({ brandId, done, recovering }: { brandId: string; done: QueueItem[]; recovering: boolean }) {
+/** Prototype `doneLabel(q)`: what was decided, in one line. */
+function doneLabel(d: HomeDecision): string {
+  if (d.kind === "settle") return `結算上一期 ${settleRange(d.row)}`;
+  const item = d.item;
+  if (item.kind_key === "cleanup") return `清理：${decisionTitle(item)}`;
+  if (item.kind_key === "worse") return `${moveText(item.triage.grade_move)}：${item.triage.name ?? "未命名廣告"}`;
+  return decisionTitle(item);
+}
+
+function HandledFold({ brandId, done, recovering }: { brandId: string; done: HomeDecision[]; recovering: boolean }) {
   if (!done.length) return null;
   return (
-    <Disclosure label={`處理過 ${done.length} 件`}>
-      {done.map((item) => <QueueRow key={item.id} brandId={brandId} item={item} recovering={recovering} />)}
+    <Disclosure label={`今天處理過 ${done.length} 件`}>
+      {done.map((d) => {
+        const action = d.kind === "settle" ? settleAction(brandId, d.row) : homeAction(brandId, d.item);
+        return (
+          <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">
+            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d)}</span>
+            {recovering ? <Chip>補完資料後更新</Chip>
+              : <Chip tone={action.label.startsWith("✓") || action.label === "已核對" ? "ok" : "neutral"}>{action.label}</Chip>}
+          </div>
+        );
+      })}
     </Disclosure>
   );
 }
@@ -150,15 +206,19 @@ function CardHead({ label, className, campaign }: { label: string; className: st
   );
 }
 
-function CardAction({ brandId, item, primary, recovering }: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
+/** The card's one step; with no proposal yet `homeAction` already uses the prototype's first-step words. */
+function CardAction({ brandId, item, primary }: { brandId: string; item: QueueItem; primary: boolean }) {
   const action = homeAction(brandId, item);
-  if (recovering) return <Chip className="self-start">補完資料後更新</Chip>;
   if (!action.href) return null;
   return (
     <Button asChild variant={primary ? "default" : "outline"} className="h-10 w-full">
       <Link to={action.href}>{action.label} →</Link>
     </Button>
   );
+}
+
+function Recovering() {
+  return <Chip className="self-start">補完資料後更新</Chip>;
 }
 
 function Thumb({ url, size }: { url: string | null; size: number }) {
@@ -168,23 +228,30 @@ function Thumb({ url, size }: { url: string | null; size: number }) {
     : <span className="shrink-0 rounded-lg bg-muted" style={style} aria-hidden="true" />;
 }
 
-function DecisionCardFor(props: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
+function DecisionCardFor(props: { brandId: string; item: QueueItem; recovering: boolean }) {
   if (props.item.kind_key === "cleanup") return <CleanupCard {...props} />;
   if (props.item.kind_key === "worse") return <WorseCard {...props} />;
   return <RefreshCard {...props} />;
 }
 
-function cleanupFigure(ad: QueueCleanupAd): string {
-  if (ad.grade === "wasted") return `花 ${formatAmount(ad.spend) ?? "—"}・0 筆`;
-  return ad.cost_per_result === null ? "每筆 —" : `每筆 ${wholeYuan(ad.cost_per_result)}`;
+function CleanupFigure({ ad, breakEven }: { ad: QueueCleanupAd; breakEven: number | null }) {
+  if (ad.grade === "wasted") return <>花 {formatAmount(ad.spend) ?? "—"}・0 筆</>;
+  if (ad.cost_per_result === null) return <>每筆 —</>;
+  return (
+    <>
+      每筆 {wholeYuan(ad.cost_per_result)}
+      <MoneyTag cost={ad.cost_per_result} breakEven={breakEven} className="block" />
+    </>
+  );
 }
 
-/** Prototype `cleanCard()`: the proposed cut, 白花 first, with the daily saving when the last 7 days are known. */
-function CleanupCard({ brandId, item, primary, recovering }: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
+/** Prototype `cleanCard()`: the proposed cut, 沒賣出 first, with the daily saving when the last 7 days are known. */
+function CleanupCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
   const cleanup = item.cleanup;
   const ads = cleanup?.ads ?? [];
   const red = ads.length > 0 && ads.every((a) => a.grade === "over" || a.grade === "wasted");
   const saving = cleanup?.daily_saving ?? null;
+  const breakEven = item.triage.target.break_even ?? null;
   const title = ads.length
     ? `${red ? "關掉色帶裡紅色的" : "關掉"} ${ads.length} 則${saving === null ? "" : `，每天省約 ${formatAmount(Math.round(saving / 10) * 10)} 元`}`
     : "預算放不下全部在投的廣告";
@@ -198,46 +265,51 @@ function CleanupCard({ brandId, item, primary, recovering }: { brandId: string; 
             <div key={ad.entity_id} className="grid grid-cols-[32px_minmax(0,1fr)_auto_auto] items-center gap-2.5">
               <Thumb url={ad.thumbnail_url} size={32} />
               <span className="min-w-0 text-sm [overflow-wrap:anywhere]">{ad.name ?? "未命名廣告"}</span>
-              <GradeChip grade={ad.grade} />
-              <span className="numeric min-w-[92px] text-right text-sm whitespace-nowrap text-muted-foreground">{cleanupFigure(ad)}</span>
+              <GradeTermChip grade={ad.grade} />
+              <span className="numeric min-w-[92px] text-right text-sm whitespace-nowrap text-muted-foreground">
+                <CleanupFigure ad={ad} breakEven={breakEven} />
+              </span>
             </div>
           ))}
         </div>
       )}
-      <CardAction brandId={brandId} item={item} primary={primary} recovering={recovering} />
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary />}
     </article>
   );
 }
 
-/** Prototype `worseCard()`: the ad got more expensive than the window before; compared with the campaign's cap. */
-function WorseCard({ brandId, item, primary, recovering }: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
+/** Prototype `worseCard()`: 變貴 is the grade moving against this campaign's cap (`grade_move`); the week-over-week
+ * trend is only the footnote. */
+function WorseCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
   const t = item.triage;
   const prev = t.previous.cost_per_result;
   const cur = t.current.cost_per_result;
   const cap = t.target.value;
-  const pct = cap && cur !== null ? Math.round(((cur - cap) / cap) * 100) : null;
-  const ref = t.target.basis === "break_even" ? "打平" : "上限";
-  const since = t.window.days === 7 ? "比上週變貴" : `比前 ${t.window.days} 天變貴`;
+  const who = shortName(t.campaign_name);
+  const capWord = t.target.basis === "break_even"
+    ? <>{who}暫用<Term k="break_even" value={t.target.break_even}>打平線</Term></>
+    : <>{who}的<Term k="cap">上限</Term></>;
+  const over = cap !== null && cur !== null && cur > cap;
   return (
     <article className={cn(CARD, "border-border")} aria-label={t.name ?? "未命名廣告"}>
-      <CardHead label={since} className="bg-zone-watch text-warning" campaign={t.campaign_name} />
+      <CardHead label={moveText(t.grade_move)} className="bg-zone-watch text-warning-strong" campaign={t.campaign_name} />
       <div className="text-base font-semibold [overflow-wrap:anywhere]">{t.name ?? "未命名廣告"}</div>
-      <div className="numeric flex flex-wrap items-baseline gap-2.5">
-        <span className="text-[13px] text-muted-foreground">每筆</span>
-        {prev !== null && <span className="text-sm text-chart-rest line-through">{formatAmount(Math.floor(prev))}</span>}
-        <span className="text-xl font-semibold">{cur === null ? "—" : `→ ${wholeYuan(cur)}`}</span>
-        {pct !== null && (pct > 0
-          ? <span className="text-sm text-warning">比{ref}貴 {pct}%</span>
-          : <span className="text-sm text-success">還在{ref}內</span>)}
+      <div>
+        <div className="numeric text-base font-semibold [overflow-wrap:anywhere]">
+          每筆 {prev !== null && `${formatAmount(Math.floor(prev))} → `}{cur === null ? "—" : formatAmount(Math.floor(cur))}
+          {cap !== null && cur !== null && <>，{over ? "超過" : "還在"}{capWord} {formatAmount(cap)}{over ? "" : " 內"}</>}
+        </div>
+        <MoneyTag cost={cur} breakEven={t.target.break_even} className="block" />
+        <div className="mt-1 text-xs text-muted-foreground">{trendNote(t)}（只當參考）</div>
       </div>
       <div className="flex-1" />
-      <CardAction brandId={brandId} item={item} primary={primary} recovering={recovering} />
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={false} />}
     </article>
   );
 }
 
 /** Not drawn by the prototype's home: the same card shape for a `refresh_creative` row (too few readable ads). */
-function RefreshCard({ brandId, item, primary, recovering }: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
+function RefreshCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
   const refresh = item.refresh;
   const thumbs = refresh?.thumbnails.slice(0, 4) ?? [];
   return (
@@ -246,7 +318,7 @@ function RefreshCard({ brandId, item, primary, recovering }: { brandId: string; 
       <div className="text-base font-semibold">{decisionTitle(item)}</div>
       <ThumbTiles items={thumbs} size={32} hollow={4 - thumbs.length} />
       <div className="flex-1" />
-      <CardAction brandId={brandId} item={item} primary={primary} recovering={recovering} />
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={false} />}
     </article>
   );
 }

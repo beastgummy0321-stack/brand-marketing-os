@@ -7,6 +7,7 @@ import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
 import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
+import type { PeriodGradeBucket } from "./adsMonthApi";
 
 /** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
  * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
@@ -30,12 +31,16 @@ export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "othe
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
-/** F28-I02: every active ad graded against the campaign's one cap T (`app/ads/triage.py`) --
- * `on_target` 划算 <= T, `watch` 偏貴 <= 1.2T, `over` 太貴 > 1.2T, `wasted` 白花 (spent >= 3T
- * with 0 results), `insufficient` (還太新、看不準 below the sample gate, 資料不足 otherwise),
- * `no_target` 未判斷. `grade_label` always comes from the backend. `class` stays the trend
- * note against the previous window. */
+/** F28-I02, v10 words F29-I01: every active ad graded against the campaign's one cap T
+ * (`app/ads/triage.py::grade_window`, the one ruler) -- `on_target` 划算 <= T, `watch` 偏貴 <=
+ * 1.2T, `over` 太貴 > 1.2T, `wasted` 沒賣出 (spent >= 3T with 0 results), `insufficient`
+ * (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise), `no_target` 未判斷.
+ * `grade_label` always comes from the backend. `class` stays the trend note against the previous
+ * window and no decision reads it (ads.md §6.33, `components/ads/oneRuler.test.ts`). */
 export type TriageGrade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
+/** F29-I01 Contract A: the grades a move can run between (both windows graded). */
+export type RankedGrade = "on_target" | "watch" | "over" | "wasted";
+export interface GradeMove { from: RankedGrade; to: RankedGrade }
 
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
  * re-worded here, `label` always comes from the backend. */
@@ -96,6 +101,10 @@ export interface TriageItem {
   thumbnail_url: string | null;
   class: TriageClass; label: string; reason_code: string;
   grade: TriageGrade; grade_label: string;
+  // F29-I01 Contract A: the previous equal-length window graded by the same ruler (null when not
+  // synced, below the gate or unknown); `grade_move` only when both are graded and differ. 變貴 =
+  // a move from `on_target` to `watch`/`over` -- the only thing that raises a `worse` row.
+  previous_grade: RankedGrade | null; grade_move: GradeMove | null;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
@@ -105,6 +114,16 @@ export interface TriageItem {
   // F27-I09 Done #7: optional for the same reason -- real responses always carry it
   // (`app/ads/triage.py::classify`).
   campaign_objective?: CampaignObjectiveFamily;
+}
+/** F29 Contract D (`app/ads/repository.py::campaign_data_status`): one per-campaign data state for
+ * the window the caller judged — triage `data.status` and home rows `data_status` are the same
+ * function. A broken sync (`never`／`disconnected`／`auth_expired`／`failed`／`syncing`) wins over a
+ * gap; `partial` = a day of the window was never read; `no_rows` = every day read, nothing spent.
+ * `label` is one plain sentence to show as is; `missing_days` are the window's unread days. */
+export type CampaignDataState =
+  | "ready" | "partial" | "no_rows" | "syncing" | "never" | "disconnected" | "auth_expired" | "failed";
+export interface CampaignDataStatus {
+  state: CampaignDataState; label: string; missing_days: string[]; last_success_at: string | null;
 }
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
@@ -116,6 +135,8 @@ export interface TriageData {
   sync: CampaignSyncState;
   coverage: { start: string; end: string } | null;
   missing_days: string[];
+  /** F29 Contract D: the one "has data / why not" state of this window (`campaign_data_status`). */
+  status: CampaignDataStatus;
   // F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict `CampaignData
   // .capacity` (`adsApi.ts`) notes -- existing hand-written `data: {sync, coverage, missing_days}`
   // fixtures (`CampaignCards.test.tsx`/`WaitPage.test.tsx`) can't be reached to add it. Real
@@ -219,6 +240,8 @@ export type QueueProposal =
 // F27-I17 Done 0: widened again with the real backend's sixth kind (`app/ads/triage.py`'s
 // `"cleanup"`, Contract F) -- `home/QueueRow.tsx`'s exhaustive switches and `home/status.ts`'s
 // `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
+// F29-I03: the backend's brand-level `"settle"` row is NOT a `QueueKind` -- `splitQueue` takes it
+// out of `items` into `QueuePayload.settle`, so every ad-row consumer keeps a non-null `triage`.
 export type QueueKind =
   | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
 
@@ -256,10 +279,16 @@ export interface QueueInsufficient {
   sync_state: CampaignSyncState["state"];
   coverage: { start: string; end: string } | null;
 }
+/** F29-I01 Contract B: the user's earlier "no" to closing this ad -- set only on a proposed ad
+ * that re-entered the cut because its grade got worse since (`grade` is the grade it had then). */
+export interface RejectedBefore {
+  grade: RankedGrade; grade_label: string; at: string; reason: string | null;
+  change_set_id: string;
+}
 /** F27-I06 Contract F, re-cut by F28-I02 (`app/ads/triage_capacity.py::cleanup_candidates`):
- * `ads` is the proposed cut -- every 白花 ad first, then, while active ads exceed `can_support`,
+ * `ads` is the proposed cut -- every 沒賣出 ad first, then, while active ads exceed `can_support`,
  * 太貴 before 偏貴, highest cost per result first; 划算 and ungraded ads never. `keep` is every
- * other active ad (same shape). `can_support` is `null` when capacity is unknown (a 白花 ad
+ * other active ad (same shape). `can_support` is `null` when capacity is unknown (a 沒賣出 ad
  * alone still raises the row). `short` counts ads still over capacity after the cut;
  * `scale_owner_id` is the campaign's qualifying `scale_budget` owner while `short > 0`.
  * `spend_7d`/`daily_spend`/`daily_saving` are `null` when the last 7 days aren't fully known;
@@ -269,11 +298,24 @@ export interface QueueCleanupAd {
   spend_7d: number | null;
   grade: TriageGrade; cost_per_result: number | null; spend: number | null;
   result_count: number | null; daily_spend: number | null;
+  // F29-I01 Contract B: null unless this ad was rejected before and its grade got worse since
+  // (always null on `keep` entries).
+  rejected_before: RejectedBefore | null;
 }
 export interface QueueCleanup {
   campaign_id: string; campaign_name: string; can_support: number | null; active_ads: number;
   ads: QueueCleanupAd[]; keep: QueueCleanupAd[]; short: number;
   daily_saving: number | null; scale_owner_id: string | null;
+}
+/** F29-I03 Contract E: the `settle` row's own payload -- the latest ended calendar month (org
+ * timezone), raised from the 2nd day after it ends while nothing is written. `learnable_count`
+ * counts the ads that will be written (划算／太貴／沒賣出); `buckets` is the month's spend by grade
+ * (`app/ads/period_grades.py::summarize`, same as the month review). The page reads
+ * `adsSettleApi.ts::getSettle(brand, month)`. Exposed as `QueuePayload.settle`, never in `items`. */
+export interface QueueSettle {
+  month: string; start: string; end: string;
+  campaign_count: number; imported_count: number; learnable_count: number;
+  buckets: PeriodGradeBucket[];
 }
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
@@ -293,13 +335,55 @@ export interface QueueItem {
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
   cleanup?: QueueCleanup;
 }
+/** F29-I03 Contract E: the brand's open period-settle row (`kind_key: "settle"` on the wire, whose
+ * `triage` is `null` -- it is about the whole brand's month, not one ad). */
+export interface SettleQueueRow {
+  id: string; dedupe_key: string; category: string; severity: AlertSeverity;
+  message: string; action_url: string | null; visible_from: string | null;
+  status: string; created_at: string;
+  settle: QueueSettle;
+}
 export interface QueuePayload {
+  /** Ad-level rows only (every one carries its `triage` item). */
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;
   kinds_available: string[]; kinds_pending: string[];
+  /** F29-I03: the open settle row, `null` when none. Always set by `getQueue`/`refreshQueue`
+   * (`splitQueue`); optional only so existing hand-written payload fixtures stay valid. */
+  settle?: SettleQueueRow | null;
+}
+/** The backend's queue as it arrives: ad rows plus, at most, one brand-level settle row. */
+type WireSettleRow = SettleQueueRow & { kind_key: "settle"; triage: null };
+export type WireQueuePayload = Omit<QueuePayload, "items" | "settle"> & {
+  items: (QueueItem | WireSettleRow)[];
+};
+
+const isWireSettle = (row: QueueItem | WireSettleRow): row is WireSettleRow =>
+  (row as { kind_key: string }).kind_key === "settle";
+
+/** F29-I03: the one type boundary for the brand-level settle row -- split once here, so no screen
+ * that scans `items` ever meets a row without an ad. */
+export function splitQueue(wire: WireQueuePayload): QueuePayload {
+  const items: QueueItem[] = [];
+  let settle: SettleQueueRow | null = null;
+  for (const row of wire.items) {
+    if (isWireSettle(row)) {
+      settle ??= {
+        id: row.id, dedupe_key: row.dedupe_key, category: row.category, severity: row.severity,
+        message: row.message, action_url: row.action_url, visible_from: row.visible_from,
+        status: row.status, created_at: row.created_at, settle: row.settle,
+      };
+    } else {
+      items.push(row);
+    }
+  }
+  return { ...wire, items, settle };
 }
 
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
+  /** F29 Contract D: 成本含運 (unit cost incl. shipping) from the same product economics row as
+   * `break_even`, so price − cost = break-even; null unless the result is a purchase and it is known. */
+  cost: number | null;
 }
 export interface TargetRequest {
   result_kind?: string | null; basis?: CapBasis | null;
@@ -349,10 +433,10 @@ async function json<T>(path: string, method: string, body?: unknown, signal?: Ab
 }
 
 export async function getQueue(brand: string, signal?: AbortSignal) {
-  return (await json<{ queue: QueuePayload }>(`${brandPath(brand)}/queue`, "GET", undefined, signal)).queue;
+  return splitQueue((await json<{ queue: WireQueuePayload }>(`${brandPath(brand)}/queue`, "GET", undefined, signal)).queue);
 }
 export async function refreshQueue(brand: string, signal?: AbortSignal) {
-  return (await json<{ queue: QueuePayload }>(`${brandPath(brand)}/queue/refresh`, "POST", {}, signal)).queue;
+  return splitQueue((await json<{ queue: WireQueuePayload }>(`${brandPath(brand)}/queue/refresh`, "POST", {}, signal)).queue);
 }
 export async function getTriage(brand: string, campaign: string, signal?: AbortSignal) {
   return (await json<{ triage: CampaignTriage }>(`${campaignPath(brand, campaign)}/triage`, "GET", undefined, signal)).triage;

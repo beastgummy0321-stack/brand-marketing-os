@@ -1,11 +1,16 @@
-"""app/dashboard/routes_jobs_api.py — 全站生成進度單一出口聚合端點（票 B4-warroom 接線，
-`.scratch/grill/GRILL-B4-warroom.md`「全站生成進度單一出口（模組邊界定案）」節，型別
-逐欄對照 `frontend/src/lib/jobsApi.ts`）。
+"""app/dashboard/routes_jobs_api.py — 全站背景工作單一出口聚合端點（票 B4-warroom 接線，
+型別逐欄對照 `frontend/src/lib/jobsApi.ts`）。
 
-票 09：最後四個 kind（建檔初掃／出題／貼回修格式、人物誌生成）搬上 `app.background`
-佇列，本檔對 `app/intake/routes_api.py` 的 `active_jobs` 直接 import（`docs/contracts/
-brand_web.md` 記錄的違規在票 08 已經拿掉三個，這是最後一個倖存者）隨之拿掉——七個 kind
-現在全部經同一條路徑讀 `llm_task`，沒有第二個機制。
+F29-I05（feature Contract G）：資料來源從「`llm_task` 裡 running 的列」換成 procrastinate
+佇列本身（`app.background.queue_snapshot()`）——`llm_task` 只看得到已經在打模型的那一刻，
+排隊中的工作、不打模型的工作（同步成效、檢查活動）在那張表裡都不存在，所以鈴鐺以前對
+它們是瞎的。現在每一件 todo／doing 的工作都有位置（整條佇列、進行中排最前面），對照表以
+**佇列任務名**為鍵（不是 `llm_task.task_type`），每個 `background.ads_*` 都有一句名稱。
+
+租戶邊界照舊（ADR 0038）：工作屬於哪個組織寫在它自己的 args（`org_id`），品牌再用
+`bi.get_brand()` 反查、比對 `brand.org_id == actor.org_id` 才列出來。其他組織的工作、
+沒有 `brand_id` 的工作（例如每分鐘的排程器、只帶 org 的每日拉取）與品牌已被刪掉的工作
+都不列出，只算進 `other_count`，但仍佔位置（同一個 worker）。job 的 args 絕不原樣吐出。
 
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/main.py`。
 """
@@ -14,91 +19,107 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
-from app import workbench
+from app import background, workbench
 from app.brand_intelligence import repository as bi
+from app.core import settings
 from app.shared import web
 from app.shared.web import require_actor
 
 router = APIRouter()
 
-# task_type -> (kind, 固定顯示的 stage 文字)。逐步進度全部放棄（票 08／09 明文
-# 決定），running 一律回同一句固定字串，跟各自 POST 端點剛送出時的初始 stage 文字一致，
-# 不是隨便挑的佔位字。
-_QUEUE_JOB_KINDS = {
-    "customer_voice_extraction": ("library_convert", "分析原話中"),
-    "product_scan": ("product_research", "讀取網址中"),
-    "brand_report": ("brand_report", "正在整理五章"),
-    "intake_scan": ("scan", "讀取網址中"),
-    "intake_question": ("question", "正在準備下一題"),
-    "intake_paste_fix": ("paste_fix", "正在請 AI 整理格式"),
-    "intake_research": ("research", "正在整理品牌知識"),
-    "intake_persona": ("persona", "整理人物誌"),
-    # issue jobs-bell-blind-to-schedule-jobs（2026-09-06 演練）：產品裡最慢的工作（實測出
-    # 方案 43–53 秒、展開活動樹 46–59 秒）本來一個都不在這份對照表裡，排程頁自己有行內
-    # 進度，全站這顆鈴鐺對它們是瞎的。stage 文字跟排程頁自己那句等待字對齊，不另編一句。
-    "schedule_plan": ("schedule_plan", "出方案中"),
-    "schedule_tree": ("schedule_tree", "展開活動樹中"),
-    # 票 05（ADR 0068）：排程樹展開後的內容生成搬進 `app.workbench`——那裡的
-    # `llm_task.task_type` 是 `workbench_copy`／`workbench_image_prompt`／…（procrastinate
-    # 的任務名 `background.workbench_generate` 只是佇列裡的一個名字，不是這張表要比對的
-    # `task_type`），每一種各自一列，都指到同一個鈴鐺 kind：使用者不用分辨背後是哪個 part。
-    "workbench_copy": ("workbench_generate", "素材生成中"),
-    "workbench_image_prompt": ("workbench_generate", "素材生成中"),
-    "workbench_video_script": ("workbench_generate", "素材生成中"),
-    "workbench_free": ("workbench_generate", "素材生成中"),
-    "workbench_derive_identity": ("workbench_generate", "素材生成中"),
+# 佇列任務名 -> (kind, stage)。kind 的顯示名稱在前端 `ACTIVE_JOB_KIND_LABELS`（接在「正在」
+# 後面也要通順）；stage 是列上的固定說明，逐步進度照舊放棄（票 08／09）。
+TASK_KINDS: dict[str, tuple[str, str]] = {
+    "background.customer_voice_extraction": ("library_convert", "分析原話中"),
+    "background.product_scan": ("product_research", "讀取網址中"),
+    "background.brand_report": ("brand_report", "正在整理五章"),
+    "background.intake_scan": ("scan", "讀取網址中"),
+    "background.intake_question": ("question", "正在準備下一題"),
+    "background.intake_paste_fix": ("paste_fix", "正在請 AI 整理格式"),
+    "background.intake_research": ("research", "正在整理品牌知識"),
+    "background.intake_persona": ("persona", "整理人物誌"),
+    "background.schedule_plan": ("schedule_plan", "出方案中"),
+    "background.schedule_tree": ("schedule_tree", "展開活動樹中"),
+    "background.performance_reading": ("schedule_diagnosis", "判讀成效中"),
+    "background.workbench_generate": ("workbench_generate", "素材生成中"),
+    "background.meta_daily_pull": ("meta_pull", "讀取 Meta 花費中"),
+    "background.meta_backfill": ("meta_backfill", "補抓過去的廣告中"),
+    "background.ads_external_sync": ("ads_sync", "讀取廣告平台成效中"),
+    "background.ads_runtime_campaign": ("ads_runtime", "檢查活動狀態與預算中"),
+    "background.ads_close_expired": ("ads_runtime", "檢查活動狀態與預算中"),
+    "background.ads_review_round": ("ads_review", "AI 判讀中"),
+    "background.ads_angles": ("ads_angles", "AI 整理主打中"),
+    "background.ads_user_asset_preview": ("ads_asset_preview", "產生預覽中"),
+    "background.ads_user_asset_suggestions": ("ads_asset_suggestions", "AI 看素材中"),
 }
+_OTHER = ("other", "處理中")
+_SCOPE_KEYS = ("campaign_id", "entity_id")
 
 
-def _queue_active_jobs(conn) -> list[dict]:
-    """回傳這十個 kind 目前 running 的工作，直接讀 `llm_task`（票 08／09）——
-    `docs/contracts/background.md`：這張表沒有專屬模組，任何模組都能讀（已有
-    `app/schedule/state.py`／`app/brand_web/routes_report_api.py` 先例）。"""
-    rows = conn.execute(
-        "SELECT org_id, brand_id, task_type, started_at, context_scope_json FROM llm_task "
-        "WHERE status = 'running' AND task_type = ANY(%s)",
-        (list(_QUEUE_JOB_KINDS),),
-    ).fetchall()
-    jobs = []
-    for row in rows:
-        kind, stage = _QUEUE_JOB_KINDS[row["task_type"]]
-        brand_id = row["brand_id"]
-        scope = row["context_scope_json"] or {}
-        if kind == "product_research":
-            action_url = f"/app/brands/{brand_id}/products/{scope.get('product_id', '')}"
-        elif kind in ("library_convert", "persona"):
-            action_url = f"/app/brands/{brand_id}/library?tab=customer-voice"
-        elif kind in ("scan", "question", "paste_fix", "research"):
-            action_url = f"/app/brands/{brand_id}/intake"
-        elif kind == "workbench_generate":
-            action_url = workbench.set_action_url(
-                conn, row["org_id"], brand_id, scope.get("brief_id", ""),
-            ) or f"/app/brands/{brand_id}/workbench"
-        elif kind in ("schedule_plan", "schedule_tree"):
-            action_url = f"/app/brands/{brand_id}/ads"
-        else:
-            action_url = f"/app/brands/{brand_id}/report"
-        jobs.append({
-            "brand_id": brand_id, "kind": kind, "status": "running", "stage": stage,
-            "started_at": row["started_at"].isoformat() if row["started_at"] else "",
-            "action_url": action_url,
-        })
-    return jobs
+def _action_url(conn, org_id: str, brand_id: str, kind: str, args: dict) -> str:
+    base = f"/app/brands/{brand_id}"
+    campaign = args.get("campaign_id")
+    if kind == "product_research":
+        return f"{base}/products/{args.get('product_id', '')}"
+    if kind in ("library_convert", "persona"):
+        return f"{base}/library?tab=customer-voice"
+    if kind in ("scan", "question", "paste_fix", "research"):
+        return f"{base}/intake"
+    if kind == "workbench_generate":
+        return workbench.set_action_url(
+            conn, org_id, brand_id, args.get("brief_id", ""),
+        ) or f"{base}/workbench"
+    if kind == "brand_report":
+        return f"{base}/report"
+    if kind == "ads_sync":
+        return f"{base}/ads/connections"
+    if campaign and kind.startswith("ads_"):
+        return f"{base}/ads/campaigns/{campaign}/detail"
+    return f"{base}/ads"
+
+
+def _since(conn, org_id: str) -> datetime:
+    """00:00 today in the org's own timezone (the same "today" every other screen uses)."""
+    zone = settings.org_timezone(conn, org_id=org_id)
+    return datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 @router.get("/api/jobs/active")
 def jobs_active(request: Request):
-    """每個 job 的 `brand_id` 反查一次 brand 列（本來就要查來補 `brand_name`），比對
-    `brand["org_id"] == actor.org_id` 才留下——過濾在這裡做，不是 `llm_task` 自己的查詢
-    條件（票 03-1 r1 defect 2 遺留的做法，票 09 起七個 kind 統一沿用）。品牌已被刪掉的
-    job 直接丟棄。"""
     actor = require_actor(request)
     conn = web.conn
-    active = _queue_active_jobs(conn)
+    snapshot = background.queue_snapshot(since=_since(conn, actor.org_id))
+    brands: dict[str, dict | None] = {}
     jobs = []
-    for job in active:
-        brand = bi.get_brand(conn, job["brand_id"])
+    for job in snapshot["jobs"]:
+        args = job["args"]
+        brand_id = args.get("brand_id")
+        if job["org_id"] != actor.org_id or not isinstance(brand_id, str) or not brand_id:
+            continue
+        if brand_id not in brands:
+            brands[brand_id] = bi.get_brand(conn, brand_id)
+        brand = brands[brand_id]
         if brand is None or brand["org_id"] != actor.org_id:
             continue
-        jobs.append({**job, "brand_name": brand["name"]})
-    return {"data": jobs, "generated_at": datetime.now(UTC).isoformat()}
+        kind, stage = TASK_KINDS.get(job["task_name"], _OTHER)
+        waited = job["waited_seconds"]
+        started_at = ""
+        if job["status"] == "running" and waited is not None:
+            started_at = datetime.fromtimestamp(
+                datetime.now(UTC).timestamp() - waited, UTC).isoformat()
+        jobs.append({
+            "brand_id": brand_id, "brand_name": brand["name"], "kind": kind,
+            "status": job["status"], "stage": stage, "started_at": started_at,
+            "action_url": _action_url(conn, actor.org_id, brand_id, kind, args),
+            "position": job["position"], "task_name": job["task_name"],
+            "scope": {k: args[k] for k in _SCOPE_KEYS if isinstance(args.get(k), str)},
+            "waited_seconds": waited,
+        })
+    return {
+        "data": jobs,
+        "total": snapshot["total"],
+        "other_count": snapshot["total"] - len(jobs),
+        "done_today": snapshot["done_today"].get(actor.org_id, 0),
+        "failed_today": snapshot["failed_today"].get(actor.org_id, 0),
+        "generated_at": datetime.now(UTC).isoformat(),
+    }

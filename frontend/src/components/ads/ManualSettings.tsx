@@ -31,12 +31,15 @@ function clearManualDraft(key: string) {
   try { sessionStorage.removeItem(key); } catch { /* Storage unavailable. */ }
 }
 
-export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange }: {
+export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange, embedded = false }: {
   draftScope: string;
   brandId: string;
   campaign: Pick<CampaignDetail, "id" | "status" | "manual_handoff">;
   onSaved: (c: CampaignDetail) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** F29 Unresolved 5: inside the launch settings' 「進階設定」 fold (publish list stage) — the per-ad-set free-text
+   * fields only, without this panel's own surface, summary and outer fold (the host's fold is the one fold). */
+  embedded?: boolean;
 }) {
   const handoff = campaign.manual_handoff;
   const [open, setOpen] = useState(false);
@@ -74,6 +77,42 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
     }));
   }
 
+  const groupFolds = (
+    <div className="flex flex-col gap-4">
+      {handoff.groups.map((group) => (
+        <Disclosure key={group.id} label={`${group.name} · ${dirtyGroups[group.id] ? "有未儲存變更" : group.status}`}
+          open={Boolean(openGroups[group.id])}
+          onOpenChange={(next) => setOpenGroups((current) => ({ ...current, [group.id]: next }))}>
+          <GroupSettings brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
+            locked={campaign.status === "closed"} onSaved={onSaved}
+            draftKey={`brand-os:ads:manual-draft:v1:${draftScope}:${brandId}:${campaign.id}:${group.id}`}
+            focusRequest={focusRequests[group.id] ?? null}
+            onDirtyChange={(next) => setGroupDirty(group.id, next)} />
+        </Disclosure>
+      ))}
+    </div>
+  );
+  const fillButtons = handoff.groups.filter((group) => group.missing.length > 0).map((group) => (
+    <Button key={group.id} type="button" size="sm" variant="outline" onClick={() => focusMissing(group)}>
+      補齊{group.name}設定
+    </Button>
+  ));
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col gap-3" aria-label="各廣告組的其他設定" role="group">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            各廣告組的其他設定：{handoff.pending_count ? `${handoff.pending_count} 組待補` : "已填齊"}
+            {dirty && <span className="ml-1 font-medium text-warning">有尚未儲存的變更。</span>}
+          </p>
+          <div className="flex flex-wrap gap-2">{fillButtons}</div>
+        </div>
+        {groupFolds}
+      </div>
+    );
+  }
+
   return (
     <div className="surface">
       <div className="surface-body flex flex-col gap-3">
@@ -83,11 +122,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
             再行銷需確認受眾池；這裡儲存設定，不會對外發布或更動預算。
             {dirty && <span className="ml-1 font-medium text-warning">有尚未儲存的變更。</span>}
           </p>
-          {handoff.groups.filter((group) => group.missing.length > 0).map((group) => (
-            <Button key={group.id} type="button" size="sm" variant="outline" onClick={() => focusMissing(group)}>
-              補齊{group.name}設定
-            </Button>
-          ))}
+          {fillButtons}
         </div>
         <div className="flex flex-col gap-1" aria-label="人工上架設定摘要">
           {handoff.groups.map((group) => {
@@ -103,19 +138,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
         </div>
         <Disclosure label={`人工上架設定與平台對應 · ${dirty ? "有未儲存變更" : `作用於這個 Campaign 的 ${handoff.groups.length} 組`}`}
           open={open} onOpenChange={setOpen}>
-          <div className="flex flex-col gap-4">
-            {handoff.groups.map((group) => (
-              <Disclosure key={group.id} label={`${group.name} · ${dirtyGroups[group.id] ? "有未儲存變更" : group.status}`}
-                open={Boolean(openGroups[group.id])}
-                onOpenChange={(next) => setOpenGroups((current) => ({ ...current, [group.id]: next }))}>
-                <GroupSettings brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
-                  locked={campaign.status === "closed"} onSaved={onSaved}
-                  draftKey={`brand-os:ads:manual-draft:v1:${draftScope}:${brandId}:${campaign.id}:${group.id}`}
-                  focusRequest={focusRequests[group.id] ?? null}
-                  onDirtyChange={(next) => setGroupDirty(group.id, next)} />
-              </Disclosure>
-            ))}
-          </div>
+          {groupFolds}
         </Disclosure>
       </div>
     </div>
@@ -166,13 +189,19 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
     else clearManualDraft(draftKey);
   }, [dirty, draftKey, values]);
 
+  // A focus request is consumed once (by its token): the jump switches the section a single time, and the user can
+  // switch sections afterwards without being dragged back. A new 補齊 click carries a new token and jumps again.
+  const handledFocusToken = useRef<number | null>(null);
   useEffect(() => {
-    if (!focusRequest || !requestedField) return;
+    if (!focusRequest || !requestedField || handledFocusToken.current === focusRequest.token) return;
     if (section !== requestedField.section) {
       setSection(requestedField.section);
       return;
     }
-    const timer = window.setTimeout(() => fieldRefs.current[focusRequest.key]?.focus(), 0);
+    const timer = window.setTimeout(() => {
+      handledFocusToken.current = focusRequest.token;
+      fieldRefs.current[focusRequest.key]?.focus();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [focusRequest, requestedField, section]);
 

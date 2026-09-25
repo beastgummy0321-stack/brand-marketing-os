@@ -14,7 +14,7 @@ This walks the SAME `plan_json.replaces_entity_id` / `ads_handoff_item.entity_id
 """
 
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app.ads import review_evidence
 
@@ -149,9 +149,12 @@ def _ad_spend_7d(rows_by_entity, entity_id, start, end):
 
 
 
-# F28-I02 (ads.md §6.32): close order -- 白花 always first, then 太貴 before 偏貴. 划算 and every
-# ungraded ad (還太新／資料不足／未判斷) never close through cleanup.
+# F28-I02 (ads.md §6.32): close order -- 沒賣出 always first, then 太貴 before 偏貴. 划算 and every
+# ungraded ad (剛開始／資料不足／未判斷) never close through cleanup.
 _CLOSE_RANK = {"wasted": 0, "over": 1, "watch": 2}
+# F29-I01 Contract B: how bad a grade is -- a remembered ad re-enters a cleanup only when its
+# current grade ranks strictly worse than the grade it had when the user said no.
+GRADE_RANK = {"on_target": 0, "watch": 1, "over": 2, "wasted": 3}
 _KEEP_RANK = {"wasted": 0, "over": 1, "watch": 2, "on_target": 3, "insufficient": 4, "no_target": 5}
 
 
@@ -166,10 +169,11 @@ def _spend_desc(item):
     return (spend is None, -(spend or 0))
 
 
-def _ad_view(item, spend_7d):
+def _ad_view(item, spend_7d, rejected_before=None):
     """One cleanup `ads`/`keep` entry (F28 Contract "Queue"): the existing keys plus the ad's grade
     and its graded-window numbers (`classify()`'s own `current`, never re-derived). `daily_spend`
-    is the last 7 days' average, `None` whenever that 7-day spend isn't fully known."""
+    is the last 7 days' average, `None` whenever that 7-day spend isn't fully known.
+    `rejected_before` (F29-I01) is set only on a proposed ad that re-entered after a rejection."""
     current = item["current"]
     return {
         "entity_id": item["entity_id"], "name": item["name"],
@@ -177,14 +181,66 @@ def _ad_view(item, spend_7d):
         "grade": item["grade"], "cost_per_result": current.get("cost_per_result"),
         "spend": current.get("spend"), "result_count": current.get("result_count"),
         "daily_spend": spend_7d / _CLEANUP_WINDOW_DAYS if spend_7d is not None else None,
+        "rejected_before": rejected_before,
+    }
+
+
+def _entry_time(value, fallback):
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return fallback
+        return parsed if parsed.tzinfo is not None else fallback
+    return fallback
+
+
+def decision_memory(conn, org_id, brand_id) -> dict:
+    """F29-I01 Contract B: the newest remembered decision per ad across this brand's change sets --
+    `entity_id -> {grade, cost_per_result, cap, at, reason, change_set_id, campaign_id, title}`.
+    One brand-wide read. `decision_grades` NULL (every set before this column, every set that never
+    declined an ad) is no memory; a remembered grade that isn't ranked holds nothing (dropped).
+    `at` is the entry's own decision time (else the set's `created_at`); the newest wins."""
+    rows = conn.execute(
+        "SELECT id,campaign_id,title,decision_reason,decision_grades,created_at "
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND decision_grades IS NOT NULL",
+        (org_id, brand_id),
+    ).fetchall()
+    memory, times = {}, {}
+    for row in rows:
+        for entity_id, entry in (row["decision_grades"] or {}).items():
+            if not isinstance(entry, dict) or entry.get("grade") not in GRADE_RANK:
+                continue
+            at = _entry_time(entry.get("at"), row["created_at"])
+            if entity_id in times and times[entity_id] >= at:
+                continue
+            times[entity_id] = at
+            memory[entity_id] = {
+                "grade": entry["grade"], "cost_per_result": entry.get("cost_per_result"),
+                "cap": entry.get("cap"), "at": at.isoformat(), "reason": row["decision_reason"],
+                "change_set_id": row["id"], "campaign_id": row["campaign_id"],
+                "title": row["title"],
+            }
+    return memory
+
+
+def got_worse(entry, grade) -> bool:
+    """A remembered ad is released only when its current grade ranks strictly worse (Contract B)."""
+    return grade in GRADE_RANK and GRADE_RANK[grade] > GRADE_RANK[entry["grade"]]
+
+
+def _rejected_before(entry):
+    return {
+        "grade": entry["grade"], "grade_label": entry.get("grade_label", entry["grade"]),
+        "at": entry["at"], "reason": entry["reason"], "change_set_id": entry["change_set_id"],
     }
 
 
 def cleanup_candidates(
     conn, org_id, brand_id, campaign_id, campaign_name, items, rows_by_entity, cutoff, capacity,
-    scale_owner_id=None,
+    scale_owner_id=None, memory=None,
 ) -> dict | None:
-    """F28-I02 cleanup rule (ads.md §6.32) over `classify()`'s own grades: every 白花 ad closes;
+    """F28-I02 cleanup rule (ads.md §6.32) over `classify()`'s own grades: every 沒賣出 ad closes;
     then, while the active ads still exceed `can_support`, 太貴 then 偏貴 close, highest cost per
     result first (ties: higher spend, then entity id). 划算 and every ungraded ad never close. An ad
     in an open replacement lineage (correction 4) never closes either -- it stays in `keep`.
@@ -192,8 +248,14 @@ def cleanup_candidates(
     `None` when nothing would close: a campaign over capacity with only 划算／ungraded ads left
     raises no cleanup row -- its budget owner's `scale_budget` row is the proposal instead.
     `short` is how many ads stay over capacity after the close list (0 when capacity is unknown or
-    below one ad -- then only 白花 closes, capacity never drives a close). `scale_owner_id` is
-    echoed only while `short > 0` (the caller passes the campaign's qualifying budget owner)."""
+    below one ad -- then only 沒賣出 closes, capacity never drives a close). `scale_owner_id` is
+    echoed only while `short > 0` (the caller passes the campaign's qualifying budget owner).
+
+    F29-I01 Contract B: `memory` (`entity_id -> remembered decision`, `decision_memory` above) is
+    applied after the close order is chosen -- a remembered ad keeps its place (the cut is never
+    refilled with the next ad) and is proposed only when its grade got worse, then carrying
+    `rejected_before`. A close list the memory empties raises no row."""
+    memory = memory or {}
     can_support = capacity["can_support"]
     active_ads = capacity["active_ads"]
     open_lineage = _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
@@ -213,7 +275,11 @@ def cleanup_candidates(
     )
     capacity_known = can_support is not None and can_support >= 1
     excess = active_ads - can_support if capacity_known else 0
-    close = wasted + costly[:max(0, excess - len(wasted))]
+    chosen = wasted + costly[:max(0, excess - len(wasted))]
+    close = [
+        item for item in chosen
+        if item["entity_id"] not in memory or got_worse(memory[item["entity_id"]], item["grade"])
+    ]
     if not close:
         return None
     short = max(0, excess - len(close))
@@ -230,7 +296,13 @@ def cleanup_candidates(
             item["entity_id"],
         ),
     )
-    ads = [_ad_view(item, spend_7d[item["entity_id"]]) for item in close]
+    ads = [
+        _ad_view(
+            item, spend_7d[item["entity_id"]],
+            _rejected_before(memory[item["entity_id"]]) if item["entity_id"] in memory else None,
+        )
+        for item in close
+    ]
     daily = [ad["daily_spend"] for ad in ads]
     return {
         "campaign_id": campaign_id, "campaign_name": campaign_name,

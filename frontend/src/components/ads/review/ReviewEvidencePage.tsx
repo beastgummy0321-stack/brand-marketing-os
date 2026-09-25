@@ -11,10 +11,12 @@ import {
   createReview, decideReview, getReview,
   type ReviewRound,
 } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, Segmented, TodoRow,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, Ladder, MoneyTag, ReadFailed, Segmented,
+  Term, TodoRow,
 } from "../patterns";
 import {
   adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
@@ -26,7 +28,18 @@ const STEPS = [
   { label: "看證據" }, { label: "選方向" }, { label: "改文案" },
   { label: "確認變更" }, { label: "到平台完成" }, { label: "核對結果" },
 ];
-const STEP_PURPOSE = "確認這則廣告值不值得改";
+const STEP_PURPOSE = "先看數字，再決定";
+
+/** F29-I14 (v10 `stepEv()`): the headline names the grade move against the cap (Contract A `grade_move`, the only
+ * thing that raises a 變貴 row); without one it stays neutral — no guess from the trend. The purpose names whose cap
+ * the ad is measured against (the campaign's own, 「跟<活動>的上限比」). */
+function worseHeadline(move: GradeMove | null | undefined): string {
+  return move ? `這則從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "看看這則廣告的數字";
+}
+function worsePurpose(campaignName: string | null | undefined): string {
+  const short = campaignName?.split("・")[0]?.trim();
+  return short ? `跟${short}的上限比，${STEP_PURPOSE}` : STEP_PURPOSE;
+}
 const POLL_MS = 3000;
 
 type SheetKind = "deferred" | "unjudgeable";
@@ -56,11 +69,19 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Entry mode: a failed queue read is not "no proposal" — its own state, with 重試.
+  const [entryFailed, setEntryFailed] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K — round mode: the queue is context (campaign chip, 第幾件, ladder, history, target); a failed read is
+  // shown with 重試, never silently dropped. Entry mode reads the queue itself below.
+  const queueRead = useApiRead(
+    (signal) => (reviewId ? getQueue(brandId, signal) : Promise.resolve(null)),
+    [brandId, campaignId, reviewId, reloadKey],
+  );
+  const queue = queueRead.data;
 
   const [busy, setBusy] = useState(false);
   const [sheetKind, setSheetKind] = useState<SheetKind | null>(null);
@@ -76,9 +97,20 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    setEntryFailed(null);
     (async () => {
+      let q;
       try {
-        const q = await getQueue(brandId);
+        q = await getQueue(brandId);
+      } catch (err) {
+        // The queue read failed: that is not "no proposal" (Contract K) — its own state with 重試.
+        if (!cancelled) {
+          setEntryFailed(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
+          setLoading(false);
+        }
+        return;
+      }
+      try {
         if (cancelled) return;
         const item = q.items.find((i) => i.triage.entity_id === entityId) ?? null;
         const existingId = item?.proposal?.kind === "review" ? item.proposal.review_id : null;
@@ -97,6 +129,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         if (cancelled) return;
         navigate(reviewRoundPath(brandId, campaignId, created.id), { replace: true });
       } catch (err) {
+        // Creating the round was refused (e.g. the campaign closed): the backend's own words, unchanged.
         if (!cancelled) {
           setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
           setLoading(false);
@@ -113,10 +146,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
-    ])
+    getReview(brandId, campaignId, reviewId)
+      .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -189,6 +220,14 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
   // Entry mode 畫面：轉導完成前只有讀取中或錯誤兩種狀態。
   if (entityId) {
+    if (entryFailed) {
+      return (
+        <div className="flex flex-col gap-4">
+          <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
+          <ReadFailed what={`這則廣告的檢討讀不到（${entryFailed}）；已保存的決定都還在`} onRetry={() => setReloadKey((k) => k + 1)} />
+        </div>
+      );
+    }
     if (loadError) {
       return (
         <div className="flex flex-col gap-4">
@@ -209,7 +248,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     );
   }
 
-  if (loading) {
+  if (loading || (queueRead.status === "loading" && !queue)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
@@ -277,12 +316,12 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
-      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `變差・${evidence.target.name ?? "廣告"}` }]} />
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `變貴・${evidence.target.name ?? "廣告"}` }]} />
       <FlowHeader
         steps={STEPS}
         current={0}
-        title="這則廣告變差了"
-        purpose={STEP_PURPOSE}
+        title={worseHeadline(triageItem?.triage.grade_move)}
+        purpose={worsePurpose(triageItem?.triage.campaign_name)}
         context={triageItem ? (
           <>
             <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
@@ -298,6 +337,10 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
           </div>
         ) : undefined}
       />
+
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」、處理階梯與上限暫時看不到；下面的證據照舊" onRetry={queueRead.reload} />
+      )}
 
       {waiting && (
         <div className="rounded-xl border border-warning/30 bg-warning/10 p-5">
@@ -368,13 +411,23 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               previous={adResultView(evidence.previous)?.cost_per_result ?? null}
               current={adResultView(evidence.current)?.cost_per_result ?? null}
             />
+            {/* v10 `mt(a)`: the cost against break-even, beside the grade's own ruler (the cap). */}
+            <div className="numeric text-right">
+              <MoneyTag cost={adResultView(evidence.current)?.cost_per_result ?? null} breakEven={triageItem?.triage.target.break_even ?? null} />
+            </div>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <Chip>{evidence.current.days_present}/{evidence.current.days_expected} 天有資料</Chip>
-              {targetValue !== null && <Chip>目標 {formatTargetAmount(targetValue)}</Chip>}
+              {targetValue !== null && <Chip><Term k="cap">上限</Term> {formatTargetAmount(targetValue)}</Chip>}
             </div>
           </div>
 
-          {isSales ? (
+          {queueRead.status === "error" ? (
+            // The history and the sales/non-sales split both come from the queue row: unknown, not "no history".
+            <div className="rounded-xl border border-border bg-card p-5">
+              <h2 className="mb-1.5 font-semibold">這條素材的紀錄</h2>
+              <p className="py-3 text-sm text-muted-foreground">讀取失敗，按上方重試後再看。</p>
+            </div>
+          ) : isSales ? (
             commerceCurrent && commercePrevious && (
               <div className="rounded-xl border border-border bg-card p-5">
                 <div className="mb-1.5 flex items-center justify-between">
@@ -417,13 +470,16 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
           <div className="col-span-full flex gap-3.5 text-xs text-muted-foreground">
             <span><i className="mr-1.5 inline-block h-1.5 w-3.5 rounded-sm bg-border" aria-hidden="true" />前期 {formatWindowDate(evidence.window.previous_start)}–{formatWindowDate(evidence.window.previous_end)}</span>
             <span><i className="mr-1.5 inline-block h-1.5 w-3.5 rounded-sm bg-primary" aria-hidden="true" />本期 {formatWindowDate(evidence.window.start)}–{formatWindowDate(evidence.window.end)}</span>
+            {/* Contract A: the ▲▼ against the previous window is a trend note; the grade (against the cap) decides. */}
+            <span>前後升降只當參考，分級看<Term k="cap">上限</Term></span>
           </div>
         </div>
       )}
 
       <div className="flex-1" />
       <ActionBar
-        back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}
+        back={{ label: "投放中心", to: homeHref }}
+        exit={closed ? undefined : { label: "先不要，回投放中心", to: homeHref }}
         hint={closed ? "要改文案請等下一回證據" : undefined}
       >
         {/* 先不決定／改變決定（feature Decisions「Sheet」）：`@/components/layout/ui/dropdown-menu`

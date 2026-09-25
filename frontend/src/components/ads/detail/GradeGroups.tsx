@@ -4,19 +4,21 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import type { QueueItem, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
-import { Chip, GRADE_FILL, GRADE_LABEL, formatAmount, type Grade } from "../patterns";
+import { Chip, GRADE_FILL, GRADE_LABEL, MoneyTag, Term, formatAmount, type Grade } from "../patterns";
 import { cleanupAction, proposalAction } from "../home/status";
 
-/** F28-I10: the campaign detail's grade groups (prototype v9 `tabPerf()` groups + `row`). Every active ad arrives
- * already graded against the campaign's one cap (`TriageItem.grade`/`grade_label`, Feature F28 "Grades"); this
- * file only groups, orders and labels them, and picks each row's one action. */
+/** F28-I10, v10 F29-I13: the campaign detail's grade groups (prototype v10 `tabPerf()` groups + `row` + `menu()`).
+ * Every active ad arrives already graded against the campaign's one cap (`TriageItem.grade`/`grade_label`, Feature
+ * F28 "Grades"); this file only groups, orders and labels them, picks each row's one decision button (在清理提議／去處理,
+ * none otherwise) and places the row's 「⋯」 menu, which the page supplies (換掉這一則／看紀錄). Every cost per purchase
+ * carries its money tag against break-even (`MoneyTag`, Contract K). */
 
-/** One group per grade, in the prototype's `ORDER` (白花, 太貴, 偏貴, 划算, 還太新). `insufficient` splits by the
- * backend's own `grade_label` (還太新、看不準 below the sample gate, 資料不足 otherwise) so the two honest reasons
+/** One group per grade, in the prototype's `ORDER` (沒賣出, 太貴, 偏貴, 划算, 剛開始). `insufficient` splits by the
+ * backend's own `grade_label` (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise) so the two honest reasons
  * never share a heading; `no_target` (no cap at all) comes last. */
 export type GroupKey = "wasted" | "over" | "watch" | "on_target" | "thin" | "no_data" | "no_target";
 export const GROUP_ORDER: GroupKey[] = ["wasted", "over", "watch", "on_target", "thin", "no_data", "no_target"];
-/** Prototype: 白花／太貴／偏貴 open, everything else folded. */
+/** Prototype: 沒賣出／太貴／偏貴 open, everything else folded. */
 export const OPEN_BY_DEFAULT: GroupKey[] = ["wasted", "over", "watch"];
 
 const GROUP_GRADE: Record<GroupKey, Grade> = {
@@ -30,7 +32,7 @@ export function groupOf(item: TriageItem): GroupKey {
 }
 
 /** The summary's right-hand hint (prototype `tabPerf()`), from the cap T and the grade bands the kit ruler draws
- * (偏貴 up to 1.2 × T, 白花／還太新 against the 3 × T spend line). No cap, or a reason that is not about the spend
+ * (偏貴 up to 1.2 × T, 沒賣出／剛開始 against the 3 × T spend line). No cap, or a reason that is not about the spend
  * line (資料不足), prints no hint rather than an invented one. */
 function groupHint(key: GroupKey, cap: number | null): string | null {
   if (cap === null) return null;
@@ -54,26 +56,33 @@ export function trendNote(item: TriageItem): string {
   return `比前 ${days} 天 ${pct > 0 ? "▲" : pct < 0 ? "▼" : "±"}${Math.abs(pct)}%`;
 }
 
-/** What a row's one button does (prototype `row`): an ad inside this campaign's open cleanup row → 在清理提議 (the
- * cleanup decision, 白花 + 太貴 are one decision); else its own open `stop_loss`／`worse` row → 去處理; else 看紀錄
- * on the workspace performance tab. A row whose proposal is already done no longer counts as open. */
+/** Where an ad leads (prototype `row`): an ad inside this campaign's open cleanup row → 在清理提議 (the cleanup
+ * decision, 沒賣出 + 太貴 are one decision); else its own open `stop_loss`／`worse` row → 去處理; else 看紀錄 on the
+ * workspace performance tab (the row shows no button then — 看紀錄 is in its 「⋯」 menu; a ruler dot still goes there).
+ * A row whose proposal is already done no longer counts as open. */
 export interface RowAction { label: "在清理提議" | "去處理" | "看紀錄"; href: string }
 
 export function recordHref(workspaceHref: string, entityId: string) {
   return `${workspaceHref}?tab=performance&ad=${entityId}`;
 }
 
+/** The open cleanup decision of this campaign (its step href and ads), or null once it is done. */
+export function openCleanup(brandId: string, campaignId: string, queue: QueueItem[]): { href: string; ids: Set<string> } | null {
+  const row = queue.find((q) => q.kind_key === "cleanup" && q.cleanup?.campaign_id === campaignId);
+  const step = row ? cleanupAction(brandId, campaignId, row.proposal, row.action_url) : null;
+  if (!row || !step || step.done) return null;
+  return { href: step.href, ids: new Set(row.cleanup!.ads.map((ad) => ad.entity_id)) };
+}
+
 export function adActions(
   brandId: string, campaignId: string, workspaceHref: string, items: TriageItem[], queue: QueueItem[],
 ): Map<string, RowAction> {
   const actions = new Map<string, RowAction>();
-  const cleanupRow = queue.find((q) => q.kind_key === "cleanup" && q.cleanup?.campaign_id === campaignId);
-  const cleanup = cleanupRow ? cleanupAction(brandId, campaignId, cleanupRow.proposal, cleanupRow.action_url) : null;
-  const inCleanup = new Set(cleanup && !cleanup.done ? cleanupRow!.cleanup!.ads.map((ad) => ad.entity_id) : []);
+  const cleanup = openCleanup(brandId, campaignId, queue);
   for (const item of items) {
     const id = item.entity_id;
-    if (inCleanup.has(id)) {
-      actions.set(id, { label: "在清理提議", href: cleanup!.href });
+    if (cleanup?.ids.has(id)) {
+      actions.set(id, { label: "在清理提議", href: cleanup.href });
       continue;
     }
     const own = queue.find((q) => q.triage.entity_id === id && (q.kind_key === "stop_loss" || q.kind_key === "worse"));
@@ -102,52 +111,72 @@ function AdThumb({ url }: { url: string | null }) {
 
 const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
 
-/** The per-result column (prototype: 每賣一筆 ／ 購買 0 筆 ／ 還太新). Purchases read 每賣一筆; other result kinds
- * name their own result (`result_label` from the backend, never re-worded). */
-function ResultCell({ item }: { item: TriageItem }) {
+const isPurchase = (item: TriageItem) =>
+  item.current.result_kind === "purchase" || (item.current.result_kind === null && item.target.result_kind === "purchase");
+
+/** The per-result column (prototype: 每賣一筆 + money tag ／ 購買 0 筆 ／ 剛開始). Purchases read 每賣一筆 and carry the
+ * money tag against break-even (hidden when either number is unknown); other result kinds name their own result
+ * (`result_label` from the backend, never re-worded) and get no money tag — break-even is per sale. */
+function ResultCell({ item, breakEven }: { item: TriageItem; breakEven: number | null }) {
   const m = item.current;
   if (item.grade === "wasted") return <NumberCell label={m.result_label} value="0 筆" />;
-  const label = m.result_kind === "purchase" || (m.result_kind === null && item.target.result_kind === "purchase")
-    ? "每賣一筆" : `每次${m.result_label}成本`;
+  const purchase = isPurchase(item);
+  const label = purchase ? "每賣一筆" : `每次${m.result_label}成本`;
   if (item.grade === "insufficient") {
-    const word = item.grade_label === GRADE_LABEL.insufficient ? "還太新" : item.grade_label;
+    const word = item.grade_label === GRADE_LABEL.insufficient ? <Term k="thin">{item.grade_label}</Term> : item.grade_label;
     return <NumberCell label={label} value={<span className="text-[13px] font-medium text-muted-foreground">{word}</span>} />;
   }
-  return <NumberCell label={label} value={money(m.cost_per_result)} />;
+  return (
+    <NumberCell label={label} value={money(m.cost_per_result)}>
+      {purchase && <MoneyTag cost={m.cost_per_result} breakEven={breakEven} className="block" />}
+    </NumberCell>
+  );
 }
 
-function NumberCell({ label, value }: { label: string; value: ReactNode }) {
+function NumberCell({ label, value, children }: { label: string; value: ReactNode; children?: ReactNode }) {
   return (
     <div className="text-right">
       <span className="block text-[11.5px] text-muted-foreground">{label}</span>
       <b className="numeric text-[15px] font-semibold whitespace-nowrap">{value}</b>
+      {children}
     </div>
   );
 }
 
-function ActionLink({ action }: { action: RowAction }) {
-  return action.label === "看紀錄"
-    ? <Button asChild variant="link" size="sm" className="h-auto px-0"><Link to={action.href}>看紀錄</Link></Button>
-    : <Button asChild variant="outline" size="sm"><Link to={action.href}>{action.label}</Link></Button>;
+/** The row's decision button: only 在清理提議／去處理; 看紀錄 lives in the 「⋯」 menu (prototype v10 `row`). */
+function DecisionLink({ action }: { action: RowAction }) {
+  if (action.label === "看紀錄") return null;
+  return <Button asChild variant="outline" size="sm"><Link to={action.href}>{action.label}</Link></Button>;
 }
 
-// Prototype `.adrow`: 40px thumb · name + trend note · 花費 · per result · action.
+// Prototype `.adrow`: 40px thumb · name + trend note · 花費 · per result · decision + menu.
 const ROW = "grid grid-cols-[40px_minmax(0,1fr)_110px_100px_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0";
 
-function AdRow({ item, action, highlighted, rowRef }: {
-  item: TriageItem; action: RowAction; highlighted: boolean; rowRef: (el: HTMLDivElement | null) => void;
+/** What the page adds to a row: its 「⋯」 menu, whether a 換掉這一則 request is open, and the last failure of one. */
+export interface RowExtras { menu: ReactNode; requestOpen: boolean; error: string | null }
+
+function AdRow({ item, action, breakEven, extras, highlighted, rowRef }: {
+  item: TriageItem; action: RowAction; breakEven: number | null; extras: RowExtras | null;
+  highlighted: boolean; rowRef: (el: HTMLDivElement | null) => void;
 }) {
   const name = item.name ?? "（未命名廣告）";
   return (
     <div ref={rowRef} data-testid={`ad-row-${item.entity_id}`} className={cn(ROW, highlighted && "-mx-2 rounded-lg bg-accent/60 px-2 ring-1 ring-inset ring-primary")}>
       <AdThumb url={item.thumbnail_url} />
       <div className="min-w-0">
-        <p className="text-sm font-semibold [overflow-wrap:anywhere]">{name}</p>
-        <p className="text-[11.5px] text-muted-foreground">{trendNote(item)}</p>
+        <p className="text-sm font-medium [overflow-wrap:anywhere]">{name}</p>
+        <p className="text-[11.5px] text-muted-foreground">
+          {trendNote(item)}
+          {extras?.requestOpen && <Chip tone="accent" className="ml-1.5 py-0.5 align-middle">換掉這一則・需求已開</Chip>}
+        </p>
+        {extras?.error && <p role="alert" className="text-[11.5px] font-medium text-danger">{extras.error}</p>}
       </div>
       <NumberCell label="花費" value={money(item.current.spend)} />
-      <ResultCell item={item} />
-      <div className="min-w-[92px] text-right"><ActionLink action={action} /></div>
+      <ResultCell item={item} breakEven={breakEven} />
+      <div className="flex min-w-[92px] items-center justify-end gap-1.5">
+        <DecisionLink action={action} />
+        {extras?.menu}
+      </div>
     </div>
   );
 }
@@ -161,7 +190,7 @@ function byCost(a: TriageItem, b: TriageItem) {
 
 /** One `<details>` shell for a grade group and the closed group (prototype `.grp`): swatch, title, count chip, hint. */
 function Fold({ swatch, title, count, hint, open, onToggle, muted = false, children }: {
-  swatch: string; title: string; count: number; hint: string | null; open: boolean;
+  swatch: string; title: string; count: number | null; hint: string | null; open: boolean;
   onToggle: (open: boolean) => void; muted?: boolean; children: ReactNode;
 }) {
   return (
@@ -171,7 +200,7 @@ function Fold({ swatch, title, count, hint, open, onToggle, muted = false, child
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2.5 px-5 py-[13px] [&::-webkit-details-marker]:hidden">
         <span aria-hidden="true" className={cn("size-3 shrink-0 rounded-[3px]", swatch)} />
         <b className="text-sm font-semibold">{title}</b>
-        <Chip>{count} 則</Chip>
+        {count !== null && <Chip>{count} 則</Chip>}
         <span className="flex-1" />
         {hint && <span className="text-[11.5px] text-muted-foreground">{hint}</span>}
       </summary>
@@ -180,11 +209,17 @@ function Fold({ swatch, title, count, hint, open, onToggle, muted = false, child
   );
 }
 
-export function GradeGroups({ items, cap, actions, openGroups, onToggle, highlightId, registerRow }: {
+export function GradeGroups({ items, cap, breakEven = null, dataReason = null, actions, extras, openGroups, onToggle, highlightId, registerRow }: {
   items: TriageItem[];
   /** The campaign's resolved cap value (own or 暫用打平); null = no cap. */
   cap: number | null;
+  /** The campaign's break-even per sale (money tags); null = unknown, no tag. */
+  breakEven?: number | null;
+  /** The campaign's one "why no data" sentence (`data.status.label`) when its data is not whole: the 資料不足 group's
+   * hint. Never re-derived here. */
+  dataReason?: string | null;
   actions: Map<string, RowAction>;
+  extras?: (item: TriageItem) => RowExtras;
   openGroups: Set<GroupKey>;
   onToggle: (key: GroupKey, open: boolean) => void;
   highlightId: string | null;
@@ -205,7 +240,7 @@ export function GradeGroups({ items, cap, actions, openGroups, onToggle, highlig
             swatch={GRADE_FILL[GROUP_GRADE[key]]}
             title={key === "no_data" ? list[0].grade_label : GRADE_LABEL[GROUP_GRADE[key]]}
             count={list.length}
-            hint={groupHint(key, cap)}
+            hint={key === "no_data" ? dataReason : groupHint(key, cap)}
             open={openGroups.has(key)}
             onToggle={(open) => onToggle(key, open)}
           >
@@ -214,6 +249,8 @@ export function GradeGroups({ items, cap, actions, openGroups, onToggle, highlig
                 key={item.entity_id}
                 item={item}
                 action={actions.get(item.entity_id)!}
+                breakEven={breakEven}
+                extras={extras ? extras(item) : null}
                 highlighted={item.entity_id === highlightId}
                 rowRef={(el) => registerRow(item.entity_id, el)}
               />
@@ -234,32 +271,35 @@ function closedStatusLabel(status: string | null): string {
   return (status && CLOSED_STATUS_LABEL[status]) || "已關閉";
 }
 
-function ClosedAdRow({ item, workspaceHref }: { item: TriageClosedItem; workspaceHref: string }) {
+/** Prototype v10 closed row: thumb, name, status — kept on record, never judged, so no numbers and no decision. */
+function ClosedAdRow({ item }: { item: TriageClosedItem }) {
   const name = item.name ?? "（未命名廣告）";
   return (
-    <div data-testid={`closed-ad-row-${item.entity_id}`} className={cn(ROW, "grid-cols-[40px_minmax(0,1fr)_110px_100px_auto_auto]")}>
+    <div data-testid={`closed-ad-row-${item.entity_id}`} className={cn(ROW, "grid-cols-[40px_minmax(0,1fr)_auto]")}>
       <AdThumb url={item.thumbnail_url} />
-      <p className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{name}</p>
-      <NumberCell label="花費" value={money(item.spend)} />
-      <NumberCell label={`每次${item.result_label}成本`} value={money(item.cost_per_result)} />
+      <p className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{name}</p>
       <Chip>{closedStatusLabel(item.native_status)}</Chip>
-      <div className="min-w-[60px] text-right"><ActionLink action={{ label: "看紀錄", href: recordHref(workspaceHref, item.entity_id) }} /></div>
     </div>
   );
 }
 
-/** The closed ads (prototype: last, grey, folded by default): kept on record, never judged. */
-export function ClosedGroup({ closed, workspaceHref, open, onToggle }: {
-  closed: TriageClosedBlock; workspaceHref: string; open: boolean; onToggle: (open: boolean) => void;
+/** The closed ads (prototype v10: under the 不在投的 heading, last, grey, folded by default): kept on record, never
+ * judged, not counted in the active number above. */
+export function ClosedGroup({ closed, open, onToggle }: {
+  closed: TriageClosedBlock; open: boolean; onToggle: (open: boolean) => void;
 }) {
   const remaining = closed.total - closed.items.length;
+  const counts = [`暫停 ${closed.paused}`, `已封存 ${closed.archived}`, ...(closed.other ? [`其他 ${closed.other}`] : [])];
   return (
-    <Fold
-      swatch="bg-border" title="已關閉" count={closed.total} muted open={open} onToggle={onToggle}
-      hint={`暫停 ${closed.paused}・已封存 ${closed.archived}・不列入判斷`}
-    >
-      {closed.items.map((item) => <ClosedAdRow key={item.entity_id} item={item} workspaceHref={workspaceHref} />)}
-      {closed.truncated && <p className="py-2.5 text-[11.5px] text-muted-foreground">…其餘 {remaining} 則</p>}
-    </Fold>
+    <section aria-label="不在投的">
+      <h2 className="mt-3 mb-2.5 text-[15px] font-semibold text-muted-foreground">不在投的</h2>
+      <Fold
+        swatch="bg-border" title={`已關閉的 ${closed.total} 則`} count={null} muted open={open} onToggle={onToggle}
+        hint={`${counts.join("・")}・不算在上面的在投數量裡`}
+      >
+        {closed.items.map((item) => <ClosedAdRow key={item.entity_id} item={item} />)}
+        {closed.truncated && <p className="py-2.5 text-[11.5px] text-muted-foreground">…其餘 {remaining} 則</p>}
+      </Fold>
+    </section>
   );
 }

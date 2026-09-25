@@ -83,7 +83,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "撞車1150724", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "worse", label: "變差",
     reason_code: "cost_per_result_up",
-    grade: "over", grade_label: "太貴",
+    grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-08", end: "2026-09-21", days: 14, previous_start: "2026-08-25", previous_end: "2026-09-07", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -340,5 +340,30 @@ describe("PreparePage（F23-I03）錯的步驟", () => {
     renderAt(preparePath());
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1"));
     expect(screen.queryByRole("button", { name: /只改文案/ })).toBeNull();
+  });
+});
+
+// F29-I10 Contract K: the queue is context on this step — a failed read is said out loud with 重試 and the step
+// still works; the open step flow has one exit back to 投放中心.
+describe("PreparePage（F29-I10）佇列讀取失敗與出口", () => {
+  it("佇列讀取失敗：只多一塊讀取失敗，這一步照舊；重試重讀佇列後補回「第幾件」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockReset();
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue());
+    renderAt(preparePath());
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /只改文案/ })).toBeTruthy();
+    expect(screen.queryByText("第 1 件／共 1 件")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
+    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("開著的決定有「✕ 先不要，回投放中心」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(preparePath());
+    const exit = await screen.findByRole("link", { name: "✕ 先不要，回投放中心" });
+    expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 });

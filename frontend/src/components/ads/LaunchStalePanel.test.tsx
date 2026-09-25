@@ -35,7 +35,7 @@ const stale = (overrides: Partial<LaunchStale> = {}): LaunchStale => ({
   ],
   ...overrides,
 });
-const workspace = (launch: LaunchStale | null, list = items): HandoffWorkspace => ({ items: list, items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false, launch_stale: launch, notice: "人工交接不代表平台已投遞。" });
+const workspace = (launch: LaunchStale | null, list = items): HandoffWorkspace => ({ items: list, items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false, launch_stale: launch, notice: "人工交接不代表平台已投遞。", settings_readback: null });
 const view = () => <MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" /></MemoryRouter>;
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 

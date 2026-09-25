@@ -1040,6 +1040,140 @@ class ChangeControlTest(unittest.TestCase):
         via_service = self.create(operation_id=db.new_id("op"))
         self.assertEqual(via_http["content_hash"], via_service["content_hash"])
         self.assertNotIn("source", via_http["plan_json"])
+        self.assertNotIn("declined_ids", via_http["plan_json"])
+
+    # -- F29-I01 Contract B: rejected cleanup memory ----------------------------------------------
+
+    def _second_ad(self):
+        other = self.entity(
+            "4", "ad", parent_native_kind="adset", parent_native_id="2",
+            creative={"kind": "image", "fields": {"body": "另一則", "image_hash": "image-two"}},
+        )
+        self.conn.commit()
+        return other["id"]
+
+    @staticmethod
+    def _pause(target):
+        return {"kind": "pause", "target_id": target, "after": {"status": "PAUSED"},
+                "reason": "清理"}
+
+    def _triage(self, grades):
+        """`triage.classify` stand-in: `entity_id -> (grade, cost)` for the active ads."""
+        from app.ads import triage
+
+        items = [
+            {"entity_id": eid, "grade": grade, "current": {"cost_per_result": cost},
+             "target": {"value": 100}}
+            for eid, (grade, cost) in grades.items()
+        ]
+        return patch.object(triage, "classify", return_value={"items": items})
+
+    def _proposal(self, *entity_ids):
+        from app.ads import triage
+
+        return patch.object(
+            triage, "campaign_cleanup",
+            return_value={"ads": [{"entity_id": eid} for eid in entity_ids]},
+        )
+
+    def _decision_grades(self, set_id):
+        return self.conn.execute(
+            "SELECT decision_grades FROM ads_change_set WHERE id=%s", (set_id,),
+        ).fetchone()["decision_grades"]
+
+    def test_rejecting_a_cleanup_set_remembers_each_paused_ads_grade(self):
+        other = self._second_ad()
+        created = self.create(items=[self._pause(self.ad["id"]), self._pause(other)],
+                              source="cleanup")
+        # `other` is not graded right now (剛開始): it holds no memory.
+        with self._triage({self.ad["id"]: ("over", 150.0), other: ("insufficient", None)}):
+            service.decide(self.conn, self.org, self.brand, self.campaign, created["id"],
+                           "rejected", "還想再看一週", None, "test")
+        memory = self._decision_grades(created["id"])
+        self.assertEqual(set(memory), {self.ad["id"]})
+        entry = memory[self.ad["id"]]
+        self.assertEqual({k: entry[k] for k in ("grade", "cost_per_result", "cap")},
+                         {"grade": "over", "cost_per_result": 150.0, "cap": 100})
+        self.assertTrue(entry["at"])
+
+    def test_an_ad_closed_before_the_rejection_holds_no_memory(self):
+        created = self.create(items=[self._pause(self.ad["id"])], source="cleanup")
+        with self._triage({}):  # classify() lists active ads only
+            service.decide(self.conn, self.org, self.brand, self.campaign, created["id"],
+                           "rejected", "已經自己關了", None, "test")
+        self.assertEqual(self._decision_grades(created["id"]), {})
+
+    def test_deferring_or_rejecting_a_non_cleanup_set_leaves_no_memory(self):
+        cleanup = self.create(items=[self._pause(self.ad["id"])], source="cleanup")
+        copy_set = self.create()
+        with self._triage({self.ad["id"]: ("over", 150.0)}):
+            service.decide(self.conn, self.org, self.brand, self.campaign, cleanup["id"],
+                           "deferred", "下週再看", (db.now_utc() + timedelta(days=3)).isoformat(),
+                           "test")
+            service.decide(self.conn, self.org, self.brand, self.campaign, copy_set["id"],
+                           "rejected", "不改", None, "test")
+        self.assertIsNone(self._decision_grades(cleanup["id"]))
+        self.assertIsNone(self._decision_grades(copy_set["id"]))
+
+    def test_declined_ids_are_stored_and_remembered_at_approval(self):
+        other = self._second_ad()
+        with self._proposal(self.ad["id"], other):
+            created = self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                                  declined_ids=[other])
+        self.assertEqual(created["plan_json"]["declined_ids"], [other])
+        self.assertIsNone(self._decision_grades(created["id"]))
+        with self._triage({self.ad["id"]: ("over", 150.0), other: ("watch", 110.0)}):
+            self.approve(created)
+        memory = self._decision_grades(created["id"])
+        self.assertEqual(set(memory), {other})
+        self.assertEqual(memory[other]["grade"], "watch")
+
+    def test_declined_ids_change_the_hash_only_when_present(self):
+        other = self._second_ad()
+        plain = self.create(items=[self._pause(self.ad["id"])], source="cleanup")
+        explicit_none = self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                                    declined_ids=None)
+        empty = self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                            declined_ids=[])
+        self.assertEqual(plain["content_hash"], explicit_none["content_hash"])
+        self.assertEqual(plain["content_hash"], empty["content_hash"])
+        self.assertNotIn("declined_ids", plain["plan_json"])
+        self.assertNotIn("declined_ids", empty["plan_json"])
+        with self._proposal(self.ad["id"], other):
+            declined = self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                                   declined_ids=[other])
+        self.assertNotEqual(plain["content_hash"], declined["content_hash"])
+
+    def test_declined_ids_are_refused_outside_a_cleanup_or_outside_the_proposal(self):
+        other = self._second_ad()
+        with self.assertRaisesRegex(ValueError, "只有清理清單"):
+            self.create(items=[self._pause(self.ad["id"])], declined_ids=[other])
+        with self._proposal(self.ad["id"]), self.assertRaisesRegex(ValueError, "清理提議"):
+            self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                        declined_ids=[other])  # not proposed
+        with self._proposal(self.ad["id"], other), self.assertRaisesRegex(ValueError, "清理提議"):
+            self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                        declined_ids=[self.ad["id"]])  # also being paused
+        with self.assertRaisesRegex(ValueError, "格式無效"):
+            self.create(items=[self._pause(self.ad["id"])], source="cleanup",
+                        declined_ids=[other, other])
+
+    def test_declined_ids_without_source_is_refused_over_http(self):
+        from app.main import app
+
+        client = TestClient(app)
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        result = client.post(
+            base + "/change-sets",
+            json={
+                "operation_id": "declined-no-source",
+                "title": "測試",
+                "month": self.month,
+                "items": [self._pause(self.ad["id"])],
+                "declined_ids": ["x"],
+            },
+        )
+        self.assertEqual(result.status_code, 409, result.text)
 
 
 class ChangeControlPlatformUrlTest(unittest.TestCase):

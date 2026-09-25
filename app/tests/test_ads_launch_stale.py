@@ -300,7 +300,9 @@ class LaunchStaleTest(unittest.TestCase):
         ).fetchone()
         context = dict(campaigns_row["context_json"] or {})
         context["manual_delivery"] = {
-            self.group: {"values": {"placements": "動態版位", "execution_notes": "已建好"}}
+            self.group: {
+                "values": {"landing_url": "https://example.test/new", "execution_notes": "已建好"}
+            }
         }
         self.sql(
             "UPDATE ads_campaign SET context_json=%s WHERE id=%s", db.jsonb(context), self.campaign
@@ -308,7 +310,7 @@ class LaunchStaleTest(unittest.TestCase):
         stale = self.workspace()["launch_stale"]
         self.assertEqual(
             [(r["field"], r["field_label"]) for r in stale["diff"]],
-            [("manual_settings.placements", "版位")],
+            [("manual_settings.landing_url", "落地頁網址")],
             "a post-build record is not plan content and never makes a launch stale",
         )
         self.revert(stale)

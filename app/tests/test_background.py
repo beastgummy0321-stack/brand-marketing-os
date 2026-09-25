@@ -399,6 +399,83 @@ class IsActiveTest(unittest.TestCase):
         )
 
 
+class QueueSnapshotTest(unittest.TestCase):
+    """F29-I05 (feature Contract G): `queue_snapshot()` reads the whole queue in pick order —
+    running first, then waiting by procrastinate's own fetch order (priority DESC, id ASC),
+    then jobs scheduled for later — and never writes."""
+
+    def _queue(self, sql, params=()):
+        schema = db.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        db.current().execute(f'SET LOCAL search_path TO "{schema}__queue"')
+        db.current().execute(sql, params)
+        db.current().commit()
+
+    def setUp(self):
+        self._queue("DELETE FROM procrastinate_jobs")
+
+    def test_pick_order_positions_and_waits(self):
+        a = background_module.app()
+        with a.open():
+            first = a.configure_task("background.noop").defer(org_id="org_a")
+            later = a.configure_task("background.noop").defer(org_id="org_a")
+            urgent = a.configure_task("background.noop", priority=5).defer(org_id="org_b")
+            running = a.configure_task("background.noop").defer(org_id="org_b")
+        self._queue("UPDATE procrastinate_jobs SET status = 'doing' WHERE id = %s", (running,))
+        self._queue(
+            "UPDATE procrastinate_jobs SET scheduled_at = now() + interval '1 hour' "
+            "WHERE id = %s", (later,),
+        )
+
+        snap = background_module.queue_snapshot()
+
+        self.assertEqual(snap["total"], 4)
+        self.assertEqual(
+            [(j["id"], j["status"], j["position"], j["org_id"]) for j in snap["jobs"]],
+            [(running, "running", 1, "org_b"), (urgent, "queued", 2, "org_b"),
+             (first, "queued", 3, "org_a"), (later, "queued", 4, "org_a")],
+        )
+        waits = [j["waited_seconds"] for j in snap["jobs"]]
+        self.assertTrue(all(isinstance(w, int) and w >= 0 for w in waits[:3]))
+        self.assertIsNone(waits[3], "a job scheduled for later has not started waiting")
+        self.assertEqual(snap["jobs"][0]["args"], {"org_id": "org_b"})
+
+    def test_finished_today_counted_per_org(self):
+        a = background_module.app()
+        with a.open():
+            ids = [a.configure_task("background.noop").defer(org_id=org)
+                   for org in ("org_a", "org_a", "org_b")]
+        for job_id, end in zip(ids, ("succeeded", "failed", "succeeded"), strict=True):
+            self._queue("UPDATE procrastinate_jobs SET status = 'doing' WHERE id = %s", (job_id,))
+            self._queue("UPDATE procrastinate_jobs SET status = %s WHERE id = %s", (end, job_id))
+
+        snap = background_module.queue_snapshot()
+
+        self.assertEqual((snap["jobs"], snap["total"]), ([], 0))
+        self.assertEqual(snap["done_today"], {"org_a": 1, "org_b": 1})
+        self.assertEqual(snap["failed_today"], {"org_a": 1})
+
+    def test_memory_mode_reads_nothing(self):
+        with mock.patch.object(config.settings(), "brand_os_job_queue", "memory"), \
+                mock.patch.object(background_module, "_sync_app_for_defer") as queue:
+            snap = background_module.queue_snapshot()
+        queue.assert_not_called()
+        self.assertEqual(snap, {"jobs": [], "total": 0, "done_today": {}, "failed_today": {}})
+
+
+class WorkerConcurrencyTest(unittest.TestCase):
+    def test_worker_runs_three_jobs_at_once(self):
+        import app.worker
+
+        with (
+            mock.patch.object(gateway, "fail_interrupted_tasks"),
+            mock.patch.object(app.worker, "_recover_queue_backlog"),
+            mock.patch.object(app.worker.ads, "bootstrap_runtime"),
+            mock.patch.object(app.worker, "background_app") as queue,
+        ):
+            app.worker.main(wait=False)
+        queue.return_value.run_worker.assert_called_once_with(wait=False, concurrency=3)
+
+
 class QueueConninfoTest(unittest.TestCase):
     def test_url_and_keyword_parameters_survive(self):
         for dsn in (

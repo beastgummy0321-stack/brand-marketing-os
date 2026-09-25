@@ -119,7 +119,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
     if (mini) return <span key={a.id} className={common} style={style} aria-hidden="true" data-grade={a.grade}>{body}</span>;
     const tipSide = p === null || p > 70 ? "right-[-4px]" : p < 22 ? "left-[-4px]" : "left-1/2 -translate-x-1/2";
     const facts = a.grade === "wasted"
-      ? `花 ${text(a.spend)} 元・0 筆購買・白花線 ${formatAmount(3 * T)} 元`
+      ? `花 ${text(a.spend)} 元・0 筆購買（花到 ${formatAmount(3 * T)} 還沒賣）`
       : `每筆 ${text(a.costPerResult)} 元・${label}`;
     const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${text(a.spend)} 元・0 筆購買` : `每筆 ${text(a.costPerResult)} 元`}｜${label}`;
     return (
@@ -157,12 +157,12 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
         <div className="relative flex shrink-0 flex-col items-center justify-end gap-1 rounded-lg border border-dashed border-danger/45 bg-danger/10 pt-1 pb-[22px]" style={{ width: g.box }}>
           {wasted.map((a) => dot(a, null, 0))}
           {!wasted.length && !mini && <span className="mb-1 text-[11.5px] text-muted-foreground">無</span>}
-          <em className="absolute inset-x-0 bottom-[3px] text-center text-[11.5px] font-bold text-danger not-italic">{mini ? "白" : "白花"}</em>
+          <em className="absolute inset-x-0 bottom-[3px] text-center text-[11.5px] font-bold text-danger not-italic">{mini ? "0" : "沒賣出"}</em>
         </div>
       </div>
       {tray && thin.length > 0 && (mini ? (
         <div className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-          還太新 {thin.length} 則 {thin.map((a) => <span key={a.id} className={cn("inline-block size-2 rounded-full", GRADE_FILL.insufficient)} />)}
+          剛開始、數字還不夠 {thin.length} 則 {thin.map((a) => <span key={a.id} className={cn("inline-block size-2 rounded-full", GRADE_FILL.insufficient)} />)}
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-[10px] bg-muted px-3 py-2.5" data-part="tray">

@@ -9,7 +9,7 @@ Three fixture styles:
   filtering, counts) against `triage._classify_brand` patched to fixed items -- classify()'s own
   class/reason-code logic is already exhaustively covered by test_ads_triage.py, not re-proven
   here.
-F28-I02 retired the `stop_loss` row (and with it F22-I01's pause-proposal tests): a 白花 ad closes
+F28-I02 retired the `stop_loss` row (and with it F22-I01's pause-proposal tests): a 沒賣出 ad closes
 through its campaign's `cleanup` row, proven end to end on the real-shaped fixture in
 `GradedCleanupEndToEndTest`.
 """
@@ -26,6 +26,20 @@ from app.core import db
 from app.core import interrupts as core_interrupts
 
 ACCOUNT_TZ = "Asia/Taipei"
+
+# F29-I03: the `settle` row depends on the calendar (it reads last month from the 2nd day of this
+# one), so fixtures dated "N days before yesterday" would raise it during the first days of every
+# month. This file proves the per-ad/per-campaign kinds; the settle row is proven on a fixed month
+# in `test_ads_settle.py`.
+_settle_patch = patch.object(triage, "_settle_candidates", return_value=[])
+
+
+def setUpModule():
+    _settle_patch.start()
+
+
+def tearDownModule():
+    _settle_patch.stop()
 
 
 class _Reader:
@@ -91,13 +105,14 @@ class QueueEndToEndTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.campaign,
             self.cutoff - timedelta(days=6), self.cutoff, self.cutoff,
         )
-        # ad_worse: cost_per_result rises past the flat band (10 -> 15, +50%).
+        # ad_worse: F29-I01 -- its grade moves from 划算 (80 a purchase, cap 100) to 太貴 (150 a
+        # purchase, over 1.2 x cap); both windows pass the gate (spend >= 3 x cap).
         for offset in range(7):
-            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=7 + offset), spend=100,
-                      result_count=10, attribution_key=f"prevworse{offset}")
+            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=7 + offset), spend=80,
+                      result_count=1, attribution_key=f"prevworse{offset}")
         for offset in range(7):
             self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=offset), spend=150,
-                      result_count=10, attribution_key=f"curworse{offset}")
+                      result_count=1, attribution_key=f"curworse{offset}")
 
     def obs(self, ad_id, day, *, spend, result_count, attribution_key):
         external.upsert_observation(
@@ -113,7 +128,7 @@ class QueueEndToEndTest(unittest.TestCase):
     def test_refresh_raises_cleanup_for_the_wasted_ad_and_worse_with_message_and_action_url(self):
         result = triage.refresh_queue(self.conn, self.org, self.brand)
         by_category = {row["category"]: row for row in result["items"]}
-        # F28-I02: no stop_loss row any more -- the 白花 ad closes through its campaign's
+        # F28-I02: no stop_loss row any more -- the 沒賣出 ad closes through its campaign's
         # cleanup row, even with no daily budget owner (capacity unknown).
         self.assertEqual(set(by_category), {"ads_triage_cleanup", "ads_triage_worse"})
 
@@ -142,17 +157,20 @@ class QueueEndToEndTest(unittest.TestCase):
             f"/brands/{self.brand}/ads/campaigns/{self.campaign}/detail?ad={self.ad_worse['id']}",
         )
         self.assertEqual(worse_row["triage"]["class"], "worse")
-        # Worse than last week, still inside the cap: the trend note, graded 划算.
-        self.assertEqual(worse_row["triage"]["grade"], "on_target")
+        # F29-I01: the row is raised by the grade move 划算 -> 太貴, never by the trend note.
+        self.assertEqual(worse_row["triage"]["grade"], "over")
+        self.assertEqual(worse_row["triage"]["previous_grade"], "on_target")
+        self.assertEqual(worse_row["triage"]["grade_move"], {"from": "on_target", "to": "over"})
         self.assertEqual(worse_row["triage"]["entity_id"], self.ad_worse["id"])
         self.assertEqual(worse_row["triage"]["campaign_name"], "活動一")
 
         self.assertEqual(
             result["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup"],
+            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
+             "settle"],
         )
         self.assertEqual(result["kinds_pending"], [])
-        # `class` keeps its meaning: the 白花 ad still counts as the stop_loss trend class.
+        # `class` keeps its meaning: the 沒賣出 ad still counts as the stop_loss trend class.
         self.assertEqual(result["counts"]["stop_loss"], 1)
         self.assertEqual(result["counts"]["worse"], 1)
         self.assertEqual(result["total_ads"], 2)
@@ -240,10 +258,21 @@ class QueuePlumbingTest(unittest.TestCase):
             self.conn, org_id=self.org, name="決定佇列機制測試", actor="test", client_name=None,
         )["id"]
 
-    @staticmethod
-    def _item(cls, *, entity_id="ent_1", campaign_id="camp_1", window_end, name="廣告A"):
+    _WORSE_MOVE = {"from": "on_target", "to": "over"}
+
+    @classmethod
+    def _item(cls_, cls, *, entity_id="ent_1", campaign_id="camp_1", window_end, name="廣告A",
+              grade_move="auto"):
+        # F29-I01: a `worse` row is raised by the grade move 划算 -> 偏貴／太貴 only; by default a
+        # "worse" item here carries that move (so the plumbing tests keep raising a row) and every
+        # other class carries none.
+        if grade_move == "auto":
+            grade_move = cls_._WORSE_MOVE if cls == "worse" else None
         return {
             "entity_id": entity_id, "native_id": "n1", "name": name, "campaign_id": campaign_id,
+            "grade": grade_move["to"] if grade_move else "on_target",
+            "previous_grade": grade_move["from"] if grade_move else None,
+            "grade_move": grade_move,
             "class": cls, "label": triage.LABELS[cls], "reason_code": "x",
             "window": {"start": window_end - timedelta(days=6), "end": window_end, "days": 7,
                        "previous_start": None, "previous_end": None, "extended_from": None},
@@ -260,6 +289,27 @@ class QueuePlumbingTest(unittest.TestCase):
             core_interrupts.CATEGORIES["ads_triage_worse"],
             {"severity": "rule_warning", "label": "廣告變差待決定"},
         )
+
+    def test_worse_row_follows_the_grade_move_never_the_trend_class(self):
+        # F29-I01 (ads.md §6.33): 變貴 = 划算 -> 偏貴／太貴. A trend-"worse" ad with no move, a move
+        # between two costly grades, and an improving move raise nothing; a trend-"flat" ad whose
+        # grade moved 划算 -> 偏貴 does.
+        window_end = date(2026, 1, 7)
+        cases = [
+            (self._item("worse", entity_id="e1", window_end=window_end, grade_move=None), False),
+            (self._item("worse", entity_id="e2", window_end=window_end,
+                        grade_move={"from": "watch", "to": "over"}), False),
+            (self._item("better", entity_id="e3", window_end=window_end,
+                        grade_move={"from": "over", "to": "on_target"}), False),
+            (self._item("flat", entity_id="e4", window_end=window_end,
+                        grade_move={"from": "on_target", "to": "watch"}), True),
+            (self._item("insufficient", entity_id="e5", window_end=window_end,
+                        grade_move={"from": "on_target", "to": "over"}), True),
+        ]
+        with patch.object(triage, "_classify_brand", return_value=[c for c, _ in cases]):
+            result = triage.refresh_queue(self.conn, self.org, self.brand)
+        raised = {row["triage"]["entity_id"] for row in result["items"]}
+        self.assertEqual(raised, {c["entity_id"] for c, expected in cases if expected})
 
     def test_refresh_is_idempotent_within_the_same_window(self):
         window_end = date(2026, 1, 7)
@@ -476,7 +526,8 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["total_ads"], 0)
         self.assertEqual(
             queue["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup"],
+            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
+             "settle"],
         )
         self.assertEqual(queue["kinds_pending"], [])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))
@@ -506,6 +557,9 @@ class QueueReviewProposalTest(unittest.TestCase):
             "entity_id": entity_id or self.entity, "native_id": "n1", "name": "廣告A",
             "campaign_id": self.campaign, "class": "worse", "label": triage.LABELS["worse"],
             "reason_code": "x",
+            # F29-I01: the `worse` row is raised by the grade move 划算 -> 太貴.
+            "grade": "over", "previous_grade": "on_target",
+            "grade_move": {"from": "on_target", "to": "over"},
             "window": {"start": window_end - timedelta(days=6), "end": window_end, "days": 7,
                        "previous_start": None, "previous_end": None, "extended_from": None},
             "target": {"value": 1}, "current": {}, "previous": {}, "change_pct": None,
@@ -690,6 +744,9 @@ class ScaleRefreshQueueTest(unittest.TestCase):
             "entity_id": entity_id, "native_id": entity_id, "name": "廣告",
             "campaign_id": campaign_id, "campaign_name": "活動一", "thumbnail_url": thumbnail_url,
             "class": cls, "label": triage.LABELS[cls], "reason_code": "x",
+            # F29-I01: readability follows the grade -- a trend class maps to 划算 here, a thin or
+            # unjudged ad stays ungraded.
+            "grade": cls if cls in ("insufficient", "no_target") else "on_target",
             "window": {"start": window_end - timedelta(days=13), "end": window_end, "days": 14,
                        "previous_start": None, "previous_end": None, "extended_from": None},
             "target": {"value": 100, "basis": "own", "result_kind": "purchase", "missing": [],
@@ -1017,8 +1074,10 @@ class CleanupQueueTest(unittest.TestCase):
 
     @staticmethod
     def _item(entity_id, campaign_id, *, cls="insufficient", grade="on_target", cost=50,
-              target_value=100, name="廣告"):
+              target_value=100, name="廣告", grade_move=None):
         return {
+            "previous_grade": grade_move["from"] if grade_move else None,
+            "grade_move": grade_move,
             "entity_id": entity_id, "native_id": entity_id, "name": name,
             "campaign_id": campaign_id, "campaign_name": "活動一", "thumbnail_url": None,
             "class": cls, "label": triage.LABELS[cls], "reason_code": "no_previous_window",
@@ -1077,9 +1136,13 @@ class CleanupQueueTest(unittest.TestCase):
         self.assertIsNone(row["proposal"])
 
     def test_worse_row_not_raised_for_an_ad_inside_the_cleanup(self):
+        # F29-I01: both ads moved from 划算; the 太貴 one is decided in the cleanup row, the 偏貴
+        # one (kept: capacity only asks for one) raises its own 變貴 row.
         items = [
-            self._item(self.ad1, self.campaign, cls="worse", grade="over", cost=150),
-            self._item(self.ad2, self.campaign, cls="worse", grade="on_target", cost=50),
+            self._item(self.ad1, self.campaign, cls="worse", grade="over", cost=150,
+                       grade_move={"from": "on_target", "to": "over"}),
+            self._item(self.ad2, self.campaign, cls="worse", grade="watch", cost=110,
+                       grade_move={"from": "on_target", "to": "watch"}),
         ]
         result = self._refresh(items)
         worse_ids = {r["triage"]["entity_id"] for r in result["items"] if r["kind_key"] == "worse"}
@@ -1233,6 +1296,53 @@ class CleanupQueueTest(unittest.TestCase):
         self._cleanup_set_with_action(self.ad1, verification_state="confirmed")
         self.assertIsNone(self._cleanup_row(self._refresh())["proposal"])
 
+    # -- F29-I01 Contract B: rejected cleanup memory through the queue ---------------------------
+
+    def _rejected_cleanup(self, target_id, *, grades):
+        pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": target_id,
+                      "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by,"
+            "decision_reason,decision_grades,created_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "清理：活動一",
+             "2026-01", "rejected", db.jsonb({"source": "cleanup", "items": [pause_item]}),
+             "test", "還在測試", db.jsonb(grades) if grades is not None else None,
+             db.now_utc() - timedelta(days=2)),  # inside the row's 7-day window
+        )
+        self.conn.commit()
+        return set_id
+
+    def test_a_rejection_at_the_same_grade_raises_no_row(self):
+        self._rejected_cleanup(self.ad1, grades={
+            self.ad1: {"grade": "over", "cost_per_result": 150, "cap": 100,
+                       "at": db.now_utc().isoformat()},
+        })
+        self.assertIsNone(self._cleanup_row(self._refresh()))
+
+    def test_a_worse_grade_raises_a_fresh_row_carrying_rejected_before(self):
+        set_id = self._rejected_cleanup(self.ad1, grades={
+            self.ad1: {"grade": "watch", "cost_per_result": 110, "cap": 100,
+                       "at": db.now_utc().isoformat()},
+        })
+        row = self._cleanup_row(self._refresh())
+        ad = row["cleanup"]["ads"][0]
+        self.assertEqual(ad["entity_id"], self.ad1)
+        self.assertEqual(ad["rejected_before"]["change_set_id"], set_id)
+        self.assertEqual(ad["rejected_before"]["grade_label"], "偏貴")
+        self.assertEqual(ad["rejected_before"]["reason"], "還在測試")
+        # The rejected set does not answer the re-raised row: it is a new proposal.
+        self.assertIsNone(row["proposal"])
+
+    def test_a_legacy_rejection_without_memory_keeps_the_window_rule(self):
+        set_id = self._rejected_cleanup(self.ad1, grades=None)
+        row = self._cleanup_row(self._refresh())
+        self.assertIsNone(row["cleanup"]["ads"][0]["rejected_before"])
+        self.assertEqual(row["proposal"]["change_set_id"], set_id)
+        self.assertEqual(row["proposal"]["status"], "rejected")
+
     def test_category_registered_with_expected_severity_and_label(self):
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_cleanup"],
@@ -1327,7 +1437,7 @@ class GradedCleanupEndToEndTest(unittest.TestCase):
             "w1": "on_target", "w2": "on_target", "w3": "on_target", "w4": "on_target",
             "fit": "on_target", "pricey": "watch", "costly": "over", "wasted": "wasted",
         })
-        self.assertEqual(items[self.ids["wasted"]]["grade_label"], "白花")
+        self.assertEqual(items[self.ids["wasted"]]["grade_label"], "沒賣出")
         self.assertEqual(items[self.ids["costly"]]["grade_label"], "太貴")
 
     def test_cleanup_closes_the_wasted_and_the_most_expensive_and_keeps_the_winners(self):

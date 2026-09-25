@@ -26,7 +26,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "1150706 健身情境單圖", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "stop_loss", label: "停損",
     reason_code: "spend_over_stop_loss",
-    grade: "wasted", grade_label: "白花",
+    grade: "wasted", grade_label: "沒賣出", previous_grade: null, grade_move: null,
     window: { start: "2026-08-25", end: "2026-09-21", days: 9, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 1420, result_count: 0, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: null },
@@ -567,5 +567,41 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(2));
     expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[0]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low1", "check"]);
     expect(vi.mocked(changeApi.actOnChangeItem).mock.calls[1]).toEqual(["brd_1", "cmp_1", "acs_1", "item_low2", "check"]);
+  });
+});
+
+// F29-I10 Contract K: the queue is context here (chip, 第幾件, 下一件); its failure is said out loud with 重試, and a
+// cleanup set names itself (`source: "cleanup"`) so the failure cannot turn it into a "multi-item" set.
+describe("VerifyPage（F29-I10）佇列讀取失敗", () => {
+  it("核對結果照舊，多一塊讀取失敗；重試後「下一件」回來", async () => {
+    vi.mocked(triageApi.getQueue).mockReset();
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([
+      queueItem(),
+      queueItem({ id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }), proposal: null }),
+    ]));
+    renderAt(verifyPath());
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByText("平台上這則廣告已經關閉")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByRole("link", { name: "下一件 →" })).toBeTruthy();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
+    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("清理清單（source: cleanup）：佇列讀不到仍畫逐則核對，不說「多項變更」", async () => {
+    vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        source: "cleanup",
+        items: [
+          changeItem({ id: "item_low1", target_id: "aex_low1", verification_state: "confirmed", reported_at: "2026-09-21T00:00:00Z" }),
+          changeItem({ id: "item_low2", target_id: "aex_low2", verification_state: "confirmed", reported_at: "2026-09-21T00:00:00Z" }),
+        ],
+      })],
+    });
+    renderAt(verifyPath());
+    expect(await screen.findByRole("button", { name: "⟳ 全部重新核對" })).toBeTruthy();
+    expect(screen.queryByText("這份清單有多項變更")).toBeNull();
+    expect(screen.getByText(/待決定清單讀不到/)).toBeTruthy();
   });
 });

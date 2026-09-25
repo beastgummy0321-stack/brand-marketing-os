@@ -82,7 +82,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "晨光隨行杯・隨時有你", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "worse", label: "變差",
     reason_code: "cost_per_result_up",
-    grade: "over", grade_label: "太貴",
+    grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-08", end: "2026-09-21", days: 14, previous_start: "2026-08-25", previous_end: "2026-09-07", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -127,7 +127,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 function handoff(overrides: Partial<handoffApi.HandoffWorkspace> = {}): handoffApi.HandoffWorkspace {
   return {
     items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
-    launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
+    launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。", settings_readback: null,
     ...overrides,
   };
 }
@@ -250,5 +250,46 @@ describe("MaterialStepPage（F27-I14）建立新廣告提議", () => {
     renderAt(materialPath("workbench_image"));
     expect(await screen.findByText("找不到這則廣告目前所屬的投放組，請重新整理再試；仍可先確認素材安排。")).toBeTruthy();
     expect((screen.getByRole("button", { name: /建立新廣告提議/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// F29-I10 Contract K: the queue is context on this step — a failed read is said out loud with 重試 and the step
+// still works; the open step flow has one exit back to 投放中心.
+describe("MaterialStepPage（F29-I10）佇列讀取失敗與出口", () => {
+  it("佇列讀取失敗：只多一塊讀取失敗，這一步照舊；重試重讀佇列後補回「第幾件」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockReset();
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue());
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "請工作台準備新圖" })).toBeTruthy();
+    expect(screen.queryByText("第 1 件／共 1 件")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
+    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("開著的決定有「✕ 先不要，回投放中心」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(materialPath("workbench_image"));
+    const exit = await screen.findByRole("link", { name: "✕ 先不要，回投放中心" });
+    expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+});
+
+describe("MaterialStepPage（F29-I10）已就緒成品讀取失敗", () => {
+  it("讀不到交接工作區：不說「還沒有就緒的成品」，顯示讀取失敗；重試後出現成品", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(handoffApi.getHandoff).mockReset();
+    vi.mocked(handoffApi.getHandoff).mockRejectedValueOnce(new Error("handoff down")).mockResolvedValueOnce(handoff({
+      ready_placements: [{ id: "plc_1", revision: 2, filename: "新圖.png", purpose: "產品介紹", destination_entity_id: null }],
+    }));
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText(/已就緒的成品讀不到/)).toBeTruthy();
+    expect(screen.queryByText("還沒有已確認、就緒的成品；請先在上方準備素材並確認安排。")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByLabelText(/新圖\.png/)).toBeTruthy();
+    expect(handoffApi.getHandoff).toHaveBeenCalledTimes(2);
   });
 });

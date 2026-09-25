@@ -156,6 +156,28 @@ class InterruptQueueTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in done], [interrupt_id])
         self.assertEqual(done[0]["status"], "archived")
 
+    def test_settle_category_is_informational_and_never_auto_archived(self):
+        """F29-I03: an unwritten period settle stays open however long it waits -- archiving it
+        would silently drop that month's learnings. Other informational rows still archive."""
+        self.assertEqual(
+            core_interrupts.CATEGORIES["ads_triage_settle"],
+            {"severity": "informational", "label": "上一期待結算"},
+        )
+        settle_id = core_interrupts.enqueue(
+            self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand_id,
+            category="ads_triage_settle", dedupe_key=f"settle-{db.new_id('t')}",
+message="結算上一期，待寫進筆記本",
+        )
+        other_id = self._enqueue()
+        self.conn.commit()
+        stale_today = (date.today()
+                       + timedelta(days=core_interrupts.STALE_AFTER_DAYS + 30)).isoformat()
+        open_ids = [i["id"] for i in core_interrupts.list_open(
+            self.conn, brand_id=self.brand_id, today=stale_today)]
+        self.assertEqual(open_ids, [settle_id])
+        done = core_interrupts.list_done(self.conn, brand_id=self.brand_id)
+        self.assertEqual([d["id"] for d in done], [other_id])
+
     def test_ads_triage_scale_and_refresh_categories_registered(self):
         """F25-I01: the two remaining queue kinds -- both informational (agent proposals, not
         yet losses or warnings), registered right after the F18 stop_loss/worse entries."""

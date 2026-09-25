@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
@@ -8,9 +8,10 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { decideReview, getReview, type ReviewRound } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import { proposePausePath } from "../flow/changeFlow";
-import { ActionBar, DecisionSheet, FlowHeader, OptionCard, Segmented } from "../patterns";
+import { ActionBar, DecisionSheet, FlowHeader, OptionCard, ReadFailed, Segmented } from "../patterns";
 import { findReviewTriageItem, reviewMaterialPath, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
@@ -74,11 +75,16 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [reviewLoading, setReviewLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context on this step (campaign chip, 第幾件, thumbnail, the ladder's suggestion); a failed read is shown with
+  // 重試, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, reviewId, reloadKey]);
+  const queue = queueRead.data;
+  // Same gate as before: the preselect below waits for both reads to settle, so a late queue can't race it.
+  const loading = reviewLoading || (queueRead.status === "loading" && !queue);
 
   const [selected, setSelected] = useState<Branch | null>(null);
   const [reason, setReason] = useState("");
@@ -89,14 +95,12 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    setReviewLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
-    ])
+    getReview(brandId, campaignId, reviewId)
+      .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => { if (!cancelled) setReviewLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, campaignId, reviewId, reloadKey]);
 
@@ -239,6 +243,10 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
         )}
       />
 
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱與「第幾件」暫時看不到；這則廣告的建議方向也要等讀到才標；這一步照舊可以選" onRetry={queueRead.reload} />
+      )}
+
       <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-5">
         {OPTIONS.map((o) => {
           // 只有「只改文案」會停用（Contract B `copy_editable.ok === false`）；image/existing/
@@ -287,7 +295,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
       )}
 
       <div className="flex-1" />
-      <ActionBar back={<Button variant="ghost" asChild><Link to={reviewRoundPath(brandId, campaignId, review.id)}>← 看證據</Link></Button>}>
+      <ActionBar back={{ label: "看證據", to: reviewRoundPath(brandId, campaignId, review.id) }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
         {selected && (
           <Button disabled={busy} onClick={() => void handleSave()}>
             {busy ? "保存中…" : `${PRIMARY_LABEL[selected]} →`}

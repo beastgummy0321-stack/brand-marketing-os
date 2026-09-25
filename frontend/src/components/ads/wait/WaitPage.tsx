@@ -46,14 +46,11 @@ function iconSlot(icon: string): number {
 
 const REASON_TEXT: Record<string, { title: string; subtitle: string }> = {
   below_sample_gate: { title: "樣本還不夠", subtitle: "每則廣告的花費或成果數還沒過門檻，累積中" },
-  no_previous_window: {
-    title: "缺前一期可比資料",
-    subtitle: "預設只同步 30 天，28 天窗沒有前一期可比；手動同步更早的區間才能補",
-  },
   result_unknown_days: { title: "成果數未知", subtitle: "平台沒回報這幾天的成果" },
 };
-// Feature Decisions 列出的順序——固定，不是後端回傳順序。
-const REASON_ORDER = ["below_sample_gate", "no_previous_window", "result_unknown_days"] as const;
+// Feature Decisions 列出的順序——固定，不是後端回傳順序。F29-I01（一把尺）：「缺前一期可比資料」
+// 只是趨勢註腳，那則廣告已經對上限分級，不是在等資料，所以不列。
+const REASON_ORDER = ["below_sample_gate", "result_unknown_days"] as const;
 
 interface Row {
   key: string;
@@ -98,7 +95,8 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
       action: { label: "補報表", href: `/brands/${brandId}/orders` },
     });
   }
-  if (missingDays.length === 0 && items.length > 0 && items.every((item) => item.class === "insufficient")) {
+  // F29-I01（ads.md §6.33 一把尺）：「全部在等」看的是每則都還沒分級（grade 為 insufficient），不看趨勢 class。
+  if (missingDays.length === 0 && items.length > 0 && items.every((item) => item.grade === "insufficient")) {
     const present = new Set(items.map((item) => item.reason_code));
     for (const code of REASON_ORDER) {
       if (present.has(code)) {

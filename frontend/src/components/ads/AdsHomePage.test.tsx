@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
-import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type TriageItem } from "@/lib/adsTriageApi";
+import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type SettleQueueRow, type TriageItem } from "@/lib/adsTriageApi";
 import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
@@ -35,7 +35,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own" }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-01", cumulative: 900 }, { day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -52,7 +52,8 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
     ],
     campaigns: [
       { campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767, purchases: 121,
-        cost_per_purchase: 130.31, cap: { value: 450, basis: "own" }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok", draft: null },
+        cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
+        data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null },
     ],
     sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: "2026-09-23T04:40:00Z" },
     ...overrides,
@@ -62,12 +63,12 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "n_1", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換",
-    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴",
+    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-16", end: "2026-09-22", days: 7, previous_start: "2026-09-09", previous_end: "2026-09-15", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     previous: { spend: 3080, result_count: 7, cost_per_result: 440, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    change_pct: 18.2, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
+    change_pct: 0.182, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
     ...overrides,
   };
 }
@@ -85,9 +86,22 @@ function cleanupItem(id: string, campaignName = "日常商品推廣・轉換"): 
     action_url: `/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily`,
     cleanup: {
       campaign_id: "cmp_daily", campaign_name: campaignName, can_support: 6, active_ads: 8, short: 0, daily_saving: 257, scale_owner_id: null, keep: [],
-      ads: [{ entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110 }],
+      ads: [{ entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110, rejected_before: null }],
     },
   }, { class: "stop_loss", grade: "wasted" });
+}
+
+/** The brand's open period-settle row for August, raised on 9/2 (Contract E). */
+function settleRow(): SettleQueueRow {
+  return {
+    id: "itr_settle", dedupe_key: "k_settle", category: "ads_triage_settle", severity: "rule_warning", message: "結算上一期（8 月），待寫進筆記本",
+    action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+    settle: { month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 5, buckets: [
+      { grade: "on_target", amount: 15300, count: 2, ads: [] }, { grade: "watch", amount: 3900, count: 1, ads: [] },
+      { grade: "over", amount: 9340, count: 2, ads: [] }, { grade: "wasted", amount: 1600, count: 1, ads: [] },
+      { grade: "insufficient", amount: 1600, count: 2, ads: [] },
+    ] },
+  };
 }
 
 function queue(items: QueueItem[]): QueuePayload {
@@ -155,14 +169,60 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(within(section).getByText("5 件")).toBeTruthy();
   });
 
-  it("a handled decision leaves the cards and the count, and sits in the 處理過 fold", async () => {
+  it("a handled decision leaves the cards and the count, and sits in the 今天處理過 fold", async () => {
     const rejected: QueueProposal = { kind: "cleanup", change_set_id: "cs_1", campaign_id: "cmp_daily", status: "rejected", verification_state: "pending", reason: null, revisit_at: null, multi: true };
     vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected }, item("w1", "worse")]));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     expect(await within(section).findAllByRole("article")).toHaveLength(1);
     expect(within(section).getByText("1 件")).toBeTruthy();
-    expect(within(section).getByRole("button", { name: "處理過 1 件" })).toBeTruthy();
+    await userEvent.click(within(section).getByRole("button", { name: "今天處理過 1 件" }));
+    expect(within(section).getByText("清理：關 1 則、留 0 則")).toBeTruthy();
+    expect(within(section).getByText("已拒絕")).toBeTruthy();
+  });
+
+  // F29-I11: the period settle is one of today's decisions (QueuePayload.settle, Contract E).
+  it("settle row present: counted, placed after cleanup and worse, before refresh; the card spans the row and opens the settle page", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([
+      item("r1", "refresh_creative", { action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
+      item("w1", "worse"),
+    ]), settle: settleRow() });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    const cards = await within(section).findAllByRole("article");
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["再行銷・兩入組 NT$1,580 免運 - 複本 2", "結算上一期", "能判讀的素材只剩 2 則"]);
+    expect(cards[1].className).toContain("col-span-full");
+    expect(within(cards[1]).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/settle/2026-08/result");
+    expect(within(section).getByText("3 件")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "3 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("settle as the fourth open decision folds under the three cards with its own row", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([cleanupItem("c1"), item("w1", "worse"), item("w2", "worse")]), settle: settleRow() });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    expect(await within(section).findAllByRole("article")).toHaveLength(3);
+    expect(within(section).queryByRole("article", { name: "結算上一期" })).toBeNull();
+    await userEvent.click(within(section).getByRole("button", { name: "還有 1 件要決定" }));
+    expect(within(section).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/settle/2026-08/result");
+    expect(within(section).getByText("4 件")).toBeTruthy();
+  });
+
+  it("settle row absent (null): no settle card and it adds nothing to the count", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([item("w1", "worse")]), settle: null });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    expect(await within(section).findAllByRole("article")).toHaveLength(1);
+    expect(within(section).queryByText(/結算上一期/)).toBeNull();
+    expect(await screen.findByRole("button", { name: "1 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("only a settle row open: today is not 沒有要決定的事", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([]), settle: settleRow() });
+    renderPage();
+    expect(await screen.findByRole("article", { name: "結算上一期" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "1 件要你決定 ↓" })).toBeTruthy();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
   });
 
   it("no open decision: honest empty card with the sync time, and 今天 says nothing to decide", async () => {
@@ -267,3 +327,40 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     });
   });
 });
+
+// F29-I10 Contract K (drill-5 item 7): the 「今天」 count and the decision cards are one queue read — while it is slow
+// both wait, when it fails both say so, and neither ever says 「沒有要決定的事」 in the meantime.
+describe("AdsHomePage (F29-I10) one queue read for the count and the cards", () => {
+  it("slow queue read: 今天 and the decisions both wait (never 沒有要決定的事); when it lands, count and cards agree", async () => {
+    let resolveQueue!: (q: QueuePayload) => void;
+    vi.mocked(refreshQueue).mockReturnValue(new Promise<QueuePayload>((res) => { resolveQueue = res; }));
+    renderPage();
+    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
+    expect(screen.getByText("正在整理今天的判斷")).toBeTruthy();
+    const section = screen.getByRole("region", { name: /需要你決定/ });
+    expect(section.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(screen.queryByText("沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+
+    resolveQueue(queue([item("w1", "worse"), cleanupItem("c1")]));
+    const cards = await within(section).findAllByRole("article");
+    expect(cards).toHaveLength(2);
+    expect(within(section).getByText("2 件")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "2 件要你決定 ↓" })).toBeTruthy();
+    expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(1);
+  });
+
+  it("failed queue read: 今天 and the decisions both say it failed, never 沒有要決定的事; one retry re-reads both", async () => {
+    vi.mocked(refreshQueue).mockRejectedValueOnce(new Error("讀取失敗")).mockResolvedValueOnce(queue([]));
+    renderPage();
+    expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
+    expect(screen.queryByText("沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+    expect(screen.getByText("沒有要決定的事")).toBeTruthy();
+    expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(2);
+  });
+});
+

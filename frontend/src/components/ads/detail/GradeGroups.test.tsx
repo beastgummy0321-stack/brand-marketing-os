@@ -5,10 +5,29 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import type { QueueCleanup, QueueItem, TriageItem } from "@/lib/adsTriageApi";
+import { listCampaigns } from "@/lib/adsApi";
+import type { QueueCleanup, QueueItem, QueueSettle, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
+import { getTriage, splitQueue } from "@/lib/adsTriageApi";
+import { apiFetch } from "@/lib/http";
+import { CampaignDetailPage } from "./CampaignDetailPage";
 import {
-  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction,
+  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction, type RowExtras,
 } from "./GradeGroups";
+
+// F29-I03: the detail-page test below runs the REAL `getQueue` (and its `splitQueue`) over a backend payload;
+// only the transport and the two other reads are stubbed.
+vi.mock("@/lib/http", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/http")>("@/lib/http");
+  return { ...actual, apiFetch: vi.fn() };
+});
+vi.mock("@/lib/adsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+  return { ...actual, listCampaigns: vi.fn() };
+});
+vi.mock("@/lib/adsTriageApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
+  return { ...actual, getTriage: vi.fn() };
+});
 
 const WS = "/brands/brd_1/ads/campaigns/cmp_1";
 const LONG_NAME = "晨光隨行杯・隨時有你｜好攜帶，走到哪都適合（通勤情境單圖・最多數量 1150706）";
@@ -18,7 +37,7 @@ function item(o: Partial<TriageItem> & { spend?: number | null; results?: number
   return {
     entity_id: "a1", native_id: "n_a1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1", campaign_name: "日常商品推廣・轉換",
     thumbnail_url: null, class: "better", label: "變好", reason_code: "cost_per_result_down",
-    grade: "on_target", grade_label: "划算",
+    grade: "on_target", grade_label: "划算", previous_grade: null, grade_move: null,
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -39,25 +58,29 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
 function cleanupPayload(ids: string[]): QueueCleanup {
   return {
     campaign_id: "cmp_1", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8,
-    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100 })),
+    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100, rejected_before: null })),
     keep: [], short: 0, daily_saving: 260, scale_owner_id: null,
   };
 }
 
-const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "白花", spend: 1480, results: 0, cost: null, change_pct: null });
+const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "沒賣出", spend: 1480, results: 0, cost: null, change_pct: null });
 const over = item({ entity_id: "a7", name: "提問式貼文・早晨第一口是什麼？", grade: "over", grade_label: "太貴", spend: 2470, results: 4, cost: 617.5, change_pct: 0.1002 });
 const watch = item({ entity_id: "a6", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", grade: "watch", grade_label: "偏貴", spend: 3120, results: 6, cost: 520, change_pct: 0.1818 });
 const ok = item({ entity_id: "a2", name: LONG_NAME, spend: 1407, results: 28, cost: 50.25 });
-const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "還太新、看不準", spend: 120, results: 0, cost: null, change_pct: null });
+const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "剛開始、數字還不夠", spend: 120, results: 0, cost: null, change_pct: null });
 const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "insufficient", grade_label: "資料不足", spend: null, results: null, cost: null, change_pct: null });
 
-function renderGroups(items: TriageItem[], opts: { cap?: number | null; open?: GroupKey[]; actions?: Map<string, RowAction> } = {}) {
+function renderGroups(items: TriageItem[], opts: {
+  cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
+  actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras;
+} = {}) {
   const actions = opts.actions ?? adActions("brd_1", "cmp_1", WS, items, []);
   const onToggle = vi.fn();
   const view = render(
     <MemoryRouter>
       <GradeGroups
         items={items} cap={opts.cap === undefined ? 450 : opts.cap} actions={actions}
+        breakEven={opts.breakEven === undefined ? 520 : opts.breakEven} dataReason={opts.dataReason ?? null} extras={opts.extras}
         openGroups={new Set(opts.open ?? OPEN_BY_DEFAULT)} onToggle={onToggle} highlightId={null} registerRow={() => {}}
       />
     </MemoryRouter>,
@@ -83,11 +106,11 @@ describe("groupOf / trendNote", () => {
 });
 
 describe("GradeGroups", () => {
-  it("orders groups 白花 → 太貴 → 偏貴 → 划算 → 還太新 → 資料不足, with the cap hints and counts", () => {
+  it("orders groups 沒賣出 → 太貴 → 偏貴 → 划算 → 剛開始 → 資料不足, with the cap hints and counts", () => {
     const { container } = renderGroups([ok, thin, watch, noData, over, wasted]);
     const titles = [...container.querySelectorAll("summary b")].map((b) => b.textContent);
-    expect(titles).toEqual(["白花", "太貴", "偏貴", "划算", "還太新、看不準", "資料不足"]);
-    expect(within(detailsOf("白花").querySelector("summary")!).getByText("花到 1,350 元還沒賣出")).toBeTruthy();
+    expect(titles).toEqual(["沒賣出", "太貴", "偏貴", "划算", "剛開始、數字還不夠", "資料不足"]);
+    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText("花到 1,350 元還沒賣出")).toBeTruthy();
     expect(screen.getByText("每筆超過 540 元")).toBeTruthy();
     expect(screen.getByText("每筆 450–540 元")).toBeTruthy();
     expect(screen.getByText("每筆不到 450 元")).toBeTruthy();
@@ -96,20 +119,20 @@ describe("GradeGroups", () => {
     expect(detailsOf("資料不足").querySelector("summary")!.textContent).toBe("資料不足1 則");
   });
 
-  it("opens only the groups it is told to (default 白花／太貴／偏貴) and reports toggles", () => {
+  it("opens only the groups it is told to (default 沒賣出／太貴／偏貴) and reports toggles", () => {
     const { onToggle } = renderGroups([ok, thin, watch, over, wasted]);
-    expect(detailsOf("白花").open).toBe(true);
+    expect(detailsOf("沒賣出").open).toBe(true);
     expect(detailsOf("太貴").open).toBe(true);
     expect(detailsOf("偏貴").open).toBe(true);
     expect(detailsOf("划算").open).toBe(false);
-    expect(detailsOf("還太新、看不準").open).toBe(false);
+    expect(detailsOf("剛開始、數字還不夠").open).toBe(false);
     const okDetails = detailsOf("划算");
     okDetails.open = true;
     fireEvent(okDetails, new Event("toggle"));
     expect(onToggle).toHaveBeenCalledWith("on_target", true);
   });
 
-  it("rows: long name wraps (never truncated), spend and per-purchase cost with decimals, 白花 prints 購買 0 筆, 還太新 prints the word", () => {
+  it("rows: long name wraps (never truncated), spend and per-purchase cost with decimals, 沒賣出 prints 購買 0 筆, 剛開始 prints the word", () => {
     renderGroups([ok, over, wasted, thin], { open: ["wasted", "over", "on_target", "thin"] });
     const okRow = screen.getByTestId("ad-row-a2");
     const name = within(okRow).getByText(LONG_NAME);
@@ -127,8 +150,59 @@ describe("GradeGroups", () => {
     expect(within(wastedRow).getByText("0 筆")).toBeTruthy();
 
     const thinRow = screen.getByTestId("ad-row-m2");
-    expect(within(thinRow).getByText("還太新")).toBeTruthy();
+    // The too-new word is the glossary term (its sentence states the ruled gate).
+    expect(within(thinRow).getByText("剛開始、數字還不夠").getAttribute("data-slot")).toBe("term");
     expect(within(thinRow).getByText("120 元")).toBeTruthy();
+  });
+
+  it("money tags against break-even beside every cost per purchase: 有賺／剛好打平／在虧; none on 沒賣出 and 剛開始", () => {
+    renderGroups([ok, watch, over, wasted, thin], { open: ["wasted", "over", "watch", "on_target", "thin"] });
+    const tag = (id: string) => screen.getByTestId(`ad-row-${id}`).querySelector("[data-slot=money-tag]");
+    expect(tag("a2")?.getAttribute("data-variant")).toBe("gain");
+    expect(tag("a2")?.textContent).toMatch(/有賺.*（打平 520）$/);
+    expect(tag("a6")?.getAttribute("data-variant")).toBe("even");
+    expect(tag("a7")?.getAttribute("data-variant")).toBe("loss");
+    expect(tag("a8")).toBeNull();
+    expect(tag("m2")).toBeNull();
+  });
+
+  it("no break-even (no product cost) or a non-purchase result: no money tag, never a guess", () => {
+    const clicks = item({
+      entity_id: "c1", cost: 3.456,
+      current: { spend: 34.56, result_count: 10, cost_per_result: 3.456, result_kind: "link_click", result_label: "連結點擊", derived_zero_days: 0, reason: null },
+    });
+    const { unmount } = renderGroups([ok], { breakEven: null, open: ["on_target"] });
+    expect(screen.getByText("50.25 元")).toBeTruthy();
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+    unmount();
+    renderGroups([clicks], { open: ["on_target"] });
+    expect(screen.getByText("每次連結點擊成本")).toBeTruthy();
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+  });
+
+  it("資料不足 carries the campaign's one data_status sentence as its hint", () => {
+    renderGroups([noData], { dataReason: "有幾天的資料還沒讀到，數字可能偏少。", open: [] });
+    expect(within(detailsOf("資料不足").querySelector("summary")!).getByText("有幾天的資料還沒讀到，數字可能偏少。")).toBeTruthy();
+  });
+
+  it("row extras: the page's menu sits after the decision button, an open request shows its chip, a failure its line", () => {
+    const queue = [queueRow({ kind_key: "worse", triage: watch })];
+    renderGroups([watch, ok], {
+      actions: adActions("brd_1", "cmp_1", WS, [watch, ok], queue), open: ["watch", "on_target"],
+      extras: (i) => ({
+        menu: <button type="button">⋯ {i.entity_id}</button>,
+        requestOpen: i.entity_id === "a2",
+        error: i.entity_id === "a6" ? "換掉這一則沒送出：網路錯誤" : null,
+      }),
+    });
+    const watchRow = screen.getByTestId("ad-row-a6");
+    const buttons = within(watchRow).getAllByRole("link").concat(within(watchRow).getAllByRole("button"));
+    expect(buttons.map((b) => b.textContent)).toEqual(["去處理", "⋯ a6"]);
+    expect(within(watchRow).getByRole("alert").textContent).toBe("換掉這一則沒送出：網路錯誤");
+    expect(within(watchRow).queryByText("換掉這一則・需求已開")).toBeNull();
+    const okRow = screen.getByTestId("ad-row-a2");
+    expect(within(okRow).getByText("換掉這一則・需求已開").getAttribute("data-tone")).toBe("accent");
+    expect(within(okRow).queryByRole("link")).toBeNull();
   });
 
   it("unknown spend reads 未知 (never 0); a non-purchase result kind names its own result", () => {
@@ -204,7 +278,7 @@ describe("adActions", () => {
     expect(adActions("brd_1", "cmp_1", WS, items, queue).get("a2")!.label).toBe("看紀錄");
   });
 
-  it("renders 在清理提議／去處理 as outline buttons and 看紀錄 as a link", () => {
+  it("renders 在清理提議／去處理 as outline buttons; a 看紀錄 row has no row button (看紀錄 is in its menu)", () => {
     const queue = [
       queueRow({ kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
       queueRow({ kind_key: "worse", triage: watch }),
@@ -213,16 +287,16 @@ describe("adActions", () => {
     const clean = within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" });
     expect(clean.getAttribute("data-variant")).toBe("outline");
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("data-variant")).toBe("outline");
-    expect(within(screen.getByTestId("ad-row-a2")).getByRole("link", { name: "看紀錄" }).getAttribute("data-variant")).toBe("link");
+    expect(within(screen.getByTestId("ad-row-a2")).queryByRole("link")).toBeNull();
   });
 });
 
 describe("ClosedGroup", () => {
-  it("folded by default with counts; rows keep numbers, status chip and 看紀錄; truncated prints the rest", () => {
+  it("under 不在投的, folded by default, 已關閉的 N 則; rows are thumb, name and status only; truncated prints the rest", () => {
     render(
       <MemoryRouter>
         <ClosedGroup
-          workspaceHref={WS} open={false} onToggle={() => {}}
+          open={false} onToggle={() => {}}
           closed={{
             paused: 40, archived: 17, other: 0, total: 57, truncated: true,
             items: [
@@ -234,22 +308,104 @@ describe("ClosedGroup", () => {
         />
       </MemoryRouter>,
     );
-    const details = detailsOf("已關閉");
+    expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
+    const details = detailsOf("已關閉的 57 則");
     expect(details.open).toBe(false);
-    expect(within(details.querySelector("summary")!).getByText("57 則")).toBeTruthy();
-    expect(screen.getByText("暫停 40・已封存 17・不列入判斷")).toBeTruthy();
+    expect(within(details.querySelector("summary")!).queryByText("57 則")).toBeNull();
+    expect(screen.getByText("暫停 40・已封存 17・不算在上面的在投數量裡")).toBeTruthy();
     const paused = screen.getByTestId("closed-ad-row-c1");
-    expect(within(paused).getByText("321 元")).toBeTruthy();
-    expect(within(paused).getByText("45.5 元")).toBeTruthy();
+    expect(within(paused).getByText("舊版主視覺 0715")).toBeTruthy();
     expect(within(paused).getByText("已暫停")).toBeTruthy();
-    expect(within(paused).getByRole("link", { name: "看紀錄" }).getAttribute("href")).toBe(`${WS}?tab=performance&ad=c1`);
-    const archived = screen.getByTestId("closed-ad-row-c2");
-    expect(within(archived).getByText("已封存")).toBeTruthy();
-    expect(within(archived).getAllByText("未知").length).toBe(2);
+    expect(within(paused).queryByText("321 元")).toBeNull();
+    expect(within(paused).queryByRole("link")).toBeNull();
+    expect(within(screen.getByTestId("closed-ad-row-c2")).getByText("已封存")).toBeTruthy();
     const deleted = screen.getByTestId("closed-ad-row-c3");
     expect(within(deleted).getByText("（未命名廣告）")).toBeTruthy();
-    expect(within(deleted).getByText("0 元")).toBeTruthy();
     expect(within(deleted).getByText("已關閉")).toBeTruthy();
     expect(screen.getByText("…其餘 54 則")).toBeTruthy();
+  });
+
+  it("closed ads outside 暫停／封存 are counted as 其他 rather than dropped from the hint", () => {
+    render(
+      <MemoryRouter>
+        <ClosedGroup open={false} onToggle={() => {}} closed={{ paused: 2, archived: 0, other: 1, total: 3, truncated: false, items: [] }} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("暫停 2・已封存 0・其他 1・不算在上面的在投數量裡")).toBeTruthy();
+  });
+});
+
+// ---- F29-I03: the brand-level settle row never reaches a screen that scans ad rows ----
+
+const SETTLE: QueueSettle = {
+  month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 6,
+  buckets: [{ grade: "on_target", amount: 14240, count: 2, ads: [] }],
+};
+
+/** What `GET .../queue` really sends: the settle row (triage null) between two ad rows. */
+function wirePayload(): WireQueuePayload {
+  const settleRow = {
+    id: "q_settle", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
+    dedupe_key: "ads-triage:settle:brd_1:2026-08-31", category: "ads_triage_settle", kind: null,
+    severity: "informational" as const, message: "結算上一期（8 月），待寫進筆記本",
+    action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open",
+    created_at: "2026-09-02T00:00:00Z", resolved_at: null, kind_key: "settle" as const, triage: null,
+    proposal: null, settle: SETTLE,
+  };
+  return {
+    items: [
+      queueRow({ id: "q_worse", kind_key: "worse", triage: watch }),
+      settleRow,
+      queueRow({ id: "q_clean", kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
+    ],
+    counts: { stop_loss: 0, worse: 1, better: 0, flat: 3, insufficient: 0, no_target: 0 }, total_ads: 4,
+    kinds_available: ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup", "settle"], kinds_pending: [],
+  };
+}
+
+describe("queue settle row (F29-I03)", () => {
+  it("splitQueue keeps ad rows in items and exposes the settle row on its own field", () => {
+    const queue = splitQueue(wirePayload());
+    expect(queue.items.map((q) => q.id)).toEqual(["q_worse", "q_clean"]);
+    expect(queue.items.every((q) => q.triage !== null)).toBe(true);
+    expect(queue.settle).toEqual({
+      id: "q_settle", dedupe_key: "ads-triage:settle:brd_1:2026-08-31", category: "ads_triage_settle",
+      severity: "informational", message: "結算上一期（8 月），待寫進筆記本",
+      action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open",
+      created_at: "2026-09-02T00:00:00Z", settle: SETTLE,
+    });
+    expect(splitQueue({ ...wirePayload(), items: [] }).settle).toBeNull();
+  });
+
+  it("the detail page renders its rows' actions with a settle row in the backend queue", async () => {
+    Element.prototype.scrollIntoView = vi.fn(); // jsdom has none
+    const items = [ok, watch, over, wasted];
+    vi.mocked(listCampaigns).mockResolvedValue([{
+      id: "cmp_1", name: "日常商品推廣・轉換", status: "live", start_date: "2026-09-08", end_date: "2026-10-08", objective: "轉換",
+      created_at: "2026-09-01T00:00:00Z", created_by: null, budget_planned: null, budget_total: null,
+      budget_progress: { spent: 22000, total: 60000, pct: 36.7 },
+      judgment: { tone: "neutral", text: "投放中", detail: "" }, outcome: { spend: 0, purchases: 0, revenue: 0 },
+    }]);
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 28, items, closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false },
+      data: {
+        sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null },
+      },
+    });
+    vi.mocked(apiFetch).mockImplementation(async (input) =>
+      String(input).endsWith("/brands/brd_1/queue")
+        ? new Response(JSON.stringify({ queue: wirePayload() }), { status: 200, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({ error: { message: "not stubbed" } }), { status: 404 }),
+    );
+    render(
+      <MemoryRouter initialEntries={[`${WS}/detail`]}>
+        <CampaignDetailPage brandId="brd_1" campaignId="cmp_1" />
+      </MemoryRouter>,
+    );
+    const worse = await screen.findByTestId("ad-row-a6");
+    expect(await within(worse).findByRole("link", { name: "去處理" })).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a2")).queryByRole("link")).toBeNull();
   });
 });

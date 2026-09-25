@@ -21,7 +21,12 @@ export interface MaterialTask {
   dispatch_status: "not_requested" | "prepared" | "queued" | "unknown";
   history: { revision: number; content_hash: string; created_at: string }[];
   limitations: string[]; created_at: string;
+  /** The ad this request replaces ("換掉這一則"), read live; null for an ordinary request. */
+  replaces: MaterialReplaces | null;
+  /** Set once withdrawn; a cancelled task leaves the list but stays readable by id. */
+  cancelled_at: string | null;
 }
+export interface MaterialReplaces { entity_id: string; name: string | null; thumbnail_url: string | null }
 export interface MaterialOption {
   set_id: string; version_id: string; part: "image_prompt" | "copy";
   label: string; text: string; card_index: number | null; copy_fields?: CopyFields;
@@ -46,4 +51,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const listMaterialTasks = (brand: string, campaign: string, signal?: AbortSignal) => request<{ tasks: MaterialTask[]; truncated?: boolean }>(materialPath(brand, campaign), { signal });
 export const getMaterialTask = (brand: string, campaign: string, id: string, signal?: AbortSignal) => request<{ task: MaterialTask }>(`${materialPath(brand, campaign)}/${encodeURIComponent(id)}`, { signal });
 export const materialOptions = (brand: string, campaign: string, id: string, signal?: AbortSignal) => request<{ options: MaterialOption[] }>(`${materialPath(brand, campaign)}/${encodeURIComponent(id)}/prompt-options`, { signal });
-export const saveMaterialOperation = (operation: MaterialOperation, signal?: AbortSignal) => request<{ task: MaterialTask }>(operation.path, { method: operation.method, body: JSON.stringify(operation.body), headers: { "Content-Type": "application/json" }, signal });
+/** One-click "replace this ad": the server defaults mode and title, and returns the open request
+ * for this ad when one already exists. A fresh operation ID per click is safe for that reason. */
+export const createReplaceRequest = (brand: string, campaign: string, entityId: string, operationId: string = crypto.randomUUID(), signal?: AbortSignal) => request<{ task: MaterialTask }>(materialPath(brand, campaign), { method: "POST", body: JSON.stringify({ operation_id: operationId, replaces_entity_id: entityId }), headers: { "Content-Type": "application/json" }, signal });
+/** Withdraw a request; 409 (`material_task_in_use`) once an approved change set uses it. */
+export const cancelMaterialTask = (brand: string, campaign: string, id: string, signal?: AbortSignal) => request<{ task: MaterialTask }>(`${materialPath(brand, campaign)}/${encodeURIComponent(id)}/cancel`, { method: "POST", signal });
+export const saveMaterialOperation =(operation: MaterialOperation, signal?: AbortSignal) => request<{ task: MaterialTask }>(operation.path, { method: operation.method, body: JSON.stringify(operation.body), headers: { "Content-Type": "application/json" }, signal });

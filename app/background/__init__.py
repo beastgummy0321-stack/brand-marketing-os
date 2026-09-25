@@ -15,7 +15,8 @@
    `recover_interrupted_jobs(*, retry_tasks=None, fail_tasks=None, limit=100) -> dict`，
    僅供持有 schema worker 鎖的組裝根在啟動時回收中斷的孤兒工作（規則見
    `app/background/recovery.py` 檔頭：唯讀工作照舊重送、其餘重送一次、第二次中斷標失敗）。
-   其餘一律私有。
+   F29-I05 另提供唯讀的 `queue_snapshot(*, since=None) -> dict`（整條佇列的排隊順序與今天
+   做完／失敗數，呼叫端目前只有 `app/dashboard/routes_jobs_api.py`）。其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
@@ -104,6 +105,7 @@ import logging
 import re
 import sys
 from collections.abc import Collection
+from datetime import UTC, datetime
 
 import procrastinate
 from procrastinate.exceptions import AlreadyEnqueued
@@ -245,3 +247,90 @@ def is_active(lock: str) -> bool:
     return bool(job_manager.list_jobs(queueing_lock=lock, status="todo")) or bool(
         job_manager.list_jobs(queueing_lock=lock, status="doing")
     )
+
+
+# F29-I05 (feature Contract G): one read of the whole queue. `list_jobs()` returns neither the
+# time a job was queued/started nor finish times, so this is one read-only query on the same
+# queue connection `enqueue()`/`is_active()` already hold (no second DSN or pool), against
+# procrastinate's own tables and its own status-event log (`procrastinate_events`, written by
+# its triggers in the vendored baseline migration).
+_SNAPSHOT_JOBS_SQL = """
+SELECT j.id, j.task_name, j.status::text AS status, j.priority, j.scheduled_at, j.args,
+       (SELECT max(e.at) FROM procrastinate_events e
+         WHERE e.job_id = j.id AND e.type = 'started') AS started_at,
+       (SELECT max(e.at) FROM procrastinate_events e
+         WHERE e.job_id = j.id
+           AND e.type IN ('deferred', 'deferred_for_retry', 'retried')) AS queued_at,
+       now() AS read_at
+  FROM procrastinate_jobs j
+ WHERE j.status IN ('todo', 'doing')
+"""
+_SNAPSHOT_FINISHED_SQL = """
+SELECT j.args->>'org_id' AS org_id, e.type::text AS type, count(*) AS n
+  FROM procrastinate_events e
+  JOIN procrastinate_jobs j ON j.id = e.job_id
+ WHERE e.type IN ('succeeded', 'failed') AND e.at >= %(since)s
+ GROUP BY 1, 2
+"""
+
+
+def _seconds(later: datetime, earlier: datetime | None) -> int | None:
+    return None if earlier is None else max(0, int((later - earlier).total_seconds()))
+
+
+def queue_snapshot(*, since: datetime | None = None) -> dict:
+    """Read-only picture of the whole queue (every tenant — one shared worker).
+
+    Returns `{jobs, total, done_today, failed_today}`:
+    - `jobs`: every `todo`/`doing` job in pick order — running (`doing`) first by start time,
+      then waiting jobs the way `procrastinate_fetch_job_v2` picks them (priority DESC, id ASC),
+      then jobs scheduled for later by their scheduled time. Each item is
+      `{id, task_name, status: "running"|"queued", position (1-based), org_id|None, args,
+      waited_seconds|None}`; `waited_seconds` counts from the start (running) or from the time
+      it was queued / became due (queued); None for a job scheduled in the future.
+      `args` are the job's own kwargs: callers must pick what they show, never pass them on.
+    - `done_today`/`failed_today`: `{org_id: count}` of `succeeded`/`failed` events since
+      `since` (default: 00:00 UTC today); jobs without `org_id` in args are keyed `None`.
+    Memory queue mode (e2e): an empty snapshot."""
+    if since is None:
+        since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    if config.settings().brand_os_job_queue == "memory":
+        return {"jobs": [], "total": 0, "done_today": {}, "failed_today": {}}
+    connector = _sync_app_for_defer().connector
+    rows = connector.execute_query_all(_SNAPSHOT_JOBS_SQL)
+    finished = connector.execute_query_all(_SNAPSHOT_FINISHED_SQL, since=since)
+
+    far = datetime.max.replace(tzinfo=UTC)
+    running = sorted(
+        (r for r in rows if r["status"] == "doing"),
+        key=lambda r: (r["started_at"] or far, r["id"]),
+    )
+    waiting = [r for r in rows if r["status"] == "todo"]
+
+    def due(r) -> bool:
+        return r["scheduled_at"] is None or r["scheduled_at"] <= r["read_at"]
+
+    ready = sorted((r for r in waiting if due(r)), key=lambda r: (-r["priority"], r["id"]))
+    later = sorted((r for r in waiting if not due(r)), key=lambda r: (r["scheduled_at"], r["id"]))
+
+    jobs = []
+    for position, r in enumerate([*running, *ready, *later], start=1):
+        args = r["args"] if isinstance(r["args"], dict) else {}
+        if r["status"] == "doing":
+            waited = _seconds(r["read_at"], r["started_at"])
+        elif due(r):
+            since_queued = max(filter(None, (r["queued_at"], r["scheduled_at"])), default=None)
+            waited = _seconds(r["read_at"], since_queued)
+        else:
+            waited = None
+        jobs.append({
+            "id": r["id"], "task_name": r["task_name"],
+            "status": "running" if r["status"] == "doing" else "queued",
+            "position": position, "org_id": args.get("org_id"), "args": args,
+            "waited_seconds": waited,
+        })
+    counts: dict[str, dict] = {"succeeded": {}, "failed": {}}
+    for r in finished:
+        counts[r["type"]][r["org_id"]] = int(r["n"])
+    return {"jobs": jobs, "total": len(jobs),
+            "done_today": counts["succeeded"], "failed_today": counts["failed"]}

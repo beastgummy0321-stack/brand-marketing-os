@@ -525,3 +525,186 @@ def test_public_copy_version_is_preserved_until_explicit_manual_revision(setup, 
     assert original["prompt"]["version_id"] == "copy-version"
     assert edited["revision"] == 2
     enqueue.assert_not_called()
+
+
+def ad_entity(setup, native_id, kind="ad", campaign=None, **extra):
+    conn, org, brand, own_campaign, _ = setup
+    entity = external_repository.upsert_entity(
+        conn,
+        org,
+        brand,
+        campaign or own_campaign,
+        {
+            "platform": "fixture",
+            "source_account": "fixture",
+            "native_kind": kind,
+            "native_id": native_id,
+            "native_status": "ACTIVE",
+            "currency": "TWD",
+            "name": "舊廣告 " + native_id,
+            **extra,
+        },
+    )
+    conn.commit()
+    return entity
+
+
+def replace(setup, entity_id, operation_id=None):
+    conn, org, brand, campaign, _ = setup
+    return tasks.create(
+        conn,
+        org,
+        brand,
+        campaign,
+        {"operation_id": operation_id or db.new_id("op"), "replaces_entity_id": entity_id},
+        "test",
+    )
+
+
+def cancel(setup, task):
+    conn, org, brand, campaign, _ = setup
+    return tasks.cancel(conn, org, brand, campaign, task["id"], "test")
+
+
+def test_replace_request_binds_the_ad_with_one_click_defaults_and_repeat_returns_it(setup):
+    conn, org, brand, campaign, enqueue = setup
+    ad = ad_entity(
+        setup, "old-ad", creative={"kind": "image", "fields": {"thumbnail_url": "https://t/1.jpg"}}
+    )
+    task = replace(setup, ad["id"])
+    assert task["mode"] == "workbench_image"
+    assert task["title"] == "換掉：舊廣告 old-ad"
+    assert task["replaces"] == {
+        "entity_id": ad["id"],
+        "name": "舊廣告 old-ad",
+        "thumbnail_url": "https://t/1.jpg",
+    }
+    assert task["cancelled_at"] is None
+    again = replace(setup, ad["id"])
+    assert again["id"] == task["id"]
+    # A fuller request for the same open ad still returns the open one, not a second task.
+    fuller = create(setup, "external_image", replaces_entity_id=ad["id"])
+    assert fuller["id"] == task["id"]
+    assert [t["id"] for t in tasks.workspace(conn, org, brand, campaign)["tasks"]] == [task["id"]]
+    plain = create(setup)
+    assert plain["replaces"] is None
+    enqueue.assert_not_called()
+
+
+def test_replace_request_operation_id_replays_and_refuses_changed_content(setup):
+    first_ad, second_ad = ad_entity(setup, "a1"), ad_entity(setup, "a2")
+    task = replace(setup, first_ad["id"], "replace-op")
+    assert replace(setup, first_ad["id"], "replace-op")["id"] == task["id"]
+    with pytest.raises(ValueError, match="同一次操作"):
+        replace(setup, second_ad["id"], "replace-op")
+
+
+def test_replace_request_refuses_foreign_non_ad_and_closed_campaign(setup):
+    conn, org, brand, campaign, _ = setup
+    other = ads.create_campaign(
+        conn,
+        org,
+        brand,
+        {
+            "name": "虛構另一活動",
+            "goal_text": "對照",
+            "objective": "購買",
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+            "status": "draft",
+        },
+        created_by="test",
+    )["id"]
+    conn.commit()
+    foreign = ad_entity(setup, "foreign-ad", campaign=other)
+    with pytest.raises(ValueError, match="不屬於此品牌活動"):
+        replace(setup, foreign["id"])
+    adset = ad_entity(setup, "group-1", kind="adset")
+    with pytest.raises(ValueError, match="一則廣告"):
+        replace(setup, adset["id"])
+    ad = ad_entity(setup, "closing-ad")
+    conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s", (campaign,))
+    conn.commit()
+    with pytest.raises(ValueError, match="已結案"):
+        replace(setup, ad["id"])
+    assert (
+        conn.execute(
+            "SELECT count(*) AS n FROM ads_material_task WHERE campaign_id=%s", (campaign,)
+        ).fetchone()["n"]
+        == 0
+    )
+
+
+def test_cancel_hides_the_task_frees_the_slot_and_keeps_history_readable(setup):
+    conn, org, brand, campaign, _ = setup
+    ad = ad_entity(setup, "cancel-ad")
+    task = replace(setup, ad["id"])
+    cancelled = cancel(setup, task)
+    assert cancelled["cancelled_at"] is not None
+    assert cancel(setup, task)["cancelled_at"] == cancelled["cancelled_at"]
+    assert tasks.workspace(conn, org, brand, campaign)["tasks"] == []
+    assert tasks.get(conn, org, brand, campaign, task["id"])["replaces"]["entity_id"] == ad["id"]
+    with pytest.raises(ValueError, match="已取消"):
+        change(setup, cancelled, "update", instruction="取消後不可再改")
+    fresh = replace(setup, ad["id"])
+    assert fresh["id"] != task["id"]
+    assert [t["id"] for t in tasks.workspace(conn, org, brand, campaign)["tasks"]] == [fresh["id"]]
+
+
+def test_cancel_refused_once_an_approved_change_set_uses_the_task(setup):
+    conn, org, brand, campaign, _ = setup
+    task = replace(setup, ad_entity(setup, "used-ad")["id"])
+
+    def change_set(status):
+        conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,request_hash,"
+            "content_hash,title,month,status,plan_json,created_by)"
+            " VALUES(%s,%s,%s,%s,%s,'h','h','換素材','2026-09',%s,%s,'test')",
+            (
+                db.new_id("acs"),
+                org,
+                brand,
+                campaign,
+                db.new_id("op"),
+                status,
+                db.jsonb({"items": [], "material_task_id": task["id"]}),
+            ),
+        )
+        conn.commit()
+
+    change_set("draft")
+    change_set("rejected")
+    other = replace(setup, ad_entity(setup, "free-ad")["id"])
+    change_set("approved")
+    with pytest.raises(tasks.InUse):
+        cancel(setup, task)
+    assert tasks.get(conn, org, brand, campaign, task["id"])["cancelled_at"] is None
+    assert cancel(setup, other)["cancelled_at"] is not None
+
+
+def test_api_one_click_replace_cancel_and_in_use_code(setup):
+    conn, org, brand, campaign, _ = setup
+    ad = ad_entity(setup, "api-ad")
+    client = TestClient(app)
+    url = f"/api/ads/brands/{brand}/campaigns/{campaign}/material-tasks"
+    assert client.post(url, json={"operation_id": "api-missing"}).status_code == 422
+    saved = client.post(url, json={"operation_id": "api-replace", "replaces_entity_id": ad["id"]})
+    assert saved.status_code == 200, saved.text
+    value = saved.json()["task"]
+    assert value["replaces"]["entity_id"] == ad["id"]
+    assert value["mode"] == "workbench_image"
+    conn.execute(
+        "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,request_hash,"
+        "content_hash,title,month,status,plan_json,created_by)"
+        " VALUES(%s,%s,%s,%s,'api-used','h','h','換素材','2026-09','approved',%s,'test')",
+        (db.new_id("acs"), org, brand, campaign, db.jsonb({"material_task_id": value["id"]})),
+    )
+    conn.commit()
+    refused = client.post(f"{url}/{value['id']}/cancel")
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "material_task_in_use"
+    free = client.post(url, json={"operation_id": "api-free", "title": "另一個", "mode": "copy"})
+    done = client.post(f"{url}/{free.json()['task']['id']}/cancel")
+    assert done.status_code == 200, done.text
+    assert done.json()["task"]["cancelled_at"]
+    assert [t["id"] for t in client.get(url).json()["tasks"]] == [value["id"]]

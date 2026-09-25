@@ -900,3 +900,22 @@ def read_external_object(conn, org_id, brand_id, account_id, kind, native_id):
     if len(page["data"])!=1 or str(page["data"][0].get("id"))!=str(native_id):
         raise ValueError("平台沒有回傳指定物件。")
     return page["data"][0]
+
+
+_PIXEL_PAGES = 5
+
+
+def read_external_pixels(conn, org_id, brand_id, account_id):
+    """F29-I07: the bound account's tracking pixels `[{id, name}]` through the same credential and
+    tenant facade as every other external read (read only; a bounded number of pages). A failure
+    raises `ExternalReadError` with the stored code (`permission_denied` for a missing grant)."""
+    pixels, cursor = [], None
+    for _ in range(_PIXEL_PAGES):
+        page = read_external_page(conn, org_id, brand_id, account_id, "pixels", cursor=cursor)
+        for item in page["data"]:
+            if item.get("id"):
+                pixels.append({"id": str(item["id"]), "name": str(item.get("name") or item["id"])})
+        cursor = page["cursor"]
+        if not cursor:
+            return pixels
+    raise ExternalReadError("像素清單超過一次可讀的範圍，這次沒有全部讀到。", "invalid_source_page")

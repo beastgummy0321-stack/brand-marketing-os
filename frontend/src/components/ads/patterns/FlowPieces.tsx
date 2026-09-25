@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Check } from "lucide-react";
+import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 
 /** Kit pieces of the v7 repair flow (F22, prototype `confirmPage()`/`handoff()`/`verify()`).
@@ -164,12 +165,22 @@ export function DecisionSheet({ title, children, actions }: { title?: string; ch
   );
 }
 
-/** `.bar`: sticky bottom action bar — back on the left; hint, secondary and primary on the right.
- * Sticky inside the page flow, same technique as `target/CampaignTargetPage`. */
-export function ActionBar({ back, hint, children }: { back?: ReactNode; hint?: string; children?: ReactNode }) {
+export interface BarLink { label: string; to: string }
+const isBarLink = (v: unknown): v is BarLink => typeof v === "object" && v !== null && !isValidElement(v) && "to" in v && "label" in v;
+
+/** `.bar`: sticky bottom action bar — back and exit on the left; hint, secondary and primary on the right.
+ * Sticky inside the page flow, same technique as `target/CampaignTargetPage`.
+ * `back` is a node or `{label, to}` (rendered 「← label」). v10 `setBar`: `exit` is every open step flow's one way to
+ * give up (「✕ 先不要，回投放中心」); when `back` is a `{label, to}` going to the same place, the exit replaces it,
+ * so there are never two buttons to one place. */
+export function ActionBar({ back, exit, hint, children }: { back?: ReactNode | BarLink; exit?: BarLink; hint?: string; children?: ReactNode }) {
+  const backNode = isBarLink(back)
+    ? (exit && back.to === exit.to ? null : <Button variant="ghost" asChild><Link to={back.to}>← {back.label}</Link></Button>)
+    : back;
   return (
     <div data-slot="action-bar" className="sticky bottom-0 z-10 -mx-[22px] mt-6 flex flex-wrap items-center gap-3 border-t border-border bg-card/95 px-[22px] py-3 backdrop-blur xl:-mx-7 xl:px-7">
-      {back}
+      {backNode}
+      {exit && <Button variant="ghost" asChild><Link to={exit.to}>✕ {exit.label}</Link></Button>}
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {hint && <small className="text-xs text-muted-foreground">{hint}</small>}
         {children}

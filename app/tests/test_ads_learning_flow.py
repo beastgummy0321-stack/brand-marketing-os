@@ -190,6 +190,22 @@ class AdsLearningFlowTest(unittest.TestCase):
         )
         self.assertEqual(self.learnings(), [])
 
+    def test_record_for_ab_item_is_a_noop_outside_an_ab_pause(self):
+        """F29-I04 Contract F: only the pause item of a `source: "ab"` set writes the A/B text."""
+        ab = {"dimension_label": "開場", "winner": {"value_label": "甲"},
+              "loser": {"value_label": "乙"}}
+        pause = {"id": "adx-p", "kind": "pause"}
+        for change_set, item in (
+            ({"plan_json": {"source": "cleanup", "ab": ab}}, pause),
+            ({"plan_json": {"source": "ab"}}, pause),
+            ({"plan_json": {"source": "ab", "ab": ab}}, {"id": "adx-c", "kind": "copy"}),
+        ):
+            self.assertIsNone(ads_learnings.record_for_ab_item(
+                self.conn, self.org, self.brand, self.campaign, change_set, item,
+            ))
+        self.assertEqual(self.learnings(), [])
+        self.assertEqual(ads_learnings.ab_text(ab), "「開場」用「甲」比「乙」划算")
+
     def test_learnings_endpoint_lists_newest_first_with_campaign(self):
         from app.main import app
 
@@ -215,6 +231,26 @@ class AdsLearningFlowTest(unittest.TestCase):
             # `CampaignChip` elsewhere already use -- this fixture's root entity is platform
             # "fake" (never "meta"), so the family always falls back to "other", never a guess.
             self.assertEqual(row["campaign_objective"], "other")
+
+    def test_settle_learning_lists_its_ads_campaign(self):
+        # F29-I03: a period-settle learning names its ad entity (`settle:<month>:<entity_id>`),
+        # not a change item -- its campaign comes from that entity. An unknown entity stays null.
+        ad = self.ad()
+        for source in (f"settle:2026-08:{ad['id']}", "settle:2026-08:ent_gone"):
+            brands.record_learning(
+                self.conn, self.brand, actor="user_1", learning_text="「早鳥族」對這群受眾有效",
+                applicability_scope=f"ads;campaign={self.campaign}", confidence="observed",
+                sample_size="12", source_cycle_id=source, source_track="ads",
+            )
+        rows = {row["id"]: row for row in ads_learnings.list_for_brand(self.conn, self.brand)}
+        by_source = {
+            learning["source_cycle_id"]: rows[learning["id"]]
+            for learning in brands.list_learnings(self.conn, self.brand, source_track="ads")
+        }
+        known = by_source[f"settle:2026-08:{ad['id']}"]
+        self.assertEqual((known["campaign_id"], known["campaign_name"]),
+                         (self.campaign, "持續活動"))
+        self.assertIsNone(by_source["settle:2026-08:ent_gone"]["campaign_id"])
 
 
 if __name__ == "__main__":

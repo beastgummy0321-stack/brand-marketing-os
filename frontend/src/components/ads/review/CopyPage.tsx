@@ -10,13 +10,14 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { formatSyncTime } from "@/lib/format";
 import { getReview, type ReviewRound } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import {
   ChangeRequestRejected, createChangeSet, getChangeControl, type ChangeDraft, type SettingValues,
 } from "@/lib/adsChangeApi";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader } from "../patterns";
+import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
@@ -109,11 +110,14 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   const [searchParams] = useSearchParams();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context on this step (campaign chip, 第幾件, thumbnail); a failed read is shown with
+  // 重試, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, reviewId, reloadKey]);
+  const queue = queueRead.data;
 
   const [operationId] = useState(() => `review-copy:${reviewId}:${crypto.randomUUID()}`);
   const [initialized, setInitialized] = useState(false);
@@ -129,15 +133,20 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   // `?prefill=observed&set=<id>`（screens「Copy page」）：只在有這兩個參數時才多打一次
   // `getChangeControl`，一般進頁（承接 adjust 建議或留白）不受影響。
   const prefillSetId = searchParams.get("prefill") === "observed" ? searchParams.get("set") : null;
+  // Contract K: the platform's current copy is its own read; a failure is shown with 重試 and never quietly replaced
+  // by the AI suggestion (a different answer to "what is on the platform now").
+  const prefillRead = useApiRead(
+    (signal) => (prefillSetId ? getChangeControl(brandId, campaignId, signal) : Promise.resolve(null)),
+    [brandId, campaignId, prefillSetId],
+  );
+  const prefillFailed = prefillRead.status === "error";
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
-    ])
+    getReview(brandId, campaignId, reviewId)
+      .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -156,37 +165,27 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   // 進頁預填新版：有 `?prefill=observed&set=` 就先讀那份清單裡偏離項目的 `evidence_json.observed`
   // （single／variants 都適用，screens「Copy page」）；沒有就照舊承接 adjust 建議的
   // `suggested_copy`（只有單一模式才有這個建議形狀）留白 variants。只在剛讀到這一輪時跑一次。
+  // 讀取失敗時不預填、不改用建議：等 `prefillRead` 重試成功才跑。
   useEffect(() => {
-    if (!review || !validStep || initialized) return;
+    if (!review || !validStep || initialized || prefillRead.status !== "ready") return;
     const mode = review.evidence_json.conditions.copy_editable?.mode;
-    let cancelled = false;
-    async function init() {
-      let observed: CopyFields | null = null;
-      if (prefillSetId) {
-        try {
-          const data = await getChangeControl(brandId, campaignId);
-          const set = data.change_sets.find((s) => s.id === prefillSetId);
-          const item = set?.items.find((it) => it.target_id === review!.entity_id);
-          observed = (item?.evidence_json.observed as CopyFields | undefined) ?? null;
-        } catch {
-          observed = null;
-        }
-      }
-      if (cancelled) return;
-      if (mode === "variants") {
-        setVariantTitles(observed?.titles?.length ? observed.titles : [""]);
-        setVariantBodies(observed?.bodies?.length ? observed.bodies : [""]);
-      } else {
-        const rec = adjustRecommendation(review!);
-        setTitle(observed?.title ?? rec?.suggested_copy?.title ?? "");
-        setBody(observed?.body ?? rec?.suggested_copy?.body ?? "");
-      }
-      setInitialized(true);
+    let observed: CopyFields | null = null;
+    if (prefillSetId && prefillRead.data) {
+      const set = prefillRead.data.change_sets.find((s) => s.id === prefillSetId);
+      const item = set?.items.find((it) => it.target_id === review.entity_id);
+      observed = (item?.evidence_json.observed as CopyFields | undefined) ?? null;
     }
-    void init();
-    return () => { cancelled = true; };
+    if (mode === "variants") {
+      setVariantTitles(observed?.titles?.length ? observed.titles : [""]);
+      setVariantBodies(observed?.bodies?.length ? observed.bodies : [""]);
+    } else {
+      const rec = adjustRecommendation(review);
+      setTitle(observed?.title ?? rec?.suggested_copy?.title ?? "");
+      setBody(observed?.body ?? rec?.suggested_copy?.body ?? "");
+    }
+    setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在資料剛讀完時跑一次，不跟著草稿內容重算。
-  }, [review, validStep, initialized]);
+  }, [review, validStep, initialized, prefillRead.status]);
 
   async function attemptCommit(draft: ChangeDraft) {
     if (busy) return;
@@ -240,7 +239,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
     void attemptCommit(draft);
   }
 
-  if (loading || (review && !validStep)) {
+  if (loading || (queueRead.status === "loading" && !queue) || (review && !validStep)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "改文案" }]} />
@@ -318,6 +317,14 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
           </div>
         )}
       />
+
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱與「第幾件」暫時看不到；這一步照舊可以做" onRetry={queueRead.reload} />
+      )}
+
+      {prefillFailed && (
+        <ReadFailed what={`平台上現在的文案讀不到（${prefillRead.error}）；沒有改用 AI 建議，重試後再預填`} onRetry={prefillRead.reload} />
+      )}
 
       {pendingDraft && (
         <div className="flex items-center gap-4 rounded-xl border border-warning/30 bg-warning/10 p-4">
@@ -436,8 +443,8 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
       </DecisionSheet>
 
       <div className="flex-1" />
-      <ActionBar back={<Button variant="ghost" asChild><Link to={reviewRoundPath(brandId, campaignId, review.id, "prepare")}>← 選方向</Link></Button>}>
-        <Button disabled={busy || pendingDraft !== null} onClick={handleSave}>
+      <ActionBar back={{ label: "選方向", to: reviewRoundPath(brandId, campaignId, review.id, "prepare") }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
+        <Button disabled={busy || pendingDraft !== null || !initialized} onClick={handleSave}>
           {busy ? "保存中…" : "加入變更清單 →"}
         </Button>
       </ActionBar>

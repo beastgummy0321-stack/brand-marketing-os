@@ -63,6 +63,16 @@ from app.background import app as background_app
 from app.core import db as coredb
 from app.llm import gateway as llm_gateway
 
+# F29-I05 (feature Contract G): three jobs at once, so one slow AI round no longer holds every
+# sync behind it. Handlers are synchronous; procrastinate runs each in its own thread
+# (`utils.sync_to_async`), and every handler borrows its own connection from
+# `app.core.db.pool()` (max 10 per process), so connections stay bounded by the pools, not by
+# this number. Same-key jobs never overlap: callers check `background.is_active(lock)` (todo +
+# doing) before `enqueue()`, and handlers that share an account/campaign/upload slot take their
+# own Postgres advisory locks (ads external sync per account, runtime per campaign, asset
+# previews two lanes per brand, review/suggestion budgets per org).
+CONCURRENCY = 3
+
 
 def _advisory_lock_key(schema: str) -> int:
     """Derived, never a magic number: the first 8 bytes of a sha256 digest of a schema-scoped
@@ -136,7 +146,7 @@ def main(*, wait: bool = True) -> None:
             _recover_queue_backlog()
             ads.bootstrap_runtime(conn, int(time.time()), limit=100)
             with llm_gateway.worker_execution():
-                background_app().run_worker(wait=wait)
+                background_app().run_worker(wait=wait, concurrency=CONCURRENCY)
         finally:
             # Round 3 (ADR 0063): only the caller that took the lock releases it — a worker
             # that returned early above never reaches this block, so it can never release a

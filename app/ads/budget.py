@@ -216,6 +216,17 @@ def _with_budget_cap(result: dict, budget_cap: int | None, days: int) -> dict:
     return {**result, "scenarios": rows, "recommended": recommended, "budget_cap": budget_cap}
 
 
+def _recommended_with_amount(result: dict) -> str | None:
+    """F29 Contract D: the recommended row the screen shows always has an amount -- the
+    projected recommendation (the §6.32 over-cap rule already applied) when its total is known,
+    else the first row in display order with a known total, else `None`."""
+    rows = result.get("scenarios", [])
+    picked = next((r for r in rows if r["key"] == result.get("recommended")), None)
+    if picked is not None and picked.get("total") is not None:
+        return picked["key"]
+    return next((r["key"] for r in rows if r.get("total") is not None), None)
+
+
 def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購買",
                       *, cap: float | None = None) -> dict:
     """Project recommendations from current inputs, without changing adopted money.
@@ -246,12 +257,18 @@ def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購
 
 def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
                        *, cap: float | None = None) -> dict:
-    """Return an up-to-date projection. Never write budget_planned or group budgets."""
+    """Return an up-to-date projection. Never write budget_planned or group budgets.
+
+    This is the campaign read every screen gets its scenarios from, so the recommendation is
+    narrowed here to one that has an amount (`_recommended_with_amount`, may be `None`).
+    `current_scenarios` itself keeps a row key: `strategy.generate` looks its recommended row up
+    without a default (a total of `None` is fine there, a missing row is not)."""
     basis = campaign.get("budget_basis_json") or {}
     stored = basis.get("scenarios")
     if not stored:
         return campaign
     scenarios_now = current_scenarios(stored, campaign, conversion_label, cap=cap)
+    scenarios_now["recommended"] = _recommended_with_amount(scenarios_now)
     strategy_now = dict(basis.get("strategy") or {})
     allocation = strategy_now.get("allocation") or []
     selected = campaign.get("budget_planned")

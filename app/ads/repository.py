@@ -516,6 +516,46 @@ def campaign_sync_state(
     return {"state": state, "error": error, "last_success_at": last_success_at}
 
 
+# F29 Contract D: one plain sentence per `data_status` state -- the screen shows it as is.
+DATA_STATUS_LABELS = {
+    "ready": "資料已讀齊。",
+    "partial": "有幾天的資料還沒讀到，數字可能偏少。",
+    "no_rows": "已讀過平台資料，這段期間沒有花費紀錄。",
+    "syncing": "正在讀取平台的最新資料。",
+    "never": "還沒讀過平台資料。",
+    "disconnected": "廣告帳號已中斷連線，讀不到新資料。",
+    "auth_expired": "平台授權已過期，重新連線後才能讀資料。",
+    "failed": "上次讀取平台資料失敗。",
+}
+
+
+def campaign_data_status(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *,
+    has_rows: bool, missing_days: list, sync: dict | None = None,
+    accounts_cache: dict | None = None,
+) -> dict:
+    """F29 Contract D `data_status`: the one "has data / why not" state of a campaign, for the
+    window the caller judged -- triage `data.status` (its 28-day window) and the home row
+    `data_status` (this month up to yesterday) both call this, never a second derivation.
+
+    The caller passes what it already read for that window: `has_rows` (any ad-scope daily row
+    in it) and `missing_days` (its days outside the recorded sync coverage). `sync` is this
+    campaign's `campaign_sync_state` when the caller already has it (read here otherwise).
+    Priority: a sync state that is not `ok` wins (`never`/`disconnected`/`auth_expired`/
+    `failed`/`syncing` -- a broken read beats a gap); then `partial` (a day of the window was
+    never read, so an empty or low number could be that gap); then `no_rows` (every day read,
+    nothing spent); else `ready`. Read-only."""
+    if sync is None:
+        sync = campaign_sync_state(conn, org_id, brand_id, campaign, accounts_cache=accounts_cache)
+    state = sync["state"]
+    if state == "ok":
+        state = "partial" if missing_days else "no_rows" if not has_rows else "ready"
+    return {
+        "state": state, "label": DATA_STATUS_LABELS[state], "missing_days": list(missing_days),
+        "last_success_at": sync["last_success_at"],
+    }
+
+
 # F27-I09 Done #7: `campaign_objective` for a system-built campaign -- the Chinese objective
 # labels `app/ads/brief.py::_OBJECTIVES` drafts one with, mapped here (ads-owned, never through
 # any adapter). 名單 (leads) and 知名度 (awareness) have no sales/engagement/traffic analogue

@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, VerifyPage, WaitPage } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -101,6 +101,8 @@ function App() {
         />
         <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
         <Route path="/brands/:brandId/ads/month" element={<AdsMonthRoute />} />
+        <Route path="/brands/:brandId/ads/settle/:month" element={<AdsSettleRoute />} />
+        <Route path="/brands/:brandId/ads/settle/:month/:step" element={<AdsSettleRoute />} />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/wait"
           element={<AdsWaitRoute />}
@@ -491,6 +493,16 @@ function AdsConnectionsRoute() {
 function AdsMonthRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return <MonthReviewPage brandId={brandId ?? ""} />;
+}
+
+/** 結算上一期（F29-I12，v10 原型 `stepRes()`／`stepAngle()`／`stepNote()`）：三步同一支頁面，選好的主打
+ * 跨步驟保留（`key` 用月份，換月才重新掛載）；不認得的步驟一律回第一步「這期成績」。 */
+function AdsSettleRoute() {
+  const { brandId, month, step } = useParams<{ brandId: string; month: string; step: string }>();
+  if (!isSettleStep(step)) {
+    return <Navigate to={`/brands/${encodeURIComponent(brandId ?? "")}/ads/settle/${encodeURIComponent(month ?? "")}/result`} replace />;
+  }
+  return <SettlePage key={month} brandId={brandId ?? ""} month={month ?? ""} step={step} />;
 }
 
 /** 資料不足 wait page（F24-I03，v7 原型 `waitPage()`）：首頁卡片「去處理」與活動工作區的

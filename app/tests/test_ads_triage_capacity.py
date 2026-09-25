@@ -1,5 +1,5 @@
 """app/tests/test_ads_triage_capacity.py — F27-I06 falsifiers: Contract F, per-campaign capacity
-and the cleanup candidate ads; F28-I02: the cut is chosen by grade against the one cap (白花
+and the cleanup candidate ads; F28-I02: the cut is chosen by grade against the one cap (沒賣出
 always, then 太貴 before 偏貴, highest cost first; 划算 and ungraded ads never).
 
 `CapacityViewTest` proves `capacity_view()` in isolation (pure function, no DB) -- items are built
@@ -167,7 +167,7 @@ class CleanupCandidatesTest(unittest.TestCase):
         return by_entity
 
     def candidates(self, items, *, can_support, active_ads=None, window_end=WINDOW_END,
-                   scale_owner_id=None):
+                   scale_owner_id=None, memory=None):
         capacity = {
             "can_support": can_support,
             "active_ads": active_ads if active_ads is not None else len(items),
@@ -176,7 +176,7 @@ class CleanupCandidatesTest(unittest.TestCase):
         return triage_capacity.cleanup_candidates(
             self.conn, self.org, self.brand, self.campaign, "活動一", items,
             self.rows_by_entity(start, window_end), window_end, capacity,
-            scale_owner_id=scale_owner_id,
+            scale_owner_id=scale_owner_id, memory=memory,
         )
 
     @staticmethod
@@ -261,7 +261,7 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertIsNone(self.candidates(items, can_support=2))
 
     def test_no_row_for_ungraded_ads_even_far_over_capacity(self):
-        # 還太新／資料不足（unknown cost）／未判斷 never close, whatever the capacity says.
+        # 剛開始／資料不足（unknown cost）／未判斷 never close, whatever the capacity says.
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
         items = [
             self.item(a, "insufficient", cost=None, spend=100, result_count=0),
@@ -270,13 +270,13 @@ class CleanupCandidatesTest(unittest.TestCase):
         ]
         self.assertIsNone(self.candidates(items, can_support=1))
 
-    # -- 白花 always closes ---------------------------------------------------------------------
+    # -- 沒賣出 always closes -------------------------------------------------------------------
 
     def test_wasted_closes_even_when_capacity_is_unknown(self):
         a, b = self.make_ad("a1"), self.make_ad("a2")
         self.full_week(a, spend=220)
         items = [
-            self.item(a, "wasted", cost=None, spend=1540, result_count=0, name="白花廣告"),
+            self.item(a, "wasted", cost=None, spend=1540, result_count=0, name="沒賣出廣告"),
             self.item(b, "over", cost=700, spend=4900),
         ]
         result = self.candidates(items, can_support=None)  # null daily budget / no owner
@@ -339,7 +339,7 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(ads[3], "on_target", cost=50, spend=1400),
             self.item(ads[4], "on_target", cost=48, spend=1344),
         ]
-        result = self.candidates(items, can_support=3)  # excess 2: the 白花 + one more
+        result = self.candidates(items, can_support=3)  # excess 2: the 沒賣出 + one more
         self.assertEqual(self.ids(result["ads"]), [ads[0], ads[1]])
         # keep: 偏貴 first (closest to closing), then 划算 by cost, highest first.
         self.assertEqual(self.ids(result["keep"]), [ads[2], ads[3], ads[4]])
@@ -350,7 +350,7 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(ads[0], "over", cost=700, spend=4900),
             self.item(ads[1], "on_target", cost=50, spend=1400),
             self.item(ads[2], "on_target", cost=60, spend=1200),
-            self.item(ads[3], "insufficient", spend=100, result_count=0),  # 還太新
+            self.item(ads[3], "insufficient", spend=100, result_count=0),  # 剛開始
         ]
         result = self.candidates(items, can_support=1, scale_owner_id="own_1")  # excess 3
         self.assertEqual(self.ids(result["ads"]), [ads[0]])
@@ -397,7 +397,7 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(result["ads"][0], {
             "entity_id": a, "name": "廣告甲", "thumbnail_url": "https://x/1.jpg",
             "spend_7d": 1540.0, "grade": "wasted", "cost_per_result": None, "spend": 1540,
-            "result_count": 0, "daily_spend": 220.0,
+            "result_count": 0, "daily_spend": 220.0, "rejected_before": None,
         })
         self.assertEqual(result["ads"][1]["grade"], "over")
         self.assertEqual(result["ads"][1]["cost_per_result"], 617)
@@ -490,6 +490,146 @@ class CleanupCandidatesTest(unittest.TestCase):
         ]
         result = self.candidates(items, can_support=1)
         self.assertEqual(self.ids(result["ads"]), [fresh])
+
+
+class RejectionMemoryTest(unittest.TestCase):
+    """F29-I01 Contract B counterexamples: the grade remembered at a "no" holds an ad out of the
+    cleanup until its current grade ranks worse (on_target < watch < over < wasted). Borrows the
+    `CleanupCandidatesTest` fixture helpers without re-running that class's tests."""
+
+    setUp = CleanupCandidatesTest.setUp
+    make_ad = CleanupCandidatesTest.make_ad
+    obs = CleanupCandidatesTest.obs
+    rows_by_entity = CleanupCandidatesTest.rows_by_entity
+    candidates = CleanupCandidatesTest.candidates
+    item = staticmethod(CleanupCandidatesTest.item)
+    ids = staticmethod(CleanupCandidatesTest.ids)
+
+    def remember(self, entries, *, reason="還想再看看", grades=True):
+        """One rejected cleanup set carrying `decision_grades` (`entity_id -> (grade, at)`);
+        `grades=False` writes a set from before the column (NULL, no memory)."""
+        set_id = db.new_id("acs")
+        memory = {
+            entity_id: {"grade": grade, "cost_per_result": 150, "cap": 100, "at": at}
+            for entity_id, (grade, at) in entries.items()
+        } if grades else None
+        plan = {"source": "cleanup", "items": [
+            {"id": db.new_id("adx"), "kind": "pause", "target_id": entity_id, "before": {},
+             "after": {"status": "PAUSED"}, "reason": "x"} for entity_id in entries
+        ]}
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by,decision_reason,"
+            "decision_grades) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "清理：活動一",
+             "2026-01", "rejected", db.jsonb(plan), "test", reason,
+             db.jsonb(memory) if memory is not None else None),
+        )
+        self.conn.commit()
+        return set_id
+
+    def memory(self):
+        labels = {"on_target": "划算", "watch": "偏貴", "over": "太貴", "wasted": "沒賣出"}
+        return {
+            eid: {**entry, "grade_label": labels[entry["grade"]]}
+            for eid, entry in triage_capacity.decision_memory(
+                self.conn, self.org, self.brand).items()
+        }
+
+    def test_a_set_without_memory_holds_nothing(self):
+        a = self.make_ad("a1")
+        self.remember({a: ("over", None)}, grades=False)  # a set from before the column
+        self.assertEqual(self.memory(), {})
+        result = self.candidates([self.item(a, "wasted", spend=400, result_count=0)],
+                                 can_support=None, memory=self.memory())
+        self.assertEqual(self.ids(result["ads"]), [a])
+        self.assertIsNone(result["ads"][0]["rejected_before"])
+
+    def test_same_grade_is_held_and_the_cut_is_not_refilled(self):
+        a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
+        self.remember({a: ("over", "2026-01-05T10:00:00+00:00")})
+        items = [
+            self.item(a, "over", cost=150), self.item(b, "watch", cost=110),
+            self.item(c, "on_target", cost=50),
+        ]
+        # can_support 2, three active: one to close -- the held 太貴 ad keeps its place, so the
+        # 偏貴 ad is not pulled in instead and no row is raised.
+        self.assertIsNone(self.candidates(items, can_support=2, memory=self.memory()))
+
+    def test_worse_grade_returns_with_rejected_before(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        set_id = self.remember({a: ("watch", "2026-01-05T10:00:00+00:00")}, reason="季節性")
+        items = [self.item(a, "over", cost=150), self.item(b, "on_target", cost=50)]
+        result = self.candidates(items, can_support=1, memory=self.memory())
+        self.assertEqual(self.ids(result["ads"]), [a])
+        self.assertEqual(result["ads"][0]["rejected_before"], {
+            "grade": "watch", "grade_label": "偏貴", "at": "2026-01-05T10:00:00+00:00",
+            "reason": "季節性", "change_set_id": set_id,
+        })
+        self.assertIsNone(result["keep"][0]["rejected_before"])
+
+    def test_the_newest_memory_wins(self):
+        a = self.make_ad("a1")
+        self.remember({a: ("watch", "2026-01-02T10:00:00+00:00")})
+        newest = self.remember({a: ("over", "2026-01-05T10:00:00+00:00")})
+        self.remember({a: ("on_target", "2026-01-01T10:00:00+00:00")})  # older, inserted last
+        memory = self.memory()
+        self.assertEqual((memory[a]["grade"], memory[a]["change_set_id"]), ("over", newest))
+        # Remembered at 太貴: 太貴 again is held; 沒賣出 returns.
+        held = self.candidates([self.item(a, "over", cost=150)], can_support=None,
+                               memory=memory)
+        self.assertIsNone(held)
+        result = self.candidates([self.item(a, "wasted", spend=400, result_count=0)],
+                                 can_support=None, memory=memory)
+        self.assertEqual(result["ads"][0]["rejected_before"]["change_set_id"], newest)
+
+    def test_improved_then_worsened_back_to_the_remembered_grade_is_not_reproposed(self):
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        self.remember({a: ("over", "2026-01-05T10:00:00+00:00")})
+        memory = self.memory()
+        # Improved to 偏貴 in between (nothing to propose), now back at 太貴 -- still not worse.
+        for grade, cost in (("watch", 110), ("over", 150)):
+            with self.subTest(grade=grade):
+                items = [self.item(a, grade, cost=cost), self.item(b, "on_target", cost=50)]
+                self.assertIsNone(self.candidates(items, can_support=1, memory=memory))
+
+    def test_wasted_that_stays_wasted_is_held(self):
+        a = self.make_ad("a1")
+        self.remember({a: ("wasted", "2026-01-05T10:00:00+00:00")})
+        items = [self.item(a, "wasted", spend=900, result_count=0)]
+        self.assertIsNone(self.candidates(items, can_support=None, memory=self.memory()))
+
+    def test_cap_changed_since_compares_the_grade_under_todays_cap(self):
+        # Remembered 偏貴 against a cap of 100; the cap was since cut, so today's ruler reads
+        # the ad as 太貴 -- worse, so it returns (the remembered cap is shown, never re-applied).
+        a, b = self.make_ad("a1"), self.make_ad("a2")
+        self.remember({a: ("watch", "2026-01-05T10:00:00+00:00")})
+        items = [self.item(a, "over", cost=110), self.item(b, "on_target", cost=40)]
+        result = self.candidates(items, can_support=1, memory=self.memory())
+        self.assertEqual(self.ids(result["ads"]), [a])
+        self.assertEqual(result["ads"][0]["rejected_before"]["grade"], "watch")
+
+    def test_an_ad_closed_since_is_simply_absent(self):
+        gone, b = self.make_ad("a1"), self.make_ad("a2")
+        self.remember({gone: ("over", "2026-01-05T10:00:00+00:00")})
+        # `classify()` never lists a closed ad, so its memory has nothing to hold or release.
+        result = self.candidates([self.item(b, "wasted", spend=400, result_count=0)],
+                                 can_support=None, memory=self.memory())
+        self.assertEqual(self.ids(result["ads"]), [b])
+
+    def test_an_unranked_remembered_grade_holds_nothing(self):
+        a = self.make_ad("a1")
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by,decision_grades) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "x",
+             "2026-01", "rejected", db.jsonb({"items": []}), "test",
+             db.jsonb({a: {"grade": "insufficient", "cost_per_result": None, "cap": 100}})),
+        )
+        self.conn.commit()
+        self.assertEqual(self.memory(), {})
 
 
 if __name__ == "__main__":

@@ -15,3 +15,4 @@ export { PreparePage } from "./review/PreparePage";
 export { CopyPage } from "./review/CopyPage";
 export { MaterialStepPage } from "./review/MaterialStepPage";
 export { ReadinessList } from "./patterns/ReadinessList";
+export { SettlePage, isSettleStep } from "./settle/SettlePage";

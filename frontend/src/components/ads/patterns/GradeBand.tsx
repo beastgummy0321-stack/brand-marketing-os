@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { GRADE_LABEL, formatAmount, type Grade } from "./Chip";
+import { Term } from "./Term";
 
-/** Kit piece for the v9 money-quality band (prototype `homeBand()`, `.bandc` + `.band`): how much of the month's
+/** Kit piece for the money-quality band (prototype v10 `homeBand()`, `.bandc` + `.band`): how much of the month's
  * spend landed in each grade. Buckets come from the home overview `quality.buckets` and sum to `spent`
  * (Feature F28 "Home overview"); segment width is the bucket amount. `data-slot="grade-band"`. */
 
@@ -67,9 +69,9 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
       </div>
     )];
   });
-  if (rest > 0) segments.push(<div key="rest" data-grade="rest" className={cn("min-w-2.5 rounded p-0 first:rounded-l-[10px] last:rounded-r-[10px]", HATCH)} style={{ flex: `${rest} 1 0` }} title={`還太新、看不準或未分級 ${formatAmount(rest)} 元`} />);
+  if (rest > 0) segments.push(<div key="rest" data-grade="rest" className={cn("min-w-2.5 rounded p-0 first:rounded-l-[10px] last:rounded-r-[10px]", HATCH)} style={{ flex: `${rest} 1 0` }} title={`剛開始、數字還不夠或未分級 ${formatAmount(rest)} 元`} />);
 
-  const legend = (swatch: string, label: string) => (
+  const legend = (swatch: string, label: ReactNode) => (
     <span><span className={cn("mr-1.5 inline-block size-2.5 rounded-[3px] align-[-1px]", swatch)} />{label}</span>
   );
 
@@ -83,13 +85,15 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
       <div className="flex h-32 gap-1">
         {segments.length ? segments : <div className={cn("flex-1 rounded-[10px]", HATCH)} aria-label="還沒有花費" />}
       </div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-muted-foreground">
-        <span>依每賣一筆花多少分：</span>
-        {legend("border border-success bg-success/10", T !== null ? `划算＝不到 ${formatAmount(T)}` : "划算＝在各活動上限內")}
-        {legend("border border-warning/80 bg-warning/10", T !== null ? `偏貴＝${formatAmount(T)}–${formatAmount(T * 1.2)}` : "偏貴＝超過上限 2 成內")}
-        {legend("border border-danger bg-danger/10", T !== null ? `太貴＝超過 ${formatAmount(T * 1.2)}` : "太貴＝超過上限 2 成")}
-        {legend("border border-danger bg-danger/20", "白花＝花了沒賣")}
-        {legend("bg-muted", `還太新、看不準 ${formatAmount(thinAmount)} 元`)}
+      {/* v10 `homeBand()` legend: every grade word is a glossary `Term` (the sentence lives in glossary.ts); the
+          shared cap's values follow in brackets only when every campaign has the same one. */}
+      <div data-part="band-legend" className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-muted-foreground">
+        <span>每個活動對照自己的上限：</span>
+        {legend("border border-success bg-success/10", <><Term k="on_target">划算</Term>＝每筆沒超過<Term k="cap">上限</Term>{T !== null && `（${formatAmount(T)}）`}</>)}
+        {legend("border border-warning/80 bg-warning/10", <><Term k="watch">偏貴</Term>＝超過上限不到 2 成{T !== null && `（${formatAmount(T)}–${formatAmount(T * 1.2)}）`}</>)}
+        {legend("border border-danger bg-danger/10", <><Term k="over">太貴</Term>＝超過 2 成以上{T !== null && `（${formatAmount(T * 1.2)} 以上）`}</>)}
+        {legend("border border-danger bg-danger/20", <><Term k="wasted">沒賣出</Term>＝花了錢一筆都沒賣</>)}
+        {legend("bg-muted", <><Term k="thin">剛開始、數字還不夠</Term> {formatAmount(thinAmount)} 元</>)}
         {ungradedAmount > 0 && legend(HATCH, `未分級 ${formatAmount(ungradedAmount)} 元`)}
       </div>
     </div>

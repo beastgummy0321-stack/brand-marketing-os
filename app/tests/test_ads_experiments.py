@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.ads import closeout, experiments, plan, repository, simulation_recovery
-from app.core.db import jsonb
+from app.core.db import jsonb, new_id
 from app.shared import web
 
 from .test_ads_publish_simulated import SimulatedPublishTestBase
@@ -336,6 +336,36 @@ class ExperimentTest(SimulatedPublishTestBase):
             experiments.save_settings(
                 *self.args, revision="0", overrides={}, actor="tester"
             )
+
+    def _meta_rows(self, *, untracked_day=None):
+        """Seven real (`source='meta'`) days per ad; `untracked_day` leaves one purchase NULL."""
+        for i in range(7):
+            day = self.today - timedelta(days=i)
+            for j, ad in enumerate(self.ads):
+                purchases = None if (j == 1 and day == untracked_day) else 10
+                web.conn.execute(
+                    "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id,"
+                    " entity_kind, entity_id, day, spend, purchases, revenue, source)"
+                    " VALUES (%s,%s,%s,%s,'ad',%s,%s,%s,%s,NULL,'meta')",
+                    (new_id("ado"), self.org_id, self.brand_id, self.args[-1], ad["id"], day,
+                     100.0 if j == 0 else 200.0, purchases),
+                )
+
+    def test_real_platform_rows_are_judged_without_a_simulation_gate(self):
+        # F29-I04: `judge` no longer requires simulated rows; tracked Meta purchases count.
+        self.confirm()
+        self._meta_rows()
+        result = experiments.read(*self.args)["result"]
+        self.assertEqual(result["verdict"], "觀察到差異")
+        self.assertEqual([v["value"] for v in result["values"]], [10, 20])
+
+    def test_an_untracked_real_purchase_day_blocks_the_judgment(self):
+        self.confirm()
+        self._meta_rows(untracked_day=self.today - timedelta(days=3))
+        result = experiments.read(*self.args)["result"]
+        self.assertEqual(result["verdict"], "看不出")
+        self.assertIn("未追蹤", result["reason"])
+        self.assertEqual(result["values"], [])
 
     def test_post_data_confirmation_is_labelled_retrospective_and_budget_cap_stops_judgment(self):
         self.fill(second_spend=400)

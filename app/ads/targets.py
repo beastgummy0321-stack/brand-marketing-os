@@ -37,6 +37,13 @@ def own_cap(campaign: dict) -> float | None:
     return None
 
 
+def _unit_cost_with_shipping(economics: dict) -> float:
+    """成本含運 of one product economics row: the two numbers `budget.breakeven_cpa` subtracts
+    from the price (a missing shipping cost is 0 there too). Only called once that row has
+    yielded a break-even, so `unit_variable_cost` is known."""
+    return float(economics["unit_variable_cost"]) + float(economics.get("shipping_cost") or 0)
+
+
 def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
             product_id: str | None = None) -> dict:
     """`campaign` is one `ads_campaign` row (a dict, e.g. from `repository.get_campaign`).
@@ -44,16 +51,19 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
     `context_json.product_ids` when given.
 
     Returns the cap view (feature F28 "Cap storage"): `{value, basis: "own"|"break_even"|None,
-    own_value, break_even, price, product_id, result_kind, result_label, missing, revision}`.
-    `break_even`/`price` are read off product economics even when an own cap is set (the ruler's
-    打平 mark, ROAS 參考 = price ÷ cap). `missing` only ever names `"product"`,
+    own_value, break_even, price, cost, product_id, result_kind, result_label, missing,
+    revision}`. `break_even`/`price` are read off product economics even when an own cap is set
+    (the ruler's 打平 mark, ROAS 參考 = price ÷ cap). `cost` (F29 Contract D) is the unit cost
+    including shipping from the SAME economics row `break_even` came from, so the screen's
+    「售價 X − 成本含運 Y」 subtracts to the break-even it shows; `None` whenever `break_even` is
+    (no purchase result kind, no product, no cost). `missing` only ever names `"product"`,
     `"product_cost"` or `"result_kind"`. `org_id` stays in the signature (every caller passes
     the tenant) although no read here needs it since the trailing-30 fallback was removed."""
     result_kind = effective_result_kind(campaign)
     own_value = own_cap(campaign)
 
     missing: list[str] = []
-    break_even = price = used_product_id = None
+    break_even = price = cost = used_product_id = None
     if result_kind is None:
         missing.append("result_kind")
     elif result_kind == "purchase":
@@ -66,7 +76,9 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
         else:
             economics, used_product_id = budget.economics_for(conn, brand_id, product_ids)
             break_even = budget.breakeven_cpa(economics)
-            if break_even is None:
+            if economics is not None and break_even is not None:
+                cost = _unit_cost_with_shipping(economics)
+            else:
                 missing.append("product_cost")
                 # No cost yet, but a known price still feeds ROAS 參考 (price / cap).
                 used_product_id = product_ids[0]
@@ -82,7 +94,7 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
         value, basis = None, None
     return {
         "value": value, "basis": basis, "own_value": own_value, "break_even": break_even,
-        "price": price, "product_id": used_product_id, "result_kind": result_kind,
+        "price": price, "cost": cost, "product_id": used_product_id, "result_kind": result_kind,
         "result_label": result_kinds.label(result_kind),
         # An own cap is a complete answer: nothing is missing for grading any more.
         "missing": [] if own_value is not None else missing,

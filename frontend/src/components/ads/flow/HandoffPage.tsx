@@ -11,18 +11,22 @@ import {
   type ChangeItem,
   type ChangeSet,
 } from "@/lib/adsChangeApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, CampaignChip, Disclosure, FlowHeader, TodoRow, type FlowStep } from "../patterns";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { ActionBar, CampaignChip, Disclosure, FlowHeader, ReadFailed, TodoRow, type FlowStep } from "../patterns";
+import { useAbContext } from "./AbEvidence";
 import { CleanupHandoffRows } from "./CleanupHandoffRows";
 import { cleanupSteps } from "./CleanupProposal";
 import { NewAdHandoffPanel } from "./NewAdHandoffPanel";
 import { PlatformButton } from "./PlatformButton";
 import {
+  abSteps,
   campaignChangesPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isAbSet,
   isCleanupTriageItem,
   stepFromChangeSet,
 } from "./changeFlow";
@@ -40,11 +44,13 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   const homeHref = `/brands/${brandId}/ads`;
   const crumb = [{ label: "投放中心", href: homeHref }, { label: "到平台完成" }];
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context here (campaign chip, 第幾件); a failed read is shown, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, setId, reloadKey]);
+  const queue = queueRead.data;
 
   const [opened, setOpened] = useState(false);
   const [acted, setActed] = useState(false);
@@ -57,17 +63,18 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getChangeControl(brandId, campaignId)
-        .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
-        .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); }),
-    ]).finally(() => { if (!cancelled) setLoading(false); });
+    getChangeControl(brandId, campaignId)
+      .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
+      .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, campaignId, setId, reloadKey]);
 
   const triageItem = useMemo(() => findFlowTriageItem(queue, changeSet), [queue, changeSet]);
   const position = flowPosition(queue, triageItem);
+  // F29-I14 Contract F: an A/B "pause the loser" set reuses the pause handoff under its own three steps.
+  const abSet = changeSet?.source !== "cleanup" && isAbSet(changeSet);
+  const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
   // feature Decisions「Step from a change set」：這一步只服務 approved + 還沒回報的清單，
   // 其他狀態（草稿、已拒絕／暫緩、已讀回）都導去正確的步驟，不在這裡重新解讀。
@@ -133,7 +140,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     }
   }
 
-  if (loading) {
+  if (loading || (queueRead.status === "loading" && !queue)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
@@ -165,9 +172,13 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     );
   }
 
-  // F27-I15 Contract F: recognised only through the queue's own `cleanup` row (`ConfirmPage.tsx`/
-  // `VerifyPage.tsx` share the same lookup) — never guessed from item shape.
-  const cleanupSet = isCleanupTriageItem(triageItem);
+  // F27-I15 Contract F: a cleanup set names itself (`source: "cleanup"`, F29-I04) or is recognised through the queue's
+  // own `cleanup` row (`ConfirmPage.tsx`/`VerifyPage.tsx` share the same rule) — never guessed from item shape, and a
+  // failed queue read cannot turn it into a "multi-item" set.
+  const cleanupSet = changeSet.source === "cleanup" || isCleanupTriageItem(triageItem);
+  const queueFailed = queueRead.status === "error" ? (
+    <ReadFailed what="待決定清單讀不到：活動名稱與「第幾件」暫時看不到；下面的步驟照舊" onRetry={queueRead.reload} />
+  ) : null;
   const item: ChangeItem | undefined = changeSet.items.length === 1 ? changeSet.items[0] : undefined;
   const kind = cleanupSet ? "cleanup" : item ? item.kind : "pause";
   const blocked = !cleanupSet
@@ -193,8 +204,11 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   // same steps as `ConfirmPage`). 提議 stays unlinked once approved — the prototype forwards it to 確認 then.
   const steps: FlowStep[] = kind === "cleanup"
     ? cleanupSteps().map((step) => (step.label === "確認" ? { ...step, to: confirmHref } : step))
+    : abSet ? abSteps(confirmHref)
     : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成" }, { label: "核對結果" }];
-  const headerContext = triageItem ? (
+  const headerContext = abSet ? (
+    abContext.campaign ? <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} /> : undefined
+  ) : triageItem ? (
     <>
       {kind === "cleanup" ? (
         <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
@@ -212,6 +226,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
         <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+        {queueFailed}
         <NewAdHandoffPanel brandId={brandId} campaignId={campaignId} />
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
@@ -232,6 +247,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
         <FlowHeader steps={steps} current={2} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+        {queueFailed}
         <div className="rounded-xl border border-border bg-card px-6">
           <CleanupHandoffRows
             items={changeSet.items}
@@ -279,7 +295,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   } else if (kind === "pause") {
     rows = (
       <>
-        <TodoRow no={1} done={opened} action={platformButton}>打開平台上的這則廣告</TodoRow>
+        <TodoRow no={1} done={opened} action={platformButton}>
+          {abSet ? `打開平台上的「${item.target.name ?? "較貴的那一則"}」` : "打開平台上的這則廣告"}
+        </TodoRow>
         <TodoRow no={2} done={acted} action={<Button variant="outline" size="sm" onClick={() => setActed(true)}>我關了</Button>}>
           把這則廣告的開關關掉
         </TodoRow>
@@ -304,6 +322,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={crumb} />
       <FlowHeader steps={steps} current={1} title="到平台完成" purpose={STEP_PURPOSE} context={headerContext} />
+      {queueFailed}
 
       <div className="rounded-xl border border-border bg-card px-6">
         {rows}

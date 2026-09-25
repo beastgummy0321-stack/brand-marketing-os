@@ -162,3 +162,52 @@ class MetaReadPolicyTest(unittest.TestCase):
             with self.assertRaises(graph.GraphError):
                 graph.list_ad_accounts("private-token")
         self.assertEqual(count, 3)
+
+
+class LaunchSettingsReadPolicyTest(unittest.TestCase):
+    """F29-I07: the launch-settings readback widens the policy by exactly its fields and one
+    path; every other field, edge and method is still refused before the network."""
+
+    def test_launch_settings_fields_and_pixel_list_reach_transport(self):
+        allowed = [
+            (BASE + "/act_1/adspixels", {"fields": "id,name", "limit": 100}),
+            (
+                BASE + "/2",
+                {"fields": "id,optimization_goal,bid_strategy,targeting,promoted_object"},
+            ),
+            (BASE + "/2", {"fields": "targeting{age_min,age_max,genders,geo_locations{countries},"
+                           "publisher_platforms,facebook_positions,instagram_positions,"
+                           "messenger_positions},promoted_object{pixel_id,custom_event_type}"}),
+            (BASE + "/2", {"fields": "creative{url_tags}"}),
+        ]
+        with patch.object(graph.httpx, "get") as get:
+            get.return_value.json.return_value = {"data": []}
+            for url, params in allowed:
+                with self.subTest(url=url, params=params):
+                    graph.fetch_page(url, params=params, headers=HEADERS)
+            self.assertEqual(get.call_count, len(allowed))
+
+    def test_every_other_field_and_path_is_still_refused(self):
+        refused = [
+            (BASE + "/2", {"fields": "targeting{flexible_spec}"}),
+            (BASE + "/2", {"fields": "targeting{custom_audiences}"}),
+            (BASE + "/2", {"fields": "promoted_object{application_id}"}),
+            (BASE + "/2", {"fields": "id,bid_amount"}),
+            (BASE + "/2", {"fields": "id,daily_min_spend_target"}),
+            (BASE + "/2", {"fields": "creative{url_tags,effective_object_story_id}"}),
+            (BASE + "/act_1/adspixels", {"fields": "id,code"}),
+            (BASE + "/act_1/adspixels", {"fields": "id,name", "method": "POST"}),
+            (BASE + "/act_1/adspixels/2", {"fields": "id"}),
+            (BASE + "/act_1/customaudiences", {"fields": "id,name"}),
+            (BASE + "/act_1/adsets", {"fields": "id,targeting"}),
+            (BASE + "/2/stats", {"fields": "id"}),
+            (BASE + "/2/shared_accounts", {"fields": "id"}),
+            (BASE + "/me/adspixels", {"fields": "id,name"}),
+            (BASE + "/2", {"fields": "id,targeting", "targeting": "{}"}),
+        ]
+        with patch.object(graph.httpx, "get") as get:
+            for url, params in refused:
+                with self.subTest(url=url, params=params):
+                    with self.assertRaises(graph.GraphError):
+                        graph.fetch_page(url, params=params, headers=HEADERS)
+            get.assert_not_called()

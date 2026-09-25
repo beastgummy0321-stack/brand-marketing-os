@@ -12,17 +12,22 @@ import {
   type ChangeSet,
   type SettingValues,
 } from "@/lib/adsChangeApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
 import { reviewRoundPath } from "../review/reviewFlow";
+import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
 import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
 import {
+  abSteps,
   campaignChangesPath,
+  campaignDetailPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isAbSet,
   isCleanupTriageItem,
   itemAngle,
   nextOpenQueueItem,
@@ -207,11 +212,13 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   const homeHref = `/brands/${brandId}/ads`;
   const crumb = [{ label: "投放中心", href: homeHref }, { label: "核對結果" }];
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context here (campaign chip, 第幾件, 下一件); a failed read is shown, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, setId, reloadKey]);
+  const queue = queueRead.data;
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -220,17 +227,18 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getChangeControl(brandId, campaignId)
-        .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
-        .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); }),
-    ]).finally(() => { if (!cancelled) setLoading(false); });
+    getChangeControl(brandId, campaignId)
+      .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
+      .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, campaignId, setId, reloadKey]);
 
   const triageItem = useMemo(() => findFlowTriageItem(queue, changeSet), [queue, changeSet]);
   const position = flowPosition(queue, triageItem);
+  // F29-I14 Contract F: an A/B "pause the loser" set reuses the pause verify, plus the learning it writes.
+  const abSet = changeSet?.source !== "cleanup" && isAbSet(changeSet);
+  const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
   // feature Decisions「Step from a change set」：這一步只服務 approved 且已經有讀回紀錄的清單
   // （pending 但 reported_at 還沒寫入的留給 handoff 頁），其他狀態都導去正確的步驟。
@@ -279,7 +287,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     }
   }
 
-  if (loading) {
+  if (loading || (queueRead.status === "loading" && !queue)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
@@ -311,11 +319,14 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   }
 
-  // F27-I15 Contract F: a cleanup set is only ever recognised through the queue's own `cleanup`
-  // row (`isCleanupTriageItem`, same lookup `ConfirmPage`/`HandoffPage` use) — never guessed from
-  // item shape, so a generic multi-`pause` set with no cleanup row behind it still falls through
-  // to the existing "多項變更" workspace link below, unchanged from before this issue.
-  const cleanupSet = isCleanupTriageItem(triageItem);
+  // F27-I15 Contract F: a cleanup set names itself (`source: "cleanup"`, F29-I04) or is recognised through the queue's
+  // own `cleanup` row (same rule as `ConfirmPage`/`HandoffPage`) — never guessed from item shape, so a generic
+  // multi-`pause` set with neither still falls through to the "多項變更" workspace link below, and a failed queue
+  // read cannot turn a cleanup set into one.
+  const cleanupSet = changeSet.source === "cleanup" || isCleanupTriageItem(triageItem);
+  const queueFailed = queueRead.status === "error" ? (
+    <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」與下一件暫時看不到；核對結果照舊" onRetry={queueRead.reload} />
+  ) : null;
   const item: ChangeItem | undefined = changeSet.items.length === 1 ? changeSet.items[0] : undefined;
   const kindRaw = cleanupSet ? "cleanup" : item ? item.kind : "pause";
   const blocked = !cleanupSet
@@ -343,8 +354,11 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   const steps: FlowStep[] = cleanupSet
     ? cleanupSteps().map((step) => (
       step.label === "確認" ? { ...step, to: confirmHref } : step.label === "到平台完成" ? { ...step, to: handoffHref } : step))
+    : abSet ? abSteps(confirmHref, handoffHref)
     : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成", to: handoffHref }, { label: "核對結果" }];
-  const context = triageItem ? (
+  const context = abSet ? (
+    abContext.campaign ? <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} /> : undefined
+  ) : triageItem ? (
     <>
       {cleanupSet ? (
         <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
@@ -379,6 +393,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
         <FlowHeader steps={steps} current={3} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+        {queueFailed}
         {hero}
         <CleanupVerifyRows items={changeSet.items} />
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
@@ -417,16 +432,20 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   if (state === "confirmed") {
     hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item)}`} />;
+    const timeline = timelineRailCells(item, kind);
     const cells: RailCell[] = [
       ...(item.evidence_json.setting_matches === true
         ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
         : []),
-      ...timelineRailCells(item, kind),
+      // An A/B pause has no angle: its notebook line is the card below, not the angle cell.
+      ...(abSet ? timeline.slice(0, 1) : timeline),
     ];
     rail = <StatusRail cells={cells} />;
     // v7 原型 verify() confirmed 分支：`i.kind==="pause"&&A[q.ad]?.angle` 才畫這張卡——跟 rail 的
     // 「已記入品牌學習」格同一個資料來源（`item.learning.recorded`），只是這裡是展開版。
-    if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
+    // F29-I14: an A/B set shows the line it writes into the notebook (prototype v10 `stepChk()` kind `ab`).
+    if (abSet && changeSet.ab) learnCard = <AbLearnedCard ab={changeSet.ab} item={item} />;
+    else if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
     bar = (
       <ActionBar>
         {again}
@@ -463,8 +482,9 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   } else if (state === "stale") {
     const staleNote = item.stale_reason ?? messageOf(item) ?? "用現在的資料重新檢討一次；舊紀錄都會保留";
     hero = <ResultHero tone="bad" title="這則廣告的設定變了，原本的核准不再適用" note={staleNote} />;
-    const restartHref = kind === "pause"
-      ? proposePausePath(brandId, campaignId, item.target_id)
+    // An A/B pair is proposed again from its performance card, never as a plain stop-loss.
+    const restartHref = abSet ? campaignDetailPath(brandId, campaignId)
+      : kind === "pause" ? proposePausePath(brandId, campaignId, item.target_id)
       : campaignChangesPath(brandId, campaignId);
     bar = (
       <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}>
@@ -490,6 +510,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={crumb} />
       <FlowHeader steps={steps} current={2} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+      {queueFailed}
 
       {hero}
       {rail}

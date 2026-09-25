@@ -1,5 +1,7 @@
 import type { CampaignStatus } from "@/lib/adsApi";
-import type { QueueItem, QueuePauseProposal, QueueProposal, QueueReviewProposal } from "@/lib/adsTriageApi";
+import type {
+  QueueItem, QueuePauseProposal, QueueProposal, QueueReviewProposal, SettleQueueRow,
+} from "@/lib/adsTriageApi";
 
 /** F19-I02：從 `AdsHomePage.tsx` 抽出，讓 `home/CampaignCards.tsx` 跟 `AdsHomePage.tsx` 都能讀，
  * 不必互相 import 造成循環依賴。`AdsHomePage.tsx` 原樣 re-export，`AllCampaignsPage.tsx`
@@ -207,10 +209,12 @@ export function cleanupAction(
  * fall through to the final `return false` the same way any unhandled kind always has. */
 export function isQueueItemDone(item: QueueItem): boolean {
   if (item.brand_id === null) return false;
-  if (item.triage.class === "stop_loss") {
+  // F29-I01（ads.md §6.33 一把尺）：看列的種類 `kind_key`，不看 triage 的趨勢 class——加預算列的
+  // 那則廣告趨勢也可能是 worse，卻不是一張「變貴」決定。
+  if (item.kind_key === "stop_loss") {
     return proposalAction(item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal).done;
   }
-  if (item.triage.class === "worse") {
+  if (item.kind_key === "worse") {
     return proposalAction(
       item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal, "review",
     ).done;
@@ -224,4 +228,15 @@ export function isQueueItemDone(item: QueueItem): boolean {
     return cleanupAction(item.brand_id, item.triage.campaign_id, item.proposal, item.action_url)?.done ?? false;
   }
   return false;
+}
+
+/** F29-I11 (Contract E): the brand-level period-settle row's own action. Its link is the row's own
+ * `action_url` (the settle page, `/brands/:b/ads/settle/:month/result`), falling back to the same
+ * route built from the payload's month. The queue lists open rows only; a row whose status is no
+ * longer `open` reads as written (「✓ 已寫進筆記本」, prototype `qState` settle branch). */
+export function settleAction(brandId: string, row: SettleQueueRow): ProposalAction {
+  const href = row.action_url ?? `/brands/${brandId}/ads/settle/${row.settle.month}/result`;
+  return row.status === "open"
+    ? { label: "開始結算", href, done: false }
+    : { label: "✓ 已寫進筆記本", href, done: true };
 }

@@ -1,8 +1,12 @@
 """Existing task registration; dates prompt a review, never silently close an activity."""
 
+import logging
+
 from app import background
 from app.background import app as background_app
 from app.core.db import connection
+
+logger = logging.getLogger(__name__)
 
 _TASK_NAME = "background.ads_close_expired"
 _DISPATCH_TASK_NAME = "ads.close_expired_dispatch"
@@ -41,15 +45,28 @@ def _dispatch_queue_refresh(timestamp: int) -> None:  # noqa: ARG001 -- cron pas
     is offset later so a freshly synced day's numbers are already committed before the queue
     re-reads them). Same "one distinct (org_id, brand_id) over non-closed campaigns" query shape
     `_dispatch_runtime_beat` above already uses -- never a second, divergent "active brand" list.
+
+    F29-I08 Contract J: right after each brand's refresh, its daily digest is built from the
+    payload that refresh just returned and handed to every `digest.SENDERS` channel. One brand
+    failing (refresh or digest) is rolled back and logged; the other brands still run, and a brand
+    whose refresh raised gets no digest.
     """
-    from app.ads import triage
+    from app.ads import digest, triage
+    from app.core import settings as coresettings
 
     with connection() as conn:
         active_brands = conn.execute(
             "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
         ).fetchall()
         for row in active_brands:
-            triage.refresh_queue(conn, row["org_id"], row["brand_id"])
+            org_id, brand_id = row["org_id"], row["brand_id"]
+            try:
+                queue = triage.refresh_queue(conn, org_id, brand_id)
+                today = coresettings.today_for_org(conn, org_id=org_id)
+                digest.deliver(conn, org_id, brand_id, today, queue=queue)
+            except Exception:
+                conn.rollback()
+                logger.exception("daily queue refresh/digest failed for brand %s", brand_id)
 
 
 def _dispatch_runtime_beat(timestamp: int):

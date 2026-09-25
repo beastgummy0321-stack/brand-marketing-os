@@ -5,38 +5,27 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency } from "@/lib/format";
-import { listCampaigns, type CampaignCard as CampaignCardData } from "@/lib/adsApi";
+import { listCampaigns } from "@/lib/adsApi";
 import {
-  getQueue, getTriage, type CampaignTriage, type QueueItem, type TriageItem, type TriageTargetView,
+  getQueue, getTriage, type CampaignDataStatus, type TriageItem, type TriageTargetView,
 } from "@/lib/adsTriageApi";
-import { Chip, TargetRuler, formatAmount, type RulerAd, type RulerCap } from "../patterns";
+import { useApiRead } from "@/lib/useApiRead";
 import {
-  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey,
+  ActionBar, Chip, GradeRules, ReadFailed, TargetRuler, Term, formatAmount, type RulerAd, type RulerCap,
+} from "../patterns";
+import { AbBlock } from "./AbBlock";
+import { AdRowMenu, useReplaceRequests } from "./AdRowMenu";
+import {
+  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, openCleanup, recordHref, trendNote, type GroupKey,
 } from "./GradeGroups";
 
-/** F28-I10: campaign detail = the campaign's active ads graded against its one cap (prototype v9 `tabPerf()`,
- * hashes `camp/daily/perf`, `camp/mid/perf`, demo `tgt:none`). The page keeps its own header and breadcrumb; the
- * body is the full `TargetRuler` card, the grade groups and the closed ads. The cap is read-only here — 去改上限
- * goes to the strategy tab, where it is edited (Feature F28 "Agent choices"). Three reads fail independently: the
- * campaign list (header), triage (ruler + groups) and the brand queue (only the rows' 在清理提議／去處理). */
-
-type Load<T> = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: T };
-const errorText = (err: unknown) => (err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
-
-function useLoad<T>(load: () => Promise<T>, deps: unknown[]): [Load<T>, () => void] {
-  const [state, setState] = useState<Load<T>>({ status: "loading" });
-  const [reload, setReload] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    load()
-      .then((data) => { if (!cancelled) setState({ status: "ready", data }); })
-      .catch((err: unknown) => { if (!cancelled) setState({ status: "error", message: errorText(err) }); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is rebuilt every render; `deps` names its inputs.
-  }, [...deps, reload]);
-  return [state, () => setReload((v) => v + 1)];
-}
+/** F28-I10, v10 F29-I13: campaign detail = the campaign's active ads graded against its one cap (prototype v10
+ * `tabPerf()`, hash `camp/daily/perf`). The page keeps its own header and breadcrumb; the body is the full
+ * `TargetRuler` card (+ the grade legend once), the automatic A/B block, the grade groups with each row's 「⋯」 menu
+ * (換掉這一則／看紀錄) and, under 不在投的, the closed ads. The cap is read-only here — 去改上限 goes to the strategy tab.
+ * Why numbers are missing is the campaign's one `data.status` (Contract D), never a per-section rule. Every read
+ * fails on its own (`useApiRead` + `ReadFailed`): the campaign list (header), triage (ruler + groups), the brand
+ * queue (only the rows' 在清理提議／去處理), the A/B pairs and the material list (only 換掉這一則). */
 
 function capOf(target: TriageTargetView | undefined): RulerCap | null {
   if (!target || target.value === null || target.basis === null) return null;
@@ -56,7 +45,7 @@ export function windowLabel(items: TriageItem[]): string | null {
   return `近 ${span} 天 ${md(start)}–${md(end)}`;
 }
 
-/** The missing-days chip (prototype 「缺 09/17、09/18，這兩天不計」) from triage `data.missing_days`. */
+/** The missing-days chip (prototype 「缺 09/17、09/18，這兩天不計」) from `data.status.missing_days`. */
 export function missingDaysLabel(days: string[]): string | null {
   if (!days.length) return null;
   const sorted = [...days].sort();
@@ -67,6 +56,14 @@ export function missingDaysLabel(days: string[]): string | null {
   return `缺 ${md(sorted[0])}–${md(sorted.at(-1) as string)} 間 ${sorted.length} 天，這些天不計`;
 }
 
+/** The one data-status chip of the ruler card: a partial window names its unread days; any other state that is not
+ * whole is the backend's own sentence (without its closing 。). `ready` says nothing. */
+export function dataStatusChip(status: CampaignDataStatus | null): string | null {
+  if (!status || status.state === "ready") return null;
+  if (status.state === "partial") return missingDaysLabel(status.missing_days) ?? status.label.replace(/。$/, "");
+  return status.label.replace(/。$/, "");
+}
+
 function CapChip({ cap }: { cap: RulerCap | null }) {
   if (!cap) return <Chip tone="warn">沒設上限</Chip>;
   return cap.basis === "break_even"
@@ -74,11 +71,12 @@ function CapChip({ cap }: { cap: RulerCap | null }) {
     : <Chip tone="accent">上限 {formatAmount(cap.value)}</Chip>;
 }
 
-function RulerCard({ items, missingDays, strategyHref, onAdClick }: {
-  items: TriageItem[]; missingDays: string[]; strategyHref: string; onAdClick: (id: string) => void;
+function RulerCard({ items, status, strategyHref, onAdClick }: {
+  items: TriageItem[]; status: CampaignDataStatus | null; strategyHref: string; onAdClick: (id: string) => void;
 }) {
   const target = items[0].target;
   const cap = capOf(target);
+  const breakEven = target.break_even ?? null;
   const ads: RulerAd[] = items.map((item) => ({
     id: item.entity_id,
     name: item.name ?? "（未命名廣告）",
@@ -89,34 +87,35 @@ function RulerCard({ items, missingDays, strategyHref, onAdClick }: {
     thumbnailUrl: item.thumbnail_url,
     note: trendNote(item),
   }));
-  const title = cap
-    ? `在投 ${items.length} 則對照${cap.basis === "break_even" ? "暫用打平" : "上限"} ${formatAmount(cap.value)}`
-    : `在投 ${items.length} 則，沒設上限`;
-  const missing = missingDaysLabel(missingDays);
+  const title = !cap
+    ? <>在投 {items.length} 則，沒設<Term k="cap">上限</Term></>
+    : cap.basis === "break_even"
+      ? <>在投 {items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)}</>
+      : <>在投 {items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)}</>;
+  // Prototype `beCap`: the dashed 打平 mark is drawn only beside an own cap that differs from it; this line names it.
+  const beLine = cap && cap.basis === "own" && breakEven !== null && Math.abs(breakEven - cap.value) > 0.01;
+  const statusChip = dataStatusChip(status);
   const windowChip = windowLabel(items);
   return (
     <section className="surface px-[22px] py-5" aria-label="對照上限">
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-[15px] font-semibold">{title}</h2>
         <div className="flex flex-wrap items-center gap-2.5">
-          {missing && <Chip tone="warn">{missing}</Chip>}
+          {statusChip && <Chip tone="warn" data-state={status!.state}>{statusChip}</Chip>}
           {windowChip && <Chip>{windowChip}</Chip>}
           <Button asChild variant="link" size="sm" className="h-auto px-0">
             <Link to={strategyHref}>{cap ? "去改上限" : "去設上限"}</Link>
           </Button>
         </div>
       </div>
-      <TargetRuler ads={ads} cap={cap} breakEven={target.break_even ?? null} size="full" onAdClick={onAdClick} />
+      <TargetRuler ads={ads} cap={cap} breakEven={breakEven} size="full" onAdClick={onAdClick} />
+      {beLine && (
+        <div className="mt-0.5 text-[11.5px] text-muted-foreground">
+          橘色虛線：<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(breakEven)}
+        </div>
+      )}
+      {cap && <GradeRules breakEven={breakEven} />}
     </section>
-  );
-}
-
-function SectionError({ what, message, onRetry }: { what: string; message: string; onRetry: () => void }) {
-  return (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/10 px-4 py-3 text-sm">
-      <span className="flex-1 font-medium text-warning">{what}讀取失敗：{message}</span>
-      <Button size="sm" variant="outline" onClick={onRetry}>重新讀取</Button>
-    </div>
   );
 }
 
@@ -125,9 +124,10 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   const highlightAdParam = searchParams.get("ad");
   const navigate = useNavigate();
 
-  const [campaigns, reloadCampaigns] = useLoad<CampaignCardData[]>(() => listCampaigns(brandId), [brandId]);
-  const [triage, reloadTriage] = useLoad<CampaignTriage>(() => getTriage(brandId, campaignId), [brandId, campaignId]);
-  const [queue, reloadQueue] = useLoad<QueueItem[]>(() => getQueue(brandId).then((q) => q.items), [brandId]);
+  const campaigns = useApiRead(() => listCampaigns(brandId), [brandId]);
+  const triage = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
+  const queue = useApiRead((signal) => getQueue(brandId, signal).then((q) => q.items), [brandId]);
+  const requests = useReplaceRequests(brandId, campaignId);
 
   const [openGroups, setOpenGroups] = useState<Set<GroupKey>>(() => new Set(OPEN_BY_DEFAULT));
   const [closedOpen, setClosedOpen] = useState(false);
@@ -159,10 +159,12 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
   const strategyHref = `${workspaceHref}?tab=strategy`;
 
+  const queueItems = queue.status === "ready" ? queue.data : null;
   const actions = useMemo(
-    () => adActions(brandId, campaignId, workspaceHref, items ?? [], queue.status === "ready" ? queue.data : []),
-    [brandId, campaignId, workspaceHref, items, queue],
+    () => adActions(brandId, campaignId, workspaceHref, items ?? [], queueItems ?? []),
+    [brandId, campaignId, workspaceHref, items, queueItems],
   );
+  const cleanup = queueItems ? openCleanup(brandId, campaignId, queueItems) : null;
 
   if (campaigns.status !== "ready") {
     return (
@@ -170,7 +172,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
         {campaigns.status === "loading"
           ? <><Skeleton className="h-9 w-80" /><Skeleton className="h-60 w-full" /></>
-          : <EmptyState title="讀取失敗" description={campaigns.message} onAction={reloadCampaigns} actionLabel="重新讀取" />}
+          : <ReadFailed what={`活動清單讀不到：${campaigns.error}`} onRetry={campaigns.reload} />}
       </div>
     );
   }
@@ -179,7 +181,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     return (
       <div className="flex max-w-[1260px] flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
-        <EmptyState title="讀取失敗" description="找不到這個 Campaign。" onAction={reloadCampaigns} actionLabel="重新讀取" />
+        <EmptyState title="找不到活動" description="找不到這個 Campaign。" onAction={campaigns.reload} actionLabel="重新讀取" />
       </div>
     );
   }
@@ -189,10 +191,12 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     ? <Chip>平台預算</Chip>
     : budgetTotal !== null ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip> : <Chip tone="warn">預算待核實</Chip>;
   const closed = triage.status === "ready" ? triage.data.closed : null;
+  const status = triage.status === "ready" ? triage.data.data?.status ?? null : null;
   const active = items !== null && items.length > 0 ? items : null;
+  const breakEven = active?.[0].target.break_even ?? null;
 
   return (
-    // Prototype v9 `.page{max-width:1260px}`.
+    // Prototype v10 `.page{max-width:1260px}`.
     <div className="flex max-w-[1260px] flex-col gap-4">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: campaign.name }]} />
 
@@ -221,26 +225,46 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
       {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
       {triage.status === "error" && (
-        <EmptyState title="讀取失敗" description={triage.message} onAction={reloadTriage} actionLabel="重新讀取" />
+        <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} />
       )}
       {items && closed && items.length === 0 && closed.total === 0 && (
-        <div className="surface p-5">
-          <p className="text-sm text-muted-foreground">沒有廣告資料，這個活動還沒有可以判斷的內容。</p>
+        <div className="surface p-5" data-testid="no-ads">
+          <p className="text-sm text-muted-foreground">
+            {status && status.state !== "ready" ? status.label : "沒有廣告資料，這個活動還沒有可以判斷的內容。"}
+          </p>
         </div>
       )}
       {active && (
         <>
           <RulerCard
             items={active}
-            missingDays={triage.status === "ready" ? triage.data.data?.missing_days ?? [] : []}
+            status={status}
             strategyHref={strategyHref}
             onAdClick={(id) => { const a = actions.get(id); if (a) navigate(a.href); }}
           />
-          {queue.status === "error" && <SectionError what="決策進度" message={queue.message} onRetry={reloadQueue} />}
+          {campaign.origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
+          {queue.status === "error" && (
+            <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} />
+          )}
+          {requests.read.status === "error" && (
+            <ReadFailed what={`素材需求讀不到（${requests.read.error}）；哪幾則已開「換掉這一則」暫時看不到。`} onRetry={requests.read.reload} />
+          )}
           <GradeGroups
             items={active}
             cap={capOf(active[0].target)?.value ?? null}
+            breakEven={breakEven}
+            dataReason={status && status.state !== "ready" ? status.label : null}
             actions={actions}
+            extras={(item) => ({
+              menu: (
+                <AdRowMenu
+                  name={item.name ?? "（未命名廣告）"} entityId={item.entity_id}
+                  recordHref={recordHref(workspaceHref, item.entity_id)} requests={requests}
+                />
+              ),
+              requestOpen: Boolean(requests.requestOf(item.entity_id)),
+              error: requests.errorOf(item.entity_id),
+            })}
             openGroups={openGroups}
             onToggle={(key, open) => setOpenGroups((prev) => {
               const next = new Set(prev);
@@ -256,9 +280,11 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
           />
         </>
       )}
-      {closed && closed.total > 0 && (
-        <ClosedGroup closed={closed} workspaceHref={workspaceHref} open={closedOpen} onToggle={setClosedOpen} />
-      )}
+      {closed && closed.total > 0 && <ClosedGroup closed={closed} open={closedOpen} onToggle={setClosedOpen} />}
+
+      <ActionBar back={{ label: "總覽", to: workspaceHref }}>
+        {cleanup && <Button asChild><Link to={cleanup.href}>看清理提議 →</Link></Button>}
+      </ActionBar>
     </div>
   );
 }

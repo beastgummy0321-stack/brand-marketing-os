@@ -48,10 +48,22 @@ export interface ChangeSet {
   // yet -- optional so existing test factories need no change.
   replaces?: { entity_id: string; name: string } | null;
   follow_up?: { kind: "pause_old"; entity_id: string } | null;
+  // F29-I04 Contract F: read straight off the set's plan. `source: "ab"` sets are created only by
+  // `POST …/ab-pairs/{pair_id}/pause-loser` (adsAbApi.ts) and carry `ab` -- optional so existing
+  // test factories need no change.
+  source?: "cleanup" | "ab" | null;
+  ab?: AbChangeBlock | null;
+}
+export interface AbChangeSide { ad_id: string; entity_id: string | null; name: string; value_label: string; cost_per_result: number | null }
+export interface AbChangeBlock {
+  pair_id: string; dimension_label: string; winner: AbChangeSide; loser: AbChangeSide;
+  window: { start: string; end: string } | null;
 }
 // `source` (F27-I25, Contract F): only "cleanup" is accepted; names the set as the campaign's
 // cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup" }
+// `declined_ids` (F29-I01 Contract B): only with `source: "cleanup"` -- the proposed ads the user
+// unticked; each is remembered at approval and proposed again only once its grade gets worse.
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup"; declined_ids?: string[] }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

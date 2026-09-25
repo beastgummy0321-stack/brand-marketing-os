@@ -1,24 +1,37 @@
-/** frontend/src/components/ads/home/HomeBoard.test.tsx — F28-I08 board D blocks, rendered on their own with realistic
- * shapes (longest names, imported campaign, no-cap draft, decimal costs, unknown values). Unknown numbers print the
- * prototype's unknown words, never 0; money goes through the kit formatter. */
-import { render, screen, within } from "@testing-library/react";
+/** frontend/src/components/ads/home/HomeBoard.test.tsx — the v10 home blocks (F28-I08 board D, F29-I11), rendered on
+ * their own with realistic shapes (longest names, imported campaign, no-cap draft, decimal costs, unknown values).
+ * Unknown numbers print the prototype's unknown words, never 0; money goes through the kit formatter; glossary words
+ * are `Term`s, so their sentences are stripped before comparing text (`plain`). */
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import type { QueueItem, TriageItem } from "@/lib/adsTriageApi";
+import type { QueueItem, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import { CampaignRows } from "./CampaignRows";
 import { MonthMoney } from "./MonthMoney";
 import { NextDates } from "./NextDates";
 import { QualityBand } from "./QualityBand";
 import { TodayDecisions } from "./TodayDecisions";
 
+/** An element's text without the glossary sentences its `Term`s carry. */
+function plain(el: Element): string {
+  const copy = el.cloneNode(true) as Element;
+  copy.querySelectorAll('[role="tooltip"]').forEach((n) => n.remove());
+  return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+/** Matches the innermost element whose plain text is exactly `text`. */
+function byPlain(text: string) {
+  return (_: string, el: Element | null) => !!el && plain(el) === text && ![...el.children].some((c) => plain(c) === text);
+}
+
 const LONG = "中秋限定活動・送禮受眾 2026｜Advantage+ 購物活動 - 複本";
 
 function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
   return {
     campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767.4, purchases: 121,
-    cost_per_purchase: 130.31, cap: { value: 450, basis: "own" }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok", draft: null,
+    cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
+    data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null,
     ...overrides,
   };
 }
@@ -27,7 +40,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own" }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -53,7 +66,9 @@ describe("MonthMoney", () => {
     expect(screen.getByText("扣掉廣告費，這個月估計多賺")).toBeTruthy();
     expect(screen.getByText("約 NT$60,000")).toBeTruthy();
     expect(screen.getByText("NT$139 元")).toBeTruthy();
-    expect(screen.getByText("你的上限 450")).toBeTruthy();
+    expect(screen.getByText(byPlain("每個活動各有上限，目前都是 450"))).toBeTruthy();
+    expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("各活動上限 450")).toBeTruthy();
     expect(screen.getByText("比 8 月同期多 40 筆")).toBeTruthy();
     expect(screen.getByText("便宜 37%")).toBeTruthy();
     expect(screen.getByText("8 月同期 221 元")).toBeTruthy();
@@ -64,22 +79,23 @@ describe("MonthMoney", () => {
 
   it("unknowns: earn names what is missing, no purchase yet, no comparison, break-even cap wording", () => {
     const h = home({
-      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even" }, earn: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
+      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("算不出來・缺商品成本")).toBeTruthy();
     expect(screen.getByText("還沒有購買")).toBeTruthy();
-    expect(screen.getByText("暫用打平 520")).toBeTruthy();
+    expect(screen.getByText(byPlain("每個活動各自算，目前都暫用打平線 520"))).toBeTruthy();
+    expect(document.querySelector('[data-slot="money-tag"]')).toBeNull();
     expect(screen.getAllByText("8 月同期沒有可比資料")).toHaveLength(2);
     expect(screen.getByText("還沒設這個月的預算")).toBeTruthy();
     expect(screen.queryByText(/NT\$0/)).toBeNull();
   });
 
   it("no shared cap: says the campaigns differ, or that none has a cap", () => {
-    const differ = home({ money: { ...home().money!, cap: null }, campaigns: [campaign(), campaign({ campaign_id: "c2", cap: { value: 300, basis: "own" } })] });
+    const differ = home({ money: { ...home().money!, cap: null }, campaigns: [campaign(), campaign({ campaign_id: "c2", cap: { value: 300, basis: "own", break_even: 520 } })] });
     const { unmount } = wrap(<MonthMoney brandId="b" state={ready(differ)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
-    expect(screen.getByText("各活動上限不同")).toBeTruthy();
+    expect(screen.getByText(byPlain("每個活動的上限不一樣"))).toBeTruthy();
     unmount();
     const none = home({ money: { ...home().money!, cap: null }, campaigns: [campaign({ cap: null })] });
     wrap(<MonthMoney brandId="b" state={ready(none)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
@@ -117,7 +133,8 @@ describe("CampaignRows", () => {
     const h = home({ campaigns: [
       campaign(),
       campaign({ campaign_id: "cmp_mid", name: LONG, origin: "imported", status: "draft", month_spend: 6233.5, purchases: 37, cost_per_purchase: 168.46,
-        missing_days: ["2026-09-17", "2026-09-18"], daily_budget: null }),
+        missing_days: ["2026-09-17", "2026-09-18"], daily_budget: null,
+        data_status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。", missing_days: ["2026-09-17", "2026-09-18"], last_success_at: "2026-09-23T00:40:00Z" } }),
       campaign({ campaign_id: "cmp_fall", name: "秋季新色預購", status: "draft", month_spend: null, purchases: null, cost_per_purchase: null, cap: null,
         active_ads: 0, draft: { start_date: "2026-10-01", cap_missing: true, ads_total: 8, ads_ready: 7, approved: false } }),
     ] });
@@ -138,16 +155,70 @@ describe("CampaignRows", () => {
   });
 
   it("no purchase yet and no spend rows say so, not 0", () => {
-    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ month_spend: null, purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even" } })] }))} onRetry={vi.fn()} />);
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ month_spend: null, purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 } })] }))} onRetry={vi.fn()} />);
     expect(screen.getByText("沒有花費紀錄")).toBeTruthy();
     expect(screen.getByText("還沒有購買")).toBeTruthy();
     expect(screen.queryByText("0 元")).toBeNull();
   });
 
-  it("a failed platform read turns the action into 重新連線 with a chip", () => {
-    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ sync_state: "auth_expired" })] }))} onRetry={vi.fn()} />);
-    expect(screen.getByText("讀取失敗")).toBeTruthy();
+  it("a failed platform read turns the action into 重新連線; the reason is the row's own data_status sentence", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ sync_state: "auth_expired",
+      data_status: { state: "auth_expired", label: "平台授權已過期，重新連線後才能讀資料。", missing_days: [], last_success_at: null } })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("平台授權已過期，重新連線後才能讀資料")).toBeTruthy();
     expect(screen.getByRole("link", { name: "重新連線 →" })).toBeTruthy();
+  });
+
+  it("the reason comes from data_status only: a stale sync_state or missing_days never adds a second one", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ sync_state: "failed", missing_days: ["2026-09-17"] })] }))} onRetry={vi.fn()} />);
+    expect(screen.queryByText(/讀取失敗|沒抓到資料|還沒讀到/)).toBeNull();
+    expect(screen.getByRole("link", { name: "打開 →" })).toBeTruthy();
+  });
+
+  it("every day read and nothing spent: the sentence stands where the spend would be", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ month_spend: null, purchases: null, cost_per_purchase: null,
+      data_status: { state: "no_rows", label: "已讀過平台資料，這段期間沒有花費紀錄。", missing_days: [], last_success_at: null } })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("已讀過平台資料，這段期間沒有花費紀錄")).toBeTruthy();
+    expect(screen.queryByText("沒有花費紀錄")).toBeNull();
+  });
+
+  it("handoff: 等你到 Meta 完成 (platform) and 等核對 (check) link to the 變更與核對 tab; none shows no chip", () => {
+    const h = home({ campaigns: [
+      campaign({ campaign_id: "cmp_mid", name: "中秋限定活動", handoff: { state: "platform", change_set_id: "cs_1" } }),
+      campaign({ campaign_id: "cmp_x", name: "夏季清倉・舊帳戶", origin: "imported", handoff: { state: "check", change_set_id: "cs_2" } }),
+      campaign({ campaign_id: "cmp_fall", name: "秋季新色預購", status: "draft", month_spend: null, purchases: null, cost_per_purchase: null, cap: null,
+        active_ads: 0, handoff: { state: "platform", change_set_id: "launch_1" }, draft: { start_date: "2026-10-01", cap_missing: false, ads_total: 8, ads_ready: 8, approved: true } }),
+      campaign(),
+    ] });
+    wrap(<CampaignRows brandId="b" state={ready(h)} onRetry={vi.fn()} />);
+    const platform = screen.getAllByRole("link", { name: "等你到 Meta 完成 →" });
+    expect(platform.map((a) => a.getAttribute("href"))).toEqual([
+      "/brands/b/ads/campaigns/cmp_mid?tab=changes", "/brands/b/ads/campaigns/cmp_fall?tab=changes",
+    ]);
+    expect(platform[0].querySelector('[data-slot="chip"]')?.getAttribute("data-tone")).toBe("accent");
+    const check = screen.getByRole("link", { name: "等核對 →" });
+    expect(check.getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_x?tab=changes");
+    expect(check.querySelector('[data-slot="chip"]')?.getAttribute("data-tone")).toBe("warn");
+    expect(screen.getAllByRole("link", { name: /等你到 Meta 完成|等核對/ })).toHaveLength(3);
+  });
+
+  it("money tag beside the cost: 有賺 against break-even; hidden when break-even is unknown (never guessed)", () => {
+    const { unmount } = wrap(<CampaignRows brandId="b" state={ready(home())} onRetry={vi.fn()} />);
+    expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
+    unmount();
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ cap: { value: 450, basis: "own", break_even: null } })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("130 元")).toBeTruthy();
+    expect(document.querySelector('[data-slot="money-tag"]')).toBeNull();
+  });
+
+  it("longest real names wrap inside their cell instead of being cut (the 1024 layout itself is in the side-by-side evidence)", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ name: LONG, handoff: { state: "check", change_set_id: "cs_1" },
+      data_status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。", missing_days: ["2026-09-01", "2026-09-02", "2026-09-17", "2026-09-18"], last_success_at: null } })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("4 天沒抓到資料")).toBeTruthy();
+    const name = screen.getByRole("link", { name: LONG });
+    expect(name.textContent).toBe(LONG);
+    expect(name.className).toContain("[overflow-wrap:anywhere]");
+    expect(name.className).toContain("whitespace-normal");
+    expect(name.parentElement?.className).toContain("flex-wrap");
   });
 
   it("the campaigns block failing alone shows its own retry", () => {
@@ -171,12 +242,25 @@ describe("NextDates", () => {
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "n_1", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換",
-    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴",
+    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-16", end: "2026-09-22", days: 7, previous_start: "2026-09-09", previous_end: "2026-09-15", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     previous: { spend: 3080, result_count: 7, cost_per_result: 440, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    change_pct: 18.2, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
+    change_pct: 0.182, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
+    ...overrides,
+  };
+}
+/** The brand's open period-settle row (Contract E), August settled on 9/2. */
+function settleRow(overrides: Partial<SettleQueueRow> = {}): SettleQueueRow {
+  return {
+    id: "itr_s", dedupe_key: "settle", category: "ads_triage_settle", severity: "rule_warning", message: "結算上一期（8 月），待寫進筆記本",
+    action_url: "/brands/b/ads/settle/2026-08/result", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+    settle: { month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 5, buckets: [
+      { grade: "on_target", amount: 15300, count: 2, ads: [] }, { grade: "watch", amount: 3900, count: 1, ads: [] },
+      { grade: "over", amount: 9340, count: 2, ads: [] }, { grade: "wasted", amount: 1600, count: 1, ads: [] },
+      { grade: "insufficient", amount: 1600, count: 2, ads: [] }, { grade: "no_target", amount: 0, count: 0, ads: [] },
+    ] },
     ...overrides,
   };
 }
@@ -190,20 +274,20 @@ function row(id: string, kind: QueueItem["kind_key"], extra: Partial<QueueItem> 
 const payload = (items: QueueItem[]) => ({ status: "ready" as const, queue: { items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0, kinds_available: [], kinds_pending: [] } });
 
 describe("TodayDecisions", () => {
-  it("cleanup card: red-only cut title with the saving rounded to 10; 白花 rows show spend, others whole-yuan cost", () => {
+  it("cleanup card: red-only cut title with the saving rounded to 10; 沒賣出 rows show spend, others whole-yuan cost", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/brands/b/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily",
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: 257, scale_owner_id: null, keep: [],
         ads: [
-          { entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110 },
-          { entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: 1050, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: 150 },
+          { entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110, rejected_before: null },
+          { entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: 1050, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: 150, rejected_before: null },
         ] },
     });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("關掉色帶裡紅色的 2 則，每天省約 260 元")).toBeTruthy();
     expect(screen.getByText("花 1,480・0 筆")).toBeTruthy();
     expect(screen.getByText("每筆 617 元")).toBeTruthy();
-    expect(screen.getByText("白花")).toBeTruthy();
+    expect(screen.getByText("沒賣出")).toBeTruthy();
     expect(screen.getByText("太貴")).toBeTruthy();
     expect(screen.getByRole("link", { name: "決定要不要關 →" }).getAttribute("data-variant")).toBe("default");
   });
@@ -212,22 +296,75 @@ describe("TodayDecisions", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/x",
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
-        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "watch", cost_per_result: 500, spend: 2470, result_count: 4, daily_spend: null }] },
+        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "watch", cost_per_result: 500, spend: 2470, result_count: 4, daily_spend: null, rejected_before: null }] },
     });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("關掉 1 則")).toBeTruthy();
   });
 
-  it("worse card: previous struck through, current whole yuan, compared with the cap (or 打平 when break-even)", () => {
-    const { unmount } = wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse")])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
-    expect(screen.getByText("比上週變貴")).toBeTruthy();
-    expect(screen.getByText("440")).toBeTruthy();
-    expect(screen.getByText("→ 520 元")).toBeTruthy();
-    expect(screen.getByText("比上限貴 16%")).toBeTruthy();
+  it("worse card: the label is the backend's grade move; costs compared with this campaign's cap; trend only as a footnote", () => {
+    const { unmount } = wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, { target: { ...triage().target, break_even: 520 } })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("從划算變太貴")).toBeTruthy();
+    expect(screen.getByText(byPlain("每筆 440 → 520，超過日常商品推廣的上限 450"))).toBeTruthy();
+    expect(screen.getByText(byPlain("・剛好打平（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("比前 7 天 ▲18%（只當參考）")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "查原因 →" }).getAttribute("data-variant")).toBe("outline");
     unmount();
-    wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, { target: { value: 520, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [] }, window: { ...triage().window, days: 14 } })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
-    expect(screen.getByText("還在打平內")).toBeTruthy();
-    expect(screen.getByText("比前 14 天變貴")).toBeTruthy();
+    wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, {
+      grade_move: { from: "on_target", to: "watch" }, change_pct: null, window: { ...triage().window, days: 14 },
+      target: { value: 520, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [], break_even: 520 },
+      current: { ...triage().current, cost_per_result: 505.5 },
+    })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("從划算變偏貴")).toBeTruthy();
+    expect(screen.getByText(byPlain("每筆 440 → 505，還在日常商品推廣暫用打平線 520 內"))).toBeTruthy();
+    expect(screen.getByText("比前 14 天：沒有可比資料（只當參考）")).toBeTruthy();
+  });
+
+  it("a worse row without a grade move: no move is guessed from previous_grade or the trend; no break-even, no money tag", () => {
+    wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, { grade_move: null, previous_grade: "on_target", grade: "over" })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("每筆變多了")).toBeTruthy();
+    expect(screen.queryByText(/^從.+變/)).toBeNull();
+    expect(document.querySelector('[data-slot="money-tag"]')).toBeNull();
+  });
+
+  it("cleanup rows: grade chips are glossary terms and a cost carries its money tag when break-even is known", () => {
+    const cleanup = row("c1", "cleanup", {
+      action_url: "/x",
+      cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
+        ads: [{ entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: null, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: null, rejected_before: null }] },
+    }, { target: { ...triage().target, break_even: 520 } });
+    wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(document.querySelector('[data-grade="over"] [data-slot="term"]')).toBeTruthy();
+    expect(screen.getByText(byPlain("・在虧（打平 520）"))).toBeTruthy();
+  });
+
+  it("settle card: the row's range, campaigns (imported counted), learnable ads, the grade bar and 開始結算; it spans the row", () => {
+    wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload([]).queue, settle: settleRow() } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    const card = screen.getByRole("article", { name: "結算上一期" });
+    expect(card.className).toContain("col-span-full");
+    expect(within(card).getByText("08/01–08/31・2 個活動（1 個從 Meta 帶進來）")).toBeTruthy();
+    expect(within(card).getByText(byPlain("5 則的成績可以寫進筆記本"))).toBeTruthy();
+    expect(card.querySelector('[data-slot="grade-bar"]')).toBeTruthy();
+    expect(card.querySelector('[data-slot="grade-rules"]')).toBeNull();
+    expect(within(card).getByText("沒賣出 1 則")).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/b/ads/settle/2026-08/result");
+    expect(screen.getByText("1 件")).toBeTruthy();
+  });
+
+  it("settle with no imported campaign drops the Meta note", () => {
+    const row = settleRow({ settle: { ...settleRow().settle, imported_count: 0, campaign_count: 1 } });
+    wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload([]).queue, settle: row } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("08/01–08/31・1 個活動")).toBeTruthy();
+  });
+
+  it("a written settle leaves the cards and the count, and sits in 今天處理過 with its range", () => {
+    const row = settleRow({ status: "resolved" });
+    wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload([]).queue, settle: row } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.queryByRole("article", { name: "結算上一期" })).toBeNull();
+    expect(screen.getByText("今天沒有要決定的事")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "今天處理過 1 件" }));
+    expect(screen.getByText("結算上一期 08/01–08/31")).toBeTruthy();
+    expect(screen.getByText("✓ 已寫進筆記本").getAttribute("data-tone")).toBe("ok");
   });
 
   it("read failure: hero with the last successful sync time and a retry", () => {

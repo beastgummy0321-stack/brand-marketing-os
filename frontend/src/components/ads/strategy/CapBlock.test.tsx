@@ -1,6 +1,6 @@
 /** F28-I09: the strategy tab's 「一個上限」 card — own／暫用打平／沒設上限 states, the integer NT$ input saved through
  * `PUT .../target` with the revision guard, the 409 reload path, and the mid ruler fed by triage (none for drafts). */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +27,10 @@ function cap(extra: Partial<CapView>): CapView {
 const OWN = cap({ value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580 });
 const BE = cap({ value: 520, basis: "break_even", break_even: 520, price: 1580 });
 const NONE = cap({ price: 1280, missing: ["product_cost"] });
+/** `GET .../target` of the 暫用打平 campaign: 成本含運 1,060 so 售價 1,580 − 1,060 = 打平 520. */
+function target(c: CapView, cost: number | null): CampaignTarget {
+  return { ...c, campaign_id: "cmp_1", product_ids: ["prd_1"], result_kinds: [{ kind: "purchase", label: "購買" }], cost };
+}
 
 function campaign(c: CapView, extra: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "cmp_1", status: "live", origin: "internal", cap: c, ...extra } as CampaignDetail;
@@ -49,6 +53,7 @@ describe("CapBlock", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false } });
+    vi.mocked(getTarget).mockResolvedValue(target(BE, 1060));
   });
 
   it("own cap: value, 自己填, ROAS 參考 = price ÷ cap and 打平; 修改 opens the input", async () => {
@@ -96,10 +101,30 @@ describe("CapBlock", () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign(OWN));
     renderBlock(campaign(BE));
     expect(await screen.findByText("暫用打平")).toBeTruthy();
-    expect(screen.getByText("售價 1,580・ROAS 參考 3.04")).toBeTruthy();
+    expect(await screen.findByText("打平線 520：售價 1,580 − 成本含運 1,060・ROAS 參考 3.04")).toBeTruthy();
+    expect(getTarget).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(putTarget).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "就用 520" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 520, expected_revision: 4 });
+  });
+
+  it("暫用打平 without a known cost, or when the target read fails: price and ROAS only, never a made-up cost", async () => {
+    vi.mocked(getTarget).mockResolvedValue(target(BE, null));
+    const { unmount } = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={campaign(BE)} onCampaignChange={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(getTarget).toHaveBeenCalled());
+    expect(screen.getByText("打平線 520・售價 1,580・ROAS 參考 3.04")).toBeTruthy();
+    expect(screen.queryByText(/成本含運/)).toBeNull();
+    unmount();
+    vi.mocked(getTarget).mockRejectedValue(new Error("逾時"));
+    renderBlock(campaign(BE));
+    await waitFor(() => expect(getTarget).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("打平線 520・售價 1,580・ROAS 參考 3.04")).toBeTruthy();
+  });
+
+  it("an own cap never reads the target for the 打平線 line", async () => {
+    renderBlock(campaign(OWN));
+    expect(await screen.findByText("NT$450")).toBeTruthy();
+    expect(getTarget).not.toHaveBeenCalled();
   });
 
   it("暫用打平: 設定自己的上限 opens the input with a 用打平 fill", async () => {
@@ -143,7 +168,7 @@ describe("CapBlock", () => {
     });
     renderBlock(campaign(OWN));
     expect(await screen.findByRole("button", { name: "廣告 a1｜每筆 180 元｜划算" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 元・0 筆購買｜白花" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 元・0 筆購買｜沒賣出" })).toBeTruthy();
   });
 
   it("a failed triage read leaves the cap usable and offers a retry", async () => {
@@ -157,7 +182,7 @@ describe("CapBlock", () => {
     const user = userEvent.setup();
     vi.mocked(getTarget).mockResolvedValue({
       ...cap({ missing: ["product"], product_id: null }), campaign_id: "cmp_1", product_ids: [],
-      result_kinds: [{ kind: "purchase", label: "購買" }, { kind: "lead", label: "名單" }],
+      result_kinds: [{ kind: "purchase", label: "購買" }, { kind: "lead", label: "名單" }], cost: null,
     });
     vi.mocked(fetchProductList).mockResolvedValue([
       { id: "prd_9", name: "晨光隨行杯 500ml 通勤款", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "confirmed" },

@@ -85,6 +85,61 @@ def record_for_item(conn: _AnyConn, org: str, brand: str, campaign: str, set_id:
     )
 
 
+def ab_text(ab: dict) -> str:
+    """F29-I04 Contract F: the learning an A/B set's confirmed pause writes -- no numbers, so the
+    same conclusion reached twice promotes confidence (Contract D)."""
+    return (
+        f"「{ab['dimension_label']}」用「{ab['winner']['value_label']}」"
+        f"比「{ab['loser']['value_label']}」划算"
+    )
+
+
+def record_for_ab_item(conn: _AnyConn, org: str, brand: str, campaign: str, change_set: dict,
+                       item: dict) -> dict | None:
+    """F29-I04 Contract F, same rules as `record_for_item`: call only once `check` has already
+    committed `item` as `confirmed`; idempotent per change ITEM id (the runtime re-check calls
+    `check` again). A no-op for anything but the `pause` item of a `source: "ab"` set."""
+    plan = change_set.get("plan_json") or {}
+    ab = plan.get("ab")
+    if plan.get("source") != "ab" or not ab or item.get("kind") != "pause":
+        return None
+    item_id = item["id"]
+    rows = _ads_rows(conn, brand)
+    if any(row["source_cycle_id"] == item_id for row in rows):
+        return None
+    text = ab_text(ab)
+    prior = sum(1 for row in rows if row["learning_text"] == text)
+    return bi_repo.record_learning(
+        cast(Conn, conn), brand, actor="system", learning_text=text,
+        applicability_scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+        sample_size="1", source_cycle_id=item_id, source_track="ads",
+    )
+
+
+# F29-I03 Contract E: a period-settle learning's `source_cycle_id` is `settle:<month>:<entity_id>`
+# (`app/ads/settle.py`), naming the ad entity instead of a change item.
+_SETTLE_PREFIX = "settle:"
+
+
+def _campaign_of_source(conn: _AnyConn, org: str, brand: str, source_cycle_id: str | None):
+    """The campaign a learning came from: a settle learning through its ad entity, every other one
+    through the change item (`ads_action`) its `source_cycle_id` names. `None` when unknown."""
+    if not source_cycle_id:
+        return None
+    if source_cycle_id.startswith(_SETTLE_PREFIX):
+        entity_id = source_cycle_id.rsplit(":", 1)[-1]
+        row = conn.execute(
+            "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org, brand, entity_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT campaign_id FROM ads_action WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org, brand, source_cycle_id),
+        ).fetchone()
+    return row["campaign_id"] if row else None
+
+
 def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     """Contract D: `GET .../learnings` -- ads-track rows only, newest first, <=50 (the ledger's
     own default). Each row's `campaign_id`/`campaign_name` is looked up through this module's own
@@ -96,13 +151,7 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     rows = _ads_rows(conn, brand)
     result = []
     for row in rows[:50]:
-        campaign_id = None
-        action = conn.execute(
-            "SELECT campaign_id FROM ads_action WHERE org_id=%s AND brand_id=%s AND id=%s",
-            (row["org_id"], brand, row["source_cycle_id"]),
-        ).fetchone()
-        if action:
-            campaign_id = action["campaign_id"]
+        campaign_id = _campaign_of_source(conn, row["org_id"], brand, row["source_cycle_id"])
         campaign_name = None
         campaign_objective = None
         if campaign_id:
