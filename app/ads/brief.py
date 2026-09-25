@@ -22,7 +22,7 @@ import json
 import math
 from datetime import date, timedelta
 
-from app.ads import channels, objectives
+from app.ads import channels, objectives, wizard_options
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
@@ -219,15 +219,18 @@ def _check_picks(conn, brand_id: str, picks: dict) -> dict:
     if not _valid_budget(budget):
         raise ValueError("budget_invalid")
     product_ids = picks.get("product_ids")
-    if (not isinstance(product_ids, list) or not product_ids
-            or not all(isinstance(p, str) and p for p in product_ids)):
+    # Contract D: `product_ids: [id]` -- exactly one pick.
+    if (not isinstance(product_ids, list) or len(product_ids) != 1
+            or not isinstance(product_ids[0], str) or not product_ids[0]):
         raise ValueError("products_required")
-    by_id = {p["id"]: p for p in bi_repo.list_products(conn, brand_id)}
-    if any(p not in by_id for p in product_ids):
+    # Only what the wizard lists is pickable (same function, not a second rule): an archived
+    # product or a product represented by its sell ways is `product_unknown`.
+    by_id = {p["id"]: p for p in wizard_options.sellable_products(conn, brand_id)}
+    product = by_id.get(product_ids[0])
+    if product is None:
         raise ValueError("product_unknown")
-    product_ids = list(dict.fromkeys(product_ids))
     return {
-        "product_ids": product_ids, "products": [by_id[p] for p in product_ids],
+        "product_ids": [product["id"]], "products": [product],
         "objective": objective, "budget": budget,
     }
 
@@ -267,6 +270,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         start, end = _validate_dates(start_date, end_date)
     constraints = dict(constraints or {})
     checked = _check_picks(conn, brand_id, picks) if picks is not None else None
+    goal_composed = False
     dates_source = "user"
     if checked is not None:
         if start is None or end is None:
@@ -275,6 +279,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             dates_source = "system"
         if not isinstance(goal_text, str) or not goal_text.strip():
             goal_text = _compose_goal_text(checked, start, end)
+            goal_composed = True
         constraints["budget"] = checked["budget"]
 
     brand_text, knowledge_item_ids, brand_version, _product_version = context_compiler.compile(
@@ -371,7 +376,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         "name": _draft_name(goal_text),
         "goal_text": goal_text,
         "objective": fields["objective"],
-        "target_cost": fields["cap"],
+        # A sentence the program composed carries no cap the user stated: whatever the model
+        # read as `cap` is dropped; the cap is set on the strategy page.
+        "target_cost": None if goal_composed else fields["cap"],
         "start_date": start,
         "end_date": end,
         "status": "draft",

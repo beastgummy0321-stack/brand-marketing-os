@@ -24,6 +24,7 @@ from app.ads import (
     external_repository,
     judgment,
     manual_settings,
+    objectives,
     result_kinds,
     triage_scale,
 )
@@ -159,11 +160,14 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         assert updated is not None
         return updated
 
-    for field in ("name", "objective"):
-        if field in updates:
-            value = updates[field]
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{field}_unknown")
+    if "name" in updates:
+        value = updates["name"]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("name_unknown")
+    if "objective" in updates:
+        # F30-I04: a draft's objective obeys the same catalog the create path does (a reserved
+        # seat -> `objective_unavailable`, anything else not accepted -> `objective_unknown`).
+        objectives.check(updates["objective"])
 
     # F03-I19: dates validated on the *merged* row — a patch may move only one of the two, so
     # checking the payload alone would miss `end < start` when only `end_date` is sent (§0 "The

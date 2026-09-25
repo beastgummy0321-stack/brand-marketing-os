@@ -188,7 +188,7 @@ _CREATE_CAMPAIGN_ERRORS = {
     "objective_unavailable": (400, "這個目標尚未開放，請選其他目標。"),
     "objective_unknown": (400, "請選一個想要的結果。"),
     "budget_invalid": (400, "「這個活動最多花」請填大於 0 的數字。"),
-    "products_required": (400, "請至少選一個商品。"),
+    "products_required": (400, "請選一個商品。"),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
 }
 
@@ -240,7 +240,8 @@ _PATCH_CAMPAIGN_ERRORS = {
     external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "name_unknown": (400, "名稱不能是空白。"),
-    "objective_unknown": (400, "目標不能是空白。"),
+    "objective_unknown": (400, "請從清單選一個目標。"),
+    "objective_unavailable": (400, "這個目標尚未開放，請選其他目標。"),
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
     "campaign_bound": (

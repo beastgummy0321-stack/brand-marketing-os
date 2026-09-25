@@ -48,6 +48,12 @@ def _thumbnails(conn, brand_id: str) -> dict:
     return urls
 
 
+def sellable_products(conn, brand_id: str) -> list[dict]:
+    """The products the wizard offers, in name order -- also the only ids a structured create
+    accepts (`brief._check_picks`), so the list and the create can never disagree."""
+    return _sellable(bi_repo.list_products(conn, brand_id))
+
+
 def _sellable(products: list[dict]) -> list[dict]:
     active = [p for p in products if p.get("status") == "active"]
     active_ids = {p["id"] for p in active}
@@ -78,6 +84,6 @@ def options(conn, org_id: str, brand_id: str) -> dict:
     thumbnails = _thumbnails(conn, brand_id)
     products = [
         _product_option(conn, brand_id, product, today, thumbnails)
-        for product in _sellable(bi_repo.list_products(conn, brand_id))
+        for product in sellable_products(conn, brand_id)
     ]
     return {"products": products, "objectives": objectives.catalog()}

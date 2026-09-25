@@ -523,16 +523,42 @@ class StructuredCreateTest(_BriefTestBase):
             self.assertEqual(str(ctx.exception), "budget_invalid", repr(bad))
         self.assertEqual(self._task_count(), 0)
 
-    def test_products_must_be_picked_from_this_brand(self):
+    def test_composed_goal_never_carries_a_model_cap(self):
+        brief.PROVIDER = _fake(json.dumps({"objective": "名單", "cap": 30000, "product_ids": []}))
+        detail = self._create_picks()
+        self.assertTrue(detail["parsed"])
+        self.assertIsNone(detail["cap"]["own_value"])
+        row = web.conn.execute(
+            "SELECT target_cost, target_basis FROM ads_campaign WHERE id=%s", (detail["id"],),
+        ).fetchone()
+        self.assertIsNone(row["target_cost"])
+        self.assertIsNone(row["target_basis"])
+
+    def test_products_must_be_one_the_wizard_lists(self):
         brief.PROVIDER = _fake("{}")
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        archived = bi_repo.create_product(web.conn, self.brand_id, name="舊款背心", actor=ACTOR)
+        bi_repo.update_product(
+            web.conn, self.brand_id, archived["id"], name=archived["name"], status="archived",
+            actor=ACTOR,
+        )
+        parent = bi_repo.create_product(web.conn, self.brand_id, name="夜跑套組", actor=ACTOR)
+        sell_way = bi_repo.create_product(
+            web.conn, self.brand_id, name="夜跑套組 · 單品", actor=ACTOR, parent_id=parent["id"],
+        )
         for bad, code in (
             ([], "products_required"), (None, "products_required"),
-            ("prd_x", "products_required"), (["prd_not_this_brand"], "product_unknown"),
+            ("prd_x", "products_required"),
+            ([self.product["id"], other["id"]], "products_required"),
+            (["prd_not_this_brand"], "product_unknown"), ([archived["id"]], "product_unknown"),
+            ([parent["id"]], "product_unknown"),
         ):
             with self.assertRaises(ValueError) as ctx:
                 self._create_picks(picks=self._picks(product_ids=bad))
             self.assertEqual(str(ctx.exception), code, repr(bad))
         self.assertEqual(self._task_count(), 0)
+        detail = self._create_picks(picks=self._picks(product_ids=[sell_way["id"]]))
+        self.assertEqual(detail["context_json"]["product_ids"], [sell_way["id"]])
 
     def test_default_dates_start_from_the_organisations_today(self):
         brief.PROVIDER = _fake(json.dumps({
@@ -603,6 +629,36 @@ class StructuredCreateRouteTest(_BriefTestBase):
         res = self.client.post(self.url, json={"goal_text": ""})
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["error"]["code"], "goal_text_required")
+
+
+class PatchObjectiveFollowsCatalogTest(_BriefTestBase):
+    def test_patch_refuses_what_create_refuses(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        for value, code in (("互動", "objective_unavailable"), ("來店", "objective_unavailable"),
+                            ("awareness", "objective_unknown"), ("", "objective_unknown"),
+                            (None, "objective_unknown")):
+            with self.assertRaises(ValueError) as ctx:
+                ads_repo.update_campaign(
+                    web.conn, self.org_id, self.brand_id, detail["id"], {"objective": value},
+                )
+            self.assertEqual(str(ctx.exception), code, value)
+            self.assertIn(code, ads_routes._PATCH_CAMPAIGN_ERRORS)
+        for value in ("流量", "加購物車"):
+            updated = ads_repo.update_campaign(
+                web.conn, self.org_id, self.brand_id, detail["id"], {"objective": value},
+            )
+            self.assertEqual(updated["objective"], value)
+
+    def test_patch_route_answers_400_objective_unavailable(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        web.conn.commit()  # the request reads through its own connection
+        res = TestClient(main.app).patch(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}", json={"objective": "互動"},
+        )
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertEqual(res.json()["error"]["code"], "objective_unavailable")
 
 
 class PatchAudienceHintTest(_BriefTestBase):

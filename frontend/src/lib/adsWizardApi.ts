@@ -47,7 +47,8 @@ export interface WizardOptions {
 }
 
 export interface CampaignPicks {
-  product_ids: string[];
+  /** Exactly one id, taken from `WizardOptions.products` (anything else is `product_unknown`). */
+  product_ids: [string];
   objective: string;
   /** ISO dates; send both or neither. */
   start_date?: string;
