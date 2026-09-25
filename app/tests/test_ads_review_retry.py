@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import app.tests.test_ads_review_cycle as _cycle
 from app.ads import review_jobs, review_monitor, review_policy, review_rounds, triage
 from app.core import db
 from app.main import app
-from app.tests import test_ads_review_cycle as _cycle
 
 # The two model texts the dev DB rejected on 2026-09-25 (Feature F30 Evidence).
 REAL_HEDGES = (
