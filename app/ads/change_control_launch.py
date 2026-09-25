@@ -3,7 +3,15 @@
 import json
 
 from app import workbench
-from app.ads import assets, change_control, handoff_assignment, manual_settings, month_budget, plan
+from app.ads import (
+    assets,
+    change_control,
+    handoff_assignment,
+    launch_settings,
+    manual_settings,
+    month_budget,
+    plan,
+)
 from app.ads import change_control_data as data
 from app.ads import repository as campaigns
 from app.core import approval, db, settings
@@ -70,6 +78,9 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
         }
         for group in manual_settings.handoff(campaign)["groups"]
     ]
+    # F29 Contract I: the launch settings are part of the frozen launch content (an edit after
+    # approval makes the launch stale). Never a platform read here.
+    result["launch_settings"] = launch_settings.effective(conn, org, brand, campaign)
     source_ref = {"ads_campaign_id": campaign_id}
     legacy_ads = {
         ad["id"]: ad
@@ -146,6 +157,7 @@ def _approve_set(
     item = _launch_item(conn, org, brand, campaign_id, frozen)
     daily = item["after"]["daily_amount"]
     month_budget.preflight(conn, org, brand, frozen["month"], [item])
+    _materialize_settings(conn, org, brand, campaign_id, frozen, actor)
     set_id = db.new_id("acs")
     conn.execute(
         "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
@@ -203,6 +215,24 @@ def _approve_set(
     return set_id, item
 
 
+def _refuse_invalid_settings(conn, org, brand, campaign_id, frozen):
+    """409 `launch_settings_invalid` while the frozen launch settings carry an error (Contract I).
+    The pixel check uses the campaign's cached pixel list: approval never waits on a platform."""
+    campaign = campaigns.get_campaign(conn, org, brand, campaign_id) or {}
+    if launch_settings.errors(frozen["launch_settings"], launch_settings.cached_pixels(campaign)):
+        raise ValueError("launch_settings_invalid")
+
+
+def _materialize_settings(conn, org, brand, campaign_id, frozen, actor):
+    """An approval that froze the recommendation stores it as the saved settings, so a later
+    change of what would be recommended (pixel list, result kind) never makes it stale."""
+    campaign = campaigns.get_campaign(conn, org, brand, campaign_id) or {}
+    if not launch_settings.is_saved(campaign):
+        launch_settings.write_values(
+            conn, org, brand, campaign_id, frozen["launch_settings"], actor
+        )
+
+
 def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
     if not operation_id or not expected_hash:
         raise ValueError("請重新檢視手動交接內容，再核准這次操作。")
@@ -223,6 +253,7 @@ def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
             conn.commit()
             return {"ok": True, "change_set_id": prior["id"]}
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
+        _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
         content_hash = data.digest(frozen)
         if expected_hash != content_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
@@ -365,6 +396,19 @@ def _rows(original, current):
                 original.get(key),
                 current.get(key),
             )
+    settings_before = original.get("launch_settings") or {}
+    settings_after = current.get("launch_settings") or {}
+    for key in launch_settings.KEYS:
+        if settings_before.get(key) != settings_after.get(key):
+            add(
+                "campaign",
+                original.get("id"),
+                name,
+                "launch_settings." + key,
+                launch_settings.KEY_LABELS[key],
+                launch_settings.value_label(key, original.get("launch_settings")),
+                launch_settings.value_label(key, current.get("launch_settings")),
+            )
     old_groups = {g["id"]: g for g in original.get("groups") or []}
     new_groups = {g["id"]: g for g in current.get("groups") or []}
     old_manual = {m["id"]: m.get("values") or {} for m in original.get("manual_settings") or []}
@@ -470,7 +514,11 @@ def _blocker(conn, org, brand, campaign_id, row, original):
             f"執行月份已從 {row['before']} 換成 {row['after']}，核准時的月份無法改回；"
             + _REAPPROVE_HINT
         )
-    if field in _WRITABLE.get(kind, ()) or field.startswith("manual_settings."):
+    if (
+        field in _WRITABLE.get(kind, ())
+        or field.startswith("manual_settings.")
+        or field.startswith("launch_settings.")
+    ):
         return None
     if kind == "ad" and field == "material":
         ad = next(
@@ -536,9 +584,24 @@ def _changed_at(conn, org, brand, campaign_id, rows, approved_at):
     return max(later) if later else None
 
 
+def _comparable(original, current):
+    """Both snapshots normalized. A launch approved before launch settings existed (F29) froze
+    none, so they are not compared for it -- it never goes stale merely by being old."""
+    original, current = normalized(original), normalized(current)
+    if isinstance(original, dict) and isinstance(current, dict):
+        if "launch_settings" not in original:
+            current.pop("launch_settings", None)
+    return original, current
+
+
+def approved_matches(original, current) -> bool:
+    """The comparison `GET …/handoff` reports as `launch_stale`, for a readback's own check."""
+    before, now = _comparable(original, current)
+    return before == now
+
+
 def _compare(change_set, frozen):
-    original = normalized(change_set["plan_json"]["launch_snapshot"])
-    current = normalized(frozen)
+    original, current = _comparable(change_set["plan_json"]["launch_snapshot"], frozen)
     if original == current:
         return original, None
     return original, _rows(original, current)
@@ -650,6 +713,7 @@ def reapprove(conn, org, brand, campaign_id, set_id, expected_hash, actor):
             return {"ok": True, "change_set_id": prior["id"]}
         old = _current_launch(conn, org, brand, campaign_id, set_id)
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
+        _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
         if data.digest(frozen) != expected_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
         if _compare(old, frozen)[1] is None:
@@ -706,11 +770,14 @@ def _restore(conn, org, brand, campaign_id, original, rows, actor):
     groups = {g["id"]: g for g in original.get("groups") or []}
     ads = {a["id"]: a for g in groups.values() for a in g.get("ads") or []}
     manual = {m["id"]: m.get("values") or {} for m in original.get("manual_settings") or []}
-    updates, setting_groups = {}, set()
+    updates, setting_groups, restore_settings = {}, set(), False
     for row in rows:
         kind, planned_id, field = row["kind"], row["planned_id"], row["field"]
         if field.startswith("manual_settings."):
             setting_groups.add(planned_id)
+            continue
+        if field.startswith("launch_settings."):
+            restore_settings = True
             continue
         sources = {"campaign": original, "group": groups.get(planned_id), "ad": ads.get(planned_id)}
         source = sources[kind] or {}
@@ -754,6 +821,10 @@ def _restore(conn, org, brand, campaign_id, original, rows, actor):
             "WHERE org_id=%s AND brand_id=%s AND id=%s",
             (db.jsonb(context), org, brand, campaign_id),
         )
+    if restore_settings:
+        launch_settings.write_values(
+            conn, org, brand, campaign_id, original["launch_settings"], actor
+        )
 
 
 def revert(conn, org, brand, campaign_id, set_id, expected_hash, actor):
@@ -776,7 +847,9 @@ def revert(conn, org, brand, campaign_id, set_id, expected_hash, actor):
             if reason:
                 raise ValueError(reason)
         _restore(conn, org, brand, campaign_id, original, rows, actor)
-        if normalized(snapshot(conn, org, brand, campaign_id)) != original:
+        if not approved_matches(
+            change_set["plan_json"]["launch_snapshot"], snapshot(conn, org, brand, campaign_id)
+        ):
             raise ValueError("改回後仍與核准內容不同，已取消；" + _REAPPROVE_HINT)
         # Items a readback marked stale because of this change go back to waiting for a check.
         conn.execute(

@@ -264,7 +264,7 @@ export function StrategyTab({
             </div>
           ) : (
             <>
-              <p className="mb-2 text-sm text-muted-foreground">人工上架可在投放結構保存受眾、版位、出價、追蹤與平台 ID 對應。</p>
+              <p className="mb-2 text-sm text-muted-foreground">人工上架可在投放結構保存受眾來源、落地頁、歸因與平台 ID 對應；優化事件、出價、版位與像素在上架清單的「投放設定」選。</p>
               <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
             </>
           )}

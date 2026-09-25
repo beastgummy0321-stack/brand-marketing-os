@@ -58,6 +58,11 @@ class LaunchDecisionRequest(BaseModel):
     content_hash: str = Field(min_length=64, max_length=64)
 
 
+class SettingConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=1, max_length=64)
+
+
 class AssignmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     placement_id: str | None
@@ -101,6 +106,22 @@ def reapprove_launch(
 @router.post("/handoff/launch/revert")
 def revert_launch(request: Request, brand_id: str, campaign_id: str, body: LaunchDecisionRequest):
     return _launch_decision(request, brand_id, campaign_id, change_control_launch.revert, body)
+
+
+@router.post("/handoff/launch/settings-confirm")
+def confirm_launch_setting(
+    request: Request, brand_id: str, campaign_id: str, body: SettingConfirmRequest
+):
+    """F29 Contract I: the user confirms by eye that an unreadable launch setting is the same on
+    the platform; answers with the refreshed handoff workspace. 409 for any other state."""
+    return _run(
+        request,
+        brand_id,
+        campaign_id,
+        handoff_check.confirm_setting,
+        body.key,
+        str(web.require_actor(request).user_id),
+    )
 
 
 @router.get("/launch-materials")

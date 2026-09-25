@@ -530,18 +530,24 @@ _EXTERNAL_FIELDS = {
         "id,account_id,name,objective,effective_status,start_time,stop_time,"
         "daily_budget,lifetime_budget"
     ),
+    # F29-I07: the single-object reads also carry the launch settings readback compares
+    # (campaign bid strategy for campaign-budget ad sets, ad set optimisation/bid/targeting/pixel,
+    # creative url_tags). Read only; nothing here writes a setting.
     "campaign": (
         "id,account_id,name,objective,effective_status,start_time,stop_time,"
-        "daily_budget,lifetime_budget"
+        "daily_budget,lifetime_budget,bid_strategy"
     ),
     "adset": (
         "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
-        "daily_budget,lifetime_budget"
+        "daily_budget,lifetime_budget,optimization_goal,bid_strategy,targeting,promoted_object"
     ),
     "ad": (
         "id,account_id,campaign_id,adset_id,name,effective_status,creative{id,body,title,"
-        "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,product_set_id}"
+        "image_hash,image_url,video_id,thumbnail_url,object_story_spec,asset_feed_spec,"
+        "product_set_id,url_tags}"
     ),
+    # F29-I07: the account's tracking pixels (id and name only), for the launch-settings choice.
+    "pixels": "id,name",
     "adsets": (
         "id,account_id,campaign_id,name,effective_status,start_time,end_time,"
         "daily_budget,lifetime_budget"
@@ -595,6 +601,8 @@ def external_page(
         params["after"] = cursor
     if section == "campaigns":
         path = f"act_{account_id}/campaigns"
+    elif section == "pixels":
+        path = f"act_{account_id}/adspixels"
     elif section == "monthly":
         if start is None or end is None or str(start) > str(end):
             raise GraphError("來源月份範圍無效。")

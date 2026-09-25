@@ -166,13 +166,19 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
     else clearManualDraft(draftKey);
   }, [dirty, draftKey, values]);
 
+  // A focus request is consumed once (by its token): the jump switches the section a single time, and the user can
+  // switch sections afterwards without being dragged back. A new 補齊 click carries a new token and jumps again.
+  const handledFocusToken = useRef<number | null>(null);
   useEffect(() => {
-    if (!focusRequest || !requestedField) return;
+    if (!focusRequest || !requestedField || handledFocusToken.current === focusRequest.token) return;
     if (section !== requestedField.section) {
       setSection(requestedField.section);
       return;
     }
-    const timer = window.setTimeout(() => fieldRefs.current[focusRequest.key]?.focus(), 0);
+    const timer = window.setTimeout(() => {
+      handledFocusToken.current = focusRequest.token;
+      fieldRefs.current[focusRequest.key]?.focus();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [focusRequest, requestedField, section]);
 

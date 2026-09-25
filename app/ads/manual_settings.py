@@ -5,19 +5,23 @@ from urllib.parse import urlparse
 
 from app.core.db import jsonb
 
+# F29 Contract I: optimisation event, bid strategy, placement, pixel and UTM are choice fields of
+# `app/ads/launch_settings.py` now. The rest stay free text per ad set, folded under 進階設定
+# (F29 Unresolved 5): the landing URL and a retarget group's audience ID keep their required rule,
+# the others are optional.
 FIELDS = [
-    {"key": "audience_source", "label": "受眾來源與納入條件", "section": "受眾", "required": True},
+    {"key": "audience_source", "label": "受眾來源與納入條件", "section": "受眾", "required": False},
     {
         "key": "audience_window",
         "label": "回溯期間（新客填不適用）",
         "section": "受眾",
-        "required": True,
+        "required": False,
     },
     {
         "key": "audience_exclusions",
         "label": "排除條件（沒有請填無）",
         "section": "受眾",
-        "required": True,
+        "required": False,
     },
     {
         "key": "audience_id",
@@ -25,18 +29,8 @@ FIELDS = [
         "section": "受眾",
         "required": False,
     },
-    {"key": "placements", "label": "版位", "section": "受眾", "required": True},
-    {"key": "bidding", "label": "出價策略", "section": "受眾", "required": True},
-    {"key": "optimization_event", "label": "優化事件", "section": "追蹤", "required": True},
-    {"key": "attribution", "label": "歸因期間", "section": "追蹤", "required": True},
-    {
-        "key": "tracking",
-        "label": "追蹤來源／像素 ID 與驗證方式",
-        "section": "追蹤",
-        "required": True,
-    },
+    {"key": "attribution", "label": "歸因期間", "section": "追蹤", "required": False},
     {"key": "landing_url", "label": "落地頁網址", "section": "追蹤", "required": True},
-    {"key": "utm", "label": "UTM 參數（不使用請寫原因）", "section": "追蹤", "required": True},
     {
         "key": "campaign_platform_id",
         "label": "平台活動 ID（手動紀錄）",
@@ -62,6 +56,9 @@ FIELDS = [
         "required": False,
     },
 ]
+# The free-text keys that moved into launch settings. A value saved before stays in its record,
+# readable and accepted back on save, but it is neither required nor part of the launch content.
+LEGACY_KEYS = frozenset({"placements", "bidding", "optimization_event", "tracking", "utm"})
 
 
 def handoff(campaign: dict) -> dict:
@@ -113,7 +110,7 @@ def save(
     group = repository.get_group(conn, org_id, brand_id, group_id)
     if group is None or group["campaign_id"] != campaign_id:
         raise ValueError("group_unknown")
-    allowed = {f["key"] for f in FIELDS}
+    allowed = {f["key"] for f in FIELDS} | LEGACY_KEYS
     if set(values) - allowed or any(
         not isinstance(v, str) or len(v) > 2000 for v in values.values()
     ):
