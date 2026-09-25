@@ -37,7 +37,7 @@ CODEX_CLI_MODEL = "gpt-5.6-luna"
 # ---------------------------------------------------------------------------
 # 罐頭回覆線路（e2e 後端專用，F06-I05）：BRAND_OS_LLM_PROVIDER=scripted 時，每一次 AI 呼叫
 # 都回這張表裡按 task_type 對應的固定 JSON，不打任何真實模型。只收 e2e 請求路徑上真的會打的
-# 三種 task_type；沒有腳本的 task_type 在 select_provider() 選供應商時就丟 LookupError，
+# task_type；沒有腳本的 task_type 在 select_provider() 選供應商時就丟 LookupError，
 # 讓請求 500、e2e 當場紅，不會掉進「解析失敗改用預設值」那條安靜的退路。
 # ---------------------------------------------------------------------------
 SCRIPTED_REPLIES: dict[str, dict] = {
@@ -53,6 +53,17 @@ SCRIPTED_REPLIES: dict[str, dict] = {
             {"role": "explore", "pct": 20, "rationale": "e2e scripted reply"},
         ],
         "why": ["e2e scripted reply"], "unknowns": [], "alternatives": [], "learning_goals": [],
+    },
+    # Same three roles as ads_strategy above; `plan.adopt_strategy` requires the role sets to match exactly.
+    "ads_delivery_plan": {
+        "groups": [
+            {"role": role, "name": f"e2e {role} group", "ads": [{
+                "name": f"e2e {role} ad",
+                "coordinates": dict.fromkeys(
+                    ("audience", "pain", "angle", "hook", "proof", "offer", "format"), "e2e"),
+            }]}
+            for role in ("new", "retarget", "explore")
+        ],
     },
     "workbench_free_parse": {
         "topic": None, "outputs": [{"part": "image_prompt", "count": 1}], "style_hint": None,

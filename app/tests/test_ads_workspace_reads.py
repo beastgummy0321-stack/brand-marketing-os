@@ -331,6 +331,12 @@ class LiveWorkspaceTest(_WithReader):
         self.assertEqual(count, 1)
         self.assertEqual(queue.call_args.kwargs["items"], [{"entity_id": self.ad}])
 
+    def test_the_count_never_grades_the_brand_month_for_a_settle_row_it_drops(self):
+        with mock.patch.object(triage, "_settle_candidates", return_value=[]) as settle:
+            workspace_reads._open_queue_count(self.conn, self.org, self.brand, self.campaign, [])
+            triage.get_queue(self.conn, self.org, self.brand, items=[])
+        self.assertEqual(settle.call_count, 1, "only the brand queue grades the month")
+
     def test_closed_is_review(self):
         self.conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s",
                           (self.campaign,))

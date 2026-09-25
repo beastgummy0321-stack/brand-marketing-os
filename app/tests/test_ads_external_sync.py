@@ -306,6 +306,26 @@ class ExternalSyncTest(unittest.TestCase):
         observations_key = next(k for k in job["tasks"] if ":observations:" in k)
         self.assertEqual(job["tasks"][observations_key]["error_code"], "derive_failed")
 
+    def test_failed_range_not_requested_again_does_not_hold_job_partial(self):
+        # The default range moves daily, so a failed observations key for yesterday's range is
+        # never requested again; it must not keep the job `partial` forever.
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        old = (today - timedelta(days=30), today - timedelta(days=1))
+        with patch.object(tracked_zero, "apply", side_effect=RuntimeError("boom")):
+            job = self.run_pages(sync.request_sync(
+                self.conn, self.org, self.brand, "other", "account", start=old[0], end=old[1]
+            ))
+        self.assertEqual(job["status"], "partial")
+        job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        self.assertIsNotNone(job["last_success_at"])
+        self.assertFalse(any(old[1].isoformat() in key for key in job["tasks"]))
+
     def test_missing_account_timezone_skips_derivation_and_keeps_the_synced_page(self):
         # F18-I01 review fix: an unresolved account timezone means the cutoff can't be computed --
         # fail closed (skip derivation, rows stay unknown), never `derive_failed`, never rolling

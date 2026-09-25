@@ -368,7 +368,7 @@ def _material_label(value):
     if not value:
         return None
     text = f"{value.get('filename') or '素材'}・第 {value.get('placement_revision')} 版"
-    if value.get("assignment_status") == "confirmed":
+    if ready_material(value):
         return text
     return text + "（已修訂或未確認，需重新指派素材）"
 

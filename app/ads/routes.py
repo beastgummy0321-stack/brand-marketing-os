@@ -456,6 +456,7 @@ _GROUP_EDIT_ERRORS = {
     "daily_budget_invalid": (400, "日預算必須大於 0。"),
     "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
     "group_bound": (400, "這個投放組已經綁定平台，不能直接刪除。"),
+    "last_group": (409, "至少要留一個投放組；想換掉請先新增再刪。"),
 }
 
 
@@ -722,6 +723,18 @@ _PUBLISH_ERRORS = {
 }
 
 
+def _drop_deferred(conn, org_id: str, brand_id: str, campaign_id: str, enriched: dict) -> dict:
+    """F30: the manual checklist lists exactly the ads the launch snapshot carries -- an ad
+    deferred until its material is ready goes out with a later version, so it is left out here
+    too. Returns that snapshot."""
+    deferred: list = []
+    content = change_control_launch.snapshot(conn, org_id, brand_id, campaign_id, deferred=deferred)
+    skip = {d["ad_id"] for d in deferred}
+    for group in enriched["groups"]:
+        group["ads"] = [ad for ad in group["ads"] if ad["id"] not in skip]
+    return content
+
+
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}/publish")
 def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str = "manual"):
     """F03-I09：發布方式清單 + 選定那個 adapter 的 `describe`。"""
@@ -733,10 +746,12 @@ def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str 
     chosen = adapters.get_adapter(adapter)
     if chosen is None:
         raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
-    description = chosen.describe(enriched)
+    content = None
     if adapter == "manual":
-        description["content_hash"] = change_control_data.digest(
-            change_control_launch.snapshot(web.conn, actor.org_id, brand_id, campaign_id))
+        content = _drop_deferred(web.conn, actor.org_id, brand_id, campaign_id, enriched)
+    description = chosen.describe(enriched)
+    if content is not None:
+        description["content_hash"] = change_control_data.digest(content)
     return {"adapters": adapters.ADAPTERS, "adapter": adapter, "describe": description}
 
 
@@ -779,6 +794,8 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
     enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
     if enriched is None:
         raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    if body.adapter == "manual":
+        _drop_deferred(web.conn, actor.org_id, brand_id, campaign_id, enriched)
     return chosen.describe(enriched)
 
 

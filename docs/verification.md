@@ -27,7 +27,7 @@
 ## e2e 的能力邊界
 
 `npm run e2e` 會 build，再由 Playwright 啟動 8720 後端。若本次 Harness integration 已成功 build，`verify.smoke_after_build` 使用同一 checkout 的 `npx playwright test`，避免第二次 build；不能跨樹或沿用未知的 dist。
-[playwright.config.ts](../frontend/playwright.config.ts) 用 `scripted` 供應商與 `memory` queue，僅允許 local。未知 task type 會失敗；背景工作不執行。需背景結果的測試應選擇可覆蓋該行為的整合測試或授權的獨立測試環境，不能把等待逾時當驗收。
+[playwright.config.ts](../frontend/playwright.config.ts) 用 `scripted` 供應商與 `memory` queue，僅允許 local。未知 task type 會失敗；背景工作不執行。需背景結果的測試應選擇可覆蓋該行為的整合測試或授權的獨立測試環境，不能把等待逾時當驗收。`ads-cold-start.spec.ts` 需要素材預覽，改在測試裡直接呼叫 worker 的 `process_preview`（CI 已有 FFmpeg）。
 新的 scripted reply 必須由所屬模組測試約束形狀；涉及 legacy seam 的票仍需 `legacy_migration` 與邊界審查。保留租戶隔離、憑證保護與費用限制。
 
 ### F13 的隔離完整流程
@@ -45,13 +45,6 @@
 正常與失敗路徑皆產生 `cleanup.json`。重啟前保留實際 queued 工作，重啟後由真 dispatcher 續跑，
 並核對原檔 bytes 不變。stdout 提供本機證據目錄；`runtime-result.json` 與清理結果必須一起檢查。
 
-需要瀏覽器時加 `--browser --browser-timeout 900 --context <專用證據目錄/context.json> --port 8732`。
-先 build 同 checkout，再用 `F13_E2E_CONTEXT=<該 context.json>`、`E2E_BASE_URL=<context.base_url>`
-執行 `npx playwright test existing-campaigns-assets.spec.ts`。測試正常登入 seed 帳號，實際批次上傳、
-解碼圖片／影片預覽、確認與回讀，再覆蓋 heavy／empty／loading／error 的 1024／1920 截圖。
-loading／error 只延遲或中止測試瀏覽器的 GET，不植入產品成功狀態；預覽解碼不冒充原檔位元組驗證。
-普通 smoke 的不執行背景環境會明確跳過此專屬 spec；F13 必須另有真實執行且通過的結果。
-完成後建立 context 的 `stop_file`，父程序清理自己的服務／schema／Storage／fixture 媒體並保留證據。
 不要把舊服務、fixture 回應或佇列 done 當成真帳號能力及人工驗收；F13 與 F07 的未驗收項目分開保存。
 
 ## UI 與視覺
@@ -76,12 +69,6 @@ D 在來源第二頁、模型已保存未掛回、模型呼叫中、檢討已保
 `review-recovery.json`、第二輪證據、`runtime-result.json` 與 `cleanup.json`；
 `ok` 只證明隔離流程，不代表真平台修改或真實營收改善。
 
-瀏覽器加 `--browser --context <專用暫存目錄/context.json> --port 8735`，先 build 同樹；
-設定 `F15_D_E2E_CONTEXT` 與 `E2E_BASE_URL` 後執行 `npx playwright test ads-runtime-cycle.spec.ts`。
-正常登入／投放中心入口核對未知結果、B2 來源、資料不足及追蹤條件保存、重開與讀回，
-1920／1024 全頁截圖存同一證據目錄。A／B／C 分別用對應 spec／context；普通 smoke
-明確跳過依賴專屬 fixture 的案例，不能把 skipped 視為已驗收。
-
-關閉頁面不停止 worker，關閉服務／主機則會中斷本地監測；完成瀏覽器驗收後寫入 context
-指定的 `stop_file`，讓 runner 清理自己的服務／schema／Storage。真 Meta 唯讀探測另列
+這兩支 runner 只做 HTTP／資料庫層驗收，不再附瀏覽器 spec（2026-09-26 退役）；冷啟動的畫面流程由
+一般 `npm run e2e` 的 `ads-cold-start.spec.ts` 自建帳號資料跑。真 Meta 唯讀探測另列
 實際取得欄位與缺漏；不得把替身設定讀回、使用者自述或檢討完成當作真實平台變更證據。

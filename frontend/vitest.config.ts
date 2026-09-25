@@ -13,5 +13,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.tsx', 'src/**/*.test.ts'],
+    // src/lib/auth.ts builds the Supabase client at import time; tests never connect, so dummy
+    // values keep every test off the real .env (and CI, which has none).
+    env: {
+      VITE_SUPABASE_URL: 'http://localhost:54321',
+      VITE_SUPABASE_ANON_KEY: 'test-anon-key',
+    },
   },
 });

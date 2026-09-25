@@ -96,10 +96,13 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
                 "start": str(start),
                 "end": str(end),
             }
+    # Observation keys carry their range, and the default range moves daily: a finished task
+    # (succeeded or failed) this call did not request is dropped, or an old failed range would
+    # hold the job `partial` forever. Pending ones stay for callers that request several ranges.
     tasks = {
         key: task
         for key, task in tasks.items()
-        if task["status"] != "succeeded" or key in requested or key.startswith("monthly:")
+        if task["status"] == "pending" or key in requested or key.startswith("monthly:")
     }
     active = row["status"] in {"pending", "running"}
     for key, task in requested.items():

@@ -8,7 +8,7 @@ from app.ads import asset_binding_repository as bindings
 from app.ads import asset_suggestion_policy as policy
 from app.ads import change_control_data as changes
 from app.ads import review_evidence
-from app.core import db, settings
+from app.core import db, interrupts, settings
 from app.llm import providers
 
 TASK_TYPE = "ads_ad_review"
@@ -233,15 +233,17 @@ def retry(conn, org, brand, campaign, review_id, actor="human"):
     if changes.campaign(conn, org, brand, campaign)["status"] == "closed":
         raise ValueError("已結案活動只能查看歷史檢討。")
     old = get(conn, org, brand, campaign, review_id)
-    if old["decision"] is not None or not (
+    # A superseded round passes so a stale screen's repeat dedupes to its retry round.
+    superseded = _superseded(conn, org, brand, campaign, review_id)
+    if not superseded and (old["decision"] is not None or not (
         old["status"] == "failed" or (old["result_json"] or {}).get("rejected")
-    ):
+    )):
         raise ValueError("只有尚未決定、失敗或 AI 說明被擋下的檢討可以再請 AI 看一次。")
     # Read the stored snapshot, not `get`'s view: `copy_editable` is a read-time field.
     evidence = conn.execute(
         "SELECT evidence_json FROM ads_review_round WHERE org_id=%s AND id=%s", (org, review_id)
     ).fetchone()["evidence_json"]
-    return submit(
+    result = submit(
         conn,
         org,
         brand,
@@ -254,6 +256,34 @@ def retry(conn, org, brand, campaign, review_id, actor="human"):
         {**deepcopy(evidence), "retry_of": review_id},
         manual_monitor=True,
     )
+    # The retry round replaces this one: close it with an existing decision value (no new
+    # state) so it stops counting as open, and end its ready notice.
+    conn.execute(
+        "UPDATE ads_review_round SET status='unjudgeable',decision='unjudgeable',reason=%s,"
+        "updated_at=now() WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s "
+        "AND decision IS NULL",
+        ("已重新請 AI 看一次，改看新一回。", org, brand, campaign, review_id),
+    )
+    _resolve_ready_notice(conn, org, brand, review_id)
+    conn.commit()
+    return result
+
+
+def _superseded(conn, org, brand, campaign, review_id):
+    return conn.execute(
+        "SELECT 1 FROM ads_review_round WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND evidence_json->>'retry_of'=%s LIMIT 1",
+        (org, brand, campaign, review_id),
+    ).fetchone() is not None
+
+
+def _resolve_ready_notice(conn, org, brand, review_id):
+    """End the 「廣告檢討已備妥」 notice `runtime` raised for this round (commits)."""
+    for row in interrupts.list_open(
+        conn, brand_id=brand, category="ads_review_ready", archive_stale=False
+    ):
+        if row["dedupe_key"] == "ads-review:" + review_id:
+            interrupts.resolve(conn, row["id"], actor="system", org_id=org)
 
 
 def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=None):
@@ -272,6 +302,8 @@ def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=N
     if decision == "deferred" and revisit is None:
         raise ValueError("延後檢討請留下重看時間。")
     get(conn, org, brand, campaign, review_id)
+    if _superseded(conn, org, brand, campaign, review_id):
+        raise ValueError("本回已重新請 AI 看一次，請改在新一回決定。")
     allowed = (
         ["ready"]
         if decision == "completed"
@@ -289,6 +321,7 @@ def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=N
     from app.ads import review_monitor
 
     review_monitor.on_decision(conn, result, commit=False)
+    _resolve_ready_notice(conn, org, brand, review_id)
     conn.commit()
     return result
 

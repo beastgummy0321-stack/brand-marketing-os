@@ -62,7 +62,6 @@ class Runtime:
             "evidence_dir": str(self.directory),
             "state_file": str(self.directory / "source-state.json"),
             "events_file": str(self.directory / "events.jsonl"),
-            "stop_file": str(self.directory / "stop"),
             "media_paths": {},
             "primary_platform": "meta",
             "primary_account_id": fixture.FIXTURE["accounts"][0],
@@ -128,7 +127,6 @@ class Runtime:
             self.context["state_file"], {"creative_revision": 1, "fail_next": False, "gate": None}
         )
         Path(self.context["events_file"]).write_text("", encoding="utf-8")
-        Path(self.context["stop_file"]).unlink(missing_ok=True)
         self.persist()
         token = jwt.encode(
             {
@@ -496,7 +494,6 @@ def review_recovery(run, route):
     assert run.count_calls() == before_gap + 1
     run.context.update(
         first_review_id=saved["id"],
-        browser_review_id=saved["id"],
         unknown_review_id=unknown["id"],
         recovered_gap_review_id=gap_review["id"],
     )
@@ -548,14 +545,5 @@ def main(args):
         fixture.write_json(run.directory / "runtime-result.json", result)
         fixture.write_json(run.directory / "queue-evidence.json", run.queue_rows())
         print(json.dumps(result), flush=True)
-        if args.browser:
-            run.start_worker()
-            until = time.monotonic() + args.browser_timeout
-            while not Path(run.context["stop_file"]).exists():
-                if run.web.poll() is not None or run.worker.poll() is not None:
-                    raise RuntimeError("D browser web/worker exited")
-                if time.monotonic() > until:
-                    raise TimeoutError("D browser hold expired")
-                time.sleep(0.2)
     finally:
         run.cleanup()

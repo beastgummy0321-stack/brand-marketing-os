@@ -281,6 +281,22 @@ describe("DeliveryTab（F06-I02）", () => {
     expect(screen.getByRole("button", { name: "儲存變更" })).toBeTruthy();
   });
 
+  it("只剩一個投放組：刪除按鈕停用並寫出原因；有兩組時可刪", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    expect((screen.getByRole("button", { name: "刪除" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("至少要留一個投放組；想換掉請先新增再刪。")).toBeTruthy();
+    unmount();
+
+    renderTab(campaign({ groups: [group(), group({ id: "grp_2", name: "再行銷" })] }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    expect((screen.getByRole("button", { name: "刪除" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("至少要留一個投放組；想換掉請先新增再刪。")).toBeNull();
+  });
+
   it("status live：打開這一組的進階後看得到未綁定徽章", async () => {
     const user = userEvent.setup();
     renderTab(campaign({ status: "live" }));

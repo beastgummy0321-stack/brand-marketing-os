@@ -38,6 +38,8 @@ from app.ads import (
     runtime,
     targets,
     triage,
+    triage_capacity,
+    triage_scale,
 )
 from app.ads.external_repository import is_monthly_budget_row
 from app.core import settings as coresettings
@@ -407,14 +409,16 @@ def _draft_view(conn, org_id, brand_id, campaign, cap) -> dict:
     }
 
 
-def _daily_budget(conn, org_id, brand_id, campaign, owners, draft) -> float | None:
+def _daily_budget(conn, org_id, brand_id, campaign, active_ads, draft,
+                  owner_by_entity=None) -> float | None:
+    """Draft: the plan's group total. Launched (ads.md §6.34, 2026-09-26): the ONE rule the
+    workspace uses too -- `triage_capacity.capacity_view` over the daily budget owners of the
+    campaign's ACTIVE ads; an owner whose ads are all paused never counts."""
     if draft:
         total = repository.group_budget_total(conn, org_id, brand_id, campaign["id"])
         return total or None
-    live = [o for o in owners if not ad_status.is_closed(o.get("native_status"))]
-    if not live or any(o.get("budget_type") != "daily" for o in live):
-        return None
-    return float(sum(Decimal(str(o["budget_amount"])) for o in live))
+    items = [{"entity_id": ad["id"]} for ad in active_ads]
+    return triage_capacity.capacity_view(items, None, owner_by_entity or {})["daily_budget"]
 
 
 def _missing_days(campaign, win) -> list:
@@ -489,12 +493,10 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
     entity_campaigns = {e["campaign_id"] for e in entities}
     handoff_sets = _handoff_sets(conn, org_id, brand_id)
     ads_by_campaign = defaultdict(list)
-    owners_by_campaign = defaultdict(list)
     for entity in entities:
-        if entity["native_kind"] == "ad":
+        if entity["native_kind"] == "ad" and not ad_status.is_closed(entity.get("native_status")):
             ads_by_campaign[entity["campaign_id"]].append(entity)
-        elif entity.get("budget_amount") is not None:
-            owners_by_campaign[entity["campaign_id"]].append(entity)
+    owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     accounts_cache: dict = {}
     live, drafts = [], []
     for campaign_id, campaign in campaigns.items():
@@ -521,12 +523,10 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
             "cost_per_purchase": _money_out(spend / purchases)
             if spend is not None and purchases else None,
             "cap": _cap_out(cap),
-            "active_ads": sum(
-                1 for ad in ads_by_campaign[campaign_id]
-                if not ad_status.is_closed(ad.get("native_status"))
-            ),
+            "active_ads": len(ads_by_campaign[campaign_id]),
             "daily_budget": _daily_budget(
-                conn, org_id, brand_id, campaign, owners_by_campaign[campaign_id], draft,
+                conn, org_id, brand_id, campaign, ads_by_campaign[campaign_id], draft,
+                owner_by_entity,
             ),
             "missing_days": missing_days,
             "sync_state": sync["state"],

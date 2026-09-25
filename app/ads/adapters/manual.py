@@ -74,7 +74,7 @@ def _ad_field(ad: dict) -> dict:
             if value:
                 fields.append({"label": label, "value": value,
                                "reason": "此計畫廣告明確指定的素材版本內容。"})
-        if material["assignment_status"] != "confirmed":
+        if not change_control_launch.ready_material(material):
             fields.append({"label": "素材需重新指派", "value": material["reason"],
                            "reason": "失效版本不能沿用核准。"})
     elif ad.get("copy_text"):

@@ -84,6 +84,8 @@ function BoundNotice({ localState }: { localState: string }) {
   );
 }
 
+const LAST_GROUP_REASON = "至少要留一個投放組；想換掉請先新增再刪。";
+
 export function GroupPanel({
   brandId,
   group: g,
@@ -92,6 +94,7 @@ export function GroupPanel({
   campaignEndDate,
   onSaved,
   onDelete,
+  isLastGroup = false,
   onDirtyChange,
   draftKey,
 }: {
@@ -102,6 +105,8 @@ export function GroupPanel({
   campaignEndDate: string | null;
   onSaved: (group: DeliveryGroupRow) => void;
   onDelete: () => void;
+  // The backend refuses removing a campaign's last group (ads §6.34); say why up front.
+  isLastGroup?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   draftKey: string;
 }) {
@@ -186,12 +191,17 @@ export function GroupPanel({
         <h2 className="flex items-center gap-1.5">
           <Folder size={15} /> {g.name}
         </h2>
-        <Button variant="ghost" size="sm" onClick={onDelete} disabled={g.local_state === "bound"}>
+        <Button
+          variant="ghost" size="sm" onClick={onDelete}
+          disabled={g.local_state === "bound" || isLastGroup}
+          title={isLastGroup ? LAST_GROUP_REASON : undefined}
+        >
           刪除
         </Button>
       </div>
       <div className="surface-body flex flex-col gap-4">
         <BoundNotice localState={g.local_state} />
+        {isLastGroup && <p className="text-sm text-muted-foreground">{LAST_GROUP_REASON}</p>}
         {restored && <p role="status" className="text-sm text-warning">
           已恢復未儲存草稿；最新已保存值可能已變更，請確認後再儲存。
         </p>}

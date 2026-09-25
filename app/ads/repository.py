@@ -994,6 +994,12 @@ def delete_group(conn: _AnyConn, org_id: str, brand_id: str, group_id: str) -> N
     node = get_group(conn, org_id, brand_id, group_id)
     if node is not None:
         require_internal_campaign(conn, org_id, brand_id, node["campaign_id"])
+        # The only group-removal path: an adopted plan with zero groups is a dead end (adopt
+        # refuses a second run, the structure editor has nowhere to add from) -- ads §6.34.
+        # ponytail: count-then-delete without a campaign lock; two concurrent deletes of the
+        # last two groups could both pass. Lock the campaign row if that ever shows up.
+        if len(_groups_for_campaign(conn, org_id, brand_id, node["campaign_id"])) <= 1:
+            raise ValueError("last_group")
     conn.execute(
         "DELETE FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s AND id = %s",
         (org_id, brand_id, group_id),

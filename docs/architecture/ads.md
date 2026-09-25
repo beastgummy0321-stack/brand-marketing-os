@@ -1557,5 +1557,11 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
   timezone), and survives a re-sync or a failed pull.
 - **Workspace.** A six-station stage rail; the 14-day totals are null when any day in the window is unread. Features the
   prototype does not show moved into same-page 「進階」 folds; nothing was deleted.
+- **One daily-budget total** (user ruling 2026-09-26): 「每日預算合計」 on the home row and the workspace counts only the
+  daily budget owners that still have an active ad (`triage_capacity.capacity_view`); a group whose ads are all paused
+  does not count. A draft still shows its plan's group total.
 - **Known gaps after F30.** The publish page's 「第 V 版有改」 chip is not shown: launch items carry no "changed in this
   version" field. The workspace tab bar keeps the site-wide pill style (the prototype draws underline tabs).
+- **A campaign keeps at least one delivery group** (user ruling 2026-09-26): `repository.delete_group` — the only
+  group-removal path — refuses the last group (`last_group`, 409 「至少要留一個投放組；想換掉請先新增再刪。」) and the
+  structure editor disables that 刪除 with the same reason. Adopt runs once, so zero groups after adopt had no way back.

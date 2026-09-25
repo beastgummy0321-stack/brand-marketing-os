@@ -69,8 +69,9 @@ def _open_queue_count(conn, org_id, brand_id, campaign_id, items) -> int:
     (`triage.get_queue`) over this campaign's own `classify()` items. Every row kind but the
     brand's `settle` row is raised from one campaign's items and carries that campaign's triage
     item, so the rows it returns for these items are exactly this campaign's rows of the brand
-    queue; `settle` (no triage item, the whole brand's month) is not this campaign's."""
-    queue = triage.get_queue(conn, org_id, brand_id, items=items)
+    queue; `settle` (no triage item, the whole brand's month) is not this campaign's, so it is
+    not even graded here."""
+    queue = triage.get_queue(conn, org_id, brand_id, items=items, settle=False)
     return sum(
         1 for row in queue["items"]
         if (row.get("triage") or {}).get("campaign_id") == campaign_id

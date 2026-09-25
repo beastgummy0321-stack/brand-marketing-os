@@ -1,8 +1,6 @@
 """F13 real HTTP/DB/Storage lifecycle in a disposable schema; no paid/platform writes.
 
 --isolated --timeout 180 runs the bounded runtime and always cleans its resources.
---browser keeps the restarted server until context.stop_file exists (bounded by
---browser-timeout). A separate normal-login Playwright run uses F13_E2E_CONTEXT.
 Only this test process injects source readers, providers, and a queue dispatcher.
 """
 
@@ -265,15 +263,12 @@ def main(args):
         "brand_ids": brands,
         "schema": schema,
         "state_file": str(directory / "source-state.json"),
-        "stop_file": str(directory / "stop"),
         "evidence_dir": str(directory),
         "fixture_labels": FIXTURE,
-        "browser_campaign_native_id": "root",
         "primary_platform": "meta",
         "primary_account_id": FIXTURE["accounts"][0],
     }
     write_json(context["state_file"], {"creative_revision": 1, "fail_next": False, "paused": False})
-    Path(context["stop_file"]).unlink(missing_ok=True)
     context["media_paths"] = {
         "image": str(directory / "runtime-image.png"),
         "video": str(directory / "runtime-video.mp4"),
@@ -409,14 +404,6 @@ def main(args):
             ),
             flush=True,
         )
-        if args.browser:
-            end = time.monotonic() + args.browser_timeout
-            while not Path(context["stop_file"]).exists():
-                if process.poll() is not None:
-                    raise RuntimeError("Browser fixture server exited")
-                if time.monotonic() >= end:
-                    raise TimeoutError("Browser hold expired; fixtures will be cleaned")
-                time.sleep(0.2)
         client.close()
     finally:
         stop_process(process, context["base_url"])
@@ -631,8 +618,6 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8731)
     parser.add_argument("--cleanup-storage", help=argparse.SUPPRESS)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--browser", action="store_true")
-    parser.add_argument("--browser-timeout", type=int, default=900)
     arguments = parser.parse_args()
     if not 8731 <= arguments.port <= 65535:
         parser.error("Use an isolated port starting at 8731")

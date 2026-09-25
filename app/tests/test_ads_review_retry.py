@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 import app.tests.test_ads_review_cycle as _cycle
 from app.ads import review_jobs, review_monitor, review_policy, review_rounds, triage
-from app.core import db
+from app.core import db, interrupts
 from app.main import app
 
 # The two model texts the dev DB rejected on 2026-09-25 (Feature F30 Evidence).
@@ -253,8 +253,54 @@ class ReviewRetryTest(unittest.TestCase):
         conflict = client.post(base + body["review"]["id"] + "/retry")
         self.assertEqual(conflict.status_code, 409, conflict.text)
         self.assertEqual(conflict.json()["error"]["code"], "review_unavailable")
-        # A decided round is not retryable either.
-        client.post(
+        # The superseded round is closed: it takes no decision, and a stale retry dedupes.
+        decided = client.post(
             base + old["id"] + "/decision", json={"decision": "unjudgeable", "reason": "改看新一回"}
         )
-        self.assertEqual(client.post(base + old["id"] + "/retry").status_code, 409)
+        self.assertEqual(decided.status_code, 409, decided.text)
+        stale = client.post(base + old["id"] + "/retry")
+        self.assertEqual(stale.json()["review"]["id"], body["review"]["id"])
+        # A decided round is not retryable either.
+        client.post(
+            base + body["review"]["id"] + "/decision",
+            json={"decision": "completed", "reason": "採用"},
+        )
+        self.assertEqual(client.post(base + body["review"]["id"] + "/retry").status_code, 409)
+
+    def test_retry_closes_superseded_round_and_decide_ends_its_notice(self):
+        self.addCleanup(self.conn.commit)
+        self.addCleanup(
+            self.conn.execute, "DELETE FROM interrupt WHERE brand_id=%s", (self.brand,)
+        )
+
+        def notice(review_id):
+            # The same notice `runtime` raises for every ready round.
+            interrupts.enqueue(
+                self.conn, org_id=self.org, brand_id=self.brand, category="ads_review_ready",
+                dedupe_key="ads-review:" + review_id, message="廣告檢討已備妥，請決定下一步",
+            )
+            self.conn.commit()
+
+        def open_keys():
+            return {r["dedupe_key"] for r in interrupts.list_open(
+                self.conn, brand_id=self.brand, category="ads_review_ready", archive_stale=False
+            )}
+
+        old = self.rejected_round()
+        notice(old["id"])
+        again = self.retry(old["id"])
+        closed = self.get(old["id"])
+        self.assertEqual((closed["status"], closed["decision"]), ("unjudgeable", "unjudgeable"))
+        self.assertNotIn("ads-review:" + old["id"], open_keys())
+        with self.assertRaises(ValueError):
+            review_rounds.decide(
+                self.conn, self.org, self.brand, self.campaign, old["id"], "deferred", "x",
+                "2999-01-01T00:00:00+00:00",
+            )
+        self.reply()
+        self.run_review(again)
+        notice(again["id"])
+        review_rounds.decide(
+            self.conn, self.org, self.brand, self.campaign, again["id"], "completed", "採用"
+        )
+        self.assertEqual(open_keys(), set())

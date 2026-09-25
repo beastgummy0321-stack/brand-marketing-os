@@ -254,17 +254,43 @@ def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, enti
     return handoff_data.get(conn, org, brand, campaign, item_id)
 
 
+def _confirmable(conn, org, brand, campaign, item_id, key):
+    changes.lock(conn, org, brand)
+    item = handoff_data.get(conn, org, brand, campaign, item_id)
+    evidence = item["evidence_json"]
+    keys = {u["key"] for u in evidence.get("unreadable") or []}
+    if (
+        item["status"] not in {"unknown", "deviated"}
+        or key not in keys
+        or key in (evidence.get("confirmed") or {})
+    ):
+        raise ValueError("只有讀不到的欄位可以由你確認一樣。")
+    return item
+
+
 def confirm_field(conn, org, brand, campaign, item_id, key, actor):
     """F30 Contract G `POST …/launch/items/{id}/confirm {key}`: the user looked at the platform
     and says a field the read could not see is the same. Refused for any other field; nothing is
     written to a platform."""
-    changes.lock(conn, org, brand)
-    item = handoff_data.get(conn, org, brand, campaign, item_id)
+    item = _confirmable(conn, org, brand, campaign, item_id, key)
+    material = None
+    if key == "material" and item["placement_id"] and item["entity_id"]:
+        # Confirming the material by eye upgrades the binding as the check path does. The eye
+        # confirmation exists for reads that fail, so a failed re-check keeps the confirmation
+        # and only leaves the evidence level where it was.
+        try:
+            material = asset_binding.verify(
+                conn, org, brand, campaign, item["placement_id"], item["placement_revision"],
+                item["entity_id"], actor, user_verified=True,
+            )["evidence_level"]
+        except ValueError:
+            material = None
+        # verify commits around its provider read: lock and check the item again.
+        item = _confirmable(conn, org, brand, campaign, item_id, key)
     evidence = dict(item["evidence_json"])
+    if material:
+        evidence["material_evidence"] = material
     confirmed = dict(evidence.get("confirmed") or {})
-    keys = {u["key"] for u in evidence.get("unreadable") or []}
-    if item["status"] not in {"unknown", "deviated"} or key not in keys or key in confirmed:
-        raise ValueError("只有讀不到的欄位可以由你確認一樣。")
     confirmed[key] = {"at": db.now_utc().isoformat(), "by": actor}
     status, evidence = _resolve(item["status"], evidence | {"confirmed": confirmed})
     conn.execute(

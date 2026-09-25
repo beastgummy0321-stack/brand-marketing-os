@@ -165,6 +165,22 @@ class AdoptTwiceRefusedTest(PlanTestBase):
         self.assertEqual(str(ctx.exception), "plan_already_adopted")
 
 
+class LastGroupDeleteRefusedTest(PlanTestBase):
+    def test_deleting_the_last_group_is_refused(self):
+        """Adopt refuses a second run, so an adopted plan with zero groups is a dead end."""
+        campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        groups = self._adopt(campaign["id"])["groups"]
+
+        for group in groups[:-1]:
+            plan.delete_group(web.conn, self.org_id, self.brand_id, group["id"])
+        with self.assertRaises(ValueError) as ctx:
+            plan.delete_group(web.conn, self.org_id, self.brand_id, groups[-1]["id"])
+        self.assertEqual(str(ctx.exception), "last_group")
+        self.assertIsNotNone(ads_repo.get_group(web.conn, self.org_id, self.brand_id,
+                                                groups[-1]["id"]))
+
+
 class GroupEditActionTraceTest(PlanTestBase):
     def test_editing_a_bound_group_writes_one_action_unbound_writes_none(self):
         campaign = self._create_adopted_campaign()

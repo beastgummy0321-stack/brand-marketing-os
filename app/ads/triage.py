@@ -767,7 +767,7 @@ def campaign_cleanup(conn, org_id, brand_id, campaign_id) -> dict | None:
     return candidates[0]["payload"]["cleanup"] if candidates else None
 
 
-def _queue_candidates(conn, org_id, brand_id, items) -> list:
+def _queue_candidates(conn, org_id, brand_id, items, *, settle=True) -> list:
     """Every row this brand's queue could raise -- qualifying `scale_budget` owners, `cleanup`
     campaigns, one `worse` row per ad whose grade moved from 划算 to 偏貴／太貴 (F29-I01; never
     for an ad already inside its
@@ -833,7 +833,8 @@ def _queue_candidates(conn, org_id, brand_id, items) -> list:
             "payload": {"triage": refresh["triage"], "refresh": refresh["refresh"]},
         })
     candidates.extend(_insufficient_candidates(conn, org_id, brand_id, by_campaign))
-    candidates.extend(_settle_candidates(conn, org_id, brand_id))
+    if settle:
+        candidates.extend(_settle_candidates(conn, org_id, brand_id))
     return candidates
 
 
@@ -902,16 +903,18 @@ def brand_items(conn, org_id, brand_id) -> list:
     return _classify_brand(conn, org_id, brand_id)
 
 
-def get_queue(conn, org_id, brand_id, items=None) -> dict:
+def get_queue(conn, org_id, brand_id, items=None, *, settle=True) -> dict:
     """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
     only place that supersedes stale rows (it may not have run yet since the last classification
     change). Current classification decides which open interrupt rows are still live: an older
     window's open row whose kind no longer qualifies (e.g. an ad now flat, or an owner's ads no
     longer all stable) is filtered out of this payload the same way, without writing anything.
     Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`).
-    `items` lets a caller that already classified the brand (`month_summary`) skip a second pass."""
+    `items` lets a caller that already classified the brand (`month_summary`) skip a second pass;
+    `settle=False` skips the brand's month `settle` row (it grades the previous month) for a caller
+    that only counts one campaign's rows (`workspace_reads`)."""
     items = _classify_brand(conn, org_id, brand_id) if items is None else items
-    candidates = _queue_candidates(conn, org_id, brand_id, items)
+    candidates = _queue_candidates(conn, org_id, brand_id, items, settle=settle)
     return _queue_payload(conn, org_id, brand_id, items, candidates)
 
 

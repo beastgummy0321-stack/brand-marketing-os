@@ -16,6 +16,7 @@ from app.ads import (
     channels,
     external_sync,
     handoff_assignment,
+    handoff_check,
     handoff_data,
     launch_view,
 )
@@ -253,6 +254,12 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(ad["parent_name"], "新客")
         self.assertIsNone(view["settings_readback"])
 
+    def test_the_manual_checklist_lists_only_the_ads_the_snapshot_carries(self):
+        response = self.client.get(self.base.removesuffix("/launch") + "/publish")
+        self.assertEqual(response.status_code, 200, response.text)
+        ads = [n["id"] for n in response.json()["describe"]["checklist"] if n["level"] == "ad"]
+        self.assertEqual(ads, [self.ad])
+
     def test_a_deferred_ad_takes_its_material_and_goes_out_with_the_next_version(self):
         self.approve()
         view = self.view()
@@ -334,11 +341,36 @@ class LaunchViewTest(unittest.TestCase):
 
         done = self.post(f"/items/{ad['id']}/confirm", key="material").json()
         self.assertEqual({i["state"] for i in done["items"]}, {"verified"})
+        # Confirming the material by eye upgrades the binding, as the check path does.
+        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        self.assertEqual(item["evidence_json"]["material_evidence"], "user_verified")
+        binding = self.conn.execute(
+            "SELECT evidence_level FROM ads_asset_binding WHERE brand_id=%s AND valid_to IS NULL",
+            (self.brand,),
+        ).fetchone()
+        self.assertEqual(binding["evidence_level"], "user_verified")
         launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         action = self.conn.execute(
             "SELECT verification_state FROM ads_action WHERE change_set_id=%s", (launch["id"],)
         ).fetchone()
         self.assertEqual(action["verification_state"], "confirmed")
+
+    def test_confirming_material_by_eye_stands_when_the_platform_recheck_fails(self):
+        self.approve()
+        self.report_all()
+        ad = self.items(self.readback())["禮盒主圖"]
+        before = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        with patch.object(
+            handoff_check.asset_binding, "verify", side_effect=ValueError("read failed")
+        ):
+            done = self.post(f"/items/{ad['id']}/confirm", key="material")
+        self.assertEqual(done.status_code, 200, done.text)
+        self.assertTrue(self.items(done.json())["禮盒主圖"]["unreadable"][0]["confirmed"])
+        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        self.assertEqual(
+            item["evidence_json"].get("material_evidence"),
+            before["evidence_json"].get("material_evidence"),
+        )
 
     def test_a_mismatch_keeps_observed_values_and_a_confirmation_outlives_a_fresh_read(self):
         self.approve()

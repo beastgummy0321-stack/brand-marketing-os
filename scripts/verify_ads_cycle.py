@@ -1,7 +1,6 @@
 """Isolated A/B/C acceptance. Reuse the existing local lifecycle/cleanup runner.
 
 The source changes below are test-only platform replacements, not live operations.
-The browser uses normal login; runtime HTTP uses the runner's isolated tenant token.
 """
 
 import argparse
@@ -301,10 +300,6 @@ def review_cycle_flow(client, context, remaining):
         action_id=action_id,
         first_review_id=first["id"],
         followup_review_id=followup["id"],
-        browser_review_id=first["id"],
-        browser_review_window=request,
-        browser_source_revision=1,
-        browser_note="重啟後來源恢復原文案；首回保留可採用建議，次回保留反證與前次設定核對。歷史期間均是隔離替身，不能當作真實修改後效果。",
     )
     assembly.write_json(
         Path(context["evidence_dir"]) / "review-rounds.json",
@@ -799,12 +794,10 @@ def material_cycle_flow(client, context, remaining):
         next_material_task_id=next_task["id"],
         material_pack_id=dispatched["pack_id"],
         first_review_id=review["id"],
-        browser_review_id=review["id"],
         recommendation_id=recommendation["id"],
         new_ad_change_set_id=draft["id"],
         handoff_item_id=checked["id"],
         new_ad_entity_id=checked["entity_id"],
-        browser_note="合成色塊與 FakeProvider 隔離驗收；原廣告未被停止。",
     )
     assembly.write_json(
         Path(context["evidence_dir"]) / "material-cycle.json",
@@ -847,8 +840,6 @@ def main():
     parser.add_argument("--child", action="store_true")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--drain", action="store_true")
-    parser.add_argument("--browser", action="store_true")
-    parser.add_argument("--browser-timeout", type=int, default=3600)
     args = parser.parse_args()
     if not 8731 <= args.port <= 65535:
         parser.error("Use an isolated port starting at 8731")

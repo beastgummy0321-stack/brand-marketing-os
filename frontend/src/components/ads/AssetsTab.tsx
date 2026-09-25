@@ -10,6 +10,7 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { formatSyncTime } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -161,18 +162,13 @@ function LegacyAssetsTab({
                           : <Badge variant={row?.material_ready ? "default" : "outline"}>{row?.material_ready ? "素材已備妥" : "還不能上架"}</Badge>}
                         {!native && <span className="ml-2 text-xs text-muted-foreground">{PROGRESS_NOTE[rowState]}</span>}
                         {native?.sync_error && <p className="text-xs text-warning">{native.sync_error}</p>}
-                        {row?.by && (
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {row.by} 於 {row.at}
-                          </span>
-                        )}
                         {packId && !row?.brief_id && rowState !== "ready_manual" && rowState !== "ready_workbench" && (
                           <p className="mt-1 text-xs text-muted-foreground">
                             交棒之後才新增的，不在素材任務包裡；做好後勾「素材已就位」。
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{native ? (native.last_success_at ?? "尚未成功讀回") : (row?.at ?? "－")}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{native ? (native.last_success_at ? formatSyncTime(native.last_success_at) : "尚未成功讀回") : (row?.at ? formatSyncTime(row.at) : "－")}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2">
                           {native && <details className="max-w-lg text-left"><summary className="cursor-pointer text-primary">查看素材</summary><NativeCreativeView creative={native.creative} /></details>}

@@ -331,6 +331,7 @@ export function DeliveryTab({
                 campaignEndDate={c.end_date}
                 onSaved={replaceGroup}
                 onDelete={() => setDeleteTarget({ kind: "group", row: selectedGroup })}
+                isLastGroup={c.groups.length === 1}
                 onDirtyChange={setEditorDirty}
                 draftKey={`brand-os:ads:group-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
               />

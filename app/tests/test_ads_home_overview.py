@@ -420,6 +420,29 @@ class CounterexampleTest(_Pinned):
         self.assertFalse(row["draft"]["cap_missing"])
         self.assertEqual(row["daily_budget"], 400)
 
+    def test_daily_budget_counts_only_owners_with_an_active_ad(self):
+        """ads.md §6.34 (2026-09-26): a live group whose ads are all paused is not in the total --
+        the same rule as the workspace capacity."""
+        conn, org, brand = self.conn, self.org, self.brand
+        live = _imported(conn, org, brand, "兩組", "c2", cap=100)
+        for adset, amount, ad, status in (("s_run", 300, "run", "ACTIVE"),
+                                          ("s_idle", 500, "idle", "PAUSED")):
+            external.upsert_entity(conn, org, brand, live, {
+                "platform": "meta", "source_account": "act_1", "native_kind": "adset",
+                "native_id": adset, "parent_native_kind": "campaign", "parent_native_id": "c2",
+                "native_status": "ACTIVE", "budget_type": "daily", "budget_amount": amount,
+                "currency": "TWD",
+            })
+            external.upsert_entity(conn, org, brand, live, {
+                "platform": "meta", "source_account": "act_1", "native_kind": "ad",
+                "native_id": ad, "name": ad, "native_status": status,
+                "parent_native_kind": "adset", "parent_native_id": adset,
+            })
+        conn.commit()
+        row = next(c for c in self.overview(brand)["campaigns"] if c["campaign_id"] == live)
+        self.assertEqual(row["active_ads"], 1)
+        self.assertEqual(row["daily_budget"], 300)
+
     def test_day_one_has_no_complete_day(self):
         conn, org, brand = self.conn, self.org, self.brand
         campaign = _imported(conn, org, brand, "月初", "c1", cap=100)
