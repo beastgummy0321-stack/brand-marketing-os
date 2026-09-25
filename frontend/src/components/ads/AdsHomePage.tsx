@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useApiRead } from "@/lib/useApiRead";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
@@ -49,35 +50,18 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
 
 /** 投放中心首頁 = board D (F28-I08; prototype `docs/design/ads/prototype-v9-ads-center.html` `home()`): the month's
  * title, 接下來, the money card with the budget pace, the money-quality band, today's decisions and the campaign
- * rows. Two independent requests: `GET …/home` (title, dates, money, pace, band, rows — each block null on its own
- * failure) and the brand queue (decisions); one failing never blanks the other (design-system §1.7 item 9). */
+ * rows. Two independent reads (Contract K, `useApiRead`): `GET …/home` (title, dates, money, pace, band, rows — each
+ * block null on its own failure) and the brand queue (the 「今天」 count and the decision cards, both from this one
+ * read); one failing never blanks the other (design-system §1.7 item 9), and a failed queue never reads as 「沒有要
+ * 決定的事」. A home reload keeps the last good overview on screen until the new one lands. */
 function AdsHome({ brandId }: { brandId: string }) {
-  const [homeState, setHomeState] = useState<HomeState>({ status: "loading" });
-  const [homeReload, setHomeReload] = useState(0);
-  const [queueState, setQueueState] = useState<QueueState>({ status: "loading" });
-  const [queueReload, setQueueReload] = useState(0);
+  const homeRead = useApiRead((signal) => getHomeOverview(brandId, undefined, signal), [brandId]);
+  const homeState: HomeState = homeRead.data !== null ? { status: "ready", home: homeRead.data }
+    : homeRead.status === "error" ? { status: "error" } : { status: "loading" };
+  const queueRead = useApiRead((signal) => refreshQueue(brandId, signal), [brandId]);
+  const queueState: QueueState = queueRead.status === "ready" ? { status: "ready", queue: queueRead.data }
+    : queueRead.status === "error" ? { status: "error", message: queueRead.error } : { status: "loading" };
   const [recoveryState, setRecoveryState] = useState<RecoveryState>({ status: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setHomeState((s) => (s.status === "ready" ? s : { status: "loading" }));
-    getHomeOverview(brandId, undefined, controller.signal)
-      .then((home) => { if (!controller.signal.aborted) setHomeState({ status: "ready", home }); })
-      .catch(() => { if (!controller.signal.aborted) setHomeState({ status: "error" }); });
-    return () => controller.abort();
-  }, [brandId, homeReload]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setQueueState({ status: "loading" });
-    refreshQueue(brandId, controller.signal)
-      .then((queue) => { if (!controller.signal.aborted) setQueueState({ status: "ready", queue }); })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setQueueState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
-      });
-    return () => controller.abort();
-  }, [brandId, queueReload]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -111,7 +95,7 @@ function AdsHome({ brandId }: { brandId: string }) {
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
     target?.focus({ preventScroll: true });
   }, []);
-  const retryHome = () => setHomeReload((v) => v + 1);
+  const retryHome = homeRead.reload;
   const monthNo = monthNumber(home?.month);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
@@ -146,7 +130,7 @@ function AdsHome({ brandId }: { brandId: string }) {
           syncing={syncing}
           recovering={recovering}
           sync={home?.sync ?? null}
-          onRetry={() => setQueueReload((v) => v + 1)}
+          onRetry={queueRead.reload}
         />
         <CampaignRows brandId={brandId} state={homeState} onRetry={retryHome} />
       </>}

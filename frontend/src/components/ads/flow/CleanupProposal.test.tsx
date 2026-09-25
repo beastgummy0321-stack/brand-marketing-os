@@ -3,6 +3,7 @@
  * cleanup_candidates`): long real names, decimal costs, a 沒賣出 ad with 0 results, unknown capacity, `short > 0` with
  * and without a qualifying `scale_budget` owner. `getTriage` only adds the daily budget and grade words. */
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as triageApi from "@/lib/adsTriageApi";
@@ -150,11 +151,23 @@ describe("CleanupProposal（F28-I11）", () => {
     expect(container.textContent).not.toMatch(/null|NaN|undefined/);
   });
 
-  it("讀不到活動 triage 時仍顯示撐幾則（只少了每日預算）", async () => {
-    vi.mocked(triageApi.getTriage).mockRejectedValue(new Error("網路錯誤"));
+  it("讀不到活動 triage 時仍顯示撐幾則（只少了每日預算），並說讀取失敗；重試重讀後補上每日預算（F29-I10）", async () => {
+    vi.mocked(triageApi.getTriage).mockRejectedValueOnce(new Error("網路錯誤")).mockResolvedValueOnce(campaignTriage(1100));
     renderProposal(cleanup());
     expect(await screen.findByText("預算撐 4 則")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "關 3 則、留 4 則" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("每日預算與等級說明讀不到");
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("每日 1,100 撐 4 則")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(triageApi.getTriage).toHaveBeenCalledTimes(2);
+  });
+
+  it("提議步驟是開著的決定：「✕ 先不要，回投放中心」取代同去處的「← 投放中心」（F29-I10）", async () => {
+    renderProposal(cleanup());
+    const exit = await screen.findByRole("link", { name: "✕ 先不要，回投放中心" });
+    expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.queryByRole("link", { name: "← 投放中心" })).toBeNull();
   });
 
   it("rankCleanupAds：同級成本高的先，成本未知排最前，再比花費", () => {

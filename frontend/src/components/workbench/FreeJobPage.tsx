@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Image as ImageIcon, Loader2, Paperclip, Sparkles, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -8,7 +8,8 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { Badge } from "@/components/layout/ui/badge";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { cn } from "@/lib/utils";
-import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
+import { fetchProductList } from "@/lib/productsApi";
+import { useApiRead } from "@/lib/useApiRead";
 import {
   createFreePack,
   parseFreeText,
@@ -158,7 +159,9 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
   const [text, setText] = useState("");
   const [useBrand, setUseBrand] = useState(true);
   const [productId, setProductId] = useState<string | null>(null);
-  const [products, setProducts] = useState<ProductListItem[]>([]);
+  // Contract K: a failed product read says so (error line + 重試), never an empty product list.
+  const productsRead = useApiRead(() => fetchProductList(brandId), [brandId]);
+  const products = productsRead.data ?? [];
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [precise, setPrecise] = useState(false);
@@ -171,10 +174,6 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
   const [parsing, setParsing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchProductList(brandId).then(setProducts).catch(() => setProducts([]));
-  }, [brandId]);
 
   function updateControl(patch: Partial<PreciseControl>) {
     setControl((prev) => {
@@ -357,6 +356,12 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
+              {productsRead.status === "error" && (
+                <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
+                  商品清單讀取失敗：{productsRead.error}
+                  <Button type="button" variant="outline" size="sm" onClick={productsRead.reload}>重試</Button>
+                </p>
+              )}
             </div>
           </div>
 

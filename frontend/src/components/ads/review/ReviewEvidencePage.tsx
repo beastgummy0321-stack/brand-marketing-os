@@ -11,10 +11,11 @@ import {
   createReview, decideReview, getReview,
   type ReviewRound,
 } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, Segmented, TodoRow,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, ReadFailed, Segmented, TodoRow,
 } from "../patterns";
 import {
   adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
@@ -56,11 +57,19 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Entry mode: a failed queue read is not "no proposal" — its own state, with 重試.
+  const [entryFailed, setEntryFailed] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K — round mode: the queue is context (campaign chip, 第幾件, ladder, history, target); a failed read is
+  // shown with 重試, never silently dropped. Entry mode reads the queue itself below.
+  const queueRead = useApiRead(
+    (signal) => (reviewId ? getQueue(brandId, signal) : Promise.resolve(null)),
+    [brandId, campaignId, reviewId, reloadKey],
+  );
+  const queue = queueRead.data;
 
   const [busy, setBusy] = useState(false);
   const [sheetKind, setSheetKind] = useState<SheetKind | null>(null);
@@ -76,9 +85,20 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    setEntryFailed(null);
     (async () => {
+      let q;
       try {
-        const q = await getQueue(brandId);
+        q = await getQueue(brandId);
+      } catch (err) {
+        // The queue read failed: that is not "no proposal" (Contract K) — its own state with 重試.
+        if (!cancelled) {
+          setEntryFailed(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
+          setLoading(false);
+        }
+        return;
+      }
+      try {
         if (cancelled) return;
         const item = q.items.find((i) => i.triage.entity_id === entityId) ?? null;
         const existingId = item?.proposal?.kind === "review" ? item.proposal.review_id : null;
@@ -97,6 +117,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         if (cancelled) return;
         navigate(reviewRoundPath(brandId, campaignId, created.id), { replace: true });
       } catch (err) {
+        // Creating the round was refused (e.g. the campaign closed): the backend's own words, unchanged.
         if (!cancelled) {
           setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
           setLoading(false);
@@ -113,10 +134,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
-    ])
+    getReview(brandId, campaignId, reviewId)
+      .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -189,6 +208,14 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
   // Entry mode 畫面：轉導完成前只有讀取中或錯誤兩種狀態。
   if (entityId) {
+    if (entryFailed) {
+      return (
+        <div className="flex flex-col gap-4">
+          <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
+          <ReadFailed what={`這則廣告的檢討讀不到（${entryFailed}）；已保存的決定都還在`} onRetry={() => setReloadKey((k) => k + 1)} />
+        </div>
+      );
+    }
     if (loadError) {
       return (
         <div className="flex flex-col gap-4">
@@ -209,7 +236,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     );
   }
 
-  if (loading) {
+  if (loading || (queueRead.status === "loading" && !queue)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
@@ -299,6 +326,10 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         ) : undefined}
       />
 
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」、處理階梯與目標暫時看不到；下面的證據照舊" onRetry={queueRead.reload} />
+      )}
+
       {waiting && (
         <div className="rounded-xl border border-warning/30 bg-warning/10 p-5">
           <h2 className="text-lg font-semibold">資料還不夠，這回先不判</h2>
@@ -374,7 +405,13 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
             </div>
           </div>
 
-          {isSales ? (
+          {queueRead.status === "error" ? (
+            // The history and the sales/non-sales split both come from the queue row: unknown, not "no history".
+            <div className="rounded-xl border border-border bg-card p-5">
+              <h2 className="mb-1.5 font-semibold">這條素材的紀錄</h2>
+              <p className="py-3 text-sm text-muted-foreground">讀取失敗，按上方重試後再看。</p>
+            </div>
+          ) : isSales ? (
             commerceCurrent && commercePrevious && (
               <div className="rounded-xl border border-border bg-card p-5">
                 <div className="mb-1.5 flex items-center justify-between">
@@ -423,7 +460,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
       <div className="flex-1" />
       <ActionBar
-        back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}
+        back={{ label: "投放中心", to: homeHref }}
+        exit={closed ? undefined : { label: "先不要，回投放中心", to: homeHref }}
         hint={closed ? "要改文案請等下一回證據" : undefined}
       >
         {/* 先不決定／改變決定（feature Decisions「Sheet」）：`@/components/layout/ui/dropdown-menu`

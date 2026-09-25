@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { Input } from "@/components/layout/ui/input";
@@ -9,7 +9,8 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { getReview, type ReviewRound } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import type { MaterialMode } from "@/lib/adsMaterialApi";
 import {
   createNewAdHandoff, getHandoff, HandoffRequestRejected,
@@ -20,7 +21,7 @@ import { materialModes } from "../MaterialTaskEditor";
 import { UserAssetPlacements } from "../UserAssetPlacements";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { ActionBar, FlowHeader } from "../patterns";
+import { ActionBar, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
@@ -74,22 +75,23 @@ export function MaterialStepPage({ brandId, campaignId, reviewId }: {
   const [searchParams, setSearchParams] = useSearchParams();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [handoff, setHandoff] = useState<HandoffWorkspace | null>(null);
-  const [handoffReloadKey, setHandoffReloadKey] = useState(0);
+  // Contract K: the queue is context (campaign chip, 第幾件, thumbnail) and the handoff workspace feeds 「建立新廣告提議」;
+  // each is its own read, and a failure is said out loud with 重試 — never an empty list of ready materials.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, reviewId, reloadKey]);
+  const queue = queueRead.data;
+  const handoffRead = useApiRead<HandoffWorkspace>(() => getHandoff(brandId, campaignId), [brandId, campaignId]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
     Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
       getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
       getCampaign(brandId, campaignId).then((c) => { if (!cancelled) setCampaign(c); }),
     ])
@@ -97,12 +99,6 @@ export function MaterialStepPage({ brandId, campaignId, reviewId }: {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, campaignId, reviewId, reloadKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-    getHandoff(brandId, campaignId).then((v) => { if (!cancelled) setHandoff(v); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [brandId, campaignId, handoffReloadKey]);
 
   const validStep = review !== null && (review.status === "ready" || review.status === "completed");
 
@@ -138,9 +134,9 @@ export function MaterialStepPage({ brandId, campaignId, reviewId }: {
   const modeInfo = materialModes[stepMode];
 
   const destinationEntity = review ? findAdSetEntity(campaign, review.entity_id) : null;
-  const readyPlacements = handoff?.ready_placements ?? [];
+  const readyPlacements = handoffRead.data?.ready_placements ?? [];
 
-  if (loading || (review && !validStep)) {
+  if (loading || (queueRead.status === "loading" && !queue) || (review && !validStep)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "準備素材" }]} />
@@ -200,19 +196,33 @@ export function MaterialStepPage({ brandId, campaignId, reviewId }: {
         )}
       />
 
-      <MaterialTasksPanel brandId={brandId} campaignId={campaignId} onSaved={() => setHandoffReloadKey((v) => v + 1)} />
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱與「第幾件」暫時看不到；這一步照舊可以做" onRetry={queueRead.reload} />
+      )}
 
-      {campaign && <UserAssetPlacements brandId={brandId} campaign={campaign} onChanged={() => setHandoffReloadKey((v) => v + 1)} />}
+      <MaterialTasksPanel brandId={brandId} campaignId={campaignId} onSaved={handoffRead.reload} />
 
-      <NewAdSection
-        brandId={brandId} campaignId={campaignId} review={review}
-        newTestRecommendationId={newTestRec?.id ?? null}
-        destinationEntityId={destinationEntity?.id ?? null}
-        readyPlacements={readyPlacements}
-      />
+      {campaign && <UserAssetPlacements brandId={brandId} campaign={campaign} onChanged={handoffRead.reload} />}
+
+      {handoffRead.status === "error" ? (
+        <section className="surface" aria-label="建立新廣告提議">
+          <div className="surface-header"><h2>建立新廣告提議</h2></div>
+          <div className="surface-body">
+            <ReadFailed what="已就緒的成品讀不到；上面準備好的素材都還在" onRetry={handoffRead.reload} />
+          </div>
+        </section>
+      ) : (
+        <NewAdSection
+          brandId={brandId} campaignId={campaignId} review={review}
+          newTestRecommendationId={newTestRec?.id ?? null}
+          destinationEntityId={destinationEntity?.id ?? null}
+          readyPlacements={readyPlacements}
+          placementsLoading={handoffRead.status === "loading" && !handoffRead.data}
+        />
+      )}
 
       <div className="flex-1" />
-      <ActionBar back={<Button variant="ghost" asChild><Link to={reviewRoundPath(brandId, campaignId, review.id, "prepare")}>← 選方向</Link></Button>} />
+      <ActionBar back={{ label: "選方向", to: reviewRoundPath(brandId, campaignId, review.id, "prepare") }} exit={{ label: "先不要，回投放中心", to: homeHref }} />
     </div>
   );
 }
@@ -221,10 +231,10 @@ export function MaterialStepPage({ brandId, campaignId, reviewId }: {
  * 這則廣告目前所屬的投放組，`replaces_entity_id` 固定是這則廣告，不讓使用者手動另選（跟既有
  * `ManualHandoffPanel` 的「新增獨立廣告」不同，那支是通用交接、目的地要使用者自己選；這裡是這輪
  * 檢討專用的捷徑，兩者不是同一個流程，不重疊）。 */
-function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, destinationEntityId, readyPlacements }: {
+function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, destinationEntityId, readyPlacements, placementsLoading }: {
   brandId: string; campaignId: string; review: ReviewRound;
   newTestRecommendationId: string | null; destinationEntityId: string | null;
-  readyPlacements: HandoffPlacement[];
+  readyPlacements: HandoffPlacement[]; placementsLoading: boolean;
 }) {
   const navigate = useNavigate();
   const [operationId] = useState(() => `review-material-handoff:${review.id}:${crypto.randomUUID()}`);
@@ -244,7 +254,7 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
     return (
       <section className="surface" aria-label="建立新廣告提議">
         <div className="surface-header"><h2>建立新廣告提議</h2></div>
-        <div className="surface-body"><p className="text-sm text-muted-foreground">還沒有已確認、就緒的成品；請先在上方準備素材並確認安排。</p></div>
+        <div className="surface-body"><p className="text-sm text-muted-foreground">{placementsLoading ? "正在讀取已就緒的成品…" : "還沒有已確認、就緒的成品；請先在上方準備素材並確認安排。"}</p></div>
       </section>
     );
   }

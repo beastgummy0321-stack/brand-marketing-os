@@ -337,3 +337,43 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
   });
 });
+
+// F29-I10 Contract K: the queue is context on this step; its failure is said out loud (ReadFailed + 重試) and never
+// changes what the step is — a cleanup set names itself (`source: "cleanup"`).
+describe("HandoffPage（F29-I10）佇列讀取失敗", () => {
+  it("單項清單：步驟照舊，只多一塊讀取失敗；重試重讀佇列後補回「第幾件」", async () => {
+    vi.mocked(triageApi.getQueue).mockReset();
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem()]));
+    renderAt(handoffPath());
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByText("打開平台上的這則廣告")).toBeTruthy();
+    expect(screen.queryByText("第 1 件／共 1 件")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
+    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("清理清單（source: cleanup）：佇列讀不到仍畫逐則步驟，不說「多項變更」", async () => {
+    vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        source: "cleanup",
+        items: [
+          changeItem({ id: "item_low1", target_id: "aex_low1", target: { id: "aex_low1", name: "1150701 情境圖 A", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low1" } }),
+          changeItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" } }),
+        ],
+      })],
+    });
+    renderAt(handoffPath());
+    expect(await screen.findByText(/打開平台上的「1150701 情境圖 A」，把開關關掉/)).toBeTruthy();
+    expect(screen.queryByText("這份清單有多項變更")).toBeNull();
+    expect(screen.getByText(/待決定清單讀不到/)).toBeTruthy();
+  });
+
+  it("已核准的步驟不給「先不要」出口（出口只在還沒決定時）", async () => {
+    renderAt(handoffPath());
+    expect(await screen.findByText("打開平台上的這則廣告")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /先不要，回投放中心/ })).toBeNull();
+  });
+});

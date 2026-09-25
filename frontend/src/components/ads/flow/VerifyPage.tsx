@@ -12,8 +12,9 @@ import {
   type ChangeSet,
   type SettingValues,
 } from "@/lib/adsChangeApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { cleanupSteps } from "./CleanupProposal";
 import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
@@ -207,11 +208,13 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   const homeHref = `/brands/${brandId}/ads`;
   const crumb = [{ label: "投放中心", href: homeHref }, { label: "核對結果" }];
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [changeSet, setChangeSet] = useState<ChangeSet | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context here (campaign chip, 第幾件, 下一件); a failed read is shown, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, setId, reloadKey]);
+  const queue = queueRead.data;
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -220,12 +223,10 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getChangeControl(brandId, campaignId)
-        .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
-        .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); }),
-    ]).finally(() => { if (!cancelled) setLoading(false); });
+    getChangeControl(brandId, campaignId)
+      .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
+      .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [brandId, campaignId, setId, reloadKey]);
 
@@ -279,7 +280,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     }
   }
 
-  if (loading) {
+  if (loading || (queueRead.status === "loading" && !queue)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
@@ -311,11 +312,14 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   }
 
-  // F27-I15 Contract F: a cleanup set is only ever recognised through the queue's own `cleanup`
-  // row (`isCleanupTriageItem`, same lookup `ConfirmPage`/`HandoffPage` use) — never guessed from
-  // item shape, so a generic multi-`pause` set with no cleanup row behind it still falls through
-  // to the existing "多項變更" workspace link below, unchanged from before this issue.
-  const cleanupSet = isCleanupTriageItem(triageItem);
+  // F27-I15 Contract F: a cleanup set names itself (`source: "cleanup"`, F29-I04) or is recognised through the queue's
+  // own `cleanup` row (same rule as `ConfirmPage`/`HandoffPage`) — never guessed from item shape, so a generic
+  // multi-`pause` set with neither still falls through to the "多項變更" workspace link below, and a failed queue
+  // read cannot turn a cleanup set into one.
+  const cleanupSet = changeSet.source === "cleanup" || isCleanupTriageItem(triageItem);
+  const queueFailed = queueRead.status === "error" ? (
+    <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」與下一件暫時看不到；核對結果照舊" onRetry={queueRead.reload} />
+  ) : null;
   const item: ChangeItem | undefined = changeSet.items.length === 1 ? changeSet.items[0] : undefined;
   const kindRaw = cleanupSet ? "cleanup" : item ? item.kind : "pause";
   const blocked = !cleanupSet
@@ -379,6 +383,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
         <FlowHeader steps={steps} current={3} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+        {queueFailed}
         {hero}
         <CleanupVerifyRows items={changeSet.items} />
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
@@ -490,6 +495,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={crumb} />
       <FlowHeader steps={steps} current={2} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+      {queueFailed}
 
       {hero}
       {rail}

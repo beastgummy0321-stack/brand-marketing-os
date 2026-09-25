@@ -252,3 +252,44 @@ describe("MaterialStepPage（F27-I14）建立新廣告提議", () => {
     expect((screen.getByRole("button", { name: /建立新廣告提議/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+// F29-I10 Contract K: the queue is context on this step — a failed read is said out loud with 重試 and the step
+// still works; the open step flow has one exit back to 投放中心.
+describe("MaterialStepPage（F29-I10）佇列讀取失敗與出口", () => {
+  it("佇列讀取失敗：只多一塊讀取失敗，這一步照舊；重試重讀佇列後補回「第幾件」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockReset();
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue());
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "請工作台準備新圖" })).toBeTruthy();
+    expect(screen.queryByText("第 1 件／共 1 件")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
+    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it("開著的決定有「✕ 先不要，回投放中心」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(materialPath("workbench_image"));
+    const exit = await screen.findByRole("link", { name: "✕ 先不要，回投放中心" });
+    expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+});
+
+describe("MaterialStepPage（F29-I10）已就緒成品讀取失敗", () => {
+  it("讀不到交接工作區：不說「還沒有就緒的成品」，顯示讀取失敗；重試後出現成品", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(handoffApi.getHandoff).mockReset();
+    vi.mocked(handoffApi.getHandoff).mockRejectedValueOnce(new Error("handoff down")).mockResolvedValueOnce(handoff({
+      ready_placements: [{ id: "plc_1", revision: 2, filename: "新圖.png", purpose: "產品介紹", destination_entity_id: null }],
+    }));
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText(/已就緒的成品讀不到/)).toBeTruthy();
+    expect(screen.queryByText("還沒有已確認、就緒的成品；請先在上方準備素材並確認安排。")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByLabelText(/新圖\.png/)).toBeTruthy();
+    expect(handoffApi.getHandoff).toHaveBeenCalledTimes(2);
+  });
+});

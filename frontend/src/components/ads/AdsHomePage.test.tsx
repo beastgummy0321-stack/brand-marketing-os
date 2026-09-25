@@ -268,3 +268,40 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     });
   });
 });
+
+// F29-I10 Contract K (drill-5 item 7): the 「今天」 count and the decision cards are one queue read — while it is slow
+// both wait, when it fails both say so, and neither ever says 「沒有要決定的事」 in the meantime.
+describe("AdsHomePage (F29-I10) one queue read for the count and the cards", () => {
+  it("slow queue read: 今天 and the decisions both wait (never 沒有要決定的事); when it lands, count and cards agree", async () => {
+    let resolveQueue!: (q: QueuePayload) => void;
+    vi.mocked(refreshQueue).mockReturnValue(new Promise<QueuePayload>((res) => { resolveQueue = res; }));
+    renderPage();
+    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
+    expect(screen.getByText("正在整理今天的判斷")).toBeTruthy();
+    const section = screen.getByRole("region", { name: /需要你決定/ });
+    expect(section.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(screen.queryByText("沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+
+    resolveQueue(queue([item("w1", "worse"), cleanupItem("c1")]));
+    const cards = await within(section).findAllByRole("article");
+    expect(cards).toHaveLength(2);
+    expect(within(section).getByText("2 件")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "2 件要你決定 ↓" })).toBeTruthy();
+    expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(1);
+  });
+
+  it("failed queue read: 今天 and the decisions both say it failed, never 沒有要決定的事; one retry re-reads both", async () => {
+    vi.mocked(refreshQueue).mockRejectedValueOnce(new Error("讀取失敗")).mockResolvedValueOnce(queue([]));
+    renderPage();
+    expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
+    expect(screen.queryByText("沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+    expect(screen.getByText("沒有要決定的事")).toBeTruthy();
+    expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(2);
+  });
+});
+
