@@ -55,6 +55,10 @@ CATEGORIES = {
     "ads_triage_settle": {"severity": "informational", "label": "上一期待結算"},
     "ads_triage_refresh_creative": {"severity": "informational", "label": "素材待補待決定"},
     "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
+    # F29-I08: the brand's daily digest of its ads decision queue (`app/ads/digest.py`) -- a
+    # summary pointing at rows already in the queue, never a decision of its own, so informational
+    # and outside the ads queue categories (it never counts toward the home decisions).
+    "ads_daily_digest": {"severity": "informational", "label": "投放每日摘要"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},
     # 產品 AI 調研（新建與再次調研共用）背景工作，完成／失敗都進這裡（票 B2-products）。
