@@ -26,7 +26,9 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
 import app.storage as storage
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
@@ -346,13 +348,15 @@ def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: st
     """procrastinate task body（`background.customer_voice_extraction`）——worker 執行，
     自己開一條連線（worker 不繼承 request 的連線）。"""
     with core_db_connection() as conn:
+        error = None
         try:
             ok, result = extract(
                 conn, brand_id, actor=actor, raw_text=raw_text, source_channel=source_channel,
                 source_detail=source_detail, job_key=job_key,
             )
-        except Exception as exc:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok, result = False, f"背景執行發生未預期錯誤：{exc}"
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, result, error = False, f"背景執行發生未預期錯誤：{exc}", exc
 
         channel_label = md.customer_voice_channel_label(source_channel)
         if ok:
@@ -364,18 +368,29 @@ def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: st
             conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
             message=message, action_url=f"/app/brands/{brand_id}/library",
         )
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成還在跑
 
 
 def _cv_job_status(conn, brand_id: str, job_key: str) -> dict:
     """讀 llm_task 取代讀行程內 dict（票 08）：`job_key` 存在 `context_scope_json`
     裡（見 `extract()`），這裡反查最新一列。查不到＝還沒排到或還沒寫列，跟原本
     「查不到的 job_key 回 running」是同一個誠實預設（避免第一次輪詢跟背景工作真正
-    寫入之間的極短暫競態被前端誤判成錯誤）。"""
+    寫入之間的極短暫競態被前端誤判成錯誤）。
+
+    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running；最新的 job 失敗＝failed
+    （這次呼叫留下失敗列就引用它的錯誤，否則講背景程式）。其餘照 llm_task 列。"""
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'customer_voice_extraction' "
         "AND context_scope_json->>'job_key' = %s ORDER BY started_at DESC LIMIT 1",
         (brand_id, job_key),
     ).fetchone()
+    outcome = background_job_outcome(f"customer_voice_extraction:{job_key}")
+    if outcome == "active":
+        return {"status": "running"}
+    if outcome == "failed":
+        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
+        return {"status": "failed", "message": row["error"] if own_error else JOB_FAILED_MESSAGE}
     if row is None or row["status"] == "running":
         return {"status": "running"}
     if row["status"] != "succeeded":

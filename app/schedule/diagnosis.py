@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards, vocab
 from app.core import settings as coresettings
@@ -410,17 +411,28 @@ def converge(outputs: list[dict]) -> list[dict]:
 def _round_rows(conn, brand_id: str) -> list[dict]:
     """最新一輪（`round_id` 相同）的 `performance_reading` 列，最多三列。讀 `llm_task` 直接
     下 SQL——跟 `state._latest_task_row()`／`_display_task_row()` 同一個既有慣例（那兩支就是
-    這樣直接查 `llm_task`，`app.llm` 沒有另開一支「按 brand/task_type 查多列」的讀取）。"""
+    這樣直接查 `llm_task`，`app.llm` 沒有另開一支「按 brand/task_type 查多列」的讀取）。
+
+    F31 Contract J, same rule as `state._latest_task_row()`: the newest job decides first. Job
+    still active while the newest round has no running row (queued behind the last round, or
+    converging after its three calls) → one running placeholder; job failed while the newest
+    round carries no failed row → one failed placeholder. Either way the round reads as not
+    finished, so there are no suggestions to show or adopt."""
     rows = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s"
         " ORDER BY started_at DESC LIMIT 30",
         (brand_id, state.DIAGNOSIS_TASK_TYPE),
     ).fetchall()
     rows = [dict(r) for r in rows]
-    if not rows:
-        return []
-    round_id = (rows[0].get("context_scope_json") or {}).get("round_id")
-    return [r for r in rows if (r.get("context_scope_json") or {}).get("round_id") == round_id]
+    if rows:
+        round_id = (rows[0].get("context_scope_json") or {}).get("round_id")
+        rows = [r for r in rows if (r.get("context_scope_json") or {}).get("round_id") == round_id]
+    outcome = background_job_outcome(state.job_lock(state.DIAGNOSIS_TASK_TYPE, brand_id))
+    if outcome == "active" and not any(r["status"] == "running" for r in rows):
+        return [state.job_placeholder_row(state.DIAGNOSIS_TASK_TYPE, "running")]
+    if outcome == "failed" and all(r["status"] in ("running", "succeeded") for r in rows):
+        return [state.job_placeholder_row(state.DIAGNOSIS_TASK_TYPE, "failed")]
+    return rows
 
 
 def _round_result(rows: list[dict]) -> tuple[str | None, list[dict]]:
