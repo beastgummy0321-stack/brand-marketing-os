@@ -23,7 +23,15 @@ vi.mock("@/lib/adsApi", async () => {
   };
 });
 
-vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => <p>逐項平台核對</p> }));
+// The handoff panel stand-in reports whether its settings readback is shown (`panel.readback`), as the real one does.
+const panel = vi.hoisted(() => ({ readback: false }));
+vi.mock("./ManualHandoffPanel", async () => {
+  const { useEffect } = await vi.importActual<typeof import("react")>("react");
+  return { ManualHandoffPanel: ({ onSettingsReadback }: { onSettingsReadback?: (shown: boolean) => void }) => {
+    useEffect(() => { onSettingsReadback?.(panel.readback); }, [onSettingsReadback]);
+    return <p>逐項平台核對{panel.readback ? "・投放設定讀回" : ""}</p>;
+  } };
+});
 vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn(), saveManualSettings: vi.fn() }));
 vi.mock("@/lib/adsLaunchSettingsApi", () => ({ getLaunchSettings: vi.fn(), saveLaunchSettings: vi.fn(), confirmLaunchSetting: vi.fn() }));
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope" }) }));
@@ -88,7 +96,7 @@ function campaign(asset_readiness: AssetReadinessSummary): CampaignDetail {
   };
 }
 
-beforeEach(() => { vi.mocked(getLaunchSettings).mockResolvedValue(settingsView()); });
+beforeEach(() => { panel.readback = false; vi.mocked(getLaunchSettings).mockResolvedValue(settingsView()); });
 const enabled = (button: HTMLElement) => waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
 
 function renderPage(c: CampaignDetail, adapter: "auto_meta" | "manual" | "simulated") {
@@ -314,8 +322,40 @@ describe("PublishPage（F29-I16）投放設定掛在上架清單", () => {
     await enabled(confirm);
     await user.click(confirm);
     await waitFor(() => expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash-2", operation_id: expect.any(String) }));
-    expect(await screen.findByText("核准後已定下來；想改，改完再核准一次")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "複製出價方式" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "核准上架清單 →" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /出價方式/ })).toBeNull();
+  });
+
+  const approved = (hash = "hash-1") => {
+    vi.mocked(getPublish).mockResolvedValue(hashDescribe(hash));
+    const c = campaign({ ready_count: 1, total: 1 });
+    c.actions = [{ kind: "publish", target_kind: "campaign", after_json: { adapter: "manual", content_hash: hash, operation_id: "op_1" } } as unknown as CampaignDetail["actions"][number]];
+    return c;
+  };
+
+  it("每一步只有一個投放設定區塊：核准前只有可改的設定卡", async () => {
+    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
+    expect(await screen.findByText("每個廣告組都用這組・都是建議值")).toBeTruthy();
+    expect(screen.getByLabelText(/出價方式/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "複製出價方式" })).toBeNull();
+    expect(screen.queryByText(/投放設定讀回/)).toBeNull();
+  });
+
+  it("每一步只有一個投放設定區塊：核准後（到平台完成）只有可複製的設定", async () => {
+    renderPage(approved(), "manual");
+    expect(await screen.findByRole("button", { name: "複製出價方式" })).toBeTruthy();
+    expect(screen.getAllByRole("region", { name: "投放設定" })).toHaveLength(1);
+    expect(screen.queryByRole("combobox", { name: /出價方式/ })).toBeNull();
+    expect(screen.queryByText(/投放設定讀回/)).toBeNull();
+  });
+
+  it("每一步只有一個投放設定區塊：有讀回後只剩讀回，不再有可複製的設定或設定卡", async () => {
+    panel.readback = true;
+    renderPage(approved(), "manual");
+    expect(await screen.findByText("逐項平台核對・投放設定讀回")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "投放設定" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "複製出價方式" })).toBeNull();
+    expect(getLaunchSettings).not.toHaveBeenCalled();
   });
 });

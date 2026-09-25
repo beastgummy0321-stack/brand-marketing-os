@@ -137,3 +137,28 @@ describe("new independent ad", () => {
     expect(sessionStorage.getItem("ads-new-ad-handoff:user:org:brand:campaign")).toBeNull();
   });
 });
+
+describe("settings readback (F29-I16)", () => {
+  const readback = { read_at: "2026-09-23T02:52:00Z", fields: [
+    { key: "age" as const, label: "年齡", expected_label: "25–54 歲", observed_label: "18–65+ 歲", state: "differ" as const, reason: null },
+  ] };
+  it("shows the readback block and tells the host it is shown", async () => {
+    vi.mocked(getHandoff).mockResolvedValue({ ...workspace(), settings_readback: readback });
+    const shown = vi.fn();
+    render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" platformLabel="Meta" onSettingsReadback={shown} /></MemoryRouter>);
+    expect(await screen.findByRole("region", { name: "投放設定讀回" })).toBeTruthy();
+    expect(screen.getByText("1 項投放設定和核准的不一樣")).toBeTruthy();
+    await waitFor(() => expect(shown).toHaveBeenLastCalledWith(true));
+  });
+  it("reports no readback before any read, and on a failed handoff read", async () => {
+    const shown = vi.fn();
+    const { unmount } = render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onSettingsReadback={shown} /></MemoryRouter>);
+    await waitFor(() => expect(shown).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole("region", { name: "投放設定讀回" })).toBeNull();
+    unmount();
+    vi.mocked(getHandoff).mockRejectedValue(new Error("逾時"));
+    const failed = vi.fn();
+    render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onSettingsReadback={failed} /></MemoryRouter>);
+    await waitFor(() => expect(failed).toHaveBeenLastCalledWith(false));
+  });
+});

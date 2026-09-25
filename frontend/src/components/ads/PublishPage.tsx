@@ -270,6 +270,9 @@ function ManualPublish({
   const [bindMessage, setBindMessage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   // F29-I16: what keeps 核准上架清單 disabled (a launch-settings error, a pending save, a failed read), or null.
+  // Whether the handoff already carries a settings readback; null until the handoff read answers (no settings view
+  // is shown before that, so two views of the same settings never appear together).
+  const [hasReadback, setHasReadback] = useState<boolean | null>(null);
   const [settingsBlocker, setSettingsBlocker] = useState<string | null>("投放設定還在讀取");
   const approvalBlocker = settingsBlocker
     ?? (describeFresh === "refreshing" ? "正在更新核准內容"
@@ -326,20 +329,23 @@ function ManualPublish({
         {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
         {confirmed && <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
       </div>
-      <LaunchSettingsCard brandId={brandId} campaign={c} locked={confirmed} onSaved={onSettingsSaved}
-        onCampaignSaved={onCampaignChange} onBlockerChange={setSettingsBlocker} />
+      {/* One view of the launch settings per step (F29-I16): the editable card until approval, then the copyable
+          settings, and once a readback exists only the readback (it shows every approved value beside the platform's). */}
+      {!confirmed && <LaunchSettingsCard brandId={brandId} campaign={c} locked={false} onSaved={onSettingsSaved}
+        onCampaignSaved={onCampaignChange} onBlockerChange={setSettingsBlocker} />}
       {describe.checklist.map((node) => (
         <NodeCard key={`${node.level}:${node.id}`} node={node} />
       ))}
 
-      <div className="surface p-4 text-sm">
+      <div id="publish-platform-step" className="surface scroll-mt-4 p-4 text-sm">
         <p className="font-semibold">2. 在{platformNames}完成必要設定</p>
         <p className="mt-1 text-muted-foreground">逐項使用上方名稱、素材、預算與追蹤設定。完成平台操作不會自動改成本系統的已上線狀態。</p>
       </div>
-      {confirmed && <div id="launch-settings-copy" className="scroll-mt-4"><LaunchSettingsCopy brandId={brandId} campaignId={c.id} /></div>}
+      {confirmed && hasReadback === false && <LaunchSettingsCopy brandId={brandId} campaignId={c.id} />}
 
       {confirmed && <ManualHandoffPanel brandId={brandId} campaignId={c.id} mode="items" platformLabel={pairingPlatform.label}
-        onBackToPlatform={() => document.getElementById("launch-settings-copy")?.scrollIntoView?.({ behavior: "smooth", block: "start" })} />}
+        onSettingsReadback={setHasReadback}
+        onBackToPlatform={() => document.getElementById("publish-platform-step")?.scrollIntoView?.({ behavior: "smooth", block: "start" })} />}
       <Disclosure label="舊版名稱配對與紀錄（不代表本次清單完成）">
       <div className="surface">
         <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">

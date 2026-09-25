@@ -55,7 +55,7 @@ function view(over: Partial<LaunchSettingsView> = {}, values: Partial<LaunchSett
   };
 }
 
-const campaign = { id: "cmp_fall", status: "ready" as const, manual_handoff: null };
+const campaign = { id: "cmp_fall", status: "ready" as const, manual_handoff: undefined };
 
 function renderCard(locked = false) {
   const onSaved = vi.fn();

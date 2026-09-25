@@ -21,6 +21,8 @@ type Props = {
   onBackToPlatform?: () => void;
   /** Display name of the platform the launch settings were read from (e.g. the channel label). */
   platformLabel?: string;
+  /** Tells the host whether the settings readback block is shown (the host then drops its own settings view). */
+  onSettingsReadback?: (shown: boolean) => void;
 };
 const states: Record<string, string> = { pending: "待操作", reported: "已回報，待讀回", confirmed: "設定已核對", deviated: "設定有差異", unknown: "尚未能確認", stale: "需重新確認" };
 const materials: Record<string, string> = { unknown: "未知", user_verified: "使用者人工核對", media_verified: "媒體來源已核對" };
@@ -40,7 +42,7 @@ export function ManualHandoffPanel(props: Props) {
   return <Panel key={`${scope}:${props.brandId}:${props.campaignId}`} {...props} scope={scope} />;
 }
 
-function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork, onBackToPlatform, platformLabel }: Props & { scope: string }) {
+function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork, onBackToPlatform, platformLabel, onSettingsReadback }: Props & { scope: string }) {
   const [data, setData] = useState<HandoffWorkspace | null>(null);
   const [nodes, setNodes] = useState<NativeEntity[]>([]);
   const [roots, setRoots] = useState<NativeEntity[]>([]);
@@ -127,6 +129,11 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
   const activeItem = pendingItems.find(item => item.id === activeItemId) ?? pendingItems[0];
   const renderItem = (item: HandoffItem) => <HandoffRow key={`${item.id}:${item.entity_id ?? ""}:${data?.items.find(row => row.id === item.parent_item_id)?.entity_id ?? ""}:${source}`} item={item} parent={data?.items.find(row => row.id === item.parent_item_id)} nodes={candidates} source={selectedSource} busy={Boolean(busy)} onReport={() => void act(item)} onCheck={identity => void act(item, identity)} onReconsider={reason => void act(item, undefined, reason)} />;
   const regular = !stale || workItems.length > 0;
+  // A failed handoff read shows no readback, so the host keeps its copyable settings.
+  const readbackShown = data ? mode !== "new-ad" && regular && data.settings_readback !== null : error ? false : null;
+  const reportReadback = useRef(onSettingsReadback);
+  reportReadback.current = onSettingsReadback;
+  useEffect(() => { if (readbackShown !== null) reportReadback.current?.(readbackShown); }, [readbackShown]);
   return <section className="space-y-4" aria-label="人工交接與平台核對">
     {launchOutcome && <p role={launchOutcome.tone === "error" ? "alert" : "status"} className={launchOutcome.tone === "error" ? "rounded-lg bg-destructive/5 p-3 text-sm text-destructive" : "rounded-lg bg-success/10 p-3 text-sm text-success"}>{launchOutcome.text}</p>}
     {data && stale && <LaunchStalePanel brandId={brandId} campaignId={campaignId} stale={stale} items={data.items}
@@ -137,7 +144,7 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
     {!data && !error && <p role="status">讀取交接內容…</p>}
     {data && <>
       {regular && <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{data.notice}</p>}
-      {mode !== "new-ad" && regular && data.settings_readback && <SettingsReadback brandId={brandId} campaignId={campaignId}
+      {readbackShown && data.settings_readback && <SettingsReadback brandId={brandId} campaignId={campaignId}
         readback={data.settings_readback} platform={platformLabel} onConfirmed={setData} onBackToPlatform={onBackToPlatform} />}
       {mode !== "new-ad" && regular && <>
         <div className="flex flex-wrap items-end gap-3">
