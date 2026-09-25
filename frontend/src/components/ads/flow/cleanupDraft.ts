@@ -2,7 +2,7 @@
  * the one way a cleanup set is created (first write on the propose route, and 「改用最新提議」). Kept out of
  * `ConfirmPage.tsx` so that page stays a router over kinds. */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createChangeSet, type ChangeItem, type ChangeSet } from "@/lib/adsChangeApi";
 import type { QueueCleanup, QueueCleanupAd, QueueItem } from "@/lib/adsTriageApi";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
@@ -19,25 +19,86 @@ export function cleanupDrift(set: ChangeSet | null, cleanup: QueueCleanup | null
   if (!set || set.status !== "draft" || !cleanup || cleanup.ads.length === 0) return null;
   const draftIds = new Set(set.items.map((i) => i.target_id));
   const latestIds = new Set(cleanup.ads.map((a) => a.entity_id));
-  const added = cleanup.ads.filter((a) => !draftIds.has(a.entity_id));
+  // F29-I14: a proposed ad the user unticked (`plan_json.declined_ids`) is the user's own subset, not an outdated
+  // draft — only an ad the draft neither closes nor declined is new.
+  const declined = new Set(declinedIdsOf(set));
+  const added = cleanup.ads.filter((a) => !draftIds.has(a.entity_id) && !declined.has(a.entity_id));
   const dropped = set.items.filter((i) => !latestIds.has(i.target_id));
   return added.length || dropped.length ? { added, dropped } : null;
 }
 
+/** F29-I01 Contract B: the proposed ads the user unticked, as the set stored them (`plan_json.declined_ids`). The
+ * set view returns its whole row, `plan_json` included, but `adsChangeApi.ts::ChangeSet` (out of this issue's touch)
+ * does not type it — read through a local widening, same technique as `changeFlow.ts::itemAngle`. */
+type ChangeSetPlan = ChangeSet & { plan_json?: { declined_ids?: string[] | null } | null };
+export function declinedIdsOf(set: ChangeSet | null | undefined): string[] {
+  return (set as ChangeSetPlan | null | undefined)?.plan_json?.declined_ids ?? [];
+}
+
 /** F27-I15 Contract F: a cleanup set is one `pause` item per ad of the queue row's `cleanup.ads`, marked
  * `source: "cleanup"` (the backend's `_matching_cleanup_set` only matches on `plan_json.source`). F28-I15:
- * `supersedesId` replaces an outdated draft with the latest proposal. */
+ * `supersedesId` replaces an outdated draft with the latest proposal. F29-I14: `declinedIds` are the proposed ads the
+ * user unticked — they are left out of the items and sent as `declined_ids` (Contract B: remembered at approval). */
 export function createCleanupSet(
   brandId: string, campaignId: string, cleanup: QueueCleanup, operationId: string, supersedesId?: string,
+  declinedIds: string[] = [],
 ): Promise<ChangeSet> {
+  const declined = new Set(declinedIds);
+  const kept = cleanup.ads.filter((ad) => declined.has(ad.entity_id)).map((ad) => ad.entity_id);
   return createChangeSet(brandId, campaignId, {
     operation_id: operationId,
     title: cleanupTitle(cleanup.campaign_name),
     month: currentBudgetMonth(),
-    items: buildCleanupDraftItems(cleanup.ads),
+    items: buildCleanupDraftItems(cleanup.ads.filter((ad) => !declined.has(ad.entity_id))),
     ...(supersedesId ? { supersedes_id: supersedesId } : {}),
     source: "cleanup",
+    ...(kept.length ? { declined_ids: kept } : {}),
   });
+}
+
+/** F29-I14: the user's pick on a cleanup proposal (prototype v10 `q.skip`): every proposed ad is ticked; the ones the
+ * user unticks stay. The unticked ids live in the URL (`?keep=`), so the proposal step and its confirm step (the same
+ * propose URL with `?step=confirm`) and a reload agree. Unknown ids (no longer proposed) are ignored. `changed` = the
+ * user unticked at least one ad. */
+export const KEEP_PARAM = "keep";
+export interface CleanupPick {
+  ticked: QueueCleanupAd[]; declined: string[]; changed: boolean;
+  isTicked: (entityId: string) => boolean; toggle: (entityId: string, on: boolean) => void; reset: () => void;
+  /** The search string of `step` (none = the proposal step) with the current pick (`?step=confirm&keep=…`); "" when
+   * there is nothing to carry. */
+  href: (step?: string) => string;
+}
+export function useCleanupPick(cleanup: QueueCleanup | null | undefined): CleanupPick {
+  const [params, setParams] = useSearchParams();
+  const proposed = cleanup?.ads ?? [];
+  const raw = new Set((params.get(KEEP_PARAM) ?? "").split(",").filter(Boolean));
+  const declined = proposed.filter((ad) => raw.has(ad.entity_id)).map((ad) => ad.entity_id);
+  const declinedSet = new Set(declined);
+  const write = (next: string[]) => setParams((prev) => {
+    const out = new URLSearchParams(prev);
+    if (next.length) out.set(KEEP_PARAM, next.join(",")); else out.delete(KEEP_PARAM);
+    return out;
+  }, { replace: true });
+  return {
+    ticked: proposed.filter((ad) => !declinedSet.has(ad.entity_id)),
+    declined,
+    changed: declined.length > 0,
+    isTicked: (id) => !declinedSet.has(id),
+    toggle: (id, on) => write(on ? declined.filter((x) => x !== id) : [...declined, id]),
+    reset: () => write([]),
+    href: (step) => {
+      const out = new URLSearchParams(step ? { step } : {});
+      if (declined.length) out.set(KEEP_PARAM, declined.join(","));
+      const search = out.toString();
+      return search ? `?${search}` : "";
+    },
+  };
+}
+
+/** F29-I14: whether a cleanup set closes exactly the ads `ticked` closes (order is not a difference). */
+export function samePick(set: ChangeSet, ticked: QueueCleanupAd[]): boolean {
+  const ids = new Set(set.items.map((i) => i.target_id));
+  return ids.size === ticked.length && ticked.every((ad) => ids.has(ad.entity_id));
 }
 
 /** F28-I15: an outdated cleanup draft on the confirm page. A cleanup draft built from an older proposal is not what
@@ -69,7 +130,8 @@ export function useCleanupRebuild({ brandId, campaignId, setId, isCleanup, propo
     setBusy(true);
     setActionError(null);
     try {
-      const rebuilt = await createCleanupSet(brandId, campaignId, cleanup, operationId, changeSet.id);
+      // The user's own unticks that the latest proposal still proposes carry over (Contract B).
+      const rebuilt = await createCleanupSet(brandId, campaignId, cleanup, operationId, changeSet.id, declinedIdsOf(changeSet));
       setChangeSet(rebuilt);
       navigate(changeStepPath(brandId, campaignId, rebuilt.id, "confirm"), { replace: true });
     } catch (err) {

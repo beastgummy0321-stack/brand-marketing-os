@@ -11,11 +11,12 @@ import {
   createReview, decideReview, getReview,
   type ReviewRound,
 } from "@/lib/adsReviewApi";
-import { getQueue } from "@/lib/adsTriageApi";
+import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, Ladder, ReadFailed, Segmented, TodoRow,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, Ladder, MoneyTag, ReadFailed, Segmented,
+  Term, TodoRow,
 } from "../patterns";
 import {
   adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
@@ -27,7 +28,18 @@ const STEPS = [
   { label: "看證據" }, { label: "選方向" }, { label: "改文案" },
   { label: "確認變更" }, { label: "到平台完成" }, { label: "核對結果" },
 ];
-const STEP_PURPOSE = "確認這則廣告值不值得改";
+const STEP_PURPOSE = "先看數字，再決定";
+
+/** F29-I14 (v10 `stepEv()`): the headline names the grade move against the cap (Contract A `grade_move`, the only
+ * thing that raises a 變貴 row); without one it stays neutral — no guess from the trend. The purpose names whose cap
+ * the ad is measured against (the campaign's own, 「跟<活動>的上限比」). */
+export function worseHeadline(move: GradeMove | null | undefined): string {
+  return move ? `這則從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "看看這則廣告的數字";
+}
+export function worsePurpose(campaignName: string | null | undefined): string {
+  const short = campaignName?.split("・")[0]?.trim();
+  return short ? `跟${short}的上限比，${STEP_PURPOSE}` : STEP_PURPOSE;
+}
 const POLL_MS = 3000;
 
 type SheetKind = "deferred" | "unjudgeable";
@@ -304,12 +316,12 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
-      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `變差・${evidence.target.name ?? "廣告"}` }]} />
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `變貴・${evidence.target.name ?? "廣告"}` }]} />
       <FlowHeader
         steps={STEPS}
         current={0}
-        title="這則廣告變差了"
-        purpose={STEP_PURPOSE}
+        title={worseHeadline(triageItem?.triage.grade_move)}
+        purpose={worsePurpose(triageItem?.triage.campaign_name)}
         context={triageItem ? (
           <>
             <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
@@ -327,7 +339,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       />
 
       {queueRead.status === "error" && (
-        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」、處理階梯與目標暫時看不到；下面的證據照舊" onRetry={queueRead.reload} />
+        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」、處理階梯與上限暫時看不到；下面的證據照舊" onRetry={queueRead.reload} />
       )}
 
       {waiting && (
@@ -399,9 +411,13 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               previous={adResultView(evidence.previous)?.cost_per_result ?? null}
               current={adResultView(evidence.current)?.cost_per_result ?? null}
             />
+            {/* v10 `mt(a)`: the cost against break-even, beside the grade's own ruler (the cap). */}
+            <div className="numeric text-right">
+              <MoneyTag cost={adResultView(evidence.current)?.cost_per_result ?? null} breakEven={triageItem?.triage.target.break_even ?? null} />
+            </div>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <Chip>{evidence.current.days_present}/{evidence.current.days_expected} 天有資料</Chip>
-              {targetValue !== null && <Chip>目標 {formatTargetAmount(targetValue)}</Chip>}
+              {targetValue !== null && <Chip><Term k="cap">上限</Term> {formatTargetAmount(targetValue)}</Chip>}
             </div>
           </div>
 
@@ -454,6 +470,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
           <div className="col-span-full flex gap-3.5 text-xs text-muted-foreground">
             <span><i className="mr-1.5 inline-block h-1.5 w-3.5 rounded-sm bg-border" aria-hidden="true" />前期 {formatWindowDate(evidence.window.previous_start)}–{formatWindowDate(evidence.window.previous_end)}</span>
             <span><i className="mr-1.5 inline-block h-1.5 w-3.5 rounded-sm bg-primary" aria-hidden="true" />本期 {formatWindowDate(evidence.window.start)}–{formatWindowDate(evidence.window.end)}</span>
+            {/* Contract A: the ▲▼ against the previous window is a trend note; the grade (against the cap) decides. */}
+            <span>前後升降只當參考，分級看<Term k="cap">上限</Term></span>
           </div>
         </div>
       )}

@@ -94,6 +94,21 @@ export function materialWorkbenchPath(brandId: string, campaignId: string): stri
   return `${campaignPath(brandId, campaignId)}?tab=assets&material_new=1`;
 }
 
+/** F29-I14: the campaign detail page (`…/campaigns/:c/detail`, v10 `#/camp/<c>/perf`) — where an A/B pair's
+ * 「關掉輸家」 proposal starts, so an `ab` set's confirm step goes back there (prototype `back: ["成效", …]`). */
+export function campaignDetailPath(brandId: string, campaignId: string): string {
+  return `${campaignPath(brandId, campaignId)}/detail`;
+}
+
+/** F29-I14 Contract F: an A/B "pause the loser" set names itself (`source: "ab"`); its flow is 確認 → 到平台完成 →
+ * 核對結果 (prototype v10 `stepsOf()` for kind `ab` — the performance card is the proposal). */
+export function isAbSet(set: ChangeSet | null | undefined): boolean {
+  return set?.source === "ab" && Boolean(set.ab);
+}
+export function abSteps(confirmHref?: string, handoffHref?: string): { label: string; to?: string }[] {
+  return [{ label: "確認", to: confirmHref }, { label: "到平台完成", to: handoffHref }, { label: "核對結果" }];
+}
+
 /** Multi-item sets, and any change-item kind this flow doesn't render, fall back to the existing
  * workspace change list instead of being re-interpreted (feature Decisions "Multi-item sets"). */
 export function campaignChangesPath(brandId: string, campaignId: string): string {
@@ -101,8 +116,8 @@ export function campaignChangesPath(brandId: string, campaignId: string): string
 }
 
 /** Feature Decisions "Agent choice — the draft is created lazily": the one fixed reason this
- * batch's single kind (`pause`) proposes. */
-export const PAUSE_REASON = "花費超過停損線（目標 × 3）仍未達成目標";
+ * batch's single kind (`pause`) proposes. F29-I14: v10 wording — a cap is 上限, never 目標. */
+export const PAUSE_REASON = "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）";
 
 export function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
@@ -155,7 +170,7 @@ export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
 
 /** F25-I03: the one fixed reason a `scale_budget` row proposes (feature Decisions "Confirm page
  * budget propose mode" — "Lazy create on first write"). */
-export const BUDGET_REASON = "近兩期成本都在目標內，加碼 20% 擴量";
+export const BUDGET_REASON = "近兩期每筆都沒超過上限，加碼 20% 擴量";
 
 /** `title = 加碼「<owner name, cut to 60 chars; null → 未命名投放組>」`，同 `pauseTitle` 的做法。 */
 export function budgetTitle(ownerName: string | null): string {

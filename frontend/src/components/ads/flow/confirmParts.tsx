@@ -7,7 +7,7 @@ import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { Chip, KindMark, LearnCard, Meter, ReadFailed, TagToggle } from "../patterns";
+import { Chip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
 
@@ -57,7 +57,9 @@ export function PauseEvidence({ triage, fallbackName, fallbackReason }: {
           marker={line}
           tone="danger"
           left={<>已花 <b className="text-foreground">{formatAmount(triage.current.spend)}</b>・{countText}・{triage.window.days} 天</>}
-          right={<>停損線 {formatTargetAmount(line)}（目標 × 3）</>}
+          right={line === null
+            ? <><Term k="cap">上限</Term>還沒設定</>
+            : <>花到 {formatTargetAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」（上限 × 3）</>}
         />
       </div>
     </div>
@@ -228,7 +230,7 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, brandId }: {
               marker={targetValue}
               tone="success"
               left={<>{scale.target.result_label}成本 {formatAmount(scale.cost_per_result)}</>}
-              right={<>目標 {formatTargetAmount(targetValue)}</>}
+              right={<>上限 {formatTargetAmount(targetValue)}</>}
             />
             <div className="flex items-center gap-2">
               <Tile url={bestAdThumbnailUrl} size="sm" />

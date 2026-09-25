@@ -20,20 +20,24 @@ import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
-import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, ReadFailed, Segmented } from "../patterns";
+import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
+import { AbEvidence, abLoserName, useAbContext } from "./AbEvidence";
 import { CleanupEvidence } from "./CleanupEvidence";
 import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
 import { AdoptLatestButton } from "./CleanupRebuild";
-import { createCleanupSet, useCleanupRebuild } from "./cleanupDraft";
+import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseLearnCard } from "./confirmParts";
 import {
   buildBudgetDraftItem,
   buildPauseDraftItem,
   budgetTitle,
+  abSteps,
   campaignChangesPath,
+  campaignDetailPath,
   changeStepPath,
   cleanupProposePath,
+  isAbSet,
   isCleanupTriageItem,
   isMonthBudgetRejection,
   itemAngle,
@@ -134,6 +138,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // it into a "multi-item" set; the queue's own `cleanup` row still recognises a propose-route cleanup.
   const cleanupSet = changeSet?.source === "cleanup" || isCleanupTriageItem(triageItem);
   const isCleanupPropose = !entityId && !setId && proposeKind === "cleanup";
+  // F29-I14: the user's ticks on the cleanup proposal (URL `?keep=`), and an A/B set's context reads.
+  const pick = useCleanupPick(isCleanupPropose ? triageItem?.cleanup : null);
+  const abSet = !cleanupSet && isAbSet(changeSet);
+  const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
   // F27-I16: `closed`／`item`／`kind`／`blocked` used to be computed after the loading／error
   // guards below (they only ever needed `changeSet`, never the guards' own state) — moved up here
@@ -146,9 +154,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
   // propose kind 只有 pause，這裡是新加的分支）。F27-I15：cleanup 是多項清單，沒有單一 `item`
   // 可讀，`cleanupSet`（佇列比對，不是內容猜測）優先於這整套 `item`／`proposeKind` 判斷。
-  const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
+  const kind = cleanupSet ? "cleanup" : abSet ? "ab" : item ? item.kind : entityId ? proposeKind : "pause";
   const blocked = changeSet !== null && !cleanupSet
-    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
+    && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad", "ab"].includes(kind));
 
   // Contract C / correction 9: 「一則廣告一次 copy hash 一顆 LLM call，暫停提議頁一開就打」——
   // `entityId`（propose 網址）或既有草稿的 `item.target_id` 都是同一則廣告的 id；`!closed` 只是
@@ -184,7 +192,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // F28-I15: an outdated cleanup draft offers only 「改用最新提議」 (see `cleanupDraft.ts::useCleanupRebuild`).
   const { drift, draftProposalId, adopt } = useCleanupRebuild({
     brandId, campaignId, setId, isCleanup: kind === "cleanup",
-    proposeConfirmStep: isCleanupPropose && searchParams.get("step") === "confirm",
+    // A pick of the user's own (some proposed ads unticked) is approved as picked, never swapped for an older draft.
+    proposeConfirmStep: isCleanupPropose && searchParams.get("step") === "confirm" && !pick.changed,
     changeSet, triageItem, busy, setBusy, setChangeSet, setActionError,
   });
 
@@ -196,13 +205,20 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
    * 先看佇列列有沒有既有提議（`proposal.change_set_id`），有就重用，沒有才建立新草稿
    * （feature Decisions「first reuse proposal.change_set_id when the queue row has one」）。
    * 草稿內容依 `proposeKind` 分支：budget 一定要有 `triageItem.scale`（propose 網址只會比對到
-   * `kind_key==="scale_budget"` 的列，見上面 `triageItem` 的 `useMemo`），沒有就是資料還沒讀到。 */
-  async function ensureWorkingSet(): Promise<ChangeSet> {
+   * `kind_key==="scale_budget"` 的列，見上面 `triageItem` 的 `useMemo`），沒有就是資料還沒讀到。
+   * F29-I14: a cleanup is approved as the user ticked it (unticked ads → `declined_ids`); 拒絕／暫緩 answer the whole
+   * proposal, so they carry every proposed ad. An existing draft with another pick is superseded, not reused. */
+  async function ensureWorkingSet(intent: "approve" | "decide" = "approve"): Promise<ChangeSet> {
     if (changeSet) return changeSet;
+    const cleanupPick = proposeKind === "cleanup" && intent === "approve" ? pick.declined : [];
     const existingId = triageItem?.proposal?.change_set_id;
     if (existingId) {
       const data = await getChangeControl(brandId, campaignId);
       const found = data.change_sets.find((s) => s.id === existingId);
+      const cleanup = triageItem?.cleanup;
+      if (found && proposeKind === "cleanup" && cleanup && found.status === "draft" && intent === "approve" && !samePick(found, pick.ticked)) {
+        return createCleanupSet(brandId, campaignId, cleanup, operationId, found.id, cleanupPick);
+      }
       if (found) return found;
     }
     if (proposeKind === "budget") {
@@ -218,7 +234,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
-      return createCleanupSet(brandId, campaignId, cleanup, operationId);
+      return createCleanupSet(brandId, campaignId, cleanup, operationId, undefined, cleanupPick);
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
@@ -245,6 +261,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         // F27-I15: a cleanup set's rebuild must carry `source: "cleanup"` again — otherwise the
         // rebuilt draft would silently stop being the campaign's cleanup proposal (Contract F's
         // own `_matching_cleanup_set` only matches on `plan_json.source`).
+        // F29-I14: the user's unticked ads ride along (Contract B), or the rebuild would forget them.
+        const declined = cleanupSet ? declinedIdsOf(target) : [];
         const rebuiltSet = await createChangeSet(brandId, campaignId, {
           operation_id: crypto.randomUUID(),
           title: target.title,
@@ -252,6 +270,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           items: target.items.map(toChangeInput),
           supersedes_id: target.id,
           ...(cleanupSet ? { source: "cleanup" as const } : {}),
+          ...(declined.length ? { declined_ids: declined } : {}),
         } as ChangeDraft & { source?: "cleanup" });
         setChangeSet(rebuiltSet);
         return approveWithRebuild(rebuiltSet, true);
@@ -307,7 +326,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     setSheetError(null);
     setActionError(null);
     try {
-      const target = await ensureWorkingSet();
+      const target = await ensureWorkingSet("decide");
       const updated = await decideChangeSet(brandId, campaignId, target.id, {
         decision: decisionKind,
         reason: trimmedReason,
@@ -399,21 +418,32 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     return (
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "清理" }]} />
-        <CleanupProposal brandId={brandId} campaignId={campaignId} item={{ ...triageItem, cleanup: triageItem.cleanup }} position={position} homeHref={homeHref} />
+        <CleanupProposal brandId={brandId} campaignId={campaignId} item={{ ...triageItem, cleanup: triageItem.cleanup }} position={position} homeHref={homeHref} pick={pick} />
       </div>
     );
   }
-  const cleanupBackHref = kind === "cleanup" && !closed ? cleanupProposePath(brandId, campaignId) : null;
+  // The proposal step keeps the user's ticks when the confirm step goes back to it (F29-I14).
+  const cleanupBackHref = kind === "cleanup" && !closed
+    ? `${cleanupProposePath(brandId, campaignId)}${isCleanupPropose ? pick.href() : ""}`
+    : null;
+  // F29-I14 Contract F: an A/B set starts on the performance card of the campaign detail page — back goes there.
+  const abBackHref = kind === "ab" && !closed ? campaignDetailPath(brandId, campaignId) : null;
+  const ab = abSet ? changeSet?.ab ?? null : null;
+  // Before the cleanup set exists the close list is the user's pick; none ticked leaves nothing to approve.
+  const cleanupCloseCount = kind === "cleanup" ? (changeSet ? changeSet.items.length : pick.ticked.length) : 0;
+  const nothingPicked = kind === "cleanup" && !changeSet && cleanupCloseCount === 0;
 
   const title = kind === "copy" ? "確認變更"
     : kind === "budget" ? "提議：加預算"
     : kind === "new_ad" ? "確認新廣告提議"
     : kind === "cleanup" ? "確認清理"
+    : kind === "ab" ? "確認關掉輸家"
     : "提議：暫停這則廣告";
   const approveLabel = kind === "copy" ? "核准，接著到平台操作"
     : kind === "budget" ? "核准加碼，接著到平台操作"
     : kind === "new_ad" ? "核准新廣告，接著到平台操作"
-    : kind === "cleanup" ? "核准清理"
+    : kind === "cleanup" ? `核准清理（關 ${cleanupCloseCount} 則）`
+    : kind === "ab" && ab ? `核准關掉 ${abLoserName(ab, abContext.pair)}`
     : "核准暫停，接著到平台操作";
   const closedLabel = changeSet
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
@@ -433,14 +463,16 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
-      <div className={kind === "cleanup" ? "flex max-w-[1260px] flex-col gap-4" : "flex flex-col gap-4"}>
+      <div className={kind === "cleanup" || kind === "ab" ? "flex max-w-[1260px] flex-col gap-4" : "flex flex-col gap-4"}>
         <FlowHeader
-          steps={kind === "cleanup" ? cleanupSteps(cleanupBackHref ?? undefined) : STEPS}
+          steps={kind === "cleanup" ? cleanupSteps(cleanupBackHref ?? undefined) : kind === "ab" ? abSteps() : STEPS}
           current={kind === "cleanup" ? 1 : 0}
           title={title}
           purpose={STEP_PURPOSE}
           aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : undefined}
-          context={triageItem ? (
+          context={kind === "ab" ? (
+            abContext.campaign && <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} />
+          ) : triageItem ? (
             <>
               {kind === "cleanup" ? (
                 <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
@@ -474,7 +506,24 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
         {kind === "cleanup" && (
-          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} drift={drift} />
+          <div>
+            <CleanupEvidence
+              cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} drift={drift}
+              picked={isCleanupPropose ? pick.ticked : undefined} breakEven={triageItem?.triage.target.break_even ?? null}
+            />
+            <GradeRules breakEven={triageItem?.triage.target.break_even ?? null} />
+          </div>
+        )}
+        {kind === "ab" && ab && (
+          <div>
+            {abContext.failed && (
+              <div className="mb-4">
+                <ReadFailed what="這組比較的縮圖、A／B 標記或打平線讀不到；下面核准的內容照舊" onRetry={abContext.reload} />
+              </div>
+            )}
+            <AbEvidence ab={ab} context={abContext} />
+            <MoneyRule breakEven={abContext.breakEven} />
+          </div>
         )}
 
         {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
@@ -498,9 +547,12 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
 
       <div className="flex-1" />
       <ActionBar
-        back={{ label: editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : "投放中心", to: editCopyHref ?? cleanupBackHref ?? homeHref }}
+        back={{
+          label: editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : abBackHref ? "成效" : "投放中心",
+          to: editCopyHref ?? cleanupBackHref ?? abBackHref ?? homeHref,
+        }}
         exit={closed ? undefined : { label: "先不要，回投放中心", to: homeHref }}
-        hint={!closed && !drift ? "核准不會改動平台" : undefined}
+        hint={closed || drift ? undefined : nothingPicked ? "一則都沒勾，沒有可核准的" : "核准不會改動平台"}
       >
         {!closed && (
           <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
@@ -508,7 +560,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         {drift ? (
           <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
         ) : !closed ? (
-          <Button disabled={busy} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
+          <Button disabled={busy || nothingPicked} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
         ) : nextAction ? (
           <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
         ) : null}

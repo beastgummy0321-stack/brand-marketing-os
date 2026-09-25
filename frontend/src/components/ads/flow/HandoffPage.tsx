@@ -14,16 +14,19 @@ import {
 import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { ActionBar, CampaignChip, Disclosure, FlowHeader, ReadFailed, TodoRow, type FlowStep } from "../patterns";
+import { useAbContext } from "./AbEvidence";
 import { CleanupHandoffRows } from "./CleanupHandoffRows";
 import { cleanupSteps } from "./CleanupProposal";
 import { NewAdHandoffPanel } from "./NewAdHandoffPanel";
 import { PlatformButton } from "./PlatformButton";
 import {
+  abSteps,
   campaignChangesPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isAbSet,
   isCleanupTriageItem,
   stepFromChangeSet,
 } from "./changeFlow";
@@ -69,6 +72,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
   const triageItem = useMemo(() => findFlowTriageItem(queue, changeSet), [queue, changeSet]);
   const position = flowPosition(queue, triageItem);
+  // F29-I14 Contract F: an A/B "pause the loser" set reuses the pause handoff under its own three steps.
+  const abSet = changeSet?.source !== "cleanup" && isAbSet(changeSet);
+  const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
   // feature Decisions「Step from a change set」：這一步只服務 approved + 還沒回報的清單，
   // 其他狀態（草稿、已拒絕／暫緩、已讀回）都導去正確的步驟，不在這裡重新解讀。
@@ -198,8 +204,11 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   // same steps as `ConfirmPage`). 提議 stays unlinked once approved — the prototype forwards it to 確認 then.
   const steps: FlowStep[] = kind === "cleanup"
     ? cleanupSteps().map((step) => (step.label === "確認" ? { ...step, to: confirmHref } : step))
+    : abSet ? abSteps(confirmHref)
     : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成" }, { label: "核對結果" }];
-  const headerContext = triageItem ? (
+  const headerContext = abSet ? (
+    abContext.campaign ? <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} /> : undefined
+  ) : triageItem ? (
     <>
       {kind === "cleanup" ? (
         <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
@@ -286,7 +295,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   } else if (kind === "pause") {
     rows = (
       <>
-        <TodoRow no={1} done={opened} action={platformButton}>打開平台上的這則廣告</TodoRow>
+        <TodoRow no={1} done={opened} action={platformButton}>
+          {abSet ? `打開平台上的「${item.target.name ?? "較貴的那一則"}」` : "打開平台上的這則廣告"}
+        </TodoRow>
         <TodoRow no={2} done={acted} action={<Button variant="outline" size="sm" onClick={() => setActed(true)}>我關了</Button>}>
           把這則廣告的開關關掉
         </TodoRow>

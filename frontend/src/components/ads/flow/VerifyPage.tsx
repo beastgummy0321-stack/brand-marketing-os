@@ -16,14 +16,18 @@ import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
 import { reviewRoundPath } from "../review/reviewFlow";
+import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
 import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
 import {
+  abSteps,
   campaignChangesPath,
+  campaignDetailPath,
   changeStepPath,
   findFlowTriageItem,
   flowPosition,
   formatTargetAmount,
+  isAbSet,
   isCleanupTriageItem,
   itemAngle,
   nextOpenQueueItem,
@@ -232,6 +236,9 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   const triageItem = useMemo(() => findFlowTriageItem(queue, changeSet), [queue, changeSet]);
   const position = flowPosition(queue, triageItem);
+  // F29-I14 Contract F: an A/B "pause the loser" set reuses the pause verify, plus the learning it writes.
+  const abSet = changeSet?.source !== "cleanup" && isAbSet(changeSet);
+  const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
   // feature Decisions「Step from a change set」：這一步只服務 approved 且已經有讀回紀錄的清單
   // （pending 但 reported_at 還沒寫入的留給 handoff 頁），其他狀態都導去正確的步驟。
@@ -347,8 +354,11 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   const steps: FlowStep[] = cleanupSet
     ? cleanupSteps().map((step) => (
       step.label === "確認" ? { ...step, to: confirmHref } : step.label === "到平台完成" ? { ...step, to: handoffHref } : step))
+    : abSet ? abSteps(confirmHref, handoffHref)
     : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成", to: handoffHref }, { label: "核對結果" }];
-  const context = triageItem ? (
+  const context = abSet ? (
+    abContext.campaign ? <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} /> : undefined
+  ) : triageItem ? (
     <>
       {cleanupSet ? (
         <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
@@ -422,16 +432,20 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   if (state === "confirmed") {
     hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item)}`} />;
+    const timeline = timelineRailCells(item, kind);
     const cells: RailCell[] = [
       ...(item.evidence_json.setting_matches === true
         ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
         : []),
-      ...timelineRailCells(item, kind),
+      // An A/B pause has no angle: its notebook line is the card below, not the angle cell.
+      ...(abSet ? timeline.slice(0, 1) : timeline),
     ];
     rail = <StatusRail cells={cells} />;
     // v7 原型 verify() confirmed 分支：`i.kind==="pause"&&A[q.ad]?.angle` 才畫這張卡——跟 rail 的
     // 「已記入品牌學習」格同一個資料來源（`item.learning.recorded`），只是這裡是展開版。
-    if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
+    // F29-I14: an A/B set shows the line it writes into the notebook (prototype v10 `stepChk()` kind `ab`).
+    if (abSet && changeSet.ab) learnCard = <AbLearnedCard ab={changeSet.ab} item={item} />;
+    else if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
     bar = (
       <ActionBar>
         {again}
@@ -468,8 +482,9 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   } else if (state === "stale") {
     const staleNote = item.stale_reason ?? messageOf(item) ?? "用現在的資料重新檢討一次；舊紀錄都會保留";
     hero = <ResultHero tone="bad" title="這則廣告的設定變了，原本的核准不再適用" note={staleNote} />;
-    const restartHref = kind === "pause"
-      ? proposePausePath(brandId, campaignId, item.target_id)
+    // An A/B pair is proposed again from its performance card, never as a plain stop-loss.
+    const restartHref = abSet ? campaignDetailPath(brandId, campaignId)
+      : kind === "pause" ? proposePausePath(brandId, campaignId, item.target_id)
       : campaignChangesPath(brandId, campaignId);
     bar = (
       <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}>
