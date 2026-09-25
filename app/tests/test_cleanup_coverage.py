@@ -3,27 +3,33 @@ has always cited (F31-I09, item 13).
 
 Root cause this guards: every module declares the tables it clears on brand delete
 (`cleanup.register(..., brand_tables=...)`), but nothing compared those declarations with the
-live schema, so tables added later (`campaign_period`, `channel_entity_map`,
-`period_node_membership`, `ads_runtime_event`, `approval`) were never cleared and a brand with
-a period could not be deleted at all (FK from its periods to `brand`).
+live schema, so tables added later were never cleared and a brand with a period could not be
+deleted at all (its periods kept a foreign key to the brand).
+
+Table-name-free on purpose (app-shell code, like test_org_isolation_all_tables.py): everything is
+derived from the registry and the live catalog.
 
 1. Every live table with a `brand_id` column is declared by some registered module, apart from
    `EXEMPT_BRAND_TABLES` (one reason each). That list may only shrink: a new entry means brand
    data that outlives its brand, which is a product decision, not a test edit.
 2. Every declared table still exists (a dropped table left in a registry is a stale claim).
-3. A brand with a period, channel bindings, period membership, runtime events, an approval
-   referenced by an ads change set and a kept `llm_task` deletes in one call; afterwards only
-   exempt tables hold its `brand_id`, and the kept `llm_task` no longer points at the period.
+3. Delete order can satisfy every foreign key between cleared tables: registration order is
+   delete order (cleanup.delete_all), so the module clearing a referrer registers no later than
+   the module clearing what it references.
+4. An exempt (kept) table that references a cleared table does so with an ON DELETE action, or
+   it would block the delete (the kept AI-spend rows pointing at a period did exactly that).
+
+The seeded end-to-end regressions live with their owners: app/tests/test_schedule_brand_delete.py
+and app/tests/test_ads_brand_delete.py.
 
 Imports only legacy facades: `app.main` (the composition root, so every module's registration
-has run in production order), `app.core` and `app.brand_intelligence`.
+has run in production order) and `app.core`.
 """
 
 import unittest
 
 import app.main  # noqa: F401 -- composition root: runs every cleanup.register() in production order
-from app.brand_intelligence import repository as bi_repo
-from app.core import approval, cleanup, db
+from app.core import cleanup, db
 
 # Brand data kept on purpose after the brand is deleted. May only shrink.
 EXEMPT_BRAND_TABLES = {
@@ -34,6 +40,18 @@ EXEMPT_BRAND_TABLES = {
     "audit_log": "稽核紀錄比被稽核的對象活得久（刪品牌本身也寫一筆）",
 }
 _EXEMPTION_CEILING = frozenset({"llm_task", "audit_log"})
+
+# Known order violations, one reason each; may only shrink (the test below fails once one is fixed).
+KNOWN_ORDER_VIOLATIONS = {
+    # 品牌智庫 (imported by everything, so registered first) deletes the brand's products before
+    # 投放中心 deletes its ads; an ad pointing at a product makes the brand delete fail. Same
+    # class and same fix as 20260911000002_workbench_brief_product_fk_set_null.sql: an ads
+    # migration switching this FK to ON DELETE SET NULL (outside F31-I09's touch; reported).
+    "ads_ad_product_id_fkey": "ads 表的 product 外鍵沒有 ON DELETE，刪品牌時先刪產品會被擋",
+}
+
+# pg_constraint.confdeltype: a = NO ACTION, r = RESTRICT block the parent delete.
+_BLOCKING_DELETE_ACTIONS = {"a", "r"}
 
 
 def _live_brand_tables(conn) -> set:
@@ -47,11 +65,23 @@ def _live_brand_tables(conn) -> set:
     return {r["table_name"] for r in rows}
 
 
-def _declared_brand_tables() -> set:
-    declared = set()
-    for tables in cleanup.declared_brand_tables().values():
-        declared |= tables
-    return declared
+def _foreign_keys(conn) -> list:
+    """[(referrer table, referenced table, delete action, constraint name)] in this schema."""
+    rows = conn.execute(
+        "SELECT child.relname AS child, parent.relname AS parent,"
+        "       con.confdeltype::text AS action, con.conname AS name"
+        " FROM pg_constraint con"
+        " JOIN pg_class child ON child.oid = con.conrelid"
+        " JOIN pg_class parent ON parent.oid = con.confrelid"
+        " JOIN pg_namespace ns ON ns.oid = con.connamespace"
+        " WHERE con.contype = 'f' AND ns.nspname = current_schema()"
+    ).fetchall()
+    return [(r["child"], r["parent"], r["action"], r["name"]) for r in rows]
+
+
+def _owners() -> dict:
+    """{table: registered module name} for every declared brand table."""
+    return {t: name for name, tables in cleanup.declared_brand_tables().items() for t in tables}
 
 
 class CleanupCoverageTest(unittest.TestCase):
@@ -60,122 +90,64 @@ class CleanupCoverageTest(unittest.TestCase):
 
     def test_every_live_brand_table_is_cleared_or_exempt(self):
         live = _live_brand_tables(self.conn)
-        unclaimed = live - _declared_brand_tables() - set(EXEMPT_BRAND_TABLES)
+        unclaimed = live - set(_owners()) - set(EXEMPT_BRAND_TABLES)
         self.assertEqual(
             unclaimed, set(),
             "these tables carry brand_id but no cleanup.register() declares them: deleting a "
             "brand leaves their rows behind (or fails on a foreign key)")
 
     def test_declared_tables_exist(self):
-        stale = _declared_brand_tables() - _live_brand_tables(self.conn)
+        stale = set(_owners()) - _live_brand_tables(self.conn)
         self.assertEqual(stale, set(), "registries declare tables that no longer exist")
 
     def test_exemptions_are_live_undeclared_and_only_shrink(self):
         self.assertLessEqual(set(EXEMPT_BRAND_TABLES), _EXEMPTION_CEILING)
         live = _live_brand_tables(self.conn)
-        declared = _declared_brand_tables()
+        declared = set(_owners())
         for table, reason in EXEMPT_BRAND_TABLES.items():
             self.assertTrue(reason)
             self.assertIn(table, live, f"exempt table {table} no longer exists: drop the exemption")
             self.assertNotIn(table, declared, f"{table} is exempt yet a registry clears it")
 
-    def test_referenced_tables_are_cleared_after_their_referrers(self):
-        """Registration order is delete order (cleanup.delete_all); FKs are NO ACTION."""
-        names = cleanup.registered_names()
-        owner = {t: n for n, ts in cleanup.declared_brand_tables().items() for t in ts}
-        for referrer, referenced in (("ads_change_set", "approval"),
-                                     ("channel_revenue", "campaign_period"),
-                                     ("interrupt", "campaign_period")):
-            self.assertLessEqual(names.index(owner[referrer]), names.index(owner[referenced]),
-                                 f"{referrer} must be cleared before {referenced}")
+    def test_referrers_are_cleared_no_later_than_what_they_reference(self):
+        order = {name: i for i, name in enumerate(cleanup.registered_names())}
+        owners = _owners()
+        late = []
+        for child, parent, action, name in _foreign_keys(self.conn):
+            if child == parent or action not in _BLOCKING_DELETE_ACTIONS:
+                continue
+            if child in owners and parent in owners and name not in KNOWN_ORDER_VIOLATIONS:
+                if order[owners[child]] > order[owners[parent]]:
+                    late.append(f"{name}: {child} ({owners[child]}) is cleared after "
+                                f"{parent} ({owners[parent]})")
+        self.assertEqual(late, [], "registration order is delete order; these FKs would block it")
 
+    def test_known_order_violations_are_still_live(self):
+        """Remove an entry from KNOWN_ORDER_VIOLATIONS once its FK stops blocking."""
+        order = {name: i for i, name in enumerate(cleanup.registered_names())}
+        owners = _owners()
+        live = {
+            name for child, parent, action, name in _foreign_keys(self.conn)
+            if action in _BLOCKING_DELETE_ACTIONS and child in owners and parent in owners
+            and order[owners[child]] > order[owners[parent]]
+        }
+        for name, reason in KNOWN_ORDER_VIOLATIONS.items():
+            self.assertTrue(reason)
+            self.assertIn(name, live,
+                          f"{name} no longer blocks: drop it from KNOWN_ORDER_VIOLATIONS")
 
-class BrandDeleteLeavesOnlyExemptRowsTest(unittest.TestCase):
-    def setUp(self):
-        self.conn = db.current()
-
-    def _seed(self) -> tuple:
-        conn, org = self.conn, db.DEV_ORG_ID
-        bid = bi_repo.create_brand(conn, name="刪品牌涵蓋率測試品牌", client_name=None,
-                                   actor="測試員", org_id=org)["id"]
-        bi_repo.update_brand(conn, bid, name="刪品牌涵蓋率測試品牌", client_name=None,
-                             status="archived", actor="測試員")
-        now = db.now_utc()
-        period = db.new_id("cp")
-        conn.execute(
-            "INSERT INTO campaign_period (id, org_id, brand_id, name, start_date, end_date,"
-            " currency) VALUES (%s, %s, %s, '九月檔期', '2026-09-01', '2026-09-30', 'TWD')",
-            (period, org, bid))
-        conn.execute(
-            "INSERT INTO ad_channel (id, org_id, channel_key) VALUES (%s, %s, 'meta')"
-            " ON CONFLICT (org_id, channel_key) DO NOTHING", (db.new_id("chn"), org))
-        channel = conn.execute(
-            "SELECT id FROM ad_channel WHERE org_id = %s AND channel_key = 'meta'", (org,)
-        ).fetchone()["id"]
-        conn.execute(
-            "INSERT INTO channel_entity_map (id, org_id, brand_id, channel_id, node_key,"
-            " node_name_at_bind, external_id) VALUES (%s, %s, %s, %s, '1', '節點一', 'ext_1')",
-            (db.new_id("cem"), org, bid, channel))
-        conn.execute(
-            "INSERT INTO period_node_membership (id, org_id, brand_id, campaign_period_id,"
-            " node_key, from_date, channel_id) VALUES (%s, %s, %s, %s, '1', '2026-09-01', %s)",
-            (db.new_id("pnm"), org, bid, period, channel))
-        conn.execute(
-            "INSERT INTO ads_runtime_event (id, kind, org_id, brand_id)"
-            " VALUES (%s, 'beat', %s, %s)",
-            (db.new_id("are"), org, bid))
-        # Rows of other modules that point at the period: their owners clear them first.
-        conn.execute(
-            "INSERT INTO interrupt (id, org_id, brand_id, campaign_period_id, dedupe_key,"
-            " category, severity, message, status, created_at)"
-            " VALUES (%s, %s, %s, %s, %s, 'test', 'informational', '測試', 'open', %s)",
-            (db.new_id("itr"), org, bid, period, db.new_id("dk"), now))
-        conn.execute(
-            "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, revenue,"
-            " source, currency, campaign_period_id)"
-            " VALUES (%s, %s, %s, 'physical_store', '2026-09-05', 100, 'manual', 'TWD', %s)",
-            (db.new_id("chr"), org, bid, period))
-        # An approval referenced by an ads change set: ads clears the set before core clears it.
-        approval_id = approval.approve(
-            conn, org_id=org, brand_id=bid, scope_type="ads_change_set", scope_ref="set",
-            content_hash="h", amount=100, max_daily_amount=100, actor="測試員", commit=False)
-        campaign = db.new_id("acp")
-        conn.execute(
-            "INSERT INTO ads_campaign (id, org_id, brand_id, name, origin)"
-            " VALUES (%s, %s, %s, '匯入活動', 'imported')", (campaign, org, bid))
-        conn.execute(
-            "INSERT INTO ads_change_set (id, org_id, brand_id, campaign_id, operation_id,"
-            " request_hash, content_hash, title, month, plan_json, created_by, approval_id)"
-            " VALUES (%s, %s, %s, %s, 'op', 'rq', 'ch', '變更', '2026-09', '{}', '測試員', %s)",
-            (db.new_id("acs"), org, bid, campaign, approval_id))
-        task = db.new_id("llm")
-        conn.execute(
-            "INSERT INTO llm_task (id, org_id, brand_id, campaign_period_id, task_type,"
-            " context_scope_json, input_context_ids_json, input_context_hash,"
-            " knowledge_item_ids_json, brand_version, prompt_template_id,"
-            " prompt_template_version, provider, model, status, attempt_no, started_at)"
-            " VALUES (%s, %s, %s, %s, 'schedule_plan', '{}', '[]', '', '[]', 1, 'p', 'v1',"
-            " 'seed', 'seed', 'succeeded', 1, %s)",
-            (task, org, bid, period, now))
-        conn.commit()
-        return bid, task
-
-    def test_brand_with_period_bindings_events_and_approval_deletes_cleanly(self):
-        bid, task = self._seed()
-
-        bi_repo.delete_brand(self.conn, bid, actor="測試員")
-
-        leftovers = {}
-        for table in sorted(_live_brand_tables(self.conn)):
-            n = self.conn.execute(
-                f"SELECT COUNT(*) AS n FROM {table} WHERE brand_id = %s", (bid,)).fetchone()["n"]
-            if n:
-                leftovers[table] = n
-        self.assertLessEqual(set(leftovers), set(EXEMPT_BRAND_TABLES), leftovers)
-        kept = self.conn.execute(
-            "SELECT campaign_period_id FROM llm_task WHERE id = %s", (task,)).fetchone()
-        self.assertIsNotNone(kept, "llm_task is kept on brand delete on purpose")
-        self.assertIsNone(kept["campaign_period_id"])
+    def test_uncleared_tables_do_not_block_deleting_cleared_ones(self):
+        owners = _owners()
+        blocking = [
+            f"{name}: {child} -> {parent}"
+            for child, parent, action, name in _foreign_keys(self.conn)
+            if parent in owners and child not in owners and child in EXEMPT_BRAND_TABLES
+            and action in _BLOCKING_DELETE_ACTIONS
+        ]
+        self.assertEqual(
+            blocking, [],
+            "a kept (exempt) table references a cleared one without an ON DELETE action, so the "
+            "brand delete fails on it")
 
 
 if __name__ == "__main__":
