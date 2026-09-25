@@ -46,13 +46,15 @@ export function TreeRows({ root, groups }: { root: TreeNodeInfo; groups: TreeGro
                 <li key={leaf.key} data-variant={leaf.missing ? "missing" : leaf.dimmed ? "dimmed" : "ad"}
                   className={cn("relative flex flex-wrap items-center gap-x-2.5 gap-y-1 py-1.5", leaf.dimmed && "opacity-50")}>
                   <span aria-hidden="true" className="absolute top-1/2 -left-[18px] w-3.5 border-t-2 border-border" />
-                  {leaf.missing
-                    ? <span aria-hidden="true" className="size-7 shrink-0 rounded-lg border-[1.5px] border-dashed border-grade-thin bg-muted" />
-                    : <Thumb url={leaf.thumbnailUrl} size={28} />}
-                  {/* The name grows from its own width with a floor, so a long name never shrinks to a one-character
-                      column beside the chip and number (1024); when they do not fit, they wrap under it instead. */}
-                  <span className="min-w-[8rem] flex-[1_1_auto] text-xs font-medium [overflow-wrap:anywhere]">
-                    {leaf.missing ? <span className="text-muted-foreground">{leaf.missingLabel ?? "缺素材"}</span> : leaf.name}
+                  {/* Thumbnail and name take at least 16rem beside the chip and number (a floor of 10rem), so a long name never
+                      shrinks to a one-character column (1024); when that does not fit, those wrap under it instead. */}
+                  <span data-part="name" className="flex min-w-[10rem] flex-[1_1_16rem] items-center gap-2.5">
+                    {leaf.missing
+                      ? <span aria-hidden="true" className="size-7 shrink-0 rounded-lg border-[1.5px] border-dashed border-grade-thin bg-muted" />
+                      : <Thumb url={leaf.thumbnailUrl} size={28} />}
+                    <span className="text-xs font-medium [overflow-wrap:anywhere]">
+                      {leaf.missing ? <span className="text-muted-foreground">{leaf.missingLabel ?? "缺素材"}</span> : leaf.name}
+                    </span>
                   </span>
                   {(leaf.chip || leaf.value !== undefined) && (
                     <span data-part="facts" className="ml-auto flex max-w-full items-center justify-end gap-2.5">

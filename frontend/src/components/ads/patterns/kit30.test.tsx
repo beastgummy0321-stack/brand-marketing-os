@@ -216,8 +216,10 @@ describe("TreeRows", () => {
     expect(name.textContent).toBe(long);
     // The row wraps rather than shrinking the name to a sliver: the name has a floor and grows from its own width.
     expect(leaf.className).toContain("flex-wrap");
-    expect(name.className).not.toContain("min-w-0");
-    expect(name.className).toMatch(/min-w-\[\d+rem\]/);
+    const nameCell = leaf.querySelector("[data-part=name]") as HTMLElement;
+    expect(nameCell).not.toBeNull();
+    expect(nameCell.contains(name)).toBe(true);
+    expect(nameCell.className).toMatch(/min-w-\[\d+rem\]/);
     // Grade and number stay together in one cell that keeps to the right edge when it drops to the next line.
     const facts = leaf.querySelector("[data-part=facts]") as HTMLElement;
     expect(facts).not.toBeNull();
