@@ -246,6 +246,11 @@ def select_version(request: Request, brand_id: str, set_id: str, version_id: str
         detail = repository.select_version_for_set(
             web.conn, actor.org_id, brand_id, set_id, version_id,
         )
+    except repository.SelectionFullError as exc:
+        # Feature Contract L: the message carries the set's own count, so it is not a table row.
+        raise web.ApiError(
+            409, "selection_full", repository.selection_full_message(exc.required),
+        ) from exc
     except ValueError as exc:
         raise _error(exc, _SELECT_ERRORS) from exc
     return {"set": detail}
