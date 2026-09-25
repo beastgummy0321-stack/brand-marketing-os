@@ -46,14 +46,16 @@ LABELS = {
     "no_target": "尚未設定目標",
 }
 
-# F28-I02 (ads.md §6.32): every active ad is graded against the campaign's one cap T -- 划算 <= T,
-# 偏貴 <= 1.2T, 太貴 > 1.2T, 白花 = spend >= 3T with a known zero result, below the sample gate =
-# 還太新、看不準. `class` above stays the trend note against the previous window.
+# F28-I02 (ads.md §6.32), F29-I01 (§6.33 v10 words): every active ad is graded against the
+# campaign's one cap T -- 划算 <= T, 偏貴 <= 1.2T, 太貴 > 1.2T, 沒賣出 = spend >= 3T with a known
+# zero result, below the sample gate = 剛開始、數字還不夠. `grade_window` below is the one ruler
+# (triage and `period_grades.grade_period` both call it); `class` above stays the trend note
+# against the previous window and no decision reads it (§6.33 "One ruler").
 WATCH_BAND = 1.2
 GRADE_LABELS = {
-    "on_target": "划算", "watch": "偏貴", "over": "太貴", "wasted": "白花", "no_target": "未判斷",
+    "on_target": "划算", "watch": "偏貴", "over": "太貴", "wasted": "沒賣出", "no_target": "未判斷",
 }
-TOO_NEW_LABEL = "還太新、看不準"
+TOO_NEW_LABEL = "剛開始、數字還不夠"
 NO_DATA_LABEL = "資料不足"
 _TOO_NEW = ("insufficient", TOO_NEW_LABEL)
 _NO_DATA = ("insufficient", NO_DATA_LABEL)
@@ -287,9 +289,20 @@ def _ad_window(entity_rows, start, end):
     aggregated = review_evidence.aggregate(rows, start, end)
     ad_views = [v for v in aggregated["result_views"] if v["metric_scope"] == "ad"]
     # More than one currency in the window has no single unambiguous view (same defensive shape
-    # `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick.
-    view = ad_views[0] if len(ad_views) == 1 else None
+    # `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick. F29-I01: it is
+    # reported as its own `mixed_currency` reason so `grade_window` reads it as 資料不足, never as
+    # a thin (剛開始) window or a 0.
+    if len(ad_views) > 1:
+        return _MIXED_CURRENCY_VIEW, _ad_spend(aggregated)
+    view = ad_views[0] if ad_views else None
     return view, _ad_spend(aggregated)
+
+
+_MIXED_CURRENCY_VIEW = {
+    "metric_scope": "ad", "currency": None, "result_kind": None, "result_count": None,
+    "cost_per_result": None, "days_present": 0, "days_known": 0, "derived_zero_days": 0,
+    "reason": "mixed_currency",
+}
 
 
 def _metrics_view(view, spend):
@@ -362,6 +375,40 @@ def _cost_grade(cost, target_value):
     return grade, GRADE_LABELS[grade]
 
 
+# The graded (ranked) grades -- every other grade key is "not graded" (剛開始／資料不足／未判斷).
+GRADED = ("on_target", "watch", "over", "wasted")
+
+
+def grade_window(view, spend, target_value, days):
+    """F29-I01 (ads.md §6.33 "One ruler"): the one cap grade of one window, `(grade, grade_label,
+    reason_code)`. Triage (`_classify_ad`, current and previous window) and
+    `period_grades.grade_period` both call this -- never a second copy. `reason_code` is `None`
+    for a graded cost, `"spend_over_target_no_result"` for 沒賣出, `"below_sample_gate"` for
+    剛開始, else the unknown window's own reason (資料不足). No cap is 未判斷.
+
+    Order is the F28 rule: a known zero past 3 × cap first, then the sample gate (spend >= 3 × cap,
+    or >= 10 results over >= 7 days), then an unknown window. A window across two currencies has
+    no single number to gate on, so it reads 資料不足 before the gate."""
+    if target_value is None:
+        return (*_NOT_JUDGED, "target_unresolved")
+    if view is not None and view["reason"] == "mixed_currency":
+        return (*_NO_DATA, "mixed_currency")
+    if _stop_loss_hit(view, spend, target_value):
+        return "wasted", GRADE_LABELS["wasted"], "spend_over_target_no_result"
+    if not _sample_gate(spend, view, target_value, days):
+        return (*_TOO_NEW, "below_sample_gate")
+    if view is None or view["reason"] is not None:
+        return (*_NO_DATA, view["reason"] if view is not None else "result_unknown_days")
+    return (*_cost_grade(view["cost_per_result"], target_value), None)
+
+
+def _grade_move(previous_grade, grade):
+    """`{from, to}` only when both windows are graded and the grade changed (Contract A)."""
+    if previous_grade in GRADED and grade in GRADED and previous_grade != grade:
+        return {"from": previous_grade, "to": grade}
+    return None
+
+
 def _thumbnail_url(entity):
     """This ad's own creative thumbnail, read from the already-loaded `ads_external_entity
     .creative` jsonb -- `creative.fields.thumbnail_url` first, else `.image_url`, else `None`
@@ -381,14 +428,21 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
 
     def finish(cls, reason_code, grade, start, end, days, extended_from, view, spend,
                change_pct=None, previous=None):
+        previous_start, previous_end = _previous_range(start, days)
         if previous is None:
-            previous_start, previous_end = _previous_range(start, days)
             previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
         gate = _sample_gate(spend, view, target["value"], days)
+        # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
+        # when it isn't fully synced, below the gate or unknown, or when this ad isn't judged.
+        previous_grade = None
+        if grade[0] != "no_target" and _window_covered(coverage, previous_start, previous_end):
+            prev_grade = grade_window(prev_view, prev_spend, target["value"], days)[0]
+            previous_grade = prev_grade if prev_grade in GRADED else None
         return {
             **base, "class": cls, "label": LABELS[cls], "reason_code": reason_code,
             "grade": grade[0], "grade_label": grade[1],
+            "previous_grade": previous_grade, "grade_move": _grade_move(previous_grade, grade[0]),
             "window": _window_view(start, end, days, extended_from),
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
@@ -406,7 +460,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
 
     days = start = end = view = spend = None
     extended_from = None
-    gate_pass = False
+    graded = None
     for step_idx, step_days in enumerate(WINDOW_STEPS):
         days = step_days
         end = cutoff
@@ -423,26 +477,23 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
                 and (view is None or view["result_kind"] is None):
             return finish("no_target", "result_kind_unknown", _NOT_JUDGED, start, end, days,
                           extended_from, view, spend)
-        if _stop_loss_hit(view, spend, target["value"]):
-            return finish("stop_loss", "spend_over_target_no_result",
-                          ("wasted", GRADE_LABELS["wasted"]), start, end, days, extended_from,
+        graded = grade_window(view, spend, target["value"], days)
+        if graded[0] == "wasted":
+            return finish("stop_loss", graded[2], graded[:2], start, end, days, extended_from,
                           view, spend)
-        gate_pass = _sample_gate(spend, view, target["value"], days)
-        if gate_pass or step_idx == len(WINDOW_STEPS) - 1:
+        if graded[2] != "below_sample_gate" or step_idx == len(WINDOW_STEPS) - 1:
             break
         extended_from = days
 
-    if not gate_pass:
-        return finish("insufficient", "below_sample_gate", _TOO_NEW, start, end, days,
-                      extended_from, view, spend)
-    if view is None or view["reason"] is not None:
-        reason = view["reason"] if view is not None else "result_unknown_days"
-        return finish("insufficient", reason, _NO_DATA, start, end, days, extended_from, view,
-                      spend)
+    # `graded` is always set (WINDOW_STEPS is never empty); a graded window always has a view.
+    if graded is None or view is None or graded[0] not in GRADED:
+        graded = graded or (*_NO_DATA, "result_unknown_days")
+        return finish("insufficient", graded[2] or "result_unknown_days", graded[:2], start, end,
+                      days, extended_from, view, spend)
 
     # F28-I02: the grade stands on this window alone -- a missing previous window only leaves the
     # trend note (`class`) insufficient, it never blocks the grade.
-    grade = _cost_grade(view["cost_per_result"], target["value"])
+    grade = graded[:2]
     previous_start, previous_end = _previous_range(start, days)
     if not _window_covered(coverage, previous_start, previous_end):
         return finish("insufficient", "no_previous_window", grade, start, end, days,
@@ -465,8 +516,8 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
 # ---------------------------------------------------------------------------
 
 # One interrupt category per queue kind (F27-I06: six kinds). F28-I02: `stop_loss` is no longer
-# raised -- a 白花 ad closes through its campaign's `cleanup` row -- but its category stays here so
-# `_supersede_stale_open_rows` resolves every row still open from before.
+# raised -- a 沒賣出 ad closes through its campaign's `cleanup` row -- but its category stays here
+# so `_supersede_stale_open_rows` resolves every row still open from before.
 QUEUE_CATEGORY = {
     "stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse",
     "scale_budget": "ads_triage_scale_budget", "refresh_creative": "ads_triage_refresh_creative",
@@ -517,7 +568,7 @@ def _insufficient_message(campaign_name):
 
 
 def _cleanup_message(campaign_name):
-    # F28-I02: a cleanup now also carries a 白花 ad on a campaign within capacity, so the message
+    # F28-I02: a cleanup now also carries a 沒賣出 ad on a campaign within capacity, so the message
     # names what the row decides (the v9 decision card's own 花錢沒效), not "too many ads".
     return f"「{_safe_name(campaign_name)}」花錢沒效，待決定"
 
@@ -633,7 +684,7 @@ def _campaign_recent_rows_by_entity(conn, org_id, brand_id, campaign_id, entity_
 
 def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_campaign) -> list:
     """The cleanup queue row (Contract F, F28-I02 grades) -- one candidate per campaign that has a
-    白花 ad, or is over its own capacity (`triage_capacity.capacity_view`) with a 太貴／偏貴 ad to
+    沒賣出 ad, or is over its own capacity (`triage_capacity.capacity_view`) with a 太貴／偏貴 ad to
     close (`triage_capacity.cleanup_candidates`). `owner_lookup` is one brand-wide read shared by
     every campaign here (never per campaign). A campaign whose own trailing 7-day window isn't
     fully synced never raises this row at all. `scale_owner_by_campaign` names the campaign's
@@ -641,6 +692,7 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
     if not by_campaign:
         return []
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
+    memory = decision_memory(conn, org_id, brand_id)
     candidates = []
     for campaign_id, campaign_items in by_campaign.items():
         if not campaign_items:
@@ -661,7 +713,7 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
         cleanup = triage_capacity.cleanup_candidates(
             conn, org_id, brand_id, campaign_id, info["campaign_name"], campaign_items,
             rows_by_entity, cutoff, capacity,
-            scale_owner_id=scale_owner_by_campaign.get(campaign_id),
+            scale_owner_id=scale_owner_by_campaign.get(campaign_id), memory=memory,
         )
         if cleanup is None:
             continue
@@ -676,12 +728,36 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
     return candidates
 
 
+def _became_costly(item) -> bool:
+    move = item.get("grade_move")
+    return move is not None and move["from"] == "on_target" and move["to"] in {"watch", "over"}
+
+
+def decision_memory(conn, org_id, brand_id) -> dict:
+    """F29-I01 Contract B: `triage_capacity.decision_memory` (newest memory per ad) with each
+    entry's `grade_label` -- one brand-wide read shared by the cleanup rows and the month review."""
+    return {
+        entity_id: {**entry, "grade_label": GRADE_LABELS.get(entry["grade"], entry["grade"])}
+        for entity_id, entry in triage_capacity.decision_memory(conn, org_id, brand_id).items()
+    }
+
+
+def campaign_cleanup(conn, org_id, brand_id, campaign_id) -> dict | None:
+    """The cleanup proposal this campaign's queue row carries right now (`cleanup` payload), or
+    `None` -- the same `_cleanup_candidates` path the brand queue uses, over this one campaign
+    (`change_control.create` checks `declined_ids` against it)."""
+    items = classify(conn, org_id, brand_id, campaign_id)["items"]
+    candidates = _cleanup_candidates(conn, org_id, brand_id, {campaign_id: items}, {})
+    return candidates[0]["payload"]["cleanup"] if candidates else None
+
+
 def _queue_candidates(conn, org_id, brand_id, items) -> list:
     """Every row this brand's queue could raise -- qualifying `scale_budget` owners, `cleanup`
-    campaigns, one `worse` row per ad whose trend rose (never for an ad already inside its
+    campaigns, one `worse` row per ad whose grade moved from 划算 to 偏貴／太貴 (F29-I01; never
+    for an ad already inside its
     campaign's cleanup `ads`, F28-I02), `refresh_creative` campaigns and `insufficient_data`
     campaigns (`triage_scale.py`/`triage_capacity.py`). `stop_loss` rows are no longer raised
-    (F28-I02): a 白花 ad closes through its campaign's cleanup row. Each candidate carries its
+    (F28-I02): a 沒賣出 ad closes through its campaign's cleanup row. Each candidate carries its
     `kind`, dedupe identity, window and queue message/action_url, plus the extra payload
     `_queue_payload` attaches to its row."""
     by_campaign = _classified_items_by_campaign(items)
@@ -712,7 +788,9 @@ def _queue_candidates(conn, org_id, brand_id, items) -> list:
         ad["entity_id"] for c in cleanup_candidates for ad in c["payload"]["cleanup"]["ads"]
     }
     for item in items:
-        if item["class"] != "worse" or item["entity_id"] in in_cleanup:
+        # F29-I01 (ads.md §6.33 "One ruler"): 變貴 is a grade move from 划算 to 偏貴／太貴 -- the
+        # trend note (`class`) never raises a row.
+        if not _became_costly(item) or item["entity_id"] in in_cleanup:
             continue
         candidates.append({
             "kind": "worse", "identity_id": item["entity_id"],
@@ -791,14 +869,20 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
     return _queue_payload(conn, org_id, brand_id, items, candidates)
 
 
-def get_queue(conn, org_id, brand_id) -> dict:
+def brand_items(conn, org_id, brand_id) -> list:
+    """Every active ad's triage item across this brand's non-closed campaigns (`classify()`)."""
+    return _classify_brand(conn, org_id, brand_id)
+
+
+def get_queue(conn, org_id, brand_id, items=None) -> dict:
     """`GET .../queue` (Done #4): read-only, no `resolve()` call here -- `refresh_queue()` is the
     only place that supersedes stale rows (it may not have run yet since the last classification
     change). Current classification decides which open interrupt rows are still live: an older
     window's open row whose kind no longer qualifies (e.g. an ad now flat, or an owner's ads no
     longer all stable) is filtered out of this payload the same way, without writing anything.
-    Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`)."""
-    items = _classify_brand(conn, org_id, brand_id)
+    Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`).
+    `items` lets a caller that already classified the brand (`month_summary`) skip a second pass."""
+    items = _classify_brand(conn, org_id, brand_id) if items is None else items
     candidates = _queue_candidates(conn, org_id, brand_id, items)
     return _queue_payload(conn, org_id, brand_id, items, candidates)
 
@@ -819,8 +903,9 @@ def _brand_change_sets_by_campaign(conn, org_id, brand_id) -> dict:
     DESC` is preserved inside each campaign's own sublist (stable grouping), so "the newest
     change set of the row's campaign" is just "the first match found while walking that list"."""
     rows = conn.execute(
-        "SELECT id,campaign_id,status,plan_json,decision_reason,revisit_at,created_at "
-        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND status != 'superseded' "
+        "SELECT id,campaign_id,status,plan_json,decision_reason,revisit_at,created_at,"
+        "decision_grades FROM ads_change_set WHERE org_id=%s AND brand_id=%s "
+        "AND status != 'superseded' "
         "ORDER BY created_at DESC",
         (org_id, brand_id),
     ).fetchall()
@@ -1021,15 +1106,22 @@ def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
         if revisit_at is not None and revisit_at <= now_utc():
             return None
     elif change_set["status"] == "rejected":
+        # F29-I01 Contract B: a rejection that left a memory is owned by that memory -- a row
+        # raised again (an ad got worse, or a different ad is now proposed) is a fresh proposal.
+        # A legacy rejection (no memory) keeps the window rule.
+        if change_set.get("decision_grades") is not None:
+            return None
         created_day = change_set["created_at"].date()
         if not (candidate["window_start"] <= created_day <= candidate["window_end"]):
             return None
     elif verification_state == "confirmed":
         # F28-I02: carried over from the retired stop-loss proposal -- a confirmed pause whose ad
         # is active again (it is back in this row's close list, and `classify()` only judges
-        # active ads) needs a fresh proposal, never the old "done" one.
+        # active ads) needs a fresh proposal, never the old "done" one. F29-I01: same for an ad
+        # the user unticked in that set that has since got worse (it re-entered the close list).
         closing = {ad["entity_id"] for ad in candidate["payload"]["cleanup"]["ads"]}
-        if any(item.get("target_id") in closing for item in pause_items):
+        declined = set(change_set["plan_json"].get("declined_ids") or ())
+        if any(item.get("target_id") in closing for item in pause_items) or closing & declined:
             return None
     return {
         "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
@@ -1037,6 +1129,16 @@ def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
         "verification_state": verification_state, "reason": change_set["decision_reason"],
         "revisit_at": change_set["revisit_at"], "multi": True,
     }
+
+
+def _trend_counts(items) -> dict:
+    """The trend-note tally (`counts`, one per `class`) -- the only reader of `class` outside the
+    note builder `_classify_ad`, display only; no decision reads it (ads.md §6.33, enforced by
+    `app/tests/test_ads_one_ruler.py`)."""
+    counts = dict.fromkeys(ALL_CLASSES, 0)
+    for item in items:
+        counts[item["class"]] += 1
+    return counts
 
 
 def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
@@ -1081,10 +1183,7 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
         open_rows.append({
             **row, "kind_key": kind, "triage": triage_item, **extra, "proposal": proposal,
         })
-    counts = dict.fromkeys(ALL_CLASSES, 0)
-    for item in items:
-        counts[item["class"]] += 1
     return {
-        "items": open_rows, "counts": counts, "total_ads": len(items),
+        "items": open_rows, "counts": _trend_counts(items), "total_ads": len(items),
         "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,
     }

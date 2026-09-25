@@ -35,7 +35,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "1150706 健身情境單圖", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "stop_loss", label: "停損",
     reason_code: "spend_over_stop_loss",
-    grade: "wasted", grade_label: "白花",
+    grade: "wasted", grade_label: "沒賣出", previous_grade: null, grade_move: null,
     window: { start: "2026-08-25", end: "2026-09-21", days: 9, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 1420, result_count: 0, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: null },
@@ -91,13 +91,13 @@ function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     cleanup: {
       campaign_id: "cmp_1", campaign_name: "【銷售】測試活動", can_support: 3, active_ads: 5,
       ads: [
-        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7 },
-        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7 },
+        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7, rejected_before: null },
+        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7, rejected_before: null },
       ],
       keep: [
-        { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7 },
-        { entity_id: "aex_keep2", name: "健身情境・保冷 12 小時", thumbnail_url: null, spend_7d: 700, grade: "on_target", cost_per_result: 431.25, spend: 3450, result_count: 8, daily_spend: 100 },
-        { entity_id: "aex_keep3", name: "辦公室一角・質感桌面", thumbnail_url: null, spend_7d: 280, grade: "on_target", cost_per_result: 52, spend: 1300, result_count: 25, daily_spend: 40 },
+        { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7, rejected_before: null },
+        { entity_id: "aex_keep2", name: "健身情境・保冷 12 小時", thumbnail_url: null, spend_7d: 700, grade: "on_target", cost_per_result: 431.25, spend: 3450, result_count: 8, daily_spend: 100, rejected_before: null },
+        { entity_id: "aex_keep3", name: "辦公室一角・質感桌面", thumbnail_url: null, spend_7d: 280, grade: "on_target", cost_per_result: 52, spend: 1300, result_count: 25, daily_spend: 40, rejected_before: null },
       ],
       short: 0, daily_saving: 460 / 7, scale_owner_id: null,
     },
@@ -599,7 +599,7 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
     const rows = screen.getAllByRole("listitem").filter((li) => li.textContent?.endsWith("關"));
-    expect(rows.map((r) => r.textContent)).toEqual(["1150701 情境圖 A白花購買0 筆關", "1150702 情境圖 B太貴每賣一筆620 元關"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["1150701 情境圖 A沒賣出購買0 筆關", "1150702 情境圖 B太貴每賣一筆620 元關"]);
     expect(screen.queryByText(/花費最低/)).toBeNull();
     expect(screen.getByRole("link", { name: "← 提議" }).getAttribute("href")).toBe(proposeCleanupPath);
     expect(changeApi.createChangeSet).not.toHaveBeenCalled();
@@ -633,8 +633,8 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(body.operation_id).toMatch(/^triage-cleanup:cmp_1:/);
     expect(body.title).toBe("清理「【銷售】測試活動」");
     expect(body.items).toEqual([
-      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
-      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
+      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "沒賣出的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
+      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "沒賣出的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
     ]);
     expect(body.source).toBe("cleanup");
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
@@ -693,7 +693,7 @@ describe("ConfirmPage（F28-I15）清理草稿與最新提議不同", () => {
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-mark"));
     expect(rows.map((r) => [r.getAttribute("data-mark"), r.textContent])).toEqual([
-      ["close", "1150701 情境圖 A白花購買0 筆關"],
+      ["close", "1150701 情境圖 A沒賣出購買0 筆關"],
       ["added", "1150702 情境圖 B新增太貴每賣一筆620 元關"],
       ["dropped", "晨光隨行杯・日常出發划算每賣一筆48 元不關"],
     ]);

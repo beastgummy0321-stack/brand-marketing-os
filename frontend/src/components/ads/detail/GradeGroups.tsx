@@ -11,12 +11,12 @@ import { cleanupAction, proposalAction } from "../home/status";
  * already graded against the campaign's one cap (`TriageItem.grade`/`grade_label`, Feature F28 "Grades"); this
  * file only groups, orders and labels them, and picks each row's one action. */
 
-/** One group per grade, in the prototype's `ORDER` (白花, 太貴, 偏貴, 划算, 還太新). `insufficient` splits by the
- * backend's own `grade_label` (還太新、看不準 below the sample gate, 資料不足 otherwise) so the two honest reasons
+/** One group per grade, in the prototype's `ORDER` (沒賣出, 太貴, 偏貴, 划算, 剛開始). `insufficient` splits by the
+ * backend's own `grade_label` (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise) so the two honest reasons
  * never share a heading; `no_target` (no cap at all) comes last. */
 export type GroupKey = "wasted" | "over" | "watch" | "on_target" | "thin" | "no_data" | "no_target";
 export const GROUP_ORDER: GroupKey[] = ["wasted", "over", "watch", "on_target", "thin", "no_data", "no_target"];
-/** Prototype: 白花／太貴／偏貴 open, everything else folded. */
+/** Prototype: 沒賣出／太貴／偏貴 open, everything else folded. */
 export const OPEN_BY_DEFAULT: GroupKey[] = ["wasted", "over", "watch"];
 
 const GROUP_GRADE: Record<GroupKey, Grade> = {
@@ -30,7 +30,7 @@ export function groupOf(item: TriageItem): GroupKey {
 }
 
 /** The summary's right-hand hint (prototype `tabPerf()`), from the cap T and the grade bands the kit ruler draws
- * (偏貴 up to 1.2 × T, 白花／還太新 against the 3 × T spend line). No cap, or a reason that is not about the spend
+ * (偏貴 up to 1.2 × T, 沒賣出／剛開始 against the 3 × T spend line). No cap, or a reason that is not about the spend
  * line (資料不足), prints no hint rather than an invented one. */
 function groupHint(key: GroupKey, cap: number | null): string | null {
   if (cap === null) return null;
@@ -55,7 +55,7 @@ export function trendNote(item: TriageItem): string {
 }
 
 /** What a row's one button does (prototype `row`): an ad inside this campaign's open cleanup row → 在清理提議 (the
- * cleanup decision, 白花 + 太貴 are one decision); else its own open `stop_loss`／`worse` row → 去處理; else 看紀錄
+ * cleanup decision, 沒賣出 + 太貴 are one decision); else its own open `stop_loss`／`worse` row → 去處理; else 看紀錄
  * on the workspace performance tab. A row whose proposal is already done no longer counts as open. */
 export interface RowAction { label: "在清理提議" | "去處理" | "看紀錄"; href: string }
 
@@ -102,7 +102,7 @@ function AdThumb({ url }: { url: string | null }) {
 
 const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
 
-/** The per-result column (prototype: 每賣一筆 ／ 購買 0 筆 ／ 還太新). Purchases read 每賣一筆; other result kinds
+/** The per-result column (prototype: 每賣一筆 ／ 購買 0 筆 ／ 剛開始). Purchases read 每賣一筆; other result kinds
  * name their own result (`result_label` from the backend, never re-worded). */
 function ResultCell({ item }: { item: TriageItem }) {
   const m = item.current;
@@ -110,7 +110,7 @@ function ResultCell({ item }: { item: TriageItem }) {
   const label = m.result_kind === "purchase" || (m.result_kind === null && item.target.result_kind === "purchase")
     ? "每賣一筆" : `每次${m.result_label}成本`;
   if (item.grade === "insufficient") {
-    const word = item.grade_label === GRADE_LABEL.insufficient ? "還太新" : item.grade_label;
+    const word = item.grade_label;
     return <NumberCell label={label} value={<span className="text-[13px] font-medium text-muted-foreground">{word}</span>} />;
   }
   return <NumberCell label={label} value={money(m.cost_per_result)} />;

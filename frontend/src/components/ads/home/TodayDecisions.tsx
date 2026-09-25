@@ -179,7 +179,7 @@ function cleanupFigure(ad: QueueCleanupAd): string {
   return ad.cost_per_result === null ? "每筆 —" : `每筆 ${wholeYuan(ad.cost_per_result)}`;
 }
 
-/** Prototype `cleanCard()`: the proposed cut, 白花 first, with the daily saving when the last 7 days are known. */
+/** Prototype `cleanCard()`: the proposed cut, 沒賣出 first, with the daily saving when the last 7 days are known. */
 function CleanupCard({ brandId, item, primary, recovering }: { brandId: string; item: QueueItem; primary: boolean; recovering: boolean }) {
   const cleanup = item.cleanup;
   const ads = cleanup?.ads ?? [];

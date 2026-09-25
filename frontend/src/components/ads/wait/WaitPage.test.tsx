@@ -56,7 +56,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖",
     campaign_id: "cmp_1", campaign_name: "【銷售】1150706 Beast Prime 最高數量", thumbnail_url: null,
     class: "insufficient", label: "資料不足", reason_code: "below_sample_gate",
-    grade: "insufficient", grade_label: "還太新、看不準",
+    grade: "insufficient", grade_label: "剛開始、數字還不夠", previous_grade: null, grade_move: null,
     window: { start: "2026-08-25", end: "2026-09-21", days: 28, previous_start: "2026-07-28", previous_end: "2026-08-24", extended_from: 14 },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: null, result_count: null, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: "result_unknown_days" },
@@ -169,7 +169,7 @@ describe("WaitPage（F24-I03）事實列", () => {
       items: [
         triageItem({ entity_id: "ad_1", reason_code: "result_unknown_days" }),
         triageItem({ entity_id: "ad_2", reason_code: "below_sample_gate" }),
-        triageItem({ entity_id: "ad_3", reason_code: "no_previous_window" }),
+        triageItem({ entity_id: "ad_3", reason_code: "below_sample_gate" }),
       ],
       data: {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
@@ -180,8 +180,7 @@ describe("WaitPage（F24-I03）事實列", () => {
     renderPage();
     expect(await screen.findByText("樣本還不夠")).toBeTruthy();
     expect(screen.getByText("每則廣告的花費或成果數還沒過門檻，累積中")).toBeTruthy();
-    expect(screen.getByText("缺前一期可比資料")).toBeTruthy();
-    expect(screen.getByText("預設只同步 30 天，28 天窗沒有前一期可比；手動同步更早的區間才能補")).toBeTruthy();
+    expect(screen.getAllByText("樣本還不夠")).toHaveLength(1);
     expect(screen.getByText("成果數未知")).toBeTruthy();
     expect(screen.getByText("平台沒回報這幾天的成果")).toBeTruthy();
     // 沒有帳戶未連接／訂單缺口的事實時不列。
@@ -190,7 +189,7 @@ describe("WaitPage（F24-I03）事實列", () => {
 
   it("不是全部資料不足時不列 reason_code", async () => {
     mockGetTriage.mockResolvedValue(triage({
-      items: [triageItem({ class: "flat" })],
+      items: [triageItem({ class: "flat", grade: "on_target", grade_label: "划算" })],
       data: {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
@@ -200,6 +199,24 @@ describe("WaitPage（F24-I03）事實列", () => {
     renderPage();
     await screen.findByText("資料不足，這個活動先不判斷");
     expect(screen.queryByText("樣本還不夠")).toBeNull();
+  });
+
+  it("F29-I01 一把尺：趨勢 class 是資料不足、但已對上限分級的廣告不算在等（不列 reason_code）", async () => {
+    mockGetTriage.mockResolvedValue(triage({
+      items: [
+        triageItem({ entity_id: "ad_1", reason_code: "below_sample_gate" }),
+        triageItem({ entity_id: "ad_2", class: "insufficient", reason_code: "no_previous_window", grade: "over", grade_label: "太貴" }),
+      ],
+      data: {
+        sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
+        coverage: { start: "2026-08-25", end: "2026-09-19" },
+        missing_days: [],
+      },
+    }));
+    renderPage();
+    await screen.findByText("資料不足，這個活動先不判斷");
+    expect(screen.queryByText("樣本還不夠")).toBeNull();
+    expect(screen.queryByText("缺前一期可比資料")).toBeNull();
   });
 
   it("訂單讀取失敗不拖累整頁，只是不列訂單缺口那一列", async () => {

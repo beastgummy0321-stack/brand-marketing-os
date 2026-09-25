@@ -187,7 +187,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "stop_loss")
         self.assertEqual(item["reason_code"], "spend_over_target_no_result")
-        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "白花"))
+        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "沒賣出"))
         self.assertEqual(item["current"]["result_count"], 0)
         self.assertGreater(item["current"]["derived_zero_days"], 0)
         self.assertEqual(item["window"]["days"], 7)
@@ -201,7 +201,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "result_unknown_days")
-        # Unknown cost: 資料不足, never a grade and never 還太新.
+        # Unknown cost: 資料不足, never a grade and never 剛開始.
         self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     # -- coverage gate (review blocker) ----------------------------------------------------------
@@ -272,10 +272,10 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["reason_code"], "below_sample_gate")
         self.assertEqual(item["window"]["days"], 28)
         self.assertEqual(item["window"]["extended_from"], 14)
-        # Known zero results but below 3 x cap: 還太新, never 白花.
+        # Known zero results but below 3 x cap: 剛開始, never 沒賣出.
         self.assertEqual(item["current"]["result_count"], 0)
         self.assertEqual(
-            (item["grade"], item["grade_label"]), ("insufficient", "還太新、看不準"),
+            (item["grade"], item["grade_label"]), ("insufficient", "剛開始、數字還不夠"),
         )
 
     # -- insufficient: mixed_result_definition / needs_resync / no_previous_window --------------
@@ -837,7 +837,7 @@ class CampaignObjectiveFamilyClassifyTest(TriageTest):
 
 class TriageGradeTest(TriageTest):
     """F28-I02 (ads.md §6.32): every active ad is graded against the one cap T -- 划算 <= T,
-    偏貴 <= 1.2T, 太貴 > 1.2T, 白花 = a known zero over 3T, below the gate 還太新. Reuses
+    偏貴 <= 1.2T, 太貴 > 1.2T, 沒賣出 = a known zero over 3T, below the gate 剛開始. Reuses
     `TriageTest`'s fixture (one campaign, one ad, broad coverage, account timezone)."""
 
     def extra_ad(self, native_id):
@@ -945,8 +945,92 @@ class TriageGradeTest(TriageTest):
         item = self.classify_one()
         self.assertIsNone(item["target"]["value"])
         self.assertEqual(item["target"]["missing"], ["product_cost"])
-        # A huge spend with zero purchases is still never 白花 without a cap to measure it by.
+        # A huge spend with zero purchases is still never 沒賣出 without a cap to measure it by.
         self.assertEqual((item["grade"], item["grade_label"]), ("no_target", "未判斷"))
+        self.assertIsNone(item["previous_grade"])
+        self.assertIsNone(item["grade_move"])
+
+    # -- F29-I01 Contract A: previous_grade / grade_move -------------------------------------------
+
+    def two_weeks(self, *, previous_spend, current_spend, previous_results=1, current_results=1):
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=7 + offset), spend=previous_spend,
+                     result_count=previous_results, attribution_key=f"prev{offset}")
+            self.obs(self.cutoff - timedelta(days=offset), spend=current_spend,
+                     result_count=current_results, attribution_key=f"cur{offset}")
+
+    def test_grade_move_from_on_target_to_over(self):
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=80, current_spend=150)
+        item = self.classify_one()
+        self.assertEqual((item["previous_grade"], item["grade"]), ("on_target", "over"))
+        self.assertEqual(item["grade_move"], {"from": "on_target", "to": "over"})
+
+    def test_same_grade_is_no_move_even_when_the_trend_is_worse(self):
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=50, current_spend=90)  # +80 %, both 划算
+        item = self.classify_one()
+        self.assertEqual(item["class"], "worse")
+        self.assertEqual(item["previous_grade"], "on_target")
+        self.assertIsNone(item["grade_move"])
+
+    def test_previous_window_below_the_gate_has_no_grade_and_no_move(self):
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=20, current_spend=150)  # previous: 140 spent, 7 results
+        item = self.classify_one()
+        self.assertEqual(item["grade"], "over")
+        self.assertIsNone(item["previous_grade"])
+        self.assertIsNone(item["grade_move"])
+
+    def test_previous_window_not_synced_has_no_grade(self):
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=80, current_spend=150)
+        self.set_coverage(self.cutoff - timedelta(days=6), self.cutoff)
+        item = self.classify_one()
+        self.assertEqual(item["grade"], "over")
+        self.assertIsNone(item["previous_grade"])
+        self.assertIsNone(item["grade_move"])
+
+    def test_thin_ad_has_no_grade_and_no_move(self):
+        self.set_target(100, result_kind="purchase")
+        # A well-graded month before the 28-day window, then almost nothing inside it.
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=30 + offset), spend=80, result_count=1,
+                     attribution_key=f"old{offset}")
+        for offset in range(3):
+            self.obs(self.cutoff - timedelta(days=offset), spend=10, result_count=1,
+                     attribution_key=f"thin{offset}")
+        item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]),
+                         ("insufficient", "剛開始、數字還不夠"))
+        self.assertEqual(item["window"]["days"], 28)
+        self.assertIsNone(item["grade_move"])
+
+    def test_a_move_out_of_wasted_is_reported_with_its_own_from(self):
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=50, current_spend=150, previous_results=0)
+        item = self.classify_one()
+        self.assertEqual(item["grade_move"], {"from": "wasted", "to": "over"})
+
+    def test_two_currencies_in_one_window_read_no_data(self):
+        self.set_target(100, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=150, result_count=1,
+                     attribution_key=f"cur{offset}")
+        external.upsert_observation(
+            self.conn, self.org, self.brand, self.campaign,
+            {"entity_id": self.ad["id"], "day": self.cutoff, "metric_scope": "ad",
+             "attribution_key": "usd", "currency": "USD", "source": "meta", "spend": 5,
+             "impressions": 10, "purchases": None},
+            result_kind="purchase", result_count=1, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        self.conn.commit()
+        item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
+        self.assertEqual(item["reason_code"], "mixed_currency")
+        self.assertIsNone(item["current"]["spend"])
+        self.assertIsNone(item["grade_move"])
 
 
 class SyncStatesRaisingInsufficientTest(unittest.TestCase):

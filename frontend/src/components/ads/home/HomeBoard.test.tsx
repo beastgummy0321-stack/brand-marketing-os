@@ -171,7 +171,7 @@ describe("NextDates", () => {
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "n_1", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換",
-    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴",
+    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-16", end: "2026-09-22", days: 7, previous_start: "2026-09-09", previous_end: "2026-09-15", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -190,20 +190,20 @@ function row(id: string, kind: QueueItem["kind_key"], extra: Partial<QueueItem> 
 const payload = (items: QueueItem[]) => ({ status: "ready" as const, queue: { items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0, kinds_available: [], kinds_pending: [] } });
 
 describe("TodayDecisions", () => {
-  it("cleanup card: red-only cut title with the saving rounded to 10; 白花 rows show spend, others whole-yuan cost", () => {
+  it("cleanup card: red-only cut title with the saving rounded to 10; 沒賣出 rows show spend, others whole-yuan cost", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/brands/b/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily",
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: 257, scale_owner_id: null, keep: [],
         ads: [
-          { entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110 },
-          { entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: 1050, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: 150 },
+          { entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110, rejected_before: null },
+          { entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: 1050, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: 150, rejected_before: null },
         ] },
     });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("關掉色帶裡紅色的 2 則，每天省約 260 元")).toBeTruthy();
     expect(screen.getByText("花 1,480・0 筆")).toBeTruthy();
     expect(screen.getByText("每筆 617 元")).toBeTruthy();
-    expect(screen.getByText("白花")).toBeTruthy();
+    expect(screen.getByText("沒賣出")).toBeTruthy();
     expect(screen.getByText("太貴")).toBeTruthy();
     expect(screen.getByRole("link", { name: "決定要不要關 →" }).getAttribute("data-variant")).toBe("default");
   });
@@ -212,7 +212,7 @@ describe("TodayDecisions", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/x",
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
-        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "watch", cost_per_result: 500, spend: 2470, result_count: 4, daily_spend: null }] },
+        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "watch", cost_per_result: 500, spend: 2470, result_count: 4, daily_spend: null, rejected_before: null }] },
     });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("關掉 1 則")).toBeTruthy();

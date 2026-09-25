@@ -143,7 +143,7 @@ describe("CapBlock", () => {
     });
     renderBlock(campaign(OWN));
     expect(await screen.findByRole("button", { name: "廣告 a1｜每筆 180 元｜划算" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 元・0 筆購買｜白花" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 元・0 筆購買｜沒賣出" })).toBeTruthy();
   });
 
   it("a failed triage read leaves the cap usable and offers a retry", async () => {

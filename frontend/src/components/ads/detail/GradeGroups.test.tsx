@@ -18,7 +18,7 @@ function item(o: Partial<TriageItem> & { spend?: number | null; results?: number
   return {
     entity_id: "a1", native_id: "n_a1", name: "晨光隨行杯・日常出發", campaign_id: "cmp_1", campaign_name: "日常商品推廣・轉換",
     thumbnail_url: null, class: "better", label: "變好", reason_code: "cost_per_result_down",
-    grade: "on_target", grade_label: "划算",
+    grade: "on_target", grade_label: "划算", previous_grade: null, grade_move: null,
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -39,16 +39,16 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
 function cleanupPayload(ids: string[]): QueueCleanup {
   return {
     campaign_id: "cmp_1", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8,
-    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100 })),
+    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100, rejected_before: null })),
     keep: [], short: 0, daily_saving: 260, scale_owner_id: null,
   };
 }
 
-const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "白花", spend: 1480, results: 0, cost: null, change_pct: null });
+const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "沒賣出", spend: 1480, results: 0, cost: null, change_pct: null });
 const over = item({ entity_id: "a7", name: "提問式貼文・早晨第一口是什麼？", grade: "over", grade_label: "太貴", spend: 2470, results: 4, cost: 617.5, change_pct: 0.1002 });
 const watch = item({ entity_id: "a6", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", grade: "watch", grade_label: "偏貴", spend: 3120, results: 6, cost: 520, change_pct: 0.1818 });
 const ok = item({ entity_id: "a2", name: LONG_NAME, spend: 1407, results: 28, cost: 50.25 });
-const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "還太新、看不準", spend: 120, results: 0, cost: null, change_pct: null });
+const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "剛開始、數字還不夠", spend: 120, results: 0, cost: null, change_pct: null });
 const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "insufficient", grade_label: "資料不足", spend: null, results: null, cost: null, change_pct: null });
 
 function renderGroups(items: TriageItem[], opts: { cap?: number | null; open?: GroupKey[]; actions?: Map<string, RowAction> } = {}) {
@@ -83,11 +83,11 @@ describe("groupOf / trendNote", () => {
 });
 
 describe("GradeGroups", () => {
-  it("orders groups 白花 → 太貴 → 偏貴 → 划算 → 還太新 → 資料不足, with the cap hints and counts", () => {
+  it("orders groups 沒賣出 → 太貴 → 偏貴 → 划算 → 剛開始 → 資料不足, with the cap hints and counts", () => {
     const { container } = renderGroups([ok, thin, watch, noData, over, wasted]);
     const titles = [...container.querySelectorAll("summary b")].map((b) => b.textContent);
-    expect(titles).toEqual(["白花", "太貴", "偏貴", "划算", "還太新、看不準", "資料不足"]);
-    expect(within(detailsOf("白花").querySelector("summary")!).getByText("花到 1,350 元還沒賣出")).toBeTruthy();
+    expect(titles).toEqual(["沒賣出", "太貴", "偏貴", "划算", "剛開始、數字還不夠", "資料不足"]);
+    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText("花到 1,350 元還沒賣出")).toBeTruthy();
     expect(screen.getByText("每筆超過 540 元")).toBeTruthy();
     expect(screen.getByText("每筆 450–540 元")).toBeTruthy();
     expect(screen.getByText("每筆不到 450 元")).toBeTruthy();
@@ -96,20 +96,20 @@ describe("GradeGroups", () => {
     expect(detailsOf("資料不足").querySelector("summary")!.textContent).toBe("資料不足1 則");
   });
 
-  it("opens only the groups it is told to (default 白花／太貴／偏貴) and reports toggles", () => {
+  it("opens only the groups it is told to (default 沒賣出／太貴／偏貴) and reports toggles", () => {
     const { onToggle } = renderGroups([ok, thin, watch, over, wasted]);
-    expect(detailsOf("白花").open).toBe(true);
+    expect(detailsOf("沒賣出").open).toBe(true);
     expect(detailsOf("太貴").open).toBe(true);
     expect(detailsOf("偏貴").open).toBe(true);
     expect(detailsOf("划算").open).toBe(false);
-    expect(detailsOf("還太新、看不準").open).toBe(false);
+    expect(detailsOf("剛開始、數字還不夠").open).toBe(false);
     const okDetails = detailsOf("划算");
     okDetails.open = true;
     fireEvent(okDetails, new Event("toggle"));
     expect(onToggle).toHaveBeenCalledWith("on_target", true);
   });
 
-  it("rows: long name wraps (never truncated), spend and per-purchase cost with decimals, 白花 prints 購買 0 筆, 還太新 prints the word", () => {
+  it("rows: long name wraps (never truncated), spend and per-purchase cost with decimals, 沒賣出 prints 購買 0 筆, 剛開始 prints the word", () => {
     renderGroups([ok, over, wasted, thin], { open: ["wasted", "over", "on_target", "thin"] });
     const okRow = screen.getByTestId("ad-row-a2");
     const name = within(okRow).getByText(LONG_NAME);
@@ -127,7 +127,7 @@ describe("GradeGroups", () => {
     expect(within(wastedRow).getByText("0 筆")).toBeTruthy();
 
     const thinRow = screen.getByTestId("ad-row-m2");
-    expect(within(thinRow).getByText("還太新")).toBeTruthy();
+    expect(within(thinRow).getByText("剛開始、數字還不夠")).toBeTruthy();
     expect(within(thinRow).getByText("120 元")).toBeTruthy();
   });
 

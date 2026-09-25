@@ -261,7 +261,7 @@ function MaterialGroupCard({ title, tone, note, count, tiles }: {
 }
 
 /** 素材（F26-I03，依 Feature Decisions「I03」重分三組）：有效／還看不出兩組仍讀「投放中」的
- * `items`（F26-I01 起 `classify()` 只判讀活躍廣告，class 篩選照舊有效）；無效・已停改讀每個
+ * `items`（F26-I01 起 `classify()` 只判讀活躍廣告；F29-I01 起按上限分級 grade 篩，不看 class）；無效・已停改讀每個
  * 活動自己的 `closed` 區塊——已暫停或已封存的廣告，不論這個月才關掉還是更早都在裡面；不再讀
  * 仍在投放的 `stop_loss`，那一類交給佇列的 stop_loss 列處理，這裡不重複判斷。`worse`／
  * `no_target` 同 F24，不在這裡列——那兩類在活動卡與佇列已經有自己的處理入口。這個月確切
@@ -271,18 +271,20 @@ function MaterialGroupCard({ title, tone, note, count, tiles }: {
 function MaterialGroups({ items, closedItems, closedTotal }: {
   items: TriageItem[]; closedItems: TriageClosedItem[]; closedTotal: number;
 }) {
-  const better = items.filter((item) => item.class === "better");
-  const flatInsufficient = items.filter((item) => item.class === "flat" || item.class === "insufficient");
+  // F29-I01（ads.md §6.33 一把尺）：有效＝對上限分級為划算（on_target），還看不出＝還沒分級
+  // （grade insufficient：剛開始、數字還不夠／資料不足）；趨勢 class 不再決定分組（v10 重做在 I15）。
+  const effective = items.filter((item) => item.grade === "on_target");
+  const unclear = items.filter((item) => item.grade === "insufficient");
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <MaterialGroupCard title="有效" tone="ok" note="投放中，成本在目標內" count={better.length} tiles={better} />
+      <MaterialGroupCard title="有效" tone="ok" note="投放中，每筆在上限內" count={effective.length} tiles={effective} />
       <MaterialGroupCard
         title="無效・已停" tone="bad" note="已暫停或封存，含這個月關掉的"
         count={closedTotal} tiles={closedItems}
       />
       <MaterialGroupCard
-        title="還看不出" tone="neutral" note="投放中，樣本還不夠"
-        count={flatInsufficient.length} tiles={flatInsufficient}
+        title="還看不出" tone="neutral" note="投放中，數字還不夠"
+        count={unclear.length} tiles={unclear}
       />
     </div>
   );

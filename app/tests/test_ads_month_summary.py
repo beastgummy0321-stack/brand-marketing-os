@@ -348,8 +348,8 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.cleanup_campaign, result_kind="purchase",
             basis="own", value=100, expected_revision=0, actor="test",
         )
-        # F28-I02: graded against the cap 100 -- 白花 (350 spent, 0 purchases), 太貴 (150 a
-        # purchase), 划算 (50 a purchase). Two over capacity: the 白花 and the 太貴 close.
+        # F28-I02: graded against the cap 100 -- 沒賣出 (350 spent, 0 purchases), 太貴 (150 a
+        # purchase), 划算 (50 a purchase). Two over capacity: the 沒賣出 and the 太貴 close.
         for idx, (daily_spend, daily_count) in enumerate(((50, 0), (150, 1), (50, 1))):
             ad = _ad(self.conn, self.org, self.brand, self.cleanup_campaign, f"ad_cln{idx}",
                      campaign_native_id="ccln")
@@ -439,7 +439,7 @@ class MonthSummarySuggestionsTest(unittest.TestCase):
 
 class MonthSummaryWastedOnlyCleanupTest(unittest.TestCase):
     def test_wasted_ad_without_a_daily_budget_owner_names_the_waste_not_capacity(self):
-        # F28-I02: a 白花 ad raises the cleanup even when capacity is unknown (no daily budget
+        # F28-I02: a 沒賣出 ad raises the cleanup even when capacity is unknown (no daily budget
         # owner -> `can_support` null) -- the reason must not print a null capacity.
         conn, org = db.current(), db.DEV_ORG_ID
         brand = brands.create_brand(
@@ -468,6 +468,118 @@ class MonthSummaryWastedOnlyCleanupTest(unittest.TestCase):
         cleanup = next(s for s in summary["suggestions"] if s["kind"] == "cleanup")
         self.assertEqual(cleanup["title"], "關掉 1 則花錢沒效的廣告")
         self.assertEqual(cleanup["why"], "1 則花了上限 3 倍以上還沒有成果")
+
+
+class MonthSummaryGradesTest(unittest.TestCase):
+    """F29-I01 Contract C `grades`: the month's spend split by the one ruler (`grade_period`);
+    有效 = 划算 only; the month edges are exact calendar days."""
+
+    def test_buckets_rows_and_exact_month_edges(self):
+        conn, org = db.current(), db.DEV_ORG_ID
+        brand = brands.create_brand(
+            conn, org_id=org, name="每月回顧分級測試", actor="test", client_name=None,
+        )["id"]
+        campaign = _campaign(conn, org, brand, name="分級活動", native_id="cgrade")
+        repository.save_campaign_target(
+            conn, org, brand, campaign, result_kind="purchase", basis="own", value=100,
+            expected_revision=0, actor="test",
+        )
+        good = _ad(conn, org, brand, campaign, "ad_good", campaign_native_id="cgrade",
+                   name="划算的")
+        waste = _ad(conn, org, brand, campaign, "ad_waste", campaign_native_id="cgrade",
+                    name="沒賣的", status="PAUSED")
+        start = date(2026, 8, 1)
+        for offset in range(10):
+            _obs(conn, org, brand, campaign, good["id"], start + timedelta(days=offset),
+                 spend=50, count=1, key=f"g{offset}")
+        for offset in range(7):
+            _obs(conn, org, brand, campaign, waste["id"], start + timedelta(days=offset),
+                 spend=50, count=0, key=f"w{offset}")
+        # One day either side of August belongs to another month -- never counted here.
+        _obs(conn, org, brand, campaign, good["id"], date(2026, 7, 31), spend=999, count=0,
+             key="before")
+        _obs(conn, org, brand, campaign, good["id"], date(2026, 9, 1), spend=999, count=0,
+             key="after")
+
+        grades = month_summary.get_summary(conn, org, brand, "2026-08")["grades"]
+        self.assertEqual(grades["spent"], 850)
+        by_grade = {b["grade"]: b for b in grades["buckets"]}
+        self.assertEqual((by_grade["on_target"]["count"], by_grade["on_target"]["amount"]),
+                         (1, 500))
+        self.assertEqual(by_grade["on_target"]["ads"][0]["name"], "划算的")
+        self.assertEqual((by_grade["wasted"]["count"], by_grade["wasted"]["amount"]), (1, 350))
+        self.assertEqual({r["name"]: r["grade_label"] for r in grades["rows"]},
+                         {"划算的": "划算", "沒賣的": "沒賣出"})
+        self.assertIsInstance(grades["missing"], list)
+
+
+class MonthSummaryRejectedTest(unittest.TestCase):
+    """F29-I01 Contract C `rejected`: a remembered "no" is listed again only when one of its ads
+    now ranks worse; every other one only counts in `same_count`; the cleanup suggestion never
+    re-proposes an ad the memory still holds."""
+
+    def test_worse_same_and_held_suggestion(self):
+        conn, org = db.current(), db.DEV_ORG_ID
+        brand = brands.create_brand(
+            conn, org_id=org, name="每月回顧拒絕記憶測試", actor="test", client_name=None,
+        )["id"]
+        month = _month(conn, org)
+        cutoff = coresettings.today_for_org(conn, org_id=org) - timedelta(days=2)
+        campaign = _campaign(conn, org, brand, name="拒絕過的活動", native_id="crej")
+        external.record_sync(
+            conn, org, brand, campaign, section="observations",
+            state={"last_success_at": db.now_utc().isoformat(),
+                   "coverage": {"start": (cutoff - timedelta(days=90)).isoformat(),
+                                "end": cutoff.isoformat()}},
+        )
+        repository.save_campaign_target(
+            conn, org, brand, campaign, result_kind="purchase", basis="own", value=100,
+            expected_revision=0, actor="test",
+        )
+        ads = {}
+        for name, (spend, count) in {"變更貴": (150, 1), "一樣貴": (150, 1),
+                                      "還是沒賣": (50, 0)}.items():
+            ads[name] = _ad(conn, org, brand, campaign, f"ad_{len(ads)}",
+                            campaign_native_id="crej", name=name)["id"]
+            for offset in range(7):
+                _obs(conn, org, brand, campaign, ads[name], cutoff - timedelta(days=offset),
+                     spend=spend, count=count, key=f"{name}{offset}")
+        gone = _ad(conn, org, brand, campaign, "ad_gone", campaign_native_id="crej",
+                   status="PAUSED")["id"]
+
+        def rejected(entries, reason, at):
+            set_id = db.new_id("acs")
+            conn.execute(
+                "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+                "request_hash,content_hash,title,month,status,plan_json,created_by,"
+                "decision_reason,decision_grades) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (set_id, org, brand, campaign, set_id, set_id, set_id, "清理：拒絕過的活動",
+                 month, "rejected", db.jsonb({"source": "cleanup", "items": []}), "test",
+                 reason, db.jsonb({eid: {"grade": grade, "cost_per_result": None, "cap": 100,
+                                         "at": at} for eid, grade in entries.items()})),
+            )
+            conn.commit()
+            return set_id
+
+        worse_set = rejected({ads["變更貴"]: "watch", ads["一樣貴"]: "over"}, "季節性",
+                             "2026-09-20T02:00:00+00:00")
+        rejected({ads["還是沒賣"]: "wasted"}, "等新素材", "2026-09-21T02:00:00+00:00")
+        rejected({gone: "over"}, "已關", "2026-09-22T02:00:00+00:00")  # closed since
+
+        summary = month_summary.get_summary(conn, org, brand, month)
+        self.assertEqual(summary["rejected"]["same_count"], 1)
+        [card] = summary["rejected"]["worse"]
+        self.assertEqual(card["change_set_id"], worse_set)
+        self.assertEqual(card["campaign_name"], "拒絕過的活動")
+        self.assertEqual(card["reason"], "季節性")
+        self.assertEqual(card["at"], "2026-09-20T02:00:00+00:00")
+        self.assertEqual(
+            [(ad["name"], ad["was"], ad["now"]) for ad in card["ads"]],
+            [("變更貴", "watch", "over")],
+        )
+        # The 沒賣出 ad remembered as 沒賣出 is held: no cleanup suggestion re-proposes it.
+        self.assertNotIn("cleanup", {s["kind"] for s in summary["suggestions"]})
 
 
 class MonthSummaryRouteTest(unittest.TestCase):
