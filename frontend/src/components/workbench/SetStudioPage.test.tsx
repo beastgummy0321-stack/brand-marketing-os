@@ -136,6 +136,67 @@ describe("優惠來源僅提醒，由使用者確認", () => {
   });
 });
 
+describe("F31-I04 選定上限與未通過檢查（Contract L）", () => {
+  function imageVersions() {
+    const base = setDetail().products.image_prompt!.versions[0];
+    return [
+      { ...base, id: "img_fail", version_index: 1, validation_warning: {
+        lines: ["❌ items[1].prompt_leak：圖上出現分類術語：['主力']"],
+      } },
+      { ...base, id: "img_clean", version_index: 2, validation_warning: null },
+    ];
+  }
+
+  it("有 ❌ 的版本要確認才選定，並列出沒通過的檢查", async () => {
+    const detail = setDetail({ products: { image_prompt: {
+      ...setDetail().products.image_prompt!, versions: imageVersions(),
+    } } });
+    mockGetSet.mockResolvedValue(detail);
+    mockSelectVersion.mockResolvedValue(detail);
+    renderStudio();
+
+    const selectButtons = await screen.findAllByRole("button", { name: "選定" });
+    expect(screen.queryByText("❌ items[1].prompt_leak：圖上出現分類術語：['主力']")).toBeNull();
+    await userEvent.click(selectButtons[0]);
+    expect(mockSelectVersion).not.toHaveBeenCalled();
+    expect(screen.getByText("❌ items[1].prompt_leak：圖上出現分類術語：['主力']")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "確認無誤，選定此版" }));
+    expect(mockSelectVersion).toHaveBeenCalledWith("brd_1", "set_1", "img_fail");
+  });
+
+  it("沒有 ❌ 的版本一鍵選定", async () => {
+    const detail = setDetail({ products: { image_prompt: {
+      ...setDetail().products.image_prompt!, versions: imageVersions(),
+    } } });
+    mockGetSet.mockResolvedValue(detail);
+    mockSelectVersion.mockResolvedValue(detail);
+    renderStudio();
+
+    const selectButtons = await screen.findAllByRole("button", { name: "選定" });
+    await userEvent.click(selectButtons[1]);
+    expect(mockSelectVersion).toHaveBeenCalledWith("brd_1", "set_1", "img_clean");
+    expect(screen.queryByRole("button", { name: "確認無誤，選定此版" })).toBeNull();
+  });
+
+  it("已選滿時其他版本的選定停用並說明要先取消", async () => {
+    const [failed, clean] = imageVersions();
+    mockGetSet.mockResolvedValue(setDetail({ products: { image_prompt: {
+      ...setDetail().products.image_prompt!, state: "已選定", selected: 1, selection_full: true,
+      versions: [{ ...clean, selected_at: "2026-09-26T00:00:00Z" }, failed],
+    } } }));
+    renderStudio();
+
+    const cancel = await screen.findByRole("button", { name: "✓ 已選定" });
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    const other = screen.getByRole("button", { name: "選定" }) as HTMLButtonElement;
+    expect(other.disabled).toBe(true);
+    expect(screen.getByText("已選滿，先取消一張再選")).toBeTruthy();
+    await userEvent.click(other);
+    expect(mockSelectVersion).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "確認無誤，選定此版" })).toBeNull();
+  });
+});
+
 describe("SetStudioPage 圖片 tab（F02-I13）", () => {
   it("有版本：顯示提示詞卡片、各自有複製按鈕、複製全部、且切換鍵兩個方向都真的有效果", async () => {
     mockGetSet.mockResolvedValue(setDetail());

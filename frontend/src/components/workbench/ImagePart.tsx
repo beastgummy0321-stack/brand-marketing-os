@@ -131,6 +131,7 @@ export function ImagePart({
                   onSimilar={onSimilar}
                   onEdit={onEdit}
                   disabled={locked}
+                  full={product.selection_full}
                 />
               </div>
             );

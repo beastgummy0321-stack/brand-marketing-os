@@ -104,6 +104,9 @@ export interface PromptCard {
 export interface ProductVersion {
   /** Advisory only. The user may confirm and select without adding a source. */
   claim_warning?: { message: string; href: string } | null;
+  /** Feature Contract L: this version's own failed-check (❌) lines, `null` when none.
+   * Advisory like `claim_warning` — selecting it takes one explicit confirm. */
+  validation_warning?: { lines: string[] } | null;
   id: string;
   version_index: number;
   generation_round: number;
@@ -122,6 +125,9 @@ export interface SetProduct {
   state: string;
   selected: number;
   required: number;
+  /** Feature Contract L: an ads-dispatched image set already holds `required` selections;
+   * the server refuses another (409 `selection_full`) until one is deselected. */
+  selection_full?: boolean;
   generation_settings: Record<string, unknown>;
   versions: ProductVersion[];
   /** F07-I08：`image_prompt` 的「複製全部」文字，其餘產物固定 `null`。 */
