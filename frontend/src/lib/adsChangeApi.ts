@@ -51,7 +51,9 @@ export interface ChangeSet {
 }
 // `source` (F27-I25, Contract F): only "cleanup" is accepted; names the set as the campaign's
 // cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup" }
+// `declined_ids` (F29-I01 Contract B): only with `source: "cleanup"` -- the proposed ads the user
+// unticked; each is remembered at approval and proposed again only once its grade gets worse.
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup"; declined_ids?: string[] }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;

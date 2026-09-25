@@ -72,7 +72,7 @@ function triageItem(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "native_1", name: "1150706 健身情境單圖",
     campaign_id: "cmp_1", campaign_name: "日常商品推廣", thumbnail_url: null,
     class: "better", label: "變好", reason_code: "cost_per_result_down",
-    grade: "on_target", grade_label: "划算",
+    grade: "on_target", grade_label: "划算", previous_grade: null, grade_move: null,
     window: { start: "2026-09-15", end: "2026-09-21", days: 7, previous_start: "2026-09-08", previous_end: "2026-09-14", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 1000, result_count: 5, cost_per_result: 200, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -135,6 +135,27 @@ function monthSummary(overrides: Partial<MonthSummary> = {}): MonthSummary {
     closed_this_month: 2, closed_tracking_since: "2026-09-22",
     suggestions: [monthSuggestion()],
     days_covered: 30, days_elapsed: 21,
+    // F29-I01 Contract C: the month's spend split by the one ruler; one remembered "no" got worse.
+    grades: {
+      spent: 22000,
+      buckets: [
+        { grade: "on_target", amount: 15400, count: 1, ads: [{ entity_id: "ad_1", name: "1150706 健身情境單圖", thumbnail_url: null, spend: 15400 }] },
+        { grade: "watch", amount: 0, count: 0, ads: [] },
+        { grade: "over", amount: 3000, count: 1, ads: [{ entity_id: "ad_2", name: "提問式貼文", thumbnail_url: null, spend: 3000 }] },
+        { grade: "wasted", amount: 1480, count: 1, ads: [{ entity_id: "ad_3", name: "秋季新色預告", thumbnail_url: null, spend: 1480 }] },
+        { grade: "insufficient", amount: 2120, count: 2, ads: [] },
+        { grade: "no_target", amount: 0, count: 0, ads: [] },
+      ],
+      rows: [],
+      missing: [{ campaign_id: "cmp_1", name: "日常商品推廣", missing_days: ["2026-09-17", "2026-09-18"] }],
+    },
+    rejected: {
+      worse: [{
+        change_set_id: "acs_1", campaign_id: "cmp_1", campaign_name: "日常商品推廣", title: "清理：日常商品推廣",
+        at: "2026-09-12T02:00:00+00:00", reason: "季節性", ads: [{ entity_id: "ad_2", name: "提問式貼文", thumbnail_url: null, was: "watch", now: "over" }],
+      }],
+      same_count: 1,
+    },
     ...overrides,
   };
 }
@@ -281,14 +302,17 @@ describe("MonthReviewPage（F27-I19／F27-I27）各活動", () => {
 });
 
 describe("MonthReviewPage（F26-I03）素材", () => {
-  it("有效／還看不出讀投放中的 class；無效・已停改讀 closed 區塊，不再算仍在投放的 stop_loss", async () => {
+  it("有效只算划算、還看不出＝還沒分級（F29-I01 一把尺，不看趨勢 class）；無效・已停讀 closed 區塊", async () => {
     mockGetTriage.mockResolvedValue(triage(
       [
-        triageItem({ entity_id: "ad_1", class: "better", label: "變好" }),
-        triageItem({ entity_id: "ad_2", class: "stop_loss", label: "停損" }),
-        triageItem({ entity_id: "ad_3", class: "flat", label: "持平" }),
-        triageItem({ entity_id: "ad_4", class: "insufficient", label: "資料不足" }),
-        triageItem({ entity_id: "ad_5", class: "worse", label: "變差" }),
+        // 趨勢變差但仍在上限內：划算，算有效。
+        triageItem({ entity_id: "ad_1", class: "worse", label: "變差", grade: "on_target", grade_label: "划算" }),
+        triageItem({ entity_id: "ad_2", class: "stop_loss", label: "停損", grade: "wasted", grade_label: "沒賣出" }),
+        triageItem({ entity_id: "ad_3", class: "insufficient", label: "資料不足", reason_code: "below_sample_gate", grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
+        triageItem({ entity_id: "ad_4", class: "insufficient", label: "資料不足", reason_code: "result_unknown_days", grade: "insufficient", grade_label: "資料不足" }),
+        // 趨勢變好但超過上限：太貴，不算有效。
+        triageItem({ entity_id: "ad_5", class: "better", label: "變好", grade: "over", grade_label: "太貴" }),
+        triageItem({ entity_id: "ad_6", class: "flat", label: "持平", grade: "watch", grade_label: "偏貴" }),
       ],
       { paused: 2, archived: 1, other: 0, total: 3, truncated: false, items: [
         closedItem({ entity_id: "closed_1", native_status: "PAUSED" }),

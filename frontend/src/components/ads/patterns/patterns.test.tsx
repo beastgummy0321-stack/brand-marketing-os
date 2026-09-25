@@ -147,7 +147,7 @@ describe("grade tokens（F28-I13）", () => {
     expect(screen.getByText("偏貴").className).toContain("bg-zone-watch");
     expect(screen.getByText("太貴").className).toContain("bg-zone-over");
     expect(screen.getByText("太貴").className).toContain("text-grade-over-foreground");
-    expect(screen.getByText("白花").className).toContain("bg-grade-wasted-soft");
+    expect(screen.getByText("沒賣出").className).toContain("bg-grade-wasted-soft");
     expect(GRADE_FILL).toMatchObject({ watch: "bg-grade-watch", over: "bg-grade-over", wasted: "bg-grade-wasted", insufficient: "bg-grade-thin" });
     // Every grade/zone/kind utility the kit uses resolves to a token that tokens.css defines.
     const css = readFileSync(join(__dirname, "../../../styles/tokens.css"), "utf8");
@@ -216,12 +216,12 @@ describe("v9 pieces（F28-I07）", () => {
     expect(dot("晨光隨行杯・日常出發").style.left).toBe(`${(48 / 720) * 100}%`);
     // a1–a4 sit within 4.8% of each other: they stack one level (33px) apart; a4 is the fourth.
     expect(dot("開箱 15 秒・單手開蓋").style.bottom).toBe("99px");
-    // 白花 has no cost: it sits in the box, not on the axis.
+    // 沒賣出 has no cost: it sits in the box, not on the axis.
     expect(dot("秋季新色預告").style.left).toBe("");
-    expect(screen.getByRole("group", { name: "對照上限：上限 450；白花 1、太貴 1、偏貴 1、划算 5" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "對照上限：上限 450；沒賣出 1、太貴 1、偏貴 1、划算 5" })).toBeTruthy();
   });
 
-  it("TargetRuler 沒上限畫空狀態；暫用打平標在上限位置；清理標出要關的；還太新的花費未知不印 0", async () => {
+  it("TargetRuler 沒上限畫空狀態；暫用打平標在上限位置；清理標出要關的；剛開始的花費未知不印 0", async () => {
     const { TargetRuler } = await import("./TargetRuler");
     const { container, rerender } = render(<TargetRuler ads={daily} cap={null} size="mid" />);
     expect(container.querySelector('[data-variant="empty"]')).toBeTruthy();
@@ -231,7 +231,7 @@ describe("v9 pieces（F28-I07）", () => {
     expect(container.querySelector('[data-part="break-even-mark"]')).toBeNull();
     expect(screen.getAllByText("關")).toHaveLength(2);
     rerender(<TargetRuler ads={[{ id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", gradeLabel: null, costPerResult: null, spend: null }]} cap={{ value: 450, basis: "own" }} size="full" />);
-    expect(screen.getByText("還太新、看不準 1 則")).toBeTruthy();
+    expect(screen.getByText("剛開始、數字還不夠 1 則")).toBeTruthy();
     expect(screen.getByText(/已花 未知／1,350 元/)).toBeTruthy();
   });
 
@@ -267,7 +267,7 @@ describe("v9 pieces（F28-I07）", () => {
     const { GradeChip } = await import("./Chip");
     render(<><GradeChip grade="on_target" /><GradeChip grade="wasted" /><GradeChip grade={null} /><GradeChip grade="insufficient" label="資料不足" /></>);
     expect(screen.getByText("划算").dataset.tone).toBe("ok");
-    expect(screen.getByText("白花").dataset.tone).toBe("stop");
+    expect(screen.getByText("沒賣出").dataset.tone).toBe("stop");
     expect(screen.getByText("未判斷").dataset.tone).toBe("neutral");
     expect(screen.getByText("資料不足")).toBeTruthy();
   });

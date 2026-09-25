@@ -5,7 +5,7 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
-import type { CampaignObjectiveFamily } from "./adsTriageApi";
+import type { CampaignObjectiveFamily, RankedGrade, TriageGrade } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
 
@@ -31,6 +31,37 @@ export interface MonthSuggestion {
   objective: string; campaign_objective?: CampaignObjectiveFamily | null;
   title: string; why: string; action_url: string | null;
 }
+/** F29-I01 Contract A: one ad that spent inside the window, graded by the one ruler against its
+ * own campaign's cap (`app/ads/period_grades.py::grade_period`). Unknown numbers are `null`,
+ * never 0; `currency` is the ad's own single currency in the window (null across two). */
+export interface PeriodGradeRow {
+  campaign_id: string; campaign_name: string; origin: string;
+  entity_id: string; name: string | null; group_name: string | null;
+  thumbnail_url: string | null;
+  spend: number | null; results: number | null; cost_per_result: number | null;
+  cap: number | null; break_even: number | null;
+  grade: TriageGrade; grade_label: string; currency: string | null;
+}
+/** One grade's share of the window: `amount` is null when any ad's spend is unknown or the ads
+ * span two currencies. Every grade is listed, empty ones with `count` 0. */
+export interface PeriodGradeBucket {
+  grade: TriageGrade; amount: number | null; count: number;
+  ads: { entity_id: string; name: string | null; thumbnail_url: string | null; spend: number | null }[];
+}
+/** F29-I01 Contract C `grades`: 有效 is the `on_target` bucket only. `missing` lists campaigns
+ * with unsynced days inside the month. */
+export interface MonthGrades {
+  spent: number | null; buckets: PeriodGradeBucket[]; rows: PeriodGradeRow[];
+  missing: { campaign_id: string; name: string; missing_days: string[] }[];
+}
+/** F29-I01 Contract C `rejected`: cleanups the user said no to whose ads got worse since (only
+ * those ads); `same_count` counts the other remembered "no"s, which are not raised again. */
+export interface MonthRejectedCard {
+  change_set_id: string; campaign_id: string; campaign_name: string; title: string;
+  at: string; reason: string | null;
+  ads: { entity_id: string; name: string | null; thumbnail_url: string | null; was: RankedGrade; now: RankedGrade }[];
+}
+export interface MonthRejected { worse: MonthRejectedCard[]; same_count: number }
 export interface MonthSummary {
   month: string; currency: string | null; total_spend: number | null;
   campaigns: MonthCampaignRow[];
@@ -38,6 +69,7 @@ export interface MonthSummary {
   closed_this_month: number | null; closed_tracking_since: string;
   suggestions: MonthSuggestion[];
   days_covered: number; days_elapsed: number;
+  grades: MonthGrades; rejected: MonthRejected;
 }
 
 const brandPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}`;

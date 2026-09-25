@@ -207,10 +207,12 @@ export function cleanupAction(
  * fall through to the final `return false` the same way any unhandled kind always has. */
 export function isQueueItemDone(item: QueueItem): boolean {
   if (item.brand_id === null) return false;
-  if (item.triage.class === "stop_loss") {
+  // F29-I01（ads.md §6.33 一把尺）：看列的種類 `kind_key`，不看 triage 的趨勢 class——加預算列的
+  // 那則廣告趨勢也可能是 worse，卻不是一張「變貴」決定。
+  if (item.kind_key === "stop_loss") {
     return proposalAction(item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal).done;
   }
-  if (item.triage.class === "worse") {
+  if (item.kind_key === "worse") {
     return proposalAction(
       item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal, "review",
     ).done;

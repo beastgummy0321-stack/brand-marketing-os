@@ -7,9 +7,9 @@ const TONE = {
   ok: "bg-zone-ok text-success",
   warn: "bg-zone-watch text-warning",
   bad: "bg-zone-over text-danger",
-  /** v9 `.chip.over` (太貴): the over-cap zone colour, one step softer than 白花. */
+  /** v9 `.chip.over` (太貴): the over-cap zone colour, one step softer than 沒賣出. */
   over: "bg-zone-over text-grade-over-foreground",
-  /** v9 `.chip.stop` (白花): the strongest red chip. */
+  /** v9 `.chip.stop` (沒賣出): the strongest red chip. */
   stop: "bg-grade-wasted-soft text-grade-wasted-foreground",
 } as const;
 export type ChipTone = keyof typeof TONE;
@@ -31,13 +31,13 @@ export function Chip({ tone = "neutral", className, ...props }: ComponentProps<"
 export type Grade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
 
 /** Default words per grade (prototype `G`). The API's `grade_label` wins when given: `insufficient` reads
- * 「還太新、看不準」 below the sample gate and 「資料不足」 for any other reason. */
+ * 「剛開始、數字還不夠」 below the sample gate and 「資料不足」 for any other reason. */
 export const GRADE_LABEL: Record<Grade, string> = {
   on_target: "划算",
   watch: "偏貴",
   over: "太貴",
-  wasted: "白花",
-  insufficient: "還太新、看不準",
+  wasted: "沒賣出",
+  insufficient: "剛開始、數字還不夠",
   no_target: "未判斷",
 };
 

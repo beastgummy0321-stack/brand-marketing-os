@@ -39,12 +39,12 @@ type Cap = { value: number | null; basis: "own" | "break_even" | null; break_eve
 const OWN_450: Cap = { value: 450, basis: "own", break_even: 520 };
 
 function ad(id: string, name: string, grade: TriageItem["grade"], spend: number | null, results: number | null, cap: Cap = OWN_450, extra: Partial<TriageItem> = {}): TriageItem {
-  const labels = { on_target: "划算", watch: "偏貴", over: "太貴", wasted: "白花", insufficient: "還太新、看不準", no_target: "未判斷" };
+  const labels = { on_target: "划算", watch: "偏貴", over: "太貴", wasted: "沒賣出", insufficient: "剛開始、數字還不夠", no_target: "未判斷" };
   const cost = spend !== null && results ? Math.round((spend / results) * 100) / 100 : null;
   const metrics = { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null };
   return {
     entity_id: id, native_id: `n_${id}`, name, campaign_id: "cmp_1", campaign_name: CAMPAIGN_NAME, thumbnail_url: null,
-    class: "flat", label: "持平", reason_code: "", grade, grade_label: labels[grade],
+    class: "flat", label: "持平", reason_code: "", grade, grade_label: labels[grade], previous_grade: null, grade_move: null,
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
     target: { value: cap.value, basis: cap.basis, result_kind: "purchase", result_label: "購買", missing: [], break_even: cap.break_even ?? null },
     current: metrics, previous: { ...metrics, spend: null, result_count: null, cost_per_result: null }, change_pct: null,
@@ -53,7 +53,7 @@ function ad(id: string, name: string, grade: TriageItem["grade"], spend: number 
   };
 }
 
-/** The prototype's `daily` campaign: 5 划算, 1 偏貴, 1 太貴, 1 白花 against 上限 450. */
+/** The prototype's `daily` campaign: 5 划算, 1 偏貴, 1 太貴, 1 沒賣出 against 上限 450. */
 function dailyAds(cap: Cap = OWN_450): TriageItem[] {
   return [
     ad("a1", "晨光隨行杯・日常出發", "on_target", 1440, 30, cap),
@@ -87,7 +87,7 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
 function cleanup(ids: string[]): QueueCleanup {
   return {
     campaign_id: "cmp_1", campaign_name: CAMPAIGN_NAME, can_support: 6, active_ads: 8,
-    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100 })),
+    ads: ids.map((id) => ({ entity_id: id, name: id, thumbnail_url: null, spend_7d: 700, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 100, rejected_before: null })),
     keep: [], short: 0, daily_saving: 260, scale_owner_id: null,
   };
 }
@@ -142,14 +142,14 @@ describe("CampaignDetailPage (F28-I10, v9 tabPerf)", () => {
     expect(container.querySelector(".max-w-\\[1260px\\]")).toBeTruthy();
   });
 
-  it("default folds: 白花／太貴／偏貴 open, 划算 folded; rows carry 在清理提議／去處理／看紀錄", async () => {
+  it("default folds: 沒賣出／太貴／偏貴 open, 划算 folded; rows carry 在清理提議／去處理／看紀錄", async () => {
     const items = dailyAds();
     vi.mocked(getTriage).mockResolvedValue(triage(items));
     vi.mocked(getQueue).mockResolvedValue(dailyQueue(items));
     renderPage();
 
     await screen.findByRole("heading", { name: "在投 8 則對照上限 450" });
-    expect(detailsOf("白花").open).toBe(true);
+    expect(detailsOf("沒賣出").open).toBe(true);
     expect(detailsOf("太貴").open).toBe(true);
     expect(detailsOf("偏貴").open).toBe(true);
     expect(detailsOf("划算").open).toBe(false);
@@ -184,7 +184,7 @@ describe("CampaignDetailPage (F28-I10, v9 tabPerf)", () => {
     expect(screen.queryByText("打平 520")).toBeNull();
   });
 
-  it("gap days (mid): missing-days chip; with only 划算／還太新 every group stays folded", async () => {
+  it("gap days (mid): missing-days chip; with only 划算／剛開始 every group stays folded", async () => {
     const items = [
       ad("m1", "中秋禮盒・隨行杯對杯組（家庭團圓情境）", "on_target", 5603, 35),
       ad("m2", "中秋限定・月光藍開箱", "insufficient", 120, 0),
@@ -197,9 +197,9 @@ describe("CampaignDetailPage (F28-I10, v9 tabPerf)", () => {
 
     expect(await screen.findByText("缺 09/17、09/18，這兩天不計")).toBeTruthy();
     expect(detailsOf("划算").open).toBe(false);
-    expect(detailsOf("還太新、看不準").open).toBe(false);
+    expect(detailsOf("剛開始、數字還不夠").open).toBe(false);
     // The ruler's own tray lists the too-new ads against the 3 × cap spend line.
-    expect(screen.getByText("還太新、看不準 2 則")).toBeTruthy();
+    expect(screen.getByText("剛開始、數字還不夠 2 則")).toBeTruthy();
   });
 
   it("no cap and no product cost: 沒設上限 chip, the empty ruler, 去設上限; every ad folded under 未判斷", async () => {
@@ -311,7 +311,7 @@ describe("CampaignDetailPage (F28-I10, v9 tabPerf)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     renderPage(`${WS}/detail?ad=nope`);
     await screen.findByRole("heading", { name: "在投 8 則對照上限 450" });
-    expect(detailsOf("白花").open).toBe(true);
+    expect(detailsOf("沒賣出").open).toBe(true);
     expect(detailsOf("划算").open).toBe(false);
   });
 

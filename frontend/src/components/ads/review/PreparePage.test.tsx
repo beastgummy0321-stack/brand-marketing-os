@@ -83,7 +83,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "撞車1150724", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "worse", label: "變差",
     reason_code: "cost_per_result_up",
-    grade: "over", grade_label: "太貴",
+    grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-08", end: "2026-09-21", days: 14, previous_start: "2026-08-25", previous_end: "2026-09-07", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },

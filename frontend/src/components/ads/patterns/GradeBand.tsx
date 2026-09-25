@@ -67,7 +67,7 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
       </div>
     )];
   });
-  if (rest > 0) segments.push(<div key="rest" data-grade="rest" className={cn("min-w-2.5 rounded p-0 first:rounded-l-[10px] last:rounded-r-[10px]", HATCH)} style={{ flex: `${rest} 1 0` }} title={`還太新、看不準或未分級 ${formatAmount(rest)} 元`} />);
+  if (rest > 0) segments.push(<div key="rest" data-grade="rest" className={cn("min-w-2.5 rounded p-0 first:rounded-l-[10px] last:rounded-r-[10px]", HATCH)} style={{ flex: `${rest} 1 0` }} title={`剛開始、數字還不夠或未分級 ${formatAmount(rest)} 元`} />);
 
   const legend = (swatch: string, label: string) => (
     <span><span className={cn("mr-1.5 inline-block size-2.5 rounded-[3px] align-[-1px]", swatch)} />{label}</span>
@@ -88,8 +88,8 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
         {legend("border border-success bg-success/10", T !== null ? `划算＝不到 ${formatAmount(T)}` : "划算＝在各活動上限內")}
         {legend("border border-warning/80 bg-warning/10", T !== null ? `偏貴＝${formatAmount(T)}–${formatAmount(T * 1.2)}` : "偏貴＝超過上限 2 成內")}
         {legend("border border-danger bg-danger/10", T !== null ? `太貴＝超過 ${formatAmount(T * 1.2)}` : "太貴＝超過上限 2 成")}
-        {legend("border border-danger bg-danger/20", "白花＝花了沒賣")}
-        {legend("bg-muted", `還太新、看不準 ${formatAmount(thinAmount)} 元`)}
+        {legend("border border-danger bg-danger/20", "沒賣出＝花了錢一筆都沒賣")}
+        {legend("bg-muted", `剛開始、數字還不夠 ${formatAmount(thinAmount)} 元`)}
         {ungradedAmount > 0 && legend(HATCH, `未分級 ${formatAmount(ungradedAmount)} 元`)}
       </div>
     </div>

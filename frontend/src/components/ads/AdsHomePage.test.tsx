@@ -62,7 +62,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "ad_1", native_id: "n_1", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換",
-    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴",
+    thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-16", end: "2026-09-22", days: 7, previous_start: "2026-09-09", previous_end: "2026-09-15", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -85,7 +85,7 @@ function cleanupItem(id: string, campaignName = "日常商品推廣・轉換"): 
     action_url: `/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily`,
     cleanup: {
       campaign_id: "cmp_daily", campaign_name: campaignName, can_support: 6, active_ads: 8, short: 0, daily_saving: 257, scale_owner_id: null, keep: [],
-      ads: [{ entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110 }],
+      ads: [{ entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110, rejected_before: null }],
     },
   }, { class: "stop_loss", grade: "wasted" });
 }

@@ -30,12 +30,16 @@ export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "othe
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
-/** F28-I02: every active ad graded against the campaign's one cap T (`app/ads/triage.py`) --
- * `on_target` 划算 <= T, `watch` 偏貴 <= 1.2T, `over` 太貴 > 1.2T, `wasted` 白花 (spent >= 3T
- * with 0 results), `insufficient` (還太新、看不準 below the sample gate, 資料不足 otherwise),
- * `no_target` 未判斷. `grade_label` always comes from the backend. `class` stays the trend
- * note against the previous window. */
+/** F28-I02, v10 words F29-I01: every active ad graded against the campaign's one cap T
+ * (`app/ads/triage.py::grade_window`, the one ruler) -- `on_target` 划算 <= T, `watch` 偏貴 <=
+ * 1.2T, `over` 太貴 > 1.2T, `wasted` 沒賣出 (spent >= 3T with 0 results), `insufficient`
+ * (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise), `no_target` 未判斷.
+ * `grade_label` always comes from the backend. `class` stays the trend note against the previous
+ * window and no decision reads it (ads.md §6.33, `components/ads/oneRuler.test.ts`). */
 export type TriageGrade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
+/** F29-I01 Contract A: the grades a move can run between (both windows graded). */
+export type RankedGrade = "on_target" | "watch" | "over" | "wasted";
+export interface GradeMove { from: RankedGrade; to: RankedGrade }
 
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
  * re-worded here, `label` always comes from the backend. */
@@ -96,6 +100,10 @@ export interface TriageItem {
   thumbnail_url: string | null;
   class: TriageClass; label: string; reason_code: string;
   grade: TriageGrade; grade_label: string;
+  // F29-I01 Contract A: the previous equal-length window graded by the same ruler (null when not
+  // synced, below the gate or unknown); `grade_move` only when both are graded and differ. 變貴 =
+  // a move from `on_target` to `watch`/`over` -- the only thing that raises a `worse` row.
+  previous_grade: RankedGrade | null; grade_move: GradeMove | null;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
@@ -256,10 +264,16 @@ export interface QueueInsufficient {
   sync_state: CampaignSyncState["state"];
   coverage: { start: string; end: string } | null;
 }
+/** F29-I01 Contract B: the user's earlier "no" to closing this ad -- set only on a proposed ad
+ * that re-entered the cut because its grade got worse since (`grade` is the grade it had then). */
+export interface RejectedBefore {
+  grade: RankedGrade; grade_label: string; at: string; reason: string | null;
+  change_set_id: string;
+}
 /** F27-I06 Contract F, re-cut by F28-I02 (`app/ads/triage_capacity.py::cleanup_candidates`):
- * `ads` is the proposed cut -- every 白花 ad first, then, while active ads exceed `can_support`,
+ * `ads` is the proposed cut -- every 沒賣出 ad first, then, while active ads exceed `can_support`,
  * 太貴 before 偏貴, highest cost per result first; 划算 and ungraded ads never. `keep` is every
- * other active ad (same shape). `can_support` is `null` when capacity is unknown (a 白花 ad
+ * other active ad (same shape). `can_support` is `null` when capacity is unknown (a 沒賣出 ad
  * alone still raises the row). `short` counts ads still over capacity after the cut;
  * `scale_owner_id` is the campaign's qualifying `scale_budget` owner while `short > 0`.
  * `spend_7d`/`daily_spend`/`daily_saving` are `null` when the last 7 days aren't fully known;
@@ -269,6 +283,9 @@ export interface QueueCleanupAd {
   spend_7d: number | null;
   grade: TriageGrade; cost_per_result: number | null; spend: number | null;
   result_count: number | null; daily_spend: number | null;
+  // F29-I01 Contract B: null unless this ad was rejected before and its grade got worse since
+  // (always null on `keep` entries).
+  rejected_before: RejectedBefore | null;
 }
 export interface QueueCleanup {
   campaign_id: string; campaign_name: string; can_support: number | null; active_ads: number;

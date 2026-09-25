@@ -17,7 +17,7 @@ export function cleanupSteps(proposeHref?: string): FlowStep[] {
   return [{ label: "提議", to: proposeHref }, { label: "確認" }, { label: "到平台完成" }, { label: "核對結果" }];
 }
 
-/** Close order (ads.md §6.32): 白花 → 太貴 → 偏貴 → 划算 → 還太新, the most expensive first inside a grade; an unknown
+/** Close order (ads.md §6.32): 沒賣出 → 太貴 → 偏貴 → 划算 → 剛開始, the most expensive first inside a grade; an unknown
  * cost sorts first (prototype `cost ?? 1e9`), then higher spend. */
 const RANK: Record<TriageGrade, number> = { wasted: 0, over: 1, watch: 2, on_target: 3, insufficient: 4, no_target: 5 };
 const desc = (v: number | null) => (v === null ? Number.POSITIVE_INFINITY : v);
@@ -30,14 +30,14 @@ export function rankCleanupAds(ads: QueueCleanupAd[]): QueueCleanupAd[] {
 
 const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
 
-/** The number cell of a row: 白花 prints its result count, 還太新 is not a cost yet, the rest print cost per result. */
+/** The number cell of a row: 沒賣出 prints its result count, 剛開始 is not a cost yet, the rest print cost per result. */
 export function CostCell({ ad, label, withCaption = false }: { ad: QueueCleanupAd; label: string; withCaption?: boolean }): ReactNode {
   if (ad.grade === "wasted") {
     const count = ad.result_count === null ? "未知" : `${ad.result_count} 筆`;
     return <>{withCaption && <span className="block text-[11.5px] text-muted-foreground">購買</span>}<b className="text-[15px]">{count}</b></>;
   }
   if (ad.grade === "insufficient" || ad.grade === "no_target") {
-    return <span className="font-medium text-muted-foreground">{label === "資料不足" ? "資料不足" : ad.grade === "no_target" ? "未判斷" : "還太新"}</span>;
+    return <span className="font-medium text-muted-foreground">{label === "資料不足" ? "資料不足" : ad.grade === "no_target" ? "未判斷" : "剛開始、數字還不夠"}</span>;
   }
   return <>{withCaption && <span className="block text-[11.5px] text-muted-foreground">每賣一筆</span>}<b className="text-[15px]">{money(ad.cost_per_result)}</b></>;
 }
@@ -47,7 +47,7 @@ function capOf(target: TriageTargetView): RulerCap | null {
 }
 
 /** 「每日 1,200 撐 6 則」: the daily budget is only on the campaign triage (`data.capacity`), read on its own so a
- * failure leaves the words without the amount, never the page blank. Grade words of 還太新 vs 資料不足 come from the
+ * failure leaves the words without the amount, never the page blank. Grade words of 剛開始 vs 資料不足 come from the
  * same read (the cleanup payload carries `grade` only). */
 function useCampaignExtras(brandId: string, campaignId: string) {
   const [extras, setExtras] = useState<{ daily: number | null; labels: Map<string, string> }>({ daily: null, labels: new Map() });
@@ -102,7 +102,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
           steps={cleanupSteps()}
           current={0}
           title={`關 ${cleanup.ads.length} 則、留 ${cleanup.keep.length} 則`}
-          purpose="白花的一定關；預算放不下的，再關最貴的"
+          purpose="沒賣出的一定關；預算放不下的，再關最貴的"
           aside={(
             <div className="flex items-center gap-2.5">
               <CapDots keep={cleanup.keep.length} close={cleanup.ads.length} label={`留 ${cleanup.keep.length} 則、關 ${cleanup.ads.length} 則`} />
@@ -140,7 +140,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
         <section className="surface px-[22px] py-5" aria-label="關的順序">
           <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold">關的順序</h2>
-            <span className="text-xs text-muted-foreground">白花 → 太貴 → 偏貴，同級先關最貴的；划算不關</span>
+            <span className="text-xs text-muted-foreground">沒賣出 → 太貴 → 偏貴，同級先關最貴的；划算不關</span>
           </div>
           <ol>
             {all.map((ad, i) => {
