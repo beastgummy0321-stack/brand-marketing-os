@@ -29,13 +29,15 @@ from app.core.db import Conn, ConnProxy, now_utc
 # ---------------------------------------------------------------------------
 
 CARDS = {
+    # Engineering note: hard rules always go into the generation prompt; soft rules are ordered
+    # by last confirmation and truncated at this cap so the prompt does not drift as rules pile
+    # up. Value source: docs/adr/0012-rule-card-expiry-and-prompt-cap.md sections 2-3.
     "rule_prompt_cap": {
         "title": "品牌智庫規則上限",
         "description": (
-            "生成 prompt 會把這個品牌全部生效中的 hard 規則整包塞進去；soft 規則依最近確認"
-            "時間排序，只取排在前面的部分——避免規則隨時間單調累積、prompt 被灌到失焦。"
-            "超過上限而這次沒進 prompt 的規則不會消失，仍留在系統裡，只是這次生成用不到。"
-            "數值來源：docs/adr/0012-rule-card-expiry-and-prompt-cap.md 第二、三節。"
+            "AI 產出內容時，會帶上這個品牌全部生效中的 hard 規則；soft 規則依最近確認的時間"
+            "排序，只帶排在前面的幾條，避免規則越積越多、AI 抓不到重點。"
+            "這次沒帶上的規則不會消失，仍留在系統裡，只是這次產出用不到。"
         ),
         "fields": {
             "max_active_rules": {
@@ -46,12 +48,15 @@ CARDS = {
             },
         },
     },
+    # Engineering note (ticket 07): the planning agent only returns ratios; the deterministic
+    # shell multiplies this daily budget by them, so money is computed by code, never by the
+    # model. 0 means "not filled in yet", and scheduling refuses until it is set.
     "schedule_budget": {
         "title": "檔期日預算",
         "description": (
-            "檔期規劃出方案時，代理只給比例，這裡的日預算乘以比例才是真正花出去的金額——"
-            "外殼算錢，代理不算錢（票 07）。預設 0 代表「使用者還沒填」，不是「預算是零」："
-            "還沒填之前，排程一律拒絕，不會拿 0 去跑出一個沒有意義的方案。"
+            "檔期方案會把這裡的日預算按比例分配，算出每個方案實際要花的金額。"
+            "預設 0 代表「還沒填」，不是「預算是零」：還沒填之前，排程會先停下來，"
+            "不會拿 0 去排出一個沒有意義的方案。"
         ),
         "fields": {
             "daily_budget": {
@@ -82,12 +87,13 @@ CARDS = {
             },
         },
     },
+    # Engineering note (ticket 08): the range is enforced by code before submit, not only
+    # stated in help text.
     "schedule_plan_count": {
         "title": "檔期方案數量上下限",
         "description": (
-            "檔期規劃一次要代理出幾個方案，使用者從下拉選單挑一個數字——這張卡決定那個"
-            "下拉選單的上下限，程式在送出前會擋掉超出範圍的數字，不是只在說明文字裡寫"
-            "一個上限（票 08）。"
+            "檔期規劃一次要 AI 出幾個方案，是從下拉選單挑一個數字；這張卡決定那個下拉選單"
+            "的上下限，超出範圍的數字送不出去。"
         ),
         "fields": {
             "plan_count_min": {
@@ -96,7 +102,7 @@ CARDS = {
             },
             "plan_count_max": {
                 "label": "方案數量上限", "unit": "個", "default": 5.0,
-                "help": "一次最多出幾個方案——方案數愈多，代理輸出的 token 愈多，成本愈高。",
+                "help": "一次最多出幾個方案。方案數愈多，AI 要寫的內容愈多，AI 費用也愈高。",
             },
         },
     },

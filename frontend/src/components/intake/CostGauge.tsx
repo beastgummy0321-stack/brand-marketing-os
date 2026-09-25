@@ -2,6 +2,9 @@ import { useState } from "react";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { DEFAULT_BUDGET } from "@/lib/intakeApi";
 
+/** Shown beside every US$ amount: the wizard cost is the AI bill, never ad spend (drill item 7c). */
+export const AI_COST_NOTE = "這是 AI 整理資料的費用，不是廣告費。";
+
 /** 右欄花費儀表（契約「任務流版型」節，S4.13／S4.67-70）：步驟 1 草稿還沒建立時顯示系統
  * 預設上限的靜態態，不可點「調整上限」；草稿建立後即時反映每次背景工作的花費變化。 */
 export function CostGauge({ draft, onAdjust }: { draft: IntakeDraft | null; onAdjust: () => void }) {
@@ -18,6 +21,7 @@ export function CostGauge({ draft, onAdjust }: { draft: IntakeDraft | null; onAd
         US$ {spent.toFixed(2)}
         <span className="ml-1 text-sm font-normal text-muted-foreground">／ US$ {limit.toFixed(2)} 上限</span>
       </p>
+      <p className="text-xs text-muted-foreground">{AI_COST_NOTE}</p>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div className={`h-full rounded-full ${over ? "bg-danger" : "bg-primary"}`} style={{ width: `${pct}%` }} />
       </div>

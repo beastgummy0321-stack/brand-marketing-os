@@ -46,6 +46,15 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertFalse(field["customized"])  # 從沒改過，非自訂
         self.assertEqual(field["value"], 20.0)
 
+    def test_card_text_speaks_to_the_user_only(self):
+        """F31-I10: the settings page renders description/help verbatim; no ticket numbers
+        or internal role words (代理／外殼) may reach it."""
+        cards = self.client.get(f"/api/settings/rule-cards/brands/{self.bid}").json()["data"]["cards"]
+        for card in cards:
+            for text in [card["description"], *(f["help"] for f in card["fields"])]:
+                for word in ("票", "代理", "外殼"):
+                    self.assertNotIn(word, text, f"{card['key']}: {text}")
+
     def test_get_unknown_brand_404s(self):
         resp = self.client.get("/api/settings/rule-cards/brands/brand_沒這個品牌")
         self.assertEqual(resp.status_code, 404)
