@@ -88,12 +88,17 @@ export function Meter({ value, max, marker, tone, left, right }: {
   );
 }
 
-/** `.todo` + `.no`: one numbered manual step; `done` turns the number into a green check. */
-export function TodoRow({ no, done = false, children, action }: { no: number; done?: boolean; children: ReactNode; action?: ReactNode }) {
+export type TodoState = "open" | "done" | "mismatch" | "locked";
+/** `.todo` + `.no`: one numbered manual step; `done` turns the number into a green check. v10 publish adds
+ * `state`: `mismatch` (`.todo.dev`, amber disc with ≠ — the platform read differs from what was approved) and
+ * `locked` (`.todo.lock`, muted number — waits for a re-approval and takes no action). `state` wins over `done`. */
+export function TodoRow({ no, done = false, state, children, action }: { no: number; done?: boolean; state?: TodoState; children: ReactNode; action?: ReactNode }) {
+  const s: TodoState = state ?? (done ? "done" : "open");
   return (
-    <div data-slot="todo-row" data-variant={done ? "done" : "open"} className="flex items-center gap-4 border-t border-border py-[18px] first:border-t-0">
-      <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full font-bold", done ? "bg-success text-white" : "bg-muted text-muted-foreground")}>
-        {done ? <Check size={16} aria-label="已完成" /> : no}
+    <div data-slot="todo-row" data-variant={s} className="flex items-center gap-4 border-t border-border py-[18px] first:border-t-0">
+      <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full font-bold",
+        s === "done" ? "bg-success text-white" : s === "mismatch" ? "bg-grade-watch text-white" : "bg-muted text-muted-foreground")}>
+        {s === "done" ? <Check size={16} aria-label="已完成" /> : s === "mismatch" ? <span role="img" aria-label="不符">≠</span> : no}
       </div>
       <div className="min-w-0 flex-1 text-[15px]">{children}</div>
       {action && <div className="flex shrink-0 flex-col gap-2">{action}</div>}
