@@ -328,7 +328,8 @@ describe("ReviewEvidencePage（F29-I10）佇列讀取失敗與出口", () => {
     vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue());
     renderAt(roundPath());
     expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "這則廣告變差了" })).toBeTruthy();
+    // Without the queue row there is no grade move to name: the headline stays neutral (no guess).
+    expect(screen.getByRole("heading", { name: "看看這則廣告的數字" })).toBeTruthy();
     expect(screen.queryByText("第 1 件／共 1 件")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
@@ -363,7 +364,7 @@ describe("ReviewEvidencePage（F29-I10）讀取失敗與已關閉的決定", () 
     expect(screen.queryByText("沒有這回的檢討提議")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     await waitFor(() => expect(reviewApi.createReview).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole("heading", { name: "這則廣告變差了" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "這則從划算變太貴" })).toBeTruthy();
   });
 
   it("已暫緩的一回沒有「先不要」出口，只剩返回投放中心", async () => {
@@ -371,5 +372,38 @@ describe("ReviewEvidencePage（F29-I10）讀取失敗與已關閉的決定", () 
     renderAt(roundPath());
     expect(await screen.findByRole("link", { name: "← 投放中心" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /先不要，回投放中心/ })).toBeNull();
+  });
+});
+
+// F29-I14 (v10 `stepEv()`): the 變貴 headline is the grade move against the campaign's own cap (Contract A
+// `grade_move`); the cost carries its money tag; the ▲▼ against the previous window is only a reference.
+describe("ReviewEvidencePage（F29-I14）變貴的標題與上限", () => {
+  it("有 grade_move：標題說從哪一級變哪一級，目的說跟哪個活動的上限比；成本旁有有賺／在虧，前後升降只當參考", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
+      triage: triage({
+        campaign_name: "日常商品推廣・轉換", grade: "watch", grade_label: "偏貴", grade_move: { from: "on_target", to: "watch" },
+        target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [], break_even: 520 },
+      }),
+    })]));
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    expect(await screen.findByRole("heading", { name: "這則從划算變偏貴" })).toBeTruthy();
+    expect(screen.getByText("跟日常商品推廣的上限比，先看數字，再決定")).toBeTruthy();
+    // 600 per purchase against break-even 520 → 在虧; the cap chip says 上限, never 目標.
+    expect(document.querySelector("[data-slot=money-tag]")?.getAttribute("data-variant")).toBe("loss");
+    expect(screen.getByText("在虧")).toBeTruthy();
+    expect(screen.getAllByText("上限").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/目標/)).toBeNull();
+    expect(screen.getByText(/前後升降只當參考/)).toBeTruthy();
+  });
+
+  it("grade_move 是 null：標題中性，不從趨勢猜「變差」", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ previous_grade: null, grade_move: null }) })]));
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    renderAt(roundPath());
+    expect(await screen.findByRole("heading", { name: "看看這則廣告的數字" })).toBeTruthy();
+    expect(screen.queryByText(/變差|變貴了/)).toBeNull();
+    // No break-even known → no money tag at all (never a guess).
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
   });
 });

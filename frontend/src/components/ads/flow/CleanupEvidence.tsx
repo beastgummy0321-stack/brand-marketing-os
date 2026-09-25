@@ -1,23 +1,25 @@
-import { Chip, GradeChip, KindMark } from "../patterns";
+import { Chip, GRADE_LABEL, GradeTermChip, KindMark } from "../patterns";
 import type { ChangeItem } from "@/lib/adsChangeApi";
 import type { QueueCleanup, QueueCleanupAd } from "@/lib/adsTriageApi";
 import type { CleanupDrift } from "./cleanupDraft";
-import { CostCell } from "./CleanupProposal";
+import { CostCell, RejectedBeforeNote } from "./CleanupProposal";
 import { Tile } from "./Tile";
 
 type Mark = "close" | "added" | "dropped";
 type Row = { id: string; name: string | null; ad: QueueCleanupAd | null; mark: Mark };
 
-/** F28-I11: the confirm card of a cleanup (prototype v9 `confirmBody()` for kind `clean`, hash `d/clean/ok`) — 關 N 則、
- * 留 M 則 and the close list with grade chips and costs. Once a change set exists its items are the frozen close
- * list (prototype `q.frozen`); each is filled from the queue row's `cleanup` payload while the row is still open,
- * else it falls back to the item's own name (same live/fallback split as `PauseEvidence`/`BudgetEvidence`).
+/** F28-I11: the confirm card of a cleanup (prototype v10 `confirmBody()` for kind `clean`, hash `d/clean/ok`) — 關 N 則、
+ * 留 M 則 and the close list with grade chips, costs and money tags. Once a change set exists its items are the frozen
+ * close list (prototype `q.frozen`); each is filled from the queue row's `cleanup` payload while the row is still open,
+ * else it falls back to the item's own name (same live/fallback split as `PauseEvidence`/`BudgetEvidence`). Before the
+ * set exists the list is the user's ticked ads (`picked`, F29-I14); none ticked says so instead of an empty card.
  *
  * F28-I15: with `drift` (the draft's close list is not the queue row's current one, `cleanupDraft.ts::cleanupDrift`)
  * the card shows the latest proposal — its count, then its close list with the ads the draft did not have marked
  * 新增 — followed by the draft's ads the latest proposal no longer closes, struck through and marked 不關. */
-export function CleanupEvidence({ cleanup, items, drift = null }: {
-  cleanup: QueueCleanup | null; items: ChangeItem[]; drift?: CleanupDrift | null;
+export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEven = null }: {
+  cleanup: QueueCleanup | null; items: ChangeItem[]; picked?: QueueCleanupAd[]; drift?: CleanupDrift | null;
+  breakEven?: number | null;
 }) {
   const pool = new Map([...(cleanup?.ads ?? []), ...(cleanup?.keep ?? [])].map((ad) => [ad.entity_id, ad]));
   let rows: Row[];
@@ -34,7 +36,7 @@ export function CleanupEvidence({ cleanup, items, drift = null }: {
   } else {
     rows = items.length
       ? items.map((item): Row => ({ id: item.target_id, name: pool.get(item.target_id)?.name ?? item.target.name, ad: pool.get(item.target_id) ?? null, mark: "close" }))
-      : (cleanup?.ads ?? []).map((ad): Row => ({ id: ad.entity_id, name: ad.name, ad, mark: "close" }));
+      : (picked ?? cleanup?.ads ?? []).map((ad): Row => ({ id: ad.entity_id, name: ad.name, ad, mark: "close" }));
     keep = cleanup ? pool.size - rows.filter((row) => row.ad).length : null;
   }
   const closing = rows.filter((row) => row.mark !== "dropped").length;
@@ -50,28 +52,35 @@ export function CleanupEvidence({ cleanup, items, drift = null }: {
         {drift && <Chip tone="warn">提議已更新</Chip>}
         <Chip tone="ok">✓ 不會新增花費</Chip>
       </div>
-      <ul className="mt-3.5">
-        {rows.map((row) => (
-          <li
-            key={row.id}
-            data-mark={drift ? row.mark : undefined}
-            className={`grid ${drift ? "grid-cols-[32px_minmax(0,1fr)_90px_100px_48px]" : "grid-cols-[32px_minmax(0,1fr)_90px_100px_36px]"} items-center gap-3.5 border-t border-border py-[11px] first:border-t-0 ${row.mark === "dropped" ? "opacity-55" : ""}`}
-          >
-            <Tile url={row.ad?.thumbnail_url} size="sm" />
-            {drift ? (
-              <p className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium [overflow-wrap:anywhere]">
-                <span className={`min-w-0 ${row.mark === "dropped" ? "line-through" : ""}`}>{row.name ?? "（未命名廣告）"}</span>
-                {row.mark === "added" && <Chip tone="warn">新增</Chip>}
-              </p>
-            ) : (
-              <p className="text-sm font-medium [overflow-wrap:anywhere]">{row.name ?? "（未命名廣告）"}</p>
-            )}
-            {row.ad ? <GradeChip grade={row.ad.grade} /> : <span />}
-            <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} label="" withCaption />}</div>
-            {row.mark === "dropped" ? <Chip tone="neutral">不關</Chip> : <Chip tone="bad">關</Chip>}
-          </li>
-        ))}
-      </ul>
+      {rows.length === 0 ? (
+        <p className="mt-3.5 text-sm text-muted-foreground">一則都沒勾。回提議勾選，或按拒絕</p>
+      ) : (
+        <ul className="mt-3.5">
+          {rows.map((row) => (
+            <li
+              key={row.id}
+              data-mark={drift ? row.mark : undefined}
+              className={`grid ${drift ? "grid-cols-[32px_minmax(0,1fr)_90px_minmax(100px,auto)_48px]" : "grid-cols-[32px_minmax(0,1fr)_90px_minmax(100px,auto)_36px]"} items-center gap-3.5 border-t border-border py-[11px] first:border-t-0 ${row.mark === "dropped" ? "opacity-55" : ""}`}
+            >
+              <Tile url={row.ad?.thumbnail_url} size="sm" />
+              <div className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
+                {drift ? (
+                  <p className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className={`min-w-0 ${row.mark === "dropped" ? "line-through" : ""}`}>{row.name ?? "（未命名廣告）"}</span>
+                    {row.mark === "added" && <Chip tone="warn">新增</Chip>}
+                  </p>
+                ) : (
+                  <p>{row.name ?? "（未命名廣告）"}</p>
+                )}
+                {row.ad && <RejectedBeforeNote ad={row.ad} label={GRADE_LABEL[row.ad.grade]} />}
+              </div>
+              {row.ad ? <GradeTermChip grade={row.ad.grade} /> : <span />}
+              <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} label="" withCaption breakEven={breakEven} />}</div>
+              {row.mark === "dropped" ? <Chip tone="neutral">不關</Chip> : <Chip tone="bad">關</Chip>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

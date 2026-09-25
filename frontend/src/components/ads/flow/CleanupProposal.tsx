@@ -1,18 +1,21 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { useApiRead } from "@/lib/useApiRead";
 import { getTriage, type QueueCleanup, type QueueCleanupAd, type QueueItem, type TriageGrade, type TriageTargetView } from "@/lib/adsTriageApi";
 import {
-  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeChip, ReadFailed, ResultHero, TargetRuler, formatAmount,
-  type FlowStep, type RulerAd, type RulerCap,
+  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeRules, GradeTermChip, MoneyTag, PickRow, ReadFailed, ResultHero,
+  TargetRuler, formatAmount, type FlowStep, type RulerAd, type RulerCap,
 } from "../patterns";
 import { proposeBudgetPath } from "./changeFlow";
+import type { CleanupPick } from "./cleanupDraft";
 import { Tile } from "./Tile";
 
-/** F28-I11: the cleanup proposal step (prototype v9 `stepProp()` for kind `clean`, hash `d/clean/prop`). The light
+/** F28-I11: the cleanup proposal step (prototype v10 `stepProp()` for kind `clean`, hash `d/clean/prop`). The light
  * flow is 提議 → 確認 → 到平台完成 → 核對結果; this step only shows the queue row's `cleanup` payload (F28-I02) —
- * nothing is written until 核准 on the confirm step (`ConfirmPage`, lazy create unchanged). */
+ * nothing is written until 核准 on the confirm step (`ConfirmPage`, lazy create unchanged). F29-I14: every proposed ad
+ * is ticked; the folded 「進階：自己挑要關哪幾則」 unticks single ones (`cleanupDraft.ts::useCleanupPick`), and the
+ * title, capacity dots, ruler and order list follow the ticked set. */
 
 export function cleanupSteps(proposeHref?: string): FlowStep[] {
   return [{ label: "提議", to: proposeHref }, { label: "確認" }, { label: "到平台完成" }, { label: "核對結果" }];
@@ -31,8 +34,11 @@ export function rankCleanupAds(ads: QueueCleanupAd[]): QueueCleanupAd[] {
 
 const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
 
-/** The number cell of a row: 沒賣出 prints its result count, 剛開始 is not a cost yet, the rest print cost per result. */
-export function CostCell({ ad, label, withCaption = false }: { ad: QueueCleanupAd; label: string; withCaption?: boolean }): ReactNode {
+/** The number cell of a row: 沒賣出 prints its result count, 剛開始 is not a cost yet, the rest print cost per result
+ * with its money tag against break-even (v10 `mt(a)`; hidden when either number is unknown). */
+export function CostCell({ ad, label, withCaption = false, breakEven = null }: {
+  ad: QueueCleanupAd; label: string; withCaption?: boolean; breakEven?: number | null;
+}): ReactNode {
   if (ad.grade === "wasted") {
     const count = ad.result_count === null ? "未知" : `${ad.result_count} 筆`;
     return <>{withCaption && <span className="block text-[11.5px] text-muted-foreground">購買</span>}<b className="text-[15px]">{count}</b></>;
@@ -40,7 +46,19 @@ export function CostCell({ ad, label, withCaption = false }: { ad: QueueCleanupA
   if (ad.grade === "insufficient" || ad.grade === "no_target") {
     return <span className="font-medium text-muted-foreground">{label === "資料不足" ? "資料不足" : ad.grade === "no_target" ? "未判斷" : "剛開始、數字還不夠"}</span>;
   }
-  return <>{withCaption && <span className="block text-[11.5px] text-muted-foreground">每賣一筆</span>}<b className="text-[15px]">{money(ad.cost_per_result)}</b></>;
+  return (
+    <>
+      {withCaption && <span className="block text-[11.5px] text-muted-foreground">每賣一筆</span>}
+      <b className="text-[15px]">{money(ad.cost_per_result)}</b>
+      <MoneyTag cost={ad.cost_per_result} breakEven={breakEven} className="block" />
+    </>
+  );
+}
+
+/** F29-I01 Contract B: an ad the user once declined to close is back only because its grade got worse — say so. */
+export function RejectedBeforeNote({ ad, label }: { ad: QueueCleanupAd; label: string }) {
+  if (!ad.rejected_before) return null;
+  return <p className="mt-0.5 text-xs font-normal text-warning-strong">上次你拒絕時是{ad.rejected_before.grade_label}，現在變{label}</p>;
 }
 
 function capOf(target: TriageTargetView): RulerCap | null {
@@ -72,22 +90,38 @@ function shortTitle(cleanup: QueueCleanup, scale: boolean): string {
   return scale ? `${head}；改提議加預算` : head;
 }
 
-export function CleanupProposal({ brandId, campaignId, item, position, homeHref }: {
+/** A pick row's numbers (v10 `.pickrow` right cell): 沒賣出 = spend and results, else cost per result + money tag. */
+function pickAside(ad: QueueCleanupAd, breakEven: number | null): ReactNode {
+  if (ad.grade === "wasted") {
+    return `花 ${formatAmount(ad.spend) ?? "未知"}・${ad.result_count === null ? "未知" : `${ad.result_count} 筆`}`;
+  }
+  return <>每筆 {money(ad.cost_per_result)}<MoneyTag cost={ad.cost_per_result} breakEven={breakEven} plain className="block" /></>;
+}
+
+export function CleanupProposal({ brandId, campaignId, item, position, homeHref, pick }: {
   brandId: string; campaignId: string; item: QueueItem & { cleanup: QueueCleanup };
-  position: { pos: number; total: number } | null; homeHref: string;
+  position: { pos: number; total: number } | null; homeHref: string; pick: CleanupPick;
 }) {
   const { cleanup, triage } = item;
   const extras = useCampaignExtras(brandId, campaignId);
-  const closeIds = new Set(cleanup.ads.map((ad) => ad.entity_id));
+  // The fold opens by itself when the user comes back with a pick already made (prototype `S.open.cleanAdv`).
+  const [advOpen, setAdvOpen] = useState(pick.changed);
+  const closeIds = new Set(pick.ticked.map((ad) => ad.entity_id));
+  const declined = new Set(pick.declined);
   const all = rankCleanupAds([...cleanup.ads, ...cleanup.keep]);
+  const nClose = closeIds.size;
+  const nKeep = all.length - nClose;
   const label = (ad: QueueCleanupAd) => extras.labels.get(ad.entity_id) || GRADE_LABEL[ad.grade];
   const cap = capOf(triage.target);
+  const breakEven = triage.target.break_even ?? null;
   const rulerAds: RulerAd[] = all.map((ad) => ({
     id: ad.entity_id, name: ad.name ?? "（未命名廣告）", grade: ad.grade, gradeLabel: label(ad),
     costPerResult: ad.cost_per_result, spend: ad.spend, thumbnailUrl: ad.thumbnail_url,
   }));
   const scaleHref = cleanup.scale_owner_id ? proposeBudgetPath(brandId, campaignId, cleanup.scale_owner_id) : null;
   const capText = capacityText(cleanup, extras.daily);
+  // Over capacity because of the user's own unticks — the backend's `short` banner already covers its own cut.
+  const overCapacity = pick.changed && cleanup.can_support !== null && nKeep > cleanup.can_support;
 
   return (
     <>
@@ -95,11 +129,11 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
         <FlowHeader
           steps={cleanupSteps()}
           current={0}
-          title={`關 ${cleanup.ads.length} 則、留 ${cleanup.keep.length} 則`}
+          title={`關 ${nClose} 則、留 ${nKeep} 則`}
           purpose="沒賣出的一定關；預算放不下的，再關最貴的"
           aside={(
             <div className="flex items-center gap-2.5">
-              <CapDots keep={cleanup.keep.length} close={cleanup.ads.length} label={`留 ${cleanup.keep.length} 則、關 ${cleanup.ads.length} 則`} />
+              <CapDots keep={nKeep} close={nClose} label={`留 ${nKeep} 則、關 ${nClose} 則`} />
               <span className="numeric text-sm text-muted-foreground">{capText}</span>
             </div>
           )}
@@ -123,8 +157,20 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
               {cap && <span>{cap.basis === "break_even" ? "暫用打平" : "上限"} {formatAmount(cap.value)}</span>}
             </div>
           </div>
-          <TargetRuler ads={rulerAds} cap={cap} breakEven={triage.target.break_even ?? null} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
+          <TargetRuler ads={rulerAds} cap={cap} breakEven={breakEven} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
+          <GradeRules breakEven={breakEven} />
         </section>
+
+        {overCapacity && (
+          <ResultHero
+            tone="warn"
+            mark="!"
+            title={extras.daily === null
+              ? `留 ${nKeep} 則，預算只撐得起 ${cleanup.can_support} 則`
+              : `留 ${nKeep} 則，每日 ${formatAmount(extras.daily)} 只撐得起 ${cleanup.can_support} 則`}
+            note="每則分到的錢變少，要更久才看得出好壞"
+          />
+        )}
 
         {cleanup.short > 0 && (
           <ResultHero
@@ -135,6 +181,33 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
           />
         )}
 
+        {cleanup.ads.length > 0 && (
+          <details className="group surface" open={advOpen} onToggle={(e) => setAdvOpen(e.currentTarget.open)}>
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-[22px] py-3.5 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              <span aria-hidden="true" className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
+              進階：自己挑要關哪幾則
+              {pick.changed && <Chip tone="accent">你留下了 {pick.declined.length} 則</Chip>}
+            </summary>
+            <div className="border-t border-border px-[22px] py-3">
+              {cleanup.ads.map((ad) => (
+                <PickRow
+                  key={ad.entity_id}
+                  checked={pick.isTicked(ad.entity_id)}
+                  onChange={(on) => pick.toggle(ad.entity_id, on)}
+                  name={ad.name ?? "（未命名廣告）"}
+                  thumbnailUrl={ad.thumbnail_url}
+                  grade={ad.grade}
+                  gradeLabel={label(ad)}
+                  aside={pickAside(ad, breakEven)}
+                />
+              ))}
+              {pick.changed && (
+                <Button variant="link" className="mt-2.5 h-auto px-0" onClick={pick.reset}>全部照建議關</Button>
+              )}
+            </div>
+          </details>
+        )}
+
         <section className="surface px-[22px] py-5" aria-label="關的順序">
           <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold">關的順序</h2>
@@ -143,14 +216,18 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
           <ol>
             {all.map((ad, i) => {
               const closing = closeIds.has(ad.entity_id);
+              const mine = declined.has(ad.entity_id);
               return (
-                <li key={ad.entity_id} className="grid grid-cols-[24px_32px_minmax(0,1fr)_auto_90px_36px] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
+                <li key={ad.entity_id} className="grid grid-cols-[24px_32px_minmax(0,1fr)_auto_minmax(90px,auto)_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
                   <span className="text-right text-xs text-muted-foreground">{i + 1}</span>
                   <Tile url={ad.thumbnail_url} size="sm" />
-                  <p className="text-sm font-medium [overflow-wrap:anywhere]">{ad.name ?? "（未命名廣告）"}</p>
-                  <GradeChip grade={ad.grade} label={label(ad)} />
-                  <div className="numeric text-right"><CostCell ad={ad} label={label(ad)} /></div>
-                  <Chip tone={closing ? "bad" : "ok"}>{closing ? "關" : "留"}</Chip>
+                  <div className="text-sm font-medium [overflow-wrap:anywhere]">
+                    <p>{ad.name ?? "（未命名廣告）"}</p>
+                    <RejectedBeforeNote ad={ad} label={label(ad)} />
+                  </div>
+                  <GradeTermChip grade={ad.grade} label={label(ad)} />
+                  <div className="numeric text-right"><CostCell ad={ad} label={label(ad)} breakEven={breakEven} /></div>
+                  <Chip tone={closing ? "bad" : mine ? "accent" : "ok"}>{closing ? "關" : mine ? "留・你改的" : "留"}</Chip>
                 </li>
               );
             })}
@@ -160,7 +237,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
       <div className="flex-1" />
       {/* Nothing is written on this step: the decision is open, so the flow's one exit replaces 「← 投放中心」. */}
       <ActionBar back={{ label: "投放中心", to: homeHref }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
-        <Button asChild><Link to="?step=confirm">下一步：確認 →</Link></Button>
+        <Button asChild><Link to={pick.href("confirm")}>下一步：確認 →</Link></Button>
       </ActionBar>
     </>
   );
