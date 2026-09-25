@@ -1485,28 +1485,33 @@ closed through the cleanup decision, whose interrupt `ads_triage_cleanup` now ca
   interrupted a second time ends `failed` and is shown as failed. This replaces the earlier start-up rule that paid work
   is never re-sent (`app/worker.py`).
 
-### 6.33 學習閉環、一把尺、拒絕記憶、畫面一致與 v10 詞彙（ruled 2026-09-25；planned as F29）
+### 6.33 學習閉環、一把尺、拒絕記憶、畫面一致與 v10 詞彙（ruled 2026-09-25；built in F29）
 Drill-5 items 4–10, decided by the user in the 2026-09-25 /dig; entries marked "default" were proposed and not objected
-to. This section is the rule; `.work/features/F29.md` holds the contract names and the defaults still open. It supersedes
+to. This section is the rule; the contract names lived in `.work/features/F29.md` (see Git history after close). It supersedes
 §6.32's word 白花 (now **沒賣出**) and the F28 deferral that let 變貴 follow the trend.
-- **Settle writes learnings.** Settling the last ended period grades, in one batch, every ad with enough sample against
+- **Settle writes learnings.** One period is the calendar month in the org timezone (user ruling). Settling the last ended month grades, in one batch, every ad with enough sample against
   its own campaign's cap (imported campaigns included): 划算 → effective, 太貴／沒賣出 → ineffective; 偏貴 and below-sample
-  ads are not written. The user confirms each ad's angle on one page (three AI candidates, the first preselected, or
+  ads are not written; an ad whose campaign has unsynced days keeps its grade (same as the month review) but is skipped with
+  the reason 資料缺天，這期不記. The learning text carries no numbers, so repeated conclusions raise confidence. The user confirms each ad's angle on one page (three AI candidates, the first preselected, or
   their own words). Home shows 「結算上一期」 as a three-step to-do.
 - **A/B on real data.** Automatic pairing stays (same ad set, exactly one coordinate differs) with its thresholds
-  (7 days, 10 conversions each, 10 %); the simulated-only gate is gone. A judged winner produces a "pause the loser"
+  (7 days, 10 conversions each, 10 %); the simulated-only gate is gone. For real rows a day inside the campaign's
+  recorded sync coverage with no row is a zero-delivery day; a day outside it keeps the pair unreadable. A pair has at
+  most one open pause set (draft, deferred, or approved with no stale/deviated item). A judged winner produces a "pause the loser"
   proposal through the normal approval flow, and the result is written as a learning. No "declare a test" wizard.
 - **One ruler.** Every judgement uses the cap grade. 變貴 means the grade moved from 划算 to 偏貴/太貴; the month
   review's 有效 counts 划算 only; the trend against the previous window is a footnote and no decision reads it.
 - **Rejected cleanup memory.** The grade of each ad at the user's rejection is remembered; the ad is proposed again only
-  when its grade gets worse, and the screen says so (「上次你拒絕時是偏貴，現在變太貴」).
+  when its grade gets worse, and the screen says so (「上次你拒絕時是偏貴，現在變太貴」). An ad the user unticked in a
+  cleanup is remembered the same way. 「先不要」 on such a card in the month review uses the month's existing dismissal.
 - **Screen consistency (defaults).** A failed read stays a failure on screen, never an empty state. One per-campaign
   "has data / why not" state feeds every section. Background progress reads the job queue and shows N of M, covering the
   ads jobs; the worker runs three jobs at once.
 - **Cleanup and material requests (defaults).** Cleanup ticks every proposed ad; single ads can be unticked in the
   folded advanced area. A material request raised from an ad row is bound to that ad as "replace this ad".
 - **Export and notification.** The period and the month review download as CSV (default). A daily digest of the
-  decision queue goes to the in-app inbox only; later channels (a per-user 「通知」 section in `/settings`, LINE Official
+  decision queue goes to the in-app inbox only (right after the 06:30 queue refresh; the previous digest is closed each day, so the
+  inbox holds at most the latest one); later channels (a per-user 「通知」 section in `/settings`, LINE Official
   Account, email; LINE Notify ended in 2025-03) plug in as one sender each behind the same digest builder.
 - **Launch settings.** Optimization event, bid strategy, placement (automatic or manual), audience (age, gender,
   location) and pixel are choice fields with a preselected recommended value and a one-line plain note each; UTM stays
@@ -1521,3 +1526,5 @@ to. This section is the rule; `.work/features/F29.md` holds the contract names a
   Coined terms have one shared definition shown on the word itself (dotted underline), and every step flow has the same
   exit 「先不要，回投放中心」.
 - **Not now.** In-app image generation stays a reserved seat (not a refusal); LINE/email; platform writes.
+- **Known gaps after F29.** Past months in the month review show no 「當時給的建議／已採用」 (that history is not stored).
+  The publish page got only its three v10 settings blocks; the rest of the page is the old layout until the next UI batch.

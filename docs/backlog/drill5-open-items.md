@@ -2,7 +2,7 @@
 
 ## Handoff (2026-09-25): start here in the next session
 - **State:** F28 is closed and merged to master (`56784a45`), **not pushed** (the user pushes manually). There is no open feature and the queue is empty. F28 fixed R1, R2, R3 and R6, and built the five v9 screens. The rules are in `docs/architecture/ads.md` §6.32.
-- **Next step (updated 2026-09-25):** items 4–10 are ruled (ads.md §6.33) and carved as F29 (`.work/features/F29.md`, v10 prototype done). Next is plan approval, then `/crank`.
+- **Next step (updated 2026-09-25):** F29 (items 4–10) is built and merged into `feature/ads-learning-loop`, integration green; closing waits on the user's one side-by-side review. After that: the remaining v9/v10 screens (new-campaign wizard, assets, full publish page, connections, workspace rail/tabs).
 - **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). They map to deferred items 4–5.
 - **Confirmed constraints to keep:**
   - The UI is graphics-first with linear flows and no text walls (§1.7).
@@ -121,9 +121,10 @@ The first three are ruled in ads.md §6.33 and planned as F29; the fourth is tes
 - **Old open cleanup rows keep the informational severity** until their daily key rolls over. This is test data only.
 
 ## Rulings for items 4–10 (/dig 2026-09-25)
-Moved to `docs/architecture/ads.md` §6.33 (the rule) and `.work/features/F29.md` (contract names, open defaults, being planned). The prototype-before-code step is done: `prototype-v10-ads-center.html`.
+Built in F29; the rule and its known gaps are in `docs/architecture/ads.md` §6.33. The prototype-before-code step is done: `prototype-v10-ads-center.html`.
 
 Still deferred, not in F29:
 - **In-app image generation** (item 6): the seat stays reserved and is never shown as a refusal. Decide on a provider before any design work.
 - **More notification channels** (item 9): a per-user 「通知」 section in `/settings`, then LINE Official Account and email, one sender each behind the F29 digest builder. LINE Notify ended in March 2025.
 - **Platform writes** (R8): still off; reversing ads.md §6.4 needs its own product ruling.
+- **Month-review suggestion history** for past months (not stored), and the **full publish-page rebuild** (F29 changed only its settings blocks) — next UI batch.
