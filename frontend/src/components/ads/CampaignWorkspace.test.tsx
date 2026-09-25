@@ -26,7 +26,6 @@ vi.mock("./AssetsTab", () => ({ AssetsTab: () => <h2>共用素材</h2> }));
 vi.mock("./ChangeControl", () => ({ ChangeControl: () => <h2>共用變更</h2> }));
 vi.mock("./ReviewPanel", () => ({ ReviewPanel: () => <h2>單則廣告檢討</h2> }));
 vi.mock("./PerformanceTab", () => ({ PerformanceTab: () => <h2>共用成效</h2> }));
-vi.mock("./PublishPage", () => ({ PublishPage: () => <h2>發布</h2> }));
 vi.mock("./detail/CampaignDetailPage", () => ({
   CampaignPerfBody: ({ advanced }: { advanced: unknown }) => <div><h2>F29 成效本體</h2>{advanced as never}</div>,
 }));
@@ -44,7 +43,10 @@ function Where() { const l = useLocation(); return <p data-testid="where">{l.sea
 function renderAt(path = "/brands/b/ads/campaigns/c") {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <Routes><Route path="/brands/:b/ads/campaigns/:c" element={<><CampaignWorkspace brandId="b" campaignId="c" /><Where /></>} /></Routes>
+      <Routes>
+        <Route path="/brands/:b/ads/campaigns/:c" element={<><CampaignWorkspace brandId="b" campaignId="c" /><Where /></>} />
+        <Route path="/brands/:b/ads/campaigns/:c/publish" element={<h2>發布頁</h2>} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -124,7 +126,7 @@ it("the progress read fails on its own: the head says so with 重試, the tabs k
   expect(getCampaignWorkspace).toHaveBeenCalledTimes(2);
 });
 
-it("step targets: the old 'performance' key opens perf (a draft's empty perf keeps the old fold); 'publish' opens the publish page", async () => {
+it("step targets: the old 'performance' key opens perf (a draft's empty perf keeps the old fold); 'publish' goes to the publish page's URL", async () => {
   vi.mocked(getCampaign).mockResolvedValue(detail({ status: "draft" }));
   vi.mocked(getCampaignWorkspace).mockResolvedValue(ws({ stage: { key: "plan", done: [] }, pending_count: 0, draft: { cap_set: false, budget_set: false, slots_ready: 0, slots_total: 3, launch_checked: 0, launch_total: 0 } }));
   renderAt();
@@ -134,6 +136,15 @@ it("step targets: the old 'performance' key opens perf (a draft's empty perf kee
   expect(screen.getByRole("button", { name: "進階：舊版成效與檢討" })).toBeTruthy(); // the comparison plan stays reachable on a draft
   expect(screen.getByTestId("where").textContent).toBe("?tab=perf");
   fireEvent.click(screen.getByRole("button", { name: "確認上架清單 →" }));
-  expect(await screen.findByText("發布")).toBeTruthy();
+  expect(await screen.findByText("發布頁")).toBeTruthy();
   expect(screen.queryByRole("group", { name: "活動分頁" })).toBeNull();
+});
+
+it("'publish' on a campaign that cannot publish (imported) opens the assets tab instead", async () => {
+  vi.mocked(getCampaign).mockResolvedValue(detail({ origin: "imported" }));
+  renderAt();
+  await screen.findByText("v10 總覽");
+  go!("publish");
+  expect(await screen.findByText("共用素材")).toBeTruthy();
+  expect(screen.getByTestId("where").textContent).toBe("?tab=assets");
 });
