@@ -240,10 +240,10 @@ export type QueueProposal =
 // F27-I17 Done 0: widened again with the real backend's sixth kind (`app/ads/triage.py`'s
 // `"cleanup"`, Contract F) -- `home/QueueRow.tsx`'s exhaustive switches and `home/status.ts`'s
 // `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
-// F29-I03 Contract E: widened with the brand-level `"settle"` row (`app/ads/settle.py`).
+// F29-I03: the backend's brand-level `"settle"` row is NOT a `QueueKind` -- `splitQueue` takes it
+// out of `items` into `QueuePayload.settle`, so every ad-row consumer keeps a non-null `triage`.
 export type QueueKind =
-  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup"
-  | "settle";
+  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
@@ -311,7 +311,7 @@ export interface QueueCleanup {
  * timezone), raised from the 2nd day after it ends while nothing is written. `learnable_count`
  * counts the ads that will be written (划算／太貴／沒賣出); `buckets` is the month's spend by grade
  * (`app/ads/period_grades.py::summarize`, same as the month review). The page reads
- * `adsSettleApi.ts::getSettle(brand, month)`. */
+ * `adsSettleApi.ts::getSettle(brand, month)`. Exposed as `QueuePayload.settle`, never in `items`. */
 export interface QueueSettle {
   month: string; start: string; end: string;
   campaign_count: number; imported_count: number; learnable_count: number;
@@ -334,14 +334,49 @@ export interface QueueItem {
   triage: TriageItem; proposal: QueueProposal | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
   cleanup?: QueueCleanup;
-  /** F29-I03: present only on a `settle` row. That row is about the whole brand's month, so the
-   * backend sends `triage: null` on it -- check `kind_key` before reading `triage` wherever every
-   * row is scanned (the type keeps `triage` required for the existing per-ad consumers). */
-  settle?: QueueSettle;
+}
+/** F29-I03 Contract E: the brand's open period-settle row (`kind_key: "settle"` on the wire, whose
+ * `triage` is `null` -- it is about the whole brand's month, not one ad). */
+export interface SettleQueueRow {
+  id: string; dedupe_key: string; category: string; severity: AlertSeverity;
+  message: string; action_url: string | null; visible_from: string | null;
+  status: string; created_at: string;
+  settle: QueueSettle;
 }
 export interface QueuePayload {
+  /** Ad-level rows only (every one carries its `triage` item). */
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;
   kinds_available: string[]; kinds_pending: string[];
+  /** F29-I03: the open settle row, `null` when none. Always set by `getQueue`/`refreshQueue`
+   * (`splitQueue`); optional only so existing hand-written payload fixtures stay valid. */
+  settle?: SettleQueueRow | null;
+}
+/** The backend's queue as it arrives: ad rows plus, at most, one brand-level settle row. */
+type WireSettleRow = SettleQueueRow & { kind_key: "settle"; triage: null };
+export type WireQueuePayload = Omit<QueuePayload, "items" | "settle"> & {
+  items: (QueueItem | WireSettleRow)[];
+};
+
+const isWireSettle = (row: QueueItem | WireSettleRow): row is WireSettleRow =>
+  (row as { kind_key: string }).kind_key === "settle";
+
+/** F29-I03: the one type boundary for the brand-level settle row -- split once here, so no screen
+ * that scans `items` ever meets a row without an ad. */
+export function splitQueue(wire: WireQueuePayload): QueuePayload {
+  const items: QueueItem[] = [];
+  let settle: SettleQueueRow | null = null;
+  for (const row of wire.items) {
+    if (isWireSettle(row)) {
+      settle ??= {
+        id: row.id, dedupe_key: row.dedupe_key, category: row.category, severity: row.severity,
+        message: row.message, action_url: row.action_url, visible_from: row.visible_from,
+        status: row.status, created_at: row.created_at, settle: row.settle,
+      };
+    } else {
+      items.push(row);
+    }
+  }
+  return { ...wire, items, settle };
 }
 
 export interface CampaignTarget extends CapView {
@@ -398,10 +433,10 @@ async function json<T>(path: string, method: string, body?: unknown, signal?: Ab
 }
 
 export async function getQueue(brand: string, signal?: AbortSignal) {
-  return (await json<{ queue: QueuePayload }>(`${brandPath(brand)}/queue`, "GET", undefined, signal)).queue;
+  return splitQueue((await json<{ queue: WireQueuePayload }>(`${brandPath(brand)}/queue`, "GET", undefined, signal)).queue);
 }
 export async function refreshQueue(brand: string, signal?: AbortSignal) {
-  return (await json<{ queue: QueuePayload }>(`${brandPath(brand)}/queue/refresh`, "POST", {}, signal)).queue;
+  return splitQueue((await json<{ queue: WireQueuePayload }>(`${brandPath(brand)}/queue/refresh`, "POST", {}, signal)).queue);
 }
 export async function getTriage(brand: string, campaign: string, signal?: AbortSignal) {
   return (await json<{ triage: CampaignTriage }>(`${campaignPath(brand, campaign)}/triage`, "GET", undefined, signal)).triage;

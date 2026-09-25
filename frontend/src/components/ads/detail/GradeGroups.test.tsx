@@ -5,10 +5,29 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import type { QueueCleanup, QueueItem, TriageItem } from "@/lib/adsTriageApi";
+import { listCampaigns } from "@/lib/adsApi";
+import type { QueueCleanup, QueueItem, QueueSettle, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
+import { getTriage, splitQueue } from "@/lib/adsTriageApi";
+import { apiFetch } from "@/lib/http";
+import { CampaignDetailPage } from "./CampaignDetailPage";
 import {
   ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction,
 } from "./GradeGroups";
+
+// F29-I03: the detail-page test below runs the REAL `getQueue` (and its `splitQueue`) over a backend payload;
+// only the transport and the two other reads are stubbed.
+vi.mock("@/lib/http", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/http")>("@/lib/http");
+  return { ...actual, apiFetch: vi.fn() };
+});
+vi.mock("@/lib/adsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+  return { ...actual, listCampaigns: vi.fn() };
+});
+vi.mock("@/lib/adsTriageApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
+  return { ...actual, getTriage: vi.fn() };
+});
 
 const WS = "/brands/brd_1/ads/campaigns/cmp_1";
 const LONG_NAME = "晨光隨行杯・隨時有你｜好攜帶，走到哪都適合（通勤情境單圖・最多數量 1150706）";
@@ -251,5 +270,80 @@ describe("ClosedGroup", () => {
     expect(within(deleted).getByText("0 元")).toBeTruthy();
     expect(within(deleted).getByText("已關閉")).toBeTruthy();
     expect(screen.getByText("…其餘 54 則")).toBeTruthy();
+  });
+});
+
+// ---- F29-I03: the brand-level settle row never reaches a screen that scans ad rows ----
+
+const SETTLE: QueueSettle = {
+  month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 6,
+  buckets: [{ grade: "on_target", amount: 14240, count: 2, ads: [] }],
+};
+
+/** What `GET .../queue` really sends: the settle row (triage null) between two ad rows. */
+function wirePayload(): WireQueuePayload {
+  const settleRow = {
+    id: "q_settle", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null,
+    dedupe_key: "ads-triage:settle:brd_1:2026-08-31", category: "ads_triage_settle", kind: null,
+    severity: "informational" as const, message: "結算上一期（8 月），待寫進筆記本",
+    action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open",
+    created_at: "2026-09-02T00:00:00Z", resolved_at: null, kind_key: "settle" as const, triage: null,
+    proposal: null, settle: SETTLE,
+  };
+  return {
+    items: [
+      queueRow({ id: "q_worse", kind_key: "worse", triage: watch }),
+      settleRow,
+      queueRow({ id: "q_clean", kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
+    ],
+    counts: { stop_loss: 0, worse: 1, better: 0, flat: 3, insufficient: 0, no_target: 0 }, total_ads: 4,
+    kinds_available: ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup", "settle"], kinds_pending: [],
+  };
+}
+
+describe("queue settle row (F29-I03)", () => {
+  it("splitQueue keeps ad rows in items and exposes the settle row on its own field", () => {
+    const queue = splitQueue(wirePayload());
+    expect(queue.items.map((q) => q.id)).toEqual(["q_worse", "q_clean"]);
+    expect(queue.items.every((q) => q.triage !== null)).toBe(true);
+    expect(queue.settle).toEqual({
+      id: "q_settle", dedupe_key: "ads-triage:settle:brd_1:2026-08-31", category: "ads_triage_settle",
+      severity: "informational", message: "結算上一期（8 月），待寫進筆記本",
+      action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open",
+      created_at: "2026-09-02T00:00:00Z", settle: SETTLE,
+    });
+    expect(splitQueue({ ...wirePayload(), items: [] }).settle).toBeNull();
+  });
+
+  it("the detail page renders its rows' actions with a settle row in the backend queue", async () => {
+    Element.prototype.scrollIntoView = vi.fn(); // jsdom has none
+    const items = [ok, watch, over, wasted];
+    vi.mocked(listCampaigns).mockResolvedValue([{
+      id: "cmp_1", name: "日常商品推廣・轉換", status: "live", start_date: "2026-09-08", end_date: "2026-10-08", objective: "轉換",
+      created_at: "2026-09-01T00:00:00Z", created_by: null, budget_planned: null, budget_total: null,
+      budget_progress: { spent: 22000, total: 60000, pct: 36.7 },
+      judgment: { tone: "neutral", text: "投放中", detail: "" }, outcome: { spend: 0, purchases: 0, revenue: 0 },
+    }]);
+    vi.mocked(getTriage).mockResolvedValue({
+      window_days: 28, items, closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false },
+      data: {
+        sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null },
+      },
+    });
+    vi.mocked(apiFetch).mockImplementation(async (input) =>
+      String(input).endsWith("/brands/brd_1/queue")
+        ? new Response(JSON.stringify({ queue: wirePayload() }), { status: 200, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({ error: { message: "not stubbed" } }), { status: 404 }),
+    );
+    render(
+      <MemoryRouter initialEntries={[`${WS}/detail`]}>
+        <CampaignDetailPage brandId="brd_1" campaignId="cmp_1" />
+      </MemoryRouter>,
+    );
+    const worse = await screen.findByTestId("ad-row-a6");
+    expect(await within(worse).findByRole("link", { name: "去處理" })).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a2")).getByRole("link", { name: "看紀錄" })).toBeTruthy();
   });
 });
