@@ -84,7 +84,7 @@ class QueueRefreshDailyTest(unittest.TestCase):
 
     def test_dispatch_refreshes_queue_for_every_brand_with_a_non_closed_campaign(self):
         timestamp = int(db.now_utc().timestamp())
-        with patch.object(triage, "refresh_queue") as refresh:
+        with patch.object(triage, "refresh_queue", return_value={"items": []}) as refresh:
             jobs._dispatch_queue_refresh(timestamp)
         called_brands = {call.args[2] for call in refresh.call_args_list}
         self.assertIn(self.brand, called_brands)
