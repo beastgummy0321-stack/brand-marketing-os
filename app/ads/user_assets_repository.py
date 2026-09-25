@@ -255,6 +255,23 @@ def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor):
     return dict(row)
 
 
+def attach_selected(conn, org, brand, campaign_id, body, actor):
+    """Place a finished upload (`upload_id`, its own copy unless `copy_fields` is given) or a
+    brand original (`asset_id`) in the campaign -- the placements route and the slot upload."""
+    copy_fields = body.get("copy_fields")
+    asset_id = body.get("asset_id")
+    if body.get("upload_id"):
+        item = get_upload(conn, org, brand, body["upload_id"])
+        if item["status"] != "complete":
+            raise ValueError(item["error"] or "此檔案仍未上傳完成。")
+        asset_id = item["asset_id"]
+        if copy_fields is None:
+            copy_fields = item["copy_fields"]
+    return attach(
+        conn, org, brand, campaign_id, asset_id, {} if copy_fields is None else copy_fields, actor
+    )
+
+
 def revise(conn, org, brand, campaign_id, placement_id, expected_revision, updates, actor):
     if (
         isinstance(expected_revision, bool)

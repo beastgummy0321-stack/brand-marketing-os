@@ -189,6 +189,44 @@ def workspace(conn, org, brand, campaign):
     }
 
 
+REPLACE_REQUESTS_CAP = 100
+
+
+def _state_label(spec):
+    """The request's own state, newest step first (Contract F)."""
+    if spec.get("placement_id") or spec.get("selected_candidate_id"):
+        return "已採用"
+    if spec.get("candidates"):
+        return "有候選圖"
+    return "等素材工作檯"
+
+
+def replace_requests(conn, org, brand, campaign):
+    """Open "replace this ad" requests, newest first: the first 100 as rows (`truncated` past
+    that) and `by_entity` (replaced entity -> task id) over all of them -- at most one open
+    request per ad (the partial unique index)."""
+    rows = conn.execute(
+        "SELECT t.id,t.created_at,t.replaces_entity_id,r.spec_json FROM ads_material_task t"
+        " JOIN ads_material_revision r ON r.task_id=t.id AND r.revision=t.revision"
+        " WHERE t.org_id=%s AND t.brand_id=%s AND t.campaign_id=%s AND t.cancelled_at IS NULL"
+        " AND t.replaces_entity_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC",
+        (org, brand, campaign),
+    ).fetchall()
+    return {
+        "requests": [
+            {
+                "task_id": r["id"],
+                "replaces": _replaces(conn, org, brand, campaign, r["replaces_entity_id"]),
+                "created_at": r["created_at"],
+                "state_label": _state_label(r["spec_json"]),
+            }
+            for r in rows[:REPLACE_REQUESTS_CAP]
+        ],
+        "truncated": len(rows) > REPLACE_REQUESTS_CAP,
+        "by_entity": {r["replaces_entity_id"]: r["id"] for r in rows},
+    }
+
+
 def prompt_options(conn, org, brand, campaign, task_id):
     task = get(conn, org, brand, campaign, task_id)
     return {

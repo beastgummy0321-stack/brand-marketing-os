@@ -239,25 +239,35 @@ async def attach(request: Request, brand_id: str, campaign_id: str):
     actor = web.require_actor(request)
     body = await _json(request)
     try:
-        copy_fields = body.get("copy_fields")
-        asset_id = body.get("asset_id")
-        if body.get("upload_id"):
-            item = repo.get_upload(db.current(), actor.org_id, brand_id, body["upload_id"])
-            if item["status"] != "complete":
-                raise ValueError(item["error"] or "此檔案仍未上傳完成。")
-            asset_id = item["asset_id"]
-            if copy_fields is None:
-                copy_fields = item["copy_fields"]
-        result = repo.attach(
-            db.current(),
-            actor.org_id,
-            brand_id,
-            campaign_id,
-            asset_id,
-            {} if copy_fields is None else copy_fields,
-            str(actor.user_id),
+        result = repo.attach_selected(
+            db.current(), actor.org_id, brand_id, campaign_id, body, str(actor.user_id)
         )
         return {"placement": result}
+    except ValueError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/slots")
+def campaign_slots(request: Request, brand_id: str, campaign_id: str):
+    from app.ads import slots
+
+    actor = web.require_actor(request)
+    try:
+        return slots.read(db.current(), actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        raise web.ApiError(404, "campaign_unknown", str(exc)) from exc
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/slots/{ad_id}/upload")
+async def upload_into_slot(request: Request, brand_id: str, campaign_id: str, ad_id: str):
+    from app.ads import slots
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return slots.upload(
+            db.current(), actor.org_id, brand_id, campaign_id, ad_id, body, str(actor.user_id)
+        )
     except ValueError as exc:
         raise _error(exc) from exc
 
@@ -330,23 +340,25 @@ def asset_suggestion_batch(request: Request, brand_id: str, campaign_id: str, ba
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}/confirm")
 async def confirm_placement(request: Request, brand_id: str, campaign_id: str, placement_id: str):
-    from app.ads import asset_suggestions
+    from app.ads import asset_suggestions, slots
 
     actor = web.require_actor(request)
     body = await _json(request)
     try:
-        return {
-            "placement": asset_suggestions.confirm(
-                db.current(),
-                actor.org_id,
-                brand_id,
-                campaign_id,
-                placement_id,
-                body.get("expected_revision"),
-                body.get("batch_id"),
-                str(actor.user_id),
-            )
-        }
+        result = asset_suggestions.confirm(
+            db.current(),
+            actor.org_id,
+            brand_id,
+            campaign_id,
+            placement_id,
+            body.get("expected_revision"),
+            body.get("batch_id"),
+            str(actor.user_id),
+        )
+        if result.get("confirmed_at"):
+            # A file uploaded into a slot is assigned to that planned ad once confirmed.
+            slots.settle(db.current(), actor.org_id, brand_id, campaign_id, placement_id)
+        return {"placement": result}
     except ValueError as exc:
         raise _error(exc) from exc
 
