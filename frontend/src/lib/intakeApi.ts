@@ -421,9 +421,19 @@ export interface OfferingBenchmark {
   source_text: string;
 }
 
+export type OfferingSellType = "product" | "service" | "both";
+export type OfferingAdDelivery = "direct" | "ask" | "lead";
+
+/** The step's two choices, stored on the draft (F31 Contract M); null = never saved. */
+export interface OfferingsChoice {
+  sell_type: OfferingSellType;
+  ad_delivery: OfferingAdDelivery;
+}
+
 export interface OfferingsData {
   offerings: Offering[];
   benchmarks: Record<"gross_margin" | "shipping_cost" | "close_rate", OfferingBenchmark>;
+  choice: OfferingsChoice | null;
 }
 
 export function fetchOfferings(brandId: string): Promise<OfferingsData> {
@@ -445,8 +455,8 @@ export interface OfferingInput {
   variants: OfferingVariantInput[];
 }
 
-export function saveOfferings(brandId: string, offerings: OfferingInput[]): Promise<void> {
-  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`, { offerings });
+export function saveOfferings(brandId: string, offerings: OfferingInput[], choice: OfferingsChoice): Promise<void> {
+  return postJson(`/api/intake/brands/${encodeURIComponent(brandId)}/offerings`, { offerings, choice });
 }
 
 // ---- 精靈第 4 步：接工具（F05-I08） ----

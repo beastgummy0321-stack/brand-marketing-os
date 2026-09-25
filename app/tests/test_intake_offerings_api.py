@@ -180,7 +180,8 @@ class OfferingsGetTest(_Base):
             ],
         }])
         self.assertEqual(resp.status_code, 204)
-        offerings = self.client.get(f"/api/intake/brands/{bid}/offerings").json()["data"]["offerings"]
+        data = self.client.get(f"/api/intake/brands/{bid}/offerings").json()["data"]
+        offerings = data["offerings"]
         sell_ways = [o["name"] for o in offerings if o["parent_id"] is not None]
         self.assertEqual(sell_ways, ["薑黃錠 · 單品", "薑黃錠 · 3 入組"])
 
