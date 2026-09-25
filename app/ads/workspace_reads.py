@@ -276,12 +276,12 @@ def _entity_daily_budget(entity) -> float | None:
 
 
 def _missing_material(conn, org_id, brand_id, campaign_id, ad) -> bool:
-    """Not ready by the launch snapshot's own check (`home_overview._draft_view`'s rule)."""
+    """Not ready by the launch batch's own rule (`change_control_launch.ready_material`)."""
     try:
         material = handoff_assignment.material_snapshot(conn, org_id, brand_id, campaign_id, ad)
     except ValueError:
         material = None
-    return not (material and material["assignment_status"] == "confirmed")
+    return not change_control_launch.ready_material(material)
 
 
 def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:

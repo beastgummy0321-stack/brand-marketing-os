@@ -12,7 +12,7 @@ workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fi
 """
 
 from app import workbench
-from app.ads import channels, plan
+from app.ads import change_control_launch, channels, handoff_assignment, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 
@@ -175,7 +175,11 @@ def readiness(conn, org_id: str, brand_id: str, campaign_id: str) -> list:
     """每支廣告的就緒狀態：`ready_workbench`（所屬 pack 已核准）／`in_progress`（pack 存在但
     還沒核准）／`ready_manual`（沒進工作檯，使用者自己勾了「素材已就位」）／
     `not_started`。只透過工作檯既有的公開入口讀（`pack_for_source`／`briefs_for_source`），
-    不碰 `workbench_*` 表。"""
+    不碰 `workbench_*` 表。
+
+    `state` is the ad's workbench/manual progress; `material_ready` is whether it can go out in
+    a launch batch -- `change_control_launch.ready_material` over its assigned material, the one
+    readiness rule the slots, the home overview and the launch batch share (F30-I16)."""
     ads = ads_repo.list_ads_for_campaign(conn, org_id, brand_id, campaign_id)
     pack = workbench.pack_for_source(
         conn, org_id, brand_id, PACK_SOURCE_KIND, _pack_source_ref(campaign_id),
@@ -226,14 +230,25 @@ def readiness(conn, org_id: str, brand_id: str, campaign_id: str) -> list:
                 "ad_id": ad["id"], "state": "not_started", "pack_id": None,
                 "brief_id": None, "source": None, "by": None, "at": None,
             })
+        rows[-1]["material_ready"] = _material_ready(conn, org_id, brand_id, campaign_id, ad)
     return rows
 
 
+def _material_ready(conn, org_id, brand_id, campaign_id, ad) -> bool:
+    try:
+        material = handoff_assignment.material_snapshot(conn, org_id, brand_id, campaign_id, ad)
+    except ValueError:
+        material = None
+    return change_control_launch.ready_material(material)
+
+
 def readiness_summary(rows: list, pack_id: str | None) -> dict:
-    """`ready_count`／`total`——素材 tab 跟發布畫面共用同一組數字（§0）。`pack_id` 是交棒過
-    的任務包 id（讀自 pack 本身，見 `pack_id()`），不是從 `rows` 推——這是唯一一條總覽的
+    """`ready_count`／`total`——素材 tab 跟發布畫面共用同一組數字（§0）。`ready_count` counts
+    `material_ready` (the launch batch's rule): an approved pack or a manual 就位 tick without a
+    confirmed material binding is progress, not ready (F30-I16). `pack_id` 是交棒過的
+    任務包 id（讀自 pack 本身，見 `pack_id()`），不是從 `rows` 推——這是唯一一條總覽的
     下一步規則需要的後端事實（§6.2 決議 15）。"""
-    ready = sum(1 for r in rows if r["state"] in ("ready_workbench", "ready_manual"))
+    ready = sum(1 for r in rows if r["material_ready"])
     return {"ready_count": ready, "total": len(rows), "pack_id": pack_id}
 
 

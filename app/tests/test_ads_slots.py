@@ -62,9 +62,11 @@ def env():
     ads = []
     for name in ("晨光隨行杯・日常出發", "通勤情境單圖", "辦公室一角"):
         ad = db.new_id("ada")
+        # clock_timestamp: one transaction's now() ties created_at, and ids minted in the same
+        # millisecond are not ordered -- the slots follow (created_at, id).
         conn.execute(
-            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name) "
-            "VALUES(%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name,created_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,clock_timestamp())",
             (ad, org, brand, campaign, group, name),
         )
         ads.append(ad)
@@ -320,10 +322,24 @@ def test_upload_refuses_unfinished_uploads_foreign_ads_and_bad_bodies(env):
     assert response.json()["error"]["code"] == "user_asset_unavailable"
 
 
-def test_upload_after_an_approved_launch_is_refused_like_the_assignment(env):
+def test_upload_after_an_approved_launch_refuses_frozen_ads_and_fills_deferred_ones(env):
+    frozen_ad, deferred_ad = env["ads"][0], env["ads"][1]
+    assign_confirmed(env, frozen_ad, user_asset(env))
     launch(env)
+    assert change_control_launch.material_frozen(
+        env["conn"], env["org"], env["brand"], env["campaign"], frozen_ad
+    )
+    # The ad the approved batch froze is refused, like `handoff_assignment.assign`.
     with pytest.raises(ValueError, match="首次投放清單已核准"):
-        upload(env, env["ads"][0], {"asset_id": user_asset(env)})
+        upload(env, frozen_ad, {"asset_id": user_asset(env)})
+    # The ad deferred from the batch for lack of material takes its file (F30 Unresolved 1).
+    asset = user_asset(env)
+    result = upload(env, deferred_ad, {"asset_id": asset, "copy_fields": COPY})
+    assert by_ad(result["slots"])[deferred_ad]["state"] == "in_progress"
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], deferred_ad)
+    assert row["slot_placement_id"] == result["placement"]["id"]
+    with pytest.raises(ValueError, match="首次投放清單已核准"):
+        upload(env, frozen_ad, {"asset_id": user_asset(env)})
 
 
 # -- launched app-built ads and replace requests -------------------------------------------------
@@ -332,6 +348,7 @@ def test_upload_after_an_approved_launch_is_refused_like_the_assignment(env):
 def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
     conn = env["conn"]
     launched_ad, draft_ad = env["ads"][0], env["ads"][1]
+    assign_confirmed(env, launched_ad, user_asset(env))  # a launch needs one ready ad
     launch(env)
     entity = platform_entity(
         env, "n1", creative={"kind": "image", "fields": {"thumbnail_url": "https://t/1.jpg"}}
