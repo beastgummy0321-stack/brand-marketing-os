@@ -333,11 +333,18 @@ def create(conn, org, brand, campaign, payload, actor):
         return get(conn, org, brand, campaign, task_id)
 
 
-def _base(conn, org, brand, campaign, task_id, expected):
-    _campaign(conn, org, brand, campaign, mutable=True)
+def open_task(conn, org, brand, campaign, task_id):
+    """The one guard for using a request: edits, dispatch and every change set that cites it
+    (new ad, copy) read it here, so a cancelled request can never be carried forward."""
     task = get(conn, org, brand, campaign, task_id)
     if task["cancelled_at"] is not None:
-        raise ValueError("此素材需求已取消，請另開新的需求。")
+        raise ValueError("此素材需求已取消，請另開新的需求或重新選定素材。")
+    return task
+
+
+def _base(conn, org, brand, campaign, task_id, expected):
+    _campaign(conn, org, brand, campaign, mutable=True)
+    task = open_task(conn, org, brand, campaign, task_id)
     if type(expected) is not int or expected != task["revision"]:
         raise ValueError("素材任務已更新，請重新讀取後再操作。")
     row = conn.execute(

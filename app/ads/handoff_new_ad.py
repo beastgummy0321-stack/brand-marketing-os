@@ -230,9 +230,7 @@ def placement_reference(conn, org, brand, campaign, placement_id, revision):
         raise ValueError("此素材安排有多個任務來源，無法確定檢討關係；請重新選定素材。")
     task_id = rows[0]["task_id"]
     conn.execute("SELECT id FROM ads_material_task WHERE id=%s FOR SHARE", (task_id,))
-    task = material_tasks.get(conn, org, brand, campaign, task_id)
-    if task["cancelled_at"] is not None:
-        raise ValueError("此素材需求已取消，請回素材重新選定成品後建立交接。")
+    task = material_tasks.open_task(conn, org, brand, campaign, task_id)
     source_revision = task.get("placement_revision")
     if (
         task.get("placement_id") != placement_id

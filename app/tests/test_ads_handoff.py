@@ -888,6 +888,42 @@ class HandoffTest(unittest.TestCase):
                 [{"kind": "copy", "target_id": "any", "after": {"body": "別的文字"}}],
             )
 
+    def test_cancelled_copy_request_cannot_be_cited_or_approved(self):
+        from app.ads import handoff_material, material_tasks
+
+        task = material_tasks.create(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            {
+                "operation_id": db.new_id("op"),
+                "mode": "copy",
+                "title": "選定文案",
+                "copy_fields": {"body": "選定文字"},
+            },
+            "human",
+        )
+        items = [{"kind": "copy", "target_id": "any", "after": {"body": "選定文字"}}]
+        cited = handoff_material.reference(
+            self.conn, self.org, self.brand, self.campaign, task["id"], task["revision"], items
+        )
+        self.assertEqual(cited["material_task_id"], task["id"])
+        material_tasks.cancel(self.conn, self.org, self.brand, self.campaign, task["id"], "human")
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_material.reference(
+                self.conn, self.org, self.brand, self.campaign, task["id"], task["revision"], items
+            )
+        # A draft cut before the cancel cannot be approved afterwards.
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_material.validate_approval(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                {"items": items, "plan_json": cited},
+            )
+
     def test_planned_material_http_assignment_changes_hash_and_launch_readback_uses_copy(self):
         from fastapi.testclient import TestClient
 
