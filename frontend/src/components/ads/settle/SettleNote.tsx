@@ -24,9 +24,9 @@ function Learning({ view, row, angle }: { view: SettleView; row: SettleRow; angl
           <span className="font-normal text-muted-foreground">（每筆 {formatAmount(Math.floor(cost))}，上限 {formatAmount(row.cap)}）</span>
         )}
       </>}
-      meta={<span className="inline-flex flex-wrap items-center gap-x-1">
+      meta={<span className="inline-flex flex-wrap items-center">
         <span>{campaign.name}</span>
-        {isImported(campaign.origin) && <OriginTag>{FROM_META}</OriginTag>}
+        {isImported(campaign.origin) && <span className="mx-1"><OriginTag>{FROM_META}</OriginTag></span>}
         {row.group_name && <span>・{row.group_name}</span>}
         {row.grade === "wasted" && <span>・花 {money(row.spend)}沒賣出</span>}
         {row.grade === "over" && <span>・每筆 {yuan(cost)}，上限 {formatAmount(row.cap) ?? "未知"}</span>}

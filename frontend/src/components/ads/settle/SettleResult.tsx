@@ -77,7 +77,7 @@ function Share({ view }: { view: SettleView }) {
         <span className={cn("numeric text-[30px] font-semibold tracking-tight", pct === null ? "text-muted-foreground" : "text-success")}>
           {pct === null ? "—" : `${pct}%`}
         </span>
-        <span className="text-base font-medium">的錢花得<Term k="on_target">划算</Term></span>
+        <span className="text-base font-medium">的錢花得划算</span>
       </div>
       <GradeBar buckets={buckets} withMoney breakEven={sharedBreakEven(view.campaigns)} />
       <div className="mt-2 text-xs text-muted-foreground">
