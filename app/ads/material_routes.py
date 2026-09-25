@@ -3,7 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ads import material_tasks as service
 from app.shared import web
@@ -33,14 +33,22 @@ class Prompt(BaseModel):
 class Create(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_id: str = Field(min_length=1, max_length=128)
-    title: str = Field(min_length=1, max_length=200)
-    mode: Literal["existing", "external_image", "workbench_image", "copy"]
+    # Optional only for a "replace this ad" request, which defaults both (Contract H).
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    mode: Literal["existing", "external_image", "workbench_image", "copy"] | None = None
     instruction: str = Field(default="", max_length=8000)
     copy_fields: dict[str, str] = Field(default_factory=dict, max_length=20)
     prompt: Prompt = Field(default_factory=Prompt)
     reference_asset_ids: list[str] = Field(default_factory=list, max_length=10)
     review_id: str | None = Field(default=None, max_length=200)
     recommendation_id: str | None = Field(default=None, max_length=200)
+    replaces_entity_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _title_and_mode(self):
+        if self.replaces_entity_id is None and (self.title is None or self.mode is None):
+            raise ValueError("title and mode are required unless replaces_entity_id is given")
+        return self
 
 
 class Operation(BaseModel):
@@ -75,6 +83,9 @@ def _run(request, brand, campaign, function, *args):
     actor = web.require_actor(request)
     try:
         return function(web.conn, actor.org_id, brand, campaign, *args)
+    except service.InUse as exc:
+        web.conn.rollback()
+        raise web.ApiError(409, "material_task_in_use", str(exc)) from None
     except ValueError as exc:
         web.conn.rollback()
         raise web.ApiError(409, "material_unavailable", str(exc)) from None
@@ -169,6 +180,20 @@ def dispatch(request: Request, brand_id: str, campaign_id: str, task_id: str, bo
             service.dispatch,
             task_id,
             body.model_dump(),
+            str(web.require_actor(request).user_id),
+        )
+    }
+
+
+@router.post("/{task_id}/cancel")
+def cancel(request: Request, brand_id: str, campaign_id: str, task_id: str):
+    return {
+        "task": _run(
+            request,
+            brand_id,
+            campaign_id,
+            service.cancel,
+            task_id,
             str(web.require_actor(request).user_id),
         )
     }

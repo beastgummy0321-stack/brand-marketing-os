@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 
 from app import workbench
+from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as common
 from app.ads import review_rounds
 from app.ads import user_assets_repository as assets
@@ -129,6 +130,7 @@ def get(conn, org, brand, campaign, task_id, revision=None):
     _campaign(conn, org, brand, campaign)
     row = conn.execute(
         "SELECT t.id,t.campaign_id,t.revision AS current_revision,t.created_at,"
+        "t.replaces_entity_id,t.cancelled_at,"
         "r.revision,r.spec_json,r.content_hash,r.pack_id,r.dispatch_status,r.approved_hash"
         " FROM ads_material_task t JOIN ads_material_revision r ON r.task_id=t.id"
         " AND r.revision=COALESCE(%s,t.revision) WHERE t.org_id=%s AND t.brand_id=%s"
@@ -139,6 +141,7 @@ def get(conn, org, brand, campaign, task_id, revision=None):
         raise ValueError("找不到此品牌活動的素材任務或版本。")
     result = dict(row)
     result.update(result.pop("spec_json"))
+    result["replaces"] = _replaces(conn, org, brand, campaign, result.pop("replaces_entity_id"))
     result["placement_current"] = None
     if result.get("placement_id"):
         p = assets.placement(conn, org, brand, campaign, result["placement_id"])
@@ -156,11 +159,28 @@ def get(conn, org, brand, campaign, task_id, revision=None):
     return result
 
 
+def _replaces(conn, org, brand, campaign, entity_id):
+    """The ad this request replaces, read live (its name or thumbnail may change after sync)."""
+    if entity_id is None:
+        return None
+    from app.ads import triage
+
+    try:
+        ad = bindings.entity(conn, org, brand, campaign, entity_id)
+    except ValueError:
+        return {"entity_id": entity_id, "name": None, "thumbnail_url": None}
+    return {
+        "entity_id": entity_id,
+        "name": ad.get("name") or ad["native_id"],
+        "thumbnail_url": triage._thumbnail_url(ad),
+    }
+
+
 def workspace(conn, org, brand, campaign):
     _campaign(conn, org, brand, campaign)
     rows = conn.execute(
         "SELECT id FROM ads_material_task WHERE org_id=%s AND brand_id=%s AND campaign_id=%s"
-        " ORDER BY created_at DESC,id LIMIT 101",
+        " AND cancelled_at IS NULL ORDER BY created_at DESC,id LIMIT 101",
         (org, brand, campaign),
     ).fetchall()
     return {
@@ -229,14 +249,56 @@ def _write(conn, org, brand, campaign, task_id, revision, spec, *, inherit=None)
         )
 
 
+def _replace_target(conn, org, brand, campaign, entity_id):
+    ad = bindings.entity(conn, org, brand, campaign, entity_id)
+    if ad["native_kind"] != "ad":
+        raise ValueError("「換掉這一則」只能指定本活動裡的一則廣告。")
+    return ad
+
+
 def create(conn, org, brand, campaign, payload, actor):
     _campaign(conn, org, brand, campaign, mutable=True)
-    if set(payload) - EDITABLE - {"operation_id", "mode", "review_id", "recommendation_id"}:
+    if (
+        set(payload)
+        - EDITABLE
+        - {
+            "operation_id",
+            "mode",
+            "review_id",
+            "recommendation_id",
+            "replaces_entity_id",
+        }
+    ):
         raise ValueError("素材任務欄位無效。")
     with _locked(conn, org, brand):
         operation, digest, prior = _prior(conn, org, brand, campaign, payload, "create")
         if prior:
             return get(conn, org, brand, campaign, prior["task_id"], prior["result_revision"])
+        replaces = payload.get("replaces_entity_id")
+        if replaces is not None:
+            ad = _replace_target(conn, org, brand, campaign, replaces)
+            open_task = conn.execute(
+                "SELECT id,revision FROM ads_material_task WHERE org_id=%s AND brand_id=%s"
+                " AND campaign_id=%s AND replaces_entity_id=%s AND cancelled_at IS NULL",
+                (org, brand, campaign, replaces),
+            ).fetchone()
+            if open_task:
+                # One open request per ad: a repeat click returns the request already raised.
+                _remember(
+                    conn,
+                    org,
+                    brand,
+                    campaign,
+                    operation,
+                    digest,
+                    open_task["id"],
+                    open_task["revision"],
+                )
+                conn.commit()
+                return get(conn, org, brand, campaign, open_task["id"])
+            # Unresolved 6 defaults: a one-click request asks the workbench for a new image.
+            name = ad.get("name") or ad["native_id"]
+            payload = {"mode": "workbench_image", "title": ("換掉：" + name)[:200], **payload}
         if payload.get("mode") not in MODES:
             raise ValueError("請選擇素材來源。")
         spec = {
@@ -261,9 +323,9 @@ def create(conn, org, brand, campaign, payload, actor):
             spec["copy_fields"] = canonical
         task_id = db.new_id("amt")
         conn.execute(
-            "INSERT INTO ads_material_task(id,org_id,brand_id,campaign_id,created_by)"
-            " VALUES(%s,%s,%s,%s,%s)",
-            (task_id, org, brand, campaign, actor),
+            "INSERT INTO ads_material_task(id,org_id,brand_id,campaign_id,created_by,"
+            "replaces_entity_id) VALUES(%s,%s,%s,%s,%s,%s)",
+            (task_id, org, brand, campaign, actor, replaces),
         )
         _write(conn, org, brand, campaign, task_id, 1, spec)
         _remember(conn, org, brand, campaign, operation, digest, task_id, 1)
@@ -274,6 +336,8 @@ def create(conn, org, brand, campaign, payload, actor):
 def _base(conn, org, brand, campaign, task_id, expected):
     _campaign(conn, org, brand, campaign, mutable=True)
     task = get(conn, org, brand, campaign, task_id)
+    if task["cancelled_at"] is not None:
+        raise ValueError("此素材需求已取消，請另開新的需求。")
     if type(expected) is not int or expected != task["revision"]:
         raise ValueError("素材任務已更新，請重新讀取後再操作。")
     row = conn.execute(
@@ -488,5 +552,39 @@ def dispatch(conn, org, brand, campaign, task_id, payload, actor):
             " WHERE task_id=%s AND revision=%s",
             (task_id, task["revision"]),
         )
+        conn.commit()
+        return get(conn, org, brand, campaign, task_id)
+
+
+class InUse(ValueError):
+    """An approved change set already references this request; it can no longer be cancelled."""
+
+
+def cancel(conn, org, brand, campaign, task_id, actor):
+    """Withdraw a request. The task and its revisions stay readable (a workbench pack keeps its
+    origin link); it only leaves the list and frees its "replace this ad" slot."""
+    _campaign(conn, org, brand, campaign, mutable=True)
+    with _locked(conn, org, brand):
+        # Row lock first: approval reads the task FOR SHARE, so it cannot slip in between the
+        # in-use check and the cancel.
+        row = conn.execute(
+            "SELECT cancelled_at FROM ads_material_task WHERE org_id=%s AND brand_id=%s"
+            " AND campaign_id=%s AND id=%s FOR UPDATE",
+            (org, brand, campaign, task_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("找不到此品牌活動的素材任務或版本。")
+        if row["cancelled_at"] is None:
+            if conn.execute(
+                "SELECT 1 FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s"
+                " AND status='approved' AND plan_json->>'material_task_id'=%s LIMIT 1",
+                (org, brand, campaign, task_id),
+            ).fetchone():
+                raise InUse("此素材需求已被核准的變更清單採用，不能取消。")
+            conn.execute(
+                "UPDATE ads_material_task SET cancelled_at=now(),cancelled_by=%s"
+                " WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
+                (actor, org, brand, campaign, task_id),
+            )
         conn.commit()
         return get(conn, org, brand, campaign, task_id)
