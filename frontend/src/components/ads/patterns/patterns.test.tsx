@@ -286,7 +286,13 @@ describe("v9 pieces（F28-I07）", () => {
     rerender(<GradeBand buckets={buckets} spent={null} spentLabel="9 月已花" cap={null} />);
     expect(screen.getByText("—")).toBeTruthy();
     expect(screen.getByText("9 月已花 未知")).toBeTruthy();
-    expect(screen.getByText("划算＝在各活動上限內")).toBeTruthy();
+    // v10 legend: grade words are glossary terms; the shared cap's values show only when one cap is shared.
+    const legend = document.querySelector('[data-part="band-legend"]') as HTMLElement;
+    const plainText = () => { const c = legend.cloneNode(true) as HTMLElement; c.querySelectorAll('[role="tooltip"]').forEach((n) => n.remove()); return c.textContent; };
+    expect(plainText()).toContain("每個活動對照自己的上限：划算＝每筆沒超過上限偏貴＝超過上限不到 2 成");
+    expect(legend.querySelectorAll('[data-slot="term"]')).toHaveLength(6);
+    rerender(<GradeBand buckets={buckets} spent={22000} spentLabel="9 月已花" cap={{ value: 450, basis: "own" }} />);
+    expect(plainText()).toContain("划算＝每筆沒超過上限（450）偏貴＝超過上限不到 2 成（450–540）太貴＝超過 2 成以上（540 以上）");
   });
 
   it("MoneyMeter 上限線在 75%；超過 1.2 倍上限變紅；不知道數值只畫空軌", async () => {
@@ -297,6 +303,8 @@ describe("v9 pieces（F28-I07）", () => {
     expect(fill.className).toContain("bg-danger");
     expect(fill.style.width).toBe("100%");
     expect(screen.getByText("上限 450")).toBeTruthy();
+    rerender(<MoneyMeter value={600} cap={{ value: 450, basis: "own" }} size="lg" capLabel="各活動上限" />);
+    expect(screen.getByText("各活動上限 450")).toBeTruthy();
     rerender(<MoneyMeter value={null} cap={{ value: 450, basis: "own" }} size="sm" />);
     expect(container.querySelector("i")).toBeNull();
   });

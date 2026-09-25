@@ -31,6 +31,17 @@ function sentence(label: string): string {
   return label.replace(/。$/, "");
 }
 
+/** The row's missing-data chip: a partial month names its unread days (prototype 「9/17、9/18 沒抓到資料」, a long gap
+ * prints its size) from `data_status.missing_days`; every other state is the backend's own sentence. */
+function dataChipText(status: HomeCampaign["data_status"]): string {
+  if (status.state === "partial" && status.missing_days.length) {
+    const md = (iso: string) => `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`;
+    const days = status.missing_days;
+    return days.length <= 3 ? `${days.map(md).join("、")} 沒抓到資料` : `${days.length} 天沒抓到資料`;
+  }
+  return sentence(status.label);
+}
+
 /** Prototype `handoffChip(c)`: 「等你到 Meta 完成」 while an approved item is not done on the platform, 「等核對」 while
  * the readback has not confirmed it; both open the campaign's 變更與核對 tab. */
 function HandoffChip({ brandId, campaignId, handoff }: { brandId: string; campaignId: string; handoff: HomeHandoff | null }) {
@@ -97,7 +108,7 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <NameLink brandId={brandId} c={c} />
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
-          {NOTED.has(status.state) && <Chip tone="warn" data-state={status.state}>{sentence(status.label)}</Chip>}
+          {NOTED.has(status.state) && <Chip tone="warn" data-state={status.state}>{dataChipText(status)}</Chip>}
         </div>
         <div className="numeric text-sm text-muted-foreground">
           在投 {c.active_ads} 則・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}

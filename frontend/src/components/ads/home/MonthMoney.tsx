@@ -149,7 +149,8 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
           <span className="text-sm text-muted-foreground">{capText(home)}</span>
           <MoneyTag cost={cpp} breakEven={cap?.break_even ?? null} />
         </div>
-        <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={Math.max(600, (cpp ?? 0) * 1.3)} size="lg" />
+        <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={Math.max(600, (cpp ?? 0) * 1.3)} size="lg"
+          capLabel={cap?.basis === "break_even" ? "各活動打平線" : "各活動上限"} />
       </div>
 
       <div className="grid grid-cols-2 gap-3 border-t border-border pt-4">

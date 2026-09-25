@@ -68,6 +68,7 @@ describe("MonthMoney", () => {
     expect(screen.getByText("NT$139 元")).toBeTruthy();
     expect(screen.getByText(byPlain("每個活動各有上限，目前都是 450"))).toBeTruthy();
     expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("各活動上限 450")).toBeTruthy();
     expect(screen.getByText("比 8 月同期多 40 筆")).toBeTruthy();
     expect(screen.getByText("便宜 37%")).toBeTruthy();
     expect(screen.getByText("8 月同期 221 元")).toBeTruthy();
@@ -142,8 +143,7 @@ describe("CampaignRows", () => {
     expect(within(grid).getByText(LONG, { exact: true }).closest("a")?.getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_mid");
     expect(within(grid).getByText("15,767 元")).toBeTruthy();
     expect(within(grid).getByText("130 元")).toBeTruthy();
-    expect(within(grid).getByText("有幾天的資料還沒讀到，數字可能偏少")).toBeTruthy();
-    expect(within(grid).queryByText(/沒抓到資料/)).toBeNull();
+    expect(within(grid).getByText("9/17、9/18 沒抓到資料")).toBeTruthy();
     expect(within(grid).getByText("在投 8 則・每日 未知")).toBeTruthy();
     expect(within(grid).getByRole("link", { name: "重新連線 →" }).getAttribute("href")).toBe("/brands/b/ads/connections");
     expect(within(grid).getByRole("link", { name: "打開 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_daily");
@@ -212,7 +212,8 @@ describe("CampaignRows", () => {
 
   it("longest real names wrap inside their cell instead of being cut (the 1024 layout itself is in the side-by-side evidence)", () => {
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ name: LONG, handoff: { state: "check", change_set_id: "cs_1" },
-      data_status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。", missing_days: ["2026-09-17"], last_success_at: null } })] }))} onRetry={vi.fn()} />);
+      data_status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。", missing_days: ["2026-09-01", "2026-09-02", "2026-09-17", "2026-09-18"], last_success_at: null } })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("4 天沒抓到資料")).toBeTruthy();
     const name = screen.getByRole("link", { name: LONG });
     expect(name.textContent).toBe(LONG);
     expect(name.className).toContain("[overflow-wrap:anywhere]");
