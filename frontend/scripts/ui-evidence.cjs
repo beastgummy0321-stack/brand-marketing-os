@@ -71,18 +71,22 @@ function facts() {
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
-  const BLOCKS = { camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
-  const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet",
+  const BLOCKS = { camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StageRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", "stage-rail": "StageRail", segmented: "Segmented", "decision-sheet": "DecisionSheet",
     "target-ruler": "TargetRuler", "grade-band": "GradeBand", "money-meter": "MoneyMeter", "pace-chart": "PaceChart", "next-up-strip": "NextUpStrip", "scenario-bars": "ScenarioBars", "allocation-bar": "AllocationBar", "confirm-sheet": "ConfirmSheet", "diff-row": "DiffRow", "cap-dots": "CapDots", "progress-segments": "ProgressSegments",
     // v10 kit (F29-I09)
     term: "Term", "money-tag": "MoneyTag", "grade-rules": "GradeRules", "money-rule": "MoneyRule", "grade-bar": "GradeBar", "wait-line": "WaitLine", "read-failed": "ReadFailed",
     "ab-pair": "AbPair", "pick-row": "PickRow", "learn-line": "LearnLine", "flow-to": "FlowTo", "origin-tag": "OriginTag", "row-menu": "RowMenu",
-    "settings-grid": "SettingsGrid", "setting-field": "SettingField", "readback-row": "ReadbackRow" };
+    "settings-grid": "SettingsGrid", "setting-field": "SettingField", "readback-row": "ReadbackRow",
+    // F30-I03 kit
+    "source-list": "SourceList", "source-row": "SourceRow", "day-grid": "DayGrid", legend: "Legend", "copy-fields": "CopyFields", "copy-field": "CopyField",
+    "slot-grid": "SlotGrid", "slot-tile": "SlotTile", "tree-rows": "TreeRows", "change-timeline": "ChangeTimeline", "pick-group": "PickGroup", "pick-card": "PickCard", "money-input": "MoneyInput" };
   const VARIANT = { kind: ["stop", "worse", "up", "fresh", "cut"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
   const NOVARIANT = new Set(["campaign-chip", "tag-toggle", "learn-card", "recover-steps", "thumb-tiles", "day-tiles", "meter", "evidence-row", "ladder", "option-card",
     "grade-band", "pace-chart", "next-up-strip", "scenario-bars", "allocation-bar", "diff-row", "cap-dots", "progress-segments",
     "term", "money-tag", "grade-rules", "money-rule", "grade-bar", "wait-line", "read-failed", "pick-row", "learn-line", "flow-to", "origin-tag", "row-menu",
-    "settings-grid", "setting-field", "readback-row"]); // colour/state comes from data or a decision, not a prototype class
+    "settings-grid", "setting-field", "readback-row",
+    "stage-rail", "source-list", "source-row", "day-grid", "legend", "copy-fields", "copy-field", "slot-grid", "slot-tile", "tree-rows", "change-timeline", "pick-group", "pick-card", "money-input"]); // colour/state comes from data or a decision, not a prototype class
   // v9 pieces (F28): prototype selector -> "<piece> <variant>", one line per piece; the built side reports them by data-slot above.
   const V9 = [
     [".rl", (e) => `TargetRuler ${["mini", "mid", "full"].find((s) => e.classList.contains(`rl-${s}`)) || "empty"}`], // ruler(); its tray sits beside it
@@ -95,6 +99,10 @@ function facts() {
   ];
   // v10 pieces (F29-I09): prototype element -> piece; the built side reports them by data-slot above.
   const V10 = [
+    // F30-I03 kit: prototype class -> piece
+    [(e) => e.matches(".src"), () => "SourceRow"], [(e) => e.matches(".calg"), () => "DayGrid"], [(e) => e.matches(".lg") && !e.querySelector(":scope > span:nth-child(4) > .term"), () => "Legend"],
+    [(e) => e.matches(".fl"), () => "CopyField"], [(e) => e.matches(".slots"), () => "SlotGrid"], [(e) => e.matches(".slot"), () => "SlotTile"],
+    [(e) => e.matches(".tree2"), () => "TreeRows"], [(e) => e.matches(".tl"), () => "ChangeTimeline"], [(e) => e.matches(".pk"), () => "PickCard"], [(e) => e.matches(".money"), () => "MoneyInput"],
     [(e) => e.matches(".term"), () => "Term"], // term(): dotted word + glossary sentence (patterns/Term; plain terms print no .term)
     [(e) => e.matches(".mtag"), () => "MoneyTag"],
     [(e) => e.matches(".lg") && !!e.querySelector(":scope > span:nth-child(4) > .term"), () => "GradeRules"], // gradeRules() legend
