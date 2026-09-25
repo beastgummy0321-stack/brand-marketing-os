@@ -1,0 +1,115 @@
+"""app/tests/test_ads_parent_guard.py — F31-I03 item 5: the Meta name-match parent guard also
+refuses an id another org holds in the ads center.
+
+`app.meta.repository._refuse_if_parent_owned_by_another_org` used to read only the schedule
+module's `channel_entity_map`. The ads center keeps its bindings on its own rows, so an id org B
+bound there reached Meta on org A's token. The fixtures write org B's rows directly (not through
+`adapters/manual.bind`, which F31-I08 deletes). Ids nobody holds still reach Meta — that branch
+is `test_meta_daily_spend.AdSetMatchUnreachableTest`, unchanged.
+"""
+
+import unittest
+from unittest import mock
+from uuid import uuid4
+
+import app.ads  # noqa: F401 — the package import registers the ads owner check
+import app.shared.web as web
+from app.brand_intelligence import repository as brands
+from app.core import db
+from app.meta import graph
+from app.meta import repository as meta_repo
+
+TOKEN = "EAAtest-fake-meta-token-parent-guard"
+
+
+def _make_org(suffix: str) -> str:
+    org_id = f"org_parent_guard_{suffix}_{uuid4().hex[:8]}"
+    web.conn.execute(
+        "INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')",
+        (org_id, org_id),
+    )
+    return org_id
+
+
+class AdsCenterParentGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.org_a = _make_org("a")
+        self.org_b = _make_org("b")
+        meta_repo.save_token(web.conn, self.org_a, TOKEN)
+        # Rows commit and outlive each test: a fresh id per test keeps one test's org B from
+        # owning the next test's id.
+        tail = uuid4().hex[:8]
+        self.camp_id, self.adset_id = f"camp-ads-b-{tail}", f"adset-ads-b-{tail}"
+        self.brand_b = brands.create_brand(
+            web.conn, org_id=self.org_b, name="B 的品牌", client_name=None, actor="test",
+        )["id"]
+        self.campaign_b = db.new_id("adc")
+        web.conn.execute(
+            "INSERT INTO ads_campaign (id, org_id, brand_id, name, goal_text, objective,"
+            " success_metric, external_id, local_state)"
+            " VALUES (%s, %s, %s, 'B 的活動', '測試', 'purchase', 'cpa', %s, 'bound')",
+            (self.campaign_b, self.org_b, self.brand_b, self.camp_id),
+        )
+        self.group_b = db.new_id("adg")
+        web.conn.execute(
+            "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key,"
+            " name, role, daily_budget, external_id, local_state)"
+            " VALUES (%s, %s, %s, %s, 'meta', 'B 的組', 'new', 100, %s, 'bound')",
+            (self.group_b, self.org_b, self.brand_b, self.campaign_b, self.adset_id),
+        )
+        web.conn.commit()
+
+    def test_ads_bound_campaign_of_another_org_refused_before_meta(self):
+        with mock.patch.object(graph, "list_ad_sets") as fake_list_ad_sets:
+            with self.assertRaises(web.ApiError) as caught:
+                meta_repo.ad_set_ids_by_exact_name(
+                    web.conn, self.org_a, self.camp_id, "隨便什麼名字",
+                )
+            self.assertEqual(fake_list_ad_sets.call_count, 0)
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.code, "campaign_not_owned")
+
+    def test_ads_bound_group_of_another_org_refused_before_meta(self):
+        with mock.patch.object(graph, "list_ads") as fake_list_ads:
+            with self.assertRaises(web.ApiError) as caught:
+                meta_repo.ad_ids_by_exact_name(
+                    web.conn, self.org_a, self.adset_id, "隨便什麼名字",
+                )
+            self.assertEqual(fake_list_ads.call_count, 0)
+        self.assertEqual(caught.exception.code, "adset_not_owned")
+
+    def test_listed_external_entity_of_another_org_refused(self):
+        web.conn.execute(
+            "INSERT INTO ads_external_entity (id, org_id, brand_id, campaign_id, platform,"
+            " source_account, native_kind, native_id)"
+            " VALUES (%s, %s, %s, %s, 'meta', 'act_b', 'campaign', %s)",
+            (db.new_id("aex"), self.org_b, self.brand_b, self.campaign_b, f"{self.camp_id}-listed"),
+        )
+        web.conn.commit()
+        with mock.patch.object(graph, "list_ad_sets") as fake_list_ad_sets:
+            with self.assertRaises(web.ApiError) as caught:
+                meta_repo.ad_set_ids_by_exact_name(
+                    web.conn, self.org_a, f"{self.camp_id}-listed", "隨便什麼名字",
+                )
+            self.assertEqual(fake_list_ad_sets.call_count, 0)
+        self.assertEqual(caught.exception.code, "campaign_not_owned")
+
+    def test_own_ads_binding_is_not_refused(self):
+        with mock.patch.object(graph, "list_ad_sets", return_value=[]) as fake_list_ad_sets:
+            result = meta_repo.ad_set_ids_by_exact_name(
+                web.conn, self.org_b, self.camp_id, "隨便什麼名字",
+            )
+        # org_b has no token, so it stops at "no list to match" — the guard let it through.
+        self.assertEqual(result, [])
+        self.assertEqual(fake_list_ad_sets.call_count, 0)
+        meta_repo.save_token(web.conn, self.org_b, TOKEN)
+        web.conn.commit()
+        with mock.patch.object(graph, "list_ad_sets", return_value=[]) as fake_list_ad_sets:
+            meta_repo.ad_set_ids_by_exact_name(
+                web.conn, self.org_b, self.camp_id, "隨便什麼名字",
+            )
+        self.assertEqual(fake_list_ad_sets.call_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

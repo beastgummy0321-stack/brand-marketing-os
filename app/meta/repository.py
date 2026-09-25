@@ -352,8 +352,24 @@ def _refuse_if_parent_owned_by_another_org(conn: _AnyConn, org_id: str, parent_i
         "SELECT 1 FROM channel_entity_map WHERE external_id = %s AND org_id != %s LIMIT 1",
         (parent_id, org_id),
     ).fetchone()
-    if row is not None:
+    # F31-I03: the ads center keeps its own bindings (`ads_*` rows), which this module may not
+    # read (meta sits below ads in LAYER_ORDER). The owning module registers a check instead.
+    if row is not None or any(
+        check(conn, org_id, parent_id) for check in _PARENT_OWNER_CHECKS.values()
+    ):
         raise web.ApiError(403, code, f"這個{noun}不屬於這個組織，已拒絕比對。")
+
+
+# F31-I03 (item 5): other modules that record which org bound a platform id register a check
+# `(conn, org_id, external_id) -> bool` ("another org bound or lists this id"). Keyed by name so
+# a second registration (module reload, tests) replaces instead of stacking. `app/ads/__init__.py`
+# registers at import; both the API (`app.main`) and the worker (`app.worker` imports `app.main`
+# and `app.ads`) import it before any request or job runs.
+_PARENT_OWNER_CHECKS: dict = {}
+
+
+def register_parent_owner_check(name: str, check) -> None:
+    _PARENT_OWNER_CHECKS[name] = check
 
 
 def ad_set_ids_by_exact_name(
@@ -459,6 +475,53 @@ def last_pull_at(conn: _AnyConn, org_id: str, ad_account_ids: list):
         (org_id, ad_account_ids),
     ).fetchone()
     return row["t"] if row else None
+
+
+# F31-I03 (Contract N): the one mapping from a stored `attribution_window` (graph.py joins
+# `_ATTRIBUTION_WINDOWS` with ",", e.g. "7d_click,1d_view") to the words the cockpit prints.
+_WINDOW_KIND_LABELS = {"click": "點擊後", "view": "瀏覽後"}
+
+
+def attribution_label(window: str | None) -> str | None:
+    """"7d_click,1d_view" → 「點擊後 7 天＋瀏覽後 1 天」. A part this mapping does not know is
+    kept as written rather than guessed; None/empty → None."""
+    if not window:
+        return None
+    labels = []
+    for part in window.split(","):
+        days, _, kind = part.strip().partition("d_")
+        if days.isdigit() and kind in _WINDOW_KIND_LABELS:
+            labels.append(f"{_WINDOW_KIND_LABELS[kind]} {int(days)} 天")
+        else:
+            labels.append(part.strip())
+    return "＋".join(labels)
+
+
+def spend_freshness(
+    conn: _AnyConn, org_id: str, ad_account_ids: list, start: date, end: date, *, level: str,
+) -> dict:
+    """F31-I03 (Contract N): for exactly the rows `spend_summary` sums (same `_SPEND_WHERE`), the
+    newest `pulled_at` and the attribution label. `last_pull_at` is per account and stays None
+    while any bound account never finished a pull, so it cannot say how old *these* numbers
+    are. Rows with more than one window get every label joined with 「／」 (the sum mixes them;
+    saying so beats naming one)."""
+    if level not in LEVELS:
+        raise ValueError(f"level 只能是 {'/'.join(LEVELS)} 其中之一")
+    if not ad_account_ids:
+        return {"data_pulled_at": None, "attribution_label": None}
+    row = conn.execute(
+        "SELECT max(pulled_at) AS pulled_at,"
+        " array_agg(DISTINCT attribution_window ORDER BY attribution_window)"
+        "   FILTER (WHERE attribution_window IS NOT NULL) AS windows"
+        " FROM meta_entity_spend mes" + _SPEND_WHERE,
+        (org_id, ad_account_ids, level, start, end),
+    ).fetchone()
+    windows = (row["windows"] if row else None) or []
+    labels = [label for label in (attribution_label(w) for w in windows) if label]
+    return {
+        "data_pulled_at": row["pulled_at"] if row else None,
+        "attribution_label": "／".join(labels) or None,
+    }
 
 
 _EMPTY_TOTAL = {
