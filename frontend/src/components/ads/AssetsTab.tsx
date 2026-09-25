@@ -3,9 +3,9 @@ import { UserAssetPlacements } from "./UserAssetPlacements";
 import { ManualHandoffPanel } from "./ManualHandoffPanel";
 import { MaterialTasksPanel } from "./MaterialTasksPanel";
 import { PlannedMaterialAssignments } from "./PlannedMaterialAssignments";
-import { Disclosure } from "./patterns";
+import { Disclosure, ReadFailed } from "./patterns";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
@@ -26,20 +26,19 @@ import {
   type CampaignDetail,
 } from "@/lib/adsApi";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
+import { AssetsBody } from "./workspace/AssetsBody";
 
-const STATE_LABEL: Record<AssetReadinessState, string> = {
-  ready_workbench: "已就位（工作檯）",
-  ready_manual: "已就位（手動）",
+/** The workbench／manual progress of a planned ad — a progress note only. Whether the ad can go out is
+ * `material_ready` (Done #7: `ready_count` counts confirmed material only), so no note says 已就位. */
+const PROGRESS_NOTE: Record<AssetReadinessState, string> = {
+  ready_workbench: "工作檯已完成",
+  ready_manual: "已手動標記",
   in_progress: "製作中",
   not_started: "未開始",
 };
 
-const STATE_TONE: Record<AssetReadinessState, "default" | "outline" | "secondary"> = {
-  ready_workbench: "default",
-  ready_manual: "default",
-  in_progress: "secondary",
-  not_started: "outline",
-};
+/** `GET …/assets` rows carry `material_ready` (the launch rule); the shared row type does not declare it. */
+type ReadinessRow = AssetReadinessRow & { material_ready?: boolean };
 
 /** 素材 tab（F03-I15）：一列一支廣告，讀 F03-I08 的就緒狀態，派工到工作檯或手動勾
  * 「素材已就位」。不擋發布（決策 8／10），這裡只是誠實顯示現況。 */
@@ -58,7 +57,7 @@ function LegacyAssetsTab({
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "ready"; rows: AssetReadinessRow[]; readyCount: number; total: number }
+    | { status: "ready"; rows: ReadinessRow[]; readyCount: number; total: number }
   >({ status: "loading" });
   const [confirmAd, setConfirmAd] = useState<{ id: string; name: string; next: boolean } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -104,7 +103,7 @@ function LegacyAssetsTab({
     );
   }
   if (state.status === "error") {
-    return <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
+    return <ReadFailed what={`舊版素材就位清單讀不到：${state.message}`} onRetry={load} />;
   }
 
   const rowsByAdId = new Map(state.rows.map((r) => [r.ad_id, r]));
@@ -129,7 +128,7 @@ function LegacyAssetsTab({
     <div className="flex flex-col gap-4">
       <div className="surface">
         <div className="surface-header">
-          <h2>{imported ? `${ads.length} 則平台廣告` : `${state.readyCount}／${state.total} 則已就位`}</h2>
+          <h2>{imported ? `${ads.length} 則平台廣告` : `${state.readyCount}／${state.total} 則素材已備妥`}</h2>
           {packId && (
             <Button variant="outline" size="sm" asChild>
               <Link to={`/brands/${brandId}/workbench/packs/${packId}`}>查看素材任務包</Link>
@@ -157,7 +156,10 @@ function LegacyAssetsTab({
                       <td className="px-3 py-2">{groupName}</td>
                       <td className="px-3 py-2">{ad.name}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={STATE_TONE[rowState]}>{native ? (native.native_status ?? "平台狀態未知") : STATE_LABEL[rowState]}</Badge>
+                        {native
+                          ? <Badge variant="secondary">{native.native_status ?? "平台狀態未知"}</Badge>
+                          : <Badge variant={row?.material_ready ? "default" : "outline"}>{row?.material_ready ? "素材已備妥" : "還不能上架"}</Badge>}
+                        {!native && <span className="ml-2 text-xs text-muted-foreground">{PROGRESS_NOTE[rowState]}</span>}
                         {native?.sync_error && <p className="text-xs text-warning">{native.sync_error}</p>}
                         {row?.by && (
                           <span className="ml-2 text-xs text-muted-foreground">
@@ -235,18 +237,55 @@ function LegacyAssetsTab({
   );
 }
 
+/** Deep links that land inside the folded panels: a material request (`?material=`, `?material_new=1`), a review
+ * hand-off (`?review=`, `?recommendation=`) and the placement list (`#material-placements`). */
+const FOLD_PARAMS = ["material", "material_new", "review", "recommendation"];
+const PLACEMENTS_HASH = "#material-placements";
+
+/** v10 (F30-I11) 素材 tab: the new body (`workspace/AssetsBody`: 素材需求, slots, the draft bar) over the old panels,
+ * folded under 「進階」 — the material requests editor, 自帶素材安排 and manual hand-off, and the old readiness list.
+ * Nothing is deleted; every deep link above opens the fold (and the placement list for its hash) on arrival. */
 export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
+  const [params] = useSearchParams();
+  const linked = FOLD_PARAMS.some((key) => params.has(key));
   const [materialRefresh, setMaterialRefresh] = useState(0);
   const [placementRefresh, setPlacementRefresh] = useState(0);
-  const [placementsOpen, setPlacementsOpen] = useState(window.location.hash === "#material-placements");
-  useEffect(() => { const open = () => { if (window.location.hash === "#material-placements") setPlacementsOpen(true); }; window.addEventListener("hashchange", open); return () => window.removeEventListener("hashchange", open); }, []);
-  return <div className="flex flex-col gap-4">
-    <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} onSaved={() => setMaterialRefresh(value => value + 1)} />
-    <div id="material-placements"><Disclosure label="素材安排與人工交接" open={placementsOpen} onOpenChange={setPlacementsOpen}>
-      <UserAssetPlacements key={`${props.brandId}:${props.campaign.id}:${materialRefresh}`} brandId={props.brandId} campaign={props.campaign} onChanged={() => setPlacementRefresh(value => value + 1)} />
-      {props.campaign.origin !== "imported" && <PlannedMaterialAssignments brandId={props.brandId} campaignId={props.campaign.id} refreshKey={materialRefresh + placementRefresh} />}
-      <ManualHandoffPanel brandId={props.brandId} campaignId={props.campaign.id} mode="new-ad" refreshKey={materialRefresh + placementRefresh} />
-    </Disclosure></div>
-    <Disclosure label="原有任務包與平台素材"><LegacyAssetsTab {...props} /></Disclosure>
-  </div>;
+  // A file put into a slot is a new placement: the placement list re-reads (a remount), the slots already have it.
+  const [slotUploads, setSlotUploads] = useState(0);
+  const [placementsOpen, setPlacementsOpen] = useState(() => window.location.hash === PLACEMENTS_HASH);
+  const [advancedOpen, setAdvancedOpen] = useState(() => linked || window.location.hash === PLACEMENTS_HASH);
+  const [scrollTick, setScrollTick] = useState(() => (window.location.hash === PLACEMENTS_HASH ? 1 : 0));
+  const openPlacements = useCallback(() => { setAdvancedOpen(true); setPlacementsOpen(true); setScrollTick((n) => n + 1); }, []);
+  // A deep link that arrives while the tab is open (e.g. 「新增素材需求」 from another screen) opens the fold once.
+  useEffect(() => { if (linked) setAdvancedOpen(true); }, [linked]);
+  useEffect(() => {
+    const open = () => { if (window.location.hash === PLACEMENTS_HASH) openPlacements(); };
+    window.addEventListener("hashchange", open);
+    return () => window.removeEventListener("hashchange", open);
+  }, [openPlacements]);
+  // Scroll once per request, after the fold has rendered its content.
+  useEffect(() => { if (scrollTick > 0) document.getElementById("material-placements")?.scrollIntoView?.({ block: "start" }); }, [scrollTick]);
+
+  const imported = props.campaign.origin === "imported";
+  const advanced = (
+    <Disclosure label="進階：素材需求、自帶素材與人工交接" open={advancedOpen} onOpenChange={setAdvancedOpen}>
+      <div className="flex flex-col gap-4">
+        <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} refreshKey={materialRefresh}
+          onSaved={() => setMaterialRefresh((value) => value + 1)} />
+        <div id="material-placements"><Disclosure label="素材安排與人工交接" open={placementsOpen} onOpenChange={setPlacementsOpen}>
+          <UserAssetPlacements key={`${props.brandId}:${props.campaign.id}:${materialRefresh}:${slotUploads}`} brandId={props.brandId} campaign={props.campaign} onChanged={() => setPlacementRefresh((value) => value + 1)} />
+          {!imported && <PlannedMaterialAssignments brandId={props.brandId} campaignId={props.campaign.id} refreshKey={materialRefresh + placementRefresh} />}
+          <ManualHandoffPanel brandId={props.brandId} campaignId={props.campaign.id} mode="new-ad" refreshKey={materialRefresh + placementRefresh} />
+        </Disclosure></div>
+        <Disclosure label="原有任務包與平台素材"><LegacyAssetsTab {...props} /></Disclosure>
+      </div>
+    </Disclosure>
+  );
+  return (
+    <AssetsBody brandId={props.brandId} campaign={props.campaign} refreshKey={materialRefresh + placementRefresh}
+      advanced={advanced}
+      onPlacementChanged={() => setSlotUploads((value) => value + 1)}
+      onRequestsChanged={() => setMaterialRefresh((value) => value + 1)}
+      onOpenPlacements={openPlacements} />
+  );
 }
