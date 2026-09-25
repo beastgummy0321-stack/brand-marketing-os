@@ -1,6 +1,7 @@
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
+import type { ReviewMonitor } from "./adsRuntimeApi";
 
 export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "completed" | "deferred" | "unjudgeable" | "failed" | "unknown";
 export interface ReviewSeries {
@@ -43,7 +44,9 @@ export interface ReviewRound {
   status: ReviewStatus; evidence_hash: string; llm_task_id: string | null;
   error: string | null; decision: string | null; reason: string | null; revisit_at: string | null;
   created_at: string;
-  result_json: { recommendations?: Recommendation[]; limitations?: string[] };
+  // Contract A (F30-I01): the fact check rejected the model text; the round stays usable
+  // on its evidence alone and can be re-run through `retryReview`.
+  result_json: { recommendations?: Recommendation[]; limitations?: string[]; rejected?: { reason: string } | null };
   evidence_json: {
     target: Pick<NativeEntity, "id" | "name" | "platform" | "source_account" | "native_id">;
     window: { start: string; end: string; previous_start: string; previous_end: string; timezone: string | null };
@@ -76,4 +79,9 @@ export async function createReview(brand: string, campaign: string, value: { ent
 }
 export async function decideReview(brand: string, campaign: string, id: string, value: { decision: "completed" | "deferred" | "unjudgeable"; reason: string; revisit_at?: string }, signal?: AbortSignal) {
   return (await request<{ review: ReviewRound }>(`${route(brand, campaign)}/${encodeURIComponent(id)}/decision`, signal, value)).review;
+}
+// Contract A: re-run an undecided failed or AI-rejected round on the same evidence; a repeated
+// call returns the same retry round. Same response shape as create.
+export async function retryReview(brand: string, campaign: string, reviewId: string, signal?: AbortSignal) {
+  return request<{ review: ReviewRound; monitor: ReviewMonitor | null }>(`${route(brand, campaign)}/${encodeURIComponent(reviewId)}/retry`, signal, {});
 }

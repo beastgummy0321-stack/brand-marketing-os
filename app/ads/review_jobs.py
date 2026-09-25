@@ -67,6 +67,9 @@ def apply_saved_task(conn, review, task):
     ):
         return None
     if task["status"] == "succeeded":
+        # A delivered reply that fails the fact check is not a failed round: the evidence is
+        # still complete, so the round stays usable without an AI recommendation (Contract A).
+        status, error = "ready", None
         try:
             output = task.get("rendered_output") or ""
             if len(output) > policy.OUTPUT_CHARS:
@@ -78,9 +81,13 @@ def apply_saved_task(conn, review, task):
                 evidence,
                 gateway.parse_json_reply(output),
             )
-            status, error = "ready", None
         except ValueError as exc:
-            status, error = "failed", str(exc)
+            result = {
+                "recommendations": [],
+                "limitations": evidence["limitations"],
+                "causality": "unavailable",
+                "rejected": {"reason": str(exc)},
+            }
     changed = conn.execute(
         "UPDATE ads_review_round SET status=%s,result_json=%s,llm_task_id=%s,error=%s,"
         "updated_at=now() WHERE id=%s AND decision IS NULL "
@@ -179,7 +186,7 @@ def run(org_id, brand_id, campaign_id, review_id):
                 or changes.digest(system) != evidence["template_hash"]
             ):
                 raise ValueError("模型或規則已改變，本回未送出；請重新建立檢討。")
-            if len(system) + len(policy.encode(evidence)) + 32 > policy.INPUT_CHARS:
+            if len(system) + len(review_rounds.model_input(evidence)) + 32 > policy.INPUT_CHARS:
                 raise ValueError("完整證據超出上限，本回未送出。")
             policy.ceiling(provider.name, model)
             sent = True
@@ -191,7 +198,7 @@ def run(org_id, brand_id, campaign_id, review_id):
                 prompt_template_id="ads/review_round",
                 prompt_template_version=evidence["template_hash"],
                 system=system,
-                messages=[{"role": "user", "content": policy.encode(evidence)}],
+                messages=[{"role": "user", "content": review_rounds.model_input(evidence)}],
                 context=gateway.TaskContext(
                     context_scope={
                         "brand_id": brand_id,
