@@ -66,17 +66,23 @@ function facts() {
     else if (e.dataset.slot === "badge") piece = `Badge ${e.dataset.variant}`;
     else if (c.contains("btn")) piece = `Button ${c.contains("pri") ? "default" : c.contains("warnp") ? "warn" : c.contains("ghost") ? "ghost" : "outline"}`; // warnp -> patterns/ConfirmSheet WarnButton
     else if (c.contains("lnk")) piece = "Button link";
-    else if (c.contains("chip")) piece = `Chip ${c.contains("over") ? "over" : c.contains("stop") ? "stop" : c.contains("ok") ? "ok" : c.contains("warn") ? "warn" : c.contains("bad") ? "bad" : c.contains("v") ? "accent" : "neutral"}`; // v9 grade chips: patterns/Chip GradeChip
+    else if (c.contains("chip")) piece = `Chip ${c.contains("nr") ? "unread" : c.contains("over") ? "over" : c.contains("stop") ? "stop" : c.contains("ok") ? "ok" : c.contains("warn") ? "warn" : c.contains("bad") ? "bad" : c.contains("v") ? "accent" : "neutral"}`; // v9 grade chips: patterns/Chip GradeChip
     else if (e.tagName === "A" || e.tagName === "BUTTON") piece = "(hand-rolled control)";
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
   const BLOCKS = { camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StatusRail", seg: "Segmented", sheet: "DecisionSheet" };
   const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", segmented: "Segmented", "decision-sheet": "DecisionSheet",
-    "target-ruler": "TargetRuler", "grade-band": "GradeBand", "money-meter": "MoneyMeter", "pace-chart": "PaceChart", "next-up-strip": "NextUpStrip", "scenario-bars": "ScenarioBars", "allocation-bar": "AllocationBar", "confirm-sheet": "ConfirmSheet", "diff-row": "DiffRow", "cap-dots": "CapDots", "progress-segments": "ProgressSegments" };
+    "target-ruler": "TargetRuler", "grade-band": "GradeBand", "money-meter": "MoneyMeter", "pace-chart": "PaceChart", "next-up-strip": "NextUpStrip", "scenario-bars": "ScenarioBars", "allocation-bar": "AllocationBar", "confirm-sheet": "ConfirmSheet", "diff-row": "DiffRow", "cap-dots": "CapDots", "progress-segments": "ProgressSegments",
+    // v10 kit (F29-I09)
+    term: "Term", "money-tag": "MoneyTag", "grade-rules": "GradeRules", "money-rule": "MoneyRule", "grade-bar": "GradeBar", "wait-line": "WaitLine", "read-failed": "ReadFailed",
+    "ab-pair": "AbPair", "pick-row": "PickRow", "learn-line": "LearnLine", "flow-to": "FlowTo", "origin-tag": "OriginTag", "row-menu": "RowMenu",
+    "settings-grid": "SettingsGrid", "setting-field": "SettingField", "readback-row": "ReadbackRow" };
   const VARIANT = { kind: ["stop", "worse", "up", "fresh", "cut"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
   const NOVARIANT = new Set(["campaign-chip", "tag-toggle", "learn-card", "recover-steps", "thumb-tiles", "day-tiles", "meter", "evidence-row", "ladder", "option-card",
-    "grade-band", "pace-chart", "next-up-strip", "scenario-bars", "allocation-bar", "diff-row", "cap-dots", "progress-segments"]); // colour/state comes from data or a decision, not a prototype class
+    "grade-band", "pace-chart", "next-up-strip", "scenario-bars", "allocation-bar", "diff-row", "cap-dots", "progress-segments",
+    "term", "money-tag", "grade-rules", "money-rule", "grade-bar", "wait-line", "read-failed", "pick-row", "learn-line", "flow-to", "origin-tag", "row-menu",
+    "settings-grid", "setting-field", "readback-row"]); // colour/state comes from data or a decision, not a prototype class
   // v9 pieces (F28): prototype selector -> "<piece> <variant>", one line per piece; the built side reports them by data-slot above.
   const V9 = [
     [".rl", (e) => `TargetRuler ${["mini", "mid", "full"].find((s) => e.classList.contains(`rl-${s}`)) || "empty"}`], // ruler(); its tray sits beside it
@@ -87,11 +93,26 @@ function facts() {
     [".confirm", () => "ConfirmSheet over-cap"], [".sheet:has(.warnp)", () => "ConfirmSheet revert"], // over-cap confirm, act.revertOpen
     [".diff", () => "DiffRow"], [".capdots", () => "CapDots"], [".prog", () => "ProgressSegments"],
   ];
+  // v10 pieces (F29-I09): prototype element -> piece; the built side reports them by data-slot above.
+  const V10 = [
+    [(e) => e.matches(".term"), () => "Term"], // term(): dotted word + glossary sentence (patterns/Term; plain terms print no .term)
+    [(e) => e.matches(".mtag"), () => "MoneyTag"],
+    [(e) => e.matches(".lg") && !!e.querySelector(":scope > span:nth-child(4) > .term"), () => "GradeRules"], // gradeRules() legend
+    [(e) => e.matches(".xs.mut") && e.querySelectorAll(":scope > .term").length >= 3, () => "MoneyRule"], // moneyRule()
+    [(e) => e.matches(".bb") && /則/.test(e.nextElementSibling?.textContent || ""), () => "GradeBar"], // gradeBar(); budgetBar() legends carry no 則
+    [(e) => e.matches(".waitbox"), () => "WaitLine"], [(e) => e.matches(".hero.bad[role=alert]"), () => "ReadFailed"], // waitLine(), failBox()
+    [(e) => e.matches(".ab"), () => "AbPair judged"], [(e) => e.matches(".g3:has(.pb)"), () => "AbPair collecting"], // abPair(): its wrapper has no class
+    [(e) => e.matches(".pickrow"), () => "PickRow"], [(e) => e.matches(".lrn"), () => "LearnLine"], [(e) => e.matches(".flowto"), () => "FlowTo"],
+    [(e) => e.matches(".org"), () => "OriginTag"], [(e) => e.matches("details.mn"), () => "RowMenu"],
+    [(e) => e.matches(".setg"), () => "SettingsGrid"], [(e) => e.matches(".fld:has(> label + .xs.mut)"), () => "SettingField"], [(e) => e.matches(".rb"), () => "ReadbackRow"], // setCard(), pubVerify()
+  ];
   for (const e of within("[class], [data-slot], svg[role=img], [role=radiogroup]")) { // the pace chart and the scenario radiogroup carry no class
     if (!vis(e)) continue;
     if (SLOTS[e.dataset.slot]) { out.push(`${SLOTS[e.dataset.slot]} ${NOVARIANT.has(e.dataset.slot) ? "" : e.dataset.variant || ""}`.trim() + " |"); continue; } // the prototype meter carries its colour inline, not as a class
     if (document.querySelector("#main-content")) continue;
     for (const [sel, piece] of V9) if (e.matches(sel)) out.push(`${piece(e)} |`);
+    for (const [is, piece] of V10) if (is(e)) out.push(`${piece(e)} |`);
+    if (e.matches(".hero.bad[role=alert]")) continue; // failBox() is ReadFailed, not ResultHero
     if (e.closest(".tray") || e.matches(".sheet:has(.warnp)")) continue; // the ruler tray's meters belong to TargetRuler; a warn sheet is ConfirmSheet
     for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
       let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
@@ -107,10 +128,12 @@ function facts() {
     const known = new Set(["btn", "pri", "ghost", "sm", "lnk", "chip", "ok", "warn", "bad", "v", "sh", "dots", "d", "dl", "done", "on", "qpos", "row", "purpose", "kind", "stop", "worse", "up", "fresh", "meter", "cap", "todo", "no", "hero", "big", "rail", "seg", "sheet", "fld", "ev", "l", "bars", "c", "n", "dd", "q", "unk", "ladder", "opt", "pick", "ic", "old", "new", "rv", "grid2", "grid4", "days", "x", "strip", "tiles", "cols3", "camp", "tag", "learn", "rec", "o-sales", "o-engage", "o-traffic", "o-mid", "o-old"]);
     // Parts of the v9 pieces above (ruler, band, meters, scenario bars, confirm, diff, capacity dots, progress) and their states.
     for (const c of ["rl", "rl-mini", "rl-mid", "rl-full", "rl-empty", "ax", "fd", "trk", "mk", "be", "r", "zl", "sb", "dt", "bx", "k", "tip", "tl", "tr", "hl", "cx", "dim", "na", "tray", "ti", "watch", "over", "gr",
+      "term", "mtag", "waitbox", "spin", "qv", "run", "me", "ab", "abt", "abk", "win", "lose", "vs", "pb", "lrn", "flowto", "mn", "pickrow", "off", "rb", "nr", "setg", "wide", "org",
       "band", "sl", "hatch", "cpm", "hb", "nextup", "tlg", "dot", "sc", "lab", "bw", "amt", "o", "caprow", "capline", "alloc", "confirm", "bb", "warnp", "diff", "w", "capdots", "prog", "chg", "bt", "dev", "lock", "cut", "dn", "s", "b"]) known.add(c);
     // Layout and type only — no piece: the worker builds these with tokens (cards, grids, rows, text styles, thumbnails, folds, inputs).
     const LAYOUT = new Set(["hstack", "titlerow", "wrap", "card", "hd", "grow", "mut", "num", "xs", "nm", "th", "stack", "g2", "g3", "lg", "f", "in", "money", "qi", "val", "tabs", "grp", "sw", "adrow",
-      "moneyg", "paceh", "left", "bandc", "decg", "dcard", "dr", "skel", "empty", "ct", "hd0", "act", "tgt"]);
+      "moneyg", "paceh", "left", "bandc", "decg", "dcard", "dr", "skel", "empty", "ct", "hd0", "act", "tgt",
+      "ok-t", "bad-t", "warn-t"]); // v10 text shades: text-success-strong, text-grade-wasted-foreground, text-warning-strong
     const seen = {}, layout = {};
     for (const e of within("[class]")) if (vis(e)) for (const c of e.classList) if (LAYOUT.has(c)) layout[c] = (layout[c] || 0) + 1; else if (!known.has(c)) seen[c] = (seen[c] || 0) + 1;
     out.push("", "## prototype layout classes (no piece: build with tokens)", Object.entries(layout).map(([c, n]) => `${c} x${n}`).join(", "));

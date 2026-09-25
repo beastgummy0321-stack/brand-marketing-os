@@ -17,11 +17,12 @@ function Mark({ k }: { k: "A" | "B" }) {
   return <span className="inline-grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-xs font-bold text-white">{k}</span>;
 }
 
-function Progress({ value, max, ok }: { value: number | null; max: number; ok: boolean }) {
+/** `.pb`: the fill is green when the side passed (or won); otherwise the collecting purple, or the judged loser's grey. */
+function Progress({ value, max, ok, rest = "bg-chart-soft" }: { value: number | null; max: number; ok: boolean; rest?: string }) {
   const pct = value === null || max <= 0 ? 0 : Math.min(100, Math.max(0, (value / max) * 100));
   return (
     <div className="relative mt-1.5 h-2 overflow-hidden rounded bg-muted" aria-hidden="true">
-      <i className={cn("absolute inset-y-0 left-0 rounded", ok ? "bg-success" : "bg-chart-soft")} style={{ width: `${pct}%` }} />
+      <i className={cn("absolute inset-y-0 left-0 rounded", ok ? "bg-success" : rest)} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -58,7 +59,7 @@ function Tile({ k, side, dimension, win, verdict, max, breakEven }: {
           ? <span className="text-sm font-medium text-muted-foreground">每筆讀不到</span>
           : <><span className="text-2xl font-[650] tracking-tight">{whole(cost)} 元</span> <span className="text-xs text-muted-foreground">每賣一筆</span><MoneyTag cost={cost} breakEven={breakEven} /></>}
       </div>
-      <Progress value={cost} max={max} ok={win === true} />
+      <Progress value={cost} max={max} ok={win === true} rest="bg-chart-rest" />
       <div className="numeric flex justify-between gap-2 text-[11.5px] text-muted-foreground">
         <span>{side.results === null ? "購買讀不到" : `購買 ${formatAmount(side.results)} 筆 ✓`}</span>
         <span>{side.spend === null ? "花費讀不到" : `花 ${formatAmount(side.spend)} 元`}</span>
