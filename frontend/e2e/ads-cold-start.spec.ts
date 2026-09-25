@@ -56,24 +56,35 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   await page.getByLabel("密碼").fill("123456");
   await page.getByRole("button", { name: "登入", exact: true }).click();
   await page.getByRole("link", { name: "F13 隔離驗收品牌", exact: true }).click();
+  // F30-I05: the wizard picks one of the brand's products; add one through the products page (manual, no spend).
+  const productName = `F13 冷啟動商品 ${Date.now()}`;
+  await page.goto(`/app/brands/${fixture.brand_id}/products`);
+  await page.getByRole("button", { name: "新增產品" }).first().click();
+  await page.getByLabel("產品名稱").fill(productName);
+  await page.getByRole("button", { name: "新增這個產品", exact: true }).click();
+  await expect(page).toHaveURL(/\/products\/prd_/);
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
   await page.getByRole("link", { name: "建立活動", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "建立投放計畫", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "建立活動", exact: true })).toBeVisible();
   const filename = "fixture-I2.png";
+  await page.getByRole("button", { name: /^進階/ }).click();
   await page.getByRole("checkbox", { name: `選取 ${filename}`, exact: true }).check();
+  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  await page.getByRole("radio", { name: /^購買/ }).click();
+  await page.getByLabel("這個活動最多花").fill("30000");
   const creation = responseFor(page, "/campaigns");
   const attachment = responseFor(page, "/placements");
-  await page.getByRole("button", { name: "請 AI 依品牌資料建議", exact: true }).click();
+  await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
   const createdResponse = await successful(creation);
   const created = (await createdResponse.json()).campaign;
   expect(created.id).not.toBe(fixture.cold_campaign_id);
-  expect(created.goal_text).toContain("品牌已保存");
+  expect(created.goal_text).toContain(productName);
   const attached = (await (await successful(attachment)).json()).placement;
-  await expect(page.getByRole("heading", { name: "行銷駕駛艙理解如下", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "系統這樣理解", exact: true })).toBeVisible();
   await capture(page, directory, "brief-confirmation");
 
   const strategy = responseFor(page, `/campaigns/${created.id}/strategy`);
-  await page.getByRole("button", { name: "產生策略建議 →", exact: true }).click();
+  await page.getByRole("button", { name: "產生策略 →", exact: true }).click();
   await successful(strategy);
   // F28-I09: nothing is preselected — the user fills the total in 自己填總額; a total above the campaign's budget cap
   // needs the second yes in the confirm sheet. Adopting also needs a cost-per-result cap (一個上限).

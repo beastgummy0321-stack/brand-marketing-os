@@ -96,21 +96,25 @@ async function openPerformanceDetails(page: Page) {
   await expect(details).toHaveAttribute("aria-expanded", "true");
 }
 
-async function createCampaignInUi(page: Page, brandId: string): Promise<string> {
+async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: string): Promise<string> {
+  // F30-I05: the wizard picks one of the brand's products (manual product, no spend).
+  const productName = "引導測試新品 500ml";
+  await api(page, headers, "POST", `/api/products/brands/${brandId}`, { name: productName });
   await page.goto(`/app/brands/${brandId}/ads/new`);
-  await page.getByLabel("你這次想做到什麼？").fill("測試新品購買成效，保持平台與素材條件可核對。");
-  await page.getByRole("button", { name: "日期" }).click();
-  await page.getByLabel("開始日期").fill(dateOffset(-6));
-  await page.getByLabel("結束日期").fill(dateOffset(0));
-  await page.getByRole("button", { name: "產生建議", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "行銷駕駛艙理解如下" })).toBeVisible();
+  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  await page.getByRole("radio", { name: /^購買/ }).click();
+  await page.getByLabel("開始", { exact: true }).fill(dateOffset(-6));
+  await page.getByLabel("結束", { exact: true }).fill(dateOffset(0));
+  await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "系統這樣理解" })).toBeVisible();
   await expect(page.getByText("商品", { exact: true })).toBeVisible();
-  await expect(page.getByText("目標", { exact: true })).toBeVisible();
-  await expect(page.getByText("預算", { exact: true })).toBeVisible();
-  await expect(page.getByText("時間", { exact: true })).toBeVisible();
+  await expect(page.getByText("結果", { exact: true })).toBeVisible();
+  await expect(page.getByText("預算上限", { exact: true })).toBeVisible();
+  await expect(page.getByText("期間", { exact: true })).toBeVisible();
   await captureDesktopEvidence(page, "campaign-understood");
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
-  await page.getByRole("button", { name: "產生策略建議 →" }).click();
+  await page.getByRole("button", { name: "產生策略 →" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/${campaignId}\\?tab=strategy`));
   // F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分; the reasons sit in a fold that starts closed.
   await expect(page.getByRole("heading", { name: "一個上限", exact: true })).toBeVisible();
@@ -237,7 +241,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   test.setTimeout(120_000);
   const headers = await register(page, "guided-advanced");
   const brandId = await createBrand(page, `引導進階測試品牌 ${Date.now()}`);
-  const campaignId = await createCampaignInUi(page, brandId);
+  const campaignId = await createCampaignInUi(page, headers, brandId);
   const { groupId } = await setupAds(page, headers, brandId, campaignId, true);
 
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=structure`);
