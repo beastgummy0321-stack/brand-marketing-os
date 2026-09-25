@@ -26,18 +26,17 @@ import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, KindMark, LearnCard, Meter, Segmented, TagToggle } from "../patterns";
 import { CleanupEvidence } from "./CleanupEvidence";
 import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
+import { AdoptLatestButton } from "./CleanupRebuild";
+import { createCleanupSet, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { Tile } from "./Tile";
 import {
   buildBudgetDraftItem,
-  buildCleanupDraftItems,
   buildPauseDraftItem,
   budgetTitle,
   campaignChangesPath,
   changeStepPath,
-  cleanupDrift,
   cleanupProposePath,
-  cleanupTitle,
   isCleanupTriageItem,
   isMonthBudgetRejection,
   itemAngle,
@@ -319,8 +318,6 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (proposeKind === "cleanup") return `triage-cleanup:${campaignId}:${crypto.randomUUID()}`;
     return `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`;
   });
-  // F28-I15: one operation id per page for 「改用最新提議」, so a retry after a lost response replays the same set.
-  const [adoptOperationId] = useState(() => `triage-cleanup-adopt:${setId ?? campaignId}:${crypto.randomUUID()}`);
   const [busy, setBusy] = useState(false);
   // The page is keyed by its URL, so an approve error must ride the canonical redirect in router
   // state — otherwise a rebuild-then-fail lands on a fresh instance with the message gone.
@@ -393,17 +390,6 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
   const blocked = changeSet !== null && !cleanupSet
     && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
-  // F28-I15: a cleanup draft built from an older proposal is not what the queue row proposes now — the page shows
-  // the difference and offers only 「改用最新提議」 (never 核准 of the outdated list). `null` = page as before.
-  const drift = kind === "cleanup" ? cleanupDrift(changeSet, triageItem?.cleanup) : null;
-  // F28-I15: the propose route's confirm step, once the row already has a cleanup draft, is that draft's own
-  // confirm page — so the comparison above happens in one place, and 核准 never silently approves an older list.
-  const draftProposalId = isCleanupPropose && searchParams.get("step") === "confirm"
-    && triageItem?.proposal?.kind === "cleanup" && triageItem.proposal.status === "draft"
-    ? triageItem.proposal.change_set_id : null;
-  useEffect(() => {
-    if (draftProposalId) navigate(changeStepPath(brandId, campaignId, draftProposalId, "confirm"), { replace: true });
-  }, [draftProposalId, brandId, campaignId, navigate]);
 
   // Contract C / correction 9: 「一則廣告一次 copy hash 一顆 LLM call，暫停提議頁一開就打」——
   // `entityId`（propose 網址）或既有草稿的 `item.target_id` 都是同一則廣告的 id；`!closed` 只是
@@ -438,6 +424,13 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (canonical !== location.pathname) navigate(canonical, { replace: true, state: actionError ? { actionError } : undefined });
   }, [changeSet, busy, actionError, brandId, campaignId, location.pathname, navigate]);
 
+  // F28-I15: an outdated cleanup draft offers only 「改用最新提議」 (see `cleanupDraft.ts::useCleanupRebuild`).
+  const { drift, draftProposalId, adopt } = useCleanupRebuild({
+    brandId, campaignId, setId, isCleanup: kind === "cleanup",
+    proposeConfirmStep: isCleanupPropose && searchParams.get("step") === "confirm",
+    changeSet, triageItem, busy, setBusy, setChangeSet, setActionError,
+  });
+
   function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。";
   }
@@ -468,19 +461,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
-      // F27-I15 Contract F / coordinator correction: the backend only accepts `source: "cleanup"`
-      // on create once F27-I25 lands its own `ChangeDraft.source?`/`CreateRequest.source` widening
-      // (out of this issue's touch, `frontend/src/lib/adsChangeApi.ts`). Widen the type locally at
-      // the call site rather than editing that file or stopping — `createChangeSet` just
-      // `JSON.stringify`s `body` as-is, so the extra key reaches the backend regardless of the
-      // narrower `ChangeDraft` type.
-      return createChangeSet(brandId, campaignId, {
-        operation_id: operationId,
-        title: cleanupTitle(cleanup.campaign_name),
-        month: currentBudgetMonth(),
-        items: buildCleanupDraftItems(cleanup.ads),
-        source: "cleanup",
-      } as ChangeDraft & { source: "cleanup" });
+      return createCleanupSet(brandId, campaignId, cleanup, operationId);
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
@@ -530,31 +511,6 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       const target = await ensureWorkingSet();
       const updated = await approveWithRebuild(target, false);
       setChangeSet(updated);
-    } catch (err) {
-      setActionError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** F28-I15: rebuild the outdated cleanup draft from the queue row's current `cleanup.ads`, superseding it
-   * (`change_control.create` marks the old draft `superseded`), then open the new set's confirm step. */
-  async function handleAdoptLatest() {
-    const cleanup = triageItem?.cleanup;
-    if (busy || !changeSet || !cleanup) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      const rebuilt = await createChangeSet(brandId, campaignId, {
-        operation_id: adoptOperationId,
-        title: cleanupTitle(cleanup.campaign_name),
-        month: currentBudgetMonth(),
-        items: buildCleanupDraftItems(cleanup.ads),
-        supersedes_id: changeSet.id,
-        source: "cleanup",
-      });
-      setChangeSet(rebuilt);
-      navigate(changeStepPath(brandId, campaignId, rebuilt.id, "confirm"), { replace: true });
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -778,7 +734,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
         )}
         {drift ? (
-          <Button disabled={busy} onClick={() => void handleAdoptLatest()}>{busy ? "處理中…" : "改用最新提議 →"}</Button>
+          <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
         ) : !closed ? (
           <Button disabled={busy} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
         ) : nextAction ? (

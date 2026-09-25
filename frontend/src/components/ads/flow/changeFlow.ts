@@ -3,7 +3,7 @@
  * Kept separate from `ConfirmPage.tsx` so I03 (到平台完成) and I04 (核對結果) reuse the same
  * step rule and paths instead of re-deriving them. */
 import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsChangeApi";
-import type { QueueCleanup, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
+import type { QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 // F25-I03: 「下一件」跨 kind 共用同一顆判斷——home 列表跟這裡的 handoff/verify 頁不能各算各的
 // （feature Decisions「下一件」）。只 import，不改 `home/status.ts`（F25-I02 同時在改那支檔）。
 import { isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
@@ -151,22 +151,6 @@ export function cleanupTitle(campaignName: string | null): string {
  * 划算 and ungraded ads are never in the list). */
 export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
   return ads.map((ad) => buildPauseDraftItem(ad.entity_id, CLEANUP_PAUSE_REASON));
-}
-
-/** F28-I15: how a cleanup draft's frozen close list differs from the queue row's current `cleanup.ads` —
- * `added` = ads the latest proposal closes that the draft does not, `dropped` = draft items the latest proposal no
- * longer closes. Compared by entity id only (order and reasons are not a difference). `null` when there is nothing
- * to adopt: the set is not a draft (a rejected / deferred / approved set is never rebuilt this way), the queue row
- * is missing (read failed or the row left the queue), the lists match, or the latest proposal is empty (a set
- * needs at least one item, so there is nothing to rebuild into). */
-export interface CleanupDrift { added: QueueCleanupAd[]; dropped: ChangeItem[] }
-export function cleanupDrift(set: ChangeSet | null, cleanup: QueueCleanup | null | undefined): CleanupDrift | null {
-  if (!set || set.status !== "draft" || !cleanup || cleanup.ads.length === 0) return null;
-  const draftIds = new Set(set.items.map((i) => i.target_id));
-  const latestIds = new Set(cleanup.ads.map((a) => a.entity_id));
-  const added = cleanup.ads.filter((a) => !draftIds.has(a.entity_id));
-  const dropped = set.items.filter((i) => !latestIds.has(i.target_id));
-  return added.length || dropped.length ? { added, dropped } : null;
 }
 
 /** F25-I03: the one fixed reason a `scale_budget` row proposes (feature Decisions "Confirm page

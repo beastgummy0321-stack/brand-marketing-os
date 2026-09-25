@@ -1,7 +1,7 @@
 import { Chip, GradeChip, KindMark } from "../patterns";
 import type { ChangeItem } from "@/lib/adsChangeApi";
 import type { QueueCleanup, QueueCleanupAd } from "@/lib/adsTriageApi";
-import type { CleanupDrift } from "./changeFlow";
+import type { CleanupDrift } from "./cleanupDraft";
 import { CostCell } from "./CleanupProposal";
 import { Tile } from "./Tile";
 
@@ -13,7 +13,7 @@ type Row = { id: string; name: string | null; ad: QueueCleanupAd | null; mark: M
  * list (prototype `q.frozen`); each is filled from the queue row's `cleanup` payload while the row is still open,
  * else it falls back to the item's own name (same live/fallback split as `PauseEvidence`/`BudgetEvidence`).
  *
- * F28-I15: with `drift` (the draft's close list is not the queue row's current one, `changeFlow.ts::cleanupDrift`)
+ * F28-I15: with `drift` (the draft's close list is not the queue row's current one, `cleanupDraft.ts::cleanupDrift`)
  * the card shows the latest proposal — its count, then its close list with the ads the draft did not have marked
  * 新增 — followed by the draft's ads the latest proposal no longer closes, struck through and marked 不關. */
 export function CleanupEvidence({ cleanup, items, drift = null }: {
