@@ -1,10 +1,22 @@
 import { useEffect, useState } from "react";
-import type { IntakeDraft, Offering, OfferingAssumptionField, OfferingInput, OfferingsData } from "@/lib/intakeApi";
+import type {
+  IntakeDraft,
+  Offering,
+  OfferingAdDelivery,
+  OfferingAssumptionField,
+  OfferingInput,
+  OfferingsChoice,
+  OfferingsData,
+  OfferingSellType,
+} from "@/lib/intakeApi";
 import { fetchOfferings, saveOfferings } from "@/lib/intakeApi";
 import { Badge } from "../shared/Badge";
 
-type SellType = "product" | "service" | "both";
-type AdDelivery = "direct" | "ask" | "lead";
+type SellType = OfferingSellType;
+type AdDelivery = OfferingAdDelivery;
+
+/** The service block is saved as this parent name (see `buildPayload`). */
+const SERVICE_PARENT_NAME = "服務";
 
 interface VariantRow {
   productId?: string;
@@ -67,9 +79,13 @@ function blankService(): ServiceState {
   };
 }
 
-/** 從既有 offerings 反推畫面狀態：有 `close_rate` 的是服務、沒有的是商品
- * （票面規則，不開新欄位判斷業務類型）。 */
-function deriveFromOfferings(offerings: Offering[]): { products: ProductGroup[]; service: ServiceState | null } {
+/** 從既有 offerings 反推畫面狀態。沒存過選擇（`choice === null`）時照舊：有 `close_rate` 的是
+ * 服務、沒有的是商品。存過選擇（F31 Contract M）時，服務是有 `close_rate` 或名叫「服務」的
+ * 母產品——直接下單的服務沒有 `close_rate`，只看它會被讀成商品。 */
+function deriveFromOfferings(
+  offerings: Offering[],
+  choice: OfferingsChoice | null,
+): { products: ProductGroup[]; service: ServiceState | null } {
   const parents = offerings.filter((o) => o.parent_id === null);
   const products: ProductGroup[] = [];
   let service: ServiceState | null = null;
@@ -77,7 +93,7 @@ function deriveFromOfferings(offerings: Offering[]): { products: ProductGroup[];
   for (const parent of parents) {
     const variants = offerings.filter((o) => o.parent_id === parent.product_id);
     const rows = variants.length > 0 ? variants : [parent];
-    const isService = rows.some((r) => r.close_rate !== null);
+    const isService = rows.some((r) => r.close_rate !== null) || (choice !== null && parent.name === SERVICE_PARENT_NAME);
     if (isService) {
       const r = rows[0];
       service = {
@@ -157,10 +173,13 @@ export function OfferingsStep({
       .then((res) => {
         if (cancelled) return;
         setData(res);
-        const { products: p, service: s } = deriveFromOfferings(res.offerings);
+        const { products: p, service: s } = deriveFromOfferings(res.offerings, res.choice);
         if (p.length > 0) setProducts(p);
         if (s) setService(s);
-        if (p.length > 0 && s) setSellType("both");
+        if (res.choice) {
+          setSellType(res.choice.sell_type);
+          setAdDelivery(res.choice.ad_delivery);
+        } else if (p.length > 0 && s) setSellType("both");
         else if (s) setSellType("service");
         else if (p.length > 0 && res.offerings.length > 0) setSellType("product");
       })
@@ -292,7 +311,7 @@ export function OfferingsStep({
       if (service.costAssumed) assumptions.push("cost");
       if (asksCloseRate && service.closeRateAssumed) assumptions.push("close_rate");
       out.push({
-        parent: { product_id: service.productId, name: "服務" },
+        parent: { product_id: service.productId, name: SERVICE_PARENT_NAME },
         variants: [{
           product_id: service.productId,
           label: "方案",
@@ -308,10 +327,11 @@ export function OfferingsStep({
   }
 
   async function handleSubmit() {
+    if (!sellType || !adDelivery) return;
     setSaving(true);
     setSubmitError(null);
     try {
-      await saveOfferings(brandId, buildPayload());
+      await saveOfferings(brandId, buildPayload(), { sell_type: sellType, ad_delivery: adDelivery });
       onRefresh();
       onNext();
     } catch (err) {

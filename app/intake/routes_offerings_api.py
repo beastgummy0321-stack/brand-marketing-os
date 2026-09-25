@@ -55,7 +55,12 @@ def offerings_get(request: Request, brand_id: str):
     require_brand(brand_id, actor)
     conn = cast(Conn, web.conn)
     offerings = []
-    for product in bi_repo.list_products(conn, brand_id):
+    # F31-I01: creation order, so a parent's sell-ways come back in the order they were entered
+    # (the screen treats the first one as 單品). `list_products` itself keeps name order —
+    # brief truncation and the wizard options depend on it.
+    products = sorted(bi_repo.list_products(conn, brand_id),
+                      key=lambda p: (p["created_at"], p["id"]))
+    for product in products:
         econ = bi_repo.get_product_economics(conn, brand_id, product["id"])
         offerings.append({
             "product_id": product["id"],
@@ -74,7 +79,10 @@ def offerings_get(request: Request, brand_id: str):
         }
         for key in _BENCHMARK_KEYS
     }
-    return _envelope({"offerings": offerings, "benchmarks": benchmarks})
+    return _envelope({
+        "offerings": offerings, "benchmarks": benchmarks,
+        "choice": state.offerings_choice(brand_id, conn=conn),
+    })
 
 
 def _display_name(parent_name: str, label: str) -> str:
@@ -91,6 +99,10 @@ async def offerings_post(request: Request, brand_id: str):
     offerings = body.get("offerings")
     if not isinstance(offerings, list) or not offerings:
         return _error(400, "至少要有一項要賣的東西。")
+    raw_choice = body.get("choice")
+    choice = state.parse_offerings_choice(raw_choice)
+    if raw_choice is not None and choice is None:
+        return _error(400, "請選你賣的是什麼、廣告帶來的是什麼。")
     conn = cast(Conn, web.conn)
 
     for offering in offerings:
@@ -150,7 +162,11 @@ async def offerings_post(request: Request, brand_id: str):
             except ValueError as exc:
                 return _error(400, f"「{display_name}」{exc}")
 
-    draft = state.require_draft(brand_id, conn=conn)
-    if draft["step"] < 3:
-        state.touch(draft, f"/brands/{brand_id}/intake/offerings", 3, conn=conn)
+    # F31-I01 Contract M: the saved choice lives on the draft (a finished brand reopening step 3
+    # writes it on its latest completed draft), and a save moves the draft on to step 4.
+    draft = state.require_draft_or_just_completed(brand_id, conn=conn)
+    if choice is not None:
+        state.save_offerings_choice(draft, choice, conn=conn)
+    if draft["status"] == "draft" and draft["step"] < 4:
+        state.touch(draft, f"/brands/{brand_id}/intake/tools", 4, conn=conn)
     return Response(status_code=204)
