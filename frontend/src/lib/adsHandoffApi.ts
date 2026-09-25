@@ -2,6 +2,7 @@ import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 import type { ChangeSet } from "./adsChangeApi";
 import type { NativeEntity } from "./adsExternalApi";
+import type { SettingsReadback } from "./adsLaunchSettingsApi";
 
 export interface HandoffEvidence {
   entity_exists?: boolean;
@@ -43,6 +44,9 @@ export interface HandoffWorkspace {
   items: HandoffItem[]; items_truncated: boolean;
   ready_placements: HandoffPlacement[]; destinations: NativeEntity[];
   destinations_truncated: boolean; launch_stale: LaunchStale | null; notice: string;
+  /** F29 Contract I: the approved launch settings against the platform read; null before any ad set or ad was read
+   * back, or for a launch approved before launch settings existed. */
+  settings_readback: SettingsReadback | null;
 }
 export interface LaunchDecision { change_set_id: string; content_hash: string }
 export interface HandoffIdentity {

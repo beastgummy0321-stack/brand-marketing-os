@@ -17,7 +17,9 @@ import {
 } from "@/lib/adsApi";
 import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
 import { StepButton } from "./nextStep";
-import { Disclosure } from "./patterns";
+import { ActionBar, Disclosure } from "./patterns";
+import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
+import { LaunchSettingsCopy } from "./publish/LaunchSettingsCopy";
 import { getOrgId } from "@/lib/auth";
 
 const OPTIONAL_HANDOFF_FIELDS = new Set([
@@ -116,6 +118,22 @@ function LegacyPublishPage({
 
   useEffect(load, [load]);
 
+  // A saved launch-settings change changes the launch content and so its approval hash: re-read the describe in
+  // place (the page stays on screen) and hold the approval until the fresh hash is here.
+  const [describeFresh, setDescribeFresh] = useState<"fresh" | "refreshing" | "failed">("fresh");
+  const refreshSeq = useRef(0);
+  const refreshDescribe = useCallback(() => {
+    const seq = ++refreshSeq.current;
+    setDescribeFresh("refreshing");
+    getPublish(brandId, c.id, adapter)
+      .then((response) => {
+        if (seq !== refreshSeq.current) return;
+        setState({ status: "ready", adapters: response.adapters, describe: response.describe });
+        setDescribeFresh("fresh");
+      })
+      .catch(() => { if (seq === refreshSeq.current) setDescribeFresh("failed"); });
+  }, [brandId, c.id, adapter]);
+
   useEffect(() => {
     let cancelled = false;
     setChannels(null);
@@ -179,6 +197,9 @@ function LegacyPublishPage({
           }}
           onCampaignChange={onCampaignChange}
           onViewPerformance={onViewPerformance}
+          onGoToAssets={onGoToAssets}
+          onSettingsSaved={refreshDescribe}
+          describeFresh={describeFresh}
         />
       ) : adapter === "simulated" ? (
         <SimulatedPublish
@@ -219,6 +240,9 @@ function ManualPublish({
   pairingPlatform,
   onCampaignChange,
   onViewPerformance,
+  onGoToAssets,
+  onSettingsSaved,
+  describeFresh,
 }: {
   brandId: string;
   campaign: CampaignDetail;
@@ -228,6 +252,9 @@ function ManualPublish({
   pairingPlatform: { key: string; label: string; connected: boolean | null; state: string };
   onCampaignChange: (campaign: CampaignDetail) => void;
   onViewPerformance: () => void;
+  onGoToAssets: () => void;
+  onSettingsSaved: () => void;
+  describeFresh: "fresh" | "refreshing" | "failed";
 }) {
   const [confirmed, setConfirmed] = useState(Boolean(describe.content_hash) && c.actions.some(a =>
     a.kind === "publish" && a.target_kind === "campaign" && a.after_json.adapter === "manual"
@@ -242,6 +269,12 @@ function ManualPublish({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [bindMessage, setBindMessage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
+  // F29-I16: what keeps 核准上架清單 disabled (a launch-settings error, a pending save, a failed read), or null.
+  const [settingsBlocker, setSettingsBlocker] = useState<string | null>("投放設定還在讀取");
+  const approvalBlocker = settingsBlocker
+    ?? (describeFresh === "refreshing" ? "正在更新核准內容"
+      : describeFresh === "failed" ? "核准內容沒有更新成功，請重新開啟本頁"
+      : !describe.content_hash ? "尚未取得本版核准內容，請重新開啟本頁" : null);
 
   const counts = bindCounts(c);
   const allBound = attempted && bindMessage === null && counts.matched === counts.total;
@@ -252,6 +285,7 @@ function ManualPublish({
 
   async function confirmPreparation() {
     if (!describe.content_hash) { setConfirmError("目前內容尚未取得可核准版本，請重新開啟本頁。"); return; }
+    if (approvalBlocker) return;
     setConfirming(true);
     setConfirmError(null);
     try {
@@ -290,9 +324,10 @@ function ManualPublish({
         <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
         <p>這次核准是品牌月總額內的分配；持續投放及其他已核准安排會一起計算。</p>
         {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
-        {!confirmed ? <Button disabled={confirming || !describe.content_hash} onClick={() => void confirmPreparation()}>{confirming ? "記錄中…" : "確認並記錄手動上架準備"}</Button> : <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
-        {confirmError && <p role="alert" className="text-danger">{confirmError}</p>}
+        {confirmed && <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
       </div>
+      <LaunchSettingsCard brandId={brandId} campaign={c} locked={confirmed} onSaved={onSettingsSaved}
+        onCampaignSaved={onCampaignChange} onBlockerChange={setSettingsBlocker} />
       {describe.checklist.map((node) => (
         <NodeCard key={`${node.level}:${node.id}`} node={node} />
       ))}
@@ -301,8 +336,10 @@ function ManualPublish({
         <p className="font-semibold">2. 在{platformNames}完成必要設定</p>
         <p className="mt-1 text-muted-foreground">逐項使用上方名稱、素材、預算與追蹤設定。完成平台操作不會自動改成本系統的已上線狀態。</p>
       </div>
+      {confirmed && <div id="launch-settings-copy" className="scroll-mt-4"><LaunchSettingsCopy brandId={brandId} campaignId={c.id} /></div>}
 
-      {confirmed && <ManualHandoffPanel brandId={brandId} campaignId={c.id} mode="items" />}
+      {confirmed && <ManualHandoffPanel brandId={brandId} campaignId={c.id} mode="items" platformLabel={pairingPlatform.label}
+        onBackToPlatform={() => document.getElementById("launch-settings-copy")?.scrollIntoView?.({ behavior: "smooth", block: "start" })} />}
       <Disclosure label="舊版名稱配對與紀錄（不代表本次清單完成）">
       <div className="surface">
         <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">
@@ -357,6 +394,15 @@ function ManualPublish({
         </div>
       </div>
       </Disclosure>
+      {confirmError && <p role="alert" className="text-sm text-danger">{confirmError}</p>}
+      {!confirmed && <ActionBar
+        back={<Button variant="ghost" onClick={onGoToAssets}>← 素材</Button>}
+        exit={{ label: "先不要，回投放中心", to: `/brands/${encodeURIComponent(brandId)}/ads` }}
+        hint={approvalBlocker ?? "核准不會改動平台"}>
+        <Button disabled={confirming || approvalBlocker !== null} onClick={() => void confirmPreparation()}>
+          {confirming ? "核准中…" : "核准上架清單 →"}
+        </Button>
+      </ActionBar>}
     </div>
   );
 }

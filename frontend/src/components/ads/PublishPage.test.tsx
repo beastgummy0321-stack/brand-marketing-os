@@ -2,12 +2,14 @@
  * 一般入口只提供 API 回傳的手動準備；直接指定 simulated adapter 的隔離演練仍可使用。
  * 測試也涵蓋素材警告、平台清單、Meta-only 配對邊界，以及選填交接資料收合。 */
 import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import type { AssetReadinessSummary, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { bindCampaign, getCampaign, getPublish, publishCampaign } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
+import { getLaunchSettings, saveLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
 import { PublishPage } from "./PublishPage";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -22,7 +24,26 @@ vi.mock("@/lib/adsApi", async () => {
 });
 
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => <p>逐項平台核對</p> }));
-vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn() }));
+vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn(), saveManualSettings: vi.fn() }));
+vi.mock("@/lib/adsLaunchSettingsApi", () => ({ getLaunchSettings: vi.fn(), saveLaunchSettings: vi.fn(), confirmLaunchSetting: vi.fn() }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope" }) }));
+
+const REC: LaunchSettingsValues = {
+  optimization_event: "purchase", bid_strategy: "lowest_cost", placement: { mode: "auto", positions: [] },
+  audience: { age_min: 18, age_max: 65, gender: "all", countries: ["TW"] }, pixel_id: null, utm: "utm_source=meta&utm_campaign=cmp_1",
+};
+function settingsView(values: Partial<LaunchSettingsValues> = {}, errors: LaunchSettingsView["errors"] = []): LaunchSettingsView {
+  const opt = <T extends string>(value: T, label: string) => ({ value, label, note: `${label}的說明` });
+  return {
+    values: { ...REC, ...values }, recommended: REC, edited: [], errors,
+    options: {
+      optimization_event: [opt("purchase", "購買")], bid_strategy: [opt("lowest_cost", "最低成本"), opt("cost_cap", "單次成果成本上限")],
+      positions: [opt("facebook_feed", "Facebook 動態")], countries: [opt("TW", "台灣")], pixels: [], pixels_error: null,
+      placement_modes: [opt("auto", "自動"), opt("manual", "手動")], genders: [opt("all", "不限")], ages: [18, 25, 65],
+      field_notes: { audience: "要給哪些人看", pixel_id: "追蹤碼", utm: "網址參數" },
+    },
+  };
+}
 
 function group(channel_key = "meta"): DeliveryGroupRow {
   return {
@@ -67,10 +88,13 @@ function campaign(asset_readiness: AssetReadinessSummary): CampaignDetail {
   };
 }
 
+beforeEach(() => { vi.mocked(getLaunchSettings).mockResolvedValue(settingsView()); });
+const enabled = (button: HTMLElement) => waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+
 function renderPage(c: CampaignDetail, adapter: "auto_meta" | "manual" | "simulated") {
   const onChangeAdapter = vi.fn();
   const onGoToAssets = vi.fn();
-  const view = render(
+  const view = render(<MemoryRouter>
     <PublishPage
       brandId="brd_1"
       campaign={c}
@@ -80,14 +104,15 @@ function renderPage(c: CampaignDetail, adapter: "auto_meta" | "manual" | "simula
       onViewPerformance={vi.fn()}
       onChangeAdapter={onChangeAdapter}
       onGoToAssets={onGoToAssets}
-    />,
-  );
+    />
+  </MemoryRouter>);
   return { onChangeAdapter, onGoToAssets, ...view };
 }
 
 describe("PublishPage（F06-I04）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getLaunchSettings).mockResolvedValue(settingsView());
     vi.mocked(getPublish).mockImplementation((_brandId, _campaignId, adapter = "manual") =>
       Promise.resolve({
         adapters: [
@@ -149,9 +174,10 @@ describe("PublishPage（F06-I04）", () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 0, total: 0 }));
     vi.mocked(publishCampaign).mockClear();
     renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
-    const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
     await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     expect(publishCampaign).not.toHaveBeenCalled();
+    await enabled(confirm);
     expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(confirm);
     await waitFor(() => expect(publishCampaign).toHaveBeenCalledTimes(1));
@@ -178,7 +204,7 @@ describe("PublishPage（F06-I04）", () => {
     first.unmount();
 
     renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
     await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await user.click(confirm);
     expect(await screen.findByText(/目前僅支援與 Meta 配對/)).toBeTruthy();
@@ -215,7 +241,7 @@ describe("PublishPage（F06-I04）", () => {
     const c = campaign({ ready_count: 1, total: 1 });
     c.groups = [group("meta")];
     renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
     await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await userEvent.click(confirm);
     expect(await screen.findByText(/Meta 連線狀態目前無法確認/)).toBeTruthy();
@@ -236,7 +262,7 @@ describe("PublishPage（F06-I04）", () => {
     const c = campaign({ ready_count: 1, total: 1 });
     c.groups = [group("meta")];
     renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "確認並記錄手動上架準備" });
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
     await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
     await userEvent.click(confirm);
     expect(await screen.findByText(/先完成 Meta 廣告連線/)).toBeTruthy();
@@ -249,6 +275,47 @@ describe("PublishPage（F06-I04）", () => {
     vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
     vi.mocked(publishCampaign).mockRejectedValue(new Error("餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。"));
     renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
-    await userEvent.click(await screen.findByRole("button", { name: "確認並記錄手動上架準備" }));
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await enabled(confirm);
+    await userEvent.click(confirm);
     expect((await screen.findByRole("alert")).textContent).toContain("餘額尚不確定");
   });
+
+describe("PublishPage（F29-I16）投放設定掛在上架清單", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "已接上" }]);
+  });
+  const hashDescribe = (hash: string) => ({ adapters: [{ key: "manual" as const, label: "手動發布" }], adapter: "manual" as const, describe: { adapter: "manual" as const, message: null, checklist: [], content_hash: hash } });
+
+  it("投放設定有錯時「核准上架清單」停用，提示就是錯誤；先不要可回投放中心", async () => {
+    vi.mocked(getPublish).mockResolvedValue(hashDescribe("hash-1"));
+    vi.mocked(getLaunchSettings).mockResolvedValue(settingsView({ placement: { mode: "manual", positions: [] } },
+      [{ field: "placement.positions", code: "positions_empty", message: "手動版位至少選一個" }]));
+    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
+    expect(await screen.findByText("手動版位至少選一個，先在「投放設定」改好")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("link", { name: "✕ 先不要，回投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    await userEvent.click(screen.getByRole("button", { name: "核准上架清單 →" }));
+    expect(publishCampaign).not.toHaveBeenCalled();
+  });
+
+  it("改了設定：存好後重新讀核准內容，用新的版本核准；核准後設定唯讀並出現可複製的投放設定", async () => {
+    vi.mocked(getPublish).mockResolvedValueOnce(hashDescribe("hash-1")).mockResolvedValue(hashDescribe("hash-2"));
+    vi.mocked(saveLaunchSettings).mockImplementation(async (_b, _c, values) => settingsView(values));
+    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 1, total: 1 }));
+    const user = userEvent.setup();
+    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
+    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await enabled(confirm);
+    await user.selectOptions(screen.getByLabelText(/出價方式/), "cost_cap");
+    await waitFor(() => expect(getPublish).toHaveBeenCalledTimes(2));
+    await enabled(confirm);
+    await user.click(confirm);
+    await waitFor(() => expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash-2", operation_id: expect.any(String) }));
+    expect(await screen.findByText("核准後已定下來；想改，改完再核准一次")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "複製出價方式" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "核准上架清單 →" })).toBeNull();
+  });
+});

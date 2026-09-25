@@ -10,12 +10,17 @@ import { formatSyncTime } from "@/lib/format";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 import { Disclosure } from "./patterns/Disclosure";
 import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
+import { SettingsReadback } from "./publish/SettingsReadback";
 
 type Props = {
   brandId: string; campaignId: string; mode?: "all" | "items" | "new-ad"; refreshKey?: number;
   /** Tells the host whether this handoff has anything to verify (items or a stale launch), so the host never
    * shows its own "nothing to verify" state beside a handoff that lists items. */
   onHandoffWork?: (hasWork: boolean) => void;
+  /** F29-I16: the host's platform stage (publish page), the target of the settings readback's 回平台改. */
+  onBackToPlatform?: () => void;
+  /** Display name of the platform the launch settings were read from (e.g. the channel label). */
+  platformLabel?: string;
 };
 const states: Record<string, string> = { pending: "待操作", reported: "已回報，待讀回", confirmed: "設定已核對", deviated: "設定有差異", unknown: "尚未能確認", stale: "需重新確認" };
 const materials: Record<string, string> = { unknown: "未知", user_verified: "使用者人工核對", media_verified: "媒體來源已核對" };
@@ -35,7 +40,7 @@ export function ManualHandoffPanel(props: Props) {
   return <Panel key={`${scope}:${props.brandId}:${props.campaignId}`} {...props} scope={scope} />;
 }
 
-function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork }: Props & { scope: string }) {
+function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork, onBackToPlatform, platformLabel }: Props & { scope: string }) {
   const [data, setData] = useState<HandoffWorkspace | null>(null);
   const [nodes, setNodes] = useState<NativeEntity[]>([]);
   const [roots, setRoots] = useState<NativeEntity[]>([]);
@@ -132,6 +137,8 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
     {!data && !error && <p role="status">讀取交接內容…</p>}
     {data && <>
       {regular && <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">{data.notice}</p>}
+      {mode !== "new-ad" && regular && data.settings_readback && <SettingsReadback brandId={brandId} campaignId={campaignId}
+        readback={data.settings_readback} platform={platformLabel} onConfirmed={setData} onBackToPlatform={onBackToPlatform} />}
       {mode !== "new-ad" && regular && <>
         <div className="flex flex-wrap items-end gap-3">
           {sources.length > 0 && <label className="text-sm">候選來源帳戶<select className="mt-1 block w-full" value={source} disabled={Boolean(busy)} onChange={e => void loadSource(e.target.value)}>{sources.map(row => <option key={`${row.platform}:${row.account_id}`} value={`${row.platform}:${row.account_id}`}>{row.label} · {row.name || row.account_id}</option>)}</select></label>}
