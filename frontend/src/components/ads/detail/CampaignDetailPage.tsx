@@ -172,7 +172,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
         {campaigns.status === "loading"
           ? <><Skeleton className="h-9 w-80" /><Skeleton className="h-60 w-full" /></>
-          : <ReadFailed what={`活動清單讀不到：${campaigns.error}`} onRetry={campaigns.reload} retryLabel="重新讀取" />}
+          : <ReadFailed what={`活動清單讀不到：${campaigns.error}`} onRetry={campaigns.reload} />}
       </div>
     );
   }
@@ -225,7 +225,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 
       {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
       {triage.status === "error" && (
-        <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} retryLabel="重新讀取" />
+        <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} />
       )}
       {items && closed && items.length === 0 && closed.total === 0 && (
         <div className="surface p-5" data-testid="no-ads">
@@ -244,10 +244,10 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
           />
           {campaign.origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
           {queue.status === "error" && (
-            <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} retryLabel="重新讀取" />
+            <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} />
           )}
           {requests.read.status === "error" && (
-            <ReadFailed what={`素材需求讀不到（${requests.read.error}）；哪幾則已開「換掉這一則」暫時看不到。`} onRetry={requests.read.reload} retryLabel="重新讀取" />
+            <ReadFailed what={`素材需求讀不到（${requests.read.error}）；哪幾則已開「換掉這一則」暫時看不到。`} onRetry={requests.read.reload} />
           )}
           <GradeGroups
             items={active}

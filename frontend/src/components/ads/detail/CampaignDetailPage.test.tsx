@@ -361,7 +361,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link")).toBeNull();
 
     vi.mocked(getQueue).mockResolvedValue(dailyQueue(items));
-    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await within(screen.getByTestId("ad-row-a8")).findByRole("link", { name: "在清理提議" })).toBeTruthy();
     expect(screen.queryByText(/決策進度讀不到/)).toBeNull();
     expect(getTriage).toHaveBeenCalledTimes(1);
@@ -377,7 +377,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(screen.queryByText("沒有廣告資料，這個活動還沒有可以判斷的內容。")).toBeNull();
 
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
-    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
     expect(listCampaigns).toHaveBeenCalledTimes(1);
   });
@@ -389,7 +389,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(await screen.findByText("活動清單讀不到：清單讀取失敗")).toBeTruthy();
 
     vi.mocked(listCampaigns).mockResolvedValue([campaignCard({ id: "cmp_other" })]);
-    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByText("找不到這個 Campaign。")).toBeTruthy();
   });
 
@@ -634,7 +634,7 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     expect(await screen.findByText(/^素材需求讀不到（素材任務讀取失敗）/)).toBeTruthy();
     expect(await within(screen.getByTestId("ad-row-a8")).findByRole("link", { name: "在清理提議" })).toBeTruthy();
     vi.mocked(listMaterialTasks).mockResolvedValue({ tasks: [task("a8")] });
-    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await within(screen.getByTestId("ad-row-a8")).findByText("換掉這一則・需求已開")).toBeTruthy();
     expect(screen.queryByText(/素材需求讀不到/)).toBeNull();
   });
