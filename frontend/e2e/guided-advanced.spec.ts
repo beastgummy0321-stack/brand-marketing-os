@@ -279,11 +279,13 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await captureDesktopEvidence(page, "manual-launch-settings");
 
   await page.getByRole("button", { name: "素材", exact: true }).click();
+  // F30-I11: the old panels live in the tab's 「進階」 fold.
+  await page.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接", exact: true }).click();
   const legacyMaterials = page.getByRole("button", { name: "原有任務包與平台素材", exact: true });
   await expect(legacyMaterials).toHaveAttribute("aria-expanded", "false");
   await legacyMaterials.click();
   await expect(legacyMaterials).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByText("0／2 則已就位")).toBeVisible();
+  await expect(page.getByText("0／2 則素材已備妥")).toBeVisible();
   await expect(page.getByText("未開始", { exact: true }).first()).toBeVisible();
 
   let simulationReads = 0;

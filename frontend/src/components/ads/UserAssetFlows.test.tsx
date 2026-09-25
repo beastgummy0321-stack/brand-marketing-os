@@ -21,6 +21,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ 
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
+vi.mock("@/lib/adsSlotsApi", async importOriginal => ({ ...await importOriginal<object>(), getSlots: vi.fn().mockResolvedValue({ ready: 0, total: 0, groups: [], requests: [], requests_truncated: false }) }));
 vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof materialApi>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
 const library = (): AssetLibrary => ({ assets: [], uploads: [], next_cursor: null, next_upload_cursor: null });
 const upload = (id = "u1", status = "complete"): AssetUpload => ({ id, batch_id: "batch1", filename: `${id}.png`, expected_size: 1, status, error: null, asset_id: status === "complete" ? "asset1" : null, copy_fields: { headline: "原標題", body: "原內文", description: "原說明", caption: "額外原文" } });
@@ -123,6 +124,8 @@ describe("durable upload UI", () => {
 describe("placement and evidence UI", () => {
   it("imported empty groups still expose uploads and never require generated ads", async () => {
     render(<MemoryRouter><AssetsTab brandId="b1" campaign={campaign} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} /></MemoryRouter>);
+    // F30-I11: the material request editor and the uploads live in the tab's 「進階」 fold.
+    await userEvent.setup().click(screen.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接" }));
     vi.mocked(materialApi.saveMaterialOperation).mockResolvedValue({ task: {
       id: "task1", campaign_id: "c1", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [], limitations: [], created_at: "2026-09-19", replaces: null, cancelled_at: null,
     } });

@@ -10,17 +10,28 @@ import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, AssetReadinessRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { getAssets, getCampaign, setAssetReady } from "@/lib/adsApi";
+import { getSlots } from "@/lib/adsSlotsApi";
 import { AssetsTab } from "./AssetsTab";
 
 vi.mock("./MaterialTasksPanel", () => ({ MaterialTasksPanel: () => <p>素材分流入口</p> }));
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 vi.mock("./UserAssetPlacements", () => ({ UserAssetPlacements: () => <div>自帶素材安排</div> }));
 
-function renderWithRouter(ui: ReactElement) {
-  const result = render(<MemoryRouter>{ui}</MemoryRouter>);
+vi.mock("@/lib/adsSlotsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsSlotsApi")>("@/lib/adsSlotsApi");
+  return { ...actual, getSlots: vi.fn() };
+});
+
+/** The old readiness list lives in the 「進階」 fold (F30-I11): open it, then the old list inside it. */
+function renderWithRouter(ui: ReactElement, entry = "/") {
+  const result = render(<MemoryRouter initialEntries={[entry]}>{ui}</MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: ADVANCED }));
   fireEvent.click(screen.getByRole("button", { name: "原有任務包與平台素材" }));
   return result;
 }
+
+const ADVANCED = "進階：素材需求、自帶素材與人工交接";
+const noSlots = { ready: 0, total: 0, groups: [], requests: [], requests_truncated: false };
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -140,6 +151,7 @@ function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = 
 describe("AssetsTab（F06-I03）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getSlots).mockResolvedValue(noSlots);
   });
 
   it("兩則都已就位：底部按鈕是「發布 →」，點下去 onChangeTab(\"publish\")", async () => {
@@ -264,4 +276,78 @@ it("原生廣告在原素材表查看，不呼叫內部就緒 API 或建立假�
   expect(screen.getByText("內文：平台原文案")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "查看成效 →" }));
   expect(onChangeTab).toHaveBeenCalledWith("performance");
+});
+
+describe("AssetsTab 進階 fold（F30-I11）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSlots).mockResolvedValue(noSlots);
+  });
+
+  it("the old readiness list labels a row by material_ready, never 已就位 for material that cannot go out", async () => {
+    vi.mocked(getAssets).mockResolvedValue({
+      assets: [
+        { ...assetRow({ ad_id: "ad_1", state: "ready_manual", by: "小美", at: "09/20" }), material_ready: false } as AssetReadinessRow,
+        { ...assetRow({ ad_id: "ad_2", state: "ready_workbench", pack_id: "pk_1", brief_id: "brf_2" }), material_ready: true } as AssetReadinessRow,
+      ],
+      ready_count: 1,
+      total: 2,
+    });
+    renderTab(campaign({ asset_readiness: { ready_count: 1, total: 2, pack_id: "pk_1" } }));
+
+    expect(await screen.findByRole("heading", { name: "1／2 則素材已備妥" })).toBeTruthy();
+    const [first, second] = screen.getAllByRole("row").slice(1);
+    expect(first.textContent).toContain("還不能上架");
+    expect(first.textContent).toContain("已手動標記");
+    expect(second.textContent).toContain("素材已備妥");
+    expect(second.textContent).toContain("工作檯已完成");
+    expect(screen.queryByText(/已就位（/)).toBeNull();
+  });
+
+  it("a failed old readiness read shows ReadFailed with 重試 and re-reads", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getAssets).mockRejectedValueOnce(new Error("連線逾時")).mockResolvedValue({ assets: [assetRow()], ready_count: 0, total: 2 });
+    renderTab(campaign());
+
+    expect(await screen.findByText(/舊版素材就位清單讀不到：連線逾時/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByRole("heading", { name: "0／2 則素材已備妥" })).toBeTruthy();
+  });
+
+  it.each(["?material=mt_1", "?material_new=1", "?review=rv_1", "?recommendation=rc_1"])("deep link %s opens the fold on arrival", async (query) => {
+    render(
+      <MemoryRouter initialEntries={[`/brands/brd_1/ads/campaigns/cmp_1${query}`]}>
+        <AssetsTab brandId="brd_1" campaign={campaign()} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: ADVANCED }).getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByText("素材分流入口")).toBeTruthy();
+  });
+
+  it("#material-placements opens the fold and the placement list", async () => {
+    window.location.hash = "#material-placements";
+    try {
+      render(
+        <MemoryRouter>
+          <AssetsTab brandId="brd_1" campaign={campaign()} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+        </MemoryRouter>,
+      );
+      expect(screen.getByRole("button", { name: ADVANCED }).getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("button", { name: "素材安排與人工交接" }).getAttribute("aria-expanded")).toBe("true");
+      expect(await screen.findByText("自帶素材安排")).toBeTruthy();
+    } finally {
+      window.location.hash = "";
+    }
+  });
+
+  it("without a deep link the fold stays closed and the old panels are not read", async () => {
+    render(
+      <MemoryRouter>
+        <AssetsTab brandId="brd_1" campaign={campaign()} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: ADVANCED }).getAttribute("aria-expanded")).toBe("false");
+    expect(await screen.findByText("還沒有要放素材的格子")).toBeTruthy();
+    expect(getAssets).not.toHaveBeenCalled();
+  });
 });
