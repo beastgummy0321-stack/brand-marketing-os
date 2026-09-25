@@ -25,6 +25,10 @@ does not import or touch `app.schedule`, `app.meta`, `app.main`, or another modu
 directly — matching data is read through `app.meta.repository`'s public functions, never a raw
 SQL join into `meta_*` tables (ARCHITECTURE.md §0 "Outcome ingest"/"Matching is by exact name").
 
+Import side effect (F31-I03): registers `external_owner.owned_by_another_org` with
+`app.meta.repository.register_parent_owner_check`, so the Meta parent-id guard also refuses ids
+another org holds in the ads center.
+
 Callers: `app/main.py`'s register loop (next to `schedule`/`workbench`, same pattern).
 
 `app.core.cleanup` registration (this ticket): `repository.py`'s module tail registers
@@ -99,6 +103,19 @@ def dispatch_runtime(timestamp: int, *, limit=100) -> dict:
     from app.ads import runtime
 
     return runtime.dispatch(timestamp, limit=limit)
+
+
+def _register_meta_parent_owner_check() -> None:
+    """F31-I03: let the Meta name-match guard see ads-center bindings (`external_owner.py`).
+    Runs at import: `app.main` (API) and `app.worker` both import this package before any
+    request or job, so the check is in place before the first name match."""
+    from app.ads import external_owner
+    from app.meta import repository as meta_repo
+
+    meta_repo.register_parent_owner_check("ads", external_owner.owned_by_another_org)
+
+
+_register_meta_parent_owner_check()
 
 
 def launch_readiness(conn, org_id: str, brand_id: str) -> dict:

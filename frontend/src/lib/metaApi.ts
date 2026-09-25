@@ -74,6 +74,10 @@ export interface MetaCampaignSpend {
 
 export interface MetaSpendSummary {
   last_pull_at: string | null;
+  /** F31-I03: newest read time of the rows summed here; null only when there are no rows. */
+  data_pulled_at: string | null;
+  /** F31-I03: the rows' attribution window in words (e.g. 點擊後 7 天＋瀏覽後 1 天). */
+  attribution_label: string | null;
   campaigns: MetaCampaignSpend[];
   total: MetaCampaignSpend;
 }

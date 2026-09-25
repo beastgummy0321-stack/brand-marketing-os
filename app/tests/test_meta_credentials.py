@@ -128,8 +128,43 @@ class TokenVaultRoundTripTest(_MetaHttpTestBase):
         graph.fetch_page = _fake_error
         resp = self.client.post("/api/meta/token", json={"token": TOKEN})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("Invalid OAuth access token.", resp.json()["error"]["message"])
+        error = resp.json()["error"]
+        # F31-I03 (Contract N): Graph's own text never reaches the user; the code does.
+        self.assertEqual(error["code"], "meta_token_rejected")
+        self.assertEqual(
+            error["message"],
+            "Meta 拒絕了這個權杖（代碼 190）。請確認權杖沒有過期、是從正確的帳號產生的。",
+        )
+        self.assertNotIn("OAuth", error["message"])
         self.assertIsNone(meta_repo.get_credential(web.conn, coredb.DEV_ORG_ID))
+
+    def test_code_100_names_the_missing_ads_read_scope(self):
+        """F31-I03: a valid token without `ads_read` gets "(#100) Unsupported get request" on
+        `me/adaccounts` (measured 2026-09-07). Graph's sentence reads like a wrong URL, so the
+        route names the missing permission instead."""
+        graph.fetch_page = lambda url, *, params, headers: {"error": {
+            "message": "(#100) Unsupported get request. Please read the Graph API documentation"
+                       " at https://developers.facebook.com/docs/graph-api",
+            "type": "GraphMethodException", "code": 100,
+        }}
+        resp = self.client.post("/api/meta/token", json={"token": TOKEN})
+        self.assertEqual(resp.status_code, 400)
+        error = resp.json()["error"]
+        self.assertEqual(error["code"], "meta_token_missing_scope")
+        self.assertEqual(
+            error["message"],
+            "這把權杖看不到廣告帳戶，通常是產生權杖時沒有勾 ads_read 權限。"
+            "請重新產生一把有勾 ads_read 的權杖再貼上。",
+        )
+        self.assertNotIn("Unsupported", error["message"])
+        self.assertIsNone(meta_repo.get_credential(web.conn, coredb.DEV_ORG_ID))
+
+    def test_permission_error_names_the_missing_scope(self):
+        graph.fetch_page = lambda url, *, params, headers: {"error": {
+            "message": "(#200) Requires ads_read permission", "code": 200,
+        }}
+        resp = self.client.post("/api/meta/token", json={"token": TOKEN})
+        self.assertEqual(resp.json()["error"]["code"], "meta_token_missing_scope")
 
 
 # -- 2. 租戶隔離：org B 看不到、綁不到、解不掉 org A 的帳號 --------------------------
