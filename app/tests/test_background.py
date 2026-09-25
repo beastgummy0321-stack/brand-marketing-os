@@ -28,6 +28,7 @@ from unittest import mock
 
 import psycopg
 from procrastinate import manager
+from procrastinate.exceptions import AppNotOpen
 from procrastinate.jobs import Status
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
@@ -512,6 +513,49 @@ class QueueConninfoTest(unittest.TestCase):
             self.assertEqual(
                 conn.execute("SHOW application_name").fetchone()[0], "recovery-conninfo-test"
             )
+
+
+class DeferAppConnectionsTest(unittest.TestCase):
+    """F31-I15: the module-private defer App (`enqueue()`/`is_active()`/`job_outcome()`) must
+    not hold queue connections it does not need. Measured in F31-I11: each process kept the
+    pool at psycopg_pool's default four idle connections, and a DSN change orphaned the old
+    App (never closed) — together 13 connections per xdist worker, enough to exhaust the shared
+    54322 server under the manifest's `pytest -n 4`. Connections are counted on the server
+    (`pg_stat_activity`) under an `application_name` only this test uses."""
+
+    def test_dsn_switch_closes_old_defer_app_and_new_one_holds_one_connection(self):
+        tag = f"f31i15_{db.new_id('t')}"[:60]
+        lock = f"defer_pool_test:{tag}"
+        old = background_module._sync_app_for_defer()
+        original = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = make_conninfo(db.dsn(), application_name=tag)
+        try:
+            self.assertTrue(
+                background_module.enqueue("background.noop", org_id=db.DEV_ORG_ID, lock=lock)
+            )
+            new = background_module._sync_app_for_defer()
+            self.assertIsNot(new, old, "a DSN change must rebuild the defer App")
+            with self.assertRaises(AppNotOpen, msg="the replaced defer App must be closed"):
+                _ = old.connector.pool
+
+            with psycopg.connect(original or db.dsn()) as conn:
+                held = conn.execute(
+                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = %s", (tag,)
+                ).fetchone()[0]
+            self.assertLessEqual(held, 1, "one enqueue must leave at most one idle connection")
+            self.assertGreaterEqual(held, 1, "test setup: the tagged pool must be visible")
+        finally:
+            if original is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = original
+            background_module._sync_app_for_defer()  # back onto this module's own queue
+            with psycopg.connect(
+                background_module._with_search_path(
+                    db.dsn(), background_module._queue_search_path()
+                )
+            ) as conn:
+                conn.execute("DELETE FROM procrastinate_jobs WHERE queueing_lock = %s", (lock,))
 
 
 class OrphanRecoveryTest(unittest.TestCase):

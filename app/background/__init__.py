@@ -191,15 +191,36 @@ def app() -> procrastinate.App:
     return _app
 
 
+#: F31-I15: pool sizing for the defer App. Every caller (`enqueue()`, `is_active()`,
+#: `job_outcome()`, `queue_snapshot()`) runs one or two short statements and returns the
+#: connection, so one idle connection is enough; psycopg_pool's default (min_size=4, and
+#: `open(wait=True)` waits for all four) held four idle connections per process for nothing.
+#: `max_size` still lets a few concurrent request threads defer at once.
+_DEFER_POOL_MIN_SIZE = 1
+_DEFER_POOL_MAX_SIZE = 4
+
+
 def _sync_app_for_defer() -> procrastinate.App:
     """惰性建立／`db.dsn()` 換了就重建的模組私有 App，`enqueue()` 專用——跟 `app()` 同一套
     rebuild 規則，但接的是 `SyncPsycopgConnector`，不是 `app()` 那顆 async 的
-    `PsycopgConnector`（為什麼不能共用見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。"""
+    `PsycopgConnector`（為什麼不能共用見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。
+
+    F31-I15: a rebuild closes the previous App's pool first. Unlike `app()` (whose pools are
+    opened and closed by its callers: `with a.open()`, `run_worker()`), this App is opened
+    here and owned here, so nobody else would ever close the one a DSN change replaces; its
+    idle connections stayed on the server until garbage collection."""
     global _sync_app, _sync_app_dsn
     current_dsn = db.dsn()
     if _sync_app is None or _sync_app_dsn != current_dsn:
+        if _sync_app is not None:
+            previous, _sync_app, _sync_app_dsn = _sync_app, None, None
+            previous.close()
         queue_dsn = _with_search_path(current_dsn, _queue_search_path())
-        connector = procrastinate.SyncPsycopgConnector(conninfo=queue_dsn)
+        connector = procrastinate.SyncPsycopgConnector(
+            conninfo=queue_dsn,
+            min_size=_DEFER_POOL_MIN_SIZE,
+            max_size=_DEFER_POOL_MAX_SIZE,
+        )
         new_app = procrastinate.App(connector=connector)
         new_app.open()
         _sync_app = new_app
