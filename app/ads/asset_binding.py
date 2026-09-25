@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.ads import asset_binding_repository as repo
 from app.ads import external_repository as external
 from app.ads import external_sync
+from app.ads.external_models import ExternalEntity
 from app.core import db
 
 
@@ -266,6 +267,8 @@ def verify(
         ).fetchone()
         binding_id = row["id"]
     for node in reversed([proof["entity"], *proof["parents"]]):
+        # same filter as handoff_check: a reader's extra keys (launch_settings) are not stored
+        node = {k: v for k, v in node.items() if k in ExternalEntity.model_fields}
         external.upsert_entity(conn, org, brand, campaign, node)
     conn.commit()
     return next(
