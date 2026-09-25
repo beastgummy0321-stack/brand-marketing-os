@@ -114,9 +114,10 @@ class AdsCenterParentGuardTest(unittest.TestCase):
 class TenantScopedParentGuardTest(AdsCenterParentGuardTest):
     """F31-I13: the guard on a request-shaped connection. Every API request (and every scoped
     job) runs `db.set_tenant_scope`, which switches to role `authenticated` with org-isolation
-    RLS in effect, so other orgs' `ads_*` and `channel_entity_map` rows are invisible to a
-    plain SELECT. The guard must still see that org B holds the id (through the modules'
-    SECURITY DEFINER boolean lookups) and refuse before any Graph call.
+    RLS in effect, so other orgs' `ads_*` rows are invisible to a plain SELECT. The guard must
+    still see that org B holds the id (through the ads module's SECURITY DEFINER boolean lookup)
+    and refuse before any Graph call. The `channel_entity_map` half is the schedule module's
+    table and is tested from a schedule-owned test file.
 
     Inherits the ads-center fixture (org B's `ads_campaign` + `ads_delivery_group`) but not its
     tests: `test_*` below replace them for this class only."""
@@ -126,24 +127,6 @@ class TenantScopedParentGuardTest(AdsCenterParentGuardTest):
     test_listed_external_entity_of_another_org_refused = None
     test_own_ads_binding_is_not_refused = None
 
-    def setUp(self):
-        super().setUp()
-        tail = uuid4().hex[:8]
-        self.mapped_id = f"camp-map-b-{tail}"
-        channel_id = db.new_id("adch")
-        web.conn.execute(
-            "INSERT INTO ad_channel (id, org_id, channel_key, enabled)"
-            " VALUES (%s, %s, 'meta', true)",
-            (channel_id, self.org_b),
-        )
-        web.conn.execute(
-            "INSERT INTO channel_entity_map (id, org_id, brand_id, channel_id, node_key,"
-            " node_name_at_bind, external_id, external_status)"
-            " VALUES (%s, %s, %s, %s, '1', 'B 的節點', %s, 'ACTIVE')",
-            (db.new_id("cem"), self.org_b, self.brand_b, channel_id, self.mapped_id),
-        )
-        web.conn.commit()
-
     def _scoped(self, org_id, call):
         with db.connection() as conn:
             db.set_tenant_scope(conn, org_id)
@@ -151,11 +134,9 @@ class TenantScopedParentGuardTest(AdsCenterParentGuardTest):
                 # Precondition: RLS really hides other orgs' rows here, so a refusal below is
                 # the SECURITY DEFINER lookup at work, not an unscoped connection.
                 hidden = conn.execute(
-                    "SELECT (SELECT count(*) FROM ads_campaign"
-                    "         WHERE external_id = %(camp)s AND org_id <> %(org)s)"
-                    " + (SELECT count(*) FROM channel_entity_map"
-                    "     WHERE external_id = %(mapped)s AND org_id <> %(org)s) AS n",
-                    {"camp": self.camp_id, "mapped": self.mapped_id, "org": org_id},
+                    "SELECT count(*) AS n FROM ads_campaign"
+                    " WHERE external_id = %(camp)s AND org_id <> %(org)s",
+                    {"camp": self.camp_id, "org": org_id},
                 ).fetchone()
                 self.assertEqual(hidden["n"], 0, "RLS must hide other orgs' rows here")
                 return call(conn)
@@ -176,28 +157,14 @@ class TenantScopedParentGuardTest(AdsCenterParentGuardTest):
         self.assertEqual(caught.exception.status, 403)
         self.assertEqual(caught.exception.code, "campaign_not_owned")
 
-    def test_channel_entity_map_id_of_another_org_refused_on_scoped_connection(self):
-        with mock.patch.object(graph, "list_ad_sets") as fake_list_ad_sets:
-            with self.assertRaises(web.ApiError) as caught:
-                self._scoped(self.org_a, lambda conn: meta_repo.ad_set_ids_by_exact_name(
-                    conn, self.org_a, self.mapped_id, "隨便什麼名字",
-                ))
-            self.assertEqual(fake_list_ad_sets.call_count, 0)
-        self.assertEqual(caught.exception.status, 403)
-        self.assertEqual(caught.exception.code, "campaign_not_owned")
-
     def test_own_ids_pass_on_scoped_connection(self):
         meta_repo.save_token(web.conn, self.org_b, TOKEN)
         web.conn.commit()
-        for parent_id in (self.camp_id, self.mapped_id):
-            with mock.patch.object(graph, "list_ad_sets", return_value=[]) as fake_list_ad_sets:
-                self._scoped(
-                    self.org_b,
-                    lambda conn, pid=parent_id: meta_repo.ad_set_ids_by_exact_name(
-                        conn, self.org_b, pid, "隨便什麼名字",
-                    ),
-                )
-            self.assertEqual(fake_list_ad_sets.call_count, 1, parent_id)
+        with mock.patch.object(graph, "list_ad_sets", return_value=[]) as fake_list_ad_sets:
+            self._scoped(self.org_b, lambda conn: meta_repo.ad_set_ids_by_exact_name(
+                conn, self.org_b, self.camp_id, "隨便什麼名字",
+            ))
+        self.assertEqual(fake_list_ad_sets.call_count, 1)
 
     def test_lookups_are_not_callable_by_anon(self):
         with db.connection() as conn:
