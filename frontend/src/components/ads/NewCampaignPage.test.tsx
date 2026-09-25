@@ -3,13 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NewCampaignPage } from "./NewCampaignPage";
-import { getCampaign, patchCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { createCampaign, getCampaign, patchCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { createCampaignFromPicks, getWizardOptions, type WizardOptions } from "@/lib/adsWizardApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { readDraft } from "./campaignDraft";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
-vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), patchCampaign: vi.fn() }));
+vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), patchCampaign: vi.fn(), createCampaign: vi.fn() }));
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/useAuthedImage", () => ({ useAuthedImage: vi.fn(() => ({ src: null, failed: true })) }));
 vi.mock("./UserAssetsLibrary", () => ({ UserAssetsLibrary: () => <div>選擇已完成素材</div> }));
@@ -61,9 +61,9 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     const cheap = screen.getByRole("radio", { name: /三盒/ });
     expect(within(cheap).getByText("NT$999")).toBeTruthy();
     expect(within(cheap).getByText("有成本")).toBeTruthy();
-    const reserved = screen.getByRole("radio", { name: /互動/ });
-    expect(reserved).toHaveProperty("disabled", true);
-    expect(within(reserved).getByText("尚未開放")).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: /互動/ })).toBeNull();
+    expect(within(screen.getByRole("list", { name: "尚未開放的目標" })).getByText("互動・尚未開放")).toBeTruthy();
+    expect(screen.getAllByRole("radio", { name: /購買|名單/ })).toHaveLength(2);
     expect(screen.getByLabelText("這個活動最多花")).toBeTruthy();
   });
 
@@ -176,6 +176,61 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     expect(await screen.findByText("第二步頁面")).toBeTruthy();
     expect(patchCampaign).toHaveBeenCalledWith("b1", "cmp_new", { objective: "名單" });
     expect(createCampaignFromPicks).not.toHaveBeenCalled();
+  });
+
+  it("one-sentence create under 進階: keeps a failed submission and clears the draft only after success", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCampaign).mockRejectedValueOnce(new Error("離線"));
+    view("save");
+    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await user.type(screen.getByLabelText("你這次想做到什麼？"), "新品銷售");
+    await user.click(screen.getByRole("button", { name: "產生建議" }));
+    expect(await screen.findByText(/離線/)).toBeTruthy();
+    expect(readDraft("campaign-draft:u:o:save").goalText).toBe("新品銷售");
+    vi.mocked(createCampaign).mockResolvedValue({ id: "draft", parsed: true } as Awaited<ReturnType<typeof createCampaign>>);
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("第二步頁面")).toBeTruthy();
+    expect(createCampaign).toHaveBeenLastCalledWith("save", { goal_text: "新品銷售" });
+    expect(createCampaignFromPicks).not.toHaveBeenCalled();
+    expect(readDraft("campaign-draft:u:o:save").goalText).toBe("");
+  });
+
+  it("can request one AI draft from saved brand data without entering the same data again", async () => {
+    vi.mocked(createCampaign).mockResolvedValue({ id: "suggested", parsed: true } as Awaited<ReturnType<typeof createCampaign>>);
+    const user = userEvent.setup();
+    view("known");
+    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await user.click(screen.getByRole("button", { name: "請 AI 依品牌資料建議" }));
+    await waitFor(() => expect(createCampaign).toHaveBeenCalledTimes(1));
+    expect(createCampaign).toHaveBeenCalledWith("known", { goal_text: expect.stringContaining("沿用已知資訊") });
+  });
+
+  it("keeps a failed AI request editable and does not replace a written goal", async () => {
+    vi.mocked(createCampaign).mockRejectedValueOnce(new Error("暫時無法連線"));
+    const user = userEvent.setup();
+    view("retry-ai");
+    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await user.click(screen.getByRole("button", { name: "請 AI 依品牌資料建議" }));
+    expect(await screen.findByText(/暫時無法連線/)).toBeTruthy();
+    expect(readDraft("campaign-draft:u:o:retry-ai").goalText).toContain("沿用已知資訊");
+    await user.click(screen.getByRole("button", { name: "← 上一步" }));
+    await user.clear(screen.getByLabelText("你這次想做到什麼？"));
+    await user.type(screen.getByLabelText("你這次想做到什麼？"), "我想增加名單");
+    expect(screen.queryByRole("button", { name: "請 AI 依品牌資料建議" })).toBeNull();
+    expect(screen.getByRole("button", { name: "產生建議" })).toBeTruthy();
+    expect(createCampaign).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the sentence with the picks when both are given, and the cap with a sentence-only create", async () => {
+    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
+    const user = userEvent.setup();
+    view();
+    await pickAll(user);
+    await user.click(screen.getByRole("button", { name: /進階/ }));
+    await user.type(screen.getByLabelText("你這次想做到什麼？"), "主打上班族");
+    await user.click(next());
+    await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", { product_ids: ["prd_a"], objective: "購買", budget: 30000, goal_text: "主打上班族" });
   });
 
   it("keeps the brand's own images／videos folded under 進階", async () => {

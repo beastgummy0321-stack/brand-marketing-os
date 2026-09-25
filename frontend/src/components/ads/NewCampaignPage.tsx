@@ -6,14 +6,19 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import { createCampaign, getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
 import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
 import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
 import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
-import { ActionBar, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed } from "./patterns";
+import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed } from "./patterns";
 import { ObjectiveIcon, ProductPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
+
+/** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
+const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
+/** What a create sends: the picks (the wizard's structured create) or one sentence (the free-text create). */
+type CreateRequest = { kind: "picks" } | { kind: "sentence"; text: string };
 
 const message = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 
@@ -70,6 +75,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const [failure, setFailure] = useState<string | null>(null);
   const [waited, setWaited] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [lastRequest, setLastRequest] = useState<CreateRequest>({ kind: "picks" });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -129,15 +135,18 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     navigate(`/brands/${brandId}/ads/new/${campaignId}`);
   }
 
-  async function submit() {
-    if (blocked || !product || !goal || budget === null) return;
+  async function submit(request: CreateRequest = { kind: "picks" }) {
+    if (request.kind === "picks" && (blocked || !product || !goal || budget === null)) return;
+    if (request.kind === "sentence" && (!request.text.trim() || busy || uploadBusy || restoring || !!created || !!createdId || oneDate || backwards)) return;
     if (uploads.some((u) => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     const signal = life.current.signal;
     setError(null); setBusy(true);
     const dates = startDate && endDate ? { start_date: startDate, end_date: endDate } : {};
+    setLastRequest(request);
+    if (request.kind === "sentence") setGoalText(request.text);
     try {
       let campaign = created;
-      if (campaign) {
+      if (campaign && product && goal && budget !== null) {
         const now = picksOf(campaign);
         const patch: PatchCampaignInput = {};
         if (product.id !== now.productId) patch.product_ids = [product.id];
@@ -145,14 +154,20 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, dates);
         if (budget !== now.budget) patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget };
         if (Object.keys(patch).length > 0) campaign = await patchCampaign(brandId, campaign.id, patch);
-      } else {
+      } else if (request.kind === "sentence") {
+        setPhase("understanding");
+        campaign = await createCampaign(brandId, {
+          goal_text: request.text.trim(), ...dates,
+          ...(budgetOk ? { constraints: { budget } } : {}),
+        });
+      } else if (product && goal && budget !== null) {
         setPhase("understanding");
         campaign = await createCampaignFromPicks(brandId, {
           product_ids: [product.id], objective: goal.key, budget, ...dates,
           ...(goalText.trim() ? { goal_text: goalText.trim() } : {}),
         });
       }
-      if (signal.aborted) return;
+      if (signal.aborted || !campaign) return;
       setCreated(campaign);
       const id = campaign.id;
       if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); return next; }, { replace: true });
@@ -187,7 +202,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         <Button disabled>產生策略 →</Button>
       </ActionBar>
     )}>
-      {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit()} />}
+      {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit(lastRequest)} />}
       <div className={picking ? "contents" : "hidden"}>
       <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品和目標" />
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
@@ -217,11 +232,23 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           <section className="surface" aria-labelledby="new-goal">
             <div className="surface-header"><h2 id="new-goal">想要的結果</h2></div>
             <div className="surface-body">
-              <PickGroup label="目標" value={objective} onChange={(v) => !locked && setObjective(v)}>
-                {data.objectives.map((o) => (
-                  <PickCard key={o.key} value={o.key} title={o.label} note={o.description} icon={<ObjectiveIcon objective={o.key} />} disabled={!o.available} />
+              <PickGroup label="目標" value={objective} onChange={(v) => !locked && setObjective(v)} className="grid-cols-2 xl:grid-cols-4">
+                {data.objectives.filter((o) => o.available).map((o) => (
+                  <PickCard key={o.key} value={o.key} title={o.label} note={o.description} icon={<ObjectiveIcon objective={o.key} />} />
                 ))}
               </PickGroup>
+              {data.objectives.some((o) => !o.available) && (
+                <ul aria-label="尚未開放的目標" className="mt-3 flex flex-wrap gap-2">
+                  {data.objectives.filter((o) => !o.available).map((o) => (
+                    <li key={o.key}>
+                      <Chip tone="neutral" aria-disabled="true" className="gap-1.5 py-1.5 opacity-80">
+                        <span aria-hidden="true" className="[&_svg]:size-3.5"><ObjectiveIcon objective={o.key} /></span>
+                        {o.label}・尚未開放
+                      </Chip>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </section>
         </>
@@ -240,11 +267,19 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           </Field>
         </div>
       </section>
-      <Disclosure label="進階：補充說明、自帶圖片／影片">
+      <Disclosure label="進階：一句話建立、自帶圖片／影片">
         <div className="flex flex-col gap-4">
-          <Field id="new-goal-text" label="補充說明（選填）">
-            <Textarea id="new-goal-text" value={goalText} disabled={locked || !!created} maxLength={500} onChange={(e) => setGoalText(e.target.value)} className="min-h-20" />
+          <Field id="new-goal-text" label="你這次想做到什麼？">
+            <Textarea id="new-goal-text" value={goalText} disabled={locked || !!created} maxLength={500} onChange={(e) => setGoalText(e.target.value)}
+              placeholder="例如：下個月想推主力商品，希望增加購買。" className="min-h-20" />
           </Field>
+          {!created && !createdId && (
+            <div className="flex flex-wrap gap-2">
+              {goalText.trim()
+                ? <Button variant="outline" disabled={locked || uploadBusy || oneDate || backwards} onClick={() => void submit({ kind: "sentence", text: goalText })}>產生建議</Button>
+                : <Button variant="outline" disabled={locked || uploadBusy || oneDate || backwards} onClick={() => void submit({ kind: "sentence", text: BRAND_SUGGESTION_REQUEST })}>請 AI 依品牌資料建議</Button>}
+            </div>
+          )}
           <UserAssetsLibrary brandId={brandId} readOnly={busy} onSelection={setUploads} onBusy={setUploadBusy} />
         </div>
       </Disclosure>
