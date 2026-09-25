@@ -2,7 +2,7 @@
 
 ## Handoff (2026-09-25): start here in the next session
 - **State:** F28 and F29 are closed and merged to master (F29 = `b00722e8`), **not pushed** (the user pushes manually). No open feature; the queue is empty. Rules: `docs/architecture/ads.md` §6.32 (F28) and §6.33 (F29).
-- **Next step:** plan the next UI batch (below) from the approved v9/v10 prototypes, and decide original item 4 (the worse flow has no manual exit when the fact check blocks it — not covered by F29).
+- **Next step:** see `docs/backlog/next-ui-batch.md` (the next UI batch and open item 4).
 - **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). Items 5, 6, 7 and 9 were built in F29; only item 4 remains.
 - **Confirmed constraints to keep:**
   - The UI is graphics-first with linear flows and no text walls (§1.7).
