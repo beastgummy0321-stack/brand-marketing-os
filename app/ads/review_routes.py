@@ -70,6 +70,24 @@ def create(request: Request, brand_id: str, campaign_id: str, body: CreateReques
     }
 
 
+@router.post("/reviews/{review_id}/retry")
+def retry(request: Request, brand_id: str, campaign_id: str, review_id: str):
+    review = _run(
+        request,
+        brand_id,
+        campaign_id,
+        service.retry,
+        review_id,
+        str(web.require_actor(request).user_id),
+    )
+    return {
+        "review": review,
+        "monitor": review_monitor.get(
+            web.conn, review["org_id"], brand_id, campaign_id, review["entity_id"]
+        ),
+    }
+
+
 @router.get("/reviews/{review_id}")
 def detail(request: Request, brand_id: str, campaign_id: str, review_id: str):
     return {"review": _run(request, brand_id, campaign_id, service.get, review_id)}

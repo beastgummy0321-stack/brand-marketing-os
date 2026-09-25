@@ -55,9 +55,12 @@ export function Ladder({ steps, current }: { steps: string[]; current?: number }
 }
 
 /** `.opt` (+ `.pick`): one direction card on 選方向. `disabled` = not available here (grey, not
- * clickable); `disabledNote` says why (default 接上後開放 — never a refusal wording). */
-export function OptionCard({ icon, title, note, picked = false, recommended = false, disabled = false, disabledNote = "接上後開放", onClick }: {
-  icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean; disabled?: boolean; disabledNote?: string; onClick?: () => void;
+ * clickable); `disabledNote` says why (default 接上後開放 — never a refusal wording).
+ * `recommendedLabel`/`recommendedTone` word the recommended chip: default 建議 in accent (prototype `chip v`);
+ * F30 ai-blocked: 照順序先試 in neutral (prototype `chip`) when the pick comes from the ladder, not from an AI. */
+export function OptionCard({ icon, title, note, picked = false, recommended = false, recommendedLabel = "建議", recommendedTone = "accent", disabled = false, disabledNote = "接上後開放", onClick }: {
+  icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean;
+  recommendedLabel?: string; recommendedTone?: "accent" | "neutral"; disabled?: boolean; disabledNote?: string; onClick?: () => void;
 }) {
   return (
     <button type="button" data-slot="option-card" data-variant={disabled ? "reserved" : picked ? "picked" : "open"}
@@ -65,7 +68,7 @@ export function OptionCard({ icon, title, note, picked = false, recommended = fa
       className={cn("rounded-xl border p-5 text-left transition-colors",
         disabled ? "cursor-default border-border bg-muted text-muted-foreground" : picked ? "border-primary bg-accent shadow-[0_0_0_1px_var(--primary)]" : "border-border bg-card hover:border-primary")}>
       <div className="text-2xl" aria-hidden="true">{icon}</div>
-      <b className="mt-2.5 mb-1 block text-[15px]">{title}{recommended && <span className="ml-1.5 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">建議</span>}</b>
+      <b className="mt-2.5 mb-1 block text-[15px]">{title}{recommended && <span data-slot="chip" data-tone={recommendedTone} className={cn("ml-1.5 rounded-full px-2 py-0.5 text-xs font-medium", recommendedTone === "neutral" ? "bg-muted text-muted-foreground" : "bg-secondary text-secondary-foreground")}>{recommendedLabel}</span>}</b>
       <span className="text-[13px] text-muted-foreground">{disabled ? disabledNote : note}</span>
     </button>
   );

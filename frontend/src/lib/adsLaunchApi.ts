@@ -2,6 +2,7 @@
  * 只是為了不撐破 800 行慣例，共用 `parseJsonOrThrow`／`BASE` 從那邊 import，不重寫一份。 */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
+import type { SettingsReadback } from "./adsLaunchSettingsApi";
 
 /** F05-I04：可投放檢查表——`app/ads/readiness.py::launch_readiness()` 的回傳形狀，瀏覽器逐字印
  * 每一列的 `reason`，不重拼句子。三色沒有第四種狀態、`items` 固定三列固定順序。 */
@@ -66,3 +67,87 @@ export async function saveManualSettings(
   });
   await parseJsonOrThrow<{ ok: boolean }>(res, "儲存人工上架設定失敗，請稍後再試。");
 }
+
+/** F30 Contract G: the one launch view of the publish page (`app/ads/launch_view.py`). The batch
+ * holds only ads whose material is ready; the others are `deferred_ads` and go out with a later
+ * launch version. Nothing here writes to a platform. */
+export type LaunchStep = "list" | "platform" | "verify" | "stale";
+export type LaunchItemKind = "campaign" | "group" | "ad";
+export type LaunchItemState = "todo" | "built" | "verified" | "mismatch" | "unknown" | "changed";
+
+export interface LaunchSummary {
+  campaigns: number;
+  groups: number;
+  ads: number;
+  /** Null when a group has no daily budget. */
+  daily_total: number | null;
+  start: string | null;
+  end: string | null;
+  /** The user's own per-result cap; null when none is set. */
+  cap: number | null;
+  slots_ready: number;
+  slots_total: number;
+}
+
+export interface LaunchField { key: string; label: string; value: string | number | null }
+export interface LaunchMismatch {
+  key: string;
+  label: string;
+  expected: string | number | null;
+  /** What the platform showed, stored with the check. */
+  observed: string | number | null;
+}
+/** A required field the platform read cannot see (e.g. the landing URL), confirmed by eye. */
+export interface LaunchUnreadable { key: string; label: string; confirmed: boolean }
+
+export interface LaunchItem {
+  /** The handoff item id once approved; the planned id on the `list` step. */
+  id: string;
+  kind: LaunchItemKind;
+  name: string;
+  parent_name: string | null;
+  fields: LaunchField[];
+  state: LaunchItemState;
+  mismatches: LaunchMismatch[];
+  unreadable: LaunchUnreadable[];
+  /** Why a readback left the item `built` (not found, ambiguous name) or `unknown`. */
+  reason: string | null;
+}
+
+export interface DeferredAd { ad_id: string; name: string; group_name: string }
+
+export interface LaunchView {
+  step: LaunchStep;
+  version: number | null;
+  approved_at: string | null;
+  summary: LaunchSummary;
+  items: LaunchItem[];
+  deferred_ads: DeferredAd[];
+  read_at: string | null;
+  settings_readback: SettingsReadback | null;
+}
+
+const launchPath = (brandId: string, campaignId: string) =>
+  `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/launch`;
+
+async function launchRequest(url: string, method: string, fallback: string, body?: unknown): Promise<LaunchView> {
+  const res = await apiFetch(url, body === undefined ? { method } : {
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return parseJsonOrThrow<LaunchView>(res, fallback);
+}
+
+export const fetchLaunchView = (brandId: string, campaignId: string) =>
+  launchRequest(launchPath(brandId, campaignId), "GET", "讀取上架清單失敗。");
+
+/** Reads back every built item of the batch at once; answers with the refreshed view. */
+export const readbackLaunch = (brandId: string, campaignId: string) =>
+  launchRequest(`${launchPath(brandId, campaignId)}/readback`, "POST", "讀回核對失敗，請稍後再試。");
+
+export const unreportLaunchItem = (brandId: string, campaignId: string, itemId: string) =>
+  launchRequest(`${launchPath(brandId, campaignId)}/items/${encodeURIComponent(itemId)}/unreport`,
+    "POST", "取消回報失敗，請稍後再試。");
+
+export const confirmLaunchItemField = (brandId: string, campaignId: string, itemId: string, key: string) =>
+  launchRequest(`${launchPath(brandId, campaignId)}/items/${encodeURIComponent(itemId)}/confirm`,
+    "POST", "確認失敗，請稍後再試。", { key });

@@ -90,27 +90,32 @@ async function captureDesktopEvidence(page: Page, name: string) {
 }
 
 async function openPerformanceDetails(page: Page) {
-  const details = page.getByRole("button", { name: "查看平台原始成效圖表", exact: true });
+  // F30-I07: the platform charts moved into the perf tab's 「進階：舊版成效與檢討」 fold.
+  const details = page.getByRole("button", { name: "進階：舊版成效與檢討", exact: true });
   await expect(details).toHaveAttribute("aria-expanded", "false");
   await details.click();
   await expect(details).toHaveAttribute("aria-expanded", "true");
 }
 
-async function createCampaignInUi(page: Page, brandId: string): Promise<string> {
+async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: string): Promise<string> {
+  // F30-I05: the wizard picks one of the brand's products (manual product, no spend).
+  const productName = "引導測試新品 500ml";
+  await api(page, headers, "POST", `/api/products/brands/${brandId}`, { name: productName });
   await page.goto(`/app/brands/${brandId}/ads/new`);
-  await page.getByLabel("你這次想做到什麼？").fill("測試新品購買成效，保持平台與素材條件可核對。");
-  await page.getByRole("button", { name: "日期" }).click();
-  await page.getByLabel("開始日期").fill(dateOffset(-6));
-  await page.getByLabel("結束日期").fill(dateOffset(0));
-  await page.getByRole("button", { name: "產生建議", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "行銷駕駛艙理解如下" })).toBeVisible();
+  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  await page.getByRole("radio", { name: /^購買/ }).click();
+  await page.getByLabel("開始", { exact: true }).fill(dateOffset(-6));
+  await page.getByLabel("結束", { exact: true }).fill(dateOffset(0));
+  await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "系統這樣理解" })).toBeVisible();
   await expect(page.getByText("商品", { exact: true })).toBeVisible();
-  await expect(page.getByText("目標", { exact: true })).toBeVisible();
-  await expect(page.getByText("預算", { exact: true })).toBeVisible();
-  await expect(page.getByText("時間", { exact: true })).toBeVisible();
+  await expect(page.getByText("結果", { exact: true })).toBeVisible();
+  await expect(page.getByText("預算上限", { exact: true })).toBeVisible();
+  await expect(page.getByText("期間", { exact: true })).toBeVisible();
   await captureDesktopEvidence(page, "campaign-understood");
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
-  await page.getByRole("button", { name: "產生策略建議 →" }).click();
+  await page.getByRole("button", { name: "產生策略 →" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/${campaignId}\\?tab=strategy`));
   // F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分; the reasons sit in a fold that starts closed.
   await expect(page.getByRole("heading", { name: "一個上限", exact: true })).toBeVisible();
@@ -237,10 +242,13 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   test.setTimeout(120_000);
   const headers = await register(page, "guided-advanced");
   const brandId = await createBrand(page, `引導進階測試品牌 ${Date.now()}`);
-  const campaignId = await createCampaignInUi(page, brandId);
+  const campaignId = await createCampaignInUi(page, headers, brandId);
   const { groupId } = await setupAds(page, headers, brandId, campaignId, true);
 
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=structure`);
+  // F30-I08: a group's manual settings live in its fold 「進階：編輯這一組（…）」, in the sub-fold 「人工上架設定」.
+  const groupFold = page.getByRole("button", { name: /^進階：編輯這一組（一般受眾）/ });
+  await groupFold.click();
   const missingButton = page.getByRole("button", { name: "補齊一般受眾設定" });
   await missingButton.focus();
   await page.keyboard.press("Enter");
@@ -250,32 +258,34 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await page.getByLabel("設定分類").getByRole("button", { name: "受眾", exact: true }).click();
   const audience = page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true });
   await audience.fill("新客網站訪客，排除近 30 天購買者");
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(audience).toBeHidden();
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(audience).toHaveValue("新客網站訪客，排除近 30 天購買者");
 
   await page.goto(`/app/brands/${brandId}/library`);
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=structure`);
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
-  await page.getByRole("button", { name: /一般受眾 · 有未儲存變更/ }).click();
+  await groupFold.click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(page.getByText(/已恢復未儲存草稿/)).toBeVisible();
   await expect(audience).toHaveValue("新客網站訪客，排除近 30 天購買者");
   await page.getByRole("button", { name: "儲存這組設定" }).click();
   await expect(page.getByText("設定已儲存")).toBeVisible();
   await page.reload();
-  await page.getByRole("button", { name: /人工上架設定與平台對應/ }).click();
-  await page.getByRole("button", { name: /一般受眾 · 待補設定/ }).click();
+  await groupFold.click();
+  await page.getByRole("button", { name: /^人工上架設定 · 待補設定/ }).click();
   await expect(page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true }))
     .toHaveValue("新客網站訪客，排除近 30 天購買者");
   await captureDesktopEvidence(page, "manual-launch-settings");
 
   await page.getByRole("button", { name: "素材", exact: true }).click();
+  // F30-I11: the old panels live in the tab's 「進階」 fold.
+  await page.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接", exact: true }).click();
   const legacyMaterials = page.getByRole("button", { name: "原有任務包與平台素材", exact: true });
   await expect(legacyMaterials).toHaveAttribute("aria-expanded", "false");
   await legacyMaterials.click();
   await expect(legacyMaterials).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByText("0／2 則已就位")).toBeVisible();
+  await expect(page.getByText("0／2 則素材已備妥")).toBeVisible();
   await expect(page.getByText("未開始", { exact: true }).first()).toBeVisible();
 
   let simulationReads = 0;

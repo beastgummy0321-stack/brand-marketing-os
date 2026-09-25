@@ -79,7 +79,7 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.queryByText("購買")).toBeNull();
   });
 
-  it("兩個投放組、10 天期間：目前投放組合計算對，且顯示日預算 × 天數的依據", () => {
+  it("兩個投放組、10 天期間：目前投放組合計算對；依據只說「投放組日預算 × 天數」，不在工作區頭部的每日預算旁再印一個日預算數字", () => {
     render(
       <OverviewTab
         campaign={campaign({
@@ -95,7 +95,8 @@ describe("OverviewTab（F03-I23）", () => {
     );
 
     expect(screen.getByText("NT$ 15,000")).toBeTruthy();
-    expect(screen.getByText("日預算 NT$ 1,500／天 × 10 天")).toBeTruthy();
+    expect(screen.getByText("投放組日預算 × 10 天")).toBeTruthy();
+    expect(screen.queryByText(/1,500/)).toBeNull();
   });
 
   it("budget_planned 跟起訖日都是 null：顯示「尚未設定」，不顯示「累積中」", () => {
@@ -164,48 +165,14 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.queryByText("自動執行接上後開放")).toBeNull();
     expect(screen.queryByText("目前沒有需要你決定的事")).toBeNull();
     await user.click(screen.getByRole("button", { name: "前往廣告檢討 →" }));
-    expect(onChangeTab).toHaveBeenCalledWith("performance");
+    expect(onChangeTab).toHaveBeenCalledWith("perf");
   });
 
-  it("策略已產生、一個投放組兩則廣告、素材 2/2 就位、status ready：下一步按鈕是「發布 →」，按下去呼叫 onChangeTab(\"publish\")", async () => {
-    const user = userEvent.setup();
-    const onChangeTab = vi.fn();
-    render(
-      <OverviewTab
-        campaign={campaign({
-          status: "ready",
-          budget_basis_json: {
-            strategy: { allocation: [{ role: "new", label: "新客", pct: 100, rationale: null, amount: null }], why: [], unknowns: [], alternatives: [], learning_goals: [] },
-          },
-          groups: [
-            group({
-              ads: [
-                {
-                  id: "ad_1", campaign_id: "cmp_1", group_id: "grp_1", name: "廣告一",
-                  audience_key: null, pain_key: null, angle_key: null, hook_key: null,
-                  proof_key: null, offer_key: null, format_key: null, coordinates_snapshot_json: {},
-                  product_id: null, asset_ready_source: null, asset_ready_by: null, asset_ready_at: null,
-                  external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
-                },
-                {
-                  id: "ad_2", campaign_id: "cmp_1", group_id: "grp_1", name: "廣告二",
-                  audience_key: null, pain_key: null, angle_key: null, hook_key: null,
-                  proof_key: null, offer_key: null, format_key: null, coordinates_snapshot_json: {},
-                  product_id: null, asset_ready_source: null, asset_ready_by: null, asset_ready_at: null,
-                  external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
-                },
-              ],
-            }),
-          ],
-          asset_readiness: { ready_count: 2, total: 2, pack_id: "pack_1" },
-        })}
-        onChangeTab={onChangeTab}
-      />,
-    );
-
-    const button = screen.getByRole("button", { name: "發布 →" });
-    await user.click(button);
-    expect(onChangeTab).toHaveBeenCalledWith("publish");
+  it("the old stage timeline, next-step card and shortcut tiles are gone (rail, bar and tabs carry them)", () => {
+    render(<OverviewTab campaign={campaign()} onChangeTab={vi.fn()} />);
+    expect(screen.queryByText("狀態時間軸")).toBeNull();
+    expect(screen.queryByText("更多 Campaign 資訊")).toBeNull();
+    expect(screen.queryByRole("button", { name: /發布 →|前往策略 →/ })).toBeNull();
   });
 });
 
@@ -232,4 +199,16 @@ it("原生活動有預算時保留幣別與預算方式，不跨層加總花費"
   render(<OverviewTab campaign={campaign({ origin: "imported", external_view: view })} onChangeTab={vi.fn()} />);
   expect(screen.getByText("300 TWD")).toBeTruthy();
   expect(screen.getByText("查看成效分頁")).toBeTruthy();
+});
+it("匯入活動：平台連線、最近成功與重新讀取平台在這個收合裡；同步失敗照原句顯示", async () => {
+  const user = userEvent.setup(), onSync = vi.fn();
+  const view = importedView();
+  view.connections = [{ platform: "meta", source_account: "act_1150706", state: "connected" }];
+  view.sync = { entities: { last_success_at: "2026-09-19T01:00:00Z" }, insights: { error: "權限不足" } };
+  render(<OverviewTab campaign={campaign({ origin: "imported", external_view: view })} onChangeTab={vi.fn()} platformSync={{ onSync, syncing: false, error: "同步失敗：授權過期" }} />);
+  expect(screen.getByText(/Meta · act_1150706 · 已連線/)).toBeTruthy();
+  expect(screen.getByText(/insights：權限不足/)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toBe("同步失敗：授權過期");
+  await user.click(screen.getByRole("button", { name: "重新讀取平台" }));
+  expect(onSync).toHaveBeenCalledTimes(1);
 });

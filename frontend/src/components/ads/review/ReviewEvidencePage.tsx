@@ -8,14 +8,14 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import {
-  createReview, decideReview, getReview,
+  createReview, decideReview, getReview, retryReview,
   type ReviewRound,
 } from "@/lib/adsReviewApi";
 import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, Ladder, MoneyTag, ReadFailed, Segmented,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
   Term, TodoRow,
 } from "../patterns";
 import {
@@ -89,6 +89,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const [quickPick, setQuickPick] = useState<"3" | "7" | "custom">("7");
   const [customDate, setCustomDate] = useState("");
   const [sheetError, setSheetError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   // Entry mode（`entityId`，還沒有 `reviewId`）：先看佇列列有沒有既有回合，沒有才建立一輪，
   // 完成後一律 `navigate(replace)` 到正典的 `reviews/:reviewId` 網址（feature Decisions）。
@@ -146,6 +148,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    setRetryError(null);
     getReview(brandId, campaignId, reviewId)
       .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
@@ -215,6 +218,22 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       setSheetError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Contract A (F30): re-run a failed or AI-rejected round on the same evidence. The new round replaces this one,
+  // so the page moves to its canonical URL (running state); a refusal (409) keeps this page and says why.
+  async function handleRetry() {
+    if (!review || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const { review: next } = await retryReview(brandId, campaignId, review.id);
+      navigate(reviewRoundPath(brandId, campaignId, next.id));
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -288,6 +307,10 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const completed = review.decision === "completed";
   const showEvidence = !running && !waiting && !failed;
   const showMenu = waiting || failed || closed || (!running && !waiting && !failed && !completed);
+  // Contract A: the fact check rejected the model text — the numbers stand on their own, the AI card says so.
+  const rejected = !!review.result_json.rejected;
+  // Retry is allowed for an undecided round that failed (not `unknown`) or whose AI text was rejected.
+  const canRetry = review.decision === null && (review.status === "failed" || rejected);
 
   const matchedProposal = triageItem?.proposal ?? null;
   const continueAction = completed
@@ -353,8 +376,18 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
       {failed && (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-5">
-          <h2 className="text-lg font-semibold">本次未完成</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{review.error ?? "結果尚未確認，請稍後再試。"}</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold">本次未完成</h2>
+              <p className="mt-2 text-sm text-muted-foreground">{review.error ?? "結果尚未確認，請稍後再試。"}</p>
+            </div>
+            {canRetry && (
+              <Button variant="outline" disabled={retrying} onClick={() => void handleRetry()}>
+                {retrying ? "送出中…" : "再請 AI 看一次"}
+              </Button>
+            )}
+          </div>
+          {retryError && <p role="alert" className="mt-2 text-xs text-destructive">{retryError}</p>}
         </div>
       )}
 
@@ -366,8 +399,20 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         </div>
       )}
 
+      {showEvidence && rejected && (
+        // v10 ai-blocked `stepEv()` `adIdent()`: with no AI card the ad's identity is a full-width card on top.
+        <div className="flex items-center gap-3.5 rounded-xl border border-border bg-card p-5">
+          <AdTile url={triageItem?.triage.thumbnail_url} />
+          <div className="min-w-0 flex-1">
+            {triageItem && <GradeChip grade={triageItem.triage.grade} label={triageItem.triage.grade_label} />}
+            <p className="mt-1 line-clamp-2 font-semibold">{evidence.target.name ?? "（未命名廣告）"}</p>
+          </div>
+        </div>
+      )}
+
       {showEvidence && (
-        <div className="grid items-start gap-4 xl:grid-cols-[1.05fr_1fr_1fr]">
+        <div className={rejected ? "grid items-start gap-4 xl:grid-cols-2" : "grid items-start gap-4 xl:grid-cols-[1.05fr_1fr_1fr]"}>
+          {!rejected && (
           <div className="rounded-xl border border-primary/20 bg-accent p-5">
             <div className="mb-3.5 flex items-center gap-3">
               <AdTile url={triageItem?.triage.thumbnail_url} />
@@ -394,6 +439,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               </>
             )}
           </div>
+          )}
 
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1.5 flex items-center justify-between">
@@ -473,6 +519,24 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
             {/* Contract A: the ▲▼ against the previous window is a trend note; the grade (against the cap) decides. */}
             <span>前後升降只當參考，分級看<Term k="cap">上限</Term></span>
           </div>
+
+          {rejected && (
+            // v10 ai-blocked `aiBlockedCard()`: the dashed card under the evidence, with the one way back to an AI text.
+            <div className="col-span-full rounded-xl border border-dashed border-border bg-card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <b className="font-semibold">✦ AI 這次的說明沒採用</b>
+                  <p className="mt-1 text-sm text-muted-foreground">它的說明沒通過事實檢查，系統先擋下。上面的數字是平台直接給的，照樣可以判斷。</p>
+                </div>
+                {canRetry && (
+                  <Button variant="outline" disabled={retrying} onClick={() => void handleRetry()}>
+                    {retrying ? "送出中…" : "再請 AI 看一次"}
+                  </Button>
+                )}
+              </div>
+              {retryError && <p role="alert" className="mt-2 text-xs text-destructive">{retryError}</p>}
+            </div>
+          )}
         </div>
       )}
 

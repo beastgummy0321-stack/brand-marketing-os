@@ -93,20 +93,20 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 const WITH_STRATEGY = { strategy: { allocation: [{ role: "new" as const, label: "新客", pct: 100, rationale: null, amount: null }], why: [], unknowns: [], alternatives: [], learning_goals: [] } };
 
 describe("nextStep（F06-I01）", () => {
-  it("status closed：id performance、target performance、stageIndex 5", () => {
+  it("status closed：id performance、target perf (v10 tab key)、stageIndex 5", () => {
     const step = nextStep(campaign({ status: "closed", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
-    expect(step).toMatchObject({ id: "performance", target: "performance", stageIndex: 5, label: "查看成效 →" });
+    expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 5, label: "查看成效 →" });
   });
 
   it("status live：id performance、stageIndex 4，句子提到「投放中」", () => {
     const step = nextStep(campaign({ status: "live", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
-    expect(step).toMatchObject({ id: "performance", target: "performance", stageIndex: 4 });
+    expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 4 });
     expect(step.sentence).toContain("投放中");
   });
 
   it("status ended：id performance、stageIndex 4，句子提到「結束」", () => {
     const step = nextStep(campaign({ status: "ended", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
-    expect(step).toMatchObject({ id: "performance", target: "performance", stageIndex: 4 });
+    expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 4 });
     expect(step.sentence).toContain("結束");
   });
 

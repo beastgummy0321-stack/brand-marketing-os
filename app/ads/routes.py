@@ -9,6 +9,7 @@ repository/brief function -> wrap.
 """
 
 from datetime import timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +40,7 @@ from app.ads import (
     simulation_routes,
     strategy,
     triage_routes,
+    wizard_options,
 )
 from app.ads.adapters import simulated
 from app.brand_intelligence import repository as bi_repo
@@ -159,17 +161,35 @@ def get_campaign(request: Request, brand_id: str, campaign_id: str):
 # 對沒登入的呼叫者洩漏「這個路由存在、body 長這樣」，也讓租戶界線的掃描測試測不到這條路由。
 
 
+@router.get("/brands/{brand_id}/new-campaign/options")
+def get_new_campaign_options(request: Request, brand_id: str):
+    """F30-I04 (Contract B): the products and objectives the new-campaign wizard can pick."""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return wizard_options.options(web.conn, actor.org_id, brand_id)
+
+
 class CreateCampaignRequest(BaseModel):
     goal_text: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     constraints: dict = {}
+    # F30-I04 (Contract D): the wizard's structured picks. Typed `Any` so a wrong type is
+    # answered by the domain check with its own 400 code, after the tenant checks (F03-I20).
+    product_ids: Any = None
+    objective: Any = None
+    budget: Any = None
 
 
 _CREATE_CAMPAIGN_ERRORS = {
     "goal_text_required": (400, "請輸入這次投放的目標句子。"),
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
+    "objective_unavailable": (400, "這個目標尚未開放，請選其他目標。"),
+    "objective_unknown": (400, "請選一個想要的結果。"),
+    "budget_invalid": (400, "「這個活動最多花」請填大於 0 的數字。"),
+    "products_required": (400, "請選一個商品。"),
+    "product_unknown": (400, "這個商品不屬於這個品牌。"),
 }
 
 
@@ -180,11 +200,18 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
     本身不合法）。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    # F30-I04: any structured pick present -> the wizard's create (Contract D); otherwise the
+    # original one-sentence create, unchanged.
+    structured = any(v is not None for v in (body.product_ids, body.objective, body.budget))
+    picks = (
+        {"product_ids": body.product_ids, "objective": body.objective, "budget": body.budget}
+        if structured else None
+    )
     try:
         campaign = brief.create_draft(
             web.conn, actor.org_id, brand_id, goal_text=body.goal_text or "",
             start_date=body.start_date or "", end_date=body.end_date or "",
-            constraints=body.constraints, actor=str(actor.user_id),
+            constraints=body.constraints, actor=str(actor.user_id), picks=picks,
         )
     except ValueError as exc:
         code = str(exc)
@@ -204,6 +231,7 @@ class PatchCampaignRequest(BaseModel):
     end_date: str | None = None
     constraints_json: dict | None = None
     product_ids: list[str] | None = None
+    audience_hint: str | None = None
 
 
 RETIRED_GOAL_MESSAGE = "成功條件已改成一個上限（每筆成果成本），請在策略頁設定上限。"
@@ -212,7 +240,8 @@ _PATCH_CAMPAIGN_ERRORS = {
     external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "name_unknown": (400, "名稱不能是空白。"),
-    "objective_unknown": (400, "目標不能是空白。"),
+    "objective_unknown": (400, "請從清單選一個目標。"),
+    "objective_unavailable": (400, "這個目標尚未開放，請選其他目標。"),
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
     "campaign_bound": (
@@ -221,6 +250,7 @@ _PATCH_CAMPAIGN_ERRORS = {
         "才會留下異動紀錄。",
     ),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
+    "audience_hint_unknown": (400, "受眾方向要是文字。"),
 }
 
 
@@ -686,6 +716,9 @@ _PUBLISH_ERRORS = {
     # F29 Contract I (`launch_settings_malformed` never reaches publish: only the settings PUT).
     "launch_settings_invalid": (409, "投放設定還有要改的地方（例如 UTM 格式），改好再核准。"),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
+    # F30: a campaign and its ad sets alone are not a launch.
+    "launch_no_ready_ads": (
+        409, "還沒有任何一則廣告的素材就緒；至少一則素材確認後才能核准上架。"),
 }
 
 

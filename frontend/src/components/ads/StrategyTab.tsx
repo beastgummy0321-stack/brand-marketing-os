@@ -19,12 +19,15 @@ import { ActionBar, AllocationBar, Disclosure, formatAmount } from "./patterns";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
 import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
+import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
 /** 策略 tab（F28-I09，prototype v9 `tabStrategy()`）：一個上限（`CapBlock`）→ 這一期的總預算（`BudgetScenarios`，
- * internal only）→ 預算怎麼分 → 兩個收合（為什麼這樣建議／進階設定），底部一條動作列。The page decides nothing
+ * internal only）→ 預算怎麼分 → 兩個收合（為什麼這樣建議／進階設定），底部一條動作列。v10 (F30-I07): 進階設定 holds the
+ * launch settings every ad set uses (`LaunchSettingsCard`, the prototype's advanced fields; read only once the launch
+ * is approved or the campaign is on a platform), and a draft's bar says 「下一步：素材」. The page decides nothing
  * about money itself: scenarios, over-cap amounts and the cap all come from the API; the only local state is what the
  * user has picked and not saved yet. */
 export function StrategyTab({
@@ -32,13 +35,21 @@ export function StrategyTab({
   campaign: c,
   onCampaignChange,
   onChangeTab,
+  launchApproved = null,
+  onLaunchSettingsSaved,
 }: {
   brandId: string;
   campaign: CampaignDetail;
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
+  /** The workspace's word on the launch approval (`stage`); null while unknown — the settings then stay read only. */
+  launchApproved?: boolean | null;
+  /** A launch-settings save landed (the workspace re-reads its progress). */
+  onLaunchSettingsSaved?: () => void;
 }) {
   const imported = c.origin === "imported";
+  const draft = !imported && (c.status === "draft" || c.status === "ready");
+  const settingsLocked = !draft || launchApproved !== false;
   const readonlyReason = c.capabilities?.unavailable.strategy ?? "既有活動保留平台設定，不使用內部策略與預算操作。";
   const [goal, setGoal] = useState(c.goal_text ?? "");
   const [goalSaving, setGoalSaving] = useState(false);
@@ -132,8 +143,10 @@ export function StrategyTab({
     const blocker = c.cap.value === null ? "先設上限" : c.budget_planned === null ? "先選一個預算" : "";
     primary = { label: "照這個方式進行 →", onClick: () => void adopt(), disabled: blocker !== "" };
     hint = blocker;
-  } else if (step.id !== "strategy_generate") {
-    primary = { label: step.label, onClick: () => onChangeTab(step.target) };
+  } else if (draft && step.id !== "strategy_generate") {
+    // Prototype `tabStrategy()`: a draft goes on to its material; a campaign already on a platform has no next step here.
+    primary = { label: "下一步：素材 →", onClick: () => onChangeTab("assets"), disabled: c.cap.value === null };
+    hint = c.cap.value === null ? "先設上限" : "";
   }
 
   const allocationTotal = pickedRow?.total ?? c.budget_planned;
@@ -263,10 +276,11 @@ export function StrategyTab({
               {goalError && <p role="alert" className="text-sm text-danger">{goalError}</p>}
             </div>
           ) : (
-            <>
-              <p className="mb-2 text-sm text-muted-foreground">人工上架可在投放結構保存受眾來源、落地頁、歸因與平台 ID 對應；優化事件、出價、版位與像素在上架清單的「投放設定」選。</p>
-              <Button variant="outline" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
-            </>
+            <div className="flex flex-col gap-3">
+              <LaunchSettingsCard brandId={brandId} campaign={c} locked={settingsLocked}
+                onSaved={() => onLaunchSettingsSaved?.()} onCampaignSaved={onCampaignChange} />
+              <Button variant="link" size="sm" className="h-auto w-fit px-0" onClick={() => onChangeTab("structure")}>前往人工上架設定</Button>
+            </div>
           )}
         </Disclosure>
       </div>

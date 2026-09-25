@@ -1,66 +1,56 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useSearchParams } from "react-router-dom";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { PageTabs } from "@/components/layout/PageTabs";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { Badge } from "@/components/layout/ui/badge";
-import { Button } from "@/components/layout/ui/button";
-import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
-import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
+import { Skeleton } from "@/components/layout/Skeleton";
+import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { completeExternalView, syncCampaign, syncJob } from "@/lib/adsExternalApi";
-import { STATUS_LABEL, STATUS_TONE } from "./AdsHomePage";
+import { getCampaignWorkspace } from "@/lib/adsWorkspaceApi";
+import { useApiRead } from "@/lib/useApiRead";
 import { OverviewTab } from "./OverviewTab";
 import { StrategyTab } from "./StrategyTab";
 import { DeliveryTab } from "./DeliveryTab";
 import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
-import { PublishPage } from "./PublishPage";
 import { ChangeControl } from "./ChangeControl";
 import { ReviewPanel } from "./ReviewPanel";
-import { Disclosure } from "./patterns";
+import { CampaignPerfBody } from "./detail/CampaignDetailPage";
+import { OverviewBody, capOf } from "./workspace/OverviewBody";
+import { WORKSPACE_TABS, WorkspaceHead, isDraftCampaign } from "./workspace/WorkspaceHead";
+import { ActionBar, Disclosure, ResultHero, TargetRuler } from "./patterns";
+import { Button } from "@/components/layout/ui/button";
 import type { StepTarget, WorkspaceTab } from "./nextStep";
-import { formatSyncTime } from "@/lib/format";
 
-const TABS: { value: WorkspaceTab; label: string }[] = [
-  { value: "overview", label: "總覽" },
-  { value: "strategy", label: "策略" },
-  { value: "structure", label: "投放結構" },
-  { value: "assets", label: "素材" },
-  { value: "performance", label: "成效" },
-  { value: "changes", label: "變更與核對" },
-];
-
-function periodLabel(c: CampaignDetail): string {
-  if (c.origin === "imported") {
-    const root = c.external_view?.entities.find(e => !e.parent_native_id);
-    return `${root?.start_date ?? "開始日未知"} ~ ${root?.end_date ?? "結束日未知"}`;
-  }
-  return c.start_date && c.end_date ? `${c.start_date} ~ ${c.end_date}` : "投放期間尚未設定";
+/** Everything a tab body gets from the workspace. The structure, assets and changes tabs are slots: their own issues
+ * rebuild the component mounted there (`DeliveryTab`, `AssetsTab`, `ChangeControl`) without editing this file. */
+export interface TabSlotProps {
+  brandId: string;
+  campaign: CampaignDetail;
+  onCampaignChange: (campaign: CampaignDetail) => void;
+  onChangeTab: (target: StepTarget) => void;
 }
 
-/** Campaign 五分頁工作區（F03-I14／I15）：總覽／策略／投放結構／素材四分頁是真的內容；
- * 成效還沒補（自己的票補上），先用「誠實的空狀態＋下一步」頂著——
- * 規則沿用 §4.2：分頁沒資料不做成禁用分頁。 */
-function Workspace({
-  brandId,
-  campaignId,
-}: {
-  brandId: string;
-  campaignId: string;
-}) {
+const SLOTS: Record<"structure" | "assets" | "changes", (p: TabSlotProps) => ReactNode> = {
+  structure: (p) => <DeliveryTab {...p} />,
+  assets: (p) => <AssetsTab {...p} />,
+  changes: (p) => <ChangeControl brandId={p.brandId} campaignId={p.campaign.id} />,
+};
+
+/** v10 (F30-I07) campaign workspace (prototype `campPage()`): the head (`WorkspaceHead`: chips, stage rail, tabs
+ * with the open-decision count) over one tab body. 總覽 is `OverviewBody` (draft／gap／live from `GET …/workspace`,
+ * the old overview folded under 進階); 成效 (`perf`) is the F29 detail body with the old review and platform charts
+ * folded under 「進階：舊版成效與檢討」. `?tab=performance` and `/detail` land on `perf`. The campaign itself and the
+ * workspace progress are two reads that fail independently. */
+function Workspace({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const location = useLocation() as { state?: { parseWarning?: string } };
-  const tabParam = (searchParams.get("tab") as WorkspaceTab | null) ?? "overview";
-  const tab = TABS.some((t) => t.value === tabParam) ? tabParam : "overview";
-  const { brands } = useWorkspace();
-  const brandName = brands.find((b) => b.brand_id === brandId)?.brand_name ?? brandId;
+  const location = useLocation() as { pathname: string; state?: { parseWarning?: string } };
+  const tabParam = searchParams.get("tab");
+  const tab: WorkspaceTab = WORKSPACE_TABS.some((t) => t.value === tabParam) ? tabParam as WorkspaceTab : "overview";
 
   const [state, setState] = useState<
     { status: "loading" } | { status: "error"; message: string } | { status: "ready"; campaign: CampaignDetail }
   >({ status: "loading" });
-  const [publishAdapter, setPublishAdapter] = useState<AdapterKey | null>(null);
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const workspace = useApiRead((signal) => getCampaignWorkspace(brandId, campaignId, signal), [brandId, campaignId]);
+  const navigate = useNavigate();
   const request = useRef<AbortController | null>(null);
   const [syncId, setSyncId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -70,20 +60,6 @@ function Workspace({
     lifetime.current = new AbortController();
     return () => { lifetime.current.abort(); request.current?.abort(); };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchChannels(brandId)
-      .then((rows) => {
-        if (!cancelled) setChannels(rows);
-      })
-      .catch(() => {
-        /* 靜默：讀失敗就不印通路徽章，不是整頁壞掉 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [brandId]);
 
   const load = useCallback(() => {
     request.current?.abort();
@@ -119,6 +95,7 @@ function Workspace({
       if (!signal.aborted) { setSyncError(err instanceof Error ? err.message : "同步失敗。"); setSyncing(false); }
     }
   }
+  const reloadWorkspace = workspace.reload;
   useEffect(() => {
     if (!syncId) return;
     const controller = new AbortController();
@@ -132,6 +109,7 @@ function Workspace({
           setSyncId(null); setSyncing(false);
           if (result.job.error) setSyncError(result.job.error);
           load();
+          reloadWorkspace();
         }
       } catch (err) {
         if (!controller.signal.aborted) { setSyncError(err instanceof Error ? err.message : "同步狀態讀取失敗。"); setSyncId(null); setSyncing(false); }
@@ -139,10 +117,10 @@ function Workspace({
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [syncId, brandId, load]);
+  }, [syncId, brandId, load, reloadWorkspace]);
 
   function changeTab(next: WorkspaceTab) {
-    // 保留其他查詢參數——占位骨架的 setSearchParams({tab}) 會把它們沖掉。
+    // Keep the other query parameters (a bare setSearchParams({tab}) would drop them).
     setSearchParams((prev) => {
       const params = new URLSearchParams(prev);
       params.set("tab", next);
@@ -150,118 +128,94 @@ function Workspace({
     });
   }
 
-  // §6.2 決議 15：規則回的 target 可能是 "publish"，不是分頁——這裡把它接到既有的發布入口。
-  function go(target: StepTarget) {
-    if (target === "publish") { if (canPublish) setPublishAdapter("auto_meta"); else changeTab("assets"); }
-    else changeTab(target);
-  }
-
   const campaign = state.status === "ready" ? state.campaign : null;
-  const lastRead = Object.values(campaign?.external_view?.sync ?? {}).map(s => s.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1);
-  const nativeStatus = campaign?.external_view?.entities.find(e => !e.parent_native_id)?.native_status;
-  const platformState = ({ ACTIVE: "活動設定：啟用", PAUSED: "活動設定：暫停", ARCHIVED: "活動設定：已封存", DELETED: "活動設定：已刪除" } as Record<string, string>)[nativeStatus ?? ""] ?? "活動設定尚待確認";
-  // 已經投放中／結束／結案不再需要發布動作——只在草稿／待發布時給這個入口。
+  const ws = workspace.status === "ready" ? workspace.data : null;
+  // Only a campaign not on a platform yet gets the publish page.
   const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
+
+  // §6.2 decision 15: a step target may be "publish" — the publish page at its own URL (F30-I13), which lands on the
+  // step its launch reports; "performance" is the old perf key.
+  function go(target: StepTarget) {
+    if (target === "publish") { if (canPublish) navigate(`/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}/publish`); else changeTab("assets"); }
+    else changeTab(target === "performance" ? "perf" : target);
+  }
 
   function updateCampaign(next: CampaignDetail) {
     setState(previous => ({ status: "ready", campaign: {
       ...next, external_view: next.origin === "imported" && previous.status === "ready" ? previous.campaign.external_view : next.external_view,
     } }));
+    reloadWorkspace();
+  }
+
+  if (tabParam === "performance") {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", "perf");
+    return <Navigate replace to={`${location.pathname}?${params.toString()}`} />;
+  }
+
+  const slot: TabSlotProps | null = campaign ? { brandId, campaign, onCampaignChange: updateCampaign, onChangeTab: go } : null;
+  const platformSync = { onSync: () => void refreshPlatform(), syncing, error: syncError };
+  let body: ReactNode = null;
+  if (state.status === "error") {
+    body = <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
+  } else if (!campaign || !slot) {
+    body = <Skeleton className="h-60 w-full" />;
+  } else if (tab === "overview") {
+    const advanced = <OverviewTab campaign={campaign} onChangeTab={go} platformSync={campaign.origin === "imported" ? platformSync : undefined} />;
+    body = ws
+      ? <OverviewBody brandId={brandId} campaign={campaign} workspace={ws} canPublish={canPublish} onGo={go} advanced={advanced} />
+      : workspace.status === "loading" ? <Skeleton className="h-60 w-full" />
+      // The head already shows the progress read's failure with 重試; the folded overview stays reachable.
+      : <Disclosure label="進階：更多活動資訊">{advanced}</Disclosure>;
+  } else if (tab === "strategy") {
+    body = (
+      <StrategyTab {...slot}
+        launchApproved={ws ? ws.stage.key === "launch" || (ws.draft?.launch_total ?? 0) > 0 : null}
+        onLaunchSettingsSaved={reloadWorkspace} />
+    );
+  } else if (tab === "perf") {
+    // The old review panel and platform charts (incl. the comparison plan and simulation tools) stay reachable on a
+    // draft too — folded, never deleted.
+    const advanced = (
+      <Disclosure label="進階：舊版成效與檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
+        <div className="flex flex-col gap-4">
+          <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
+          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} />
+        </div>
+      </Disclosure>
+    );
+    body = isDraftCampaign(campaign, ws)
+      ? <DraftPerf brandId={brandId} campaign={campaign} onGo={go} advanced={advanced} />
+      : <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={advanced} />;
+  } else {
+    body = SLOTS[tab](slot);
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex max-w-[1260px] flex-col gap-4">
       {campaign?.simulation_mode && <p role="status" className="rounded-md bg-warning/10 p-3 text-sm">隔離模擬品牌：成效與學習只供演練，不代表真實投放。</p>}
-      <PageHeader
-        title={campaign ? campaign.name : "Campaign"}
-        description={campaign ? `${brandName} ・ ${periodLabel(campaign)}` : undefined}
-        actions={
-          campaign ? (
-            <div className="flex items-center gap-2">
-              <Badge variant={STATUS_TONE[campaign.status]}>{campaign.origin === "imported" ? platformState : STATUS_LABEL[campaign.status]}</Badge>
-              {campaign.origin === "imported" && <Button size="sm" variant="outline" disabled={syncing} onClick={() => void refreshPlatform()}>{syncing ? "同步中…" : "重新讀取平台"}</Button>}
-              {canPublish && (
-                <Button size="sm" onClick={() => setPublishAdapter("auto_meta")}>
-                  選擇上架方式
-                </Button>
-              )}
-            </div>
-          ) : undefined
-        }
-      />
-      {syncError && <p role="alert" className="text-sm text-destructive">{syncError}</p>}
-      {campaign?.origin === "imported" && <p className="text-xs text-muted-foreground">
-        {campaign.external_view?.connections.map(connection => `${connection.platform === "meta" ? "Meta" : connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
-        {" · 最近成功："}{lastRead ? formatSyncTime(lastRead) : "尚未成功讀回"}
-        {" · 活動設定不代表已實際投遞"}
-        {Object.entries(campaign.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
-      </p>}
-      {location.state?.parseWarning && (
-        <p className="text-sm text-warning">{location.state.parseWarning}</p>
-      )}
-      {campaign && publishAdapter ? (
-        <PublishPage
-          brandId={brandId}
-          campaign={campaign}
-          adapter={publishAdapter}
-          onCampaignChange={updateCampaign}
-          onClose={() => setPublishAdapter(null)}
-          onViewPerformance={() => {
-            setPublishAdapter(null);
-            changeTab("performance");
-          }}
-          onChangeAdapter={setPublishAdapter}
-          onGoToAssets={() => {
-            setPublishAdapter(null);
-            changeTab("assets");
-          }}
-        />
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <PageTabs items={TABS} value={tab} onChange={changeTab} label="Campaign 工作區分頁" />
-            {campaign && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span>{periodLabel(campaign)}</span>
-                {campaign.groups[0] && (
-                  <Badge variant="outline">
-                    ●{" "}
-                    {channels.find((c) => c.key === campaign.groups[0].channel_key)?.label
-                      ?? campaign.groups[0].channel_key}
-                  </Badge>
-                )}
-              </div>
-            )}
-          </div>
-          {state.status === "error" ? (
-            <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
-          ) : !campaign ? (
-            <div className="surface">
-              <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
-            </div>
-          ) : tab === "overview" ? (
-            <OverviewTab campaign={campaign} onChangeTab={go} />
-          ) : tab === "strategy" ? (
-            <StrategyTab
-              brandId={brandId}
-              campaign={campaign}
-              onCampaignChange={updateCampaign}
-              onChangeTab={go}
-            />
-          ) : tab === "structure" ? (
-            <DeliveryTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
-          ) : tab === "assets" ? (
-            <AssetsTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} />
-          ) : tab === "changes" ? (
-            <ChangeControl brandId={brandId} campaignId={campaign.id} />
-          ) : (
-            <div className="space-y-4">
-              <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
-              <Disclosure label="查看平台原始成效圖表" defaultOpen={searchParams.has("ad")}><PerformanceTab brandId={brandId} campaign={campaign} onCampaignChange={updateCampaign} onChangeTab={go} onSync={() => void refreshPlatform()} syncing={syncing} /></Disclosure>
-            </div>
-          )}
-        </>
-      )}
+      <WorkspaceHead brandId={brandId} campaign={campaign} workspace={workspace} tab={tab} onTab={changeTab} />
+      {location.state?.parseWarning && <p className="text-sm text-warning">{location.state.parseWarning}</p>}
+      {body}
+    </div>
+  );
+}
+
+/** Prototype `tabPerf()` for a draft: nothing is on a platform yet, so no results — the empty ruler shows where the
+ * ads will land. */
+function DraftPerf({ brandId, campaign: c, onGo, advanced }: {
+  brandId: string; campaign: CampaignDetail; onGo: (target: StepTarget) => void; advanced: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="surface px-[22px] py-5" aria-label="成效">
+        <ResultHero tone="neutral" title="還沒上架，沒有成效" note="上架並讀回核對後開始累積" />
+        <div className="mt-3"><TargetRuler ads={[]} cap={capOf(c)} breakEven={c.cap.break_even} size="full" /></div>
+      </section>
+      {advanced}
+      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}>
+        <Button onClick={() => onGo("publish")}>確認上架清單 →</Button>
+      </ActionBar>
     </div>
   );
 }

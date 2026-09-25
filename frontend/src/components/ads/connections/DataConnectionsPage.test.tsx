@@ -1,99 +1,69 @@
-/** frontend/src/components/ads/connections/DataConnectionsPage.test.tsx — F21-I02：資料連線頁
- * （v7 `connections()`）。覆蓋 issue Done／§1.7 自查：五張卡各自的狀態（ok／warn／
- * neutral）、「影響」chip 只在 warn 才印、按鈕文案與目的地、header「N 項需要處理」（warn＋
- * 失敗）、§1.7 item 9 獨立讀取失敗（一張卡失敗不拖累其餘卡，附重試）、0 個綁定帳戶時
- * 過去的廣告紀錄卡不打 `fetchMetaBackfillStatus`（lead 修正 2026-09-22：逐條對照後端程式
- * 重新核過資料 → 狀態規則，這批測試專門補舊版測不出來的坑）。`vi.mock` 掉四支 lib，
- * 不打真的 API。 */
+/** frontend/src/components/ads/connections/DataConnectionsPage.test.tsx — F30-I15: the v10 connections page
+ * (prototype `connections()`), fed by the one `GET …/connections` read (Feature F30 Contract H). The fixture has
+ * the real shape the server writes: an ok account, an auth-expired account with a two-day gap, a never-read
+ * account, orders missing after a date, a product without cost, and the four platforms without a reader. */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MetaAccountsData, MetaBackfillStatus, MetaSpendSummary } from "@/lib/metaApi";
-import { fetchMetaAccounts, fetchMetaBackfillStatus, fetchMetaSpend } from "@/lib/metaApi";
-import type { MonthlyBudget } from "@/lib/adsChangeApi";
-import { getMonthlyBudget } from "@/lib/adsChangeApi";
-import type { OrdersPageData } from "@/lib/ordersApi";
-import { fetchOrders } from "@/lib/ordersApi";
-import type { ProductListItem } from "@/lib/productsApi";
-import { fetchProductList } from "@/lib/productsApi";
-import {
-  accountsCardState,
-  budgetCardState,
-  DataConnectionsPage,
-  historyCardState,
-  ordersCardState,
-  productsCardState,
-} from "./DataConnectionsPage";
+import type { AdsConnections, CalendarDayState, ConnectionSource } from "@/lib/adsConnectionsApi";
+import { getConnections } from "@/lib/adsConnectionsApi";
+import { formatSyncTime } from "@/lib/format";
+import { DataConnectionsPage, sourceChip, sourceNote } from "./DataConnectionsPage";
 
-vi.mock("@/lib/metaApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/metaApi")>("@/lib/metaApi");
-  return { ...actual, fetchMetaAccounts: vi.fn(), fetchMetaSpend: vi.fn(), fetchMetaBackfillStatus: vi.fn() };
-});
-vi.mock("@/lib/adsChangeApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
-  return { ...actual, getMonthlyBudget: vi.fn() };
-});
-vi.mock("@/lib/ordersApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/ordersApi")>("@/lib/ordersApi");
-  return { ...actual, fetchOrders: vi.fn() };
-});
-vi.mock("@/lib/productsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/productsApi")>("@/lib/productsApi");
-  return { ...actual, fetchProductList: vi.fn() };
+vi.mock("@/lib/adsConnectionsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsConnectionsApi")>("@/lib/adsConnectionsApi");
+  return { ...actual, getConnections: vi.fn() };
 });
 
-function accounts(overrides: Partial<MetaAccountsData> = {}): MetaAccountsData {
+const iso = (d: number) => `2026-09-${String(d).padStart(2, "0")}`;
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => iso(from + i));
+const TODAY = 23;
+
+function source(overrides: Partial<ConnectionSource> & Pick<ConnectionSource, "key" | "kind" | "name" | "state" | "note">): ConnectionSource {
+  return { platform: null, last_success_at: null, missing_days: [], affected_campaigns: [], action: null, ...overrides };
+}
+
+function days(state: (d: number) => CalendarDayState) {
+  return range(1, 30).map((date, i) => ({ date, state: state(i + 1) }));
+}
+
+function fixture(): AdsConnections {
+  const unsupported = [["google_ads", "Google Ads"], ["tiktok", "TikTok"], ["shopee", "蝦皮"], ["momo", "momo"]].map(([key, label]) =>
+    source({ key: `platform:${key}`, kind: "platform", platform: key, name: label, state: "unsupported", note: "尚未支援，接上後開放" }));
   return {
-    token_tail: "abcd",
-    accounts: [
-      { id: "mad_1", account_id: "1", name: "帳戶一", currency: "TWD", connected_at: "2026-09-01T00:00:00Z", bound_brand_ids: ["brd_1"] },
-      { id: "mad_2", account_id: "2", name: "帳戶二（別的品牌）", currency: "TWD", connected_at: "2026-09-01T00:00:00Z", bound_brand_ids: ["brd_other"] },
+    attention_count: 4,
+    sources: [
+      source({ key: "meta:act_1", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・示例品牌主帳戶", state: "ok",
+        note: "每天的資料都有讀到", last_success_at: "2026-09-23T00:40:00Z" }),
+      source({ key: "meta:act_2", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・中秋活動帳戶", state: "auth_expired",
+        note: "09/17、09/18 讀不到・中秋限定活動先不判斷", last_success_at: "2026-09-16T01:00:00Z", missing_days: [iso(17), iso(18)],
+        affected_campaigns: [{ id: "cmp_mid", name: "中秋限定活動" }], action: { label: "重新授權", href: "/settings?tab=meta" } }),
+      source({ key: "meta:act_3", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・新品測試帳戶", state: "never",
+        note: "還沒讀取過", missing_days: ["2026-08-26", ...range(1, 22)] }),
+      source({ key: "orders", kind: "orders", name: "商城訂單報表", state: "missing_days", note: "最新到 09/12，缺 09/13 之後",
+        missing_days: range(13, 22), action: { label: "補報表", href: "/brands/brd_1/orders" } }),
+      source({ key: "product_costs", kind: "product_costs", name: "商品成本", state: "missing_cost", note: "3 個商品，2 個有成本；秋季新色缺成本",
+        action: { label: "去填成本", href: "/brands/brd_1/products" } }),
+      ...unsupported,
     ],
-    ...overrides,
+    calendar: {
+      month: "2026-09",
+      today: iso(TODAY),
+      rows: [
+        { source_key: "meta:act_1", label: "示例品牌主帳戶", days: days((d) => (d > TODAY ? "future" : "ok")) },
+        { source_key: "meta:act_2", label: "中秋活動帳戶", days: days((d) => (d > TODAY ? "future" : d < 10 ? "none" : d === 17 || d === 18 ? "missing" : "ok")) },
+        { source_key: "meta:act_3", label: "新品測試帳戶", days: days((d) => (d >= TODAY ? "future" : "missing")) },
+        { source_key: "orders", label: "商城訂單報表", days: days((d) => (d >= TODAY ? "future" : d > 12 ? "missing" : "ok")) },
+      ],
+    },
   };
-}
-function spend(overrides: Partial<MetaSpendSummary> = {}): MetaSpendSummary {
-  return { last_pull_at: "2026-09-21T03:03:25.000Z", campaigns: [], total: { campaign_id: "total", campaign_name: "總計", spend: 0, impressions: 0, clicks: 0, roas: null }, ...overrides };
-}
-function budget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
-  return {
-    month: "2026-09", currency: "TWD", amount: 60000, revision: 1, known_spend: 1000, ongoing_estimate: 500,
-    reserved_increases: 0, available: 5000, uncertainties: [], can_increase: true, period_end: "2026-09-30",
-    confirmed_at: "2026-09-19T00:00:00Z", notice: "",
-    ...overrides,
-  };
-}
-function orderItem(overrides: Partial<OrdersPageData["orders"]["items"][number]> = {}) {
-  // Relative to today: a hard-coded date silently turned this card warn once the clock passed it,
-  // and the page test then counted one card too many.
-  const yesterday = new Date(Date.now() - 86_400_000).toLocaleDateString("sv-SE");
-  return { id: "ord_1", order_number: "#1", order_date: yesterday, total_amount: 100, order_status: "Open", voucher_code: null, ...overrides };
-}
-function orders(items: OrdersPageData["orders"]["items"] = [orderItem()], total = items.length): OrdersPageData {
-  return {
-    brand: { id: "brd_1", name: "品牌" },
-    summary: { since: "2026-08-01", until: "2026-09-22", has_history: true, order_count: total, net_revenue: 100, average_order_value: 100, new_customers: 1, existing_customers: 0, repurchase_rate: null, repurchase_sample_size: 0, sku_margins: [] },
-    orders: { items, page: 1, page_size: 12, total },
-    policy_changes: [], channel_entries: [],
-  };
-}
-function product(overrides: Partial<ProductListItem> = {}): ProductListItem {
-  return { id: "prd_0", name: "商品", status: "active", parent_id: null, fact_count: 0, pending_fact_count: 0, economics_status: "confirmed", ...overrides };
-}
-function backfill(overrides: Partial<MetaBackfillStatus> = {}): MetaBackfillStatus {
-  return { running: false, earliest_spend_date: "2025-04-25", latest_spend_date: "2026-09-21", ad_rows: 100, ...overrides };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(fetchMetaAccounts).mockResolvedValue(accounts());
-  vi.mocked(fetchMetaSpend).mockResolvedValue(spend());
-  vi.mocked(getMonthlyBudget).mockResolvedValue(budget());
-  vi.mocked(fetchOrders).mockResolvedValue(orders());
-  vi.mocked(fetchProductList).mockResolvedValue([product()]);
-  vi.mocked(fetchMetaBackfillStatus).mockResolvedValue(backfill());
+  vi.mocked(getConnections).mockResolvedValue(fixture());
 });
 
 function renderPage() {
@@ -104,177 +74,123 @@ function renderPage() {
   );
 }
 
-describe("純函式：每張卡的資料 → 畫面狀態（lead 修正 2026-09-22 的規則）", () => {
-  it("accounts：0 個綁定帳戶→warn「尚未連接」；≥1→ok「已連接」，只算綁這個品牌的帳戶", () => {
-    const zero = accountsCardState(accounts({ accounts: [{ id: "mad_1", account_id: "1", name: "帳戶一", currency: "TWD", connected_at: "2026-09-01T00:00:00Z", bound_brand_ids: ["brd_other"] }] }), spend(), "brd_1");
-    expect(zero.tone).toBe("warn");
-    expect(zero.badge).toBe("尚未連接");
-    expect(zero.fact).toBe("還沒有連接廣告帳戶");
-    expect(zero.buttonLabel).toBe("去連接");
+const row = (name: string) =>
+  within(screen.getByRole("list", { name: "資料來源" })).getByText(name, { selector: "b" }).closest("[data-slot=source-row]") as HTMLElement;
 
-    const some = accountsCardState(accounts(), spend(), "brd_1");
-    expect(some.tone).toBe("ok");
-    expect(some.fact).toBe("1 個帳戶・最近讀取 09/21 11:03");
+describe("sourceChip / sourceNote (state → chip words; the server note shown as is)", () => {
+  const [ok, expired, never, orders, costs, google] = fixture().sources;
+
+  it("maps every state to one chip; problems are warn, a platform without a reader is neutral", () => {
+    expect(sourceChip(ok)).toEqual({ tone: "ok", label: "正常" });
+    expect(sourceChip(expired)).toEqual({ tone: "warn", label: "權限失效" });
+    expect(sourceChip({ ...expired, state: "failed" })).toEqual({ tone: "warn", label: "讀取失敗" });
+    expect(sourceChip(never)).toEqual({ tone: "warn", label: "還沒讀取" });
+    expect(sourceChip(orders)).toEqual({ tone: "warn", label: "缺 09/13 之後" });
+    expect(sourceChip({ ...ok, state: "missing_days", missing_days: [iso(17), iso(18)] })).toEqual({ tone: "warn", label: "缺 2 天" });
+    expect(sourceChip({ ...ok, state: "missing_days", missing_days: [] })).toEqual({ tone: "warn", label: "缺資料" });
+    expect(sourceChip(costs)).toEqual({ tone: "warn", label: "缺成本" });
+    expect(sourceChip(google)).toEqual({ tone: "neutral", label: "尚未支援" });
   });
 
-  it("budget：amount===null→warn「尚未設定」（不論 currency）；currency===null 但有 amount→warn「預算待核實」；uncertainties 非空不算 warn", () => {
-    const noAmount = budgetCardState(budget({ amount: null, currency: null }), "brd_1");
-    expect(noAmount.tone).toBe("warn");
-    expect(noAmount.badge).toBe("尚未設定");
-
-    const noCurrency = budgetCardState(budget({ amount: 1000, currency: null }), "brd_1");
-    expect(noCurrency.tone).toBe("warn");
-    expect(noCurrency.badge).toBe("預算待核實");
-
-    const withUncertainties = budgetCardState(budget({ amount: 60000, currency: "TWD", uncertainties: ["還有未核對的花費"] }), "brd_1");
-    expect(withUncertainties.tone).toBe("ok");
-    expect(withUncertainties.impacts).toEqual([]);
+  it("「never」 says what is missing per kind: no account bound, no orders imported, no products", () => {
+    expect(sourceChip({ ...google, state: "never" }).label).toBe("尚未連接");
+    expect(sourceChip({ ...orders, state: "never" }).label).toBe("尚未匯入");
+    expect(sourceChip({ ...costs, state: "never" }).label).toBe("還沒有商品");
   });
 
-  it("orders：total===0→warn「尚未匯入」；第一頁全部 order_date 為 null→warn「日期不明」；跳過 null 找到第一筆有日期的訂單", () => {
-    const empty = ordersCardState(orders([], 0), "brd_1", "2026-09-22");
-    expect(empty.tone).toBe("warn");
-    expect(empty.badge).toBe("尚未匯入");
-
-    const allNull = ordersCardState(orders([orderItem({ order_date: null }), orderItem({ order_date: null })]), "brd_1", "2026-09-22");
-    expect(allNull.tone).toBe("warn");
-    expect(allNull.badge).toBe("日期不明");
-
-    // `ORDER BY order_date DESC` 把 NULL 排最前——前兩筆沒日期，第三筆才有。
-    const skipsNulls = ordersCardState(
-      orders([orderItem({ order_date: null }), orderItem({ order_date: null }), orderItem({ order_date: "2026-09-20" })]),
-      "brd_1",
-      "2026-09-21",
-    );
-    expect(skipsNulls.tone).toBe("ok");
-    expect(skipsNulls.fact).toBe("最新到 9/20");
-  });
-
-  it("orders：「今天／昨天」比本機日曆日字串，不解析成 Date、不用 UTC getter——灌本機日期字串就能算對", () => {
-    // 今天 9/22，昨天 9/21：最新 9/21（等於昨天）→ ok。
-    const fresh = ordersCardState(orders([orderItem({ order_date: "2026-09-21" })]), "brd_1", "2026-09-22");
-    expect(fresh.tone).toBe("ok");
-    expect(fresh.badge).toBe("已更新");
-
-    // 最新 9/20，早於昨天 9/21→warn，缺的日期＝9/21（最新＋1 天）。
-    const stale = ordersCardState(orders([orderItem({ order_date: "2026-09-20" })]), "brd_1", "2026-09-22");
-    expect(stale.tone).toBe("warn");
-    expect(stale.badge).toBe("缺 9/21 之後");
-
-    // 跨月：最新 8/31，今天 9/2（昨天 9/1）→ 早於昨天，缺的日期要正確跨月成 9/1，不是 8/32。
-    const crossMonth = ordersCardState(orders([orderItem({ order_date: "2026-08-31" })]), "brd_1", "2026-09-02");
-    expect(crossMonth.badge).toBe("缺 9/1 之後");
-  });
-
-  it("products：只算上架中且不是別列母產品的列；母產品與下架列不計入分母，也不計入分子", () => {
-    const withParentAndArchived = productsCardState(
-      [
-        product({ id: "parent", status: "active", parent_id: null, economics_status: "none" }),
-        product({ id: "c1", status: "active", parent_id: "parent", economics_status: "confirmed" }),
-        product({ id: "c2", status: "active", parent_id: "parent", economics_status: "confirmed" }),
-        product({ id: "c3", status: "active", parent_id: "parent", economics_status: "confirmed" }),
-        product({ id: "c4", status: "active", parent_id: "parent", economics_status: "confirmed" }),
-        product({ id: "c5", status: "active", parent_id: "parent", economics_status: "confirmed" }),
-        product({ id: "archived", status: "archived", parent_id: null, economics_status: "confirmed" }),
-      ],
-      "brd_1",
-    );
-    expect(withParentAndArchived.fact).toBe("5 個商品，5 個有成本");
-    expect(withParentAndArchived.tone).toBe("ok");
-
-    const noSellable = productsCardState([product({ id: "gone", status: "archived", parent_id: null })], "brd_1");
-    expect(noSellable.tone).toBe("warn");
-    expect(noSellable.badge).toBe("尚未建立商品");
-
-    const noneConfirmed = productsCardState([product({ economics_status: "none" }), product({ economics_status: "pending" })], "brd_1");
-    expect(noneConfirmed.tone).toBe("warn");
-    expect(noneConfirmed.badge).toBe("缺成本");
-  });
-
-  it("history：running→neutral「帶入中」；沒有 earliest_spend_date→warn「尚未帶入」；否則 ok 並算月數；0 個帳戶→warn「先連接帳戶」", () => {
-    expect(historyCardState(backfill({ running: true }), "brd_1").tone).toBe("neutral");
-    const none = historyCardState(backfill({ earliest_spend_date: null }), "brd_1");
-    expect(none.tone).toBe("warn");
-    expect(none.badge).toBe("尚未帶入");
-    const done = historyCardState(backfill({ earliest_spend_date: "2025-04-25", latest_spend_date: "2026-09-21" }), "brd_1");
-    expect(done.tone).toBe("ok");
-    expect(done.fact).toBe("已帶入 18 個月");
-
-    const noAccounts = historyCardState("no-accounts", "brd_1");
-    expect(noAccounts.tone).toBe("warn");
-    expect(noAccounts.badge).toBe("先連接帳戶");
+  it("an ok account adds its last read time; every other row prints the server note unchanged", () => {
+    expect(sourceNote(ok)).toBe(`每天的資料都有讀到・最近讀取 ${formatSyncTime("2026-09-23T00:40:00Z")}`);
+    expect(sourceNote(expired)).toBe("09/17、09/18 讀不到・中秋限定活動先不判斷");
+    expect(sourceNote({ ...ok, last_success_at: null })).toBe("每天的資料都有讀到");
+    expect(sourceNote(orders)).toBe("最新到 09/12，缺 09/13 之後");
   });
 });
 
-describe("DataConnectionsPage（F21-I02，v7 connections()）", () => {
-  it("五張卡都讀到：header 印「N 項需要處理」（warn＋失敗都算），未支援平台灰卡固定顯示且帶原型 .cn.off 的灰底", async () => {
-    vi.mocked(getMonthlyBudget).mockResolvedValue(budget({ amount: null, currency: null }));
-
+describe("DataConnectionsPage (F30-I15, v10 connections())", () => {
+  it("header prints the server's attention count and the read-only chip", async () => {
     renderPage();
-
-    expect(await screen.findByText("1 項需要處理")).toBeTruthy();
-    const unsupported = screen.getByTestId("connection-card-unsupported-Google Ads");
-    expect(unsupported.className).toMatch(/bg-muted/);
+    expect(await screen.findByText("4 項需要處理")).toBeTruthy();
+    expect(screen.getByText("只讀取，不會修改你的廣告").getAttribute("data-tone")).toBe("ok");
   });
 
-  it("0 個綁定帳戶：帳戶卡 warn「尚未連接」，過去的廣告紀錄卡 warn「先連接帳戶」，且不打 fetchMetaBackfillStatus", async () => {
-    vi.mocked(fetchMetaAccounts).mockResolvedValue(accounts({ accounts: [] }));
-
+  it("one row per source in server order; the four platforms without a reader come last, greyed", async () => {
     renderPage();
-
-    const accountsCard = await screen.findByTestId("connection-card-Meta 廣告帳戶");
-    expect(await within(accountsCard).findByText("尚未連接")).toBeTruthy();
-    const historyCard = await screen.findByTestId("connection-card-過去的廣告紀錄");
-    expect(await within(historyCard).findByText("先連接帳戶")).toBeTruthy();
-    expect(fetchMetaBackfillStatus).not.toHaveBeenCalled();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((r) => r.querySelector("b")?.textContent)).toEqual([
+      "Meta 廣告帳戶・示例品牌主帳戶", "Meta 廣告帳戶・中秋活動帳戶", "Meta 廣告帳戶・新品測試帳戶", "商城訂單報表", "商品成本",
+      "Google Ads", "TikTok", "蝦皮", "momo",
+    ]);
+    for (const name of ["Google Ads", "TikTok", "蝦皮", "momo"]) {
+      expect(row(name).className).toMatch(/opacity-60/);
+      expect(within(row(name)).getByText("尚未支援")).toBeTruthy();
+      expect(within(row(name)).queryByRole("link")).toBeNull();
+    }
+    expect(row("商品成本").className).not.toMatch(/opacity-60/);
   });
 
-  it("warn 卡：印「影響」chip 與原型固定文案，按鈕連去既有設定入口", async () => {
-    vi.mocked(getMonthlyBudget).mockResolvedValue(budget({ amount: null, currency: null }));
-
+  it("actions only on problem rows, linking to the page that fixes them; ok and action-less rows have none", async () => {
     renderPage();
-    await screen.findByText("Meta 預算金額");
-
-    const budgetCard = screen.getByTestId("connection-card-Meta 預算金額");
-    expect(await within(budgetCard).findByText("影響")).toBeTruthy();
-    expect(within(budgetCard).getByText("加預算提議")).toBeTruthy();
-    expect(within(budgetCard).getByText("約撐得起幾則")).toBeTruthy();
-    const link = within(budgetCard).getByRole("link", { name: "去設定 →" });
-    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads");
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    expect(within(row("Meta 廣告帳戶・中秋活動帳戶")).getByRole("link", { name: "重新授權 →" }).getAttribute("href")).toBe("/settings?tab=meta");
+    expect(within(row("商城訂單報表")).getByRole("link", { name: "補報表 →" }).getAttribute("href")).toBe("/brands/brd_1/orders");
+    expect(within(row("商品成本")).getByRole("link", { name: "去填成本 →" }).getAttribute("href")).toBe("/brands/brd_1/products");
+    expect(within(row("Meta 廣告帳戶・示例品牌主帳戶")).queryByRole("link")).toBeNull();
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).queryByRole("link")).toBeNull();
+    expect(within(row("Meta 廣告帳戶・示例品牌主帳戶")).getByText("✓ 正常")).toBeTruthy();
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByText("還沒讀取過")).toBeTruthy();
   });
 
-  it("ok 卡：不印「影響」；帳戶卡指到 Meta 帳戶設定入口", async () => {
+  it("the removed v7 cards are gone: no budget, no past-ads history, no 影響 chips, no 查看 on ok rows", async () => {
     renderPage();
-    await screen.findByText("Meta 廣告帳戶");
-
-    const accountsCard = screen.getByTestId("connection-card-Meta 廣告帳戶");
-    expect(within(accountsCard).queryByText("影響")).toBeNull();
-    const link = await within(accountsCard).findByRole("link", { name: "查看 →" });
-    expect(link.getAttribute("href")).toBe("/settings?tab=meta");
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    expect(screen.queryByText(/Meta 預算金額/)).toBeNull();
+    expect(screen.queryByText(/過去的廣告紀錄/)).toBeNull();
+    expect(screen.queryByText("影響")).toBeNull();
+    expect(screen.queryByRole("link", { name: /查看/ })).toBeNull();
   });
 
-  it("§1.7 item 9：一張卡讀取失敗不拖累其餘卡；印「讀取失敗」與「重試」，按下去重打那一張；失敗也算進 header 的「需要處理」", async () => {
-    vi.mocked(fetchOrders).mockRejectedValueOnce(new Error("訂單讀取失敗"));
-
+  it("「9 月每天的資料」: a day grid row per calendar row, today ringed, missing days titled, with its legend", async () => {
     renderPage();
-
-    const ordersCard = await screen.findByTestId("connection-card-商城訂單報表");
-    expect(await within(ordersCard).findByText("讀取失敗")).toBeTruthy();
-    expect(within(ordersCard).getByText("訂單讀取失敗")).toBeTruthy();
-    expect(await screen.findByText("1 項需要處理")).toBeTruthy();
-
-    // 其餘卡照常顯示，沒有被這張卡的失敗拖累。
-    expect(await screen.findByText("Meta 廣告帳戶")).toBeTruthy();
-    expect(screen.getByTestId("connection-card-過去的廣告紀錄")).toBeTruthy();
-
-    vi.mocked(fetchOrders).mockResolvedValue(orders());
-    await userEvent.click(within(ordersCard).getByRole("button", { name: "重試" }));
-    expect(await within(ordersCard).findByText(/最新到/)).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "9 月每天的資料" })).toBeTruthy();
+    const grid = screen.getByRole("group", { name: "9 月每天的資料" });
+    expect(within(grid).getAllByRole("img")).toHaveLength(4 * 30);
+    expect(grid.querySelectorAll("[data-today]")).toHaveLength(4);
+    expect(within(grid).getByRole("img", { name: "中秋活動帳戶 9/17 缺資料" }).getAttribute("data-state")).toBe("missing");
+    expect(within(grid).getByRole("img", { name: "商城訂單報表 9/12 有資料" })).toBeTruthy();
+    const legend = document.querySelector("[data-slot=legend]") as HTMLElement;
+    for (const word of ["有資料", "缺資料", "不需要／還沒到", "今天"]) expect(within(legend).getByText(word)).toBeTruthy();
   });
 
-  it("版面寬度照 v7 `.page{max-width:1180px}`：外層容器帶同一個上限", async () => {
+  it("loading shows the skeleton, not an empty list or a zero count", async () => {
+    let resolve: (value: AdsConnections) => void = () => {};
+    vi.mocked(getConnections).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    renderPage();
+    expect(screen.getByTestId("connections-loading")).toBeTruthy();
+    expect(screen.queryByText(/項需要處理/)).toBeNull();
+    resolve(fixture());
+    expect(await screen.findByText("4 項需要處理")).toBeTruthy();
+    expect(screen.queryByTestId("connections-loading")).toBeNull();
+  });
+
+  it("a failed read shows ReadFailed with 重試 (never empty data); 重試 reads again", async () => {
+    vi.mocked(getConnections).mockRejectedValueOnce(new Error("讀取資料連線失敗。"));
+    renderPage();
+    const failed = await screen.findByRole("alert");
+    expect(within(failed).getByText(/讀取資料連線失敗/)).toBeTruthy();
+    expect(screen.queryByRole("listitem")).toBeNull();
+    expect(screen.queryByText(/項需要處理/)).toBeNull();
+
+    await userEvent.click(within(failed).getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("4 項需要處理")).toBeTruthy();
+    expect(getConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("layout: prototype `.page` max-width 1260, breadcrumb and back bar to the ads home", async () => {
     const { container } = renderPage();
-    await screen.findByText("Meta 廣告帳戶");
-    expect(container.querySelector(".max-w-\\[1180px\\]")).toBeTruthy();
+    await screen.findByText("4 項需要處理");
+    expect(container.querySelector(".max-w-\\[1260px\\]")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.getByRole("link", { name: "← 投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 });

@@ -10,7 +10,7 @@ import { AssetHandoffPanel } from "./AssetHandoffPanel";
 import { AssetsTab } from "./AssetsTab";
 import { nextStep } from "./nextStep";
 import { NewCampaignPage } from "./NewCampaignPage";
-import { createCampaign } from "@/lib/adsApi";
+import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
 import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, attachUpload, assetBlob, listPlacements, listSuggestionBatches, suggestAssets, getSuggestionBatch, revisePlacement, confirmPlacement, assetHandoff, AssetApiError, type AssetLibrary, type Placement, type AssetUpload, type SuggestionBatch } from "@/lib/adsUserAssetsApi";
 import * as materialApi from "@/lib/adsMaterialApi";
 import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
@@ -18,9 +18,10 @@ import type { CampaignDetail } from "@/lib/adsApi";
 
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn(), errorMessageFrom: () => "error" }));
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
-vi.mock("@/lib/adsApi", async importOriginal => ({ ...await importOriginal<object>(), createCampaign: vi.fn() }));
+vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
+vi.mock("@/lib/adsSlotsApi", async importOriginal => ({ ...await importOriginal<object>(), getSlots: vi.fn().mockResolvedValue({ ready: 0, total: 0, groups: [], requests: [], requests_truncated: false }) }));
 vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof materialApi>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
 const library = (): AssetLibrary => ({ assets: [], uploads: [], next_cursor: null, next_upload_cursor: null });
 const upload = (id = "u1", status = "complete"): AssetUpload => ({ id, batch_id: "batch1", filename: `${id}.png`, expected_size: 1, status, error: null, asset_id: status === "complete" ? "asset1" : null, copy_fields: { headline: "原標題", body: "原內文", description: "原說明", caption: "額外原文" } });
@@ -45,17 +46,20 @@ beforeEach(() => {
 describe("durable upload UI", () => {
   it("keeps the upload library mounted while creating and retries attach without creating twice", async () => {
     vi.mocked(listUserAssets).mockResolvedValue({ ...library(), uploads: [upload()] });
-    const create = deferred<CampaignDetail & { parsed: boolean }>(); vi.mocked(createCampaign).mockReturnValue(create.promise);
+    vi.mocked(getWizardOptions).mockResolvedValue({ products: [{ id: "prd_1", name: "商品一", price: 990, currency: "TWD", thumbnail_url: null, has_cost: true }], objectives: [{ key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} }] });
+    const create = deferred<CampaignDetail & { parsed: boolean }>(); vi.mocked(createCampaignFromPicks).mockReturnValue(create.promise);
     vi.mocked(attachUpload).mockRejectedValueOnce(new Error("附件暫時失敗")).mockResolvedValue({ placement: placement() });
     render(<MemoryRouter><NewCampaignPage brandId="b1" /></MemoryRouter>); const user = userEvent.setup();
-    await user.click(await screen.findByLabelText("選取 u1.png")); await user.type(screen.getByLabelText("你這次想做到什麼？"), "介紹商品");
-    await user.click(screen.getByRole("button", { name: "產生建議" }));
+    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await user.click(await screen.findByLabelText("選取 u1.png"));
+    await user.click(screen.getByRole("radio", { name: /商品一/ })); await user.click(screen.getByRole("radio", { name: /購買/ }));
+    await user.type(screen.getByLabelText("這個活動最多花"), "30000");
+    await user.click(screen.getByRole("button", { name: /下一步：系統理解/ }));
     expect(screen.getByText("自帶圖片／影片")).toBeTruthy(); expect(screen.getByLabelText("選取 u1.png")).toHaveProperty("disabled", true);
-    await act(async () => create.resolve({ ...campaign, parsed: true }));
+    await act(async () => create.resolve({ ...campaign, objective: "購買", context_json: { product_ids: ["prd_1"] }, constraints_json: { budget: 30000 }, parsed: true }));
     expect(await screen.findByText(/活動已建立，未完成素材仍可重試/)).toBeTruthy();
-    expect(screen.getByLabelText("你這次想做到什麼？")).toHaveProperty("disabled", true);
-    await user.click(screen.getByRole("button", { name: "重試加入未完成素材並繼續" }));
-    await waitFor(() => expect(attachUpload).toHaveBeenCalledTimes(2)); expect(createCampaign).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: /重試加入未完成素材並繼續/ }));
+    await waitFor(() => expect(attachUpload).toHaveBeenCalledTimes(2)); expect(createCampaignFromPicks).toHaveBeenCalledTimes(1);
     expect(attachUpload).toHaveBeenLastCalledWith("b1", "c1", "u1");
   });
   it("keeps all 11 files, splits descriptor batches, and saves through raw PUT", async () => {
@@ -120,6 +124,8 @@ describe("durable upload UI", () => {
 describe("placement and evidence UI", () => {
   it("imported empty groups still expose uploads and never require generated ads", async () => {
     render(<MemoryRouter><AssetsTab brandId="b1" campaign={campaign} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} /></MemoryRouter>);
+    // F30-I11: the material request editor and the uploads live in the tab's 「進階」 fold.
+    await userEvent.setup().click(screen.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接" }));
     vi.mocked(materialApi.saveMaterialOperation).mockResolvedValue({ task: {
       id: "task1", campaign_id: "c1", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [], limitations: [], created_at: "2026-09-19", replaces: null, cancelled_at: null,
     } });

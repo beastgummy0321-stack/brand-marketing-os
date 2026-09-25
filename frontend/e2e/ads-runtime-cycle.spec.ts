@@ -51,10 +51,14 @@ test("D: normal entry, unknown recovery, saved monitoring preferences and unchan
   await page.getByRole("link", { name: "F13 隔離驗收品牌", exact: true }).click();
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
   await page.getByTestId("campaign-grid").getByText("F13 測試｜暫停活動", { exact: true }).click();
+  // F30-I07: the old overview (with 檢討與持續追蹤) is folded under 進階 on the v10 overview.
+  await page.getByRole("button", { name: "進階：更多活動資訊", exact: true }).click();
   await expect(page.getByRole("button", { name: "前往廣告檢討 →", exact: true })).toBeVisible();
   await capture(page, directory, "overview-runtime-entry");
   const workspace = page.waitForResponse(response => response.url().endsWith("/reviews") && response.request().method() === "GET");
   await page.getByRole("button", { name: "前往廣告檢討 →", exact: true }).click();
+  // The review panel sits in the perf tab's 「進階：舊版成效與檢討」 fold; it reads the rounds once opened.
+  await page.getByRole("button", { name: "進階：舊版成效與檢討", exact: true }).click();
   const reviews = (await (await workspace).json() as ReviewsData).reviews;
   const unknown = reviews.find(row => row.id === fixture.unknown_review_id);
   const waiting = reviews.find(row => row.id === fixture.b2_review_id);

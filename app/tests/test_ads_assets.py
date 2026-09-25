@@ -2,7 +2,9 @@
 workbench pack with one set per ad (the set's `source_ref` carries the ad id, the pack `summary`
 情境 key is a non-empty sentence); approving the pack in the workbench flips those ads to
 `ready_workbench`, an unapproved pack reads `in_progress`; a hand tick on an ad outside any pack
-gives `ready_manual` with actor and timestamp, untick returns it to `not_started`; readiness
+gives `ready_manual` with actor and timestamp, untick returns it to `not_started`; neither an
+approved pack nor a manual tick counts toward `ready_count` -- only a confirmed material binding
+does, the launch batch's `ready_material` rule (F30-I16); readiness
 never reads a `workbench_*` table directly (this test's own setup only ever calls the workbench's
 public entries — `pack_for_source`/`briefs_for_source`/`submit_pack` — never raw SQL against
 `workbench_*`); dispatching twice is refused.
@@ -17,8 +19,9 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app import workbench
-from app.ads import assets, plan
+from app.ads import assets, handoff_assignment, plan
 from app.ads import repository as ads_repo
+from app.ads import user_assets_repository as user_assets
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
@@ -130,6 +133,27 @@ class AssetsTestBase(unittest.TestCase):
     def _approve(self, pack_id: str):
         return self.client.post(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}/approve")
 
+    def _assign_confirmed(self, campaign_id: str, ad_id: str) -> None:
+        """Bind a confirmed brand original to the planned ad (the launch batch's "ready")."""
+        asset = coredb.new_id("aua")
+        web.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'a.png','image/png',1,'ready')",
+            (asset, self.org_id, self.brand_id, asset, f"{self.org_id}/{asset}"),
+        )
+        placement = user_assets.attach(
+            web.conn, self.org_id, self.brand_id, campaign_id, asset,
+            {"headline": "標題", "body": "文案", "description": "說明"}, ACTOR,
+        )
+        web.conn.execute(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by=%s WHERE id=%s",
+            (ACTOR, placement["id"]),
+        )
+        web.conn.commit()
+        handoff_assignment.assign(
+            web.conn, self.org_id, self.brand_id, campaign_id, ad_id, placement["id"], 1,
+        )
+
 
 # -- 案例 1：交棒建一個 pack、一支廣告一個 set，摘要的「情境」是一句非空的話 --------------------
 
@@ -175,7 +199,21 @@ class ApprovalFlipsReadinessTest(AssetsTestBase):
         self.assertEqual({row["state"] for row in after}, {"ready_workbench"})
         current_pack_id = assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"])
         summary = assets.readiness_summary(after, current_pack_id)
-        self.assertEqual(summary, {"ready_count": 2, "total": 2, "pack_id": pack_id})
+        # F30-I16: an approved pack is progress, not launchable material -- the launch batch
+        # would defer both ads, so 下一步 must not say 素材都就位了.
+        self.assertEqual(summary, {"ready_count": 0, "total": 2, "pack_id": pack_id})
+
+        ad_ids = [row["ad_id"] for row in after]
+        self._assign_confirmed(campaign["id"], ad_ids[0])
+        bound = assets.readiness(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(
+            {row["ad_id"]: row["material_ready"] for row in bound},
+            {ad_ids[0]: True, ad_ids[1]: False},
+        )
+        self.assertEqual(
+            assets.readiness_summary(bound, current_pack_id),
+            {"ready_count": 1, "total": 2, "pack_id": pack_id},
+        )
 
 
 # -- 案例 3：手動勾「素材已就位」——不進工作檯的廣告一樣可以就緒 -------------------------------
@@ -200,6 +238,9 @@ class ManualTickTest(AssetsTestBase):
         self.assertEqual(row["state"], "ready_manual")
         self.assertEqual(row["by"], ACTOR)
         self.assertIsNotNone(row["at"])
+        # F30-I16: the tick records progress; without a confirmed material it is not ready.
+        self.assertIs(row["material_ready"], False)
+        self.assertEqual(assets.readiness_summary(rows, None)["ready_count"], 0)
         self.assertIsNone(assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"]))
 
         untucked = assets.mark_ready(

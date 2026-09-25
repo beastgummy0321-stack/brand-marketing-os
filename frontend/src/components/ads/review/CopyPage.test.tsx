@@ -199,7 +199,7 @@ describe("CopyPage（F23-I04）承接與差異標記", () => {
     expect(screen.queryByText("沒有可承接的建議，這份清單不會連回這輪檢討。")).toBeNull();
   });
 
-  it("沒有 adjust 建議：新版留白，一行說明不會連回檢討", async () => {
+  it("沒有 adjust 建議（F30-I02）：新版從平台現在的文案開始，目的行說 AI 沒給新版", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review({
       result_json: {
         recommendations: [{
@@ -210,10 +210,10 @@ describe("CopyPage（F23-I04）承接與差異標記", () => {
       },
     }));
     renderAt(copyPath());
-    await screen.findByText("目前");
-    expect((screen.getByLabelText("新標題") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("新內文") as HTMLTextAreaElement).value).toBe("");
-    expect(screen.getByText("沒有可承接的建議，這份清單不會連回這輪檢討。")).toBeTruthy();
+    expect(await screen.findByDisplayValue("每天的隨行杯")).toBeTruthy();
+    expect((screen.getByLabelText("新內文") as HTMLTextAreaElement).value).toBe(review().evidence_json.conditions.creative_snapshot.copy_fields?.body);
+    expect(screen.getByText("AI 沒給新版，從現在的文案直接改")).toBeTruthy();
+    expect(screen.queryByText("圖片不變，只換文字")).toBeNull();
   });
 
   it("目前卡片標記新版刪掉的行；還留著的行不標記", async () => {
@@ -358,8 +358,7 @@ describe("CopyPage（F27-I13）variants 模式：copy_editable.mode===\"variants
     // 新版沒有 prefill、也沒有可用的 variants 建議（`suggested_copy` 只有單一模式的形狀）→ 各一列空白。
     expect((screen.getByLabelText("新標題 1") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("新內文 1") as HTMLTextAreaElement).value).toBe("");
-    // 這一輪本來就有 adjust 建議，所以草稿仍會連回檢討，不顯示「沒有可承接的建議」。
-    expect(screen.queryByText("沒有可承接的建議，這份清單不會連回這輪檢討。")).toBeNull();
+    // 這一輪本來就有 adjust 建議（只是沒有 variants 的形狀），新版照舊留白，不從現在的文案開始。
   });
 
   it("新版沿用其中一則標題，另一則沒被沿用 → 目前卡片只標記沒被沿用的那一則（整段每一行）", async () => {
@@ -505,5 +504,59 @@ describe("CopyPage（F29-I10）佇列讀取失敗與出口", () => {
     renderAt(copyPath());
     const exit = await screen.findByRole("link", { name: "✕ 先不要，回投放中心" });
     expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+});
+
+// F30-I02 (v10 ai-blocked `stepCopy()`, Contract A): the fact check rejected the model text — no AI version, so
+// the new version starts from the platform's current copy, and an untouched draft is not a change.
+describe("CopyPage（F30-I02）AI 說明被擋下：從現在的文案直接改", () => {
+  const rejected = { recommendations: [], limitations: [], rejected: { reason: "模型包含未允許的數字或因果斷言；請依原始證據人工判讀。" } };
+
+  it("single：新版＝目前、沒有標記；沒改過不給存；改一行後存，不附 review_id／recommendation_id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ result_json: rejected }));
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet());
+    renderAt(copyPath());
+    expect(await screen.findByDisplayValue("每天的隨行杯")).toBeTruthy();
+    expect(screen.getByText("AI 沒給新版，從現在的文案直接改")).toBeTruthy();
+    expect(document.querySelector("[data-slot=copy-block] mark")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    expect(await screen.findByText("新版跟現在的文案一樣，改過再加入。")).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+
+    const title = screen.getByLabelText("新標題");
+    await user.clear(title);
+    await user.type(title, "兩入組免運，今天下單");
+    expect(screen.getByText("每天的隨行杯").className).toContain("bg-warning/30");
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.items[0].after).toEqual({ title: "兩入組免運，今天下單", body: review().evidence_json.conditions.creative_snapshot.copy_fields?.body });
+    expect(body.review_id).toBeUndefined();
+    expect(body.recommendation_id).toBeUndefined();
+  });
+
+  it("variants：新版每一列從現在的標題／內文開始；沒改過不給存，刪掉一則後存", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview({ result_json: rejected }));
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet());
+    renderAt(copyPath());
+    expect(await screen.findByDisplayValue("標題B")).toBeTruthy();
+    expect((screen.getByLabelText("新標題 1") as HTMLInputElement).value).toBe("標題A");
+    expect((screen.getByLabelText("新內文 1") as HTMLTextAreaElement).value).toBe("內文A 第一行\n內文A 第二行");
+    expect((screen.getByLabelText("新內文 2") as HTMLTextAreaElement).value).toBe("內文B");
+    expect(screen.getByText("AI 沒給新版，從現在的文案直接改")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    expect(await screen.findByText("新版跟現在的文案一樣，改過再加入。")).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "刪除標題 2" }));
+    await user.click(screen.getByRole("button", { name: /加入變更清單/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.items[0].after).toEqual({ titles: ["標題A"], bodies: ["內文A 第一行\n內文A 第二行", "內文B"] });
+    expect(body.review_id).toBeUndefined();
   });
 });

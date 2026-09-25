@@ -2,7 +2,7 @@
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
  * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { BudgetScenarioRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { adoptStrategy, patchCampaign, selectScenario } from "@/lib/adsApi";
 import { getTriage, type CapView } from "@/lib/adsTriageApi";
+import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
 import { StrategyTab } from "./StrategyTab";
 
 vi.mock("@/lib/adsApi", async () => {
@@ -18,6 +19,11 @@ vi.mock("@/lib/adsApi", async () => {
     ...actual, generateStrategy: vi.fn(), getCampaign: vi.fn(), patchCampaign: vi.fn(), selectScenario: vi.fn(),
     setAllocation: vi.fn(), adoptStrategy: vi.fn(), setBudgetCap: vi.fn(),
   };
+});
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ brands: [], scope: "test" }) }));
+vi.mock("@/lib/adsLaunchSettingsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsLaunchSettingsApi")>("@/lib/adsLaunchSettingsApi");
+  return { ...actual, getLaunchSettings: vi.fn(), saveLaunchSettings: vi.fn() };
 });
 vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
@@ -69,14 +75,34 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   } as CampaignDetail;
 }
 
-function renderTab(c: CampaignDetail) {
+function renderTab(c: CampaignDetail, launchApproved: boolean | null = false) {
   const onCampaignChange = vi.fn();
   const onChangeTab = vi.fn();
-  const ui: ReactElement = <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} />;
+  const ui: ReactElement = <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={onChangeTab} launchApproved={launchApproved} />;
   return { onCampaignChange, onChangeTab, ...render(<MemoryRouter>{ui}</MemoryRouter>) };
 }
 
-const bar = () => screen.getByRole("button", { name: /照這個方式進行|儲存預算|查看成效|安排自帶素材|前往/ });
+const bar = () => screen.getByRole("button", { name: /照這個方式進行|儲存預算|下一步：素材/ });
+const barEl = () => document.querySelector("[data-slot=action-bar]") as HTMLElement;
+
+/** `GET …/launch-settings` in its real shape: recommended values, a two-pixel account. */
+const VALUES: LaunchSettingsValues = {
+  optimization_event: "purchase", bid_strategy: "lowest_cost", placement: { mode: "auto", positions: [] },
+  audience: { age_min: 25, age_max: 54, gender: "all", countries: ["TW"] }, pixel_id: "px_4821", utm: "utm_source=meta&utm_campaign=daily",
+};
+const SETTINGS: LaunchSettingsView = {
+  values: VALUES, recommended: VALUES, edited: [], errors: [],
+  options: {
+    optimization_event: [{ value: "purchase", label: "購買", note: "Meta 要幫你找哪種人：會買的人" }, { value: "add_to_cart", label: "加入購物車", note: "會放進購物車的人" }, { value: "initiate_checkout", label: "開始結帳", note: "會開始結帳的人" }, { value: "view_content", label: "內容瀏覽", note: "會點進來看的人" }],
+    bid_strategy: [{ value: "lowest_cost", label: "最低成本", note: "讓 Meta 用最少的錢買到結果" }, { value: "cost_cap", label: "單次成果成本上限", note: "每筆盡量不超過你設的金額" }, { value: "bid_cap", label: "出價上限", note: "懂競價再用" }],
+    positions: [{ value: "facebook_feed", label: "Facebook 動態", note: "" }],
+    countries: [{ value: "TW", label: "台灣", note: "" }],
+    pixels: [{ id: "px_4821", name: "晨光官網像素" }], pixels_error: null,
+    placement_modes: [{ value: "auto", label: "自動版位", note: "讓 Meta 自己挑" }, { value: "manual", label: "手動", note: "自己選" }],
+    genders: [{ value: "all", label: "不限", note: "" }], ages: [18, 25, 35, 45, 54, 65],
+    field_notes: { audience: "年齡、性別、地區", pixel_id: "追蹤購買用", utm: "追蹤來源用" },
+  },
+};
 
 describe("StrategyTab (F28-I09)", () => {
   beforeEach(() => {
@@ -160,11 +186,42 @@ describe("StrategyTab (F28-I09)", () => {
     expect(onChangeTab).toHaveBeenCalledWith("structure");
   });
 
-  it("after adoption the bar is the workspace's next step and the allocation is no longer editable", async () => {
+  it("on a platform (live) the bar has no next step here and the allocation is no longer editable", async () => {
     renderTab(campaign({ status: "live", budget_planned: 30000, budget_scenario: "cap", groups: [group()] }));
-    expect((await screen.findByRole("button", { name: "查看成效 →" })).hasAttribute("disabled")).toBe(false);
+    expect(await screen.findByText("以 30,000 計")).toBeTruthy();
+    expect(barEl().textContent).toBe("← 總覽");
     expect(screen.queryByRole("button", { name: "調整比例" })).toBeNull();
-    expect(screen.getByText("以 30,000 計")).toBeTruthy();
+  });
+
+  it("a draft after adoption: the bar says 下一步：素材 and opens the assets tab (v10 tabStrategy)", async () => {
+    const user = userEvent.setup();
+    const { onChangeTab } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] }));
+    await user.click(await screen.findByRole("button", { name: "下一步：素材 →" }));
+    expect(onChangeTab).toHaveBeenCalledWith("assets");
+  });
+
+  it("a draft after adoption without a cap: 下一步：素材 waits for the cap", async () => {
+    renderTab(campaign({ cap: cap(null), budget_planned: 30000, budget_scenario: "cap", groups: [group()] }));
+    expect((await screen.findByRole("button", { name: "下一步：素材 →" })).hasAttribute("disabled")).toBe(true);
+    expect(within(barEl()).getByText("先設上限")).toBeTruthy();
+  });
+
+  it("進階設定 holds the launch settings: editable on a draft whose launch is not approved; read only once approved or unknown", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getLaunchSettings).mockResolvedValue(SETTINGS);
+    const { unmount } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] }), false);
+    expect(getLaunchSettings).not.toHaveBeenCalled(); // folded content is not read before it is opened
+    await user.click(await screen.findByRole("button", { name: "進階設定" }));
+    const select = await screen.findByLabelText(/出價方式/);
+    expect(select.matches(":disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "前往人工上架設定" })).toBeTruthy();
+    unmount();
+    for (const approved of [true, null]) {
+      const view = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] }), approved);
+      await user.click(await screen.findByRole("button", { name: "進階設定" }));
+      expect((await screen.findByLabelText(/出價方式/)).matches(":disabled")).toBe(true);
+      view.unmount();
+    }
   });
 
   it("history mode: the API's own labels and 推薦 are printed as sent", async () => {
@@ -203,7 +260,7 @@ describe("StrategyTab (F28-I09)", () => {
     expect(screen.queryByText("這一期的總預算")).toBeNull();
     expect(screen.queryByText("預算怎麼分")).toBeNull();
     expect(screen.queryByText("改預算上限")).toBeNull();
-    expect(bar().textContent).toBe("安排自帶素材 →");
+    expect(barEl().textContent).toBe("← 總覽");
     await user.click(screen.getByRole("button", { name: "進階設定" }));
     await user.clear(screen.getByLabelText("內部活動目標"));
     await user.type(screen.getByLabelText("內部活動目標"), "內部管理目標");

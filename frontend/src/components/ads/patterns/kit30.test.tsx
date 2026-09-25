@@ -1,0 +1,331 @@
+/** frontend/src/components/ads/patterns/kit30.test.tsx — F30-I03: the v10 kit pieces for the remaining ads-center
+ * screens. Pure presentational pieces, fed props directly (no fetch mocks). */
+import { useState } from "react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  ChangeTimeline, CopyField, CopyFields, DAY_SWATCH, DayGrid, Legend, MoneyInput, PickCard, PickGroup, SlotGrid, SlotTile,
+  SourceList, SourceRow, StageRail, TodoRow, TreeRows, type DayGridRow,
+} from ".";
+
+const STATIONS = [
+  { key: "plan", label: "計畫" }, { key: "assets", label: "素材" }, { key: "launch", label: "上架" },
+  { key: "read", label: "判讀" }, { key: "decide", label: "決策" }, { key: "review", label: "回顧" },
+];
+
+describe("StageRail", () => {
+  it("six stations: done ones show ✓, the current one carries aria-current=step, the rest their number", () => {
+    render(<StageRail stations={STATIONS} current="launch" done={["plan", "assets"]} onSelect={() => {}} />);
+    const nav = screen.getByRole("navigation", { name: "活動進度" });
+    const buttons = within(nav).getAllByRole("button");
+    expect(buttons).toHaveLength(6);
+    expect(buttons[0].textContent).toContain("✓");
+    expect(buttons[0].textContent).toContain("已完成");
+    expect(buttons[2].getAttribute("aria-current")).toBe("step");
+    expect(buttons.filter((b) => b.getAttribute("aria-current") === "step")).toHaveLength(1);
+    expect(buttons[3].textContent).toBe("4判讀");
+    expect(nav.querySelectorAll("li")[1].dataset.state).toBe("done");
+    expect(nav.querySelectorAll("li")[4].dataset.state).toBe("todo");
+  });
+
+  it("done comes from the contract, not the position: a later station can be done while an earlier is not", () => {
+    render(<StageRail stations={STATIONS} current="read" done={["plan", "launch"]} onSelect={() => {}} />);
+    const items = screen.getByRole("navigation").querySelectorAll("li");
+    expect(items[1].dataset.state).toBe("todo");
+    expect(items[2].dataset.state).toBe("done");
+  });
+
+  it("keyboard: Tab to a station and Enter selects it", async () => {
+    const onSelect = vi.fn();
+    render(<StageRail stations={STATIONS} current="plan" done={[]} onSelect={onSelect} />);
+    const user = userEvent.setup();
+    await user.tab();
+    await user.tab();
+    expect(document.activeElement?.textContent).toContain("素材");
+    await user.keyboard("{Enter}");
+    expect(onSelect).toHaveBeenCalledWith("assets");
+  });
+
+  it("a station with `to` is a link", () => {
+    render(<MemoryRouter><StageRail stations={STATIONS.map((s) => ({ ...s, to: `/c?tab=${s.key}` }))} current="plan" done={[]} /></MemoryRouter>);
+    expect(screen.getAllByRole("link")).toHaveLength(6);
+    expect(screen.getAllByRole("link")[0].getAttribute("aria-current")).toBe("step");
+  });
+});
+
+describe("SourceList", () => {
+  it("rows print the name, a ✓ on an ok chip, the note and the action; dimmed rows fade", () => {
+    render(
+      <SourceList>
+        <SourceRow icon="∞" name="Meta 廣告帳戶・主帳戶" tone="ok" status="正常" note="最近讀取 09/23 08:40" />
+        <SourceRow icon="∞" name="Meta 廣告帳戶・中秋" tone="warn" status="權限失效" note="09/17、09/18 讀不到" action={<button type="button">重新授權 →</button>} />
+        <SourceRow icon="G" name="Google Ads" tone="neutral" status="尚未支援" note="接上後開放" dimmed />
+      </SourceList>,
+    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]).getByText("✓ 正常")).toBeTruthy();
+    expect(within(rows[1]).getByText("權限失效").textContent).toBe("權限失效");
+    expect(within(rows[1]).getByRole("button", { name: "重新授權 →" })).toBeTruthy();
+    expect(rows[2].className).toContain("opacity-60");
+    expect(rows[1].dataset.variant).toBe("warn");
+  });
+});
+
+const day = (d: number) => `2026-09-${String(d).padStart(2, "0")}`;
+const month = (state: (d: number) => DayGridRow["days"][number]["state"]) => Array.from({ length: 30 }, (_, i) => ({ date: day(i + 1), state: state(i + 1) }));
+
+describe("DayGrid + Legend", () => {
+  const rows: DayGridRow[] = [
+    { key: "a", label: "主帳戶", days: month((d) => (d > 23 ? "future" : "ok")) },
+    { key: "b", label: "中秋活動帳戶", days: month((d) => (d > 23 ? "future" : d < 10 ? "none" : d === 17 || d === 18 ? "missing" : "ok")) },
+  ];
+
+  it("renders every state, a title per cell, the row labels and one today marker", () => {
+    const { container } = render(<DayGrid rows={rows} today={day(23)} />);
+    expect(screen.getByText("主帳戶")).toBeTruthy();
+    expect(screen.getByText("中秋活動帳戶")).toBeTruthy();
+    const cells = container.querySelectorAll("[data-state]");
+    expect(cells).toHaveLength(60);
+    expect(screen.getAllByTitle("9/17 缺資料")).toHaveLength(1);
+    expect(screen.getAllByTitle("9/5 不需要")).toHaveLength(1);
+    expect(screen.getAllByTitle("9/30 還沒到")).toHaveLength(2);
+    expect(screen.getAllByTitle("9/1 有資料")).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "中秋活動帳戶 9/18 缺資料" }).dataset.state).toBe("missing");
+    expect(container.querySelectorAll("[data-today]")).toHaveLength(2);
+    const missing = screen.getByTitle("9/17 缺資料");
+    expect(missing.className).toContain("border-dashed");
+    expect(screen.getAllByTitle("9/1 有資料")[0].className).toContain(DAY_SWATCH.ok);
+  });
+
+  it("the header numbers only the tick days, and the grid has one column per day", () => {
+    const { container } = render(<DayGrid rows={rows} today={null} />);
+    const grid = container.querySelector("[data-slot=day-grid]") as HTMLElement;
+    expect(grid.style.gridTemplateColumns).toBe("150px repeat(30, minmax(0, 1fr))");
+    const header = Array.from(grid.children).slice(1, 31).map((e) => e.textContent).filter(Boolean);
+    expect(header).toEqual(["1", "5", "10", "15", "20", "25", "30"]);
+    expect(container.querySelectorAll("[data-today]")).toHaveLength(0);
+  });
+
+  it("no rows renders nothing", () => {
+    const { container } = render(<DayGrid rows={[]} />);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("Legend prints each entry with the swatch classes it was given", () => {
+    const { container } = render(<Legend items={[{ label: "有資料", swatch: DAY_SWATCH.ok }, { label: "缺資料", swatch: DAY_SWATCH.missing }, { label: "上限", swatch: "bg-foreground", line: true }]} />);
+    expect(screen.getByText("有資料")).toBeTruthy();
+    const swatches = container.querySelectorAll("i");
+    expect(swatches[1].className).toContain("border-dashed");
+    expect(swatches[2].className).toContain("w-0.5");
+  });
+});
+
+describe("CopyField", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("copies the value and says 已複製; a refused clipboard says 請手動複製", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<CopyFields><CopyField label="每日預算" value="NT$400" /><CopyField label="名稱" value="晨光・A" copy={false} /></CopyFields>);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await user.click(screen.getByRole("button", { name: "複製每日預算" }));
+    expect(writeText).toHaveBeenCalledWith("NT$400");
+    expect(await screen.findByText("已複製")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "複製名稱" })).toBeNull();
+    expect(screen.getByText("晨光・A")).toBeTruthy();
+
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true });
+    render(<CopyField label="網址" value="https://example.com" />);
+    await user.click(screen.getByRole("button", { name: "複製網址" }));
+    expect(await screen.findByText("請手動複製")).toBeTruthy();
+  });
+});
+
+describe("SlotGrid", () => {
+  it("ready, missing and reserved tiles; the reserved seat has no button", () => {
+    render(
+      <SlotGrid label="廣告組 A">
+        <SlotTile variant="ready" name="晨光隨行杯・日常出發" thumbnailUrl={null} status={<span>已確認</span>} />
+        <SlotTile variant="missing" actions={<button type="button">上傳</button>} />
+        <SlotTile variant="reserved" title="站內出圖" />
+      </SlotGrid>,
+    );
+    const tiles = within(screen.getByRole("list", { name: "廣告組 A" })).getAllByRole("listitem");
+    expect(tiles.map((t) => t.dataset.variant)).toEqual(["ready", "missing", "reserved"]);
+    expect(within(tiles[0]).getByText("已確認")).toBeTruthy();
+    expect(within(tiles[1]).getByText("缺 1 則")).toBeTruthy();
+    expect(within(tiles[1]).getByRole("button", { name: "上傳" })).toBeTruthy();
+    expect(within(tiles[2]).getByText("接上後開放")).toBeTruthy();
+    expect(within(tiles[2]).queryByRole("button")).toBeNull();
+  });
+});
+
+describe("TreeRows", () => {
+  it("root, groups and leaves; a missing leaf says 缺素材 and a dimmed one fades", () => {
+    render(
+      <TreeRows
+        root={{ kind: "活動", name: "日常銷售", note: "每日 600・購買" }}
+        groups={[
+          { key: "A", kind: "廣告組", name: "廣告組 A", note: "每日 400・2 則", leaves: [
+            { key: "1", name: "日常出發", thumbnailUrl: null, chip: <span>划算</span>, value: "380 元" },
+            { key: "2", name: "兩入組", thumbnailUrl: null, dimmed: true, chip: <span>關閉中</span> },
+          ] },
+          { key: "B", kind: "廣告組", name: "廣告組 B", leaves: [{ key: "3", name: "", thumbnailUrl: null, missing: true }] },
+        ]}
+      />,
+    );
+    expect(screen.getByText("日常銷售")).toBeTruthy();
+    const a = screen.getByRole("list", { name: "廣告組 A" });
+    const leaves = within(a).getAllByRole("listitem");
+    expect(within(leaves[0]).getByText("380 元")).toBeTruthy();
+    expect(leaves[1].className).toContain("opacity-50");
+    expect(within(screen.getByRole("list", { name: "廣告組 B" })).getByText("缺素材")).toBeTruthy();
+  });
+});
+
+describe("ChangeTimeline", () => {
+  it("time, title, reason, progress x／N and the state chip; rejected rows have no progress", () => {
+    const { container } = render(
+      <ChangeTimeline rows={[
+        { key: "1", at: "09/21 16:30", title: "改文案", state: "verified", checked: 1, total: 1 },
+        { key: "2", at: "09/20 14:05", title: "首次上架・8 項", state: "stale", checked: 2, total: 8, action: <button type="button">打開</button> },
+        { key: "3", at: "09/15 10:20", title: "清理：關 1 則", state: "rejected", reason: "兩入組還在檔期", checked: 0, total: 1 },
+        { key: "4", at: "09/23 10:12", title: "改預算", state: "platform", checked: 0, total: 2, label: "等你到 Meta 完成" },
+      ]} />,
+    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((r) => r.dataset.variant)).toEqual(["verified", "stale", "rejected", "platform"]);
+    expect(within(rows[0]).getByText("✓ 已核對")).toBeTruthy();
+    expect(within(rows[1]).getByText("2／8 已核對")).toBeTruthy();
+    expect(Array.from(rows[1].querySelectorAll("[data-slot=progress-segments] i")).map((i) => (i as HTMLElement).dataset.state))
+      .toEqual(["ok", "ok", "changed", "changed", "changed", "changed", "changed", "changed"]);
+    expect(within(rows[1]).getByRole("button", { name: "打開" })).toBeTruthy();
+    expect(within(rows[2]).getByText("原因：兩入組還在檔期")).toBeTruthy();
+    expect(rows[2].querySelector("[data-slot=progress-segments]")).toBeNull();
+    expect(within(rows[3]).getByText("等你到 Meta 完成")).toBeTruthy();
+    expect(container.querySelectorAll("[data-slot=chip]")).toHaveLength(4);
+  });
+});
+
+function Picker({ onPick }: { onPick?: (v: string) => void }) {
+  const [v, setV] = useState<string | null>(null);
+  return (
+    <PickGroup label="目標" value={v} onChange={(x) => { setV(x); onPick?.(x); }}>
+      <PickCard value="sales" title="購買" icon="🛒" note="看每賣一筆花多少" />
+      <PickCard value="lead" title="名單" icon="✉" note="看每筆名單成本" />
+      <PickCard value="engage" title="互動" icon="♡" note="看每次互動成本" disabled />
+      <PickCard value="traffic" title="流量" icon="↗" note="看每次點擊成本" />
+    </PickGroup>
+  );
+}
+
+describe("PickCard", () => {
+  it("radios in a radiogroup; a click checks one; the reserved card is disabled with its note", async () => {
+    render(<Picker />);
+    const group = screen.getByRole("radiogroup", { name: "目標" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios.every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
+    const user = userEvent.setup();
+    await user.click(radios[1]);
+    expect(radios[1].getAttribute("aria-checked")).toBe("true");
+    expect(radios[0].getAttribute("aria-checked")).toBe("false");
+    expect((radios[2] as HTMLButtonElement).disabled).toBe(true);
+    expect(within(radios[2]).getByText("尚未開放")).toBeTruthy();
+    expect(within(radios[2]).queryByText("看每次互動成本")).toBeNull();
+    await user.click(radios[2]);
+    expect(radios[2].getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keyboard: arrows move and pick, skipping the disabled card; Space picks; only the picked card is tabbable", async () => {
+    const onPick = vi.fn();
+    render(<Picker onPick={onPick} />);
+    const radios = screen.getAllByRole("radio");
+    const user = userEvent.setup();
+    await user.tab();
+    expect(document.activeElement).toBe(radios[0]);
+    await user.keyboard(" ");
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(radios[1]);
+    expect(radios[1].getAttribute("aria-checked")).toBe("true");
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(radios[3]);
+    expect(onPick).toHaveBeenLastCalledWith("traffic");
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(radios[0]);
+    await user.keyboard("{End}");
+    expect(radios[3].getAttribute("aria-checked")).toBe("true");
+    expect(radios.map((r) => r.tabIndex)).toEqual([-1, -1, -1, 0]);
+  });
+
+  it("the product layout draws a thumbnail and the badge", () => {
+    render(
+      <PickGroup label="商品" value="cup" onChange={() => {}}>
+        <PickCard value="cup" title="晨光隨行杯" note="NT$1,580" thumbnailUrl={null} badge={<span>有成本</span>} />
+      </PickGroup>,
+    );
+    const card = screen.getByRole("radio", { name: /晨光隨行杯/ });
+    expect(card.getAttribute("aria-checked")).toBe("true");
+    expect(card.dataset.variant).toBe("picked");
+    expect(within(card).getByText("有成本")).toBeTruthy();
+  });
+});
+
+function Money({ onValue }: { onValue: (v: number | null) => void }) {
+  const [v, setV] = useState<number | null>(null);
+  return <MoneyInput label="這個活動最多花" value={v} onChange={(x) => { setV(x); onValue(x); }} />;
+}
+
+describe("MoneyInput", () => {
+  it("accepts digits, drops thousands separators, rejects anything else; empty is null", async () => {
+    const onValue = vi.fn();
+    render(<Money onValue={onValue} />);
+    const input = screen.getByRole("textbox", { name: "這個活動最多花" }) as HTMLInputElement;
+    expect(input.inputMode).toBe("numeric");
+    const user = userEvent.setup();
+    await user.type(input, "3a0-0.e0");
+    expect(input.value).toBe("3000");
+    expect(onValue).toHaveBeenLastCalledWith(3000);
+    await user.clear(input);
+    expect(onValue).toHaveBeenLastCalledWith(null);
+    expect(input.value).toBe("");
+    await user.click(input);
+    await user.paste("30,000");
+    expect(input.value).toBe("30000");
+    await user.paste("x");
+    expect(input.value).toBe("30000");
+    expect(screen.getByText("NT$")).toBeTruthy();
+  });
+
+  it("Enter runs onEnter", async () => {
+    const onEnter = vi.fn();
+    render(<MoneyInput label="上限" value={450} onChange={() => {}} onEnter={onEnter} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "上限" }), "{Enter}");
+    expect(onEnter).toHaveBeenCalledOnce();
+  });
+});
+
+describe("TodoRow v10 states", () => {
+  it("mismatch shows ≠ on an amber disc, locked keeps the number, state wins over done", () => {
+    const { container } = render(
+      <div>
+        <TodoRow no={1} state="mismatch">每日預算</TodoRow>
+        <TodoRow no={2} state="locked">廣告組 B</TodoRow>
+        <TodoRow no={3} done>廣告 C</TodoRow>
+        <TodoRow no={4} done state="locked">廣告 D</TodoRow>
+      </div>,
+    );
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-slot=todo-row]"));
+    expect(rows.map((r) => r.dataset.variant)).toEqual(["mismatch", "locked", "done", "locked"]);
+    expect(screen.getByRole("img", { name: "不符" }).textContent).toBe("≠");
+    expect(rows[0].firstElementChild?.className).toContain("bg-grade-watch");
+    expect(rows[1].firstElementChild?.textContent).toBe("2");
+    expect(rows[3].firstElementChild?.textContent).toBe("4");
+  });
+});

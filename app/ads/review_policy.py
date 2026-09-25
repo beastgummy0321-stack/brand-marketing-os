@@ -11,7 +11,8 @@ def unsupported_claim(text):
     for clause in re.split(r"[，。；！？,;.!?]|(?:但是|然而|但)", text):
         if re.search(r"已改善|造成|證明有效|caused|proven|increased revenue", clause, re.I):
             if not re.search(
-                r"無法確認|不能確認|尚未確認|無法證明|不能證明|不代表|cannot confirm|not proven",
+                r"無法確認|不能確認|尚未確認|無法證明|不能證明|不代表|不足以|無法判斷|無法判定|未能"
+                r"|cannot confirm|not proven",
                 clause,
                 re.I,
             ):

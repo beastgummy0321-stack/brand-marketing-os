@@ -73,7 +73,9 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await dialog.getByRole("button", { name: "納入並開啟" }).first().click();
   await expect(page).toHaveURL(/\/ads\/campaigns\/[^?]+/);
   const campaignUrl = new URL(page.url()).pathname;
-  await expect(page.getByRole("heading", { name: "狀態時間軸" })).toBeVisible();
+  // F30-I07: platform state, connections and 重新讀取平台 live in the overview's 進階 fold.
+  await expect(page.getByRole("navigation", { name: "活動進度" })).toBeVisible();
+  await page.getByRole("button", { name: "進階：更多活動資訊", exact: true }).click();
   await page.getByRole("button", { name: "重新讀取平台", exact: true }).click();
   await expect(page.getByRole("button", { name: "同步中…", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新讀取平台", exact: true })).toBeEnabled({ timeout: 30_000 });
@@ -87,7 +89,8 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await expect(page.getByRole("heading", { name: "投放結構", exact: true })).toBeVisible();
   await capture(page, evidence, "existing-native");
 
-  await page.goto(`${campaignUrl}?tab=assets`);
+  // F30-I11: the placement list is folded under 「進階」; its deep link opens both folds.
+  await page.goto(`${campaignUrl}?tab=assets#material-placements`);
   await expect(page.getByRole("heading", { name: "自帶素材安排" })).toBeVisible();
   const stamp = Date.now();
   const imageName = `browser-${stamp}-0.png`;
@@ -186,15 +189,25 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await expect.poll(() => videoCard.locator("video").evaluate(node => (node as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(1);
   await capture(page, evidence, "playable-video", videoCard);
 
-  // New campaign uses the same durable brand library, without generating a strategy.
+  // New campaign uses the same durable brand library (folded under 進階), without generating a strategy.
+  // F30-I05: the wizard picks one of the brand's products; add one through the products page (manual, no spend).
+  const productName = `自帶素材驗收商品 ${stamp}`;
+  await page.goto(`/app/brands/${fixture.brand_id}/products`);
+  await page.getByRole("button", { name: "新增產品" }).first().click();
+  await page.getByLabel("產品名稱").fill(productName);
+  await page.getByRole("button", { name: "新增這個產品", exact: true }).click();
+  await expect(page).toHaveURL(/\/products\/prd_/);
   await page.goto(`${root}/new`);
-  await expect(page.getByRole("heading", { name: "建立投放計畫" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "建立活動" })).toBeVisible();
+  await page.getByRole("button", { name: /^進階/ }).click();
   await page.getByRole("checkbox", { name: `選取 ${imageName}`, exact: true }).check();
-  await page.getByLabel("你這次想做到什麼？").fill("介紹品牌產品，希望增加購買");
-  await page.getByRole("button", { name: "產生建議", exact: true }).click();
+  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  await page.getByRole("radio", { name: /^購買/ }).click();
+  await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
   await expect(page).toHaveURL(/\/ads\/new\/[^?]+/, { timeout: 30_000 });
   const newId = new URL(page.url()).pathname.split("/").at(-1);
-  await page.goto(`${root}/campaigns/${newId}?tab=assets`);
+  await page.goto(`${root}/campaigns/${newId}?tab=assets#material-placements`);
   await expect(page.locator("article")).toHaveCount(1);
   await capture(page, evidence, "new-campaign-assets");
 
@@ -217,6 +230,7 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await page.getByRole("button", { name: "重新載入品牌素材" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.goto(`/app/brands/${fixture.second_brand_id}/ads/new`);
+  await page.getByRole("button", { name: /^進階/ }).click();
   await expect(page.getByText("品牌尚無自帶素材。加入原檔後可安排文案，不必先產生圖片。")).toBeVisible();
   await expect(page.getByText(imageName, { exact: true })).toHaveCount(0);
   await capture(page, evidence, "empty-other-brand");

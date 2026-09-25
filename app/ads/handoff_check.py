@@ -7,6 +7,7 @@ from app.ads import (
     external_sync,
     handoff_data,
     launch_settings,
+    manual_settings,
 )
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
@@ -68,17 +69,53 @@ def _source_versions(conn, org, platform, account, native_ids):
     }
 
 
+_COPY_LABELS = {"title": "標題", "body": "文案", "description": "說明"}
+_FIELD_LABELS = {
+    "objective": "目標",
+    "budget_type": "預算類型",
+    "budget_amount": "每日預算",
+    "start_date": "開始日期",
+    "end_date": "結束日期",
+}
+_SETTING_LABELS = {f["key"]: f["label"] for f in manual_settings.FIELDS}
+
+
+def _plain(value):
+    return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+
+
 def _settings(item, node, material, observed=None, pixels=None):
     expected = item["expected_json"]
     known, missing, differences = {}, [], []
+    # F30 Contract G: the same results keyed for the launch view -- a required field the read
+    # cannot see (`unreadable`, confirmed by eye per key) and a differing one with the value the
+    # platform showed (`mismatches`, stored with the check).
+    unreadable, mismatches = [], []
+
+    def unread(key, label, text):
+        missing.append(text)
+        unreadable.append({"key": key, "label": label})
+
+    def differ(key, label, text, want, got):
+        differences.append(text)
+        mismatches.append(
+            {"key": key, "label": label, "expected": _plain(want), "observed": _plain(got)}
+        )
+
     # F29 Contract I: the frozen launch settings against the reader's own observation. A differing
     # value is a deviation; an unreadable one stays out of the item's result (the readback shows
     # it and the user may confirm it by eye).
     compared = launch_settings.compare_item(expected.get("launch_settings"), observed, pixels)
     labels = dict(launch_settings.READBACK_FIELDS)
-    differences.extend(
-        "投放設定：" + labels[key] for key, r in compared.items() if r["state"] == "differ"
-    )
+    for key, result in compared.items():
+        if result["state"] == "differ":
+            differ(
+                "launch_settings." + key,
+                labels[key],
+                "投放設定：" + labels[key],
+                launch_settings.expected_label(key, expected["launch_settings"], pixels),
+                result["observed_label"],
+            )
     if item["planned_kind"] == "ad":
         fields = changes.copy_fields(node)
         creative = (node.get("creative") or {}).get("fields") or {}
@@ -88,25 +125,28 @@ def _settings(item, node, material, observed=None, pixels=None):
         for key, value in expected_fields.items():
             if not value:
                 continue
+            label = _COPY_LABELS.get(key, key)
             if fields.get(key) is None:
-                missing.append("文案：" + key)
+                unread("copy." + key, label, "文案：" + key)
             elif fields[key] != value:
-                differences.append("文案：" + key)
+                differ("copy." + key, label, "文案：" + key, value, fields[key])
             else:
                 known[key] = value
         if not any(expected_fields.values()):
-            missing.append("核准文案內容")
+            unread("copy", "核准文案內容", "核准文案內容")
         if material == "unknown":
-            missing.append("圖片或影片版本等價")
+            unread("material", "圖片或影片版本", "圖片或影片版本等價")
     else:
         for key, value in expected.items():
             if key == "launch_settings":
                 continue
+            label = _FIELD_LABELS.get(key, key)
             if key == "manual_settings":
                 # No existing reader contract proves these semantic/manual fields.
-                missing.extend("人工設定：" + k for k in value)
+                for k in value:
+                    unread("manual_settings." + k, _SETTING_LABELS.get(k, k), "人工設定：" + k)
             elif value is None or node.get(key) is None:
-                missing.append(key)
+                unread(key, label, key)
             elif str(node[key]) != str(value):
                 if key == "budget_amount" and float(node[key]) == float(value):
                     known[key] = value
@@ -116,17 +156,15 @@ def _settings(item, node, material, observed=None, pixels=None):
                     # real campaign reads back deviated (drill 5). Either side unrecognised ->
                     # unproven, never a deviation.
                     planned = campaigns.objective_family(value)
-                    observed = adapters.objective_family(
-                        node.get("platform"), node.get("objective")
-                    )
-                    if planned == "other" or observed == "other":
-                        missing.append(key)
-                    elif planned != observed:
-                        differences.append(key)
+                    family = adapters.objective_family(node.get("platform"), node.get("objective"))
+                    if planned == "other" or family == "other":
+                        unread(key, label, key)
+                    elif planned != family:
+                        differ(key, label, key, value, node.get("objective"))
                     else:
                         known[key] = value
                 else:
-                    differences.append(key)
+                    differ(key, label, key, value, node[key])
             else:
                 known[key] = value
     state = "deviated" if differences else "unknown" if missing else "confirmed"
@@ -136,6 +174,8 @@ def _settings(item, node, material, observed=None, pixels=None):
         "matched_fields": list(known),
         "unknown_fields": missing,
         "deviated_fields": differences,
+        "unreadable": unreadable,
+        "mismatches": mismatches,
         "material_evidence": material,
         "entity_exists": True,
         "delivery_confirmed": False,
@@ -143,10 +183,63 @@ def _settings(item, node, material, observed=None, pixels=None):
     }
 
 
+def _resolve(status, evidence):
+    """An item whose readable fields all match is confirmed once the user confirmed every field
+    the read could not see (F30 Contract G: the settings-readback self-confirm rule, per item)."""
+    unreadable = evidence.get("unreadable") or []
+    confirmed = evidence.get("confirmed") or {}
+    if (
+        status == "unknown"
+        and evidence.get("entity_exists") is True
+        and not evidence.get("deviated_fields")
+        and unreadable
+        and all(u["key"] in confirmed for u in unreadable)
+    ):
+        return "confirmed", evidence | {
+            "setting_matches": True,
+            "message": "讀得到的欄位都相符，讀不到的由你確認一樣；不代表已投遞或成效改善。",
+        }
+    return status, evidence
+
+
+def _aggregate(conn, org, action_id, item_id, message, observed):
+    peers = conn.execute(
+        "SELECT status FROM ads_handoff_item WHERE org_id=%s AND action_id=%s", (org, action_id)
+    ).fetchall()
+    aggregate = "confirmed" if all(r["status"] == "confirmed" for r in peers) else "unknown"
+    conn.execute(
+        "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
+        "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
+        "ELSE first_observed_at END,"
+        "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END "
+        "WHERE org_id=%s AND id=%s",
+        (
+            aggregate,
+            db.jsonb(
+                {
+                    "handoff_item_id": item_id,
+                    "setting_matches": aggregate == "confirmed",
+                    "delivery_confirmed": False,
+                    "message": message,
+                }
+            ),
+            observed,
+            aggregate,
+            org,
+            action_id,
+        ),
+    )
+
+
 def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id=None):
     observed = evidence.get("entity_exists") is True
     if not observed:
         evidence["attempted_at"] = db.now_utc().isoformat()
+    # Per-field confirmations outlive a fresh read, as `settings_confirmed` does.
+    prior = handoff_data.get(conn, org, brand, campaign, item_id)["evidence_json"].get("confirmed")
+    if prior and "confirmed" not in evidence:
+        evidence["confirmed"] = prior
+    status, evidence = _resolve(status, evidence)
     conn.execute(
         "UPDATE ads_handoff_item SET status=%s,evidence_json=%s,entity_id=COALESCE(%s,entity_id),"
         "observed_at=CASE WHEN %s THEN now() ELSE observed_at END,updated_at=now() "
@@ -156,30 +249,31 @@ def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, enti
     )
     current = handoff_data.get(conn, org, brand, campaign, item_id)
     if current["attempt_id"] == attempt:
-        peers = conn.execute(
-            "SELECT status FROM ads_handoff_item WHERE action_id=%s", (current["action_id"],)
-        ).fetchall()
-        aggregate = "confirmed" if all(r["status"] == "confirmed" for r in peers) else "unknown"
-        conn.execute(
-            "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
-            "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
-            "ELSE first_observed_at END,"
-            "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END WHERE id=%s",
-            (
-                aggregate,
-                db.jsonb(
-                    {
-                        "handoff_item_id": item_id,
-                        "setting_matches": aggregate == "confirmed",
-                        "delivery_confirmed": False,
-                        "message": evidence["message"],
-                    }
-                ),
-                observed,
-                aggregate,
-                current["action_id"],
-            ),
-        )
+        _aggregate(conn, org, current["action_id"], item_id, evidence["message"], observed)
+    conn.commit()
+    return handoff_data.get(conn, org, brand, campaign, item_id)
+
+
+def confirm_field(conn, org, brand, campaign, item_id, key, actor):
+    """F30 Contract G `POST …/launch/items/{id}/confirm {key}`: the user looked at the platform
+    and says a field the read could not see is the same. Refused for any other field; nothing is
+    written to a platform."""
+    changes.lock(conn, org, brand)
+    item = handoff_data.get(conn, org, brand, campaign, item_id)
+    evidence = dict(item["evidence_json"])
+    confirmed = dict(evidence.get("confirmed") or {})
+    keys = {u["key"] for u in evidence.get("unreadable") or []}
+    if item["status"] not in {"unknown", "deviated"} or key not in keys or key in confirmed:
+        raise ValueError("只有讀不到的欄位可以由你確認一樣。")
+    confirmed[key] = {"at": db.now_utc().isoformat(), "by": actor}
+    status, evidence = _resolve(item["status"], evidence | {"confirmed": confirmed})
+    conn.execute(
+        "UPDATE ads_handoff_item SET status=%s,evidence_json=%s,updated_at=now() "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
+        (status, db.jsonb(evidence), org, brand, campaign, item_id),
+    )
+    if status != item["status"]:
+        _aggregate(conn, org, item["action_id"], item_id, evidence["message"], True)
     conn.commit()
     return handoff_data.get(conn, org, brand, campaign, item_id)
 

@@ -68,3 +68,17 @@ it("raises a one-click replace request and cancels by id without a request body"
     expect(fetchMock.mock.calls[1][1]?.body).toBeUndefined();
   } finally { fetchMock.mockRestore(); }
 });
+
+it("a failed request list read is ReadFailed with 重試, and a new refreshKey re-reads the list (F30-I11)", async () => {
+  const user = userEvent.setup();
+  vi.mocked(api.listMaterialTasks).mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ tasks: [task] });
+  const view = render(page());
+  expect(await screen.findByText(/素材需求暫時讀不到/)).toBeTruthy();
+  expect(screen.queryByRole("status")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "重試" }));
+  expect(await screen.findByText("已保存的需求")).toBeTruthy();
+  expect(screen.queryByText(/素材需求暫時讀不到/)).toBeNull();
+  expect(api.listMaterialTasks).toHaveBeenCalledTimes(2);
+  view.rerender(<MemoryRouter initialEntries={["/"]}><MaterialTasksPanel brandId="brand_a" campaignId="campaign_a" refreshKey={1} /></MemoryRouter>);
+  await waitFor(() => expect(api.listMaterialTasks).toHaveBeenCalledTimes(3));
+});
