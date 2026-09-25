@@ -50,6 +50,24 @@ it("缺漏直達會展開巢狀區塊並聚焦正確欄位；儲存失敗仍保�
   expect(saveManualSettings).toHaveBeenCalledWith("b1", "c1", "g1", { audience_source: "網站訪客30天" });
 });
 
+it("缺漏直達只切一次分頁：之後可切到其他分頁並停留，再按補齊才會再跳回", async () => {
+  const user = userEvent.setup();
+  renderSettings();
+  await user.click(screen.getByRole("button", { name: "補齊再行銷設定" }));
+  const input = await screen.findByRole("textbox", { name: "受眾來源 *" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+
+  await user.click(screen.getByRole("button", { name: "技術設定" }));
+  expect(await screen.findByRole("textbox", { name: "執行備註" })).toBeTruthy();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.getByRole("textbox", { name: "執行備註" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "受眾來源 *" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "補齊再行銷設定" }));
+  const again = await screen.findByRole("textbox", { name: "受眾來源 *" });
+  await waitFor(() => expect(document.activeElement).toBe(again));
+});
+
 it("輸入後收起再展開不丟草稿，收起本身不儲存也不取消", async () => {
   const user = userEvent.setup();
   renderSettings();
