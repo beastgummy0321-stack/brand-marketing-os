@@ -114,10 +114,14 @@ class WizardOptionsTest(unittest.TestCase):
         })
         self.assertTrue(products["B 晨光隨行杯 · 單品"]["has_cost"])
         fall = products["B 晨光隨行杯 · 秋季新色"]
-        self.assertEqual((fall["price"], fall["currency"], fall["has_cost"]), (1680.0, "TWD", False))
+        self.assertEqual(
+            (fall["price"], fall["currency"], fall["has_cost"]), (1680.0, "TWD", False),
+        )
         for name in ("D 沒填數字", "E 過季品", "F 預購品"):
             row = products[name]
-            self.assertEqual((row["price"], row["currency"], row["has_cost"]), (None, None, False), name)
+            self.assertEqual(
+                (row["price"], row["currency"], row["has_cost"]), (None, None, False), name,
+            )
 
     def test_sell_way_thumbnail_is_the_parent_products_newest_photo(self):
         products = self._by_name(wizard_options.options(web.conn, self.org_id, self.brand_id))
@@ -177,7 +181,9 @@ class ObjectiveCatalogTest(unittest.TestCase):
         self.assertNotIn("加購物車", by_key)
 
     def test_brief_accepts_available_objectives_and_add_to_cart_only(self):
-        self.assertEqual(brief._OBJECTIVES, frozenset({"購買", "加購物車", "名單", "流量", "知名度"}))
+        self.assertEqual(
+            brief._OBJECTIVES, frozenset({"購買", "加購物車", "名單", "流量", "知名度"}),
+        )
 
     def test_check_refuses_reserved_and_unknown(self):
         self.assertEqual(objectives.check("加購物車"), "加購物車")

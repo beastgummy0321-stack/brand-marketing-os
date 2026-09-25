@@ -12,6 +12,9 @@ import json
 import unittest
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+import app.main as main
 import app.shared.web as web
 from app.ads import brief
 from app.ads import repository as ads_repo
@@ -432,6 +435,207 @@ class ScriptedReplyParsesTest(_BriefTestBase):
         detail = self._create()
 
         self.assertTrue(detail["parsed"])
+
+
+class StructuredCreateTest(_BriefTestBase):
+    """F30-I04 (Contract D): the wizard creates a campaign from picks -- product, objective,
+    dates and this campaign's spending cap -- with no sentence typed. The picks are the user's
+    own and the model's parse never overrides them."""
+
+    def _picks(self, **overrides):
+        picks = {"product_ids": [self.product["id"]], "objective": "名單", "budget": 30000}
+        picks.update(overrides)
+        return picks
+
+    def _create_picks(self, picks=None, **overrides):
+        return self._create(goal_text="", picks=picks or self._picks(), **overrides)
+
+    def test_create_without_text_composes_goal_and_keeps_every_pick(self):
+        # The model reads the composed sentence back as a different objective and product --
+        # the picks still win; only its audience guess is kept (the one field it adds).
+        provider = _fake(json.dumps({
+            "objective": "購買", "cap": None, "product_ids": [],
+            "audience_hint": "夜跑族", "notes": None,
+        }, ensure_ascii=False))
+        brief.PROVIDER = provider
+
+        detail = self._create_picks()
+
+        self.assertTrue(detail["parsed"])
+        self.assertIn("夜跑背心", detail["goal_text"])
+        self.assertIn("名單", detail["goal_text"])
+        self.assertIn("30000", detail["goal_text"])
+        self.assertIn(detail["goal_text"], provider.calls[0]["messages"][0]["content"])
+        self.assertEqual(detail["objective"], "名單")
+        self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
+        self.assertEqual(detail["start_date"], datetime.date(2026, 10, 1))
+        self.assertEqual(detail["end_date"], datetime.date(2026, 10, 31))
+        budget = detail["constraints_json"]["budget"]
+        self.assertNotIsInstance(budget, str)
+        self.assertEqual(budget, 30000)
+        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑族")
+        sources = detail["context_json"]["field_sources"]
+        for key in ("product", "objective", "budget", "dates"):
+            self.assertEqual(sources[key], "user", key)
+        self.assertEqual(self._task_count(), 1)  # parsing stays synchronous, one call
+
+    def test_typed_goal_text_is_kept_verbatim(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create(goal_text="秋天主打通勤族", picks=self._picks())
+        self.assertEqual(detail["goal_text"], "秋天主打通勤族")
+        self.assertEqual(detail["objective"], "名單")
+
+    def test_picks_survive_a_provider_failure(self):
+        brief.PROVIDER = providers.FakeProvider(
+            exception=providers.ProviderTimeoutError("AI 服務逾時未回應，請再試一次。"),
+        )
+        detail = self._create_picks()
+        self.assertFalse(detail["parsed"])
+        self.assertEqual(detail["objective"], "名單")
+        self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
+        self.assertEqual(detail["constraints_json"]["budget"], 30000)
+        self.assertEqual(detail["context_json"]["field_sources"]["objective"], "user")
+
+    def test_budget_pick_beats_a_budget_in_constraints_and_the_model(self):
+        brief.PROVIDER = _fake(json.dumps({
+            "objective": "名單", "cap": None, "product_ids": [], "budget_cap": 99999,
+        }))
+        detail = self._create_picks(picks=self._picks(budget=1234.5),
+                                    constraints={"budget": "5000"})
+        self.assertEqual(detail["constraints_json"]["budget"], 1234.5)
+
+    def test_reserved_objective_is_refused_before_any_model_call(self):
+        brief.PROVIDER = _fake("{}")
+        for key in ("互動", "App 推廣", "來店"):
+            with self.assertRaises(ValueError) as ctx:
+                self._create_picks(picks=self._picks(objective=key))
+            self.assertEqual(str(ctx.exception), "objective_unavailable", key)
+        with self.assertRaises(ValueError) as ctx:
+            self._create_picks(picks=self._picks(objective="OUTCOME_SALES"))
+        self.assertEqual(str(ctx.exception), "objective_unknown")
+        self.assertEqual(self._task_count(), 0)
+
+    def test_budget_must_be_a_positive_number(self):
+        brief.PROVIDER = _fake("{}")
+        for bad in ("30000", "abc", True, 0, -10, float("nan"), float("inf"), None, [30000]):
+            with self.assertRaises(ValueError) as ctx:
+                self._create_picks(picks=self._picks(budget=bad))
+            self.assertEqual(str(ctx.exception), "budget_invalid", repr(bad))
+        self.assertEqual(self._task_count(), 0)
+
+    def test_products_must_be_picked_from_this_brand(self):
+        brief.PROVIDER = _fake("{}")
+        for bad, code in (
+            ([], "products_required"), (None, "products_required"),
+            ("prd_x", "products_required"), (["prd_not_this_brand"], "product_unknown"),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                self._create_picks(picks=self._picks(product_ids=bad))
+            self.assertEqual(str(ctx.exception), code, repr(bad))
+        self.assertEqual(self._task_count(), 0)
+
+    def test_default_dates_start_from_the_organisations_today(self):
+        brief.PROVIDER = _fake(json.dumps({
+            "objective": "名單", "cap": None, "product_ids": [],
+            "period": {"kind": "month", "month": 12},
+        }))
+        org_today = datetime.date(2031, 1, 31)  # not the machine's date
+        with patch.object(coresettings, "today_for_org", return_value=org_today) as today:
+            detail = self._create_picks(start_date="", end_date="")
+        today.assert_any_call(web.conn, org_id=self.org_id)
+        # The picks path never takes the model's period: no dates -> org today + 30 days.
+        self.assertEqual(detail["start_date"], org_today)
+        self.assertEqual(detail["end_date"], org_today + datetime.timedelta(days=30))
+        self.assertEqual(detail["context_json"]["field_sources"]["dates"], "system")
+        self.assertIn("2031-01-31", detail["goal_text"])
+
+    def test_only_one_date_is_still_refused(self):
+        brief.PROVIDER = _fake("{}")
+        with self.assertRaises(ValueError) as ctx:
+            self._create_picks(start_date="2026-10-01", end_date="")
+        self.assertEqual(str(ctx.exception), "dates_required")
+
+
+class StructuredCreateRouteTest(_BriefTestBase):
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(main.app)
+        self.url = f"/api/ads/brands/{self.brand_id}/campaigns"
+
+    def _post(self, **body):
+        payload = {"product_ids": [self.product["id"]], "objective": "購買",
+                   "start_date": "2026-10-01", "end_date": "2026-10-31", "budget": 30000}
+        payload.update(body)
+        return self.client.post(self.url, json=payload)
+
+    def test_create_from_picks_without_goal_text(self):
+        brief.PROVIDER = _fake("{}")
+        res = self._post()
+        self.assertEqual(res.status_code, 200, res.text)
+        campaign = res.json()["campaign"]
+        self.assertEqual(campaign["objective"], "購買")
+        self.assertEqual(campaign["constraints_json"]["budget"], 30000)
+        self.assertTrue(campaign["goal_text"])
+        self.assertIn("asset_readiness", campaign)
+
+    def test_refusals_are_400_with_their_codes_not_422(self):
+        brief.PROVIDER = _fake("{}")
+        for body, code in (
+            ({"objective": "互動"}, "objective_unavailable"),
+            ({"budget": "abc"}, "budget_invalid"),
+            ({"budget": "30000"}, "budget_invalid"),
+            ({"budget": 0}, "budget_invalid"),
+            ({"product_ids": "prd_x"}, "products_required"),
+            ({"product_ids": ["prd_not_this_brand"]}, "product_unknown"),
+        ):
+            res = self._post(**body)
+            self.assertEqual(res.status_code, 400, (body, res.text))
+            self.assertEqual(res.json()["error"]["code"], code, body)
+        self.assertEqual(self._task_count(), 0)
+
+    def test_free_text_create_still_works(self):
+        brief.PROVIDER = _fake(json.dumps({"objective": "流量", "cap": None, "product_ids": []}))
+        res = self.client.post(self.url, json={
+            "goal_text": "導流量到新頁面", "start_date": "2026-10-01", "end_date": "2026-10-31",
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["campaign"]["objective"], "流量")
+        res = self.client.post(self.url, json={"goal_text": ""})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["error"]["code"], "goal_text_required")
+
+
+class PatchAudienceHintTest(_BriefTestBase):
+    def test_patch_sets_and_clears_audience_hint_as_the_users(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        self.assertEqual(detail["context_json"]["field_sources"]["audience"], "system")
+        web.conn.commit()  # the request reads through its own connection
+        client = TestClient(main.app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+
+        res = client.patch(url, json={"audience_hint": "  上班族・通勤族 "})
+        self.assertEqual(res.status_code, 200, res.text)
+        context = res.json()["campaign"]["context_json"]
+        self.assertEqual(context["audience_hint"], "上班族・通勤族")
+        self.assertEqual(context["field_sources"]["audience"], "user")
+        self.assertEqual(context["product_ids"], detail["context_json"]["product_ids"])
+
+        res = client.patch(url, json={"audience_hint": "   "})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertIsNone(res.json()["campaign"]["context_json"]["audience_hint"])
+
+    def test_imported_campaign_refuses_audience_hint(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        web.conn.execute(
+            "UPDATE ads_campaign SET origin = 'imported' WHERE id = %s", (detail["id"],),
+        )
+        web.conn.commit()
+        with self.assertRaises(ValueError):
+            ads_repo.update_campaign(
+                web.conn, self.org_id, self.brand_id, detail["id"], {"audience_hint": "上班族"},
+            )
 
 
 if __name__ == "__main__":
