@@ -91,9 +91,8 @@ def assign(conn, org, brand, campaign, ad_id, placement_id, revision):
     # An approved launch freezes its materials -- unless the plan already changed since (F28
     # "Stale launch"): then re-pointing a revised material is how the user reaches a plan that
     # can be re-approved, instead of a dead end between a refused re-approval and this refusal.
-    if change_control_launch.launch_set(
-        conn, org, brand, campaign
-    ) and not change_control_launch.is_stale(conn, org, brand, campaign):
+    # An ad deferred from the batch for lack of material was never frozen (F30 Unresolved 1).
+    if change_control_launch.material_frozen(conn, org, brand, campaign, ad_id):
         raise ValueError("首次投放清單已核准，不能改寫原交接素材；請先處理原核准清單。")
     if (placement_id is None) != (revision is None):
         raise ValueError("素材安排與版本必須一起提供，或一起清除。")

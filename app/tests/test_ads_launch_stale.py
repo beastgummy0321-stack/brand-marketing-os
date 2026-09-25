@@ -105,6 +105,10 @@ class LaunchStaleTest(unittest.TestCase):
     # -- helpers ---------------------------------------------------------------------------------
 
     def launch(self):
+        # Only an ad with ready material is in a launch batch (F30 Unresolved 1).
+        ad = campaigns.get_ad(self.conn, self.org, self.brand, self.ad)
+        if ad["material_placement_id"] is None:
+            self.assigned_material()
         frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         with patch.object(
             change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
@@ -384,8 +388,8 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIsNone(response.json()["launch_stale"])
 
-    def assigned_material(self):
-        """Assign a confirmed material (revision 1) to the planned ad, before any launch."""
+    def assigned_material(self, ad_id=None):
+        """Assign a confirmed material (revision 1) to a planned ad (the fixture's by default)."""
         asset = db.new_id("aua")
         self.conn.execute(
             "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
@@ -407,7 +411,7 @@ class LaunchStaleTest(unittest.TestCase):
             placement["id"],
         )
         handoff_assignment.assign(
-            self.conn, self.org, self.brand, self.campaign, self.ad, placement["id"], 1
+            self.conn, self.org, self.brand, self.campaign, ad_id or self.ad, placement["id"], 1
         )
         return placement
 
@@ -473,17 +477,14 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(revision, 2)
         stale = self.workspace()["launch_stale"]
         self.assertFalse(stale["revertible"])
-        # Re-approving the revised-but-unassigned material is refused as before ...
-        with (
-            patch.object(
-                change_control_launch.month_budget,
-                "preflight",
-                return_value={"can_increase": True},
-            ),
-            self.assertRaisesRegex(ValueError, "尚未確認或已修訂"),
-        ):
-            self.reapprove(stale)
-        # ... but the stale launch no longer freezes the assignment, so it can be re-pointed.
+        # The revised-but-unassigned material is not ready: the ad would leave the batch, which
+        # the diff says as a material change (F30 Unresolved 1), not as a removed ad.
+        row = next(r for r in stale["diff"] if r["kind"] == "ad")
+        self.assertEqual(
+            (row["field"], row["before"], row["after"]),
+            ("material", "fall.png・第 1 版", "素材未就緒，這一則先不上架"),
+        )
+        # The stale launch no longer freezes the assignment, so it can be re-pointed.
         planned = self.assign(placement["id"], revision)["planned_ads"][0]
         self.assertEqual(
             (planned["placement_revision"], planned["assignment_status"]), (revision, "confirmed")
@@ -516,6 +517,21 @@ class LaunchStaleTest(unittest.TestCase):
             self.campaign,
             self.group,
         )
+        # Without material it stays out of the batch: the approved launch is still current.
+        self.assertIsNone(self.workspace()["launch_stale"])
+        # A deferred ad is not frozen by the approval: it takes its material, and the launch goes
+        # stale so the next version can take it out (F30 Unresolved 1).
+        self.assertFalse(
+            change_control_launch.material_frozen(
+                self.conn, self.org, self.brand, self.campaign, extra
+            )
+        )
+        self.assertTrue(
+            change_control_launch.material_frozen(
+                self.conn, self.org, self.brand, self.campaign, self.ad
+            )
+        )
+        self.assigned_material(extra)
         stale = self.workspace()["launch_stale"]
         row = stale["diff"][0]
         self.assertEqual(

@@ -15,11 +15,13 @@ from app.ads import (
     change_control_data,
     change_control_launch,
     external_sync,
+    handoff_assignment,
     handoff_check,
     handoff_data,
     launch_settings,
 )
 from app.ads import repository as campaigns
+from app.ads import user_assets_repository as assets
 from app.ads.adapters import meta_read
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
@@ -149,7 +151,31 @@ class LaunchSettingsTest(unittest.TestCase):
                 values[key] = value
         return self.client.put(self.base + "/launch-settings", json=values)
 
+    def material(self):
+        """A confirmed material on the planned ad: only such an ad is in a launch batch (F30)."""
+        asset = db.new_id("aua")
+        self.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) "
+            "VALUES(%s,%s,%s,%s,%s,'gift.png','image/png',1,'ready')",
+            (asset, self.org, self.brand, asset, f"{self.org}/{asset}"),
+        )
+        placement = assets.attach(
+            self.conn, self.org, self.brand, self.campaign, asset, {"body": "文案"}, "human"
+        )
+        self.conn.execute(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
+            (placement["id"],),
+        )
+        self.conn.commit()
+        handoff_assignment.assign(
+            self.conn, self.org, self.brand, self.campaign, self.ad, placement["id"], 1
+        )
+
     def launch(self):
+        ad = campaigns.get_ad(self.conn, self.org, self.brand, self.ad)
+        if ad["material_placement_id"] is None:
+            self.material()
         frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         with patch.object(
             change_control_launch.month_budget, "preflight", return_value={"can_increase": True}

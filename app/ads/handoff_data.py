@@ -259,3 +259,35 @@ def report(conn, org, brand, campaign, item_id):
     )
     conn.commit()
     return get(conn, org, brand, campaign, item_id)
+
+
+def unreport(conn, org, brand, campaign, item_id):
+    """F30 Contract G: take back a 「我建好了」 while the item is not verified. The platform
+    binding and evidence of an earlier read stay; only the report is cleared."""
+    item = get(conn, org, brand, campaign, item_id)
+    if item["status"] == "confirmed":
+        raise ValueError("這一項已核對相符，不能取消回報。")
+    conn.execute(
+        "UPDATE ads_handoff_item SET reported_at=NULL,status='pending',updated_at=now() "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s AND status<>'confirmed'",
+        (org, brand, campaign, item_id),
+    )
+    conn.commit()
+    return get(conn, org, brand, campaign, item_id)
+
+
+def note_readback(conn, org, brand, campaign, item_id, reason):
+    """A batch readback that found no single platform object for this item leaves it as it was,
+    with the reason and the time of the attempt."""
+    conn.execute(
+        "UPDATE ads_handoff_item SET evidence_json=evidence_json || %s::jsonb,updated_at=now() "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
+        (
+            db.jsonb({"readback": {"at": db.now_utc().isoformat(), "reason": reason}}),
+            org,
+            brand,
+            campaign,
+            item_id,
+        ),
+    )
+    conn.commit()
