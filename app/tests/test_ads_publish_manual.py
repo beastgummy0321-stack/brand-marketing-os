@@ -1,11 +1,5 @@
-"""app/tests/test_ads_publish_manual.py — F03-I09 falsifiers (Meta faked at the `graph`
-boundary, the way `app/tools/simulate_meta_spend.py` does it — only the outermost network call
-is replaced, `app/ads/adapters/manual.py` and `app/meta/repository.py`'s name-lookup functions
-run for real): with no bound account the bind result is exactly the no-account message and
-nothing else; a campaign node that does not match means no group or ad is compared and the
-message says so; with the campaign matched and two of three group names matching, the two are
-bound, the third is named in the message, and the campaign stays `ready`; when all match the
-campaign is `live` and there is one `bind` action per row (campaign node included); `auto_meta`
+"""app/tests/test_ads_publish_manual.py — F03-I09 falsifiers (the name-match `bind` these used
+to cover was removed in F31-I08; launch readback binds instead): `auto_meta`
 returns 未接上 without raising a 500; the checklist contains the campaign node plus every group
 and ad name exactly once; one manual publish writes exactly one `approval` row with
 `scope_type = plan.APPROVAL_SCOPE_TYPE`, `scope_ref` = the campaign id and `max_daily_amount` =
@@ -36,8 +30,6 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
 from app.llm import providers
-from app.meta import graph as meta_graph
-from app.meta import repository as meta_repo
 
 ACTOR = "測試員"
 
@@ -144,21 +136,6 @@ class PublishTestBase(unittest.TestCase):
             web.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR,
         )
 
-    def _connect_account(self) -> str:
-        """跟 `test_schedule.py::BindTreeApiContractTest._connect_account` 同一套：接權杖、
-        掛一個假帳號、把它綁進這個品牌。回傳平台端的帳號 id（`graph` 假函式要用它當
-        `account_id` 參數）。"""
-        meta_repo.save_token(web.conn, self.org_id, "tok")
-        external_id = f"act_{uuid.uuid4().hex[:10]}"
-        meta_repo.upsert_accounts(web.conn, self.org_id, [
-            {"account_id": external_id, "name": "測試廣告帳號", "currency": "TWD"},
-        ])
-        row = next(a for a in meta_repo.list_accounts(web.conn, self.org_id)
-                   if a["account_id"] == external_id)
-        meta_repo.bind(web.conn, self.org_id, self.brand_id, row["id"])
-        web.conn.commit()
-        return external_id
-
     def _actions(self, campaign_id: str) -> list:
         rows = web.conn.execute(
             "SELECT * FROM ads_action WHERE campaign_id = %s ORDER BY created_at", (campaign_id,),
@@ -171,125 +148,6 @@ class PublishTestBase(unittest.TestCase):
             (plan.APPROVAL_SCOPE_TYPE, campaign_id),
         ).fetchall()
         return [dict(r) for r in rows]
-
-    def _patch_campaigns(self, by_account: dict):
-        def fake_list_campaigns(_token: str, account_id: str) -> list:
-            return [
-                {"campaign_id": cid, "name": name, "effective_status": "ACTIVE"}
-                for cid, name in by_account.get(account_id, [])
-            ]
-        return mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns)
-
-    def _patch_ad_sets(self, by_campaign: dict):
-        def fake_list_ad_sets(_token: str, campaign_id: str) -> list:
-            return [
-                {"adset_id": aid, "name": name, "external_status": "ACTIVE"}
-                for aid, name in by_campaign.get(campaign_id, [])
-            ]
-        return mock.patch.object(meta_graph, "list_ad_sets", fake_list_ad_sets)
-
-    def _patch_ads(self, by_adset: dict):
-        def fake_list_ads(_token: str, adset_id: str) -> list:
-            return [
-                {"ad_id": aid, "name": name, "external_status": "ACTIVE"}
-                for aid, name in by_adset.get(adset_id, [])
-            ]
-        return mock.patch.object(meta_graph, "list_ads", fake_list_ads)
-
-
-class NoAccountBoundTest(PublishTestBase):
-    def test_bind_with_no_bound_account_returns_the_guard_message_alone(self):
-        detail = self._adopted_campaign()
-
-        result = manual_adapter.bind(
-            web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-        )
-
-        self.assertEqual(result["message"], manual_adapter.NO_ACCOUNT_BOUND_MESSAGE)
-        self.assertEqual(self._actions(detail["id"]), [])
-        self.assertEqual(result["campaign"]["local_state"], "unbound")
-
-
-class CampaignNodeNotMatchedTest(PublishTestBase):
-    def test_unmatched_campaign_node_stops_children_from_being_compared(self):
-        detail = self._adopted_campaign()
-        self._connect_account()
-
-        with self._patch_campaigns({}):  # 平台上完全沒有叫這個名字的活動
-            result = manual_adapter.bind(
-                web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-            )
-
-        self.assertIn(f"「{detail['name']}」在 Meta 上找不到", result["message"])
-        self.assertIn("名稱要一字不差", result["message"])
-        self.assertEqual(result["campaign"]["local_state"], "unbound")
-        for group in result["campaign"]["groups"]:
-            self.assertEqual(group["local_state"], "unbound")
-            for ad in group["ads"]:
-                self.assertEqual(ad["local_state"], "unbound")
-        self.assertEqual(self._actions(detail["id"]), [])
-
-
-class PartialMatchTest(PublishTestBase):
-    def test_two_of_three_groups_bind_the_third_is_named_campaign_stays_ready(self):
-        detail = self._adopted_campaign()
-        account_id = self._connect_account()
-        campaign_ext = "camp-1"
-        with self._patch_campaigns({account_id: [(campaign_ext, detail["name"])]}), \
-                self._patch_ad_sets({
-                    campaign_ext: [
-                        ("as-new", "新客組"), ("as-retarget", "再行銷組"),
-                    ],  # 探索組故意不放平台上，逼出零筆的那一種失敗
-                }), \
-                self._patch_ads({
-                    "as-new": [("ad-new", "新客-廣告一")],
-                    "as-retarget": [("ad-retarget", "再行銷-廣告一")],
-                }):
-            result = manual_adapter.bind(
-                web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-            )
-
-        self.assertIn("「探索組」在 Meta 上找不到", result["message"])
-        self.assertEqual(result["campaign"]["status"], "ready")
-
-        reloaded_groups = {g["name"]: g for g in result["campaign"]["groups"]}
-        self.assertEqual(reloaded_groups["新客組"]["local_state"], "bound")
-        self.assertEqual(reloaded_groups["再行銷組"]["local_state"], "bound")
-        self.assertEqual(reloaded_groups["探索組"]["local_state"], "unbound")
-        self.assertEqual(reloaded_groups["新客組"]["ads"][0]["local_state"], "bound")
-        self.assertEqual(reloaded_groups["再行銷組"]["ads"][0]["local_state"], "bound")
-        self.assertEqual(reloaded_groups["探索組"]["ads"][0]["local_state"], "unbound")
-
-
-class FullMatchTest(PublishTestBase):
-    def test_all_matched_goes_live_with_one_bind_action_per_row(self):
-        detail = self._adopted_campaign()
-        account_id = self._connect_account()
-        campaign_ext = "camp-1"
-
-        with self._patch_campaigns({account_id: [(campaign_ext, detail["name"])]}), \
-                self._patch_ad_sets({
-                    campaign_ext: [
-                        ("as-new", "新客組"), ("as-retarget", "再行銷組"), ("as-explore", "探索組"),
-                    ],
-                }), \
-                self._patch_ads({
-                    "as-new": [("ad-new", "新客-廣告一")],
-                    "as-retarget": [("ad-retarget", "再行銷-廣告一")],
-                    "as-explore": [("ad-explore", "探索-廣告一")],
-                }):
-            result = manual_adapter.bind(
-                web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-            )
-
-        self.assertIsNone(result["message"])
-        self.assertEqual(result["campaign"]["status"], "live")
-
-        actions = self._actions(detail["id"])
-        bind_actions = [a for a in actions if a["kind"] == "bind"]
-        # campaign 節點 + 3 個投放組 + 3 支廣告 = 7 列，一列不多一列不少。
-        self.assertEqual(len(bind_actions), 7)
-        self.assertEqual(len({a["target_id"] for a in bind_actions}), 7)
 
 
 class ChecklistContentTest(PublishTestBase):
@@ -319,10 +177,6 @@ class AutoMetaAdapterTest(PublishTestBase):
 
         with self.assertRaises(ValueError) as ctx:
             auto_meta.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
-        self.assertEqual(str(ctx.exception), "auto_meta_not_connected")
-
-        with self.assertRaises(ValueError) as ctx:
-            auto_meta.bind(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
         self.assertEqual(str(ctx.exception), "auto_meta_not_connected")
 
 
@@ -447,34 +301,6 @@ class NoGroupsToPublishTest(PublishTestBase):
             role="new", daily_budget=100,
         )
         self.assertEqual(group["name"], "補一個投放組")
-
-
-class ClosedCampaignNotRevivedTest(PublishTestBase):
-    def test_full_match_bind_on_a_closed_campaign_stays_closed(self):
-        detail = self._adopted_campaign()
-        ads_repo.set_campaign_status(
-            web.conn, self.org_id, self.brand_id, detail["id"], "closed",
-        )
-        account_id = self._connect_account()
-        campaign_ext = "camp-1"
-
-        with self._patch_campaigns({account_id: [(campaign_ext, detail["name"])]}), \
-                self._patch_ad_sets({
-                    campaign_ext: [
-                        ("as-new", "新客組"), ("as-retarget", "再行銷組"), ("as-explore", "探索組"),
-                    ],
-                }), \
-                self._patch_ads({
-                    "as-new": [("ad-new", "新客-廣告一")],
-                    "as-retarget": [("ad-retarget", "再行銷-廣告一")],
-                    "as-explore": [("ad-explore", "探索-廣告一")],
-                }):
-            result = manual_adapter.bind(
-                web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-            )
-
-        self.assertIsNone(result["message"])
-        self.assertEqual(result["campaign"]["status"], "closed")
 
 
 # -- F07-I10：手動配對清單的圖片提示詞欄位讀 §5.8 的 `text`，不是舊的 `rendered` -------------

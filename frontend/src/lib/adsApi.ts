@@ -637,7 +637,7 @@ export async function setAssetReady(
   return data.ad;
 }
 
-// -- F03-I09：手動發布／配對 -------------------------------------------------------------------
+// -- F03-I09：手動發布 -------------------------------------------------------------------------
 
 export async function getPublish(
   brandId: string,
@@ -662,21 +662,6 @@ export async function publishCampaign(
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter, ...approval }) },
   );
   return parseJsonOrThrow<PublishDescribe>(res, "發布失敗。");
-}
-
-/** `POST .../bind` — 手動路徑的「配對」：精準名稱比對，逐節點由上往下。`message` 是
- * `null`（整批都配對成功）或一句話（哪些節點沒配上，§0「一次講完整批」）。 */
-export interface BindResponse {
-  message: string | null;
-  campaign: CampaignDetail;
-}
-
-export async function bindCampaign(brandId: string, campaignId: string): Promise<BindResponse> {
-  const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/bind`,
-    { method: "POST" },
-  );
-  return parseJsonOrThrow<BindResponse>(res, "配對失敗。");
 }
 
 // -- F03-I11：成效 -----------------------------------------------------------------------------

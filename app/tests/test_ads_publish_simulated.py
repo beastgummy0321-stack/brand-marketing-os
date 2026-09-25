@@ -181,18 +181,6 @@ class NoMetaEntitySpendWriteTest(SimulatedPublishTestBase):
         self.assertEqual(before, after)
 
 
-class BindIsIdempotentNoOpTest(SimulatedPublishTestBase):
-    def test_bind_returns_the_auto_matched_message_without_writing_new_actions(self):
-        detail = self._campaign(start_date=self.today, end_date=self.today)
-        simulated.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
-        actions_before = self._actions(detail["id"])
-
-        result = simulated.bind(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
-
-        self.assertEqual(result["message"], simulated.BOUND_MESSAGE)
-        self.assertEqual(self._actions(detail["id"]), actions_before)
-
-
 class NoGroupsToPublishTest(SimulatedPublishTestBase):
     def test_publish_with_no_groups_refuses(self):
         campaign = self._campaign(groups=0, ads_per_group=0)

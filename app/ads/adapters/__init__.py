@@ -1,13 +1,14 @@
-"""app/ads/adapters/__init__.py — F03-I09: the publish/bind interface, one registry, more than
-one implementation (§0 the "action" link). Every adapter exposes exactly three functions:
+"""app/ads/adapters/__init__.py — F03-I09: the publish interface, one registry, more than
+one implementation (§0 the "action" link). Every adapter exposes exactly two functions:
     describe(campaign: dict) -> dict          # what the user must do / what will happen
     publish(conn, org_id, brand_id, campaign_id, *, actor) -> dict
-    bind(conn, org_id, brand_id, campaign_id, *, actor) -> dict
-`get_adapter(name)` returns the adapter object (a plain module works — duck typing, no ABC for
-three functions) or `None` when the name is unknown. `auto_meta` is a reserved third entry:
-`describe` reports 「自動發布未接上」 (never phrased as a refusal — it is reserved, not broken);
-`publish`/`bind` raise `ValueError("auto_meta_not_connected")`, which `routes.py` turns into a
-400, never a 500. Private to app/ads (container contract §1): only `routes.py` imports this.
+F31-I08: there is no `bind` verb. The ads-center name-match bind had no screen calling it;
+launch readback (F30-I12, `handoff_check`) binds each planned node to the platform object the
+user proved. `get_adapter(name)` returns the adapter object (a plain module works — duck typing,
+no ABC for two functions) or `None` when the name is unknown. `auto_meta` is a reserved third
+entry: `describe` reports 「自動發布未接上」 (never phrased as a refusal — it is reserved, not
+broken); `publish` raises `ValueError("auto_meta_not_connected")`, which `routes.py` turns into
+a 400, never a 500. Private to app/ads (container contract §1): only `routes.py` imports this.
 """
 
 from app.ads.adapters import manual, simulated
@@ -32,9 +33,6 @@ class _AutoMetaAdapter:
         return {"adapter": "auto_meta", "message": AUTO_META_NOT_CONNECTED_MESSAGE, "checklist": []}
 
     def publish(self, conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
-        raise ValueError("auto_meta_not_connected")
-
-    def bind(self, conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
         raise ValueError("auto_meta_not_connected")
 
 

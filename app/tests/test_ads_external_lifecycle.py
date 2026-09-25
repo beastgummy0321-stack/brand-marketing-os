@@ -77,7 +77,6 @@ class ExternalLifecycleTest(unittest.TestCase):
             "plan",
             "pack",
             "publish",
-            "bind",
             "ingest",
             "close",
             "comparison",
