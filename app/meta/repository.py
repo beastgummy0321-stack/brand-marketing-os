@@ -37,7 +37,10 @@ Tables (see supabase/migrations/20260829000002_meta_baseline.sql,
                               `_refuse_if_parent_owned_by_another_org` (ticket 06) reads it
                               read-only, same precedent as channel_credential above: the table
                               belongs elsewhere, the one place that needs to touch it from here
-                              stays here. It never writes this table.
+                              stays here. It never writes this table. Since F31-I13 the guard
+                              asks the schedule module's `schedule_channel_entity_owned_elsewhere`
+                              SQL function (boolean only), because RLS hides other orgs' rows
+                              from a request connection.
 
 The token itself never touches channel_credential (or any other table, audit_log, or a log
 line) — it lives in Supabase Vault. `save_token` does not give the secret a name:
@@ -348,13 +351,17 @@ def _refuse_if_parent_owned_by_another_org(conn: _AnyConn, org_id: str, parent_i
     `AdMatchUnreachableTest` 那種「org 有權杖、id 沒有任何綁定紀錄」的情境因此不受影響，
     照舊一路走到 Meta、連不上就變成 `meta_unreachable`。只有一個通路（ADR 0056 §4），
     不必再 JOIN `ad_channel` 篩 `channel_key`。"""
+    # F31-I13: through the schedule module's SECURITY DEFINER boolean lookup, not a raw SELECT.
+    # A request connection runs as `authenticated` under org-isolation RLS, where other orgs'
+    # `channel_entity_map` rows are invisible and a plain SELECT never found them.
     row = conn.execute(
-        "SELECT 1 FROM channel_entity_map WHERE external_id = %s AND org_id != %s LIMIT 1",
+        "SELECT schedule_channel_entity_owned_elsewhere(%s, %s) AS owned",
         (parent_id, org_id),
     ).fetchone()
+    assert row is not None, "a scalar function SELECT always returns one row"
     # F31-I03: the ads center keeps its own bindings (`ads_*` rows), which this module may not
     # read (meta sits below ads in LAYER_ORDER). The owning module registers a check instead.
-    if row is not None or any(
+    if row["owned"] or any(
         check(conn, org_id, parent_id) for check in _PARENT_OWNER_CHECKS.values()
     ):
         raise web.ApiError(403, code, f"這個{noun}不屬於這個組織，已拒絕比對。")
