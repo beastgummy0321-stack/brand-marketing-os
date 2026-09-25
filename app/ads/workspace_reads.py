@@ -190,6 +190,13 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
             lambda: _open_queue_count(conn, org_id, brand_id, campaign_id, items),
         )
     data_ready = None if triaged is None else triaged["data"]["status"]["state"] == "ready"
+    # The days of the judged window never read (triage `data.status.missing_days`, the same
+    # window `data_ready` is judged on); a draft has no platform day to miss.
+    missing_days: list | None
+    if draft:
+        missing_days = []
+    else:
+        missing_days = None if triaged is None else triaged["data"]["status"]["missing_days"]
 
     sync = home_overview._guarded(
         conn, "workspace.sync", lambda: home_overview._sync_block(conn, org_id, brand_id)
@@ -210,6 +217,7 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         **_capacity(conn, org_id, brand_id, campaign, draft, triaged),
         "active_ads": active_ads,
         "next_sync_at": sync["next_at"] if sync is not None else None,
+        "missing_days": missing_days,
         "totals": totals,
         "draft": draft_block,
     }
@@ -271,6 +279,9 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
         "thumbnail_url": triage._thumbnail_url(entity),
         "grade": item["grade"] if item else None,
         "grade_label": item["grade_label"] if item else None,
+        # The ad's own spend over the window its grade was judged on (triage `current.spend`),
+        # null when unknown -- never 0.
+        "spend": None if current.get("spend") is None else round(float(current["spend"]), 2),
         "cost_per_result": current.get("cost_per_result"),
         "results": home_overview._count_out(current.get("result_count")),
         "closing": entity["id"] in closing, "missing_material": False,
@@ -318,7 +329,8 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                 if entity is None:
                     out_ads.append({
                         "ad_id": ad["id"], "entity_id": None, "name": ad["name"],
-                        "thumbnail_url": None, "grade": None, "grade_label": None,
+                        "thumbnail_url": None, "spend": None, "grade": None,
+                        "grade_label": None,
                         "cost_per_result": None, "results": None, "closing": False,
                         "missing_material": _missing_material(
                             conn, org_id, brand_id, campaign_id, ad

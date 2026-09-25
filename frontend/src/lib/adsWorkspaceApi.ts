@@ -54,6 +54,9 @@ export interface CampaignWorkspace {
   active_ads: number;
   can_support: number | null;
   next_sync_at: string | null;
+  /** Days (YYYY-MM-DD) of the judged window never read from the platform — the campaign's
+   * `data_status.missing_days` (triage window); `[]` on a draft, null when the read failed. */
+  missing_days: string[] | null;
   totals: WorkspaceTotals | null;
   draft: WorkspaceDraft | null;
 }
@@ -65,6 +68,8 @@ export interface StructureAd {
   entity_id: string | null;
   name: string;
   thumbnail_url: string | null;
+  /** The ad's own spend over the window its grade was judged on; null when unknown. */
+  spend: number | null;
   grade: TriageGrade | null;
   grade_label: string | null;
   cost_per_result: number | null;

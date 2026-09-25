@@ -223,6 +223,7 @@ class DraftWorkspaceTest(_WithReader):
         self.assertIsNone(ws["totals"])
         self.assertIsNone(ws["daily_budget"])  # no group yet: unknown, not 0
         self.assertIsNone(ws["can_support"])
+        self.assertEqual(ws["missing_days"], [])  # nothing on a platform to miss
         self.assertEqual(ws["draft"], {
             "cap_set": False, "budget_set": False, "slots_ready": 0, "slots_total": 0,
             "launch_checked": 0, "launch_total": 0,
@@ -289,6 +290,11 @@ class LiveWorkspaceTest(_WithReader):
         self.assertEqual(ws["stage"]["key"], "read")
         self.assertEqual(ws["active_ads"], 1)
         self.assertIsNone(ws["draft"])
+        status = triage.classify(self.conn, self.org, self.brand, self.campaign)["data"]["status"]
+        self.assertEqual(status["state"], "partial")
+        self.assertTrue(ws["missing_days"])
+        self.assertEqual(ws["missing_days"], status["missing_days"])
+        self.assertLess(ws["missing_days"][-1], (self.cutoff - timedelta(days=3)).isoformat())
 
     def test_ready_without_open_items_is_read(self):
         _synced(self.conn, self.org, self.brand, self.campaign,
@@ -298,6 +304,7 @@ class LiveWorkspaceTest(_WithReader):
         ws = self.workspace(self.brand, self.campaign)
         self.assertEqual(ws["pending_count"], 0)
         self.assertEqual(ws["stage"], {"key": "read", "done": ["plan", "assets", "launch"]})
+        self.assertEqual(ws["missing_days"], [])
 
     def test_open_queue_row_is_decide_and_another_campaigns_row_does_not_count(self):
         other = _imported(self.conn, self.org, self.brand, "別的活動", "c_other", cap=100)
@@ -375,6 +382,7 @@ class FailedSubReadTest(_WithReader):
         self.assertIsNone(ws["pending_count"])
         self.assertIsNone(ws["daily_budget"])
         self.assertIsNone(ws["can_support"])
+        self.assertIsNone(ws["missing_days"])  # unread, never "no day missing"
         self.assertEqual(ws["stage"]["key"], "read")
         self.assertEqual(ws["active_ads"], 1)
 
@@ -455,8 +463,8 @@ def _fake_classify(grades):
     def classify(conn, org_id, brand_id, campaign_id):
         items = [
             {"entity_id": entity_id, "grade": grade, "grade_label": label,
-             "current": {"cost_per_result": cost, "result_count": results}}
-            for entity_id, (grade, label, cost, results) in grades.items()
+             "current": {"cost_per_result": cost, "result_count": results, "spend": spend}}
+            for entity_id, (grade, label, cost, results, spend) in grades.items()
         ]
         return {"items": items}
 
@@ -480,9 +488,9 @@ class ImportedStructureTest(_WithReader):
         self.gone = _ad(conn, org, brand, self.campaign, "丁", ("adset", "B 組"),
                         status="PAUSED")
         self.grades = {
-            self.a1: ("on_target", "划算", 80.0, 5),
-            self.a2: ("wasted", "沒賣出", None, 0),
-            self.b1: ("insufficient", "剛開始、數字還不夠", None, None),
+            self.a1: ("on_target", "划算", 80.0, 5, 400.004),
+            self.a2: ("wasted", "沒賣出", None, 0, 350.0),
+            self.b1: ("insufficient", "剛開始、數字還不夠", None, None, None),
         }
 
     def structure(self):
@@ -502,12 +510,14 @@ class ImportedStructureTest(_WithReader):
         self.assertEqual([a["name"] for a in a_ads], ["乙", "甲"])
         self.assertEqual(a_ads[1], {
             "ad_id": None, "entity_id": self.a1, "name": "甲", "thumbnail_url": None,
-            "grade": "on_target", "grade_label": "划算", "cost_per_result": 80.0, "results": 5,
-            "closing": False, "missing_material": False,
+            "spend": 400.0, "grade": "on_target", "grade_label": "划算", "cost_per_result": 80.0,
+            "results": 5, "closing": False, "missing_material": False,
         })
         self.assertTrue(a_ads[0]["closing"])  # approved pause, readback not confirmed yet
         self.assertEqual(a_ads[0]["results"], 0)
+        self.assertEqual(a_ads[0]["spend"], 350)  # 沒賣出: spend known, results a known 0
         self.assertEqual([a["entity_id"] for a in groups[1]["ads"]], [self.b1])  # 丁 is paused
+        self.assertIsNone(groups[1]["ads"][0]["spend"])  # unknown stays null, never 0
 
     def test_a_confirmed_pause_is_not_closing(self):
         _set_id, (pause,) = _set(self.conn, self.org, self.brand, self.campaign,
@@ -524,7 +534,9 @@ class ImportedStructureTest(_WithReader):
             groups = self.structure()["groups"]
         ads = [a for g in groups for a in g["ads"]]
         self.assertEqual(len(ads), 3)
-        self.assertTrue(all(a["grade"] is None and a["results"] is None for a in ads))
+        self.assertTrue(all(
+            a["grade"] is None and a["results"] is None and a["spend"] is None for a in ads
+        ))
 
     def test_real_triage_grade_is_the_structure_grade(self):
         _synced(self.conn, self.org, self.brand, self.campaign,
@@ -534,9 +546,11 @@ class ImportedStructureTest(_WithReader):
                  triage.classify(self.conn, self.org, self.brand, self.campaign)["items"]}
         ads = {a["entity_id"]: a for g in self.structure()["groups"] for a in g["ads"]}
         self.assertEqual(ads[self.a2]["grade"], "wasted")
+        self.assertEqual(ads[self.a2]["spend"], 500)
         for entity_id, ad in ads.items():
             self.assertEqual(ad["grade"], items[entity_id]["grade"])
             self.assertEqual(ad["grade_label"], items[entity_id]["grade_label"])
+            self.assertEqual(ad["spend"], items[entity_id]["current"]["spend"])
 
 
 class AppBuiltStructureTest(_WithReader):
@@ -570,7 +584,8 @@ class AppBuiltStructureTest(_WithReader):
         self.assertEqual([(a["ad_id"], a["entity_id"], a["missing_material"])
                           for a in groups[0]["ads"]],
                          [(self.ready, None, False), (self.missing, None, True)])
-        self.assertTrue(all(a["grade"] is None for a in groups[0]["ads"]))
+        self.assertTrue(all(a["grade"] is None and a["spend"] is None
+                            for a in groups[0]["ads"]))
 
     def test_launched_plan_ads_carry_their_platform_ad_and_a_replacement_joins_its_group(self):
         conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
@@ -583,7 +598,8 @@ class AppBuiltStructureTest(_WithReader):
         _launch(conn, org, brand, campaign, handoff=[
             ("group", self.group, "confirmed", adset), ("ad", self.ready, "confirmed", bound),
         ])
-        grades = {bound: ("watch", "偏貴", 110.0, 12), extra: ("on_target", "划算", 60.0, 20)}
+        grades = {bound: ("watch", "偏貴", 110.0, 12, 1320.0),
+                  extra: ("on_target", "划算", 60.0, 20, 1200.0)}
         with mock.patch.object(handoff_assignment, "material_snapshot",
                                side_effect=self.snapshot), \
                 mock.patch.object(triage, "classify", side_effect=_fake_classify(grades)):
@@ -700,7 +716,7 @@ class RouteTest(_WithReader):
         self.assertEqual(ws.status_code, 200, ws.text)
         self.assertEqual(set(ws.json()), {
             "stage", "pending_count", "daily_budget", "active_ads", "can_support",
-            "next_sync_at", "totals", "draft",
+            "next_sync_at", "missing_days", "totals", "draft",
         })
         structure = client.get(f"{base}/{draft}/structure")
         self.assertEqual(structure.status_code, 200, structure.text)
