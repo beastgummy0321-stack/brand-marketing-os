@@ -174,18 +174,19 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
         onLaunchSettingsSaved={reloadWorkspace} />
     );
   } else if (tab === "perf") {
+    // The old review panel and platform charts (incl. the comparison plan and simulation tools) stay reachable on a
+    // draft too — folded, never deleted.
+    const advanced = (
+      <Disclosure label="進階：舊版成效與檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
+        <div className="flex flex-col gap-4">
+          <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
+          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} />
+        </div>
+      </Disclosure>
+    );
     body = isDraftCampaign(campaign, ws)
-      ? <DraftPerf brandId={brandId} campaign={campaign} onGo={go} />
-      : (
-        <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={(
-          <Disclosure label="進階：舊版成效與檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
-            <div className="flex flex-col gap-4">
-              <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
-              <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} />
-            </div>
-          </Disclosure>
-        )} />
-      );
+      ? <DraftPerf brandId={brandId} campaign={campaign} onGo={go} advanced={advanced} />
+      : <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={advanced} />;
   } else {
     body = SLOTS[tab](slot);
   }
@@ -213,13 +214,16 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
 
 /** Prototype `tabPerf()` for a draft: nothing is on a platform yet, so no results — the empty ruler shows where the
  * ads will land. */
-function DraftPerf({ brandId, campaign: c, onGo }: { brandId: string; campaign: CampaignDetail; onGo: (target: StepTarget) => void }) {
+function DraftPerf({ brandId, campaign: c, onGo, advanced }: {
+  brandId: string; campaign: CampaignDetail; onGo: (target: StepTarget) => void; advanced: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-4">
       <section className="surface px-[22px] py-5" aria-label="成效">
         <ResultHero tone="neutral" title="還沒上架，沒有成效" note="上架並讀回核對後開始累積" />
         <div className="mt-3"><TargetRuler ads={[]} cap={capOf(c)} breakEven={c.cap.break_even} size="full" /></div>
       </section>
+      {advanced}
       <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}>
         <Button onClick={() => onGo("publish")}>確認上架清單 →</Button>
       </ActionBar>

@@ -124,13 +124,14 @@ it("the progress read fails on its own: the head says so with 重試, the tabs k
   expect(getCampaignWorkspace).toHaveBeenCalledTimes(2);
 });
 
-it("step targets: the old 'performance' key opens perf; 'publish' opens the publish page on a draft", async () => {
+it("step targets: the old 'performance' key opens perf (a draft's empty perf keeps the old fold); 'publish' opens the publish page", async () => {
   vi.mocked(getCampaign).mockResolvedValue(detail({ status: "draft" }));
   vi.mocked(getCampaignWorkspace).mockResolvedValue(ws({ stage: { key: "plan", done: [] }, pending_count: 0, draft: { cap_set: false, budget_set: false, slots_ready: 0, slots_total: 3, launch_checked: 0, launch_total: 0 } }));
   renderAt();
   await screen.findByText("v10 總覽");
   go!("performance");
   expect(await screen.findByText("還沒上架，沒有成效")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "進階：舊版成效與檢討" })).toBeTruthy(); // the comparison plan stays reachable on a draft
   expect(screen.getByTestId("where").textContent).toBe("?tab=perf");
   fireEvent.click(screen.getByRole("button", { name: "確認上架清單 →" }));
   expect(await screen.findByText("發布")).toBeTruthy();
