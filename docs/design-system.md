@@ -280,7 +280,7 @@ correct. Cards that carry data use the full grid cell.
 
 ### 5.1 投放中心：清單頁 ＋ Campaign 工作區
 
-投放中心：首頁 ＋ 清單頁 ＋ Campaign 工作區（五個分頁：總覽／策略/投放結構/素材/成效，分頁狀態在查詢字串）。
+投放中心：首頁 ＋ 清單頁 ＋ Campaign 工作區（頂部六站進度＋六個分頁：總覽／策略／投放結構／素材／成效（`perf`；`?tab=performance` 與 `/detail` 轉過來）／變更與核對，分頁狀態在查詢字串；上架是 `…/publish/{list,platform,verify}` 三步網址，F30）。
 `/brands/:id/ads` 是首頁（v7 決定佇列＋月預算＋活動卡，見下方「F19 現況」，不是清單頁），
 `/brands/:id/ads/campaigns` 才是清單頁（Campaign 清單 + 建立 Campaign），`/brands/:id/ads/campaigns/:id` 是工作區。
 同樣的規則沿用自舊版的 staged workspace：
@@ -315,7 +315,7 @@ I03／I04，設定目標頁是 I05。清單頁、「理解如下」確認畫面�
 | 品牌總覽 (跨品牌) | one brand: its own layout; many brands: health, revenue and next step compared; brand entry and task entry separated |
 | 收件匣 | compact list + detail pane; 待處理／已處理 toggle; brand and severity legible at a glance |
 | 品牌智庫 | workspace split: vertical categories with counts, list in the middle, detail on the right; never two rows of horizontal tabs. 官方素材 browses thumbnails; 事實／規則／宣稱 are lists |
-| 投放中心 | 首頁（v7，F19）：`PageHeader`「今天需要你決定的事」＋件數；`1.9fr/1fr` 格線左 `DecisionQueue`（品牌層停損／變差佇列）右 `BudgetCard`（月可新增承諾大數字＋分段長條）；下方「活動」＋`CampaignCards`（`CampaignTile` 卡片，含既有平台活動）; 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）; 建立 Campaign 先過「理解如下」確認畫面（`StepIndicator`＋`FieldCard`）才花第二次模型錢; 工作區：五個 `PageTabs`（總覽／策略/投放結構/素材/成效），分頁狀態在查詢字串，策略頁按鈕真的會動 |
+| 投放中心 | 首頁（v7，F19）：`PageHeader`「今天需要你決定的事」＋件數；`1.9fr/1fr` 格線左 `DecisionQueue`（品牌層停損／變差佇列）右 `BudgetCard`（月可新增承諾大數字＋分段長條）；下方「活動」＋`CampaignCards`（`CampaignTile` 卡片，含既有平台活動）; 清單頁：`.table-surface` of Campaign（name, status pill, dates, objective, budget, spend so far）; 建立 Campaign 先過「理解如下」確認畫面（`StepIndicator`＋`FieldCard`）才花第二次模型錢; 工作區：`StageRail` 六站＋六個 `PageTabs`（總覽／策略／投放結構／素材／成效／變更與核對），分頁狀態在查詢字串；原型沒有的舊功能收在同頁「進階」，不刪（F30，`prototype-v10-ads-center.html`） |
 | 素材工作檯 | four screens, one IA: 入口（pack card grid／list, search ＋ status pills ＋ 最近使用 ＋ 快速開始） → 任務包（meta strip・摘要・完成條件・素材組 table） → 素材組 studio（tabs per 產物類型, versions as history, 生成設定） → 自由創作（AI 解析 free text → editable sets, two-click flow）. The pack rail and set rail are pack-local／set-local, not the OS sidebar, not a new shared kit component |
 | 產品清單 | comparison table; product name, 待確認 count and cost status emphasised |
 | 產品詳情 | product title + the same `PageTabs`; 再次調研 behind an explicit action |

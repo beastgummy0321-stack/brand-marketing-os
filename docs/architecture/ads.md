@@ -1527,4 +1527,35 @@ to. This section is the rule; the contract names lived in `.work/features/F29.md
   exit 「先不要，回投放中心」.
 - **Not now.** In-app image generation stays a reserved seat (not a refusal); LINE/email; platform writes.
 - **Known gaps after F29.** Past months in the month review show no 「當時給的建議／已採用」 (that history is not stored).
-  The publish page got only its three v10 settings blocks; the rest of the page is the old layout until the next UI batch.
+  The publish page got only its three v10 settings blocks (the full page followed in F30, §6.34).
+### 6.34 其餘 v10 畫面、AI 說明被擋下、上架批次與一條素材規則（ruled 2026-09-25；built in F30）
+Decided in the 2026-09-25 /dig and /carve; "default" entries were proposed and not objected to. The contract names lived
+in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/ads/prototype-v10-ads-center.html` plus
+`docs/design/ads/prototype-v10-ai-blocked.html`.
+- **AI text blocked by the fact check.** A model reply that fails parsing, the size cap or the review policy leaves the
+  round usable without an AI recommendation (`ready` with `rejected`); only a provider failure is `failed`. Direction and
+  copy unlock (copy starts from the platform's current copy), and 「再請 AI 看一次」 re-runs the same evidence once
+  more as a new round (never on a closed campaign). The fact check accepts 不足以／無法判斷／無法判定／未能 as negations;
+  the digit rule stays.
+- **New campaign.** Step 1 is a product + objective pick with dates and 「這個活動最多花」 — this campaign's spending cap,
+  not the brand's monthly allowance (user ruling). A composed goal never carries a model-read cap. The free-text create stays
+  in the step's 進階.
+- **One objective catalog across platforms** (user ruling): 購買、名單、流量、知名度 are selectable; 互動、App 推廣、來店
+  are reserved seats shown as 「尚未開放」. Each entry names its Meta and Google Ads counterpart. 加購物車 stays accepted
+  as a sales optimisation event, not an objective. Drafts can only hold catalog objectives.
+- **Launch batch** (default, user asked for the least-conflict option): only ads whose material is ready enter an approved
+  launch; the others stay in the plan as deferred and go out with a later version. An ad an approved version already
+  handed off never leaves the batch — invalid material blocks re-approval (F28 rule). Zero ready ads cannot be approved.
+  Reason: the rule sits in the shared core, and an automatic platform publish cannot create an ad without a creative.
+- **One material-readiness rule.** `change_control_launch.ready_material()` decides readiness for the launch batch, the
+  slots, the overview and 下一步; an approved workbench pack or a manual 就位 tick without a confirmed material binding is
+  progress, not ready. One freeze predicate (`material_frozen`) decides whether an ad can still receive material.
+- **Readback.** One call reads back every built item of the batch, matching by exact name under the expected parent;
+  a required field the platform read cannot see is confirmed per field by the user; a report can be withdrawn until verified.
+- **Connections.** One row per bound account from its own sync state (never a minimum across accounts); a never-read
+  account is not ok. Coverage is proven by pull ranges, not by spend rows, ends the day before a pull completed (account
+  timezone), and survives a re-sync or a failed pull.
+- **Workspace.** A six-station stage rail; the 14-day totals are null when any day in the window is unread. Features the
+  prototype does not show moved into same-page 「進階」 folds; nothing was deleted.
+- **Known gaps after F30.** The publish page's 「第 V 版有改」 chip is not shown: launch items carry no "changed in this
+  version" field. The workspace tab bar keeps the site-wide pill style (the prototype draws underline tabs).
