@@ -547,6 +547,9 @@ export interface DiagnosisSuggestion {
   currency: string | null;
   numbers: DiagnosisCheckableNumbers | null;
   compared_with: DiagnosisCheckableNumbers[];
+  /** F31-I06 (Contract K): already adopted as a brand rule, computed server-side with the
+   * same key the adopt route dedupes on — survives a reload. */
+  adopted: boolean;
 }
 
 export interface DiagnosisCheckableNumbers {

@@ -143,6 +143,9 @@ export function CampaignTable({ data }: { data: MetaSpendSummary }) {
           本月尚無活動資料
         </div>
       )}
+      <p className="border-t border-border px-5 py-2 text-xs text-muted-foreground">
+        剛配對的活動，下一次每日讀取後才會出現在這張表。
+      </p>
       <div className="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
         <span className="text-xs text-muted-foreground">
           {current + 1} / {pageCount} 頁
@@ -358,16 +361,22 @@ export function PerformanceWidget({
         <p className="mt-5 text-xs leading-relaxed text-muted-foreground">
           區間：營收 ÷ 全部花費 → 營收 ÷ 有追蹤花費。依花費顯示前 5 項。
         </p>
-        {!!(
-          noSpend.length ||
-          noRevenue.length ||
-          active?.untagged.ad_count
-        ) && (
+        {noSpend.length ||
+        noRevenue.length ||
+        active?.untagged.ad_count ? (
           <p className="mt-2 text-xs text-muted-foreground">
             零花費 {noSpend.length} 項 · 未追蹤營收 {noRevenue.length} 項 ·
             未標座標 {active?.untagged.ad_count ?? 0} 則（花費{" "}
             {number(active?.untagged.spend ?? 0)} {selected?.currency}）
           </p>
+        ) : (
+          // Full coverage: say so, so "all matched" never looks like "not computed".
+          // Needs at least one coordinate with spend, else there is nothing to cover.
+          !!active?.values.length && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              花費全部對到座標
+            </p>
+          )
         )}
       </div>
     </>
