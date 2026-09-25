@@ -63,17 +63,19 @@ def _economics_for(
     choice for this issue — the `basis` always names which product it used.
 
     一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：金額掛賣法，母產品自己沒有
-    `product_economics`。選到母產品時取它的第一個賣法（`list_products` 的既有順序，精靈先寫
-    「單品」所以第一個就是單品），`basis` 記下實際用的那個賣法的 id，不是母產品的 id。"""
+    `product_economics`。選到母產品時取它的第一個賣法——建立順序（`created_at, id`），精靈先寫
+    「單品」所以第一個就是單品；不能用 `list_products` 的名稱順序（F31-I01：「3 入組」會排在
+    「單品」前面）。`basis` 記下實際用的那個賣法的 id，不是母產品的 id。"""
     for product_id in product_ids or []:
         economics = bi_repo.get_product_economics(conn, brand_id, product_id)
         if breakeven_cpa(economics) is not None:
             return economics, product_id
         if economics is None:
-            children = [
-                p for p in bi_repo.list_products(conn, brand_id)
-                if p["parent_id"] == product_id
-            ]
+            children = sorted(
+                (p for p in bi_repo.list_products(conn, brand_id)
+                 if p["parent_id"] == product_id),
+                key=lambda p: (p["created_at"], p["id"]),
+            )
             if children:
                 sell_way_id = children[0]["id"]
                 sell_way_economics = bi_repo.get_product_economics(conn, brand_id, sell_way_id)
