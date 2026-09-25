@@ -134,13 +134,13 @@ def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decisi
     dimension_label = experiments.DIMENSIONS[dimension]
     values = [labels.get((dimension, ad[f"{dimension}_key"]), ad[f"{dimension}_key"])
               for ad in (a, b)]
-    firsts = [_first_delivery(rows, ad["id"], last_day) for ad in (a, b)]
+    first_a, first_b = (_first_delivery(rows, ad["id"], last_day) for ad in (a, b))
     base = {
         "pair_id": pair_id(a["id"], b["id"]), "group_id": group["id"],
         "group_name": group["name"], "dimension": dimension, "dimension_label": dimension_label,
         "rules": dict(RULES), "winner": None, "difference_pct": None, "decision": decision,
     }
-    if None in firsts:
+    if first_a is None or first_b is None:
         sides = [_side(ad, v, entities.get(ad["id"]), None) for ad, v in zip((a, b), values,
                                                                                 strict=True)]
         return {
@@ -150,7 +150,7 @@ def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decisi
                         "b_results": RULES["min_conversions_each"]},
             "reason": "兩則廣告都開始投放後，才開始比較。",
         }
-    start = max(firsts)
+    start = max(first_a, first_b)
     days = (last_day - start).days + 1
     core = experiments.evaluate(rows, [a["id"], b["id"]], start, last_day, RULES, "cpa")
     sides = [
