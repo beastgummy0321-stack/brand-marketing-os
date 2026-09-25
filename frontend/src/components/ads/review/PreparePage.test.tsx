@@ -367,3 +367,36 @@ describe("PreparePage（F29-I10）佇列讀取失敗與出口", () => {
     expect(exit.getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 });
+
+// F30-I02 (v10 ai-blocked `stepDir()`, Contract A): the fact check rejected the model text — no AI recommendation,
+// so the ladder's pick is labelled 照順序先試 (neutral), never 建議, and the step works as usual.
+describe("PreparePage（F30-I02）AI 說明被擋下：照順序先試", () => {
+  const rejected = { recommendations: [], limitations: [], rejected: { reason: "模型包含未允許的數字或因果斷言；請依原始證據人工判讀。" } };
+
+  it("ladder.step 0：只改文案預選、標「照順序先試」不標建議；原因不寫採用建議；存檔後導去改文案", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ result_json: rejected }));
+    vi.mocked(reviewApi.decideReview).mockResolvedValue(review({ status: "completed", decision: "completed", result_json: rejected }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 0, copy_changes: 0, image_changes: 0, lineage_from: null } }) })]));
+    renderAt(preparePath());
+    await screen.findByDisplayValue("照順序先試：保留圖片，測試新文案");
+    const chip = screen.getByText("照順序先試");
+    expect(chip.getAttribute("data-tone")).toBe("neutral");
+    expect(screen.queryByText("建議")).toBeNull();
+    expect(screen.getByRole("button", { name: /只改文案/ }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("button", { name: /開始改文案/ }));
+    await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_1", {
+      decision: "completed", reason: "照順序先試：保留圖片，測試新文案",
+    }));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/copy"));
+  });
+
+  it("ladder.step 1：換一張圖標「照順序先試」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ result_json: rejected }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({ ladder: { step: 1, copy_changes: 1, image_changes: 0, lineage_from: null } }) })]));
+    renderAt(preparePath());
+    await screen.findByDisplayValue("文案改過仍未改善，換圖");
+    expect(screen.getByRole("button", { name: /換一張圖/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: /換一張圖/ }).textContent).toContain("照順序先試");
+  });
+});

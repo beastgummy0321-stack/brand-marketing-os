@@ -25,6 +25,8 @@ const STEPS = [
   { label: "確認變更" }, { label: "到平台完成" }, { label: "核對結果" },
 ];
 const STEP_PURPOSE = "圖片不變，只換文字";
+// v10 ai-blocked `stepCopy()`: no AI version to start from, so the new version starts from the platform's current copy.
+const STEP_PURPOSE_NO_AI = "AI 沒給新版，從現在的文案直接改";
 const REASON_DEFAULT = "測試新的文案訴求";
 
 /** 小圖示佔位：跟 `PreparePage.tsx`／`ReviewEvidencePage.tsx` 的 `AdTile` 同樣理由自己刻一份
@@ -72,6 +74,21 @@ function adjustRecommendation(review: ReviewRound) {
   return review.result_json.recommendations?.find((r) => r.recommendation === "adjust") ?? null;
 }
 
+/** The draft may start as the current copy (no AI version): an untouched draft is not a change the user made
+ * (§1.7 self-check 3), so it is never saved as one. */
+const UNCHANGED = "新版跟現在的文案一樣，改過再加入。";
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i].trim());
+}
+
+/** The AI's new version: the adjust recommendation's `suggested_copy` when it carries any text. Without it the
+ * round has no AI version (e.g. the fact check rejected the text, Contract A) and the draft starts from the
+ * platform's current copy. */
+function aiCopyOf(review: ReviewRound): { title?: string; body?: string } | null {
+  const copy = adjustRecommendation(review)?.suggested_copy;
+  return copy && (copy.title || copy.body) ? copy : null;
+}
+
 /** 目前 → 新版的行差異：哪些「目前」的行（含標題）在新版裡消失了，畫成即時 `<mark>`
  * （prototype `diffOld`，逐行比對、忽略頭尾空白，標題只有真的改了才標）。 */
 function diffMarks(oldTitle: string | null, oldBody: string | null, newTitle: string, newBody: string): Set<string> {
@@ -97,8 +114,9 @@ function variantMarks(value: string, keptValues: string[]): Set<string> {
 /** 改文案頁（F23-I04，v7 原型 `copy()`）：六步流程第 3 步。`reviewId` 一定已經有一輪檢討——跟
  * `PreparePage` 用同一組合法狀態（`ready`／`completed`，feature Decisions「Review step from a
  * round」把兩者都列為可以往下走的狀態），其餘狀態轉回看證據頁。「新版」預設承接唯一標 `adjust`
- * 的建議附帶的 `suggested_copy`；沒有這則建議時新版留白，也不會替 `createChangeSet` 附上
- * `review_id`/`recommendation_id`（畫面上用一行字說明，不是靜靜省略）。保存失敗分兩種：
+ * 的建議附帶的 `suggested_copy`；沒有 AI 新版時（F30：AI 說明被擋下）新版從平台現在的文案開始、
+ * 目的行改說「AI 沒給新版，從現在的文案直接改」，沒改過不給存；沒有 adjust 建議就不替
+ * `createChangeSet` 附上 `review_id`/`recommendation_id`。保存失敗分兩種：
  * 4xx（`ChangeRequestRejected`，premise 變了／單則超過 30 天／建議不是 adjust）顯示後端訊息、
  * 保留草稿；其餘（沒收到回應）顯示「上次保存沒收到回應」banner，之後只能用 banner 自己的按鈕
  * 沿用同一份草稿（同一個 `operation_id`）重試——主動作列的「加入變更清單」在這段期間停用，
@@ -164,7 +182,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
 
   // 進頁預填新版：有 `?prefill=observed&set=` 就先讀那份清單裡偏離項目的 `evidence_json.observed`
   // （single／variants 都適用，screens「Copy page」）；沒有就照舊承接 adjust 建議的
-  // `suggested_copy`（只有單一模式才有這個建議形狀）留白 variants。只在剛讀到這一輪時跑一次。
+  // `suggested_copy`（只有單一模式才有這個建議形狀）；沒有 AI 新版就從平台現在的文案開始。只在剛讀到這一輪時跑一次。
   // 讀取失敗時不預填、不改用建議：等 `prefillRead` 重試成功才跑。
   useEffect(() => {
     if (!review || !validStep || initialized || prefillRead.status !== "ready") return;
@@ -175,13 +193,18 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
       const item = set?.items.find((it) => it.target_id === review.entity_id);
       observed = (item?.evidence_json.observed as CopyFields | undefined) ?? null;
     }
+    // Without an AI version (no adjust recommendation, or one without copy) the draft starts from the platform's
+    // current copy (`creative_snapshot.copy_fields`), not from blank.
+    // (variants mode has no AI version shape; with an AI version on the round it keeps starting blank, as before).
+    const aiCopy = aiCopyOf(review);
     if (mode === "variants") {
-      setVariantTitles(observed?.titles?.length ? observed.titles : [""]);
-      setVariantBodies(observed?.bodies?.length ? observed.bodies : [""]);
+      const current = aiCopy ? { titles: [], bodies: [] } : oldVariants(review);
+      setVariantTitles(observed?.titles?.length ? observed.titles : current.titles.length ? current.titles : [""]);
+      setVariantBodies(observed?.bodies?.length ? observed.bodies : current.bodies.length ? current.bodies : [""]);
     } else {
-      const rec = adjustRecommendation(review);
-      setTitle(observed?.title ?? rec?.suggested_copy?.title ?? "");
-      setBody(observed?.body ?? rec?.suggested_copy?.body ?? "");
+      const current = aiCopy ?? oldCopy(review);
+      setTitle(observed?.title ?? current.title ?? "");
+      setBody(observed?.body ?? current.body ?? "");
     }
     setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在資料剛讀完時跑一次，不跟著草稿內容重算。
@@ -220,11 +243,19 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
       if (cleanTitles.length === 0 && cleanBodies.length === 0) {
         setSaveError("請至少填寫一則標題或內文。"); return;
       }
+      const current = oldVariants(review);
+      if (sameList(cleanTitles, current.titles) && sameList(cleanBodies, current.bodies)) {
+        setSaveError(UNCHANGED); return;
+      }
       after = { titles: cleanTitles, bodies: cleanBodies };
     } else {
       const trimmedBody = body.trim();
       if (!trimmedBody) { setSaveError("請填寫新內文。"); return; }
       const trimmedTitle = title.trim();
+      const current = oldCopy(review);
+      if (trimmedBody === (current.body ?? "").trim() && trimmedTitle === (current.title ?? "").trim()) {
+        setSaveError(UNCHANGED); return;
+      }
       after = { body: trimmedBody, ...(trimmedTitle ? { title: trimmedTitle } : {}) };
     }
     if (!trimmedReason) { setSaveError("請填寫原因。"); return; }
@@ -275,6 +306,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   const marks = diffMarks(oldTitle, oldBody, title, body);
   const { titles: oldTitles, bodies: oldBodies } = oldVariants(review);
   const rec = adjustRecommendation(review);
+  const noAiCopy = aiCopyOf(review) === null;
   const moreVersionsHref = `/brands/${brandId}/ads/campaigns/${campaignId}`
     + `?tab=assets&material_new=1&review=${encodeURIComponent(review.id)}`
     + (rec ? `&recommendation=${encodeURIComponent(rec.id)}` : "");
@@ -300,7 +332,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
         ]}
         current={2}
         title="改文案"
-        purpose={STEP_PURPOSE}
+        purpose={noAiCopy ? STEP_PURPOSE_NO_AI : STEP_PURPOSE}
         context={triageItem ? (
           <>
             <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
@@ -414,9 +446,6 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
                   </div>
                 );
               })}
-              {!rec && (
-                <p className="text-xs text-muted-foreground">沒有可承接的建議，這份清單不會連回這輪檢討。</p>
-              )}
             </div>
           ) : (
             <>
@@ -425,9 +454,6 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
                 onChange={(e) => setTitle(e.target.value)}
               />
               <Textarea aria-label="新內文" rows={8} value={body} disabled={busy} onChange={(e) => setBody(e.target.value)} />
-              {!rec && (
-                <p className="mt-2 text-xs text-muted-foreground">沒有可承接的建議，這份清單不會連回這輪檢討。</p>
-              )}
             </>
           )}
         </div>

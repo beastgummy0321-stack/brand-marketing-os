@@ -14,7 +14,7 @@ import { ReviewEvidencePage } from "./ReviewEvidencePage";
 
 vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
   ...(await importOriginal<typeof reviewApi>()),
-  getReview: vi.fn(), createReview: vi.fn(), decideReview: vi.fn(),
+  getReview: vi.fn(), createReview: vi.fn(), decideReview: vi.fn(), retryReview: vi.fn(),
 }));
 vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
   ...(await importOriginal<typeof triageApi>()),
@@ -405,5 +405,79 @@ describe("ReviewEvidencePage（F29-I14）變貴的標題與上限", () => {
     expect(screen.queryByText(/變差|變貴了/)).toBeNull();
     // No break-even known → no money tag at all (never a guess).
     expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+  });
+});
+
+// F30-I02 (v10 ai-blocked `aiBlockedCard()`, Contract A): the fact check rejected the model text — the round is
+// `ready` with no recommendation; the numbers show as usual and the AI card is the dashed 「沒採用」 card with one retry.
+describe("ReviewEvidencePage（F30-I02）AI 說明被擋下與再請 AI 看一次", () => {
+  const rejectedRound = (overrides: Partial<ReviewRound> = {}) => review({
+    result_json: { recommendations: [], limitations: ["歸因不可用"], rejected: { reason: "模型包含未允許的數字或因果斷言；請依原始證據人工判讀。" } },
+    ...overrides,
+  });
+
+  it("rejected：數字照常，AI 卡變成「這次的說明沒採用」＋再請 AI 看一次，選方向照樣可以往下", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(rejectedRound());
+    renderAt(roundPath());
+    expect(await screen.findByText("✦ AI 這次的說明沒採用")).toBeTruthy();
+    // Prototype `adIdent()`: the ad's grade and name head the page in their own card (no AI column).
+    expect(screen.getByText("太貴").getAttribute("data-grade")).toBe("over");
+    expect(screen.getByText("這則廣告")).toBeTruthy();
+    expect(screen.getByText("3,000")).toBeTruthy();
+    expect(screen.getByText("商城訂單")).toBeTruthy();
+    // No stand-in AI text: neither the 「沒有給出建議」 fallback nor the limitations list.
+    expect(screen.queryByText("AI 沒有給出建議")).toBeNull();
+    expect(screen.queryByText("歸因不可用")).toBeNull();
+    expect(screen.queryByText("✦ AI 建議")).toBeNull();
+    expect(screen.getByRole("button", { name: "再請 AI 看一次" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /選擇處理方向/ }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/prepare");
+  });
+
+  it("rejected：再請 AI 看一次 → 同一份證據重送，轉到新一輪的網址，新一輪顯示整理中", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockImplementation(async (_b, _c, id) => (id === "arv_2" ? review({ id: "arv_2", status: "queued", result_json: {} }) : rejectedRound()));
+    vi.mocked(reviewApi.retryReview).mockResolvedValue({ review: review({ id: "arv_2", status: "queued", result_json: {} }), monitor: null });
+    renderAt(roundPath());
+    await user.click(await screen.findByRole("button", { name: "再請 AI 看一次" }));
+    expect(reviewApi.retryReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_1");
+    expect(await screen.findByText("AI 正在整理證據")).toBeTruthy();
+    expect(reviewApi.getReview).toHaveBeenLastCalledWith("brd_1", "cmp_1", "arv_2");
+  });
+
+  it("重送被拒（409）：留在這一頁，說出後端的原因，數字與選方向都還在", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockResolvedValue(rejectedRound());
+    vi.mocked(reviewApi.retryReview).mockRejectedValue(new Error("只有尚未決定、失敗或 AI 說明被擋下的檢討可以再請 AI 看一次。"));
+    renderAt(roundPath());
+    await user.click(await screen.findByRole("button", { name: "再請 AI 看一次" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("只有尚未決定、失敗或 AI 說明被擋下的檢討可以再請 AI 看一次。");
+    expect(screen.getByText("這則廣告")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /選擇處理方向/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "再請 AI 看一次" })).toBeTruthy();
+  });
+
+  it("failed：訊息旁有再請 AI 看一次，按下轉到新一輪", async () => {
+    const user = userEvent.setup();
+    vi.mocked(reviewApi.getReview).mockImplementation(async (_b, _c, id) => (id === "arv_2" ? review({ id: "arv_2", status: "running", result_json: {} }) : review({ status: "failed", error: "模型未完成；保留已知證據，不自動重送。", result_json: {} })));
+    vi.mocked(reviewApi.retryReview).mockResolvedValue({ review: review({ id: "arv_2", status: "running", result_json: {} }), monitor: null });
+    renderAt(roundPath());
+    expect(await screen.findByText("本次未完成")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "再請 AI 看一次" }));
+    expect(await screen.findByText("AI 正在整理證據")).toBeTruthy();
+    expect(reviewApi.retryReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("unknown（結果未確認）與已決定的一輪都不給重送", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "unknown", error: null, result_json: {} }));
+    renderAt(roundPath());
+    expect(await screen.findByText("本次未完成")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "再請 AI 看一次" })).toBeNull();
+  });
+
+  it("已決定（completed）的 rejected 一輪：還是說沒採用，但不給重送", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(rejectedRound({ status: "completed", decision: "completed" }));
+    renderAt(roundPath());
+    expect(await screen.findByText("✦ AI 這次的說明沒採用")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "再請 AI 看一次" })).toBeNull();
   });
 });
