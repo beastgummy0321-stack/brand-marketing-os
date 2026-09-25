@@ -130,7 +130,7 @@ describe("A/B 關掉輸家（F29-I14）確認", () => {
     expect(screen.getByText("核准後才到平台操作")).toBeTruthy();
     expect([...document.querySelectorAll("[data-slot=flow-header] ol li")].map((li) => li.textContent)).toEqual(["1確認", "2到平台完成", "3核對結果"]);
     expect(await screen.findByText("關掉 A、留下 B")).toBeTruthy();
-    expect(screen.getByText("日常商品推廣・轉換")).toBeTruthy();
+    expect(await screen.findByText("日常商品推廣・轉換")).toBeTruthy();
     expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
     expect(screen.getByText("✓ 關掉不會刪除，想反悔隨時可以再開")).toBeTruthy();
     expect(screen.getByText("B 每筆便宜 20%，兩則都跑滿 7 天、各賣到 10 筆以上")).toBeTruthy();
@@ -177,7 +177,7 @@ describe("A/B 關掉輸家（F29-I14）確認", () => {
     expect(screen.queryByRole("button", { name: /核准關掉/ })).toBeNull();
     expect(screen.queryByRole("link", { name: /先不要/ })).toBeNull();
     // Still the A/B card, not a plain stop-loss.
-    expect(screen.getByText("關掉 A、留下 B")).toBeTruthy();
+    expect(await screen.findByText("關掉 A、留下 B")).toBeTruthy();
   });
 
   it("已拒絕的清單走到核對頁：導回確認頁", async () => {
@@ -197,7 +197,7 @@ describe("A/B 關掉輸家（F29-I14）到平台完成與核對", () => {
     expect([...document.querySelectorAll("[data-slot=flow-header] ol li")].map((li) => li.textContent?.replace("已完成", ""))).toEqual(["確認", "2到平台完成", "3核對結果"]);
     expect(screen.getByText(`打開平台上的「${LOSER}」`)).toBeTruthy();
     expect(screen.getByText("把這則廣告的開關關掉")).toBeTruthy();
-    expect(screen.getByText("日常商品推廣・轉換")).toBeTruthy();
+    expect(await screen.findByText("日常商品推廣・轉換")).toBeTruthy();
   });
 
   it("核對相符：寫進筆記本的那句（已寫進）", async () => {

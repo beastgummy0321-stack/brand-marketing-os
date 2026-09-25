@@ -33,10 +33,10 @@ const STEP_PURPOSE = "先看數字，再決定";
 /** F29-I14 (v10 `stepEv()`): the headline names the grade move against the cap (Contract A `grade_move`, the only
  * thing that raises a 變貴 row); without one it stays neutral — no guess from the trend. The purpose names whose cap
  * the ad is measured against (the campaign's own, 「跟<活動>的上限比」). */
-export function worseHeadline(move: GradeMove | null | undefined): string {
+function worseHeadline(move: GradeMove | null | undefined): string {
   return move ? `這則從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "看看這則廣告的數字";
 }
-export function worsePurpose(campaignName: string | null | undefined): string {
+function worsePurpose(campaignName: string | null | undefined): string {
   const short = campaignName?.split("・")[0]?.trim();
   return short ? `跟${short}的上限比，${STEP_PURPOSE}` : STEP_PURPOSE;
 }

@@ -132,7 +132,9 @@ describe("CleanupProposal（F28-I11）", () => {
     // Capacity dots: 4 kept before the line, 3 closed after it.
     expect(screen.getByRole("img", { name: "留 4 則、關 3 則" })).toBeTruthy();
     // No 「剩下的都划算」 banner while nothing stays over capacity.
-    expect(screen.queryByText(/剩下的/)).toBeNull();
+    expect(screen.queryByText(/剩下的都划算/)).toBeNull();
+    // The grade legend (grade rules + money rule) sits under the ruler, as in the prototype.
+    expect(document.querySelector("[data-slot=grade-rules]")).toBeTruthy();
     // The ruler badges exactly the three closing ads.
     expect(screen.getAllByText("關", { selector: "em" })).toHaveLength(3);
     expect(screen.getByRole("link", { name: "下一步：確認 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1?step=confirm");

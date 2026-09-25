@@ -4,7 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { useApiRead } from "@/lib/useApiRead";
 import { getTriage, type QueueCleanup, type QueueCleanupAd, type QueueItem, type TriageGrade, type TriageTargetView } from "@/lib/adsTriageApi";
 import {
-  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeTermChip, MoneyTag, PickRow, ReadFailed, ResultHero,
+  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeRules, GradeTermChip, MoneyTag, PickRow, ReadFailed, ResultHero,
   TargetRuler, formatAmount, type FlowStep, type RulerAd, type RulerCap,
 } from "../patterns";
 import { proposeBudgetPath } from "./changeFlow";
@@ -158,6 +158,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
             </div>
           </div>
           <TargetRuler ads={rulerAds} cap={cap} breakEven={breakEven} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
+          <GradeRules breakEven={breakEven} />
         </section>
 
         {overCapacity && (
@@ -181,8 +182,9 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
         )}
 
         {cleanup.ads.length > 0 && (
-          <details className="surface" open={advOpen} onToggle={(e) => setAdvOpen(e.currentTarget.open)}>
-            <summary className="flex cursor-pointer items-center gap-2 px-[22px] py-3.5 text-sm font-medium">
+          <details className="group surface" open={advOpen} onToggle={(e) => setAdvOpen(e.currentTarget.open)}>
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-[22px] py-3.5 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              <span aria-hidden="true" className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
               進階：自己挑要關哪幾則
               {pick.changed && <Chip tone="accent">你留下了 {pick.declined.length} 則</Chip>}
             </summary>
