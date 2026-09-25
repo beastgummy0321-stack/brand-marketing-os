@@ -1,16 +1,16 @@
 # Drill 5 交接：待裁決的 10 題（2026-09-23）
 
 ## Handoff (2026-09-25): start here in the next session
-- **State:** F28 is closed and merged to master (`56784a45`), **not pushed** (the user pushes manually). There is no open feature and the queue is empty. F28 fixed R1, R2, R3 and R6, and built the five v9 screens. The rules are in `docs/architecture/ads.md` §6.32.
-- **Next step (updated 2026-09-25):** F29 (items 4–10) is built and merged into `feature/ads-learning-loop`, integration green; closing waits on the user's one side-by-side review. After that: the remaining v9/v10 screens (new-campaign wizard, assets, full publish page, connections, workspace rail/tabs).
-- **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). They map to deferred items 4–5.
+- **State:** F28 and F29 are closed and merged to master (F29 = `b00722e8`), **not pushed** (the user pushes manually). No open feature; the queue is empty. Rules: `docs/architecture/ads.md` §6.32 (F28) and §6.33 (F29).
+- **Next step:** plan the next UI batch (below) from the approved v9/v10 prototypes, and decide original item 4 (the worse flow has no manual exit when the fact check blocks it — not covered by F29).
+- **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). Items 5, 7 and 9 were built in F29; item 6 and 4 remain.
 - **Confirmed constraints to keep:**
   - The UI is graphics-first with linear flows and no text walls (§1.7).
   - Every UI change is prototyped first and validated with a cold novice persona on screenshots before the user sees it.
   - One cap per campaign, cost per result only; the screen word is 上限. Grades are 划算/偏貴/太貴/沒賣出 (白花 renamed in v10, ads.md §6.33).
   - No platform writes: reversing that needs its own product ruling against ads.md §6.4.
   - Never ask the user to run real Meta ads.
-- **Next UI batch (after the /dig):** the remaining v9 screens: the new-campaign wizard, assets, publish list, month review, connections, and the workspace lifecycle rail and tabs.
+- **Next UI batch:** the remaining v9/v10 screens: the new-campaign wizard, assets (incl. the v10 素材需求 card), the full publish page, connections, and the workspace lifecycle rail and tabs. The month review was rebuilt in F29.
 - **Environment:** start with `啟動行銷系統.bat`. It now brings Docker and Supabase up and clears Docker's stale socket folders itself (`scripts/ensure_database.ps1`). Test login: see CLAUDE.md.
 
 三人實機演練（阿明／Vivian／小杰）＋原型落地複查後的未決事項。原始逐站紀錄在
