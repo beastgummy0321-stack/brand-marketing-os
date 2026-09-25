@@ -214,8 +214,18 @@ describe("MonthReviewPage — current month", () => {
     expect(screen.getByText(`比 ${PREV} 月同期（只當參考，不影響判斷）：購買多 40 筆・每筆便宜 37%`)).toBeTruthy();
 
     await user.click(within(card).getByRole("button", { name: "先不要" }));
-    expect(screen.queryByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" })).toBeNull();
-    expect(mockDismiss).not.toHaveBeenCalled();
+    expect(mockDismiss).toHaveBeenCalledWith("brd_bughunt", THIS, "cleanup:cmp_daily");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" })).toBeNull());
+  });
+
+  it("a failed 先不要 on a rejected card keeps the card and says so", async () => {
+    const user = userEvent.setup();
+    mockDismiss.mockRejectedValueOnce(new Error("沒有存到"));
+    renderPage();
+    const card = await screen.findByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" });
+    await user.click(within(card).getByRole("button", { name: "先不要" }));
+    expect(await within(card).findByText("沒有存到")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "關掉：提問式貼文・早晨第一口是什麼？" })).toBeTruthy();
   });
 
   it("shows no rejected card or footnote line when every remembered no stayed the same", async () => {

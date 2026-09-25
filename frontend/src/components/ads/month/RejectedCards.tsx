@@ -1,17 +1,32 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import type { MonthRejectedCard } from "@/lib/adsMonthApi";
+import { dismissSuggestion, type MonthRejectedCard } from "@/lib/adsMonthApi";
 import { CampaignChip, GRADE_LABEL, GradeTermChip, type ObjectiveKey } from "../patterns";
 import { cleanupHref, mmdd } from "./monthCsv";
 
 /** F29-I15: a cleanup the user rejected comes back only when one of its ads now grades worse than when the user
  * said no (Feature F29 Contract B/C `rejected.worse`, prototype v10 `rejectedSplit()` + worse cards). The rest only
- * count in the footnote. 看提議 opens that campaign's cleanup proposal, where the worsened ad is back in the list. */
+ * count in the footnote. 看提議 opens that campaign's cleanup proposal, where the worsened ad is back in the list;
+ * 先不要 is the month's `cleanup:<campaign_id>` dismissal (the same store as the cleanup suggestion), so the card stays
+ * gone for this month. */
 
-export function RejectedCard({ brandId, card, objective, onSkip }: {
-  brandId: string; card: MonthRejectedCard; objective: ObjectiveKey; onSkip: () => void;
+export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
+  brandId: string; month: string; card: MonthRejectedCard; objective: ObjectiveKey; onDismissed: () => void;
 }) {
   const many = card.ads.length > 1;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const skip = () => {
+    setBusy(true);
+    setError("");
+    dismissSuggestion(brandId, month, `cleanup:${card.campaign_id}`)
+      .then(onDismissed)
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(err instanceof Error ? err.message : "先不要沒有存到，請稍後再試。");
+      });
+  };
   return (
     <section aria-label={card.title} data-part="rejected-worse" className="surface flex flex-col !border-danger/35 px-[22px] py-5">
       <CampaignChip objective={objective} name={card.campaign_name} />
@@ -30,9 +45,10 @@ export function RejectedCard({ brandId, card, objective, onSkip }: {
       <div className="mt-0.5 mb-3.5 text-xs text-muted-foreground">
         {mmdd(card.at)} 拒絕{card.reason ? `・原因：${card.reason}` : ""}
       </div>
+      {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" asChild><Link to={cleanupHref(brandId, card.campaign_id)}>看提議（核准或拒絕）→</Link></Button>
-        <Button size="sm" variant="ghost" onClick={onSkip}>先不要</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={skip}>先不要</Button>
       </div>
     </section>
   );

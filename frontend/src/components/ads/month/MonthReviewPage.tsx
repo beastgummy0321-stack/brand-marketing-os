@@ -145,13 +145,14 @@ function objectiveOf(summary: MonthSummary, campaignId: string): ObjectiveKey {
   return summary.campaigns.find((c) => c.campaign_id === campaignId)?.campaign_objective ?? "other";
 }
 
-/** The next-month suggestions and the worsened rejected cleanups (current month only). 先不要 hides a card: a
- * suggestion is dismissed for the month on the server; a rejected card only for this visit (it has no dismissal). */
+/** The next-month suggestions and the worsened rejected cleanups (current month only). 先不要 dismisses a card for
+ * the month on the server; a rejected card's dismissal is its campaign's `cleanup:<id>` key, which also retires that
+ * campaign's cleanup suggestion for the month (one store), so both leave the screen together. */
 function Suggestions({ brandId, month, summary }: { brandId: string; month: string; summary: MonthSummary }) {
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const hide = (key: string) => setHidden((prev) => new Set(prev).add(key));
   const suggestions = summary.suggestions.filter((s) => !hidden.has(`s:${s.key}`));
-  const worse = summary.rejected.worse.filter((r) => !hidden.has(`r:${r.change_set_id}`));
+  const worse = summary.rejected.worse.filter((r) => !hidden.has(`s:cleanup:${r.campaign_id}`));
   return (
     <section aria-label={`${monthNum(shiftMonth(month, 1))} 月建議`}>
       <h2 className="mt-2 mb-2.5 text-[15px] font-semibold">{monthNum(shiftMonth(month, 1))} 月建議</h2>
@@ -164,8 +165,8 @@ function Suggestions({ brandId, month, summary }: { brandId: string; month: stri
             ))}
             {worse.map((card) => (
               <RejectedCard
-                key={card.change_set_id} brandId={brandId} card={card}
-                objective={objectiveOf(summary, card.campaign_id)} onSkip={() => hide(`r:${card.change_set_id}`)}
+                key={card.change_set_id} brandId={brandId} month={month} card={card}
+                objective={objectiveOf(summary, card.campaign_id)} onDismissed={() => hide(`s:cleanup:${card.campaign_id}`)}
               />
             ))}
           </div>

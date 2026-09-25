@@ -310,11 +310,27 @@ def _grades_view(conn, org_id, brand_id, start, end) -> dict:
     }
 
 
-def _rejected_view(conn, org_id, brand_id, items) -> dict:
+def _dismissed_for(conn, org_id, brand_id, campaigns_by_id: dict, campaign_id: str,
+                   month: str) -> list:
+    """The month's dismissed keys of any campaign of this brand: `campaigns_by_id` holds the
+    imported ones already; a system-built campaign's row is read here (dismissal is stored the
+    same way for both, `dismiss_suggestion`)."""
+    campaign = campaigns_by_id.get(campaign_id)
+    if campaign is None:
+        campaign = conn.execute(
+            "SELECT context_json FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org_id, brand_id, campaign_id),
+        ).fetchone()
+    return _dismissed_keys(dict(campaign), month) if campaign is not None else []
+
+
+def _rejected_view(conn, org_id, brand_id, items, campaigns_by_id: dict, month: str) -> dict:
     """Contract C `rejected`: every remembered decision (Contract B, newest per ad) grouped back by
     the change set it came from. A set with at least one still-active ad whose grade now ranks
     worse than when the user said no is listed in `worse` (those ads only); every other set with a
-    still-active remembered ad only counts in `same_count` -- it is not raised again."""
+    still-active remembered ad only counts in `same_count` -- it is not raised again. F29-I15: a
+    worse set whose campaign's `cleanup:<campaign_id>` is dismissed for this month (先不要 on the
+    card, the same month dismissal the cleanup suggestion uses) is not listed either."""
     memory = triage.decision_memory(conn, org_id, brand_id)
     items_by_entity = {item["entity_id"]: item for item in items}
     by_set = {}
@@ -333,6 +349,9 @@ def _rejected_view(conn, org_id, brand_id, items) -> dict:
         entry = group["entry"]
         if not group["ads"]:
             same_count += 1
+            continue
+        if f"cleanup:{entry['campaign_id']}" in _dismissed_for(
+                conn, org_id, brand_id, campaigns_by_id, entry["campaign_id"], month):
             continue
         campaign = items_by_entity[group["ads"][0]["entity_id"]]
         worse.append({
@@ -396,7 +415,9 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         "suggestions": suggestions,
         "days_covered": days_covered, "days_elapsed": days_elapsed,
         "grades": _grades_view(conn, org_id, brand_id, start, end),
-        "rejected": _rejected_view(conn, org_id, brand_id, brand_items),
+        "rejected": _rejected_view(
+            conn, org_id, brand_id, brand_items, campaigns_by_id, month,
+        ),
     }
 
 
