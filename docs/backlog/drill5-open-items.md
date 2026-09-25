@@ -1,5 +1,18 @@
 # Drill 5 交接：待裁決的 10 題（2026-09-23）
 
+## Handoff (2026-09-25): start here in the next session
+- **State:** F28 is closed and merged to master (`56784a45`), **not pushed** (the user pushes manually). There is no open feature and the queue is empty. F28 fixed R1, R2, R3 and R6, and built the five v9 screens. The rules are in `docs/architecture/ads.md` §6.32.
+- **Next step:** `/dig` with the user on the list **"Deferred to a later /dig" items 4–10** below. That list is the ranking shown to the user, not the original "待裁決" numbering. The recommended first topic is **4: learning and A/B are closed on real data** (R7), because it decides whether the system improves itself. Also bring up the two items in **"Deferred from F28 planning"** (白花 learning; 變貴 defined by the cap) and the four in **"Left open after F28"**.
+- **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). They map to deferred items 4–5.
+- **Confirmed constraints to keep:**
+  - The UI is graphics-first with linear flows and no text walls (§1.7).
+  - Every UI change is prototyped first and validated with a cold novice persona on screenshots before the user sees it.
+  - One cap per campaign, cost per result only; the screen word is 上限. Grades are 划算/偏貴/太貴/白花.
+  - No platform writes: reversing that needs its own product ruling against ads.md §6.4.
+  - Never ask the user to run real Meta ads.
+- **Next UI batch (after the /dig):** the remaining v9 screens: the new-campaign wizard, assets, publish list, month review, connections, and the workspace lifecycle rail and tabs.
+- **Environment:** start with `啟動行銷系統.bat`. It now brings Docker and Supabase up and clears Docker's stale socket folders itself (`scripts/ensure_database.ps1`). Test login: see CLAUDE.md.
+
 三人實機演練（阿明／Vivian／小杰）＋原型落地複查後的未決事項。原始逐站紀錄在
 `.scratch/drill5/{aming,vivian,jay}/run.md` 與 `.scratch/drill5/synthesis.md`（拋棄式，重灌會消失）。
 
@@ -82,7 +95,7 @@ The user rejected the text-heavy UI, including the prototypes, and wants a graph
 - Re-approve keeps the items already verified, and reverting needs one confirm.
 - With no product cost, the screen also links to entering the product cost.
 
-## Ads-centre entry page rethink (2026-09-23, in progress)
+## Ads-centre entry page rethink (2026-09-23, done in F28)
 
 The user says the v9 home is a to-do centre, not an operations view, and still feels like a cockpit. Question to answer first: why does the user come here, and what must they know on arrival? Three concepts are being drawn on a design canvas and checked by a cold novice persona before the user reviews them.
 - Canvas: https://claude.ai/artifact/4zuu6yz76DTXt8arpSb3Dh. It holds three boards: A shows the month's pace, B shows where the money went, and C is a morning brief (recommended).
