@@ -59,7 +59,7 @@ function campaignTriage(daily: number | null, items: TriageItem[] = []): Campaig
   return {
     window_days: 14, items,
     closed: { total: 0, paused: 0, archived: 0, other: 0, items: [], truncated: false },
-    data: { sync: { state: "fresh" }, coverage: null, missing_days: [], capacity: { daily_budget: daily, currency: "TWD", target: 450, can_support: 4, active_ads: 7 } },
+    data: { sync: { state: "fresh" }, coverage: null, missing_days: [], status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null }, capacity: { daily_budget: daily, currency: "TWD", target: 450, can_support: 4, active_ads: 7 } },
   } as unknown as CampaignTriage;
 }
 

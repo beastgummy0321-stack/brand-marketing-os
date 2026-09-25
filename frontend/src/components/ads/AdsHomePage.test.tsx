@@ -35,7 +35,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own" }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-01", cumulative: 900 }, { day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -52,7 +52,8 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
     ],
     campaigns: [
       { campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767, purchases: 121,
-        cost_per_purchase: 130.31, cap: { value: 450, basis: "own" }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok", draft: null },
+        cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
+        data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null },
     ],
     sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: "2026-09-23T04:40:00Z" },
     ...overrides,

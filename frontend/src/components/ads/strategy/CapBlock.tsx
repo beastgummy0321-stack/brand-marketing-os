@@ -51,6 +51,21 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     return () => { cancelled = true; };
   }, [brandId, c.id, isDraft, cap.revision, cap.value, triageReload]);
 
+  // 暫用打平: the 打平線 line subtracts 成本含運 from the price. The cost lives on the target read (`GET .../target`,
+  // F29 Contract D), not on the campaign's cap view, so it is read only in that state. Until it arrives, or when the
+  // read fails, the line keeps the price and ROAS without the subtraction — never a made-up cost.
+  const showsBreakEven = !editing && cap.basis === "break_even";
+  const [cost, setCost] = useState<number | null>(null);
+  useEffect(() => {
+    setCost(null);
+    if (!showsBreakEven) return;
+    let cancelled = false;
+    getTarget(brandId, c.id)
+      .then((t) => { if (!cancelled) setCost(t.cost); })
+      .catch(() => { /* the line stays without the subtraction */ });
+    return () => { cancelled = true; };
+  }, [brandId, c.id, showsBreakEven, cap.revision, cap.value]);
+
   const trimmed = value.trim();
   const typed = /^[1-9]\d*$/.test(trimmed) ? Number(trimmed) : null;
   const breakEven = cap.break_even;
@@ -133,7 +148,10 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
       <div>
         <div className="text-sm text-muted-foreground">上限・每賣一筆最多花</div>
         <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip tone="warn">暫用打平</Chip></div>
-        {price !== null && <div className="numeric mt-1 text-xs text-muted-foreground">售價 {fmt(price)}・ROAS 參考 {roas(price, v)}</div>}
+        <div className="numeric mt-1 text-xs text-muted-foreground">
+          {`打平線 ${fmt(v)}`}
+          {price !== null && (cost !== null ? `：售價 ${fmt(price)} − 成本含運 ${fmt(cost)}・ROAS 參考 ${roas(price, v)}` : `・售價 ${fmt(price)}・ROAS 參考 ${roas(price, v)}`)}
+        </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={saving} onClick={() => saveOwn(v)}>就用 {fmt(v)}</Button>
           <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditOpen(true)}>設定自己的上限</Button>

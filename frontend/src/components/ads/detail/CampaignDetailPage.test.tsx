@@ -72,7 +72,10 @@ const EMPTY_CLOSED: TriageClosedBlock = { paused: 0, archived: 0, other: 0, tota
 function triage(items: TriageItem[], extra: Partial<CampaignTriage> = {}): CampaignTriage {
   return {
     window_days: 28, items, closed: EMPTY_CLOSED,
-    data: { sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [] },
+    data: {
+      sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [],
+      status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null },
+    },
     ...extra,
   };
 }
@@ -191,7 +194,10 @@ describe("CampaignDetailPage (F28-I10, v9 tabPerf)", () => {
       ad("m3", "送禮提案・長輩也會用的保溫杯", "insufficient", 180, 1),
     ];
     vi.mocked(getTriage).mockResolvedValue(triage(items, {
-      data: { sync: { state: "ok", error: null, last_success_at: null }, coverage: null, missing_days: ["2026-09-18", "2026-09-17"] },
+      data: {
+        sync: { state: "ok", error: null, last_success_at: null }, coverage: null, missing_days: ["2026-09-18", "2026-09-17"],
+        status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。", missing_days: ["2026-09-18", "2026-09-17"], last_success_at: null },
+      },
     }));
     renderPage();
 

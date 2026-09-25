@@ -18,7 +18,8 @@ const LONG = "中秋限定活動・送禮受眾 2026｜Advantage+ 購物活動 -
 function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
   return {
     campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767.4, purchases: 121,
-    cost_per_purchase: 130.31, cap: { value: 450, basis: "own" }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok", draft: null,
+    cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
+    data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null,
     ...overrides,
   };
 }
@@ -27,7 +28,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own" }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -64,7 +65,7 @@ describe("MonthMoney", () => {
 
   it("unknowns: earn names what is missing, no purchase yet, no comparison, break-even cap wording", () => {
     const h = home({
-      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even" }, earn: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
+      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
@@ -77,7 +78,7 @@ describe("MonthMoney", () => {
   });
 
   it("no shared cap: says the campaigns differ, or that none has a cap", () => {
-    const differ = home({ money: { ...home().money!, cap: null }, campaigns: [campaign(), campaign({ campaign_id: "c2", cap: { value: 300, basis: "own" } })] });
+    const differ = home({ money: { ...home().money!, cap: null }, campaigns: [campaign(), campaign({ campaign_id: "c2", cap: { value: 300, basis: "own", break_even: 520 } })] });
     const { unmount } = wrap(<MonthMoney brandId="b" state={ready(differ)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("各活動上限不同")).toBeTruthy();
     unmount();
@@ -138,7 +139,7 @@ describe("CampaignRows", () => {
   });
 
   it("no purchase yet and no spend rows say so, not 0", () => {
-    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ month_spend: null, purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even" } })] }))} onRetry={vi.fn()} />);
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ month_spend: null, purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 } })] }))} onRetry={vi.fn()} />);
     expect(screen.getByText("沒有花費紀錄")).toBeTruthy();
     expect(screen.getByText("還沒有購買")).toBeTruthy();
     expect(screen.queryByText("0 元")).toBeNull();
