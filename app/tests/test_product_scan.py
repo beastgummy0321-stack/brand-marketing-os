@@ -18,6 +18,7 @@ import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.brand_web import product_ai_calls as product_ai
+from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.llm.providers import (
@@ -268,6 +269,39 @@ class ProductRescanTest(_BaseProductScanTest):
         economics = bi_repo.get_product_economics(web.conn, self.brand["id"], product_id)
         self.assertEqual(economics["status"], "confirmed")
         self.assertEqual(economics["confirmed_by"], DEV_USER_ID)
+
+    def test_apply_failure_after_ai_success_reads_failed_and_notifies(self):
+        """F31-I02 (Contract J): the AI call succeeded but applying its facts raised. The
+        handler now notifies and re-raises, so the job ends `failed`. Red on master: the
+        apply ran outside the guard, no failure notice was sent and the status read `done`
+        from the succeeded `llm_task` row."""
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        with mock.patch("app.brand_web.routes_product_helpers._apply_product_scan_result",
+                        side_effect=RuntimeError("模擬落地失敗")):
+            product_id, state = self._post()
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["error"], background_module.JOB_FAILED_MESSAGE)
+        notices = [r["message"] for r in core_interrupts.list_open(web.conn, brand_id=self.brand["id"])
+                   if r["category"] == "product_research_done"]
+        self.assertTrue(any("調研失敗" in m for m in notices), notices)
+        self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
+
+    def test_rescan_queued_behind_an_older_success_reads_running(self):
+        """F31-I02 (Contract J): the newest job decides first. Red on master: the older
+        succeeded `llm_task` row won and the status read `done` while the rescan waited."""
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product_id, state = self._post()
+        self.assertEqual(state["status"], "done")
+
+        response = self.client.post(
+            f"/api/products/brands/{self.brand['id']}/products/{product_id}/rescan",
+            json={"source_url": "https://example.com/products/oolong-v2"},
+        )
+        self.assertEqual(response.status_code, 202)
+        web.conn.commit()
+
+        self.assertEqual(self._research_status(product_id)["status"], "running")
+        self._run_worker()  # drain the queued job so no later test's worker picks it up
 
     def test_second_rescan_while_first_is_claimed_but_not_yet_calling_provider_is_refused(self):
         """票 08 round 2 done-check 9 — the exact reproduction from the ticket's "Blocked"

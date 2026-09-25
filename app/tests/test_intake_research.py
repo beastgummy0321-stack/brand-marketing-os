@@ -133,6 +133,89 @@ class ResearchBackgroundTest(_Base):
         self.assertEqual(row["n"], 0)
 
 
+class _SeqProvider(FakeProvider):
+    """Replies with `texts` in order (the last one repeats); records calls like FakeProvider."""
+
+    def __init__(self, texts, *, tokens: int = 10):
+        super().__init__()
+        self._texts = list(texts)
+        self._tokens = tokens
+
+    def complete(self, **kwargs):
+        super().complete(**kwargs)
+        text = self._texts[min(len(self.calls), len(self._texts)) - 1]
+        return ProviderResponse(output_text=text, structured=None,
+                                usage=Usage(input_tokens=self._tokens, output_tokens=self._tokens),
+                                stop_reason="end_turn")
+
+
+class ResearchReaskAndJobStatusTest(_Base):
+    """F31-I02: one automatic re-ask when the table cannot be read, and the Contract J
+    status rule (the newest queued job decides before any `llm_task` row)."""
+
+    _GARBAGE = "這次調研有點趕，先把重點寫給你，細節之後再補。"
+
+    def test_unreadable_first_reply_is_reasked_once_then_lands(self):
+        """Red on master: no re-ask, the status read `failed` after one call."""
+        bid = self._create_full()
+        bi_repo.create_product(web.conn, bid, name=script.MOCK_PRODUCT_NAME, actor="測試員")
+        intake_ai.PROVIDER = _SeqProvider([self._GARBAGE, script.PASTE_SAMPLE_SUCCESS])
+
+        self.client.post(f"/api/intake/brands/{bid}/research/start")
+        status = self._poll(bid)
+
+        self.assertEqual(status["status"], "done")
+        self.assertEqual(len(intake_ai.PROVIDER.calls), 2)
+        reask = intake_ai.PROVIDER.calls[1]["messages"][0]["content"]
+        self.assertIn("上一次的回覆讀不出來", reask)
+        draft = state.get_draft(bid)
+        self.assertEqual(len(ir.list_pending_items(web.conn, bid, draft["id"])), 23)
+
+    def test_reask_is_skipped_when_the_cost_limit_blocks_it(self):
+        bid = self._create_full()
+        self.client.post(f"/api/intake/brands/{bid}/budget",
+                         json={"limit": script.COST_RESEARCH_STANDARD})
+        intake_ai.PROVIDER = _SeqProvider([self._GARBAGE, script.PASTE_SAMPLE_SUCCESS],
+                                          tokens=20000)
+
+        resp = self.client.post(f"/api/intake/brands/{bid}/research/start")
+        self.assertIsNone(resp.json()["limit_block"])
+        status = self._poll(bid)
+
+        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(state.get_draft(bid)["paste_raw"], self._GARBAGE)
+
+    def test_new_job_queued_behind_a_failed_row_reads_running(self):
+        """Red on master: the older failed `llm_task` row won and the status read `failed`."""
+        from app.llm.providers import AnthropicProvider
+        bid = self._create_full()
+        intake_ai.PROVIDER = AnthropicProvider()  # no key: the AI call fails, row = failed
+        self.client.post(f"/api/intake/brands/{bid}/research/start")
+        self.assertEqual(self._poll(bid)["status"], "failed")
+
+        self.client.post(f"/api/intake/brands/{bid}/research/start")  # queued, not yet run
+        web.conn.commit()
+        status = self.client.get(f"/api/intake/brands/{bid}/research/status").json()["data"]
+
+        self.assertEqual(status["status"], "running")
+        self._poll(bid)  # drain the queued job so no later test's worker picks it up
+
+    def test_job_failing_before_the_ai_call_reads_failed_with_worker_hint(self):
+        """Red on master: the handler swallowed the exception, no `llm_task` row existed and
+        the status read idle `done` with an empty stage."""
+        bid = self._create_full()
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
+        before_ai = RuntimeError("模擬呼叫前出錯")
+        with mock.patch.object(research, "build_prompt", side_effect=before_ai):
+            self.client.post(f"/api/intake/brands/{bid}/research/start")
+            status = self._poll(bid)
+
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], background_module.JOB_FAILED_MESSAGE)
+        self.assertEqual(intake_ai.PROVIDER.calls, [])
+
+
 class ResearchPromptTest(_Base):
     def test_prompt_forbids_customer_quotes_and_states_no_internet(self):
         bid = self._create_full()

@@ -32,8 +32,10 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job, product_ai
 from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls
@@ -204,12 +206,29 @@ def _research_state(conn, brand_id: str, product_id: str) -> dict:
     回固定字串；`added_count`／`price_created` 這兩個彙總數字沒有地方可以在執行
     結束後還讀得到（不是 llm_task 欄位，也不新增 schema），保留鍵與型別、值固定回
     None／False——前端 `ProductDetailPage.tsx` 的 `done` 分支本來就不讀這兩個值
-    （轉成功就整包重新 `load()`），這裡是有回報過的簡化，不是悄悄近似。"""
+    （轉成功就整包重新 `load()`），這裡是有回報過的簡化，不是悄悄近似。
+
+    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
+    最新的 job 失敗＝failed（沒有那次呼叫的錯誤可引用時講背景程式）。其餘照 llm_task 列。"""
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'product_scan' "
         "AND context_scope_json->>'product_id' = %s ORDER BY started_at DESC LIMIT 1",
         (brand_id, product_id),
     ).fetchone()
+    outcome = background_job_outcome(f"product_scan:{product_id}")
+    if outcome == "active":
+        running_row = row is not None and row["status"] == "running"
+        return {"status": "running", "stage": "讀取網址中",
+                "started_at": row["started_at"] if running_row else datetime.now(UTC).isoformat(),
+                "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
+                "price_created": False}
+    if outcome == "failed":
+        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
+        return {"status": "failed", "stage": "整理事實中",
+                "started_at": row["started_at"] if row is not None else datetime.now(UTC).isoformat(),
+                "usual_range_text": _RESEARCH_USUAL_RANGE,
+                "error": row["error"] if own_error else JOB_FAILED_MESSAGE,
+                "added_count": None, "price_created": False}
     if row is None:
         return {"status": "done", "stage": "", "started_at": datetime.now(UTC).isoformat(),
                 "usual_range_text": "", "error": None, "added_count": None, "price_created": False}
@@ -243,18 +262,24 @@ def background_product_scan(org_id: str, brand_id: str, product_id: str, actor: 
     """procrastinate task body（`background.product_scan`）——worker 執行，自己開一條
     連線（worker 不繼承 request 的連線）。超預算已經在 POST 端點同步擋過，這裡不重查。"""
     with core_db_connection() as conn:
+        error, added = None, 0
         try:
             brand_facts = repo.list_brand_facts(conn, brand_id, status="confirmed")
             ok, result = product_ai_calls.run_product_scan(
                 conn, brand_id, product_id, product_name, url, brand_facts)
-        except Exception as exc:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok, result = False, f"背景執行發生未預期錯誤：{exc}"
+            if ok:
+                # F31-I02：套用結果也在防線裡——AI 成功但落地失敗時要寄失敗通知、job 記失敗
+                src_id = legacy_routes._create_source_ref(brand_id, actor, url)
+                added, _skipped, _price_created = product_helpers._apply_product_scan_result(
+                    brand_id, product_id, actor, src_id, result)
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, error = False, exc
         if not ok:
             _research_notify(conn, brand_id, product_id, f"「{product_name}」調研失敗，可以重試")
+            if error is not None:
+                raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
             return
-        src_id = legacy_routes._create_source_ref(brand_id, actor, url)
-        added, _skipped, _price_created = product_helpers._apply_product_scan_result(
-            brand_id, product_id, actor, src_id, result)
         _research_notify(conn, brand_id, product_id, f"「{product_name}」調研完成，新增 {added} 條待確認")
 
 
