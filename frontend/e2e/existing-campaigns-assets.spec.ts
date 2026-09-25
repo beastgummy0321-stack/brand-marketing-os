@@ -73,7 +73,9 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await dialog.getByRole("button", { name: "納入並開啟" }).first().click();
   await expect(page).toHaveURL(/\/ads\/campaigns\/[^?]+/);
   const campaignUrl = new URL(page.url()).pathname;
-  await expect(page.getByRole("heading", { name: "狀態時間軸" })).toBeVisible();
+  // F30-I07: platform state, connections and 重新讀取平台 live in the overview's 進階 fold.
+  await expect(page.getByRole("navigation", { name: "活動進度" })).toBeVisible();
+  await page.getByRole("button", { name: "進階：更多活動資訊", exact: true }).click();
   await page.getByRole("button", { name: "重新讀取平台", exact: true }).click();
   await expect(page.getByRole("button", { name: "同步中…", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新讀取平台", exact: true })).toBeEnabled({ timeout: 30_000 });

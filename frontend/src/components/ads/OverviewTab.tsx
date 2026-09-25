@@ -1,11 +1,9 @@
-import { Check, Sparkles, Target, Wallet, BarChart2, Settings, Image as ImageIcon, TrendingUp, AlertTriangle, Clock } from "lucide-react";
+import { Target, Wallet, BarChart2, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatSyncTime } from "@/lib/format";
 import { currentBudgetTotal, type CampaignDetail, type CampaignLabels } from "@/lib/adsApi";
 import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
-import { nextStep, type StepTarget, type WorkspaceTab } from "./nextStep";
-
-const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中", "結案"] as const;
+import type { StepTarget } from "./nextStep";
 
 // F05-I12：後端一律回傳 `campaign.labels`；這裡的預設值只在舊測試 fixture 沒帶這個欄位時
 // 頂上（同 `judgment` 選填的先例），跟 `app/ads/judgment.py::_CONVERSION_LABELS["purchase"]`
@@ -14,15 +12,24 @@ const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數
 
 const JUDGMENT_ICON = { good: TrendingUp, warn: AlertTriangle, neutral: Clock } as const;
 
+/** The imported campaign's platform read: 重新讀取平台 and its failure (the workspace owns the sync job). */
+export interface PlatformSync { onSync: () => void; syncing: boolean; error: string }
+
+/** v10 (F30-I07): the overview's 「進階：更多活動資訊」 fold — what the old overview showed that the v10 prototype does
+ * not (the three-number strip, the backend's judgement sentence, 檢討與持續追蹤, 最近做了什麼, and for an imported
+ * campaign its platform state, connections and 重新讀取平台). Nothing here is deleted, only folded (CLAUDE.md three
+ * layers). The old stage timeline, next-step card and shortcut tiles are gone: the stage rail, the bottom bar and
+ * the tab bar carry them now. */
 export function OverviewTab({
   campaign: c,
   onChangeTab,
+  platformSync,
 }: {
   campaign: CampaignDetail;
   onChangeTab: (target: StepTarget) => void;
+  platformSync?: PlatformSync;
 }) {
   const labels = c.labels ?? DEFAULT_LABELS;
-  const step = nextStep(c);
   const imported = c.origin === "imported";
   const runtime = c.context_json.runtime;
   const checkedAt = runtime && typeof runtime === "object" && "last_checked_at" in runtime && typeof runtime.last_checked_at === "string" ? runtime.last_checked_at : null;
@@ -31,14 +38,14 @@ export function OverviewTab({
   const nativeStates = ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"];
   const nativeLabels = ["投放啟用", "已暫停", "已封存", "已刪除", "狀態未知"];
   const nativeIndex = nativeStates.indexOf(root?.native_status ?? "");
-  const idx = imported ? (nativeIndex < 0 ? 4 : nativeIndex) : step.stageIndex;
-  const stageLabels = imported ? nativeLabels : STAGE_LABELS;
+  const idx = nativeIndex < 0 ? 4 : nativeIndex;
+  const lastRead = Object.values(c.external_view?.sync ?? {}).map(s => s.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1);
   const t = currentBudgetTotal(c);
   const hasOutcome = (c.outcome.spend ?? 0) > 0 || (c.outcome.purchases ?? 0) > 0 || (c.outcome.revenue ?? 0) > 0;
   const pct = c.outcome.spend !== null && t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
 
   const budgetCaption =
-    (t.total !== null ? `日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天` : "還沒設定投放起訖日") +
+    (t.total !== null ? `投放組日預算 × ${t.days} 天` : "還沒設定投放起訖日") +
     (c.budget_planned !== null ? `・採用情境 ${formatCurrency(c.budget_planned)}` : "");
 
   const kpiCells: KpiCell[] = [
@@ -90,13 +97,6 @@ export function OverviewTab({
     detail: a.detail,
   }));
 
-  const shortcuts: { icon: typeof BarChart2; title: string; detail: string; tab: WorkspaceTab }[] = [
-    { icon: BarChart2, title: "查看成效", detail: "瀏覽關鍵指標與走勢圖", tab: "performance" },
-    { icon: Settings, title: "查看投放設定", detail: "受眾、預算、排程等設定", tab: "structure" },
-    { icon: ImageIcon, title: "查看素材", detail: "所有素材與表現數據", tab: "assets" },
-    { icon: Sparkles, title: "查看策略", detail: "推薦策略與預算情境", tab: "strategy" },
-  ];
-
   return (
     <div className="flex flex-col gap-4">
       <KpiStrip cells={kpiCells} />
@@ -105,7 +105,23 @@ export function OverviewTab({
       </p>
 
       {imported ? (
-        <JudgmentBand icon={Clock} sentence={`平台狀態：${nativeLabels[idx]}${root?.native_status ? `（${root.native_status}）` : ""}`} facts="顯示最近讀回的平台狀態；不代表內部策略、素材確認或上架流程已完成。" tone="neutral" />
+        <>
+          <JudgmentBand icon={Clock} sentence={`平台狀態：${nativeLabels[idx]}${root?.native_status ? `（${root.native_status}）` : ""}`} facts="顯示最近讀回的平台狀態；不代表內部策略、素材確認或上架流程已完成。" tone="neutral" />
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+              {c.external_view?.connections.map(connection => `${connection.platform === "meta" ? "Meta" : connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
+              {" · 最近成功："}{lastRead ? formatSyncTime(lastRead) : "尚未成功讀回"}
+              {" · 活動設定不代表已實際投遞"}
+              {Object.entries(c.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
+            </p>
+            {platformSync && (
+              <Button size="sm" variant="outline" disabled={platformSync.syncing} onClick={platformSync.onSync}>
+                {platformSync.syncing ? "同步中…" : "重新讀取平台"}
+              </Button>
+            )}
+          </div>
+          {platformSync?.error && <p role="alert" className="text-sm text-destructive">{platformSync.error}</p>}
+        </>
       ) : c.judgment && (
         <JudgmentBand
           icon={JUDGMENT_ICON[judgmentTone]}
@@ -120,53 +136,8 @@ export function OverviewTab({
           <p className="text-sm">查看單則廣告與商城證據，決定保留、觀察或準備新測試。</p>
           <p className="text-xs text-muted-foreground">{checkedAt ? `背景最近檢查：${new Date(checkedAt).toLocaleString("zh-TW")}。` : "尚無背景檢查紀錄，請先確認平台廣告對應與檢討條件。"}平台變更仍由你核准後手動操作。</p>
         </div>
-        <Button onClick={() => onChangeTab("performance")}>前往廣告檢討 →</Button>
+        <Button onClick={() => onChangeTab("perf")}>前往廣告檢討 →</Button>
       </section>
-
-      <div className="surface">
-        <div className="surface-header">
-          <h2>狀態時間軸</h2>{imported && <span className="text-xs text-muted-foreground">僅標示最近讀回狀態，非狀態變更歷程</span>}
-        </div>
-        <div className="surface-body flex items-center gap-0 pt-2">
-          {stageLabels.map((label, i) => {
-            const done = !imported && i < idx;
-            const current = i === idx;
-            return (
-              <div key={label} className="relative flex-1 text-center">
-                {i > 0 && (
-                  <div
-                    className={`absolute top-[9px] right-1/2 left-[-50%] h-0.5 ${
-                      !imported && (done || current) ? "bg-primary" : "bg-border"
-                    }`}
-                  />
-                )}
-                <div
-                  className={`relative z-10 mx-auto mb-1.5 flex size-[18px] items-center justify-center rounded-full text-primary-foreground ${
-                    done ? "bg-success" : current ? "bg-primary" : "bg-border"
-                  }`}
-                >
-                  {done && <Check size={11} />}
-                </div>
-                <div className={`text-sm ${current ? "font-semibold" : ""}`}>{label}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="surface">
-        <div className="surface-header">
-          <h2 className="flex items-center gap-1.5">
-            <Sparkles size={15} /> 下一步
-          </h2>
-        </div>
-        <div className="surface-body flex items-center justify-between gap-4">
-          <span className="text-sm">{step.sentence}</span>
-          <Button size="sm" onClick={() => onChangeTab(step.target)}>
-            {step.label}
-          </Button>
-        </div>
-      </div>
 
       <div className="surface">
         <div className="surface-header">
@@ -174,32 +145,6 @@ export function OverviewTab({
         </div>
         <div className="surface-body">
           <ActionTimeline items={timelineItems} emptyText="這個 Campaign 還沒有異動紀錄。" />
-        </div>
-      </div>
-
-      <div>
-        <h2 className="mb-1 text-base font-semibold">更多 Campaign 資訊</h2>
-        <p className="mb-3 text-sm text-muted-foreground">查看詳細數據與設定，隨時掌握投放進度。</p>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {shortcuts.map((s) => {
-            const Icon = s.icon;
-            return (
-              <button
-                key={s.title}
-                type="button"
-                onClick={() => onChangeTab(s.tab)}
-                className="surface flex items-center gap-3 p-4 text-left transition-colors hover:bg-accent/60"
-              >
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent">
-                  <Icon className="size-4 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold">{s.title}</p>
-                  <p className="text-xs text-muted-foreground">{s.detail}</p>
-                </div>
-              </button>
-            );
-          })}
         </div>
       </div>
     </div>

@@ -8,8 +8,10 @@ import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import type { CampaignDetail } from "@/lib/adsApi";
 
-export type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "performance" | "changes";
-export type StepTarget = WorkspaceTab | "publish";
+/** v10 (F30-I07): the perf tab key is `perf`. `performance` stays accepted as a step target only because older
+ * tabs still call `onChangeTab("performance")`; the workspace maps it to `perf` (and `?tab=performance` redirects). */
+export type WorkspaceTab = "overview" | "strategy" | "structure" | "assets" | "perf" | "changes";
+export type StepTarget = WorkspaceTab | "publish" | "performance";
 export type StepId =
   | "strategy_generate"
   | "strategy_adopt"
@@ -32,13 +34,13 @@ export function nextStep(c: CampaignDetail): NextStep {
     return { id: "make_assets", target: "assets", stageIndex: -1, sentence: "查看平台資料，安排自帶素材與手動交接；內部確認不代表平台已上架。", label: "安排自帶素材 →" };
   }
   if (c.status === "closed") {
-    return { id: "performance", target: "performance", stageIndex: 5, sentence: "已結案，結案紀錄在成效。", label: "查看成效 →" };
+    return { id: "performance", target: "perf", stageIndex: 5, sentence: "已結案，結案紀錄在成效。", label: "查看成效 →" };
   }
   if (c.status === "live") {
-    return { id: "performance", target: "performance", stageIndex: 4, sentence: "投放中，每天的花費與結果在成效。", label: "查看成效 →" };
+    return { id: "performance", target: "perf", stageIndex: 4, sentence: "投放中，每天的花費與結果在成效。", label: "查看成效 →" };
   }
   if (c.status === "ended") {
-    return { id: "performance", target: "performance", stageIndex: 4, sentence: "投放已結束，到成效看結果或結案。", label: "查看成效 →" };
+    return { id: "performance", target: "perf", stageIndex: 4, sentence: "投放已結束，到成效看結果或結案。", label: "查看成效 →" };
   }
   if (!c.budget_basis_json.strategy) {
     return { id: "strategy_generate", target: "strategy", stageIndex: 0, sentence: "還沒有策略，先產生策略建議。", label: "前往策略 →" };
