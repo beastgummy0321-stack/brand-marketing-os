@@ -581,6 +581,16 @@ class MonthSummaryRejectedTest(unittest.TestCase):
         # The 沒賣出 ad remembered as 沒賣出 is held: no cleanup suggestion re-proposes it.
         self.assertNotIn("cleanup", {s["kind"] for s in summary["suggestions"]})
 
+        # F29-I15: 先不要 on the worse card is the month's `cleanup:<campaign>` dismissal -- the
+        # card stays gone for this month only, and it is not counted as "did not get worse".
+        month_summary.dismiss_suggestion(conn, org, brand, month, f"cleanup:{campaign}")
+        dismissed = month_summary.get_summary(conn, org, brand, month)
+        self.assertEqual(dismissed["rejected"]["worse"], [])
+        self.assertEqual(dismissed["rejected"]["same_count"], 1)
+        next_month = (date.fromisoformat(month + "-01") + timedelta(days=32)).strftime("%Y-%m")
+        later = month_summary.get_summary(conn, org, brand, next_month)
+        self.assertEqual([c["change_set_id"] for c in later["rejected"]["worse"]], [worse_set])
+
 
 class MonthSummaryRouteTest(unittest.TestCase):
     def test_get_and_dismiss_routes_are_wired(self):
