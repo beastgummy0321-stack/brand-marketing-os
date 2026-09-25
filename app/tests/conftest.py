@@ -151,6 +151,17 @@ def _reset_pool() -> None:
     if coredb._pool is not None:
         coredb._pool.close()
         coredb._pool = None
+    # F31-I11: `app.background`'s defer App keeps its own connection pool (procrastinate's
+    # default min_size=4) for this module's queue DSN. The per-module DSN switch makes the next
+    # `enqueue()` build a new App and orphan this one, whose idle connections then stay on the
+    # server until garbage collection -- measured up to 14 queue connections in one worker.
+    # Close it with the module, like the core pool above.
+    from app import background
+
+    if background._sync_app is not None:
+        background._sync_app.close()
+        background._sync_app = None
+        background._sync_app_dsn = None
 
 
 @pytest.fixture(scope="module", autouse=True)
