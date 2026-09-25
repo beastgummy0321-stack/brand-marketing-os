@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Navigate, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { getCampaign, type AdapterKey, type CampaignDetail } from "@/lib/adsApi";
+import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { completeExternalView, syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { getCampaignWorkspace } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
@@ -11,7 +11,6 @@ import { StrategyTab } from "./StrategyTab";
 import { DeliveryTab } from "./DeliveryTab";
 import { AssetsTab } from "./AssetsTab";
 import { PerformanceTab } from "./PerformanceTab";
-import { PublishPage } from "./PublishPage";
 import { ChangeControl } from "./ChangeControl";
 import { ReviewPanel } from "./ReviewPanel";
 import { CampaignPerfBody } from "./detail/CampaignDetailPage";
@@ -51,7 +50,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
     { status: "loading" } | { status: "error"; message: string } | { status: "ready"; campaign: CampaignDetail }
   >({ status: "loading" });
   const workspace = useApiRead((signal) => getCampaignWorkspace(brandId, campaignId, signal), [brandId, campaignId]);
-  const [publishAdapter, setPublishAdapter] = useState<AdapterKey | null>(null);
+  const navigate = useNavigate();
   const request = useRef<AbortController | null>(null);
   const [syncId, setSyncId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -134,9 +133,10 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   // Only a campaign not on a platform yet gets the publish page.
   const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
 
-  // §6.2 decision 15: a step target may be "publish" (the publish page, not a tab); "performance" is the old perf key.
+  // §6.2 decision 15: a step target may be "publish" — the publish page at its own URL (F30-I13), which lands on the
+  // step its launch reports; "performance" is the old perf key.
   function go(target: StepTarget) {
-    if (target === "publish") { if (canPublish) setPublishAdapter("auto_meta"); else changeTab("assets"); }
+    if (target === "publish") { if (canPublish) navigate(`/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}/publish`); else changeTab("assets"); }
     else changeTab(target === "performance" ? "perf" : target);
   }
 
@@ -194,20 +194,9 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   return (
     <div className="flex max-w-[1260px] flex-col gap-4">
       {campaign?.simulation_mode && <p role="status" className="rounded-md bg-warning/10 p-3 text-sm">隔離模擬品牌：成效與學習只供演練，不代表真實投放。</p>}
-      <WorkspaceHead brandId={brandId} campaign={campaign} workspace={workspace} tab={tab} onTab={changeTab} showTabs={!(campaign && publishAdapter)} />
+      <WorkspaceHead brandId={brandId} campaign={campaign} workspace={workspace} tab={tab} onTab={changeTab} />
       {location.state?.parseWarning && <p className="text-sm text-warning">{location.state.parseWarning}</p>}
-      {campaign && publishAdapter ? (
-        <PublishPage
-          brandId={brandId}
-          campaign={campaign}
-          adapter={publishAdapter}
-          onCampaignChange={updateCampaign}
-          onClose={() => { setPublishAdapter(null); reloadWorkspace(); }}
-          onViewPerformance={() => { setPublishAdapter(null); reloadWorkspace(); changeTab("perf"); }}
-          onChangeAdapter={setPublishAdapter}
-          onGoToAssets={() => { setPublishAdapter(null); changeTab("assets"); }}
-        />
-      ) : body}
+      {body}
     </div>
   );
 }

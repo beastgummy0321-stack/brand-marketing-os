@@ -1,433 +1,129 @@
-import { ManualHandoffPanel } from "./ManualHandoffPanel";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { Badge } from "@/components/layout/ui/badge";
-import { CopyIconButton } from "@/components/layout/CopyIconButton";
-import {
-  bindCampaign,
-  getCampaign,
-  getPublish,
-  publishCampaign,
-  type AdapterKey,
-  type AdapterOption,
-  type CampaignDetail,
-  type PublishChecklistNode,
-  type PublishDescribe,
-} from "@/lib/adsApi";
-import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
-import { StepButton } from "./nextStep";
-import { ActionBar, Disclosure } from "./patterns";
-import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
-import { LaunchSettingsCopy } from "./publish/LaunchSettingsCopy";
-import { getOrgId } from "@/lib/auth";
+import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { getHandoff, type HandoffWorkspace } from "@/lib/adsHandoffApi";
+import { fetchChannels, fetchLaunchView, type LaunchView } from "@/lib/adsLaunchApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
+import { ReadFailed } from "./patterns";
+import { PublishList } from "./publish/PublishList";
+import { PublishPlatform } from "./publish/PublishPlatform";
+import { PublishVerify } from "./publish/PublishVerify";
+import { allowsStep, campaignPath, launchPlatform, publishPath, urlOfStep } from "./publish/PublishFlow";
 
-const OPTIONAL_HANDOFF_FIELDS = new Set([
-  "平台活動 ID（手動紀錄）",
-  "平台投放組 ID（手動紀錄）",
-  "廣告對應（每行：系統廣告 ID = 平台廣告 ID）",
-  "實際執行差異與核對紀錄",
-]);
+/** F30-I13 publish page (prototype v10 `pubPage()`): 確認上架清單 → 到平台完成 → 讀回核對 at
+ * `…/campaigns/:c/publish/{list,platform,verify}`. `GET …/launch` reports the step; a URL the step does not allow yet
+ * (or no step) redirects to it, and a stale launch is decided on the platform step with F28's `LaunchStalePanel`.
+ * The campaign, the launch view and the channel list are separate reads that fail on their own. Nothing on this page
+ * writes to a platform. */
+export function PublishPage({ brandId, campaignId, step }: { brandId: string; campaignId: string; step?: string }) {
+  const navigate = useNavigate();
+  const campaignRead = useApiRead(() => getCampaign(brandId, campaignId), [brandId, campaignId]);
+  const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
+  const launchRead = useApiRead(() => fetchLaunchView(brandId, campaignId), [brandId, campaignId]);
+  // A write answers with the refreshed view; it stands in until the next read.
+  const [view, setView] = useState<LaunchView | null>(null);
+  useEffect(() => { if (launchRead.status === "ready") setView(launchRead.data); }, [launchRead.status, launchRead.data]);
+  const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
+  useEffect(() => { if (campaignRead.status === "ready") setCampaign(campaignRead.data); }, [campaignRead.status, campaignRead.data]);
+  const [moving, setMoving] = useState(false);
+  const [staleOutcome, setStaleOutcome] = useState<LaunchOutcome | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
-/** 逐節點是否已經全部綁定——用來算「配對完成：n／m」，不去解析後端訊息字串
- * （§0「the browser must not re-word it」，訊息只能原樣印）。 */
-function bindCounts(c: CampaignDetail): { matched: number; total: number } {
-  let total = 1;
-  let matched = c.local_state === "bound" ? 1 : 0;
-  for (const g of c.groups) {
-    total += 1 + g.ads.length;
-    if (g.local_state === "bound") matched += 1;
-    matched += g.ads.filter((a) => a.local_state === "bound").length;
-  }
-  return { matched, total };
-}
+  const home = `/brands/${encodeURIComponent(brandId)}/ads`;
+  const name = campaign?.name ?? view?.items.find((i) => i.kind === "campaign")?.name ?? "活動";
+  const crumb = [{ label: "投放中心", href: home }, { label: name, href: campaignPath(brandId, campaignId) }, { label: "首次上架" }];
+  const platform = launchPlatform(campaign, channels.data);
 
-function NodeCard({ node }: { node: PublishChecklistNode }) {
-  const essential = node.fields.filter((field) => !OPTIONAL_HANDOFF_FIELDS.has(field.label));
-  const optional = node.fields.filter((field) => OPTIONAL_HANDOFF_FIELDS.has(field.label));
-  const fields = (rows: PublishChecklistNode["fields"]) => rows.map((field) => (
-    <div key={field.label} className="border-t border-border py-2 first:border-t-0">
-      <div className="flex items-center gap-2">
-        <span className="w-28 shrink-0 text-xs text-muted-foreground">{field.label}</span>
-        <span className="flex-1 truncate text-sm">{String(field.value)}</span>
-        <CopyIconButton ariaLabel={`複製${field.label}`} getText={() => String(field.value)} />
-      </div>
-      {(String(field.value) === "尚未填寫" || field.label === "人工上架設定狀態") && (
-        <p className="mt-1 pl-28 text-xs text-warning">{field.reason}</p>
-      )}
-    </div>
-  ));
-  return (
-    <div className="surface" style={node.level === "ad" ? { marginLeft: 24 } : undefined}>
-      <div className="surface-header">
-        <h3 className="text-sm font-semibold">{node.name}</h3>
-      </div>
-      <div className="surface-body flex flex-col gap-2">
-        {node.level !== "campaign" && (
-          <p className="flex items-center gap-1.5 text-xs text-warning">
-            <AlertTriangle size={12} /> 平台名稱供辨識，實際對應仍以平台識別與讀回核對為準
-          </p>
-        )}
-        {fields(essential)}
-        {optional.length > 0 && <Disclosure label="選填 ID 與核對紀錄">
-          {fields(optional)}
-        </Disclosure>}
-      </div>
+  // Approval and the batch readback move the page on only once the server answered with the new step.
+  const moveTo = useCallback(async (read: () => Promise<LaunchView>, target: "platform" | "verify") => {
+    setMoving(true); setMoveError(null);
+    try { setView(await read()); navigate(publishPath(brandId, campaignId, target)); }
+    catch (err) { setMoveError(err instanceof Error ? err.message : "讀取上架清單失敗。"); }
+    finally { setMoving(false); }
+  }, [brandId, campaignId, navigate]);
+
+  const wrap = (body: ReactNode) => (
+    <div className="flex max-w-[1260px] flex-col gap-4">
+      <Breadcrumb items={crumb} />
+      {body}
     </div>
   );
-}
 
-/** 發布畫面（F03-I16）：一般路徑只顯示 `describe.message`（例如自動發布未接上，決策 1
- * 「從來不是拒絕，是還沒接」）；手動／模擬兩個進階路徑各自的流程見下方兩個子元件。
- * 不新增路由（票只准動 CampaignWorkspace／這個檔），發布畫面是 CampaignWorkspace 裡的一個
- * 內嵌畫面，用 `onClose` 換回原本的分頁。 */
-function LegacyPublishPage({
-  brandId,
-  campaign: c,
-  adapter,
-  onCampaignChange,
-  onClose,
-  onViewPerformance,
-  onChangeAdapter,
-  onGoToAssets,
-}: {
-  brandId: string;
-  campaign: CampaignDetail;
-  adapter: AdapterKey;
-  onCampaignChange: (campaign: CampaignDetail) => void;
-  onClose: () => void;
-  onViewPerformance: () => void;
-  onChangeAdapter: (adapter: AdapterKey) => void;
-  onGoToAssets: () => void;
-}) {
-  const [state, setState] = useState<
-    | { status: "loading" }
-    | { status: "error"; message: string }
-    | { status: "ready"; adapters: AdapterOption[]; describe: PublishDescribe }
-  >({ status: "loading" });
-  const [channels, setChannels] = useState<Channel[] | null>(null);
-
-  const load = useCallback(() => {
-    setState({ status: "loading" });
-    getPublish(brandId, c.id, adapter)
-      .then((response) => setState({ status: "ready", adapters: response.adapters, describe: response.describe }))
-      .catch((err: unknown) =>
-        setState({ status: "error", message: err instanceof Error ? err.message : "讀取發布方式失敗。" }),
-      );
-  }, [brandId, c.id, adapter]);
-
-  useEffect(load, [load]);
-
-  // A saved launch-settings change changes the launch content and so its approval hash: re-read the describe in
-  // place (the page stays on screen) and hold the approval until the fresh hash is here.
-  const [describeFresh, setDescribeFresh] = useState<"fresh" | "refreshing" | "failed">("fresh");
-  const refreshSeq = useRef(0);
-  const refreshDescribe = useCallback(() => {
-    const seq = ++refreshSeq.current;
-    setDescribeFresh("refreshing");
-    getPublish(brandId, c.id, adapter)
-      .then((response) => {
-        if (seq !== refreshSeq.current) return;
-        setState({ status: "ready", adapters: response.adapters, describe: response.describe });
-        setDescribeFresh("fresh");
-      })
-      .catch(() => { if (seq === refreshSeq.current) setDescribeFresh("failed"); });
-  }, [brandId, c.id, adapter]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setChannels(null);
-    fetchChannels(brandId)
-      .then((rows) => { if (!cancelled) setChannels(rows); })
-      .catch(() => { /* 平台資料未知時不阻斷既有手動清單。 */ });
-    return () => { cancelled = true; };
-  }, [brandId]);
-
-  const adapterLabel = state.status === "ready" ? state.adapters.find((item) => item.key === adapter)?.label : null;
-  const title = adapter === "manual" ? `${adapterLabel ?? "手動上架"}準備` : adapter === "simulated" ? "模擬發布（演練）" : "選擇上架方式";
-  const missing = c.asset_readiness.total - c.asset_readiness.ready_count;
-  const platformRows = [...new Set(c.groups.map((group) => group.channel_key))].map((key) => {
-    const channel = channels?.find((item) => item.key === key);
-    return { key, label: channel?.label ?? key, connected: channel?.connected ?? null, state: channel?.state_text ?? "連線狀態未知" };
-  });
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-sm">
-        <button type="button" onClick={onClose} className="flex items-center gap-1 text-muted-foreground hover:text-foreground">
-          <ChevronLeft size={14} /> {c.name}
-        </button>
-        <span className="text-muted-foreground">/</span>
-        <span className="font-semibold">{title}</span>
-      </div>
-
-      {adapter !== "simulated" && missing > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-danger/30 bg-danger/5 p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle size={18} className="mt-0.5 shrink-0 text-danger" />
-            <div className="flex flex-col gap-0.5">
-              <p className="font-semibold text-danger">還有 {missing} 則廣告沒有素材</p>
-              <p className="text-sm text-muted-foreground">現在照清單建，這幾則會是空廣告。</p>
-            </div>
-          </div>
-          <Button onClick={onGoToAssets}>回到素材</Button>
-        </div>
-      )}
-
-      {state.status === "loading" ? (
-        <div className="surface">
-          <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
-        </div>
-      ) : state.status === "error" ? (
-        <div className="surface">
-          <div className="surface-body py-10 text-center text-sm text-danger">{state.message}</div>
-        </div>
-      ) : adapter === "manual" ? (
-        <ManualPublish
-          brandId={brandId}
-          campaign={c}
-          describe={state.describe}
-          adapterLabel={state.adapters.find((item) => item.key === "manual")?.label ?? "手動發布"}
-          platforms={platformRows}
-          pairingPlatform={{
-            key: "meta",
-            label: channels?.find((item) => item.key === "meta")?.label ?? "Meta",
-            connected: channels?.find((item) => item.key === "meta")?.connected ?? null,
-            state: channels?.find((item) => item.key === "meta")?.state_text ?? "連線狀態未知",
-          }}
-          onCampaignChange={onCampaignChange}
-          onViewPerformance={onViewPerformance}
-          onGoToAssets={onGoToAssets}
-          onSettingsSaved={refreshDescribe}
-          describeFresh={describeFresh}
-        />
-      ) : adapter === "simulated" ? (
-        <SimulatedPublish
-          brandId={brandId}
-          campaign={c}
-          describe={state.describe}
-          onCampaignChange={onCampaignChange}
-          onViewPerformance={onViewPerformance}
-        />
-      ) : (
-        <div className="surface">
-          <div className="surface-body flex flex-col gap-4 py-10">
-            <p className="text-center text-sm text-muted-foreground">
-              {state.describe.message ?? "自動發布未接上"}
-            </p>
-            <p className="text-center text-sm">
-              平台：{platformRows.length ? platformRows.map((row) => `${row.label}（${row.state}）`).join("、") : "尚未建立投放組"}
-            </p>
-            {state.adapters.some((item) => item.key === "manual") ? <div className="flex flex-col gap-1">
-              <StepButton onClick={() => onChangeAdapter("manual")}>
-                {state.adapters.find((item) => item.key === "manual")?.label ?? "手動發布"}準備
-              </StepButton>
-              <p className="text-center text-xs text-muted-foreground">照清單在平台完成設定，再回來配對；目前只記錄準備，不代表已上線。</p>
-            </div> : <p className="text-center text-sm text-warning">目前回傳的上架方式不包含手動準備。</p>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ManualPublish({
-  brandId,
-  campaign: c,
-  describe,
-  adapterLabel,
-  platforms,
-  pairingPlatform,
-  onCampaignChange,
-  onViewPerformance,
-  onGoToAssets,
-  onSettingsSaved,
-  describeFresh,
-}: {
-  brandId: string;
-  campaign: CampaignDetail;
-  describe: PublishDescribe;
-  adapterLabel: string;
-  platforms: { key: string; label: string; connected: boolean | null; state: string }[];
-  pairingPlatform: { key: string; label: string; connected: boolean | null; state: string };
-  onCampaignChange: (campaign: CampaignDetail) => void;
-  onViewPerformance: () => void;
-  onGoToAssets: () => void;
-  onSettingsSaved: () => void;
-  describeFresh: "fresh" | "refreshing" | "failed";
-}) {
-  const [confirmed, setConfirmed] = useState(Boolean(describe.content_hash) && c.actions.some(a =>
-    a.kind === "publish" && a.target_kind === "campaign" && a.after_json.adapter === "manual"
-    && a.after_json.content_hash === describe.content_hash && Boolean(a.after_json.operation_id)));
-  const operationKey = `ads-publish:${getOrgId()}:${brandId}:${c.id}:${describe.content_hash}`;
-  const operation = useRef<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [binding, setBinding] = useState(false);
-  const [bindError, setBindError] = useState<string | null>(null);
-  // The confirm step's own error: sharing `bindError` hid it inside the collapsed pairing panel
-  // (drill 5: a 409 from the month-budget guard looked like a dead button).
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  const [bindMessage, setBindMessage] = useState<string | null>(null);
-  const [attempted, setAttempted] = useState(false);
-  // F29-I16: what keeps 核准上架清單 disabled (a launch-settings error, a pending save, a failed read), or null.
-  // Whether the handoff already carries a settings readback; null until the handoff read answers (no settings view
-  // is shown before that, so two views of the same settings never appear together).
-  const [hasReadback, setHasReadback] = useState<boolean | null>(null);
-  const [settingsBlocker, setSettingsBlocker] = useState<string | null>("投放設定還在讀取");
-  const approvalBlocker = settingsBlocker
-    ?? (describeFresh === "refreshing" ? "正在更新核准內容"
-      : describeFresh === "failed" ? "核准內容沒有更新成功，請重新開啟本頁"
-      : !describe.content_hash ? "尚未取得本版核准內容，請重新開啟本頁" : null);
-
-  const counts = bindCounts(c);
-  const allBound = attempted && bindMessage === null && counts.matched === counts.total;
-  const campaignUsesPairingPlatform = Boolean(platforms.length > 0
-    && platforms.every((platform) => platform.key === pairingPlatform.key));
-  const connectedForPairing = pairingPlatform.connected === true && campaignUsesPairingPlatform;
-  const platformNames = platforms.map((platform) => platform.label).join("、") || "平台";
-
-  async function confirmPreparation() {
-    if (!describe.content_hash) { setConfirmError("目前內容尚未取得可核准版本，請重新開啟本頁。"); return; }
-    if (approvalBlocker) return;
-    setConfirming(true);
-    setConfirmError(null);
-    try {
-      operation.current ??= sessionStorage.getItem(operationKey) ?? crypto.randomUUID();
-      sessionStorage.setItem(operationKey, operation.current);
-      await publishCampaign(brandId, c.id, "manual", { content_hash: describe.content_hash, operation_id: operation.current });
-      setConfirmed(true);
-      onCampaignChange(await getCampaign(brandId, c.id));
-    } catch (err) {
-      setConfirmError(err instanceof Error ? err.message : "確認失敗，請稍後再試。");
-    } finally { setConfirming(false); }
+  if (campaign && (campaign.origin === "imported" || campaign.capabilities?.unavailable.publish)) {
+    return wrap(
+      <div className="surface flex flex-wrap items-center gap-4 px-[22px] py-5">
+        <p className="min-w-0 flex-1 text-sm">{campaign.capabilities?.unavailable.publish ?? "此活動只支援素材手動交接，不支援內部發布。"}</p>
+        <Button asChild><Link to={`${campaignPath(brandId, campaignId)}?tab=assets`}>前往自帶素材安排</Link></Button>
+      </div>,
+    );
   }
-
-  async function handleBind() {
-    if (!connectedForPairing) return;
-    setBinding(true);
-    setBindError(null);
-    try {
-      const result = await bindCampaign(brandId, c.id);
-      onCampaignChange(result.campaign);
-      setBindMessage(result.message);
-      setAttempted(true);
-    } catch (err) {
-      setBindError(err instanceof Error ? err.message : "配對失敗，請稍後再試。");
-    } finally {
-      setBinding(false);
-    }
+  if (launchRead.status === "error" && !view) {
+    return wrap(<ReadFailed what={`上架清單讀不到：${launchRead.error}。平台上沒有任何改動。`} onRetry={launchRead.reload} />);
   }
+  if (!view) return wrap(<><Skeleton className="h-16 w-96" /><Skeleton className="h-60 w-full" /></>);
+  if (!allowsStep(view.step, step)) return <Navigate replace to={publishPath(brandId, campaignId, urlOfStep(view.step))} />;
 
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="surface p-4 text-sm space-y-2">
-        <p className="font-semibold">1. 記錄{adapterLabel}準備</p>
-        <p>只在本系統記錄手動上架意圖與預算核准，不會在平台建立廣告或花費廣告費，也不代表已上線。</p>
-        <p>平台：{platforms.length ? platforms.map((platform) => `${platform.label}（${platform.state}）`).join("、") : "尚未建立投放組"}。此步驟不選擇或寫入任何廣告帳戶。</p>
-        <p>期間：{c.start_date || "未設定"} ～ {c.end_date || "未設定"}；每日預算合計：{c.groups.reduce((sum, g) => sum + g.daily_budget, 0).toLocaleString()}；期間總預算：{c.budget_total?.toLocaleString() ?? "未設定"}。</p>
-        <p>這次核准是品牌月總額內的分配；持續投放及其他已核准安排會一起計算。</p>
-        {!describe.content_hash && <p className="text-warning">尚未取得本版核准內容，請重新開啟本頁。舊的準備紀錄不會自動升級為本次核准。</p>}
-        {confirmed && <p role="status">已記錄手動上架準備；請在平台完成設定後再配對。</p>}
-      </div>
-      {/* One view of the launch settings per step (F29-I16): the editable card until approval, then the copyable
-          settings, and once a readback exists only the readback (it shows every approved value beside the platform's). */}
-      {!confirmed && <LaunchSettingsCard brandId={brandId} campaign={c} locked={false} onSaved={onSettingsSaved}
-        onCampaignSaved={onCampaignChange} onBlockerChange={setSettingsBlocker} />}
-      {describe.checklist.map((node) => (
-        <NodeCard key={`${node.level}:${node.id}`} node={node} />
-      ))}
-
-      <div id="publish-platform-step" className="surface scroll-mt-4 p-4 text-sm">
-        <p className="font-semibold">2. 在{platformNames}完成必要設定</p>
-        <p className="mt-1 text-muted-foreground">逐項使用上方名稱、素材、預算與追蹤設定。完成平台操作不會自動改成本系統的已上線狀態。</p>
-      </div>
-      {confirmed && hasReadback === false && <LaunchSettingsCopy brandId={brandId} campaignId={c.id} />}
-
-      {confirmed && <ManualHandoffPanel brandId={brandId} campaignId={c.id} mode="items" platformLabel={pairingPlatform.label}
-        onSettingsReadback={setHasReadback}
-        onBackToPlatform={() => document.getElementById("publish-platform-step")?.scrollIntoView?.({ behavior: "smooth", block: "start" })} />}
-      <Disclosure label="舊版名稱配對與紀錄（不代表本次清單完成）">
-      <div className="surface">
-        <div className="surface-body flex flex-col items-center gap-2 py-6 text-center">
-          <p className="font-semibold">依舊版名稱尋找平台物件</p>
-          <p className="text-sm text-muted-foreground">
-            目前僅支援與 {pairingPlatform.label} 配對；其他平台目前可使用準備清單。
-          </p>
-          {bindError && <p className="text-sm text-danger">{bindError}</p>}
-          {pairingPlatform.connected === false && <div className="flex flex-col items-center gap-2">
-            <p className="text-sm text-warning">
-              {pairingPlatform.label} 顯示{pairingPlatform.state}；先完成 Meta 廣告連線，才能開始配對。
-            </p>
-            <Button variant="outline" asChild>
-              <a href="/settings?tab=meta">前往 Meta 廣告連線</a>
-            </Button>
-          </div>}
-          {pairingPlatform.connected == null && campaignUsesPairingPlatform && <p className="text-sm text-warning">
-            {pairingPlatform.label} 連線狀態目前無法確認，暫時不能配對。
-          </p>}
-          {platforms.length > 0 && !campaignUsesPairingPlatform && <p className="text-sm text-warning">
-            這個 Campaign 的平台目前不能使用 {pairingPlatform.label} 配對；仍可使用上方準備清單。
-          </p>}
-          {!attempted ? (
-            <Button onClick={() => void handleBind()} disabled={binding || !confirmed || !connectedForPairing}>
-              {binding ? "配對中…" : `我已在${pairingPlatform.label}建好，開始配對`}
-            </Button>
-          ) : allBound ? (
-            <>
-              <p className="flex items-center gap-1.5 text-success">
-                <CheckCircle2 size={18} /> 配對完成：{counts.matched}／{counts.total} 個節點對上
-              </p>
-              <p className="text-sm text-muted-foreground">平台物件已對應；是否開始投遞及成效是否足夠仍需另外確認。</p>
-              <Button variant="outline" onClick={onViewPerformance}>
-                查看成效 <ArrowRight size={13} />
-              </Button>
-            </>
-          ) : (
-            <div className="flex w-full flex-col gap-2 text-left">
-              <p className="flex items-center gap-1.5 text-warning">
-                <AlertTriangle size={16} /> 配對完成：{counts.matched}／{counts.total} 個節點對上
-              </p>
-              {bindMessage && (
-                <div className="field-card">
-                  <p className="text-sm">{bindMessage}</p>
-                </div>
-              )}
-              <Button onClick={() => void handleBind()} disabled={binding || !confirmed || !connectedForPairing}>
-                {binding ? "配對中…" : "重新配對"}
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
-      </Disclosure>
-      {confirmError && <p role="alert" className="text-sm text-danger">{confirmError}</p>}
-      {!confirmed && <ActionBar
-        back={<Button variant="ghost" onClick={onGoToAssets}>← 素材</Button>}
-        exit={{ label: "先不要，回投放中心", to: `/brands/${encodeURIComponent(brandId)}/ads` }}
-        hint={approvalBlocker ?? "核准不會改動平台"}>
-        <Button disabled={confirming || approvalBlocker !== null} onClick={() => void confirmPreparation()}>
-          {confirming ? "核准中…" : "核准上架清單 →"}
-        </Button>
-      </ActionBar>}
-    </div>
+  const moveNote = (moving || moveError) && (
+    moveError
+      ? <ReadFailed what={`已記錄，但上架清單沒有讀到：${moveError}`} onRetry={launchRead.reload} />
+      : <p role="status" className="text-sm text-muted-foreground">讀取上架清單…</p>
   );
+  const campaignFailed = campaignRead.status === "error" ? campaignRead.error : null;
+
+  if (step === "list") {
+    return wrap(<>
+      {moveNote}
+      <PublishList brandId={brandId} campaignId={campaignId} name={name} campaign={campaign} campaignFailed={campaignFailed}
+        onCampaignRetry={campaignRead.reload} onCampaignSaved={(c) => { setCampaign(c); launchRead.reload(); }}
+        view={view} onApproved={() => void moveTo(() => fetchLaunchView(brandId, campaignId), "platform")} />
+    </>);
+  }
+  if (step === "platform" && view.step === "stale") {
+    return wrap(<StaleStep brandId={brandId} campaignId={campaignId} outcome={staleOutcome} onOutcome={setStaleOutcome} onDecided={launchRead.reload} />);
+  }
+  const outcomeNote = staleOutcome && <OutcomeNote outcome={staleOutcome} />;
+  if (step === "platform") {
+    return wrap(<>
+      {moveNote}{outcomeNote}
+      <PublishPlatform brandId={brandId} campaignId={campaignId} name={name} view={view} platform={platform} onView={setView}
+        onReadBack={(next) => { setView(next); navigate(publishPath(brandId, campaignId, "verify")); }} />
+    </>);
+  }
+  return wrap(<PublishVerify brandId={brandId} campaignId={campaignId} name={name} view={view} platform={platform} onView={setView} />);
 }
 
-function SimulatedPublish({ onViewPerformance }: {
-  brandId: string;
-  campaign: CampaignDetail;
-  describe: PublishDescribe;
-  onCampaignChange: (campaign: CampaignDetail) => void;
-  onViewPerformance: () => void;
+function OutcomeNote({ outcome }: { outcome: LaunchOutcome }) {
+  return <p role={outcome.tone === "error" ? "alert" : "status"} className={outcome.tone === "error" ? "rounded-lg bg-danger/10 p-3 text-sm text-danger" : "rounded-lg bg-success/10 p-3 text-sm text-success"}>{outcome.text}</p>;
+}
+
+/** The stale step: F28's panel works on the handoff workspace (the approved set's items and the approved → now diff).
+ * A decision re-reads the launch view, which then reports the platform step again. */
+function StaleStep({ brandId, campaignId, outcome, onOutcome, onDecided }: {
+  brandId: string; campaignId: string; outcome: LaunchOutcome | null;
+  onOutcome: (outcome: LaunchOutcome | null) => void; onDecided: () => void;
 }) {
-  return <div className="surface p-6 flex flex-col items-start gap-3">
-    <Badge variant="outline">演練用</Badge>
-    <p className="text-sm">隔離演練會使用測試品牌與模擬數字，不會對外投放。到成效頁確認隔離範圍，再逐日輸入成效。</p>
-    <Button onClick={onViewPerformance}>前往隔離模擬回收</Button>
-  </div>;
-}
+  const [seq, setSeq] = useState(0);
+  const handoff = useApiRead((signal) => getHandoff(brandId, campaignId, signal), [brandId, campaignId, seq]);
+  const [data, setData] = useState<HandoffWorkspace | null>(null);
+  useEffect(() => { if (handoff.status === "ready") setData(handoff.data); }, [handoff.status, handoff.data]);
+  const decided = useRef(onDecided);
+  decided.current = onDecided;
+  // The launch view said stale but the handoff no longer does: read the launch again for the current step.
+  const settled = data !== null && data.launch_stale === null;
+  useEffect(() => { if (settled) decided.current(); }, [settled]);
 
-export function PublishPage(props: Parameters<typeof LegacyPublishPage>[0]) {
-  if (props.campaign.origin === "imported" || props.campaign.capabilities?.unavailable.publish) return <div className="surface"><div className="surface-body"><p>{props.campaign.capabilities?.unavailable.publish ?? "此活動只支援素材手動交接，不支援內部發布。"}</p><Button onClick={props.onGoToAssets}>前往自帶素材安排</Button></div></div>;
-  return <LegacyPublishPage {...props} />;
+  if (handoff.status === "error" && !data) return <ReadFailed what={`上架清單讀不到：${handoff.error}。`} onRetry={handoff.reload} />;
+  if (!data || !data.launch_stale) return <Skeleton className="h-60 w-full" />;
+  return (
+    <>
+      {outcome && <OutcomeNote outcome={outcome} />}
+      <LaunchStalePanel brandId={brandId} campaignId={campaignId} stale={data.launch_stale} items={data.items}
+        onDecided={(value, result) => { setData(value); onOutcome(result); }}
+        onReload={(result) => { onOutcome(result ?? null); setSeq((n) => n + 1); decided.current(); }} />
+    </>
+  );
 }

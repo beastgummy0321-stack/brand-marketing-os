@@ -10,6 +10,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep } from "@/components/ads";
+import { PublishPage } from "@/components/ads/PublishPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -99,6 +100,7 @@ function App() {
           path="/brands/:brandId/ads/campaigns/:campaignId/detail"
           element={<AdsCampaignDetailRoute />}
         />
+        <Route path="/brands/:brandId/ads/campaigns/:campaignId/publish/:step?" element={<AdsPublishRoute />} />
         <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
         <Route path="/brands/:brandId/ads/month" element={<AdsMonthRoute />} />
         <Route path="/brands/:brandId/ads/settle/:month" element={<AdsSettleRoute />} />
@@ -481,6 +483,13 @@ function AdsCampaignDetailRoute() {
   const params = new URLSearchParams(searchParams);
   params.set("tab", "perf");
   return <Navigate replace to={`/brands/${brandId ?? ""}/ads/campaigns/${campaignId ?? ""}?${params.toString()}`} />;
+}
+
+/** 首次上架三步（F30-I13，v10 原型 `pubPage()`）：`publish/{list,platform,verify}`；沒帶或走錯的步驟由頁面依
+ * `GET …/launch` 的 step 轉過去。 */
+function AdsPublishRoute() {
+  const { brandId, campaignId, step } = useParams<{ brandId: string; campaignId: string; step: string }>();
+  return <PublishPage key={`${brandId}:${campaignId}`} brandId={brandId ?? ""} campaignId={campaignId ?? ""} step={step} />;
 }
 
 /** 資料連線頁（F21-I02，v7 原型 `connections()`）：投放中心倚賴的五個資料來源各自的狀態，

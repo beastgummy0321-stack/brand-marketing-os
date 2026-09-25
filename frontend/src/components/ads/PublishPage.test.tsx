@@ -1,361 +1,122 @@
-/** frontend/src/components/ads/PublishPage.test.tsx — 發布頁保留必要的手動交接與預算確認，
- * 一般入口只提供 API 回傳的手動準備；直接指定 simulated adapter 的隔離演練仍可使用。
- * 測試也涵蓋素材警告、平台清單、Meta-only 配對邊界，以及選填交接資料收合。 */
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import userEvent from "@testing-library/user-event";
-
-import type { AssetReadinessSummary, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { bindCampaign, getCampaign, getPublish, publishCampaign } from "@/lib/adsApi";
-import { fetchChannels } from "@/lib/adsLaunchApi";
-import { getLaunchSettings, saveLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
+/** F30-I13: the publish page's URL steps follow `GET …/launch` — no step or a step not open yet redirects to the
+ * reported one, earlier steps stay reachable, a stale launch is decided on the platform step (F28 panel), an imported
+ * campaign has no publish page, and a failed read is its own state with 重試. Step bodies are covered in
+ * `publish/PublishFlow.test.tsx`. */
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { getHandoff } from "@/lib/adsHandoffApi";
+import { fetchChannels, fetchLaunchView, type LaunchStep, type LaunchView } from "@/lib/adsLaunchApi";
 import { PublishPage } from "./PublishPage";
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+  return { ...actual, getCampaign: vi.fn(), getPublish: vi.fn(() => new Promise(() => {})) };
+});
+vi.mock("@/lib/adsHandoffApi", () => ({ getHandoff: vi.fn(), reportHandoff: vi.fn() }));
+vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn(), fetchLaunchView: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_1" }));
+vi.mock("./publish/LaunchSettingsCard", () => ({ LaunchSettingsCard: () => <p>投放設定卡</p> }));
+vi.mock("./publish/LaunchSettingsCopy", () => ({ LaunchSettingsCopy: () => <p>可複製的投放設定</p> }));
+vi.mock("./LaunchStalePanel", () => ({
+  LaunchStalePanel: ({ stale, onDecided }: { stale: { diff: unknown[] }; onDecided: (w: unknown, o: { tone: "ok"; text: string }) => void }) => (
+    <div><h1>方案改過 {stale.diff.length} 處</h1>
+      <button type="button" onClick={() => onDecided({ items: [], launch_stale: null }, { tone: "ok", text: "已用現在的方案重新核准" })}>重新核准</button></div>
+  ),
+}));
+
+const CAMPAIGN = {
+  id: "cmp_1", name: "秋季新色預購", origin: "internal", status: "ready", capabilities: { allowed: [], unavailable: {} },
+  cap: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買" }, groups: [], manual_handoff: null,
+} as unknown as CampaignDetail;
+function view(step: LaunchStep): LaunchView {
   return {
-    ...actual,
-    getPublish: vi.fn(),
-    publishCampaign: vi.fn(),
-    getCampaign: vi.fn(),
-    bindCampaign: vi.fn(),
+    step, version: step === "list" ? null : 1, approved_at: step === "list" ? null : "2026-09-20T06:05:00Z",
+    summary: { campaigns: 1, groups: 0, ads: 0, daily_total: null, start: null, end: null, cap: null, slots_ready: 0, slots_total: 0 },
+    items: [{ id: "h1", kind: "campaign", name: "秋季新色預購", parent_name: null, fields: [], state: "todo", mismatches: [], unreadable: [], reason: null }],
+    deferred_ads: [], read_at: step === "verify" ? "2026-09-23T02:52:00Z" : null, settings_readback: null,
   };
+}
+
+function Page() {
+  const { step } = useParams();
+  return <><PublishPage brandId="brd_1" campaignId="cmp_1" step={step} /><p data-testid="where">{useLocation().pathname}</p></>;
+}
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes><Route path="/brands/:b/ads/campaigns/:c/publish/:step?" element={<Page />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+const where = () => screen.getByTestId("where").textContent;
+const base = "/brands/brd_1/ads/campaigns/cmp_1/publish";
+
+afterEach(cleanup);
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getCampaign).mockResolvedValue(CAMPAIGN);
+  vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "已接上" }]);
 });
 
-// The handoff panel stand-in reports whether its settings readback is shown (`panel.readback`), as the real one does.
-const panel = vi.hoisted(() => ({ readback: false }));
-vi.mock("./ManualHandoffPanel", async () => {
-  const { useEffect } = await vi.importActual<typeof import("react")>("react");
-  return { ManualHandoffPanel: ({ onSettingsReadback }: { onSettingsReadback?: (shown: boolean) => void }) => {
-    useEffect(() => { onSettingsReadback?.(panel.readback); }, [onSettingsReadback]);
-    return <p>逐項平台核對{panel.readback ? "・投放設定讀回" : ""}</p>;
-  } };
-});
-vi.mock("@/lib/adsLaunchApi", () => ({ fetchChannels: vi.fn(), saveManualSettings: vi.fn() }));
-vi.mock("@/lib/adsLaunchSettingsApi", () => ({ getLaunchSettings: vi.fn(), saveLaunchSettings: vi.fn(), confirmLaunchSetting: vi.fn() }));
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope" }) }));
-
-const REC: LaunchSettingsValues = {
-  optimization_event: "purchase", bid_strategy: "lowest_cost", placement: { mode: "auto", positions: [] },
-  audience: { age_min: 18, age_max: 65, gender: "all", countries: ["TW"] }, pixel_id: null, utm: "utm_source=meta&utm_campaign=cmp_1",
-};
-function settingsView(values: Partial<LaunchSettingsValues> = {}, errors: LaunchSettingsView["errors"] = []): LaunchSettingsView {
-  const opt = <T extends string>(value: T, label: string) => ({ value, label, note: `${label}的說明` });
-  return {
-    values: { ...REC, ...values }, recommended: REC, edited: [], errors,
-    options: {
-      optimization_event: [opt("purchase", "購買")], bid_strategy: [opt("lowest_cost", "最低成本"), opt("cost_cap", "單次成果成本上限")],
-      positions: [opt("facebook_feed", "Facebook 動態")], countries: [opt("TW", "台灣")], pixels: [], pixels_error: null,
-      placement_modes: [opt("auto", "自動"), opt("manual", "手動")], genders: [opt("all", "不限")], ages: [18, 25, 65],
-      field_notes: { audience: "要給哪些人看", pixel_id: "追蹤碼", utm: "網址參數" },
-    },
-  };
-}
-
-function group(channel_key = "meta"): DeliveryGroupRow {
-  return {
-    id: "grp_1", campaign_id: "cmp_1", channel_key, name: "投放組", role: "new", daily_budget: 1000,
-    start_date: null, end_date: null, ads: [], external_id: null, external_name: null,
-    external_status: null, local_state: "unbound", bound_at: null,
-  };
-}
-
-function campaign(asset_readiness: AssetReadinessSummary): CampaignDetail {
-  return {
-    id: "cmp_1",
-    name: "測試 Campaign",
-    goal_text: "想在雙十一衝一波業績",
-    objective: "增加新客購買",
-    cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
-    start_date: "2026-01-01",
-    end_date: "2026-01-15",
-    status: "ready",
-    budget_planned: null,
-    budget_scenario: null,
-    budget_basis_json: {},
-    budget_total: null,
-    context_json: {},
-    constraints_json: {},
-    verdict: null,
-    verdict_json: {},
-    closed_at: null,
-    created_by: null,
-    created_at: "2026-01-01T00:00:00Z",
-    groups: [],
-    actions: [],
-    outcome: { spend: 0, purchases: 0, revenue: 0 },
-    asset_readiness,
-    judgment: { tone: "neutral", text: "投放中", detail: "還沒有花費資料" },
-    action_lines: [],
-    external_id: null,
-    external_name: null,
-    external_status: null,
-    local_state: "unbound",
-    bound_at: null,
-  };
-}
-
-beforeEach(() => { panel.readback = false; vi.mocked(getLaunchSettings).mockResolvedValue(settingsView()); });
-const enabled = (button: HTMLElement) => waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
-
-function renderPage(c: CampaignDetail, adapter: "auto_meta" | "manual" | "simulated") {
-  const onChangeAdapter = vi.fn();
-  const onGoToAssets = vi.fn();
-  const view = render(<MemoryRouter>
-    <PublishPage
-      brandId="brd_1"
-      campaign={c}
-      adapter={adapter}
-      onCampaignChange={vi.fn()}
-      onClose={vi.fn()}
-      onViewPerformance={vi.fn()}
-      onChangeAdapter={onChangeAdapter}
-      onGoToAssets={onGoToAssets}
-    />
-  </MemoryRouter>);
-  return { onChangeAdapter, onGoToAssets, ...view };
-}
-
-describe("PublishPage（F06-I04）", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(getLaunchSettings).mockResolvedValue(settingsView());
-    vi.mocked(getPublish).mockImplementation((_brandId, _campaignId, adapter = "manual") =>
-      Promise.resolve({
-        adapters: [
-          { key: "manual", label: "手動發布" },
-          { key: "auto_meta", label: "自動發布（未接上）" },
-          { key: "simulated", label: "模擬發布（演練用）" },
-        ],
-        adapter,
-        describe: { adapter, message: "自動發布未接上", checklist: [] },
-      }),
-    );
-    vi.mocked(fetchChannels).mockResolvedValue([
-      { key: "meta", label: "Meta", connected: true, state_text: "已接上" },
-    ]);
-    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
-    vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 0, total: 0 }));
-    vi.mocked(bindCampaign).mockResolvedValue({ message: null, campaign: campaign({ ready_count: 0, total: 0 }) });
-  });
-
-  it("auto_meta、3/3 就位：只保留 API 回傳的手動入口，不顯示一般模擬選項", async () => {
-    const user = userEvent.setup();
-    const { onChangeAdapter } = renderPage(campaign({ ready_count: 3, total: 3 }), "auto_meta");
-
-    expect(await screen.findByText("自動發布未接上")).toBeTruthy();
-    expect(screen.queryByText(/則廣告沒有素材/)).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "手動發布準備" }));
-    expect(onChangeAdapter).toHaveBeenCalledWith("manual");
-    expect(screen.queryByRole("button", { name: /模擬發布/ })).toBeNull();
-  });
-
-  it("auto_meta、1/3 就位：印「還有 2 則廣告沒有素材」，「回到素材」呼叫 onGoToAssets，手動發布不 disabled", async () => {
-    const user = userEvent.setup();
-    const { onGoToAssets } = renderPage(campaign({ ready_count: 1, total: 3 }), "auto_meta");
-
-    expect(await screen.findByText("還有 2 則廣告沒有素材")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "回到素材" }));
-    expect(onGoToAssets).toHaveBeenCalledTimes(1);
-
-    const manualButton = screen.getByRole("button", { name: "手動發布準備" }) as HTMLButtonElement;
-    expect(manualButton.disabled).toBe(false);
-  });
-
-  it("manual、1/3 就位：警告帶出現", async () => {
-    renderPage(campaign({ ready_count: 1, total: 3 }), "manual");
-    expect(await screen.findByText("還有 2 則廣告沒有素材")).toBeTruthy();
-  });
-
-  it("simulated、1/3 就位：不出現警告帶", async () => {
-    renderPage(campaign({ ready_count: 1, total: 3 }), "simulated");
-    expect(await screen.findByText("演練用")).toBeTruthy();
-    expect(screen.queryByText(/則廣告沒有素材/)).toBeNull();
-  });
+it("no step lands on the step the launch reports", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("platform"));
+  renderAt(base);
+  await waitFor(() => expect(where()).toBe(`${base}/platform`));
+  expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
 });
 
-  it("opening manual checklist is read-only; explicit confirmation writes once", async () => {
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
-    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
-    vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 0, total: 0 }));
-    vi.mocked(publishCampaign).mockClear();
-    renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
-    expect(publishCampaign).not.toHaveBeenCalled();
-    await enabled(confirm);
-    expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
-    await userEvent.click(confirm);
-    await waitFor(() => expect(publishCampaign).toHaveBeenCalledTimes(1));
-    expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "current-plan-hash", operation_id: expect.any(String) });
-    expect(await screen.findByText("已記錄手動上架準備；請在平台完成設定後再配對。")).toBeTruthy();
-  });
+it("a step not open yet (or an unknown one) redirects to the reported step", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("list"));
+  renderAt(`${base}/verify`);
+  await waitFor(() => expect(where()).toBe(`${base}/list`));
+  cleanup();
+  renderAt(`${base}/nope`);
+  await waitFor(() => expect(where()).toBe(`${base}/list`));
+  expect(await screen.findByRole("heading", { name: "確認上架清單" })).toBeTruthy();
+});
 
-  it("非 Meta 即使 channels 顯示已連接，也不冒稱具有 Meta 專屬配對能力", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getPublish).mockImplementation((_brandId, _campaignId, adapter = "manual") => Promise.resolve({
-      adapters: [{ key: "manual", label: "手動發布" }, { key: "auto_meta", label: "自動發布（未接上）" }],
-      adapter, describe: { adapter, message: adapter === "auto_meta" ? "自動發布未接上" : null, checklist: [] },
-    }));
-    vi.mocked(fetchChannels).mockResolvedValue([
-      { key: "google_ads", label: "Google Ads", connected: true, state_text: "已接上" },
-    ]);
-    const c = campaign({ ready_count: 1, total: 1 });
-    c.groups = [group("google_ads")];
-    const first = renderPage(c, "auto_meta");
-    expect(await screen.findByText("平台：Google Ads（已接上）")).toBeTruthy();
-    expect(screen.queryByText(/平台：Meta/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "手動發布準備" }));
-    expect(first.onChangeAdapter).toHaveBeenCalledWith("manual");
-    first.unmount();
+it("earlier steps stay reachable: from 讀回核對 the platform step opens as it is", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("verify"));
+  renderAt(`${base}/platform`);
+  expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
+  expect(where()).toBe(`${base}/platform`);
+  expect(screen.getByRole("link", { name: "回到確認上架清單" }).getAttribute("href")).toBe(`${base}/list`);
+});
 
-    renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
-    await user.click(confirm);
-    expect(await screen.findByText(/目前僅支援與 Meta 配對/)).toBeTruthy();
-    expect(screen.getByText(/這個 Campaign 的平台目前不能使用 Meta 配對/)).toBeTruthy();
-    const pairingButton = screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement;
-    expect(pairingButton.disabled).toBe(true);
-    await user.click(pairingButton);
-    expect(bindCampaign).not.toHaveBeenCalled();
-  });
+it("a stale launch is decided on the platform step; the decision reads the launch again", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValueOnce(view("stale")).mockResolvedValue(view("platform"));
+  vi.mocked(getHandoff).mockResolvedValue({ items: [], launch_stale: { diff: [{}, {}] } } as never);
+  renderAt(`${base}/verify`);
+  await waitFor(() => expect(where()).toBe(`${base}/platform`));
+  expect(await screen.findByRole("heading", { name: "方案改過 2 處" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "重新核准" }));
+  expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
+  expect(screen.getByText("已用現在的方案重新核准")).toBeTruthy();
+  expect(fetchLaunchView).toHaveBeenCalledTimes(2);
+});
 
-  it("必要上架欄位直接顯示，選填 ID 與核對紀錄收合後仍可展開", async () => {
-    vi.mocked(getPublish).mockResolvedValue({
-      adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual",
-      describe: { adapter: "manual", message: null, checklist: [{
-        level: "group", id: "grp_1", name: "投放組", fields: [
-          { label: "每日預算", value: 1000, reason: "必要預算" },
-          { label: "平台活動 ID（手動紀錄）", value: "尚未填寫", reason: "選填紀錄" },
-        ],
-      }] },
-    });
-    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
-    expect(await screen.findByText("每日預算")).toBeTruthy();
-    expect(screen.queryByText("平台活動 ID（手動紀錄）")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "選填 ID 與核對紀錄" }));
-    expect(screen.getByText("平台活動 ID（手動紀錄）")).toBeTruthy();
-  });
+it("an imported campaign has no publish page: it points to its own material handoff", async () => {
+  vi.mocked(getCampaign).mockResolvedValue({ ...CAMPAIGN, origin: "imported" } as CampaignDetail);
+  vi.mocked(fetchLaunchView).mockReturnValue(new Promise(() => {}));
+  renderAt(`${base}/list`);
+  expect((await screen.findByRole("link", { name: "前往自帶素材安排" })).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
+});
 
-  it("Meta channel 狀態讀取失敗時維持未知並停用配對，不送 request", async () => {
-    vi.mocked(getPublish).mockImplementation((_brandId, _campaignId, adapter = "manual") => Promise.resolve({
-      adapters: [{ key: "manual", label: "手動發布" }, { key: "auto_meta", label: "自動發布（未接上）" }],
-      adapter, describe: { adapter, message: null, checklist: [] },
-    }));
-    vi.mocked(fetchChannels).mockRejectedValue(new Error("offline"));
-    const c = campaign({ ready_count: 1, total: 1 });
-    c.groups = [group("meta")];
-    renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
-    await userEvent.click(confirm);
-    expect(await screen.findByText(/Meta 連線狀態目前無法確認/)).toBeTruthy();
-    const pairingButton = screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement;
-    expect(pairingButton.disabled).toBe(true);
-    await userEvent.click(pairingButton);
-    expect(bindCampaign).not.toHaveBeenCalled();
-  });
+it("a failed launch read shows ReadFailed with 重試 — never an empty list", async () => {
+  vi.mocked(fetchLaunchView).mockRejectedValueOnce(new Error("伺服器忙碌")).mockResolvedValue(view("list"));
+  renderAt(`${base}/list`);
+  expect((await screen.findByRole("alert")).textContent).toContain("上架清單讀不到：伺服器忙碌");
+  fireEvent.click(screen.getByRole("button", { name: "重試" }));
+  expect(await screen.findByRole("heading", { name: "確認上架清單" })).toBeTruthy();
+});
 
-  it("Meta 未連線時提供既有連線入口並停用配對", async () => {
-    vi.mocked(getPublish).mockResolvedValue({
-      adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual",
-      describe: { adapter: "manual", message: null, checklist: [] },
-    });
-    vi.mocked(fetchChannels).mockResolvedValue([
-      { key: "meta", label: "Meta", connected: false, state_text: "未接上" },
-    ]);
-    const c = campaign({ ready_count: 1, total: 1 });
-    c.groups = [group("meta")];
-    renderPage(c, "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await userEvent.click(screen.getByRole("button", { name: "舊版名稱配對與紀錄（不代表本次清單完成）" }));
-    await userEvent.click(confirm);
-    expect(await screen.findByText(/先完成 Meta 廣告連線/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "前往 Meta 廣告連線" }).getAttribute("href")).toBe("/settings?tab=meta");
-    expect((screen.getByRole("button", { name: "我已在Meta建好，開始配對" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(bindCampaign).not.toHaveBeenCalled();
-  });
-
-  it("confirm rejected by the server shows its message next to the button (drill 5)", async () => {
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [{ key: "manual", label: "手動發布" }], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "current-plan-hash" } });
-    vi.mocked(publishCampaign).mockRejectedValue(new Error("餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。"));
-    renderPage(campaign({ ready_count: 0, total: 0 }), "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await enabled(confirm);
-    await userEvent.click(confirm);
-    expect((await screen.findByRole("alert")).textContent).toContain("餘額尚不確定");
-  });
-
-describe("PublishPage（F29-I16）投放設定掛在上架清單", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "已接上" }]);
-  });
-  const hashDescribe = (hash: string) => ({ adapters: [{ key: "manual" as const, label: "手動發布" }], adapter: "manual" as const, describe: { adapter: "manual" as const, message: null, checklist: [], content_hash: hash } });
-
-  it("投放設定有錯時「核准上架清單」停用，提示就是錯誤；先不要可回投放中心", async () => {
-    vi.mocked(getPublish).mockResolvedValue(hashDescribe("hash-1"));
-    vi.mocked(getLaunchSettings).mockResolvedValue(settingsView({ placement: { mode: "manual", positions: [] } },
-      [{ field: "placement.positions", code: "positions_empty", message: "手動版位至少選一個" }]));
-    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
-    expect(await screen.findByText("手動版位至少選一個，先在「投放設定」改好")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("link", { name: "✕ 先不要，回投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
-    await userEvent.click(screen.getByRole("button", { name: "核准上架清單 →" }));
-    expect(publishCampaign).not.toHaveBeenCalled();
-  });
-
-  it("改了設定：存好後重新讀核准內容，用新的版本核准；核准後設定唯讀並出現可複製的投放設定", async () => {
-    vi.mocked(getPublish).mockResolvedValueOnce(hashDescribe("hash-1")).mockResolvedValue(hashDescribe("hash-2"));
-    vi.mocked(saveLaunchSettings).mockImplementation(async (_b, _c, values) => settingsView(values));
-    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
-    vi.mocked(getCampaign).mockResolvedValue(campaign({ ready_count: 1, total: 1 }));
-    const user = userEvent.setup();
-    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
-    const confirm = await screen.findByRole("button", { name: "核准上架清單 →" });
-    await enabled(confirm);
-    await user.selectOptions(screen.getByLabelText(/出價方式/), "cost_cap");
-    await waitFor(() => expect(getPublish).toHaveBeenCalledTimes(2));
-    await enabled(confirm);
-    await user.click(confirm);
-    await waitFor(() => expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash-2", operation_id: expect.any(String) }));
-    expect(await screen.findByRole("button", { name: "複製出價方式" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "核准上架清單 →" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: /出價方式/ })).toBeNull();
-  });
-
-  const approved = (hash = "hash-1") => {
-    vi.mocked(getPublish).mockResolvedValue(hashDescribe(hash));
-    const c = campaign({ ready_count: 1, total: 1 });
-    c.actions = [{ kind: "publish", target_kind: "campaign", after_json: { adapter: "manual", content_hash: hash, operation_id: "op_1" } } as unknown as CampaignDetail["actions"][number]];
-    return c;
-  };
-
-  it("每一步只有一個投放設定區塊：核准前只有可改的設定卡", async () => {
-    renderPage(campaign({ ready_count: 1, total: 1 }), "manual");
-    expect(await screen.findByText("每個廣告組都用這組・都是建議值")).toBeTruthy();
-    expect(screen.getByLabelText(/出價方式/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "複製出價方式" })).toBeNull();
-    expect(screen.queryByText(/投放設定讀回/)).toBeNull();
-  });
-
-  it("每一步只有一個投放設定區塊：核准後（到平台完成）只有可複製的設定", async () => {
-    renderPage(approved(), "manual");
-    expect(await screen.findByRole("button", { name: "複製出價方式" })).toBeTruthy();
-    expect(screen.getAllByRole("region", { name: "投放設定" })).toHaveLength(1);
-    expect(screen.queryByRole("combobox", { name: /出價方式/ })).toBeNull();
-    expect(screen.queryByText(/投放設定讀回/)).toBeNull();
-  });
-
-  it("每一步只有一個投放設定區塊：有讀回後只剩讀回，不再有可複製的設定或設定卡", async () => {
-    panel.readback = true;
-    renderPage(approved(), "manual");
-    expect(await screen.findByText("逐項平台核對・投放設定讀回")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByRole("region", { name: "投放設定" })).toBeNull());
-    expect(screen.queryByRole("button", { name: "複製出價方式" })).toBeNull();
-    expect(getLaunchSettings).not.toHaveBeenCalled();
-  });
+it("the campaign read fails on its own: the list still shows, the settings block says so and approval waits", async () => {
+  vi.mocked(getCampaign).mockRejectedValue(new Error("活動讀取逾時"));
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("list"));
+  renderAt(`${base}/list`);
+  expect(await screen.findByText(/活動資料讀不到：活動讀取逾時/)).toBeTruthy();
+  expect(screen.getByRole("region", { name: "清單" })).toBeTruthy();
+  expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
 });
