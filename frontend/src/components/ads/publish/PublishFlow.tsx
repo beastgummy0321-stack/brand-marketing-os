@@ -47,6 +47,17 @@ export function periodText(start: string | null, end: string | null): string {
   return `${md(start) ?? "開始日未知"} – ${md(end) ?? "結束日未知"}`;
 }
 
+/** The list's read-only field line: start and end date read as one 期間 (prototype `pubList()`); the platform step
+ * keeps them apart, full dates, for pasting into the platform's date fields. */
+export function summaryFields(fields: LaunchField[]): LaunchField[] {
+  const start = fields.find((f) => f.key === "start_date"), end = fields.find((f) => f.key === "end_date");
+  if (!start && !end) return fields;
+  const period: LaunchField = { key: "period", label: "期間", value: periodText(start?.value == null ? null : String(start.value), end?.value == null ? null : String(end.value)) };
+  const at = fields.findIndex((f) => f === start || f === end);
+  const rest = fields.filter((f) => f !== start && f !== end);
+  return [...rest.slice(0, at), period, ...rest.slice(at)];
+}
+
 export const timeText = (iso: string | null) => (iso && !Number.isNaN(new Date(iso).getTime()) ? formatSyncTime(iso) : null);
 
 /** The platform the batch goes to: one channel key across the campaign's groups, its label from the channel list.

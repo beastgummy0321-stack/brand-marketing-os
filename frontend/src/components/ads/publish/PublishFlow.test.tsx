@@ -41,10 +41,11 @@ const ITEMS: LaunchItem[] = [
     { key: "name", label: "名稱", value: "秋季新色預購" }, { key: "objective", label: "目標", value: "購買" },
     { key: "start_date", label: "開始日期", value: "2026-10-01" }, { key: "end_date", label: "結束日期", value: "2026-10-31" }] }),
   item({ id: "h2", kind: "group", name: "A・廣泛受眾", parent_name: "秋季新色預購", fields: [
-    { key: "name", label: "名稱", value: "A・廣泛受眾" }, { key: "budget_amount", label: "每日預算", value: 1500.5 }] }),
+    { key: "name", label: "名稱", value: "A・廣泛受眾" }, { key: "budget_amount", label: "每日預算", value: 1500.5 },
+    { key: "manual_settings.landing_url", label: "落地頁網址", value: "https://shop.example.com/fall" }] }),
   item({ id: "h3", kind: "ad", name: LONG, parent_name: "A・廣泛受眾", fields: [
     { key: "name", label: "名稱", value: LONG }, { key: "group", label: "放在", value: "A・廣泛受眾" },
-    { key: "material", label: "素材", value: "已確認版本・圖片 1 張" }, { key: "landing_url", label: "導流網址", value: "https://shop.example.com/fall" }] }),
+    { key: "material", label: "素材", value: "已確認版本・圖片 1 張" }] }),
 ];
 function view(o: Partial<LaunchView> = {}): LaunchView {
   return {
@@ -160,7 +161,7 @@ describe("到平台完成", () => {
     expect(screen.getByText("待操作 3")).toBeTruthy();
     expect((screen.getByRole("button", { name: /讀回核對/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("先勾起已建好的項目")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "複製導流網址" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "複製落地頁網址" })).toBeTruthy();
   });
 
   it("我建好了 reports the item and shows the refreshed state; 取消 takes the report back", async () => {
@@ -234,7 +235,8 @@ describe("讀回核對", () => {
     expect(await screen.findByText("2 項和核准的不一樣")).toBeTruthy();
     expect(screen.getByText("1,500.5")).toBeTruthy();
     expect(screen.getByText("3,000")).toBeTruthy();
-    expect(screen.getByText("核准的每日預算")).toBeTruthy();
+    expect(screen.getByText("核准的")).toBeTruthy();
+    expect(screen.getByText("Meta 目前")).toBeTruthy();
     expect(screen.getByRole("link", { name: "回平台改 →" })).toBeTruthy();
     fireEvent.click(within(screen.getByRole("region", { name: "投放設定讀回" })).getByRole("button", { name: "我看過了，一樣" }));
     await waitFor(() => expect(confirmLaunchSetting).toHaveBeenCalledWith("brd_1", "cmp_1", "pixel_id"));
@@ -242,16 +244,16 @@ describe("讀回核對", () => {
   });
 
   it("an unreadable landing URL is confirmed by eye per field; built items read 待讀回, the rest 還沒建", async () => {
-    const unread = { state: "unknown" as const, unreadable: [{ key: "landing_url", label: "導流網址", confirmed: false }] };
-    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "built" }, h3: unread }, read));
-    vi.mocked(confirmLaunchItemField).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "built" }, h3: { state: "verified" } }, read));
+    const unread = { state: "unknown" as const, unreadable: [{ key: "manual_settings.landing_url", label: "落地頁網址", confirmed: false }] };
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: unread, h3: { state: "built" } }, read));
+    vi.mocked(confirmLaunchItemField).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "built" } }, read));
     renderAt("verify");
     expect(await screen.findByText("1／3 已核對")).toBeTruthy();
     expect(screen.getByText("https://shop.example.com/fall")).toBeTruthy();
     expect(screen.getByText("待讀回")).toBeTruthy();
     expect(screen.getByRole("link", { name: "繼續建剩下的 →" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "我看過了，一樣" }));
-    await waitFor(() => expect(confirmLaunchItemField).toHaveBeenCalledWith("brd_1", "cmp_1", "h3", "landing_url"));
+    await waitFor(() => expect(confirmLaunchItemField).toHaveBeenCalledWith("brd_1", "cmp_1", "h2", "manual_settings.landing_url"));
     expect(await screen.findByText("2／3 已核對")).toBeTruthy();
   });
 

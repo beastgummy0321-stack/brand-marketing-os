@@ -79,7 +79,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
               <ItemTitle item={item} strong={false} />
               {item.mismatches.map((m) => (
                 <DiffRow key={m.key} field={byKey.get(m.key)?.label ?? m.label} before={m.expected} after={m.observed}
-                  beforeLabel={`核准的${byKey.get(m.key)?.label ?? m.label}`} afterLabel={`${platform.label} 目前`} />
+                  beforeLabel="核准的" afterLabel={`${platform.label} 目前`} />
               ))}
               {item.unreadable.map((u) => (
                 <div key={u.key} className="mt-2 flex flex-wrap items-center gap-2 text-xs">

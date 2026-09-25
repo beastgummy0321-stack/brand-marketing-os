@@ -8,7 +8,7 @@ import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ActionBar, CopyField, CopyFields, ReadFailed, TodoRow, formatAmount } from "../patterns";
 import { LaunchSettingsCard } from "./LaunchSettingsCard";
-import { ItemTitle, PublishHead, campaignPath, fieldText, periodText, publishPath } from "./PublishFlow";
+import { ItemTitle, PublishHead, campaignPath, fieldText, periodText, publishPath, summaryFields } from "./PublishFlow";
 
 /** F30-I13 step 1 (prototype v10 `pubList()`, hash `pub/fall/list`): the four summary tiles, the launch settings card
  * (F29 `LaunchSettingsCard`, read only after approval), the numbered list of what will be built and 核准上架清單. Only
@@ -127,7 +127,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
           <TodoRow key={item.id} no={i + 1}>
             <ItemTitle item={item} />
             <CopyFields>
-              {item.fields.filter((f) => f.key !== "name").map((f) => <CopyField key={f.key} label={f.label} value={fieldText(f.value)} copy={false} />)}
+              {summaryFields(item.fields.filter((f) => f.key !== "name")).map((f) => <CopyField key={f.key} label={f.label} value={fieldText(f.value)} copy={false} />)}
             </CopyFields>
           </TodoRow>
         ))}
