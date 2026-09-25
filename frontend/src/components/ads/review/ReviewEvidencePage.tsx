@@ -15,7 +15,7 @@ import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, Ladder, MoneyTag, ReadFailed, Segmented,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
   Term, TodoRow,
 } from "../patterns";
 import {
@@ -399,14 +399,26 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         </div>
       )}
 
+      {showEvidence && rejected && (
+        // v10 ai-blocked `stepEv()` `adIdent()`: with no AI card the ad's identity is a full-width card on top.
+        <div className="flex items-center gap-3.5 rounded-xl border border-border bg-card p-5">
+          <AdTile url={triageItem?.triage.thumbnail_url} />
+          <div className="min-w-0 flex-1">
+            {triageItem && <GradeChip grade={triageItem.triage.grade} label={triageItem.triage.grade_label} />}
+            <p className="mt-1 line-clamp-2 font-semibold">{evidence.target.name ?? "（未命名廣告）"}</p>
+          </div>
+        </div>
+      )}
+
       {showEvidence && (
-        <div className="grid items-start gap-4 xl:grid-cols-[1.05fr_1fr_1fr]">
-          <div className={rejected ? "rounded-xl border border-border bg-card p-5" : "rounded-xl border border-primary/20 bg-accent p-5"}>
-            <div className={rejected ? "flex items-center gap-3" : "mb-3.5 flex items-center gap-3"}>
+        <div className={rejected ? "grid items-start gap-4 xl:grid-cols-2" : "grid items-start gap-4 xl:grid-cols-[1.05fr_1fr_1fr]"}>
+          {!rejected && (
+          <div className="rounded-xl border border-primary/20 bg-accent p-5">
+            <div className="mb-3.5 flex items-center gap-3">
               <AdTile url={triageItem?.triage.thumbnail_url} />
               <p className="line-clamp-2 min-w-0 flex-1 font-semibold">{evidence.target.name ?? "（未命名廣告）"}</p>
             </div>
-            {rejected ? null : first ? (
+            {first ? (
               <>
                 <Chip tone="accent">✦ AI 建議</Chip>
                 <p className="mt-2 text-xl font-semibold">{RECOMMENDATION_TITLE[first.recommendation]}</p>
@@ -427,6 +439,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               </>
             )}
           </div>
+          )}
 
           <div className="rounded-xl border border-border bg-card p-5">
             <div className="mb-1.5 flex items-center justify-between">

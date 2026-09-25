@@ -171,6 +171,18 @@ describe("review pieces（F23）", () => {
     expect((screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("接上後開放")).toBeTruthy();
   });
+
+  it("OptionCard 建議標籤：預設「建議」accent；F30 可改字與 neutral（照順序先試）", async () => {
+    const { OptionCard } = await import("./ReviewPieces");
+    const { unmount } = render(<OptionCard icon="✎" title="只改文案" note="x" recommended />);
+    expect(screen.getByText("建議").getAttribute("data-tone")).toBe("accent");
+    unmount();
+    render(<OptionCard icon="✎" title="只改文案" note="x" recommended recommendedLabel="照順序先試" recommendedTone="neutral" />);
+    const chip = screen.getByText("照順序先試");
+    expect(chip.getAttribute("data-tone")).toBe("neutral");
+    expect(chip.className).toContain("bg-muted");
+    expect(screen.queryByText("建議")).toBeNull();
+  });
 });
 
 describe("loop pieces（F27）", () => {

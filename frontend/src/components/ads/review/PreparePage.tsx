@@ -126,6 +126,9 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
   const copyDisabled = copyEditable?.ok === false;
   // 建議指到只改文案，但那張卡停用時，挪去下一步（換一張圖）——不把建議標籤放在不能點的卡上。
   const effectiveRecommended: Branch | null = recommended === "copy" && copyDisabled ? "image" : recommended;
+  // F30 (v10 ai-blocked `stepDir()`): with no AI recommendation (e.g. the fact check rejected its text) the pick
+  // comes from the ladder alone, so its chip says 照順序先試, not 建議.
+  const ladderOnly = review !== null && !first;
 
   // 進頁預選建議方向（沒有建議時預設「只改文案」，安全、可逆的預設）；只在資料剛讀完、
   // 還沒選過方向時跑一次。
@@ -136,7 +139,8 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
 
   function pick(key: Branch) {
     setSelected(key);
-    setReason(REASON_DEFAULT[key]);
+    // No AI recommendation to adopt: the copy default must not record 「採用建議」.
+    setReason(ladderOnly && key === "copy" ? "照順序先試：保留圖片，測試新文案" : REASON_DEFAULT[key]);
     setQuickPick("7");
     setCustomDate("");
     setSaveError(null);
@@ -259,6 +263,8 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
               title={o.title}
               note={o.note}
               recommended={o.key === effectiveRecommended}
+              recommendedLabel={ladderOnly ? "照順序先試" : undefined}
+              recommendedTone={ladderOnly ? "neutral" : undefined}
               picked={o.key === selected}
               disabled={disabled}
               disabledNote={disabled ? (copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。") : undefined}

@@ -420,6 +420,8 @@ describe("ReviewEvidencePage（F30-I02）AI 說明被擋下與再請 AI 看一�
     vi.mocked(reviewApi.getReview).mockResolvedValue(rejectedRound());
     renderAt(roundPath());
     expect(await screen.findByText("✦ AI 這次的說明沒採用")).toBeTruthy();
+    // Prototype `adIdent()`: the ad's grade and name head the page in their own card (no AI column).
+    expect(screen.getByText("太貴").getAttribute("data-grade")).toBe("over");
     expect(screen.getByText("這則廣告")).toBeTruthy();
     expect(screen.getByText("3,000")).toBeTruthy();
     expect(screen.getByText("商城訂單")).toBeTruthy();
