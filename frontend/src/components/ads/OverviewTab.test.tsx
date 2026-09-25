@@ -36,9 +36,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     name: "測試 Campaign",
     goal_text: "想在雙十一衝一波業績",
     objective: "conversion",
-    success_metric: "cpa",
-    success_target: null,
-    success_basis: null,
+    cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: null,
     end_date: null,
     status: "live",
@@ -144,18 +142,18 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.queryByText(/daily_budget/)).toBeNull();
   });
 
-  it("labels 是名單時：Campaign 目標與提示句改印「名單」「每筆名單成本」，不是寫死的「購買」", () => {
+  it("labels 是名單時：上限與提示句改印「名單」「每筆名單成本」，不是寫死的「購買」", () => {
     render(
       <OverviewTab
         campaign={campaign({
-          success_metric: "cpa", success_target: 300,
+          cap: { value: 300, basis: "own", own_value: 300, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 },
           labels: { conversion: "名單", count: "名單數", cpa: "每筆名單成本" },
         })}
         onChangeTab={vi.fn()}
       />,
     );
 
-    expect(screen.getByText(/每筆名單成本 目標/)).toBeTruthy();
+    expect(screen.getByText(/每筆名單成本上限 NT\$ 300/)).toBeTruthy();
     expect(screen.getByText(/名單、每筆名單成本、ROAS 等成效數字/)).toBeTruthy();
   });
 

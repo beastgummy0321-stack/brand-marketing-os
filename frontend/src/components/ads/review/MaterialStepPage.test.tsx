@@ -82,6 +82,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "aex_1", native_id: "native_1", name: "晨光隨行杯・隨時有你", campaign_id: "cmp_1",
     campaign_name: "【銷售】測試活動", thumbnail_url: null, class: "worse", label: "變差",
     reason_code: "cost_per_result_up",
+    grade: "over", grade_label: "太貴",
     window: { start: "2026-09-08", end: "2026-09-21", days: 14, previous_start: "2026-08-25", previous_end: "2026-09-07", extended_from: null },
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3000, result_count: 5, cost_per_result: 600, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
@@ -115,7 +116,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
       observations: [], next_entity_cursor: null, next_observation_cursor: null,
       window: { start: "2026-09-08", end: "2026-09-21" }, connections: [], sync: {}, coverage: {},
     },
-    name: "測試活動", goal_text: null, objective: "銷售", success_metric: "purchases", success_target: null, success_basis: null,
+    name: "測試活動", goal_text: null, objective: "銷售", cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: null, end_date: null, status: "live", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null,
     context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-01-01",
     groups: [], actions: [], outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { total: 0, ready_count: 0 },
@@ -126,7 +127,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 function handoff(overrides: Partial<handoffApi.HandoffWorkspace> = {}): handoffApi.HandoffWorkspace {
   return {
     items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
-    notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
+    launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
     ...overrides,
   };
 }

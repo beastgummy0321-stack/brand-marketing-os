@@ -1,21 +1,15 @@
 """app/tests/test_ads_judgment.py — F04-I08 falsifiers: `app/ads/judgment.py` is pure string
-rules (照 `app/tests/test_ads_budget.py` 的純函式測試寫法，judgment 那半不需要 DB)，加一條
-路由測試證明 `GET .../home` 的租戶界線與誠實空狀態。
+rules (照 `app/tests/test_ads_budget.py` 的純函式測試寫法，judgment 那半不需要 DB)。F28-I06 起
+`GET .../home` 是月份總覽（`test_ads_home_overview.py`），舊首頁路由測試隨路由一起刪除。
 """
 
 import unittest
 from datetime import date
-from uuid import uuid4
 
-from fastapi.testclient import TestClient
-
-import app.main as main
 import app.shared.web as web
 from app.ads import judgment
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
-
-from .identity_test_helpers import mint_hs256
 
 ACTOR = "測試員"
 
@@ -64,13 +58,6 @@ class CampaignJudgmentDraftTest(unittest.TestCase):
         campaign = {"status": "draft", "budget_basis_json": {"strategy": {"allocation": []}}}
         result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
         self.assertEqual(result["text"], "策略已產生，還沒採用")
-
-
-class BrandHeadlineTest(unittest.TestCase):
-    def test_all_zero_says_no_decision_needed(self):
-        counts = {"running": 0, "upcoming": 0, "ended": 0, "needs_decision": 0}
-        result = judgment.brand_headline(counts)
-        self.assertIn("目前沒有需要你決定的事", result["facts"])
 
 
 class ActionLineTest(unittest.TestCase):
@@ -145,7 +132,7 @@ class CampaignDetailJudgmentTest(unittest.TestCase):
         )["id"]
         campaign = {
             "name": "判斷句測試 Campaign", "goal_text": "驗證判斷句", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
         }
         campaign_id = ads_repo.create_campaign(
             web.conn, org_id, brand_id, campaign, created_by=ACTOR,
@@ -159,53 +146,9 @@ class CampaignDetailJudgmentTest(unittest.TestCase):
         self.assertIn("actions", detail)
 
 
-class AdsHomeRouteTest(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(main.app)
-        user = uuid4()
-        self.token = mint_hs256(sub=str(user), email=f"adshome-{user.hex[:8]}@example.com")
-        me = self.client.get("/api/identity/me", headers={"Authorization": f"Bearer {self.token}"})
-        self.org_id = me.json()["org"]["id"]
-        self.brand_id = bi_repo.create_brand(
-            web.conn, org_id=self.org_id, name="測試品牌：投放中心首頁", client_name=None,
-            actor=ACTOR,
-        )["id"]
-        web.conn.commit()
-        self.headers = {"Authorization": f"Bearer {self.token}"}
-
-    def test_imported_campaign_is_visible_without_becoming_an_upcoming_draft(self):
-        from app.ads import external_repository
-
-        imported = external_repository.create_imported_campaign(
-            web.conn, self.org_id, self.brand_id, name="真實平台活動"
-        )
-        web.conn.commit()
-        response = self.client.get(f"/api/ads/brands/{self.brand_id}/home", headers=self.headers)
-        home = response.json()["home"]
-        self.assertEqual(home["counts"]["upcoming"], 0)
-        self.assertEqual(home["imported_campaigns"][0]["id"], imported["id"])
-        self.assertEqual(home["counts"]["imported"], 1)
-
-    def test_home_404s_for_wrong_tenant_and_200s_with_honest_empty_state(self):
-        other_user = uuid4()
-        other_token = mint_hs256(
-            sub=str(other_user), email=f"adshomeb-{other_user.hex[:8]}@example.com",
-        )
-        wrong = self.client.get(
-            f"/api/ads/brands/{self.brand_id}/home",
-            headers={"Authorization": f"Bearer {other_token}"},
-        )
-        self.assertEqual(wrong.status_code, 404)
-
-        response = self.client.get(f"/api/ads/brands/{self.brand_id}/home", headers=self.headers)
-        self.assertEqual(response.status_code, 200)
-        home = response.json()["home"]
-        self.assertEqual(home["counts"]["needs_decision"], 0)
-
-
 class ConversionLabelsTest(unittest.TestCase):
     """F05-I12：「每筆名單成本」與 CPA 是同一個算式的兩個名字——只換 label，不新增
-    `success_metric` 的值（§8 第 4 條）。"""
+    指標（§8 第 4 條）。"""
 
     def test_purchase_goal(self):
         labels = judgment.conversion_labels("purchase")

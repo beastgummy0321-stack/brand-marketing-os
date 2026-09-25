@@ -1,9 +1,11 @@
-"""app/tests/test_ads_closeout.py — F03-I12 falsifiers: a campaign that beat its ROAS target
-closes as 達成 with the compared numbers; one that missed it closes as 未達成; one with two
-purchases closes as 看不出 and still writes a learning (at `observed`, text names the small
-sample); a second campaign in the same direction makes the next learning `likely`; closing
-twice does not write a second learning; an ended campaign at end+7d or end+6d stays open — there is
-no unattended auto-close path, close-out is always a person's or an explicit job's call
+"""app/tests/test_ads_closeout.py — F03-I12 falsifiers, re-cut by F28-I01 (one cap): a campaign
+whose cost per result is at or under its cap closes as 達成 with the compared numbers; one over it
+closes as 未達成; one with two purchases closes as 看不出 and still writes a learning (at
+`observed`, text names the small sample); no cap closes as 看不出 naming the missing cap; without
+an own cap the cap is break-even from product economics; a second campaign with the same result
+kind in the same direction makes the next learning `likely` (another result kind does not count);
+closing twice does not write a second learning; an ended campaign at end+7d or end+6d stays open —
+there is no unattended auto-close path, close-out is always a person's or an explicit job's call
 (`ExpiredActivityRemainsOpenTest`); a learning is never written into `brand_fact` or `rule`
 (ruling 15/16).
 """
@@ -32,10 +34,10 @@ class CloseoutTestBase(unittest.TestCase):
         self.today = coresettings.today_for_org(self.conn, org_id=self.org_id)
         self.conn.commit()
 
-    def _campaign(self, *, metric: str, target, start_date, end_date, status="live") -> dict:
+    def _campaign(self, *, cap, start_date, end_date, status="live", context=None) -> dict:
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
-            "name": f"測試 Campaign {metric}-{target}", "goal_text": "衝一波", "objective": "購買",
-            "success_metric": metric, "success_target": target,
+            "name": f"測試 Campaign {cap}", "goal_text": "衝一波", "objective": "購買",
+            "target_cost": cap, "context_json": context or {},
             "start_date": start_date, "end_date": end_date, "status": status,
         }, created_by=ACTOR)
         self.conn.commit()
@@ -59,6 +61,16 @@ class CloseoutTestBase(unittest.TestCase):
         )
         self.conn.commit()
 
+    def _three_days(self, campaign: dict, *, spend: float, purchases: int | None,
+                    revenue: float | None, source: str = "simulated") -> None:
+        start = self.today - timedelta(days=2)
+        group = self._group(campaign["id"])
+        for offset in range(3):
+            self._outcome_row(
+                campaign["id"], group["id"], start + timedelta(days=offset),
+                spend=spend, purchases=purchases, revenue=revenue, source=source,
+            )
+
     def _facts_and_rules_untouched(self) -> None:
         facts = self.conn.execute(
             "SELECT COUNT(*) AS n FROM brand_fact WHERE brand_id = %s", (self.brand_id,),
@@ -71,40 +83,32 @@ class CloseoutTestBase(unittest.TestCase):
 
 
 class BeatTargetClosesAchievedTest(CloseoutTestBase):
-    def test_beats_roas_target_closes_as_achieved(self):
+    def test_cost_per_result_under_the_cap_closes_as_achieved(self):
         start = self.today - timedelta(days=2)
-        campaign = self._campaign(metric="roas", target=2.0, start_date=start, end_date=self.today)
-        group = self._group(campaign["id"])
-        for offset in range(3):
-            self._outcome_row(
-                campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=1000.0, purchases=5, revenue=2500.0,
-            )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         self.assertEqual(closed["status"], "closed")
         self.assertEqual(closed["verdict"], "達成")
-        self.assertEqual(closed["verdict_json"]["metric"], "roas")
-        self.assertEqual(closed["verdict_json"]["target"], 2.0)
-        self.assertAlmostEqual(closed["verdict_json"]["actual"], 2.5)
+        self.assertEqual(closed["verdict_json"]["metric"], "cpa")
+        self.assertEqual(closed["verdict_json"]["target"], 300)
+        self.assertEqual(closed["verdict_json"]["basis"], "own")
+        self.assertAlmostEqual(closed["verdict_json"]["actual"], 200.0)  # 3000/15
         self.assertIsNotNone(closed["closed_at"])
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
         self.assertEqual(len(learnings), 1)
         self.assertEqual(learnings[0]["confidence"], "observed")
+        self.assertIn("每筆成本上限 300", learnings[0]["learning_text"])
         self._facts_and_rules_untouched()
 
 
 class MissedTargetClosesUnachievedTest(CloseoutTestBase):
-    def test_missed_cpa_target_closes_as_unachieved(self):
+    def test_over_the_cap_closes_as_unachieved(self):
         start = self.today - timedelta(days=2)
-        campaign = self._campaign(metric="cpa", target=300, start_date=start, end_date=self.today)
-        group = self._group(campaign["id"])
-        for offset in range(3):
-            self._outcome_row(
-                campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=2000.0, purchases=5, revenue=1000.0,
-            )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
@@ -114,9 +118,7 @@ class MissedTargetClosesUnachievedTest(CloseoutTestBase):
 
 class LowSampleClosesInconclusiveButStillLearnsTest(CloseoutTestBase):
     def test_two_purchases_closes_as_inconclusive_and_still_writes_a_learning(self):
-        campaign = self._campaign(
-            metric="cpa", target=300, start_date=self.today, end_date=self.today,
-        )
+        campaign = self._campaign(cap=300, start_date=self.today, end_date=self.today)
         group = self._group(campaign["id"])
         self._outcome_row(campaign["id"], group["id"], self.today, spend=200.0, purchases=2,
                            revenue=400.0)
@@ -134,9 +136,7 @@ class LowSampleClosesInconclusiveButStillLearnsTest(CloseoutTestBase):
 class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBase):
     def test_meta_sourced_campaign_closes_inconclusive_naming_untracked_not_low_sample(self):
         start = self.today - timedelta(days=6)
-        campaign = self._campaign(
-            metric="purchases", target=50, start_date=start, end_date=self.today,
-        )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
         group = self._group(campaign["id"])
         for offset in range(7):
             self._outcome_row(
@@ -157,37 +157,32 @@ class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBas
 
 
 class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
-    """F05-I12：`conversion_goal='lead'` 的品牌結案要印「每筆名單成本」／「名單數」，不是
-    寫死的「購買」——換的只是 label，`_judge` 的算式一個字沒動。"""
+    """F05-I12, re-cut by F28-I01: a `conversion_goal='lead'` brand never prints a hard-coded
+    「購買」. The learning sentence names the one metric (每筆成本上限); an untracked metric still
+    speaks the brand's own vocabulary (「每筆名單成本」)."""
 
-    def test_lead_brand_missed_cpa_target_prints_lead_labels(self):
+    def _lead_brand(self):
         bi_repo.set_brand_switches(
             self.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
         )
+
+    def test_lead_brand_missed_cap_never_prints_purchase(self):
+        self._lead_brand()
         start = self.today - timedelta(days=2)
-        campaign = self._campaign(metric="cpa", target=300, start_date=start, end_date=self.today)
-        group = self._group(campaign["id"])
-        for offset in range(3):
-            self._outcome_row(
-                campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=2000.0, purchases=5, revenue=1000.0,
-            )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         self.assertEqual(closed["verdict"], "未達成")
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
-        self.assertIn("每筆名單成本", learnings[0]["learning_text"])
+        self.assertIn("每筆成本上限", learnings[0]["learning_text"])
         self.assertNotIn("購買", learnings[0]["learning_text"])
 
-    def test_lead_brand_untracked_metric_names_lead_count_untracked(self):
-        bi_repo.set_brand_switches(
-            self.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
-        )
+    def test_lead_brand_untracked_metric_names_lead_cost_untracked(self):
+        self._lead_brand()
         start = self.today - timedelta(days=6)
-        campaign = self._campaign(
-            metric="purchases", target=50, start_date=start, end_date=self.today,
-        )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
         group = self._group(campaign["id"])
         for offset in range(7):
             self._outcome_row(
@@ -198,46 +193,34 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         self.assertEqual(closed["verdict"], "看不出")
-        self.assertIn("名單數未追蹤", closed["verdict_json"]["missing"])
+        self.assertIn("每筆名單成本未追蹤", closed["verdict_json"]["missing"])
 
 
 class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
-    """既有斷言不准改壞（Done 5）：品牌沒設 `conversion_goal`（`None`）維持原本的購買字串。"""
+    """品牌沒設 `conversion_goal`（`None`）：學習句印唯一的指標（每筆成本上限）與實際數字。"""
 
-    def test_default_brand_still_prints_purchase_labels(self):
+    def test_default_brand_prints_the_cap_sentence(self):
         start = self.today - timedelta(days=2)
-        campaign = self._campaign(metric="cpa", target=300, start_date=start, end_date=self.today)
-        group = self._group(campaign["id"])
-        for offset in range(3):
-            self._outcome_row(
-                campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=2000.0, purchases=5, revenue=1000.0,
-            )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
-        self.assertIn("每次購買成本", learnings[0]["learning_text"])
+        self.assertIn("每筆成本上限 300，實際 400", learnings[0]["learning_text"])
 
 
 class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
-    def test_second_campaign_in_the_same_direction_makes_the_next_learning_likely(self):
-        def _achieved_campaign():
-            start = self.today - timedelta(days=2)
-            campaign = self._campaign(
-                metric="roas", target=1.5, start_date=start, end_date=self.today,
-            )
-            group = self._group(campaign["id"])
-            for offset in range(3):
-                self._outcome_row(
-                    campaign["id"], group["id"], start + timedelta(days=offset),
-                    spend=1000.0, purchases=5, revenue=2500.0,
-                )
-            return campaign
+    def _achieved_campaign(self):
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
+        return campaign
 
-        first = _achieved_campaign()
+    def test_second_campaign_in_the_same_direction_makes_the_next_learning_likely(self):
+        first = self._achieved_campaign()
         closeout.close(self.conn, self.org_id, self.brand_id, first["id"], actor=ACTOR)
-        second = _achieved_campaign()
+        second = self._achieved_campaign()
         closeout.close(self.conn, self.org_id, self.brand_id, second["id"], actor=ACTOR)
 
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
@@ -246,17 +229,29 @@ class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
         self.assertEqual(by_cycle[first["id"]]["confidence"], "observed")
         self.assertEqual(by_cycle[second["id"]]["confidence"], "likely")
 
+    def test_same_verdict_with_another_result_kind_is_another_cohort(self):
+        # F28-I01: the cohort is same brand + same result kind + same verdict.
+        first = self._achieved_campaign()
+        ads_repo.save_campaign_target(
+            self.conn, self.org_id, self.brand_id, first["id"],
+            result_kind="lead", expected_revision=0, actor=ACTOR,
+        )
+        closeout.close(self.conn, self.org_id, self.brand_id, first["id"], actor=ACTOR)
+        second = self._achieved_campaign()
+        closeout.close(self.conn, self.org_id, self.brand_id, second["id"], actor=ACTOR)
+
+        by_cycle = {
+            row["source_cycle_id"]: row
+            for row in bi_repo.list_learnings(self.conn, self.brand_id)
+        }
+        self.assertEqual(by_cycle[second["id"]]["confidence"], "observed")
+
 
 class ClosingTwiceDoesNotDuplicateLearningTest(CloseoutTestBase):
     def test_closing_twice_writes_only_one_learning(self):
         start = self.today - timedelta(days=2)
-        campaign = self._campaign(metric="roas", target=2.0, start_date=start, end_date=self.today)
-        group = self._group(campaign["id"])
-        for offset in range(3):
-            self._outcome_row(
-                campaign["id"], group["id"], start + timedelta(days=offset),
-                spend=1000.0, purchases=5, revenue=2500.0,
-            )
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
 
         first = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
         second = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -267,57 +262,62 @@ class ClosingTwiceDoesNotDuplicateLearningTest(CloseoutTestBase):
         self.assertEqual(len(learnings), 1)
 
 
-class TargetPutDoesNotChangeCloseoutVerdictTest(CloseoutTestBase):
-    """F16-I04 repair regression: `PUT .../target` writes only `target_cost`/`target_basis`/
-    `result_kind`/`target_revision` -- never `success_metric`/`success_target`/`success_basis`,
-    the three fields `_judge()` actually reads. A campaign that gets a `PUT` between its outcome
-    landing and its close-out must reach the exact same verdict as an identical campaign that
-    never got one."""
+class CapResolutionTest(CloseoutTestBase):
+    """F28-I01: close-out reads the one resolved cap (`targets.resolve`) -- the own cap wherever
+    it was set, else break-even from product economics, else 看不出."""
 
-    def test_put_target_before_close_gives_the_same_verdict(self):
-        start = self.today - timedelta(days=2)
+    def _close(self, campaign):
+        self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)  # 400 each
+        return closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
-        def _cpa_campaign_with_outcome():
-            campaign = self._campaign(metric="cpa", target=300, start_date=start,
-                                       end_date=self.today)
-            group = self._group(campaign["id"])
-            for offset in range(3):
-                self._outcome_row(
-                    campaign["id"], group["id"], start + timedelta(days=offset),
-                    spend=2000.0, purchases=5, revenue=1000.0,
-                )
-            return campaign
+    def test_no_own_cap_judges_against_break_even(self):
+        product_id = bi_repo.create_product(
+            self.conn, self.brand_id, name="測試商品", actor=ACTOR,
+        )["id"]
+        bi_repo.save_product_economics(
+            self.conn, self.brand_id, product_id, selling_price=1000, currency="TWD",
+            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=450, shipping_cost=50,
+        )
+        self.conn.commit()
+        campaign = self._campaign(
+            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
+            context={"product_ids": [product_id]},
+        )
+        closed = self._close(campaign)
+        self.assertEqual(closed["verdict_json"]["basis"], "break_even")
+        self.assertEqual(closed["verdict_json"]["target"], 500)  # 1000 - 450 - 50
+        self.assertEqual(closed["verdict"], "達成")  # 400 <= 500
 
-        untouched = _cpa_campaign_with_outcome()
-        put_first = _cpa_campaign_with_outcome()
+    def test_cap_set_on_the_target_route_is_the_one_judged(self):
+        campaign = self._campaign(
+            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
+        )
         ads_repo.save_campaign_target(
-            self.conn, self.org_id, self.brand_id, put_first["id"],
-            basis="own", value=999, expected_revision=0, actor=ACTOR,
+            self.conn, self.org_id, self.brand_id, campaign["id"],
+            basis="own", value=350, expected_revision=0, actor=ACTOR,
         )
+        closed = self._close(campaign)
+        self.assertEqual(closed["verdict_json"]["target"], 350)
+        self.assertEqual(closed["verdict"], "未達成")  # 400 > 350
 
-        closed_untouched = closeout.close(
-            self.conn, self.org_id, self.brand_id, untouched["id"], actor=ACTOR,
+    def test_no_cap_at_all_is_inconclusive_naming_the_cap(self):
+        campaign = self._campaign(
+            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
         )
-        closed_put = closeout.close(
-            self.conn, self.org_id, self.brand_id, put_first["id"], actor=ACTOR,
-        )
-
-        self.assertEqual(closed_untouched["verdict"], closed_put["verdict"])
-        self.assertEqual(
-            closed_untouched["verdict_json"]["actual"], closed_put["verdict_json"]["actual"],
-        )
-        self.assertEqual(closed_untouched["verdict_json"]["target"], 300)
-        self.assertEqual(closed_put["verdict_json"]["target"], 300)  # 未被 own 覆寫值 999 動到
+        closed = self._close(campaign)
+        self.assertEqual(closed["verdict"], "看不出")
+        self.assertIsNone(closed["verdict_json"]["target"])
+        self.assertIn("上限沒有設定", closed["verdict_json"]["missing"])
 
 
 class ExpiredActivityRemainsOpenTest(CloseoutTestBase):
     def test_expiry_never_closes_activity_at_seven_or_six_days(self):
         expired = self._campaign(
-            metric="purchases", target=None, start_date=self.today - timedelta(days=14),
+            cap=None, start_date=self.today - timedelta(days=14),
             end_date=self.today - timedelta(days=7), status="live",
         )
         not_yet = self._campaign(
-            metric="purchases", target=None, start_date=self.today - timedelta(days=13),
+            cap=None, start_date=self.today - timedelta(days=13),
             end_date=self.today - timedelta(days=6), status="live",
         )
 

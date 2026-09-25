@@ -1,7 +1,7 @@
 import { Check, Sparkles, Target, Wallet, BarChart2, Settings, Image as ImageIcon, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency, formatCount, formatRoas } from "@/lib/format";
-import { currentBudgetTotal, type CampaignDetail, type CampaignLabels, type SuccessMetric } from "@/lib/adsApi";
+import { formatCurrency } from "@/lib/format";
+import { currentBudgetTotal, type CampaignDetail, type CampaignLabels } from "@/lib/adsApi";
 import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 import { nextStep, type StepTarget, type WorkspaceTab } from "./nextStep";
 
@@ -11,18 +11,6 @@ const STAGE_LABELS = ["草稿", "策略", "投放結構", "素材", "投放中",
 // 頂上（同 `judgment` 選填的先例），跟 `app/ads/judgment.py::_CONVERSION_LABELS["purchase"]`
 // 同一組字。
 const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
-
-function metricLabel(metric: SuccessMetric, labels: CampaignLabels): string {
-  if (metric === "cpa") return labels.cpa;
-  if (metric === "purchases") return labels.count;
-  return "ROAS";
-}
-
-function formatTarget(metric: SuccessMetric, value: number): string {
-  if (metric === "cpa") return formatCurrency(value);
-  if (metric === "roas") return formatRoas(value);
-  return formatCount(value);
-}
 
 const JUDGMENT_ICON = { good: TrendingUp, warn: AlertTriangle, neutral: Clock } as const;
 
@@ -58,10 +46,11 @@ export function OverviewTab({
       icon: Target,
       label: "Campaign 目標",
       value: c.objective,
+      // F28-I01: the one cap, read-only here (set on the strategy tab).
       caption:
-        c.success_target !== null
-          ? `${metricLabel(c.success_metric, labels)} 目標 ${formatTarget(c.success_metric, c.success_target)}`
-          : "未設定成功條件",
+        c.cap.value !== null
+          ? `每筆${labels.conversion}成本上限 ${c.cap.basis === "break_even" ? "暫用打平 " : ""}${formatCurrency(c.cap.value)}`
+          : "未設定上限",
     },
     {
       icon: Wallet,

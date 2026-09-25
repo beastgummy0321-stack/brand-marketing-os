@@ -13,8 +13,9 @@ import {
   type SettingValues,
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
-import { ActionBar, Chip, FlowHeader, LearnCard, ResultHero, StatusRail, type RailCell } from "../patterns";
+import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
 import { reviewRoundPath } from "../review/reviewFlow";
+import { cleanupSteps } from "./CleanupProposal";
 import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
 import {
   campaignChangesPath,
@@ -335,16 +336,21 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     );
   }
 
-  const steps = [
-    { label: "確認提議", to: changeStepPath(brandId, campaignId, changeSet.id, "confirm") },
-    { label: "到平台完成", to: changeStepPath(brandId, campaignId, changeSet.id, "handoff") },
-    { label: "核對結果" },
-  ];
+  const confirmHref = changeStepPath(brandId, campaignId, changeSet.id, "confirm");
+  const handoffHref = changeStepPath(brandId, campaignId, changeSet.id, "handoff");
+  // F28-I14: cleanup keeps its own four-step light flow (提議／確認／到平台完成／核對結果, prototype v9 `#/d/clean/*`,
+  // same steps as `ConfirmPage`). 提議 stays unlinked once approved — the prototype forwards it to 確認 then.
+  const steps: FlowStep[] = cleanupSet
+    ? cleanupSteps().map((step) => (
+      step.label === "確認" ? { ...step, to: confirmHref } : step.label === "到平台完成" ? { ...step, to: handoffHref } : step))
+    : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成", to: handoffHref }, { label: "核對結果" }];
   const context = triageItem ? (
     <>
-      <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
+      {cleanupSet ? (
+        <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
+      ) : <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
         <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
-      </Badge>
+      </Badge>}
       {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
     </>
   ) : undefined;
@@ -372,7 +378,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     return (
       <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
         <Breadcrumb items={crumb} />
-        <FlowHeader steps={steps} current={2} title="核對結果" purpose={STEP_PURPOSE} context={context} />
+        <FlowHeader steps={steps} current={3} title="核對結果" purpose={STEP_PURPOSE} context={context} />
         {hero}
         <CleanupVerifyRows items={changeSet.items} />
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}

@@ -13,7 +13,9 @@
    08-standalone-jobs-on-the-queue round 2 補的 `is_active(lock: str) -> bool`（見下方函式
    檔頭：這個 `queueing_lock` 名下還有列在 `todo` 或 `doing`）。F15 另提供
    `recover_interrupted_jobs(*, retry_tasks=None, fail_tasks=None, limit=100) -> dict`，
-   僅供持有 schema worker 鎖的組裝根在啟動時回收明確清單內的孤兒工作。其餘一律私有。
+   僅供持有 schema worker 鎖的組裝根在啟動時回收中斷的孤兒工作（規則見
+   `app/background/recovery.py` 檔頭：唯讀工作照舊重送、其餘重送一次、第二次中斷標失敗）。
+   其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
@@ -154,16 +156,18 @@ def recover_interrupted_jobs(
     *, retry_tasks: Collection[str] | None = None,
     fail_tasks: Collection[str] | None = None, limit: int = 100,
 ) -> dict:
-    """Recover exact known orphan tasks, ONLY under the worker schema session lock.
+    """Recover orphaned `doing` jobs, ONLY under the worker schema session lock.
 
-    The assembly root owns that lock and calls this before any worker starts. This
-    never retries arbitrary paid work or inspects domain tables. Review domain
-    recovery runs afterward, through ads.bootstrap_runtime. Memory mode does nothing.
+    The assembly root owns that lock and calls this before any worker starts. Read-only
+    tasks are re-queued; review rounds end failed and their domain recovery runs afterward,
+    through ads.bootstrap_runtime; every other task is re-queued once, and a job stranded
+    again ends failed and is listed in `stranded_again` ({id, task_name}). Never inspects
+    domain tables. Memory mode does nothing.
     """
-    from .recovery import recover
+    from .recovery import RECEIPT_KEYS, recover
 
     if config.settings().brand_os_job_queue == "memory":
-        return {key: [] for key in ("retried_ids", "failed_ids", "aborted_ids", "deferred_ids")}
+        return {key: [] for key in RECEIPT_KEYS}
     return recover(
         _with_search_path(db.dsn(), _queue_search_path()),
         retry_tasks=retry_tasks, fail_tasks=fail_tasks, limit=limit,

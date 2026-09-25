@@ -140,12 +140,14 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["label"], "尚未設定目標")
         self.assertIsNone(item["target"]["value"])
         self.assertTrue(item["target"]["missing"])
+        self.assertEqual((item["grade"], item["grade_label"]), ("no_target", "未判斷"))
 
     def test_no_target_result_kind_unknown_even_with_a_resolved_value(self):
         self.set_target(1000, result_kind=None)  # own value resolved, but no result_kind either
         item = self.classify_one()
         self.assertEqual(item["class"], "no_target")
         self.assertEqual(item["reason_code"], "result_kind_unknown")
+        self.assertEqual((item["grade"], item["grade_label"]), ("no_target", "未判斷"))
 
     def test_stop_loss_does_not_fire_without_a_target(self):
         # Exact same spend/known-zero shape that fires stop-loss in
@@ -185,6 +187,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "stop_loss")
         self.assertEqual(item["reason_code"], "spend_over_target_no_result")
+        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "白花"))
         self.assertEqual(item["current"]["result_count"], 0)
         self.assertGreater(item["current"]["derived_zero_days"], 0)
         self.assertEqual(item["window"]["days"], 7)
@@ -198,6 +201,8 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "result_unknown_days")
+        # Unknown cost: 資料不足, never a grade and never 還太新.
+        self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     # -- coverage gate (review blocker) ----------------------------------------------------------
 
@@ -220,6 +225,7 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["reason_code"], "needs_resync")
         self.assertEqual(item["window"]["days"], 7)
         self.assertIsNone(item["window"]["extended_from"])
+        self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     def test_partially_covered_window_never_yields_stop_loss_or_comparison(self):
         # Coverage only reaches 3 days back -- the smallest (7-day) window is not fully covered,
@@ -251,6 +257,8 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "no_previous_window")
+        # F28-I02: an uncovered previous window never blocks the grade (cost 5 > 1.2 x 1).
+        self.assertEqual((item["grade"], item["grade_label"]), ("over", "太貴"))
 
     # -- insufficient: below_sample_gate ---------------------------------------------------------
 
@@ -264,6 +272,11 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(item["reason_code"], "below_sample_gate")
         self.assertEqual(item["window"]["days"], 28)
         self.assertEqual(item["window"]["extended_from"], 14)
+        # Known zero results but below 3 x cap: 還太新, never 白花.
+        self.assertEqual(item["current"]["result_count"], 0)
+        self.assertEqual(
+            (item["grade"], item["grade_label"]), ("insufficient", "還太新、看不準"),
+        )
 
     # -- insufficient: mixed_result_definition / needs_resync / no_previous_window --------------
 
@@ -277,6 +290,7 @@ class TriageTest(unittest.TestCase):
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "mixed_result_definition")
+        self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     def test_needs_resync_from_legacy_rows_is_insufficient(self):
         self.set_target(1, result_kind="purchase")
@@ -819,6 +833,120 @@ class CampaignObjectiveFamilyClassifyTest(TriageTest):
         result = triage.classify(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(len(result["items"]), 1)
         return result["items"][0]
+
+
+class TriageGradeTest(TriageTest):
+    """F28-I02 (ads.md §6.32): every active ad is graded against the one cap T -- 划算 <= T,
+    偏貴 <= 1.2T, 太貴 > 1.2T, 白花 = a known zero over 3T, below the gate 還太新. Reuses
+    `TriageTest`'s fixture (one campaign, one ad, broad coverage, account timezone)."""
+
+    def extra_ad(self, native_id):
+        ad = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": native_id, "name": native_id, "parent_native_kind": "campaign",
+             "parent_native_id": "c1"},
+        )
+        self.conn.commit()
+        return ad["id"]
+
+    def week(self, ad_id, *, spend, result_count, tag):
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=spend,
+                     result_count=result_count, attribution_key=f"{tag}{offset}", ad_id=ad_id)
+
+    def items_by_entity(self):
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        return {item["entity_id"]: item for item in result["items"]}
+
+    def test_boundaries_at_the_cap_and_at_one_point_two_times_it(self):
+        self.set_target(100, result_kind="purchase")
+        at_cap, at_band, over_band = (
+            self.extra_ad("at_cap"), self.extra_ad("at_band"), self.extra_ad("over_band"),
+        )
+        # 7 days x 1 purchase a day; spend 700+ >= 3 x 100 passes the gate on the first window.
+        self.week(at_cap, spend=100, result_count=1, tag="cap")
+        self.week(at_band, spend=120, result_count=1, tag="band")
+        self.week(over_band, spend=121, result_count=1, tag="over")
+        items = self.items_by_entity()
+        self.assertEqual(items[at_cap]["grade"], "on_target")
+        self.assertEqual(items[at_cap]["grade_label"], "划算")
+        self.assertEqual(items[at_band]["grade"], "watch")
+        self.assertEqual(items[at_band]["grade_label"], "偏貴")
+        self.assertEqual(items[over_band]["grade"], "over")
+        self.assertEqual(items[over_band]["grade_label"], "太貴")
+        for entity_id in (at_cap, at_band, over_band):
+            # Timezone cutoff unchanged: the graded window still ends on the account's own
+            # yesterday.
+            self.assertEqual(items[entity_id]["window"]["end"], self.cutoff)
+            self.assertEqual(items[entity_id]["window"]["days"], 7)
+
+    def test_on_target_graded_with_no_previous_window_and_trend_stays_a_note(self):
+        self.set_target(100, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=50, result_count=2,
+                     attribution_key=f"cur{offset}")
+        item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]), ("on_target", "划算"))
+        self.assertEqual(item["class"], "insufficient")
+        self.assertEqual(item["reason_code"], "no_previous_window")
+        self.assertIsNone(item["change_pct"])
+
+    def test_grade_and_trend_are_independent(self):
+        # Worse than last week, yet still inside the cap: 划算 with a `worse` trend note.
+        self.set_target(1000, result_kind="purchase")
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=7 + offset), spend=100, result_count=10,
+                     attribution_key=f"prev{offset}")
+            self.obs(self.cutoff - timedelta(days=offset), spend=150, result_count=10,
+                     attribution_key=f"cur{offset}")
+        item = self.classify_one()
+        self.assertEqual(item["class"], "worse")
+        self.assertEqual(item["grade"], "on_target")
+
+    def test_break_even_is_the_provisional_cap_when_no_own_cap(self):
+        product_id = brands.create_product(
+            self.conn, self.brand, name="測試商品", actor="測試員",
+        )["id"]
+        brands.save_product_economics(
+            self.conn, self.brand, product_id, selling_price=500, currency="TWD",
+            confirmed_by="測試員", actor="測試員", unit_variable_cost=150, shipping_cost=50,
+        )
+        repository.save_campaign_target(
+            self.conn, self.org, self.brand, self.campaign, result_kind="purchase",
+            product_id=product_id, expected_revision=0, actor="測試員",
+        )
+        self.conn.commit()
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=350, result_count=1,
+                     attribution_key=f"be{offset}")
+        item = self.classify_one()
+        self.assertEqual(item["target"]["basis"], "break_even")
+        self.assertEqual(item["target"]["value"], 300)  # 500 - 150 - 50
+        # 350 <= 1.2 x 300 -- graded against the provisional break-even cap.
+        self.assertEqual((item["grade"], item["grade_label"]), ("watch", "偏貴"))
+
+    def test_no_cap_and_no_product_cost_is_not_judged(self):
+        product_id = brands.create_product(
+            self.conn, self.brand, name="沒成本商品", actor="測試員",
+        )["id"]
+        brands.save_product_economics(
+            self.conn, self.brand, product_id, selling_price=500, currency="TWD",
+            confirmed_by="測試員", actor="測試員", unit_variable_cost=None, shipping_cost=50,
+        )
+        repository.save_campaign_target(
+            self.conn, self.org, self.brand, self.campaign, result_kind="purchase",
+            product_id=product_id, expected_revision=0, actor="測試員",
+        )
+        self.conn.commit()
+        for offset in range(7):
+            self.obs(self.cutoff - timedelta(days=offset), spend=5000, result_count=0,
+                     attribution_key=f"nocost{offset}")
+        item = self.classify_one()
+        self.assertIsNone(item["target"]["value"])
+        self.assertEqual(item["target"]["missing"], ["product_cost"])
+        # A huge spend with zero purchases is still never 白花 without a cap to measure it by.
+        self.assertEqual((item["grade"], item["grade_label"]), ("no_target", "未判斷"))
 
 
 class SyncStatesRaisingInsufficientTest(unittest.TestCase):

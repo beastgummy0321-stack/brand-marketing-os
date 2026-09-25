@@ -45,3 +45,62 @@
 
 - 演練用後端：`scripts.drill.serve --port 8710` ＋ 裝了替身的 worker；目前已切回正常模式。
 - worker 重啟會留下狀態 `doing` 的工作不會自己恢復，需手動改回 `todo`（schema `public__queue`）。
+
+## Probe results (2026-09-23, code-read only, services were down)
+
+Root causes behind the 10 items above, with evidence:
+
+- **R1 Judgement is not anchored to the target.** `triage.py:320-334` classifies each ad only against its own previous window (±20%). So cleanup falls back to spend order (`triage_capacity.py:176,182`), scale-up needs the whole budget unit stable (`triage_scale.py:111-128`), and the month review counts only "better" as effective. Two target stores feed it: `success_metric/success_target` (strategy tab, read by `closeout.py:51`) vs `target_cost/target_basis` (detail page, read by `targets.resolve`, which falls back to the 30-day actual at `targets.py:113-118`). A metric that fails to parse defaults to `roas` (`brief.py:45`). → items 1, 2, 3, 9, 10.
+- **R2 `stale` has no way out.** `handoff_check.py:281-290` marks an item stale, and after that the UI disables readback/review (`ManualHandoffPanel.tsx:170-171`) while `approve` accepts only draft or deferred sets (`change_control.py:229-233`). Nothing re-freezes the set against the current plan. → item 8.
+- **R3 Stuck jobs never recover.** `background/recovery.py:15-27` re-queues only 8 read-only kinds. Every other kind stays in `doing` forever. Worker concurrency is 1 (`worker.py:131`).
+- **R4 Progress is read from `llm_task`, not from the queue.** `dashboard/routes_jobs_api.py:57-60` sees running rows only and no `ads_*` kinds; there is no position API. → item 5.
+- **R5 Each section decides "has data" on its own.** The detail page has three sources (`PerformanceTab.tsx:191,378`, `ReviewEvidence.tsx:43`). The home count and the cards come from separate reads, and failed reads turn into an empty list in 4 places. → items 6, 7.
+- **R6 No budget cap check.** `budget.py:97-155` never reads `constraints_json.budget`, and the UI preselects "recommended" (`StrategyTab.tsx:139,157`).
+- **R7 The learning loop is closed on real data.** Learning is written only on a manual closeout of an internally created campaign (`closeout.py:78`) or on a verified pause of an ad with an angle tag (`change_control_verify.py:263`). Period settle writes only a budget direction. Experiments refuse any data that is not simulated (`experiments.py:386`).
+- **R8 No platform writes.** The only network call is `httpx.get` in `meta/graph.py:87`, and `auto_meta` is a reserved seat. This follows the decision in ads.md §6.4, so changing it is a product ruling, not a bug. The image port is a reserved seat (`workbench/image_port.py:14`).
+
+## Deferred to a later /dig (user ruling 2026-09-23: fix R1, R2, R3 and R6 first)
+
+Numbered as in the ranking shown to the user. Proposals are starting points, not decisions.
+4. **Learning and A/B are closed on real data** (R7). Proposal: period settle writes learnings for ongoing campaigns (stable winners too, not only "angle failed"). Experiments judge real data behind a minimum-sample gate. Add a test definition (variable, equal budget, end date, winner rule).
+5. **The screen contradicts itself** (R4, R5). Proposal: jobs progress reads the procrastinate queue (queued position, N of M) and covers `ads_*` kinds. One shared "has data / why not" state per campaign that every section reads. A failed read never shows as empty. Raise worker concurrency.
+6. **No in-app image generation** (the image port is a reserved seat). Proposal: decide on a provider before any design work.
+7. **A material request binds only to a campaign.** Proposal: let it target a specific ad, and let cleanup choose how many ads.
+8. **No export or share.** Proposal: CSV for the period and month review first.
+9. **No proactive notification.** Proposal: a daily digest (email or LINE) of the triage queue.
+10. **Launch settings are free text** (audience, placement, bid, optimization event, pixel, UTM). Proposal: structured fields that readback can verify. Platform writes (R8) need a separate product ruling that reverses ads.md §6.4.
+
+## Rulings for R1/R2/R3/R6 (/dig 2026-09-23)
+
+Moved to `docs/architecture/ads.md` §6.32 (the rule) and `.work/features/F28.md` (contract names, being built). The prototype-before-code step is done: `prototype-v9-ads-center.html`.
+
+## UI overhaul ruling (2026-09-23)
+
+The user rejected the text-heavy UI, including the prototypes, and wants a graphics-first overhaul where the layout itself tells the user what to do next. Scope is the whole ads-centre loop, in ONE single-file prototype that becomes the final look: `docs/design/ads/prototype-v9-ads-center.html`. It absorbs v7, v8 and the drill-5 rulings above. Visual tokens stay unchanged: violet, Inter + Noto Sans TC, and the palette in design-system §2. The 4 open prototype details follow the recommendations:
+- Cleanup never closes on-target ads; it proposes a budget increase instead.
+- When the recommended budget is over the cap, the "推薦" tag moves to 照上限.
+- Re-approve keeps the items already verified, and reverting needs one confirm.
+- With no product cost, the screen also links to entering the product cost.
+
+## Ads-centre entry page rethink (2026-09-23, in progress)
+
+The user says the v9 home is a to-do centre, not an operations view, and still feels like a cockpit. Question to answer first: why does the user come here, and what must they know on arrival? Three concepts are being drawn on a design canvas and checked by a cold novice persona before the user reviews them.
+- Canvas: https://claude.ai/artifact/4zuu6yz76DTXt8arpSb3Dh. It holds three boards: A shows the month's pace, B shows where the money went, and C is a morning brief (recommended).
+- Why the user comes here, in order: (1) is ad money being wasted, i.e. profit after ad spend; (2) the month's pace; (3) which campaign works and which is broken; (4) what to do today, at most 3 items. v9 answered only (4).
+- A cold novice persona (a 42-year-old shop owner, screenshot only) tested two rounds. Round 1 root causes: marketing jargon instead of money, buttons that do not say what happens, colour without names. After the fixes, calm went from 3 to 4 on every version, but clarity stayed at 3. What is left: each number must say whether it is good or bad news, and who set the cap.
+- Fixture caveat: in v9, break-even 380 is below target 450, which means a CPA at target loses money. The canvas assumes a profitable target and says "上限" instead of "目標". Fix the fixture before any real build.
+- **Approved 2026-09-23:** home = board D (Fused) on the canvas. It is being ported into `prototype-v9-ads-center.html`, and the vocabulary follows it across all screens:
+  - grades are 划算 / 偏貴 / 太貴 / 白花;
+  - the target is shown as 上限;
+  - stop-loss and cleanup merge into one decision;
+  - the fixture break-even becomes 520.
+
+## Deferred from F28 planning (user 2026-09-25: save for a later /dig, F28 uses the defaults)
+1. **白花 closes through cleanup, so its brand learning is lost.** The cleanup flow has no 「這則主打什麼？」 step (F27 Contract D), so closing a 白花 ad no longer writes a learning. F28 accepts this. Restore it in the learning-loop /dig (item 4 above).
+2. **變貴 (`worse`) rows are still triggered by the trend vs the previous window**, although the ruling makes trend a note only. F28 keeps them. Decide in the next feature, which owns the worse/stop decision flows, whether 變貴 should instead mean "moved from 划算 to 偏貴/太貴 against the cap".
+
+## Left open after F28 (2026-09-25)
+- **Pending handoffs are not on the home page.** Home D dropped the ChangeAttention card: approved lists waiting for 到平台完成 or 核對 show only on the campaign's 變更與核對 tab. The next feature should decide how home surfaces them, e.g. a campaign-row state.
+- **暫用打平 lacks the product cost field.** The cap view has no `cost`, so the screen shows 售價 and ROAS 參考 but not the prototype's formula 「售價 − 成本含運 = 打平」.
+- **No cap means no visible 推薦.** Without a budget cap, the 推薦 scenario can be a row whose amount is unknown, so the tag is not visible.
+- **Old open cleanup rows keep the informational severity** until their daily key rolls over. This is test data only.

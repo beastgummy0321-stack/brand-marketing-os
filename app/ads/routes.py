@@ -140,43 +140,6 @@ def list_campaigns(request: Request, brand_id: str):
     return {"campaigns": campaigns}
 
 
-@router.get("/brands/{brand_id}/home")
-def get_home(request: Request, brand_id: str):
-    """F04-I08：首頁四塊——一句整體判斷、四個計數、進行中的 Campaign 卡片（最多 6 張）、
-    最近做了什麼（最多 6 筆）。不 fetch 成效、不打模型、不寫任何東西。
-
-    `list_campaigns()` 沒有分頁，拿到的就是這個品牌的全部，所以在這裡數三行計數就是準的；
-    哪天它加了分頁，這裡要跟著改成 SQL COUNT（§0：多一句 `COUNT(*) FILTER (...)` 只是同一件
-    事的第二份寫法，先不寫）。
-    """
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    campaigns = repository.list_campaigns(web.conn, actor.org_id, brand_id)
-    labels = _conversion_labels(brand_id)
-    for c in campaigns:
-        c["labels"] = labels
-    imported = [c for c in campaigns if c.get("origin") == "imported"]
-    campaigns = [c for c in campaigns if c.get("origin") != "imported"]
-    counts = {
-        "imported": len(imported),
-        "running": sum(1 for c in campaigns if c["status"] == "live"),
-        "upcoming": sum(1 for c in campaigns if c["status"] in ("draft", "ready")),
-        "ended": sum(1 for c in campaigns if c["status"] in ("ended", "closed")),
-        "needs_decision": 0,  # 建議的產生端是 F05；F04 回誠實的空狀態，不是猜出來的數字。
-    }
-    home = {
-        "headline": judgment.brand_headline(counts),
-        "counts": counts,
-        "campaigns": [c for c in campaigns if c["status"] == "live"][:6],
-        "imported_campaigns": imported[:6],
-        "actions": repository.recent_actions(web.conn, actor.org_id, brand_id, limit=6),
-    }
-    if imported:
-        home["headline"]["text"] = f"已納入 {len(imported)} 個既有平台活動；平台狀態請進入活動查看"
-        home["headline"]["facts"] = "內部計畫：" + home["headline"]["facts"]
-    return {"home": home}
-
-
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}")
 def get_campaign(request: Request, brand_id: str, campaign_id: str):
     actor = web.require_actor(request)
@@ -229,26 +192,25 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
 
 
 class PatchCampaignRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    # `extra="allow"` only so the handler can answer an unknown key AFTER the tenant checks:
+    # a retired goal key gets its own 400, any other unknown key the usual 422 (F28-I01).
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
     goal_text: str | None = None
     name: str | None = None
     objective: str | None = None
-    success_metric: str | None = None
-    success_target: float | None = None
-    success_basis: str | None = None
     start_date: str | None = None
     end_date: str | None = None
     constraints_json: dict | None = None
     product_ids: list[str] | None = None
 
 
+RETIRED_GOAL_MESSAGE = "成功條件已改成一個上限（每筆成果成本），請在策略頁設定上限。"
+
 _PATCH_CAMPAIGN_ERRORS = {
     external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "name_unknown": (400, "名稱不能是空白。"),
     "objective_unknown": (400, "目標不能是空白。"),
-    "success_metric_unknown": (400, "成功指標只能是 cpa／roas／purchases。"),
-    "success_target_unknown": (400, "成功條件的目標值必須是數字。"),
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "end_before_start": (400, brief.END_BEFORE_START_MESSAGE),
     "campaign_bound": (
@@ -263,10 +225,16 @@ _PATCH_CAMPAIGN_ERRORS = {
 @router.patch("/brands/{brand_id}/campaigns/{campaign_id}")
 def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: PatchCampaignRequest):
     """F03-I03：草稿欄位的一般編輯——不是 `ads_action`（還沒有任何東西綁定到平台，§0）。
-    只送使用者真的填過的欄位（`exclude_unset`），沒填的欄位維持原樣，`success_target`／
-    `success_basis` 因此可以被明確清成 `null`（使用者送 `null` 也算「填過」）。"""
+    只送使用者真的填過的欄位（`exclude_unset`），沒填的欄位維持原樣（使用者送 `null` 也算
+    「填過」）。F28-I01：舊的成功條件欄位（`success_` 開頭）已退役——上限只在策略頁的
+    `PUT .../target` 設定，送來一律 400，不悄悄忽略。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    unknown = sorted(body.model_extra or {})
+    if any(key.startswith("success_") for key in unknown):
+        raise web.ApiError(400, "goal_fields_retired", RETIRED_GOAL_MESSAGE)
+    if unknown:
+        raise web.ApiError(422, "field_unknown", "不認得的欄位：" + "、".join(unknown))
     updates = body.model_dump(exclude_unset=True)
     try:
         repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
@@ -304,6 +272,8 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
 class SelectScenarioRequest(BaseModel):
     scenario_key: str = ""
     custom_total: float | None = None
+    # F28-I03: required to save a total above the campaign's budget cap.
+    confirm_over_cap: bool = False
 
 
 _SELECT_SCENARIO_ERRORS = {
@@ -321,18 +291,60 @@ _SELECT_SCENARIO_ERRORS = {
 def select_strategy_scenario(
     request: Request, brand_id: str, campaign_id: str, body: SelectScenarioRequest,
 ):
-    """F03-I05：採用最低／推薦／積極其中一個情境，或手打一個總額——寫 `budget_planned`。"""
+    """F03-I05：採用其中一個情境，或手打一個總額——寫 `budget_planned`。F28-I03：超過預算
+    上限要帶 `confirm_over_cap: true`，否則 409 `over_cap_unconfirmed`，訊息寫出超出多少。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
         campaign = strategy.select_scenario(
             web.conn, actor.org_id, brand_id, campaign_id,
             scenario_key=body.scenario_key, custom_total=body.custom_total,
+            confirm_over_cap=body.confirm_over_cap, actor=str(actor.user_id),
+        )
+    except strategy.OverCapUnconfirmed as exc:
+        raise web.ApiError(
+            409, "over_cap_unconfirmed",
+            f"這個預算 NT${round(exc.total):,} 超出你設的預算上限 NT${exc.cap:,}，"
+            f"多了 NT${exc.over:,}。確定要超出，請再確認一次。",
+            {"total": exc.total, "cap": exc.cap, "over": exc.over},
+        ) from exc
+    except ValueError as exc:
+        code = str(exc)
+        status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
+        raise web.ApiError(status, code, message) from exc
+    return {"campaign": _with_readiness(actor, brand_id, campaign)}
+
+
+class BudgetCapRequest(BaseModel):
+    # `object`, not `int`: a string or a fraction must reach the handler (after the tenant
+    # checks) and be refused there, never silently coerced by the model.
+    budget_cap: object = None
+
+
+_BUDGET_CAP_ERRORS = {
+    "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    external_models.IMPORTED_REASON: (409, external_models.IMPORTED_REASON),
+    "budget_cap_invalid": (422, "預算上限要是大於 0 的整數；要取消上限請送 null。"),
+}
+
+
+@router.put("/brands/{brand_id}/campaigns/{campaign_id}/strategy/budget-cap")
+def put_budget_cap(request: Request, brand_id: str, campaign_id: str, body: BudgetCapRequest):
+    """F28-I03（使用者裁決 2026-09-25）：精靈之後、任何狀態都能改預算上限。只寫
+    `constraints_json.budget`——不寫平台、不動已存的情境與 `budget_planned`、不讓交接過期。"""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    if "budget_cap" not in body.model_fields_set:  # a missing key is not "clear the cap"
+        status, message = _BUDGET_CAP_ERRORS["budget_cap_invalid"]
+        raise web.ApiError(status, "budget_cap_invalid", message)
+    try:
+        campaign = strategy.set_budget_cap(
+            web.conn, actor.org_id, brand_id, campaign_id, budget_cap=body.budget_cap,
             actor=str(actor.user_id),
         )
     except ValueError as exc:
         code = str(exc)
-        status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
+        status, message = _BUDGET_CAP_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
     return {"campaign": _with_readiness(actor, brand_id, campaign)}
 
@@ -860,8 +872,8 @@ class TargetRequest(BaseModel):
 _TARGET_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "target_conflict": (409, "目標設定已被更新，請重新載入後再試一次。"),
-    "target_basis_unknown": (400, "basis 只能是 own／break_even／trailing_30。"),
-    "target_value_unknown": (400, "own 目標值必須是數字。"),
+    "target_basis_unknown": (400, "basis 只能是 own／break_even。"),
+    "target_value_unknown": (400, "上限必須是大於 0 的數字。"),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
     "product_economics_unknown": (400, "這個商品還沒有售價可以核對，請先補售價。"),
     # F19-I06: result_kind is a trust-boundary value -- `app/ads/result_kinds.py::LABELS` is the

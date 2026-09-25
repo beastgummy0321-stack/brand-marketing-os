@@ -1,19 +1,16 @@
 import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
-/** 投放中心 API 型別與呼叫（F03-I01）。對應 `app/ads/routes.py`——Campaign 物件的共用契約，
- * 只有讀取；後續票在這個檔案上加，不重排這裡已經定的形狀。錯誤處理沿用既有寫法：`apiFetch`
- * 之後檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就
- * 用預設訊息。 */
+/** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
+ * 錯誤：`apiFetch` 後檢查 `res.ok`，解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來用預設訊息。 */
 import { apiFetch, errorMessageFrom } from "./http";
 import type { ExternalCampaignFields } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
 // F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
-import type { CampaignCapacity, CampaignObjectiveFamily } from "./adsTriageApi";
+import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
-export type SuccessMetric = "cpa" | "roas" | "purchases";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
 
 export interface CampaignOutcomeTotals {
@@ -83,8 +80,7 @@ export interface CampaignCard extends ExternalCampaignFields {
   budget_progress: CampaignBudgetProgress;
   judgment: CampaignJudgment;
   outcome: CampaignOutcomeTotals;
-  /** F05-I12：後端一律回傳；選填只是為了不逼著既有的手寫測試 fixture（`AdsHomePage.test.tsx`
-   * ／`AllCampaignsPage.test.tsx`，`do_not_touch`）都補上這個新欄位——同 `judgment` 的先例。 */
+  /** F05-I12：後端一律回傳；選填只為了既有手寫 fixture（`AdsHomePage`／`AllCampaignsPage` 測試）。 */
   labels?: CampaignLabels;
   /** F24-I01：後端一律回傳（`repository.py::list_campaigns`）；選填只是同 `labels` 的先例——
    * 這次 `do_not_touch`（`frontend/src/components/ads/**\/*.tsx`）在 harness 的 `scopeDenial`
@@ -159,16 +155,14 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   name: string;
   goal_text: string | null;
   objective: string;
-  success_metric: SuccessMetric;
-  success_target: number | null;
-  success_basis: string | null;
+  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`). */
+  cap: CapView;
   start_date: string | null;
   end_date: string | null;
   status: CampaignStatus;
   budget_planned: number | null;
   budget_scenario: string | null;
-  /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——畫面在讀前先檢查
-   * `budget_basis_json.strategy` 存不存在。 */
+  /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——讀前先檢查 `.strategy` 存不存在。 */
   budget_basis_json: Partial<AdsBudgetBasisJson>;
   budget_total: number | null;
   context_json: Record<string, unknown>;
@@ -183,15 +177,11 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   outcome: CampaignOutcomeTotals;
   /** F03-I08：素材 tab 跟發布畫面共用同一組數字。 */
   asset_readiness: AssetReadinessSummary;
-  /** F04-I08：跟 `CampaignCard.judgment` 同一支規則（`campaign_judgment()`）——後端一律回傳，
-   * 選填只是為了不逼著每一個既有的手寫測試 fixture（`do_not_touch`：
-   * `frontend/src/components/**`）都補上這兩個新欄位。 */
+  /** F04-I08：同 `CampaignCard.judgment`（`campaign_judgment()`）；後端一律回傳，選填只為了既有手寫 fixture。 */
   judgment?: CampaignJudgment;
-  /** F04-I08：`actions` 每一列跑過 `judgment.action_line()` 的三句話——`actions` 本身保留
-   * 不刪，別的分頁還在讀原始欄位。 */
+  /** F04-I08：`actions` 每列跑過 `judgment.action_line()` 的三句話；`actions` 保留給別的分頁。 */
   action_lines?: AdsActionLine[];
-  /** F05-I12：同 `CampaignCard.labels`——選填是為了不逼 `ConfirmBriefPage.test.tsx`
-   * （`do_not_touch`）補新欄位，不是後端真的會漏。 */
+  /** F05-I12：同 `CampaignCard.labels`；選填只為了既有測試 fixture，後端不會漏。 */
   labels?: CampaignLabels;
 }
 
@@ -226,9 +216,7 @@ export interface AssetReadinessRow {
 export interface AssetReadinessSummary {
   ready_count: number;
   total: number;
-  /** 這個 Campaign 交棒過的任務包 id，讀自 pack 本身，不是從逐列 briefs 推（§6.2 決議 15）。
-   * 後端一律回傳，選填只是為了不逼著每一個既有的手寫測試 fixture都補上這個新欄位
-   * （precedent：`CampaignDetail.labels` 上面的同一句話）。 */
+  /** 交棒過的任務包 id，讀自 pack 本身（§6.2 決議 15）；後端一律回傳，選填只為了既有 fixture。 */
   pack_id?: string | null;
 }
 
@@ -262,14 +250,11 @@ export interface CreateCampaignInput {
 }
 
 /** `PATCH /campaigns/{id}` 的請求體——草稿欄位的一般編輯，不是 `ads_action`。所有欄位選填，
- * 沒帶到的欄位維持原樣；`success_target`／`success_basis` 可以明確傳 `null` 清空。 */
+ * 沒帶到的欄位維持原樣。上限不在這裡改（F28-I01：`PUT .../target`）。 */
 export interface PatchCampaignInput {
   goal_text?: string;
   name?: string;
   objective?: string;
-  success_metric?: SuccessMetric;
-  success_target?: number | null;
-  success_basis?: string | null;
   start_date?: string;
   end_date?: string;
   constraints_json?: Record<string, unknown>;
@@ -287,14 +272,16 @@ export interface BudgetScenarioRow {
   daily: number | null;
   total: number | null;
   caption: string;
+  over_cap: number | null; // F28-I03: amount above the budget cap; 0 within, null = no cap／total unknown
 }
 
 /** `app/ads/budget.py::scenarios()` 的整包回傳——程式算的，AI 只預填百分比。 */
 export interface BudgetScenarios {
   mode: BudgetScenarioMode;
   scenarios: BudgetScenarioRow[];
-  recommended: string;
+  recommended: string; // F28-I03: moves to the "cap" row (照預算上限) when the old pick is over the cap
   basis: Record<string, unknown>;
+  budget_cap: number | null; // F28-I03: `constraints_json.budget`; unset／0／negative -> null
 }
 
 export type StrategyRole = "new" | "retarget" | "explore";
@@ -359,6 +346,7 @@ export interface AdsBudgetBasisJson {
   strategy: StrategyPayload;
   scenarios: BudgetScenarios;
   basis: StrategyBasis;
+  over_cap_confirmation?: { by: string; at: string; total: number; cap: number; over: number }; // F28-I03
 }
 
 export interface SelectScenarioInput {
@@ -452,17 +440,29 @@ export async function generateStrategy(brandId: string, campaignId: string): Pro
   return data.campaign;
 }
 
+/** F28-I03: a total above the budget cap needs `{ confirmOverCap: true }`, else 409 `over_cap_unconfirmed`. */
 export async function selectScenario(
   brandId: string,
   campaignId: string,
   input: SelectScenarioInput,
+  options: { confirmOverCap?: boolean } = {},
 ): Promise<CampaignDetail> {
+  const body = options.confirmOverCap ? { ...input, confirm_over_cap: true } : input;
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/scenario`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   );
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "選擇預算情境失敗。");
   return data.campaign;
+}
+
+/** F28-I03: editable in any status; a positive integer sets, `null` clears. Internal only. */
+export async function setBudgetCap(brandId: string, campaignId: string, budgetCap: number | null): Promise<CampaignDetail> {
+  const res = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/budget-cap`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ budget_cap: budgetCap }) },
+  );
+  return (await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新預算上限失敗。")).campaign;
 }
 
 /** F04-I13：採用之前調整三個角色的百分比——金額由後端 `budget.split()` 重算，這裡只送
@@ -773,28 +773,3 @@ export async function closeCampaign(
   return data.campaign;
 }
 
-// -- F04-I08：首頁四塊 -------------------------------------------------------------------------
-
-export interface AdsHomeCounts {
-  imported?: number;
-  running: number;
-  upcoming: number;
-  ended: number;
-  needs_decision: number;
-}
-
-/** `GET /home` 的整包 payload——一句整體判斷、四個計數、進行中的 Campaign（最多 6 張）、
- * 最近做了什麼（最多 6 筆）。不含成效、不打模型。 */
-export interface AdsHome {
-  headline: { text: string; facts: string };
-  counts: AdsHomeCounts;
-  imported_campaigns?: CampaignCard[];
-  campaigns: CampaignCard[];
-  actions: AdsActionLine[];
-}
-
-export async function getAdsHome(brandId: string): Promise<AdsHome> {
-  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/home`);
-  const data = await parseJsonOrThrow<{ home: AdsHome }>(res, "讀取投放中心首頁失敗。");
-  return data.home;
-}

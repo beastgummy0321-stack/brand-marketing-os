@@ -12,6 +12,11 @@ if not errorlevel 1 goto open
 
 if not exist ".venv\Scripts\python.exe" goto novenv
 
+rem 資料庫（Docker 裡的 Supabase）沒開，伺服器一定起不來；Docker 當掉留下的連線檔也在這裡清掉。
+echo 正在確認資料庫...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ensure_database.ps1"
+if errorlevel 1 goto nodb
+
 echo.
 echo 正在啟動行銷系統，請稍候（第一次會久一點）...
 rem 一定要用 .venv 裡的 python：系統的 python 沒有裝這個專案的套件（procrastinate 等），
@@ -32,6 +37,14 @@ echo.
 echo 等了 60 秒，行銷系統還是沒有起來。
 echo 請看標題「Marketing OS Server」那個黑視窗最後幾行字，問題會寫在那裡。
 echo 最常見的原因：資料庫沒開。先執行 supabase start 再點一次這支。
+echo.
+pause
+exit /b 1
+
+:nodb
+echo.
+echo 資料庫開不起來，行銷系統沒辦法啟動。
+echo 請打開 Docker Desktop 看它有沒有錯誤訊息，處理後再點一次這支。
 echo.
 pause
 exit /b 1

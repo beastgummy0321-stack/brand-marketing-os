@@ -71,7 +71,7 @@ class AssetsTestBase(unittest.TestCase):
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = {
             "name": "測試 Campaign", "goal_text": "幫新品衝第一波購買",
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
+            "objective": "購買", "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
             "budget_planned": 1400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -89,7 +89,7 @@ class AssetsTestBase(unittest.TestCase):
         format_key 完全可控（`_variant_count` 的落點測試用）。"""
         campaign = {
             "name": "測試 Campaign", "goal_text": "衝購買", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
             "start_date": campaign_start, "end_date": campaign_end, "status": "draft",
             "budget_planned": 1400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": [
@@ -425,7 +425,7 @@ class EachAdUsesItsOwnGroupTest(AssetsTestBase):
     def test_each_ad_uses_its_own_groups_dates_and_role(self):
         campaign = {
             "name": "測試 Campaign", "goal_text": "衝購買", "objective": "購買",
-            "success_metric": "cpa", "success_target": 300,
+            "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-01", "status": "draft",
             "budget_planned": 1400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": [

@@ -30,6 +30,13 @@ export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "othe
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
+/** F28-I02: every active ad graded against the campaign's one cap T (`app/ads/triage.py`) --
+ * `on_target` 划算 <= T, `watch` 偏貴 <= 1.2T, `over` 太貴 > 1.2T, `wasted` 白花 (spent >= 3T
+ * with 0 results), `insufficient` (還太新、看不準 below the sample gate, 資料不足 otherwise),
+ * `no_target` 未判斷. `grade_label` always comes from the backend. `class` stays the trend
+ * note against the previous window. */
+export type TriageGrade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
+
 /** F19-I06: the shared Chinese vocabulary for `result_kind` (`app/ads/result_kinds.py`) — never
  * re-worded here, `label` always comes from the backend. */
 export interface ResultKindOption { kind: string; label: string }
@@ -39,12 +46,24 @@ export interface TriageWindow {
   previous_start: string; previous_end: string;
   extended_from: number | null;
 }
+/** F28-I01: the one cost-per-result cap (screen word 上限) -- the user's own, else break-even
+ * using product economics; never a trailing actual. */
+export type CapBasis = "own" | "break_even";
 export interface TriageTargetView {
-  value: number | null; basis: "own" | "break_even" | "trailing_30" | null;
+  value: number | null; basis: CapBasis | null;
   result_kind: string | null;
   // F19-I06: always sent by the backend (`app/ads/result_kinds.py::label()`).
   result_label: string;
   missing: string[];
+  // F28-I14: the triage `target` is the full cap view, so these always arrive (ruler 打平 mark,
+  // ROAS 參考 = price ÷ cap); optional only because older hand-written test factories omit them.
+  break_even?: number | null; price?: number | null;
+}
+/** F28-I01 cap view (`app/ads/targets.py::resolve`): campaign detail `cap`, triage `target`.
+ * `break_even`/`price` are sent even when an own cap wins (打平 mark, ROAS 參考 = price ÷ cap). */
+export interface CapView extends TriageTargetView {
+  own_value: number | null; break_even: number | null; price: number | null;
+  product_id: string | null; revision: number;
 }
 export interface TriageMetricsView {
   spend: number | null; result_count: number | null; cost_per_result: number | null;
@@ -76,6 +95,7 @@ export interface TriageItem {
   // F20-I01: thumbnail first, else full image, else `null` (`app/ads/triage.py::_thumbnail_url`).
   thumbnail_url: string | null;
   class: TriageClass; label: string; reason_code: string;
+  grade: TriageGrade; grade_label: string;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
   change_pct: number | null; sample: TriageSampleView;
@@ -236,15 +256,24 @@ export interface QueueInsufficient {
   sync_state: CampaignSyncState["state"];
   coverage: { start: string; end: string } | null;
 }
-/** F27-I06 Contract F: the `cleanup` row's own payload -- `ads` is the proposed cut, lowest
- * 7-day spend first, at most `active_ads - can_support` entries (fewer only when fewer ads were
- * actually eligible, `app/ads/triage_capacity.py::cleanup_candidates`). */
+/** F27-I06 Contract F, re-cut by F28-I02 (`app/ads/triage_capacity.py::cleanup_candidates`):
+ * `ads` is the proposed cut -- every 白花 ad first, then, while active ads exceed `can_support`,
+ * 太貴 before 偏貴, highest cost per result first; 划算 and ungraded ads never. `keep` is every
+ * other active ad (same shape). `can_support` is `null` when capacity is unknown (a 白花 ad
+ * alone still raises the row). `short` counts ads still over capacity after the cut;
+ * `scale_owner_id` is the campaign's qualifying `scale_budget` owner while `short > 0`.
+ * `spend_7d`/`daily_spend`/`daily_saving` are `null` when the last 7 days aren't fully known;
+ * `cost_per_result`/`spend`/`result_count` are the ad's graded window (`TriageItem.current`). */
 export interface QueueCleanupAd {
-  entity_id: string; name: string | null; thumbnail_url: string | null; spend_7d: number;
+  entity_id: string; name: string | null; thumbnail_url: string | null;
+  spend_7d: number | null;
+  grade: TriageGrade; cost_per_result: number | null; spend: number | null;
+  result_count: number | null; daily_spend: number | null;
 }
 export interface QueueCleanup {
-  campaign_id: string; campaign_name: string; can_support: number; active_ads: number;
-  ads: QueueCleanupAd[];
+  campaign_id: string; campaign_name: string; can_support: number | null; active_ads: number;
+  ads: QueueCleanupAd[]; keep: QueueCleanupAd[]; short: number;
+  daily_saving: number | null; scale_owner_id: string | null;
 }
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
@@ -269,14 +298,11 @@ export interface QueuePayload {
   kinds_available: string[]; kinds_pending: string[];
 }
 
-export interface CampaignTarget {
-  campaign_id: string; product_ids: string[]; own_value: number | null; revision: number;
-  value: number | null; basis: "own" | "break_even" | "trailing_30" | null;
-  result_kind: string | null; result_label: string; result_kinds: ResultKindOption[];
-  missing: string[];
+export interface CampaignTarget extends CapView {
+  campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
 }
 export interface TargetRequest {
-  result_kind?: string | null; basis?: "own" | "break_even" | "trailing_30" | null;
+  result_kind?: string | null; basis?: CapBasis | null;
   value?: number | null; product_id?: string | null; price?: number | null;
   variable_cost?: number | null; expected_revision: number;
 }

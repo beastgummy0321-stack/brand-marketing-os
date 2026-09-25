@@ -292,7 +292,7 @@ class ExperimentTest(SimulatedPublishTestBase):
     def test_conditions_change_requires_a_fresh_confirmation(self):
         self.confirm()
         old = experiments.read(*self.args)["confirmed"]["fingerprint"]
-        repository.update_campaign(*self.args, {"success_target": 200})
+        repository.update_campaign(*self.args, {"objective": "名單"})
         changed = experiments.read(*self.args)
         self.assertTrue(changed["stale"])
         self.assertIn("已過期", changed["result"]["reason"])
@@ -361,15 +361,15 @@ class ExperimentTest(SimulatedPublishTestBase):
                 *args, revision="0", overrides={}, actor="tester"
             )
 
-    def test_unsupported_metric_is_explicitly_unavailable_without_purchase_fallback(self):
-        detail = repository.campaign_detail(*self.args)
-        detail["success_metric"] = "platform_custom_metric"
-        with patch("app.ads.experiments._detail", return_value=detail):
-            proposal, missing = experiments.propose(*self.args)
+    def test_proposal_judges_cost_per_result_and_an_unknown_stored_metric_stays_unavailable(self):
+        # F28-I01: one cap per campaign, so every proposal compares cost per result; a stored
+        # proposal naming any other metric is still refused, never read as purchases.
+        proposal, missing = experiments.propose(*self.args)
         self.assertIsNone(missing)
-        self.assertIn("不支援", proposal["metric_label"])
+        self.assertEqual(proposal["metric"], "cpa")
         result = experiments.judge(
-            *self.args, proposal=proposal, confirmed=True, stale=False
+            *self.args, proposal={**proposal, "metric": "platform_custom_metric"},
+            confirmed=True, stale=False,
         )
         self.assertEqual(result["verdict"], "看不出")
         self.assertIn("不支援活動成功指標", result["reason"])
@@ -416,6 +416,24 @@ class ExperimentTest(SimulatedPublishTestBase):
         self.assertEqual(unknown.status_code, 400, unknown.text)
         self.assertEqual(unknown.json()["error"]["code"], "comparison_settings_invalid")
 
+
+    def test_budget_cap_edit_keeps_a_confirmed_comparison_fresh_but_platform_does_not(self):
+        """F28-I03: the budget cap is an internal planning number (ads.md §6.32) -- setting or
+        clearing it through `PUT .../strategy/budget-cap` never makes a confirmation stale; the
+        platform is still a comparison condition."""
+        self.confirm()
+        web.conn.commit()
+        client = TestClient(main.app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{self.args[-1]}/strategy/budget-cap"
+        for value in (12345, 999, None):
+            response = client.put(url, json={"budget_cap": value})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(experiments.read(*self.args)["stale"], value)
+        constraints = repository.get_campaign(*self.args)["constraints_json"]
+        repository.update_campaign(
+            *self.args, {"constraints_json": {**constraints, "platform": "other"}},
+        )
+        self.assertTrue(experiments.read(*self.args)["stale"])
 
     def test_query_order_is_not_a_material_change(self):
         self.confirm()

@@ -43,7 +43,6 @@ const proposeBudgetPath = (brandId: string, campaignId: string, ownerId: string)
 const changePath = (
   brandId: string, campaignId: string, setId: string, step: "confirm" | "handoff" | "verify",
 ) => `/brands/${brandId}/ads/campaigns/${campaignId}/changes/${setId}/${step}`;
-const workspacePath = (brandId: string, campaignId: string) => `/brands/${brandId}/ads/campaigns/${campaignId}`;
 // F23-I01: entry for a `worse` row with no review round yet, and the round's own detail/prepare
 // steps once one exists (feature Decisions "Queue row state for `worse` rows").
 const reviewPath = (brandId: string, campaignId: string, entityId: string) =>
@@ -148,10 +147,11 @@ export function proposalAction(
   if (proposal.kind === "review") {
     return reviewProposalAction(brandId, campaignId, entityId, proposal);
   }
-  // multi-item 清單這批不畫單一步驟頁——導去活動工作區既有的變更清單（feature Decisions
-  // "Rule details"），label 還是照 status／verification_state 算，只換連結去處。
+  // F28: every change set, a multi-item cleanup set included, opens its own step page. The flow
+  // pages (confirm / handoff / verify) render cleanup sets since F28-I11/I14; the old fallback to
+  // the campaign workspace sent 「等你核准」 to an overview with no decision on it.
   const stepHref = (step: "confirm" | "handoff" | "verify") =>
-    proposal.multi ? workspacePath(brandId, campaignId) : changePath(brandId, campaignId, proposal.change_set_id, step);
+    changePath(brandId, campaignId, proposal.change_set_id, step);
 
   switch (proposal.status) {
     case "draft":

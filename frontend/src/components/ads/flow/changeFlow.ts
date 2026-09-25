@@ -137,7 +137,7 @@ export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REA
 /** F27-I15 Contract F: the one fixed reason every pause item of a lazily-created cleanup set
  * proposes (same "one fixed reason per lazy-create kind" convention `PAUSE_REASON`/`BUDGET_REASON`
  * already follow). */
-export const CLEANUP_PAUSE_REASON = "同時投放的廣告超過預算能撐的則數，先暫停這段時間花費最低的幾則";
+export const CLEANUP_PAUSE_REASON = "白花的先關，再關超過上限、每筆成本最高的幾則；划算的不動";
 
 /** `title = 清理「<campaign name, cut to 60 chars; null → 未命名活動>」`，同 `pauseTitle`／
  * `budgetTitle` 的做法。 */
@@ -146,7 +146,9 @@ export function cleanupTitle(campaignName: string | null): string {
 }
 
 /** F27-I15 Contract F: the lazily-created cleanup set's own items — one `pause` item per proposed
- * ad, in the same (lowest-spend-first) order the queue row's own `cleanup.ads` already carries. */
+ * ad, in the order the queue row's own `cleanup.ads` already carries (F28-I02, ads.md §6.32:
+ * every 白花 ad first, then the over-cap ads 太貴 before 偏貴, most expensive per result first;
+ * 划算 and ungraded ads are never in the list). */
 export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
   return ads.map((ad) => buildPauseDraftItem(ad.entity_id, CLEANUP_PAUSE_REASON));
 }

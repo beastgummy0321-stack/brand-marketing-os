@@ -43,6 +43,7 @@ def register(app: FastAPI) -> None:
         change_routes,
         external_routes,
         handoff_routes,
+        home_overview_routes,
         learning_routes,
         material_routes,
         month_budget_routes,
@@ -61,6 +62,7 @@ def register(app: FastAPI) -> None:
     app.include_router(change_routes.router)
     app.include_router(month_budget_routes.router)
     app.include_router(month_summary_routes.router)
+    app.include_router(home_overview_routes.router)
     app.include_router(review_routes.router)
     app.include_router(material_routes.router)
     app.include_router(handoff_routes.router)

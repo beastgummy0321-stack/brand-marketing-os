@@ -112,8 +112,10 @@ async function createCampaignInUi(page: Page, brandId: string): Promise<string> 
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
   await page.getByRole("button", { name: "產生策略建議 →" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/campaigns/${campaignId}\\?tab=strategy`));
-  await expect(page.getByText("行銷駕駛艙建議這樣投")).toBeVisible();
-  await expect(page.getByRole("button", { name: "調整建議" })).toHaveAttribute("aria-expanded", "false");
+  // F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分; the reasons sit in a fold that starts closed.
+  await expect(page.getByRole("heading", { name: "一個上限", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "這一期的總預算", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "為什麼這樣建議", exact: true })).toHaveAttribute("aria-expanded", "false");
   await captureDesktopEvidence(page, "strategy-general");
   return campaignId;
 }
@@ -206,7 +208,14 @@ test("一般流程保留必要操作；受控 loading/error、empty、深連結�
   await page.goto(`/app/brands/${brandId}/workbench`);
   await expect(page.getByText("目前沒有任務包")).toBeVisible();
   await page.goto(`/app/brands/${brandId}/ads`);
-  await expect(page.getByText("還沒有 Campaign")).toBeVisible();
+  // F28-I08: a brand with no campaign gets one honest empty card (no money, band or decisions that could only print
+  // zeros) whose one primary action is ＋ 建立活動.
+  const empty = page.getByRole("region", { name: "還沒有進行中的活動" });
+  await expect(empty).toBeVisible();
+  await expect(empty.getByRole("link", { name: "建立活動", exact: true })).toHaveAttribute("href", `/app/brands/${brandId}/ads/new`);
+  await expect(page.getByRole("link", { name: "建立活動", exact: true })).toHaveCount(1);
+  await expect(page.getByText("的廣告費花得划算")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /^需要你決定/ })).toHaveCount(0);
 
   for (const viewport of [
     { width: 1920, height: 1080, label: "wide" },

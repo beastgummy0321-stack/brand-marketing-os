@@ -10,6 +10,7 @@ or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a r
 
 from typing import cast
 
+from app.ads import targets
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -20,18 +21,27 @@ _COORDINATE_DIMENSIONS = (
 )
 
 
-def _sentence(campaign: dict, verdict: str, verdict_json: dict, labels: dict) -> str:
-    metric_labels = {"cpa": labels["cpa"], "roas": "ROAS", "purchases": labels["count"]}
-    label = metric_labels.get(campaign["success_metric"], campaign["success_metric"])
+def _sentence(campaign: dict, verdict: str, verdict_json: dict) -> str:
+    """F28-I01: every campaign is judged on cost per result against its one cap, so the label is
+    always 每筆成本."""
+    label = "每筆成本"
     name = campaign["name"]
     sample = verdict_json.get("sample_bucket")
     if verdict == "看不出":
         missing = verdict_json.get("missing", "")
-        return f"「{name}」這次投放{missing}（樣本{sample}），{label} 目標暫時看不出達成與否。"
-    target = verdict_json.get("target")
-    actual = verdict_json.get("actual")
-    actual_text = round(actual, 2) if isinstance(actual, float) else actual
-    return f"「{name}」{label} 目標 {target}，實際 {actual_text}，結果{verdict}（樣本{sample}）。"
+        return f"「{name}」這次投放{missing}（樣本{sample}），{label}上限暫時看不出達成與否。"
+    target = _number(verdict_json.get("target"))
+    actual = _number(verdict_json.get("actual"))
+    return f"「{name}」{label}上限 {target}，實際 {actual}，結果{verdict}（樣本{sample}）。"
+
+
+def _number(value):
+    """Money as the sentence prints it: 2 decimals at most, and a whole number without `.0`
+    (the cap is stored as numeric, so 300 reads back as 300.0)."""
+    if not isinstance(value, float):
+        return value
+    rounded = round(value, 2)
+    return int(rounded) if rounded.is_integer() else rounded
 
 
 def _applicability_scope(detail: dict) -> str:
@@ -68,16 +78,18 @@ def _needs_revalidation(conn: _AnyConn, brand_id: str, campaign: dict) -> bool:
 
 
 def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verdict: str) -> str:
-    """分級死規則（F03 決策 3）：1 個活動＝`observed`；同一品牌、同一 `success_metric`、
-    同方向（同一個 verdict）累計 ≥2＝`likely`；≥3＝`validated`（另一條「同期對照」留給
-    F04 的人工勾）。`看不出` 不指向任何方向，永遠是 `observed`（Blocked if：跨活動的「同
-    方向」只查得到這個模組自己的 `ads_campaign.verdict`,不需要另造一張跨活動表）。"""
+    """分級死規則（F03 決策 3，F28-I01 改分群）：1 個活動＝`observed`；同一品牌、同一種成果
+    （`targets.effective_result_kind`）、同方向（同一個 verdict）累計 ≥2＝`likely`；≥3＝
+    `validated`（另一條「同期對照」留給 F04 的人工勾）。`看不出` 不指向任何方向，永遠是
+    `observed`。系統自建的活動沒存 `result_kind` 時一律算購買——SQL 用同一條規則。"""
     if verdict == "看不出":
         return "observed"
     row = conn.execute(
         "SELECT COUNT(*) AS n FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
-        " AND id != %s AND success_metric = %s AND verdict = %s",
-        (org_id, brand_id, campaign["id"], campaign["success_metric"], verdict),
+        " AND id != %s AND verdict = %s"
+        " AND COALESCE(result_kind, CASE WHEN origin <> 'imported' THEN 'purchase' END)"
+        " IS NOT DISTINCT FROM %s",
+        (org_id, brand_id, campaign["id"], verdict, targets.effective_result_kind(campaign)),
     ).fetchone()
     assert row is not None  # COUNT(*) 一定回一列
     same_direction = row["n"] + 1  # +1 = 這個 Campaign 自己
@@ -89,19 +101,18 @@ def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verd
 
 
 def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, verdict: str,
-                    verdict_json: dict, *, actor: str, labels: dict) -> dict:
+                    verdict_json: dict, *, actor: str) -> dict:
     """結案（或自動結案）寫的那一條學習。`campaign_id` 而非整包 `campaign` dict：這裡自己
     重讀 `campaign_detail`（要投放組／廣告的座標湊 `applicability_scope`），呼叫端
     （`closeout.close`）已經有的那份 dict 只到 campaign 欄位，不值得為了少一次查詢多傳一個
-    尚未組好的大 dict。`labels` 是呼叫端（`closeout.close`）已經算好的 `judgment
-    .conversion_labels()`——這裡不重查一次品牌。"""
+    尚未組好的大 dict。"""
     from app.ads import repository as ads_repo  # 延遲 import 避免循環（closeout.py 已是入口）
 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
 
-    text = _sentence(detail, verdict, verdict_json, labels)
+    text = _sentence(detail, verdict, verdict_json)
     if verdict_json.get("data_source") == "isolated_simulation":
         text = "【隔離模擬，非市場實證】" + text
     confidence = _confidence(conn, org_id, brand_id, detail, verdict)

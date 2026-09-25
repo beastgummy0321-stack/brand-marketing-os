@@ -1,8 +1,10 @@
 """app/tests/test_ads_brief.py — F03-I03: one sentence becomes a draft Campaign
 (`app/ads/brief.py::create_draft`). FakeProvider only, no real network request (same pattern as
 `app/tests/test_workbench_free_parse.py`). Falsifiers named in the ticket's `# Done`: the draft
-never loses the user's sentence, never invents a `success_target`, never dead-ends on a provider
-error, and refuses dates outside `start <= end` with a readable message.
+never loses the user's sentence, never invents a cap, never dead-ends on a provider error, and
+refuses dates outside `start <= end` with a readable message. F28-I01: the reply carries one
+cost-per-purchase `cap` (stored as the campaign's own cap); a reply without `cap` still parses,
+and a ROAS in the reply never becomes a cap.
 """
 
 import datetime
@@ -75,7 +77,7 @@ class ValidReplyTest(_BriefTestBase):
             web.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
         )
         provider = _fake(json.dumps({
-            "objective": "名單", "success_metric": "cpa", "success_target": None, "product_ids": [],
+            "objective": "名單", "cap": None, "product_ids": [],
         }))
         brief.PROVIDER = provider
         channel = {"key": "connected-fixture", "label": "已綁平台", "connected": True}
@@ -100,7 +102,7 @@ class ValidReplyTest(_BriefTestBase):
 
     def test_missing_saved_setup_stays_unknown_and_does_not_fabricate_a_platform_or_budget(self):
         provider = _fake(json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": None, "product_ids": [],
+            "objective": "購買", "cap": None, "product_ids": [],
         }))
         brief.PROVIDER = provider
         detail = self._create()
@@ -113,8 +115,7 @@ class ValidReplyTest(_BriefTestBase):
     def test_parsed_reply_preserves_sentence_and_names_products_used(self):
         goal_text = "幫夜跑背心做一波購買導向的投放，這個月衝業績"
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 500,
-            "success_basis": f"依 {self.product['id']} 打平 CPA 推算",
+            "objective": "購買", "cap": 500,
             "product_ids": [self.product["id"]], "audience_hint": "夜跑愛好者", "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)
@@ -124,8 +125,10 @@ class ValidReplyTest(_BriefTestBase):
         self.assertTrue(detail["parsed"])
         self.assertEqual(detail["goal_text"], goal_text)
         self.assertEqual(detail["objective"], "購買")
-        self.assertEqual(detail["success_metric"], "cpa")
-        self.assertEqual(detail["success_target"], 500)
+        self.assertEqual(detail["cap"]["value"], 500)
+        self.assertEqual(detail["cap"]["basis"], "own")
+        self.assertEqual(detail["cap"]["break_even"], 600)  # 1000 - 300 - 100
+        self.assertFalse([key for key in detail if key.startswith("success_")])
         self.assertEqual(detail["status"], "draft")
         self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
         self.assertEqual(detail["context_json"]["economics_ids"], [self.economics["id"]])
@@ -144,18 +147,31 @@ class ProviderFailureTest(_BriefTestBase):
         self.assertFalse(detail["parsed"])
         self.assertEqual(detail["goal_text"], goal_text)
         self.assertEqual(detail["objective"], "購買")
-        self.assertEqual(detail["success_metric"], "roas")
-        self.assertIsNone(detail["success_target"])
-        self.assertIsNotNone(detail["success_basis"])
+        self.assertIsNone(detail["cap"]["own_value"])
+        self.assertIsNone(detail["cap"]["value"])  # no product named yet -> nothing to resolve
+        self.assertEqual(detail["cap"]["missing"], ["product"])
         self.assertEqual(detail["status"], "draft")
         self.assertEqual(self._task_count(), 1)
 
 
 class NullTargetSurvivesTest(_BriefTestBase):
-    def test_model_returned_null_target_survives_as_null(self):
+    def test_model_returned_null_cap_survives_as_no_cap(self):
         reply = json.dumps({
-            "objective": "知名度", "success_metric": "roas", "success_target": None,
-            "success_basis": "沒有足夠的價格資料推算目標值",
+            "objective": "知名度", "cap": None,
+            "product_ids": [], "audience_hint": None, "notes": "使用者希望 ROAS 3",
+        }, ensure_ascii=False)
+        brief.PROVIDER = _fake(reply)
+
+        detail = self._create()
+
+        self.assertTrue(detail["parsed"])
+        self.assertIsNone(detail["cap"]["own_value"])
+
+    def test_reply_without_cap_still_parses_and_a_roas_never_becomes_a_cap(self):
+        # The pre-F28 reply shape (and the legacy e2e scripted reply) carries a ROAS target and
+        # no `cap` at all: it parses, and the ROAS is never converted into a cost cap.
+        reply = json.dumps({
+            "objective": "購買", "success_metric": "roas", "success_target": 3,
             "product_ids": [], "audience_hint": None, "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)
@@ -163,8 +179,20 @@ class NullTargetSurvivesTest(_BriefTestBase):
         detail = self._create()
 
         self.assertTrue(detail["parsed"])
-        self.assertIsNone(detail["success_target"])
-        self.assertEqual(detail["success_basis"], "沒有足夠的價格資料推算目標值")
+        self.assertIsNone(detail["cap"]["own_value"])
+        row = web.conn.execute(
+            "SELECT target_cost, target_basis FROM ads_campaign WHERE id=%s", (detail["id"],),
+        ).fetchone()
+        self.assertIsNone(row["target_cost"])
+        self.assertIsNone(row["target_basis"])
+
+    def test_non_positive_or_non_numeric_cap_is_no_cap(self):
+        for bad in (0, -5, "450", True):
+            reply = json.dumps({"objective": "購買", "cap": bad, "product_ids": []})
+            brief.PROVIDER = _fake(reply)
+            detail = self._create()
+            self.assertTrue(detail["parsed"])
+            self.assertIsNone(detail["cap"]["own_value"], bad)
 
 
 class BadDatesTest(_BriefTestBase):
@@ -208,7 +236,7 @@ class PatchEndBeforeStartOnMergedRowTest(_BriefTestBase):
 
 
 class PatchBoundCampaignTest(_BriefTestBase):
-    def test_bound_campaign_refuses_name_but_accepts_success_target(self):
+    def test_bound_campaign_refuses_name_but_accepts_goal_text(self):
         brief.PROVIDER = _fake("{}")
         detail = self._create()
         web.conn.execute(
@@ -223,16 +251,15 @@ class PatchBoundCampaignTest(_BriefTestBase):
         self.assertEqual(str(ctx.exception), "campaign_bound")
 
         updated = ads_repo.update_campaign(
-            web.conn, self.org_id, self.brand_id, detail["id"], {"success_target": 250},
+            web.conn, self.org_id, self.brand_id, detail["id"], {"objective": "名單"},
         )
-        self.assertEqual(updated["success_target"], 250)
+        self.assertEqual(updated["objective"], "名單")
 
 
 class ForeignProductIdDroppedOnParseTest(_BriefTestBase):
     def test_model_named_product_id_not_in_brand_is_dropped_silently(self):
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 500,
-            "success_basis": "AI 掰的商品 id",
+            "objective": "購買", "cap": 500,
             "product_ids": ["prd_not_this_brand"], "audience_hint": None, "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)
@@ -278,8 +305,8 @@ class ManyProductsCappedTest(_BriefTestBase):
 
         beyond_cap_id = extra_products[24]["id"]
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 500,
-            "success_basis": "測試", "product_ids": [beyond_cap_id],
+            "objective": "購買", "cap": 500,
+            "product_ids": [beyond_cap_id],
             "audience_hint": None, "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)
@@ -314,7 +341,7 @@ class ResolvePeriodTest(unittest.TestCase):
 class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
     """F04-I11 (backlog: `docs/backlog/issue-brief-parse-drops-explicit-target.md`, verbatim):
     「9 月推 Beast Gummy 高咖啡因軟糖給上班族，目標是購買，希望 CPA 在 300 以內，預算三萬。」
-    used to lose both `success_target` and the budget — this locks the fix in."""
+    used to lose both the cost cap (`cap` since F28-I01) and the budget — this locks the fix in."""
 
     GOAL_TEXT = (
         "9 月推 Beast Gummy 高咖啡因軟糖給上班族，目標是購買，希望 CPA 在 300 以內，預算三萬。"
@@ -322,8 +349,8 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
 
     def test_numbers_land_on_the_fields_they_modify_and_period_resolves(self):
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
-            "success_basis": "使用者直接說出的 CPA 上限", "product_ids": [self.product["id"]],
+            "objective": "購買", "cap": 300,
+            "product_ids": [self.product["id"]],
             "budget_cap": 30000, "platform": None,
             "period": {"kind": "month", "month": 9},
             "audience_hint": "上班族", "notes": None,
@@ -336,7 +363,7 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
 
         detail = self._create(goal_text=self.GOAL_TEXT, start_date="", end_date="")
 
-        self.assertEqual(detail["success_target"], 300)
+        self.assertEqual(detail["cap"]["value"], 300)
         self.assertEqual(detail["constraints_json"]["budget"], 30000)
         self.assertEqual(detail["start_date"], expected_start)
         self.assertEqual(detail["end_date"], expected_end)
@@ -345,8 +372,8 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
 
     def test_unparseable_period_falls_back_to_today_plus_30_and_is_system(self):
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
-            "success_basis": "使用者直接說出的 CPA 上限", "product_ids": [],
+            "objective": "購買", "cap": 300,
+            "product_ids": [],
             "budget_cap": 30000, "platform": None, "period": None,
             "audience_hint": None, "notes": None,
         }, ensure_ascii=False)
@@ -363,8 +390,8 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
 class UserBudgetChipBeatsModelTest(_BriefTestBase):
     def test_user_supplied_constraint_wins_over_model_parsed_budget(self):
         reply = json.dumps({
-            "objective": "購買", "success_metric": "cpa", "success_target": 300,
-            "success_basis": "測試", "product_ids": [], "budget_cap": 30000,
+            "objective": "購買", "cap": 300,
+            "product_ids": [], "budget_cap": 30000,
             "platform": None, "period": None, "audience_hint": None, "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)

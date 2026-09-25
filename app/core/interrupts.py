@@ -36,6 +36,10 @@ CATEGORIES = {
     # per class the queue actually carries in this batch (`worse` is a decision to make, not yet
     # a loss, so it ranks below `stop_loss` but above the pre-existing informational entries).
     "ads_triage_stop_loss": {"severity": "money_loss", "label": "廣告停損待決定"},
+    # F27-I06 cleanup row, F28-I02/I06: it now also carries the 白花 ads (spent >= 3x the cap with
+    # no result) that used to raise `stop_loss` -- money already being lost -- so it ranks
+    # money_loss right after stop_loss, never lower than the rows it replaced.
+    "ads_triage_cleanup": {"severity": "money_loss", "label": "花錢沒效的廣告待決定"},
     "ads_triage_worse": {"severity": "rule_warning", "label": "廣告變差待決定"},
     "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
     # F26-I01: the campaign-level "insufficient data" row (missing sync days, or a failed/
@@ -46,10 +50,6 @@ CATEGORIES = {
     # (feature Decisions "Rule A"/"Rule B"), so both rank informational, after the F18 entries.
     "ads_triage_scale_budget": {"severity": "informational", "label": "可加預算待決定"},
     "ads_triage_refresh_creative": {"severity": "informational", "label": "素材待補待決定"},
-    # F27-I06: Contract F's cleanup row (a campaign carrying more active ads than its budget can
-    # support) -- a program proposal, not yet a loss or warning, so informational (same rank
-    # family as scale_budget/refresh_creative above).
-    "ads_triage_cleanup": {"severity": "informational", "label": "廣告清理待決定"},
     "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
     "customer_voice_extraction_done": {"severity": "informational", "label": "顧客原話分析完成"},

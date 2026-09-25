@@ -34,9 +34,6 @@ from app.core.db import Conn, ConnProxy, jsonb, new_id
 
 _AnyConn = Conn | ConnProxy
 
-_SUCCESS_METRICS = frozenset({"cpa", "roas", "purchases"})
-
-
 def _budget_total(start_date, end_date, groups: list[dict]) -> float | None:
     """`sum(group.daily_budget) x days`, one definition (§0). `days` is inclusive of both
     ends (a one-day campaign still spends one day's budget); `None` when either bound is
@@ -57,36 +54,30 @@ def _budget_total(start_date, end_date, groups: list[dict]) -> float | None:
 
 def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *,
                      created_by: str | None = None) -> dict:
-    """寫一列 `ads_campaign`。`name`／`goal_text`／`objective`／`success_metric` 都是必填——
-    `ValueError("field_unknown")` 帶欄位名在缺欄／空字串時；`success_metric` 不在
-    CPA／ROAS／購買數之外一律 `ValueError("success_metric_unknown")`；`success_target` 可以是
-    `None`（模型說不出有根據的數字），但若有值就必須是數字，非數字一律
-    `ValueError("success_target_unknown")`。
+    """寫一列 `ads_campaign`。`name`／`goal_text`／`objective` 都是必填——
+    `ValueError("field_unknown")` 帶欄位名在缺欄／空字串時。`target_cost`（F28-I01：這個活動
+    唯一的上限，每筆成果成本）可以是 `None`（沒有說出上限）；有值就必須是正的有限數字，
+    存成 `target_basis='own'`，否則一律 `ValueError("target_value_unknown")`。
     """
     for field in ("name", "goal_text", "objective"):
         value = campaign.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field}_unknown")
-    success_metric = campaign.get("success_metric")
-    if success_metric not in _SUCCESS_METRICS:
-        raise ValueError("success_metric_unknown")
-    success_target = campaign.get("success_target")
-    if success_target is not None and (
-        isinstance(success_target, bool) or not isinstance(success_target, (int, float))
-    ):
-        raise ValueError("success_target_unknown")
+    cap = campaign.get("target_cost")
+    if cap is not None and not _valid_cap(cap):
+        raise ValueError("target_value_unknown")
 
     campaign_id = new_id("adc")
     conn.execute(
         "INSERT INTO ads_campaign (id, org_id, brand_id, name, goal_text, objective,"
-        " success_metric, success_target, success_basis, start_date, end_date, status,"
+        " target_cost, target_basis, start_date, end_date, status,"
         " budget_planned, budget_scenario, budget_basis_json, context_json, constraints_json,"
         " created_by)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             campaign_id, org_id, brand_id, campaign["name"], campaign["goal_text"],
-            campaign["objective"], success_metric, success_target,
-            campaign.get("success_basis"), campaign.get("start_date"), campaign.get("end_date"),
+            campaign["objective"], cap, "own" if cap is not None else None,
+            campaign.get("start_date"), campaign.get("end_date"),
             campaign.get("status", "draft"), campaign.get("budget_planned"),
             campaign.get("budget_scenario"), jsonb(campaign.get("budget_basis_json") or {}),
             jsonb(campaign.get("context_json") or {}),
@@ -99,10 +90,15 @@ def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, 
     return row
 
 
-_PATCHABLE_COLUMNS = (
-    "name", "objective", "success_metric", "success_target", "success_basis",
-    "start_date", "end_date",
-)
+def _valid_cap(value) -> bool:
+    """A cap is a positive, finite number -- never a bool, a string, zero or NaN."""
+    return (
+        not isinstance(value, bool) and isinstance(value, (int, float))
+        and math.isfinite(value) and value > 0
+    )
+
+
+_PATCHABLE_COLUMNS = ("name", "objective", "start_date", "end_date")
 
 
 # F04-I11：使用者改過的那一格，`context_json.field_sources` 要跟著翻成「你說的」
@@ -142,22 +138,13 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         raise ValueError("campaign_unknown")
 
     if campaign.get("origin") == "imported":
-        allowed = {"goal_text", "objective", "success_metric", "success_target", "success_basis"}
+        allowed = {"goal_text", "objective"}
         if set(updates) - allowed:
             raise ValueError(external_models.IMPORTED_REASON)
         for key in ("goal_text", "objective"):
             value = updates.get(key)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"{key}_unknown")
-        if (updates.get("success_metric") is not None
-                and updates["success_metric"] not in _SUCCESS_METRICS):
-            raise ValueError("success_metric_unknown")
-        target = updates.get("success_target")
-        if target is not None and (
-            isinstance(target, bool) or not isinstance(target, (int, float))
-            or not math.isfinite(target)
-        ):
-            raise ValueError("success_target_unknown")
         if updates:
             conn.execute(
                 "UPDATE ads_campaign SET updated_at=now(),"
@@ -174,14 +161,6 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
             value = updates[field]
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field}_unknown")
-    if "success_metric" in updates and updates["success_metric"] not in _SUCCESS_METRICS:
-        raise ValueError("success_metric_unknown")
-    if "success_target" in updates:
-        success_target = updates["success_target"]
-        if success_target is not None and (
-            isinstance(success_target, bool) or not isinstance(success_target, (int, float))
-        ):
-            raise ValueError("success_target_unknown")
 
     # F03-I19: dates validated on the *merged* row — a patch may move only one of the two, so
     # checking the payload alone would miss `end < start` when only `end_date` is sent (§0 "The
@@ -252,6 +231,13 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     return row
 
 
+def _without_retired_goal(row) -> dict:
+    """F28-I01: the pre-cap goal columns (`success_*`) are kept in the table but retired -- one
+    cap per campaign lives in `target_cost`/`target_basis` (docs/architecture/ads.md §6.32).
+    Dropped here, at the one campaign read, so no caller can read or return them again."""
+    return {key: value for key, value in dict(row).items() if not key.startswith("success_")}
+
+
 def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     row = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND id = %s",
@@ -259,11 +245,20 @@ def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -
     ).fetchone()
     if row is None:
         return None
-    if row["origin"] == "imported":
-        return dict(row)
+    campaign = _without_retired_goal(row)
+    if campaign["origin"] == "imported":
+        return campaign
     brand = bi_repo.get_brand(cast(Conn, conn), brand_id)
     labels = judgment.conversion_labels((brand or {}).get("conversion_goal"))
-    return budget.reconcile_campaign(dict(row), labels["conversion"])
+    cap = None
+    stored = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
+    if stored.get("mode") == "cold_start":
+        # F28-I01: a cold start is the one cap x purchases per day -- resolved only when the
+        # stored projection needs it, so a plain row read stays one query otherwise.
+        from app.ads import targets
+
+        cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
+    return budget.reconcile_campaign(campaign, labels["conversion"], cap=cap)
 
 
 def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:
@@ -275,25 +270,17 @@ def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:
     return campaign
 
 
-_TARGET_BASES = frozenset({"own", "break_even", "trailing_30"})
+_TARGET_BASES = frozenset({"own", "break_even"})
 
 
 def _campaign_target_view(campaign: dict, resolved: dict) -> dict:
-    own_value = (
-        float(campaign["target_cost"])
-        if campaign.get("target_basis") == "own" and campaign.get("target_cost") is not None
-        else None
-    )
+    """The cap view (`targets.resolve`) plus this sub-resource's own configuration: which
+    products the campaign names, and the full result-kind vocabulary the cap block's fold
+    offers (F19-I06: `result_label` is never a raw code)."""
     return {
         "campaign_id": campaign["id"],
         "product_ids": (campaign.get("context_json") or {}).get("product_ids") or [],
-        "own_value": own_value,
-        "revision": campaign.get("target_revision") or 0,
         **resolved,
-        # F19-I06: the Chinese vocabulary the target page reads its segmented control from --
-        # `result_label` for this campaign's own resolved kind (never a raw code), `result_kinds`
-        # the full stable-order list every campaign may choose from.
-        "result_label": result_kinds.label(resolved.get("result_kind")),
         "result_kinds": result_kinds.options(),
     }
 
@@ -322,9 +309,7 @@ def save_campaign_target(
     counter, so unrelated campaign edits (strategy/plan/bind/...) never collide with it.
 
     Writes only this sub-resource's own columns (`target_cost`/`target_basis`/`result_kind`/
-    `target_revision`) -- never `success_metric`/`success_target`/`success_basis` (2026-09-20
-    re-cut: overloading those three silently corrupted close-out verdicts, learning cohorts,
-    cold-start budgets, asset suggestions and the frontend metric label, all outside this issue).
+    `target_revision`) -- the one cap store (F28-I01, docs/architecture/ads.md §6.32).
 
     `price`/`variable_cost` are never written to `product_economics` here: they only ever reach
     `app.brand_intelligence.repository.save_product_economics`, that layer's own public write
@@ -348,7 +333,7 @@ def save_campaign_target(
         raise ValueError("target_basis_unknown")
     if basis == "own" and value is None:
         raise ValueError("target_value_unknown")
-    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+    if value is not None and not _valid_cap(value):
         raise ValueError("target_value_unknown")
 
     context_json = dict(campaign.get("context_json") or {})
@@ -395,11 +380,9 @@ def save_campaign_target(
         set_clauses += ["target_basis = %s", "target_cost = %s"]
         params += ["own", value]
     elif basis is not None:
-        # `basis` here only ever asks resolve() to pick again among break-even/trailing-30 --
-        # never a stored preference (the priority order is fixed, §0) -- so clearing a prior
-        # "own" override just drops `target_cost` and relabels `target_basis`; `resolve()` never
-        # reads this label for break-even/trailing-30 (both are always recomputed), it is kept
-        # only so `_campaign_target_view` can tell "user asked for X" from "nothing chosen yet".
+        # `break_even` only clears the user's own cap so resolve() falls back to break-even --
+        # never a stored number (break-even is always recomputed using product economics); the
+        # label only records "the user asked for break-even" versus "nothing chosen yet".
         set_clauses += ["target_basis = %s", "target_cost = NULL"]
         params += [basis]
     params += [org_id, brand_id, campaign_id]
@@ -679,30 +662,6 @@ def _target_name(conn: _AnyConn, org_id: str, brand_id: str, action: dict,
     return row["name"] if row is not None else None
 
 
-def recent_actions(conn: _AnyConn, org_id: str, brand_id: str, *, limit: int = 20) -> list:
-    """F04-I08：這個品牌**跨 Campaign** 的最近操作——首頁「最近做了什麼」時間軸。每一列帶
-    `campaign_id`／`campaign_name`（JOIN `ads_campaign`）跟 `judgment.action_line()` 組好的
-    三個字串。"""
-    today = coresettings.today_for_org(conn, org_id=org_id)
-    rows = conn.execute(
-        "SELECT a.*, c.name AS campaign_name FROM ads_action a"
-        " JOIN ads_campaign c ON c.id = a.campaign_id"
-        " WHERE a.org_id = %s AND a.brand_id = %s ORDER BY a.created_at DESC LIMIT %s",
-        (org_id, brand_id, limit),
-    ).fetchall()
-    entries = []
-    for row in rows:
-        row = dict(row)
-        target_name = _target_name(conn, org_id, brand_id, row, campaign_name=row["campaign_name"])
-        line = judgment.action_line(
-            row, campaign_name=row["campaign_name"], target_name=target_name, today=today,
-        )
-        entries.append({
-            "campaign_id": row["campaign_id"], "campaign_name": row["campaign_name"], **line,
-        })
-    return entries
-
-
 def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     """`GET /campaigns/{c}`：整個五分頁工作區要讀的一份 dict——campaign 本身 + 投放組 +
     廣告（掛在各自的投放組下）+ 每個節點最新一筆 action + 成效小計 + F04-I08 的
@@ -737,6 +696,9 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     budget_total = _budget_total(campaign["start_date"], campaign["end_date"], groups)
 
     detail = dict(campaign)
+    from app.ads import targets
+
+    detail["cap"] = targets.resolve(conn, org_id, brand_id, campaign)
     detail["capabilities"] = external_models.capabilities(campaign["origin"])
     detail["external_view"] = (
         external_repository.external_view(conn, org_id, brand_id, campaign_id)
@@ -867,6 +829,28 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         "UPDATE ads_campaign SET budget_planned = %s, budget_scenario = %s,"
         " budget_basis_json = %s WHERE org_id = %s AND brand_id = %s AND id = %s",
         (budget_planned, scenario_key, jsonb(budget_basis_json), org_id, brand_id, campaign_id),
+    )
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
+    return row
+
+
+def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                   budget_cap: int | None) -> dict:
+    """F28-I03: write only `constraints_json.budget` (set or removed) and flip
+    `context_json.field_sources.budget` to the user's -- in any status, no status or binding
+    check, and no other column (`budget_planned`／`budget_scenario`／`budget_basis_json` stay as
+    saved). The caller validated the value. Both documents are edited in place in SQL, so a
+    concurrent edit of another key in them is never overwritten."""
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
+    conn.execute(
+        "UPDATE ads_campaign SET"
+        " constraints_json = (COALESCE(constraints_json, '{}'::jsonb) - 'budget') || %s,"
+        " context_json = jsonb_set(COALESCE(context_json, '{}'::jsonb), '{field_sources}',"
+        "   COALESCE(context_json->'field_sources', '{}'::jsonb) || '{\"budget\": \"user\"}')"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb({} if budget_cap is None else {"budget": budget_cap}),
+         org_id, brand_id, campaign_id),
     )
     row = get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None

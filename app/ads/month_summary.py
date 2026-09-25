@@ -254,12 +254,21 @@ def _cleanup_suggestions(campaigns_by_id: dict, queue_items: list, month: str) -
         key = f"cleanup:{cleanup['campaign_id']}"
         if campaign is None or key in _dismissed_keys(campaign, month):
             continue
+        # F28-I02: the cut is chosen by grade (白花 first, then the most expensive over the cap),
+        # no longer the lowest-spend ads -- and a 白花 ad alone raises it even when capacity is
+        # unknown (`can_support` null), so the reason names whichever applies.
+        can_support = cleanup["can_support"]
+        over_capacity = can_support is not None and cleanup["active_ads"] > can_support
+        wasted = sum(1 for ad in cleanup["ads"] if ad["grade"] == "wasted")
         out.append({
             "key": key, "kind": "cleanup", "campaign_id": cleanup["campaign_id"],
             "campaign_name": cleanup["campaign_name"], "objective": campaign["objective"],
             "campaign_objective": campaign["campaign_objective"],
-            "title": f"清掉 {len(cleanup['ads'])} 則沒被投放的廣告",
-            "why": f"同時 {cleanup['active_ads']} 則，預算約撐 {cleanup['can_support']} 則",
+            "title": f"關掉 {len(cleanup['ads'])} 則花錢沒效的廣告",
+            "why": (
+                f"同時 {cleanup['active_ads']} 則，預算約撐 {can_support} 則" if over_capacity
+                else f"{wasted} 則花了上限 3 倍以上還沒有成果"
+            ),
             "action_url": row["action_url"],
         })
     return out

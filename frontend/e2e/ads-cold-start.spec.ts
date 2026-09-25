@@ -57,7 +57,7 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   await page.getByRole("button", { name: "登入", exact: true }).click();
   await page.getByRole("link", { name: "F13 隔離驗收品牌", exact: true }).click();
   await page.getByRole("link", { name: "投放中心", exact: true }).click();
-  await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
+  await page.getByRole("link", { name: "建立活動", exact: true }).click();
   await expect(page.getByRole("heading", { name: "建立投放計畫", exact: true })).toBeVisible();
   const filename = "fixture-I2.png";
   await page.getByRole("checkbox", { name: `選取 ${filename}`, exact: true }).check();
@@ -75,12 +75,23 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   const strategy = responseFor(page, `/campaigns/${created.id}/strategy`);
   await page.getByRole("button", { name: "產生策略建議 →", exact: true }).click();
   await successful(strategy);
-  await page.getByRole("button", { name: "先設定預算 →", exact: true }).click();
-  await page.getByPlaceholder("輸入自訂預算", { exact: true }).fill("800");
+  // F28-I09: nothing is preselected — the user fills the total in 自己填總額; a total above the campaign's budget cap
+  // needs the second yes in the confirm sheet. Adopting also needs a cost-per-result cap (一個上限).
+  await page.getByRole("button", { name: "自己填總額", exact: true }).click();
+  await page.getByLabel("自己填這一期的總預算", { exact: true }).fill("800");
   const budget = responseFor(page, `/campaigns/${created.id}/strategy/scenario`);
   await page.getByRole("button", { name: "套用", exact: true }).click();
+  const overCap = page.getByRole("alertdialog");
+  if (await overCap.isVisible()) await overCap.getByRole("button", { name: "超出預算上限也要用", exact: true }).click();
   const budgetResult = (await (await successful(budget)).json()).campaign;
   expect(budgetResult.budget_planned).toBe(800);
+  const capInput = page.getByLabel("每賣一筆最多花多少（上限）", { exact: true });
+  if (await capInput.isVisible()) {
+    await capInput.fill("300");
+    const capSaved = responseFor(page, `/campaigns/${created.id}/target`, "PUT");
+    await page.getByRole("button", { name: "儲存上限", exact: true }).click();
+    await successful(capSaved);
+  }
   const plan = responseFor(page, `/campaigns/${created.id}/plan`);
   await page.getByRole("button", { name: "照這個方式進行 →", exact: true }).click();
   const planned = (await (await successful(plan)).json()).campaign;

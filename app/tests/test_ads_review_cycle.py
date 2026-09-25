@@ -608,13 +608,13 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertTrue(any("歷史投放條件未完整確認" in text for text in limitations))
         self.assertFalse(any("conditions_" in text for text in limitations))
 
-    def test_linked_change_http_accepts_persisted_numeric_goal_and_rejects_real_change(self):
+    def test_linked_change_http_accepts_a_cap_edit_and_rejects_a_real_goal_change(self):
         from fastapi.testclient import TestClient
 
         from app.main import app
 
         self.conn.execute(
-            "UPDATE ads_campaign SET success_metric='roas',success_target=2 WHERE id=%s",
+            "UPDATE ads_campaign SET target_basis='own',target_cost=2 WHERE id=%s",
             (self.campaign,),
         )
         self.conn.execute(
@@ -626,7 +626,11 @@ class ReviewCycleTest(unittest.TestCase):
         self.reply()
         ready = self.run_review(self.request())
         self.assertEqual(ready["status"], "ready", ready["error"])
-        self.assertEqual(ready["evidence_json"]["premise"]["goal"]["success_target"], 2.0)
+        # F28-I01: the cap is not a platform setting, so it is never part of the premise.
+        self.assertNotIn("target_cost", ready["evidence_json"]["premise"]["goal"])
+        self.assertEqual(
+            set(ready["evidence_json"]["premise"]["goal"]), {"goal_text", "objective"},
+        )
         client = TestClient(app)
         base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
         payload = {
@@ -647,7 +651,10 @@ class ReviewCycleTest(unittest.TestCase):
         response = client.post(base + "/change-sets", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["change_set"]["review_id"], ready["id"])
-        self.conn.execute("UPDATE ads_campaign SET success_target=3 WHERE id=%s", (self.campaign,))
+        self.conn.execute("UPDATE ads_campaign SET target_cost=3 WHERE id=%s", (self.campaign,))
+        self.conn.execute(
+            "UPDATE ads_campaign SET goal_text='改過的目標' WHERE id=%s", (self.campaign,),
+        )
         self.conn.commit()
         payload["operation_id"] = db.new_id("op")
         changed = client.post(base + "/change-sets", json=payload)

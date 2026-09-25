@@ -12,7 +12,9 @@ of what the user adopted — after 採用策略 the group daily budgets are the 
 ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
 """
 
-from app.ads import budget, judgment
+from datetime import UTC, datetime
+
+from app.ads import budget, judgment, targets
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -272,6 +274,11 @@ def _apply_amounts(allocation: list[dict], total: float | None) -> list[dict]:
     ]
 
 
+def _cap_text(cap: float | None) -> str:
+    """The one cap as the strategy prompt reads it (F28-I01) -- `未設定`, never a guessed number."""
+    return "未設定" if cap is None else f"{round(cap):,}"
+
+
 def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
     """組context、打模型、套 `budget.scenarios()`／`budget.split()`，整包寫進
     `ads_campaign.budget_basis_json`。失敗（provider 出錯或回覆解不出來）一律 `ValueError`，
@@ -296,11 +303,14 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
 
     history = ads_repo.budget_history(conn, org_id, brand_id)
     days = _days(campaign["start_date"], campaign["end_date"])
+    cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
     scenario_result = budget.scenarios(
         conn, org_id, brand_id, product_ids=product_ids, days=days, history=history,
-        conversion_label=labels["conversion"],
+        conversion_label=labels["conversion"], cap=cap,
     )
-    scenario_result = budget.current_scenarios(scenario_result, campaign, labels["conversion"])
+    scenario_result = budget.current_scenarios(
+        scenario_result, campaign, labels["conversion"], cap=cap,
+    )
     scenarios_text = _scenarios_section(scenario_result)
 
     knowledge_item_ids = (
@@ -315,8 +325,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n## 這次投放\n\n"
         + f"目標句子：{campaign['goal_text']}\n"
         + f"objective：{campaign['objective']}\n"
-        + f"success_metric：{campaign['success_metric']}\n"
-        + f"success_target：{campaign.get('success_target')}\n"
+        + f"上限（每筆購買成本）：{_cap_text(cap)}\n"
         + f"期間：{campaign['start_date']} ~ {campaign['end_date']}"
         + "\n\n" + facts_text
         + "\n\n" + products_text
@@ -365,10 +374,24 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     return detail
 
 
+class OverCapUnconfirmed(ValueError):
+    """F28-I03: the chosen total is above the campaign's budget cap and the caller did not send
+    `confirm_over_cap` -- carries the numbers the refusal states."""
+
+    def __init__(self, *, total: float, cap: int, over: int):
+        super().__init__("over_cap_unconfirmed")
+        self.total, self.cap, self.over = total, cap, over
+
+
 def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
-                     scenario_key: str, custom_total: float | None = None, actor: str) -> dict:
-    """使用者選最低／推薦／積極，或手打一個總額——重新用已存的百分比 `split()` 出金額，
-    寫 `budget_planned`／`budget_scenario`（§0）。"""
+                     scenario_key: str, custom_total: float | None = None,
+                     confirm_over_cap: bool = False, actor: str) -> dict:
+    """使用者選最低／推薦／積極／照預算上限，或手打一個總額——重新用已存的百分比 `split()`
+    出金額，寫 `budget_planned`／`budget_scenario`（§0）。
+
+    F28-I03：總額超過預算上限（`constraints_json.budget`）時必須帶 `confirm_over_cap=True`，
+    否則 `OverCapUnconfirmed`；確認過就存，並在 `budget_basis_json.over_cap_confirmation`
+    記下誰、何時、總額、上限、超出多少。上限內或沒有上限時照舊（不留確認紀錄）。"""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
@@ -392,6 +415,20 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         if row["total"] is None:
             raise ValueError("scenario_amount_unknown")
         total = row["total"]
+
+    budget_cap = budget.budget_cap_of(campaign.get("constraints_json"))
+    over = budget.amount_over_cap(total, budget_cap)
+    budget_basis_json = {
+        k: v for k, v in budget_basis_json.items() if k != "over_cap_confirmation"
+    }
+    if over:
+        assert budget_cap is not None  # `over` is only ever positive against a known cap
+        if not confirm_over_cap:
+            raise OverCapUnconfirmed(total=total, cap=budget_cap, over=over)
+        budget_basis_json["over_cap_confirmation"] = {
+            "by": actor, "at": datetime.now(UTC).isoformat(), "total": total,
+            "cap": budget_cap, "over": over,
+        }
 
     strategy_payload = dict(strategy_payload)
     strategy_payload["allocation"] = _apply_amounts(strategy_payload["allocation"], total)
@@ -461,6 +498,23 @@ def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,
     strategy_payload["allocation"] = _apply_amounts(validated_allocation, total)
     budget_basis_json = {**budget_basis_json, "strategy": strategy_payload}
     ads_repo.save_strategy(conn, org_id, brand_id, campaign_id, budget_basis_json=budget_basis_json)
+    detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+    assert detail is not None
+    return detail
+
+
+def set_budget_cap(conn, org_id: str, brand_id: str, campaign_id: str, *,
+                   budget_cap, actor: str) -> dict:
+    """F28-I03 (user ruling 2026-09-25): the budget cap stays editable after the wizard, in any
+    campaign status. A positive whole number sets `constraints_json.budget`, `None` clears it;
+    anything else is `ValueError("budget_cap_invalid")`. Internal planning number only: it never
+    writes the platform, never touches `budget_planned` or the saved scenario, and is not part of
+    any handoff premise -- the next scenarios read (`budget.current_scenarios`) reflects it."""
+    if budget_cap is not None and (
+        isinstance(budget_cap, bool) or not isinstance(budget_cap, int) or budget_cap <= 0
+    ):
+        raise ValueError("budget_cap_invalid")
+    ads_repo.set_budget_cap(conn, org_id, brand_id, campaign_id, budget_cap=budget_cap)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     return detail

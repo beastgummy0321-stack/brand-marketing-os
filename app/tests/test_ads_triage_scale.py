@@ -70,12 +70,13 @@ class _CandidateFixture(unittest.TestCase):
     @staticmethod
     def item(*, entity_id, cls="flat", cost=80, previous=90, target_value=100,
              window_end=WINDOW_END, window_days=14, campaign_id=None, campaign_name="活動一",
-             reason_code="cost_per_result_flat", thumbnail_url=None):
+             reason_code="cost_per_result_flat", thumbnail_url=None, grade="on_target"):
         return {
             "entity_id": entity_id, "native_id": entity_id, "name": "廣告",
             "campaign_id": campaign_id, "campaign_name": campaign_name,
             "thumbnail_url": thumbnail_url,
             "class": cls, "label": triage.LABELS[cls], "reason_code": reason_code,
+            "grade": grade,
             "window": {"start": window_end - timedelta(days=window_days - 1), "end": window_end,
                        "days": window_days, "previous_start": None, "previous_end": None,
                        "extended_from": None},
@@ -116,22 +117,59 @@ class ScaleCandidatesTest(_CandidateFixture):
         self.assertEqual(candidate["scale"]["from"], 1000.0)
         self.assertEqual(candidate["scale"]["to"], 1200)  # ceil(1000*1.2)
         self.assertEqual(candidate["scale"]["owner"]["ads_count"], 2)
-        # A `better` ad is not required, but is preferred as the row's own triage item when one
-        # exists.
+        # F28-I02: the row's own triage item is the cheapest 划算 ad.
         self.assertEqual(candidate["triage"]["entity_id"], ad1)
         self.assertEqual(candidate["scale"]["cost_per_result"], 70)
         self.assertEqual(candidate["scale"]["previous_cost_per_result"], 95)
         self.assertEqual(candidate["scale"]["month"]["available"], 500.0)
         self.assertEqual(candidate["scale"]["month"]["extra_needed"], 0.0)
 
-    def test_all_flat_owner_qualifies_without_a_better_ad(self):
+    def test_display_item_is_the_cheapest_on_target_ad_not_the_first(self):
+        self.campaign_entity(budget_type="daily", budget_amount=1000)
+        ad1 = self.ad_entity(native_id="ad1")["id"]
+        ad2 = self.ad_entity(native_id="ad2")["id"]
+        items = [
+            self.item(entity_id=ad1, cls="better", cost=90, previous=95, campaign_id=self.campaign),
+            self.item(entity_id=ad2, cls="flat", cost=40, previous=41, campaign_id=self.campaign),
+        ]
+        self.assertEqual(self.candidates(items)[0]["triage"]["entity_id"], ad2)
+
+    def test_trend_is_only_a_note_worse_or_no_previous_window_still_qualifies(self):
+        # F28-I02: grades decide; `class`/`previous` never gate a scale-up.
         self.campaign_entity(budget_type="daily", budget_amount=500)
         ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="flat", cost=90, previous=92,
-                           campaign_id=self.campaign)]
+        ad2 = self.ad_entity(native_id="ad2")["id"]
+        items = [
+            self.item(entity_id=ad1, cls="worse", cost=90, previous=60,
+                      reason_code="cost_per_result_up", campaign_id=self.campaign),
+            self.item(entity_id=ad2, cls="insufficient", cost=80, previous=None,
+                      reason_code="no_previous_window", campaign_id=self.campaign),
+        ]
+        candidates = self.candidates(items)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["triage"]["entity_id"], ad2)
+        self.assertIsNone(candidates[0]["scale"]["previous_cost_per_result"])
+
+    def test_too_new_ad_allowed_alongside_an_on_target_ad(self):
+        self.campaign_entity(budget_type="daily", budget_amount=1000)
+        ad1 = self.ad_entity(native_id="ad1")["id"]
+        ad2 = self.ad_entity(native_id="ad2")["id"]
+        items = [
+            self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign),
+            self.item(entity_id=ad2, cls="insufficient", reason_code="below_sample_gate",
+                      grade="insufficient", cost=None, previous=None, campaign_id=self.campaign),
+        ]
         candidates = self.candidates(items)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["triage"]["entity_id"], ad1)
+
+    def test_only_too_new_ads_never_qualify(self):
+        self.campaign_entity(budget_type="daily", budget_amount=1000)
+        ad1 = self.ad_entity(native_id="ad1")["id"]
+        items = [self.item(entity_id=ad1, cls="insufficient", reason_code="below_sample_gate",
+                           grade="insufficient", cost=None, previous=None,
+                           campaign_id=self.campaign)]
+        self.assertEqual(self.candidates(items), [])
 
     def test_to_is_ceil_of_from_times_1_2(self):
         self.campaign_entity(budget_type="daily", budget_amount=999)
@@ -140,40 +178,31 @@ class ScaleCandidatesTest(_CandidateFixture):
         candidates = self.candidates(items)
         self.assertEqual(candidates[0]["scale"]["to"], math.ceil(999 * 1.2))
 
-    def test_a_worse_ad_among_active_ads_blocks_the_owner(self):
+    def test_every_other_grade_among_active_ads_blocks_the_owner(self):
+        # 偏貴／太貴／白花 and 資料不足／未判斷 each block; only 划算 and 還太新 pass.
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
         ad2 = self.ad_entity(native_id="ad2")["id"]
-        items = [
-            self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=ad2, cls="worse", campaign_id=self.campaign),
-        ]
-        self.assertEqual(self.candidates(items), [])
+        for grade, reason_code in (
+            ("watch", "cost_per_result_flat"), ("over", "cost_per_result_flat"),
+            ("wasted", "spend_over_target_no_result"), ("insufficient", "needs_resync"),
+            ("insufficient", "result_unknown_days"), ("no_target", "result_kind_unknown"),
+        ):
+            with self.subTest(grade=grade, reason_code=reason_code):
+                items = [
+                    self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign),
+                    self.item(entity_id=ad2, cls="insufficient", reason_code=reason_code,
+                              grade=grade, campaign_id=self.campaign),
+                ]
+                self.assertEqual(self.candidates(items), [])
 
-    def test_insufficient_ad_among_active_ads_blocks_the_owner(self):
+    def test_previous_cost_above_target_no_longer_blocks_the_owner(self):
+        # F28-I02: the previous window is the trend note, never the judge.
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
-        ad2 = self.ad_entity(native_id="ad2")["id"]
-        items = [
-            self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=ad2, cls="insufficient", reason_code="below_sample_gate",
-                     campaign_id=self.campaign),
-        ]
-        self.assertEqual(self.candidates(items), [])
-
-    def test_current_cost_above_target_blocks_the_owner(self):
-        self.campaign_entity(budget_type="daily", budget_amount=1000)
-        ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="flat", cost=101, previous=95, target_value=100,
+        items = [self.item(entity_id=ad1, cls="better", cost=90, previous=160, target_value=100,
                            campaign_id=self.campaign)]
-        self.assertEqual(self.candidates(items), [])
-
-    def test_previous_cost_above_target_blocks_the_owner(self):
-        self.campaign_entity(budget_type="daily", budget_amount=1000)
-        ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="flat", cost=90, previous=101, target_value=100,
-                           campaign_id=self.campaign)]
-        self.assertEqual(self.candidates(items), [])
+        self.assertEqual(len(self.candidates(items)), 1)
 
     def test_lifetime_budget_owner_never_qualifies(self):
         self.campaign_entity(budget_type="lifetime", budget_amount=30000)
@@ -190,7 +219,7 @@ class ScaleCandidatesTest(_CandidateFixture):
     def test_no_target_blocks_the_owner(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="no_target", target_value=None,
+        items = [self.item(entity_id=ad1, cls="no_target", target_value=None, grade="no_target",
                            campaign_id=self.campaign)]
         self.assertEqual(self.candidates(items), [])
 
@@ -222,7 +251,7 @@ class ScaleCandidatesTest(_CandidateFixture):
         paused = self.ad_entity(native_id="ad1")["id"]
         active = self.ad_entity(native_id="ad2")["id"]
         items = [
-            self.item(entity_id=paused, cls="stop_loss", campaign_id=self.campaign),
+            self.item(entity_id=paused, cls="stop_loss", grade="wasted", campaign_id=self.campaign),
             self.item(entity_id=active, cls="flat", campaign_id=self.campaign),
         ]
         candidates = self.candidates(items, native_status={paused: "PAUSED"})
@@ -238,7 +267,8 @@ class ScaleCandidatesTest(_CandidateFixture):
         adset_paused = self.ad_entity(native_id="ad1")["id"]
         active = self.ad_entity(native_id="ad2")["id"]
         items = [
-            self.item(entity_id=adset_paused, cls="worse", campaign_id=self.campaign),
+            self.item(entity_id=adset_paused, cls="worse", grade="over",
+                      campaign_id=self.campaign),
             self.item(entity_id=active, cls="flat", campaign_id=self.campaign),
         ]
         candidates = self.candidates(items, native_status={adset_paused: "ADSET_PAUSED"})
@@ -291,7 +321,7 @@ class ScaleCandidatesTest(_CandidateFixture):
     def test_month_view_never_called_when_no_owner_qualifies(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="worse", campaign_id=self.campaign)]
+        items = [self.item(entity_id=ad1, cls="flat", grade="over", campaign_id=self.campaign)]
         calls = []
 
         def month_view(additional):

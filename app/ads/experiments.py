@@ -226,12 +226,9 @@ def _build_proposal(conn, org_id, brand_id, campaign_id, detail):
         return None, "請先設定共同的開始與結束日期。"
     if float(group["daily_budget"]) <= 0:
         return None, "請先設定投放組的每日預算。"
-    metric = detail["success_metric"]
-    metric_label = {
-        "cpa": "每次轉換成本",
-        "roas": "ROAS（保守）",
-        "purchases": "轉換數",
-    }.get(metric, f"不支援的指標（{metric}）")
+    # F28-I01: one cap per campaign, cost per result -- the comparison reads the same metric.
+    metric = "cpa"
+    metric_label = "每次轉換成本"
     left, right = [
         labels.get((dimension, ad[f"{dimension}_key"]), ad[f"{dimension}_key"]) for ad in (a, b)
     ]
@@ -243,18 +240,22 @@ def _build_proposal(conn, org_id, brand_id, campaign_id, detail):
         "daily_budget": float(group["daily_budget"]),
         "objective": detail["objective"],
     }
+    constraints = detail.get("constraints_json") or {}
     snapshot = {
         "campaign": {
-            k: detail.get(k)
-            for k in (
-                "objective",
-                "success_metric",
-                "success_target",
-                "start_date",
-                "end_date",
-                "budget_planned",
-                "constraints_json",
-            )
+            **{
+                k: detail.get(k)
+                for k in (
+                    "objective",
+                    "start_date",
+                    "end_date",
+                    "budget_planned",
+                )
+            },
+            # F28-I03: only the platform is a comparison condition. The budget cap is an
+            # internal planning number, editable in any status, and never makes a confirmed
+            # comparison stale (ads.md §6.32).
+            "constraints_json": {k: constraints[k] for k in ("platform",) if k in constraints},
         },
         "manual_delivery": (detail.get("context_json") or {}).get("manual_delivery"),
         "groups": [

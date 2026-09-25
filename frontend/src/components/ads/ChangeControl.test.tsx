@@ -7,7 +7,12 @@ import type { NativeEntity } from "@/lib/adsExternalApi";
 import { ChangeControl } from "./ChangeControl";
 import { MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
 
-vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
+// The handoff panel reports whether it lists anything to verify (`onHandoffWork`); tests set what it reports.
+const handoff = vi.hoisted(() => ({ work: false }));
+vi.mock("./ManualHandoffPanel", async () => {
+  const { useEffect } = await import("react");
+  return { ManualHandoffPanel: ({ onHandoffWork }: { onHandoffWork?: (hasWork: boolean) => void }) => { useEffect(() => { onHandoffWork?.(handoff.work); }, [onHandoffWork]); return null; } };
+});
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/adsChangeApi", async importOriginal => ({
   ...await importOriginal<typeof api>(),
@@ -22,7 +27,7 @@ function change(overrides: Partial<api.ChangeSet> = {}): api.ChangeSet {
   return { id: "change_1", campaign_id: "campaign_1", title: "保留圖片，調整文案", month: "2026-09", operation_id: "operation_saved", content_hash: "hash_saved", status: "draft", reason: null, revisit_at: null, approval_id: null, created_at: "2026-09-19T00:00:00Z", approved_at: null, items: [{ id: "item_1", kind: "copy", target_id: target.id, target, before: { body: "舊內文" }, after: { body: "新內文" }, reason: "測試不同訴求", verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, platform_url: null }], ...overrides };
 }
 beforeEach(() => {
-  vi.resetAllMocks(); sessionStorage.clear();
+  vi.resetAllMocks(); sessionStorage.clear(); handoff.work = false;
   vi.mocked(api.getMonthlyBudget).mockResolvedValue(budget);
   vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [change()] });
 });
@@ -72,6 +77,21 @@ describe("ChangeControl 核准與逐項核對", () => {
     resolveOld({ targets: [target], change_sets: [change({ title: "不該顯示的 A 品牌清單" })] });
     await waitFor(() => expect(oldSignal?.aborted).toBe(true));
     expect(screen.queryByText("不該顯示的 A 品牌清單")).toBeNull();
+  });
+
+  it("交接仍有上架項目要核對時，不顯示「還沒有可核對的廣告對象」", async () => {
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+    handoff.work = true;
+    render(page());
+    // Loaded: the reading placeholder is gone, so an empty state would render now if it were allowed to.
+    await waitFor(() => expect(screen.queryByText("正在讀取清單與平台對象…")).toBeNull());
+    expect(screen.queryByText("還沒有可核對的廣告對象")).toBeNull();
+  });
+
+  it("交接與變更都沒有東西時，才顯示「還沒有可核對的廣告對象」", async () => {
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+    render(page());
+    expect(await screen.findByText("還沒有可核對的廣告對象")).toBeTruthy();
   });
 
   it("部分完成保留逐項結果，降額尚未核對不釋放額度", async () => {
