@@ -612,10 +612,20 @@ class AppBuiltStructureTest(_WithReader):
         return {"assignment_status": "confirmed"} if ad["id"] == self.ready else None
 
     def test_draft_plan_groups_with_missing_material(self):
-        with mock.patch.object(handoff_assignment, "material_snapshot",
-                               side_effect=self.snapshot):
+        # A manual 就位 tick without a confirmed material binding is still missing (F30-I16).
+        repository.set_ad_asset_ready(self.conn, self.org, self.brand, self.missing,
+                                      actor="t", ready=True)
+        self.conn.commit()
+        with (
+            mock.patch.object(handoff_assignment, "material_snapshot",
+                              side_effect=self.snapshot),
+            mock.patch.object(change_control_launch, "ready_material",
+                              wraps=change_control_launch.ready_material) as ready,
+        ):
             groups = workspace_reads.structure(self.conn, self.org, self.brand,
                                                self.campaign)["groups"]
+        # The launch batch's predicate decides, not a copy of it.
+        self.assertEqual(ready.call_count, 2)
         self.assertEqual(len(groups), 1)
         self.assertEqual((groups[0]["group_id"], groups[0]["name"], groups[0]["daily_budget"]),
                          (self.group, "新客", 400))
