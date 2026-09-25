@@ -1,0 +1,246 @@
+"""app/ads/ab_pairs.py — F29-I04 Contract F: automatic A/B pairs on real data.
+
+Every qualifying pair of an internal campaign (`experiments.pairs`: same group, audience and
+product, exactly one coordinate different) is judged without a plan confirmation (Unresolved 3):
+the window runs from the later ad's first delivery day to the last complete day, with the fixed
+7-day / 10-each / 10% thresholds and the same judge core as the confirmed comparison
+(`experiments.evaluate`). The old "group hit its daily budget" stop does not apply here -- real
+delivery spends the full daily budget every day. Unknown stays unknown: a missing day or an
+untracked purchase count makes the pair `unreadable`, never a 0.
+
+A judged pair can propose pausing the loser through the normal approval flow
+(`change_control.create_ab`, `source: "ab"`); nothing here writes to a platform. Imported
+campaigns have no coordinates, so no pairs.
+"""
+
+from datetime import timedelta
+
+from app.ads import change_control, experiments, repository, triage
+from app.core import settings
+
+RULES = {
+    "min_days": experiments.DEFAULT_RULES["min_days"],
+    "min_conversions_each": experiments.DEFAULT_RULES["min_conversions_each"],
+    "relative_difference": experiments.DEFAULT_RULES["relative_difference"],
+}
+IMPORTED_REASON = "匯入的活動沒有廣告座標，無法自動配對 A/B 比較。"
+_UNREADABLE = {"missing_days", "untracked", "zero_spend"}
+
+
+class PairUnknown(ValueError):
+    pass
+
+
+class NotJudged(ValueError):
+    pass
+
+
+class LoserUnbound(ValueError):
+    pass
+
+
+def pair_id(a_id: str, b_id: str) -> str:
+    return ":".join(sorted((a_id, b_id)))
+
+
+def _entities(conn, org, brand, campaign_id, ads):
+    """`ads_ad.id -> ads_external_entity` for each ad bound to exactly one platform ad of this
+    campaign (`ads_ad.external_id` = the entity's `native_id`, written when the handoff reads the
+    ad back). Unbound or ambiguous -> absent."""
+    external_ids = {ad["id"]: ad["external_id"] for ad in ads if ad.get("external_id")}
+    if not external_ids:
+        return {}
+    by_native = {}
+    for row in conn.execute(
+        "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND native_kind='ad' AND native_id = ANY(%s)",
+        (org, brand, campaign_id, sorted(set(external_ids.values()))),
+    ).fetchall():
+        by_native.setdefault(row["native_id"], []).append(dict(row))
+    return {
+        ad_id: by_native[native][0]
+        for ad_id, native in external_ids.items()
+        if len(by_native.get(native, [])) == 1
+    }
+
+
+def _outcome_rows(conn, org, brand, campaign_id, ad_ids, last_day):
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+            "AND entity_kind='ad' AND entity_id = ANY(%s) AND day <= %s ORDER BY day",
+            (org, brand, campaign_id, ad_ids, last_day),
+        ).fetchall()
+    ]
+
+
+def _decisions(conn, org, brand, campaign_id):
+    """`pair_id -> {change_set_id, status, verification_state}` from each pair's newest `ab`
+    set. `verification_state` is the pause item's; null before approval."""
+    decisions = {}
+    for row in conn.execute(
+        "SELECT s.id, s.status, s.plan_json->'ab'->>'pair_id' AS pair_id, "
+        "(SELECT a.verification_state FROM ads_action a WHERE a.org_id=s.org_id "
+        "AND a.change_set_id=s.id ORDER BY a.id LIMIT 1) AS verification_state "
+        "FROM ads_change_set s WHERE s.org_id=%s AND s.brand_id=%s AND s.campaign_id=%s "
+        "AND s.plan_json->>'source'='ab' ORDER BY s.created_at, s.id",
+        (org, brand, campaign_id),
+    ).fetchall():
+        decisions[row["pair_id"]] = {
+            "change_set_id": row["id"], "status": row["status"],
+            "verification_state": row["verification_state"],
+        }
+    return decisions
+
+
+def _first_delivery(rows, ad_id, last_day):
+    days = [
+        r["day"] for r in rows
+        if r["entity_id"] == ad_id and r["day"] <= last_day and float(r["spend"]) > 0
+    ]
+    return min(days) if days else None
+
+
+def _side(ad, value_label, entity, total):
+    results = total["purchases"] if total else None
+    spend = total["spend"] if total else None
+    return {
+        "ad_id": ad["id"],
+        "entity_id": entity["id"] if entity else None,
+        "name": ad["name"],
+        "value_label": value_label,
+        "thumbnail_url": triage._thumbnail_url(entity) if entity else None,
+        "spend": spend,
+        "results": int(results) if results is not None else None,
+        "cost_per_result": spend / results if spend is not None and results else None,
+    }
+
+
+def _missing(days, sides):
+    def need(side):
+        if side["results"] is None:
+            return None
+        return max(0, RULES["min_conversions_each"] - side["results"])
+
+    return {
+        "days": max(0, RULES["min_days"] - days),
+        "a_results": need(sides[0]),
+        "b_results": need(sides[1]),
+    }
+
+
+def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decision):
+    dimension_label = experiments.DIMENSIONS[dimension]
+    values = [labels.get((dimension, ad[f"{dimension}_key"]), ad[f"{dimension}_key"])
+              for ad in (a, b)]
+    firsts = [_first_delivery(rows, ad["id"], last_day) for ad in (a, b)]
+    base = {
+        "pair_id": pair_id(a["id"], b["id"]), "group_id": group["id"],
+        "group_name": group["name"], "dimension": dimension, "dimension_label": dimension_label,
+        "rules": dict(RULES), "winner": None, "difference_pct": None, "decision": decision,
+    }
+    if None in firsts:
+        sides = [_side(ad, v, entities.get(ad["id"]), None) for ad, v in zip((a, b), values,
+                                                                                strict=True)]
+        return {
+            **base, "a": sides[0], "b": sides[1], "window": None, "days": 0,
+            "state": "collecting",
+            "missing": {"days": RULES["min_days"], "a_results": RULES["min_conversions_each"],
+                        "b_results": RULES["min_conversions_each"]},
+            "reason": "兩則廣告都開始投放後，才開始比較。",
+        }
+    start = max(firsts)
+    days = (last_day - start).days + 1
+    core = experiments.evaluate(rows, [a["id"], b["id"]], start, last_day, RULES, "cpa")
+    sides = [
+        _side(ad, v, entities.get(ad["id"]), total)
+        for ad, v, total in zip((a, b), values, core["totals"], strict=True)
+    ]
+    result = {
+        **base, "a": sides[0], "b": sides[1],
+        "window": {"start": start.isoformat(), "end": last_day.isoformat()}, "days": days,
+        "missing": _missing(days, sides), "reason": core["reason"],
+    }
+    if core["state"] in _UNREADABLE:
+        return {**result, "state": "unreadable"}
+    if core["state"] in {"short", "thin"}:
+        return {**result, "state": "collecting"}
+    difference_pct = round(core["difference"] * 100, 1)
+    if core["state"] == "no_difference":
+        return {**result, "state": "no_difference", "difference_pct": difference_pct}
+    winner = "a" if core["winner"] == 0 else "b"
+    win, lose = (sides[0], sides[1]) if winner == "a" else (sides[1], sides[0])
+    return {
+        **result, "state": "judged", "winner": winner, "difference_pct": difference_pct,
+        "reason": f"「{dimension_label}」用「{win['value_label']}」比「{lose['value_label']}」"
+        f"每次轉換成本低 {difference_pct:g}%；{core['reason']}",
+    }
+
+
+def read(conn, org, brand, campaign_id) -> dict:
+    """`GET …/campaigns/{c}/ab-pairs` (Contract F): `{pairs, unavailable}`. Pure reads."""
+    detail = repository.campaign_detail(conn, org, brand, campaign_id)
+    if detail is None:
+        raise ValueError("找不到這個活動。")
+    if detail.get("origin") == "imported":
+        return {"pairs": [], "unavailable": IMPORTED_REASON}
+    found = list(experiments.pairs(detail))
+    if not found:
+        return {"pairs": [], "unavailable": None}
+    labels = {
+        (v["dimension"], v["key"]): v["label"]
+        for v in repository.coordinate_vocabulary(conn, org, brand)
+    }
+    ads = [ad for group in detail["groups"] for ad in group["ads"]]
+    entities = _entities(conn, org, brand, campaign_id, ads)
+    yesterday = settings.today_for_org(conn, org_id=org) - timedelta(days=1)
+    rows = _outcome_rows(conn, org, brand, campaign_id, [ad["id"] for ad in ads], yesterday)
+    decisions = _decisions(conn, org, brand, campaign_id)
+    pairs = []
+    for group, a, b, dimension in found:
+        end = group.get("end_date") or detail.get("end_date")
+        last_day = min(yesterday, end) if end else yesterday
+        pairs.append(_judge_pair(
+            group, a, b, dimension, labels, entities, rows, last_day,
+            decisions.get(pair_id(a["id"], b["id"])),
+        ))
+    return {"pairs": pairs, "unavailable": None}
+
+
+def _ab_side(side):
+    return {k: side[k] for k in ("ad_id", "entity_id", "name", "value_label", "cost_per_result")}
+
+
+def pause_loser(conn, org, brand, campaign_id, pid, operation_id, actor) -> dict:
+    """`POST …/ab-pairs/{pair_id}/pause-loser` (Contract F): an open set for the pair is returned
+    as it is; otherwise a judged pair with a bound loser becomes one `ab` change set with one
+    pause item on the loser's platform ad, through the same create/approve flow as any set."""
+    pair = next((p for p in read(conn, org, brand, campaign_id)["pairs"]
+                 if p["pair_id"] == pid), None)
+    if pair is None:
+        raise PairUnknown("找不到這組 A/B 比較。")
+    existing = change_control.open_ab_set(conn, org, brand, campaign_id, pid)
+    if existing is not None:
+        return existing
+    if pair["state"] != "judged":
+        raise NotJudged("這組比較還沒分出較划算的一則，不能暫停。")
+    win, lose = (pair["a"], pair["b"]) if pair["winner"] == "a" else (pair["b"], pair["a"])
+    if not lose["entity_id"]:
+        raise LoserUnbound("較貴的那一則還沒對應到平台上的廣告，無法建立暫停清單。")
+    ab = {
+        "pair_id": pid, "dimension_label": pair["dimension_label"], "winner": _ab_side(win),
+        "loser": _ab_side(lose), "window": pair["window"],
+    }
+    month = settings.today_for_org(conn, org_id=org).strftime("%Y-%m")
+    payload = {
+        "operation_id": operation_id,
+        "title": f"暫停 A/B 比較中較貴的一則：{lose['name']}"[:200],
+        "month": month,
+        "items": [{
+            "kind": "pause", "target_id": lose["entity_id"], "after": {"status": "PAUSED"},
+            "reason": (f"A/B 比較：「{pair['dimension_label']}」用「{win['value_label']}」"
+                       f"比「{lose['value_label']}」划算，暫停較貴的一則。")[:2000],
+        }],
+    }
+    return change_control.create_ab(conn, org, brand, campaign_id, payload, ab, actor)

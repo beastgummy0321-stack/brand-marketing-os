@@ -85,6 +85,37 @@ def record_for_item(conn: _AnyConn, org: str, brand: str, campaign: str, set_id:
     )
 
 
+def ab_text(ab: dict) -> str:
+    """F29-I04 Contract F: the learning an A/B set's confirmed pause writes -- no numbers, so the
+    same conclusion reached twice promotes confidence (Contract D)."""
+    return (
+        f"「{ab['dimension_label']}」用「{ab['winner']['value_label']}」"
+        f"比「{ab['loser']['value_label']}」划算"
+    )
+
+
+def record_for_ab_item(conn: _AnyConn, org: str, brand: str, campaign: str, change_set: dict,
+                       item: dict) -> dict | None:
+    """F29-I04 Contract F, same rules as `record_for_item`: call only once `check` has already
+    committed `item` as `confirmed`; idempotent per change ITEM id (the runtime re-check calls
+    `check` again). A no-op for anything but the `pause` item of a `source: "ab"` set."""
+    plan = change_set.get("plan_json") or {}
+    ab = plan.get("ab")
+    if plan.get("source") != "ab" or not ab or item.get("kind") != "pause":
+        return None
+    item_id = item["id"]
+    rows = _ads_rows(conn, brand)
+    if any(row["source_cycle_id"] == item_id for row in rows):
+        return None
+    text = ab_text(ab)
+    prior = sum(1 for row in rows if row["learning_text"] == text)
+    return bi_repo.record_learning(
+        cast(Conn, conn), brand, actor="system", learning_text=text,
+        applicability_scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+        sample_size="1", source_cycle_id=item_id, source_track="ads",
+    )
+
+
 def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     """Contract D: `GET .../learnings` -- ads-track rows only, newest first, <=50 (the ledger's
     own default). Each row's `campaign_id`/`campaign_name` is looked up through this module's own

@@ -60,7 +60,11 @@ def _percent(value):
     return f"{percent:g}%"
 
 
-def _pair(detail):
+def pairs(detail):
+    """Every qualifying pair, in a stable order (group id, then ad ids): same group, same
+    audience, same product, every coordinate set, exactly one coordinate different (F29-I04
+    Contract F generalises the first-pair rule to all pairs). Yields `(group, a, b, dimension)`
+    with `a.id < b.id`; an ad may sit in more than one pair."""
     for group in sorted(detail["groups"], key=lambda g: g["id"]):
         for a, b in combinations(sorted(group["ads"], key=lambda ad: ad["id"]), 2):
             if not a["audience_key"] or a["audience_key"] != b["audience_key"]:
@@ -69,8 +73,11 @@ def _pair(detail):
                 continue
             changed = [d for d in DIMENSIONS if a[f"{d}_key"] != b[f"{d}_key"]]
             if len(changed) == 1 and a.get("product_id") == b.get("product_id"):
-                return group, a, b, changed[0]
-    return None
+                yield group, a, b, changed[0]
+
+
+def _pair(detail):
+    return next(pairs(detail), None)
 
 
 def _default_window(detail, pair=None):
@@ -344,6 +351,80 @@ def _rows(conn, org_id, brand_id, campaign_id, proposal):
     ).fetchall()
 
 
+def evaluate(rows, ad_ids, start, end, rules, metric="cpa"):
+    """The one judge core (F29-I04 Contract F), shared by a confirmed plan's `judge` and the
+    automatic pairs (`ab_pairs`). `rows` are `ads_outcome_daily` ad rows of `ad_ids`; only the
+    days in `[start, end]` count. Unknown stays unknown: a missing day or an untracked purchase
+    count blocks the judgement and is never summed as 0. There is no data-source gate -- real
+    and simulated rows are read the same way. Returns `{state, reason, totals, difference,
+    winner}`:
+
+    - `state`: `missing_days` | `untracked` | `short` (fewer than `min_days`) | `thin` (a side
+      under `min_conversions_each`) | `zero_spend` (ROAS without spend) | `no_difference` |
+      `judged`;
+    - `totals[i]` for `ad_ids[i]`: `{ad_id, days_present, spend, purchases, revenue, value}` --
+      `spend` null when a day is missing, `purchases` also null when a day is untracked, `value`
+      only once both sides pass the thresholds;
+    - `difference`: the relative difference once both sides pass the thresholds, else null;
+    - `winner`: the index into `ad_ids` of the better side, only for `judged`.
+    """
+    min_days = rules["min_days"]
+    min_conversions = rules.get("min_conversions_each", rules.get("min_purchases_each"))
+    relative_difference = rules["relative_difference"]
+    required = {start + timedelta(days=i) for i in range((end - start).days + 1)}
+    tracked_keys = ("purchases", "revenue") if metric == "roas" else ("purchases",)
+    totals, missing, untracked = [], False, False
+    for ad_id in ad_ids:
+        own = [r for r in rows if r["entity_id"] == ad_id and r["day"] in required]
+        present = {r["day"] for r in own}
+        complete = present == required
+        known = all(r[k] is not None for r in own for k in tracked_keys)
+        missing = missing or not complete
+        untracked = untracked or not known
+        total = {"ad_id": ad_id, "days_present": len(present), "spend": None, "purchases": None,
+                 "revenue": None, "value": None}
+        if complete:
+            total["spend"] = sum(float(r["spend"]) for r in own)
+            if known:
+                total["purchases"] = sum(float(r["purchases"]) for r in own)
+            if all(r["revenue"] is not None for r in own):
+                total["revenue"] = sum(float(r["revenue"]) for r in own)
+        totals.append(total)
+    result = {"state": None, "reason": None, "totals": totals, "difference": None,
+              "winner": None}
+    if missing:
+        return {**result, "state": "missing_days", "reason": "兩則廣告尚有缺日；缺資料不當成零。"}
+    if untracked:
+        return {**result, "state": "untracked",
+                "reason": "平台回收有未追蹤轉換的日子；未追蹤不當成零，不能判讀此指標。"}
+    if len(required) < min_days:
+        return {**result, "state": "short",
+                "reason": f"尚未完成至少 {min_days} 天的共同觀察期間。"}
+    if any(t["purchases"] < min_conversions for t in totals):
+        return {**result, "state": "thin",
+                "reason": f"每則至少需要 {min_conversions} 次轉換；目前樣本不足。"}
+    for total in totals:
+        value = total["purchases"]
+        if metric == "cpa":
+            value = total["spend"] / total["purchases"]
+        elif metric == "roas":
+            if not total["spend"]:
+                return {**result, "state": "zero_spend", "reason": "花費為零，ROAS 無法計算。"}
+            value = total["revenue"] / total["spend"]
+        total["value"] = value
+    a, b = [t["value"] for t in totals]
+    difference = abs(a - b) / max(abs(a), abs(b)) if max(abs(a), abs(b)) else 0
+    if difference < relative_difference:
+        threshold_kind = (
+            "預設" if relative_difference == DEFAULT_RULES["relative_difference"] else "自訂"
+        )
+        return {**result, "state": "no_difference", "difference": difference,
+                "reason": f"觀察差異未達{threshold_kind} {_percent(relative_difference)} 門檻。"}
+    winner = (0 if a < b else 1) if metric == "cpa" else (0 if a > b else 1)
+    return {**result, "state": "judged", "difference": difference, "winner": winner,
+            "reason": "觀察性比較，不構成市場優勝或因果證據。"}
+
+
 def judge(conn, org_id, brand_id, campaign_id, proposal, confirmed, stale):
     result = {"verdict": "看不出", "reason": "請先確認比較計畫。", "values": []}
     if not confirmed:
@@ -355,8 +436,6 @@ def judge(conn, org_id, brand_id, campaign_id, proposal, confirmed, stale):
         return {**result, "reason": f"目前不支援活動成功指標「{metric}」，無法判讀。"}
     rules = proposal["rules"]
     min_days = rules["min_days"]
-    min_conversions = rules.get("min_conversions_each", rules.get("min_purchases_each"))
-    relative_difference = rules["relative_difference"]
     start, end = [date.fromisoformat(proposal["window"][k]) for k in ("start", "end")]
     today = settings.today_for_org(conn, org_id=org_id)
     if today < end or (end - start).days + 1 < min_days:
@@ -378,59 +457,26 @@ def judge(conn, org_id, brand_id, campaign_id, proposal, confirmed, stale):
     ).fetchone()
     if cap_hit:
         return {**result, "reason": "已碰到預設每日預算停止條件，先檢查配量；暫不判優劣。"}
-    required = {start + timedelta(days=i) for i in range((end - start).days + 1)}
-    values = []
-    for variant in proposal["variants"]:
-        own = [r for r in rows if r["entity_id"] == variant["ad_id"]]
-        if {r["day"] for r in own} != required:
-            return {**result, "reason": "兩則廣告尚有缺日；缺資料不當成零。"}
-        if any(r["source"] != "simulated" for r in own):
-            return {**result, "reason": "目前真實平台回收未追蹤轉換，不能判讀此指標。"}
-        # `purchases`/`revenue` are nullable (F16-I01); simulated rows never leave them
-        # untracked, but the sum stays defensive rather than crashing on a future NULL —
-        # unknown days are skipped, never coerced into 0.
-        total = {
-            k: sum(float(r[k]) for r in own if r[k] is not None)
-            for k in ("spend", "purchases", "revenue")
+    variants = proposal["variants"]
+    core = evaluate(rows, [v["ad_id"] for v in variants], start, end, rules, metric)
+    if core["state"] not in {"no_difference", "judged"}:
+        return {**result, "reason": core["reason"]}
+    values = [
+        {
+            "ad_id": variant["ad_id"],
+            "name": variant["name"],
+            "value": total["value"],
+            "spend": total["spend"],
+            "purchases": total["purchases"],
         }
-        if total["purchases"] < min_conversions:
-            return {
-                **result,
-                "reason": f"每則至少需要 {min_conversions} 次轉換；目前樣本不足。",
-            }
-        if metric == "roas" and not total["spend"]:
-            return {**result, "reason": "花費為零，ROAS 無法計算。"}
-        value = total["purchases"]
-        if metric == "cpa":
-            value = total["spend"] / total["purchases"]
-        elif metric == "roas":
-            value = total["revenue"] / total["spend"]
-        values.append(
-            {
-                "ad_id": variant["ad_id"],
-                "name": variant["name"],
-                "value": value,
-                "spend": total["spend"],
-                "purchases": total["purchases"],
-            }
-        )
-    a, b = [v["value"] for v in values]
-    difference = abs(a - b) / max(abs(a), abs(b)) if max(abs(a), abs(b)) else 0
-    if difference < relative_difference:
-        threshold_kind = (
-            "預設" if relative_difference == DEFAULT_RULES["relative_difference"] else "自訂"
-        )
-        return {
-            **result,
-            "values": values,
-            "reason": f"觀察差異未達{threshold_kind} {_percent(relative_difference)} 門檻。",
-        }
-    index = (0 if a < b else 1) if proposal["metric"] == "cpa" else (0 if a > b else 1)
+        for variant, total in zip(variants, core["totals"], strict=True)
+    ]
+    if core["state"] == "no_difference":
+        return {**result, "values": values, "reason": core["reason"]}
     return {
         "verdict": "觀察到差異",
         "values": values,
-        "reason": f"「{values[index]['name']}」的指標較佳；隔離模擬數字僅驗證判讀流程，"
-        "不構成市場優勝或因果證據。",
+        "reason": f"「{values[core['winner']]['name']}」的指標較佳；{core['reason']}",
     }
 
 
