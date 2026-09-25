@@ -1,11 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
-import { EmptyState } from "@/components/layout/EmptyState";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency } from "@/lib/format";
-import { listCampaigns } from "@/lib/adsApi";
 import {
   getQueue, getTriage, type CampaignDataStatus, type TriageItem, type TriageTargetView,
 } from "@/lib/adsTriageApi";
@@ -20,11 +16,12 @@ import {
 } from "./GradeGroups";
 
 /** F28-I10, v10 F29-I13: campaign detail = the campaign's active ads graded against its one cap (prototype v10
- * `tabPerf()`, hash `camp/daily/perf`). The page keeps its own header and breadcrumb; the body is the full
+ * `tabPerf()`, hash `camp/daily/perf`). Since F30-I07 it is the workspace's perf tab body (the workspace head carries
+ * the name, chips and tabs; `/detail` redirects there); the body is the full
  * `TargetRuler` card (+ the grade legend once), the automatic A/B block, the grade groups with each row's 「⋯」 menu
  * (換掉這一則／看紀錄) and, under 不在投的, the closed ads. The cap is read-only here — 去改上限 goes to the strategy tab.
  * Why numbers are missing is the campaign's one `data.status` (Contract D), never a per-section rule. Every read
- * fails on its own (`useApiRead` + `ReadFailed`): the campaign list (header), triage (ruler + groups), the brand
+ * fails on its own (`useApiRead` + `ReadFailed`): triage (ruler + groups), the brand
  * queue (only the rows' 在清理提議／去處理), the A/B pairs and the material list (only 換掉這一則). */
 
 function capOf(target: TriageTargetView | undefined): RulerCap | null {
@@ -62,13 +59,6 @@ export function dataStatusChip(status: CampaignDataStatus | null): string | null
   if (!status || status.state === "ready") return null;
   if (status.state === "partial") return missingDaysLabel(status.missing_days) ?? status.label.replace(/。$/, "");
   return status.label.replace(/。$/, "");
-}
-
-function CapChip({ cap }: { cap: RulerCap | null }) {
-  if (!cap) return <Chip tone="warn">沒設上限</Chip>;
-  return cap.basis === "break_even"
-    ? <Chip tone="warn">暫用打平 {formatAmount(cap.value)}</Chip>
-    : <Chip tone="accent">上限 {formatAmount(cap.value)}</Chip>;
 }
 
 function RulerCard({ items, status, strategyHref, onAdClick }: {
@@ -119,12 +109,27 @@ function RulerCard({ items, status, strategyHref, onAdClick }: {
   );
 }
 
+/** v10 (F30-I07): the old detail address `…/campaigns/:c/detail` (A/B links, bookmarks) lands on the workspace's
+ * perf tab; its query (e.g. `?ad=`) is kept. `replace` keeps the dead address out of history. */
 export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
+  const [searchParams] = useSearchParams();
+  const params = new URLSearchParams(searchParams);
+  params.set("tab", "perf");
+  return <Navigate replace to={`/brands/${brandId}/ads/campaigns/${campaignId}?${params.toString()}`} />;
+}
+
+/** The workspace perf tab body (prototype v10 `tabPerf()` under `wsHead()`): the ruler card, the A/B block, the grade
+ * groups, 不在投的 and the bottom bar. The workspace head (name, chips, rail, tabs) is the caller's. `origin`: an
+ * imported campaign has no A/B block (never read). */
+export function CampaignPerfBody({ brandId, campaignId, origin, advanced }: {
+  brandId: string; campaignId: string; origin: "internal" | "imported" | undefined;
+  /** A same-page fold placed above the bottom bar (the workspace's 「進階：舊版成效與檢討」). */
+  advanced?: ReactNode;
+}) {
   const [searchParams] = useSearchParams();
   const highlightAdParam = searchParams.get("ad");
   const navigate = useNavigate();
 
-  const campaigns = useApiRead(() => listCampaigns(brandId), [brandId]);
   const triage = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
   const queue = useApiRead((signal) => getQueue(brandId, signal).then((q) => q.items), [brandId]);
   const requests = useReplaceRequests(brandId, campaignId);
@@ -155,7 +160,6 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
     scrolledToRef.current = highlightId;
   }, [highlightId, openGroups]);
 
-  const homeHref = `/brands/${brandId}/ads`;
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
   const strategyHref = `${workspaceHref}?tab=strategy`;
 
@@ -166,63 +170,13 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   );
   const cleanup = queueItems ? openCleanup(brandId, campaignId, queueItems) : null;
 
-  if (campaigns.status !== "ready") {
-    return (
-      <div className="flex max-w-[1260px] flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
-        {campaigns.status === "loading"
-          ? <><Skeleton className="h-9 w-80" /><Skeleton className="h-60 w-full" /></>
-          : <ReadFailed what={`活動清單讀不到：${campaigns.error}`} onRetry={campaigns.reload} />}
-      </div>
-    );
-  }
-  const campaign = campaigns.data.find((c) => c.id === campaignId) ?? null;
-  if (campaign === null) {
-    return (
-      <div className="flex max-w-[1260px] flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
-        <EmptyState title="找不到活動" description="找不到這個 Campaign。" onAction={campaigns.reload} actionLabel="重新讀取" />
-      </div>
-    );
-  }
-
-  const budgetTotal = campaign.budget_progress.total;
-  const budgetChip = campaign.origin === "imported"
-    ? <Chip>平台預算</Chip>
-    : budgetTotal !== null ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip> : <Chip tone="warn">預算待核實</Chip>;
   const closed = triage.status === "ready" ? triage.data.closed : null;
   const status = triage.status === "ready" ? triage.data.data?.status ?? null : null;
   const active = items !== null && items.length > 0 ? items : null;
   const breakEven = active?.[0].target.break_even ?? null;
 
   return (
-    // Prototype v10 `.page{max-width:1260px}`.
-    <div className="flex max-w-[1260px] flex-col gap-4">
-      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: campaign.name }]} />
-
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold [overflow-wrap:anywhere]">{campaign.name}</h1>
-          {items && (
-            <p className="mt-1 text-[15px] text-muted-foreground">
-              只判讀投放中的 {items.length} 則；已關閉的廣告保留紀錄，不列入判斷
-            </p>
-          )}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {/* An imported objective can be a whole sentence: only it truncates, 「・N 則」 always shows. */}
-            <Chip className="max-w-[14rem] items-center">
-              <span className="min-w-0 truncate" title={campaign.objective || undefined}>{campaign.objective || "尚待確認"}</span>
-              {items && <span className="shrink-0">・{items.length} 則</span>}
-            </Chip>
-            {active && <CapChip cap={capOf(active[0].target)} />}
-            {budgetChip}
-          </div>
-        </div>
-        <Button variant="ghost" asChild>
-          <Link to={workspaceHref}>全部資料 ›</Link>
-        </Button>
-      </div>
-
+    <div className="flex flex-col gap-4">
       {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
       {triage.status === "error" && (
         <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} />
@@ -242,7 +196,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
             strategyHref={strategyHref}
             onAdClick={(id) => { const a = actions.get(id); if (a) navigate(a.href); }}
           />
-          {campaign.origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
+          {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
           {queue.status === "error" && (
             <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} />
           )}
@@ -281,6 +235,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
         </>
       )}
       {closed && closed.total > 0 && <ClosedGroup closed={closed} open={closedOpen} onToggle={setClosedOpen} />}
+      {advanced}
 
       <ActionBar back={{ label: "總覽", to: workspaceHref }}>
         {cleanup && <Button asChild><Link to={cleanup.href}>看清理提議 →</Link></Button>}
