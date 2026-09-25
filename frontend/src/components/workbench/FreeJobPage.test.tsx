@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/productsApi", () => ({
   fetchProductList: vi.fn().mockResolvedValue([]),
@@ -15,6 +15,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 }));
 
 import { parseFreeText } from "@/lib/workbenchApi";
+import { fetchProductList } from "@/lib/productsApi";
 import { FreeJobPage, specToCreateBody } from "./FreeJobPage";
 import type { FreeParseSpec } from "@/lib/workbenchApi";
 
@@ -177,5 +178,26 @@ describe("精準控制的產出數量欄位（F07-I14）", () => {
     await waitFor(() => expect(screen.getByText("0／1")).toBeTruthy());
     expect(screen.getByText("0／3")).toBeTruthy();
     expect(screen.queryByText("0／5")).toBeNull();
+  });
+});
+
+// F29-I10 Contract K: a failed product read is said out loud with 重試 — never a silently empty product list.
+describe("FreeJobPage product list read (F29-I10)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("the product read fails: the error line and 重試 show; 重試 re-requests and the products come back", async () => {
+    vi.mocked(fetchProductList)
+      .mockRejectedValueOnce(new Error("伺服器沒回應"))
+      .mockResolvedValueOnce([{ id: "p1", name: "夜跑鞋" }] as Awaited<ReturnType<typeof fetchProductList>>);
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+    expect((await screen.findByRole("alert")).textContent).toContain("商品清單讀取失敗：伺服器沒回應");
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(vi.mocked(fetchProductList)).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("option", { name: "夜跑鞋" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

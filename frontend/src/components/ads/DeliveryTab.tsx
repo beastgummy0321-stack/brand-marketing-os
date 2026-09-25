@@ -19,7 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/layout/ui/dropdown-menu";
-import { fetchCoordinates, type Coordinate } from "@/lib/coordinatesApi";
+import { fetchCoordinates } from "@/lib/coordinatesApi";
 import {
   currentBudgetTotal,
   deleteAd,
@@ -30,7 +30,8 @@ import {
   type CampaignDetail,
   type DeliveryGroupRow,
 } from "@/lib/adsApi";
-import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
+import { fetchChannels } from "@/lib/adsLaunchApi";
+import { useApiRead } from "@/lib/useApiRead";
 import { Disclosure, JudgmentBand, KpiStrip, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 import { ROLE_LABEL, GroupPanel, AdPanel, AddGroupDialog, AddAdDialog } from "./DeliveryEditors";
@@ -82,8 +83,21 @@ export function DeliveryTab({
   const { scope: draftScope } = useWorkspace();
   const [selected, setSelected] = useState<SelectedKey | null>(null);
   const selectedNative = nativeEntities.find((row) => `native:${row.id}` === selected);
-  const [vocabulary, setVocabulary] = useState<Coordinate[]>([]);
-  const [channelInfo, setChannelInfo] = useState<Channel[]>([]);
+  // Contract K: a failed read is said out loud (error line + 重試) — never an empty vocabulary or channel list.
+  const vocabularyRead = useApiRead(() => fetchCoordinates(brandId), [brandId]);
+  // F05-I05：通路清單／連線狀態一律讀 app/ads/channels.py，不再繞去 /api/meta/accounts
+  // （§0「不預設」：畫面不准自己判斷哪個通路查得到連線狀態）。
+  const channelRead = useApiRead(() => fetchChannels(brandId), [brandId]);
+  const vocabulary = vocabularyRead.data ?? [];
+  const channelInfo = channelRead.data ?? [];
+  const failedReads = [
+    vocabularyRead.status === "error" ? "座標選項" : null,
+    channelRead.status === "error" ? "通路連線狀態" : null,
+  ].filter((x): x is string => x !== null);
+  function retryFailedReads() {
+    if (vocabularyRead.status === "error") vocabularyRead.reload();
+    if (channelRead.status === "error") channelRead.reload();
+  }
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addAdOpen, setAddAdOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<
@@ -127,15 +141,6 @@ export function DeliveryTab({
     setEditorDirty(false);
     setSelected(next);
   }
-
-  useEffect(() => {
-    fetchCoordinates(brandId).then(setVocabulary).catch(() => setVocabulary([]));
-    // F05-I05：通路清單／連線狀態一律讀 app/ads/channels.py，不再繞去 /api/meta/accounts
-    // （§0「不預設」：畫面不准自己判斷哪個通路查得到連線狀態）。
-    fetchChannels(brandId)
-      .then(setChannelInfo)
-      .catch(() => setChannelInfo([]));
-  }, [brandId]);
 
   function replaceGroup(next: DeliveryGroupRow) {
     onCampaignChange({
@@ -296,6 +301,13 @@ export function DeliveryTab({
         )}
         {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
       </div>
+
+      {failedReads.length > 0 && (
+        <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+          {failedReads.join("、")}讀取失敗，下方的結構編輯可能缺少選項。
+          <Button variant="outline" size="sm" onClick={retryFailedReads}>重試</Button>
+        </p>
+      )}
 
       {!imported && <ManualSettings key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
         onSaved={onCampaignChange} onDirtyChange={setManualSettingsDirty} />}
