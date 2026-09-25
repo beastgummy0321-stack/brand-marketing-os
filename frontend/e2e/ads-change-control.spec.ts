@@ -47,7 +47,9 @@ test("A: normal entry, save/reopen/approve, lost response replay and independent
   // Normal campaign card entry followed by the workspace tab, not a fabricated internal state.
   await page.getByTestId("campaign-grid").getByText("F13 測試｜暫停活動", { exact: true }).first().click();
   await page.getByRole("button", { name: "變更與核對", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "變更與核對", exact: true })).toBeVisible();
+  // F30-I09 (v10): the tab is the 變更紀錄 timeline; the change list lives in the fold 「進階：自己建一份變更」.
+  await expect(page.getByRole("heading", { name: "變更紀錄", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "進階：自己建一份變更", exact: true }).click();
   await page.getByRole("button", { name: "建立變更清單", exact: true }).first().click();
   await page.getByLabel("清單名稱", { exact: true }).fill(`瀏覽器文案核准 ${Date.now()}`);
   await page.getByLabel("變更 1 新內文", { exact: true }).fill("先了解適合自己的補給方式，再選擇日常所需。");
