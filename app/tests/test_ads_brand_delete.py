@@ -2,7 +2,8 @@
 runtime events and the approvals its change sets reference.
 
 Before F31-I09 `ads_runtime_event` was missing from the ads registry (rows outlived the brand and
-their FK to the brand blocked the delete), and no registry cleared `approval` at all. Approval is
+their FK to the brand blocked the delete), no registry cleared `approval` at all, and an ad's
+product FK had no ON DELETE action, so deleting the brand's products first failed on it. Approval is
 registered by core after every module (app/main.py), because an ads change set references it
 without an ON DELETE action: clearing approvals first would fail on that reference.
 """
@@ -53,10 +54,23 @@ class AdsBrandDeleteTest(unittest.TestCase):
             " request_hash, content_hash, title, month, plan_json, created_by, approval_id)"
             " VALUES (%s, %s, %s, %s, 'op', 'rq', 'ch', '變更', '2026-09', '{}', '測試員', %s)",
             (db.new_id("acs"), org, bid, campaign, approval_id))
+        # An ad for one of the brand's products: 品牌智庫 (registered first) deletes the product
+        # before 投放中心 deletes the ad, so the ad's product FK must not block
+        # (20260927000007_ads_ad_product_fk_set_null.sql).
+        product = bi_repo.create_product(conn, bid, name="待刪品牌的商品", actor="測試員")["id"]
+        group = db.new_id("adg")
+        conn.execute(
+            "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key, name,"
+            " role, daily_budget) VALUES (%s, %s, %s, %s, 'meta', '投放組', 'new', 100)",
+            (group, org, bid, campaign))
+        conn.execute(
+            "INSERT INTO ads_ad (id, org_id, brand_id, campaign_id, group_id, name, product_id)"
+            " VALUES (%s, %s, %s, %s, %s, '廣告一', %s)",
+            (db.new_id("ad"), org, bid, campaign, group, product))
         conn.commit()
         return bid
 
-    def test_brand_with_runtime_events_and_approved_change_set_deletes_cleanly(self):
+    def test_brand_with_runtime_events_approved_change_set_and_product_ad_deletes_cleanly(self):
         bid = self._seed()
 
         bi_repo.delete_brand(self.conn, bid, actor="測試員")

@@ -42,13 +42,10 @@ EXEMPT_BRAND_TABLES = {
 _EXEMPTION_CEILING = frozenset({"llm_task", "audit_log"})
 
 # Known order violations, one reason each; may only shrink (the test below fails once one is fixed).
-KNOWN_ORDER_VIOLATIONS = {
-    # 品牌智庫 (imported by everything, so registered first) deletes the brand's products before
-    # 投放中心 deletes its ads; an ad pointing at a product makes the brand delete fail. Same
-    # class and same fix as 20260911000002_workbench_brief_product_fk_set_null.sql: an ads
-    # migration switching this FK to ON DELETE SET NULL (outside F31-I09's touch; reported).
-    "ads_ad_product_id_fkey": "ads 表的 product 外鍵沒有 ON DELETE，刪品牌時先刪產品會被擋",
-}
+# Fix a new violation with an ON DELETE action on the referrer's FK rather than adding an entry
+# here (precedents: 20260911000002_workbench_brief_product_fk_set_null.sql,
+# 20260927000007_ads_ad_product_fk_set_null.sql).
+KNOWN_ORDER_VIOLATIONS: dict = {}
 
 # pg_constraint.confdeltype: a = NO ACTION, r = RESTRICT block the parent delete.
 _BLOCKING_DELETE_ACTIONS = {"a", "r"}
