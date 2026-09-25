@@ -441,7 +441,7 @@ describe("CopyPage（F27-I13）?prefill=observed&set= 從偏離項目的平台�
       })],
     });
     renderAt(`${copyPath()}?prefill=observed&set=acs_9`);
-    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalledWith("brd_1", "cmp_1"));
+    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalledWith("brd_1", "cmp_1", expect.any(AbortSignal)));
     expect(await screen.findByDisplayValue("觀察到的標題")).toBeTruthy();
     expect((screen.getByLabelText("新內文 1") as HTMLTextAreaElement).value).toBe("觀察到的內文");
   });
@@ -463,11 +463,23 @@ describe("CopyPage（F27-I13）?prefill=observed&set= 從偏離項目的平台�
     expect((screen.getByLabelText("新內文") as HTMLTextAreaElement).value).toBe("平台現在的內文");
   });
 
-  it("讀取變更清單失敗：不擋頁面，照舊留白／承接建議", async () => {
+  it("讀取變更清單失敗（F29-I10）：說讀取失敗＋重試，不偷偷改用 AI 建議；重試成功後預填平台現況", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
-    vi.mocked(changeApi.getChangeControl).mockRejectedValue(new Error("網路錯誤"));
+    vi.mocked(changeApi.getChangeControl).mockRejectedValueOnce(new Error("網路錯誤")).mockResolvedValueOnce({
+      targets: [],
+      change_sets: [changeSet({
+        id: "acs_9",
+        items: [changeItem({ target_id: "aex_1", evidence_json: { observed: { title: "平台現在的標題", body: "平台現在的內文" } } })],
+      })],
+    });
     renderAt(`${copyPath()}?prefill=observed&set=acs_9`);
-    expect(await screen.findByDisplayValue("輕鬆帶走，每天剛剛好")).toBeTruthy();
+    expect(await screen.findByText(/平台上現在的文案讀不到/)).toBeTruthy();
+    expect(screen.queryByDisplayValue("輕鬆帶走，每天剛剛好")).toBeNull();
+    expect((screen.getByRole("button", { name: "加入變更清單 →" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByDisplayValue("平台現在的標題")).toBeTruthy();
+    expect(screen.queryByText(/平台上現在的文案讀不到/)).toBeNull();
+    expect(changeApi.getChangeControl).toHaveBeenCalledTimes(2);
   });
 });
 
