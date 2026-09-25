@@ -349,8 +349,12 @@ class ReviewCycleTest(unittest.TestCase):
         self.observation()
         self.reply(target_id="another-ad")
         row = self.request()
-        failed = self.run_review(row)
-        self.assertEqual(failed["status"], "failed")
+        rejected = self.run_review(row)
+        # F30 Contract A: a rejected text leaves the round usable on its evidence alone.
+        self.assertEqual(rejected["status"], "ready")
+        self.assertIsNone(rejected["error"])
+        self.assertEqual(rejected["result_json"]["recommendations"], [])
+        self.assertTrue(rejected["result_json"]["rejected"]["reason"])
         self.assertEqual(self.request()["id"], row["id"])
         self.run_review(row)
         self.assertEqual(len(self.fake.calls), 1)
@@ -430,6 +434,10 @@ class ReviewCycleTest(unittest.TestCase):
         )
         self.assertEqual(result["causality"], "unavailable")
         self.assertTrue(review_policy.unsupported_claim("無法確認資料，但是此文案已改善營收"))
+        for hedge in ("不足以判斷", "無法判斷", "無法判定", "未能確認"):
+            self.assertFalse(review_policy.unsupported_claim(f"資料{hedge}設定造成成效變化"))
+        self.assertTrue(review_policy.unsupported_claim("此文案造成轉換下降"))
+        self.assertTrue(review_policy.unsupported_claim("不足以判斷 3 天內造成的變化"))
 
     def test_provider_timeout_records_unknown_and_holds_reservation_no_retry(self):
         self.observation()

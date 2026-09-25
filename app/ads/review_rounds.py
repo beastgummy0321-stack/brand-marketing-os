@@ -25,6 +25,11 @@ def evidence_digest(evidence):
     return changes.digest(content)
 
 
+def model_input(evidence):
+    """What the model reads: `retry_of` only separates a re-run's digest, it is not evidence."""
+    return policy.encode({k: v for k, v in evidence.items() if k != "retry_of"})
+
+
 def get(conn, org, brand, campaign, review_id):
     changes.campaign(conn, org, brand, campaign)
     row = conn.execute(
@@ -177,7 +182,7 @@ def submit(
         conn.commit()
         return result
     waiting = bool(evidence["waiting_reasons"])
-    if not waiting and len(system) + len(policy.encode(evidence)) + 32 > policy.INPUT_CHARS:
+    if not waiting and len(system) + len(model_input(evidence)) + 32 > policy.INPUT_CHARS:
         raise ValueError("完整證據超過 12,000 字元，未截斷或送出；請縮短期間或整理品牌背景。")
     amount = 0 if waiting else policy.ceiling(provider.name, model)
     if not waiting:
@@ -215,6 +220,35 @@ def submit(
 
         review_jobs.enqueue(org, brand, campaign, review_id)
     return get(conn, org, brand, campaign, review_id)
+
+
+def retry(conn, org, brand, campaign, review_id, actor="human"):
+    """Re-run an undecided failed or AI-rejected round on its own saved evidence (Contract A).
+
+    `retry_of` gives the re-run its own digest (the old one is UNIQUE per campaign), so a repeat
+    call dedupes to the same retry round; the round reserves AI cost like any other."""
+    old = get(conn, org, brand, campaign, review_id)
+    if old["decision"] is not None or not (
+        old["status"] == "failed" or (old["result_json"] or {}).get("rejected")
+    ):
+        raise ValueError("只有尚未決定、失敗或 AI 說明被擋下的檢討可以再請 AI 看一次。")
+    # Read the stored snapshot, not `get`'s view: `copy_editable` is a read-time field.
+    evidence = conn.execute(
+        "SELECT evidence_json FROM ads_review_round WHERE org_id=%s AND id=%s", (org, review_id)
+    ).fetchone()["evidence_json"]
+    return submit(
+        conn,
+        org,
+        brand,
+        campaign,
+        old["entity_id"],
+        old["window_start"],
+        old["window_end"],
+        old["previous_id"],
+        actor,
+        {**deepcopy(evidence), "retry_of": review_id},
+        manual_monitor=True,
+    )
 
 
 def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=None):
