@@ -112,6 +112,8 @@ def _touched_field_sources(updates: dict, old_constraints: dict) -> set[str]:
         touched.add("objective")
     if "start_date" in updates or "end_date" in updates:
         touched.add("dates")
+    if "audience_hint" in updates:
+        touched.add("audience")
     if "constraints_json" in updates:
         new_constraints = updates["constraints_json"] or {}
         for constraints_key, source_key in (("platform", "platform"), ("budget", "budget")):
@@ -126,7 +128,8 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     (nothing is bound to a platform yet, §0). `updates` only ever contains keys the caller
     (`routes.py`) explicitly received; unknown keys are ignored so callers can pass a raw
     `dict(exclude_unset=True)` straight through. Same field rules as `create_campaign` for any
-    key that's present. `constraints_json` replaces whole; `product_ids` merges into the
+    key that's present. `constraints_json` replaces whole; `product_ids` (and, F30-I04,
+    `audience_hint`) merges into the
     existing `context_json` (the one nested field this issue lets the user correct — §0
     "PATCH ... for context_json.product_ids" — the rest of `context_json` is untouched).
 
@@ -204,6 +207,13 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
             if product_id not in brand_product_ids:
                 raise ValueError("product_unknown")
         context_json["product_ids"] = product_ids
+        context_json_changed = True
+    if "audience_hint" in updates:
+        # F30-I04: the wizard's 受眾方向 correction; blank clears it (never an empty string).
+        hint = updates["audience_hint"]
+        if hint is not None and not isinstance(hint, str):
+            raise ValueError("audience_hint_unknown")
+        context_json["audience_hint"] = (hint.strip() or None) if hint is not None else None
         context_json_changed = True
 
     old_constraints = campaign.get("constraints_json") or {}

@@ -22,7 +22,7 @@ import json
 import math
 from datetime import date, timedelta
 
-from app.ads import channels
+from app.ads import channels, objectives
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
@@ -36,7 +36,9 @@ DEPARTMENT_PATH = APP_DIR / "departments" / "ads" / "brief_parse.md"
 # `mock.patch.object(brief, "PROVIDER", FakeProvider(...))` 換掉。
 PROVIDER = providers.AnthropicProvider()
 
-_OBJECTIVES = frozenset({"購買", "加購物車", "名單", "流量", "知名度"})
+# F30-I04: derived from the one objective catalog (`objectives.py`, Contract C) -- the available
+# objectives plus 加購物車 (accepted from the parse, never listed).
+_OBJECTIVES = objectives.ACCEPTED
 
 DATES_REQUIRED_MESSAGE = (
     "投放的開始與結束日期請一起填，或兩個都留空讓行銷駕駛艙從你的描述判斷。"
@@ -201,11 +203,62 @@ def _draft_name(goal_text: str) -> str:
     return text if len(text) <= 40 else text[:40] + "…"
 
 
+def _valid_budget(value) -> bool:
+    """The wizard's 「這個活動最多花」 is a positive, finite number -- never a bool or a string."""
+    return (
+        not isinstance(value, bool) and isinstance(value, (int, float))
+        and math.isfinite(value) and value > 0
+    )
+
+
+def _check_picks(conn, brand_id: str, picks: dict) -> dict:
+    """F30-I04 (Contract D): the wizard's structured picks, validated before any model call
+    (a refused create never spends). Returns `{product_ids, products, objective, budget}`."""
+    objective = objectives.check(picks.get("objective"))
+    budget = picks.get("budget")
+    if not _valid_budget(budget):
+        raise ValueError("budget_invalid")
+    product_ids = picks.get("product_ids")
+    if (not isinstance(product_ids, list) or not product_ids
+            or not all(isinstance(p, str) and p for p in product_ids)):
+        raise ValueError("products_required")
+    by_id = {p["id"]: p for p in bi_repo.list_products(conn, brand_id)}
+    if any(p not in by_id for p in product_ids):
+        raise ValueError("product_unknown")
+    product_ids = list(dict.fromkeys(product_ids))
+    return {
+        "product_ids": product_ids, "products": [by_id[p] for p in product_ids],
+        "objective": objective, "budget": budget,
+    }
+
+
+def _amount_text(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def _compose_goal_text(picks: dict, start: date, end: date) -> str:
+    """The sentence a structured create stores as `goal_text` when the user typed none: the
+    picks said back in words, nothing added (no audience, no promise, no guessed number)."""
+    names = "、".join(p["name"] for p in picks["products"])
+    return (
+        f"推「{names}」，想要的結果：{objectives.label(picks['objective'])}，"
+        f"期間 {start.isoformat()} ~ {end.isoformat()}，"
+        f"這個活動最多花 {_amount_text(picks['budget'])}。"
+    )
+
+
 def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date: str,
-                  end_date: str, constraints: dict | None, actor: str) -> dict:
+                  end_date: str, constraints: dict | None, actor: str,
+                  picks: dict | None = None) -> dict:
     """一句話 -> 一列 `status='draft'` 的 `ads_campaign`。回傳值是 `campaign_detail()` 的
-    形狀再加一個 `parsed` 鍵（這次呼叫解析成功與否，不落地，只是這次回應的旗標）。"""
-    if not isinstance(goal_text, str) or not goal_text.strip():
+    形狀再加一個 `parsed` 鍵（這次呼叫解析成功與否，不落地，只是這次回應的旗標）。
+
+    F30-I04（Contract D）：`picks`（`{product_ids, objective, budget}`）是建立精靈的結構化
+    選擇——商品、目標、日期、預算上限都是使用者自己選的，模型的解析結果不能蓋過它們；
+    `goal_text` 可以不填（由選擇組出一句話）；沒給日期時從組織自己的今天起算 30 天。
+    模型照樣同步呼叫一次，只補受眾方向與附註（沒有排隊）。"""
+    structured = picks is not None
+    if not structured and (not isinstance(goal_text, str) or not goal_text.strip()):
         raise ValueError("goal_text_required")
     # F04-I11：兩個都給 -> 照舊驗證（來源 user）；只給一個 -> 拒絕；兩個都沒給 -> 讓模型從
     # 句子判斷 `period`，等呼叫完再解析（R7：日曆算數在程式，不在 prompt 裡）。
@@ -213,6 +266,16 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     if start_date or end_date:
         start, end = _validate_dates(start_date, end_date)
     constraints = dict(constraints or {})
+    checked = _check_picks(conn, brand_id, picks) if picks is not None else None
+    dates_source = "user"
+    if checked is not None:
+        if start is None or end is None:
+            today = coresettings.today_for_org(conn, org_id=org_id)
+            start, end = today, today + timedelta(days=30)
+            dates_source = "system"
+        if not isinstance(goal_text, str) or not goal_text.strip():
+            goal_text = _compose_goal_text(checked, start, end)
+        constraints["budget"] = checked["budget"]
 
     brand_text, knowledge_item_ids, brand_version, _product_version = context_compiler.compile(
         conn, brand_id, include_personas=False,
@@ -274,7 +337,6 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     # 日期：呼叫端給了兩個就是「你說的」；兩個都沒給就看模型從句子解析出來的 `period`
     # 算不算數（算得出來也是「你說的」——句子裡講了時間），解析不出來才落到「今天～+30 天」
     # 那個備援（那一格才是「系統帶入」，ARCHITECTURE.md §6.1 第 11 條）。
-    dates_source = "user"
     if start is None:
         resolved_start, resolved_end = _resolve_period(fields["period"], today=today)
         if resolved_start is not None:
@@ -291,10 +353,14 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
 
     brand_product_id_set = set(brand_product_ids)
     product_ids = [p for p in fields["product_ids"] if p and p in brand_product_id_set] or None
+    if checked is not None:
+        # The user's picks win over whatever the model read back from the composed sentence.
+        product_ids = checked["product_ids"]
+        fields["objective"] = checked["objective"]
 
     field_sources = {
         "product": "user" if product_ids else "system",
-        "objective": "user" if parsed_ok else "system",
+        "objective": "user" if parsed_ok or checked is not None else "system",
         "platform": "user" if constraints.get("platform") is not None else "system",
         "budget": "user" if constraints.get("budget") is not None else "system",
         "dates": dates_source,
