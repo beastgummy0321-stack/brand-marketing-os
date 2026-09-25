@@ -160,17 +160,16 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // `item` narrowed to `item?.id`：整個 `item` 物件每次 `getChangeControl` 重新讀取都是新的參照，只有身分（id）
   // 真的換了才需要重置選取狀態或重打一次 `getAngles`。A failed request stays a failed read (Contract K), shown
   // with 重試 — it is not the backend's own `failed` judgement.
-  const angleDeps = [kind, closed, pauseEntityId, brandId, campaignId, item?.id];
   const angleRead = useApiRead<AnglesResponse | null>(
     () => (kind === "pause" && !closed && pauseEntityId ? getAngles(brandId, campaignId, pauseEntityId) : Promise.resolve(null)),
-    angleDeps,
+    [kind, closed, pauseEntityId, brandId, campaignId, item?.id],
   );
   const angleData = angleRead.data;
   useEffect(() => {
     setAngleChoice(itemAngle(item) ?? "");
     setAngleCustomOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same identity list as the angle read above.
-  }, angleDeps);
+  }, [kind, closed, pauseEntityId, brandId, campaignId, item?.id]);
 
   // feature Decisions「Step from a change set」：非 confirm 步驟的清單，或還沒對到正典
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
