@@ -110,6 +110,17 @@ class DigestTest(unittest.TestCase):
         self.assertEqual(open_row["dedupe_key"], f"ads-digest:{self.brand}:2026-09-25")
         self.assertEqual(len(self.digest_rows(self.brand, status="resolved")), 1)
 
+    def test_a_day_with_nothing_open_closes_the_earlier_digest_and_sends_none(self):
+        triage.refresh_queue(self.conn, self.org, self.brand)
+        digest.deliver(self.conn, self.org, self.brand, date(2026, 9, 24))
+        self.assertEqual(len(self.digest_rows(self.brand, status="open")), 1)
+        sent = digest.deliver(self.conn, self.org, self.brand, date(2026, 9, 25),
+                              queue={"items": []})
+        self.assertIsNone(sent)
+        self.assertEqual(self.digest_rows(self.brand, status="open"), [])
+        [closed] = self.digest_rows(self.brand, status="resolved")
+        self.assertEqual(closed["dedupe_key"], f"ads-digest:{self.brand}:2026-09-24")
+
     def test_a_brand_whose_refresh_raised_gets_no_digest_and_others_still_do(self):
         real_refresh = triage.refresh_queue
         other = self._brand("每日摘要（刷新失敗）")
