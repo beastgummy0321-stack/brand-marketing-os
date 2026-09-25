@@ -202,16 +202,17 @@ def _resolve(status, evidence):
     return status, evidence
 
 
-def _aggregate(conn, action_id, item_id, message, observed):
+def _aggregate(conn, org, action_id, item_id, message, observed):
     peers = conn.execute(
-        "SELECT status FROM ads_handoff_item WHERE action_id=%s", (action_id,)
+        "SELECT status FROM ads_handoff_item WHERE org_id=%s AND action_id=%s", (org, action_id)
     ).fetchall()
     aggregate = "confirmed" if all(r["status"] == "confirmed" for r in peers) else "unknown"
     conn.execute(
         "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
         "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
         "ELSE first_observed_at END,"
-        "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END WHERE id=%s",
+        "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END "
+        "WHERE org_id=%s AND id=%s",
         (
             aggregate,
             db.jsonb(
@@ -224,6 +225,7 @@ def _aggregate(conn, action_id, item_id, message, observed):
             ),
             observed,
             aggregate,
+            org,
             action_id,
         ),
     )
@@ -247,7 +249,7 @@ def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, enti
     )
     current = handoff_data.get(conn, org, brand, campaign, item_id)
     if current["attempt_id"] == attempt:
-        _aggregate(conn, current["action_id"], item_id, evidence["message"], observed)
+        _aggregate(conn, org, current["action_id"], item_id, evidence["message"], observed)
     conn.commit()
     return handoff_data.get(conn, org, brand, campaign, item_id)
 
@@ -271,7 +273,7 @@ def confirm_field(conn, org, brand, campaign, item_id, key, actor):
         (status, db.jsonb(evidence), org, brand, campaign, item_id),
     )
     if status != item["status"]:
-        _aggregate(conn, item["action_id"], item_id, evidence["message"], True)
+        _aggregate(conn, org, item["action_id"], item_id, evidence["message"], True)
     conn.commit()
     return handoff_data.get(conn, org, brand, campaign, item_id)
 

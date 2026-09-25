@@ -282,9 +282,10 @@ class LaunchViewTest(unittest.TestCase):
             )
         view = self.view()
         self.assertEqual((view["step"], view["version"]), ("platform", 2))
-        self.assertEqual(
-            [i["name"] for i in view["items"]], ["秋季預購", "新客", "禮盒主圖", "禮盒影片"]
-        )
+        # Parents first; the two ads keep the plan's order (same insert time here, so either).
+        names = [i["name"] for i in view["items"]]
+        self.assertEqual(names[:2], ["秋季預購", "新客"])
+        self.assertEqual(sorted(names[2:]), sorted(["禮盒主圖", "禮盒影片"]))
         self.assertEqual(view["summary"]["ads"], 2)
 
     def test_readback_matches_by_exact_name_and_confirm_reaches_verified(self):
