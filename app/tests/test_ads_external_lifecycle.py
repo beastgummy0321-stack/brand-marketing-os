@@ -48,6 +48,8 @@ class ExternalLifecycleTest(unittest.TestCase):
         self.assertIsNone(campaign["outcome"]["purchases"])
         self.assertIn("add_assets", campaign["capabilities"]["allowed"])
         self.assertIn("close", campaign["capabilities"]["unavailable"])
+        # F31-I08: the ads-center bind is deleted, so it is neither offered nor refused.
+        self.assertNotIn("bind", campaign["capabilities"]["unavailable"])
         performance = self.client.get(self.url + "/performance").json()
         self.assertEqual(performance["origin"], "imported")
         self.assertNotIn("totals", performance)
@@ -136,6 +138,7 @@ class ExternalLifecycleTest(unittest.TestCase):
         self.assertEqual(detail["origin"], "internal")
         self.assertIsNone(detail["external_view"])
         self.assertIn("strategy", detail["capabilities"]["allowed"])
+        self.assertNotIn("bind", detail["capabilities"]["allowed"])  # F31-I08: path deleted
 
     def test_internal_goal_can_be_completed_but_source_budget_cannot_change(self):
         result = self.client.patch(

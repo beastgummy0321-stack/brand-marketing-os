@@ -9,12 +9,17 @@ from app.ads import repository as ads_repo
 
 # -- describe：逐節點清單，campaign 節點打頭 ---------------------------------------------------
 
+# F31-I08: the name-match 「配對」 is gone. Launch readback (`handoff_check`) never compares
+# names -- the user picks the platform object in each check -- so the name only helps them
+# recognise which one to pick.
+_NAME_REASON = "平台上的名稱照這裡填，回來核對時比較容易認出要選哪一個。"
+
 def _campaign_field(campaign: dict) -> dict:
     return {
         "level": "campaign", "id": campaign["id"], "name": campaign["name"],
         "fields": [
             {"label": "活動名稱", "value": campaign["name"],
-             "reason": "平台上的活動名稱要跟這裡一字不差，之後「配對」靠它精準比對。"},
+             "reason": _NAME_REASON},
             {"label": "目標", "value": campaign["objective"],
              "reason": "我們自己的分類，選平台上意思最接近的目標。"},
         ],
@@ -23,8 +28,7 @@ def _campaign_field(campaign: dict) -> dict:
 
 def _group_field(group: dict) -> dict:
     fields = [
-        {"label": "廣告組合名稱", "value": group["name"],
-         "reason": "名稱要跟這裡一字不差，之後「配對」靠它。"},
+        {"label": "廣告組合名稱", "value": group["name"], "reason": _NAME_REASON},
         {"label": "每日預算", "value": group["daily_budget"], "reason": "這組廣告一天要花多少。"},
     ]
     if group.get("start_date"):
@@ -38,8 +42,7 @@ def _group_field(group: dict) -> dict:
 
 def _ad_field(ad: dict) -> dict:
     fields = [
-        {"label": "廣告名稱", "value": ad["name"],
-         "reason": "名稱要跟這裡一字不差，之後「配對」靠它。"},
+        {"label": "廣告名稱", "value": ad["name"], "reason": _NAME_REASON},
     ]
     material = ad.get("material_assignment")
     if material:

@@ -166,6 +166,21 @@ class ChecklistContentTest(PublishTestBase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(described["checklist"][0]["level"], "campaign")
 
+    def test_name_hints_do_not_point_at_the_removed_pairing(self):
+        # F31-I08: the name-match 「配對」 button is gone and launch readback never compares
+        # names, so no name hint may promise that the name is what gets matched.
+        detail = self._adopted_campaign()
+
+        described = manual_adapter.describe(detail)
+
+        name_hints = [f["reason"] for node in described["checklist"] for f in node["fields"]
+                      if f["label"] in ("活動名稱", "廣告組合名稱", "廣告名稱")]
+        self.assertEqual(len(name_hints), len(described["checklist"]))
+        for hint in name_hints:
+            self.assertNotIn("配對", hint)
+            self.assertNotIn("比對", hint)
+            self.assertIn("核對", hint)
+
 
 class AutoMetaAdapterTest(PublishTestBase):
     def test_auto_meta_describes_not_connected_without_raising(self):
