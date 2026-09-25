@@ -58,24 +58,34 @@ function readAt(iso: string): string {
   return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${hh}:${mm}`;
 }
 
-/** What is happening right now (the first running job; the rest wait), not a bare count. */
-function pillText(state: ReadState): { text: string; mark: "spin" | "ok" | "bad" | "idle" } {
-  if (state.status === "loading") return { text: "讀取背景工作…", mark: "idle" };
-  if (state.status === "error") return { text: "背景工作讀取失敗・點開重試", mark: "bad" };
+/** What is happening right now (the first running job; the rest wait), not a bare count.
+ * Segments marked `wide` only show from `xl` (1280) up: at 1024 the top bar also carries the
+ * sync status and the org menu, so the pill drops 「正在」/「還有」 instead of cutting off the count
+ * (`title` keeps the full sentence). */
+type Segment = { text: string; wide?: boolean };
+type Pill = { parts: Segment[]; mark: "spin" | "ok" | "bad" | "idle" };
+
+function pillText(state: ReadState): Pill {
+  if (state.status === "loading") return { parts: [{ text: "讀取背景工作…" }], mark: "idle" };
+  if (state.status === "error") {
+    return { parts: [{ text: "背景工作讀取失敗" }, { text: "・點開重試", wide: true }], mark: "bad" };
+  }
   const jobs = state.snapshot.data;
   const running = jobs.find((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "queued");
   if (running) {
-    return {
-      text: queued.length ? `正在${label(running)}・還有 ${queued.length} 件排隊` : `正在${label(running)}`,
-      mark: "spin",
-    };
+    const parts: Segment[] = [{ text: "正在", wide: true }, { text: label(running) }];
+    if (queued.length) parts.push({ text: "・" }, { text: "還有 ", wide: true }, { text: `${queued.length} 件排隊` });
+    return { parts, mark: "spin" };
   }
   if (queued.length) {
     const ahead = queued[0].position - 1;
-    return { text: `${label(queued[0])}排隊中・前面還有 ${ahead} 件`, mark: "spin" };
+    return {
+      parts: [{ text: `${label(queued[0])}排隊中・` }, { text: "前面還有 ", wide: true }, { text: `${ahead} 件` }],
+      mark: "spin",
+    };
   }
-  return { text: "沒有背景工作在跑", mark: "ok" };
+  return { parts: [{ text: "沒有背景工作在跑" }], mark: "ok" };
 }
 
 function JobRow({ job, onPick }: { job: ActiveJob; onPick: () => void }) {
@@ -188,9 +198,10 @@ export function ActiveJobsBell() {
   }, [open, close]);
 
   const pill = pillText(state);
+  const pillLabel = pill.parts.map((p) => p.text).join("");
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    <div ref={rootRef} className="relative min-w-0 shrink-0 xl:shrink">
       <button
         ref={pillRef}
         type="button"
@@ -198,12 +209,19 @@ export function ActiveJobsBell() {
         aria-expanded={open}
         aria-controls={panelId}
         aria-haspopup="dialog"
-        title={pill.text}
+        title={pillLabel}
+        aria-label={pillLabel}
         className="inline-flex max-w-full items-center gap-[7px] rounded-full border border-border bg-card px-3 py-1 text-[12.5px] text-muted-foreground hover:border-primary hover:text-primary"
       >
         {pill.mark === "spin" ? <Spinner className="h-2.5 w-2.5" /> : <Dot tone={pill.mark} />}
-        <span className="min-w-0 truncate">{pill.text}</span>
-        <span aria-hidden="true">›</span>
+        <span className="min-w-0 truncate whitespace-nowrap">
+          {pill.parts.map((part, i) => (
+            <span key={i} className={part.wide ? "hidden xl:inline" : undefined}>
+              {part.text}
+            </span>
+          ))}
+        </span>
+        <span aria-hidden="true" className="shrink-0">›</span>
       </button>
       {open && (
         <div
