@@ -423,6 +423,8 @@ class TotalsWindowTest(_WithReader):
         _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 15), spend=0, count=0)
         _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 23), spend=50, count=1)
         _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 24), spend=777, count=7)
+        # Every day of the window was read; the days without a row spent nothing.
+        _synced(self.conn, self.org, brand, campaign, date(2026, 8, 1), date(2026, 9, 24))
         with mock.patch.object(coresettings, "datetime", _Clock):
             ws = self.workspace(brand, campaign)
         self.assertEqual(ws["totals"], {
@@ -430,9 +432,45 @@ class TotalsWindowTest(_WithReader):
             "results": 2, "cost_per_result": 75,
         })
 
+    def test_an_unread_day_in_the_window_nulls_every_number(self):
+        # Rows only on read days; the unread days have no row at all -- they must never read as
+        # zero spend (which would shrink spend and cost per result).
+        brand = _brand(self.conn, self.org, "工作區：窗口缺日")
+        campaign = _imported(self.conn, self.org, brand, "窗口缺日", "c_gap", cap=100)
+        ad = _ad(self.conn, self.org, brand, campaign, "a_gap", ("campaign", "c_gap"))
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 14), spend=100, count=1)
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 20), spend=80, count=1)
+        for coverage in ((date(2026, 9, 13), date(2026, 9, 23)),   # 9/10–9/12 never read
+                         (date(2026, 8, 1), date(2026, 9, 21))):   # 9/22–9/23 never read
+            with self.subTest(coverage=coverage):
+                _synced(self.conn, self.org, brand, campaign, *coverage)
+                with mock.patch.object(coresettings, "datetime", _Clock):
+                    totals = self.workspace(brand, campaign)["totals"]
+                self.assertEqual((totals["start"], totals["end"]), ("2026-09-10", "2026-09-23"))
+                self.assertEqual(
+                    (totals["spend"], totals["results"], totals["cost_per_result"]),
+                    (None, None, None),
+                )
+        _synced(self.conn, self.org, brand, campaign, date(2026, 9, 10), date(2026, 9, 23))
+        with mock.patch.object(coresettings, "datetime", _Clock):
+            totals = self.workspace(brand, campaign)["totals"]
+        self.assertEqual((totals["spend"], totals["results"], totals["cost_per_result"]),
+                         (180, 2, 90))
+
+    def test_rows_without_any_recorded_coverage_are_unknown(self):
+        brand = _brand(self.conn, self.org, "工作區：沒有讀取紀錄")
+        campaign = _imported(self.conn, self.org, brand, "沒讀過", "c_nocov", cap=100)
+        ad = _ad(self.conn, self.org, brand, campaign, "a_nocov", ("campaign", "c_nocov"))
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 14), spend=100, count=1)
+        with mock.patch.object(coresettings, "datetime", _Clock):
+            totals = self.workspace(brand, campaign)["totals"]
+        self.assertIsNone(totals["spend"])
+        self.assertIsNone(totals["cost_per_result"])
+
     def test_an_unknown_day_nulls_spend_and_no_rows_is_unknown(self):
         brand = _brand(self.conn, self.org, "工作區：未知花費")
         campaign = _imported(self.conn, self.org, brand, "未知", "c_unk", cap=100)
+        _synced(self.conn, self.org, brand, campaign, date(2026, 8, 1), date(2026, 9, 23))
         with mock.patch.object(coresettings, "datetime", _Clock):
             empty = self.workspace(brand, campaign)["totals"]
         self.assertIsNone(empty["spend"])

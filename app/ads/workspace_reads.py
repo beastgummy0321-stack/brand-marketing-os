@@ -77,14 +77,23 @@ def _open_queue_count(conn, org_id, brand_id, campaign_id, items) -> int:
     )
 
 
-def _totals(conn, org_id, brand_id, campaign_id) -> dict:
+def _totals(conn, org_id, brand_id, campaign) -> dict:
     """The last 14 complete days in the org timezone (yesterday back), one window -- never the
-    triage 7/14/28 widening. Spend and currency by `home_overview._spend_view` (unknown day or
-    mixed currency -> null), results and cost per result by `month_summary._ad_result` (the one
-    ad-scope result view; null unless every row agrees on one result kind). A day with a zero-spend
-    row is a known zero; a window without any row is unknown, as on the home."""
+    triage 7/14/28 widening. A day of this window the platform read never covered has no row, and
+    a missing row would otherwise read as zero spend: so the window's own unread days are taken
+    from the campaign's recorded sync coverage with the same functions the `data_status` missing
+    days come from (`triage._coverage` / `triage._missing_days`), and any unread day -- or no
+    recorded coverage at all -- nulls spend, results and cost per result together. Over a fully
+    read window: spend and currency by `home_overview._spend_view` (a null-spend row or mixed
+    currencies -> null), results and cost per result by `month_summary._ad_result` (the one
+    ad-scope result view; null unless every row agrees on one result kind). A read day with a
+    zero-spend row, or with no row at all, is a known zero; a window without any row is unknown,
+    as on the home."""
+    campaign_id = campaign["id"]
     end = coresettings.today_for_org(conn, org_id=org_id) - timedelta(days=1)
     start = end - timedelta(days=TOTALS_DAYS - 1)
+    coverage = triage._coverage(campaign)
+    unread = coverage is None or bool(triage._missing_days(coverage, start, end))
     rows = [
         dict(r) for r in conn.execute(
             "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
@@ -97,6 +106,11 @@ def _totals(conn, org_id, brand_id, campaign_id) -> dict:
     results, cost_per_result, _kind = month_summary._ad_result(
         review_evidence.aggregate(rows, start, end)
     )
+    if unread:
+        return {
+            "start": start.isoformat(), "end": end.isoformat(), "currency": spend["currency"],
+            "spend": None, "results": None, "cost_per_result": None,
+        }
     return {
         "start": start.isoformat(), "end": end.isoformat(), "currency": spend["currency"],
         "spend": home_overview._money_out(spend["amount"]) if spend["known"] else None,
@@ -202,7 +216,7 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         conn, "workspace.sync", lambda: home_overview._sync_block(conn, org_id, brand_id)
     )
     totals = None if draft else home_overview._guarded(
-        conn, "workspace.totals", lambda: _totals(conn, org_id, brand_id, campaign_id)
+        conn, "workspace.totals", lambda: _totals(conn, org_id, brand_id, campaign)
     )
     draft_block = None if not draft else home_overview._guarded(
         conn, "workspace.draft",

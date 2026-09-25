@@ -12,8 +12,11 @@
  *   owners of its active ads (the number the cleanup proposal uses); on a draft the plan's group
  *   total, with `can_support` null.
  * - `totals` is the last 14 complete days in the org timezone (`start`–`end`, yesterday back);
- *   `null` on a draft. Inside it, `spend` is null when a day's spend is unknown, the rows mix
- *   currencies, or there is no row at all; a zero-spend day is a known 0.
+ *   `null` on a draft. Inside it, `spend`, `results` and `cost_per_result` are all null when any
+ *   day of the window was never read from the platform (outside the campaign's recorded sync
+ *   coverage, or no coverage at all) — an unread day is never counted as 0. Over a fully read
+ *   window `spend` is still null when a day's spend is unknown, the rows mix currencies, or there
+ *   is no row at all; a read day with zero spend (a 0 row, or no row) is a known 0.
  * - Structure grades are triage's (`TriageGrade`), null when the ad is not on a platform yet or the
  *   triage read failed. `closing` = an approved pause the readback has not confirmed yet.
  * - Timeline rows are newest first (`created_at DESC, id DESC`), at most 50 (`truncated` says
