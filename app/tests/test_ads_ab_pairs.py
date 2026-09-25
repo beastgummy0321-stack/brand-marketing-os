@@ -14,7 +14,7 @@ from app.ads import change_control as service
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
 from app.ads import repository as ads_repo
-from app.core.db import new_id
+from app.core.db import jsonb, new_id
 from app.shared import web
 
 from .test_ads_publish_simulated import ACTOR, SimulatedPublishTestBase
@@ -210,12 +210,51 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual((pair["state"], pair["winner"], pair["difference_pct"]),
                          ("judged", "b", 10.0))
 
+    def cover(self, start, end):
+        """The campaign's recorded observations sync coverage (triage's known-days source)."""
+        context = ads_repo.get_campaign(*self.args)["context_json"] or {}
+        context["external_sync"] = {
+            "observations": {"coverage": {"start": str(start), "end": str(end)}}
+        }
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json=%s WHERE id=%s", (jsonb(context), self.cid)
+        )
+        web.conn.commit()
+
+    def test_a_no_row_day_inside_coverage_is_a_zero_delivery_day(self):
+        self.cover(self.yesterday - timedelta(days=30), self.yesterday)
+        self.fill(self.a, spend=100.0, purchases=[4, 2, 2, 2, 2, 2, 2])  # 16 -> 700 / 16
+        self.fill(self.b, spend=80.0, purchases=[4, 2, 2, 2, 2, 2, 2], skip=(3,))  # 14 -> 480
+        pair = self.pair()
+        self.assertEqual(pair["state"], "judged")
+        self.assertEqual(pair["days"], 7)
+        self.assertEqual((pair["b"]["spend"], pair["b"]["results"]), (480.0, 14))
+
+    def test_the_same_day_outside_coverage_is_unreadable_and_named(self):
+        self.cover(self.yesterday - timedelta(days=2), self.yesterday)
+        self.fill(self.a)
+        self.fill(self.b, spend=80.0, skip=(3,))
+        pair = self.pair()
+        self.assertEqual(pair["state"], "unreadable")
+        self.assertIn(str(self.yesterday - timedelta(days=3)), pair["reason"])
+        self.assertIsNone(pair["b"]["spend"])
+
+    def test_a_simulated_ad_is_never_padded_inside_coverage(self):
+        self.cover(self.yesterday - timedelta(days=30), self.yesterday)
+        self.fill(self.a)
+        self.fill(self.b, spend=80.0, skip=(3,))
+        web.conn.execute(
+            "UPDATE ads_outcome_daily SET source='simulated' WHERE entity_id=%s", (self.b["id"],)
+        )
+        web.conn.commit()
+        self.assertEqual(self.pair()["state"], "unreadable")
+
     def test_a_missing_day_is_unreadable_never_zero(self):
         self.fill(self.a)
         self.fill(self.b, spend=80.0, skip=(3,))
         pair = self.pair()
         self.assertEqual(pair["state"], "unreadable")
-        self.assertIn("缺日", pair["reason"])
+        self.assertIn(f"缺 {self.yesterday - timedelta(days=3)} 的資料", pair["reason"])
         self.assertIsNone(pair["b"]["spend"])
         self.assertIsNone(pair["b"]["results"])
         self.assertIsNone(pair["missing"]["b_results"])
