@@ -33,6 +33,7 @@ from app.ads import (
     plan,
     readiness,
     repository,
+    settle_routes,
     simulation_mode,
     simulation_recovery,
     simulation_routes,
@@ -86,6 +87,7 @@ router.include_router(manual_settings_routes.router)
 router.include_router(simulation_routes.router)
 router.include_router(experiment_routes.router)
 router.include_router(triage_routes.router)
+router.include_router(settle_routes.router)
 
 CAMPAIGN_UNKNOWN_MESSAGE = "找不到這個 Campaign。"
 GROUP_UNKNOWN_MESSAGE = "找不到這個投放組。"

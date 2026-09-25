@@ -533,9 +533,13 @@ QUEUE_CATEGORY = {
     "stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse",
     "scale_budget": "ads_triage_scale_budget", "refresh_creative": "ads_triage_refresh_creative",
     "insufficient_data": "ads_triage_insufficient_data", "cleanup": "ads_triage_cleanup",
+    # F29-I03 Contract E: the brand's period settle (`app/ads/settle.py::queue_candidate`).
+    "settle": "ads_triage_settle",
 }
 ALL_CLASSES = ("stop_loss", "worse", "better", "flat", "insufficient", "no_target")
-KINDS_AVAILABLE = ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup"]
+KINDS_AVAILABLE = [
+    "worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup", "settle",
+]
 KINDS_PENDING = []
 _NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10 fixed chars).
 
@@ -589,7 +593,8 @@ def _dedupe_key(kind, identity_id, window_end):
     # window moves on to a new `window_end` -- a fresh dedupe key `interrupts.enqueue` never
     # confuses with the old, resolved-or-not, row. `identity_id`: the ad's `entity_id` for
     # `worse` (and the retired `stop_loss`), the budget owner's `id` for `scale_budget`, the
-    # campaign's `id` for `refresh_creative`/`insufficient_data`/`cleanup`.
+    # campaign's `id` for `refresh_creative`/`insufficient_data`/`cleanup`, the brand's `id` for
+    # `settle` (window_end = the settled month's last day).
     return f"ads-triage:{kind}:{identity_id}:{window_end.isoformat()}"
 
 
@@ -828,7 +833,19 @@ def _queue_candidates(conn, org_id, brand_id, items) -> list:
             "payload": {"triage": refresh["triage"], "refresh": refresh["refresh"]},
         })
     candidates.extend(_insufficient_candidates(conn, org_id, brand_id, by_campaign))
+    candidates.extend(_settle_candidates(conn, org_id, brand_id))
     return candidates
+
+
+def _settle_candidates(conn, org_id, brand_id) -> list:
+    """F29-I03 Contract E: the brand's one `settle` row for the latest ended month
+    (`settle.queue_candidate`, program reads only). Its `triage` is `None`: a settle is about the
+    whole brand's month, not one active ad. Lazy import -- `settle` reads `period_grades`, which
+    imports this module."""
+    from app.ads import settle
+
+    candidate = settle.queue_candidate(conn, org_id, brand_id)
+    return [candidate] if candidate is not None else []
 
 
 def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
@@ -1187,8 +1204,8 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
         elif kind == "cleanup":
             proposal = _row_cleanup_proposal(sets_by_campaign, action_states, candidate)
         else:
-            # refresh_creative/insufficient_data: no change set -- the row's own button goes
-            # elsewhere (the workbench / the F24 wait page) instead.
+            # refresh_creative/insufficient_data/settle: no change set -- the row's own button
+            # goes elsewhere (the workbench / the F24 wait page / the settle page) instead.
             proposal = None
         extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
         open_rows.append({

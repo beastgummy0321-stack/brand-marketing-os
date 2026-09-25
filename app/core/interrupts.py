@@ -49,6 +49,10 @@ CATEGORIES = {
     # F25-I01: the two remaining queue kinds -- program proposals, not yet losses or warnings
     # (feature Decisions "Rule A"/"Rule B"), so both rank informational, after the F18 entries.
     "ads_triage_scale_budget": {"severity": "informational", "label": "可加預算待決定"},
+    # F29-I03: the brand's period settle (last month's grades written to the brand notebook) --
+    # nothing is lost while it waits, so informational, but it is never auto-archived while
+    # unwritten (`_NEVER_STALE_CATEGORIES`); `app/ads` resolves it once written.
+    "ads_triage_settle": {"severity": "informational", "label": "上一期待結算"},
     "ads_triage_refresh_creative": {"severity": "informational", "label": "素材待補待決定"},
     "ads_review_ready": {"severity": "informational", "label": "廣告檢討已備妥"},
     # 顧客原話貼入後背景 AI 抽取，完成／失敗都進這裡（票 B2-library，五鐵則③生成不擋路）。
@@ -113,6 +117,9 @@ def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
 # 「提醒進佇列不過期；使用者過時才來則直接併入期末判讀」）。逾期不代表沒用，逾期只代表
 # 該併入期末結論，不是該悄悄消失（票 #38）。
 _NEVER_STALE_KINDS = ("day3_look_dont_touch", "day7_report")
+# 同理，這些類別逾期也不自動封存：期結算（F29-I03）在寫進筆記本之前一直要留著，寫完由
+# app/ads 自己 resolve——悄悄封存等於那一期的學習永遠沒寫進去。
+_NEVER_STALE_CATEGORIES = ("ads_triage_settle",)
 
 
 def _archive_stale_informational(conn, today: str | None = None) -> int:
@@ -128,12 +135,14 @@ def _archive_stale_informational(conn, today: str | None = None) -> int:
     today_date = date.fromisoformat(today) if today else date.today()
     cutoff = today_date - timedelta(days=STALE_AFTER_DAYS)
     placeholders = ",".join("%s" for _ in _NEVER_STALE_KINDS)
+    category_placeholders = ",".join("%s" for _ in _NEVER_STALE_CATEGORIES)
     cursor = conn.execute(
         "UPDATE interrupt SET status = 'archived', resolved_at = %s"
         " WHERE status = 'open' AND severity = 'informational'"
         " AND COALESCE(visible_from, created_at) < %s"
-        f" AND (kind IS NULL OR kind NOT IN ({placeholders}))",
-        (now_utc(), cutoff, *_NEVER_STALE_KINDS),
+        f" AND (kind IS NULL OR kind NOT IN ({placeholders}))"
+        f" AND category NOT IN ({category_placeholders})",
+        (now_utc(), cutoff, *_NEVER_STALE_KINDS, *_NEVER_STALE_CATEGORIES),
     )
     conn.commit()
     return cursor.rowcount
