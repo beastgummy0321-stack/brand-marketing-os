@@ -377,6 +377,34 @@ class ScanBackgroundTest(_Base):
                                  json={"names": ["虛構回甘烏龍"]})
         self.assertEqual(resp2.json()["created_count"], 0)
 
+    def test_job_the_worker_cannot_run_reads_failed_with_worker_hint(self):
+        """F31-I02 (Contract J): a queued scan job the worker could not run (here: a task name
+        it does not know, like an old worker started before a new task type) ends `failed`
+        with no `llm_task` row. Red on master: the status read idle `done`."""
+        bid = self._create_full()
+        background_module.enqueue(
+            "background.intake_scan_not_known_to_this_worker", org_id=DEV_ORG_ID,
+            lock=f"intake_scan:{bid}", brand_id=bid,
+        )
+        status = self._poll(bid, "scan")
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], background_module.JOB_FAILED_MESSAGE)
+
+    def test_scan_failing_before_the_ai_call_reads_failed_and_notifies(self):
+        """F31-I02: the handler sends its failure notice, then re-raises so the job ends
+        `failed`. Red on master: the exception was swallowed and the status read `done`."""
+        bid = self._create_full()
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(_SCAN_OK))
+        with mock.patch.object(intake_ai, "run_scan", side_effect=RuntimeError("模擬呼叫前出錯")):
+            self.client.post(f"/api/intake/brands/{bid}/scan/start")
+            status = self._poll(bid, "scan")
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], background_module.JOB_FAILED_MESSAGE)
+        self.assertEqual(intake_ai.PROVIDER.calls, [])
+        messages = [r["message"] for r in core_interrupts.list_open(web.conn, brand_id=bid)
+                    if r["category"] == "intake_ai_step_done"]
+        self.assertTrue(any("初掃失敗" in m for m in messages), messages)
+
     def test_status_survives_a_restart_and_reports_terminal_states_honestly(self):
         # 票 09 done-check 3：狀態讀 llm_task，不是行程內 dict；矛盾檢查：不能因為「有列
         # 就是還在跑」永遠回 running——running／done／failed 都要誠實回報。
@@ -466,6 +494,17 @@ class QuestionBackgroundTest(_Base):
         self.assertEqual(status["status"], "failed")
         after = len(core_interrupts.list_open(web.conn, brand_id=bid))
         self.assertEqual(after, before)
+
+    def test_question_job_failing_before_the_ai_call_reads_failed(self):
+        """F31-I02 (Contract J). Red on master: the question handler swallowed the exception,
+        the job ended `succeeded` with no `intake_question` row and the status read `done`."""
+        bid = self._scanned_brand()
+        with mock.patch.object(intake_ai, "run_next_question",
+                               side_effect=RuntimeError("模擬呼叫前出錯")):
+            self.client.post(f"/api/intake/brands/{bid}/question/start")
+            status = self._poll(bid, "question")
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], background_module.JOB_FAILED_MESSAGE)
 
     def test_skip_remaining_marks_qa_done(self):
         bid = self._scanned_brand()

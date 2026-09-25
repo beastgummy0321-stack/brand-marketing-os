@@ -142,13 +142,15 @@ def generation_state(brand_id: str) -> dict:
     lock = f"intake_persona:{brand_id}"
     row = _latest_task_row(brand_id)
     outcome = background_job_outcome(lock)
-    if outcome == "active":
-        running_row = row is not None and row["status"] == "running" and row["started_at"]
-        return _state("running", row["started_at"].isoformat() if running_row else None)
-    if outcome == "failed":
-        started_at = row["started_at"].isoformat() if row is not None and row["started_at"] else None
-        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
-        return _state("failed", started_at, row["error"] if own_error else JOB_FAILED_MESSAGE)
+    if outcome in ("active", "failed"):
+        started = row["started_at"] if row is not None else None
+        if outcome == "active":
+            running = row is not None and row["status"] == "running"
+            return _state("running", started.isoformat() if running and started else None)
+        error = row["error"] if row is not None and row["status"] not in (
+            "running", "succeeded") else None
+        return _state("failed", started.isoformat() if started else None,
+                      error or JOB_FAILED_MESSAGE)
     if row is None:
         return _state("running", None) if background_is_active(lock) else _state("idle", None)
     started_at = row["started_at"].isoformat() if row["started_at"] else None
