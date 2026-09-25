@@ -262,9 +262,7 @@ class HandoffTest(unittest.TestCase):
     def test_platform_objective_code_matches_the_planned_objective(self):
         # Drill 5: the plan says 購買, Meta says OUTCOME_SALES -- comparing the raw strings made
         # every real campaign read back as deviated.
-        self.conn.execute(
-            "UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,)
-        )
+        self.conn.execute("UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,))
         self.root["platform"] = "meta"
         self.root["objective"] = "OUTCOME_SALES"
         self.conn.commit()
@@ -274,9 +272,7 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("objective", root["evidence_json"]["matched_fields"])
 
     def test_platform_objective_of_another_family_is_a_deviation(self):
-        self.conn.execute(
-            "UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,)
-        )
+        self.conn.execute("UPDATE ads_campaign SET objective='購買' WHERE id=%s", (self.campaign,))
         self.root["platform"] = "meta"
         self.root["objective"] = "OUTCOME_TRAFFIC"
         self.conn.commit()
@@ -670,6 +666,140 @@ class HandoffTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "素材任務已修訂"):
             self.approve(draft)
 
+    def replace_task_placement(self, seed, entity_id):
+        """A "replace this ad" request carried through to a selected, confirmed placement."""
+        from app.ads import material_tasks
+
+        image = db.new_id("aua")
+        self.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) "
+            "VALUES(%s,%s,%s,%s,%s,'replace.png','image/png',1,'ready')",
+            (image, self.org, self.brand, image, f"{self.org}/{image}"),
+        )
+        self.conn.commit()
+        task = material_tasks.create(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            {"operation_id": db.new_id("op"), "replaces_entity_id": entity_id},
+            "human",
+        )
+
+        def mutate(current, action, **values):
+            return material_tasks.mutate(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                task["id"],
+                {
+                    "operation_id": db.new_id("op"),
+                    "expected_revision": current["revision"],
+                    **values,
+                },
+                action,
+                "human",
+            )
+
+        gathered = mutate(task, "candidates", asset_ids=[image])
+        selected = mutate(
+            gathered,
+            "select",
+            candidate_id=gathered["candidates"][0]["id"],
+            content_hash=gathered["content_hash"],
+        )
+        self.conn.execute(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
+            (selected["placement_id"],),
+        )
+        self.conn.commit()
+        return task, {
+            "operation_id": db.new_id("op"),
+            "month": self.today.strftime("%Y-%m"),
+            "title": "換掉舊廣告",
+            "reason": "舊廣告偏貴",
+            "placement_id": selected["placement_id"],
+            "revision": selected["placement_revision"],
+            "destination_entity_id": seed["items"][0]["after"]["destination_entity_id"],
+        }
+
+    def test_new_ad_from_replace_request_inherits_the_ad_and_locks_cancel_after_approval(self):
+        from app.ads import material_tasks
+
+        seed = self.new_ad()
+        task, payload = self.replace_task_placement(seed, self.existing_ad_id)
+        draft = handoff_new_ad.create(
+            self.conn, self.org, self.brand, self.campaign, payload, "human"
+        )
+        self.assertEqual(draft["material_task_id"], task["id"])
+        self.assertEqual(draft["items"][0]["replaces_entity_id"], self.existing_ad_id)
+        self.assertEqual(draft["replaces"]["entity_id"], self.existing_ad_id)
+        # A draft does not hold the request; approval does.
+        self.approve(draft)
+        with self.assertRaises(material_tasks.InUse):
+            material_tasks.cancel(
+                self.conn, self.org, self.brand, self.campaign, task["id"], "human"
+            )
+        self.assertIsNone(
+            material_tasks.get(self.conn, self.org, self.brand, self.campaign, task["id"])[
+                "cancelled_at"
+            ]
+        )
+
+    def test_explicit_replacement_wins_and_a_cancelled_request_cannot_hand_off(self):
+        from app.ads import material_tasks
+
+        seed = self.new_ad()
+        other = external_repository.upsert_entity(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            self.node("C", "ad", parent_native_kind="adset", parent_native_id="group"),
+        )
+        self.conn.commit()
+        task, payload = self.replace_task_placement(seed, self.existing_ad_id)
+        explicit = handoff_new_ad.create(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            {**payload, "replaces_entity_id": other["id"]},
+            "human",
+        )
+        self.assertEqual(explicit["items"][0]["replaces_entity_id"], other["id"])
+        # The inherited ad is no longer running: nothing left to replace, the default drops.
+        self.conn.execute(
+            "UPDATE ads_external_entity SET native_status='PAUSED' WHERE id=%s",
+            (self.existing_ad_id,),
+        )
+        self.conn.commit()
+        plain = handoff_new_ad.create(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            {**payload, "operation_id": db.new_id("op")},
+            "human",
+        )
+        self.assertIsNone(plain["items"][0]["replaces_entity_id"])
+        material_tasks.cancel(self.conn, self.org, self.brand, self.campaign, task["id"], "human")
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_new_ad.create(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                {**payload, "operation_id": db.new_id("op")},
+                "human",
+            )
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_new_ad.validate_reference(
+                self.conn, self.org, self.brand, self.campaign, explicit
+            )
+
     def test_new_ad_review_reference_checks_live_premise_and_age(self):
         from app.ads import review_evidence
 
@@ -756,6 +886,42 @@ class HandoffTest(unittest.TestCase):
                 task["id"],
                 task["revision"],
                 [{"kind": "copy", "target_id": "any", "after": {"body": "別的文字"}}],
+            )
+
+    def test_cancelled_copy_request_cannot_be_cited_or_approved(self):
+        from app.ads import handoff_material, material_tasks
+
+        task = material_tasks.create(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            {
+                "operation_id": db.new_id("op"),
+                "mode": "copy",
+                "title": "選定文案",
+                "copy_fields": {"body": "選定文字"},
+            },
+            "human",
+        )
+        items = [{"kind": "copy", "target_id": "any", "after": {"body": "選定文字"}}]
+        cited = handoff_material.reference(
+            self.conn, self.org, self.brand, self.campaign, task["id"], task["revision"], items
+        )
+        self.assertEqual(cited["material_task_id"], task["id"])
+        material_tasks.cancel(self.conn, self.org, self.brand, self.campaign, task["id"], "human")
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_material.reference(
+                self.conn, self.org, self.brand, self.campaign, task["id"], task["revision"], items
+            )
+        # A draft cut before the cancel cannot be approved afterwards.
+        with self.assertRaisesRegex(ValueError, "已取消"):
+            handoff_material.validate_approval(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                {"items": items, "plan_json": cited},
             )
 
     def test_planned_material_http_assignment_changes_hash_and_launch_readback_uses_copy(self):

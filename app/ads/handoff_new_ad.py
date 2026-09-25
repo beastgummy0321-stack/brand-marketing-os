@@ -91,6 +91,14 @@ def _review(conn, org, brand, campaign, review_id, recommendation_id):
     }
 
 
+def _active_ad(conn, org, brand, campaign, entity_id):
+    try:
+        ad = bindings.entity(conn, org, brand, campaign, entity_id)
+    except ValueError:
+        return False
+    return ad["native_kind"] == "ad" and ad["native_status"] == "ACTIVE"
+
+
 def create(conn, org, brand, campaign, payload, actor):
     changes.campaign(conn, org, brand, campaign)
     operation = changes.operation(payload["operation_id"])
@@ -118,14 +126,21 @@ def create(conn, org, brand, campaign, payload, actor):
         payload["revision"],
         payload["destination_entity_id"],
     )
+    reference = placement_reference(
+        conn, org, brand, campaign, payload["placement_id"], payload["revision"]
+    )
     replaces_entity_id = payload.get("replaces_entity_id")
     if replaces_entity_id is not None:
         old_ad = bindings.entity(conn, org, brand, campaign, replaces_entity_id)
         if old_ad["native_kind"] != "ad" or old_ad["native_status"] != "ACTIVE":
             raise ValueError("要取代的廣告必須是本活動目前正在投放中的廣告，請重新選擇。")
-    reference = placement_reference(
-        conn, org, brand, campaign, payload["placement_id"], payload["revision"]
-    )
+    elif reference.get("material_task_id"):
+        # Contract H: a "replace this ad" request carries its ad into the new-ad handoff. The
+        # default applies only while that ad still runs; a paused ad has nothing left to replace.
+        bound = material_tasks.get(conn, org, brand, campaign, reference["material_task_id"])
+        old_ad = (bound["replaces"] or {}).get("entity_id")
+        if old_ad and _active_ad(conn, org, brand, campaign, old_ad):
+            replaces_entity_id = old_ad
     explicit = _review(
         conn, org, brand, campaign, payload.get("review_id"), payload.get("recommendation_id")
     )
@@ -215,7 +230,7 @@ def placement_reference(conn, org, brand, campaign, placement_id, revision):
         raise ValueError("此素材安排有多個任務來源，無法確定檢討關係；請重新選定素材。")
     task_id = rows[0]["task_id"]
     conn.execute("SELECT id FROM ads_material_task WHERE id=%s FOR SHARE", (task_id,))
-    task = material_tasks.get(conn, org, brand, campaign, task_id)
+    task = material_tasks.open_task(conn, org, brand, campaign, task_id)
     source_revision = task.get("placement_revision")
     if (
         task.get("placement_id") != placement_id

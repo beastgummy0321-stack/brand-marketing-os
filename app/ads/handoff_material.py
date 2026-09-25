@@ -13,7 +13,7 @@ def reference(conn, org, brand, campaign, task_id, revision, items):
         "AND campaign_id=%s AND id=%s FOR SHARE",
         (org, brand, campaign, task_id),
     )
-    task = material_tasks.get(conn, org, brand, campaign, task_id)
+    task = material_tasks.open_task(conn, org, brand, campaign, task_id)
     if task["mode"] != "copy" or task["revision"] != revision:
         raise ValueError("素材文案版本已變更，請回素材選定目前版本後重新建立清單。")
     copy = task["copy_fields"]

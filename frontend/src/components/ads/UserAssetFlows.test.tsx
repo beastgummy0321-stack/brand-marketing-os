@@ -121,7 +121,7 @@ describe("placement and evidence UI", () => {
   it("imported empty groups still expose uploads and never require generated ads", async () => {
     render(<MemoryRouter><AssetsTab brandId="b1" campaign={campaign} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} /></MemoryRouter>);
     vi.mocked(materialApi.saveMaterialOperation).mockResolvedValue({ task: {
-      id: "task1", campaign_id: "c1", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [], limitations: [], created_at: "2026-09-19",
+      id: "task1", campaign_id: "c1", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [], limitations: [], created_at: "2026-09-19", replaces: null, cancelled_at: null,
     } });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /使用已有成品/ }));

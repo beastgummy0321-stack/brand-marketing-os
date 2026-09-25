@@ -5,11 +5,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import * as api from "@/lib/adsMaterialApi";
 import { MaterialTasksPanel } from "./MaterialTasksPanel";
 
-vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org" }));
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org", getAccessToken: async () => "test_token" }));
 vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof api>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
 vi.mock("./UserAssetsLibrary", () => ({ CopyEditor: () => <p>文案編輯</p>, UserAssetsLibrary: () => <p>品牌原檔</p> }));
 vi.mock("./AuthAssetMedia", () => ({ AuthAssetMedia: () => <p>原檔預覽</p> }));
-const task: api.MaterialTask = { id: "task_a", campaign_id: "campaign_a", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [{ revision: 1, content_hash: "a", created_at: "2026-09-19" }], limitations: [], created_at: "2026-09-19" };
+const task: api.MaterialTask = { id: "task_a", campaign_id: "campaign_a", revision: 1, title: "使用已有成品", mode: "existing", instruction: "", copy_fields: {}, prompt: { source: "none" }, reference_asset_ids: [], review_id: null, recommendation_id: null, review_context: null, content_hash: "a".repeat(64), candidates: [], selected_candidate_id: null, placement_id: null, placement_revision: null, placement_current: null, pack_id: null, dispatch_status: "not_requested", history: [{ revision: 1, content_hash: "a", created_at: "2026-09-19" }], limitations: [], created_at: "2026-09-19", replaces: null, cancelled_at: null };
 function page(brandId = "brand_a", query = "") { return <MemoryRouter initialEntries={[`/${query}`]}><MaterialTasksPanel brandId={brandId} campaignId="campaign_a" /></MemoryRouter>; }
 beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); vi.mocked(api.listMaterialTasks).mockResolvedValue({ tasks: [] }); vi.mocked(api.materialOptions).mockResolvedValue({ options: [] }); });
 
@@ -49,4 +49,22 @@ it("retains review provenance in the new material request", async () => {
 
 it("serializes a selected workbench prompt without trusting echoed text", () => {
   expect(api.promptInput({ source: "workbench", text: "browser altered", set_id: "s", version_id: "v", card_index: 1 })).toEqual({ source: "workbench", set_id: "s", version_id: "v", card_index: 1 });
+});
+
+it("raises a one-click replace request and cancels by id without a request body", async () => {
+  const replaced = { ...task, mode: "workbench_image" as const, title: "換掉：舊廣告", replaces: { entity_id: "aex_1", name: "舊廣告", thumbnail_url: null } };
+  const fetchMock = vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(new Response(JSON.stringify({ task: replaced }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: "material_task_in_use", message: "此素材需求已被核准的變更清單採用，不能取消。" } }), { status: 409 }));
+  try {
+    const { task: saved } = await api.createReplaceRequest("brand_a", "campaign_a", "aex_1", "op_1");
+    expect(saved.replaces?.entity_id).toBe("aex_1");
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe(api.materialPath("brand_a", "campaign_a"));
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ operation_id: "op_1", replaces_entity_id: "aex_1" });
+    await expect(api.cancelMaterialTask("brand_a", "campaign_a", "task_a")).rejects.toMatchObject({ status: 409, message: "此素材需求已被核准的變更清單採用，不能取消。" });
+    expect(fetchMock.mock.calls[1][0]).toBe(`${api.materialPath("brand_a", "campaign_a")}/task_a/cancel`);
+    expect(fetchMock.mock.calls[1][1]?.body).toBeUndefined();
+  } finally { fetchMock.mockRestore(); }
 });
