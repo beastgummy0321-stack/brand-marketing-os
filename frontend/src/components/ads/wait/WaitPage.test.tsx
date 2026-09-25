@@ -81,6 +81,7 @@ function triage(overrides: Partial<CampaignTriage> = {}): CampaignTriage {
       sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
       coverage: { start: "2026-08-25", end: "2026-09-19" },
       missing_days: [],
+      status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-19T14:40:00+00:00" },
     },
     ...overrides,
   };
@@ -130,6 +131,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "disconnected", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: ["2026-09-17", "2026-09-18"],
+        status: { state: "disconnected", label: "廣告帳號已中斷連線，讀不到新資料。", missing_days: ["2026-09-17", "2026-09-18"], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -152,6 +154,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "auth_expired", error: "拒絕存取", last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: ["2026-09-17", "2026-09-18"],
+        status: { state: "auth_expired", label: "平台授權已過期，重新連線後才能讀資料。", missing_days: ["2026-09-17", "2026-09-18"], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -175,6 +178,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -194,6 +198,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -211,6 +216,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -226,6 +232,7 @@ describe("WaitPage（F24-I03）事實列", () => {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
         coverage: { start: "2026-08-25", end: "2026-09-19" },
         missing_days: [],
+        status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-19T14:40:00+00:00" },
       },
     }));
     renderPage();
@@ -251,7 +258,10 @@ describe("WaitPage（F24-I03）頭部提示", () => {
 
   it("never 顯示「尚未同步」，按鈕仍可按", async () => {
     mockGetTriage.mockResolvedValue(triage({
-      data: { sync: { state: "never", error: null, last_success_at: null }, coverage: null, missing_days: [] },
+      data: {
+        sync: { state: "never", error: null, last_success_at: null }, coverage: null, missing_days: [],
+        status: { state: "never", label: "還沒讀過平台資料。", missing_days: [], last_success_at: null },
+      },
     }));
     renderPage();
     await screen.findByText("資料不足，這個活動先不判斷");

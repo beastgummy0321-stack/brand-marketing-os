@@ -550,7 +550,9 @@ class TriageDataViewTest(unittest.TestCase):
             self.data(), {"sync": {"state": "never", "error": None, "last_success_at": None},
                           "coverage": None, "missing_days": [],
                           "capacity": {"daily_budget": None, "currency": None, "target": None,
-                                       "can_support": None, "active_ads": 0}},
+                                       "can_support": None, "active_ads": 0},
+                          "status": {"state": "never", "label": "還沒讀過平台資料。",
+                                     "missing_days": [], "last_success_at": None}},
         )
 
     def test_ok(self):

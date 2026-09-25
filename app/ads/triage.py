@@ -113,10 +113,21 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     # never a second, divergent "active ad" query.
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     capacity = triage_capacity.capacity_view(items, target["value"], owner_by_entity)
+    data = _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity)
+    # F29 Contract D: the one data status, over the same judged window `missing_days` covers and
+    # the rows this call already read (never a second query).
+    window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
+    data["status"] = repository.campaign_data_status(
+        conn, org_id, brand_id, campaign, sync=data["sync"], missing_days=data["missing_days"],
+        has_rows=any(
+            window_start <= row["day"] <= cutoff
+            for entity_rows in rows_by_entity.values() for row in entity_rows
+        ),
+    )
     return {
         "window_days": WINDOW_STEPS[-1], "items": items,
         "closed": _closed_block(closed_ads, rows_by_entity, cutoff),
-        "data": _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity),
+        "data": data,
     }
 
 

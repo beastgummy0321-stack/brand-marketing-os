@@ -114,6 +114,16 @@ export interface TriageItem {
   // (`app/ads/triage.py::classify`).
   campaign_objective?: CampaignObjectiveFamily;
 }
+/** F29 Contract D (`app/ads/repository.py::campaign_data_status`): one per-campaign data state for
+ * the window the caller judged — triage `data.status` and home rows `data_status` are the same
+ * function. A broken sync (`never`／`disconnected`／`auth_expired`／`failed`／`syncing`) wins over a
+ * gap; `partial` = a day of the window was never read; `no_rows` = every day read, nothing spent.
+ * `label` is one plain sentence to show as is; `missing_days` are the window's unread days. */
+export type CampaignDataState =
+  | "ready" | "partial" | "no_rows" | "syncing" | "never" | "disconnected" | "auth_expired" | "failed";
+export interface CampaignDataStatus {
+  state: CampaignDataState; label: string; missing_days: string[]; last_success_at: string | null;
+}
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
  * `coverage` is this campaign's own recorded sync coverage, `null` when never synced.
@@ -124,6 +134,8 @@ export interface TriageData {
   sync: CampaignSyncState;
   coverage: { start: string; end: string } | null;
   missing_days: string[];
+  /** F29 Contract D: the one "has data / why not" state of this window (`campaign_data_status`). */
+  status: CampaignDataStatus;
   // F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict `CampaignData
   // .capacity` (`adsApi.ts`) notes -- existing hand-written `data: {sync, coverage, missing_days}`
   // fixtures (`CampaignCards.test.tsx`/`WaitPage.test.tsx`) can't be reached to add it. Real
@@ -317,6 +329,9 @@ export interface QueuePayload {
 
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
+  /** F29 Contract D: 成本含運 (unit cost incl. shipping) from the same product economics row as
+   * `break_even`, so price − cost = break-even; null unless the result is a purchase and it is known. */
+  cost: number | null;
 }
 export interface TargetRequest {
   result_kind?: string | null; basis?: CapBasis | null;

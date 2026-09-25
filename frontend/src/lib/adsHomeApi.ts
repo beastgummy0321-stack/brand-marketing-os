@@ -13,9 +13,17 @@
  *   `previous_same_period.days` is that many days at the start of the previous month. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow, type CampaignStatus, type CampaignSyncState } from "./adsApi";
-import type { CapBasis, TriageGrade } from "./adsTriageApi";
+import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
 
-export interface HomeCap { value: number; basis: CapBasis | null }
+/** F29 Contract D: `break_even` beside the cap (null when no product break-even is known; on
+ * `money.cap` only when every included campaign shares the same one). */
+export interface HomeCap { value: number; basis: CapBasis | null; break_even: number | null }
+
+/** F29 Contract D: where a campaign's approved change stands. `platform` = the newest approved
+ * set or the approved launch still has an item not done on the platform; `check` = done, the
+ * readback has not confirmed it (reported／unknown／deviated). null = all confirmed, or the launch
+ * went stale (the stale-launch exit owns that). */
+export interface HomeHandoff { state: "platform" | "check"; change_set_id: string }
 
 export type HomeEarnMissing =
   | "product" | "product_cost" | "spend" | "purchases" | "no_purchase_campaign";
@@ -86,6 +94,9 @@ export interface HomeCampaign {
   daily_budget: number | null;
   missing_days: string[];
   sync_state: CampaignSyncState["state"];
+  /** This month (up to yesterday); the same function as triage `data.status`. */
+  data_status: CampaignDataStatus;
+  handoff: HomeHandoff | null;
   draft: HomeDraft | null;
 }
 

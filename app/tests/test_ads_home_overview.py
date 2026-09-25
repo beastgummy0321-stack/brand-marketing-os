@@ -192,7 +192,7 @@ class OneSpentTest(_Pinned):
         # buy: 1650 spend / 3 purchases; old (closed, purchase): 50 spend / 0 purchases.
         self.assertEqual(money["purchases"], 3)
         self.assertEqual(money["cost_per_purchase"], round(1700 / 3, 2))
-        self.assertEqual(money["cap"], {"value": 250, "basis": "own"})
+        self.assertEqual(money["cap"], {"value": 250, "basis": "own", "break_even": 300})
         self.assertEqual(money["earn"], 3 * 300 - 1700)
         self.assertEqual(money["earn_missing"], [])
         self.assertEqual(money["excluded"], [
@@ -207,7 +207,7 @@ class OneSpentTest(_Pinned):
         self.assertEqual(buy["month_spend"], 1650)
         self.assertEqual(buy["purchases"], 3)
         self.assertEqual(buy["cost_per_purchase"], 550)
-        self.assertEqual(buy["cap"], {"value": 250, "basis": "own"})
+        self.assertEqual(buy["cap"], {"value": 250, "basis": "own", "break_even": 300})
         self.assertEqual(buy["active_ads"], 2)
         self.assertIsNone(buy["draft"])
         self.assertEqual(buy["origin"], "imported")
@@ -278,7 +278,7 @@ class CounterexampleTest(_Pinned):
         self.assertEqual(money["purchases"], 0)
         self.assertIsNone(money["cost_per_purchase"])
         self.assertEqual(money["earn"], -120)
-        self.assertEqual(money["cap"], {"value": 300, "basis": "break_even"})
+        self.assertEqual(money["cap"], {"value": 300, "basis": "break_even", "break_even": 300})
 
     def test_null_spend_day_nulls_spent_but_not_other_campaigns(self):
         conn, org, brand = self.conn, self.org, self.brand
