@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
 from app.ads import tracked_zero
-from app.ads.adapters.external import SourcePage
+from app.ads.adapters.external import SourcePage, SourceReadError
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 
@@ -627,6 +627,30 @@ class ExternalSyncTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "解除"):
             sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+
+    def test_month_reset_carries_the_last_covered_range(self):
+        """F30-I14: resetting a month task for the next read keeps the range the last good read
+        proved, while the new read is in flight and after it fails."""
+        month = "monthly:" + settings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
+        done = self.run_pages(
+            sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        )
+        task = done["tasks"][month]
+        self.assertEqual(task["status"], "succeeded")
+        self.assertNotIn("last_covered", task)
+        proof = {"start": task["start"], "end": task["end"], "completed_at": task["completed_at"]}
+
+        job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        self.assertEqual(job["tasks"][month]["status"], "pending")
+        self.assertEqual(job["tasks"][month]["last_covered"], proof)
+
+        refused = SourceReadError("沒有讀取權限", "permission_denied")
+        with patch.object(self.reader, "read_monthly", side_effect=refused):
+            failed = self.run_pages(job)["tasks"][month]
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["last_covered"], proof)
+        again = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        self.assertEqual(again["tasks"][month]["last_covered"], proof)
 
     def test_requests_merge_and_jobs_remain_brand_scoped(self):
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")

@@ -36,6 +36,17 @@ def _enqueue(job):
         )
 
 
+def _last_covered(old):
+    """F30-I14: the last range a month task finished reading, carried across the reset below so
+    the days it proved stay provable while the next read runs or after it fails. A succeeded task
+    is its own proof; otherwise the proof it already carried survives."""
+    if not old:
+        return None
+    if old.get("status") == "succeeded" and old.get("start") and old.get("end"):
+        return {"start": old["start"], "end": old["end"], "completed_at": old.get("completed_at")}
+    return old.get("last_covered")
+
+
 def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None):
     account_reader(conn, org_id, brand_id, platform, source_account)
     today = settings.today_for_org(conn, org_id=org_id)
@@ -115,6 +126,9 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "error_code": None,
             "attempts": 0,
         }
+        covered = _last_covered(old) if task["section"] == "monthly" else None
+        if covered:
+            tasks[key]["last_covered"] = covered
     conn.execute(
         "UPDATE ads_external_sync_job SET "
         "tasks=%s,status='pending',error=NULL,updated_at=now() WHERE id=%s",
