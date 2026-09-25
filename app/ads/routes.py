@@ -716,6 +716,9 @@ _PUBLISH_ERRORS = {
     # F29 Contract I (`launch_settings_malformed` never reaches publish: only the settings PUT).
     "launch_settings_invalid": (409, "投放設定還有要改的地方（例如 UTM 格式），改好再核准。"),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
+    # F30: a campaign and its ad sets alone are not a launch.
+    "launch_no_ready_ads": (
+        409, "還沒有任何一則廣告的素材就緒；至少一則素材確認後才能核准上架。"),
 }
 
 

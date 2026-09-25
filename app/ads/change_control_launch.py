@@ -2,9 +2,7 @@
 
 import json
 
-from app import workbench
 from app.ads import (
-    assets,
     change_control,
     handoff_assignment,
     launch_settings,
@@ -26,10 +24,38 @@ _PLAN_SETTING_KEYS = frozenset(
 )
 
 
-def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
+def ready_material(material) -> bool:
+    """F30 Unresolved 1: a planned ad goes out in a launch batch only with a confirmed material
+    (the same "ready" the assets slots show). The rule lives here, in the shared launch core --
+    a future automatic publish cannot create an ad without a creative either."""
+    return bool(material) and material.get("assignment_status") == "confirmed"
+
+
+def _launched_ads(conn, org, brand, campaign_id):
+    """Planned ads some approved launch version (current or superseded) already handed off."""
+    return {
+        r["planned_id"]
+        for r in conn.execute(
+            "SELECT DISTINCT h.planned_id FROM ads_handoff_item h JOIN ads_change_set c "
+            "ON c.id=h.change_set_id AND c.org_id=h.org_id AND c.brand_id=h.brand_id "
+            "AND c.campaign_id=h.campaign_id WHERE h.org_id=%s AND h.brand_id=%s "
+            "AND h.campaign_id=%s AND h.planned_kind='ad' AND c.plan_json ? 'launch_snapshot' "
+            "AND c.status IN ('approved','superseded')",
+            (org, brand, campaign_id),
+        ).fetchall()
+    }
+
+
+def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred=None):
+    """The launch content an approval freezes. An ad joins the batch once its material is
+    ready; until then it stays in the plan and, when `deferred` is a list, is appended to it as
+    `{ad_id, name, group_name}` -- it goes out with a later launch version. An ad an approved
+    version already handed off never leaves the batch: an invalid material keeps F28's rule
+    (shown in the diff, re-approval refused until it is re-assigned)."""
     campaign = campaigns.campaign_detail(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
+    launched = _launched_ads(conn, org, brand, campaign_id)
     fields = (
         "id",
         "name",
@@ -43,13 +69,22 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
     )
     result = {key: campaign.get(key) for key in fields}
     result["month"] = settings.today_for_org(conn, org_id=org).strftime("%Y-%m")
-    result["groups"] = [
-        {
-            **{
-                key: group.get(key)
-                for key in ("id", "name", "daily_budget", "start_date", "end_date", "external_id")
-            },
-            "ads": [
+    result["groups"] = []
+    for group in campaign["groups"]:
+        ads = []
+        for ad in group.get("ads", []):
+            material = handoff_assignment.material_snapshot(conn, org, brand, campaign_id, ad)
+            if not ready_material(material) and ad["id"] not in launched:
+                if deferred is not None:
+                    deferred.append(
+                        {"ad_id": ad["id"], "name": ad["name"], "group_name": group["name"]}
+                    )
+                continue
+            if validate_material:
+                material = handoff_assignment.material_snapshot(
+                    conn, org, brand, campaign_id, ad, validate=True
+                )
+            ads.append(
                 {
                     **{
                         key: ad.get(key)
@@ -62,15 +97,25 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
                             "image_prompt_text",
                         )
                     },
-                    "material_assignment": handoff_assignment.material_snapshot(
-                        conn, org, brand, campaign_id, ad, validate=validate_material
-                    ),
+                    "material_assignment": material,
                 }
-                for ad in group.get("ads", [])
-            ],
-        }
-        for group in campaign["groups"]
-    ]
+            )
+        result["groups"].append(
+            {
+                **{
+                    key: group.get(key)
+                    for key in (
+                        "id",
+                        "name",
+                        "daily_budget",
+                        "start_date",
+                        "end_date",
+                        "external_id",
+                    )
+                },
+                "ads": ads,
+            }
+        )
     result["manual_settings"] = [
         {
             "id": group["id"],
@@ -81,52 +126,9 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False):
     # F29 Contract I: the launch settings are part of the frozen launch content (an edit after
     # approval makes the launch stale). Never a platform read here.
     result["launch_settings"] = launch_settings.effective(conn, org, brand, campaign)
-    source_ref = {"ads_campaign_id": campaign_id}
-    legacy_ads = {
-        ad["id"]: ad
-        for group in result["groups"]
-        for ad in group["ads"]
-        if not ad["material_assignment"]
-    }
+    # Workbench outputs were frozen for ads without an assigned material; such an ad is never in
+    # a batch now (F30 Unresolved 1), so none remain. The key stays for the snapshot's shape.
     result["outputs"] = []
-    # Match the manual checklist's selected brief for each unassigned planned ad.
-    briefs_by_ad = {
-        (brief.get("source_ref") or {}).get("ads_ad_id"): brief
-        for brief in workbench.briefs_for_source(
-            conn, org, brand, assets.PACK_SOURCE_KIND, source_ref
-        )
-        if (brief.get("source_ref") or {}).get("ads_ad_id") in legacy_ads
-    }
-    for ad_id, ad in legacy_ads.items():
-        brief = briefs_by_ad.get(ad_id)
-        if brief is None:
-            continue
-        for part in ("copy", "image_prompt"):
-            output = workbench.adopted_output(conn, org, brand, brief["id"], part)
-            if not output:
-                continue
-            body = output.get("body_json") or {}
-            if part == "copy":
-                cards = body.get("sets")
-                text = (
-                    cards[0].get("body")
-                    if (isinstance(cards, list) and cards and isinstance(cards[0], dict))
-                    else None
-                )
-            else:
-                text = body.get("text") if output.get("is_adopted") else None
-            if not isinstance(text, str) or not text:
-                continue
-            ad["copy_text" if part == "copy" else "image_prompt_text"] = text
-            result["outputs"].append(
-                {
-                    "ad_id": ad_id,
-                    "brief_id": brief["id"],
-                    "part": part,
-                    "id": output["id"],
-                    "text": text,
-                }
-            )
     return result
 
 
@@ -215,6 +217,16 @@ def _approve_set(
     return set_id, item
 
 
+def _refuse_no_ready_ads(frozen):
+    """409 `launch_no_ready_ads`: a campaign and its ad sets alone are not a launch (F30)."""
+    if not any(
+        ready_material(ad.get("material_assignment"))
+        for group in frozen["groups"]
+        for ad in group.get("ads") or []
+    ):
+        raise ValueError("launch_no_ready_ads")
+
+
 def _refuse_invalid_settings(conn, org, brand, campaign_id, frozen):
     """409 `launch_settings_invalid` while the frozen launch settings carry an error (Contract I).
     The pixel check uses the campaign's cached pixel list: approval never waits on a platform."""
@@ -254,6 +266,7 @@ def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
             return {"ok": True, "change_set_id": prior["id"]}
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
         _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
+        _refuse_no_ready_ads(frozen)
         content_hash = data.digest(frozen)
         if expected_hash != content_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
@@ -355,7 +368,9 @@ def _material_label(value):
     if not value:
         return None
     text = f"{value.get('filename') or '素材'}・第 {value.get('placement_revision')} 版"
-    return text if value.get("assignment_status") == "confirmed" else text + "（已修訂或未確認）"
+    if value.get("assignment_status") == "confirmed":
+        return text
+    return text + "（已修訂或未確認，需重新指派素材）"
 
 
 def _outputs(value):
@@ -615,13 +630,30 @@ def is_stale(conn, org, brand, campaign_id):
     return _compare(change_set, snapshot(conn, org, brand, campaign_id))[1] is not None
 
 
-def stale(conn, org, brand, campaign_id):
+def material_frozen(conn, org, brand, campaign_id, ad_id) -> bool:
+    """True when the current approved launch froze this planned ad's material and the plan has
+    not changed since -- the only case a material assignment must be refused. An ad deferred
+    from the batch (F30 Unresolved 1) is not frozen: it gets its material, the launch goes stale,
+    and the re-approval is the later version that takes it out."""
+    change_set = launch_set(conn, org, brand, campaign_id)
+    if change_set is None:
+        return False
+    frozen_ids = {
+        ad["id"]
+        for group in change_set["plan_json"]["launch_snapshot"].get("groups") or []
+        for ad in group.get("ads") or []
+    }
+    return ad_id in frozen_ids and not is_stale(conn, org, brand, campaign_id)
+
+
+def stale(conn, org, brand, campaign_id, *, current=None):
     """`launch_stale` of `GET …/handoff`, computed on read; None while the approved launch still
-    matches the plan (or there is no approved launch)."""
+    matches the plan (or there is no approved launch). `current` is the plan's snapshot when the
+    caller already built it."""
     change_set = launch_set(conn, org, brand, campaign_id)
     if change_set is None:
         return None
-    frozen = snapshot(conn, org, brand, campaign_id)
+    frozen = current if current is not None else snapshot(conn, org, brand, campaign_id)
     original, rows = _compare(change_set, frozen)
     if rows is None:
         return None
@@ -714,6 +746,7 @@ def reapprove(conn, org, brand, campaign_id, set_id, expected_hash, actor):
         old = _current_launch(conn, org, brand, campaign_id, set_id)
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
         _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
+        _refuse_no_ready_ads(frozen)
         if data.digest(frozen) != expected_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
         if _compare(old, frozen)[1] is None:

@@ -124,6 +124,14 @@ class HandoffTest(unittest.TestCase):
         }
 
     def launch(self):
+        # Only an ad with ready material is in a launch batch (F30 Unresolved 1).
+        ad = campaigns.get_ad(self.conn, self.org, self.brand, self.ad)
+        if ad["material_placement_id"] is None:
+            from app.ads import handoff_assignment
+
+            handoff_assignment.assign(
+                self.conn, self.org, self.brand, self.campaign, self.ad, self.placement()["id"], 1
+            )
         frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         with patch.object(
             change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
@@ -247,7 +255,7 @@ class HandoffTest(unittest.TestCase):
         self.assertTrue(group["evidence_json"]["unknown_fields"])
         ad = self.check(nodes["ad"], "ad", "B2", user_verified=True)
         self.assertTrue(ad["entity_exists"], ad["evidence_json"])
-        self.assertEqual(ad["status"], "unknown")
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
         current = campaigns.campaign_detail(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(current["id"], self.campaign)
         self.assertEqual(current["origin"], "internal")
@@ -976,7 +984,7 @@ class HandoffTest(unittest.TestCase):
         blocked = client.put(base + "/" + self.ad, json={"placement_id": None, "revision": None})
         self.assertEqual(blocked.status_code, 409)
 
-    def test_planned_material_stale_revision_is_visible_and_cannot_be_approved(self):
+    def test_planned_material_stale_revision_is_visible_and_defers_the_ad(self):
         from app.ads import handoff_assignment
 
         placement = self.placement()
@@ -1000,7 +1008,9 @@ class HandoffTest(unittest.TestCase):
         self.assertFalse(any(p["id"] == placement["id"] for p in workspace["ready_placements"]))
         handoff = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
         self.assertFalse(any(p["id"] == placement["id"] for p in handoff["ready_placements"]))
-        with self.assertRaisesRegex(ValueError, "尚未確認或已修訂"):
+        # Never approved, the revised material is not ready: the ad now waits outside the batch
+        # (F30 Unresolved 1), which leaves no ready ad -- not a launch.
+        with self.assertRaisesRegex(ValueError, "launch_no_ready_ads"):
             change_control_launch.publish(
                 self.conn,
                 self.org,
@@ -1010,6 +1020,11 @@ class HandoffTest(unittest.TestCase):
                 db.new_id("op"),
                 change_control_data.digest(old),
             )
+        deferred = []
+        change_control_launch.snapshot(
+            self.conn, self.org, self.brand, self.campaign, deferred=deferred
+        )
+        self.assertEqual([d["ad_id"] for d in deferred], [self.ad])
         cleared = handoff_assignment.assign(
             self.conn, self.org, self.brand, self.campaign, self.ad, None, None
         )
@@ -1060,7 +1075,7 @@ class HandoffTest(unittest.TestCase):
         self.conn.rollback()
         self.assertNotEqual(other, self.campaign)
 
-    def test_launch_hash_ignores_unused_placements_and_assigned_ads_workbench_outputs(self):
+    def test_launch_hash_ignores_unused_placements(self):
         from app.ads import handoff_assignment
 
         selected = self.placement()
@@ -1080,45 +1095,17 @@ class HandoffTest(unittest.TestCase):
             "human",
         )
         self.conn.commit()
-        briefs = [
-            {"id": "unused-brief", "source_ref": {"ads_ad_id": self.ad}},
-            {"id": "unrelated-brief", "source_ref": {"ads_ad_id": "not-a-planned-ad"}},
-        ]
-        with (
-            patch.object(change_control_launch.workbench, "briefs_for_source", return_value=briefs),
-            patch.object(change_control_launch.workbench, "adopted_output") as output,
-        ):
-            after = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
-        output.assert_not_called()
+        after = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(change_control_data.digest(before), change_control_data.digest(after))
 
-    def test_launch_hash_retains_only_unassigned_ads_actual_legacy_output(self):
-        briefs = [
-            {"id": "selected-brief", "source_ref": {"ads_ad_id": self.ad}},
-            {"id": "unused-brief", "source_ref": {"ads_ad_id": "other-ad"}},
-        ]
-        output = {"id": "selected-output", "body_json": {"sets": [{"body": "採用文案"}]}}
-
-        def adopted(_conn, _org, _brand, brief_id, part):
-            self.assertEqual(brief_id, "selected-brief")
-            return output if part == "copy" else None
-
-        with (
-            patch.object(change_control_launch.workbench, "briefs_for_source", return_value=briefs),
-            patch.object(change_control_launch.workbench, "adopted_output", side_effect=adopted),
-        ):
-            before = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
-            self.assertEqual(before["groups"][0]["ads"][0]["copy_text"], "採用文案")
-            self.assertEqual(len(before["outputs"]), 1)
-            output["body_json"]["sets"].append({"body": "清單未使用的其他卡片"})
-            unrelated = change_control_launch.snapshot(
-                self.conn, self.org, self.brand, self.campaign
-            )
-            self.assertEqual(
-                change_control_data.digest(before), change_control_data.digest(unrelated)
-            )
-            output["body_json"]["sets"][0]["body"] = "新的採用文案"
-            changed = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
-            self.assertNotEqual(
-                change_control_data.digest(before), change_control_data.digest(changed)
-            )
+    def test_an_ad_without_ready_material_is_deferred_from_the_batch(self):
+        # F30 Unresolved 1: no workbench output or copy stands in for the material any more.
+        deferred = []
+        frozen = change_control_launch.snapshot(
+            self.conn, self.org, self.brand, self.campaign, deferred=deferred
+        )
+        self.assertEqual(frozen["groups"][0]["ads"], [])
+        self.assertEqual(frozen["outputs"], [])
+        self.assertEqual(
+            deferred, [{"ad_id": self.ad, "name": "原廣告", "group_name": "計畫投放組"}]
+        )

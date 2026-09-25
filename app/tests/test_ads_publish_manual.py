@@ -20,8 +20,17 @@ import uuid
 from unittest import mock
 
 import app.shared.web as web
-from app.ads import adapters, assets, change_control_data, change_control_launch, plan, routes
+from app.ads import (
+    adapters,
+    assets,
+    change_control_data,
+    change_control_launch,
+    handoff_assignment,
+    plan,
+    routes,
+)
 from app.ads import repository as ads_repo
+from app.ads import user_assets_repository as user_assets
 from app.ads.adapters import manual as manual_adapter
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
@@ -85,6 +94,29 @@ class PublishTestBase(unittest.TestCase):
                 actor=ACTOR, operation_id=str(uuid.uuid4()), content_hash=content_hash)
         self.assertEqual(preflight.call_args.args[4][0]["kind"], "launch")
         return result
+
+    def _ready_material(self, detail: dict) -> dict:
+        """A confirmed material on the first planned ad: a launch needs at least one ad whose
+        material is ready (F30, `launch_no_ready_ads`)."""
+        asset = coredb.new_id("aua")
+        web.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'ad.png','image/png',1,'ready')",
+            (asset, self.org_id, self.brand_id, asset, f"{self.org_id}/{asset}"),
+        )
+        placement = user_assets.attach(
+            web.conn, self.org_id, self.brand_id, detail["id"], asset, {"body": "文案"}, ACTOR,
+        )
+        web.conn.execute(
+            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by=%s WHERE id=%s",
+            (ACTOR, placement["id"]),
+        )
+        web.conn.commit()
+        handoff_assignment.assign(
+            web.conn, self.org_id, self.brand_id, detail["id"],
+            detail["groups"][0]["ads"][0]["id"], placement["id"], 1,
+        )
+        return detail
 
     def _create_campaign(self, *, start_date: str | None = "2026-10-01",
                           end_date: str | None = "2026-10-14",
@@ -297,6 +329,7 @@ class AutoMetaAdapterTest(PublishTestBase):
 class PublishWritesOneApprovalTest(PublishTestBase):
     def test_missing_approval_hash_and_unknown_budget_cannot_bypass_new_boundary(self):
         detail = self._adopted_campaign()
+        self._ready_material(detail)
         with self.assertRaisesRegex(ValueError, "重新檢視"):
             manual_adapter.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
         content_hash = change_control_data.digest(change_control_launch.snapshot(
@@ -309,6 +342,7 @@ class PublishWritesOneApprovalTest(PublishTestBase):
 
     def test_launch_lost_response_replays_same_atomic_approval_and_action(self):
         detail = self._adopted_campaign()
+        self._ready_material(detail)
         content_hash = change_control_data.digest(change_control_launch.snapshot(
             web.conn, self.org_id, self.brand_id, detail["id"]))
         with mock.patch.object(change_control_launch.month_budget, "preflight", return_value={}):
@@ -326,6 +360,7 @@ class PublishWritesOneApprovalTest(PublishTestBase):
 
     def test_one_manual_publish_writes_exactly_one_approval_row(self):
         detail = self._adopted_campaign()
+        self._ready_material(detail)
         daily_sum = ads_repo.group_budget_total(web.conn, self.org_id, self.brand_id, detail["id"])
 
         self._publish_with_isolated_budget_evidence(detail["id"])
@@ -344,6 +379,7 @@ class PublishWritesOneApprovalTest(PublishTestBase):
         # 天數），所以「沒有排期的 Campaign」是採用之後才清掉日期——bound 之前
         # `local_state == 'unbound'`，PATCH 一路都能改日期（F03-I19 才凍結，見票面）。
         detail = self._adopted_campaign()
+        self._ready_material(detail)
         ads_repo.update_campaign(
             web.conn, self.org_id, self.brand_id, detail["id"],
             {"start_date": None, "end_date": None},
@@ -362,7 +398,7 @@ class PublishWritesOneApprovalTest(PublishTestBase):
 
 class CrossCampaignApprovalTest(PublishTestBase):
     def test_campaign_bs_budget_edit_is_judged_by_bs_own_approval_not_as(self):
-        campaign_a = self._adopted_campaign()
+        campaign_a = self._ready_material(self._adopted_campaign())
         campaign_b = self._adopted_campaign()
 
         self._publish_with_isolated_budget_evidence(campaign_a["id"])
