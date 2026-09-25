@@ -19,6 +19,10 @@ import {
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { usePagination } from "@/lib/usePagination";
 
+/** Every format `app/orders/dispatch.import_dropped_file` accepts; one string so the empty
+ * states and the import panel cannot drift apart (the Meta ads CSV path was removed there). */
+const IMPORT_FORMATS = "EasyStore 訂單匯出（.xlsx）或蝦皮賣家中心報表（.csv）";
+
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -98,7 +102,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
     const missingCosts = summary.sku_margins.filter((item) => item.unit_cost === null).length;
     const customerCount = summary.new_customers + summary.existing_customers;
     content = <>
-      {tab === "overview" && (noData ? <div className="surface"><EmptyState title="還沒有訂單資料" description="匯入 EasyStore 訂單匯出檔後，即可查看實收營收、訂單與顧客統計。" actionLabel="匯入訂單檔" onAction={() => setPanel({ kind: "import" })} /></div> : <>
+      {tab === "overview" && (noData ? <div className="surface"><EmptyState title="還沒有訂單資料" description={`匯入${IMPORT_FORMATS}後，即可查看實收營收、訂單與顧客統計。`} actionLabel="匯入訂單檔" onAction={() => setPanel({ kind: "import" })} /></div> : <>
         <div className="grid grid-cols-5 gap-3">
           <Metric label="實收營收" value={formatCurrency(summary.net_revenue)} />
           <Metric label="訂單數" value={displayNumber(summary.order_count)} />
@@ -135,7 +139,7 @@ export function OrdersPage({ brandId }: { brandId: string }) {
       {tab === "orders" && <section className="surface">
         <div className="surface-header"><h2>最近訂單</h2><span className="text-xs text-muted-foreground">共 {orders.total} 筆</span></div>
         <div className="surface-body">
-          {orders.items.length === 0 ? <EmptyState title="目前沒有訂單" description="匯入訂單檔後，即可在這裡查看訂單明細。" actionLabel="匯入訂單檔" onAction={() => setPanel({ kind: "import" })} /> : <>
+          {orders.items.length === 0 ? <EmptyState title="目前沒有訂單" description={`匯入${IMPORT_FORMATS}後，即可在這裡查看訂單明細。`} actionLabel="匯入訂單檔" onAction={() => setPanel({ kind: "import" })} /> : <>
             <Table><thead><tr><Header>訂單編號</Header><Header>日期</Header><Header>金額</Header><Header>訂單狀態</Header><Header>優惠碼</Header></tr></thead><tbody>{orders.items.map((item) => <tr key={item.id} className="border-t border-border"><Cell>{item.order_number}</Cell><Cell>{item.order_date ?? "—"}</Cell><Cell>{formatCurrency(item.total_amount)}</Cell><Cell><Badge variant="outline">{item.order_status ?? "—"}</Badge></Cell><Cell>{item.voucher_code ?? "—"}</Cell></tr>)}</tbody></Table>
             <div className="mt-4"><Pager page={orders.page} pageCount={Math.ceil(orders.total / orders.page_size)} totalCount={orders.total} onChange={load} /></div>
           </>}
@@ -194,7 +198,7 @@ type PanelProps = { brandId: string; onClose: () => void; onSaved: (message: str
 function ImportPanel({ brandId, onClose, onSaved }: PanelProps) {
   const [file, setFile] = useState<File | null>(null);
   const form = useFormSubmit(async () => { if (!file) throw new Error("請先選擇檔案。"); onSaved(await importOrdersFile(brandId, file)); });
-  return <PanelShell title="匯入訂單檔" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">檔案</span><span className="w-fit cursor-pointer rounded-md border border-border bg-card px-4 py-2 font-medium text-foreground hover:bg-muted">選擇檔案</span><Input type="file" accept=".xlsx,.xlsm,.csv,text/csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="sr-only" /></label><div onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFile(event.dataTransfer.files[0] ?? null); }} className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{file ? `已選擇：${file.name}` : "把檔案拖到這裡"}<p className="mt-2">EasyStore 訂單匯出（.xlsx）、蝦皮報表、Meta 廣告 CSV 都丟這裡，系統自動認格式。</p></div><FormError message={form.error} /><SubmitButton saving={form.saving} label="開始匯入" pendingLabel="匯入中…" /></form></PanelShell>;
+  return <PanelShell title="匯入訂單檔" onClose={onClose}><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); void form.submit(); }}><label className="flex flex-col gap-1 text-sm"><span className="font-medium text-foreground">檔案</span><span className="w-fit cursor-pointer rounded-md border border-border bg-card px-4 py-2 font-medium text-foreground hover:bg-muted">選擇檔案</span><Input type="file" accept=".xlsx,.xlsm,.csv,text/csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} className="sr-only" /></label><div onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFile(event.dataTransfer.files[0] ?? null); }} className="rounded-md border border-dashed border-border p-5 text-center text-sm text-muted-foreground">{file ? `已選擇：${file.name}` : "把檔案拖到這裡"}<p className="mt-2">{IMPORT_FORMATS}都丟這裡，系統自動認格式。</p></div><FormError message={form.error} /><SubmitButton saving={form.saving} label="開始匯入" pendingLabel="匯入中…" /></form></PanelShell>;
 }
 
 function SkuCostPanel({ brandId, sku, onClose, onSaved }: PanelProps & { sku: string }) {

@@ -95,6 +95,7 @@ export function EconomicsPanel({
               onChange={(e) => setFixedCost(e.target.value)}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
+            <span className="text-xs text-muted-foreground">每月不管賣幾件都要付的錢。</span>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">單位變動成本</span>
@@ -108,6 +109,7 @@ export function EconomicsPanel({
               }}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
+            <span className="text-xs text-muted-foreground">每賣一件多花的錢。</span>
           </label>
         </div>
         <label className="flex flex-col gap-1 text-sm">
