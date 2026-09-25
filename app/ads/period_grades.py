@@ -81,7 +81,9 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
     out = []
     for entity_id in spent_ids:
         entity = entities.get(entity_id)
-        campaign = campaigns.get(entity["campaign_id"]) if entity else None
+        if entity is None:
+            continue
+        campaign = campaigns.get(entity["campaign_id"])
         if campaign is None:
             continue
         if campaign["id"] not in target_by_campaign:

@@ -1280,6 +1280,53 @@ class CleanupQueueTest(unittest.TestCase):
         self._cleanup_set_with_action(self.ad1, verification_state="confirmed")
         self.assertIsNone(self._cleanup_row(self._refresh())["proposal"])
 
+    # -- F29-I01 Contract B: rejected cleanup memory through the queue ---------------------------
+
+    def _rejected_cleanup(self, target_id, *, grades):
+        pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": target_id,
+                      "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by,"
+            "decision_reason,decision_grades,created_at) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "清理：活動一",
+             "2026-01", "rejected", db.jsonb({"source": "cleanup", "items": [pause_item]}),
+             "test", "還在測試", db.jsonb(grades) if grades is not None else None,
+             db.now_utc() - timedelta(days=2)),  # inside the row's 7-day window
+        )
+        self.conn.commit()
+        return set_id
+
+    def test_a_rejection_at_the_same_grade_raises_no_row(self):
+        self._rejected_cleanup(self.ad1, grades={
+            self.ad1: {"grade": "over", "cost_per_result": 150, "cap": 100,
+                       "at": db.now_utc().isoformat()},
+        })
+        self.assertIsNone(self._cleanup_row(self._refresh()))
+
+    def test_a_worse_grade_raises_a_fresh_row_carrying_rejected_before(self):
+        set_id = self._rejected_cleanup(self.ad1, grades={
+            self.ad1: {"grade": "watch", "cost_per_result": 110, "cap": 100,
+                       "at": db.now_utc().isoformat()},
+        })
+        row = self._cleanup_row(self._refresh())
+        ad = row["cleanup"]["ads"][0]
+        self.assertEqual(ad["entity_id"], self.ad1)
+        self.assertEqual(ad["rejected_before"]["change_set_id"], set_id)
+        self.assertEqual(ad["rejected_before"]["grade_label"], "偏貴")
+        self.assertEqual(ad["rejected_before"]["reason"], "還在測試")
+        # The rejected set does not answer the re-raised row: it is a new proposal.
+        self.assertIsNone(row["proposal"])
+
+    def test_a_legacy_rejection_without_memory_keeps_the_window_rule(self):
+        set_id = self._rejected_cleanup(self.ad1, grades=None)
+        row = self._cleanup_row(self._refresh())
+        self.assertIsNone(row["cleanup"]["ads"][0]["rejected_before"])
+        self.assertEqual(row["proposal"]["change_set_id"], set_id)
+        self.assertEqual(row["proposal"]["status"], "rejected")
+
     def test_category_registered_with_expected_severity_and_label(self):
         self.assertEqual(
             core_interrupts.CATEGORIES["ads_triage_cleanup"],

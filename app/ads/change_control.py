@@ -189,7 +189,7 @@ def create(conn, org, brand, campaign, payload, actor):
 def _declined_ids(value, source):
     """F29-I01 Contract B: the proposed cleanup ads the user unticked -- only on a cleanup set, a
     list of distinct non-empty ids. Empty or absent = nothing declined (never stored)."""
-    if value is None:
+    if value is None or value == []:
         return []
     if source != "cleanup":
         raise ValueError("只有清理清單可以保留未勾選的廣告。")

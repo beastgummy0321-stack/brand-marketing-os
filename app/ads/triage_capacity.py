@@ -202,8 +202,8 @@ def decision_memory(conn, org_id, brand_id) -> dict:
     declined an ad) is no memory; a remembered grade that isn't ranked holds nothing (dropped).
     `at` is the entry's own decision time (else the set's `created_at`); the newest wins."""
     rows = conn.execute(
-        "SELECT id,campaign_id,title,decision_reason,decision_grades,created_at FROM ads_change_set "
-        "WHERE org_id=%s AND brand_id=%s AND decision_grades IS NOT NULL",
+        "SELECT id,campaign_id,title,decision_reason,decision_grades,created_at "
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND decision_grades IS NOT NULL",
         (org_id, brand_id),
     ).fetchall()
     memory, times = {}, {}

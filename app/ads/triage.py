@@ -473,7 +473,8 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
             return finish("insufficient", "needs_resync", _NO_DATA, start, end, days,
                           extended_from, view, spend)
         view, spend = _ad_window(entity_rows, start, end)
-        if step_idx == 0 and target["result_kind"] is None                 and (view is None or view["result_kind"] is None):
+        if step_idx == 0 and target["result_kind"] is None \
+                and (view is None or view["result_kind"] is None):
             return finish("no_target", "result_kind_unknown", _NOT_JUDGED, start, end, days,
                           extended_from, view, spend)
         graded = grade_window(view, spend, target["value"], days)
@@ -484,7 +485,9 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
             break
         extended_from = days
 
-    if graded[0] not in GRADED:
+    # `graded` is always set (WINDOW_STEPS is never empty); a graded window always has a view.
+    if graded is None or view is None or graded[0] not in GRADED:
+        graded = graded or (*_NO_DATA, "result_unknown_days")
         return finish("insufficient", graded[2] or "result_unknown_days", graded[:2], start, end,
                       days, extended_from, view, spend)
 
@@ -513,8 +516,8 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
 # ---------------------------------------------------------------------------
 
 # One interrupt category per queue kind (F27-I06: six kinds). F28-I02: `stop_loss` is no longer
-# raised -- a 沒賣出 ad closes through its campaign's `cleanup` row -- but its category stays here so
-# `_supersede_stale_open_rows` resolves every row still open from before.
+# raised -- a 沒賣出 ad closes through its campaign's `cleanup` row -- but its category stays here
+# so `_supersede_stale_open_rows` resolves every row still open from before.
 QUEUE_CATEGORY = {
     "stop_loss": "ads_triage_stop_loss", "worse": "ads_triage_worse",
     "scale_budget": "ads_triage_scale_budget", "refresh_creative": "ads_triage_refresh_creative",
