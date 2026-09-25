@@ -23,6 +23,9 @@ export interface SettleAngles { status: SettleAnglesStatus; candidates: string[]
 
 export interface SettleRow extends PeriodGradeRow {
   fate: SettleFate;
+  /** Set only when the grade alone would be written but the row is skipped anyway: 「資料缺天，
+   * 這期不記」 (its campaign has unsynced days in the month). The grade stays the month review's. */
+  skip_reason: string | null;
   /** The ad's own copy (first body, else title); null when the ad has none. */
   copy_text: string | null;
   angles: SettleAngles;

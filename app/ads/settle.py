@@ -3,10 +3,11 @@ the org timezone (user ruling 2026-09-25, feature Unresolved 1; `app/schedule/pe
 used).
 
 Step 1 (這期成績) is `period_grades.grade_period` over the month -- the same rows the month review
-of that month reads -- with one settle-only rule on top: an ad whose campaign has unsynced days
-inside the month reads 資料不足 (its numbers could be the gap), so it is never written. Each row's
-fate follows the one ruler (ads.md §6.33): 划算 -> effective, 太貴／沒賣出 -> ineffective, anything
-else -> skip. Step 2 reuses `angles.get` (F27 Contract C: one enqueue per ad per copy hash) for
+of that month reads, grades untouched (no second grading rule). Each row's fate follows the one
+ruler (ads.md §6.33): 划算 -> effective, 太貴／沒賣出 -> ineffective, anything else -> skip; an ad
+whose campaign has unsynced days inside the month keeps its grade but is skipped with a named
+`skip_reason` (its numbers could be the gap, so nothing is written from it).
+Step 2 reuses `angles.get` (F27 Contract C: one enqueue per ad per copy hash) for
 every row that will be written. Step 3 (`write`) writes one brand-notebook learning per non-skip
 row through `bi_repo.record_learning`, idempotent by `source_cycle_id = settle:<month>:<entity>`.
 
@@ -34,6 +35,7 @@ QUEUE_CATEGORY = "ads_triage_settle"
 # yet hold the month's last day.
 RAISE_AFTER_DAYS = 2
 MAX_ANGLE_CHARS = 12
+MISSING_DAYS_REASON = "資料缺天，這期不記"
 _FATE = {"on_target": "effective", "over": "ineffective", "wasted": "ineffective"}
 _MONTH_RE = re.compile(r"\d{4}-\d{2}")
 _TEXT_RE = re.compile(r"^「(.+)」對這群受眾(有效|無效)$")
@@ -117,7 +119,8 @@ def _written_view(written: dict):
 
 
 def _graded(conn, org_id, brand_id, start, end):
-    """`grade_period` rows with the settle's missing-days rule applied, plus `missing`."""
+    """`grade_period` rows (grades exactly as the month review shows them) with each row's `fate`
+    and `skip_reason`, plus `missing` (campaign -> unsynced days)."""
     rows = period_grades.grade_period(conn, org_id, brand_id, start, end)
     missing = {
         entry["campaign_id"]: entry["missing_days"]
@@ -126,8 +129,9 @@ def _graded(conn, org_id, brand_id, start, end):
     out = []
     for row in rows:
         if row["campaign_id"] in missing:
-            row = {**row, "grade": "insufficient", "grade_label": triage.NO_DATA_LABEL}
-        out.append({**row, "fate": _FATE.get(row["grade"], "skip")})
+            out.append({**row, "fate": "skip", "skip_reason": MISSING_DAYS_REASON})
+        else:
+            out.append({**row, "fate": _FATE.get(row["grade"], "skip"), "skip_reason": None})
     return out, missing
 
 

@@ -13,7 +13,7 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
-from app.ads import angles, channels, repository, settle, strategy, triage
+from app.ads import angles, channels, period_grades, repository, settle, strategy, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db, interrupts
@@ -229,16 +229,30 @@ class SettleViewTest(SettleFixture):
                          (400, "settle_angle_missing"))
         self.assertEqual(self.learnings(), [])
 
-    def test_campaign_with_missing_days_reads_no_data_and_is_skipped(self):
+    def test_campaign_with_missing_days_keeps_its_grade_and_is_skipped_with_a_reason(self):
         # rows 08-01..08-10, synced coverage only from 08-15: 08-11..08-14 were never read
         gap = self.campaign("缺天活動", "c_gap", cap=100, coverage_start="2026-08-15")
         self.add("g1", gap, "缺天廣告", days=10, spend=500, results=10, copy="有文案。")
         self.conn.commit()
         result = self.view()
         row = self.rows(result)[self.ads["g1"]]
-        self.assertEqual((row["grade"], row["grade_label"], row["fate"]),
-                         ("insufficient", "資料不足", "skip"))
+        # the grade is the month review's own (no second grading rule); only the fate changes
+        self.assertEqual((row["grade"], row["grade_label"], row["fate"], row["skip_reason"]),
+                         ("on_target", "划算", "skip", "資料缺天，這期不記"))
+        review = {r["entity_id"]: r for r in period_grades.grade_period(
+            self.conn, self.org, self.brand, START, END)}
+        self.assertEqual(
+            {eid: (r["grade"], r["grade_label"]) for eid, r in self.rows(result).items()},
+            {eid: (r["grade"], r["grade_label"]) for eid, r in review.items()},
+        )
         self.assertEqual(row["angles"]["status"], "not_needed")
+        self.assertIsNone(self.rows(result)[self.ads["p1"]]["skip_reason"])
+        with self.assertRaises(settle.SettleError):  # still no pick needed for it
+            settle.write(self.conn, self.org, self.brand, MONTH, self.picks("g1"), "user_1")
+        settle.write(self.conn, self.org, self.brand, MONTH,
+                     self.picks("p1", "p3", "p4", "i1", "i2", "i3"), "user_1")
+        self.assertNotIn(f"settle:{MONTH}:{self.ads['g1']}",
+                         {r["source_cycle_id"] for r in self.learnings()})
         status = {c["campaign_id"]: c for c in result["campaigns"]}[gap]["data_status"]
         self.assertEqual(status["state"], "partial")
         self.assertEqual(status["missing_days"],

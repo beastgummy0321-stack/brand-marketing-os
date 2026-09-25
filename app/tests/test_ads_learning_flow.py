@@ -232,6 +232,26 @@ class AdsLearningFlowTest(unittest.TestCase):
             # "fake" (never "meta"), so the family always falls back to "other", never a guess.
             self.assertEqual(row["campaign_objective"], "other")
 
+    def test_settle_learning_lists_its_ads_campaign(self):
+        # F29-I03: a period-settle learning names its ad entity (`settle:<month>:<entity_id>`),
+        # not a change item -- its campaign comes from that entity. An unknown entity stays null.
+        ad = self.ad()
+        for source in (f"settle:2026-08:{ad['id']}", "settle:2026-08:ent_gone"):
+            brands.record_learning(
+                self.conn, self.brand, actor="user_1", learning_text="「早鳥族」對這群受眾有效",
+                applicability_scope=f"ads;campaign={self.campaign}", confidence="observed",
+                sample_size="12", source_cycle_id=source, source_track="ads",
+            )
+        rows = {row["id"]: row for row in ads_learnings.list_for_brand(self.conn, self.brand)}
+        by_source = {
+            learning["source_cycle_id"]: rows[learning["id"]]
+            for learning in brands.list_learnings(self.conn, self.brand, source_track="ads")
+        }
+        known = by_source[f"settle:2026-08:{ad['id']}"]
+        self.assertEqual((known["campaign_id"], known["campaign_name"]),
+                         (self.campaign, "持續活動"))
+        self.assertIsNone(by_source["settle:2026-08:ent_gone"]["campaign_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

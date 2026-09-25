@@ -132,6 +132,10 @@ def _missing(days, sides):
     }
 
 
+# `ads_outcome_daily.source` of simulated delivery (`adapters/simulated.py`).
+_SIMULATED_SOURCE = "simulated"
+
+
 def _window_days(start, end):
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
@@ -145,12 +149,15 @@ def _covered_zero_rows(rows, ad_ids, start, end, coverage):
     padded = []
     for ad_id in ad_ids:
         own = [r for r in rows if r["entity_id"] == ad_id]
-        if any(r["source"] != "meta" for r in own):
+        # Platform-neutral (§0「不預設」): only the simulated source is named; a padded day carries
+        # the ad's own existing source, never a platform literal.
+        if not own or any(r["source"] == _SIMULATED_SOURCE for r in own):
             continue
+        source = own[0]["source"]
         present = {r["day"] for r in own}
         padded.extend(
             {"entity_id": ad_id, "day": day, "spend": 0, "purchases": 0, "revenue": None,
-             "source": "meta"}
+             "source": source}
             for day in _window_days(start, end)
             if day not in present and triage._window_covered(coverage, day, day)
         )
