@@ -128,6 +128,7 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred
     result["launch_settings"] = launch_settings.effective(conn, org, brand, campaign)
     # Workbench outputs were frozen for ads without an assigned material; such an ad is never in
     # a batch now (F30 Unresolved 1), so none remain. The key stays for the snapshot's shape.
+    # What each ad went out with is recorded at approval by `live_creative.record_launch`.
     result["outputs"] = []
     return result
 
@@ -211,9 +212,12 @@ def _approve_set(
         "UPDATE ads_change_set SET status='approved',approval_id=%s,approved_at=now() WHERE id=%s",
         (approval_id, set_id),
     )
-    from app.ads import handoff_data
+    from app.ads import handoff_data, live_creative
 
     handoff_data.install_launch(conn, org, brand, campaign_id, set_id, item["id"], frozen)
+    # F31-I05 Contract O: the snapshot carries no per-ad workbench outputs (`outputs` stays []),
+    # so what each batched ad goes out with is frozen on the ad itself for the learning readers.
+    live_creative.record_launch(conn, org, brand, campaign_id, set_id, frozen)
     return set_id, item
 
 
