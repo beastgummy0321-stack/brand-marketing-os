@@ -524,22 +524,41 @@ export function VersionBadge({
   onSimilar,
   onEdit,
   disabled,
+  full,
 }: {
   version: ProductVersion;
   onSelect: () => void;
   onSimilar?: () => void;
   onEdit?: () => void;
   disabled?: boolean;
+  /** Feature Contract L: the part already holds every selection it may (`selection_full`). */
+  full?: boolean;
 }) {
   const selected = Boolean(version.selected_at);
   const [confirming, setConfirming] = useState(false);
   useEffect(() => setConfirming(false), [version.id, version.selected_at]);
+  const blockedByFull = !selected && Boolean(full);
+  const failedLines = version.validation_warning?.lines ?? [];
+  const needsConfirm = !selected && (Boolean(version.claim_warning) || failedLines.length > 0);
+  const showWarning = !selected && (Boolean(version.claim_warning) || (confirming && failedLines.length > 0));
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {!selected && version.claim_warning && (
+      {showWarning && (
         <div role="status" className="w-full rounded-md bg-warning/10 p-3 text-sm text-warning">
-          <p>{version.claim_warning.message}</p>
-          <Link className="underline" to={version.claim_warning.href}>前往品牌智庫補充資料（選用）</Link>
+          {version.claim_warning && (
+            <>
+              <p>{version.claim_warning.message}</p>
+              <Link className="underline" to={version.claim_warning.href}>前往品牌智庫補充資料（選用）</Link>
+            </>
+          )}
+          {confirming && failedLines.length > 0 && (
+            <div className={cn(version.claim_warning && "mt-2")}>
+              <p>這一版有沒通過的檢查：</p>
+              <ul className="mt-1 flex flex-col gap-0.5 text-xs">
+                {failedLines.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </div>
+          )}
           {confirming && (
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" disabled={disabled} onClick={onSelect}>確認無誤，選定此版</Button>
@@ -551,14 +570,15 @@ export function VersionBadge({
       <Button
         size="sm"
         variant={selected ? "default" : "outline"}
-        disabled={disabled}
+        disabled={disabled || blockedByFull}
         onClick={() => {
-          if (!selected && version.claim_warning) setConfirming(true);
+          if (needsConfirm) setConfirming(true);
           else onSelect();
         }}
       >
         {selected ? "✓ 已選定" : "選定"}
       </Button>
+      {blockedByFull && <span className="text-xs text-muted-foreground">已選滿，先取消一張再選</span>}
       {onSimilar && (
         <Button size="sm" variant="outline" disabled={disabled} onClick={onSimilar}>
           相似版本
