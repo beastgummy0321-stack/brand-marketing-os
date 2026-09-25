@@ -3,8 +3,10 @@
 票 09：搬離行程內狀態表＋背景執行緒，改走 `app.background` 佇列（範本同 routes_report_api.py）。
 """
 
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job, personas
 from app.brand_intelligence import repository as repo
 from app.core.db import connection as core_db_connection
@@ -134,9 +136,19 @@ def _state(status: str, started_at, error: str | None = None) -> dict:
             "usual_range_text": _USUAL_RANGE if status != "idle" else "", "error": error}
 
 
-def generation_state(brand_id: str) -> dict:  # 讀 llm_task 取代 JOBS dict；succeeded 列重驗
+def generation_state(brand_id: str) -> dict:
+    """Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
+    最新的 job 失敗＝failed。其餘讀 llm_task 取代 JOBS dict；succeeded 列重驗。"""
     lock = f"intake_persona:{brand_id}"
     row = _latest_task_row(brand_id)
+    outcome = background_job_outcome(lock)
+    if outcome == "active":
+        running_row = row is not None and row["status"] == "running" and row["started_at"]
+        return _state("running", row["started_at"].isoformat() if running_row else None)
+    if outcome == "failed":
+        started_at = row["started_at"].isoformat() if row is not None and row["started_at"] else None
+        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
+        return _state("failed", started_at, row["error"] if own_error else JOB_FAILED_MESSAGE)
     if row is None:
         return _state("running", None) if background_is_active(lock) else _state("idle", None)
     started_at = row["started_at"].isoformat() if row["started_at"] else None
@@ -162,14 +174,18 @@ def background_intake_persona(org_id: str, brand_id: str) -> None:
     with core_db_connection() as conn:
         brand = repo.get_brand(conn, brand_id)
         brand_name = brand["name"] if brand else brand_id
+        error = None
         try:
             ok, _result = generate(conn, brand_id)
-        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok = False
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, error = False, exc
         if ok:
             _notify(conn, brand_id, f"「{brand_name}」人物誌好了")
         else:
             _notify(conn, brand_id, f"「{brand_name}」人物誌失敗，可重試")
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 
 
 def start_generation(org_id: str, brand_id: str) -> None:

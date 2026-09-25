@@ -24,8 +24,10 @@ from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import Response
 
 from app import schedule
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
 from app.core.db import connection as core_db_connection
@@ -237,11 +239,26 @@ def _latest_task_row(brand_id: str, kind: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def _failed_error(row: dict | None) -> str:
+    """Contract J：job 失敗時，有那次呼叫留下的 llm_task 錯誤就用它，否則講背景程式。"""
+    if row is not None and row["status"] not in ("running", "succeeded") and row["error"]:
+        return row["error"]
+    return JOB_FAILED_MESSAGE
+
+
 def _job_state(draft: dict, kind: str) -> dict:
-    """讀 llm_task 取代讀行程內 dict；succeeded 列重驗（比照 `_research_state()`）。"""
+    """Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
+    最新的 job 失敗＝failed。其餘讀 llm_task；succeeded 列重驗（比照 `_research_state()`）。"""
     brand_id = draft["brand_id"]
     lock = f"intake_{kind}:{brand_id}"
     row = _latest_task_row(brand_id, kind)
+    outcome = background_job_outcome(lock)
+    if outcome == "active":
+        started = row["started_at"] if row is not None and row["status"] == "running" else None
+        return _job("running", kind, started.isoformat() if started else now_iso())
+    if outcome == "failed":
+        started = row["started_at"] if row is not None else None
+        return _job("failed", kind, started.isoformat() if started else now_iso(), _failed_error(row))
     if row is None:
         return _job("running", kind, now_iso()) if background_is_active(lock) else _idle_job()
     started_at = row["started_at"].isoformat() if row["started_at"] else now_iso()
@@ -279,29 +296,32 @@ def background_intake_scan(org_id: str, brand_id: str) -> None:
     with core_db_connection() as conn:
         brand = repo.get_brand(conn, brand_id)
         brand_name = brand["name"] if brand else brand_id
+        error = None
         try:
             draft = state.require_draft(brand_id, conn=conn)
             ok, _err = ai.run_scan(conn, draft)
-        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok = False
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, error = False, exc
         _notify_step_done(conn, brand_id, brand_name, ok,
                           verbs=("初掃完成，可以回去看初步印象", "初掃失敗，可以回去重試"))
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 
 
 def background_intake_question(org_id: str, brand_id: str) -> None:
     with core_db_connection() as conn:
-        try:
-            draft = state.require_draft(brand_id, conn=conn)
-            ai.run_next_question(conn, draft)  # 出下一題不進收件匣（GRILL 決策：洗版）
-        except Exception:  # noqa: BLE001
-            pass
+        # 出下一題不進收件匣（GRILL 決策：洗版），所以沒有失敗通知可寄；例外直接往上丟，
+        # job 記成 failed（Contract J），狀態端點據此回失敗。
+        draft = state.require_draft(brand_id, conn=conn)
+        ai.run_next_question(conn, draft)
 
 
 def background_intake_paste_fix(org_id: str, brand_id: str) -> None:
     with core_db_connection() as conn:
         brand = repo.get_brand(conn, brand_id)
         brand_name = brand["name"] if brand else brand_id
-        ok = False
+        ok, error = False, None
         try:
             draft = state.require_draft(brand_id, conn=conn)
             ok, result = ai.run_paste_fix(conn, draft)
@@ -312,10 +332,13 @@ def background_intake_paste_fix(org_id: str, brand_id: str) -> None:
                 draft = state.require_draft(brand_id, conn=conn)
                 if n is not None and draft["step"] < 5:
                     state.touch(draft, f"/brands/{brand_id}/intake/paste", 5, conn=conn)
-        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok = False
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, error = False, exc
         _notify_step_done(conn, brand_id, brand_name, ok,
                           verbs=("貼回格式已修好，可以回去看", "貼回修格式失敗，可以回去重試"))
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 
 
 def _start(kind: str, brand_id: str, org_id: str) -> None:
