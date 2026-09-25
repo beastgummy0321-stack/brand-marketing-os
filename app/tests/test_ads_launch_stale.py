@@ -477,14 +477,22 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(revision, 2)
         stale = self.workspace()["launch_stale"]
         self.assertFalse(stale["revertible"])
-        # The revised-but-unassigned material is not ready: the ad would leave the batch, which
-        # the diff says as a material change (F30 Unresolved 1), not as a removed ad.
-        row = next(r for r in stale["diff"] if r["kind"] == "ad")
-        self.assertEqual(
-            (row["field"], row["before"], row["after"]),
-            ("material", "fall.png・第 1 版", "素材未就緒，這一則先不上架"),
-        )
-        # The stale launch no longer freezes the assignment, so it can be re-pointed.
+        # An ad an approved version already handed off never leaves the batch (F30 Unresolved 1
+        # defers only never-approved ads): its revised material shows in the diff ...
+        row = next(r for r in stale["diff"] if r["field"] == "material")
+        self.assertEqual(row["before"], "fall.png・第 1 版")
+        self.assertIn("需重新指派素材", row["after"])
+        # ... and re-approving the revised-but-unassigned material is refused as before ...
+        with (
+            patch.object(
+                change_control_launch.month_budget,
+                "preflight",
+                return_value={"can_increase": True},
+            ),
+            self.assertRaisesRegex(ValueError, "尚未確認或已修訂"),
+        ):
+            self.reapprove(stale)
+        # ... but the stale launch no longer freezes the assignment, so it can be re-pointed.
         planned = self.assign(placement["id"], revision)["planned_ads"][0]
         self.assertEqual(
             (planned["placement_revision"], planned["assignment_status"]), (revision, "confirmed")
@@ -504,6 +512,31 @@ class LaunchStaleTest(unittest.TestCase):
         # The new approval freezes the materials again.
         with self.assertRaisesRegex(ValueError, "首次投放清單已核准"):
             self.assign(None, None)
+
+    def test_a_never_approved_ad_with_a_revised_material_waits_outside_the_batch(self):
+        self.assigned_material()
+        extra = db.new_id("ada")
+        self.sql(
+            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name) "
+            "VALUES(%s,%s,%s,%s,%s,'第二則廣告')",
+            extra,
+            self.org,
+            self.brand,
+            self.campaign,
+            self.group,
+        )
+        self.revise(self.assigned_material(extra))
+        deferred = []
+        frozen = change_control_launch.snapshot(
+            self.conn, self.org, self.brand, self.campaign, deferred=deferred
+        )
+        self.assertEqual([d["ad_id"] for d in deferred], [extra])
+        self.assertEqual([a["id"] for a in frozen["groups"][0]["ads"]], [self.ad])
+        # The approval goes ahead without it; the ad is not in the handed-off batch.
+        self.launch()
+        self.assertEqual(set(self.items()), {"campaign", "group", "ad"})
+        self.assertEqual(self.items()["ad"]["planned_id"], self.ad)
+        self.assertIsNone(self.workspace()["launch_stale"])
 
     def test_added_ad_is_listed_and_blocks_revert(self):
         self.launch()

@@ -1008,9 +1008,9 @@ class HandoffTest(unittest.TestCase):
         self.assertFalse(any(p["id"] == placement["id"] for p in workspace["ready_placements"]))
         handoff = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
         self.assertFalse(any(p["id"] == placement["id"] for p in handoff["ready_placements"]))
-        # The reviewed batch held the old version; the revised one is not ready, so the ad now
-        # waits outside the batch and the reviewed approval is refused (F30 Unresolved 1).
-        with self.assertRaisesRegex(ValueError, "已改變"):
+        # Never approved, the revised material is not ready: the ad now waits outside the batch
+        # (F30 Unresolved 1), which leaves no ready ad -- not a launch.
+        with self.assertRaisesRegex(ValueError, "launch_no_ready_ads"):
             change_control_launch.publish(
                 self.conn,
                 self.org,

@@ -70,12 +70,21 @@ class AssignmentRequest(BaseModel):
     revision: int | None = Field(ge=1)
 
 
+# Refusals that carry their own code (the rest answer `handoff_unavailable` with their message).
+_CODED = {
+    "launch_no_ready_ads": "還沒有任何一則廣告的素材就緒；至少一則素材確認後才能核准上架。",
+}
+
+
 def _run(request, brand, campaign, function, *args):
     try:
         return function(web.conn, web.require_actor(request).org_id, brand, campaign, *args)
     except ValueError as exc:
         web.conn.rollback()
-        raise web.ApiError(409, "handoff_unavailable", str(exc)) from None
+        code = str(exc)
+        if code in _CODED:
+            raise web.ApiError(409, code, _CODED[code]) from None
+        raise web.ApiError(409, "handoff_unavailable", code) from None
 
 
 @router.get("/handoff")

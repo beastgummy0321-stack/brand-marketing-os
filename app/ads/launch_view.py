@@ -22,12 +22,13 @@ _STATES = {
 _READABLE = {"reported", "unknown", "deviated"}
 _KIND_ORDER = {"campaign": 0, "group": 1, "ad": 2}
 _KIND_LABELS = {"campaign": "活動", "group": "廣告組", "ad": "廣告"}
+# One vocabulary with the readback's `mismatches`/`unreadable` keys (`handoff_check`), so a
+# mismatch attaches to its field row. The ad copy keys are the platform's (title = headline).
+_LABELS = handoff_check._FIELD_LABELS
 _COPY_FIELDS = (
-    ("headline", "標題"),
-    ("body", "文案"),
-    ("description", "說明"),
-    ("cta", "行動呼籲"),
-    ("landing_url", "連結"),
+    ("title", "headline"),
+    ("body", "body"),
+    ("description", "description"),
 )
 _SETTING_LABELS = {f["key"]: f["label"] for f in manual_settings.FIELDS}
 # Bounded platform reads per readback call (pages of one listing).
@@ -40,12 +41,6 @@ def _plain(value):
 
 def _number(value):
     return None if value is None else float(value)
-
-
-def _period(start, end):
-    if start is None and end is None:
-        return None
-    return f"{_plain(start) or '未定'} – {_plain(end) or '未定'}"
 
 
 # -- the view -------------------------------------------------------------------------------------
@@ -65,8 +60,9 @@ def _fields(kind, node, parent_name, snapshot):
     if kind == "campaign":
         rows = [
             ("name", "名稱", node.get("name")),
-            ("objective", "目標", node.get("objective")),
-            ("period", "期間", _period(node.get("start_date"), node.get("end_date"))),
+            ("objective", _LABELS["objective"], node.get("objective")),
+            ("start_date", _LABELS["start_date"], node.get("start_date")),
+            ("end_date", _LABELS["end_date"], node.get("end_date")),
         ]
     elif kind == "group":
         values = next(
@@ -79,15 +75,13 @@ def _fields(kind, node, parent_name, snapshot):
         )
         rows = [
             ("name", "名稱", node.get("name")),
-            ("daily_budget", "每日預算", _number(node.get("daily_budget"))),
+            ("budget_amount", _LABELS["budget_amount"], _number(node.get("daily_budget"))),
             (
-                "period",
-                "期間",
-                _period(
-                    node.get("start_date") or snapshot.get("start_date"),
-                    node.get("end_date") or snapshot.get("end_date"),
-                ),
+                "start_date",
+                _LABELS["start_date"],
+                node.get("start_date") or snapshot.get("start_date"),
             ),
+            ("end_date", _LABELS["end_date"], node.get("end_date") or snapshot.get("end_date")),
             *(
                 ("manual_settings." + key, _SETTING_LABELS.get(key, key), value)
                 for key, value in values.items()
@@ -101,7 +95,11 @@ def _fields(kind, node, parent_name, snapshot):
             ("name", "名稱", node.get("name")),
             ("group", "放在", parent_name),
             ("material", "素材", launch._material_label(material or None)),
-            *(("copy." + key, label, copy[key]) for key, label in _COPY_FIELDS if copy.get(key)),
+            *(
+                ("copy." + key, handoff_check._COPY_LABELS[key], copy[source])
+                for key, source in _COPY_FIELDS
+                if copy.get(source)
+            ),
         ]
     return [{"key": key, "label": label, "value": _plain(value)} for key, label, value in rows]
 
@@ -204,7 +202,9 @@ def _read_at(rows):
 def _summary(snapshot, campaign, current, deferred):
     groups = snapshot.get("groups") or []
     budgets = [g.get("daily_budget") for g in groups]
-    ready = sum(len(g.get("ads") or []) for g in current.get("groups") or [])
+    planned = [a for g in current.get("groups") or [] for a in g.get("ads") or []]
+    # A handed-off ad whose material became invalid stays in the batch but is not ready.
+    ready = sum(launch.ready_material(a.get("material_assignment")) for a in planned)
     return {
         "campaigns": 1,
         "groups": len(groups),
@@ -216,7 +216,7 @@ def _summary(snapshot, campaign, current, deferred):
         "end": _plain(snapshot.get("end_date")),
         "cap": targets.own_cap(campaign),
         "slots_ready": ready,
-        "slots_total": ready + len(deferred),
+        "slots_total": len(planned) + len(deferred),
     }
 
 
@@ -240,7 +240,7 @@ def view(conn, org, brand, campaign_id):
             "settings_readback": None,
         }
     frozen = change_set["plan_json"]["launch_snapshot"]
-    stale = launch.stale(conn, org, brand, campaign_id, current=current, deferred=deferred)
+    stale = launch.stale(conn, org, brand, campaign_id, current=current)
     changed = {d["item_id"] for d in (stale or {}).get("diff", []) if d.get("item_id")}
     rows = _batch_rows(conn, org, brand, campaign_id, change_set["id"])
     nodes = _nodes(frozen)

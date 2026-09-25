@@ -31,13 +31,31 @@ def ready_material(material) -> bool:
     return bool(material) and material.get("assignment_status") == "confirmed"
 
 
+def _launched_ads(conn, org, brand, campaign_id):
+    """Planned ads some approved launch version (current or superseded) already handed off."""
+    return {
+        r["planned_id"]
+        for r in conn.execute(
+            "SELECT DISTINCT h.planned_id FROM ads_handoff_item h JOIN ads_change_set c "
+            "ON c.id=h.change_set_id AND c.org_id=h.org_id AND c.brand_id=h.brand_id "
+            "AND c.campaign_id=h.campaign_id WHERE h.org_id=%s AND h.brand_id=%s "
+            "AND h.campaign_id=%s AND h.planned_kind='ad' AND c.plan_json ? 'launch_snapshot' "
+            "AND c.status IN ('approved','superseded')",
+            (org, brand, campaign_id),
+        ).fetchall()
+    }
+
+
 def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred=None):
-    """The launch content an approval freezes. Only ads with ready material are in the batch;
-    the rest stay in the plan and, when `deferred` is a list, are appended to it as
-    `{ad_id, name, group_name}` -- they go out with a later launch version once ready."""
+    """The launch content an approval freezes. An ad joins the batch once its material is
+    ready; until then it stays in the plan and, when `deferred` is a list, is appended to it as
+    `{ad_id, name, group_name}` -- it goes out with a later launch version. An ad an approved
+    version already handed off never leaves the batch: an invalid material keeps F28's rule
+    (shown in the diff, re-approval refused until it is re-assigned)."""
     campaign = campaigns.campaign_detail(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
+    launched = _launched_ads(conn, org, brand, campaign_id)
     fields = (
         "id",
         "name",
@@ -56,7 +74,7 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred
         ads = []
         for ad in group.get("ads", []):
             material = handoff_assignment.material_snapshot(conn, org, brand, campaign_id, ad)
-            if not ready_material(material):
+            if not ready_material(material) and ad["id"] not in launched:
                 if deferred is not None:
                     deferred.append(
                         {"ad_id": ad["id"], "name": ad["name"], "group_name": group["name"]}
@@ -199,6 +217,16 @@ def _approve_set(
     return set_id, item
 
 
+def _refuse_no_ready_ads(frozen):
+    """409 `launch_no_ready_ads`: a campaign and its ad sets alone are not a launch (F30)."""
+    if not any(
+        ready_material(ad.get("material_assignment"))
+        for group in frozen["groups"]
+        for ad in group.get("ads") or []
+    ):
+        raise ValueError("launch_no_ready_ads")
+
+
 def _refuse_invalid_settings(conn, org, brand, campaign_id, frozen):
     """409 `launch_settings_invalid` while the frozen launch settings carry an error (Contract I).
     The pixel check uses the campaign's cached pixel list: approval never waits on a platform."""
@@ -238,6 +266,7 @@ def publish(conn, org, brand, campaign_id, actor, operation_id, expected_hash):
             return {"ok": True, "change_set_id": prior["id"]}
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
         _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
+        _refuse_no_ready_ads(frozen)
         content_hash = data.digest(frozen)
         if expected_hash != content_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
@@ -339,7 +368,9 @@ def _material_label(value):
     if not value:
         return None
     text = f"{value.get('filename') or '素材'}・第 {value.get('placement_revision')} 版"
-    return text if value.get("assignment_status") == "confirmed" else text + "（已修訂或未確認）"
+    if value.get("assignment_status") == "confirmed":
+        return text
+    return text + "（已修訂或未確認，需重新指派素材）"
 
 
 def _outputs(value):
@@ -351,13 +382,8 @@ def _outputs(value):
     return {k: sorted(v, key=str) for k, v in found.items()}
 
 
-_NOT_READY = "素材未就緒，這一則先不上架"
-
-
-def _rows(original, current, deferred=frozenset()):
-    """Field-level differences between two normalized snapshots. `planned_id` is internal.
-    `deferred` holds the planned ads still in the plan but out of the batch for lack of ready
-    material: one that left the batch reads as a material change, not as a removed ad."""
+def _rows(original, current):
+    """Field-level differences between two normalized snapshots. `planned_id` is internal."""
     rows = []
 
     def add(kind, planned_id, name, field, label, before, after):
@@ -446,17 +472,6 @@ def _rows(original, current, deferred=frozenset()):
         new_ads = {a["id"]: a for a in (after or {}).get("ads") or []}
         for ad_id in [*old_ads, *(a for a in new_ads if a not in old_ads)]:
             ad_before, ad_after = old_ads.get(ad_id), new_ads.get(ad_id)
-            if ad_before is not None and ad_after is None and ad_id in deferred:
-                add(
-                    "ad",
-                    ad_id,
-                    ad_before.get("name"),
-                    "material",
-                    "素材",
-                    _material_label(ad_before.get("material_assignment")),
-                    _NOT_READY,
-                )
-                continue
             if ad_before is None or ad_after is None:
                 present = ad_after or ad_before or {}
                 add(
@@ -600,11 +615,11 @@ def approved_matches(original, current) -> bool:
     return before == now
 
 
-def _compare(change_set, frozen, deferred=()):
+def _compare(change_set, frozen):
     original, current = _comparable(change_set["plan_json"]["launch_snapshot"], frozen)
     if original == current:
         return original, None
-    return original, _rows(original, current, frozenset(d["ad_id"] for d in deferred))
+    return original, _rows(original, current)
 
 
 def is_stale(conn, org, brand, campaign_id):
@@ -631,18 +646,15 @@ def material_frozen(conn, org, brand, campaign_id, ad_id) -> bool:
     return ad_id in frozen_ids and not is_stale(conn, org, brand, campaign_id)
 
 
-def stale(conn, org, brand, campaign_id, *, current=None, deferred=None):
+def stale(conn, org, brand, campaign_id, *, current=None):
     """`launch_stale` of `GET …/handoff`, computed on read; None while the approved launch still
-    matches the plan (or there is no approved launch). `current` and `deferred` are the plan's
-    snapshot and its deferred ads when the caller already built them."""
+    matches the plan (or there is no approved launch). `current` is the plan's snapshot when the
+    caller already built it."""
     change_set = launch_set(conn, org, brand, campaign_id)
     if change_set is None:
         return None
-    if current is None:
-        deferred = []
-        current = snapshot(conn, org, brand, campaign_id, deferred=deferred)
-    frozen = current
-    original, rows = _compare(change_set, frozen, deferred or ())
+    frozen = current if current is not None else snapshot(conn, org, brand, campaign_id)
+    original, rows = _compare(change_set, frozen)
     if rows is None:
         return None
     items = {
@@ -734,6 +746,7 @@ def reapprove(conn, org, brand, campaign_id, set_id, expected_hash, actor):
         old = _current_launch(conn, org, brand, campaign_id, set_id)
         frozen = snapshot(conn, org, brand, campaign_id, validate_material=True)
         _refuse_invalid_settings(conn, org, brand, campaign_id, frozen)
+        _refuse_no_ready_ads(frozen)
         if data.digest(frozen) != expected_hash:
             raise ValueError("計畫、素材或月份已改變，請重新檢視後核准。")
         if _compare(old, frozen)[1] is None:
@@ -856,11 +869,10 @@ def revert(conn, org, brand, campaign_id, set_id, expected_hash, actor):
         data.lock(conn, org, brand)
         _lock_campaign(conn, org, brand, campaign_id)
         change_set = _current_launch(conn, org, brand, campaign_id, set_id)
-        deferred: list = []
-        frozen = snapshot(conn, org, brand, campaign_id, deferred=deferred)
+        frozen = snapshot(conn, org, brand, campaign_id)
         if data.digest(frozen) != expected_hash:
             raise ValueError("計畫在你檢視後又改過，請重新載入再決定。")
-        original, rows = _compare(change_set, frozen, deferred)
+        original, rows = _compare(change_set, frozen)
         if rows is None:
             raise ValueError("核准後方案沒有改變，不需要改回。")
         for row in rows:

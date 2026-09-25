@@ -242,6 +242,14 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(fields["group"], "新客")
         self.assertEqual(fields["material"], "gift.png・第 1 版")
         self.assertEqual(fields["copy.body"], "文案")
+        # One vocabulary with the readback's mismatch/unreadable keys.
+        self.assertEqual(
+            list(fields),
+            ["name", "group", "material", "copy.title", "copy.body", "copy.description"],
+        )
+        group = {f["key"]: f["value"] for f in self.items(view)["新客"]["fields"]}
+        self.assertEqual(list(group), ["name", "budget_amount", "start_date", "end_date"])
+        self.assertEqual(group["budget_amount"], 300.0)
         self.assertEqual(ad["parent_name"], "新客")
         self.assertIsNone(view["settings_readback"])
 
@@ -338,6 +346,7 @@ class LaunchViewTest(unittest.TestCase):
         self.structure[0]["budget_amount"] = 400
         group = self.items(self.readback())["新客"]
         self.assertEqual(group["state"], "mismatch")
+        self.assertIn("budget_amount", {f["key"] for f in group["fields"]})
         self.assertEqual(
             group["mismatches"],
             [{"key": "budget_amount", "label": "每日預算", "expected": 300, "observed": 400}],
@@ -461,6 +470,31 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(view["summary"]["daily_total"], 300.0, "the approved batch's total")
         refused = self.client.post(self.base + "/readback")
         self.assertEqual(refused.status_code, 409, refused.text)
+
+    def test_a_launch_with_no_ready_ad_is_refused(self):
+        handoff_assignment.assign(
+            self.conn, self.org, self.brand, self.campaign, self.ad, None, None
+        )
+        view = self.view()
+        self.assertEqual(view["summary"]["slots_ready"], 0)
+        self.assertEqual([i["kind"] for i in view["items"]], ["campaign", "group"])
+        frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        with patch.object(
+            change_control_launch.month_budget, "preflight", return_value={"can_increase": True}
+        ):
+            response = self.client.post(
+                self.base.removesuffix("/launch") + "/publish",
+                json={
+                    "adapter": "manual",
+                    "operation_id": db.new_id("op"),
+                    "content_hash": change_control_data.digest(frozen),
+                },
+            )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "launch_no_ready_ads")
+        self.assertIsNone(
+            change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        )
 
     def test_the_view_refuses_another_brands_campaign(self):
         other = brands.create_brand(
