@@ -54,9 +54,10 @@ export function abLetters(ab: AbChangeBlock, pair: AbPair | null): { loser: "A" 
   return null;
 }
 
-/** 「核准關掉 A」／ fallback 「核准關掉較貴的一則」. */
-export function abLoserName(ab: AbChangeBlock, pair: AbPair | null): string {
-  return abLetters(ab, pair)?.loser ?? "較貴的一則";
+/** The approve button: 「核准關掉 A」, or 「核准關掉較貴的一則」 while the letters are unknown. */
+export function abApproveLabel(ab: AbChangeBlock, pair: AbPair | null): string {
+  const letter = abLetters(ab, pair)?.loser;
+  return letter ? `核准關掉 ${letter}` : "核准關掉較貴的一則";
 }
 
 function days(window: AbChangeBlock["window"]): number | null {
@@ -102,7 +103,7 @@ export function AbEvidence({ ab, context }: { ab: AbChangeBlock; context: AbCont
   const rules = pair?.rules ?? { min_days: 7, min_conversions_each: 10 };
   const w = ab.winner.cost_per_result, l = ab.loser.cost_per_result;
   const pct = w !== null && l !== null && Math.max(w, l) > 0 ? Math.round((Math.abs(l - w) / Math.max(w, l)) * 100) : null;
-  const winName = letters?.winner ?? `「${ab.winner.value_label}」`;
+  const winName = letters ? `${letters.winner} ` : `「${ab.winner.value_label}」`;
   const rows = letters
     ? (letters.loser === "A" ? [["A", ab.loser, true], ["B", ab.winner, false]] : [["A", ab.winner, false], ["B", ab.loser, true]]) as [("A" | "B"), AbChangeSide, boolean][]
     : [[null, ab.loser, true], [null, ab.winner, false]] as [null, AbChangeSide, boolean][];
@@ -122,7 +123,7 @@ export function AbEvidence({ ab, context }: { ab: AbChangeBlock; context: AbCont
         </div>
       </div>
       <p className="mt-2.5 text-sm font-semibold">
-        {pct !== null && `${winName} 每筆便宜 ${pct}%，`}兩則都跑滿 {rules.min_days} 天、各賣到 {rules.min_conversions_each} 筆以上
+        {pct !== null && `${winName}每筆便宜 ${pct}%，`}兩則都跑滿 {rules.min_days} 天、各賣到 {rules.min_conversions_each} 筆以上
       </p>
       <ul className="mt-3.5">
         {rows.map(([letter, side, close]) => (

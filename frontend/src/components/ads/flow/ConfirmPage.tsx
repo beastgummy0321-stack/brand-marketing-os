@@ -21,7 +21,7 @@ import { useApiRead } from "@/lib/useApiRead";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
-import { AbEvidence, abLoserName, useAbContext } from "./AbEvidence";
+import { AbEvidence, abApproveLabel, useAbContext } from "./AbEvidence";
 import { CleanupEvidence } from "./CleanupEvidence";
 import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
 import { AdoptLatestButton } from "./CleanupRebuild";
@@ -443,7 +443,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     : kind === "budget" ? "核准加碼，接著到平台操作"
     : kind === "new_ad" ? "核准新廣告，接著到平台操作"
     : kind === "cleanup" ? `核准清理（關 ${cleanupCloseCount} 則）`
-    : kind === "ab" && ab ? `核准關掉 ${abLoserName(ab, abContext.pair)}`
+    : kind === "ab" && ab ? abApproveLabel(ab, abContext.pair)
     : "核准暫停，接著到平台操作";
   const closedLabel = changeSet
     ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
