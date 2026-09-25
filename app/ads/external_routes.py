@@ -5,7 +5,7 @@ from datetime import UTC, date, timedelta
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
 
-from app.ads import channels
+from app.ads import channels, connections
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
 from app.shared import web
@@ -33,6 +33,14 @@ def _sources(conn, org, brand):
                 for a in reader.accounts(conn, org, brand)
             )
     return result
+
+
+@router.get("/brands/{brand_id}/connections")
+def connections_view(request: Request, brand_id: str):
+    """F30 Contract H: every data source's own read state and this month's day calendar.
+    Read-only -- unlike `existing` below, this read never requests a sync."""
+    actor = web.require_actor(request)
+    return connections.get_connections(web.conn, actor.org_id, brand_id)
 
 
 @router.get("/brands/{brand_id}/existing-campaigns")
