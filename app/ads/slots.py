@@ -3,11 +3,12 @@
 
 Readiness is the launch batch's own rule (`change_control_launch.ready_material` over
 `handoff_assignment.material_snapshot`, the same count `assets.readiness_summary` and
-`home_overview._draft_view` show), never a second definition. A file uploaded into a slot goes through the user-asset placement path
-(`user_assets_repository.attach_selected`) and waits on `ads_ad.slot_placement_id` until that
-placement is confirmed; only then is it assigned through `handoff_assignment.assign`, so
-`material_placement_id` keeps pointing at confirmed versions only. The pointer follows the
-placement id (not a revision) because the manual confirmation needs a revision first (purpose).
+`home_overview._draft_view` show), never a second definition. A file uploaded into a slot goes
+through the user-asset placement path (`user_assets_repository.attach_selected`) and waits on
+`ads_ad.slot_placement_id` until that placement is confirmed; only then is it assigned through
+`handoff_assignment.assign`, so `material_placement_id` keeps pointing at confirmed versions
+only. The pointer follows the placement id (not a revision) because the manual confirmation
+needs a revision first (purpose).
 """
 
 from app.ads import ad_status, handoff_assignment, material_tasks

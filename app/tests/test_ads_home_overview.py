@@ -16,7 +16,6 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from unittest import mock
 
-from app.ads import external_repository as external
 from app.ads import (
     change_control_launch,
     handoff_assignment,
@@ -25,6 +24,7 @@ from app.ads import (
     repository,
     triage,
 )
+from app.ads import external_repository as external
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.core import settings as coresettings
@@ -406,8 +406,12 @@ class CounterexampleTest(_Pinned):
                 return {"assignment_status": "confirmed"}
             return None
 
-        with mock.patch.object(handoff_assignment, "material_snapshot", side_effect=snapshot),                 mock.patch.object(change_control_launch, "ready_material",
-                                  wraps=change_control_launch.ready_material) as ready:
+        with (
+            mock.patch.object(handoff_assignment, "material_snapshot", side_effect=snapshot),
+            mock.patch.object(
+                change_control_launch, "ready_material", wraps=change_control_launch.ready_material
+            ) as ready,
+        ):
             row = self.overview(brand)["campaigns"][0]
         self.assertEqual(row["draft"]["ads_total"], 2)
         self.assertEqual(row["draft"]["ads_ready"], 1)
