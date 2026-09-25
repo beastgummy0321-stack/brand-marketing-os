@@ -10,7 +10,7 @@ import { formatAmount } from "./Chip";
 
 export type MoneyMeterTone = "auto" | "primary";
 
-export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto" }: {
+export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto", capLabel }: {
   value: number | null;
   cap?: { value: number; basis: "own" | "break_even" } | null;
   /** Axis end when there is no cap (the prototype's fixed fallback, or the month total for a share bar). */
@@ -18,6 +18,8 @@ export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto" 
   size?: "lg" | "sm";
   /** `primary`: a plain share bar (「花了多少」 column) instead of a cost-vs-cap colour. */
   tone?: MoneyMeterTone;
+  /** The `lg` cap tick's words; default 「上限」／「打平」. Home mixes campaigns, so it says 「各活動上限」 (v10). */
+  capLabel?: string;
 }) {
   const scale = cap ? (cap.value * 4) / 3 : max ?? null;
   const known = value !== null && scale !== null && scale > 0;
@@ -37,7 +39,7 @@ export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto" 
       {lg && (
         <div className="numeric relative mt-1.5 h-4 text-xs text-muted-foreground">
           <span className="absolute left-0">0</span>
-          {cap && <span className="absolute left-3/4 -translate-x-1/2 whitespace-nowrap">{cap.basis === "break_even" ? "打平" : "上限"} {formatAmount(cap.value)}</span>}
+          {cap && <span className="absolute left-3/4 -translate-x-1/2 whitespace-nowrap">{capLabel ?? (cap.basis === "break_even" ? "打平" : "上限")} {formatAmount(cap.value)}</span>}
           {scale !== null && <span className="absolute right-0">{formatAmount(Math.round(scale))}</span>}
         </div>
       )}

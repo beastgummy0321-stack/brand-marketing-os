@@ -13,7 +13,7 @@ import { CampaignRows } from "./home/CampaignRows";
 import { MonthMoney, monthNumber } from "./home/MonthMoney";
 import { NextDates, type TodayNote } from "./home/NextDates";
 import { QualityBand } from "./home/QualityBand";
-import { TodayDecisions, homeDecisions, type QueueState } from "./home/TodayDecisions";
+import { TodayDecisions, homeBoard, type QueueState } from "./home/TodayDecisions";
 import { proposalAction } from "./home/status";
 
 export { STATUS_LABEL, STATUS_TONE } from "./home/status";
@@ -48,9 +48,9 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
   );
 }
 
-/** 投放中心首頁 = board D (F28-I08; prototype `docs/design/ads/prototype-v9-ads-center.html` `home()`): the month's
- * title, 接下來, the money card with the budget pace, the money-quality band, today's decisions and the campaign
- * rows. Two independent reads (Contract K, `useApiRead`): `GET …/home` (title, dates, money, pace, band, rows — each
+/** 投放中心首頁 (F29-I11; prototype `docs/design/ads/prototype-v10-ads-center.html` `home()`): the month's title,
+ * 接下來, the money card with the budget pace, the money-quality band, today's decisions (the period settle among
+ * them) and the campaign rows. Two independent reads (Contract K, `useApiRead`): `GET …/home` (title, dates, money, pace, band, rows — each
  * block null on its own failure) and the brand queue (the 「今天」 count and the decision cards, both from this one
  * read); one failing never blanks the other (design-system §1.7 item 9), and a failed queue never reads as 「沒有要
  * 決定的事」. A home reload keeps the last good overview on screen until the new one lands. */
@@ -73,7 +73,7 @@ function AdsHome({ brandId }: { brandId: string }) {
 
   const home = homeState.status === "ready" ? homeState.home : null;
   const syncing = (home?.campaigns ?? []).some((c) => c.draft === null && c.sync_state === "syncing");
-  const decisions = queueState.status === "ready" ? homeDecisions(brandId, queueState.queue) : null;
+  const decisions = queueState.status === "ready" ? homeBoard(brandId, queueState.queue) : null;
   const note: TodayNote = syncing ? { kind: "syncing" }
     : queueState.status === "loading" ? { kind: "loading" }
     : queueState.status === "error" ? { kind: "error" }
@@ -111,7 +111,7 @@ function AdsHome({ brandId }: { brandId: string }) {
         actions={empty ? undefined : (
           <>
             <Button asChild variant="outline"><Link to={`/brands/${brandId}/ads/month`}>每月回顧</Link></Button>
-            {/* Not in the v9 prototype: the only home entry to bring an existing platform campaign in (kept). */}
+            {/* Not in the v10 prototype: the only home entry to bring an existing platform campaign in (kept). */}
             <ExistingCampaignDialog brandId={brandId} />
             <Button asChild variant="outline">
               <Link to={`/brands/${brandId}/ads/new`}><span aria-hidden="true">＋</span> 建立活動</Link>

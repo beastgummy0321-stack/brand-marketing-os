@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
-import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type TriageItem } from "@/lib/adsTriageApi";
+import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type SettleQueueRow, type TriageItem } from "@/lib/adsTriageApi";
 import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
@@ -68,7 +68,7 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     previous: { spend: 3080, result_count: 7, cost_per_result: 440, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    change_pct: 18.2, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
+    change_pct: 0.182, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
     ...overrides,
   };
 }
@@ -89,6 +89,19 @@ function cleanupItem(id: string, campaignName = "日常商品推廣・轉換"): 
       ads: [{ entity_id: "a9", name: "秋季新色預告・直式 9:16 短影音", thumbnail_url: null, spend_7d: 770, grade: "wasted", cost_per_result: null, spend: 1480, result_count: 0, daily_spend: 110, rejected_before: null }],
     },
   }, { class: "stop_loss", grade: "wasted" });
+}
+
+/** The brand's open period-settle row for August, raised on 9/2 (Contract E). */
+function settleRow(): SettleQueueRow {
+  return {
+    id: "itr_settle", dedupe_key: "k_settle", category: "ads_triage_settle", severity: "rule_warning", message: "結算上一期（8 月），待寫進筆記本",
+    action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+    settle: { month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 5, buckets: [
+      { grade: "on_target", amount: 15300, count: 2, ads: [] }, { grade: "watch", amount: 3900, count: 1, ads: [] },
+      { grade: "over", amount: 9340, count: 2, ads: [] }, { grade: "wasted", amount: 1600, count: 1, ads: [] },
+      { grade: "insufficient", amount: 1600, count: 2, ads: [] },
+    ] },
+  };
 }
 
 function queue(items: QueueItem[]): QueuePayload {
@@ -156,14 +169,60 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(within(section).getByText("5 件")).toBeTruthy();
   });
 
-  it("a handled decision leaves the cards and the count, and sits in the 處理過 fold", async () => {
+  it("a handled decision leaves the cards and the count, and sits in the 今天處理過 fold", async () => {
     const rejected: QueueProposal = { kind: "cleanup", change_set_id: "cs_1", campaign_id: "cmp_daily", status: "rejected", verification_state: "pending", reason: null, revisit_at: null, multi: true };
     vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected }, item("w1", "worse")]));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     expect(await within(section).findAllByRole("article")).toHaveLength(1);
     expect(within(section).getByText("1 件")).toBeTruthy();
-    expect(within(section).getByRole("button", { name: "處理過 1 件" })).toBeTruthy();
+    await userEvent.click(within(section).getByRole("button", { name: "今天處理過 1 件" }));
+    expect(within(section).getByText("清理：關 1 則、留 0 則")).toBeTruthy();
+    expect(within(section).getByText("已拒絕")).toBeTruthy();
+  });
+
+  // F29-I11: the period settle is one of today's decisions (QueuePayload.settle, Contract E).
+  it("settle row present: counted, placed after cleanup and worse, before refresh; the card spans the row and opens the settle page", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([
+      item("r1", "refresh_creative", { action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
+      item("w1", "worse"),
+    ]), settle: settleRow() });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    const cards = await within(section).findAllByRole("article");
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["再行銷・兩入組 NT$1,580 免運 - 複本 2", "結算上一期", "能判讀的素材只剩 2 則"]);
+    expect(cards[1].className).toContain("col-span-full");
+    expect(within(cards[1]).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/settle/2026-08/result");
+    expect(within(section).getByText("3 件")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "3 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("settle as the fourth open decision folds under the three cards with its own row", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([cleanupItem("c1"), item("w1", "worse"), item("w2", "worse")]), settle: settleRow() });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    expect(await within(section).findAllByRole("article")).toHaveLength(3);
+    expect(within(section).queryByRole("article", { name: "結算上一期" })).toBeNull();
+    await userEvent.click(within(section).getByRole("button", { name: "還有 1 件要決定" }));
+    expect(within(section).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/settle/2026-08/result");
+    expect(within(section).getByText("4 件")).toBeTruthy();
+  });
+
+  it("settle row absent (null): no settle card and it adds nothing to the count", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([item("w1", "worse")]), settle: null });
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    expect(await within(section).findAllByRole("article")).toHaveLength(1);
+    expect(within(section).queryByText(/結算上一期/)).toBeNull();
+    expect(await screen.findByRole("button", { name: "1 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("only a settle row open: today is not 沒有要決定的事", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([]), settle: settleRow() });
+    renderPage();
+    expect(await screen.findByRole("article", { name: "結算上一期" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "1 件要你決定 ↓" })).toBeTruthy();
+    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
   });
 
   it("no open decision: honest empty card with the sync time, and 今天 says nothing to decide", async () => {

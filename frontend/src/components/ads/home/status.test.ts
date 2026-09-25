@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
-import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, TriageItem } from "@/lib/adsTriageApi";
-import { cleanupAction, isQueueItemDone } from "./status";
+import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
+import { cleanupAction, isQueueItemDone, settleAction } from "./status";
+
+// F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
+const settleRow = (overrides: Partial<SettleQueueRow> = {}): SettleQueueRow => ({
+  id: "itr_s", dedupe_key: "settle", category: "ads_triage_settle", severity: "rule_warning", message: "",
+  action_url: "/brands/brd_1/ads/settle/2026-08/result", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+  settle: { month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 5, buckets: [] },
+  ...overrides,
+});
+
+describe("settleAction", () => {
+  it("an open row starts the settle at its own link; without one, the same route from the month", () => {
+    expect(settleAction("brd_1", settleRow())).toEqual({ label: "開始結算", href: "/brands/brd_1/ads/settle/2026-08/result", done: false });
+    expect(settleAction("brd_1", settleRow({ action_url: null }))).toMatchObject({ href: "/brands/brd_1/ads/settle/2026-08/result" });
+  });
+
+  it("a row no longer open reads as written", () => {
+    expect(settleAction("brd_1", settleRow({ status: "resolved" }))).toMatchObject({ label: "✓ 已寫進筆記本", done: true });
+  });
+});
 
 const cleanupSet = (
   status: QueueCleanupProposal["status"], verification_state: QueueCleanupProposal["verification_state"],

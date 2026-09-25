@@ -1,10 +1,10 @@
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeOverview } from "@/lib/adsHomeApi";
-import { GradeBand, type BandBucket } from "../patterns";
+import { GradeBand, MoneyRule, type BandBucket } from "../patterns";
 import { monthNumber } from "./MonthMoney";
 
-/** Board D money-quality band (prototype v9 `homeBand()`, `.bandc`): how much of the month's one 已花 figure landed in
+/** Home money-quality band (prototype v10 `homeBand()`, `.bandc`): how much of the month's one 已花 figure landed in
  * each grade. `quality.buckets` sum to `spent` exactly (F28-I06); `null` quality means the spend is not fully known
  * (or the block failed) and nothing is graded — said once, never drawn as 0. */
 export function QualityBand({ state, onRetry }: {
@@ -39,5 +39,11 @@ function Band({ home }: { home: HomeOverview }) {
     ads: b.ads.map((a) => ({ entity_id: a.entity_id, name: a.name ?? "未命名廣告", thumbnail_url: a.thumbnail_url, spend: a.spend })),
   }));
   const cap = home.money?.cap && home.money.cap.basis ? { value: home.money.cap.value, basis: home.money.cap.basis } : null;
-  return <GradeBand buckets={buckets} spent={home.spent} spentLabel={label} cap={cap} />;
+  // v10 `moneyRule()` closes the band: 有賺／在虧 is measured against break-even, the grades against the cap.
+  return (
+    <>
+      <GradeBand buckets={buckets} spent={home.spent} spentLabel={label} cap={cap} />
+      <MoneyRule breakEven={home.money?.cap?.break_even ?? null} />
+    </>
+  );
 }
