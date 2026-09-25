@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
+import { useApiRead } from "@/lib/useApiRead";
 import { getTriage, type QueueCleanup, type QueueCleanupAd, type QueueItem, type TriageGrade, type TriageTargetView } from "@/lib/adsTriageApi";
 import {
-  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeChip, ResultHero, TargetRuler, formatAmount,
+  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeChip, ReadFailed, ResultHero, TargetRuler, formatAmount,
   type FlowStep, type RulerAd, type RulerCap,
 } from "../patterns";
 import { proposeBudgetPath } from "./changeFlow";
@@ -47,24 +48,17 @@ function capOf(target: TriageTargetView): RulerCap | null {
 }
 
 /** 「每日 1,200 撐 6 則」: the daily budget is only on the campaign triage (`data.capacity`), read on its own so a
- * failure leaves the words without the amount, never the page blank. Grade words of 剛開始 vs 資料不足 come from the
- * same read (the cleanup payload carries `grade` only). */
+ * failure leaves the words without the amount, never the page blank — and says so (Contract K, `ReadFailed` + 重試).
+ * Grade words of 剛開始 vs 資料不足 come from the same read (the cleanup payload carries `grade` only). */
 function useCampaignExtras(brandId: string, campaignId: string) {
-  const [extras, setExtras] = useState<{ daily: number | null; labels: Map<string, string> }>({ daily: null, labels: new Map() });
-  useEffect(() => {
-    let cancelled = false;
-    getTriage(brandId, campaignId)
-      .then((t) => {
-        if (cancelled || !t) return;
-        setExtras({
-          daily: t.data?.capacity?.daily_budget ?? null,
-          labels: new Map((t.items ?? []).map((i) => [i.entity_id, i.grade_label])),
-        });
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [brandId, campaignId]);
-  return extras;
+  const read = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
+  const t = read.data;
+  return {
+    daily: t?.data?.capacity?.daily_budget ?? null,
+    labels: new Map((t?.items ?? []).map((i) => [i.entity_id, i.grade_label])),
+    failed: read.status === "error",
+    retry: read.reload,
+  };
 }
 
 function capacityText(cleanup: QueueCleanup, daily: number | null): string {
@@ -117,6 +111,10 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
           )}
         />
 
+        {extras.failed && (
+          <ReadFailed what="每日預算與等級說明讀不到；下面關與留的清單照舊" onRetry={extras.retry} />
+        )}
+
         <section className="surface px-[22px] py-5" aria-label="對照上限">
           <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold">對照上限</h2>
@@ -160,7 +158,8 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref 
         </section>
       </div>
       <div className="flex-1" />
-      <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}>
+      {/* Nothing is written on this step: the decision is open, so the flow's one exit replaces 「← 投放中心」. */}
+      <ActionBar back={{ label: "投放中心", to: homeHref }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
         <Button asChild><Link to="?step=confirm">下一步：確認 →</Link></Button>
       </ActionBar>
     </>
