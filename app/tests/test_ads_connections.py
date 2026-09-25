@@ -18,6 +18,7 @@ from app import main
 from app.ads import channels, connections
 from app.ads import external_repository as external
 from app.ads import external_sync as sync
+from app.ads.adapters.external import SourceReadError
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.core import settings as coresettings
@@ -36,6 +37,16 @@ class _Reader:
             {"account_id": "act_new", "name": "新帳戶", "currency": "TWD",
              "timezone_name": "Asia/Taipei"},
         ]
+
+
+class _Revoked(_Reader):
+    """The platform now refuses every read of the account (its authorization was revoked)."""
+
+    def list_existing(self, *args, **kwargs):
+        raise SourceReadError("沒有讀取權限", "permission_denied")
+
+    def read_monthly(self, *args, **kwargs):
+        raise SourceReadError("沒有讀取權限", "permission_denied")
 
 
 def _only_meta(reader):
@@ -127,9 +138,10 @@ class ConnectionsTest(unittest.TestCase):
                                 "start": "2026-09-01", "end": "2026-09-19",
                                 "completed_at": "2026-09-19T01:02:00+00:00"},
         })
-        # act_mid: read up to 09/16, then its authorization expired (09/17 and 09/18 unread).
+        # act_mid: last read on the morning of 09/17 (so 09/16 is its last whole day), then its
+        # authorization expired (09/17 and 09/18 unread).
         mid_id, _ = self._campaign("act_mid", "c_mid", "中秋限定活動")
-        self._observed(mid_id, "2026-08-18", "2026-09-16", at="2026-09-16T01:00:00+00:00")
+        self._observed(mid_id, "2026-08-18", "2026-09-17", at="2026-09-17T01:00:00+00:00")
         external.record_sync(
             self.conn, self.org, self.brand, mid_id, section="observations",
             state={"status": "error", "error": "沒有讀取權限", "error_code": "permission_denied"},
@@ -168,9 +180,10 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(mid["affected_campaigns"], [{"id": mid_id, "name": "中秋限定活動"}])
         self.assertEqual(mid["note"], "09/17、09/18 讀不到・中秋限定活動先不判斷")
         self.assertEqual(mid["action"]["label"], "重新授權")
-        self.assertEqual(mid["last_success_at"], datetime(2026, 9, 16, 1, 0, tzinfo=UTC))
+        self.assertEqual(mid["last_success_at"], datetime(2026, 9, 17, 1, 0, tzinfo=UTC))
 
         self.assertEqual(new["state"], "never")
+        self.assertEqual(new["note"], "還沒讀取過")
         self.assertIsNone(new["last_success_at"])
         self.assertEqual(result["attention_count"], 4)  # mid, new, orders (none), products
 
@@ -180,7 +193,8 @@ class ConnectionsTest(unittest.TestCase):
         main = self._days(result, "meta:act_main")
         self.assertEqual(main["2026-09-10"], "ok")  # read, no spend row: not missing
         self.assertEqual(main["2026-09-09"], "ok")
-        self.assertEqual(main["2026-09-19"], "ok")  # today, already read
+        self.assertEqual(main["2026-09-18"], "ok")
+        self.assertEqual(main["2026-09-19"], "future")  # read this morning: today is not over
         self.assertEqual(main["2026-09-20"], "future")
         self.assertEqual(len(main), 30)
 
@@ -195,13 +209,73 @@ class ConnectionsTest(unittest.TestCase):
     def test_account_with_only_monthly_reads_and_a_later_gap(self):
         self._job("act_main", {"monthly:2026-09": {
             "section": "monthly", "status": "succeeded", "start": "2026-09-05",
-            "end": "2026-09-15", "completed_at": "2026-09-15T01:00:00+00:00"}})
+            "end": "2026-09-15", "completed_at": "2026-09-16T01:00:00+00:00"}})
         source = self._source(self._read(), "meta:act_main")
         self.assertEqual(source["state"], "missing_days")
         self.assertEqual(source["missing_days"], ["2026-09-16", "2026-09-17", "2026-09-18"])
         days = self._days(self._read(), "meta:act_main")
         self.assertEqual(days["2026-09-04"], "none")  # before the first read
         self.assertEqual(days["2026-09-05"], "ok")
+
+    def test_a_day_read_while_it_was_running_is_not_proven(self):
+        # Both reads cover up to 09/18. act_main finished at 09:00 on 09/18 (Taipei), so 09/18
+        # was not over yet; act_mid finished at 04:00 on 09/19 (Taipei), after 09/18 ended.
+        for account, finished in (("act_main", "2026-09-18T01:00:00+00:00"),
+                                  ("act_mid", "2026-09-18T20:00:00+00:00")):
+            self._job(account, {"monthly:2026-09": {
+                "section": "monthly", "status": "succeeded", "start": "2026-09-01",
+                "end": "2026-09-18", "completed_at": finished}})
+        campaign_id, _ = self._campaign("act_new", "c_new", "新活動")
+        self._observed(campaign_id, "2026-08-20", "2026-09-18", at="2026-09-18T01:00:00+00:00")
+        result = self._read()
+        self.assertEqual(self._source(result, "meta:act_main")["missing_days"], ["2026-09-18"])
+        self.assertEqual(self._days(result, "meta:act_main")["2026-09-17"], "ok")
+        self.assertEqual(self._source(result, "meta:act_mid")["state"], "ok")
+        self.assertEqual(self._source(result, "meta:act_new")["missing_days"], ["2026-09-18"])
+
+    def test_resync_in_flight_or_failed_keeps_already_read_days(self):
+        self._job("act_main", {"monthly:2026-09": {
+            "section": "monthly", "status": "succeeded", "start": "2026-09-01",
+            "end": "2026-09-17", "completed_at": "2026-09-18T01:00:00+00:00"}})
+        with (
+            patch.object(sync.background, "enqueue"),
+            patch.object(sync.background, "is_active", return_value=False),
+        ):
+            job = sync.request_sync(self.conn, self.org, self.brand, "meta", "act_main")
+        self.assertEqual(job["tasks"]["monthly:2026-09"]["status"], "pending")
+        in_flight = self._read()
+        self.assertEqual(self._source(in_flight, "meta:act_main")["missing_days"], ["2026-09-18"])
+        self.assertEqual(self._days(in_flight, "meta:act_main")["2026-09-17"], "ok")
+
+        with (
+            patch.object(channels, "external_reader", side_effect=_only_meta(_Revoked())),
+            patch.object(sync.background, "enqueue"),
+            patch.object(sync.background, "is_active", return_value=False),
+        ):
+            for _ in range(4):
+                sync.run_sync(self.org, self.brand, job["id"])
+            failed = self._read()
+        task = sync.repo.get_job(self.conn, self.org, self.brand, job["id"])["tasks"]
+        self.assertEqual(task["monthly:2026-09"]["status"], "failed")
+        source = self._source(failed, "meta:act_main")
+        self.assertEqual(source["state"], "auth_expired")
+        self.assertEqual(source["missing_days"], ["2026-09-18"])
+        self.assertEqual(self._days(failed, "meta:act_main")["2026-09-17"], "ok")
+
+    def test_newest_month_task_failure_counts_at_the_month_start(self):
+        self._job("act_main", {
+            "list": {"section": "list", "status": "succeeded",
+                     "completed_at": "2026-09-30T01:00:00+00:00"},
+            "monthly:2026-08": {"section": "monthly", "status": "succeeded",
+                                "start": "2026-08-01", "end": "2026-08-31",
+                                "completed_at": "2026-09-01T01:00:00+00:00"},
+            "monthly:2026-09": {"section": "monthly", "status": "failed", "start": "2026-09-01",
+                                "end": "2026-09-30", "error_code": "permission_denied",
+                                "errors": ["沒有讀取權限"]},
+        })
+        with patch.object(coresettings, "today_for_org", return_value=date(2026, 10, 1)):
+            source = self._source(self._read(), "meta:act_main")
+        self.assertEqual(source["state"], "auth_expired")
 
     def test_failed_read_that_is_not_auth_is_failed(self):
         self._job("act_main", {"list": {"section": "list", "status": "failed",
@@ -281,7 +355,7 @@ class ConnectionsTest(unittest.TestCase):
 
         self._job("act_main", {"monthly:2026-09": {
             "section": "monthly", "status": "succeeded", "start": "2026-09-01",
-            "end": "2026-09-28", "completed_at": "2026-09-28T01:00:00+00:00"}})
+            "end": "2026-09-28", "completed_at": "2026-09-29T01:00:00+00:00"}})
         self.today.stop()  # the real `today_for_org`, on a clock at 00:30 of the 1st locally
         try:
             with patch.object(coresettings, "datetime", _Clock):

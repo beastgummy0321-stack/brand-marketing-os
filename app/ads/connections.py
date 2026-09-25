@@ -14,16 +14,21 @@ Sources, in screen order:
   exactly what the wizard means).
 
 An account's days come from pull coverage, never from spend rows (a day read with no spend is
-`ok`). Coverage is the union of the account's succeeded `monthly:*` reads in
-`ads_external_sync_job` (account-wide, one month each) and the recorded observations coverage of
-each of its campaigns (`triage._coverage`, kept on a failed read, so a failure after a good read
-leaves only the unread days missing). A campaign misses the days after its own coverage that no
-monthly read covered either (`triage._missing_days`), from its first covered day on; an account
-without campaign coverage misses the days its monthly reads did not cover, from its first
-monthly day on. Days before any read are `none`; an account never read at all misses every day.
+`ok`). Coverage is the union of the account's `monthly:*` reads in `ads_external_sync_job`
+(account-wide, one month each: a succeeded task, and the `last_covered` range a reset task carries
+from its last good read, so a read in flight or failed never un-proves days) and the recorded
+observations coverage of each of its campaigns (`triage._coverage`, kept on a failed read, so a
+failure after a good read leaves only the unread days missing). A read proves a day only once the
+day was over when the read finished: each range ends at most the day before its finish moment
+(`completed_at` for a month task, the section's `last_success_at` for a campaign) in the
+account's timezone, so a day read while still running is never `ok`. A campaign misses the
+days after its own coverage that no monthly read covered either (`triage._missing_days`), from
+its first covered day on; an account without campaign coverage misses the days its monthly reads
+did not cover, from its first monthly day on. Days before any read are `none`; an account never
+read at all misses every day (its note says 「還沒讀取過」, not a list of dates).
 
 Account state, first match: `auth_expired` / `failed` (the latest account-wide read -- the `list`
-task or this month's `monthly` task -- failed, or one of its open campaigns' own sync state is
+task or the newest `monthly` task -- failed, or one of its open campaigns' own sync state is
 failed / auth_expired; auth through the adapters' auth-error classifier) / `never` (no coverage
 at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to yesterday) of this
 month or of the last `LOOKBACK_DAYS` days, whichever starts earlier -- so a gap just before the
@@ -33,6 +38,7 @@ not read yet are `future`.
 
 import calendar
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import adapters, channels, repository, triage, wizard_options
 from app.core import settings as coresettings
@@ -63,6 +69,40 @@ def _moment(value):
         except ValueError:
             return None
     return value if isinstance(value, datetime) else None
+
+
+def _proven(start, end, finished, zone):
+    """`[start, end]` cut to the days already over when the read finished (`finished`, in the
+    account's `zone`); `None` when no day is left. No finish moment -> the range as recorded."""
+    start = start if isinstance(start, date) else date.fromisoformat(start)
+    end = end if isinstance(end, date) else date.fromisoformat(end)
+    moment = _moment(finished)
+    if moment is not None:
+        end = min(end, moment.astimezone(zone).date() - timedelta(days=1))
+    return (start, end) if start <= end else None
+
+
+def _zone(conn, org_id, account):
+    try:
+        return ZoneInfo(account.get("timezone_name") or "")
+    except (ValueError, ZoneInfoNotFoundError):
+        return coresettings.org_timezone(conn, org_id=org_id)
+
+
+def _monthly_ranges(tasks, zone) -> list:
+    ranges = []
+    for key, task in tasks.items():
+        if not key.startswith("monthly:"):
+            continue
+        proofs = [task.get("last_covered") or {}]
+        if task.get("status") == "succeeded":
+            proofs.append(task)
+        for proof in proofs:
+            if proof.get("start") and proof.get("end"):
+                proven = _proven(proof["start"], proof["end"], proof.get("completed_at"), zone)
+                if proven:
+                    ranges.append(proven)
+    return ranges
 
 
 def _days_text(days: list[str]) -> str:
@@ -106,17 +146,14 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
         (org_id, brand_id, platform, account_id),
     ).fetchone()
     tasks = dict(job["tasks"] or {}) if job else {}
-    monthly = [
-        (date.fromisoformat(task["start"]), date.fromisoformat(task["end"]))
-        for key, task in tasks.items()
-        if key.startswith("monthly:") and task.get("status") == "succeeded"
-        and task.get("start") and task.get("end")
-    ]
+    zone = _zone(conn, org_id, account)
+    monthly = _monthly_ranges(tasks, zone)
     moments = [job["last_success_at"]] if job else []
     failures = []  # (error_code, error text)
     auth = False
-    for key in ("list", "monthly:" + today.strftime("%Y-%m")):
-        task = tasks.get(key)
+    newest_month = max((key for key in tasks if key.startswith("monthly:")), default=None)
+    for key in ("list", newest_month):
+        task = tasks.get(key) if key else None
         if not task:
             continue
         if task.get("status") == "failed":
@@ -131,6 +168,11 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     campaign_covered = False
     for campaign in _account_campaigns(conn, org_id, brand_id, platform, account_id):
         coverage = triage._coverage(campaign)
+        if coverage is not None:
+            observed = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
+                "observations"
+            ) or {}
+            coverage = _proven(*coverage, observed.get("last_success_at"), zone)
         sync = repository.campaign_sync_state(
             conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
         )
@@ -158,13 +200,13 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
         missing = {day for day in _days(start, yesterday) if not _covered(monthly, day)}
 
     missing_days = sorted(day.isoformat() for day in missing)
-    gap = f"{_days_text(missing_days)} 讀不到" if missing_days else ""
+    gap = f"{_days_text(missing_days)} 讀不到" if missing_days and ranges else ""
     if failures:
         state = "auth_expired" if auth else "failed"
         text = next((error for _, error in failures if error), None)
         note = gap or ("授權已失效，重新授權後才能讀資料" if auth else text or "上次讀取失敗")
     elif not ranges:
-        state, note = "never", "還沒讀過這個帳戶的資料"
+        state, note = "never", "還沒讀取過"
     elif missing_days:
         state, note = "missing_days", gap
     else:

@@ -8,7 +8,10 @@
  *   platform without a reader (`unsupported`, listed last). A platform with a reader but no bound
  *   account is one `platform` row in state `never`.
  * - An account day is `ok` by pull coverage, not by spend rows: a day read with no spend is `ok`.
- *   An account never read at all is `never` (never `ok`) and every past day is `missing`.
+ *   A day only counts once it was over when the read finished (account timezone), and days an
+ *   earlier read proved stay `ok` while a new read runs or after it fails.
+ *   An account never read at all is `never` (never `ok`, note 「還沒讀取過」) and every past day
+ *   is `missing`.
  * - `auth_expired` / `failed` win over gaps; `missing_days` lists the unread complete days (up to
  *   yesterday) of this month or of the last 28 days, whichever starts earlier.
  * - `note` is server-written text, shown as is. `action` is `null` when there is nothing for the
