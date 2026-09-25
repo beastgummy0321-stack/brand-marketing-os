@@ -279,7 +279,7 @@ export interface BudgetScenarioRow {
 export interface BudgetScenarios {
   mode: BudgetScenarioMode;
   scenarios: BudgetScenarioRow[];
-  recommended: string; // F28-I03: moves to the "cap" row (照預算上限) when the old pick is over the cap
+  recommended: string | null; // F28-I03: moves to the "cap" row (照預算上限) when the old pick is over the cap
   basis: Record<string, unknown>;
   budget_cap: number | null; // F28-I03: `constraints_json.budget`; unset／0／negative -> null
 }
