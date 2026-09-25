@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
+import { formatCurrency } from "@/lib/format";
+import { listCampaigns } from "@/lib/adsApi";
 import {
-  getQueue, getTriage, type CampaignDataStatus, type TriageItem, type TriageTargetView,
+  getQueue, getTriage, type CampaignDataStatus, type CampaignTriage, type TriageItem, type TriageTargetView,
 } from "@/lib/adsTriageApi";
-import { useApiRead } from "@/lib/useApiRead";
+import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import {
   ActionBar, Chip, GradeRules, ReadFailed, TargetRuler, Term, formatAmount, type RulerAd, type RulerCap,
 } from "../patterns";
@@ -109,20 +113,86 @@ function RulerCard({ items, status, strategyHref, onAdClick }: {
   );
 }
 
-/** v10 (F30-I07): the old detail address `…/campaigns/:c/detail` (A/B links, bookmarks) lands on the workspace's
- * perf tab; its query (e.g. `?ad=`) is kept. `replace` keeps the dead address out of history. */
+function CapChip({ cap }: { cap: RulerCap | null }) {
+  if (!cap) return <Chip tone="warn">沒設上限</Chip>;
+  return cap.basis === "break_even"
+    ? <Chip tone="warn">暫用打平 {formatAmount(cap.value)}</Chip>
+    : <Chip tone="accent">上限 {formatAmount(cap.value)}</Chip>;
+}
+
+/** The standalone detail page (header + `CampaignPerfBody`). Since F30-I07 the route `…/campaigns/:c/detail` redirects
+ * to the workspace perf tab (App.tsx); this page stays for callers that render it directly. */
 export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
-  const [searchParams] = useSearchParams();
-  const params = new URLSearchParams(searchParams);
-  params.set("tab", "perf");
-  return <Navigate replace to={`/brands/${brandId}/ads/campaigns/${campaignId}?${params.toString()}`} />;
+  const campaigns = useApiRead(() => listCampaigns(brandId), [brandId]);
+  const triage = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
+  const homeHref = `/brands/${brandId}/ads`;
+  const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
+
+  if (campaigns.status !== "ready") {
+    return (
+      <div className="flex max-w-[1260px] flex-col gap-4">
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
+        {campaigns.status === "loading"
+          ? <><Skeleton className="h-9 w-80" /><Skeleton className="h-60 w-full" /></>
+          : <ReadFailed what={`活動清單讀不到：${campaigns.error}`} onRetry={campaigns.reload} />}
+      </div>
+    );
+  }
+  const campaign = campaigns.data.find((c) => c.id === campaignId) ?? null;
+  if (campaign === null) {
+    return (
+      <div className="flex max-w-[1260px] flex-col gap-4">
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "活動" }]} />
+        <EmptyState title="找不到活動" description="找不到這個 Campaign。" onAction={campaigns.reload} actionLabel="重新讀取" />
+      </div>
+    );
+  }
+
+  const budgetTotal = campaign.budget_progress.total;
+  const budgetChip = campaign.origin === "imported"
+    ? <Chip>平台預算</Chip>
+    : budgetTotal !== null ? <Chip>總預算 {formatCurrency(budgetTotal)}</Chip> : <Chip tone="warn">預算待核實</Chip>;
+  const items = triage.status === "ready" ? triage.data.items : null;
+  const active = items !== null && items.length > 0 ? items : null;
+
+  return (
+    // Prototype v10 `.page{max-width:1260px}`.
+    <div className="flex max-w-[1260px] flex-col gap-4">
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: campaign.name }]} />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold [overflow-wrap:anywhere]">{campaign.name}</h1>
+          {items && (
+            <p className="mt-1 text-[15px] text-muted-foreground">
+              只判讀投放中的 {items.length} 則；已關閉的廣告保留紀錄，不列入判斷
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {/* An imported objective can be a whole sentence: only it truncates, 「・N 則」 always shows. */}
+            <Chip className="max-w-[14rem] items-center">
+              <span className="min-w-0 truncate" title={campaign.objective || undefined}>{campaign.objective || "尚待確認"}</span>
+              {items && <span className="shrink-0">・{items.length} 則</span>}
+            </Chip>
+            {active && <CapChip cap={capOf(active[0].target)} />}
+            {budgetChip}
+          </div>
+        </div>
+        <Button variant="ghost" asChild>
+          <Link to={workspaceHref}>全部資料 ›</Link>
+        </Button>
+      </div>
+      <CampaignPerfBody brandId={brandId} campaignId={campaignId} origin={campaign.origin} triage={triage} />
+    </div>
+  );
 }
 
 /** The workspace perf tab body (prototype v10 `tabPerf()` under `wsHead()`): the ruler card, the A/B block, the grade
  * groups, 不在投的 and the bottom bar. The workspace head (name, chips, rail, tabs) is the caller's. `origin`: an
  * imported campaign has no A/B block (never read). */
-export function CampaignPerfBody({ brandId, campaignId, origin, advanced }: {
+export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared }: {
   brandId: string; campaignId: string; origin: "internal" | "imported" | undefined;
+  /** The caller's own triage read (the standalone page shares it with its header); else the body reads it. */
+  triage?: ApiRead<CampaignTriage>;
   /** A same-page fold placed above the bottom bar (the workspace's 「進階：舊版成效與檢討」). */
   advanced?: ReactNode;
 }) {
@@ -130,7 +200,8 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced }: {
   const highlightAdParam = searchParams.get("ad");
   const navigate = useNavigate();
 
-  const triage = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
+  const own = useApiRead((signal) => (shared ? Promise.resolve(null) : getTriage(brandId, campaignId, signal)), [brandId, campaignId, Boolean(shared)]);
+  const triage = shared ?? (own as ApiRead<CampaignTriage>);
   const queue = useApiRead((signal) => getQueue(brandId, signal).then((q) => q.items), [brandId]);
   const requests = useReplaceRequests(brandId, campaignId);
 

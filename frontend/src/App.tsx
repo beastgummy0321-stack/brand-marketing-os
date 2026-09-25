@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignDetailPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep } from "@/components/ads";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -473,13 +473,14 @@ function AdsTargetRoute() {
   return <Navigate replace to={`/brands/${brandId ?? ""}/ads/campaigns/${campaignId ?? ""}?tab=strategy`} />;
 }
 
-/** 活動詳情頁（F20-I02，v7 原型 `campPage()`）：家頁的活動卡名稱與佇列的「看證據」都落在
- * 這裡；原本的五分頁工作區網址（`AdsCampaignRoute`）不變、由這頁的「全部資料 ›」進入。
- * `key={campaignId}`：換活動要整支重新掛載，不沿用上一個活動的
- * 展開／高亮狀態。 */
+/** 活動詳情頁的舊網址（F20-I02 起的 `/detail`）：v10（F30-I07）起詳情就是工作區的「成效」分頁（`?tab=perf`），
+ * 舊連結（A/B、書籤）轉過去並保留原本的查詢參數（如 `?ad=`）。`replace` 不把死網址留在歷史紀錄。 */
 function AdsCampaignDetailRoute() {
   const { brandId, campaignId } = useParams<{ brandId: string; campaignId: string }>();
-  return <CampaignDetailPage key={campaignId} brandId={brandId ?? ""} campaignId={campaignId ?? ""} />;
+  const [searchParams] = useSearchParams();
+  const params = new URLSearchParams(searchParams);
+  params.set("tab", "perf");
+  return <Navigate replace to={`/brands/${brandId ?? ""}/ads/campaigns/${campaignId ?? ""}?${params.toString()}`} />;
 }
 
 /** 資料連線頁（F21-I02，v7 原型 `connections()`）：投放中心倚賴的五個資料來源各自的狀態，
