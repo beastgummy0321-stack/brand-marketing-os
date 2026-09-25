@@ -11,7 +11,7 @@ import { getTriage, splitQueue } from "@/lib/adsTriageApi";
 import { apiFetch } from "@/lib/http";
 import { CampaignDetailPage } from "./CampaignDetailPage";
 import {
-  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction,
+  ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction, type RowExtras,
 } from "./GradeGroups";
 
 // F29-I03: the detail-page test below runs the REAL `getQueue` (and its `splitQueue`) over a backend payload;
@@ -70,13 +70,17 @@ const ok = item({ entity_id: "a2", name: LONG_NAME, spend: 1407, results: 28, co
 const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "剛開始、數字還不夠", spend: 120, results: 0, cost: null, change_pct: null });
 const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "insufficient", grade_label: "資料不足", spend: null, results: null, cost: null, change_pct: null });
 
-function renderGroups(items: TriageItem[], opts: { cap?: number | null; open?: GroupKey[]; actions?: Map<string, RowAction> } = {}) {
+function renderGroups(items: TriageItem[], opts: {
+  cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
+  actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras;
+} = {}) {
   const actions = opts.actions ?? adActions("brd_1", "cmp_1", WS, items, []);
   const onToggle = vi.fn();
   const view = render(
     <MemoryRouter>
       <GradeGroups
         items={items} cap={opts.cap === undefined ? 450 : opts.cap} actions={actions}
+        breakEven={opts.breakEven === undefined ? 520 : opts.breakEven} dataReason={opts.dataReason ?? null} extras={opts.extras}
         openGroups={new Set(opts.open ?? OPEN_BY_DEFAULT)} onToggle={onToggle} highlightId={null} registerRow={() => {}}
       />
     </MemoryRouter>,
@@ -146,8 +150,59 @@ describe("GradeGroups", () => {
     expect(within(wastedRow).getByText("0 筆")).toBeTruthy();
 
     const thinRow = screen.getByTestId("ad-row-m2");
-    expect(within(thinRow).getByText("剛開始、數字還不夠")).toBeTruthy();
+    // The too-new word is the glossary term (its sentence states the ruled gate).
+    expect(within(thinRow).getByText("剛開始、數字還不夠").getAttribute("data-slot")).toBe("term");
     expect(within(thinRow).getByText("120 元")).toBeTruthy();
+  });
+
+  it("money tags against break-even beside every cost per purchase: 有賺／剛好打平／在虧; none on 沒賣出 and 剛開始", () => {
+    renderGroups([ok, watch, over, wasted, thin], { open: ["wasted", "over", "watch", "on_target", "thin"] });
+    const tag = (id: string) => screen.getByTestId(`ad-row-${id}`).querySelector("[data-slot=money-tag]");
+    expect(tag("a2")?.getAttribute("data-variant")).toBe("gain");
+    expect(tag("a2")?.textContent).toMatch(/有賺.*（打平 520）$/);
+    expect(tag("a6")?.getAttribute("data-variant")).toBe("even");
+    expect(tag("a7")?.getAttribute("data-variant")).toBe("loss");
+    expect(tag("a8")).toBeNull();
+    expect(tag("m2")).toBeNull();
+  });
+
+  it("no break-even (no product cost) or a non-purchase result: no money tag, never a guess", () => {
+    const clicks = item({
+      entity_id: "c1", cost: 3.456,
+      current: { spend: 34.56, result_count: 10, cost_per_result: 3.456, result_kind: "link_click", result_label: "連結點擊", derived_zero_days: 0, reason: null },
+    });
+    const { unmount } = renderGroups([ok], { breakEven: null, open: ["on_target"] });
+    expect(screen.getByText("50.25 元")).toBeTruthy();
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+    unmount();
+    renderGroups([clicks], { open: ["on_target"] });
+    expect(screen.getByText("每次連結點擊成本")).toBeTruthy();
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+  });
+
+  it("資料不足 carries the campaign's one data_status sentence as its hint", () => {
+    renderGroups([noData], { dataReason: "有幾天的資料還沒讀到，數字可能偏少。", open: [] });
+    expect(within(detailsOf("資料不足").querySelector("summary")!).getByText("有幾天的資料還沒讀到，數字可能偏少。")).toBeTruthy();
+  });
+
+  it("row extras: the page's menu sits after the decision button, an open request shows its chip, a failure its line", () => {
+    const queue = [queueRow({ kind_key: "worse", triage: watch })];
+    renderGroups([watch, ok], {
+      actions: adActions("brd_1", "cmp_1", WS, [watch, ok], queue), open: ["watch", "on_target"],
+      extras: (i) => ({
+        menu: <button type="button">⋯ {i.entity_id}</button>,
+        requestOpen: i.entity_id === "a2",
+        error: i.entity_id === "a6" ? "換掉這一則沒送出：網路錯誤" : null,
+      }),
+    });
+    const watchRow = screen.getByTestId("ad-row-a6");
+    const buttons = within(watchRow).getAllByRole("link").concat(within(watchRow).getAllByRole("button"));
+    expect(buttons.map((b) => b.textContent)).toEqual(["去處理", "⋯ a6"]);
+    expect(within(watchRow).getByRole("alert").textContent).toBe("換掉這一則沒送出：網路錯誤");
+    expect(within(watchRow).queryByText("換掉這一則・需求已開")).toBeNull();
+    const okRow = screen.getByTestId("ad-row-a2");
+    expect(within(okRow).getByText("換掉這一則・需求已開").getAttribute("data-tone")).toBe("accent");
+    expect(within(okRow).queryByRole("link")).toBeNull();
   });
 
   it("unknown spend reads 未知 (never 0); a non-purchase result kind names its own result", () => {
@@ -223,7 +278,7 @@ describe("adActions", () => {
     expect(adActions("brd_1", "cmp_1", WS, items, queue).get("a2")!.label).toBe("看紀錄");
   });
 
-  it("renders 在清理提議／去處理 as outline buttons and 看紀錄 as a link", () => {
+  it("renders 在清理提議／去處理 as outline buttons; a 看紀錄 row has no row button (看紀錄 is in its menu)", () => {
     const queue = [
       queueRow({ kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
       queueRow({ kind_key: "worse", triage: watch }),
@@ -232,16 +287,16 @@ describe("adActions", () => {
     const clean = within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" });
     expect(clean.getAttribute("data-variant")).toBe("outline");
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("data-variant")).toBe("outline");
-    expect(within(screen.getByTestId("ad-row-a2")).getByRole("link", { name: "看紀錄" }).getAttribute("data-variant")).toBe("link");
+    expect(within(screen.getByTestId("ad-row-a2")).queryByRole("link")).toBeNull();
   });
 });
 
 describe("ClosedGroup", () => {
-  it("folded by default with counts; rows keep numbers, status chip and 看紀錄; truncated prints the rest", () => {
+  it("under 不在投的, folded by default, 已關閉的 N 則; rows are thumb, name and status only; truncated prints the rest", () => {
     render(
       <MemoryRouter>
         <ClosedGroup
-          workspaceHref={WS} open={false} onToggle={() => {}}
+          open={false} onToggle={() => {}}
           closed={{
             paused: 40, archived: 17, other: 0, total: 57, truncated: true,
             items: [
@@ -253,23 +308,30 @@ describe("ClosedGroup", () => {
         />
       </MemoryRouter>,
     );
-    const details = detailsOf("已關閉");
+    expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
+    const details = detailsOf("已關閉的 57 則");
     expect(details.open).toBe(false);
-    expect(within(details.querySelector("summary")!).getByText("57 則")).toBeTruthy();
-    expect(screen.getByText("暫停 40・已封存 17・不列入判斷")).toBeTruthy();
+    expect(within(details.querySelector("summary")!).queryByText("57 則")).toBeNull();
+    expect(screen.getByText("暫停 40・已封存 17・不算在上面的在投數量裡")).toBeTruthy();
     const paused = screen.getByTestId("closed-ad-row-c1");
-    expect(within(paused).getByText("321 元")).toBeTruthy();
-    expect(within(paused).getByText("45.5 元")).toBeTruthy();
+    expect(within(paused).getByText("舊版主視覺 0715")).toBeTruthy();
     expect(within(paused).getByText("已暫停")).toBeTruthy();
-    expect(within(paused).getByRole("link", { name: "看紀錄" }).getAttribute("href")).toBe(`${WS}?tab=performance&ad=c1`);
-    const archived = screen.getByTestId("closed-ad-row-c2");
-    expect(within(archived).getByText("已封存")).toBeTruthy();
-    expect(within(archived).getAllByText("未知").length).toBe(2);
+    expect(within(paused).queryByText("321 元")).toBeNull();
+    expect(within(paused).queryByRole("link")).toBeNull();
+    expect(within(screen.getByTestId("closed-ad-row-c2")).getByText("已封存")).toBeTruthy();
     const deleted = screen.getByTestId("closed-ad-row-c3");
     expect(within(deleted).getByText("（未命名廣告）")).toBeTruthy();
-    expect(within(deleted).getByText("0 元")).toBeTruthy();
     expect(within(deleted).getByText("已關閉")).toBeTruthy();
     expect(screen.getByText("…其餘 54 則")).toBeTruthy();
+  });
+
+  it("closed ads outside 暫停／封存 are counted as 其他 rather than dropped from the hint", () => {
+    render(
+      <MemoryRouter>
+        <ClosedGroup open={false} onToggle={() => {}} closed={{ paused: 2, archived: 0, other: 1, total: 3, truncated: false, items: [] }} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("暫停 2・已封存 0・其他 1・不算在上面的在投數量裡")).toBeTruthy();
   });
 });
 
@@ -344,6 +406,6 @@ describe("queue settle row (F29-I03)", () => {
     const worse = await screen.findByTestId("ad-row-a6");
     expect(await within(worse).findByRole("link", { name: "去處理" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a2")).getByRole("link", { name: "看紀錄" })).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a2")).queryByRole("link")).toBeNull();
   });
 });
