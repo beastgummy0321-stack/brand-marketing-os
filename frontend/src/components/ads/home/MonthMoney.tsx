@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeEarnMissing, HomeOverview } from "@/lib/adsHomeApi";
 import { MonthlyBudgetPanel } from "../MonthlyBudgetPanel";
-import { MoneyMeter, PaceChart, formatAmount } from "../patterns";
+import { MoneyMeter, MoneyTag, PaceChart, Term, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 
-/** Board D money card (prototype v9 `homeMoney()`, `.moneyg`): what the month earned after ad cost, the cost per
+/** Home money card (prototype v10 `homeMoney()`, `.moneyg`): what the month earned after ad cost, the cost per
  * purchase against the one shared cap, purchases against the same days of last month, and the budget pace chart
  * with the 調整 entry to the existing monthly-budget editor. Every number comes from `GET …/home` (F28-I06);
  * `null` prints the unknown text, never 0. */
@@ -37,13 +37,18 @@ const EARN_MISSING: Record<HomeEarnMissing, string> = {
   no_purchase_campaign: "沒有以購買為成果的活動",
 };
 
-/** One brand-level cap wording: shared cap → 你的上限／暫用打平; none shared → why. */
-function capText(home: HomeOverview): string {
+/** v10 cap wording: caps are per campaign, so home never says 「你的上限」 as if it were one rule. A shared cap says
+ * every campaign currently has the same one; none shared says they differ (or that none has one). */
+function capText(home: HomeOverview): ReactNode {
   const cap = home.money?.cap ?? null;
-  if (cap) return cap.basis === "break_even" ? `暫用打平 ${formatAmount(cap.value)}` : `你的上限 ${formatAmount(cap.value)}`;
+  if (cap) {
+    return cap.basis === "break_even"
+      ? <>每個活動各自算，目前都暫用<Term k="break_even" value={cap.break_even}>打平線</Term> {formatAmount(cap.value)}</>
+      : <>每個活動各有<Term k="cap">上限</Term>，目前都是 {formatAmount(cap.value)}</>;
+  }
   const live = (home.campaigns ?? []).filter((c: HomeCampaign) => c.draft === null);
   if (live.length && live.every((c) => c.cap === null)) return "還沒設上限";
-  return "各活動上限不同";
+  return <>每個活動的<Term k="cap">上限</Term>不一樣</>;
 }
 
 type Props = {
@@ -142,6 +147,7 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
               : <span className="text-xl font-medium text-muted-foreground/80">{purchases === 0 ? "還沒有購買" : "算不出來"}</span>}
           </span>
           <span className="text-sm text-muted-foreground">{capText(home)}</span>
+          <MoneyTag cost={cpp} breakEven={cap?.break_even ?? null} />
         </div>
         <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={Math.max(600, (cpp ?? 0) * 1.3)} size="lg" />
       </div>
