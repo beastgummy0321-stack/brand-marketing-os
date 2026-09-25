@@ -11,9 +11,31 @@ import { ChangeComposer } from "./ChangeComposer";
 import { ChangeSetView } from "./ChangeSetView";
 import { currentBudgetMonth, MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
 import { Disclosure } from "./patterns/Disclosure";
+import type { TimelineRow } from "@/lib/adsWorkspaceApi";
+import { isAbSet } from "./flow/changeFlow";
+import { ChangesTab } from "./workspace/ChangesTab";
+
+/** A set the step pages (`changes/:id/confirm|handoff|verify`) render: a cleanup, an A/B pause, or one item of a kind
+ * they draw — the same rule their own 「這份清單有多項變更」 fallback uses. Anything else (a launch, a multi-item set
+ * from the composer) is shown here, in the advanced fold. */
+function flowRenders(set: ChangeSet): boolean {
+  return set.source === "cleanup" || isAbSet(set)
+    || (set.items.length === 1 && ["pause", "copy", "budget", "new_ad"].includes(set.items[0].kind));
+}
+
+/** The fold renders its content a frame after it opens; wait for the anchor for a few frames, then scroll to it. */
+function scrollWhenShown(id: string, frames = 10) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  else if (frames > 0) requestAnimationFrame(() => scrollWhenShown(id, frames - 1));
+}
 
 function Control({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const [search, setSearch] = useSearchParams();
+  // v10 (F30-I09): the timeline is the tab; the composer, month budget and manual handoff live in the fold
+  // 「進階：自己建一份變更」. A link that lands on something inside it (a set, a recommendation or material copy to
+  // compose from, an unsent save) opens it.
+  const [advancedOpen, setAdvancedOpen] = useState(() => ["change", "review", "material_copy"].some(key => search.has(key)));
   const storageKey = `ads-change-operation:${getOrgId()}:${brandId}:${campaignId}`;
   const [pending, setPending] = useState<ChangeDraft | null>(() => {
     try { const raw = sessionStorage.getItem(storageKey); return raw ? JSON.parse(raw) as ChangeDraft : null; } catch { return null; }
@@ -42,6 +64,8 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     return () => controller.abort();
   }, [brandId, campaignId, reload]);
   const reviewId = search.get("review"), recommendationId = search.get("recommendation");
+  const materialParam = search.get("material_copy"), changeParam = search.get("change");
+  useEffect(() => { if (composing || pending || (reviewId && recommendationId) || materialParam || changeParam) setAdvancedOpen(true); }, [composing, pending, reviewId, recommendationId, materialParam, changeParam]);
   useEffect(() => {
     const recommendationKey = `${reviewId}:${recommendationId}`;
     if (!reviewId || !recommendationId || pending || loadedRecommendation.current === recommendationKey) return;
@@ -56,7 +80,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     }).catch(() => { if (!controller.signal.aborted) setError("檢討建議尚未讀取完成，請回到成效頁重新查看。"); });
     return () => controller.abort();
   }, [brandId, campaignId, reviewId, recommendationId, pending]);
-  const materialId = search.get("material_copy");
+  const materialId = materialParam;
   useEffect(() => {
     if (!materialId || pending || !data || loadedRecommendation.current === `material:${materialId}`) return;
     const controller = new AbortController();
@@ -117,8 +141,22 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     } catch (err) { if (!signal.aborted) setError(err instanceof Error ? err.message : "目前設定尚未讀取完成，請稍後再試。"); }
     finally { if (!signal.aborted) setBusy(false); }
   }
+  function openInFold(row: TimelineRow) {
+    if (data?.change_sets.some(set => set.id === row.change_set_id)) { select(row.change_set_id); setComposing(false); }
+    setAdvancedOpen(true);
+    // A launch is checked item by item in the manual handoff; any other set is its own view at the top of the fold.
+    const anchor = row.version !== null ? "manual-handoff" : "changes-advanced";
+    scrollWhenShown(anchor);
+  }
+  const inFold = (row: TimelineRow) => {
+    if (row.version !== null) return true;
+    const set = data?.change_sets.find(item => item.id === row.change_set_id);
+    return set ? !flowRenders(set) : false;
+  };
   return <div className="space-y-4">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">變更與核對</h2><p className="mt-1 text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p></div>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
+    <ChangesTab brandId={brandId} campaignId={campaignId} refreshKey={budgetRefresh} inFold={inFold} onOpenInFold={openInFold} />
+    <Disclosure label="進階：自己建一份變更" open={advancedOpen} onOpenChange={setAdvancedOpen}><div id="changes-advanced" className="space-y-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><p className="text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
     <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth()} refresh={budgetRefresh} compact />
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
@@ -131,6 +169,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     {data && !composing && !selected && !handoffWork && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : "先從投放中心帶入既有活動，或完成廣告對應；原有平台物件與歷史會保留。"} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => setComposing(true) } : {})} />}
     {!composing && <div id="manual-handoff"><ManualHandoffPanel brandId={brandId} campaignId={campaignId} mode="items" refreshKey={budgetRefresh} onHandoffWork={setHandoffWork} /></div>}
     {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{new Date(set.created_at).toLocaleDateString("zh-TW")}</span></button>)}</div></Disclosure>}
+    </div></Disclosure>
   </div>;
 }
 export function ChangeControl(props: Parameters<typeof Control>[0]) {
