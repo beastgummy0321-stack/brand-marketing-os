@@ -7,6 +7,7 @@ import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
 import type { CampaignSyncState } from "./adsApi";
 import type { AlertSeverity } from "./api";
+import type { PeriodGradeBucket } from "./adsMonthApi";
 
 /** F27-I06 Contract F: per-campaign capacity, read-only from the ACTIVE ads' own daily-budget
  * owners (`app/ads/triage_capacity.py::capacity_view`, owner lookup shared with
@@ -239,8 +240,10 @@ export type QueueProposal =
 // F27-I17 Done 0: widened again with the real backend's sixth kind (`app/ads/triage.py`'s
 // `"cleanup"`, Contract F) -- `home/QueueRow.tsx`'s exhaustive switches and `home/status.ts`'s
 // `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
+// F29-I03 Contract E: widened with the brand-level `"settle"` row (`app/ads/settle.py`).
 export type QueueKind =
-  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
+  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup"
+  | "settle";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
@@ -304,6 +307,16 @@ export interface QueueCleanup {
   ads: QueueCleanupAd[]; keep: QueueCleanupAd[]; short: number;
   daily_saving: number | null; scale_owner_id: string | null;
 }
+/** F29-I03 Contract E: the `settle` row's own payload -- the latest ended calendar month (org
+ * timezone), raised from the 2nd day after it ends while nothing is written. `learnable_count`
+ * counts the ads that will be written (划算／太貴／沒賣出); `buckets` is the month's spend by grade
+ * (`app/ads/period_grades.py::summarize`, same as the month review). The page reads
+ * `adsSettleApi.ts::getSettle(brand, month)`. */
+export interface QueueSettle {
+  month: string; start: string; end: string;
+  campaign_count: number; imported_count: number; learnable_count: number;
+  buckets: PeriodGradeBucket[];
+}
 
 /** One open row of the brand decision queue (`interrupt` table columns actually returned) plus
  * `triage`: the current triage item that produced it, matched by the same dedupe key the
@@ -321,6 +334,10 @@ export interface QueueItem {
   triage: TriageItem; proposal: QueueProposal | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
   cleanup?: QueueCleanup;
+  /** F29-I03: present only on a `settle` row. That row is about the whole brand's month, so the
+   * backend sends `triage: null` on it -- check `kind_key` before reading `triage` wherever every
+   * row is scanned (the type keeps `triage` required for the existing per-ad consumers). */
+  settle?: QueueSettle;
 }
 export interface QueuePayload {
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;
