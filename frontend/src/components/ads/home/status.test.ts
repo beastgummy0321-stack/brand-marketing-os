@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { QueueProposal } from "@/lib/adsTriageApi";
+import type { QueueCleanupProposal } from "@/lib/adsTriageApi";
 import { cleanupAction } from "./status";
 
-const cleanupSet = (status: QueueProposal["status"], verification_state: QueueProposal["verification_state"]): QueueProposal => ({
+const cleanupSet = (
+  status: QueueCleanupProposal["status"], verification_state: QueueCleanupProposal["verification_state"],
+): QueueCleanupProposal => ({
   kind: "cleanup", change_set_id: "cs_1", campaign_id: "cmp_1", status, verification_state,
   reason: null, revisit_at: null, multi: true,
 });
