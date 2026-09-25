@@ -819,9 +819,9 @@ class ExternalSyncTest(unittest.TestCase):
 
     def test_contending_account_job_remains_durable_until_unlock(self):
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
-        lock = f"external-account:{self.org}:other:account"
+        lock = sync.account_lock_name(self.org, "other", "account")
         with db.connection() as holder:
-            holder.execute("SELECT pg_advisory_lock(hashtextextended(%s,0))", (lock,))
+            holder.execute(f"SELECT pg_advisory_lock({sync.ACCOUNT_LOCK_KEY})", (lock,))
             holder.commit()
             try:
                 sync.run_sync(self.org, self.brand, job["id"])
@@ -830,7 +830,41 @@ class ExternalSyncTest(unittest.TestCase):
                     repo.get_job(self.conn, self.org, self.brand, job["id"])["status"], "pending"
                 )
             finally:
-                holder.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (lock,))
+                holder.execute(f"SELECT pg_advisory_unlock({sync.ACCOUNT_LOCK_KEY})", (lock,))
                 holder.commit()
         result = self.run_pages(job)
         self.assertEqual(result["status"], "succeeded")
+
+    def test_same_account_locked_in_another_schema_does_not_stall_this_read(self):
+        """F31-I11: advisory locks are server-wide, schemas are not. Another test module (or a
+        concurrent run of this one) syncing the same org/platform/account in its own schema
+        holds the lock exactly as `run_sync` takes it there; this schema's read must still run
+        to completion instead of skipping every round ("cursor did not terminate")."""
+        job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        # Record the exact lock statement `run_sync` issues (first page, list -> page2).
+        taken = []
+        execute = db.Conn.execute
+
+        def recording(conn, sql, params=()):
+            if "pg_try_advisory_lock" in sql:
+                taken.append((sql, params))
+            return execute(conn, sql, params)
+
+        with patch.object(db.Conn, "execute", recording):
+            sync.run_sync(self.org, self.brand, job["id"])
+        self.assertEqual(len(taken), 1)
+        sql, params = taken[0]
+        # Another schema's worker replays that statement with its own schema on the search
+        # path (`public` stands in for "not this schema") and keeps holding the lock.
+        with db.connection() as other:
+            other.execute("SET LOCAL search_path TO public")
+            other.execute(sql.replace("pg_try_advisory_lock", "pg_advisory_lock"), params)
+            other.commit()
+            try:
+                result = self.run_pages(job)
+            finally:
+                other.execute("SET LOCAL search_path TO public")
+                other.execute(sql.replace("pg_try_advisory_lock", "pg_advisory_unlock"), params)
+                other.commit()
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(self.reader.calls[-1], ("list", {"after": "page2"}))

@@ -15,6 +15,14 @@ from app.core.db import connection, jsonb, new_id, now_utc, set_tenant_scope
 
 TASK = "background.ads_external_sync"
 SECTIONS = ("structure", "creatives", "observations")
+# Advisory locks are database-wide, but the rows this lock serialises live in the connection's
+# schema. The key carries `current_schema()` so a read in one schema never skips because a
+# different schema (another test module/run on the same server) holds the same account.
+ACCOUNT_LOCK_KEY = "hashtextextended(current_schema() || ':' || %s, 0)"
+
+
+def account_lock_name(org_id, platform, source_account):
+    return f"external-account:{org_id}:{platform}:{source_account}"
 
 
 def account_reader(conn, org_id, brand_id, platform, source_account):
@@ -380,9 +388,9 @@ def run_sync(org_id, brand_id, job_id):
     with connection() as conn:
         set_tenant_scope(conn, org_id)
         job = repo.get_job(conn, org_id, brand_id, job_id)
-        lock = f"external-account:{org_id}:{job['platform']}:{job['source_account']}"
+        lock = account_lock_name(org_id, job["platform"], job["source_account"])
         lock_row = conn.execute(
-            "SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS ok", (lock,)
+            f"SELECT pg_try_advisory_lock({ACCOUNT_LOCK_KEY}) AS ok", (lock,)
         ).fetchone()
         acquired = bool(lock_row and lock_row["ok"])
         conn.commit()
@@ -583,7 +591,7 @@ def run_sync(org_id, brand_id, job_id):
                 _enqueue(current)
         finally:
             conn.rollback()
-            conn.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (lock,))
+            conn.execute(f"SELECT pg_advisory_unlock({ACCOUNT_LOCK_KEY})", (lock,))
             conn.commit()
 
 
