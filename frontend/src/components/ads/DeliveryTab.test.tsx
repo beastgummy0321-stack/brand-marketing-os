@@ -1,6 +1,7 @@
-/** frontend/src/components/ads/DeliveryTab.test.tsx — F06-I02: 投放結構長得跟策略頁一樣——
- * 判斷帶＋數字條＋整寬主要按鈕，樹與編輯面板收進「調整結構（進階）」，預設關閉、預設不選中
- * 任何節點。 */
+/** frontend/src/components/ads/DeliveryTab.test.tsx — F06-I02 behaviours, v10 layout (F30-I08): the tab shows the
+ * structure tree; each group's node editors and manual settings sit in its closed 「進階：編輯這一組（…）」 fold, and
+ * the next-step button, numbers, budget and 新增節點 sit in the closed campaign-wide 「調整結構（進階）」. No node is
+ * selected by default. The tree itself is covered in `workspace/StructureTab.test.tsx`. */
 import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +45,10 @@ vi.mock("@/lib/coordinatesApi", () => ({
     ["proof", "證據"], ["offer", "優惠"], ["format", "格式"],
   ],
   fetchCoordinates: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("@/lib/adsWorkspaceApi", () => ({
+  getCampaignStructure: vi.fn().mockResolvedValue({ groups: [] }),
 }));
 
 vi.mock("@/lib/adsLaunchApi", () => ({
@@ -153,16 +158,30 @@ describe("DeliveryTab（F06-I02）", () => {
     sessionStorage.clear();
   });
 
-  it("預設面：開始做素材 → 在，進階收合是關的，沒有未綁定／儲存變更／日期輸入框", () => {
+  it("預設面：結構樹與返回總覽；兩種進階收合都是關的，沒有未綁定／儲存變更／日期輸入框；開始做素材 → 在活動進階裡", async () => {
+    const user = userEvent.setup();
     renderTab(campaign());
-    const button = screen.getByRole("button", { name: "開始做素材 →" });
-    expect(button.className).toContain("h-12");
-    expect(
-      screen.getByRole("button", { name: "調整結構（進階）" }).getAttribute("aria-expanded"),
-    ).toBe("false");
+    expect(screen.getByRole("heading", { name: "活動 → 廣告組 → 廣告" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+    expect(screen.getByRole("button", { name: "調整結構（進階）" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "開始做素材 →" })).toBeNull();
     expect(screen.queryByText("未綁定")).toBeNull();
     expect(screen.queryByText("儲存變更")).toBeNull();
     expect(document.querySelector("input[type=date]")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    expect(screen.getByRole("button", { name: "開始做素材 →" }).className).toContain("h-12");
+  });
+
+  it("每個投放組各有一個「進階：編輯這一組」；在這一組新增廣告時預設選這一組", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({ groups: [group(), group({ id: "grp_2", name: "再行銷", ads: [ad({ id: "ad_9", group_id: "grp_2", name: "廣告九" })] })] }));
+    expect(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（再行銷）" }));
+    expect(screen.getByRole("button", { name: /^廣告九/ })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "在這一組新增廣告" }));
+    expect((screen.getByRole("combobox", { name: /投放組/ }) as HTMLSelectElement).value).toBe("grp_2");
   });
 
   it("交棒：dispatchPack 一次，接著 getCampaign，回呼帶著新資料，跳去素材分頁", async () => {
@@ -172,6 +191,7 @@ describe("DeliveryTab（F06-I02）", () => {
     vi.mocked(getCampaign).mockResolvedValue(dispatched);
     const { onCampaignChange, onChangeTab } = renderTab(campaign());
 
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
 
     expect(dispatchPack).toHaveBeenCalledWith("brd_1", "cmp_1");
@@ -187,6 +207,7 @@ describe("DeliveryTab（F06-I02）", () => {
     vi.mocked(getCampaign).mockResolvedValue(fresh);
     const { onChangeTab } = renderTab(campaign());
 
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
 
     expect(onChangeTab).toHaveBeenCalledWith("assets");
@@ -199,6 +220,7 @@ describe("DeliveryTab（F06-I02）", () => {
       campaign({ asset_readiness: { ready_count: 0, total: 2, pack_id: "pk_1" } }),
     );
 
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     const button = screen.getByRole("button", { name: "前往素材 →" });
     await user.click(button);
 
@@ -236,6 +258,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const user = userEvent.setup();
     renderTab(campaign({ groups: [group({ ads: [] })] }));
 
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     await user.click(screen.getByRole("button", { name: "新增廣告 →" }));
 
     expect(screen.getByText("新增廣告")).toBeTruthy();
@@ -245,7 +268,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const user = userEvent.setup();
     renderTab(campaign());
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
 
     expect(screen.getByText("跟活動同期間（2026-01-01 ~ 2026-01-15）")).toBeTruthy();
@@ -258,20 +281,20 @@ describe("DeliveryTab（F06-I02）", () => {
     expect(screen.getByRole("button", { name: "儲存變更" })).toBeTruthy();
   });
 
-  it("status live：打開進階後看得到未綁定徽章", async () => {
+  it("status live：打開這一組的進階後看得到未綁定徽章", async () => {
     const user = userEvent.setup();
     renderTab(campaign({ status: "live" }));
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
 
     expect(screen.getAllByText("未綁定").length).toBeGreaterThan(0);
   });
 
-  it("status ready、沒有發布動作：打開進階後看不到綁定徽章", async () => {
+  it("status ready、沒有發布動作：打開這一組的進階後看不到綁定徽章", async () => {
     const user = userEvent.setup();
     renderTab(campaign({ status: "ready" }));
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
 
     expect(screen.queryByText("未綁定")).toBeNull();
   });
@@ -280,7 +303,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderTab(campaign());
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     const name = screen.getByDisplayValue("投放組");
     await user.clear(name);
@@ -289,6 +312,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const beforeUnload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(beforeUnload);
     expect(beforeUnload.defaultPrevented).toBe(true);
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
 
     expect(confirm).toHaveBeenCalledWith("還有未儲存的變更，確定要離開嗎？");
@@ -302,12 +326,13 @@ describe("DeliveryTab（F06-I02）", () => {
     vi.mocked(dispatchPack).mockResolvedValueOnce("pk_1");
     vi.mocked(getCampaign).mockResolvedValueOnce(campaign({ asset_readiness: { ready_count: 0, total: 2, pack_id: "pk_1" } }));
     const { onChangeTab } = renderTab(campaign());
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     const name = screen.getByDisplayValue("投放組");
     await user.clear(name);
     await user.type(name, "不保存直接前往");
 
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
 
     expect(confirm).toHaveBeenCalledTimes(1);
@@ -318,7 +343,7 @@ describe("DeliveryTab（F06-I02）", () => {
   it("離開再回同一身份品牌與 Campaign 會恢復結構草稿，不跨品牌恢復", async () => {
     const user = userEvent.setup();
     const first = renderTab(campaign());
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     const name = screen.getByDisplayValue("投放組");
     await user.clear(name);
@@ -326,14 +351,14 @@ describe("DeliveryTab（F06-I02）", () => {
     first.unmount();
 
     const restored = renderTab(campaign());
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     expect(await screen.findByText(/已恢復未儲存草稿/)).toBeTruthy();
     expect((screen.getByDisplayValue("待回來繼續") as HTMLInputElement).value).toBe("待回來繼續");
     restored.unmount();
 
     renderTab(campaign(), vi.fn(), vi.fn(), "brd_2");
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     expect(screen.queryByText(/已恢復未儲存草稿/)).toBeNull();
     expect((screen.getByDisplayValue("投放組") as HTMLInputElement).value).toBe("投放組");
@@ -344,7 +369,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const onCampaignChange = vi.fn();
     const onChangeTab = vi.fn();
     const view = renderTab(campaign(), onCampaignChange, onChangeTab);
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     const name = screen.getByDisplayValue("投放組");
     await user.clear(name);
@@ -364,7 +389,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const savedGroup = group({ name: "已保存名稱" });
     vi.mocked(patchGroup).mockResolvedValueOnce(savedGroup);
     const first = renderTab(campaign());
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));
     const name = screen.getByDisplayValue("投放組");
     await user.clear(name);
@@ -374,7 +399,7 @@ describe("DeliveryTab（F06-I02）", () => {
     first.unmount();
 
     renderTab(campaign({ groups: [{ ...savedGroup, ads: [ad(), ad({ id: "ad_2", name: "廣告二" })] }] }));
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（已保存名稱）" }));
     await user.click(screen.getByRole("button", { name: /^已保存名稱/ }));
     expect(screen.queryByText(/已恢復未儲存草稿/)).toBeNull();
   });
@@ -393,8 +418,9 @@ it("uses the existing structure tree for native groups and keeps native edits un
     entities: [native], observations: [], next_entity_cursor: null, next_observation_cursor: null,
     window: {start: "2026-01-01", end: "2026-01-15"}, connections: [], sync: {}, coverage: {},
   }}));
-  expect(screen.getByText("平台投放結構已載入 1 筆")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /進階：編輯這一組/ })).toBeNull();
   await user.click(screen.getByText("調整結構（進階）"));
+  expect(screen.getByText(/平台投放結構已載入 1 筆/)).toBeTruthy();
   expect(screen.getByRole("button", {name: "新增節點"}).hasAttribute("disabled")).toBe(true);
   await user.click(screen.getByRole("button", {name: /真實平台投放組/}));
   expect(screen.getByText("平台 ID：native-42")).toBeTruthy();
@@ -416,6 +442,7 @@ describe("DeliveryTab failed reads (F29-I10 Contract K)", () => {
     renderTab(campaign());
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("座標選項、通路連線狀態讀取失敗");
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
     expect(screen.getByRole("button", { name: "開始做素材 →" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重試" }));
     expect(vi.mocked(fetchCoordinates)).toHaveBeenCalledTimes(2);

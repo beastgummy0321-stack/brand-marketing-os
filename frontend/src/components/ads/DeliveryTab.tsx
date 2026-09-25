@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { NativeCreativeView } from "./NativeCreativeView";
 import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -32,11 +32,11 @@ import {
 } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { Disclosure, JudgmentBand, KpiStrip, type KpiCell } from "./patterns";
+import { ActionBar, Disclosure, KpiStrip, ReadFailed, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 import { ROLE_LABEL, GroupPanel, AdPanel, AddGroupDialog, AddAdDialog } from "./DeliveryEditors";
-
 import { ManualSettings } from "./ManualSettings";
+import { StructureTab } from "./workspace/StructureTab";
 
 const LOCAL_STATE_LABEL: Record<string, string> = {
   unbound: "未綁定",
@@ -54,9 +54,12 @@ function mmdd(iso: string): string {
   return `${m}/${d}`;
 }
 
-/** 投放結構 tab（F06-I02）：長得跟策略頁一樣——判斷帶＋數字條＋整寬主要按鈕，樹與編輯面板
- * 收進「調整結構（進階）」（ARCHITECTURE.md §6.2 決議 16）。主要按鈕讀 `nextStep()`：沒有廣告
- * 給「新增廣告」，有廣告還沒交棒給「開始做素材」，其餘照規則走（永遠不交棒第二次）。 */
+/** v10 (F30-I08) the workspace's 投放結構 tab (prototype `tabStructure()`): the tree card (`StructureTab`: campaign →
+ * ad groups → ads with grades and cost per result) and the back bar. Everything the prototype does not show stays on
+ * this tab, folded (CLAUDE.md three-layer rule): each plan group's 「進階：編輯這一組」 holds its node editors and
+ * its manual launch settings; the campaign-wide 「調整結構（進階）」 (the pre-v10 label, kept: e2e specs open it)
+ * holds the next-step button (`nextStep()`, never dispatching twice), the old numbers strip, the budget summary, channel status, 新增節點 and — on an imported campaign — the read-only
+ * platform entity tree. A campaign with no groups keeps the old empty state and its next step. */
 export function DeliveryTab({
   brandId,
   campaign: c,
@@ -83,7 +86,7 @@ export function DeliveryTab({
   const { scope: draftScope } = useWorkspace();
   const [selected, setSelected] = useState<SelectedKey | null>(null);
   const selectedNative = nativeEntities.find((row) => `native:${row.id}` === selected);
-  // Contract K: a failed read is said out loud (error line + 重試) — never an empty vocabulary or channel list.
+  // Contract K: a failed read is said out loud (ReadFailed + 重試) — never an empty vocabulary or channel list.
   const vocabularyRead = useApiRead(() => fetchCoordinates(brandId), [brandId]);
   // F05-I05：通路清單／連線狀態一律讀 app/ads/channels.py，不再繞去 /api/meta/accounts
   // （§0「不預設」：畫面不准自己判斷哪個通路查得到連線狀態）。
@@ -100,6 +103,7 @@ export function DeliveryTab({
   }
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addAdOpen, setAddAdOpen] = useState(false);
+  const [addAdGroupId, setAddAdGroupId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<
     { kind: "group"; row: DeliveryGroupRow } | { kind: "ad"; row: AdRow } | null
   >(null);
@@ -108,7 +112,12 @@ export function DeliveryTab({
   const [dispatching, setDispatching] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
-  const [manualSettingsDirty, setManualSettingsDirty] = useState(false);
+  // One manual-settings panel per group fold; each reports its own dirty state.
+  const [manualDirty, setManualDirty] = useState<Record<string, boolean>>({});
+  const setGroupManualDirty = useCallback((groupId: string, dirty: boolean) => {
+    setManualDirty((current) => (Boolean(current[groupId]) === dirty ? current : { ...current, [groupId]: dirty }));
+  }, []);
+  const manualSettingsDirty = Object.values(manualDirty).some(Boolean);
   const hasUnsavedDraft = editorDirty || manualSettingsDirty;
 
   useEffect(() => {
@@ -126,7 +135,7 @@ export function DeliveryTab({
     const confirmed = window.confirm("還有未儲存的變更，確定要離開嗎？");
     if (confirmed) {
       setEditorDirty(false);
-      setManualSettingsDirty(false);
+      setManualDirty({});
     }
     return confirmed;
   }
@@ -230,6 +239,8 @@ export function DeliveryTab({
   const selectedAd = selected?.startsWith("ad:")
     ? c.groups.flatMap((g) => g.ads).find((a) => `ad:${a.id}` === selected) ?? null
     : null;
+  // The tree re-reads when the plan behind it changes (a group or ad added, renamed, removed, re-budgeted).
+  const planKey = c.groups.map((g) => `${g.id}:${g.name}:${g.daily_budget}:${g.ads.map((a) => `${a.id}:${a.name}`).join(",")}`).join("|");
 
   const t = currentBudgetTotal(c);
   const diff = t.total !== null && c.budget_planned !== null ? t.total - c.budget_planned : null;
@@ -275,45 +286,107 @@ export function DeliveryTab({
     },
   ];
 
+  const placeholder = (
+    <div className="surface">
+      <div className="surface-body py-10 text-center text-sm text-muted-foreground">
+        {imported ? "點左邊的投放組或廣告查看明細。" : "點左邊的投放組或廣告來調整。"}
+      </div>
+    </div>
+  );
+  const nodeButton = (key: SelectedKey, indent: string, icon: ReactNode, name: string, badge: ReactNode) => (
+    <button key={key} type="button" onClick={() => selectNode(key)}
+      className={`flex w-full items-center gap-2 rounded-md py-1.5 ${indent} pr-2 text-left text-sm ${selected === key ? "bg-accent" : "hover:bg-muted"}`}>
+      {icon}
+      <span className="flex-1 truncate">{name}</span>
+      {badge}
+    </button>
+  );
+  const bindBadge = (state: DeliveryGroupRow["local_state"]) => published
+    ? <Badge variant={state === "bound" ? "default" : "outline"}>{LOCAL_STATE_LABEL[state]}</Badge> : null;
+
+  // One fold per plan group: its node editors and its manual launch settings.
+  const groupFolds = !imported && c.groups.map((g) => {
+    const ownsSelection = selectedGroup?.id === g.id || selectedAd?.group_id === g.id;
+    const dirty = (editorDirty && ownsSelection) || manualDirty[g.id];
+    return (
+      <Disclosure key={g.id} label={`進階：編輯這一組（${g.name}）${dirty ? " · 有未儲存變更" : ""}`}>
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-[minmax(220px,0.8fr)_minmax(0,1.4fr)] items-start gap-4">
+            <div className="surface">
+              <div className="surface-body flex flex-col">
+                {nodeButton(`group:${g.id}`, "pl-2", <Folder size={13} className="shrink-0 text-muted-foreground" />, g.name, bindBadge(g.local_state))}
+                {g.ads.map((a) => nodeButton(`ad:${a.id}`, "pl-8", <FileText size={12} className="shrink-0 text-muted-foreground" />, a.name, bindBadge(a.local_state)))}
+                <Button variant="outline" size="sm" className="mt-2 w-fit" onClick={() => { setAddAdGroupId(g.id); setAddAdOpen(true); }}>
+                  <Plus size={14} /> 在這一組新增廣告
+                </Button>
+              </div>
+            </div>
+            {selectedGroup?.id === g.id ? (
+              <GroupPanel
+                key={`${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
+                brandId={brandId}
+                group={selectedGroup}
+                channels={channelInfo}
+                campaignStartDate={c.start_date}
+                campaignEndDate={c.end_date}
+                onSaved={replaceGroup}
+                onDelete={() => setDeleteTarget({ kind: "group", row: selectedGroup })}
+                onDirtyChange={setEditorDirty}
+                draftKey={`brand-os:ads:group-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
+              />
+            ) : selectedAd?.group_id === g.id ? (
+              <AdPanel
+                key={`${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
+                brandId={brandId}
+                ad={selectedAd}
+                vocabulary={vocabulary}
+                campaignStatus={c.status}
+                onSaved={replaceAd}
+                onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
+                onDirtyChange={setEditorDirty}
+                draftKey={`brand-os:ads:ad-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
+              />
+            ) : placeholder}
+          </div>
+          <ManualSettings key={`${draftScope}:${brandId}:${c.id}:${g.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
+            groupId={g.id} onSaved={onCampaignChange} onDirtyChange={(dirty) => setGroupManualDirty(g.id, dirty)} />
+        </div>
+      </Disclosure>
+    );
+  });
+
   return (
     <div className="flex flex-col gap-4">
-      <JudgmentBand
-        icon={Layers}
-        sentence={imported ? nativeEntities.length ? `平台投放結構已載入 ${nativeEntities.length} 筆` : "尚未讀回平台投放結構" : "系統已經照策略建好投放結構"}
-        facts={imported ? readonlyReason : "不用改也可以；想微調再打開下面的「調整結構（進階）」。"}
-      />
-
-      <div className="surface">
-        <div className="surface-body">
-          <KpiStrip cells={kpiCells} />
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        {step.id === "add_ad" ? (
-          <StepButton onClick={() => setAddAdOpen(true)}>新增廣告 →</StepButton>
-        ) : step.id === "dispatch" ? (
-          <StepButton onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
-            {dispatching ? "交棒中…" : "開始做素材 →"}
-          </StepButton>
-        ) : (
-          <NextStepButton step={step} onChangeTab={requestTabChange} />
-        )}
-        {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
-      </div>
+      <StructureTab brandId={brandId} campaign={c} planKey={planKey} />
 
       {failedReads.length > 0 && (
-        <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
-          {failedReads.join("、")}讀取失敗，下方的結構編輯可能缺少選項。
-          <Button variant="outline" size="sm" onClick={retryFailedReads}>重試</Button>
-        </p>
+        <ReadFailed what={`${failedReads.join("、")}讀取失敗，下方的結構編輯可能缺少選項。`} onRetry={retryFailedReads} />
       )}
 
-      {!imported && <ManualSettings key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaign={c}
-        onSaved={onCampaignChange} onDirtyChange={setManualSettingsDirty} />}
+      {groupFolds}
 
-      <Disclosure label={`調整結構（進階）${editorDirty ? " · 有未儲存變更" : ""}`}>
+      <Disclosure label="調整結構（進階）">
         <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            {step.id === "add_ad" ? (
+              <StepButton onClick={() => setAddAdOpen(true)}>新增廣告 →</StepButton>
+            ) : step.id === "dispatch" ? (
+              <StepButton onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
+                {dispatching ? "交棒中…" : "開始做素材 →"}
+              </StepButton>
+            ) : (
+              <NextStepButton step={step} onChangeTab={requestTabChange} />
+            )}
+            {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
+          </div>
+
+          {imported && (
+            <p className="text-sm text-muted-foreground">
+              {nativeEntities.length ? `平台投放結構已載入 ${nativeEntities.length} 筆` : "尚未讀回平台投放結構"}。{readonlyReason}
+            </p>
+          )}
+          <KpiStrip cells={kpiCells} />
+
           {!imported && <div className="surface">
             <div className="surface-header">
               <h2>預算（這個 Campaign）</h2>
@@ -393,50 +466,18 @@ export function DeliveryTab({
                     </div>
                   );
                 })}
-                {imported && orderedNative.map((entity) => (
-                  <button key={entity.id} type="button" onClick={() => selectNode(`native:${entity.id}`)}
-                    style={{ paddingLeft: entity.native_kind === "ad" ? 48 : entity.native_kind === "adset" ? 24 : 8 }}
-                    className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm ${selected === `native:${entity.id}` ? "bg-accent" : "hover:bg-muted"}`}>
-                    {entity.native_kind === "ad" ? <FileText size={12} /> : <Folder size={13} />}
-                    <span className="flex-1 truncate">{entity.name ?? entity.native_id}</span>
-                    <Badge variant="outline">{entity.native_status ?? "狀態未知"}</Badge>
-                  </button>
+                {imported && orderedNative.map((entity) => nodeButton(
+                  `native:${entity.id}`,
+                  entity.native_kind === "ad" ? "pl-12" : entity.native_kind === "adset" ? "pl-6" : "pl-2",
+                  entity.native_kind === "ad" ? <FileText size={12} /> : <Folder size={13} />,
+                  entity.name ?? entity.native_id,
+                  <Badge variant="outline">{entity.native_status ?? "狀態未知"}</Badge>,
                 ))}
                 {!imported && c.groups.map((g) => (
-                  <div key={g.id}>
-                    <button
-                      type="button"
-                      onClick={() => selectNode(`group:${g.id}`)}
-                      className={`flex w-full items-center gap-2 rounded-md py-1.5 pl-6 pr-2 text-left text-sm ${
-                        selected === `group:${g.id}` ? "bg-accent" : "hover:bg-muted"
-                      }`}
-                    >
-                      <Folder size={13} className="shrink-0 text-muted-foreground" />
-                      <span className="flex-1 truncate">{g.name}</span>
-                      {published && (
-                        <Badge variant={g.local_state === "bound" ? "default" : "outline"}>
-                          {LOCAL_STATE_LABEL[g.local_state]}
-                        </Badge>
-                      )}
-                    </button>
-                    {g.ads.map((a) => (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => selectNode(`ad:${a.id}`)}
-                        className={`flex w-full items-center gap-2 rounded-md py-1.5 pl-12 pr-2 text-left text-sm ${
-                          selected === `ad:${a.id}` ? "bg-accent" : "hover:bg-muted"
-                        }`}
-                      >
-                        <FileText size={12} className="shrink-0 text-muted-foreground" />
-                        <span className="flex-1 truncate">{a.name}</span>
-                        {published && (
-                          <Badge variant={a.local_state === "bound" ? "default" : "outline"}>
-                            {LOCAL_STATE_LABEL[a.local_state]}
-                          </Badge>
-                        )}
-                      </button>
-                    ))}
+                  <div key={g.id} className="flex items-center gap-2 py-1.5 pl-6 text-sm">
+                    <Folder size={13} className="shrink-0 text-muted-foreground" />
+                    <span className="flex-1 truncate">{g.name}</span>
+                    <span className="text-xs text-muted-foreground">{g.ads.length} 則</span>
                   </div>
                 ))}
               </div>
@@ -459,41 +500,18 @@ export function DeliveryTab({
                   <Button disabled>儲存</Button>
                 </div>
               </div>
-            ) : selectedGroup ? (
-              <GroupPanel
-                key={`${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
-                brandId={brandId}
-                group={selectedGroup}
-                channels={channelInfo}
-                campaignStartDate={c.start_date}
-                campaignEndDate={c.end_date}
-                onSaved={replaceGroup}
-                onDelete={() => setDeleteTarget({ kind: "group", row: selectedGroup })}
-                onDirtyChange={setEditorDirty}
-                draftKey={`brand-os:ads:group-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedGroup.id}`}
-              />
-            ) : selectedAd ? (
-              <AdPanel
-                key={`${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
-                brandId={brandId}
-                ad={selectedAd}
-                vocabulary={vocabulary}
-                campaignStatus={c.status}
-                onSaved={replaceAd}
-                onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
-                onDirtyChange={setEditorDirty}
-                draftKey={`brand-os:ads:ad-draft:v1:${draftScope}:${brandId}:${c.id}:${selectedAd.id}`}
-              />
-            ) : (
+            ) : imported ? placeholder : (
               <div className="surface">
                 <div className="surface-body py-10 text-center text-sm text-muted-foreground">
-                  {imported ? "點左邊的投放組或廣告查看明細。" : "點左邊的投放組或廣告來調整。"}
+                  每一組的設定在上面的「進階：編輯這一組」裡調整。
                 </div>
               </div>
             )}
           </div>
         </div>
       </Disclosure>
+
+      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }} />
 
       {addGroupOpen && (
         <AddGroupDialog
@@ -512,9 +530,9 @@ export function DeliveryTab({
           brandId={brandId}
           campaignId={c.id}
           groups={c.groups}
-          defaultGroupId={selectedGroup?.id ?? c.groups[0].id}
+          defaultGroupId={addAdGroupId ?? selectedGroup?.id ?? selectedAd?.group_id ?? c.groups[0].id}
           vocabulary={vocabulary}
-          onClose={() => setAddAdOpen(false)}
+          onClose={() => { setAddAdOpen(false); setAddAdGroupId(null); }}
           onCreated={(ad) => {
             onCampaignChange({
               ...c,
@@ -522,6 +540,7 @@ export function DeliveryTab({
             });
             setSelected(`ad:${ad.id}`);
             setAddAdOpen(false);
+            setAddAdGroupId(null);
           }}
         />
       )}

@@ -133,6 +133,11 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   );
   await assertNoOverflow("/brands/:brandId/ads/campaigns/:campaignId");
 
+  // --- ?tab=structure（v10 投放結構樹與各組「進階：編輯這一組」，F30-I08）---------------
+  await page.getByRole("button", { name: "投放結構", exact: true }).click();
+  await expect(page).toHaveURL(/tab=structure/);
+  await assertNoOverflow("/brands/:brandId/ads/campaigns/:campaignId?tab=structure");
+
   // --- /brands/:brandId/workbench（票 workbench/04，ADR 0068；F02 四個畫面加三條）-------
   await page.goto(`/app/brands/${brandId}/workbench`);
   await assertNoOverflow("/brands/:brandId/workbench");
