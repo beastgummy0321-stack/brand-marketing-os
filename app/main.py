@@ -458,9 +458,15 @@ ads_module.register_tasks()
 
 # 啟動斷言（第 2 刀「清理登記處」）：確認刪品牌時該連鎖清資料的模組都有登記進
 # app.core.cleanup，少一個就不讓服務起來，避免又漏掉誰。
+from app.core import approval as core_approval  # noqa: E402
 from app.core import cleanup as core_cleanup  # noqa: E402
 
-_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "訂單", "中斷提醒", "素材工作檯")
+# F31-I09: approval registers last, after every module whose rows reference it (registration
+# order is delete order; see app/core/approval.py register_cleanup()).
+core_approval.register_cleanup()
+
+_REQUIRED_CLEANUP_MODULES = ("品牌智庫", "建檔精靈", "訂單", "中斷提醒", "素材工作檯",
+                             "創意座標與素材候選", "投放中心", core_approval.CLEANUP_NAME)
 _missing_cleanup = [n for n in _REQUIRED_CLEANUP_MODULES if n not in core_cleanup.registered_names()]
 if _missing_cleanup:
     raise RuntimeError(f"清理登記處少登記了：{_missing_cleanup}")

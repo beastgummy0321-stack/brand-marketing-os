@@ -41,14 +41,6 @@ class BrandDeleteTest(unittest.TestCase):
         repo.create_official_asset(self.conn, bid, asset_kind="logo",
                                     storage_key=f"{db.DEV_ORG_ID}/brands/{bid}/assets/oas_fake/logo.png",
                                     actor="測試員")
-        # strategy_hypothesis 沒有寫入端了（票 04：唯一寫入端隨 app/ads/ 一起刪除，表留著）。
-        self.conn.execute(
-            "INSERT INTO strategy_hypothesis (id, org_id, brand_id, product_id, hypothesis_type,"
-            " statement, status, created_by, created_at, updated_at)"
-            " VALUES (%s, %s, %s, %s, 'audience', '測試假設', 'proposed', '測試員', %s, %s)",
-            (db.new_id("hyp"), db.DEV_ORG_ID, bid, pid, db.now_utc(), db.now_utc()),
-        )
-        self.conn.commit()
         repo.create_brand_performance_baseline(self.conn, bid, metric="典型CTR", value=1.2,
                                                 as_of_date="2026-01-01", created_by="測試員",
                                                 actor="測試員")

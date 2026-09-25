@@ -59,7 +59,8 @@ class CleanupCoverageTest(unittest.TestCase):
         self.conn = db.current()
 
     def test_every_live_brand_table_is_cleared_or_exempt(self):
-        unclaimed = _live_brand_tables(self.conn) - _declared_brand_tables() - set(EXEMPT_BRAND_TABLES)
+        live = _live_brand_tables(self.conn)
+        unclaimed = live - _declared_brand_tables() - set(EXEMPT_BRAND_TABLES)
         self.assertEqual(
             unclaimed, set(),
             "these tables carry brand_id but no cleanup.register() declares them: deleting a "
@@ -78,10 +79,15 @@ class CleanupCoverageTest(unittest.TestCase):
             self.assertIn(table, live, f"exempt table {table} no longer exists: drop the exemption")
             self.assertNotIn(table, declared, f"{table} is exempt yet a registry clears it")
 
-    def test_approval_is_registered_after_the_ads_rows_that_reference_it(self):
+    def test_referenced_tables_are_cleared_after_their_referrers(self):
+        """Registration order is delete order (cleanup.delete_all); FKs are NO ACTION."""
         names = cleanup.registered_names()
         owner = {t: n for n, ts in cleanup.declared_brand_tables().items() for t in ts}
-        self.assertLess(names.index(owner["ads_change_set"]), names.index(owner["approval"]))
+        for referrer, referenced in (("ads_change_set", "approval"),
+                                     ("channel_revenue", "campaign_period"),
+                                     ("interrupt", "campaign_period")):
+            self.assertLessEqual(names.index(owner[referrer]), names.index(owner[referenced]),
+                                 f"{referrer} must be cleared before {referenced}")
 
 
 class BrandDeleteLeavesOnlyExemptRowsTest(unittest.TestCase):
@@ -97,8 +103,8 @@ class BrandDeleteLeavesOnlyExemptRowsTest(unittest.TestCase):
         now = db.now_utc()
         period = db.new_id("cp")
         conn.execute(
-            "INSERT INTO campaign_period (id, org_id, brand_id, name, start_date, end_date, currency)"
-            " VALUES (%s, %s, %s, '九月檔期', '2026-09-01', '2026-09-30', 'TWD')",
+            "INSERT INTO campaign_period (id, org_id, brand_id, name, start_date, end_date,"
+            " currency) VALUES (%s, %s, %s, '九月檔期', '2026-09-01', '2026-09-30', 'TWD')",
             (period, org, bid))
         conn.execute(
             "INSERT INTO ad_channel (id, org_id, channel_key) VALUES (%s, %s, 'meta')"
@@ -115,7 +121,8 @@ class BrandDeleteLeavesOnlyExemptRowsTest(unittest.TestCase):
             " node_key, from_date, channel_id) VALUES (%s, %s, %s, %s, '1', '2026-09-01', %s)",
             (db.new_id("pnm"), org, bid, period, channel))
         conn.execute(
-            "INSERT INTO ads_runtime_event (id, kind, org_id, brand_id) VALUES (%s, 'beat', %s, %s)",
+            "INSERT INTO ads_runtime_event (id, kind, org_id, brand_id)"
+            " VALUES (%s, 'beat', %s, %s)",
             (db.new_id("are"), org, bid))
         # Rows of other modules that point at the period: their owners clear them first.
         conn.execute(
