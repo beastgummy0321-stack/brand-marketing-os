@@ -17,7 +17,14 @@ from datetime import UTC, date, datetime, timedelta
 from unittest import mock
 
 from app.ads import external_repository as external
-from app.ads import handoff_assignment, home_overview, month_budget, repository, triage
+from app.ads import (
+    change_control_launch,
+    handoff_assignment,
+    home_overview,
+    month_budget,
+    repository,
+    triage,
+)
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.core import settings as coresettings
@@ -388,8 +395,10 @@ class CounterexampleTest(_Pinned):
                                         role="new", daily_budget=400)["id"]
         first = repository.create_ad(conn, org, brand, draft, group, name="一",
                                      coordinates={}, coordinates_snapshot={})["id"]
-        repository.create_ad(conn, org, brand, draft, group, name="二", coordinates={},
-                             coordinates_snapshot={})
+        second = repository.create_ad(conn, org, brand, draft, group, name="二",
+                                      coordinates={}, coordinates_snapshot={})["id"]
+        # A manual 就位 tick without a confirmed material binding is not ready (F30-I16).
+        repository.set_ad_asset_ready(conn, org, brand, second, actor="t", ready=True)
         conn.commit()
 
         def snapshot(conn_, org_, brand_, campaign_, ad, **_kw):
@@ -397,10 +406,13 @@ class CounterexampleTest(_Pinned):
                 return {"assignment_status": "confirmed"}
             return None
 
-        with mock.patch.object(handoff_assignment, "material_snapshot", side_effect=snapshot):
+        with mock.patch.object(handoff_assignment, "material_snapshot", side_effect=snapshot),                 mock.patch.object(change_control_launch, "ready_material",
+                                  wraps=change_control_launch.ready_material) as ready:
             row = self.overview(brand)["campaigns"][0]
         self.assertEqual(row["draft"]["ads_total"], 2)
         self.assertEqual(row["draft"]["ads_ready"], 1)
+        # The count is the launch batch's own predicate, not a copy of it.
+        self.assertEqual(ready.call_count, 2)
         self.assertFalse(row["draft"]["cap_missing"])
         self.assertEqual(row["daily_budget"], 400)
 

@@ -1,9 +1,9 @@
 """F30 Contract F: the assets tab's slots -- one planned ad (app-built) or one platform ad
 (imported) per slot -- and uploading a file into one planned ad's slot.
 
-Readiness is the launch snapshot's own rule (`handoff_assignment.material_snapshot` ->
-`assignment_status == "confirmed"`, the same count `home_overview._draft_view` shows), never a
-second definition. A file uploaded into a slot goes through the user-asset placement path
+Readiness is the launch batch's own rule (`change_control_launch.ready_material` over
+`handoff_assignment.material_snapshot`, the same count `assets.readiness_summary` and
+`home_overview._draft_view` show), never a second definition. A file uploaded into a slot goes through the user-asset placement path
 (`user_assets_repository.attach_selected`) and waits on `ads_ad.slot_placement_id` until that
 placement is confirmed; only then is it assigned through `handoff_assignment.assign`, so
 `material_placement_id` keeps pointing at confirmed versions only. The pointer follows the
@@ -93,7 +93,7 @@ def _planned_slot(conn, org, brand, campaign, ad, entity, readiness, replace_by_
             triage._thumbnail_url(entity) or material_thumb,
             replace_by_entity.get(entity["id"]),
         )
-    if material and material["assignment_status"] == "confirmed":
+    if launch.ready_material(material):
         return _slot(ad["id"], None, ad["name"], "ready", material_thumb)
     if pending is not None:
         return _slot(
@@ -252,10 +252,9 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
     ad = _planned_ad(conn, org, brand, campaign_id, ad_id)
     if ad["id"] in _planned_entities(conn, org, brand, campaign_id):
         raise ValueError("這則廣告已在平台上；要換素材請用「換掉這一則」。")
-    # The same freeze `handoff_assignment.assign` applies, told before the file is placed.
-    if launch.launch_set(conn, org, brand, campaign_id) and not launch.is_stale(
-        conn, org, brand, campaign_id
-    ):
+    # The same freeze `handoff_assignment.assign` applies, told before the file is placed; an ad
+    # deferred from the approved batch for lack of material is not frozen (F30 Unresolved 1).
+    if launch.material_frozen(conn, org, brand, campaign_id, ad_id):
         raise ValueError("首次投放清單已核准，不能改寫原交接素材；請先處理原核准清單。")
     placement = user_assets.attach_selected(conn, org, brand, campaign_id, body, actor)
     conn.execute(

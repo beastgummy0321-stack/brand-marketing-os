@@ -29,6 +29,7 @@ from decimal import Decimal
 
 from app.ads import (
     ad_status,
+    change_control_launch,
     handoff_assignment,
     month_budget,
     month_summary,
@@ -380,9 +381,9 @@ def _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities) -> 
 
 
 def _draft_view(conn, org_id, brand_id, campaign, cap) -> dict:
-    """`ads_ready` counts ads whose material passes the check the launch snapshot freezes
-    (`handoff_assignment.material_snapshot` -> `assignment_status == "confirmed"`), never a
-    second definition of "ready"."""
+    """`ads_ready` counts ads whose material the launch batch takes
+    (`change_control_launch.ready_material` over `handoff_assignment.material_snapshot`), never
+    a second definition of "ready"."""
     ads = repository.list_ads_for_campaign(conn, org_id, brand_id, campaign["id"])
     ready = 0
     for ad in ads:
@@ -392,7 +393,7 @@ def _draft_view(conn, org_id, brand_id, campaign, cap) -> dict:
             )
         except ValueError:
             material = None
-        if material and material["assignment_status"] == "confirmed":
+        if change_control_launch.ready_material(material):
             ready += 1
     approved = conn.execute(
         "SELECT 1 FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
