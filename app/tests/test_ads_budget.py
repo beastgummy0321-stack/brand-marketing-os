@@ -250,3 +250,60 @@ class BudgetCapScenariosTest(unittest.TestCase):
         cleared = budget.current_scenarios(lower, self._campaign(None))
         self.assertNotIn("cap", [r["key"] for r in cleared["scenarios"]])
         self.assertEqual(cleared["recommended"], "recommended")
+
+
+class RecommendedWithAmountTest(unittest.TestCase):
+    """F29 Contract D: the campaign read (`reconcile_campaign`) never recommends a row with no
+    amount -- the projected pick when its total is known, else the first row in display order
+    with a known total, else `None`. The §6.32 over-cap rule still wins when a cap exists."""
+
+    START, END = date(2026, 10, 1), date(2026, 10, 10)  # 10 days
+
+    def _read(self, budget_cap=None, *, cap=300, dates=True, stored=None) -> dict:
+        campaign = {
+            "start_date": self.START if dates else None, "end_date": self.END if dates else None,
+            "constraints_json": {} if budget_cap is None else {"budget": budget_cap},
+            "budget_planned": None,
+            "budget_basis_json": {"scenarios": stored or {"mode": "cold_start"}},
+        }
+        return budget.reconcile_campaign(campaign, cap=cap)["budget_basis_json"]["scenarios"]
+
+    def test_a_known_pick_is_kept(self):
+        self.assertEqual(self._read()["recommended"], "recommended")
+
+    def test_over_cap_rule_still_wins(self):
+        # recommended (15000) is over the 12000 budget cap -> the cap row, as §6.32 rules.
+        self.assertEqual(self._read(12000)["recommended"], "cap")
+
+    def test_unknown_pick_falls_to_the_first_row_with_an_amount(self):
+        # No cost-per-result cap: only the 照預算上限 row has an amount.
+        scenarios = self._read(12000, cap=None)
+        self.assertIsNone({r["key"]: r for r in scenarios["scenarios"]}["recommended"]["total"])
+        self.assertEqual(scenarios["recommended"], "cap")
+
+    def test_every_total_unknown_recommends_nothing(self):
+        scenarios = self._read(None, cap=None)
+        self.assertTrue(all(r["total"] is None for r in scenarios["scenarios"]))
+        self.assertIsNone(scenarios["recommended"])
+
+    def test_no_dates_and_no_budget_cap_recommends_nothing(self):
+        # A cap but no campaign dates: every daily is known, no total is.
+        self.assertIsNone(self._read(None, dates=False)["recommended"])
+
+    def test_a_stored_null_recommendation_reprojects(self):
+        # A snapshot saved with `recommended: None` is read back as a real pick once amounts
+        # are known again.
+        stored = {"mode": "cold_start", "recommended": None, "scenarios": []}
+        self.assertEqual(self._read(stored=stored)["recommended"], "recommended")
+
+    def test_history_pick_with_unknown_days_recommends_nothing(self):
+        stored = {
+            "mode": "history", "recommended": "recommended", "basis": {},
+            "scenarios": [
+                {"key": "conservative", "label": "保守", "daily": 600, "total": None,
+                 "caption": "x"},
+                {"key": "recommended", "label": "照上一期", "daily": 1000, "total": None,
+                 "caption": "x"},
+            ],
+        }
+        self.assertIsNone(self._read(dates=False, stored=stored)["recommended"])

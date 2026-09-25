@@ -163,7 +163,7 @@ class _Caps:
 def _cap_out(cap: dict) -> dict | None:
     if cap["value"] is None:
         return None
-    return {"value": cap["value"], "basis": cap["basis"]}
+    return {"value": cap["value"], "basis": cap["basis"], "break_even": cap["break_even"]}
 
 
 def _entities(conn, org_id, brand_id) -> list[dict]:
@@ -243,7 +243,12 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
     if len(caps_seen) == 1:
         value, basis = next(iter(caps_seen))
         if value is not None:
-            one_cap = {"value": value, "basis": basis}
+            # The shared cap's break-even only when every included campaign has the same one.
+            break_evens = {cap["break_even"] for cap, _m in included}
+            one_cap = {
+                "value": value, "basis": basis,
+                "break_even": next(iter(break_evens)) if len(break_evens) == 1 else None,
+            }
     return {
         "purchases": purchases, "cost_per_purchase": cost_per_purchase, "cap": one_cap,
         "earn": earn, "earn_missing": earn_missing, "excluded": excluded,
@@ -422,9 +427,66 @@ def _missing_days(campaign, win) -> list:
     return triage._missing_days(triage._coverage(campaign), start, win["cutoff"])
 
 
+_HANDOFF_CHECK_STATES = frozenset({"reported", "unknown", "deviated"})
+
+
+def _handoff_sets(conn, org_id, brand_id) -> dict:
+    """campaign id -> its newest approved change set and its newest approved launch set (the
+    same "latest" order `change_control_launch.launch_set` uses), each with the
+    `ads_action.verification_state` of its items -- ONE query for the whole brand, never one per
+    campaign row. Newest first; a set that is both appears once."""
+    rows = conn.execute(
+        "WITH ranked AS (SELECT id,campaign_id,(plan_json ? 'launch_snapshot') AS is_launch,"
+        "row_number() OVER (PARTITION BY campaign_id ORDER BY approved_at DESC,id DESC) AS newest,"
+        "row_number() OVER (PARTITION BY campaign_id,(plan_json ? 'launch_snapshot') "
+        "ORDER BY approved_at DESC,id DESC) AS newest_of_kind "
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND status='approved') "
+        "SELECT r.id,r.campaign_id,r.is_launch,r.newest,"
+        "array_remove(array_agg(a.verification_state),NULL) AS states "
+        "FROM ranked r LEFT JOIN ads_action a ON a.org_id=%s AND a.brand_id=%s "
+        "AND a.campaign_id=r.campaign_id AND a.change_set_id=r.id "
+        "WHERE r.newest=1 OR (r.is_launch AND r.newest_of_kind=1) "
+        "GROUP BY r.id,r.campaign_id,r.is_launch,r.newest ORDER BY r.campaign_id,r.newest",
+        (org_id, brand_id, org_id, brand_id),
+    ).fetchall()
+    by_campaign = defaultdict(list)
+    for row in rows:
+        by_campaign[row["campaign_id"]].append(
+            {"id": row["id"], "is_launch": row["is_launch"], "states": set(row["states"] or [])}
+        )
+    return by_campaign
+
+
+def _handoff(conn, org_id, brand_id, campaign_id, sets) -> dict | None:
+    """F29 Contract D home-row `handoff`: `platform` when the newest approved set or the approved
+    launch still has an item `pending` (the user has not done it on the platform yet), else
+    `check` when one is `reported`/`unknown`/`deviated` (done, the readback has not confirmed
+    it), else `None` (all confirmed, stale or legacy). A launch whose plan changed after approval
+    (`change_control_launch.is_stale`) is left out -- the F28 stale-launch exit owns it. That
+    check builds the plan snapshot, so it runs only for a launch that would otherwise decide the
+    state."""
+    from app.ads import change_control_launch
+
+    stale: dict = {}
+
+    def usable(entry) -> bool:
+        if not entry["is_launch"]:
+            return True
+        if "stale" not in stale:
+            stale["stale"] = change_control_launch.is_stale(conn, org_id, brand_id, campaign_id)
+        return not stale["stale"]
+
+    for state, wanted in (("platform", {"pending"}), ("check", _HANDOFF_CHECK_STATES)):
+        for entry in sets:
+            if entry["states"] & wanted and usable(entry):
+                return {"state": state, "change_set_id": entry["id"]}
+    return None
+
+
 def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, rows_by_campaign,
                      currency_ok) -> list:
     entity_campaigns = {e["campaign_id"] for e in entities}
+    handoff_sets = _handoff_sets(conn, org_id, brand_id)
     ads_by_campaign = defaultdict(list)
     owners_by_campaign = defaultdict(list)
     for entity in entities:
@@ -446,6 +508,10 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         )
         purchases = month["purchases"] if cap["result_kind"] == "purchase" and rows else None
         spend = month["spend"]
+        sync = repository.campaign_sync_state(
+            conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
+        )
+        missing_days = [] if draft else _missing_days(campaign, win)
         entry = {
             "campaign_id": campaign_id, "name": campaign["name"], "origin": campaign["origin"],
             "status": campaign["status"],
@@ -461,10 +527,16 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
             "daily_budget": _daily_budget(
                 conn, org_id, brand_id, campaign, owners_by_campaign[campaign_id], draft,
             ),
-            "missing_days": [] if draft else _missing_days(campaign, win),
-            "sync_state": repository.campaign_sync_state(
-                conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
-            )["state"],
+            "missing_days": missing_days,
+            "sync_state": sync["state"],
+            # F29 Contract D: the same function triage `data.status` uses, over this month's
+            # window (the rows this payload already read).
+            "data_status": repository.campaign_data_status(
+                conn, org_id, brand_id, campaign, sync=sync, missing_days=missing_days,
+                has_rows=bool(rows),
+            ),
+            "handoff": _handoff(conn, org_id, brand_id, campaign_id,
+                                handoff_sets.get(campaign_id, [])),
             "draft": _draft_view(conn, org_id, brand_id, campaign, cap) if draft else None,
         }
         (drafts if draft else live).append(entry)
@@ -560,7 +632,9 @@ def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
         conn, "quality",
         lambda: _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities),
     )
-    campaigns_out = None if entities is None else _guarded(
+    # A failed spend read nulls the campaign rows too: their numbers and `data_status` rest on
+    # it, and a failed read never reads as "no rows".
+    campaigns_out = None if entities is None or rows is None else _guarded(
         conn, "campaigns",
         lambda: _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities,
                                  rows_by_campaign, currency_ok),

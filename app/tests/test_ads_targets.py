@@ -198,6 +198,56 @@ class ResolveTargetTest(unittest.TestCase):
         self.assertEqual(result["result_label"], "購買")
         self.assertEqual(result["revision"], 3)
 
+    # -- F29 Contract D: `cost` (成本含運) beside break-even --------------------------------------
+
+    def test_cost_is_unit_cost_plus_shipping_from_the_break_even_row(self):
+        product_id = self._product(unit_variable_cost=150)
+        campaign = {
+            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "context_json": {"product_ids": [product_id]},
+        }
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["cost"], 200)  # 150 + 50
+        self.assertEqual(result["price"] - result["cost"], result["break_even"])
+
+    def test_cost_rides_along_with_an_own_cap(self):
+        product_id = self._product(unit_variable_cost=150)
+        campaign = {
+            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "target_basis": "own", "target_cost": 250,
+            "context_json": {"product_ids": [product_id]},
+        }
+        self.assertEqual(targets.resolve(web.conn, self.org_id, self.brand_id, campaign)["cost"],
+                         200)
+
+    def test_price_without_cost_has_no_cost(self):
+        product_id = self._product(unit_variable_cost=None)
+        campaign = {
+            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "context_json": {"product_ids": [product_id]},
+        }
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertEqual(result["price"], 500)  # the price is still known...
+        self.assertIsNone(result["cost"])  # ...but shipping alone is never a cost
+        self.assertIsNone(result["break_even"])
+
+    def test_non_purchase_result_kind_has_no_cost(self):
+        product_id = self._product(unit_variable_cost=150)
+        campaign = {
+            "id": "nonexistent", "origin": "internal", "result_kind": "lead",
+            "context_json": {"product_ids": [product_id]},
+        }
+        result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
+        self.assertIsNone(result["cost"])
+        self.assertIsNone(result["price"])
+
+    def test_target_endpoint_carries_cost(self):
+        product_id = self._product(unit_variable_cost=150)
+        campaign_id = self._imported_campaign_with_objective("OUTCOME_SALES", product_id=product_id)
+        view = repository.get_campaign_target(web.conn, self.org_id, self.brand_id, campaign_id)
+        self.assertEqual((view["basis"], view["break_even"], view["cost"]),
+                         ("break_even", 300, 200))
+
     # -- result_kind provenance: the real Meta adapter mapping, never a dict literal ------------
 
     def test_imported_sales_objective_from_meta_resolves_break_even(self):
