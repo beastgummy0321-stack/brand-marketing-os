@@ -26,17 +26,17 @@ import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, KindMark, LearnCard, Meter, Segmented, TagToggle } from "../patterns";
 import { CleanupEvidence } from "./CleanupEvidence";
 import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
+import { AdoptLatestButton } from "./CleanupRebuild";
+import { createCleanupSet, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { Tile } from "./Tile";
 import {
   buildBudgetDraftItem,
-  buildCleanupDraftItems,
   buildPauseDraftItem,
   budgetTitle,
   campaignChangesPath,
   changeStepPath,
   cleanupProposePath,
-  cleanupTitle,
   isCleanupTriageItem,
   isMonthBudgetRejection,
   itemAngle,
@@ -424,6 +424,13 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (canonical !== location.pathname) navigate(canonical, { replace: true, state: actionError ? { actionError } : undefined });
   }, [changeSet, busy, actionError, brandId, campaignId, location.pathname, navigate]);
 
+  // F28-I15: an outdated cleanup draft offers only 「改用最新提議」 (see `cleanupDraft.ts::useCleanupRebuild`).
+  const { drift, draftProposalId, adopt } = useCleanupRebuild({
+    brandId, campaignId, setId, isCleanup: kind === "cleanup",
+    proposeConfirmStep: isCleanupPropose && searchParams.get("step") === "confirm",
+    changeSet, triageItem, busy, setBusy, setChangeSet, setActionError,
+  });
+
   function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。";
   }
@@ -454,19 +461,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
-      // F27-I15 Contract F / coordinator correction: the backend only accepts `source: "cleanup"`
-      // on create once F27-I25 lands its own `ChangeDraft.source?`/`CreateRequest.source` widening
-      // (out of this issue's touch, `frontend/src/lib/adsChangeApi.ts`). Widen the type locally at
-      // the call site rather than editing that file or stopping — `createChangeSet` just
-      // `JSON.stringify`s `body` as-is, so the extra key reaches the backend regardless of the
-      // narrower `ChangeDraft` type.
-      return createChangeSet(brandId, campaignId, {
-        operation_id: operationId,
-        title: cleanupTitle(cleanup.campaign_name),
-        month: currentBudgetMonth(),
-        items: buildCleanupDraftItems(cleanup.ads),
-        source: "cleanup",
-      } as ChangeDraft & { source: "cleanup" });
+      return createCleanupSet(brandId, campaignId, cleanup, operationId);
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
@@ -570,7 +565,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     }
   }
 
-  if (loading) {
+  if (loading || draftProposalId) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
@@ -709,7 +704,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
         {kind === "cleanup" && (
-          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} />
+          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} drift={drift} />
         )}
 
         {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
@@ -733,12 +728,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       <div className="flex-1" />
       <ActionBar
         back={<Button variant="ghost" asChild><Link to={editCopyHref ?? cleanupBackHref ?? homeHref}>← {editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : "投放中心"}</Link></Button>}
-        hint={!closed ? "核准不會改動平台" : undefined}
+        hint={!closed && !drift ? "核准不會改動平台" : undefined}
       >
         {!closed && (
           <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
         )}
-        {!closed ? (
+        {drift ? (
+          <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
+        ) : !closed ? (
           <Button disabled={busy} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
         ) : nextAction ? (
           <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
