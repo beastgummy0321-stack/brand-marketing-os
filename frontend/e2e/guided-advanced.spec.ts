@@ -246,6 +246,9 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   const { groupId } = await setupAds(page, headers, brandId, campaignId, true);
 
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=structure`);
+  // F30-I08: a group's manual settings live in its fold 「進階：編輯這一組（…）」, in the sub-fold 「人工上架設定」.
+  const groupFold = page.getByRole("button", { name: /^進階：編輯這一組（一般受眾）/ });
+  await groupFold.click();
   const missingButton = page.getByRole("button", { name: "補齊一般受眾設定" });
   await missingButton.focus();
   await page.keyboard.press("Enter");
@@ -255,22 +258,22 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await page.getByLabel("設定分類").getByRole("button", { name: "受眾", exact: true }).click();
   const audience = page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true });
   await audience.fill("新客網站訪客，排除近 30 天購買者");
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(audience).toBeHidden();
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(audience).toHaveValue("新客網站訪客，排除近 30 天購買者");
 
   await page.goto(`/app/brands/${brandId}/library`);
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}?tab=structure`);
-  await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
-  await page.getByRole("button", { name: /一般受眾 · 有未儲存變更/ }).click();
+  await groupFold.click();
+  await page.getByRole("button", { name: "人工上架設定 · 有未儲存變更" }).click();
   await expect(page.getByText(/已恢復未儲存草稿/)).toBeVisible();
   await expect(audience).toHaveValue("新客網站訪客，排除近 30 天購買者");
   await page.getByRole("button", { name: "儲存這組設定" }).click();
   await expect(page.getByText("設定已儲存")).toBeVisible();
   await page.reload();
-  await page.getByRole("button", { name: /人工上架設定與平台對應/ }).click();
-  await page.getByRole("button", { name: /一般受眾 · 待補設定/ }).click();
+  await groupFold.click();
+  await page.getByRole("button", { name: /^人工上架設定 · 待補設定/ }).click();
   await expect(page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true }))
     .toHaveValue("新客網站訪客，排除近 30 天購買者");
   await captureDesktopEvidence(page, "manual-launch-settings");

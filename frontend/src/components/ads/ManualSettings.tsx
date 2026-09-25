@@ -31,7 +31,7 @@ function clearManualDraft(key: string) {
   try { sessionStorage.removeItem(key); } catch { /* Storage unavailable. */ }
 }
 
-export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange, embedded = false }: {
+export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange, embedded = false, groupId }: {
   draftScope: string;
   brandId: string;
   campaign: Pick<CampaignDetail, "id" | "status" | "manual_handoff">;
@@ -40,8 +40,12 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
   /** F29 Unresolved 5: inside the launch settings' 「進階設定」 fold (publish list stage) — the per-ad-set free-text
    * fields only, without this panel's own surface, summary and outer fold (the host's fold is the one fold). */
   embedded?: boolean;
+  /** F30-I08: inside the structure tab's per-group fold 「進階：編輯這一組」 — only this delivery group's settings, in
+   * one sub-fold 「人工上架設定」, without this panel's own surface and campaign summary. */
+  groupId?: string;
 }) {
-  const handoff = campaign.manual_handoff;
+  const all = campaign.manual_handoff;
+  const handoff = all && groupId !== undefined ? { ...all, groups: all.groups.filter((group) => group.id === groupId) } : all;
   const [open, setOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [dirtyGroups, setDirtyGroups] = useState<Record<string, boolean>>(() => Object.fromEntries(
@@ -80,7 +84,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
   const groupFolds = (
     <div className="flex flex-col gap-4">
       {handoff.groups.map((group) => (
-        <Disclosure key={group.id} label={`${group.name} · ${dirtyGroups[group.id] ? "有未儲存變更" : group.status}`}
+        <Disclosure key={group.id} label={`${groupId !== undefined ? "人工上架設定" : group.name} · ${dirtyGroups[group.id] ? "有未儲存變更" : group.status}`}
           open={Boolean(openGroups[group.id])}
           onOpenChange={(next) => setOpenGroups((current) => ({ ...current, [group.id]: next }))}>
           <GroupSettings brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
@@ -97,6 +101,21 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
       補齊{group.name}設定
     </Button>
   ));
+
+  if (groupId !== undefined) {
+    return (
+      <div className="flex flex-col gap-3" aria-label="人工上架設定" role="group">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            人工上架設定：這裡儲存設定，不會對外發布或更動預算。
+            {dirty && <span className="ml-1 font-medium text-warning">有尚未儲存的變更。</span>}
+          </p>
+          <div className="flex flex-wrap gap-2">{fillButtons}</div>
+        </div>
+        {groupFolds}
+      </div>
+    );
+  }
 
   if (embedded) {
     return (

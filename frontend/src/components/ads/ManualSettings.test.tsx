@@ -136,3 +136,26 @@ it("儲存成功清除離開草稿", async () => {
   await user.click(screen.getByRole("button", { name: "再行銷 · 已填設定" }));
   expect(screen.queryByText("已恢復未儲存草稿。")).toBeNull();
 });
+
+it("groupId (F30-I08 per-group fold): only that group, in one 人工上架設定 sub-fold; 補齊 opens it and focuses the field", async () => {
+  const user = userEvent.setup();
+  const two = campaign();
+  two.manual_handoff!.groups.push({ id: "g2", name: "新客", status: "已填設定", values: { audience_source: "x" },
+    missing: [], saved_at: null, saved_by: null, ads: [] });
+  render(<ManualSettings draftScope={testScope} brandId="b1" campaign={two} groupId="g1" onSaved={vi.fn()} />);
+
+  expect(screen.queryByText(/新客/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /人工上架設定與平台對應/ })).toBeNull();
+  const fold = screen.getByRole("button", { name: "人工上架設定 · 待補設定" });
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  await user.click(screen.getByRole("button", { name: "補齊再行銷設定" }));
+  const input = await screen.findByRole("textbox", { name: "受眾來源 *" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  await user.type(input, "網站訪客");
+  expect(screen.getByRole("button", { name: "人工上架設定 · 有未儲存變更" })).toBeTruthy();
+});
+
+it("groupId of a group without manual settings renders nothing", () => {
+  const { container } = render(<ManualSettings draftScope={testScope} brandId="b1" campaign={campaign()} groupId="other" onSaved={vi.fn()} />);
+  expect(container.textContent).toBe("");
+});
