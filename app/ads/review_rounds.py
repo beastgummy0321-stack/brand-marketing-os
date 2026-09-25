@@ -175,7 +175,9 @@ def submit(
     ).fetchone()
     if old:
         result = get(conn, org, brand, campaign, old["id"])
-        if manual_monitor:
+        # A decided round is history: pointing the monitor back at it (a stale-screen
+        # re-request or retry) would reopen its window and replay `on_decision`.
+        if manual_monitor and result["decision"] is None:
             from app.ads import review_monitor
 
             review_monitor.track_manual(conn, result, commit=False)
@@ -227,6 +229,9 @@ def retry(conn, org, brand, campaign, review_id, actor="human"):
 
     `retry_of` gives the re-run its own digest (the old one is UNIQUE per campaign), so a repeat
     call dedupes to the same retry round; the round reserves AI cost like any other."""
+    # Same guard as `review_evidence.snapshot`: a closed campaign only shows its history.
+    if changes.campaign(conn, org, brand, campaign)["status"] == "closed":
+        raise ValueError("已結案活動只能查看歷史檢討。")
     old = get(conn, org, brand, campaign, review_id)
     if old["decision"] is not None or not (
         old["status"] == "failed" or (old["result_json"] or {}).get("rejected")

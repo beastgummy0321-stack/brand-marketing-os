@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.ads import review_jobs, review_monitor, review_policy, review_rounds, triage
 from app.core import db
 from app.main import app
-from app.tests.test_ads_review_cycle import ReviewCycleTest as _CycleFixture
+from app.tests import test_ads_review_cycle as _cycle
 
 # The two model texts the dev DB rejected on 2026-09-25 (Feature F30 Evidence).
 REAL_HEDGES = (
@@ -21,11 +21,12 @@ REAL_HEDGES = (
 
 
 class ReviewRetryTest(unittest.TestCase):
-    setUp = _CycleFixture.setUp
-    observation = _CycleFixture.observation
-    request = _CycleFixture.request
-    reply = _CycleFixture.reply
-    run_review = _CycleFixture.run_review
+    # Borrow fixture methods via the module: a TestCase bound here would be collected twice.
+    setUp = _cycle.ReviewCycleTest.setUp
+    observation = _cycle.ReviewCycleTest.observation
+    request = _cycle.ReviewCycleTest.request
+    reply = _cycle.ReviewCycleTest.reply
+    run_review = _cycle.ReviewCycleTest.run_review
 
     def tearDown(self):
         self.conn.rollback()
@@ -185,6 +186,54 @@ class ReviewRetryTest(unittest.TestCase):
         self.assertEqual(monitor["window"], None)
         with self.assertRaises(ValueError):
             self.retry(old["id"])
+
+    def test_closed_campaign_refuses_retry_without_cost_or_monitor_write(self):
+        old = self.rejected_round()
+        self.conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s", (self.campaign,))
+        self.conn.commit()
+        before, enqueued = self.monitor_row(), self.enqueue.call_count
+        with self.assertRaisesRegex(ValueError, "已結案"):
+            self.retry(old["id"])
+        self.conn.rollback()
+        client = TestClient(app)
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/reviews/"
+        response = client.post(base + old["id"] + "/retry")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "review_unavailable")
+        rounds = self.conn.execute(
+            "SELECT id FROM ads_review_round WHERE brand_id=%s", (self.brand,)
+        ).fetchall()
+        self.assertEqual([r["id"] for r in rounds], [old["id"]])
+        self.assertEqual(self.monitor_row(), before)
+        self.assertEqual(self.enqueue.call_count, enqueued)
+
+    def test_retry_returning_a_decided_round_leaves_the_monitor_alone(self):
+        old = self.rejected_round()
+        again = self.retry(old["id"])
+        self.reply()
+        self.run_review(again)
+        review_rounds.decide(
+            self.conn, self.org, self.brand, self.campaign, again["id"], "completed", "採用"
+        )
+        advanced = self.monitor_row()
+        self.assertIsNone(advanced["review_id"])
+        self.assertEqual(advanced["previous_id"], again["id"])
+        # A stale screen still offers retry on A: it dedupes to decided B and must not repoint
+        # the monitor at B, reopen its window or replay on_decision.
+        with patch.object(review_monitor, "on_decision") as replay:
+            same = self.retry(old["id"])
+        self.assertEqual(same["id"], again["id"])
+        self.assertEqual(same["decision"], "completed")
+        replay.assert_not_called()
+        self.assertEqual(self.monitor_row(), advanced)
+
+    def monitor_row(self):
+        row = self.conn.execute(
+            "SELECT review_id,previous_id,window_start,window_end,state,next_check_at,revision "
+            "FROM ads_review_monitor WHERE brand_id=%s AND entity_id=%s",
+            (self.brand, self.ad["id"]),
+        ).fetchone()
+        return dict(row) if row else None
 
     def test_http_retry_shape_and_conflicts(self):
         client = TestClient(app)
