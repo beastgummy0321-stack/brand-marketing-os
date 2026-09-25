@@ -35,9 +35,9 @@ export function ObjectiveIcon({ objective }: { objective: string }) {
   return <Icon className="size-5" strokeWidth={1.75} />;
 }
 
-/** 「NT$1,580」, another currency by its code, 「價格未填」 when there is no current price (never NT$0). */
+/** 「NT$1,580」, another currency by its code, 「價格未填」 when there is no usable current price (never NT$0). */
 export function priceText(price: number | null, currency: string | null): string {
-  const amount = formatAmount(price);
+  const amount = price !== null && price > 0 ? formatAmount(price) : null;
   if (amount === null) return "價格未填";
   return !currency || currency === "TWD" ? `NT$${amount}` : `${currency} ${amount}`;
 }

@@ -1,185 +1,208 @@
-/** frontend/src/components/ads/ConfirmBriefPage.test.tsx — F04-I12：四個斷言，`vi.mock`
- * 掉 `@/lib/adsApi` 與 `@/lib/productsApi`（不打真的 API，這一頁是純畫面邏輯的證偽）。 */
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+/** ConfirmBriefPage (F30-I05): wizard v10 step 2 「系統這樣理解」 — six fields, guessed ones marked, in-place edits
+ * that PATCH one field, independent read failures, and 產生策略 as the only model call. */
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignDetail, CampaignFieldSources } from "@/lib/adsApi";
 import { generateStrategy, getCampaign, patchCampaign } from "@/lib/adsApi";
-import { fetchProductList } from "@/lib/productsApi";
+import { fetchChannels } from "@/lib/adsLaunchApi";
+import { getWizardOptions, patchAudienceHint, type WizardOptions } from "@/lib/adsWizardApi";
 import { ConfirmBriefPage } from "./ConfirmBriefPage";
 
-vi.mock("@/lib/adsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
-  return {
-    ...actual,
-    getCampaign: vi.fn(),
-    patchCampaign: vi.fn(),
-    generateStrategy: vi.fn(),
-  };
-});
+vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), patchCampaign: vi.fn(), generateStrategy: vi.fn() }));
+vi.mock("@/lib/adsLaunchApi", async (original) => ({ ...await original<object>(), fetchChannels: vi.fn() }));
+vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), patchAudienceHint: vi.fn() }));
 
-vi.mock("@/lib/productsApi", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/productsApi")>("@/lib/productsApi");
-  return { ...actual, fetchProductList: vi.fn() };
-});
-
-const mockGetCampaign = vi.mocked(getCampaign);
-const mockPatchCampaign = vi.mocked(patchCampaign);
-const mockGenerateStrategy = vi.mocked(generateStrategy);
-const mockFetchProductList = vi.mocked(fetchProductList);
+const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)";
+const options: WizardOptions = {
+  products: [
+    { id: "prd_1", name: LONG, price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false },
+    { id: "prd_2", name: "Beast Gummy咖啡因機能軟糖・試用包", price: 100, currency: "TWD", thumbnail_url: null, has_cost: true },
+  ],
+  objectives: [
+    { key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} },
+    { key: "名單", label: "名單", description: "看每筆名單成本", available: true, platforms: {} },
+    { key: "互動", label: "互動", description: "看每次互動成本", available: false, platforms: {} },
+  ],
+};
 
 function sources(overrides: Partial<CampaignFieldSources> = {}): CampaignFieldSources {
-  return {
-    product: "user",
-    objective: "system",
-    platform: "system",
-    budget: "system",
-    dates: "system",
-    audience: "system",
-    ...overrides,
-  };
+  return { product: "user", objective: "user", platform: "user", budget: "user", dates: "user", audience: "system", ...overrides };
 }
-
 function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   return {
-    id: "cmp_1",
-    name: "測試 Campaign",
-    goal_text: "9 月想推 Beast Gummy",
-    objective: "購買",
+    id: "cmp_1", name: "測試 Campaign", goal_text: "推商品", objective: "購買",
     cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
-    start_date: "2026-09-01",
-    end_date: "2026-09-30",
-    status: "draft",
-    budget_planned: null,
-    budget_scenario: null,
-    budget_basis_json: {},
-    budget_total: null,
-    context_json: {
-      product_ids: ["prd_1"],
-      audience_hint: "上班族",
-      field_sources: sources(),
-    },
+    start_date: "2026-10-01", end_date: "2026-10-31", status: "draft", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null,
+    context_json: { product_ids: ["prd_1"], audience_hint: "25–40 歲上班族", field_sources: sources() },
     constraints_json: { platform: "meta", budget: 30000 },
-    verdict: null,
-    verdict_json: {},
-    closed_at: null,
-    created_by: null,
-    created_at: "2026-01-01T00:00:00Z",
-    groups: [],
-    actions: [],
-    outcome: { spend: 0, purchases: 0, revenue: 0 },
-    asset_readiness: { ready_count: 0, total: 0 },
-    external_id: null,
-    external_name: null,
-    external_status: null,
-    local_state: "unbound",
-    bound_at: null,
+    verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-01-01T00:00:00Z", groups: [], actions: [],
+    outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { ready_count: 0, total: 0 },
+    external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
     ...overrides,
   };
 }
+const field = (key: string) => document.querySelector(`[data-field="${key}"]`) as HTMLElement;
 
 function renderPage() {
   return render(
-    <MemoryRouter>
-      <ConfirmBriefPage brandId="brd_1" campaignId="cmp_1" />
+    <MemoryRouter initialEntries={["/brands/brd_1/ads/new/cmp_1"]}>
+      <Routes>
+        <Route path="/brands/:b/ads/new/:c" element={<ConfirmBriefPage brandId="brd_1" campaignId="cmp_1" />} />
+        <Route path="/brands/:b/ads/campaigns/:c" element={<p>策略頁</p>} />
+      </Routes>
     </MemoryRouter>,
   );
 }
 
-describe("ConfirmBriefPage（F04-I12）", () => {
-  it("provides a direct asset handoff route without generating strategy", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([]);
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getCampaign).mockResolvedValue(campaign());
+  vi.mocked(getWizardOptions).mockResolvedValue(options);
+  vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "" }, { key: "google_ads", label: "Google Ads", connected: false, state_text: "" }]);
+});
+
+describe("ConfirmBriefPage (F30-I05)", () => {
+  it("shows the six understood fields with their values; 主打／素材 are not shown before the strategy", async () => {
     renderPage();
-    const link = await screen.findByRole("link", { name: "先處理自帶素材與手動交接" });
-    expect(link.getAttribute("href")).toContain("/ads/campaigns/cmp_1?tab=assets");
-  });
-  it("六張卡的 label 都在畫面上", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([{ id: "prd_1", name: "Beast Gummy", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "none" }]);
-
-    renderPage();
-
-    for (const label of ["商品", "目標", "平台", "預算", "時間", "受眾方向"]) {
-      expect(await screen.findByText(label)).toBeTruthy();
-    }
-    expect(screen.getByText(/確認後會依這六項需求整理策略、預算配置與素材需求/)).toBeTruthy();
-    expect(screen.queryByText("Tracking 建議")).toBeNull();
-  });
-
-  it("field_sources 混合 user／system：畫面上「你說的」與「系統帶入」都出現", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([{ id: "prd_1", name: "Beast Gummy", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "none" }]);
-
-    renderPage();
-
-    await screen.findByText("商品");
-    expect(screen.getAllByText("你說的").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("系統帶入").length).toBeGreaterThan(0);
+    expect(await screen.findByText(LONG)).toBeTruthy();
+    for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾方向"]) expect(screen.getByText(label)).toBeTruthy();
+    expect(within(field("objective")).getByText("購買")).toBeTruthy();
+    expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
+    expect(within(field("budget")).getByText("NT$30,000")).toBeTruthy();
+    expect(await within(field("platform")).findByText("Meta")).toBeTruthy();
+    expect(within(field("audience")).getByText("25–40 歲上班族")).toBeTruthy();
+    expect(screen.queryByText("主打")).toBeNull();
+    expect(screen.queryByText("素材")).toBeNull();
   });
 
-  it("編輯「目標」→ 選「名單」→ 儲存：patchCampaign 呼叫一次帶 objective，回傳值重畫成「你說的」", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([]);
-    mockPatchCampaign.mockResolvedValue(
-      campaign({
-        objective: "名單",
-        context_json: {
-          product_ids: ["prd_1"],
-          audience_hint: "上班族",
-          field_sources: sources({ objective: "user" }),
-        },
-      }),
-    );
-
+  it("marks only fields the system guessed with 「猜的，請確認」 and counts them in the bar", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_1"], audience_hint: null, field_sources: sources({ dates: "system" }) } }));
     renderPage();
-    await screen.findByText("目標");
-
-    const objectiveLabel = screen.getByText("目標");
-    const objectiveCard = objectiveLabel.closest("div.surface") as HTMLElement;
-    fireEvent.click(within(objectiveCard).getAllByRole("button")[0]);
-
-    const select = await within(objectiveCard).findByRole("combobox");
-    fireEvent.change(select, { target: { value: "名單" } });
-    fireEvent.click(within(objectiveCard).getByText("儲存"));
-
-    await waitFor(() => expect(mockPatchCampaign).toHaveBeenCalledTimes(1));
-    expect(mockPatchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { objective: "名單" });
-
-    expect(await within(objectiveCard).findByText("你說的")).toBeTruthy();
+    await screen.findByText(LONG);
+    expect(within(field("dates")).getByText("猜的，請確認")).toBeTruthy();
+    expect(within(field("audience")).getByText("猜的，請確認")).toBeTruthy();
+    expect(within(field("audience")).getByText("未設定")).toBeTruthy();
+    expect(within(field("product")).queryByText("猜的，請確認")).toBeNull();
+    expect(screen.getByText("有 2 項是猜的")).toBeTruthy();
   });
 
-  it("編輯「時間」卡：日期輸入的容器窄版直排（避免撐出卡片，見 F04-I12 Fix）", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([]);
-
+  it("prints the cap as a number or unset, never NaN", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ constraints_json: { budget: "NT$ 30,000" } }));
+    const view = renderPage();
+    await screen.findByText("預算上限");
+    expect(within(field("budget")).getByText("NT$ 30,000")).toBeTruthy();
+    view.unmount();
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ constraints_json: {} }));
     renderPage();
-    await screen.findByText("時間");
-
-    const dateLabel = screen.getByText("時間");
-    const dateCard = dateLabel.closest("div.surface") as HTMLElement;
-    fireEvent.click(within(dateCard).getAllByRole("button")[0]);
-
-    const dateInputs = await within(dateCard).findAllByDisplayValue(/2026-09/);
-    const wrapper = dateInputs[0].parentElement as HTMLElement;
-    expect(wrapper.className).toContain("flex-col");
-    expect(wrapper.className).not.toMatch(/flex-row/);
+    await screen.findByText("預算上限");
+    expect(within(field("budget")).getByText("未設定")).toBeTruthy();
+    expect(screen.queryByText(/NaN/)).toBeNull();
   });
 
-  it("按「產生策略建議」→ generateStrategy 只被呼叫一次（不是載入時就呼叫）", async () => {
-    mockGetCampaign.mockResolvedValue(campaign());
-    mockFetchProductList.mockResolvedValue([]);
-    mockGenerateStrategy.mockResolvedValue(campaign());
-
+  it("edits the objective in place from the available catalog and closes only after the server confirmed", async () => {
+    let resolve!: (c: CampaignDetail) => void;
+    vi.mocked(patchCampaign).mockReturnValue(new Promise((r) => { resolve = r; }));
+    const user = userEvent.setup();
     renderPage();
-    await screen.findByText("商品");
-    expect(mockGenerateStrategy).not.toHaveBeenCalled();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改結果" }));
+    const select = within(field("objective")).getByRole("combobox");
+    expect(within(select).queryByRole("option", { name: "互動" })).toBeNull();
+    await user.selectOptions(select, "名單");
+    await user.click(within(field("objective")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { objective: "名單" });
+    expect(within(field("objective")).getByRole("combobox")).toBeTruthy();
+    resolve(campaign({ objective: "名單" }));
+    expect(await within(field("objective")).findByText("名單")).toBeTruthy();
+    expect(within(field("objective")).queryByRole("combobox")).toBeNull();
+  });
 
-    fireEvent.click(screen.getByText("產生策略建議 →"));
+  it("keeps the editor open with the error when a save fails", async () => {
+    vi.mocked(patchCampaign).mockRejectedValue(new Error("這個目標尚未開放，請選其他目標。"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改結果" }));
+    await user.selectOptions(within(field("objective")).getByRole("combobox"), "名單");
+    await user.click(within(field("objective")).getByRole("button", { name: "完成" }));
+    expect(await screen.findByText("這個目標尚未開放，請選其他目標。")).toBeTruthy();
+    expect(within(field("objective")).getByRole("combobox")).toBeTruthy();
+  });
 
-    await waitFor(() => expect(mockGenerateStrategy).toHaveBeenCalledTimes(1));
-    expect(mockGenerateStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
+  it("confirms a guessed audience through the audience PATCH; an owned unchanged field just closes", async () => {
+    vi.mocked(patchAudienceHint).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_1"], audience_hint: "通勤族", field_sources: sources({ audience: "user" }) } }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改受眾方向" }));
+    const input = within(field("audience")).getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "通勤族{Enter}");
+    expect(patchAudienceHint).toHaveBeenCalledWith("brd_1", "cmp_1", "通勤族");
+    expect(await within(field("audience")).findByText("通勤族")).toBeTruthy();
+    expect(within(field("audience")).queryByText("猜的，請確認")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "改期間" }));
+    await user.click(within(field("dates")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).not.toHaveBeenCalled();
+    expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
+  });
+
+  it("saves a new cap as a number in the campaign's constraints", async () => {
+    vi.mocked(patchCampaign).mockResolvedValue(campaign({ constraints_json: { platform: "meta", budget: 45000 } }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改預算上限" }));
+    const input = within(field("budget")).getByLabelText("預算上限");
+    await user.clear(input);
+    await user.type(input, "45000");
+    await user.click(within(field("budget")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { constraints_json: { platform: "meta", budget: 45000 } });
+    expect(await within(field("budget")).findByText("NT$45,000")).toBeTruthy();
+  });
+
+  it("a failed channel list shows ReadFailed with 重試; the platform is not editable, the rest still is", async () => {
+    vi.mocked(fetchChannels).mockRejectedValueOnce(new Error("讀取通路清單失敗。"));
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText(/平台清單讀不到/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "改平台" })).toBeNull();
+    expect(within(field("platform")).getByText("meta")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "改結果" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByRole("button", { name: "改平台" })).toBeTruthy();
+    expect(screen.queryByText(/平台清單讀不到/)).toBeNull();
+  });
+
+  it("a failed campaign read shows ReadFailed, not empty fields", async () => {
+    vi.mocked(getCampaign).mockRejectedValueOnce(new Error("讀取 Campaign 失敗。"));
+    renderPage();
+    expect(await screen.findByText(/這個活動讀不到/)).toBeTruthy();
+    expect(screen.queryByText("未設定")).toBeNull();
+  });
+
+  it("產生策略 calls the strategy once (not on load) and lands on the strategy tab", async () => {
+    vi.mocked(generateStrategy).mockResolvedValue(campaign());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    expect(generateStrategy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "產生策略 →" }));
+    expect(await screen.findByText("策略頁")).toBeTruthy();
+    expect(generateStrategy).toHaveBeenCalledTimes(1);
+    expect(generateStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
+  });
+
+  it("上一步 and the done step go back to step 1 of this campaign, and the asset route stays under 進階", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    expect(screen.getByRole("link", { name: "← 上一步" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
+    expect(screen.getByRole("link", { name: "回到選商品與目標" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
+    await user.click(screen.getByRole("button", { name: "進階" }));
+    expect(screen.getByRole("link", { name: "先處理自帶素材與手動交接" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
   });
 });

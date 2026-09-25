@@ -144,7 +144,6 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         if (goal.key !== campaign.objective) patch.objective = goal.key;
         if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, dates);
         if (budget !== now.budget) patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget };
-        if (goalText.trim() && goalText.trim() !== campaign.goal_text) patch.goal_text = goalText.trim();
         if (Object.keys(patch).length > 0) campaign = await patchCampaign(brandId, campaign.id, patch);
       } else {
         setPhase("understanding");
@@ -169,30 +168,27 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     }
   }
 
-  if (phase !== "pick") {
-    return (
-      <Shell homeHref={homeHref} bar={
-        <ActionBar
-          back={<Button variant="ghost" disabled={phase === "understanding"} onClick={() => setPhase("pick")}>← 上一步</Button>}
-          hint={phase === "failed" ? "讀取失敗，按上方重試" : undefined}
-        >
-          <Button disabled>產生策略 →</Button>
-        </ActionBar>
-      }>
-        <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit()} />
-      </Shell>
-    );
-  }
-
+  const picking = phase === "pick";
   const locked = busy || restoring;
+  // The pick view stays mounted (hidden) while the create runs, so the upload library keeps its selection for
+  // an attach retry.
   return (
-    <Shell homeHref={homeHref} bar={
+    <Shell homeHref={homeHref} bar={picking ? (
       <ActionBar back={{ label: "投放中心", to: homeHref }} hint={hint || undefined}>
         <Button disabled={blocked} onClick={() => void submit()}>
           {created && error && uploads.some((u) => !attached.has(u.id)) ? "重試加入未完成素材並繼續" : "下一步：系統理解"} →
         </Button>
       </ActionBar>
-    }>
+    ) : (
+      <ActionBar
+        back={<Button variant="ghost" disabled={phase === "understanding"} onClick={() => setPhase("pick")}>← 上一步</Button>}
+        hint={phase === "failed" ? "讀取失敗，按上方重試" : undefined}
+      >
+        <Button disabled>產生策略 →</Button>
+      </ActionBar>
+    )}>
+      {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit()} />}
+      <div className={picking ? "contents" : "hidden"}>
       <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品和目標" />
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
       {options.status === "error" ? (
@@ -253,6 +249,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         </div>
       </Disclosure>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      </div>
     </Shell>
   );
 }
@@ -261,7 +258,7 @@ function Shell({ homeHref, bar, children }: { homeHref: string; bar: ReactNode; 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "建立活動" }]} />
-      <div className="flex max-w-[1260px] flex-col gap-4 [&>[data-slot=flow-header]]:mb-1">{children}</div>
+      <div className="flex max-w-[1260px] flex-col gap-4 [&_[data-slot=flow-header]]:mb-1">{children}</div>
       <div className="flex-1" />
       {bar}
     </div>
