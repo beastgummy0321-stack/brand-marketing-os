@@ -1,247 +1,278 @@
-import { UserAssetsLibrary } from "./UserAssetsLibrary";
-import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
-import type { CampaignDraft } from "@/lib/adsApi";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Plus, Sparkles, X } from "lucide-react";
-import { PageHeader } from "@/components/layout/PageHeader";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
-import { createCampaign, getCampaign } from "@/lib/adsApi";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { readDraft, saveDraft, clearDraft } from "./campaignDraft";
+import { getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
+import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { UserAssetsLibrary } from "./UserAssetsLibrary";
+import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
+import { ActionBar, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed } from "./patterns";
+import { ObjectiveIcon, ProductPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
 
-const CONSTRAINT_FIELDS: { key: string; label: string; placeholder: string; isDate?: boolean }[] = [
-  { key: "budget", label: "預算上限", placeholder: "例如 NT$ 30,000" },
-  { key: "platform", label: "指定平台", placeholder: "例如 Facebook" },
-  { key: "product", label: "指定商品", placeholder: "選擇商品" },
-  { key: "dates", label: "日期", placeholder: "", isDate: true },
-  { key: "other", label: "其他限制", placeholder: "例如受眾、地區等" },
-];
+const message = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 
-const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
+/** The picks a created campaign already holds, for going back to step 1 without creating a second campaign.
+ * Dates the system filled in are not shown as the user's (they stay empty here). */
+function picksOf(c: CampaignDetail) {
+  const ctx = (c.context_json ?? {}) as { product_ids?: string[]; field_sources?: { dates?: string } };
+  const cons = (c.constraints_json ?? {}) as { budget?: unknown };
+  const userDates = ctx.field_sources?.dates === "user";
+  return {
+    productId: ctx.product_ids?.[0] ?? null,
+    objective: c.objective || null,
+    startDate: userDates ? c.start_date ?? "" : "",
+    endDate: userDates ? c.end_date ?? "" : "",
+    budget: typeof cons.budget === "number" && Number.isFinite(cons.budget) && cons.budget > 0 ? cons.budget : null,
+  };
+}
 
-/** 建立 Campaign 步驟一（F04-I12，圖 3）：一句話＋選填限制條件 → `POST /campaigns`。
- * 日期不是必填欄位（F04-I11 後端會從句子判斷，判斷不出來就今天～+30 天並標「系統帶入」）；
- * 這裡只在「只填一邊」時擋下來。送出成功後導去步驟二（`ConfirmBriefPage`）確認理解，
- * 不再直接進策略頁——那一步才是第二次、也是最後一次模型呼叫。 */
+/** New-campaign wizard v10 step 1 (F30-I05, prototype `newStep1()`): pick one product and one objective from the
+ * catalog, the dates and 「這個活動最多花」, then `createCampaignFromPicks` understands them (one synchronous model
+ * call) while step 2's wait line shows, and lands on step 2 (`ConfirmBriefPage`). `?created=<id>` is the campaign
+ * this tab already created: its picks reload, a change is a `PATCH`, never a second campaign. The optional sentence
+ * and the brand's own images／videos sit folded under 進階. */
 export function NewCampaignPage({ brandId }: { brandId: string }) {
   const { scope } = useWorkspace();
   const draftKey = `campaign-draft:${scope}:${brandId}`;
-  return <CampaignForm key={draftKey} brandId={brandId} draftKey={draftKey} />;
+  return <CampaignWizard key={draftKey} brandId={brandId} draftKey={draftKey} />;
 }
 
-function CampaignForm({ brandId, draftKey }: { brandId: string; draftKey: string }) {
+function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: string }) {
   const navigate = useNavigate();
+  const homeHref = `/brands/${brandId}/ads`;
   const [search, setSearch] = useSearchParams();
-  const existingId = search.get("created");
-  const [restoring, setRestoring] = useState(!!existingId);
+  const createdId = search.get("created");
   const life = useRef(new AbortController());
   useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
+  const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
+
   const [initial] = useState(() => readDraft(draftKey));
-  const [goalText, setGoalText] = useState(initial.goalText);
+  const [productId, setProductId] = useState(initial.productId);
+  const [objective, setObjective] = useState(initial.objective);
   const [startDate, setStartDate] = useState(initial.startDate);
   const [endDate, setEndDate] = useState(initial.endDate);
-  const [openConstraints, setOpenConstraints] = useState<Record<string, boolean>>(initial.openConstraints);
-  const [constraintValues, setConstraintValues] = useState<Record<string, string>>(initial.constraintValues);
+  const [budget, setBudget] = useState(initial.budget);
+  const [goalText, setGoalText] = useState(initial.goalText);
   const [uploads, setUploads] = useState<AssetUpload[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
-  const [created, setCreated] = useState<CampaignDraft | null>(null);
   const [attached, setAttached] = useState<Set<string>>(new Set());
-  const [submitting, setSubmitting] = useState(false);
+  const [created, setCreated] = useState<CampaignDetail | null>(null);
+  const [restoring, setRestoring] = useState(!!createdId);
+  const [restoreFailed, setRestoreFailed] = useState<string | null>(null);
+  const [restoreKey, setRestoreKey] = useState(0);
+  const [phase, setPhase] = useState<"pick" | "understanding" | "failed">("pick");
+  const [failure, setFailure] = useState<string | null>(null);
+  const [waited, setWaited] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!existingId || created?.id === existingId) { setRestoring(false); return; }
-    let cancelled = false; setRestoring(true);
-    getCampaign(brandId, existingId).then(value => { if (!cancelled) { setCreated({ ...value, parsed: true }); setGoalText(value.goal_text ?? ""); } }).catch(e => { if (!cancelled) setError(`找回已建立活動失敗，請重開此頁或至活動清單查看：${String(e)}`); }).finally(() => { if (!cancelled) setRestoring(false); });
+    if (!createdId || created?.id === createdId) { setRestoring(false); return; }
+    let cancelled = false;
+    setRestoring(true); setRestoreFailed(null);
+    getCampaign(brandId, createdId)
+      .then((c) => {
+        if (cancelled) return;
+        const p = picksOf(c);
+        setCreated(c); setProductId(p.productId); setObjective(p.objective);
+        setStartDate(p.startDate); setEndDate(p.endDate); setBudget(p.budget);
+      })
+      .catch((e) => { if (!cancelled) setRestoreFailed(message(e, "讀取已建立的活動失敗。")); })
+      .finally(() => { if (!cancelled) setRestoring(false); });
     return () => { cancelled = true; };
-  }, [brandId, existingId, created?.id]);
+  }, [brandId, createdId, created?.id, restoreKey]);
   useEffect(() => {
-    saveDraft(draftKey, { goalText, startDate, endDate, openConstraints, constraintValues });
-  }, [draftKey, goalText, startDate, endDate, openConstraints, constraintValues]);
+    saveDraft(draftKey, { productId, objective, startDate, endDate, budget, goalText });
+  }, [draftKey, productId, objective, startDate, endDate, budget, goalText]);
+  useEffect(() => {
+    if (phase !== "understanding") return;
+    setWaited(0);
+    const started = Date.now();
+    const timer = setInterval(() => setWaited(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [phase]);
 
-  function toggleConstraint(key: string) {
-    setOpenConstraints((prev) => ({ ...prev, [key]: !prev[key] }));
+  const data = options.data;
+  const product = data?.products.find((p) => p.id === productId) ?? null;
+  const goal = data?.objectives.find((o) => o.key === objective && o.available) ?? null;
+  const oneDate = !!startDate !== !!endDate;
+  const backwards = !!startDate && !!endDate && endDate < startDate;
+  const budgetOk = budget !== null && budget > 0;
+  const hint = !product || !goal ? "選好商品和結果"
+    : !budgetOk ? "填這個活動最多花"
+    : oneDate ? "開始和結束要一起填"
+    : backwards ? "結束要在開始之後" : "";
+  const blocked = !!hint || busy || uploadBusy || restoring || (!!createdId && !created);
+
+  /** Attaches the picked uploads not yet attached; returns the failures (the campaign is never re-created). */
+  async function attachAll(campaignId: string, signal: AbortSignal) {
+    const done = new Set(attached);
+    const errors: string[] = [];
+    for (const upload of uploads) {
+      if (signal.aborted) return errors;
+      if (done.has(upload.id)) continue;
+      try { await attachUpload(brandId, campaignId, upload.id); done.add(upload.id); }
+      catch (e) { errors.push(`${upload.filename}：${message(e, "加入失敗")}`); }
+    }
+    setAttached(done);
+    return errors;
   }
 
-  async function handleSubmit(request = goalText) {
-    if (!request.trim() || submitting || uploadBusy || restoring || (existingId && !created)) return;
-    if (uploads.some(u => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
-    if ((startDate && !endDate) || (!startDate && endDate)) {
-      setError("開始與結束日期請一起填，或兩個都留空。");
-      return;
-    }
+  function finish(campaignId: string) {
+    clearDraft(draftKey);
+    navigate(`/brands/${brandId}/ads/new/${campaignId}`);
+  }
+
+  async function submit() {
+    if (blocked || !product || !goal || budget === null) return;
+    if (uploads.some((u) => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     const signal = life.current.signal;
-    setSubmitting(true);
-    setError(null);
-    setGoalText(request);
-    const constraints: Record<string, unknown> = {};
-    for (const field of CONSTRAINT_FIELDS) {
-      if (field.isDate) continue;
-      const value = constraintValues[field.key]?.trim();
-      if (openConstraints[field.key] && value) constraints[field.key] = value;
-    }
+    setError(null); setBusy(true);
+    const dates = startDate && endDate ? { start_date: startDate, end_date: endDate } : {};
     try {
-      const draft = created ?? await createCampaign(brandId, {
-        goal_text: request,
-        ...(startDate && endDate ? { start_date: startDate, end_date: endDate } : {}),
-        ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
-      });
-      if (signal.aborted) return;
-      setCreated(draft);
-      setSearch(prev => { const next = new URLSearchParams(prev); next.set("created", draft.id); return next; }, { replace: true });
-      const completed = new Set(attached);
-      const errors: string[] = [];
-      for (const upload of uploads) {
-        if (signal.aborted) return;
-        if (completed.has(upload.id)) continue;
-        try { await attachUpload(brandId, draft.id, upload.id); completed.add(upload.id); }
-        catch (e) { errors.push(`${upload.filename}：${e instanceof Error ? e.message : String(e)}`); }
+      let campaign = created;
+      if (campaign) {
+        const now = picksOf(campaign);
+        const patch: PatchCampaignInput = {};
+        if (product.id !== now.productId) patch.product_ids = [product.id];
+        if (goal.key !== campaign.objective) patch.objective = goal.key;
+        if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, dates);
+        if (budget !== now.budget) patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget };
+        if (goalText.trim() && goalText.trim() !== campaign.goal_text) patch.goal_text = goalText.trim();
+        if (Object.keys(patch).length > 0) campaign = await patchCampaign(brandId, campaign.id, patch);
+      } else {
+        setPhase("understanding");
+        campaign = await createCampaignFromPicks(brandId, {
+          product_ids: [product.id], objective: goal.key, budget, ...dates,
+          ...(goalText.trim() ? { goal_text: goalText.trim() } : {}),
+        });
       }
       if (signal.aborted) return;
-      setAttached(completed);
-      if (errors.length) { setError(`活動已建立，未完成素材仍可重試，不會重建活動。${errors.join("；")}`); setSubmitting(false); return; }
-      clearDraft(draftKey);
-      navigate(`/brands/${brandId}/ads/new/${draft.id}`, {
-        state: draft.parsed
-          ? undefined
-          : { parseWarning: "這句話沒有完全被理解，請確認下面的欄位。" },
-      });
+      setCreated(campaign);
+      const id = campaign.id;
+      if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); return next; }, { replace: true });
+      const errors = await attachAll(id, signal);
+      if (signal.aborted) return;
+      if (errors.length) { setPhase("pick"); setError(`活動已建立，未完成素材仍可重試，不會重建活動。${errors.join("；")}`); setBusy(false); return; }
+      finish(id);
     } catch (err) {
       if (signal.aborted) return;
-      setError(err instanceof Error ? err.message : "建立 Campaign 失敗，請稍後再試。");
-      setSubmitting(false);
+      setBusy(false);
+      if (created) { setError(message(err, "更新活動失敗，請稍後再試。")); return; }
+      setFailure(message(err, "建立活動失敗")); setPhase("failed");
     }
   }
 
+  if (phase !== "pick") {
+    return (
+      <Shell homeHref={homeHref} bar={
+        <ActionBar
+          back={<Button variant="ghost" disabled={phase === "understanding"} onClick={() => setPhase("pick")}>← 上一步</Button>}
+          hint={phase === "failed" ? "讀取失敗，按上方重試" : undefined}
+        >
+          <Button disabled>產生策略 →</Button>
+        </ActionBar>
+      }>
+        <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit()} />
+      </Shell>
+    );
+  }
 
+  const locked = busy || restoring;
   return (
-    <div className="flex flex-col gap-4">
-      <Link
-        to={`/brands/${brandId}/ads`}
-        className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft size={14} /> 投放中心
-      </Link>
-      <PageHeader
-        title="建立投放計畫"
-        description="只要告訴我們你的目標，行銷駕駛艙會幫你整理投放策略、預算、素材與排程。"
-      />
-      <p className="text-xs text-muted-foreground">未送出的內容會保留在這個分頁，離開後返回可繼續填寫。</p>
-      <p className="text-sm text-muted-foreground">商品資料會沿用品牌已保存的內容。有完成的圖片或影片可直接加入，下方不必重新製作素材。</p>
-      <UserAssetsLibrary brandId={brandId} readOnly={submitting} onSelection={setUploads} onBusy={setUploadBusy} />
-      {created && <p className="text-sm">活動已建立。<Link to={`/brands/${brandId}/ads/campaigns/${created.id}?tab=assets`}>前往此活動核對素材</Link></p>}
-      {submitting && <p role="status">讀取品牌／商品／投放紀錄…正在建立活動或加入所選素材。</p>}
-      <div className="max-w-3xl">
-        <div className="surface">
-          <div className="surface-body flex flex-col gap-4">
-            <div>
-              <label className="mb-2 block text-sm font-medium" htmlFor="goal-textarea">
-                你這次想做到什麼？
-              </label>
-              <p className="mb-2 text-sm text-muted-foreground">
-                寫一句話即可，或讓 AI 依已知品牌資料起草，再由你確認。
-              </p>
-              <Textarea
-                id="goal-textarea"
-                disabled={submitting || !!created}
-                value={goalText}
-                onChange={(e) => setGoalText(e.target.value)}
-                placeholder="例如：下個月想推主力商品，希望增加購買。"
-                className="min-h-28"
-                maxLength={500}
-              />
-              <p className="mt-1 text-right text-xs text-muted-foreground">
-                {goalText.length} / 500
-              </p>
+    <Shell homeHref={homeHref} bar={
+      <ActionBar back={{ label: "投放中心", to: homeHref }} hint={hint || undefined}>
+        <Button disabled={blocked} onClick={() => void submit()}>
+          {created && error && uploads.some((u) => !attached.has(u.id)) ? "重試加入未完成素材並繼續" : "下一步：系統理解"} →
+        </Button>
+      </ActionBar>
+    }>
+      <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品和目標" />
+      {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
+      {options.status === "error" ? (
+        <ReadFailed what={`商品和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
+      ) : !data ? (
+        <>
+          <Skeleton className="h-[170px] w-full rounded-xl" />
+          <Skeleton className="h-[226px] w-full rounded-xl" />
+        </>
+      ) : (
+        <>
+          <section className="surface" aria-labelledby="new-product">
+            <div className="surface-header"><h2 id="new-product">商品</h2></div>
+            <div className="surface-body">
+              {data.products.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  還沒有可以推的商品。<Link className="text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/products`}>去新增商品</Link>
+                </p>
+              ) : (
+                <PickGroup label="商品" value={productId} onChange={(v) => !locked && setProductId(v)}>
+                  {data.products.map((p) => <ProductPickCard key={p.id} product={p} />)}
+                </PickGroup>
+              )}
             </div>
-            <div>
-              <label className="mb-2 block text-sm text-muted-foreground">限制條件（選填）</label>
-              <div className="flex flex-wrap gap-2">
-                {CONSTRAINT_FIELDS.map((field) =>
-                  openConstraints[field.key] ? (
-                    <span
-                      key={field.key}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border py-1 pl-3 pr-1.5 text-sm"
-                    >
-                      {field.label}
-                      {field.isDate ? (
-                        <span className="flex items-center gap-1">
-                          <Input
-                            disabled={submitting || !!created}
-                            aria-label="開始日期"
-                            type="date"
-                            value={startDate}
-                            onChange={(e) => setStartDate(e.target.value)}
-                            className="h-7 w-32 px-2 text-xs"
-                          />
-                          <span className="text-muted-foreground">~</span>
-                          <Input
-                            disabled={submitting || !!created}
-                            aria-label="結束日期"
-                            type="date"
-                            value={endDate}
-                            onChange={(e) => setEndDate(e.target.value)}
-                            className="h-7 w-32 px-2 text-xs"
-                          />
-                        </span>
-                      ) : (
-                        <Input
-                          disabled={submitting || !!created}
-                          aria-label={field.label}
-                          value={constraintValues[field.key] ?? ""}
-                          onChange={(e) =>
-                            setConstraintValues((prev) => ({ ...prev, [field.key]: e.target.value }))
-                          }
-                          placeholder={field.placeholder}
-                          className="h-7 w-36 px-2 text-xs"
-                        />
-                      )}
-                      <button
-                        type="button"
-                        disabled={submitting || !!created}
-                        aria-label={`移除${field.label}`}
-                        onClick={() => {
-                          toggleConstraint(field.key);
-                          if (field.isDate) {
-                            setStartDate("");
-                            setEndDate("");
-                          }
-                        }}
-                        className="rounded-full p-0.5 hover:bg-muted"
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      key={field.key}
-                      type="button"
-                      disabled={submitting || !!created}
-                      onClick={() => toggleConstraint(field.key)}
-                      className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-3 py-1 text-sm text-muted-foreground hover:bg-muted"
-                    >
-                      <Plus size={13} />
-                      {field.label}
-                    </button>
-                  ),
-                )}
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">這裡的預算上限只適用於本次活動。品牌月額度沿用<Link className="text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/ads`}>投放中心</Link>的設定，兩者會分別核對。</p>
+          </section>
+          <section className="surface" aria-labelledby="new-goal">
+            <div className="surface-header"><h2 id="new-goal">想要的結果</h2></div>
+            <div className="surface-body">
+              <PickGroup label="目標" value={objective} onChange={(v) => !locked && setObjective(v)}>
+                {data.objectives.map((o) => (
+                  <PickCard key={o.key} value={o.key} title={o.label} note={o.description} icon={<ObjectiveIcon objective={o.key} />} disabled={!o.available} />
+                ))}
+              </PickGroup>
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <div className="flex flex-wrap justify-end gap-3">
-              {!goalText.trim() && !created && <Button variant="outline" onClick={() => void handleSubmit(BRAND_SUGGESTION_REQUEST)} disabled={submitting || uploadBusy || restoring || !!existingId}>請 AI 依品牌資料建議</Button>}
-              <Button onClick={() => void handleSubmit()} disabled={!goalText.trim() || submitting || uploadBusy || restoring || (!!existingId && !created)}>
-                <Sparkles size={15} />
-                {created ? "重試加入未完成素材並繼續" : "產生建議"}
-              </Button>
-            </div>
-          </div>
+          </section>
+        </>
+      )}
+      <section className="surface" aria-labelledby="new-period">
+        <div className="surface-header"><h2 id="new-period">期間與預算上限</h2></div>
+        <div className="surface-body flex flex-wrap items-end gap-4">
+          <Field id="new-start" label="開始">
+            <Input id="new-start" type="date" value={startDate} disabled={locked} onChange={(e) => setStartDate(e.target.value)} className="h-[42px] w-[170px] rounded-lg" />
+          </Field>
+          <Field id="new-end" label="結束">
+            <Input id="new-end" type="date" value={endDate} disabled={locked} onChange={(e) => setEndDate(e.target.value)} className="h-[42px] w-[170px] rounded-lg" />
+          </Field>
+          <Field id="new-cap" label="這個活動最多花">
+            <MoneyInput id="new-cap" value={budget} onChange={setBudget} disabled={locked} onEnter={() => void submit()} />
+          </Field>
         </div>
-      </div>
+      </section>
+      <Disclosure label="進階：補充說明、自帶圖片／影片">
+        <div className="flex flex-col gap-4">
+          <Field id="new-goal-text" label="補充說明（選填）">
+            <Textarea id="new-goal-text" value={goalText} disabled={locked || !!created} maxLength={500} onChange={(e) => setGoalText(e.target.value)} className="min-h-20" />
+          </Field>
+          <UserAssetsLibrary brandId={brandId} readOnly={busy} onSelection={setUploads} onBusy={setUploadBusy} />
+        </div>
+      </Disclosure>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    </Shell>
+  );
+}
+
+function Shell({ homeHref, bar, children }: { homeHref: string; bar: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "建立活動" }]} />
+      <div className="flex max-w-[1260px] flex-col gap-4 [&>[data-slot=flow-header]]:mb-1">{children}</div>
+      <div className="flex-1" />
+      {bar}
+    </div>
+  );
+}
+
+function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div>
+      <label htmlFor={id} className="mb-1 block text-xs text-muted-foreground">{label}</label>
+      {children}
     </div>
   );
 }
