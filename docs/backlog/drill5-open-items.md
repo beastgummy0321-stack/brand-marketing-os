@@ -2,12 +2,12 @@
 
 ## Handoff (2026-09-25): start here in the next session
 - **State:** F28 is closed and merged to master (`56784a45`), **not pushed** (the user pushes manually). There is no open feature and the queue is empty. F28 fixed R1, R2, R3 and R6, and built the five v9 screens. The rules are in `docs/architecture/ads.md` §6.32.
-- **Next step:** `/dig` with the user on the list **"Deferred to a later /dig" items 4–10** below. That list is the ranking shown to the user, not the original "待裁決" numbering. The recommended first topic is **4: learning and A/B are closed on real data** (R7), because it decides whether the system improves itself. Also bring up the two items in **"Deferred from F28 planning"** (白花 learning; 變貴 defined by the cap) and the four in **"Left open after F28"**.
+- **Next step (updated 2026-09-25):** items 4–10 are ruled (ads.md §6.33) and carved as F29 (`.work/features/F29.md`, v10 prototype done). Next is plan approval, then `/crank`.
 - **Status of the original "待裁決" list:** 1, 2, 3 and 8 are done in F28, and 10's 「目標調高撐得起更少」 is shown on the strategy tab. Still open: 4 (worse flow with no manual exit when the fact check blocks), 5, 6, 7 and 9 (month review). They map to deferred items 4–5.
 - **Confirmed constraints to keep:**
   - The UI is graphics-first with linear flows and no text walls (§1.7).
   - Every UI change is prototyped first and validated with a cold novice persona on screenshots before the user sees it.
-  - One cap per campaign, cost per result only; the screen word is 上限. Grades are 划算/偏貴/太貴/白花.
+  - One cap per campaign, cost per result only; the screen word is 上限. Grades are 划算/偏貴/太貴/沒賣出 (白花 renamed in v10, ads.md §6.33).
   - No platform writes: reversing that needs its own product ruling against ads.md §6.4.
   - Never ask the user to run real Meta ads.
 - **Next UI batch (after the /dig):** the remaining v9 screens: the new-campaign wizard, assets, publish list, month review, connections, and the workspace lifecycle rail and tabs.
@@ -74,7 +74,7 @@ Root causes behind the 10 items above, with evidence:
 
 ## Deferred to a later /dig (user ruling 2026-09-23: fix R1, R2, R3 and R6 first)
 
-Numbered as in the ranking shown to the user. Proposals are starting points, not decisions.
+Numbered as in the ranking shown to the user. **Status 2026-09-25:** 4, 5, 7, 8, 9 (inbox only) and 10 are ruled in ads.md §6.33 and planned as F29; 6 and the other channels of 9 stay deferred (see the end). The proposals below are the original starting points.
 4. **Learning and A/B are closed on real data** (R7). Proposal: period settle writes learnings for ongoing campaigns (stable winners too, not only "angle failed"). Experiments judge real data behind a minimum-sample gate. Add a test definition (variable, equal budget, end date, winner rule).
 5. **The screen contradicts itself** (R4, R5). Proposal: jobs progress reads the procrastinate queue (queued position, N of M) and covers `ads_*` kinds. One shared "has data / why not" state per campaign that every section reads. A failed read never shows as empty. Raise worker concurrency.
 6. **No in-app image generation** (the image port is a reserved seat). Proposal: decide on a provider before any design work.
@@ -109,11 +109,21 @@ The user says the v9 home is a to-do centre, not an operations view, and still f
   - the fixture break-even becomes 520.
 
 ## Deferred from F28 planning (user 2026-09-25: save for a later /dig, F28 uses the defaults)
+Both are ruled in ads.md §6.33 (settle writes the 沒賣出 learning; 變貴 = a 划算 → 偏貴/太貴 move) and planned as F29.
 1. **白花 closes through cleanup, so its brand learning is lost.** The cleanup flow has no 「這則主打什麼？」 step (F27 Contract D), so closing a 白花 ad no longer writes a learning. F28 accepts this. Restore it in the learning-loop /dig (item 4 above).
 2. **變貴 (`worse`) rows are still triggered by the trend vs the previous window**, although the ruling makes trend a note only. F28 keeps them. Decide in the next feature, which owns the worse/stop decision flows, whether 變貴 should instead mean "moved from 划算 to 偏貴/太貴 against the cap".
 
 ## Left open after F28 (2026-09-25)
+The first three are ruled in ads.md §6.33 and planned as F29; the fourth is test data only.
 - **Pending handoffs are not on the home page.** Home D dropped the ChangeAttention card: approved lists waiting for 到平台完成 or 核對 show only on the campaign's 變更與核對 tab. The next feature should decide how home surfaces them, e.g. a campaign-row state.
 - **暫用打平 lacks the product cost field.** The cap view has no `cost`, so the screen shows 售價 and ROAS 參考 but not the prototype's formula 「售價 − 成本含運 = 打平」.
 - **No cap means no visible 推薦.** Without a budget cap, the 推薦 scenario can be a row whose amount is unknown, so the tag is not visible.
 - **Old open cleanup rows keep the informational severity** until their daily key rolls over. This is test data only.
+
+## Rulings for items 4–10 (/dig 2026-09-25)
+Moved to `docs/architecture/ads.md` §6.33 (the rule) and `.work/features/F29.md` (contract names, open defaults, being planned). The prototype-before-code step is done: `prototype-v10-ads-center.html`.
+
+Still deferred, not in F29:
+- **In-app image generation** (item 6): the seat stays reserved and is never shown as a refusal. Decide on a provider before any design work.
+- **More notification channels** (item 9): a per-user 「通知」 section in `/settings`, then LINE Official Account and email, one sender each behind the F29 digest builder. LINE Notify ended in March 2025.
+- **Platform writes** (R8): still off; reversing ads.md §6.4 needs its own product ruling.
