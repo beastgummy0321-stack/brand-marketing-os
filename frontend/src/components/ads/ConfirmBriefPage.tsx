@@ -1,419 +1,248 @@
-import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import {
-  ArrowLeft,
-  Boxes,
-  Calendar,
-  Database,
-  Megaphone,
-  Sparkles,
-  Target,
-  Users,
-} from "lucide-react";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { Skeleton } from "@/components/layout/Skeleton";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
-import { FieldCard, StepIndicator } from "./patterns";
-import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import {
-  generateStrategy,
-  getCampaign,
-  patchCampaign,
-  type CampaignDetail,
-  type CampaignFieldSources,
+  generateStrategy, getCampaign, patchCampaign,
+  type CampaignDetail, type CampaignFieldSources, type PatchCampaignInput,
 } from "@/lib/adsApi";
-import { fetchChannels, type Channel } from "@/lib/adsLaunchApi";
-
-const OBJECTIVE_OPTIONS = ["購買", "加購物車", "名單", "流量", "知名度"];
+import { fetchChannels } from "@/lib/adsLaunchApi";
+import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";
+import { useApiRead } from "@/lib/useApiRead";
+import { ActionBar, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
+import { UnderstoodField, UnderstoodSkeleton, newCampaignPath, wizardSteps, type UnderstoodKey } from "./wizard/WizardPieces";
 
 interface CampaignContext {
   product_ids?: string[];
   audience_hint?: string | null;
-  field_sources?: CampaignFieldSources;
+  field_sources?: Partial<CampaignFieldSources>;
 }
+interface CampaignConstraints { platform?: unknown; budget?: unknown }
 
-interface CampaignConstraints {
-  platform?: string | null;
-  budget?: number | null;
+const message = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
+const md = (d: string) => d.slice(5).replace("-", "/");
+function periodText(start: string | null, end: string | null) {
+  if (!start || !end) return "";
+  return start.slice(0, 4) === end.slice(0, 4) ? `${md(start)} – ${md(end)}` : `${start.replaceAll("-", "/")} – ${end.replaceAll("-", "/")}`;
 }
+/** A number cap prints as money; an older free-text cap prints as typed; anything else is unset (never NaN). */
+function budgetText(budget: unknown) {
+  if (typeof budget === "number") return formatAmount(budget) === null ? "" : `NT$${formatAmount(budget)}`;
+  return typeof budget === "string" ? budget.trim() : "";
+}
+const numericBudget = (budget: unknown) => (typeof budget === "number" && Number.isFinite(budget) && budget > 0 ? budget : null);
 
-const DEFAULT_SOURCES: CampaignFieldSources = {
-  product: "system",
-  objective: "system",
-  platform: "system",
-  budget: "system",
-  dates: "system",
-  audience: "system",
-};
-
-type FieldKey = keyof CampaignFieldSources;
-
-/** 建立 Campaign 步驟二（F04-I12，圖 4「理解如下」）：六張可改的欄位卡，改一格就 `PATCH`
- * 一格，不重新解析——第二次、也是最後一次模型呼叫在「產生策略建議」按下去那一刻，寫在
- * `handleGenerate` 旁邊，別在這一頁加第三個「幫我想想看」按鈕（ARCHITECTURE.md §6.1 第 11 條）。 */
+/** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
+ * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
+ * the strategy). A field the system guessed (`field_sources === "system"`) is dashed with 「猜的，請確認」; pressing a
+ * field edits it in place and `PATCH`es that one field (no re-parse). 「產生策略」 is the second and last model call
+ * of the wizard (ARCHITECTURE.md §6.1 item 11) and lands on the strategy tab. */
 export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const navigate = useNavigate();
-  const location = useLocation() as { state?: { parseWarning?: string } };
-  const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
-  const [products, setProducts] = useState<ProductListItem[]>([]);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<FieldKey | null>(null);
+  const homeHref = `/brands/${brandId}/ads`;
+  const read = useApiRead(() => getCampaign(brandId, campaignId), [brandId, campaignId]);
+  const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
+  const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
+  const [saved, setSaved] = useState<CampaignDetail | null>(null);
+  const [editing, setEditing] = useState<UnderstoodKey | null>(null);
+  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([getCampaign(brandId, campaignId), fetchProductList(brandId)])
-      .then(([c, p]) => {
-        if (cancelled) return;
-        setCampaign(c);
-        setProducts(p);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(err instanceof Error ? err.message : "讀取資料失敗，請稍後再試。");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    // 通路清單讀失敗只讓「平台」欄位沒有下拉可選、顯示現值——不拖垮整頁（Done 5）。
-    fetchChannels(brandId)
-      .then((rows) => {
-        if (!cancelled) setChannels(rows);
-      })
-      .catch(() => {
-        /* 靜默：channels 維持空陣列，平台欄位不給編輯 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [brandId, campaignId]);
+  const campaign = saved?.id === campaignId ? saved : read.data;
+  const backHref = newCampaignPath(brandId, campaignId);
+  const steps = wizardSteps(brandId, campaignId);
+  const shell = (body: ReactNode, bar: ReactNode) => (
+    <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "建立活動", href: backHref }, { label: "系統理解" }]} />
+      <div className="flex max-w-[1260px] flex-col gap-4 [&>[data-slot=flow-header]]:mb-1">{body}</div>
+      <div className="flex-1" />
+      {bar}
+    </div>
+  );
 
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-4">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
+  if (!campaign) {
+    return shell(
+      <>
+        <FlowHeader steps={steps} current={1} title="系統這樣理解" purpose="不對就點一下改" />
+        {read.status === "error" ? <ReadFailed what={`這個活動讀不到（${read.error}）`} onRetry={read.reload} /> : <UnderstoodSkeleton />}
+      </>,
+      <ActionBar back={{ label: "上一步", to: backHref }}><Button disabled>產生策略 →</Button></ActionBar>,
     );
-  }
-
-  if (loadError || !campaign) {
-    return <p className="text-sm text-destructive">{loadError ?? "找不到這個 Campaign。"}</p>;
   }
 
   const context = (campaign.context_json ?? {}) as CampaignContext;
   const constraints = (campaign.constraints_json ?? {}) as CampaignConstraints;
-  const sources = context.field_sources ?? DEFAULT_SOURCES;
-  const productIds = context.product_ids ?? [];
-  const audienceHint = context.audience_hint ?? "";
+  const sources = context.field_sources ?? {};
+  const guessed = (key: keyof CampaignFieldSources) => (sources[key] ?? "system") === "system";
+  const productId = context.product_ids?.[0] ?? null;
+  const products = options.data?.products ?? [];
+  const objectives = options.data?.objectives ?? [];
+  const platform = typeof constraints.platform === "string" ? constraints.platform : null;
+  const audience = context.audience_hint ?? "";
 
-  async function save(patch: Parameters<typeof patchCampaign>[2]) {
-    setSaveError(null);
+  const productName = !productId ? ""
+    : products.find((p) => p.id === productId)?.name
+      ?? (options.status === "ready" ? "（不在可選商品裡）" : options.status === "error" ? "（商品名稱讀不到）" : "…");
+  const objectiveLabel = objectives.find((o) => o.key === campaign.objective)?.label ?? campaign.objective ?? "";
+  const platformLabel = channels.data?.find((c) => c.key === platform)?.label ?? platform ?? "";
+
+  async function save(key: UnderstoodKey, patch: PatchCampaignInput | { audience_hint: string }) {
+    setSaving(true); setSaveError(null);
     try {
-      const updated = await patchCampaign(brandId, campaignId, patch);
-      setCampaign(updated);
-      setEditing(null);
+      const updated = "audience_hint" in patch
+        ? await patchAudienceHint(brandId, campaignId, patch.audience_hint)
+        : await patchCampaign(brandId, campaignId, patch);
+      setSaved(updated); setEditing((now) => (now === key ? null : now));
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
+      setSaveError(message(err, "更新失敗，請稍後再試。"));
+    } finally {
+      setSaving(false);
     }
   }
+  /** 完成 on an unchanged field the user already owns just closes it; on a guessed one it confirms it. */
+  const done = (key: UnderstoodKey, source: keyof CampaignFieldSources, changed: boolean, patch: PatchCampaignInput | { audience_hint: string }) => {
+    if (!changed && !guessed(source)) { setEditing(null); return; }
+    void save(key, patch);
+  };
+  const cancel = () => { setEditing(null); setSaveError(null); };
+  const edit = (key: UnderstoodKey) => () => { setSaveError(null); setEditing(key); };
+
+  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources; label: string; value: string; editable: boolean; editor: ReactNode }[] = [
+    {
+      key: "product", source: "product", label: "商品", value: productName, editable: products.length > 0,
+      editor: <SelectEditor label="商品" initial={productId ?? ""} busy={saving} onCancel={cancel}
+        options={products.map((p) => ({ key: p.id, label: p.name }))}
+        onDone={(v) => done("product", "product", v !== productId, { product_ids: [v] })} />,
+    },
+    {
+      key: "objective", source: "objective", label: "結果", value: objectiveLabel, editable: objectives.some((o) => o.available),
+      editor: <SelectEditor label="結果" initial={campaign.objective ?? ""} busy={saving} onCancel={cancel}
+        options={objectives.filter((o) => o.available).map((o) => ({ key: o.key, label: o.label }))}
+        onDone={(v) => done("objective", "objective", v !== campaign.objective, { objective: v })} />,
+    },
+    {
+      key: "dates", source: "dates", label: "期間", value: periodText(campaign.start_date, campaign.end_date), editable: true,
+      editor: <DatesEditor start={campaign.start_date ?? ""} end={campaign.end_date ?? ""} busy={saving} onCancel={cancel}
+        onDone={(s, e) => done("dates", "dates", s !== campaign.start_date || e !== campaign.end_date, { start_date: s, end_date: e })} />,
+    },
+    {
+      key: "budget", source: "budget", label: "預算上限", value: budgetText(constraints.budget), editable: true,
+      editor: <BudgetEditor initial={numericBudget(constraints.budget)} busy={saving} onCancel={cancel}
+        onDone={(v) => done("budget", "budget", v !== constraints.budget, { constraints_json: { ...(campaign.constraints_json ?? {}), budget: v } })} />,
+    },
+    {
+      key: "platform", source: "platform", label: "平台", value: platformLabel, editable: (channels.data?.length ?? 0) > 0,
+      editor: <SelectEditor label="平台" initial={platform ?? channels.data?.[0]?.key ?? ""} busy={saving} onCancel={cancel}
+        options={(channels.data ?? []).map((c) => ({ key: c.key, label: c.label }))}
+        onDone={(v) => done("platform", "platform", v !== platform, { constraints_json: { ...(campaign.constraints_json ?? {}), platform: v } })} />,
+    },
+    {
+      key: "audience", source: "audience", label: "受眾方向", value: audience, editable: true,
+      editor: <TextEditor label="受眾方向" initial={audience} busy={saving} onCancel={cancel}
+        onDone={(v) => done("audience", "audience", v !== audience, { audience_hint: v })} />,
+    },
+  ];
+  const guesses = fields.filter((f) => guessed(f.source)).length;
 
   async function handleGenerate() {
-    setGenerating(true);
-    setGenerateError(null);
+    setGenerating(true); setGenerateError(null);
     try {
       await generateStrategy(brandId, campaignId);
       navigate(`/brands/${brandId}/ads/campaigns/${campaignId}?tab=strategy`);
     } catch (err) {
-      setGenerateError(err instanceof Error ? err.message : "產生策略失敗，請稍後再試。");
+      setGenerateError(message(err, "產生策略失敗，請稍後再試。"));
       setGenerating(false);
     }
   }
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <Link
-          to={`/brands/${brandId}/ads`}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft size={14} /> 投放中心
-        </Link>
-        <StepIndicator steps={["確認需求", "產生策略", "查看結果"]} current={0} />
+  return shell(
+    <>
+      <FlowHeader steps={steps} current={1} title="系統這樣理解" purpose="不對就點一下改" />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {fields.map((f) => (
+          <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
+            editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
+        ))}
       </div>
-      <PageHeader
-        title="行銷駕駛艙理解如下"
-        description="這是我們根據你的需求整理的重點內容。如果理解有誤，可直接修改。"
-      />
-      {location.state?.parseWarning && (
-        <p className="text-sm text-warning">{location.state.parseWarning}</p>
-      )}
-      <div className="surface">
-        <div className="surface-header">
-          <div>
-            <h2 className="flex items-center gap-1.5">
-              <Sparkles size={15} className="text-primary" /> 你的行銷需求
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">我們已根據你的輸入，整理出以下重點。</p>
-          </div>
-        </div>
-        <div className="surface-body grid grid-cols-1 gap-3 md:grid-cols-2">
-          <FieldCard
-            icon={Boxes}
-            label="商品"
-            value={productIds
-              .map((id) => products.find((p) => p.id === id)?.name)
-              .filter((name): name is string => Boolean(name))
-              .join("、")}
-            emptyText="不指定"
-            source={sources.product}
-            editing={editing === "product"}
-            onEdit={() => setEditing("product")}
-          >
-            <ProductPicker
-              products={products}
-              initial={productIds}
-              onCancel={() => setEditing(null)}
-              onSave={(ids) => save({ product_ids: ids })}
-            />
-          </FieldCard>
-          <FieldCard
-            icon={Target}
-            label="目標"
-            value={campaign.objective}
-            emptyText="未設定"
-            source={sources.objective}
-            editing={editing === "objective"}
-            onEdit={() => setEditing("objective")}
-          >
-            <SelectField
-              options={OBJECTIVE_OPTIONS.map((o) => ({ key: o, label: o }))}
-              initial={campaign.objective}
-              onCancel={() => setEditing(null)}
-              onSave={(value) => save({ objective: value })}
-            />
-          </FieldCard>
-          <FieldCard
-            icon={Megaphone}
-            label="平台"
-            value={channels.find((c) => c.key === constraints.platform)?.label ?? constraints.platform ?? ""}
-            emptyText="尚未指定"
-            source={sources.platform}
-            editing={editing === "platform"}
-            onEdit={channels.length > 0 ? () => setEditing("platform") : undefined}
-          >
-            <SelectField
-              options={channels.map((c) => ({ key: c.key, label: c.label }))}
-              initial={constraints.platform ?? channels[0]?.key ?? ""}
-              onCancel={() => setEditing(null)}
-              onSave={(value) => save({ constraints_json: { ...constraints, platform: value } })}
-            />
-          </FieldCard>
-          <FieldCard
-            icon={Database}
-            label="預算"
-            value={constraints.budget ? `約 NT$${Math.round(constraints.budget).toLocaleString("zh-TW")}` : ""}
-            emptyText="由行銷駕駛艙建議"
-            source={sources.budget}
-            editing={editing === "budget"}
-            onEdit={() => setEditing("budget")}
-          >
-            <NumberField
-              initial={constraints.budget ?? null}
-              onCancel={() => setEditing(null)}
-              onSave={(value) => save({ constraints_json: { ...constraints, budget: value } })}
-            />
-          </FieldCard>
-          <FieldCard
-            icon={Calendar}
-            label="時間"
-            value={campaign.start_date && campaign.end_date ? `${campaign.start_date} ~ ${campaign.end_date}` : ""}
-            emptyText="未設定"
-            source={sources.dates}
-            editing={editing === "dates"}
-            onEdit={() => setEditing("dates")}
-          >
-            <DateRangeField
-              initialStart={campaign.start_date ?? ""}
-              initialEnd={campaign.end_date ?? ""}
-              onCancel={() => setEditing(null)}
-              onSave={(start, end) => save({ start_date: start, end_date: end })}
-            />
-          </FieldCard>
-          <FieldCard
-            icon={Users}
-            label="受眾方向"
-            value={audienceHint}
-            emptyText="未設定"
-            source={sources.audience}
-          />
-        </div>
-        {saveError && <p className="px-4 pb-3 text-sm text-destructive">{saveError}</p>}
-      </div>
-      <p className="text-center text-sm text-muted-foreground">
-        確認後會依這六項需求整理策略、預算配置與素材需求；之後仍由你核准採用與上架。
-      </p>
-      {generateError && <p className="text-sm text-destructive">{generateError}</p>}
-      <div className="flex flex-wrap justify-center gap-3">
-        <Button asChild variant="outline" disabled={generating}>
-          <Link to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=assets`}>先處理自帶素材與手動交接</Link>
-        </Button>
-        <Button onClick={handleGenerate} disabled={generating}>
-          <Sparkles size={15} />
-          {generating ? "產生中…" : "產生策略建議 →"}
-        </Button>
-        <Button variant="outline" onClick={() => navigate(`/brands/${brandId}/ads/new`)}>
-          返回修改
-        </Button>
-      </div>
-    </div>
+      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
+      {options.status === "error" && <ReadFailed what={`商品和目標清單讀不到（${options.error}）；這兩項先不能改，其他照常`} onRetry={options.reload} />}
+      {channels.status === "error" && <ReadFailed what={`平台清單讀不到（${channels.error}）；平台先不能改，其他照常`} onRetry={channels.reload} />}
+      {generateError && <p role="alert" className="text-sm text-destructive">{generateError}</p>}
+      <Disclosure label="進階">
+        <Link className="text-sm text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=assets`}>先處理自帶素材與手動交接</Link>
+      </Disclosure>
+    </>,
+    <ActionBar back={{ label: "上一步", to: backHref }} hint={guesses ? `有 ${guesses} 項是猜的` : undefined}>
+      <Button onClick={() => void handleGenerate()} disabled={generating || saving || editing !== null}>
+        {generating ? "產生中…" : "產生策略 →"}
+      </Button>
+    </ActionBar>,
   );
 }
 
-function SelectField({
-  options,
-  initial,
-  onCancel,
-  onSave,
-}: {
-  options: { key: string; label: string }[];
-  initial: string;
-  onCancel: () => void;
-  onSave: (value: string) => void;
+const onEscape = (cancel: () => void) => (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } };
+const SELECT = "h-9 min-w-0 flex-1 rounded-md border border-input bg-card px-3 text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
+
+function DoneButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
+  return <Button size="sm" variant="outline" disabled={disabled} onClick={onClick}>完成</Button>;
+}
+
+function SelectEditor({ label, options, initial, busy, onDone, onCancel }: {
+  label: string; options: { key: string; label: string }[]; initial: string; busy: boolean; onDone: (value: string) => void; onCancel: () => void;
+}) {
+  const [value, setValue] = useState(options.some((o) => o.key === initial) ? initial : options[0]?.key ?? "");
+  return (
+    <>
+      <select autoFocus aria-label={label} className={SELECT} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={onEscape(onCancel)}>
+        {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+      </select>
+      <DoneButton disabled={busy || !value} onClick={() => onDone(value)} />
+    </>
+  );
+}
+
+function DatesEditor({ start, end, busy, onDone, onCancel }: {
+  start: string; end: string; busy: boolean; onDone: (start: string, end: string) => void; onCancel: () => void;
+}) {
+  const [s, setS] = useState(start);
+  const [e, setE] = useState(end);
+  return (
+    <>
+      <Input aria-label="開始日期" type="date" value={s} onChange={(ev) => setS(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
+      <Input aria-label="結束日期" type="date" value={e} onChange={(ev) => setE(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
+      <DoneButton disabled={busy || !s || !e || e < s} onClick={() => onDone(s, e)} />
+    </>
+  );
+}
+
+function BudgetEditor({ initial, busy, onDone, onCancel }: {
+  initial: number | null; busy: boolean; onDone: (value: number) => void; onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial);
+  const ok = value !== null && value > 0;
   return (
-    <div className="flex items-center gap-2">
-      <select
-        className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-      >
-        {options.map((o) => (
-          <option key={o.key} value={o.key}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <Button size="sm" onClick={() => onSave(value)}>
-        儲存
-      </Button>
-      <Button size="sm" variant="outline" onClick={onCancel}>
-        取消
-      </Button>
-    </div>
+    <>
+      <div onKeyDown={onEscape(onCancel)} className="min-w-0 flex-1">
+        <MoneyInput label="預算上限" value={value} onChange={setValue} invalid={value === 0} className="w-full" onEnter={() => { if (ok && !busy) onDone(value); }} />
+      </div>
+      <DoneButton disabled={busy || !ok} onClick={() => { if (ok) onDone(value); }} />
+    </>
   );
 }
 
-function NumberField({
-  initial,
-  onCancel,
-  onSave,
-}: {
-  initial: number | null;
-  onCancel: () => void;
-  onSave: (value: number | null) => void;
+function TextEditor({ label, initial, busy, onDone, onCancel }: {
+  label: string; initial: string; busy: boolean; onDone: (value: string) => void; onCancel: () => void;
 }) {
-  const [value, setValue] = useState(initial === null ? "" : String(initial));
+  const [value, setValue] = useState(initial);
+  const submit = () => onDone(value.trim());
   return (
-    <div className="flex items-center gap-2">
-      <Input
-        type="number"
-        step={100}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        className="h-9 w-32"
-      />
-      <Button size="sm" onClick={() => onSave(value.trim() ? Number(value) : null)}>
-        儲存
-      </Button>
-      <Button size="sm" variant="outline" onClick={onCancel}>
-        取消
-      </Button>
-    </div>
-  );
-}
-
-function DateRangeField({
-  initialStart,
-  initialEnd,
-  onCancel,
-  onSave,
-}: {
-  initialStart: string;
-  initialEnd: string;
-  onCancel: () => void;
-  onSave: (start: string, end: string) => void;
-}) {
-  const [start, setStart] = useState(initialStart);
-  const [end, setEnd] = useState(initialEnd);
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-2">
-        <Input
-          type="date"
-          value={start}
-          onChange={(e) => setStart(e.target.value)}
-          className="h-9 w-full"
-        />
-        <Input
-          type="date"
-          value={end}
-          onChange={(e) => setEnd(e.target.value)}
-          className="h-9 w-full"
-        />
-      </div>
-      <div className="flex w-full items-center gap-2">
-        <Button size="sm" onClick={() => onSave(start, end)} disabled={!start || !end}>
-          儲存
-        </Button>
-        <Button size="sm" variant="outline" onClick={onCancel}>
-          取消
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ProductPicker({
-  products,
-  initial,
-  onCancel,
-  onSave,
-}: {
-  products: ProductListItem[];
-  initial: string[];
-  onCancel: () => void;
-  onSave: (ids: string[]) => void;
-}) {
-  const [selected, setSelected] = useState<string[]>(initial);
-  function toggle(id: string) {
-    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex max-h-32 flex-col gap-1 overflow-y-auto">
-        {products.map((p) => (
-          <label key={p.id} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} />
-            {p.name}
-          </label>
-        ))}
-      </div>
-      <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => onSave(selected)}>
-          儲存
-        </Button>
-        <Button size="sm" variant="outline" onClick={onCancel}>
-          取消
-        </Button>
-      </div>
-    </div>
+    <>
+      <Input autoFocus aria-label={label} value={value} maxLength={200} onChange={(e) => setValue(e.target.value)} className="min-w-0 flex-1"
+        onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); submit(); } else onEscape(onCancel)(e); }} />
+      <DoneButton disabled={busy} onClick={submit} />
+    </>
   );
 }

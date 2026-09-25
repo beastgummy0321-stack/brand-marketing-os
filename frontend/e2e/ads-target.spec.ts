@@ -43,12 +43,11 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   // A product with no economics yet (手動新增：同步、不花錢).
   const product = await api<{ id: string }>(page, headers, "POST", `/api/products/brands/${brandId}`, { name: "晨光隨行杯 500ml 通勤款" });
 
-  // --- 建一個活動（一句話即可）--------------------------------------------------------------------------
-  await page.goto(`/app/brands/${brandId}/ads/new`);
-  await page.getByLabel("你這次想做到什麼？").fill("下個月想推主力商品，希望增加購買。");
-  await page.getByRole("button", { name: "產生建議", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/new/[^/]+$`));
-  const campaignId = page.url().split("/").pop()!;
+  // --- 建一個沒有商品的活動（一句話的建立 API；F30-I05 的建立精靈一定要選商品，這裡要測「沒有商品」的分支）------
+  const { campaign } = await api<{ campaign: { id: string } }>(page, headers, "POST", `/api/ads/brands/${brandId}/campaigns`, {
+    goal_text: "下個月想推主力商品，希望增加購買。",
+  });
+  const campaignId = campaign.id;
 
   // --- 舊的設定目標網址轉到策略分頁 --------------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/ads/campaigns/${campaignId}/target`);

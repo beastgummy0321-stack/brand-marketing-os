@@ -111,18 +111,20 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/ads/campaigns`);
   await assertNoOverflow("/brands/:brandId/ads/campaigns");
 
-  // --- /brands/:brandId/ads/new：建 Campaign 兩步流程（F04-I12）——步驟一填目標、
-  // 步驟二「理解如下」確認欄位、按「產生策略建議」才進工作區頁 ----------------------
+  // --- /brands/:brandId/ads/new：建立精靈 v10（F30-I05）——第一步選商品、結果、預算上限，
+  // 第二步「系統這樣理解」確認欄位、按「產生策略」才進工作區頁 ----------------------------
   await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
   await assertNoOverflow("/brands/:brandId/ads/new");
-  await page.getByLabel("你這次想做到什麼？").fill("寬度測試用的一句話目標，預算大約三萬。");
-  await page.getByRole("button", { name: "產生建議", exact: true }).click();
+  await page.getByRole("radio", { name: new RegExp(`寬度測試產品 ${stamp}`) }).click();
+  await page.getByRole("radio", { name: /^購買/ }).click();
+  await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
 
-  // --- /brands/:brandId/ads/new/:campaignId（理解如下）-----------------------------
-  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/new/[^/]+$`));
-  await expect(page.getByText("你的行銷需求")).toBeVisible();
+  // --- /brands/:brandId/ads/new/:campaignId（系統這樣理解）---------------------------
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/ads/new/[^/]+$`), { timeout: 60000 });
+  await expect(page.getByRole("heading", { name: "系統這樣理解" })).toBeVisible();
   await assertNoOverflow("/brands/:brandId/ads/new/:campaignId");
-  await page.getByRole("button", { name: "產生策略建議 →" }).click();
+  await page.getByRole("button", { name: "產生策略 →" }).click();
 
   // --- /brands/:brandId/ads/campaigns/:campaignId ---------------------------------
   await expect(page).toHaveURL(
