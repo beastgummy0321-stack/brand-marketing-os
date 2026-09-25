@@ -234,8 +234,8 @@ function PixelField({ view, draft, tagValue, error, onPick, onType }: {
   const { pixels, pixels_error, field_notes } = view.options;
   if (pixels === null) {
     return (
-      <SettingField label="像素" htmlFor="set-pixel_id" tag={tagValue} note={field_notes.pixel_id}>
-        <p className="mb-1.5 text-xs text-warning">{pixels_error ?? "像素清單讀不到。"}請到廣告平台看像素 ID，填在下面。</p>
+      <SettingField label="像素" htmlFor="set-pixel_id" tag={draft.pixel_id === null ? null : tagValue} note={field_notes.pixel_id}>
+        <p className="mb-1.5 text-xs text-warning">{pixels_error ?? "像素清單讀不到。"}像素 ID 請手動填在下面。</p>
         <Input id="set-pixel_id" placeholder="貼上像素 ID" value={draft.pixel_id ?? ""} spellCheck={false} autoComplete="off"
           onChange={(e) => onType(e.target.value.trim() ? e.target.value.trim() : null)} />
         {error && <p className="mt-1 text-xs text-danger">{error}</p>}
