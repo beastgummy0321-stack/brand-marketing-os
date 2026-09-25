@@ -252,6 +252,8 @@ export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
   const [placementRefresh, setPlacementRefresh] = useState(0);
   // A file put into a slot is a new placement: the placement list re-reads (a remount), the slots already have it.
   const [slotUploads, setSlotUploads] = useState(0);
+  // A request cancelled from the 素材需求 card: the folded request list re-reads (its own saves update it in place).
+  const [requestsRefresh, setRequestsRefresh] = useState(0);
   const [placementsOpen, setPlacementsOpen] = useState(() => window.location.hash === PLACEMENTS_HASH);
   const [advancedOpen, setAdvancedOpen] = useState(() => linked || window.location.hash === PLACEMENTS_HASH);
   const [scrollTick, setScrollTick] = useState(() => (window.location.hash === PLACEMENTS_HASH ? 1 : 0));
@@ -270,7 +272,7 @@ export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
   const advanced = (
     <Disclosure label="進階：素材需求、自帶素材與人工交接" open={advancedOpen} onOpenChange={setAdvancedOpen}>
       <div className="flex flex-col gap-4">
-        <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} refreshKey={materialRefresh}
+        <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} refreshKey={requestsRefresh}
           onSaved={() => setMaterialRefresh((value) => value + 1)} />
         <div id="material-placements"><Disclosure label="素材安排與人工交接" open={placementsOpen} onOpenChange={setPlacementsOpen}>
           <UserAssetPlacements key={`${props.brandId}:${props.campaign.id}:${materialRefresh}:${slotUploads}`} brandId={props.brandId} campaign={props.campaign} onChanged={() => setPlacementRefresh((value) => value + 1)} />
@@ -282,10 +284,10 @@ export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
     </Disclosure>
   );
   return (
-    <AssetsBody brandId={props.brandId} campaign={props.campaign} refreshKey={materialRefresh + placementRefresh}
+    <AssetsBody brandId={props.brandId} campaign={props.campaign} refreshKey={materialRefresh + placementRefresh + requestsRefresh}
       advanced={advanced}
       onPlacementChanged={() => setSlotUploads((value) => value + 1)}
-      onRequestsChanged={() => setMaterialRefresh((value) => value + 1)}
+      onRequestsChanged={() => setRequestsRefresh((value) => value + 1)}
       onOpenPlacements={openPlacements} />
   );
 }
