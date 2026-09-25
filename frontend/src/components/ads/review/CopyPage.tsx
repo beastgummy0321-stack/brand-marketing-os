@@ -10,13 +10,14 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { formatSyncTime } from "@/lib/format";
 import { getReview, type ReviewRound } from "@/lib/adsReviewApi";
-import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue } from "@/lib/adsTriageApi";
+import { useApiRead } from "@/lib/useApiRead";
 import {
   ChangeRequestRejected, createChangeSet, getChangeControl, type ChangeDraft, type SettingValues,
 } from "@/lib/adsChangeApi";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader } from "../patterns";
+import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
@@ -109,11 +110,14 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   const [searchParams] = useSearchParams();
   const homeHref = `/brands/${brandId}/ads`;
 
-  const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [review, setReview] = useState<ReviewRound | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Contract K: the queue is context on this step (campaign chip, 第幾件, thumbnail); a failed read is shown with
+  // 重試, never silently dropped.
+  const queueRead = useApiRead((signal) => getQueue(brandId, signal), [brandId, campaignId, reviewId, reloadKey]);
+  const queue = queueRead.data;
 
   const [operationId] = useState(() => `review-copy:${reviewId}:${crypto.randomUUID()}`);
   const [initialized, setInitialized] = useState(false);
@@ -134,10 +138,8 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      getQueue(brandId).then((q) => { if (!cancelled) setQueue(q); }).catch(() => {}),
-      getReview(brandId, campaignId, reviewId).then((r) => { if (!cancelled) setReview(r); }),
-    ])
+    getReview(brandId, campaignId, reviewId)
+      .then((r) => { if (!cancelled) setReview(r); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。"); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -240,7 +242,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
     void attemptCommit(draft);
   }
 
-  if (loading || (review && !validStep)) {
+  if (loading || (queueRead.status === "loading" && !queue) || (review && !validStep)) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "改文案" }]} />
@@ -318,6 +320,10 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
           </div>
         )}
       />
+
+      {queueRead.status === "error" && (
+        <ReadFailed what="待決定清單讀不到：活動名稱與「第幾件」暫時看不到；這一步照舊可以做" onRetry={queueRead.reload} />
+      )}
 
       {pendingDraft && (
         <div className="flex items-center gap-4 rounded-xl border border-warning/30 bg-warning/10 p-4">
@@ -436,7 +442,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
       </DecisionSheet>
 
       <div className="flex-1" />
-      <ActionBar back={<Button variant="ghost" asChild><Link to={reviewRoundPath(brandId, campaignId, review.id, "prepare")}>← 選方向</Link></Button>}>
+      <ActionBar back={{ label: "選方向", to: reviewRoundPath(brandId, campaignId, review.id, "prepare") }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
         <Button disabled={busy || pendingDraft !== null} onClick={handleSave}>
           {busy ? "保存中…" : "加入變更清單 →"}
         </Button>
