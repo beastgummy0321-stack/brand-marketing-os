@@ -60,7 +60,8 @@ class LiveCreativeTest(unittest.TestCase):
         # ad_id -> the fake set; (set_id, part) -> the output its workbench selection shows now.
         self.sets: dict = {}
         self.selected: dict = {}
-        for name, target in (("briefs_for_source", self._briefs), ("adopted_output", self._adopted)):
+        fakes = (("briefs_for_source", self._briefs), ("adopted_output", self._adopted))
+        for name, target in fakes:
             patcher = mock.patch.object(live_creative.workbench, name, side_effect=target)
             patcher.start()
             self.addCleanup(patcher.stop)
