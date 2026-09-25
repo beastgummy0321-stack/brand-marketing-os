@@ -12,7 +12,7 @@ vi.mock("@/lib/adsHandoffApi", async () => ({ ...await vi.importActual("@/lib/ad
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
 const node = (id: string, kind = "ad", parent: string | null = "group"): NativeEntity => ({ id, platform: "fixture", source_account: "account", native_kind: kind, native_id: id, parent_native_id: parent, name: `平台 ${id}`, native_label: kind, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {}, currency: null, last_success_at: null, sync_error: null, creative: {} });
 const item = (overrides: Partial<HandoffItem> = {}): HandoffItem => ({ id: "handoff", name: "B2", planned_kind: "ad", planned_id: "placement", status: "unknown", change_set_id: "set", parent_item_id: null, expected_parent_name: "既有組", placement_id: "placement", placement_revision: 2, entity_id: null, platform: null, source_account: null, native_kind: null, native_id: null, reported_at: null, observed_at: null, entity_exists: false, setting_matches: null, material_evidence: "unknown", expected_json: { copy: { body: "核准文案" } }, evidence_json: {}, ...overrides });
-const workspace = (items = [item()]): HandoffWorkspace => ({ items, items_truncated: false, ready_placements: [{ id: "placement", filename: "B2.png", revision: 2, purpose: "ad", destination_entity_id: "group" }], destinations: [node("root", "campaign", null), node("group", "adset", "root"), node("old-ad")], destinations_truncated: false, launch_stale: null, notice: "人工交接不代表平台已投遞。" });
+const workspace = (items = [item()]): HandoffWorkspace => ({ items, items_truncated: false, ready_placements: [{ id: "placement", filename: "B2.png", revision: 2, purpose: "ad", destination_entity_id: "group" }], destinations: [node("root", "campaign", null), node("group", "adset", "root"), node("old-ad")], destinations_truncated: false, launch_stale: null, notice: "人工交接不代表平台已投遞。", settings_readback: null });
 function Location() { const where = useLocation(); return <output aria-label="目前位置">{where.pathname}{where.search}</output>; }
 function view(brand = "brand", campaign = "campaign", mode: "all" | "items" | "new-ad" = "all") { return <MemoryRouter><ManualHandoffPanel brandId={brand} campaignId={campaign} mode={mode} /><Location /></MemoryRouter>; }
 beforeEach(() => {
@@ -135,5 +135,30 @@ describe("new independent ad", () => {
     expect(await screen.findByText("素材版本已變更")).toBeTruthy();
     expect(screen.getByLabelText("新廣告名稱")).toHaveProperty("disabled", false);
     expect(sessionStorage.getItem("ads-new-ad-handoff:user:org:brand:campaign")).toBeNull();
+  });
+});
+
+describe("settings readback (F29-I16)", () => {
+  const readback = { read_at: "2026-09-23T02:52:00Z", fields: [
+    { key: "age" as const, label: "年齡", expected_label: "25–54 歲", observed_label: "18–65+ 歲", state: "differ" as const, reason: null },
+  ] };
+  it("shows the readback block and tells the host it is shown", async () => {
+    vi.mocked(getHandoff).mockResolvedValue({ ...workspace(), settings_readback: readback });
+    const shown = vi.fn();
+    render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" platformLabel="Meta" onSettingsReadback={shown} /></MemoryRouter>);
+    expect(await screen.findByRole("region", { name: "投放設定讀回" })).toBeTruthy();
+    expect(screen.getByText("1 項投放設定和核准的不一樣")).toBeTruthy();
+    await waitFor(() => expect(shown).toHaveBeenLastCalledWith(true));
+  });
+  it("reports no readback before any read, and on a failed handoff read", async () => {
+    const shown = vi.fn();
+    const { unmount } = render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onSettingsReadback={shown} /></MemoryRouter>);
+    await waitFor(() => expect(shown).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole("region", { name: "投放設定讀回" })).toBeNull();
+    unmount();
+    vi.mocked(getHandoff).mockRejectedValue(new Error("逾時"));
+    const failed = vi.fn();
+    render(<MemoryRouter><ManualHandoffPanel brandId="brand" campaignId="campaign" mode="items" onSettingsReadback={failed} /></MemoryRouter>);
+    await waitFor(() => expect(failed).toHaveBeenLastCalledWith(false));
   });
 });
