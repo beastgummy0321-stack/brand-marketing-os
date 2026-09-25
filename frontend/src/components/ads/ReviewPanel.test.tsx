@@ -10,6 +10,8 @@ import { ReviewPanel } from "./ReviewPanel";
 import { ChangeControl } from "./ChangeControl";
 
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
+// The v10 timeline above the fold reads its own endpoint; this suite asserts the change-set request is the first `apiFetch`.
+vi.mock("./workspace/ChangesTab", () => ({ ChangesTab: () => null }));
 vi.mock("./ReviewTracking", () => ({ ReviewTracking: () => null }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
