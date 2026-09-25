@@ -35,6 +35,7 @@ import {
   budgetTitle,
   campaignChangesPath,
   changeStepPath,
+  cleanupDrift,
   cleanupProposePath,
   cleanupTitle,
   isCleanupTriageItem,
@@ -318,6 +319,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (proposeKind === "cleanup") return `triage-cleanup:${campaignId}:${crypto.randomUUID()}`;
     return `triage-pause:${entityId ?? ""}:${crypto.randomUUID()}`;
   });
+  // F28-I15: one operation id per page for 「改用最新提議」, so a retry after a lost response replays the same set.
+  const [adoptOperationId] = useState(() => `triage-cleanup-adopt:${setId ?? campaignId}:${crypto.randomUUID()}`);
   const [busy, setBusy] = useState(false);
   // The page is keyed by its URL, so an approve error must ride the canonical redirect in router
   // state — otherwise a rebuild-then-fail lands on a fresh instance with the message gone.
@@ -390,6 +393,17 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const kind = cleanupSet ? "cleanup" : item ? item.kind : entityId ? proposeKind : "pause";
   const blocked = changeSet !== null && !cleanupSet
     && (changeSet.items.length !== 1 || !["pause", "copy", "budget", "new_ad"].includes(kind));
+  // F28-I15: a cleanup draft built from an older proposal is not what the queue row proposes now — the page shows
+  // the difference and offers only 「改用最新提議」 (never 核准 of the outdated list). `null` = page as before.
+  const drift = kind === "cleanup" ? cleanupDrift(changeSet, triageItem?.cleanup) : null;
+  // F28-I15: the propose route's confirm step, once the row already has a cleanup draft, is that draft's own
+  // confirm page — so the comparison above happens in one place, and 核准 never silently approves an older list.
+  const draftProposalId = isCleanupPropose && searchParams.get("step") === "confirm"
+    && triageItem?.proposal?.kind === "cleanup" && triageItem.proposal.status === "draft"
+    ? triageItem.proposal.change_set_id : null;
+  useEffect(() => {
+    if (draftProposalId) navigate(changeStepPath(brandId, campaignId, draftProposalId, "confirm"), { replace: true });
+  }, [draftProposalId, brandId, campaignId, navigate]);
 
   // Contract C / correction 9: 「一則廣告一次 copy hash 一顆 LLM call，暫停提議頁一開就打」——
   // `entityId`（propose 網址）或既有草稿的 `item.target_id` 都是同一則廣告的 id；`!closed` 只是
@@ -523,6 +537,31 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     }
   }
 
+  /** F28-I15: rebuild the outdated cleanup draft from the queue row's current `cleanup.ads`, superseding it
+   * (`change_control.create` marks the old draft `superseded`), then open the new set's confirm step. */
+  async function handleAdoptLatest() {
+    const cleanup = triageItem?.cleanup;
+    if (busy || !changeSet || !cleanup) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const rebuilt = await createChangeSet(brandId, campaignId, {
+        operation_id: adoptOperationId,
+        title: cleanupTitle(cleanup.campaign_name),
+        month: currentBudgetMonth(),
+        items: buildCleanupDraftItems(cleanup.ads),
+        supersedes_id: changeSet.id,
+        source: "cleanup",
+      });
+      setChangeSet(rebuilt);
+      navigate(changeStepPath(brandId, campaignId, rebuilt.id, "confirm"), { replace: true });
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openSheet() {
     setDecisionKind("deferred");
     setReason("想再觀察幾天");
@@ -570,7 +609,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     }
   }
 
-  if (loading) {
+  if (loading || draftProposalId) {
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
@@ -709,7 +748,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
         {kind === "cleanup" && (
-          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} />
+          <CleanupEvidence cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} drift={drift} />
         )}
 
         {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
@@ -733,12 +772,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       <div className="flex-1" />
       <ActionBar
         back={<Button variant="ghost" asChild><Link to={editCopyHref ?? cleanupBackHref ?? homeHref}>← {editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : "投放中心"}</Link></Button>}
-        hint={!closed ? "核准不會改動平台" : undefined}
+        hint={!closed && !drift ? "核准不會改動平台" : undefined}
       >
         {!closed && (
           <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
         )}
-        {!closed ? (
+        {drift ? (
+          <Button disabled={busy} onClick={() => void handleAdoptLatest()}>{busy ? "處理中…" : "改用最新提議 →"}</Button>
+        ) : !closed ? (
           <Button disabled={busy} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
         ) : nextAction ? (
           <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>

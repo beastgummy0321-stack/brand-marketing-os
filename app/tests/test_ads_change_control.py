@@ -928,6 +928,50 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(change_set["id"], created["id"])
         self.assertEqual([i["id"] for i in pause_items], [created["items"][0]["id"]])
 
+    def test_cleanup_draft_superseded_by_the_latest_proposal(self):
+        """F28-I15: 「改用最新提議」 creates a new cleanup set with `supersedes_id` = an outdated
+        *draft* (never approved). The draft becomes `superseded`, keeps its own hash, and the
+        queue's cleanup proposal match moves to the new set."""
+        from app.ads import triage
+
+        other = self.entity(
+            "4",
+            "ad",
+            parent_native_kind="adset",
+            parent_native_id="2",
+            creative={"kind": "image", "fields": {"body": "另一則", "image_hash": "image-two"}},
+        )
+        self.conn.commit()
+
+        def pause(target):
+            return {
+                "kind": "pause",
+                "target_id": target,
+                "after": {"status": "PAUSED"},
+                "reason": "清理",
+            }
+
+        outdated = self.create(items=[pause(self.ad["id"])], source="cleanup")
+        self.assertEqual(outdated["status"], "draft")
+        latest = self.create(
+            items=[pause(self.ad["id"]), pause(other["id"])],
+            source="cleanup",
+            supersedes_id=outdated["id"],
+        )
+        old = data.get(self.conn, self.org, self.brand, self.campaign, outdated["id"])
+        self.assertEqual(old["status"], "superseded")
+        self.assertEqual(old["content_hash"], outdated["content_hash"])
+        self.assertEqual(latest["status"], "draft")
+        self.assertEqual(latest["plan_json"]["supersedes_id"], outdated["id"])
+        self.assertEqual(latest["plan_json"]["source"], "cleanup")
+        self.assertEqual([i["target_id"] for i in latest["items"]], [self.ad["id"], other["id"]])
+        sets = triage._brand_change_sets_by_campaign(self.conn, self.org, self.brand)
+        change_set, pause_items = triage._matching_cleanup_set(sets, self.campaign)
+        self.assertEqual(change_set["id"], latest["id"])
+        self.assertEqual(len(pause_items), 2)
+        with self.assertRaises(ValueError):
+            self.approve(outdated)
+
     def test_source_cleanup_refuses_a_non_pause_item(self):
         with self.assertRaisesRegex(ValueError, "只能包含暫停項目"):
             self.create(source="cleanup")  # default create() item is a `copy`

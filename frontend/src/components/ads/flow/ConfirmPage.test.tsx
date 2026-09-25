@@ -662,3 +662,118 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(screen.getByRole("link", { name: "回到提議" }).getAttribute("href")).toBe(proposeCleanupPath);
   });
 });
+
+describe("ConfirmPage（F28-I15）清理草稿與最新提議不同", () => {
+  const draftProposal = (id = "acs_old") => ({
+    kind: "cleanup" as const, change_set_id: id, campaign_id: "cmp_1", status: "draft" as const,
+    verification_state: "pending" as const, reason: null, revisit_at: null, multi: true,
+  });
+  // The dev-DB shape the user hit: the draft closes one ad the proposal still closes plus one it no longer does;
+  // the proposal now also closes a second ad.
+  const outdatedDraft = (overrides: Partial<ChangeSet> = {}) => changeSet({
+    id: "acs_old", title: "清理「【銷售】測試活動」",
+    items: [
+      changeItem({ id: "item_low1", target_id: "aex_low1", reason: "花費最低" }),
+      changeItem({
+        id: "item_keep1", target_id: "aex_keep1", reason: "花費最低",
+        target: { id: "aex_keep1", name: "晨光隨行杯・日常出發", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "n_k1" },
+      }),
+    ],
+    ...overrides,
+  });
+
+  it("畫出差異（新增／不關），不給核准清理；改用最新提議帶 supersedes_id 建新清單並導去新清單的確認頁", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [outdatedDraft()] });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({ proposal: draftProposal() })]));
+    renderAt(confirmPath("acs_old"));
+
+    expect(await screen.findByRole("heading", { name: "確認清理" })).toBeTruthy();
+    expect(screen.getByText("提議已更新")).toBeTruthy();
+    expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
+    const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-mark"));
+    expect(rows.map((r) => [r.getAttribute("data-mark"), r.textContent])).toEqual([
+      ["close", "1150701 情境圖 A白花購買0 筆關"],
+      ["added", "1150702 情境圖 B新增太貴每賣一筆620 元關"],
+      ["dropped", "晨光隨行杯・日常出發划算每賣一筆48 元不關"],
+    ]);
+    expect(screen.queryByRole("button", { name: /核准清理/ })).toBeNull();
+    expect(screen.queryByText("核准不會改動平台")).toBeNull();
+
+    const rebuilt = changeSet({
+      id: "acs_new", title: "清理「【銷售】測試活動」",
+      items: [
+        changeItem({ id: "item_n1", target_id: "aex_low1" }),
+        changeItem({ id: "item_n2", target_id: "aex_low2" }),
+      ],
+    });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(rebuilt);
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [rebuilt, outdatedDraft({ status: "superseded" })],
+    });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({ proposal: draftProposal("acs_new") })]));
+    await user.click(screen.getByRole("button", { name: "改用最新提議 →" }));
+
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2] as unknown as {
+      operation_id: string; title: string; supersedes_id?: string; source?: string; items: { target_id: string }[];
+    };
+    expect(body.supersedes_id).toBe("acs_old");
+    expect(body.source).toBe("cleanup");
+    expect(body.title).toBe("清理「【銷售】測試活動」");
+    expect(body.operation_id).toMatch(/^triage-cleanup-adopt:acs_old:/);
+    expect(body.items.map((i) => i.target_id)).toEqual(["aex_low1", "aex_low2"]);
+    // The new set matches the proposal: the ordinary confirm page with 核准清理.
+    expect(await screen.findByRole("button", { name: "核准清理 →" })).toBeTruthy();
+    expect(screen.queryByText("提議已更新")).toBeNull();
+    expect(changeApi.approveChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("草稿與提議一致：頁面照舊，有核准清理、沒有差異標記", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({
+        items: [
+          changeItem({ id: "item_low2", target_id: "aex_low2" }),
+          changeItem({ id: "item_low1", target_id: "aex_low1" }),
+        ],
+      })],
+    });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({ proposal: draftProposal("acs_1") })]));
+    renderAt(confirmPath());
+    expect(await screen.findByRole("button", { name: "核准清理 →" })).toBeTruthy();
+    expect(screen.getByText("核准不會改動平台")).toBeTruthy();
+    expect(screen.queryByText("提議已更新")).toBeNull();
+    expect(screen.queryByRole("button", { name: /改用最新提議/ })).toBeNull();
+    expect(screen.getAllByRole("listitem").every((li) => li.getAttribute("data-mark") === null)).toBe(true);
+  });
+
+  it("佇列讀取失敗：不提供改用最新提議，也不當掉", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [outdatedDraft()] });
+    vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
+    renderAt(confirmPath("acs_old"));
+    await waitFor(() => expect(screen.queryByRole("heading", { level: 1 }) ?? screen.queryByText("這份清單有多項變更")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /改用最新提議/ })).toBeNull();
+    expect(screen.queryByText("提議已更新")).toBeNull();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("已拒絕的清單不走這條重建", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [outdatedDraft({ status: "rejected", reason: "先不要" })],
+    });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({ proposal: { ...draftProposal(), status: "rejected" } })]));
+    renderAt(confirmPath("acs_old"));
+    expect(await screen.findByText(/已拒絕・先不要/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /改用最新提議/ })).toBeNull();
+    expect(screen.queryByText("提議已更新")).toBeNull();
+  });
+
+  it("propose 路由的確認步驟遇到既有草稿：導去那份草稿自己的確認頁（在那裡比對）", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [outdatedDraft()] });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem({ proposal: draftProposal() })]));
+    renderAt(`${proposeCleanupPath}?step=confirm`);
+    expect(await screen.findByText("提議已更新")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "改用最新提議 →" })).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+  });
+});
