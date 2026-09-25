@@ -4,8 +4,8 @@ Falsifiers: every bound account is its own row (a never-synced one is `never`, n
 a min or read as ok); an auth failure after a good read is `auth_expired` with only the unread
 days missing and its campaign named; a covered day with no spend row is `ok`; orders are `none`
 before the first order and missing after the later of the latest order and the day before the
-latest import (F31-I07: a zero-order day an import covered is `ok`); costless products are named; platforms
-without a reader are `unsupported`; the month and today follow the org timezone at a month edge;
+latest import (F31-I07: a zero-order day an import covered is `ok`); costless products are
+named; platforms without a reader are `unsupported`; the month and today follow the org timezone at a month edge;
 the route never requests a sync.
 """
 
