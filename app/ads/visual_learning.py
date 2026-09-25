@@ -11,9 +11,8 @@ Never delete or overwrite anything under `data/`.
 
 from typing import cast
 
-from app import workbench
-from app.ads import assets, outcome
 from app.ads import learning as ads_learning
+from app.ads import live_creative, outcome
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
@@ -49,22 +48,18 @@ def _smallest_bucket(buckets: list[str]) -> str:
 
 def _kept_ads(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, ads: list) -> dict:
     """`ad_id -> fingerprint dict`,只留 `is_adopted` 且 `body_json.fingerprint` 是 dict 的圖片
-    版本;讀 §5.8 的 row contract,只碰 `fingerprint`（F07 決策 17）。"""
-    briefs = workbench.briefs_for_source(
-        conn, org_id, brand_id, assets.PACK_SOURCE_KIND, {"ads_campaign_id": campaign_id},
+    版本;讀 §5.8 的 row contract,只碰 `fingerprint`（F07 決策 17）。F31-I05 Contract O：上架
+    核准過的廣告讀核准當下凍結的那一版（`live_creative`），之後在工作檯改選不會改寫學習；
+    還沒核准過的才讀目前的選定。"""
+    creative = live_creative.materials(
+        conn, org_id, brand_id, campaign_id, parts=("image_prompt",),
     )
-    brief_by_ad_id = {}
-    for brief in briefs:
-        ad_id = (brief.get("source_ref") or {}).get("ads_ad_id")
-        if ad_id:
-            brief_by_ad_id[ad_id] = brief
-
     kept: dict = {}
     for ad in ads:
-        brief = brief_by_ad_id.get(ad["id"])
-        if brief is None:
+        found = creative.get(ad["id"])
+        if found is None:
             continue
-        row = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "image_prompt")
+        row = found["outputs"].get("image_prompt")
         if row is None or not row.get("is_adopted"):
             continue
         fingerprint = (row.get("body_json") or {}).get("fingerprint")
@@ -75,7 +70,8 @@ def _kept_ads(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, ads:
 
 
 def _strata(ads: list, fingerprints: dict) -> dict:
-    """`audience_key -> [ad, ...]`,只留有指紋且有受眾座標的廣告,只留 >=2 支廣告的受眾。"""
+    """`audience_key -> [ad, ...]`,只留有指紋且有受眾座標的廣告,只留 >=2 支廣告的受眾。
+    `ads` 已帶學習座標（`live_creative.with_learning_coordinates`）。"""
     by_audience: dict[str, list] = {}
     for ad in ads:
         if ad["id"] not in fingerprints:
@@ -109,6 +105,9 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    # F31-I05 Contract O: strata group ads by the coordinates their images were made for (the
+    # dispatched set's snapshot), not by coordinates edited after dispatch.
+    detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
     # F28-I01: every campaign is judged on cost per result against its one cap.
     metric = "cpa"
     metric_label = labels["cpa"]

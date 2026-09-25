@@ -9,7 +9,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, external_sync, plan
+from app.ads import ab_pairs, external_sync, live_creative, plan
 from app.ads import change_control as service
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
@@ -314,6 +314,28 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual(ac["state"], "no_difference")
         self.assertIn(self.a["id"], (ac["a"]["ad_id"], ac["b"]["ad_id"]))
         self.assertIsNone((ac["a"] if ac["a"]["ad_id"] == c["id"] else ac["b"])["entity_id"])
+
+    def test_a_hook_edited_after_dispatch_still_pairs_on_the_dispatch_hook(self):
+        # F31-I05 Contract O: each set was dispatched with the ad's hook at that time; editing B
+        # back to A's hook afterwards does not change what its creative was made for.
+        sets = [
+            {"id": f"wbb-{ad['id']}", "source_ref": {"ads_campaign_id": self.cid,
+                                                    "ads_ad_id": ad["id"]},
+             "coordinates_snapshot_json": {"audience": "aud", "pain": "pain", "angle": "angle",
+                                           "hook": hook, "proof": "proof", "offer": "offer",
+                                           "format": "format"}}
+            for ad, hook in ((self.a, "hook"), (self.b, "price"))
+        ]
+        plan.update_ad(
+            web.conn, self.org_id, self.brand_id, self.b["id"],
+            {"coordinates": {"hook": "hook"}}, actor=ACTOR,
+        )
+        web.conn.commit()
+        with patch.object(live_creative.workbench, "briefs_for_source", return_value=sets):
+            pairs = ab_pairs.read(*self.args)["pairs"]
+        self.assertEqual([p["dimension"] for p in pairs], ["hook"])
+        values = {pairs[0]["a"]["value_label"], pairs[0]["b"]["value_label"]}
+        self.assertEqual(values, {"先講痛點", "先講價格"})
 
     def test_imported_campaign_is_unavailable(self):
         imported = external.create_imported_campaign(
