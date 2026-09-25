@@ -89,7 +89,8 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await expect(page.getByRole("heading", { name: "投放結構", exact: true })).toBeVisible();
   await capture(page, evidence, "existing-native");
 
-  await page.goto(`${campaignUrl}?tab=assets`);
+  // F30-I11: the placement list is folded under 「進階」; its deep link opens both folds.
+  await page.goto(`${campaignUrl}?tab=assets#material-placements`);
   await expect(page.getByRole("heading", { name: "自帶素材安排" })).toBeVisible();
   const stamp = Date.now();
   const imageName = `browser-${stamp}-0.png`;
@@ -206,7 +207,7 @@ test("existing campaign, originals, confirmation and version evidence survive re
   await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
   await expect(page).toHaveURL(/\/ads\/new\/[^?]+/, { timeout: 30_000 });
   const newId = new URL(page.url()).pathname.split("/").at(-1);
-  await page.goto(`${root}/campaigns/${newId}?tab=assets`);
+  await page.goto(`${root}/campaigns/${newId}?tab=assets#material-placements`);
   await expect(page.locator("article")).toHaveCount(1);
   await capture(page, evidence, "new-campaign-assets");
 

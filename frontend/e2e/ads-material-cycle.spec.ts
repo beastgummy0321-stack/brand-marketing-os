@@ -78,6 +78,8 @@ test("C: normal entry, existing assets, P2/R and ten candidates, then a saved co
   await page.getByTestId("campaign-grid").getByText("F13 測試｜暫停活動", { exact: true }).first().click();
   const initialTasks = responseFor(page, "/material-tasks", "GET");
   await page.getByRole("button", { name: "素材", exact: true }).click();
+  // F30-I11: the material request editor lives in the assets tab's 「進階」 fold (read when first opened).
+  await page.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接", exact: true }).click();
   const taskListResponse = await initialTasks; expect(taskListResponse.ok()).toBe(true);
   const seeded = ((await taskListResponse.json()).tasks as Task[]).find(task => task.id === fixture.material_task_id);
   expect(seeded).toBeTruthy();

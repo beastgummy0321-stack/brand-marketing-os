@@ -113,6 +113,8 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   await capture(page, directory, "plan-created");
 
   await page.getByRole("button", { name: "素材", exact: true }).click();
+  // F30-I11: the placement list lives in the assets tab's 「進階」 fold.
+  await page.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接", exact: true }).click();
   await page.getByRole("button", { name: "素材安排與人工交接", exact: true }).click();
   const placement = page.getByRole("article").filter({ has: page.getByRole("heading", { name: `${filename} · 第`, exact: false }) });
   await expect(placement).toHaveCount(1);
@@ -142,6 +144,7 @@ test("C cold start: login, create from brand, confirm strategy, plan and assign 
   await capture(page, directory, "assignments-saved");
   const reopened = responseFor(page, "/launch-materials", "GET");
   await page.reload();
+  await page.getByRole("button", { name: "進階：素材需求、自帶素材與人工交接", exact: true }).click();
   await page.getByRole("button", { name: "素材安排與人工交接", exact: true }).click();
   const reread = (await (await successful(reopened)).json()) as Assigned;
   expect(reread.planned_ads.map(ad => ad.id).sort()).toEqual([...plannedIds].sort());
