@@ -24,7 +24,8 @@ function leafValue(a: StructureAd, breakEven: number | null) {
   if (a.grade === "wasted") return "0 筆";
   if (a.grade === "insufficient") {
     const label = a.grade_label || "剛開始、數字還不夠";
-    return <span className="font-normal text-muted-foreground">{label === "剛開始、數字還不夠" ? <Term k="thin">{label}</Term> : label}</span>;
+    // Beside the chip that already says it: wraps onto two short lines so the ad name keeps its width at 1024.
+    return <span className="inline-block max-w-[5.5rem] font-normal leading-snug text-muted-foreground">{label === "剛開始、數字還不夠" ? <Term k="thin">{label}</Term> : label}</span>;
   }
   const cost = formatAmount(a.cost_per_result);
   return cost === null ? "—" : <>{cost} 元<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>;
@@ -82,7 +83,10 @@ export function StructureTab({ brandId, campaign: c, planKey }: {
       {data && groups.length > 0 && (
         <>
           <TreeRows
-            root={{ kind: "活動", name: c.name, note: `${daily(total)}・${c.objective || "目標待確認"}` }}
+            root={{ kind: "活動", name: c.name, note: (
+              // An imported objective can be a whole sentence: two lines at most, the full text on hover.
+              <span className="line-clamp-2" title={c.objective || undefined}>{`${daily(total)}・${c.objective || "目標待確認"}`}</span>
+            ) }}
             groups={groups.map((g, i) => groupOf(g, i, c.cap.break_even))}
           />
           <GradeRules breakEven={c.cap.break_even} />
