@@ -51,7 +51,7 @@ import app.shared.web as web
 from app.background import enqueue as background_enqueue
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
-from app.core import rule_cards, vocab
+from app.core import rule_cards
 from app.llm import gateway
 from app.schedule import binding as binding_mod
 from app.schedule import creative as creative_mod
@@ -521,14 +521,11 @@ def _run_diagnosis_adopt(conn, brand_id: str, actor, body: "AdoptRequest") -> di
     # issue adopted-advice-can-invert（2026-09-06 演練）：採用一條判讀寫出來的是「這一期要
     # 去做的實驗」，不是「不准做的事」，所以固定寫 EXPERIMENT_RULE_TYPE，不再按維度借用
     # 角度／受眾的抽屜（原本鉤子的結論會被存成 angle，下一次 prompt 當角度限制讀）。
-    rule_type = vocab.EXPERIMENT_RULE_TYPE
-    content = diagnosis_mod.adopt_content(suggestion, round_date)
+    # F31-I06（Contract K）：同一支 `adopt_key()` 也標判讀回應的 `adopted`，兩邊不會各算各的。
+    key = diagnosis_mod.adopt_key(suggestion, round_date)
+    rule_type, content = key
 
-    existing = next(
-        (r for r in bi_repo.list_rules_for_brand(conn, brand_id)
-         if r["product_id"] is None and r["rule_type"] == rule_type and r["content"] == content),
-        None,
-    )
+    existing = diagnosis_mod.adopted_rule(conn, brand_id, key)
     row = existing or bi_repo.create_rule(
         conn, brand_id, actor=str(actor.user_id), rule_type=rule_type,
         content=content, severity="soft", source_reference_id=None,

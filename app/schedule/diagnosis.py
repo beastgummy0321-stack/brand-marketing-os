@@ -26,7 +26,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import rule_cards
+from app.core import rule_cards, vocab
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 from app.schedule import performance, state
@@ -459,6 +459,38 @@ def adopt_content(suggestion: dict, round_date: str) -> str:
     return f"{body}\n（本條來自 {round_date} 的成效判讀，{DIRECTIONAL_ONLY_NOTE}）"
 
 
+def adopt_key(suggestion: dict, round_date: str) -> tuple[str, str]:
+    """The one key a suggestion is "adopted" under: `(rule_type, content)` of the brand-wide
+    rule `_run_diagnosis_adopt()` writes. The adopt route dedupes on it and the diagnosis
+    response marks `adopted` with it (F31-I06, Contract K), so the two can never disagree.
+    Adopting always writes `vocab.EXPERIMENT_RULE_TYPE` (issue adopted-advice-can-invert)."""
+    return vocab.EXPERIMENT_RULE_TYPE, adopt_content(suggestion, round_date)
+
+
+def adopted_rule(conn, brand_id: str, key: tuple[str, str]) -> dict | None:
+    """The active brand-wide rule stored under `key`, or None. Product-specific rules never
+    count: adopting writes a brand-wide rule only."""
+    rule_type, content = key
+    return next(
+        (r for r in bi_repo.list_rules_for_brand(conn, brand_id)
+         if r["product_id"] is None and r["rule_type"] == rule_type and r["content"] == content),
+        None,
+    )
+
+
+def _mark_adopted(
+    conn, brand_id: str, round_date: str | None, suggestions: list[dict],
+) -> list[dict]:
+    """Each suggestion plus `adopted: bool` (Contract K). One rule read for the whole list."""
+    if round_date is None or not suggestions:
+        return [{**s, "adopted": False} for s in suggestions]
+    keys = {
+        (r["rule_type"], r["content"])
+        for r in bi_repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None
+    }
+    return [{**s, "adopted": adopt_key(s, round_date) in keys} for s in suggestions]
+
+
 def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
     """`GET /api/schedule/brands/{brand_id}/diagnosis` 的本體，`POST` 剛 enqueue 完也回這個
     形狀（比照既有三支生成端點的既有慣例）。`window`／`breakeven` 每次都現查（決定 8：
@@ -497,7 +529,8 @@ def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
     # `_round_result()` 自己會判斷「整輪是否都成功」，這裡不再重複那個判斷；`status` 是
     # 給畫面看的字（running／succeeded／failed），跟 `_round_result()` 內部的守門條件是
     # 同一件事的兩種寫法（都成功 ⇔ status == "succeeded"）。
-    _round_date, suggestions = _round_result(rows)
+    round_date, suggestions = _round_result(rows)
+    suggestions = _mark_adopted(conn, brand_id, round_date, suggestions)
 
     lenses = {lens: (row.get("rendered_output") or "") for lens, row in by_lens.items() if lens}
 
