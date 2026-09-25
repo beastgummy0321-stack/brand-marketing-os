@@ -427,6 +427,134 @@ def platform_url(target: dict) -> str | None:
     )
 
 
+# -- F29-I07: launch-settings readback (Contract I) ------------------------------------------------
+# Meta's own ad set / campaign / creative fields -> the shared launch-settings vocabulary
+# (`app/ads/launch_settings.py`). Every entry is `{value, raw, state, reason}`: `value` is the
+# shared value (None when Meta's setting has no equivalent there), `raw` Meta's own value as text
+# (shown when `value` is None or carries extras), `state` "read" or "unreadable". A field Meta did
+# not return is unreadable, never guessed; nothing here writes a setting.
+_EVENT = {
+    "PURCHASE": "purchase",
+    "ADD_TO_CART": "add_to_cart",
+    "INITIATE_CHECKOUT": "initiate_checkout",
+    "CONTENT_VIEW": "view_content",
+}
+_BID = {
+    "LOWEST_COST_WITHOUT_CAP": "lowest_cost",
+    "COST_CAP": "cost_cap",
+    "LOWEST_COST_WITH_BID_CAP": "bid_cap",
+}
+_POSITIONS = {
+    "facebook": {"feed": "facebook_feed", "story": "stories", "facebook_reels": "reels"},
+    "instagram": {"stream": "instagram_feed", "story": "stories", "reels": "reels"},
+    "messenger": {"messenger_home": "messenger"},
+}
+_PUBLISHER_LABEL = {
+    "facebook": "Facebook", "instagram": "Instagram", "messenger": "Messenger",
+    "audience_network": "Audience Network", "threads": "Threads",
+}
+_GEO_EXTRA = {
+    "regions": "區域", "cities": "城市", "zips": "郵遞區號", "places": "地點",
+    "custom_locations": "自訂地點", "geo_markets": "市場", "country_groups": "國家群組",
+    "electoral_districts": "選區",
+}
+_TARGETING_MISSING = "平台沒有回傳受眾與版位（可能沒有讀取權限）。"
+
+
+def _read(value, raw=None):
+    return {"value": value, "raw": raw, "state": "read", "reason": None}
+
+
+def _unreadable(reason):
+    return {"value": None, "raw": None, "state": "unreadable", "reason": reason}
+
+
+def _placement(targeting):
+    platforms = targeting.get("publisher_platforms")
+    if not platforms:
+        return _read({"mode": "auto", "positions": [], "extra": []})
+    positions, extra = set(), []
+    for platform in platforms:
+        mapping = _POSITIONS.get(platform)
+        label = _PUBLISHER_LABEL.get(platform, str(platform))
+        chosen = targeting.get(f"{platform}_positions") if mapping else None
+        if mapping is None:
+            extra.append(label)
+        elif chosen is None:
+            extra.append(f"{label} 全部版位")
+        else:
+            for position in chosen:
+                if position in mapping:
+                    positions.add(mapping[position])
+                else:
+                    extra.append(f"{label}：{position}")
+    return _read({"mode": "manual", "positions": sorted(positions), "extra": extra})
+
+
+def _countries(targeting):
+    geo = targeting.get("geo_locations")
+    if not isinstance(geo, dict):
+        return _unreadable(_TARGETING_MISSING)
+    extra = []
+    for key, label in _GEO_EXTRA.items():
+        for place in geo.get(key) or []:
+            name = (place.get("name") or place.get("key")) if isinstance(place, dict) else place
+            extra.append(f"{name}（{label}）")
+    return _read({"countries": sorted(str(c) for c in geo.get("countries") or []), "extra": extra})
+
+
+def launch_settings_observed(adset: dict, campaign: dict | None = None) -> dict:
+    """One ad set's settings in the shared vocabulary; `campaign` supplies the bid strategy of a
+    campaign-budget ad set, which carries none of its own."""
+    result = {}
+    goal = adset.get("optimization_goal")
+    promoted = adset.get("promoted_object")
+    if goal is None and promoted is None:
+        result["optimization_event"] = _unreadable("平台沒有回傳優化事件。")
+    else:
+        event = (promoted or {}).get("custom_event_type") if isinstance(promoted, dict) else None
+        if goal not in (None, "OFFSITE_CONVERSIONS"):
+            result["optimization_event"] = _read(None, str(goal))
+        elif not isinstance(promoted, dict):
+            # A conversion goal whose event lives on an object Meta did not return.
+            result["optimization_event"] = _unreadable("平台沒有回傳優化事件（可能沒有讀取權限）。")
+        else:
+            result["optimization_event"] = _read(_EVENT.get(str(event)), event or goal)
+    bid = adset.get("bid_strategy") or (campaign or {}).get("bid_strategy")
+    result["bid_strategy"] = (
+        _read(_BID.get(bid), str(bid)) if bid else _unreadable("平台沒有回傳出價方式。")
+    )
+    targeting = adset.get("targeting")
+    if not isinstance(targeting, dict):
+        for key in ("placement", "age", "gender", "countries"):
+            result[key] = _unreadable(_TARGETING_MISSING)
+    else:
+        result["placement"] = _placement(targeting)
+        try:
+            ages = {key: int(targeting[key]) for key in ("age_min", "age_max")}
+            result["age"] = _read(ages)
+        except (KeyError, TypeError, ValueError):
+            result["age"] = _unreadable("平台沒有回傳年齡。")
+        genders = sorted(targeting.get("genders") or [])
+        gender = {(): "all", (1, 2): "all", (1,): "male", (2,): "female"}.get(tuple(genders))
+        result["gender"] = _read(gender, None if gender else str(genders))
+        result["countries"] = _countries(targeting)
+    if not isinstance(promoted, dict):
+        result["pixel_id"] = _unreadable("平台沒有回傳像素（可能沒有讀取權限）。")
+    else:
+        pixel = promoted.get("pixel_id")
+        result["pixel_id"] = _read(str(pixel) if pixel else None)
+    return result
+
+
+def launch_settings_observed_ad(ad: dict) -> dict:
+    creative = ad.get("creative")
+    if not isinstance(creative, dict):
+        return {"utm": _unreadable("平台沒有回傳這則廣告的素材設定。")}
+    tags = creative.get("url_tags")
+    return {"utm": _read(tags.strip() if isinstance(tags, str) and tags.strip() else None)}
+
+
 class MetaReader:
     def sync_scopes(self, conn):
         return source.external_sync_scopes(conn)
@@ -608,6 +736,15 @@ class MetaReader:
     def binding_kinds(self):
         return ("ad",)
 
+    def pixels(self, conn, org_id, brand_id, account):
+        """F29-I07: this account's tracking pixels `[{id, name}]` (read only)."""
+        try:
+            return source.read_external_pixels(conn, org_id, brand_id, account["account_id"])
+        except source.ExternalReadError as exc:
+            raise SourceReadError(str(exc), exc.code) from None
+        except ValueError as exc:
+            raise SourceReadError(str(exc), "disconnected") from None
+
     def verify_native(
         self,
         conn,
@@ -651,6 +788,9 @@ class MetaReader:
             entity = _verified_snapshot(raw, native_kind, account)
             if native_kind == "ad":
                 entity["creative"] = creative_summary(raw.get("creative"))
+                entity["launch_settings"] = launch_settings_observed_ad(raw)
+            elif native_kind == "adset":
+                entity["launch_settings"] = launch_settings_observed(raw, campaign)
             return {
                 "entity": entity,
                 "parents": parents,

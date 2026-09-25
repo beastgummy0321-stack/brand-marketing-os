@@ -244,8 +244,9 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   const missingButton = page.getByRole("button", { name: "補齊一般受眾設定" });
   await missingButton.focus();
   await page.keyboard.press("Enter");
-  const audience = page.getByRole("textbox", { name: "受眾來源與納入條件 *" });
-  await expect(audience).toBeFocused();
+  // F29 Unresolved 5: the landing URL is still required; the audience source became optional.
+  await expect(page.getByRole("textbox", { name: "落地頁網址 *" })).toBeFocused();
+  const audience = page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true });
   await audience.fill("新客網站訪客，排除近 30 天購買者");
   await page.getByRole("button", { name: /人工上架設定與平台對應 · 有未儲存變更/ }).click();
   await expect(audience).toBeHidden();
@@ -263,7 +264,7 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   await page.reload();
   await page.getByRole("button", { name: /人工上架設定與平台對應/ }).click();
   await page.getByRole("button", { name: /一般受眾 · 待補設定/ }).click();
-  await expect(page.getByRole("textbox", { name: "受眾來源與納入條件 *" }))
+  await expect(page.getByRole("textbox", { name: "受眾來源與納入條件", exact: true }))
     .toHaveValue("新客網站訪客，排除近 30 天購買者");
   await captureDesktopEvidence(page, "manual-launch-settings");
 

@@ -1,6 +1,13 @@
 """Fresh read-only native verification with scoped ownership and late-response protection."""
 
-from app.ads import adapters, asset_binding, change_control_launch, external_sync, handoff_data
+from app.ads import (
+    adapters,
+    asset_binding,
+    change_control_launch,
+    external_sync,
+    handoff_data,
+    launch_settings,
+)
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
 from app.ads import external_repository as external
@@ -15,7 +22,7 @@ def _launch_current(conn, org, brand, campaign, change_set):
         return True
     current = change_control_launch.snapshot(conn, org, brand, campaign)
     # The same comparison `GET …/handoff` reports as `launch_stale`.
-    return change_control_launch.normalized(current) == change_control_launch.normalized(original)
+    return change_control_launch.approved_matches(original, current)
 
 
 def _parent(conn, org, brand, campaign, item):
@@ -61,9 +68,17 @@ def _source_versions(conn, org, platform, account, native_ids):
     }
 
 
-def _settings(item, node, material):
+def _settings(item, node, material, observed=None, pixels=None):
     expected = item["expected_json"]
     known, missing, differences = {}, [], []
+    # F29 Contract I: the frozen launch settings against the reader's own observation. A differing
+    # value is a deviation; an unreadable one stays out of the item's result (the readback shows
+    # it and the user may confirm it by eye).
+    compared = launch_settings.compare_item(expected.get("launch_settings"), observed, pixels)
+    labels = dict(launch_settings.READBACK_FIELDS)
+    differences.extend(
+        "投放設定：" + labels[key] for key, r in compared.items() if r["state"] == "differ"
+    )
     if item["planned_kind"] == "ad":
         fields = changes.copy_fields(node)
         creative = (node.get("creative") or {}).get("fields") or {}
@@ -85,6 +100,8 @@ def _settings(item, node, material):
             missing.append("圖片或影片版本等價")
     else:
         for key, value in expected.items():
+            if key == "launch_settings":
+                continue
             if key == "manual_settings":
                 # No existing reader contract proves these semantic/manual fields.
                 missing.extend("人工設定：" + k for k in value)
@@ -113,7 +130,8 @@ def _settings(item, node, material):
             else:
                 known[key] = value
     state = "deviated" if differences else "unknown" if missing else "confirmed"
-    return state, {
+    extra = {"launch_settings": compared} if compared else {}
+    return state, extra | {
         "setting_matches": False if differences else None if missing else True,
         "matched_fields": list(known),
         "unknown_fields": missing,
@@ -233,6 +251,7 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         )
         asset_binding._validate_chain(proof, payload, root)
         node = proof["entity"]
+        observed = node.get("launch_settings")
         if parent and (node.get("parent_native_kind"), node.get("parent_native_id")) != (
             parent["native_kind"],
             parent["native_id"],
@@ -328,7 +347,10 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             )
             material = binding["evidence_level"]
             node = bindings.entity(conn, org, brand, campaign, entity_id)
-        status, evidence = _settings(item, node, material)
+        pixels = launch_settings.cached_pixels(
+            campaigns.get_campaign(conn, org, brand, campaign) or {}
+        )
+        status, evidence = _settings(item, node, material, observed, pixels)
         evidence.update(
             observed_at=db.now_utc().isoformat(),
             native_id=node["native_id"],
@@ -355,3 +377,90 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
                 "attempt_id": attempt,
             },
         )
+
+
+# -- F29 Contract I: launch-settings readback ------------------------------------------------------
+
+
+def _readback_set(conn, org, brand, campaign):
+    change_set = change_control_launch.launch_set(conn, org, brand, campaign)
+    if change_set is None:
+        return None, None
+    frozen = change_set["plan_json"]["launch_snapshot"].get("launch_settings")
+    return change_set, frozen
+
+
+def settings_readback(conn, org, brand, campaign):
+    """`settings_readback` of `GET …/handoff`: every launch-settings field of the current approved
+    launch against what the readbacks observed. A field any ad set (or ad, for UTM) differs on is
+    `differ`; one no read returned is `unreadable` with its reason (or `self_confirmed` once the
+    user confirmed it by eye). None before any ad set or ad was read back, or for a launch approved
+    before launch settings existed."""
+    change_set, frozen = _readback_set(conn, org, brand, campaign)
+    if change_set is None or frozen is None:
+        return None
+    rows = conn.execute(
+        "SELECT evidence_json,observed_at FROM ads_handoff_item WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND change_set_id=%s AND planned_kind IN ('group','ad') "
+        "AND evidence_json ? 'launch_settings'",
+        (org, brand, campaign, change_set["id"]),
+    ).fetchall()
+    if not rows:
+        return None
+    pixels = launch_settings.cached_pixels(campaigns.get_campaign(conn, org, brand, campaign) or {})
+    confirmed = change_set["plan_json"].get("settings_confirmed") or {}
+    fields = []
+    for key, label in launch_settings.READBACK_FIELDS:
+        results = [
+            r["evidence_json"]["launch_settings"][key]
+            for r in rows
+            if key in (r["evidence_json"].get("launch_settings") or {})
+        ]
+        differ = next((r for r in results if r["state"] == "differ"), None)
+        unreadable = next((r for r in results if r["state"] == "unreadable"), None)
+        if differ:
+            state, observed, reason = "differ", differ["observed_label"], None
+        elif unreadable or not results:
+            state = "self_confirmed" if key in confirmed else "unreadable"
+            observed = None
+            reason = unreadable["reason"] if unreadable else "還沒讀回這一項。"
+        else:
+            state, observed, reason = "match", results[0]["observed_label"], None
+        fields.append(
+            {
+                "key": key,
+                "label": label,
+                "expected_label": launch_settings.expected_label(key, frozen, pixels),
+                "observed_label": observed,
+                "state": state,
+                "reason": reason,
+            }
+        )
+    read_at = max((r["observed_at"] for r in rows if r["observed_at"]), default=None)
+    return {"read_at": read_at, "fields": fields}
+
+
+def confirm_setting(conn, org, brand, campaign, key, actor):
+    """`POST …/handoff/launch/settings-confirm {key}`: the user looked at the platform and says an
+    unreadable field is the same. Refused for any other state; nothing is written to a platform."""
+    changes.lock(conn, org, brand)
+    readback = settings_readback(conn, org, brand, campaign)
+    field = next((f for f in (readback or {}).get("fields", []) if f["key"] == key), None)
+    if field is None or field["state"] != "unreadable":
+        raise ValueError("只有讀不到的投放設定可以由你確認一樣。")
+    change_set, _ = _readback_set(conn, org, brand, campaign)
+    assert change_set is not None
+    conn.execute(
+        "UPDATE ads_change_set SET plan_json=jsonb_set(plan_json,'{settings_confirmed}',"
+        "COALESCE(plan_json->'settings_confirmed','{}'::jsonb) || %s::jsonb) "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
+        (
+            db.jsonb({key: {"at": db.now_utc().isoformat(), "by": actor}}),
+            org,
+            brand,
+            campaign,
+            change_set["id"],
+        ),
+    )
+    conn.commit()
+    return handoff_data.workspace(conn, org, brand, campaign)

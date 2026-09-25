@@ -10,7 +10,7 @@ import re
 from urllib.parse import parse_qsl, urlsplit
 
 _PATH = re.compile(
-    r"(?:me/adaccounts|act_[0-9]+/(?:campaigns|insights)|[0-9]+(?:/(?:adsets|ads|insights))?)"
+    r"(?:me/adaccounts|act_[0-9]+/(?:campaigns|insights|adspixels)|[0-9]+(?:/(?:adsets|ads|insights))?)"
 )
 _PARAMS = {
     "fields", "limit", "after", "before", "__paging_token", "level",
@@ -23,6 +23,13 @@ _FIELDS = set(
     "ad_id ad_name account_currency date_start date_stop spend impressions clicks purchase_roas "
     "actions action_values created_time updated_time creative body title image_hash image_url "
     "video_id thumbnail_url object_story_spec asset_feed_spec product_set_id".split()
+) | set(
+    # F29-I07: launch-settings readback. Exactly the ad set/campaign/creative settings compared
+    # with the approved launch; `targeting` and `promoted_object` are requested whole, their
+    # listed sub-fields are allowed for an explicit expansion.
+    "optimization_goal bid_strategy targeting age_min age_max genders geo_locations countries "
+    "publisher_platforms facebook_positions instagram_positions messenger_positions "
+    "promoted_object pixel_id custom_event_type url_tags".split()
 )
 _CURSORS = {"after", "before", "__paging_token"}
 _JSON_PARAMS = {"time_range", "action_attribution_windows", "effective_status"}

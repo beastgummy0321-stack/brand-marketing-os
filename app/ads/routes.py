@@ -683,6 +683,8 @@ _PUBLISH_ERRORS = {
     "simulation_isolation_required": (409, "請到成效頁啟用隔離模擬回收；只限測試品牌。"),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "adapter_unknown": (400, "找不到這個發布方式。"),
+    # F29 Contract I (`launch_settings_malformed` never reaches publish: only the settings PUT).
+    "launch_settings_invalid": (409, "投放設定還有要改的地方（例如 UTM 格式），改好再核准。"),
     "no_groups_to_publish": (400, "這個活動還沒有投放組，先採用策略產出投放組再發布。"),
 }
 

@@ -1,7 +1,7 @@
 """Approved handoff nodes and their evidence, without another native-object registry."""
 
 from app.ads import change_control_data as changes
-from app.ads import manual_settings
+from app.ads import launch_settings, manual_settings
 from app.ads import user_assets_repository as assets
 from app.core import db
 
@@ -74,6 +74,10 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
                 if f["required"]
             },
         }
+        # F29 Contract I: each ad set is read back against the frozen launch settings (a launch
+        # approved before they existed froze none and compares none).
+        if frozen.get("launch_settings") is not None:
+            expected["launch_settings"] = launch_settings.group_subset(frozen["launch_settings"])
         group_id = insert(
             conn,
             org,
@@ -91,6 +95,8 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
             material = ad.get("material_assignment") or {}
             copy = material.get("copy_fields") or {}
             expected = {"copy_text": ad.get("copy_text"), "material_required": True}
+            if frozen.get("launch_settings") is not None:
+                expected["launch_settings"] = launch_settings.ad_subset(frozen["launch_settings"])
             if material:
                 expected.update(
                     copy={
@@ -208,8 +214,9 @@ def get(conn, org, brand, campaign, item_id):
 
 
 def workspace(conn, org, brand, campaign):
-    # Lazy: `change_control_launch` imports this module inside its own functions.
-    from app.ads import change_control_launch
+    # Lazy: `change_control_launch` imports this module inside its own functions, and
+    # `handoff_check` imports this module.
+    from app.ads import change_control_launch, handoff_check
 
     changes.campaign(conn, org, brand, campaign)
     rows = conn.execute(
@@ -237,6 +244,7 @@ def workspace(conn, org, brand, campaign):
         "destinations": [dict(r) for r in destinations[:500]],
         "destinations_truncated": len(destinations) > 500,
         "launch_stale": change_control_launch.stale(conn, org, brand, campaign),
+        "settings_readback": handoff_check.settings_readback(conn, org, brand, campaign),
         "notice": "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
     }
 

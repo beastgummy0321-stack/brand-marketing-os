@@ -1,6 +1,7 @@
 """One GET per source page, fixed host/path, no token-bearing next URL replay."""
 
 import json
+import re
 import unittest
 from unittest.mock import patch
 
@@ -128,3 +129,26 @@ class ExternalGraphTest(unittest.TestCase):
                 result = graph.external_page("secret", "1", kind, native_id="3")
             self.assertEqual(fetch.call_args.args[0], graph.GRAPH_BASE_URL + "/3")
             self.assertEqual(result["data"][0]["id"], "3")
+
+    def test_launch_settings_readback_fields_ride_the_single_object_reads(self):
+        expected = {
+            "campaign": {"bid_strategy"},
+            "adset": {"optimization_goal", "bid_strategy", "targeting", "promoted_object"},
+            "ad": {"url_tags"},
+        }
+        for kind, fields in expected.items():
+            with patch.object(
+                graph, "fetch_page", return_value={"id": "3", "account_id": "1"}
+            ) as fetch:
+                graph.external_page("secret", "1", kind, native_id="3")
+            requested = set(re.findall(r"[a-z_]+", fetch.call_args.kwargs["params"]["fields"]))
+            self.assertLessEqual(fields, requested, kind)
+
+    def test_pixel_list_is_one_account_edge_read_with_id_and_name(self):
+        payload = {"data": [{"id": "7", "name": "官網像素"}]}
+        with patch.object(graph, "fetch_page", return_value=payload) as fetch:
+            page = graph.external_page("secret", "1", "pixels")
+        self.assertEqual(fetch.call_args.args[0], graph.GRAPH_BASE_URL + "/act_1/adspixels")
+        self.assertEqual(fetch.call_args.kwargs["params"]["fields"], "id,name")
+        self.assertNotIn("effective_status", fetch.call_args.kwargs["params"])
+        self.assertEqual(page["data"], payload["data"])
