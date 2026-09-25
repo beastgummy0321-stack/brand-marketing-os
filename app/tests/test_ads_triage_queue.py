@@ -27,6 +27,20 @@ from app.core import interrupts as core_interrupts
 
 ACCOUNT_TZ = "Asia/Taipei"
 
+# F29-I03: the `settle` row depends on the calendar (it reads last month from the 2nd day of this
+# one), so fixtures dated "N days before yesterday" would raise it during the first days of every
+# month. This file proves the per-ad/per-campaign kinds; the settle row is proven on a fixed month
+# in `test_ads_settle.py`.
+_settle_patch = patch.object(triage, "_settle_candidates", return_value=[])
+
+
+def setUpModule():
+    _settle_patch.start()
+
+
+def tearDownModule():
+    _settle_patch.stop()
+
 
 class _Reader:
     def accounts(self, conn, org, brand):
@@ -152,7 +166,8 @@ class QueueEndToEndTest(unittest.TestCase):
 
         self.assertEqual(
             result["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup"],
+            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
+             "settle"],
         )
         self.assertEqual(result["kinds_pending"], [])
         # `class` keeps its meaning: the 沒賣出 ad still counts as the stop_loss trend class.
@@ -511,7 +526,8 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["total_ads"], 0)
         self.assertEqual(
             queue["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup"],
+            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
+             "settle"],
         )
         self.assertEqual(queue["kinds_pending"], [])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))

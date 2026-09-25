@@ -116,6 +116,30 @@ def record_for_ab_item(conn: _AnyConn, org: str, brand: str, campaign: str, chan
     )
 
 
+# F29-I03 Contract E: a period-settle learning's `source_cycle_id` is `settle:<month>:<entity_id>`
+# (`app/ads/settle.py`), naming the ad entity instead of a change item.
+_SETTLE_PREFIX = "settle:"
+
+
+def _campaign_of_source(conn: _AnyConn, org: str, brand: str, source_cycle_id: str | None):
+    """The campaign a learning came from: a settle learning through its ad entity, every other one
+    through the change item (`ads_action`) its `source_cycle_id` names. `None` when unknown."""
+    if not source_cycle_id:
+        return None
+    if source_cycle_id.startswith(_SETTLE_PREFIX):
+        entity_id = source_cycle_id.rsplit(":", 1)[-1]
+        row = conn.execute(
+            "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org, brand, entity_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT campaign_id FROM ads_action WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org, brand, source_cycle_id),
+        ).fetchone()
+    return row["campaign_id"] if row else None
+
+
 def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     """Contract D: `GET .../learnings` -- ads-track rows only, newest first, <=50 (the ledger's
     own default). Each row's `campaign_id`/`campaign_name` is looked up through this module's own
@@ -127,13 +151,7 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     rows = _ads_rows(conn, brand)
     result = []
     for row in rows[:50]:
-        campaign_id = None
-        action = conn.execute(
-            "SELECT campaign_id FROM ads_action WHERE org_id=%s AND brand_id=%s AND id=%s",
-            (row["org_id"], brand, row["source_cycle_id"]),
-        ).fetchone()
-        if action:
-            campaign_id = action["campaign_id"]
+        campaign_id = _campaign_of_source(conn, row["org_id"], brand, row["source_cycle_id"])
         campaign_name = None
         campaign_objective = None
         if campaign_id:

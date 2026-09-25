@@ -249,6 +249,18 @@ class AbPairsTest(SimulatedPublishTestBase):
         web.conn.commit()
         self.assertEqual(self.pair()["state"], "unreadable")
 
+    def test_any_non_simulated_source_is_padded_with_its_own_source(self):
+        # Platform-neutral: any non-simulated source pads (the table's own CHECK limits which
+        # sources exist today, so the rule is proven on the function itself), and the padded day
+        # carries that ad's own source, never a platform literal.
+        rows = [{"entity_id": self.b["id"], "day": self.yesterday, "source": "other_platform"}]
+        padded = ab_pairs._covered_zero_rows(
+            rows, (self.b["id"],), self.yesterday - timedelta(days=1), self.yesterday,
+            (self.yesterday - timedelta(days=30), self.yesterday),
+        )
+        self.assertEqual([(r["day"], r["source"]) for r in padded],
+                         [(self.yesterday - timedelta(days=1), "other_platform")])
+
     def test_a_missing_day_is_unreadable_never_zero(self):
         self.fill(self.a)
         self.fill(self.b, spend=80.0, skip=(3,))
