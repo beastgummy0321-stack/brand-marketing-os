@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { IntakeDraft, IntakePhoto } from "@/lib/intakeApi";
 import { fetchIntakeDraft, submitIntakeRestart, submitIntakeStart, uploadIntakePhoto } from "@/lib/intakeApi";
 import { setAdvertisingHistory } from "@/lib/libraryApi";
@@ -8,6 +9,64 @@ type PastAds = "has_history" | "none";
 
 const URL_COUNT = 5;
 const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp";
+
+/** Unsent text of this form (F31-I01), kept in localStorage per user+org scope and brand ("new"
+ * for a brand not created yet), so leaving the step and coming back keeps it. Cleared once the
+ * submit has created the brand / draft. Photos are not kept: their tokens are server-side and
+ * temporary. Anything not of this shape reads as nothing kept. */
+interface KeptText {
+  brandName: string;
+  clientName: string;
+  description: string;
+  urls: string[];
+  pastAds: PastAds | null;
+}
+
+function keptTextKey(scope: string | undefined, brandId: string | null): string {
+  return `intake-start:${scope ?? ""}:${brandId ?? "new"}`;
+}
+
+function isKeptText(value: unknown): value is KeptText {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return [v.brandName, v.clientName, v.description].every((x) => typeof x === "string")
+    && Array.isArray(v.urls) && v.urls.every((u) => typeof u === "string")
+    && (v.pastAds === null || v.pastAds === "has_history" || v.pastAds === "none");
+}
+
+function hasText(t: KeptText): boolean {
+  return !!(t.brandName.trim() || t.clientName.trim() || t.description.trim() || t.urls.some((u) => u.trim()) || t.pastAds);
+}
+
+function readKeptText(key: string): KeptText | null {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) || "null");
+    return isKeptText(value) && hasText(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeKeptText(key: string, text: KeptText): void {
+  try {
+    if (hasText(text)) localStorage.setItem(key, JSON.stringify(text));
+    else localStorage.removeItem(key);
+  } catch {
+    /* Storage unavailable: nothing is kept. */
+  }
+}
+
+function clearKeptText(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* Storage unavailable. */
+  }
+}
+
+function paddedUrls(urls: string[]): string[] {
+  return Array.from({ length: URL_COUNT }, (_, i) => urls[i] ?? "");
+}
 
 /** 起始輸入（契約 S4.1–S4.13）。新品牌（`brandId === null`）與既有品牌重新調研（W1b）
  * 共用同一個畫面容器，只差標題與品牌名稱欄位是否顯示。 */
@@ -19,19 +78,26 @@ export function StartStep({
   onSubmitted: (result: { brand_id: string; quick: boolean }) => void;
 }) {
   const isRestart = brandId !== null;
+  const { scope } = useWorkspace();
+  const keptKey = keptTextKey(scope, brandId);
+  const [kept] = useState(() => readKeptText(keptKey));
   const [prevBrandName, setPrevBrandName] = useState<string | null>(null);
   const [prevPhotos, setPrevPhotos] = useState<IntakePhoto[]>([]);
   const [alreadyRunning, setAlreadyRunning] = useState(false);
 
-  const [brandName, setBrandName] = useState("");
-  const [clientName, setClientName] = useState("");
-  const [description, setDescription] = useState("");
-  const [urls, setUrls] = useState<string[]>(Array.from({ length: URL_COUNT }, () => ""));
-  const [urlsOpen, setUrlsOpen] = useState(false);
+  const [brandName, setBrandName] = useState(kept?.brandName ?? "");
+  const [clientName, setClientName] = useState(kept?.clientName ?? "");
+  const [description, setDescription] = useState(kept?.description ?? "");
+  const [urls, setUrls] = useState<string[]>(paddedUrls(kept?.urls ?? []));
+  const [urlsOpen, setUrlsOpen] = useState(() => !!kept?.urls.some((u) => u.trim()));
   const [photos, setPhotos] = useState<IntakePhoto[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [pastAds, setPastAds] = useState<PastAds | null>(null);
+  const [pastAds, setPastAds] = useState<PastAds | null>(kept?.pastAds ?? null);
+
+  useEffect(() => {
+    writeKeptText(keptKey, { brandName, clientName, description, urls, pastAds });
+  }, [keptKey, brandName, clientName, description, urls, pastAds]);
 
   useEffect(() => {
     if (!isRestart || !brandId) return;
@@ -65,6 +131,7 @@ export function StartStep({
     const photoTokens = photos.map((p) => p.token);
     if (isRestart && brandId) {
       const res = await submitIntakeRestart(brandId, { description, urls: trimmedUrls, photo_tokens: photoTokens, client_name: "" });
+      clearKeptText(keptKey);
       onSubmitted({ brand_id: brandId, quick: res.quick });
     } else {
       if (!brandName.trim()) throw new Error("請填寫品牌名稱。");
@@ -76,6 +143,7 @@ export function StartStep({
         urls: trimmedUrls,
         photo_tokens: photoTokens,
       });
+      clearKeptText(keptKey);
       await setAdvertisingHistory(res.brand_id, pastAds);
       onSubmitted(res);
     }
@@ -95,6 +163,7 @@ export function StartStep({
         <h1 className="font-display text-xl text-foreground">
           {isRestart ? (prevBrandName === null ? "品牌調研" : `重新調研：${prevBrandName}`) : "智能引導建立品牌"}
         </h1>
+        {kept && <p className="mt-1 text-sm text-muted-foreground">幫你留著上次填的</p>}
       </div>
 
       <form
