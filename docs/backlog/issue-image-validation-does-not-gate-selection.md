@@ -1,6 +1,6 @@
 # Failed image checks do not stop a version from being selected; prose drift is unchecked
 
-Status: not planned. Found reviewing F07 (2026-09-15).
+Status: 2026-09-26 F31-I04 made a version with its own ❌ lines need an explicit confirm (ads.md §6.35). Still open: the prose-drift check below. Found reviewing F07 (2026-09-15).
 
 - A round re-asks failing items once, then writes every row with its ❌ lines
   (`app/workbench/jobs.py:572-583, 602-604`); selecting a version ignores validation

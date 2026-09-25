@@ -1565,3 +1565,27 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
 - **A campaign keeps at least one delivery group** (user ruling 2026-09-26): `repository.delete_group` — the only
   group-removal path — refuses the last group (`last_group`, 409 「至少要留一個投放組；想換掉請先新增再刪。」) and the
   structure editor disables that 刪除 with the same reason. Adopt runs once, so zero groups after adopt had no way back.
+
+### 6.35 P1 bug batch rules（ruled 2026-09-26；built in F31）
+- **What ran, and on which coordinates** (user ruling): an ad's coordinates stay editable after dispatch. Learning never
+  reads the ad's current coordinates or `adopted_output` after launch: `live_creative.record_launch` freezes, at launch
+  approval, each batched ad's selected workbench outputs into `ads_ad.live_creative_json`, and learning coordinates are the
+  dispatched set's `coordinates_snapshot_json` (an ad with no dispatched set uses its current coordinates). Readers:
+  visual learning, experiments, A/B pairs, learning scope.
+- **One image per ad.** An ads-dispatched image set holds at most its required number of selections (409
+  `selection_full`, refuse, never swap); copy and free jobs keep multi-select. A version with its own ❌ check lines is
+  selectable after an explicit confirm; round-level ❌ lines do not force the confirm.
+- **Orders coverage** (user accepted the default): orders coverage ends at the later of the latest order date and the day
+  before the latest import (org timezone). The wait page reads the connections `orders` source; it no longer derives a gap
+  from the latest order date. Known risk: importing an old export last marks later empty days ok.
+- **No name-match bind.** The ads-center `POST …/campaigns/{c}/bind` and every adapter `bind` verb are removed; launch
+  readback (§6.34) is the only way a planned node gets its platform id. `bind` is no longer in `capabilities`.
+- **Cross-org platform ids.** The Meta parent-id guard refuses an id another org holds, through two boolean-only
+  `SECURITY DEFINER` functions that see past RLS: `schedule_channel_entity_owned_elsewhere` and
+  `ads_external_id_owned_elsewhere` (registered by `app/ads/__init__.py` into `app.meta.repository`). A plain SELECT on a
+  request connection cannot answer "does another org own this".
+- **Brand delete.** `app/tests/test_cleanup_coverage.py` compares the cleanup registry with every live `brand_id` table
+  (exempt on purpose: `llm_task`, `audit_log`) and derives the delete order from the database's FK constraints; a
+  referrer that must outlive a cleared table needs an `ON DELETE` action (e.g. `ads_ad.product_id` → SET NULL).
+- **Known gaps after F31.** `GET …/campaigns/{c}` still returns `live_creative_json` on each ad (internal column, not
+  read by the frontend).

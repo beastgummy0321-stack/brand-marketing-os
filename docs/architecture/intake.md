@@ -94,3 +94,14 @@ These are decided. A worker implements them; it does not re-open them.
    `channels.py` → `app.meta.repository.spend_summary` with the brand's `conversion_goal`). The
    caption names which one it used. Nothing tracked → honest cold start, unchanged. **No model reads
    ad history** (ADR 0067): every number here is program-computed and the model only phrases it.
+
+### F31 (2026-09-26): offerings choice, start-step draft, one job-status rule
+- The offerings step's two choices (賣什麼, 廣告帶來的是什麼) are stored on the draft (`intake_draft.offerings_choice_json`);
+  `close_rate` cannot tell 先詢問 from 留資料. Saving advances the draft to step 4. Sell-ways come back in creation order
+  where "first 賣法" matters (offerings, `ads.budget._economics_for`); `list_products` keeps name order.
+- The start step's text fields are kept in browser storage per user, org and brand until a successful submit; photos are not.
+- **One job-status rule** (also used by `app/brand_web` and `app/schedule`): a status reader first asks
+  `app.background.job_outcome(lock)` about the newest queued job — active → running; failed → failed, quoting the
+  `llm_task` error when that job wrote one, else `JOB_FAILED_MESSAGE`; otherwise the `llm_task` row rule. A handler whose
+  save fails after a successful AI call sends its notice and re-raises, so the job ends failed. Research re-asks once when
+  the reply's table cannot be read.
