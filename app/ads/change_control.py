@@ -28,6 +28,36 @@ def workspace(conn, org, brand, campaign):
 
 
 def create(conn, org, brand, campaign, payload, actor):
+    """The public create path (`POST …/change-sets`): `source` may only be "cleanup" -- an `ab`
+    set is created only through `create_ab` (F29-I04 Contract F)."""
+    return _create(conn, org, brand, campaign, payload, actor)
+
+
+def create_ab(conn, org, brand, campaign, payload, ab, actor):
+    """F29-I04 Contract F: the internal path `ab_pairs.pause_loser` uses -- the same validation,
+    item building, idempotency by `operation_id` and approval flow as every other set, with
+    `source: "ab"` and the pair's `ab` block frozen into the content. Only pause items. An open
+    set for the same pair (checked under the same lock) is returned instead of a second one."""
+    return _create(conn, org, brand, campaign, {**payload, "source": "ab"}, actor, ab=ab)
+
+
+def open_ab_set(conn, org, brand, campaign, pair_id):
+    """The newest `ab` set of this pair that is still open: draft, deferred, or approved with no
+    item already `stale`/`deviated` (those can be revised, so a fresh set may replace them).
+    Rejected and superseded sets are closed. `None` when there is none."""
+    row = conn.execute(
+        "SELECT s.id FROM ads_change_set s WHERE s.org_id=%s AND s.brand_id=%s "
+        "AND s.campaign_id=%s AND s.plan_json->>'source'='ab' "
+        "AND s.plan_json->'ab'->>'pair_id'=%s AND (s.status IN ('draft','deferred') OR "
+        "(s.status='approved' AND NOT EXISTS (SELECT 1 FROM ads_action a WHERE "
+        "a.change_set_id=s.id AND a.verification_state IN ('stale','deviated')))) "
+        "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
+        (org, brand, campaign, pair_id),
+    ).fetchone()
+    return data.get(conn, org, brand, campaign, row["id"]) if row else None
+
+
+def _create(conn, org, brand, campaign, payload, actor, ab=None):
     c = data.campaign(conn, org, brand, campaign)
     required = {"operation_id", "title", "items", "month"}
     if (
@@ -47,9 +77,10 @@ def create(conn, org, brand, campaign, payload, actor):
     ):
         raise ValueError("請提供完整的變更清單。")
     # F27-I25 / Contract F: `source` only ever names the cleanup proposal match; any other value
-    # is refused here too (defence for direct callers that bypass `CreateRequest`'s 422).
+    # is refused here too (defence for direct callers that bypass `CreateRequest`'s 422). F29-I04:
+    # "ab" only together with the `ab` block `create_ab` passes -- never from a payload alone.
     source = payload.get("source")
-    if source is not None and source != "cleanup":
+    if (source == "ab") != (ab is not None) or source not in {None, "cleanup", "ab"}:
         raise ValueError("不支援的清單來源。")
     declined = _declined_ids(payload.get("declined_ids"), source)
     operation_id, month = data.operation(payload["operation_id"]), data.month(payload["month"])
@@ -61,9 +92,16 @@ def create(conn, org, brand, campaign, payload, actor):
         or not 1 <= len(payload["items"]) <= 30
     ):
         raise ValueError("請提供清單名稱與一到三十項具體變更。")
-    request_hash = data.digest({"campaign_id": campaign, **payload})
+    request_hash = data.digest(
+        {"campaign_id": campaign, **payload, **({"ab": ab} if ab is not None else {})}
+    )
     try:
         data.lock(conn, org, brand)
+        if ab is not None:
+            existing = open_ab_set(conn, org, brand, campaign, ab["pair_id"])
+            if existing is not None:
+                conn.commit()
+                return existing
         prior = conn.execute(
             "SELECT id,campaign_id,request_hash FROM ads_change_set WHERE "
             "org_id=%s AND brand_id=%s AND operation_id=%s",
@@ -78,6 +116,8 @@ def create(conn, org, brand, campaign, payload, actor):
         items = [data.build_item(conn, org, brand, campaign, item, c) for item in payload["items"]]
         if source == "cleanup" and any(i["kind"] != "pause" for i in items):
             raise ValueError("清理清單只能包含暫停項目。")
+        if source == "ab" and (len(items) != 1 or items[0]["kind"] != "pause"):
+            raise ValueError("A/B 比較清單只能暫停較貴的那一則。")
         if declined:
             _check_declined(conn, org, brand, campaign, declined, items)
         from app.ads import review_rounds
@@ -121,6 +161,7 @@ def create(conn, org, brand, campaign, payload, actor):
             # exact `content_hash`. Same for `declined_ids` (F29-I01).
             **({"source": source} if source else {}),
             **({"declined_ids": declined} if declined else {}),
+            **({"ab": ab} if ab is not None else {}),
         }
         set_id = db.new_id("acs")
         conn.execute(
@@ -145,6 +186,7 @@ def create(conn, org, brand, campaign, payload, actor):
                         **material_reference,
                         **({"source": source} if source else {}),
                         **({"declined_ids": declined} if declined else {}),
+                        **({"ab": ab} if ab is not None else {}),
                     }
                 ),
                 actor,

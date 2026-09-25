@@ -351,6 +351,8 @@ def get(conn, org, brand, campaign_id, set_id):
         ).fetchall()
     }
     result["items"] = []
+    # F29-I04 Contract F: an `ab` set's pause item writes a learning too (no `angle` needed).
+    is_ab = result["plan_json"].get("source") == "ab"
     for item in result["plan_json"]["items"]:
         action = actions.get(item["id"], {})
         view = {
@@ -367,7 +369,7 @@ def get(conn, org, brand, campaign_id, set_id):
             # trivially "not recorded" without a lookup.
             "learning": (
                 ads_learnings.view_for_item(conn, brand, item["id"])
-                if item["kind"] == "pause" and item.get("angle")
+                if item["kind"] == "pause" and (item.get("angle") or is_ab)
                 else {"recorded": False, "confidence": None, "count": 0}
             ),
         }
@@ -404,6 +406,9 @@ def get(conn, org, brand, campaign_id, set_id):
     result["recommendation_id"] = result["plan_json"].get("recommendation_id")
     result["material_task_id"] = result["plan_json"].get("material_task_id")
     result["material_revision"] = result["plan_json"].get("material_revision")
+    # F29-I04 Contract F: read straight off `plan_json` (never re-derived), null when unset.
+    result["source"] = result["plan_json"].get("source")
+    result["ab"] = result["plan_json"].get("ab")
     # Contract E: a `new_ad` item may name the ACTIVE ad it replaces (validated at creation,
     # `handoff_new_ad.create`) -- `replaces` is read live (the old ad's name may since have
     # changed); `follow_up` only once that item's own verification reads back `confirmed`, and

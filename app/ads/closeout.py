@@ -85,8 +85,10 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     result = outcome.summary(conn, org_id, brand_id, campaign_id)
     totals = result["totals"]
     days = _days(campaign["start_date"], campaign["end_date"])
-    # `sample_bucket` 吃 int，Meta 來源的 `purchases` 恆為 `None`（未追蹤）——未追蹤當低樣本
-    # 處理，不是傳 `None` 進去（§0「an untracked campaign is 低樣本, ... never passes None」）。
+    # `sample_bucket` takes an int. `purchases` is `None` only when no day of the campaign carries
+    # a tracked purchase count (Meta purchases are tracked since F16-I05; a legacy or untracked
+    # day stays NULL) -- untracked reads as 低 sample, never passes `None` in (§0 "an untracked
+    # campaign is 低樣本, ... never passes None").
     purchases_for_bucket = totals["purchases"] if totals["purchases"] is not None else 0
     sample_bucket = outcome.sample_bucket(purchases_for_bucket, days)
 

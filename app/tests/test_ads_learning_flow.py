@@ -190,6 +190,22 @@ class AdsLearningFlowTest(unittest.TestCase):
         )
         self.assertEqual(self.learnings(), [])
 
+    def test_record_for_ab_item_is_a_noop_outside_an_ab_pause(self):
+        """F29-I04 Contract F: only the pause item of a `source: "ab"` set writes the A/B text."""
+        ab = {"dimension_label": "開場", "winner": {"value_label": "甲"},
+              "loser": {"value_label": "乙"}}
+        pause = {"id": "adx-p", "kind": "pause"}
+        for change_set, item in (
+            ({"plan_json": {"source": "cleanup", "ab": ab}}, pause),
+            ({"plan_json": {"source": "ab"}}, pause),
+            ({"plan_json": {"source": "ab", "ab": ab}}, {"id": "adx-c", "kind": "copy"}),
+        ):
+            self.assertIsNone(ads_learnings.record_for_ab_item(
+                self.conn, self.org, self.brand, self.campaign, change_set, item,
+            ))
+        self.assertEqual(self.learnings(), [])
+        self.assertEqual(ads_learnings.ab_text(ab), "「開場」用「甲」比「乙」划算")
+
     def test_learnings_endpoint_lists_newest_first_with_campaign(self):
         from app.main import app
 
