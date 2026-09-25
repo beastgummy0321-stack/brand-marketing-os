@@ -110,6 +110,19 @@ describe("DayGrid + Legend", () => {
     expect(container.querySelectorAll("[data-today]")).toHaveLength(0);
   });
 
+  it("F31-I12: a long account name wraps in full inside the label column instead of being cut with an ellipsis", () => {
+    const long = "Beast Gummy 台灣官方旗艦店主要投放帳戶（新台幣計價）・BeastGummyMidAutumnFestivalTW2026";
+    expect(long.length).toBeGreaterThanOrEqual(60);
+    const { container } = render(<DayGrid rows={[{ key: "a", label: long, days: month(() => "ok") }]} today={null} />);
+    const label = screen.getByText(long);
+    expect(label.textContent).toBe(long);
+    expect(label.className).not.toContain("truncate");
+    expect(label.className).toContain("[overflow-wrap:anywhere]");
+    // The 150px label column and one square per day stay as they are.
+    expect((container.querySelector("[data-slot=day-grid]") as HTMLElement).style.gridTemplateColumns).toBe("150px repeat(30, minmax(0, 1fr))");
+    expect(container.querySelectorAll("[data-state]")).toHaveLength(30);
+  });
+
   it("no rows renders nothing", () => {
     const { container } = render(<DayGrid rows={[]} />);
     expect(container.innerHTML).toBe("");
@@ -185,6 +198,32 @@ describe("TreeRows", () => {
     expect(within(leaves[0]).getByText("380 元")).toBeTruthy();
     expect(leaves[1].className).toContain("opacity-50");
     expect(within(screen.getByRole("list", { name: "廣告組 B" })).getByText("缺素材")).toBeTruthy();
+  });
+
+  it("F31-I12: a long ad name keeps a readable width; chip and number move under it as one right-aligned cell", () => {
+    const long = "秋季新色預購・兩入組限定優惠・滿三千送品牌帆布袋與試用包・九月底前下單加贈專屬贈品組合・BeastGummyTWAutumn2026";
+    expect(long.length).toBeGreaterThanOrEqual(60);
+    render(
+      <TreeRows
+        root={{ kind: "活動", name: "日常銷售" }}
+        groups={[{ key: "A", kind: "廣告組", name: "廣告組 A", leaves: [
+          { key: "1", name: long, thumbnailUrl: null, chip: <span>偏貴</span>, value: "2,345.67 元・在虧（打平 804）" },
+        ] }]}
+      />,
+    );
+    const leaf = within(screen.getByRole("list", { name: "廣告組 A" })).getByRole("listitem");
+    const name = within(leaf).getByText(long);
+    expect(name.textContent).toBe(long);
+    // The row wraps rather than shrinking the name to a sliver: the name has a floor and grows from its own width.
+    expect(leaf.className).toContain("flex-wrap");
+    expect(name.className).not.toContain("min-w-0");
+    expect(name.className).toMatch(/min-w-\[\d+rem\]/);
+    // Grade and number stay together in one cell that keeps to the right edge when it drops to the next line.
+    const facts = leaf.querySelector("[data-part=facts]") as HTMLElement;
+    expect(facts).not.toBeNull();
+    expect(facts.className).toContain("ml-auto");
+    expect(within(facts).getByText("偏貴")).toBeTruthy();
+    expect(within(facts).getByText("2,345.67 元・在虧（打平 804）")).toBeTruthy();
   });
 });
 
