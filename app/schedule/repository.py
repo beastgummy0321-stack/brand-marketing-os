@@ -693,6 +693,13 @@ _CHILD_TABLES = (
     ("creative_candidate", "廣告內容候選"),
     ("creative_slot", "廣告節點欄位"),
     ("brand_coordinate", "品牌創意座標"),
+    # F31-I09: periods and their bindings. Every FK into campaign_period is cleared first:
+    # the rows above and period_node_membership here; other modules' rows (orders
+    # channel_revenue, core interrupt) by their own earlier registrations; core llm_task is
+    # kept on purpose and forgets the period (ON DELETE SET NULL, 20260927000003).
+    ("period_node_membership", "檔期節點歸屬"),
+    ("channel_entity_map", "節點與平台物件綁定"),
+    ("campaign_period", "檔期"),
 )
 
 
@@ -717,10 +724,7 @@ cleanup.register(
     "創意座標與素材候選",
     count_brand=_count_brand,
     delete_brand=_delete_brand,
-    brand_tables=frozenset({
-        "brand_coordinate", "creative_slot", "creative_candidate",
-        "creative_candidate_item", "feedback", "period_node_result", "imported_ad",
-    }),
+    brand_tables=frozenset({t for t, _ in _CHILD_TABLES}),
     count_product=None,
     delete_product=None,
     product_tables=frozenset(),

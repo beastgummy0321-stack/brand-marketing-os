@@ -205,7 +205,6 @@ BRAND_CHILD_TABLES = (
     ("rule", "規則"),
     ("claim", "宣稱"),
     ("official_asset", "官方素材"),
-    ("strategy_hypothesis", "策略假設"),
     ("owned_channel", "自有渠道"),
     ("customer_voice", "顧客原話"),
     ("brand_fact", "品牌事實"),
@@ -241,7 +240,7 @@ def count_pending_product_layer(conn: Conn, brand_id: str) -> int:
 
 
 def delete_brand_data(conn: Conn, brand_id: str) -> dict:
-    """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 15 張子表，
+    """清掉本模組掛在該品牌下的子表資料（只清 BRAND_CHILD_TABLES 這 14 張子表，
     不碰 brand 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_brand() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_brand() 統一做）。
     """
@@ -381,7 +380,6 @@ PRODUCT_CHILD_TABLES = (
     ("rule", "規則"),
     ("claim", "宣稱"),
     ("official_asset", "官方素材"),
-    ("strategy_hypothesis", "策略假設"),
     ("learning_ledger", "品牌學習紀錄"),
 )
 
@@ -397,7 +395,7 @@ def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
 
 
 def delete_product_data(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 9 張子表，
+    """清掉本模組掛在該產品下的子表資料（只清 PRODUCT_CHILD_TABLES 這 8 張子表，
     不碰 product 那一列、不寫稽核），登記進 app.core.cleanup 給 delete_product() 呼叫用。
     只下 DELETE、不 commit（Q4 單一交易、全有全無，commit 由 delete_product() 統一做）。
     """

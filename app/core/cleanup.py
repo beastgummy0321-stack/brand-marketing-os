@@ -91,7 +91,11 @@ def count_all(conn, brand_id: str) -> list:
 
 def delete_all(conn, brand_id: str) -> dict:
     """呼叫所有登記模組的清除函式。只下 DELETE，絕對不 commit——commit 由呼叫端
-    在做完品牌本身的刪除、寫完稽核之後統一做一次（Q4 單一交易、全有全無）。"""
+    在做完品牌本身的刪除、寫完稽核之後統一做一次（Q4 單一交易、全有全無）。
+
+    Registration order is delete order: a module whose table other modules' rows reference
+    registers after them (app/core/approval.py register_cleanup(); pinned by
+    app/tests/test_cleanup_coverage.py)."""
     counts = {}
     for entry in _REGISTRY.values():
         counts.update(entry["delete_brand"](conn, brand_id))
