@@ -69,7 +69,7 @@ export function RecoverSteps({ steps }: { steps: RecoverStep[] }) {
 }
 
 /** One tile; a missing or failed image falls back to the same neutral tile. */
-function Thumb({ url, size }: { url: string | null; size: number }) {
+export function Thumb({ url, size }: { url: string | null; size: number }) {
   const [failed, setFailed] = useState<string | null>(null);
   const tile = "shrink-0 rounded-[.6rem] bg-muted object-cover";
   return url && failed !== url
@@ -87,5 +87,55 @@ export function ThumbTiles({ items, size = 44, max, hollow = 0 }: { items: (stri
       {Array.from({ length: hollow }, (_, i) => <div key={`h${i}`} className="shrink-0 rounded-[.6rem] border border-dashed border-border" style={{ width: size, height: size }} aria-hidden="true" />)}
       {rest > 0 && <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">＋{rest} 則</span>}
     </div>
+  );
+}
+
+/** v10 `.lrn`: one brand-notebook learning — ✓ effective / ✕ ineffective (or a custom mark such as ✎ for
+ * 「核對完成後寫進筆記本」), an optional eyebrow above, the learning in bold, a meta line under it.
+ * `data-slot="learn-line"`. */
+export function LearnLine({ tone, mark, eyebrow, title, meta }: {
+  tone: "ok" | "no"; mark?: string; eyebrow?: ReactNode; title: ReactNode; meta?: ReactNode;
+}) {
+  return (
+    <div data-slot="learn-line" data-variant={tone} className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-3 border-t border-border py-3 first:border-t-0">
+      <i aria-hidden="true" className={cn("grid size-[26px] place-items-center rounded-lg text-[13px] font-bold not-italic", tone === "ok" ? "bg-zone-ok text-success" : "bg-zone-over text-danger")}>
+        {mark ?? (tone === "ok" ? "✓" : "✕")}
+      </i>
+      <div className="min-w-0">
+        {eyebrow && <div className="text-[11.5px] text-muted-foreground">{eyebrow}</div>}
+        <b className="font-semibold">{title}</b>
+        {meta && <div className="mt-0.5 text-[11.5px] text-muted-foreground">{meta}</div>}
+      </div>
+    </div>
+  );
+}
+
+export interface FlowToEnd { label: ReactNode; value: ReactNode; note?: ReactNode }
+/** v10 `.flowto`: where a result goes next — two boxes joined by an arrow (筆記本多了 N 條 → 下一個新活動).
+ * `data-slot="flow-to"`. */
+export function FlowTo({ from, to }: { from: FlowToEnd; to: FlowToEnd }) {
+  const box = (end: FlowToEnd) => (
+    <div className="rounded-[10px] border border-border bg-card px-4 py-3.5">
+      <div className="text-[11.5px] text-muted-foreground">{end.label}</div>
+      <b className="text-base">{end.value}</b>
+      {end.note && <div className="text-xs text-muted-foreground">{end.note}</div>}
+    </div>
+  );
+  return (
+    <div data-slot="flow-to" className="grid grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)] items-center gap-2.5">
+      {box(from)}
+      <span aria-hidden="true" className="text-center text-xl text-muted-foreground">→</span>
+      {box(to)}
+    </div>
+  );
+}
+
+/** v10 `.org`: the small outline tag after a campaign name, e.g. 「從 Meta 帶進來」 for an imported campaign
+ * (the caller words it from the campaign's own origin; the kit names no platform). `data-slot="origin-tag"`. */
+export function OriginTag({ children }: { children: ReactNode }) {
+  return (
+    <span data-slot="origin-tag" className="inline-flex rounded-full border border-border px-[7px] text-[11px] font-medium whitespace-nowrap text-muted-foreground">
+      {children}
+    </span>
   );
 }

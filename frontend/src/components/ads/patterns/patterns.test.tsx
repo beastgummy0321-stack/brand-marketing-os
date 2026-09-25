@@ -367,3 +367,259 @@ describe("v9 pieces（F28-I07）", () => {
     expect(screen.queryByText(/・/)).toBeNull();
   });
 });
+
+describe("v10 kit（F29-I09）", () => {
+  const PROTO = "../../../../../docs/design/ads/prototype-v10-ads-center.html";
+  /** Text as shown: a term's hidden tooltip sentence is not part of the line. */
+  const shown = (el: Element) => { const copy = el.cloneNode(true) as Element; copy.querySelectorAll("[role='tooltip']").forEach((t) => t.remove()); return copy.textContent; };
+
+  it("glossary 逐字等於原型 GLOSS；打平線帶自己的數字；剛開始那句寫裁決的門檻", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { define } = await import("./glossary");
+    const html = readFileSync(join(__dirname, PROTO), "utf8");
+    const start = html.indexOf("const GLOSS = {");
+    const block = html.slice(start, html.indexOf("};", start));
+    const gloss = Object.fromEntries([...block.matchAll(/^\s+(\w+): "([^"]*)",?\r?$/gm)].map((m) => [m[1], m[2]]));
+    expect(Object.keys(gloss)).toHaveLength(9);
+    expect(define("break_even", 520)).toBe(gloss.be);
+    expect(define("cap")).toBe(gloss.cap);
+    expect(define("on_target")).toBe(gloss.ok);
+    expect(define("watch")).toBe(gloss.watch);
+    expect(define("over")).toBe(gloss.over);
+    expect(define("wasted")).toBe(gloss.stop);
+    expect(define("money")).toBe(gloss.money);
+    expect(define("notebook")).toBe(gloss.note);
+    expect(define("break_even", null)).not.toContain("這裡是");
+    expect(define("thin")).not.toBe(gloss.thin);
+    expect(define("thin")).toMatch(/上限 3 倍.*7 天.*10 筆/);
+    expect(define("thin")).not.toContain("3 筆");
+  });
+
+  it("Term：虛線字可 tab 到，說明掛在 tooltip；plain 只印字", async () => {
+    const { Term, GradeTermChip } = await import("./Term");
+    const { container } = render(<p>每筆沒超過<Term k="cap">上限</Term>・<Term k="money" plain>有賺</Term></p>);
+    const term = container.querySelector("[data-slot='term']") as HTMLElement;
+    expect(term.tabIndex).toBe(0);
+    expect(term.className).toContain("border-dotted");
+    const tip = screen.getByRole("tooltip", { hidden: true });
+    expect(tip.textContent).toBe("你願意為一筆訂單付的廣告費，每個活動自己設");
+    expect(term.getAttribute("aria-describedby")).toBe(tip.id);
+    expect(container.querySelectorAll("[data-slot='term']")).toHaveLength(1);
+    expect(container.textContent).toContain("有賺");
+
+    const chips = render(<><GradeTermChip grade="insufficient" label="剛開始、數字還不夠" /><GradeTermChip grade="wasted" plain /><GradeTermChip grade={null} /></>).container;
+    expect(chips.querySelectorAll("[data-slot='term']")).toHaveLength(1);
+    expect(chips.textContent).toContain("沒賣出");
+    expect(chips.textContent).toContain("未判斷");
+  });
+
+  it("moneyTag：±2% 算剛好打平，差 2.1% 才有賺／在虧；任一未知就不出", async () => {
+    const { moneyTag, MoneyTag } = await import("./MoneyTag");
+    expect(moneyTag(520 * 0.98, 520)?.label).toBe("剛好打平");
+    expect(moneyTag(520 * 1.02, 520)?.label).toBe("剛好打平");
+    expect(moneyTag(520 * 0.979, 520)?.label).toBe("有賺");
+    expect(moneyTag(520 * 1.021, 520)?.label).toBe("在虧");
+    expect(moneyTag(null, 520)).toBeNull();
+    expect(moneyTag(353, null)).toBeNull();
+    expect(moneyTag(0, 520)?.label).toBe("有賺");
+
+    const { container } = render(<><MoneyTag cost={353} breakEven={520} /><MoneyTag cost={614} breakEven={null} /></>);
+    const tags = container.querySelectorAll("[data-slot='money-tag']");
+    expect(tags).toHaveLength(1);
+    expect(shown(tags[0])).toBe("・有賺（打平 520）");
+    expect(tags[0].getAttribute("data-variant")).toBe("gain");
+  });
+
+  it("GradeRules 四個等級字都是名詞解釋；GradeBar 依金額分段，金額未知印未知不印 0", async () => {
+    const { GradeRules } = await import("./GradeRules");
+    const { GradeBar } = await import("./GradeBar");
+    const rules = render(<GradeRules breakEven={520} />).container;
+    expect(shown(rules)).toContain("划算＝每筆沒超過上限");
+    expect(shown(rules)).toContain("沒賣出＝花了錢一筆都沒賣");
+    expect(shown(rules)).toContain("有賺／在虧：跟打平線比；分級：跟你的上限比");
+    expect(rules.querySelectorAll("[data-slot='term']")).toHaveLength(8);
+    const moneyRule = rules.querySelector("[data-slot='money-rule']") as HTMLElement;
+    expect(moneyRule.querySelectorAll("[role='tooltip']")[1].textContent).toContain("這裡是 520");
+
+    const { container } = render(
+      <GradeBar withMoney rules={false} buckets={[
+        { grade: "on_target", amount: 14240, count: 2 }, { grade: "watch", amount: 6100, count: 1 },
+        { grade: "over", amount: 8200, count: 2 }, { grade: "wasted", amount: 1600, count: 1 },
+        { grade: "insufficient", amount: 1600, count: 2 }, { grade: "ungraded", amount: null, count: 1 },
+      ]} />,
+    );
+    const seg = container.querySelector("i[data-grade='on_target']") as HTMLElement;
+    expect(seg.style.width).toBe(`${(14240 / 31740) * 100}%`);
+    expect(container.textContent).toContain("划算 2 則・14,240 元");
+    expect(container.textContent).toContain("剛開始、數字還不夠 2 則・1,600 元");
+    expect(container.textContent).toContain("未判斷 1 則・金額未知");
+    expect(container.textContent).not.toContain("・0 元");
+    expect(container.querySelector("[data-slot='grade-rules']")).toBeNull();
+  });
+
+  it("WaitLine：排第 2 件、正在處理的第 1 件、位置讀不到；不印第 0 件", async () => {
+    const { WaitLine } = await import("./WaitLine");
+    const queued = render(<WaitLine title="AI 正在從文案整理主打" status="queued" position={2} total={5} waitedSeconds={20} note="可以先離開，整理好會出現在首頁待辦" />).container;
+    expect(queued.textContent).toContain("AI 排隊：第 2 件／共 5 件，前面還有 1 件・已等約 20 秒");
+    expect(queued.querySelectorAll("[data-slot='wait-line'] > div:last-child i")).toHaveLength(5);
+
+    const first = render(<WaitLine title="整理中" status="running" position={1} total={3} waitedSeconds={65} />).container;
+    expect(first.textContent).toContain("AI 正在處理：共 3 件・已跑約 1 分");
+    expect(first.textContent).not.toContain("前面還有");
+
+    const nextUp = render(<WaitLine title="整理中" status="queued" position={1} total={3} waitedSeconds={0} />).container;
+    expect(nextUp.textContent).toContain("第 1 件／共 3 件，前面還有 0 件・剛排進來");
+
+    const unknown = render(<WaitLine title="整理中" status={null} position={null} total={null} waitedSeconds={null} />).container;
+    expect(unknown.textContent).toContain("排第幾件讀不到");
+    expect(unknown.textContent).not.toMatch(/第 0 件|共 0 件/);
+    expect(unknown.querySelectorAll("i")).toHaveLength(0);
+  });
+
+  it("ReadFailed 是 alert、不是空狀態；按重試重讀", async () => {
+    const { ReadFailed } = await import("./ReadFailed");
+    const retry = vi.fn();
+    render(<ReadFailed what="AI 整理的主打讀不到；這期的成績都還在" onRetry={retry} />);
+    const box = screen.getByRole("alert");
+    expect(box.textContent).toContain("讀取失敗");
+    expect(box.textContent).toContain("這期的成績都還在");
+    fireEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  describe("AbPair", () => {
+    const side = (over: Record<string, unknown>) => ({ ad_id: "ad_a", entity_id: "e_a", name: "開箱 15 秒・單手開蓋", value_label: "開箱畫面", thumbnail_url: null, spend: 560, results: 10, cost_per_result: 56, ...over }) as AbSideFixture;
+    type AbSideFixture = { ad_id: string; entity_id: string | null; name: string; value_label: string; thumbnail_url: string | null; spend: number | null; results: number | null; cost_per_result: number | null };
+    const base = {
+      pair_id: "ad_a:ad_b", group_id: "grp_a", group_name: "A・廣泛受眾", dimension: "hook", dimension_label: "開場",
+      rules: { min_days: 7, min_conversions_each: 10, relative_difference: 0.1 }, decision: null,
+    };
+
+    it("收集中：天數與兩邊購買的進度、還差什麼；購買讀不到不當 0", async () => {
+      const { AbPair } = await import("./AbPair");
+      const pair = {
+        ...base, a: side({ value_label: "辦公桌", results: 6 }), b: side({ ad_id: "ad_b", value_label: "通勤路上", results: null }),
+        window: { start: "2026-09-20", end: "2026-09-23" }, days: 4, state: "collecting" as const,
+        missing: { days: 3, a_results: 4, b_results: null }, winner: null, difference_pct: null, reason: null,
+      };
+      const { container } = render(<AbPair pair={pair} />);
+      expect(container.querySelector("[data-slot='ab-pair']")?.getAttribute("data-variant")).toBe("collecting");
+      expect(container.textContent).toContain("09/20 開始・第 4 天");
+      expect(container.textContent).toContain("4／7 天");
+      expect(container.textContent).toContain("6／10 筆");
+      expect(container.textContent).toContain("還差 3 天／A 還差 4 筆購買／B 的購買讀不到");
+      expect(container.textContent).not.toContain("0／10 筆");
+    });
+
+    it("可以判斷：贏家留下、輸家建議關掉；便宜幾 % 用 API 的 difference_pct", async () => {
+      const { AbPair } = await import("./AbPair");
+      const pair = {
+        ...base, a: side({}), b: side({ ad_id: "ad_b", name: "晨光隨行杯・日常出發", value_label: "出門情境", spend: 720, results: 16, cost_per_result: 45 }),
+        window: { start: "2026-09-16", end: "2026-09-22" }, days: 7, state: "judged" as const,
+        missing: { days: 0, a_results: 0, b_results: 0 }, winner: "b" as const, difference_pct: 19.6, reason: null,
+      };
+      const { container } = render(<AbPair pair={pair} breakEven={520} action={<button type="button">關掉輸家（A）</button>} />);
+      expect(container.textContent).toContain("近 7 天 09/16–09/22・其他都一樣");
+      expect(container.textContent).toContain("B 比較划算");
+      expect(container.textContent).toContain("B 每筆便宜 19.6%（11 元）");
+      expect(container.textContent).toContain("比較貴・建議關掉");
+      expect(container.textContent).toContain("比較划算・留下");
+      expect(container.querySelectorAll("[data-slot='money-tag']")).toHaveLength(2);
+      expect(screen.getByRole("button", { name: "關掉輸家（A）" })).toBeTruthy();
+    });
+
+    it("讀不到：只印原因，不畫數字", async () => {
+      const { AbPair } = await import("./AbPair");
+      const pair = {
+        ...base, a: side({ spend: null, results: null, cost_per_result: null }), b: side({ ad_id: "ad_b", spend: null, results: null, cost_per_result: null }),
+        window: { start: "2026-09-16", end: "2026-09-22" }, days: 7, state: "unreadable" as const,
+        missing: { days: 0, a_results: null, b_results: null }, winner: null, difference_pct: null, reason: "缺 2026-09-17 的資料；缺資料不當成零。",
+      };
+      const { container } = render(<AbPair pair={pair} />);
+      expect(container.textContent).toContain("缺 2026-09-17 的資料");
+      expect(container.textContent).not.toMatch(/\d+ 元/);
+    });
+  });
+
+  it("PickRow：整列是勾選框的 label，取消勾選變暗", async () => {
+    const { PickRow } = await import("./PickRow");
+    const change = vi.fn();
+    const { container } = render(<PickRow checked={false} onChange={change} name="提問式貼文・早晨第一口是什麼？" thumbnailUrl={null} grade="over" aside="每筆 617 元" />);
+    const box = screen.getByRole("checkbox", { name: "關掉「提問式貼文・早晨第一口是什麼？」" });
+    expect(container.querySelector("[data-slot='pick-row']")?.getAttribute("data-variant")).toBe("off");
+    expect(container.querySelector("[data-slot='term']")).toBeNull();
+    fireEvent.click(screen.getByText("每筆 617 元"));
+    expect(change).toHaveBeenCalledWith(true);
+    expect((box as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("RowMenu：選一項就收起並執行", async () => {
+    const { RowMenu } = await import("./RowMenu");
+    const replace = vi.fn();
+    const { container } = render(<RowMenu label="更多：秋季新色預告" items={[{ label: "換掉這一則", onSelect: replace }, { label: "看紀錄", onSelect: vi.fn() }]} />);
+    const details = container.querySelector("details") as HTMLDetailsElement;
+    details.open = true;
+    fireEvent.click(screen.getByRole("button", { name: "換掉這一則" }));
+    expect(replace).toHaveBeenCalledOnce();
+    expect(details.open).toBe(false);
+  });
+
+  it("投放設定：建議／你改的標籤；讀回列的不一樣、讀不到與計數", async () => {
+    const { SettingField, ReadbackRow, ReadbackSummary } = await import("./SettingsPieces");
+    const fields = render(<>
+      <SettingField label="優化事件" htmlFor="opt" tag="recommended" note="Meta 要幫你找哪種人：會買的人"><select id="opt"><option>購買</option></select></SettingField>
+      <SettingField label="出價方式" tag="edited"><span>出價上限</span></SettingField>
+    </>).container;
+    expect(screen.getByLabelText(/優化事件/)).toBeTruthy();
+    expect(fields.textContent).toContain("建議");
+    expect(fields.textContent).toContain("你改的");
+
+    const rows = [
+      { key: "age", label: "年齡", expected_label: "25–54 歲", observed_label: "18–65+ 歲", state: "differ" as const, reason: null },
+      { key: "pixel", label: "像素", expected_label: "晨光官網像素（…4821）", observed_label: null, state: "unreadable" as const, reason: "像素的讀取權限沒開，系統看不到" },
+      { key: "bid", label: "出價方式", expected_label: "最低成本", observed_label: "最低成本", state: "match" as const, reason: null },
+      { key: "gender", label: "性別", expected_label: "不限", observed_label: null, state: "self_confirmed" as const, reason: null },
+    ];
+    const { container } = render(<>
+      <ReadbackSummary fields={rows} />
+      {rows.map((f) => <ReadbackRow key={f.key} field={f} platform="Meta" action={f.state === "unreadable" ? <button type="button">我看過了，一樣</button> : undefined} />)}
+    </>);
+    expect(container.textContent).toContain("對上了 2");
+    expect(container.textContent).toContain("不一樣 1");
+    expect(container.textContent).toContain("讀不到 1");
+    expect(container.textContent).toContain("不一樣（Meta 上是 18–65+ 歲，這裡是 25–54 歲）");
+    expect(container.textContent).toContain("像素的讀取權限沒開");
+    expect(container.textContent).toContain("你確認一樣");
+    expect(container.querySelectorAll("[data-tone='unread']")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "我看過了，一樣" })).toBeTruthy();
+  });
+
+  it("ActionBar exit：back 跟 exit 同一處時只留 exit；不同處兩個都在", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const { ActionBar } = await import("./FlowPieces");
+    const exit = { label: "先不要，回投放中心", to: "/brands/b/ads" };
+    const same = render(<MemoryRouter><ActionBar back={{ label: "投放中心", to: "/brands/b/ads" }} exit={exit} /></MemoryRouter>).container;
+    expect([...same.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["✕ 先不要，回投放中心"]);
+    const other = render(<MemoryRouter><ActionBar back={{ label: "這期成績", to: "/brands/b/ads/settle/2026-08/result" }} exit={{ label: "晚點再結算", to: "/brands/b/ads" }} /></MemoryRouter>).container;
+    expect([...other.querySelectorAll("a")].map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["← 這期成績", "/brands/b/ads/settle/2026-08/result"], ["✕ 晚點再結算", "/brands/b/ads"],
+    ]);
+    const node = render(<MemoryRouter><ActionBar back={<span>自訂返回</span>} /></MemoryRouter>).container;
+    expect(node.textContent).toContain("自訂返回");
+  });
+
+  it("LearnLine、FlowTo、OriginTag", async () => {
+    const { LearnLine, FlowTo, OriginTag } = await import("./LoopPieces");
+    const { container } = render(<>
+      <LearnLine tone="ok" title="「通勤帶著走」對這群受眾有效" meta={<>日常商品推廣・轉換<OriginTag>從 Meta 帶進來</OriginTag></>} />
+      <LearnLine tone="no" title="「新色搶先看」對這群受眾無效" />
+      <FlowTo from={{ label: "品牌筆記本", value: "多了 5 條", note: "原本 14 條" }} to={{ label: "下一個新活動", value: "策略會先讀這些" }} />
+    </>);
+    const lines = container.querySelectorAll("[data-slot='learn-line']");
+    expect(lines[0].textContent).toContain("✓");
+    expect(lines[1].textContent).toContain("✕");
+    expect(container.querySelector("[data-slot='origin-tag']")?.textContent).toBe("從 Meta 帶進來");
+    expect(container.querySelector("[data-slot='flow-to']")?.textContent).toContain("多了 5 條原本 14 條→下一個新活動");
+  });
+});

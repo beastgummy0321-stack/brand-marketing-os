@@ -32,6 +32,12 @@ describe("design tokens are the only colour and font source", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("v10 strong text shades are tokens (F29-I09: 有賺／對上了, 不一樣)", () => {
+    const css = readFileSync(join(SRC, "styles/tokens.css"), "utf8");
+    expect(css).toMatch(/--color-success-strong:\s*#1d6e59;/);
+    expect(css).toMatch(/--color-warning-strong:\s*#8f560d;/);
+  });
+
   it("no font-family outside tokens.css", () => {
     const offenders = files
       .filter(([, full]) => FONT_FAMILY.test(readFileSync(full, "utf8")))
