@@ -21,7 +21,7 @@ Outside advertiser (Opus, blind) vs the product (Sonnet persona) over three simu
    bind time only); on the dev DB run once:
    `UPDATE ads_campaign SET status='live' WHERE origin='internal' AND status='ready' AND local_state='bound';` (3 rows on
    2026-09-27: the drill brand's P1/P2 and one `brd_bughunt` campaign). `supabase db reset` makes this moot.
-2. Red group 2 — strategy blind to history: prompt omits `advertising_history`, pixel/audience size (`strategy.py:296-334`, `strategy.md:23-27` always splits 新客／再行銷／探索; `plan.py:69` validates vocabulary only). Plus a minimal TW calendar (holidays + exam weeks) as program rules, not LLM.
+2. ~~Red group 2~~ carved as **F33** (2026-09-27, rulings 1A/2A; rules in ads.md §6.37). Original claim, verified: strategy blind to history: prompt omits `advertising_history`, pixel/audience size (`strategy.py:296-334`, `strategy.md:23-27` always splits 新客／再行銷／探索; `plan.py:69` validates vocabulary only). Plus a minimal TW calendar (holidays + exam weeks) as program rules, not LLM.
 3. Red 3 — 食安法 banned-words gate after generation (today only prompt injection + brand `forbidden` substring on uploads; `claims.py` warnings never block). `docs/backlog/issue-u1-banned-words-gate.md` is UI wording, not ad compliance — do not reuse it as the ticket.
 4. Yellow (report §4): ask the per-sale target before showing 打平 559 (`budget.py:36`, `CapBlock.tsx:117`); slot copy 「套用到全部」 (`UserAssetPlacements.tsx:73`); one data source for connections/home/成效/review (`home_overview.py:97`, `routes.py:825`, `review_evidence.py:243`); 「照上一期」 ÷ days with spend, not ÷30 (`channels.py:113`); duplicate products from 「賣什麼與數字」 (`routes_offerings_api.py:119,143`).
 

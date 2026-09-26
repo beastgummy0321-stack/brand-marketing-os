@@ -1600,3 +1600,18 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
   `jobs.close_expired_campaigns` is a compatibility handler for already-queued jobs.
 - **Settle steps are a query string.** `AppShell` re-keys on `pathname`, so a multi-step page that keeps client state
   across steps must vary `?step=` not the path; `/settle/:month/:step` stays as a redirect for stored `action_url`s.
+
+### 6.37 Strategy starting point, available roles, Taiwan calendar（ruled 2026-09-27；built in F33）
+- **The program states the starting point** (user ruling 1A): the strategy prompt carries a program-built
+  【這個品牌的起點】 (asked advertising history, spend-history source, 90-day external clicks/purchases, loop purchases,
+  cached pixels; 「不知道」 when unknown, never a guessed number) and a 【可用角色】 line. `retarget` is offered only when
+  the brand has a retargeting source (`advertising_history = has_history`, or any external clicks or purchases); a reply
+  naming an unavailable role is refused. The department example no longer shows a fixed three-role split. The ads module
+  reads no order tables for this (it may not import `app.orders`); the prompt says so instead of assuming a buyer list.
+- **Calendar is data, not prompt text** (user ruling 2A): `app/ads/calendar_tw.py` is a hand-maintained table (national
+  holidays and makeup workdays from 人事總處, 學測／分科／會考／統測 from their centres, exam-week and commerce-peak
+  conventions marked `source: "convention"`), covering 2026–2027. Strategy and delivery-plan prompts get only the entries
+  overlapping the campaign period under 【投放期間內的行事曆】, and a coverage note when a year is outside the table.
+  Extend the table yearly; nothing fetches it at runtime.
+- **e2e scripted AI follows the prompt**: the scripted `ads_strategy`／`ads_delivery_plan` replies use the roles the
+  prompt offers or adopted, so a fresh e2e brand runs with two roles.
