@@ -269,6 +269,10 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
             web.conn, org_id=self.org_id, name="測試品牌：投放中心形狀守門", client_name=None,
             actor=ACTOR,
         )["id"]
+        # F33-I01：`_STRATEGY_REPLY` 分了 `retarget`，品牌要先合格（Contract P 可用角色）。
+        bi_repo.set_advertising_history(
+            web.conn, self.brand_id, "has_history", actor=ACTOR,
+        )
         web.conn.commit()
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
