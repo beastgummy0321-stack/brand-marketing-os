@@ -1589,3 +1589,14 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
   referrer that must outlive a cleared table needs an `ON DELETE` action (e.g. `ads_ad.product_id` → SET NULL).
 - **Known gaps after F31.** `GET …/campaigns/{c}` still returns `live_creative_json` on each ad (internal column, not
   read by the frontend).
+
+### 6.36 Campaign status on the manual path and settle-step state（ruled 2026-09-26；built in F32）
+- **`live` = bound by readback** (user ruling A). `repository.bind_campaign`, the one readback binding point (§6.35),
+  moves an internal campaign from `ready` to `live`; `live` means "a platform object is bound", never "delivering", and
+  judgment copy keeps 不代表已投遞. The runtime health beat that emits `plan_date_passed` moves `live` to `ended`; nothing
+  automatic writes `closed` (jobs rule: dates prompt a review, never close). Before F32 nothing wrote `live`/`ended` on
+  this path, so `PerformanceTab`'s 結案 block never appeared and a hand-launched campaign could not write a learning.
+- **Monitoring is not status-driven.** `runtime.dispatch` picks campaigns by `ads_external_entity` existence;
+  `jobs.close_expired_campaigns` is a compatibility handler for already-queued jobs.
+- **Settle steps are a query string.** `AppShell` re-keys on `pathname`, so a multi-step page that keeps client state
+  across steps must vary `?step=` not the path; `/settle/:month/:step` stays as a redirect for stored `action_url`s.

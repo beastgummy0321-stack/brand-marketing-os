@@ -13,7 +13,10 @@ Start here in the next session. A board, not an implementation authorization: `/
 Outside advertiser (Opus, blind) vs the product (Sonnet persona) over three simulated weeks: A ROAS 0.81→2.00→4.27, B 0.25→0.30→0.88. Full report `docs/drills/drill-6/report.md`; 21 gaps cited to code in `audit_p1.md` / `audit_p2.md`. Simulated numbers are relative only (`tw_sim.py` rules), never proof of real delivery.
 
 ## Next step (user ruling pending: order below is the drill's recommendation)
-1. `/dig` red group 1 — the closed loop: settle wizard loses custom picks on route remount (`App.tsx:189` / `AppShell.tsx:27` key on pathname → `SettlePage.tsx:129` bounce) → no close-out → `learning_ledger` never written → next strategy says 「沒有任何過去學習記錄」; and readback never sets `ads_campaign.status='live'` / `ads_action.sync_state` (`handoff_check.py:205-231`), so the list says 「待發布」 and `jobs.py:22` never monitors the campaign. Rules: ads.md §4-5, §6.34 Readback, §7.
+1. ~~Red group 1~~ carved as **F32** (2026-09-26, ruling A): `live` at readback bind, `ended` on the runtime beat, settle
+   steps as `?step=`. Corrections to the audit: `jobs.py:22` is not the monitor (`runtime.dispatch` keys on
+   `ads_external_entity`), and the real blocker was `PerformanceTab.tsx:195` hiding 結案 for a `ready` campaign; a
+   non-default settle candidate also silently degraded to candidate 0. Rules in ads.md §6.36.
 2. Red group 2 — strategy blind to history: prompt omits `advertising_history`, pixel/audience size (`strategy.py:296-334`, `strategy.md:23-27` always splits 新客／再行銷／探索; `plan.py:69` validates vocabulary only). Plus a minimal TW calendar (holidays + exam weeks) as program rules, not LLM.
 3. Red 3 — 食安法 banned-words gate after generation (today only prompt injection + brand `forbidden` substring on uploads; `claims.py` warnings never block). `docs/backlog/issue-u1-banned-words-gate.md` is UI wording, not ad compliance — do not reuse it as the ticket.
 4. Yellow (report §4): ask the per-sale target before showing 打平 559 (`budget.py:36`, `CapBlock.tsx:117`); slot copy 「套用到全部」 (`UserAssetPlacements.tsx:73`); one data source for connections/home/成效/review (`home_overview.py:97`, `routes.py:825`, `review_evidence.py:243`); 「照上一期」 ÷ days with spend, not ÷30 (`channels.py:113`); duplicate products from 「賣什麼與數字」 (`routes_offerings_api.py:119,143`).
