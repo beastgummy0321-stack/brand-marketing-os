@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import contextvars
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,7 @@ SCRIPTED_REPLIES: dict[str, dict] = {
         "why": ["e2e scripted reply"], "unknowns": [], "alternatives": [], "learning_goals": [],
     },
     # Same three roles as ads_strategy above; `plan.adopt_strategy` requires the role sets to match exactly.
+    # Both are templates: ScriptedProvider._reply_for follows the roles the prompt offers／adopted (F33-I00).
     "ads_delivery_plan": {
         "groups": [
             {"role": role, "name": f"e2e {role} group", "ads": [{
@@ -788,6 +790,12 @@ class ScriptedProvider:
 
     name = "scripted"
 
+    # Fixed pcts by number of offered roles (F33-I00, Contract P in .work/features/F33.md).
+    _STRATEGY_PCTS = {1: (100,), 2: (60, 40), 3: (50, 30, 20)}
+    _AVAILABLE_ROLES_HEADER = "【可用角色】"
+    # Delivery-plan prompt's adopted-allocation line: `- <role>（<label>）：<pct>%…` (plan.py).
+    _ADOPTED_LINE = re.compile(r"^- (\w+)（[^）]*）：\d+(?:\.\d+)?%")
+
     def __init__(self, reply: dict):
         self._reply = reply
 
@@ -804,12 +812,84 @@ class ScriptedProvider:
         org_id: str | None = None,
     ) -> ProviderResponse:
         return ProviderResponse(
-            output_text=json.dumps(self._reply, ensure_ascii=False),
+            output_text=json.dumps(self._reply_for(messages), ensure_ascii=False),
             structured=None,
             usage=Usage(input_tokens=0, output_tokens=0),
             stop_reason="end_turn",
             search_sources=[],
         )
+
+    def _reply_for(self, messages: list) -> dict:
+        """Prompt-aware selection (F33-I00): the strategy template follows the roles the prompt
+        offers under `【可用角色】`; the delivery-plan template follows the adopted-allocation lines.
+        Any other template, or a prompt without those sections, returns the template unchanged."""
+        prompt = self._last_user_text(messages)
+        if "allocation" in self._reply:
+            roles = self._offered_roles(prompt)
+            pcts = self._STRATEGY_PCTS.get(len(roles))
+            if pcts is None:
+                return self._reply
+            rationale = self._reply["allocation"][0]["rationale"]
+            return {
+                **self._reply,
+                "allocation": [
+                    {"role": role, "pct": pct, "rationale": rationale}
+                    for role, pct in zip(roles, pcts, strict=True)
+                ],
+            }
+        if "groups" in self._reply:
+            roles = self._adopted_roles(prompt)
+            if not roles:
+                return self._reply
+            template = self._reply["groups"][0]
+            return {
+                **self._reply,
+                "groups": [
+                    {"role": role, "name": f"e2e {role} group", "ads": [{
+                        "name": f"e2e {role} ad",
+                        "coordinates": dict(template["ads"][0]["coordinates"]),
+                    }]}
+                    for role in roles
+                ],
+            }
+        return self._reply
+
+    @staticmethod
+    def _last_user_text(messages: list) -> str:
+        """Text of the last user message; `content` is a string or a list of content blocks
+        (same two shapes `_build_codex_prompt` reads)."""
+        for message in reversed(messages or []):
+            if message.get("role") == "assistant":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            return "\n".join(
+                block.get("text", "") for block in content or []
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return ""
+
+    @classmethod
+    def _offered_roles(cls, prompt: str) -> list:
+        lines = prompt.splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() != cls._AVAILABLE_ROLES_HEADER:
+                continue
+            for candidate in lines[index + 1:]:
+                if candidate.strip():
+                    return [role.strip() for role in candidate.split("、") if role.strip()]
+            return []
+        return []
+
+    @classmethod
+    def _adopted_roles(cls, prompt: str) -> list:
+        roles = []
+        for line in prompt.splitlines():
+            match = cls._ADOPTED_LINE.match(line.strip())
+            if match and match.group(1) not in roles:
+                roles.append(match.group(1))
+        return roles
 
 
 class FakeProvider:
