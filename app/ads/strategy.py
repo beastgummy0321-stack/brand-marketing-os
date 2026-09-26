@@ -14,7 +14,7 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 
 from datetime import UTC, datetime
 
-from app.ads import budget, judgment, launch_settings, targets
+from app.ads import budget, calendar_tw, judgment, launch_settings, targets
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -391,6 +391,8 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     starting_point_text = _starting_point_section(brand, history, reads, campaign)
     available_roles = _available_roles(brand, reads)
     roles_text = _available_roles_section(available_roles)
+    # F33-I02（Contract Q）：靜態台灣行事曆只列跟期間重疊的列；表外年份會附「沒有資料」的註記。
+    calendar_text = calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
 
     knowledge_item_ids = (
         [f["id"] for f in facts_basis]
@@ -408,6 +410,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + f"期間：{campaign['start_date']} ~ {campaign['end_date']}"
         + "\n\n" + starting_point_text
         + "\n\n" + roles_text
+        + "\n\n" + calendar_text
         + "\n\n" + facts_text
         + "\n\n" + products_text
         + "\n\n" + learnings_text
