@@ -8,7 +8,7 @@ Private to app/ads (container contract §1): only `routes.py` imports this modul
 
 from datetime import date
 
-from app.ads import budget, channels
+from app.ads import budget, calendar_tw, channels
 from app.ads import repository as ads_repo
 from app.core import approval as approval_mod
 from app.core.db import APP_DIR
@@ -152,9 +152,11 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         for row in allocation
     )
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
+    # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
     prompt = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
+        + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
         + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
 

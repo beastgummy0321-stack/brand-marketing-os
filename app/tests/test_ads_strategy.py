@@ -817,6 +817,34 @@ class CurrentCpaScenariosTest(StrategyTestBase):
         self.assertNotIn("success_", prompt)
 
 
+class CalendarInStrategyPromptTest(StrategyTestBase):
+    """F33-I02（ruling 2A、Contract Q）：策略 prompt 帶【投放期間內的行事曆】，只列跟期間重疊
+    的列——預設 Campaign 2026-10-01～10-10 跨國慶日；跨到表外的年份要有「沒有資料」的註記，
+    不能安靜地變成空白。"""
+
+    def _prompt(self, **overrides) -> str:
+        self.campaign = self._create_campaign(**overrides)
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        self._generate()
+        return provider.calls[0]["messages"][0]["content"]
+
+    def test_prompt_lists_the_calendar_rows_overlapping_the_period(self):
+        prompt = self._prompt()
+        self.assertIn("【投放期間內的行事曆】\n", prompt)
+        self.assertIn("國慶日", prompt)
+        self.assertNotIn("雙 11 檔", prompt)
+        self.assertNotIn("不要假設沒有活動", prompt)
+        # 行事曆段落接在 F33-I01 的兩段之後（Contract P 的段落文字不動）；任務檔前面也提到
+        # 這兩個標題，所以取最後一次出現的位置才是真正的段落。
+        self.assertLess(prompt.rindex("【可用角色】"), prompt.rindex("【投放期間內的行事曆】"))
+
+    def test_period_outside_the_table_gets_the_coverage_note(self):
+        prompt = self._prompt(start_date="2028-03-01", end_date="2028-03-10")
+        self.assertIn("【投放期間內的行事曆】\n期間內沒有登記的假日、考季或檔期\n", prompt)
+        self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
+
+
 class BudgetCapSelectionTest(StrategyTestBase):
     """F28-I03: a total above the budget cap (`constraints_json.budget`) is saved only with an
     explicit confirmation, which is recorded; within the cap, or with no cap, as before.

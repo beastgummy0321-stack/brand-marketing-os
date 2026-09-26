@@ -240,5 +240,33 @@ class BudgetCeilingTest(PlanTestBase):
         self.assertEqual(groups, [])  # 拒絕在寫任何列之前發生
 
 
+class CalendarInDeliveryPlanPromptTest(PlanTestBase):
+    """F33-I02（Contract Q）：展開投放組的 prompt 也帶【投放期間內的行事曆】——預設 Campaign
+    2026-10-01～10-14 跨國慶日；已採用的角色分配那幾行（Contract P）不動。"""
+
+    def _prompt(self, **overrides) -> str:
+        campaign = self._create_adopted_campaign(**overrides)
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+        self._adopt(campaign["id"])
+        return provider.calls[0]["messages"][0]["content"]
+
+    def test_prompt_lists_the_calendar_rows_overlapping_the_period(self):
+        prompt = self._prompt()
+        self.assertIn("【投放期間內的行事曆】\n", prompt)
+        self.assertIn("國慶日", prompt)
+        self.assertNotIn("雙 11 檔", prompt)
+        self.assertIn("- new（新客）：50%", prompt)
+        # 任務檔前面也提到這個標題，取最後一次出現的位置才是真正的段落。
+        self.assertLess(
+            prompt.index("- explore（探索）：20%"), prompt.rindex("【投放期間內的行事曆】"),
+        )
+
+    def test_period_outside_the_table_gets_the_coverage_note(self):
+        prompt = self._prompt(start_date="2028-03-01", end_date="2028-03-14")
+        self.assertIn("【投放期間內的行事曆】\n期間內沒有登記的假日、考季或檔期\n", prompt)
+        self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
