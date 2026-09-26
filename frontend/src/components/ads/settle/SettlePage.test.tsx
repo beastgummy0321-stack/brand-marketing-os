@@ -1,15 +1,16 @@
 /** frontend/src/components/ads/settle/SettlePage.test.tsx — F29-I12: the three-step period settle. Fixtures are shaped
  * like `app/ads/settle.py::view` (Contract E): two campaigns (one imported from the platform, no break-even), decimal
  * costs, 划算／偏貴／太貴／沒賣出 rows and two thin rows below the sample gate, month budget in the same currency. */
+import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import { MemoryRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as settleApi from "@/lib/adsSettleApi";
 import type { SettleRow, SettleView } from "@/lib/adsSettleApi";
 import * as triageApi from "@/lib/adsTriageApi";
 import * as jobsApi from "@/lib/jobsApi";
 import type { ActiveJobsSnapshot } from "@/lib/jobsApi";
-import { SettlePage, isSettleStep } from "./SettlePage";
+import { SettlePage, isSettleStep, settlePath } from "./SettlePage";
 import { settleCsvRows } from "./settleCsv";
 
 vi.mock("@/lib/adsSettleApi", async (importOriginal) => ({
@@ -75,20 +76,42 @@ function view(overrides: Partial<SettleView> = {}): SettleView {
   };
 }
 
+/** The two settle routes as `App.tsx` mounts them: `/settle/:month?step=` renders the page (`key` on the month), the
+ * old `/settle/:month/:step` path redirects to the query form. */
 function Route_() {
+  const { brandId, month } = useParams();
+  return <SettlePage key={month} brandId={brandId ?? ""} month={month ?? ""} />;
+}
+function StepRedirect() {
   const { brandId, month, step } = useParams();
-  return isSettleStep(step) ? <SettlePage brandId={brandId ?? ""} month={month ?? ""} step={step} /> : null;
+  return <Navigate to={settlePath(brandId ?? "", month ?? "", isSettleStep(step) ? step : "result")} replace />;
 }
 
-function renderAt(step: string) {
+/** The same rule as `AppShell.tsx:27`: the page is re-keyed on the pathname (a query string keeps it mounted). */
+function Shell({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return <div key={location.pathname}>{children}</div>;
+}
+
+function renderAt(step: string, url = `/brands/brd_1/ads/settle/2026-08?step=${step}`) {
   return render(
-    <MemoryRouter initialEntries={[`/brands/brd_1/ads/settle/2026-08/${step}`]}>
-      <Routes>
-        <Route path="/brands/:brandId/ads/settle/:month/:step" element={<Route_ />} />
-        <Route path="/brands/:brandId/ads" element={<p>投放中心首頁</p>} />
-      </Routes>
+    <MemoryRouter initialEntries={[url]}>
+      <Shell>
+        <Routes>
+          <Route path="/brands/:brandId/ads/settle/:month" element={<Route_ />} />
+          <Route path="/brands/:brandId/ads/settle/:month/:step" element={<StepRedirect />} />
+          <Route path="/brands/:brandId/ads" element={<p>投放中心首頁</p>} />
+        </Routes>
+        <Where />
+      </Shell>
     </MemoryRouter>,
   );
+}
+
+/** The current URL, for asserting a step change or a redirect. */
+function Where() {
+  const location = useLocation();
+  return <output data-testid="where">{location.pathname}{location.search}</output>;
 }
 
 const jobs = (entityId: string, position: number): ActiveJobsSnapshot => ({
@@ -143,6 +166,20 @@ describe("SettlePage step 1 這期成績", () => {
     expect(screen.getByText("這個月還沒結束，結束後才能結算")).toBeTruthy();
     expect(screen.queryByRole("link", { name: /晚點再結算/ })).toBeNull();
     expect(writeSettle).not.toHaveBeenCalled();
+  });
+
+  it("the old path step redirects to the query step; a missing or unknown step is step 1 at its canonical URL", async () => {
+    getSettle.mockResolvedValue(view());
+    const where = () => screen.getByTestId("where").textContent;
+    const first = renderAt("angle", "/brands/brd_1/ads/settle/2026-08/angle");
+    expect(where()).toBe("/brands/brd_1/ads/settle/2026-08?step=angle");
+    expect(await screen.findByRole("heading", { name: "確認每則主打什麼" })).toBeTruthy();
+    first.unmount();
+    for (const url of ["/brands/brd_1/ads/settle/2026-08", "/brands/brd_1/ads/settle/2026-08?step=nope", "/brands/brd_1/ads/settle/2026-08/nope"]) {
+      const { unmount } = renderAt("result", url);
+      expect(where()).toBe("/brands/brd_1/ads/settle/2026-08?step=result");
+      unmount();
+    }
   });
 
   it("CSV lines are the numbers on screen, unknown cost as an empty cell", () => {
@@ -204,6 +241,25 @@ describe("SettlePage step 2 確認每則主打什麼", () => {
 });
 
 describe("SettlePage step 3 寫進筆記本", () => {
+  it("keeps a non-default candidate and a custom angle across the steps under the AppShell key rule (F32-I02)", async () => {
+    getSettle.mockResolvedValue(view());
+    writeSettle.mockRejectedValueOnce(new Error("目前無法完成，請稍後重試。"));
+    renderAt("angle");
+    fireEvent.click(await screen.findByRole("button", { name: "保溫到公司" }));
+    const groupB = screen.getByRole("group", { name: "夏日冰飲・保冷一整天主打什麼" });
+    fireEvent.click(within(groupB).getByRole("button", { name: "＋ 自訂" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "「夏日冰飲・保冷一整天」的自訂主打" }), { target: { value: "辦公室冰飲" } });
+    fireEvent.click(screen.getByRole("link", { name: "都對，下一步 →" }));
+    expect(await screen.findByRole("heading", { name: "寫進筆記本" })).toBeTruthy();
+    expect(screen.getByText("「保溫到公司」對這群受眾有效")).toBeTruthy();
+    expect(screen.getByText("「辦公室冰飲」對這群受眾有效")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "寫進筆記本（5 條）→" }));
+    await screen.findByRole("alert");
+    const sent = writeSettle.mock.calls[0][2];
+    expect(sent).toContainEqual({ entity_id: "ent_1", angle: "保溫到公司" });
+    expect(sent).toContainEqual({ entity_id: "ent_6", angle: "辦公室冰飲" });
+  });
+
   it("a failed POST keeps the picks; the retry sends the same picks", async () => {
     getSettle.mockResolvedValue(view());
     writeSettle.mockRejectedValueOnce(new Error("目前無法完成，請稍後重試。"));

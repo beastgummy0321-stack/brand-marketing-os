@@ -9,7 +9,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep } from "@/components/ads";
+import { AdsHomePage, AllCampaignsPage, CampaignWorkspace, ConfirmBriefPage, ConfirmPage, CopyPage, DataConnectionsPage, HandoffPage, MaterialStepPage, MonthReviewPage, NewCampaignPage, PreparePage, ReviewEvidencePage, SettlePage, VerifyPage, WaitPage, isSettleStep, settlePath } from "@/components/ads";
 import { PublishPage } from "@/components/ads/PublishPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -104,7 +104,7 @@ function App() {
         <Route path="/brands/:brandId/ads/connections" element={<AdsConnectionsRoute />} />
         <Route path="/brands/:brandId/ads/month" element={<AdsMonthRoute />} />
         <Route path="/brands/:brandId/ads/settle/:month" element={<AdsSettleRoute />} />
-        <Route path="/brands/:brandId/ads/settle/:month/:step" element={<AdsSettleRoute />} />
+        <Route path="/brands/:brandId/ads/settle/:month/:step" element={<AdsSettleStepRedirect />} />
         <Route
           path="/brands/:brandId/ads/campaigns/:campaignId/wait"
           element={<AdsWaitRoute />}
@@ -506,13 +506,17 @@ function AdsMonthRoute() {
 }
 
 /** 結算上一期（F29-I12，v10 原型 `stepRes()`／`stepAngle()`／`stepNote()`）：三步同一支頁面，選好的主打
- * 跨步驟保留（`key` 用月份，換月才重新掛載）；不認得的步驟一律回第一步「這期成績」。 */
+ * 跨步驟保留（`key` 用月份，換月才重新掛載）。F32-I02：步驟走 `?step=`（`AppShell` 只以 pathname 重新掛載頁面，
+ * 路徑段的步驟會讓選項歸零）；不認得的步驟由頁面自己導回第一步「這期成績」。 */
 function AdsSettleRoute() {
+  const { brandId, month } = useParams<{ brandId: string; month: string }>();
+  return <SettlePage key={month} brandId={brandId ?? ""} month={month ?? ""} />;
+}
+
+/** 舊的 `/settle/:month/:step` 路徑（後端 `settle.py` 的 `action_url` 與首頁連結仍沿用）導到查詢字串形式。 */
+function AdsSettleStepRedirect() {
   const { brandId, month, step } = useParams<{ brandId: string; month: string; step: string }>();
-  if (!isSettleStep(step)) {
-    return <Navigate to={`/brands/${encodeURIComponent(brandId ?? "")}/ads/settle/${encodeURIComponent(month ?? "")}/result`} replace />;
-  }
-  return <SettlePage key={month} brandId={brandId ?? ""} month={month ?? ""} step={step} />;
+  return <Navigate to={settlePath(brandId ?? "", month ?? "", isSettleStep(step) ? step : "result")} replace />;
 }
 
 /** 資料不足 wait page（F24-I03，v7 原型 `waitPage()`）：首頁卡片「去處理」與活動工作區的

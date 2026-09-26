@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { getSettle, writeSettle, SettleRequestRejected, type SettleView } from "@/lib/adsSettleApi";
@@ -15,8 +15,10 @@ import { FROM_META, SETTLE_RULE, isImported } from "./settleCsv";
 
 /** F29-I12: the three-step period settle 這期成績 → 確認每則主打什麼 → 寫進筆記本 (prototype v10 `stepRes()`,
  * `stepAngle()`, `stepNote()`; Feature F29 Contract E). One period is one calendar month. The page reads
- * `GET …/settle?month=` once and keeps the picks across the three step routes; the only write is the one POST on
- * step 3. While an AI angle job is pending it re-reads the settle and the job queue every few seconds. */
+ * `GET …/settle?month=` once and keeps the picks across the three steps; the only write is the one POST on
+ * step 3. While an AI angle job is pending it re-reads the settle and the job queue every few seconds.
+ * F32-I02: the step is the `?step=` query, not a path segment — `AppShell` re-keys the page on the pathname, so a
+ * path step remounted the page between steps and lost the picks; a query change keeps it mounted. */
 
 export type SettleStep = "result" | "angle" | "note";
 const STEPS: SettleStep[] = ["result", "angle", "note"];
@@ -25,14 +27,17 @@ const POLL_MS = 3000;
 export const isSettleStep = (value: string | undefined): value is SettleStep => STEPS.includes(value as SettleStep);
 
 export function settlePath(brandId: string, month: string, step: SettleStep): string {
-  return `/brands/${encodeURIComponent(brandId)}/ads/settle/${encodeURIComponent(month)}/${step}`;
+  return `/brands/${encodeURIComponent(brandId)}/ads/settle/${encodeURIComponent(month)}?step=${step}`;
 }
 
 type Read = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; view: SettleView };
 
 const ORDER_BEFORE_SETTLE = new Set(["cleanup", "worse"]);
 
-export function SettlePage({ brandId, month, step }: { brandId: string; month: string; step: SettleStep }) {
+export function SettlePage({ brandId, month }: { brandId: string; month: string }) {
+  const [searchParams] = useSearchParams();
+  const stepParam = searchParams.get("step") ?? undefined;
+  const step: SettleStep = isSettleStep(stepParam) ? stepParam : "result";
   const [read, setRead] = useState<Read>({ status: "loading" });
   const [tick, setTick] = useState(0);
   const [picks, setPicks] = useState<AnglePicks>({});
@@ -105,6 +110,9 @@ export function SettlePage({ brandId, month, step }: { brandId: string; month: s
   const frame = (children: ReactNode) => (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">{crumb}{children}</div>
   );
+
+  // A missing or unknown step is step 1, at its canonical URL.
+  if (stepParam !== step) return <Navigate to={path("result")} replace />;
 
   if (read.status === "loading") {
     return frame(
