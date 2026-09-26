@@ -1212,6 +1212,7 @@ _CHILD_TABLES = (
     ("ads_change_set", "廣告變更核准清單"),
     ("ads_review_round", "單則廣告檢討紀錄"),
     ("ads_month_budget", "品牌月預算"),
+    ("ads_runtime_event", "投放中心背景執行紀錄"),
     ("ads_ad", "投放中心廣告"),
     ("ads_delivery_group", "投放中心投放組"),
     ("ads_campaign", "投放中心 Campaign"),

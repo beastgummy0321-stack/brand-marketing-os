@@ -5,6 +5,7 @@
 
 import json
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -198,6 +199,61 @@ class BrandReportApiTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(rows["c"], 1)
         self.assertEqual(len(fake_provider.calls), 1)
+
+    def _generate_via_queue(self, brand, provider) -> dict:
+        orig_provider = report_service.PROVIDER
+        report_service.PROVIDER = provider
+        try:
+            self.assertEqual(
+                self.client.post(f"/api/brands/{brand['id']}/report/generate").status_code, 200)
+            self._run_worker()
+        finally:
+            report_service.PROVIDER = orig_provider
+        return self.client.get(f"/api/brands/{brand['id']}/report").json()
+
+    def test_save_failure_after_ai_success_reads_failed(self):
+        """F31-I02 (Contract J): the AI call succeeded but saving the report raised. The
+        handler notifies and re-raises, so the job ends `failed`. Red on master: the
+        exception was swallowed and the succeeded `llm_task` row read `idle`."""
+        brand = repo.create_brand(web.conn, name="報告存檔失敗", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
+        with mock.patch.object(repo, "create_brand_report", side_effect=RuntimeError("模擬存檔失敗")):
+            data = self._generate_via_queue(brand, _provider(brand["name"]))
+        self.assertIsNone(data["report"])
+        self.assertEqual(data["job"], {"status": "failed",
+                                       "message": background_module.JOB_FAILED_MESSAGE})
+
+    def test_unreadable_reply_reads_failed_not_idle(self):
+        """F31-I02: the AI answered but the reply is not five chapters, so no report was
+        saved. Red on master: the succeeded `llm_task` row read `idle`."""
+        brand = repo.create_brand(web.conn, name="報告讀不懂", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
+        garbage = providers.FakeProvider(response=providers.ProviderResponse(
+            output_text="這不是五章的 JSON", structured=None,
+            usage=providers.Usage(input_tokens=10, output_tokens=10), stop_reason="end_turn",
+        ))
+        data = self._generate_via_queue(brand, garbage)
+        self.assertEqual(data["job"]["status"], "failed")
+        self.assertEqual(data["job"]["message"], report_service.brand_report_mod.PARSE_FAIL_MESSAGE)
+
+    def test_new_job_queued_behind_an_older_report_reads_running(self):
+        """F31-I02 (Contract J): the newest job decides first. Red on master: the older
+        succeeded `llm_task` row read `idle` while the new job waited in the queue."""
+        brand = repo.create_brand(web.conn, name="排隊中的報告", client_name=None, actor=ACTOR, org_id=DEV_ORG_ID)
+        self.assertEqual(self._generate_via_queue(brand, _provider(brand["name"]))["job"],
+                         {"status": "idle"})
+
+        background_module.enqueue("background.brand_report", org_id=DEV_ORG_ID,
+                                  lock=f"brand_report:{brand['id']}", brand_id=brand["id"], actor=ACTOR)
+        web.conn.commit()
+        job = self.client.get(f"/api/brands/{brand['id']}/report").json()["job"]
+
+        self.assertEqual(job["status"], "running")
+        self.assertIsInstance(job["started_at"], str)
+        orig_provider = report_service.PROVIDER
+        report_service.PROVIDER = _provider(brand["name"])
+        try:
+            self._run_worker()  # drain the queued job so no later test's worker picks it up
+        finally:
+            report_service.PROVIDER = orig_provider
 
     def test_missing_brand_returns_json_404_for_get_and_post(self):
         brand_id = "missing-brand"

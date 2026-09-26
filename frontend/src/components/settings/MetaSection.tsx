@@ -86,8 +86,12 @@ export function MetaSection() {
             onChange={(e) => setToken(e.target.value)}
             placeholder="貼上 Meta 存取權杖"
             autoComplete="off"
+            aria-describedby="meta-token-scope"
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
+          <span id="meta-token-scope" className="text-xs text-muted-foreground">
+            產生權杖時要勾選 ads_read 權限，系統才看得到你的廣告帳戶。
+          </span>
           {hasToken && accountsState.status === "ready" && (
             <span className="text-xs text-muted-foreground">
               目前使用中的權杖末四碼：{accountsState.data.token_tail}

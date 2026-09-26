@@ -17,7 +17,7 @@ campaigns have no coordinates, so no pairs.
 
 from datetime import timedelta
 
-from app.ads import change_control, experiments, repository, triage
+from app.ads import change_control, experiments, live_creative, repository, triage
 from app.core import settings
 
 RULES = {
@@ -233,6 +233,8 @@ def read(conn, org, brand, campaign_id) -> dict:
         raise ValueError("找不到這個活動。")
     if detail.get("origin") == "imported":
         return {"pairs": [], "unavailable": IMPORTED_REASON}
+    # F31-I05 Contract O: pair on the coordinates each creative was made for.
+    detail = live_creative.with_learning_coordinates(conn, org, brand, detail)
     found = list(experiments.pairs(detail))
     if not found:
         return {"pairs": [], "unavailable": None}

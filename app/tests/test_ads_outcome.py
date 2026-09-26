@@ -18,13 +18,11 @@ import app.main as main
 import app.shared.web as web
 from app.ads import outcome, plan
 from app.ads import repository as ads_repo
-from app.ads.adapters import manual as manual_adapter
 from app.ads.adapters import simulated
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import providers
-from app.meta import graph as meta_graph
 from app.meta import repository as meta_repo
 
 ACTOR = "測試員"
@@ -88,7 +86,7 @@ class OutcomeTestBase(unittest.TestCase):
     def _bound_campaign(self, *, start_date=None, end_date=None,
                          cap=300) -> tuple[dict, str, str]:
         """回傳 (campaign_detail, group_external_id, ad_external_id)，campaign/group/ad 三層
-        都已經精準名稱比對綁定完成（跟 `test_ads_publish_manual.py::FullMatchTest` 同一套）。
+        都已經綁定完成、Campaign 轉 `live`（F31-I08 起用上架回讀同一組 repository 綁定函式）。
         每個平台實體 id 都是這次呼叫自己造的（`uuid`），不同測試、不同 Campaign 之間不會撞名。
         `cap`（F28-I01 唯一的上限，每筆成果成本）預設 300，F16-I05 的結案整合測試才覆寫。"""
         start_date = start_date or self.today
@@ -105,34 +103,25 @@ class OutcomeTestBase(unittest.TestCase):
         detail = plan.adopt_strategy(web.conn, self.org_id, self.brand_id, campaign["id"],
                                       actor=ACTOR)
 
-        account_ext = getattr(self, "_account_ext", None)
-        if account_ext is None:
+        if getattr(self, "_account_ext", None) is None:
             self._connect_account()
-            account_ext = self._account_ext
         tag = uuid.uuid4().hex[:8]
         campaign_ext, group_ext, ad_ext = f"camp-{tag}", f"as-{tag}", f"ad-{tag}"
 
-        def fake_list_campaigns(_token, account_id):
-            return [{"campaign_id": campaign_ext, "name": detail["name"],
-                      "effective_status": "ACTIVE"}] if account_id == account_ext else []
-
-        def fake_list_ad_sets(_token, campaign_id):
-            group_name = detail["groups"][0]["name"]
-            return [{"adset_id": group_ext, "name": group_name,
-                      "external_status": "ACTIVE"}] if campaign_id == campaign_ext else []
-
-        def fake_list_ads(_token, adset_id):
-            ad_name = detail["groups"][0]["ads"][0]["name"]
-            return [{"ad_id": ad_ext, "name": ad_name,
-                      "external_status": "ACTIVE"}] if adset_id == group_ext else []
-
-        with mock.patch.object(meta_graph, "list_campaigns", fake_list_campaigns), \
-                mock.patch.object(meta_graph, "list_ad_sets", fake_list_ad_sets), \
-                mock.patch.object(meta_graph, "list_ads", fake_list_ads):
-            result = manual_adapter.bind(
-                web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR,
-            )
-        self.assertIsNone(result["message"])
+        # F31-I08: the name-match bind is gone; bind the three nodes with the same repository
+        # helpers launch readback (`handoff_check`) uses, then ready -> live as a full bind did.
+        group, ad = detail["groups"][0], detail["groups"][0]["ads"][0]
+        ads_repo.bind_campaign(web.conn, self.org_id, self.brand_id, detail["id"],
+                               external_id=campaign_ext, external_name=detail["name"],
+                               external_status="ACTIVE")
+        ads_repo.bind_group(web.conn, self.org_id, self.brand_id, group["id"],
+                            external_id=group_ext, external_name=group["name"],
+                            external_status="ACTIVE")
+        ads_repo.bind_ad(web.conn, self.org_id, self.brand_id, ad["id"], external_id=ad_ext,
+                         external_name=ad["name"], external_status="ACTIVE")
+        if detail["status"] == "ready":
+            ads_repo.set_campaign_status(web.conn, self.org_id, self.brand_id, detail["id"],
+                                         "live")
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])
         self.assertEqual(reloaded["local_state"], "bound")
         return reloaded, group_ext, ad_ext

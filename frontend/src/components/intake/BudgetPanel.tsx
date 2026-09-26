@@ -4,6 +4,7 @@ import { SidePanel } from "@/components/layout/SidePanel";
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { saveBudget } from "@/lib/intakeApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
+import { AI_COST_NOTE } from "./CostGauge";
 
 /** 花費上限側板（契約 S4.67-70）。 */
 export function BudgetPanel({
@@ -30,7 +31,7 @@ export function BudgetPanel({
       <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
         <div>
           <h2 className="font-display text-lg text-foreground">這次建檔最多可以花多少？</h2>
-          <p className="mt-1 text-sm text-muted-foreground">只管這個品牌這一次。用不完不會累積。</p>
+          <p className="mt-1 text-sm text-muted-foreground">只管這個品牌這一次。用不完不會累積。{AI_COST_NOTE}</p>
         </div>
         <button type="button" onClick={onClose} aria-label="關閉側板" className="rounded-md p-2 text-muted-foreground hover:bg-muted">
           <X className="h-4 w-4" aria-hidden="true" />
@@ -56,7 +57,7 @@ export function BudgetPanel({
               className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
           </div>
-          <span className="text-xs text-muted-foreground">目前已花費 US$ {draft.cost_spent.toFixed(2)}，上限不能設得比它低。</span>
+          <span className="text-xs text-muted-foreground">目前已花費 US$ {draft.cost_spent.toFixed(2)}，上限不能設得比它低。{AI_COST_NOTE}</span>
         </label>
 
         {error && <p className="text-sm text-danger">{error}</p>}

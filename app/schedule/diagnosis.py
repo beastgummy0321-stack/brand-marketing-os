@@ -25,8 +25,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import repository as bi_repo
-from app.core import rule_cards
+from app.core import rule_cards, vocab
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 from app.schedule import performance, state
@@ -410,17 +411,28 @@ def converge(outputs: list[dict]) -> list[dict]:
 def _round_rows(conn, brand_id: str) -> list[dict]:
     """最新一輪（`round_id` 相同）的 `performance_reading` 列，最多三列。讀 `llm_task` 直接
     下 SQL——跟 `state._latest_task_row()`／`_display_task_row()` 同一個既有慣例（那兩支就是
-    這樣直接查 `llm_task`，`app.llm` 沒有另開一支「按 brand/task_type 查多列」的讀取）。"""
+    這樣直接查 `llm_task`，`app.llm` 沒有另開一支「按 brand/task_type 查多列」的讀取）。
+
+    F31 Contract J, same rule as `state._latest_task_row()`: the newest job decides first. Job
+    still active while the newest round has no running row (queued behind the last round, or
+    converging after its three calls) → one running placeholder; job failed while the newest
+    round carries no failed row → one failed placeholder. Either way the round reads as not
+    finished, so there are no suggestions to show or adopt."""
     rows = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s"
         " ORDER BY started_at DESC LIMIT 30",
         (brand_id, state.DIAGNOSIS_TASK_TYPE),
     ).fetchall()
     rows = [dict(r) for r in rows]
-    if not rows:
-        return []
-    round_id = (rows[0].get("context_scope_json") or {}).get("round_id")
-    return [r for r in rows if (r.get("context_scope_json") or {}).get("round_id") == round_id]
+    if rows:
+        round_id = (rows[0].get("context_scope_json") or {}).get("round_id")
+        rows = [r for r in rows if (r.get("context_scope_json") or {}).get("round_id") == round_id]
+    outcome = background_job_outcome(state.job_lock(state.DIAGNOSIS_TASK_TYPE, brand_id))
+    if outcome == "active" and not any(r["status"] == "running" for r in rows):
+        return [state.job_placeholder_row(state.DIAGNOSIS_TASK_TYPE, "running")]
+    if outcome == "failed" and all(r["status"] in ("running", "succeeded") for r in rows):
+        return [state.job_placeholder_row(state.DIAGNOSIS_TASK_TYPE, "failed")]
+    return rows
 
 
 def _round_result(rows: list[dict]) -> tuple[str | None, list[dict]]:
@@ -457,6 +469,38 @@ def adopt_content(suggestion: dict, round_date: str) -> str:
     if not body.endswith(("。", "！", "？")):
         body += "。"
     return f"{body}\n（本條來自 {round_date} 的成效判讀，{DIRECTIONAL_ONLY_NOTE}）"
+
+
+def adopt_key(suggestion: dict, round_date: str) -> tuple[str, str]:
+    """The one key a suggestion is "adopted" under: `(rule_type, content)` of the brand-wide
+    rule `_run_diagnosis_adopt()` writes. The adopt route dedupes on it and the diagnosis
+    response marks `adopted` with it (F31-I06, Contract K), so the two can never disagree.
+    Adopting always writes `vocab.EXPERIMENT_RULE_TYPE` (issue adopted-advice-can-invert)."""
+    return vocab.EXPERIMENT_RULE_TYPE, adopt_content(suggestion, round_date)
+
+
+def adopted_rule(conn, brand_id: str, key: tuple[str, str]) -> dict | None:
+    """The active brand-wide rule stored under `key`, or None. Product-specific rules never
+    count: adopting writes a brand-wide rule only."""
+    rule_type, content = key
+    return next(
+        (r for r in bi_repo.list_rules_for_brand(conn, brand_id)
+         if r["product_id"] is None and r["rule_type"] == rule_type and r["content"] == content),
+        None,
+    )
+
+
+def _mark_adopted(
+    conn, brand_id: str, round_date: str | None, suggestions: list[dict],
+) -> list[dict]:
+    """Each suggestion plus `adopted: bool` (Contract K). One rule read for the whole list."""
+    if round_date is None or not suggestions:
+        return [{**s, "adopted": False} for s in suggestions]
+    keys = {
+        (r["rule_type"], r["content"])
+        for r in bi_repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None
+    }
+    return [{**s, "adopted": adopt_key(s, round_date) in keys} for s in suggestions]
 
 
 def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
@@ -497,7 +541,8 @@ def brand_diagnosis_response(conn, org_id: str, brand_id: str) -> dict:
     # `_round_result()` 自己會判斷「整輪是否都成功」，這裡不再重複那個判斷；`status` 是
     # 給畫面看的字（running／succeeded／failed），跟 `_round_result()` 內部的守門條件是
     # 同一件事的兩種寫法（都成功 ⇔ status == "succeeded"）。
-    _round_date, suggestions = _round_result(rows)
+    round_date, suggestions = _round_result(rows)
+    suggestions = _mark_adopted(conn, brand_id, round_date, suggestions)
 
     lenses = {lens: (row.get("rendered_output") or "") for lens, row in by_lens.items() if lens}
 

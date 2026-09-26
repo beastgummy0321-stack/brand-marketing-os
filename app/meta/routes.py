@@ -55,6 +55,29 @@ def _accounts_response(org_id: str) -> AccountsResponse:
     )
 
 
+# F31-I03 (Contract N): Graph's own text never reaches the user. A valid token without
+# `ads_read` gets "(#100) Unsupported get request" on `me/adaccounts`, which reads like a wrong
+# URL; 10/200-299 are Graph's permission codes.
+_MISSING_SCOPE_MESSAGE = (
+    "這把權杖看不到廣告帳戶，通常是產生權杖時沒有勾 ads_read 權限。"
+    "請重新產生一把有勾 ads_read 的權杖再貼上。"
+)
+
+
+def _token_rejection(exc: graph.GraphError) -> web.ApiError:
+    code = exc.code
+    if code == 100 or code == 10 or (isinstance(code, int) and 200 <= code <= 299):
+        return web.ApiError(400, "meta_token_missing_scope", _MISSING_SCOPE_MESSAGE)
+    if exc.retryable:
+        # Transport failure: nothing was judged about the token.
+        return web.ApiError(502, "meta_unreachable", "連不上 Meta，這把權杖還沒驗證。請稍後再試。")
+    shown = f"（代碼 {code}）" if code is not None else ""
+    return web.ApiError(
+        400, "meta_token_rejected",
+        f"Meta 拒絕了這個權杖{shown}。請確認權杖沒有過期、是從正確的帳號產生的。",
+    )
+
+
 @router.post("/token", response_model=AccountsResponse)
 def connect_token(request: Request, body: TokenRequest):
     actor = web.require_actor(request)
@@ -65,9 +88,7 @@ def connect_token(request: Request, body: TokenRequest):
     try:
         accounts = graph.list_ad_accounts(token)
     except graph.GraphError as exc:
-        raise web.ApiError(
-            400, "meta_token_rejected", f"Meta 拒絕了這個權杖：{exc.message}"
-        ) from exc
+        raise _token_rejection(exc) from exc
     repo.save_token(web.conn, actor.org_id, token)
     repo.upsert_accounts(web.conn, actor.org_id, accounts)
     web.conn.commit()
@@ -125,6 +146,10 @@ class CampaignSpendOut(BaseModel):
 
 class SpendSummaryResponse(BaseModel):
     last_pull_at: datetime | None  # None＝這個品牌綁定的帳號一次都還沒成功拉過
+    # F31-I03 (Contract N): newest pulled_at of the rows summed below (None only with no rows),
+    # and the Chinese label of their attribution window (repo.attribution_label).
+    data_pulled_at: datetime | None
+    attribution_label: str | None
     campaigns: list[CampaignSpendOut]
     total: CampaignSpendOut
 
@@ -164,8 +189,13 @@ def brand_spend(request: Request, brand_id: str):
         impressions=summary["total"]["impressions"], clicks=summary["total"]["clicks"],
         roas=summary["total"]["roas"],
     )
+    freshness = repo.spend_freshness(
+        web.conn, actor.org_id, account_ids, month_start, month_end, level="campaign",
+    )
     return SpendSummaryResponse(
         last_pull_at=repo.last_pull_at(web.conn, actor.org_id, account_ids),
+        data_pulled_at=freshness["data_pulled_at"],
+        attribution_label=freshness["attribution_label"],
         campaigns=campaigns,
         total=total,
     )

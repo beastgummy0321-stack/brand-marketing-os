@@ -84,6 +84,19 @@ class RuleCardValueTest(unittest.TestCase):
             rule_cards.CARDS["schedule_budget"]["fields"]["daily_budget"]["default"],
         )
 
+    def test_user_facing_text_carries_no_internal_notes(self):
+        """F31-I10 (drill wording item 1): description and help are shown to the user as-is,
+        so they must not carry ticket numbers, internal role words or doc paths. Checks every
+        card, including ones hidden from the settings page."""
+        banned = ("票", "代理", "外殼", "docs/", "prompt", "token")
+        for card_key, card in rule_cards.CARDS.items():
+            texts = [("description", card["description"])] + [
+                (f"{field_key}.help", field["help"]) for field_key, field in card["fields"].items()
+            ]
+            for where, text in texts:
+                for word in banned:
+                    self.assertNotIn(word, text, f"{card_key}.{where} contains {word!r}")
+
     def test_rule_prompt_cap_default_matches_adr_0012(self):
         """票 02-prompt-cap-and-overflow-list：進生成提示詞的規則上限，系統預設 20 條
         （ADR 0012 第二節），沒有種子 migration，靠 CARDS default 落地就夠。"""

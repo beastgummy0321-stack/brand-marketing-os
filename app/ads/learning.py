@@ -10,7 +10,7 @@ or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a r
 
 from typing import cast
 
-from app.ads import targets
+from app.ads import live_creative, targets
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -111,6 +111,8 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    # F31-I05 Contract O: the scope names the coordinates the creatives were made for.
+    detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
 
     text = _sentence(detail, verdict, verdict_json)
     if verdict_json.get("data_source") == "isolated_simulation":

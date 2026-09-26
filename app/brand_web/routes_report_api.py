@@ -17,13 +17,16 @@ docs/contracts/background.md）——三個搬上佇列的 kind 裡最貼近 `ap
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
+from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id
+from app.core.db import new_id, now_iso
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
 
@@ -68,9 +71,27 @@ def _report_shape(report: dict, brand: dict) -> dict:
 def _job_shape(brand_id: str) -> dict:
     """讀 llm_task 最新一列取代讀行程內 dict（票 08）——跟 `app/schedule/state.py`
     `_display_task_row()` 同一個讀法，套到單一 task_type：一個品牌同時只有一次報告
-    在跑，不必分「還在跑」與「上一次成功」兩層顯示。"""
+    在跑，不必分「還在跑」與「上一次成功」兩層顯示。
+
+    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
+    最新的 job 失敗＝failed（沒有那次呼叫的錯誤可引用時講背景程式）。成功列還要重驗：
+    AI 成功但回覆讀不成五章時 `report_service.generate()` 不入庫，最新報告就不是這一列產的
+    ——那是失敗，不是 idle。"""
     row = _latest_report_task_row(web.conn, brand_id)
-    if row is None or row["status"] == "succeeded":
+    outcome = background_job_outcome(f"brand_report:{brand_id}")
+    if outcome == "active":
+        running_row = row is not None and row["status"] == "running" and row["started_at"]
+        return {"status": "running", "stage": "正在整理五章",
+                "started_at": row["started_at"] if running_row else now_iso()}
+    if outcome == "failed":
+        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
+        return {"status": "failed", "message": row["error"] if own_error else JOB_FAILED_MESSAGE}
+    if row is None:
+        return {"status": "idle"}
+    if row["status"] == "succeeded":
+        report = repo.get_latest_brand_report(web.conn, brand_id)
+        if report is None or report["llm_task_id"] != row["id"]:
+            return {"status": "failed", "message": brand_report_mod.PARSE_FAIL_MESSAGE}
         return {"status": "idle"}
     if row["status"] == "running":
         return {"status": "running", "stage": "正在整理五章", "started_at": row["started_at"]}
@@ -88,14 +109,18 @@ def background_brand_report(org_id: str, brand_id: str, actor: str) -> None:
     """procrastinate task body（`background.brand_report`）——worker 執行，自己開一條
     連線（worker 不繼承 request 的連線）。"""
     with core_db_connection() as conn:
+        error = None
         try:
             ok, message = report_service.generate(conn, brand_id, actor)
-        except Exception as exc:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok, message = False, f"背景執行發生未預期錯誤：{exc}"
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, message, error = False, f"背景執行發生未預期錯誤：{exc}", exc
         if ok:
             _notify(brand_id, "顧問分析報告已生成。")
         else:
             _notify(brand_id, f"顧問分析報告生成失敗：{message or '報告生成失敗。'}")
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 
 
 @router.get("/api/brands/{brand_id}/report")

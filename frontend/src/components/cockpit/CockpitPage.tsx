@@ -135,6 +135,17 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       />
     );
   const total = meta.data?.total;
+  // F31-I03: 「尚未成功拉取」 only when nothing was ever read; rows read by another account's
+  // pull or a backfill still say when they were read.
+  const freshnessText = meta.data
+    ? meta.data.last_pull_at
+      ? `更新於 ${formatRelativeHours(meta.data.last_pull_at)}`
+      : meta.data.data_pulled_at
+        ? `資料讀取於 ${formatRelativeHours(meta.data.data_pulled_at)}`
+        : "尚未成功拉取"
+    : meta.isError
+      ? "讀取失敗"
+      : "讀取中…";
   const values = total
     ? {
         spend: number(total.spend),
@@ -221,11 +232,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           <CalendarDays size={15} />
           <span>本月累計</span>
           <span className="h-4 border-l border-border" />
-          <span>
-            {meta.data?.last_pull_at
-              ? `更新於 ${formatRelativeHours(meta.data.last_pull_at)}`
-              : "尚未成功拉取"}
-          </span>
+          <span>{freshnessText}</span>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -271,7 +278,9 @@ export function CockpitPage({ brandId }: { brandId: string }) {
                         : id === "ctr" && total?.impressions === 0
                           ? "尚無曝光，無法計算"
                           : id === "roas"
-                            ? "平台回報 · 非全通路"
+                            ? meta.data?.attribution_label
+                              ? `平台回報 · 非全通路 · 歸因：${meta.data.attribution_label}`
+                              : "平台回報 · 非全通路"
                             : "本月累計"}
                     </p>
                   </article>

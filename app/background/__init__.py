@@ -16,7 +16,9 @@
    僅供持有 schema worker 鎖的組裝根在啟動時回收中斷的孤兒工作（規則見
    `app/background/recovery.py` 檔頭：唯讀工作照舊重送、其餘重送一次、第二次中斷標失敗）。
    F29-I05 另提供唯讀的 `queue_snapshot(*, since=None) -> dict`（整條佇列的排隊順序與今天
-   做完／失敗數，呼叫端目前只有 `app/dashboard/routes_jobs_api.py`）。其餘一律私有。
+   做完／失敗數，呼叫端目前只有 `app/dashboard/routes_jobs_api.py`）。F31-I02（Contract J）
+   另提供唯讀的 `job_outcome(lock) -> "active"|"failed"|"succeeded"|None`（這個 lock 最新
+   一個 job 的結局），供 `app/intake`／`app/brand_web` 的狀態端點判斷。其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
@@ -189,15 +191,36 @@ def app() -> procrastinate.App:
     return _app
 
 
+#: F31-I15: pool sizing for the defer App. Every caller (`enqueue()`, `is_active()`,
+#: `job_outcome()`, `queue_snapshot()`) runs one or two short statements and returns the
+#: connection, so one idle connection is enough; psycopg_pool's default (min_size=4, and
+#: `open(wait=True)` waits for all four) held four idle connections per process for nothing.
+#: `max_size` still lets a few concurrent request threads defer at once.
+_DEFER_POOL_MIN_SIZE = 1
+_DEFER_POOL_MAX_SIZE = 4
+
+
 def _sync_app_for_defer() -> procrastinate.App:
     """惰性建立／`db.dsn()` 換了就重建的模組私有 App，`enqueue()` 專用——跟 `app()` 同一套
     rebuild 規則，但接的是 `SyncPsycopgConnector`，不是 `app()` 那顆 async 的
-    `PsycopgConnector`（為什麼不能共用見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。"""
+    `PsycopgConnector`（為什麼不能共用見模組檔頭「enqueue() 為什麼要蓋第二個 App」）。
+
+    F31-I15: a rebuild closes the previous App's pool first. Unlike `app()` (whose pools are
+    opened and closed by its callers: `with a.open()`, `run_worker()`), this App is opened
+    here and owned here, so nobody else would ever close the one a DSN change replaces; its
+    idle connections stayed on the server until garbage collection."""
     global _sync_app, _sync_app_dsn
     current_dsn = db.dsn()
     if _sync_app is None or _sync_app_dsn != current_dsn:
+        if _sync_app is not None:
+            previous, _sync_app, _sync_app_dsn = _sync_app, None, None
+            previous.close()
         queue_dsn = _with_search_path(current_dsn, _queue_search_path())
-        connector = procrastinate.SyncPsycopgConnector(conninfo=queue_dsn)
+        connector = procrastinate.SyncPsycopgConnector(
+            conninfo=queue_dsn,
+            min_size=_DEFER_POOL_MIN_SIZE,
+            max_size=_DEFER_POOL_MAX_SIZE,
+        )
         new_app = procrastinate.App(connector=connector)
         new_app.open()
         _sync_app = new_app
@@ -247,6 +270,42 @@ def is_active(lock: str) -> bool:
     return bool(job_manager.list_jobs(queueing_lock=lock, status="todo")) or bool(
         job_manager.list_jobs(queueing_lock=lock, status="doing")
     )
+
+
+#: Contract J: what a status reader shows when the newest job for its lock ended failed and
+#: that job left no `llm_task` error to quote (it failed before the AI call, or a worker that
+#: does not know the task picked it up).
+JOB_FAILED_MESSAGE = (
+    "背景工作沒有完成：背景程式可能沒有接到這個工作，請再試一次；一直這樣請確認背景程式有在跑。"
+)
+
+_ACTIVE_STATUSES = frozenset({"todo", "doing", "aborting"})
+_FAILED_STATUSES = frozenset({"failed", "cancelled", "aborted"})
+
+
+def job_outcome(lock: str) -> str | None:
+    """Feature F31 Contract J: outcome of the newest job carrying this `queueing_lock`.
+
+    Returns "active" (todo/doing), "failed" (failed, or cancelled/aborted: it never finished
+    its work), "succeeded", or None when no job with this lock ever existed. Memory queue mode
+    (e2e) always returns None: jobs never run there, callers fall back to their `llm_task` rule.
+
+    "Newest" = highest job id; procrastinate never deletes finished jobs here (default
+    `delete_job=never`) and never clears `queueing_lock` on completion (see `is_active()`).
+    Reads through `job_manager.list_jobs(queueing_lock=...)`, procrastinate's own public query
+    surface, not hand SQL on `procrastinate_jobs`."""
+    if config.settings().brand_os_job_queue == "memory":
+        return None
+    jobs = _sync_app_for_defer().job_manager.list_jobs(queueing_lock=lock)
+    if not jobs:
+        return None
+    newest = max(jobs, key=lambda job: job.id or 0)
+    status = str(newest.status)
+    if status in _ACTIVE_STATUSES:
+        return "active"
+    if status in _FAILED_STATUSES:
+        return "failed"
+    return "succeeded"
 
 
 # F29-I05 (feature Contract G): one read of the whole queue. `list_jobs()` returns neither the

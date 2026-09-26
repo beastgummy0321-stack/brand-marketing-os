@@ -1,5 +1,5 @@
 """app/ads/adapters/simulated.py — F03-I10: 沒有平台的通路（演練／驗收用），實作跟
-`manual` 同一份三方法介面（`app.ads.adapters` 的介面）。`publish` 不等使用者到平台後台，
+`manual` 同一份兩方法介面（`app.ads.adapters` 的介面）。`publish` 不等使用者到平台後台，
 直接自己造假外部 id、綁定每一個節點、把 Campaign 推到 `live`，接著把 `start_date` 到今天
 的每一天成效都補齊——所以一個人在瀏覽器裡點「模擬發布」，下一秒切到成效分頁就有數字可看，
 不必再跑一次命令列（§0「pluggable — delete it and the product still works, but acceptance
@@ -28,7 +28,6 @@ DESCRIBE_MESSAGE = (
     "模擬發布（演練用）：不會連到任何平台，程式會直接幫這個 Campaign 產生一整套"
     "示意資料——綁定、成效都是假的，只是為了讓畫面走得完整。"
 )
-BOUND_MESSAGE = "模擬發布已自動配對"
 
 
 def describe(campaign: dict) -> dict:  # noqa: ARG001 — 介面要求收 campaign，這裡用不到內容
@@ -87,19 +86,6 @@ def publish(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
     ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "live")
     generate_outcomes(conn, org_id, brand_id, campaign_id)
     return {"ok": True}
-
-
-def bind(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
-         actor: str) -> dict:  # noqa: ARG001 — 介面要求收 actor，模擬通路不需要它
-    """冪等空操作——`publish` 已經自己綁完了，「配對」只是把同一份 campaign_detail 原樣
-    回報一次（決策 19：模擬通路不需要使用者再按一次配對）。"""
-    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
-    campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
-    if campaign is None:
-        raise ValueError("campaign_unknown")
-    return {"message": BOUND_MESSAGE, "campaign": ads_repo.campaign_detail(
-        conn, org_id, brand_id, campaign_id,
-    )}
 
 
 def _group_day_exists(conn: _AnyConn, org_id: str, brand_id: str, group_id: str,

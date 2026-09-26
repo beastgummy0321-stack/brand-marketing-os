@@ -1,43 +1,25 @@
 """app/ads/adapters/manual.py — F03-I09: 手動發布——沒有平台寫入，使用者到平台後台照清單
-自己建，回來按「配對」用精準名稱比對綁回這裡（決策 1）。Implements the `app.ads.adapters`
-interface (`describe`/`publish`/`bind`); registered under the key `"manual"`.
+自己建（決策 1）。Implements the `app.ads.adapters` interface (`describe`/`publish`);
+registered under the key `"manual"`. F31-I08: the name-match `bind` is gone -- launch readback
+(`handoff_check`) binds each planned node to the platform object the user proved.
 """
 
 from app.ads import change_control_launch, manual_settings, simulation_mode
 from app.ads import repository as ads_repo
-from app.meta import repository as meta_repo
-
-# app/schedule/binding.py 的訊息規則「再實作一份行為」（§0「reused as behaviour,
-# re-implemented here — do not import it」）：沒有帳戶可比對時原文回這一句，不接「名稱要一字
-# 不差」的尾巴——那句對這個情況是錯的建議。
-NO_ACCOUNT_BOUND_MESSAGE = (
-    "還沒綁廣告帳戶：到「設定 → Meta 廣告連線」貼權杖並勾選這個品牌，再回來配對。"
-)
-
-
-def _failure_reason(name: str, matches: list) -> str:
-    if not matches:
-        return f"「{name}」在 Meta 上找不到"
-    return f"「{name}」在 Meta 上有 {len(matches)} 個同名的"
-
-
-def _failure_message(failures: list[str]) -> str:
-    return (
-        "配對失敗："
-        + "、".join(dict.fromkeys(failures))
-        + "。名稱要一字不差（區分大小寫，前後空白也算）。"
-        "上一層沒有配對成功時，它底下的節點這次不會比對。"
-    )
-
 
 # -- describe：逐節點清單，campaign 節點打頭 ---------------------------------------------------
+
+# F31-I08: the name-match 「配對」 is gone. Launch readback (`handoff_check`) never compares
+# names -- the user picks the platform object in each check -- so the name only helps them
+# recognise which one to pick.
+_NAME_REASON = "平台上的名稱照這裡填，回來核對時比較容易認出要選哪一個。"
 
 def _campaign_field(campaign: dict) -> dict:
     return {
         "level": "campaign", "id": campaign["id"], "name": campaign["name"],
         "fields": [
             {"label": "活動名稱", "value": campaign["name"],
-             "reason": "平台上的活動名稱要跟這裡一字不差，之後「配對」靠它精準比對。"},
+             "reason": _NAME_REASON},
             {"label": "目標", "value": campaign["objective"],
              "reason": "我們自己的分類，選平台上意思最接近的目標。"},
         ],
@@ -46,8 +28,7 @@ def _campaign_field(campaign: dict) -> dict:
 
 def _group_field(group: dict) -> dict:
     fields = [
-        {"label": "廣告組合名稱", "value": group["name"],
-         "reason": "名稱要跟這裡一字不差，之後「配對」靠它。"},
+        {"label": "廣告組合名稱", "value": group["name"], "reason": _NAME_REASON},
         {"label": "每日預算", "value": group["daily_budget"], "reason": "這組廣告一天要花多少。"},
     ]
     if group.get("start_date"):
@@ -61,8 +42,7 @@ def _group_field(group: dict) -> dict:
 
 def _ad_field(ad: dict) -> dict:
     fields = [
-        {"label": "廣告名稱", "value": ad["name"],
-         "reason": "名稱要跟這裡一字不差，之後「配對」靠它。"},
+        {"label": "廣告名稱", "value": ad["name"], "reason": _NAME_REASON},
     ]
     material = ad.get("material_assignment")
     if material:
@@ -130,97 +110,3 @@ def publish(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
     return change_control_launch.publish(conn, org_id, brand_id, campaign_id, actor,
                                          operation_id, content_hash)
 
-
-# -- bind：逐節點由上往下精準名稱比對 -------------------------------------------------------------
-
-def bind(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
-    """逐節點由上往下比對（campaign -> group -> ad），因為 Meta 的查找是階層式的：上一層
-    沒綁成，底下整批不比對。全部綁完、且原本是 `ready` 才轉 `live`（F03-I09 修正 4：任何
-    其他狀態原樣留著，重新配對不會救回一個已經 `closed` 的 Campaign）。"""
-    ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
-    simulation_mode.require_real(conn, org_id, brand_id)
-    campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
-    if campaign is None:
-        raise ValueError("campaign_unknown")
-
-    account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
-    if not account_ids:
-        return {"message": NO_ACCOUNT_BOUND_MESSAGE,
-                "campaign": ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)}
-
-    failures: list[str] = []
-
-    campaign_bound_id = campaign["external_id"] if campaign["local_state"] == "bound" else None
-    if campaign_bound_id is None:
-        matches = meta_repo.campaign_ids_by_exact_name(conn, org_id, account_ids, campaign["name"])
-        if len(matches) != 1:
-            failures.append(_failure_reason(campaign["name"], matches))
-        else:
-            campaign_bound_id = matches[0]["campaign_id"]
-            ads_repo.bind_campaign(
-                conn, org_id, brand_id, campaign_id, external_id=campaign_bound_id,
-                external_name=campaign["name"], external_status=matches[0]["external_status"],
-            )
-            ads_repo.record_action(
-                conn, org_id, brand_id, campaign_id, target_kind="campaign",
-                target_id=campaign_id, kind="bind", before={},
-                after={"external_id": campaign_bound_id}, approved_by=actor,
-                sync_state="confirmed_manual", platform_ref=campaign_bound_id,
-            )
-
-    if campaign_bound_id is not None:
-        detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
-        assert detail is not None
-        for group in detail["groups"]:
-            group_bound_id = group["external_id"] if group["local_state"] == "bound" else None
-            if group_bound_id is None:
-                matches = meta_repo.ad_set_ids_by_exact_name(
-                    conn, org_id, campaign_bound_id, group["name"],
-                )
-                if len(matches) != 1:
-                    failures.append(_failure_reason(group["name"], matches))
-                    continue  # 沒有廣告組合可以當第三層的父層範圍，底下廣告整批不比對
-                group_bound_id = matches[0]["adset_id"]
-                ads_repo.bind_group(
-                    conn, org_id, brand_id, group["id"], external_id=group_bound_id,
-                    external_name=group["name"], external_status=matches[0]["external_status"],
-                )
-                ads_repo.record_action(
-                    conn, org_id, brand_id, campaign_id, target_kind="group",
-                    target_id=group["id"], kind="bind", before={},
-                    after={"external_id": group_bound_id}, approved_by=actor,
-                    sync_state="confirmed_manual", platform_ref=group_bound_id,
-                )
-
-            for ad in group["ads"]:
-                ad_bound_id = ad["external_id"] if ad["local_state"] == "bound" else None
-                if ad_bound_id is not None:
-                    continue
-                matches = meta_repo.ad_ids_by_exact_name(conn, org_id, group_bound_id, ad["name"])
-                if len(matches) != 1:
-                    failures.append(_failure_reason(ad["name"], matches))
-                    continue
-                ad_bound_id = matches[0]["ad_id"]
-                ads_repo.bind_ad(
-                    conn, org_id, brand_id, ad["id"], external_id=ad_bound_id,
-                    external_name=ad["name"], external_status=matches[0]["external_status"],
-                )
-                ads_repo.record_action(
-                    conn, org_id, brand_id, campaign_id, target_kind="ad", target_id=ad["id"],
-                    kind="bind", before={}, after={"external_id": ad_bound_id},
-                    approved_by=actor, sync_state="confirmed_manual", platform_ref=ad_bound_id,
-                )
-
-    reloaded = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
-    assert reloaded is not None
-    all_bound = (
-        reloaded["local_state"] == "bound"
-        and all(g["local_state"] == "bound" for g in reloaded["groups"])
-        and all(a["local_state"] == "bound" for g in reloaded["groups"] for a in g["ads"])
-    )
-    if all_bound and reloaded["status"] == "ready":  # F03-I09 修正 4：只有 ready -> live
-        ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "live")
-        reloaded = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
-
-    message = _failure_message(failures) if failures else None
-    return {"message": message, "campaign": reloaded}

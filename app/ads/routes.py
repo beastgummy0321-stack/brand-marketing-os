@@ -62,7 +62,7 @@ def _legacy_campaign_guard(request: Request):
         if not suffix and request.method == "PATCH":
             return  # update_campaign validates the imported goal-only allowlist
         if suffix and suffix.split("/")[1] not in {
-            "strategy", "plan", "groups", "ads", "pack", "publish", "bind", "ingest", "close",
+            "strategy", "plan", "groups", "ads", "pack", "publish", "ingest", "close",
             "comparison", "simulation", "simulate", "simulation-recovery",
         }:
             return
@@ -797,26 +797,6 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
     if body.adapter == "manual":
         _drop_deferred(web.conn, actor.org_id, brand_id, campaign_id, enriched)
     return chosen.describe(enriched)
-
-
-@router.post("/brands/{brand_id}/campaigns/{campaign_id}/bind")
-def bind_campaign(request: Request, brand_id: str, campaign_id: str):
-    """F03-I09：手動路徑的「配對」——精準名稱比對，逐節點由上往下（`app/ads/adapters/
-    manual.py::bind`）。"""
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    manual_adapter = adapters.get_adapter("manual")
-    assert manual_adapter is not None  # 這是固定登記過的 key，永遠找得到
-    try:
-        result = manual_adapter.bind(
-            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
-        )
-    except ValueError as exc:
-        code = str(exc)
-        status, message = _PUBLISH_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
-    result["campaign"] = _with_readiness(actor, brand_id, result["campaign"])
-    return result
 
 
 # -- F03-I11：成效——Meta 花費灌進來 + 模擬通路補天數，一個 ingest 端點兩邊派工 ------------------

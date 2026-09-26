@@ -1,5 +1,6 @@
 /** frontend/src/components/ads/wait/WaitPage.test.tsx — F24-I03：`vi.mock` 掉 `@/lib/adsApi`／
- * `@/lib/adsTriageApi`／`@/lib/ordersApi`／`@/lib/adsExternalApi`，不打真的 API。覆蓋 Feature
+ * `@/lib/adsTriageApi`／`@/lib/ordersApi`／`@/lib/adsConnectionsApi`／`@/lib/adsExternalApi`，不打真的 API
+（F31-I07：訂單缺口只讀 connections 的 `orders.missing_days`，`ordersApi` 留著 mock 證明不再被讀）。覆蓋 Feature
  * Decisions「Wait page」：三個事實列（未連接／缺天／訂單缺口）、沒有缺天時改列 `reason_code`
  * （缺天存在就不重複列）、「重新檢查」＝`syncCampaign`＋poll 直到不是 pending／running 才
  * 重新讀取、忙碌時停用、訂單讀取失敗不拖累整頁、頭部提示（最近同步／尚未同步）、找不到
@@ -15,6 +16,8 @@ import type { CampaignTriage, TriageClosedBlock, TriageItem } from "@/lib/adsTri
 import { getTriage } from "@/lib/adsTriageApi";
 import type { OrdersPageData } from "@/lib/ordersApi";
 import { fetchOrders } from "@/lib/ordersApi";
+import type { AdsConnections, ConnectionSource } from "@/lib/adsConnectionsApi";
+import { getConnections } from "@/lib/adsConnectionsApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { WaitPage } from "./WaitPage";
 
@@ -30,11 +33,16 @@ vi.mock("@/lib/ordersApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/ordersApi")>("@/lib/ordersApi");
   return { ...actual, fetchOrders: vi.fn() };
 });
+vi.mock("@/lib/adsConnectionsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsConnectionsApi")>("@/lib/adsConnectionsApi");
+  return { ...actual, getConnections: vi.fn() };
+});
 vi.mock("@/lib/adsExternalApi", () => ({ syncCampaign: vi.fn(), syncJob: vi.fn() }));
 
 const mockListCampaigns = vi.mocked(listCampaigns);
 const mockGetTriage = vi.mocked(getTriage);
 const mockFetchOrders = vi.mocked(fetchOrders);
+const mockGetConnections = vi.mocked(getConnections);
 const mockSyncCampaign = vi.mocked(syncCampaign);
 const mockSyncJob = vi.mocked(syncJob);
 
@@ -104,6 +112,26 @@ function orders(overrides: Partial<OrdersPageData> = {}): OrdersPageData {
   };
 }
 
+/** The real `GET …/connections` shape (F30 Contract H), trimmed to the orders source the wait
+ * page reads. Default: orders up to 9/14 and no import since, so 9/15～9/18 are missing. */
+function ordersSource(overrides: Partial<ConnectionSource> = {}): ConnectionSource {
+  return {
+    key: "orders", kind: "orders", platform: null, name: "商城訂單報表", state: "missing_days",
+    note: "最新到 09/14，缺 09/15 之後", last_success_at: null,
+    missing_days: ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"],
+    affected_campaigns: [], action: { label: "補報表", href: "/brands/brd_1/orders" },
+    ...overrides,
+  };
+}
+
+function connections(orders: ConnectionSource = ordersSource()): AdsConnections {
+  return {
+    attention_count: orders.state === "ok" ? 0 : 1,
+    sources: [orders],
+    calendar: { month: "2026-09", today: "2026-09-19", rows: [] },
+  };
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={["/brands/brd_1/ads/campaigns/cmp_1/wait"]}>
@@ -120,7 +148,10 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockListCampaigns.mockResolvedValue([campaignCard()]);
+  // The orders list still says the latest order is 9/14; the wait page must not derive its gap
+  // from it (F31-I07) -- only from the connections read's `orders` source.
   mockFetchOrders.mockResolvedValue(orders());
+  mockGetConnections.mockResolvedValue(connections());
 });
 
 describe("WaitPage（F24-I03）事實列", () => {
@@ -225,8 +256,43 @@ describe("WaitPage（F24-I03）事實列", () => {
     expect(screen.queryByText("缺前一期可比資料")).toBeNull();
   });
 
+  it("F31-I07：匯入已涵蓋、只是沒有訂單的日子不算缺，不列訂單缺口（跟資料連線頁同一條規則）", async () => {
+    // Orders on 9/1 and 9/14, imported on 9/20: the connections read covers through 9/19.
+    mockGetConnections.mockResolvedValue(connections(ordersSource({
+      state: "ok", note: "最新匯入 09/20", missing_days: [], action: null,
+    })));
+    mockGetTriage.mockResolvedValue(triage({
+      data: {
+        sync: { state: "disconnected", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },
+        coverage: { start: "2026-08-25", end: "2026-09-19" },
+        missing_days: ["2026-09-17"],
+        status: { state: "disconnected", label: "廣告帳號已中斷連線，讀不到新資料。", missing_days: ["2026-09-17"], last_success_at: "2026-09-19T14:40:00+00:00" },
+      },
+    }));
+    renderPage();
+    await screen.findByText("廣告帳戶未連接");
+    expect(screen.queryByText(/商城報表只到/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "補報表 →" })).toBeNull();
+    expect(mockGetConnections).toHaveBeenCalledWith("brd_1");
+    expect(mockFetchOrders).not.toHaveBeenCalled();
+  });
+
+  it("訂單缺的日子都在活動覆蓋範圍之後時不列訂單缺口", async () => {
+    mockGetTriage.mockResolvedValue(triage({
+      data: {
+        sync: { state: "disconnected", error: null, last_success_at: "2026-09-10T14:40:00+00:00" },
+        coverage: { start: "2026-08-25", end: "2026-09-10" },
+        missing_days: [],
+        status: { state: "disconnected", label: "廣告帳號已中斷連線，讀不到新資料。", missing_days: [], last_success_at: "2026-09-10T14:40:00+00:00" },
+      },
+    }));
+    renderPage();
+    await screen.findByText("廣告帳戶未連接");
+    expect(screen.queryByText(/商城報表只到/)).toBeNull();
+  });
+
   it("訂單讀取失敗不拖累整頁，只是不列訂單缺口那一列", async () => {
-    mockFetchOrders.mockRejectedValue(new Error("讀取失敗"));
+    mockGetConnections.mockRejectedValue(new Error("讀取失敗"));
     mockGetTriage.mockResolvedValue(triage({
       data: {
         sync: { state: "ok", error: null, last_success_at: "2026-09-19T14:40:00+00:00" },

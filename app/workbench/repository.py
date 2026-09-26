@@ -1151,10 +1151,54 @@ def select_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: s
     output = _output_with_brief(conn, org_id, brand_id, output_id)
     if output["brief_id"] != set_id:
         raise ValueError("output_unknown")
+    if output["adopted_at"] is None:
+        # Feature Contract L: lock the set row so two quick clicks cannot both pass the count.
+        brief = conn.execute(
+            "SELECT source_ref, required_outputs_json FROM workbench_brief"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s FOR UPDATE",
+            (org_id, brand_id, set_id),
+        ).fetchone()
+        cap = _selection_cap(dict(brief), output["part"]) if brief is not None else None
+        if cap is not None:
+            selected = conn.execute(
+                "SELECT COUNT(*) AS n FROM workbench_output WHERE org_id = %s AND brand_id = %s"
+                " AND brief_id = %s AND part = %s AND adopted_at IS NOT NULL",
+                (org_id, brand_id, set_id, output["part"]),
+            ).fetchone()
+            if selected is not None and selected["n"] >= cap:
+                raise SelectionFullError(cap)
     adopt_output(conn, org_id, brand_id, output_id)
     detail = set_detail(conn, org_id, brand_id, set_id)
     assert detail is not None
     return detail
+
+
+class SelectionFullError(ValueError):
+    """Feature Contract L: `str(exc)` is the route's error code; `required` fills the message."""
+
+    def __init__(self, required: int):
+        super().__init__("selection_full")
+        self.required = required
+
+
+def selection_full_message(required: int) -> str:
+    return f"這一則只能選 {required} 張，先取消目前選的那張再選。"
+
+
+def _selection_full(brief: dict, part: str, adopted_flags: list) -> bool:
+    cap = _selection_cap(brief, part)
+    return cap is not None and sum(1 for a in adopted_flags if a) >= cap
+
+
+def _selection_cap(brief: dict, part: str) -> int | None:
+    """Feature Contract L (F31 item 7): an ads-dispatched set (`source_ref.ads_ad_id`) runs
+    exactly `required_outputs[image_prompt]` images per ad, so image selections stop there — a
+    selection beyond it is refused, not swapped. Copy, video scripts and every non-ads set keep
+    multi-select (`None` = no cap)."""
+    if part != "image_prompt" or not (brief.get("source_ref") or {}).get("ads_ad_id"):
+        return None
+    required = (brief.get("required_outputs_json") or {}).get(part)
+    return required if isinstance(required, int) and required > 0 else None
 
 
 def deselect_version_for_set(conn: _AnyConn, org_id: str, brand_id: str, set_id: str,
@@ -1211,6 +1255,34 @@ def _image_variant_count(request_json: dict | None) -> int:
     return count if isinstance(count, int) and 0 <= count <= 9 else 0
 
 
+_VERSION_ITEM_KEYS = ("items", "concepts", "sets", "scripts")
+
+
+def _validation_warning(body_json, version_index: int) -> dict | None:
+    """Feature Contract L (F31 item 8): this version's own ❌ lines, `None` when it has none.
+
+    `jobs.py` stores the round's check lines on every row of the round (image: each version's
+    body; copy／video_script: the shared round body), each line `"❌ <path>：<message>"`. A
+    version owns the lines whose path addresses its item — `items[i]`／`concepts[i]`（image）,
+    `sets[i]`（copy）, `scripts[i]`（video_script）with `i` = `version_index`. Round-level
+    lines (layout／device variety, item count, coordinates) belong to no single version and
+    stay out, so they never force a confirm on every version of the round."""
+    if not isinstance(body_json, dict):
+        return None
+    lines = body_json.get("validation")
+    if not isinstance(lines, list):
+        return None
+    prefixes = tuple(f"{key}[{version_index}]" for key in _VERSION_ITEM_KEYS)
+    own = []
+    for line in lines:
+        if not isinstance(line, str) or not line.startswith("❌ "):
+            continue
+        path = line[2:].split("：", 1)[0]
+        if any(path == p or path.startswith(p + ".") for p in prefixes):
+            own.append(line)
+    return {"lines": own} if own else None
+
+
 def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str,
                     request_json: dict | None = None, product_id: str | None = None) -> list:
     rows = conn.execute(
@@ -1226,6 +1298,10 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         }
         for r in (dict(row) for row in rows)
     ]
+    for version, row in zip(versions, rows, strict=True):
+        version["validation_warning"] = _validation_warning(
+            row["body_json"], version["version_index"],
+        )
     if versions:
         claim_sources = claims.sources(conn, brand_id, product_id)
         for version in versions:
@@ -1364,6 +1440,9 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
             "state": product_state(required_outputs[part], versions_by_part.get(part) or []),
             "selected": sum(1 for a in (versions_by_part.get(part) or []) if a),
             "required": required_outputs[part],
+            # Feature Contract L: the cap `select_version_for_set()` enforces, told to the
+            # browser so it disables 選定 instead of re-spelling the ads-set rule.
+            "selection_full": _selection_full(brief, part, versions_by_part.get(part) or []),
             "generation_settings": _generation_settings(part, brief["request_json"]),
             "versions": versions,
             "copy_all_text": copy_all_text,

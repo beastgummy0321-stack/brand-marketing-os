@@ -8,7 +8,7 @@ import { formatSyncTime } from "@/lib/format";
 import { listCampaigns, type CampaignSyncState } from "@/lib/adsApi";
 import { getTriage, type TriageItem } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
-import { fetchOrders } from "@/lib/ordersApi";
+import { getConnections, type AdsConnections } from "@/lib/adsConnectionsApi";
 import { ActionBar, Chip, DayTiles, ResultHero, TodoRow } from "../patterns";
 
 /** 本機日曆日期小工具（同 `connections/DataConnectionsPage.tsx` 的先例，各自留一份，見那個
@@ -63,7 +63,7 @@ interface Row {
 /** 三個一定存在的事實列 + 「全部資料不足」時每個 `reason_code` 一列（Feature Decisions
  * 「Wait page」）——沒有 missing_days 才會顯示 reason_code 列，`missing_days` 本身已經解釋了
  * 「資料不足」的原因，兩邊不重複列。 */
-function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: string; end: string } | null, missingDays: string[], items: TriageItem[], ordersLatest: string | null): Row[] {
+function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: string; end: string } | null, missingDays: string[], items: TriageItem[], ordersMissing: string[]): Row[] {
   const rows: Row[] = [];
   if (sync.state === "disconnected") {
     rows.push({
@@ -88,9 +88,13 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
       subtitle: "同步恢復後自動補",
     });
   }
-  if (coverage && ordersLatest !== null && ordersLatest < coverage.end) {
+  // F31-I07：訂單缺口跟資料連線頁同一條規則——`GET …/connections` 的 `orders.missing_days`
+  // （匯入已經涵蓋、當天沒有訂單的日子不算缺），只看這個活動覆蓋範圍內的那幾天。缺的日子一定
+  // 是報表涵蓋範圍之後連續的尾段，所以「只到」＝第一個缺的日子前一天。
+  const ordersGap = coverage ? ordersMissing.filter((day) => day >= coverage.start && day <= coverage.end) : [];
+  if (coverage && ordersGap.length > 0) {
     rows.push({
-      key: "orders", emoji: "🧾", title: `商城報表只到 ${formatMD(ordersLatest)}`,
+      key: "orders", emoji: "🧾", title: `商城報表只到 ${formatMD(addDaysLocal(ordersGap[0], -1))}`,
       subtitle: `補到 ${formatMD(coverage.end)} 才能對照訂單`,
       action: { label: "補報表", href: `/brands/${brandId}/orders` },
     });
@@ -119,7 +123,8 @@ type State =
       coverage: { start: string; end: string } | null;
       missingDays: string[];
       items: TriageItem[];
-      ordersLatest: string | null;
+      /** The `orders` source's `missing_days` from `GET …/connections` (the one orders-coverage rule). */
+      ordersMissing: string[];
     };
 
 /** 資料不足 wait page（F24-I03，v7 原型 `waitPage()`）：首頁卡片與活動工作區在
@@ -145,9 +150,9 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
       getTriage(brandId, campaignId),
       // review 先例（`CampaignDetailPage.tsx`）：訂單只餵一顆選用的列，讀失敗不該拖累整頁
       // （design-system §1.7 self-check 9）。
-      fetchOrders(brandId).catch(() => null),
+      getConnections(brandId).catch((): AdsConnections | null => null),
     ])
-      .then(([campaigns, triage, orders]) => {
+      .then(([campaigns, triage, connections]) => {
         if (cancelled) return;
         const campaign = campaigns.find((c) => c.id === campaignId);
         if (!campaign) {
@@ -155,7 +160,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
           return;
         }
         const data = triage.data;
-        const ordersLatest = orders ? orders.orders.items.find((item) => item.order_date !== null)?.order_date ?? null : null;
+        const ordersMissing = connections?.sources.find((source) => source.kind === "orders")?.missing_days ?? [];
         setState({
           status: "ready",
           campaignName: campaign.name,
@@ -163,7 +168,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
           coverage: data?.coverage ?? null,
           missingDays: data?.missing_days ?? [],
           items: triage.items,
-          ordersLatest,
+          ordersMissing,
         });
       })
       .catch((err: unknown) => {
@@ -252,8 +257,8 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
     );
   }
 
-  const { campaignName, sync, coverage, missingDays, items, ordersLatest } = state;
-  const rows = buildRows(brandId, sync, coverage, missingDays, items, ordersLatest);
+  const { campaignName, sync, coverage, missingDays, items, ordersMissing } = state;
+  const rows = buildRows(brandId, sync, coverage, missingDays, items, ordersMissing);
   const tiles = last7Days(coverage?.end ?? todayLocalString());
   const missingSet = new Set(missingDays);
   const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatSyncTime(sync.last_success_at)}` : "尚未同步";

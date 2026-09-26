@@ -4,7 +4,8 @@ import { Thumb } from "./LoopPieces";
 
 /** v10 `tabStructure()` `.tree2` (F30): campaign → ad groups → ads. The root node (`.node.root`) sits left with a
  * connector into the spine; each group block (`.sblk`) is a group node (`.node.set`) beside its leaf list
- * (`.leafs` / `.leaf`). A leaf is a 28px thumbnail, the ad name, then the caller's chip and number. A leaf with
+ * (`.leafs` / `.leaf`). A leaf is a 28px thumbnail, the ad name, then the caller's chip and number (one right-aligned
+ * cell that wraps under a long name instead of squeezing it, F31-I12). A leaf with
  * `missing` shows the dashed empty tile and 「缺素材」 instead of the name (a draft slot without material);
  * `dimmed` is the half-transparent 關閉中 row. `data-slot="tree-rows"`. */
 
@@ -43,16 +44,24 @@ export function TreeRows({ root, groups }: { root: TreeNodeInfo; groups: TreeGro
             <ul aria-label={g.name} className="m-0 list-none border-l-2 border-border py-0 pr-0 pl-[18px]">
               {g.leaves.map((leaf) => (
                 <li key={leaf.key} data-variant={leaf.missing ? "missing" : leaf.dimmed ? "dimmed" : "ad"}
-                  className={cn("relative flex items-center gap-2.5 py-1.5", leaf.dimmed && "opacity-50")}>
+                  className={cn("relative flex flex-wrap items-center gap-x-2.5 gap-y-1 py-1.5", leaf.dimmed && "opacity-50")}>
                   <span aria-hidden="true" className="absolute top-1/2 -left-[18px] w-3.5 border-t-2 border-border" />
-                  {leaf.missing
-                    ? <span aria-hidden="true" className="size-7 shrink-0 rounded-lg border-[1.5px] border-dashed border-grade-thin bg-muted" />
-                    : <Thumb url={leaf.thumbnailUrl} size={28} />}
-                  <span className="min-w-0 flex-1 text-xs font-medium [overflow-wrap:anywhere]">
-                    {leaf.missing ? <span className="text-muted-foreground">{leaf.missingLabel ?? "缺素材"}</span> : leaf.name}
+                  {/* Thumbnail and name take at least 16rem beside the chip and number (a floor of 10rem), so a long name never
+                      shrinks to a one-character column (1024); when that does not fit, those wrap under it instead. */}
+                  <span data-part="name" className="flex min-w-[10rem] flex-[1_1_16rem] items-center gap-2.5">
+                    {leaf.missing
+                      ? <span aria-hidden="true" className="size-7 shrink-0 rounded-lg border-[1.5px] border-dashed border-grade-thin bg-muted" />
+                      : <Thumb url={leaf.thumbnailUrl} size={28} />}
+                    <span className="text-xs font-medium [overflow-wrap:anywhere]">
+                      {leaf.missing ? <span className="text-muted-foreground">{leaf.missingLabel ?? "缺素材"}</span> : leaf.name}
+                    </span>
                   </span>
-                  {leaf.chip}
-                  {leaf.value !== undefined && <b className="numeric min-w-[76px] text-right text-xs font-semibold">{leaf.value}</b>}
+                  {(leaf.chip || leaf.value !== undefined) && (
+                    <span data-part="facts" className="ml-auto flex max-w-full items-center justify-end gap-2.5">
+                      {leaf.chip}
+                      {leaf.value !== undefined && <b className="numeric min-w-[76px] text-right text-xs font-semibold">{leaf.value}</b>}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

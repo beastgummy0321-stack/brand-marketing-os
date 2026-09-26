@@ -11,28 +11,14 @@ Start here in the next session. This is a board, not an implementation authoriza
 Order: bugs and everything the ad closed loop needs first; the rest is archived below for a later session.
 Each open-file claim was re-verified against `1fd9a187` on 2026-09-26 (file:line in the issue files may be stale).
 
-### P1 — bugs (one feature batch)
-Ad loop:
-1. Wizard: offerings step does not advance, forgets 「廣告帶來的是什麼」, order flips (`issue-offerings-step-does-not-advance-and-forgets-choice.md`).
-2. Wizard: start-step draft lost on navigation (`issue-intake-draft-not-saved.md`).
-3. Intake research: a failed queued job with no `llm_task` row reads `done` (`research.py` `_idle_job`); pipe-table format has no retry (`issue-intake-research-first-run-format-fail-and-silent-worker.md`).
-4. Meta token rejection shows raw Graph text, no missing-scope hint (`issue-meta-token-rejection-shows-raw-graph-text.md`).
-5. Meta parent-id guard is fail-open for ads-center bindings — the second caller now exists (`adapters/manual.py` name matches; `issue-meta-unknown-parent-id-fail-open.md`).
-6. Coordinates edited after dispatch: **ruling — editing stays allowed; learning reads a coordinates snapshot taken at dispatch** (`issue-ad-coordinates-edited-after-dispatch.md`).
-7. Image selection: no one-per-ad cap; the creative that ran is not recorded (`issue-image-selection-one-per-ad.md`).
-8. Failed image validation does not gate or warn at selection (`issue-image-validation-does-not-gate-selection.md`; prose-drift check stays undecided).
-9. Brand-home 「判讀」 (cockpit diagnosis) has three bugs (`issue-adopt-button-visible-while-a-new-round-starts.md`, `issue-adopt-has-no-echo.md`, `issue-diagnosis-hides-full-coverage.md`). **Ruling (2026-09-26): keep it and fix the three bugs** — an overlap map found four capabilities the Ads Center lacks (brand-level grouping by the 7 coordinate dimensions, breakeven against coordinates, the cross-campaign 3-lens diagnosis, 「採用」 → an experiment brand rule read by every generation prompt via `context_compiler`).
-10. Connections: a day after the latest order without orders reads as missing.
-11. Bind message hides partial success (`issue-bind-message-hides-partial-success.md`) — the ads-center bind endpoint has no frontend caller: fix the message or delete the dead path.
-12. Loop wording (`issue-drill-wording-gaps.md` items 3, 4, 5, 7a): 「尚未成功拉取」 beside real numbers, newly matched campaign waits for the next pull, attribution window on the cockpit ROAS tile, fixed vs unit cost help.
-
-Other bugs:
-13. Brand delete misses 10 brand_id tables; 3 have FKs so delete fails (`ads_runtime_event`, `campaign_period`, `channel_entity_map`); `llm_task` is kept on purpose; the coverage test `cleanup.py` cites does not exist (`issue-brand-delete-misses-nine-tables.md`). Drop the 4 dead tables in the same pass (`issue-five-live-tables-zero-code.md`).
-14. Post-processing failure after a successful AI call reads as done (`issue-post-processing-failure-reads-as-done.md`).
-15. Research/report status reads done while queued (`issue-research-status-reads-done-while-queued.md`).
-16. Non-loop wording (`issue-drill-wording-gaps.md` items 1, 7c, 7d): internal ticket notes on rule cards, US$ cost with no 「不是廣告費」, EasyStore-only empty state.
-17. Flaky under load: `test_ads_external_sync.py` cursor test; DB connection exhaustion at `pytest -n 4` on 54322.
-18. `TreeRows` squeezes long names at 1024; `DayGrid` truncates long account names.
+### P1 — bugs: done in F31 (2026-09-26)
+All 18 items fixed at their causes (rules in `docs/architecture/ads.md` §6.35 and `docs/architecture/intake.md` "F31"); the absorbed backlog files were deleted. Follow-ups F31 surfaced, not fixed:
+1. `WorkspaceHead` 打平線 pill squeezes to one character per line beside a long campaign name at 1024 (same class as the TreeRows fix).
+2. Brand-home 判讀: a failed round reads 「這一輪判讀沒有給出建議」, not as a failure (the diagnosis response has no failure message).
+3. `GET …/campaigns/{c}` returns the internal `live_creative_json` on each ad (payload only; frontend ignores it).
+4. `test_workbench.py::VideoScriptRoundTripTest::test_short_reply_stays_red_after_a_fix_round_that_does_not_add_one` fails under xdist without `--dist loadfile` (order/queue dependence).
+5. The two cross-org lookup functions are callable by any signed-in user through PostgREST RPC as a yes/no oracle on a platform id; wait page `missing_days` only cover the connections window (this month or last 28 days).
+6. `issue-image-validation-does-not-gate-selection.md`: the prose-drift check is still undecided.
 
 ### P2 — ad-loop features, one /dig each, in this order
 1. **Platform writes** (the system creates ads, changes budgets and pauses on Meta after approval) — next /dig (§6.4 ruling needed).

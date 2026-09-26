@@ -272,6 +272,23 @@ class PasteFixBackgroundTest(_Base):
         self.assertEqual(status["error"], MISSING_KEY_MESSAGE)
         self._assert_notice(bid, "貼回修格式失敗")
 
+    def test_apply_failure_after_ai_success_reads_failed_and_notifies(self):
+        """F31-I02 (Contract J): the AI call succeeded but landing its rows raised. The
+        handler notifies, then re-raises so the job ends `failed`. Red on master: the
+        exception was swallowed and the status read `done` from the succeeded `llm_task` row."""
+        bid = self._create_full()
+        bi_repo.create_product(web.conn, bid, name=script.MOCK_PRODUCT_NAME, actor="測試員")
+        self.client.post(f"/api/intake/brands/{bid}/paste/validate",
+                         json={"raw_text": script.PASTE_SAMPLE_ERRORS})
+        intake_ai.PROVIDER = FakeProvider(response=_fake_response(script.PASTE_SAMPLE_FIXED))
+        with mock.patch.object(state, "apply_paste", side_effect=RuntimeError("模擬落地失敗")):
+            self.client.post(f"/api/intake/brands/{bid}/paste/fix/start")
+            status = self._poll(bid, "paste_fix")
+        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error"], background_module.JOB_FAILED_MESSAGE)
+        self._assert_notice(bid, "貼回修格式失敗")
+
     def test_over_budget_blocks_before_calling_ai(self):
         bid = self._create_full()
         self.client.post(f"/api/intake/brands/{bid}/budget", json={"limit": 0.05})

@@ -10,9 +10,11 @@ CLI 驅動也照樣需要，所以它們是工作，不是端點。
 """
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from app import workbench  # module entry point only (docs/contracts/workbench.md)
+from app.background import JOB_FAILED_MESSAGE
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
@@ -62,13 +64,42 @@ def _load_platform_data() -> dict:
     return json.loads(PLATFORM_DATA_FILE.read_text(encoding="utf-8"))
 
 
+def job_lock(task_type: str, brand_id: str) -> str:
+    """The `queueing_lock` every schedule generation enqueues under (`routes._run_plan`,
+    `_run_tree`, `_run_diagnosis`): one job per brand and task type."""
+    return f"{task_type}:{brand_id}"
+
+
+def job_placeholder_row(task_type: str, status: str) -> dict:
+    """F31 Contract J: stands in for an `llm_task` row the newest job has not written (still
+    queued, or failed before its AI call). Same keys the row readers use; `id` is None because
+    there is no row, so nothing hangs off it (bindings, briefs, approval)."""
+    return {
+        "id": None, "task_type": task_type, "status": status,
+        "error": JOB_FAILED_MESSAGE if status == "failed" else None,
+        "started_at": datetime.now(UTC), "context_scope_json": {}, "rendered_output": None,
+        "structured_output_json": None, "usage_json": None,
+    }
+
+
 def _latest_task_row(conn, brand_id: str, task_type: str) -> dict | None:
+    """The newest `llm_task` row, read through F31 Contract J: the newest job decides first.
+    Job still active while the newest row is not its running row (queued behind an older row,
+    or past its AI call) → a running placeholder; job failed while the newest row carries no
+    failure of its own → a failed placeholder with `JOB_FAILED_MESSAGE`. Otherwise (and always
+    in memory queue mode, `job_outcome` → None) the row as it is."""
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
         "ORDER BY started_at DESC LIMIT 1",
         (brand_id, task_type),
     ).fetchone()
-    return dict(row) if row is not None else None
+    newest = dict(row) if row is not None else None
+    outcome = background_job_outcome(job_lock(task_type, brand_id))
+    if outcome == "active" and (newest is None or newest["status"] != "running"):
+        return job_placeholder_row(task_type, "running")
+    if outcome == "failed" and (newest is None or newest["status"] in ("running", "succeeded")):
+        return job_placeholder_row(task_type, "failed")
+    return newest
 
 
 def _display_task_row(conn, brand_id: str, task_type: str) -> tuple:

@@ -3,9 +3,10 @@
 Falsifiers: every bound account is its own row (a never-synced one is `never`, never folded into
 a min or read as ok); an auth failure after a good read is `auth_expired` with only the unread
 days missing and its campaign named; a covered day with no spend row is `ok`; orders are `none`
-before the first order and missing after the latest one; costless products are named; platforms
-without a reader are `unsupported`; the month and today follow the org timezone at a month edge;
-the route never requests a sync.
+before the first order and missing after the later of the latest order and the day before the
+latest import (F31-I07: a zero-order day an import covered is `ok`); costless products are
+named; platforms without a reader are `unsupported`; the month and today follow the org
+timezone at a month edge; the route never requests a sync.
 """
 
 import unittest
@@ -105,11 +106,19 @@ class ConnectionsTest(unittest.TestCase):
         )
         self.conn.commit()
 
-    def _order(self, number, day):
+    def _local(self, day, hour=12):
+        """A moment on `day` in the org's own timezone."""
+        zone = coresettings.org_timezone(self.conn, org_id=self.org)
+        return datetime.combine(day, time(hour, 0), tzinfo=zone)
+
+    def _order(self, number, day, *, imported_at=None):
+        """One order row as an import leaves it; by default imported at noon of its own order
+        day (an undated one on the 1st), so the import never reaches past the latest order."""
+        imported_at = imported_at or self._local(day or date(2026, 9, 1))
         self.conn.execute(
-            "INSERT INTO order_record(id,org_id,brand_id,order_number,order_date,source) "
-            "VALUES (%s,%s,%s,%s,%s,'test')",
-            (db.new_id("ord"), self.org, self.brand, number, day),
+            "INSERT INTO order_record(id,org_id,brand_id,order_number,order_date,source,"
+            "created_at,updated_at) VALUES (%s,%s,%s,%s,%s,'test',%s,%s)",
+            (db.new_id("ord"), self.org, self.brand, number, day, imported_at, imported_at),
         )
         self.conn.commit()
 
@@ -328,6 +337,44 @@ class ConnectionsTest(unittest.TestCase):
     def test_orders_up_to_yesterday_are_ok(self):
         self._order("B-1", TODAY - timedelta(days=1))
         self.assertEqual(self._source(self._read(), "orders")["state"], "ok")
+
+    def test_days_an_import_covered_are_ok_without_orders(self):
+        # F31-I07 (item 10): orders on the 1st and the 3rd, exported at 01:00 on the 6th (org
+        # time; still the 5th in UTC). The import covers up to the 5th, so the zero-order 4th
+        # and 5th are read, not missing; the 6th onwards is.
+        self._order("C-1", date(2026, 9, 1))
+        self._order("C-2", date(2026, 9, 3), imported_at=self._local(date(2026, 9, 6), hour=1))
+        result = self._read()
+        source = self._source(result, "orders")
+        self.assertEqual(source["state"], "missing_days")
+        self.assertEqual(source["missing_days"][0], "2026-09-06")
+        self.assertEqual(source["missing_days"][-1], "2026-09-18")
+        self.assertEqual(source["note"], "最新匯入 09/06，缺 09/06 之後")
+        days = self._days(result, "orders")
+        self.assertEqual([days["2026-09-04"], days["2026-09-05"]], ["ok", "ok"])
+        self.assertEqual(days["2026-09-06"], "missing")
+
+    def test_an_import_on_the_last_order_day_covers_nothing_later(self):
+        self._order("D-1", date(2026, 9, 1))
+        self._order("D-2", date(2026, 9, 3), imported_at=self._local(date(2026, 9, 3), hour=23))
+        result = self._read()
+        source = self._source(result, "orders")
+        self.assertEqual(source["missing_days"][0], "2026-09-04")
+        self.assertEqual(source["note"], "最新到 09/03，缺 09/04 之後")
+        days = self._days(result, "orders")
+        self.assertEqual(days["2026-09-03"], "ok")
+        self.assertEqual(days["2026-09-04"], "missing")
+
+    def test_an_import_today_covers_through_yesterday(self):
+        self._order("E-1", date(2026, 9, 10), imported_at=self._local(TODAY, hour=9))
+        result = self._read()
+        source = self._source(result, "orders")
+        self.assertEqual((source["state"], source["missing_days"]), ("ok", []))
+        self.assertEqual(source["note"], "最新匯入 09/19")
+        self.assertIsNone(source["action"])
+        days = self._days(result, "orders")
+        self.assertEqual(days["2026-09-18"], "ok")
+        self.assertEqual(days["2026-09-19"], "future")
 
     def test_costless_products_are_named(self):
         with_cost = brands.create_product(self.conn, self.brand, name="經典款", actor=ACTOR)

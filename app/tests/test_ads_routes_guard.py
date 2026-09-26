@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app.ads import adapters as ads_adapters
 from app.ads import brief as ads_brief
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
@@ -183,6 +184,31 @@ class AdsRoutesValidationStillFiresTest(unittest.TestCase):
         self.assertEqual(response.json()["error"]["code"], "ready_invalid")
 
 
+class NameMatchBindRemovedTest(unittest.TestCase):
+    """F31-I08 (item 11): the ads-center name-match bind had no screen calling it and launch
+    readback replaced it, so the route and every adapter's `bind` verb are gone -- not kept with
+    a better message. Same real campaign of the caller's own brand as the class above."""
+
+    setUp = AdsRoutesValidationStillFiresTest.setUp
+
+    def test_bind_route_is_gone_for_a_real_campaign(self):
+        response = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign_id}/bind",
+            json={}, headers=self.headers,
+        )
+        self.assertIn(response.status_code, (404, 405), response.text)
+        self.assertEqual(
+            [r.path for r in _ads_routes() if r.path.endswith("/bind")], [],
+        )
+
+    def test_no_adapter_has_a_bind_verb(self):
+        for name in ("manual", "auto_meta", "simulated"):
+            with self.subTest(adapter=name):
+                adapter = ads_adapters.get_adapter(name)
+                self.assertIsNotNone(adapter)
+                self.assertFalse(hasattr(adapter, "bind"))
+
+
 def _fake(rendered_output: str) -> providers.FakeProvider:
     return providers.FakeProvider(response=providers.ProviderResponse(
         output_text=rendered_output, structured=None,
@@ -314,11 +340,6 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
             f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}", headers=self.headers,
         )
         self._assert_shape(get)
-
-        bind = self.client.post(
-            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/bind", headers=self.headers,
-        )
-        self._assert_shape(bind)
 
 
 if __name__ == "__main__":

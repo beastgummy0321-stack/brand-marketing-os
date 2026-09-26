@@ -6,8 +6,7 @@ import math
 from datetime import date, timedelta
 from itertools import combinations
 
-from app import workbench
-from app.ads import assets, repository, simulation_mode
+from app.ads import live_creative, repository, simulation_mode
 from app.core import settings
 from app.core.db import jsonb, now_utc
 
@@ -48,7 +47,9 @@ def _detail(conn, org_id, brand_id, campaign_id, *, write=False):
         raise ValueError("找不到這個活動。")
     if write:
         repository.require_internal_campaign(conn, org_id, brand_id, campaign_id)
-    return detail
+    # F31-I05 Contract O: pairs compare the coordinates each creative was made for (the
+    # dispatched set's snapshot), not coordinates edited after dispatch.
+    return live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
 
 
 def _fingerprint(value):
@@ -190,20 +191,10 @@ def save_settings(conn, org_id, brand_id, campaign_id, *, revision, overrides, a
 
 
 def _materials(conn, org_id, brand_id, campaign_id):
-    # Read the public workbench projection, including each currently adopted output.
-    briefs = workbench.briefs_for_source(
-        conn, org_id, brand_id, assets.PACK_SOURCE_KIND, {"ads_campaign_id": campaign_id}
-    )
-    result = {}
-    for brief in briefs:
-        ad_id = (brief.get("source_ref") or {}).get("ads_ad_id")
-        if ad_id:
-            outputs = {
-                part: workbench.adopted_output(conn, org_id, brand_id, brief["id"], part)
-                for part in (brief.get("parts") or {})
-            }
-            result[ad_id] = {"brief": brief, "outputs": outputs}
-    return result
+    # The creative each ad shows through the public workbench projection: the outputs its
+    # approved launch froze once launched, the set's current selection before (F31-I05 Contract
+    # O). Same `{ad_id: {brief, outputs}}` shape, so an unchanged creative keeps its fingerprint.
+    return live_creative.materials(conn, org_id, brand_id, campaign_id)
 
 
 def _build_proposal(conn, org_id, brand_id, campaign_id, detail):

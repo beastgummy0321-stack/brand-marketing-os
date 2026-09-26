@@ -53,6 +53,9 @@ export function useDiagnosisPanel(brandId: string) {
       .then((diagnosis) => {
         setState({ status: "ready", diagnosis });
         setSubmitting(false);
+        // F31-I06: `suggestion.adopted` from the server is the truth; the local set only
+        // bridges the moment between a click and this refetch.
+        setAdoptedIndexes(new Set());
       })
       .catch((err: unknown) => {
         setState({
@@ -102,6 +105,7 @@ export function useDiagnosisPanel(brandId: string) {
     try {
       await adoptSuggestion(brandId, index);
       setAdoptedIndexes((prev) => new Set(prev).add(index));
+      load();
     } catch (err) {
       setAdoptError(err instanceof Error ? err.message : "採用失敗，請稍後再試。");
     } finally {
@@ -182,8 +186,9 @@ function DiagnosisReadout({ diagnosis, panel }: { diagnosis: Diagnosis; panel: D
               <SuggestionCard
                 key={index}
                 suggestion={suggestion}
-                adopted={panel.adoptedIndexes.has(index)}
+                adopted={suggestion.adopted || panel.adoptedIndexes.has(index)}
                 adopting={panel.adoptingIndex === index}
+                roundBusy={panel.busy}
                 onAdopt={() => panel.onAdopt(index)}
               />
             ))}
@@ -202,11 +207,14 @@ function formatCheckable(n: DiagnosisCheckableNumbers, currency: string): string
 }
 
 function SuggestionCard({
-  suggestion, adopted, adopting, onAdopt,
+  suggestion, adopted, adopting, roundBusy, onAdopt,
 }: {
   suggestion: DiagnosisSuggestion;
   adopted: boolean;
   adopting: boolean;
+  /** A new round is submitting or running: these cards are the previous round, and the
+   * server already reads the new one, so adopting now would miss (400). */
+  roundBusy: boolean;
   onAdopt: () => void;
 }) {
   // 票 past-ads-07：可核對數字的花費跟著 suggestion 自己的 currency 走，不是系統 TWD——
@@ -239,7 +247,7 @@ function SuggestionCard({
       <button
         type="button"
         onClick={onAdopt}
-        disabled={adopted || adopting}
+        disabled={adopted || adopting || roundBusy}
         className="mt-1 w-fit rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {adopted ? "已採用" : adopting ? "採用中…" : "採用"}

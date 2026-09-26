@@ -48,7 +48,7 @@ BRANCH_TABLES: set = set()
 BRAND_PERMANENT_TABLES = {
     "brand", "brand_fact", "brand_performance_baseline", "brand_report", "claim",
     "customer_voice", "learning_ledger", "official_asset", "owned_channel", "persona", "product",
-    "product_economics", "product_fact", "rule", "source_reference", "strategy_hypothesis",
+    "product_economics", "product_fact", "rule", "source_reference",
 }
 
 _SQL_TABLE_REF = re.compile(r"(?:FROM|INTO|UPDATE|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)

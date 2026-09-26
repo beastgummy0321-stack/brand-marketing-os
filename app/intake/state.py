@@ -348,6 +348,32 @@ def complete_draft(draft: dict, conn=None) -> None:
     ir.complete_draft(_conn(conn), draft["brand_id"], draft["id"])
 
 
+OFFERINGS_SELL_TYPES = ("product", "service", "both")
+OFFERINGS_AD_DELIVERIES = ("direct", "ask", "lead")
+
+
+def parse_offerings_choice(raw) -> dict | None:
+    """Contract M: `{sell_type, ad_delivery}` with both values from the fixed sets, else None."""
+    if not isinstance(raw, dict):
+        return None
+    sell_type, ad_delivery = raw.get("sell_type"), raw.get("ad_delivery")
+    if sell_type not in OFFERINGS_SELL_TYPES or ad_delivery not in OFFERINGS_AD_DELIVERIES:
+        return None
+    return {"sell_type": sell_type, "ad_delivery": ad_delivery}
+
+
+def offerings_choice(brand_id: str, conn=None) -> dict | None:
+    """The offerings step's saved choice (Contract M): the active draft's, else the latest
+    completed draft's (a finished brand reopening step 3); None when never saved."""
+    conn = _conn(conn)
+    row = ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
+    return parse_offerings_choice(row.get("offerings_choice_json")) if row else None
+
+
+def save_offerings_choice(draft: dict, choice: dict, conn=None) -> None:
+    ir.update_draft(_conn(conn), draft["brand_id"], draft["id"], offerings_choice_json=choice)
+
+
 def touch(draft: dict, path: str, step: int, conn=None) -> None:
     """每個精靈 GET 頁面呼叫一次：記下「現在停在第幾步」，供續接連結使用。"""
     if draft["step"] != step:

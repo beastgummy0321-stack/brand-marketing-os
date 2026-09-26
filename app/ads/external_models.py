@@ -12,7 +12,6 @@ LEGACY_OPERATIONS = (
     "budget",
     "pack",
     "publish",
-    "bind",
     "simulate",
     "close",
     "comparison",

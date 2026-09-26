@@ -125,9 +125,8 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
             with self.assertRaisesRegex(ValueError, "本機"):
                 self.start()
         self.start()
-        for fn in (manual.publish, manual.bind):
-            with self.subTest(fn=fn.__name__), self.assertRaisesRegex(ValueError, "隔離模擬"):
-                fn(*self.args, actor="tester")
+        with self.assertRaisesRegex(ValueError, "隔離模擬"):
+            manual.publish(*self.args, actor="tester")
         with self.assertRaisesRegex(ValueError, "隔離模擬"):
             outcome.ingest_meta(*self.args, start=self.today, end=self.today)
 

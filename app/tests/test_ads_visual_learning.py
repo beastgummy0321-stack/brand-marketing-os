@@ -11,7 +11,7 @@ import unittest
 from datetime import timedelta
 from unittest import mock
 
-from app.ads import closeout, plan, visual_learning
+from app.ads import closeout, live_creative, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -95,9 +95,15 @@ class VisualLearningTestBase(unittest.TestCase):
                 purchases=daily_purchases, revenue=daily_revenue,
             )
 
-    def _patch_workbench(self, fingerprints: dict, *, unadopted: frozenset = frozenset()):
+    def _patch_workbench(self, fingerprints: dict, *, unadopted: frozenset = frozenset(),
+                          snapshots: dict | None = None):
+        """`snapshots`: `ad_id -> coordinates_snapshot_json` of that ad's dispatched set;
+        an ad without one gets a set without a snapshot (its current coordinates count)."""
         briefs = {
-            ad_id: {"id": f"brief-{ad_id}", "source_ref": {"ads_ad_id": ad_id}}
+            ad_id: {
+                "id": f"brief-{ad_id}", "source_ref": {"ads_ad_id": ad_id},
+                "coordinates_snapshot_json": (snapshots or {}).get(ad_id),
+            }
             for ad_id in fingerprints
         }
         brief_by_id = {b["id"]: ad_id for ad_id, b in briefs.items()}
@@ -113,10 +119,10 @@ class VisualLearningTestBase(unittest.TestCase):
             }
 
         p1 = mock.patch.object(
-            visual_learning.workbench, "briefs_for_source", side_effect=fake_briefs_for_source,
+            live_creative.workbench, "briefs_for_source", side_effect=fake_briefs_for_source,
         )
         p2 = mock.patch.object(
-            visual_learning.workbench, "adopted_output", side_effect=fake_adopted_output,
+            live_creative.workbench, "adopted_output", side_effect=fake_adopted_output,
         )
         p1.start()
         self.addCleanup(p1.stop)
@@ -152,6 +158,77 @@ class LookDimensionWritesOneLearningTest(VisualLearningTestBase):
         self.assertIn("phone_raw標籤", row["learning_text"])
         self.assertIn("studio_hero標籤", row["learning_text"])
         self.assertIn("這是相關，不代表是風格造成。", row["learning_text"])
+
+
+class AudienceEditedAfterDispatchTest(VisualLearningTestBase):
+    """F31-I05 Contract O (item 6 ruling): coordinates stay editable after dispatch, and the
+    closeout strata read the audience snapshot the images were made for."""
+
+    def test_strata_use_the_dispatch_audience_not_the_edited_one(self):
+        campaign = self._campaign()
+        group = self._group(campaign["id"])
+        ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
+        ad_b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
+        # Both sets were dispatched for cold_unaware (the two stored snapshot shapes).
+        snapshots = {
+            ad_a["id"]: {"audience": "cold_unaware", **_FILLER_COORDS},
+            ad_b["id"]: {"audience": {"key": "cold_unaware", "label": "冷受眾"}},
+        }
+        # Editing stays allowed after dispatch.
+        plan.update_ad(
+            self.conn, self.org_id, self.brand_id, ad_b["id"],
+            {"coordinates": {"audience": "warm_retarget"}}, actor=ACTOR,
+        )
+        self.conn.commit()
+        start = campaign["start_date"]
+        self._spread(campaign["id"], ad_a["id"], start, 3, daily_spend=100.0,
+                     daily_purchases=10, daily_revenue=200.0)
+        self._spread(campaign["id"], ad_b["id"], start, 3, daily_spend=100.0,
+                     daily_purchases=5, daily_revenue=200.0)
+        self._group_outcome(campaign["id"], group["id"], start, spend=600.0, purchases=45,
+                             revenue=800.0)
+        self._patch_workbench(
+            {ad_a["id"]: _fp(look="phone_raw"), ad_b["id"]: _fp(look="studio_hero")},
+            snapshots=snapshots,
+        )
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
+        self.assertEqual(
+            [r["applicability_scope"] for r in rows],
+            ["visual；audience=cold_unaware；look=phone_raw"],
+        )
+        # The coordinate edit itself was kept.
+        self.assertEqual(
+            ads_repo.get_ad(self.conn, self.org_id, self.brand_id, ad_b["id"])["audience_key"],
+            "warm_retarget",
+        )
+
+    def test_an_ad_without_a_dispatch_snapshot_uses_its_current_audience(self):
+        campaign = self._campaign()
+        group = self._group(campaign["id"])
+        ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
+        ad_b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
+        plan.update_ad(
+            self.conn, self.org_id, self.brand_id, ad_b["id"],
+            {"coordinates": {"audience": "warm_retarget"}}, actor=ACTOR,
+        )
+        self.conn.commit()
+        start = campaign["start_date"]
+        for ad, purchases in ((ad_a, 10), (ad_b, 5)):
+            self._spread(campaign["id"], ad["id"], start, 3, daily_spend=100.0,
+                         daily_purchases=purchases, daily_revenue=200.0)
+        self._patch_workbench(
+            {ad_a["id"]: _fp(look="phone_raw"), ad_b["id"]: _fp(look="studio_hero")},
+        )
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        # Current audiences differ, so the two ads are not one stratum.
+        self.assertEqual(
+            bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual"), [],
+        )
 
 
 class SecondCampaignSameWinnerUpgradesTest(VisualLearningTestBase):

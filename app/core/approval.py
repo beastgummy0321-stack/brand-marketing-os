@@ -13,6 +13,7 @@
 `context_scope_json.platform`，這裡加一欄平台名稱是加資料、不是加欄位（ADR 0035）。
 """
 
+from app.core import cleanup
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, new_id, now_utc
 
@@ -103,3 +104,36 @@ def revoke(conn: _AnyConn, *, approval_id: str, org_id: str, actor: str) -> None
         entity_id=approval_id, action="revoke", actor=actor,
     )
     conn.commit()
+
+
+# ---- 品牌刪除清理登記（app/core/cleanup.py；F31-I09）------------------------------------
+# approval rows are referenced by other modules' rows (ads_change_set.approval_id, no delete
+# action), so this entry must run after theirs. Registration order is delete order, and
+# importing this file happens early (ads and schedule import it), so registering at import
+# time would put it first. The composition root (app/main.py) calls register_cleanup() once
+# every module has registered.
+
+CLEANUP_NAME = "核准紀錄"
+
+
+def count_brand_data(conn: _AnyConn, brand_id: str) -> list:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM approval WHERE brand_id = %s", (brand_id,)
+    ).fetchone()
+    return [("核准紀錄", row["n"] if row is not None else 0)]
+
+
+def delete_brand_data(conn: _AnyConn, brand_id: str) -> dict:
+    """Only DELETE, never commit (the caller commits once, app/core/cleanup.py)."""
+    counts = dict(count_brand_data(conn, brand_id))
+    conn.execute("DELETE FROM approval WHERE brand_id = %s", (brand_id,))
+    return counts
+
+
+def register_cleanup() -> None:
+    """Register approval into app.core.cleanup after every module whose rows reference it."""
+    if CLEANUP_NAME in cleanup.registered_names():
+        return
+    cleanup.register(CLEANUP_NAME, count_brand=count_brand_data, delete_brand=delete_brand_data,
+                     brand_tables=frozenset({"approval"}),
+                     count_product=None, delete_product=None, product_tables=frozenset())

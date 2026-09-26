@@ -617,8 +617,7 @@ visual learnings (`visual`, written at 結案 by §6.3 and read by the image-pro
 learning_id, *, actor)` sets the existing `expired` flag (audited) — the one write §6.3 item 19
 needs to downgrade a visual winner that later loses; the rule of when lives in `ads`. The four
 other dead tables (`decision`, `strategy_hypothesis`, `campaign_period_budget_version`,
-`brand_dismissed_calendar_category`) stay in `docs/backlog/issue-five-live-tables-zero-code.md`;
-dropping them is not part of building the loop.
+`brand_dismissed_calendar_category`) were dropped in F31-I09 (2026-09-26).
 
 Two cross-module raw-SQL reads exist and are deliberate, pre-dating the manifest:
 `app/workbench/repository.py::list_coordinate_vocabulary` reads `brand_coordinate`/`feedback`

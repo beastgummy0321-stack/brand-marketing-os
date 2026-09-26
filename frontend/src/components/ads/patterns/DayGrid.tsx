@@ -33,7 +33,8 @@ export function DayGrid({ rows, today, label = "每天的資料" }: { rows: DayG
       <span />
       {dates.map((d) => <span key={d} aria-hidden="true" className="text-center text-[10.5px] text-muted-foreground">{TICKS.has(dayOf(d)) ? dayOf(d) : ""}</span>)}
       {rows.map((row) => [
-        <span key={`${row.key}:label`} className="truncate pr-2 text-xs font-medium">{row.label}</span>,
+        // Prototype `.calg` labels wrap: a long account name takes more lines in its 150px column, never an ellipsis.
+        <span key={`${row.key}:label`} className="pr-2 text-xs leading-snug font-medium [overflow-wrap:anywhere]">{row.label}</span>,
         ...row.days.map((d) => {
           const title = `${shortDate(d.date)} ${DAY_WORD[d.state]}`;
           return (

@@ -18,7 +18,11 @@
  *   user to do on another page.
  * - `attention_count` counts every source whose state is not `ok` or `unsupported`.
  * - Calendar dates are the organisation's own; `calendar.today` is today. Orders are `none` before
- *   the earliest order; a day not read yet today, and every later day, is `future`. */
+ *   the earliest order; a day not read yet today, and every later day, is `future`.
+ * - Orders coverage (F31-I07) ends at the later of the latest order date and the day before the
+ *   latest import, so a zero-order day an import covered is `ok`, not missing. This is the one
+ *   orders-coverage rule: the wait page reads the `orders` source's `missing_days` instead of
+ *   deriving a gap from the latest order date. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 

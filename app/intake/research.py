@@ -17,8 +17,10 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
+from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as bi_repo
 from app.core import net
@@ -130,25 +132,58 @@ def _cost_estimate(depth: str) -> float:
     return script.COST_RESEARCH_DEEP if depth == "deep" else script.COST_RESEARCH_STANDARD
 
 
+def _errors_text(errors) -> str:
+    lines = []
+    for e in errors or []:
+        if isinstance(e, dict):
+            where = f"第 {e['line']} 行：" if e.get("line") else ""
+            lines.append(f"- {where}{e.get('msg') or ''}")
+        else:
+            lines.append(f"- {e}")
+    return "\n".join(lines) or "- 讀不出總結表。"
+
+
+def _reask_prompt(prompt: str, errors) -> str:
+    return (
+        prompt + "\n\n【上一次的回覆讀不出來】系統照上面的輸出格式讀你上一次的回覆，"
+        "遇到這些問題：\n" + _errors_text(errors) + "\n"
+        "請重新輸出一次，嚴格照上面的輸出格式，只輸出總結表。"
+    )
+
+
 def run_research(conn, draft: dict, depth: str) -> tuple:
     """回傳 (ok, needs_review)。ok=False：呼叫本身失敗（人話錯誤已經在 llm_task）。
     ok=True, needs_review=True：AI 有回覆，但 `apply_paste` 讀不出表格——原文已經存進
     `paste_raw`，使用者可以在進階摺疊裡自己修或讓外部 AI 重跑。
+
+    F31-I02：第一次的回覆讀不出表格時，同一個工作裡自動再問一次（附上讀不出來的原因），
+    這次一樣算進草稿的花費上限，上限不夠就不問；第二次還是讀不出來才走「格式要你看一下」。
 
     呼叫走既有的 `ai._run`（不重開第二個呼叫入口；它內部讀 `brand.knowledge_version`
     的那句 SQL 已經記在 `test_architecture_boundaries.KNOWN_SQL_VIOLATIONS` 裡）。"""
     existing = ir.existing_confirmed_data(conn, draft["brand_id"])
     prompt = build_prompt(conn, draft, existing)
     max_tokens = 16000 if depth == "deep" else 8000
-    task = ai._run(
-        conn, draft, task_type=TASK_TYPE, purpose="整理品牌知識",
-        system=_SYSTEM, user_text=prompt,
-        options=gateway.TaskOptions(max_tokens=max_tokens),
-    )
+
+    def ask(user_text: str) -> dict:
+        return ai._run(
+            conn, draft, task_type=TASK_TYPE, purpose="整理品牌知識",
+            system=_SYSTEM, user_text=user_text,
+            options=gateway.TaskOptions(max_tokens=max_tokens),
+        )
+
+    task = ask(prompt)
     if task["status"] != "succeeded":
         return False, False
-    n = state.apply_paste(draft, task["rendered_output"], conn=conn)
-    return True, n is None
+    if state.apply_paste(draft, task["rendered_output"], conn=conn) is not None:
+        return True, False
+    draft = state.require_draft(draft["brand_id"], conn=conn)  # 重讀：花費已含第一次
+    if state.would_exceed(draft, _cost_estimate(depth)):
+        return True, True
+    retry = ask(_reask_prompt(prompt, draft["paste_errors"]))
+    if retry["status"] != "succeeded":
+        return True, True
+    return True, state.apply_paste(draft, retry["rendered_output"], conn=conn) is None
 
 
 # ---------------------------------------------------------------------------
@@ -159,12 +194,13 @@ def background_intake_research(org_id: str, brand_id: str, depth: str = "standar
     with core_db_connection() as conn:
         brand = bi_repo.get_brand(conn, brand_id)
         brand_name = brand["name"] if brand else brand_id
-        ok, needs_review = False, False
+        ok, needs_review, error = False, False, None
         try:
             draft = state.require_draft(brand_id, conn=conn)
             ok, needs_review = run_research(conn, draft, depth)
-        except Exception:  # noqa: BLE001 — worker 最後一道防線，不能讓例外憑空消失
-            ok = False
+        except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
+            conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
+            ok, error = False, exc
         if ok:
             message = ("品牌知識整理完了，但格式要你看一下" if needs_review
                       else "品牌知識整理完了，可以回去看")
@@ -174,6 +210,8 @@ def background_intake_research(org_id: str, brand_id: str, depth: str = "standar
             conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
             message=f"「{brand_name}」{message}", action_url=f"/app/brands/{brand_id}/intake",
         )
+        if error is not None:
+            raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 
 
 def _start_research(brand_id: str, org_id: str, depth: str) -> None:
@@ -202,6 +240,13 @@ def _job(status: str, started_at: str, error: str | None = None) -> dict:
             "usual_range_text": _USUAL_RANGE_TEXT, "error": error}
 
 
+def _failed_error(row: dict | None) -> str:
+    """Contract J：job 失敗時，有那次呼叫留下的 llm_task 錯誤就用它，否則講背景程式。"""
+    if row is not None and row["status"] not in ("running", "succeeded") and row["error"]:
+        return row["error"]
+    return JOB_FAILED_MESSAGE
+
+
 def _latest_task_row(brand_id: str) -> dict | None:
     row = web.conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
@@ -212,11 +257,20 @@ def _latest_task_row(brand_id: str) -> dict | None:
 
 
 def job_state(draft: dict) -> dict:
-    """成功列還要重驗格式：`apply_paste` 讀不出表格時 `draft["paste_errors"]` 非空——
-    比照 `routes_api._job_state` 對 scan／question 的重驗方式。"""
+    """Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
+    最新的 job 失敗＝failed。其餘照 llm_task 列判斷；成功列還要重驗格式：`apply_paste`
+    讀不出表格時 `draft["paste_errors"]` 非空——比照 `routes_api._job_state` 對
+    scan／question 的重驗方式。"""
     brand_id = draft["brand_id"]
     lock = _lock(brand_id)
     row = _latest_task_row(brand_id)
+    outcome = background_job_outcome(lock)
+    if outcome == "active":
+        started = row["started_at"] if row is not None and row["status"] == "running" else None
+        return _job("running", started.isoformat() if started else now_iso())
+    if outcome == "failed":
+        started = row["started_at"] if row is not None else None
+        return _job("failed", started.isoformat() if started else now_iso(), _failed_error(row))
     if row is None:
         return _job("running", now_iso()) if background_is_active(lock) else _idle_job()
     started_at = row["started_at"].isoformat() if row["started_at"] else now_iso()
