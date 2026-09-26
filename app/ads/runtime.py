@@ -239,6 +239,15 @@ def _health(conn, org, brand, campaign, now):
         add("budget_exceeded", "依目前整月花費與持續投放預估，已超出月總額。請檢視降低風險操作。")
     if value.get("end_date") and value["end_date"] <= today:
         add("plan_date_passed", "原計畫日期已到。活動與平台投放仍保留，請確認期限與下一步。")
+        # F32-I01: a hand-launched campaign whose planned end date has passed is `ended` so the
+        # list, the judgment and the close-out entry agree. `ended` is not `closed`: dates
+        # prompt a review, never a close-out; `closed` and imported rows are never touched.
+        if value.get("status") == "live" and value.get("origin") == "internal":
+            conn.execute(
+                "UPDATE ads_campaign SET status='ended' WHERE org_id=%s AND brand_id=%s "
+                "AND id=%s AND status='live' AND origin='internal'",
+                (org, brand, campaign),
+            )
     expired = conn.execute(
         "SELECT COUNT(*) AS n FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
         "AND campaign_id=%s AND end_date<=%s AND native_status='ACTIVE'",
