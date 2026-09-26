@@ -1152,10 +1152,15 @@ def record_action(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, 
 
 def bind_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                    external_id: str, external_name: str, external_status: str | None) -> None:
+    """F32-I01: binding the campaign node by launch readback is the moment a hand-launched
+    campaign becomes `live` (2026-09-26 ruling: live = bound to a platform object, not
+    "platform reports ACTIVE"). Only `ready` moves; a re-bind on `live`, or any other status,
+    is left alone, so the simulated adapter and re-reads stay untouched."""
     require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET external_id = %s, external_name = %s, external_status = %s,"
-        " local_state = 'bound', bound_at = now()"
+        " local_state = 'bound', bound_at = now(),"
+        " status = CASE WHEN status = 'ready' THEN 'live' ELSE status END"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
         (external_id, external_name, external_status, org_id, brand_id, campaign_id),
     )

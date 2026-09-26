@@ -267,6 +267,40 @@ class HandoffTest(unittest.TestCase):
         )["items"][0]
         self.assertFalse(action["evidence_json"]["delivery_confirmed"])
 
+    def _status(self):
+        return campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)["status"]
+
+    def test_campaign_readback_binds_ready_campaign_to_live(self):
+        # F32-I01: `live` means "bound to a platform object by readback" (2026-09-26 ruling).
+        # A hand-launched campaign left `ready` could never reach the close-out entry.
+        _, nodes = self.launch()
+        campaigns.set_campaign_status(self.conn, self.org, self.brand, self.campaign, "ready")
+        self.conn.commit()
+        root = self.check(nodes["campaign"], "campaign", "root")
+        self.assertEqual(root["status"], "confirmed", root["evidence_json"])
+        self.assertEqual(self._status(), "live")
+        # A second readback of the same campaign node keeps `live`; it does not bounce.
+        again = self.check(nodes["campaign"], "campaign", "root")
+        self.assertEqual(again["status"], "confirmed", again["evidence_json"])
+        self.assertEqual(self._status(), "live")
+
+    def test_group_only_binding_leaves_campaign_ready(self):
+        # Readback binds children through `bind_group`/`bind_ad` (handoff_check `_finish`);
+        # only the campaign node's own binding moves the status.
+        self.launch()
+        campaigns.set_campaign_status(self.conn, self.org, self.brand, self.campaign, "ready")
+        campaigns.bind_group(
+            self.conn,
+            self.org,
+            self.brand,
+            self.group,
+            external_id="group",
+            external_name="group",
+            external_status="ACTIVE",
+        )
+        self.conn.commit()
+        self.assertEqual(self._status(), "ready")
+
     def test_platform_objective_code_matches_the_planned_objective(self):
         # Drill 5: the plan says 購買, Meta says OUTCOME_SALES -- comparing the raw strings made
         # every real campaign read back as deviated.

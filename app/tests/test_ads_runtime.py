@@ -304,6 +304,46 @@ class RuntimeTest(unittest.TestCase):
         incomplete = next(item for item in health if item["code"] == "source_incomplete")
         self.assertEqual(incomplete["severity"], "unknown")
 
+    def _internal_campaign(self, status, end_offset_days):
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        campaign = repository.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": f"人工上架 {status}",
+                "goal_text": "檢驗結案入口",
+                "objective": "awareness",
+                "start_date": today - timedelta(days=14),
+                "end_date": today + timedelta(days=end_offset_days),
+                "status": status,
+            },
+            created_by="test",
+        )
+        self.conn.commit()
+        return campaign["id"]
+
+    def _campaign_status(self, campaign_id):
+        return repository.get_campaign(self.conn, self.org, self.brand, campaign_id)["status"]
+
+    def test_health_marks_live_campaign_ended_once_plan_end_date_passed(self):
+        # F32-I01: nothing wrote `ended`, so a hand-launched campaign never reached 結案.
+        campaign = self._internal_campaign("live", -1)
+        health, _ = runtime._health(self.conn, self.org, self.brand, campaign, db.now_utc())
+        self.assertIn("plan_date_passed", [item["code"] for item in health])
+        self.assertEqual(self._campaign_status(campaign), "ended")
+        # The beat is idempotent: `ended` stays `ended`, never advances to `closed`.
+        runtime._health(self.conn, self.org, self.brand, campaign, db.now_utc())
+        self.assertEqual(self._campaign_status(campaign), "ended")
+
+    def test_health_leaves_closed_and_still_running_campaigns_alone(self):
+        closed = self._internal_campaign("closed", -1)
+        running = self._internal_campaign("live", 3)
+        for campaign in (closed, running):
+            runtime._health(self.conn, self.org, self.brand, campaign, db.now_utc())
+        self.assertEqual(self._campaign_status(closed), "closed")
+        self.assertEqual(self._campaign_status(running), "live")
+
     def _confirmed_handoffs(self):
         old = db.now_utc() - timedelta(days=2)
         change = db.new_id("acs")
