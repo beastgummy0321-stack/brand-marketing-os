@@ -18,7 +18,6 @@ import app.shared.web as web
 from app.ads import budget, change_control_launch, plan, strategy
 from app.ads import external_repository as external
 from app.ads import repository as ads_repo
-from app.brand_intelligence import advertising_history
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
@@ -86,7 +85,7 @@ class StrategyTestBase(unittest.TestCase):
         )
         self.brand_id = self.brand["id"]
         if self.ELIGIBLE:
-            self.brand = advertising_history.set_advertising_history(
+            self.brand = bi_repo.set_advertising_history(
                 web.conn, self.brand_id, "has_history", actor=ACTOR,
             )
         self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
@@ -908,7 +907,7 @@ class BudgetCapRoutesTest(StrategyTestBase):
             web.conn, org_id=org_id, name="測試品牌：預算上限", client_name=None, actor=ACTOR,
         )["id"]
         # F33-I01：`_VALID_REPLY` 帶 `retarget`，品牌要先合格（同 `StrategyTestBase`）。
-        advertising_history.set_advertising_history(
+        bi_repo.set_advertising_history(
             web.conn, self.brand_id, "has_history", actor=ACTOR,
         )
         self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
@@ -1091,7 +1090,7 @@ class StartingPointFreshBrandTest(StrategyTestBase):
         self.assertEqual(campaign["budget_basis_json"], {})
 
     def test_wizard_answer_none_is_quoted_and_still_offers_no_retarget(self):
-        advertising_history.set_advertising_history(
+        bi_repo.set_advertising_history(
             web.conn, self.brand_id, "none", actor=ACTOR,
         )
         prompt, _ = self._prompt(_TWO_ROLE_REPLY)

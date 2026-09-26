@@ -21,7 +21,6 @@ from app.ads import brief as ads_brief
 from app.ads import plan as ads_plan
 from app.ads import repository as ads_repo
 from app.ads import strategy as ads_strategy
-from app.brand_intelligence import advertising_history
 from app.brand_intelligence import repository as bi_repo
 from app.llm import providers
 
@@ -271,7 +270,7 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
             actor=ACTOR,
         )["id"]
         # F33-I01：`_STRATEGY_REPLY` 分了 `retarget`，品牌要先合格（Contract P 可用角色）。
-        advertising_history.set_advertising_history(
+        bi_repo.set_advertising_history(
             web.conn, self.brand_id, "has_history", actor=ACTOR,
         )
         web.conn.commit()
