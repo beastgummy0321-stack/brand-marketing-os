@@ -1,0 +1,169 @@
+{
+  "side": "A",
+  "period": 3,
+  "name": "Beast Gummy｜期中考週＋國慶連假｜收成再行銷與學生，驗證回購",
+  "start_date": "2026-10-10",
+  "end_date": "2026-10-16",
+  "objective": "purchase",
+  "daily_budget_total": 1500,
+  "kpi": {
+    "target_roas": 2.2,
+    "target_cpa": 556
+  },
+  "hypothesis": "把預算集中到兩週內驗證過的暖受眾與期中考週學生，停掉兩週都沒過兩平的上班族，確認能否以 ROAS 2.2（兩平 1.89）收成，並用最小預算驗證三盒組買家會不會回購典藏組。",
+  "groups": [
+    {
+      "name": "暖受眾｜兩期點擊未購買",
+      "audience_key": "warm_engaged",
+      "audience_desc": "廣告點擊者／網站訪客 2026-09-26～10-09（約 1,454 人點擊）＋體驗包買家；排除所有三盒組以上購買者；頻率約每人每天 2 次以內",
+      "placement": "feed | stories | reels",
+      "daily_budget": 525,
+      "hypothesis": "暖受眾 CPA（第二期 280）在預算加倍、名單擴大到兩期點擊者後仍能維持 < 400；換掉綁日期的影片能抵消同一批人的疲勞。",
+      "ads": [
+        {
+          "name": "P2｜再行銷｜五盒兩包可分送｜單圖",
+          "format_key": "single_image",
+          "hook_key": "contrast_flip",
+          "pain_key": "cost",
+          "angle_key": "暖受眾升級：五盒自己用，兩包體驗包送同事、隊友、室友",
+          "offer_key": "bundle",
+          "product": "終極組合包",
+          "price": 1500,
+          "headline": "五盒自己留，兩包送給也想試的人",
+          "body": "上週看過 Beast Gummy 還在考慮？\n終極組合包：5 盒＋2 包隨身體驗包 NT$1,500（原價 2,500），免運。\n盒裝放公司、健身包、車上；兩包 3 顆裝的體驗包，拿給一起加班的同事或一起練的隊友先試。\n每顆 150 mg 咖啡因，含著化開、不用配水，西西里咖啡風味。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-ultimate-bundle-5-boxes-2-packs",
+          "compliance_notes": "「上週看過」只指廣告互動，不涉及個人身心特徵（Personal Attributes）；內容為組合內容、價格與形式；無效果宣稱；附咖啡因警語；受眾皆為第一期 18+ 投放所得。",
+          "proof_key": "none",
+          "daily_budget": null
+        },
+        {
+          "name": "P3｜再行銷｜連假回來補三盒｜影片",
+          "format_key": "video",
+          "hook_key": "pain_question",
+          "pain_key": "availability",
+          "angle_key": "給看過還沒買的人：連假結束到期中考週，需要的那幾天手邊有沒有",
+          "offer_key": "free_shipping",
+          "product": "超能特惠組",
+          "price": 999,
+          "headline": "10/12 連假一結束就是考試週和補班進度，手邊有沒有？",
+          "body": "前兩週看過 Beast Gummy，還沒下單？\n國慶連假回來，10/12 起是期中考週，也是公司補進度的一週。\n影片 8 秒：從口袋拿出一顆、放進嘴裡、翻開筆記——不用配水、不用開罐。\n每顆 150 mg 咖啡因，西西里咖啡風味。\n超能特惠組 3 盒 NT$999（原價 1,500），免運；今天下單，連假後出貨就寄到。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-value-bundle-3-boxes",
+          "compliance_notes": "「看過」只指廣告互動，不涉及個人身心特徵；描述時程、形式與免運；無提神／專注效果宣稱；「連假後出貨」是出貨說明而非急迫性造假；附咖啡因警語。",
+          "proof_key": "none",
+          "daily_budget": null
+        }
+      ]
+    },
+    {
+      "name": "冷受眾｜大學生期中考週",
+      "audience_key": "cold_problem_aware",
+      "audience_desc": "TW 18–24（年齡下限硬性 18），興趣：大學、研究所、Dcard、圖書館；排除高中／學測相關興趣、排除所有既有點擊者與購買者（交給暖受眾組）",
+      "placement": "advantage+",
+      "daily_budget": 500,
+      "hypothesis": "第二期 5 筆全落在期中考前 10/5–7；若考試週換上新素材後 CPA 仍 < 600，就證明學生這個情境是日曆驅動，而不是單一素材的運氣。",
+      "ads": [
+        {
+          "name": "P3｜期中考週｜考場外最後十分鐘｜單圖",
+          "format_key": "single_image",
+          "hook_key": "pain_question",
+          "pain_key": "effort",
+          "angle_key": "考試週當下：考場不方便帶飲料、兩科之間只有一小時",
+          "offer_key": "free_shipping",
+          "product": "超能特惠組",
+          "price": 999,
+          "headline": "10/12–10/16 考試週，兩科之間只有一小時？",
+          "body": "考完一科、下一科在別棟，中間只夠走過去、翻一下筆記。\n排超商咖啡要時間，飲料也不一定能帶進考場。\nBeast Gummy 一顆 150 mg 咖啡因，大約是超商中杯美式（約 200 mg）的四分之三；含在嘴裡化開，不用配水、不用杯子。\n\n超能特惠組 3 盒 NT$999（原價 1,500），免運寄到宿舍；和室友一人一盒，每人 NT$333。\n晚上讀完要睡前，不要吃。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-value-bundle-3-boxes",
+          "compliance_notes": "只描述考試週的時間情境、含量與形式；不宣稱專注、記憶或考試表現；咖啡比較用公開參考值、不點名競品；受眾 18+ 限大學；明寫睡前不吃；附咖啡因警語。",
+          "proof_key": "none",
+          "daily_budget": null
+        },
+        {
+          "name": "P3｜期中考週｜寢室三人分三盒｜輪播",
+          "format_key": "carousel",
+          "hook_key": "outcome_led",
+          "pain_key": "cost",
+          "angle_key": "考試週寢室合購：一人一盒、一人 NT$333、免運",
+          "offer_key": "bundle",
+          "product": "超能特惠組",
+          "price": 999,
+          "headline": "寢室三個人同一週考試，三盒免運一人一盒",
+          "body": "卡 1｜10/12 起，三個人的考程全擠在同一週。\n卡 2｜超能特惠組 3 盒 NT$999（原價 1,500），免運寄到宿舍。\n卡 3｜一人一盒 NT$333，不用各付運費、不用各自跑超商。\n卡 4｜每顆 150 mg 咖啡因，含著化開、不用配水；每人一天最多兩顆，睡前不吃。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-value-bundle-3-boxes",
+          "compliance_notes": "賣點是分攤與免運；產品只寫含量與形式、明列每日上限與睡前不吃；不宣稱讀書效果；受眾 18+；附咖啡因警語。",
+          "proof_key": "none",
+          "daily_budget": null
+        }
+      ]
+    },
+    {
+      "name": "冷受眾｜訓練族（路跑＋重訓）",
+      "audience_key": "cold_problem_aware",
+      "audience_desc": "TW 20–39 全性別；興趣：馬拉松、路跑、重量訓練、健身房、CrossFit、運動補給；排除所有既有點擊者與購買者",
+      "placement": "advantage+",
+      "daily_budget": 400,
+      "hypothesis": "路跑輪播（第二期 CPA 368）第二週仍能維持 CPA < 600；新的重訓日單圖能否取代已疲勞的『不用搖搖杯』影片。",
+      "ads": [
+        {
+          "name": "P2｜路跑賽季｜號碼布旁一顆｜輪播",
+          "format_key": "carousel",
+          "hook_key": "outcome_led",
+          "pain_key": "availability",
+          "angle_key": "秋季路跑賽季：起跑區沒有咖啡、補給袋空間有限",
+          "offer_key": "bundle",
+          "product": "超能特惠組",
+          "price": 999,
+          "headline": "10 月起跑季，補給袋裡多一個不用配水的選項",
+          "body": "卡 1｜清晨 5 點的起跑區，買不到咖啡，也不想賽前灌一大杯水。\n卡 2｜Beast Gummy 一顆 150 mg 咖啡因＋100 mg 牛磺酸，含在嘴裡化開，不用配水、不用開罐。\n卡 3｜軟糖扁平一片，跑步腰包、號碼布夾袋都塞得下。\n卡 4｜一盒放健身包、一盒放跑步腰包、一盒留在家；超能特惠組 3 盒 NT$999（原價 1,500），免運。\n\n第一次用請先在平常的練跑試，不要在比賽日才第一次吃。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-value-bundle-3-boxes",
+          "compliance_notes": "只描述含量、成分數字（官網標示）、形式與攜帶；未宣稱配速、耐力、表現提升或防抽筋；提醒先在練習時試用，屬負責任使用說明而非效果宣稱；附咖啡因警語；受眾 20–39。",
+          "proof_key": "none",
+          "daily_budget": null
+        },
+        {
+          "name": "P3｜重訓日｜健身包側袋一盒｜單圖",
+          "format_key": "single_image",
+          "hook_key": "contrast_flip",
+          "pain_key": "effort",
+          "angle_key": "連假兩天沒練，10/12 回健身房：包裡一盒取代沖泡粉＋水瓶",
+          "offer_key": "bundle",
+          "product": "超能特惠組",
+          "price": 999,
+          "headline": "健身包裡少一罐沖泡粉，多一盒軟糖",
+          "body": "國慶連假兩天沒進健身房，10/12 回去第一天，包裡不用再塞一罐沖泡粉和量匙。\n一盒 Beast Gummy 放側袋：一顆 150 mg 咖啡因＋100 mg 牛磺酸，熱身前含著化開，不用配水。\n超能特惠組 3 盒 NT$999（原價 1,500），免運；一盒放健身包、一盒放辦公室、一盒放家裡。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-value-bundle-3-boxes",
+          "compliance_notes": "只比較攜帶形式與成分數字（官網標示）；未宣稱力量、耐力或表現提升；無身形前後對比；附咖啡因警語；受眾 20–39。",
+          "proof_key": "none",
+          "daily_budget": null
+        }
+      ]
+    },
+    {
+      "name": "客戶｜三盒組買家回購",
+      "audience_key": "customer_repeat",
+      "audience_desc": "2026-09-26～10-02 第一期購買者（約 10 人，三盒組可能快用完）；排除 10/3 之後才購買的人（剛收到貨）；同時建議品牌以訂單 Email 免費通知",
+      "placement": "feed | stories",
+      "daily_budget": 75,
+      "hypothesis": "第一期三盒組買家到期中考週可能快用完；典藏組（每盒折合 NT$250）能否讓至少 1 人回購，驗證品牌有沒有回購需求。",
+      "ads": [
+        {
+          "name": "P3｜回購｜十二盒典藏組｜單圖",
+          "format_key": "single_image",
+          "hook_key": "outcome_led",
+          "pain_key": "cost",
+          "angle_key": "給已買過三盒的人：囤一整季、每盒折合 NT$250、附品牌 T-shirt",
+          "offer_key": "bundle",
+          "product": "典藏組",
+          "price": 3000,
+          "headline": "三盒快吃完了？典藏組 12 盒，每盒折合 NT$250",
+          "body": "謝謝你上個月買過 Beast Gummy。\n如果三盒快吃完，典藏組 12 盒＋品牌 T-shirt NT$3,000（原價 6,000），免運；每盒折合 NT$250，比三盒組每盒 NT$333 少 83 元。\n放公司、健身包、車上、家裡，一次補到年底。\n\n※每次一顆、一日最多兩顆；孩童、孕哺婦女及對咖啡因敏感者不宜；勿空腹或睡前食用。",
+          "landing": "https://beastprime.com.tw/collections/beast-gummy-caffeine-gummy/products/beast-gummy-12-box-collectors-bundle-tshirt",
+          "compliance_notes": "對象是品牌自有購買者名單，文案只提購買紀錄，不涉及身心特徵；只談數量、價格與贈品；無效果宣稱；附咖啡因警語。",
+          "proof_key": "none",
+          "daily_budget": null
+        }
+      ]
+    }
+  ],
+  "notes": "兩週合計：29 筆購買、CPA 694、ROAS 1.40；第二期單期 ROAS 2.00、CPA 527 已達標。第三期延續原名原內容：『P2｜路跑賽季｜號碼布旁一顆｜輪播』『P2｜再行銷｜五盒兩包可分送｜單圖』（第二週，疲勞如實累積）。砍：『P1｜訓練前｜不用搖搖杯｜影片』（CPA 512→1,825，疲勞）、整個上班族組（兩週三則素材 CPA 1,114）。第二期兩則贏家『期中考前｜圖書館閉館前』『再行銷｜體驗過後三盒』因文案綁已過的日期，換成全新內容的 P3 素材，不是改名。連假日 9/26、9/27、10/9 三天 0 購買；若平台允許排時段，10/10–11 應降到約六成、移到 10/12–16，contract 只允許固定日預算，故保持 1,500。KPI：預期組合 70% 三盒／25% 終極／5% 典藏 → AOV 1,224、貢獻毛利 648、兩平 ROAS 1.89；收成期 target_roas 2.2 → target_cpa 556。再行銷池：點擊 1,454×2≈2,900/天上限，實際以頻率決定 525；customer 池 29×5=145/天上限，只用 75。"
+}

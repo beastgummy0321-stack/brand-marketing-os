@@ -80,6 +80,8 @@ DRILL_ACCOUNTS = [
      "timezone_name": "Asia/Taipei", "token": "EAAG-drill-token-aming"},
     {"account_id": "900000000000003", "name": "日常萃廣告帳戶", "currency": "TWD",
      "timezone_name": "Asia/Taipei", "token": "EAAG-drill-token-jay"},
+    {"account_id": "900000000000006", "name": "Beast Prime 廣告帳戶", "currency": "TWD",
+     "timezone_name": "Asia/Taipei", "token": "EAAG-drill-token-beast"},  # drill 6
 ]
 
 
@@ -594,6 +596,75 @@ def cmd_spend(brand_id: str, round_no: int, days: int, daily_total: float = 1000
         print(f"  {'贏' if ad['id'] in winners else '賠'}  {ad['name']}")
 
 
+def _sim_row(level, day, campaign_id, account_id, currency, spend, imp, clicks, buys, rev,
+             **extra) -> dict:
+    return {"level": level, "date_start": day, "date_stop": day, "campaign_id": campaign_id,
+            "account_id": account_id, "account_currency": currency,
+            "spend": _fmt_amount(spend), "impressions": imp, "clicks": clicks,
+            "actions": [{"action_type": "omni_purchase", "value": f"{buys}"}],
+            "action_values": [{"action_type": "omni_purchase", "value": f"{rev:.2f}"}],
+            "purchase_roas": ([{"action_type": "omni_purchase", "value": f"{rev / spend:.4f}"}]
+                              if spend else []),
+            **extra}
+
+
+def cmd_load_rows(brand_id: str, path: str) -> None:
+    """Drill 6: write simulator rows (scripts/drill/tw_sim.py) into the stand-in as insights,
+    matched to this brand's mirrored ads by name. Replaces rows for the same ad+day and rebuilds
+    the rollups of those campaign-days; every other day stays, so period 1 remains history when
+    period 2 lands."""
+    state = load()
+    ads = {a["name"]: a for a in state["ads"] if a.get("brand_id") == brand_id}
+    if not ads:
+        raise SystemExit(f"演練替身裡沒有 {brand_id} 的廣告，先跑 mirror")
+    with open(path, encoding="utf-8") as f:
+        rows = json.load(f)
+    missing = sorted({r["ad_name"] for r in rows} - set(ads))
+    if missing:
+        raise SystemExit("這些廣告名稱在替身裡找不到（鏡射後名稱要完全一樣）：" + "、".join(missing))
+    account_id = _bound_account_id(brand_id)
+    currency = "TWD"
+    touched = {(ads[r["ad_name"]]["id"], r["date"]) for r in rows}
+    touched_cdays = {(ads[r["ad_name"]]["campaign_id"], r["date"]) for r in rows}
+    state["insights"] = [
+        i for i in state["insights"]
+        if not ((i["level"] == "ad" and (i.get("ad_id"), i["date_start"]) in touched)
+                or (i["level"] != "ad" and (i["campaign_id"], i["date_start"]) in touched_cdays))]
+    for r in rows:
+        ad = ads[r["ad_name"]]
+        state["insights"].append(_sim_row(
+            "ad", r["date"], ad["campaign_id"], account_id, currency, float(r["spend"]),
+            int(r["impressions"]), int(r["clicks"]), int(r["purchases"]), float(r["revenue"]),
+            adset_id=ad["adset_id"], ad_id=ad["id"], ad_name=ad["name"]))
+    name_of = {s_["id"]: s_["name"] for s_ in state["adsets"]}
+    cname_of = {c["id"]: c["name"] for c in state["campaigns"]}
+    for cid, day in touched_cdays:
+        by_adset: dict = {}
+        tot = [0.0, 0, 0, 0, 0.0]
+        for i in state["insights"]:
+            if i["level"] != "ad" or i["campaign_id"] != cid or i["date_start"] != day:
+                continue
+            buys = int(float(i["actions"][0]["value"])) if i.get("actions") else 0
+            rev = float(i["action_values"][0]["value"]) if i.get("action_values") else 0.0
+            vals = (float(i["spend"]), int(i["impressions"]), int(i["clicks"]), buys, rev)
+            acc = by_adset.setdefault(i["adset_id"], [0.0, 0, 0, 0, 0.0])
+            for k, v in enumerate(vals):
+                acc[k] += v
+                tot[k] += v
+        for sid, vals in by_adset.items():
+            state["insights"].append(_sim_row("adset", day, cid, account_id, currency, *vals,
+                                              adset_id=sid, adset_name=name_of.get(sid, sid)))
+        state["insights"].append(_sim_row("campaign", day, cid, account_id, currency, *tot,
+                                          campaign_name=cname_of.get(cid, cid)))
+    for bucket in ("campaigns", "adsets", "ads"):
+        for entity in state[bucket]:
+            if entity.get("brand_id") == brand_id:
+                entity["effective_status"] = "ACTIVE"
+    save(state)
+    days = {d for _, d in touched}
+    print(f"已載入 {len(rows)} 列（{len(days)} 天、{len({r['ad_name'] for r in rows})} 則廣告）")
+
+
 def cmd_pull(org_id: str, since: str, until: str | None) -> None:
     """Run the product's own backfill with the stand-in installed — this is the only way
     invented numbers reach `meta_entity_spend`."""
@@ -975,6 +1046,9 @@ if __name__ == "__main__":
                          help="只給還沒有任何花費紀錄的廣告灌數字（第二波用，不改寫第一波的歷史）")
     p_spend.add_argument("--daily-total", type=float, default=1000.0,
                          help="這個品牌一天總共花多少（貼近使用者自己設的日預算）")
+    p_load = sub.add_parser("load-rows", help="drill 6: tw_sim rows -> stand-in insights")
+    p_load.add_argument("brand_id")
+    p_load.add_argument("path")
     p_pull = sub.add_parser("pull")
     p_pull.add_argument("org_id")
     p_pull.add_argument("--since", required=True)
@@ -1019,6 +1093,8 @@ if __name__ == "__main__":
         cmd_mirror(args.brand_id, args.append)
     elif args.cmd == "spend":
         cmd_spend(args.brand_id, args.round, args.days, args.daily_total, args.new_only)
+    elif args.cmd == "load-rows":
+        cmd_load_rows(args.brand_id, args.path)
     elif args.cmd == "pull":
         cmd_pull(args.org_id, args.since, args.until)
     elif args.cmd == "show":

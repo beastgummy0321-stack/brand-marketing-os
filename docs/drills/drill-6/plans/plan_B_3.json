@@ -1,0 +1,159 @@
+{
+ "side": "B",
+ "period": 3,
+ "campaign_id": "adc_01M3ET2VWC77XJVVBPGRY67XNR",
+ "name": "推「超能特惠組 · 3盒（免運）」，想要的結果：購買，期間 2026-10-10…",
+ "start_date": "2026-10-10",
+ "end_date": "2026-10-16",
+ "objective": "購買",
+ "success_metric": null,
+ "success_target": null,
+ "result_kind": null,
+ "status": "ready",
+ "budget_planned": 3668.0,
+ "daily_budget_total": 524.0,
+ "goal_text": "推「超能特惠組 · 3盒（免運）」，想要的結果：購買，期間 2026-10-10 ~ 2026-10-16，這個活動最多花 10500。",
+ "groups": [
+  {
+   "name": "新客觸及投放組",
+   "role": "new",
+   "channel": "meta",
+   "audience_key": "cold_unaware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 263.0,
+   "ads": [
+    {
+     "name": "第一次認識品牌的結果導向介紹",
+     "format_key": "video",
+     "hook_key": "outcome_led",
+     "pain_key": "uncertainty",
+     "angle_key": "product_explainer",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "陌生新客的痛點解法說明",
+     "format_key": "carousel",
+     "hook_key": "pain_question",
+     "pain_key": "effort",
+     "angle_key": "benefit_explainer",
+     "proof_key": "customer_review",
+     "offer_key": "trial_sample",
+     "audience_key": "cold_problem_aware",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    }
+   ]
+  },
+  {
+   "name": "探索受眾訊息測試組",
+   "role": "explore",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 104.0,
+   "ads": [
+    {
+     "name": "不同生活情境的日常使用分享",
+     "format_key": "video",
+     "hook_key": "outcome_led",
+     "pain_key": "experience",
+     "angle_key": "daily_use_sharing",
+     "proof_key": "customer_review",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "用戶案例帶出實際改變",
+     "format_key": "carousel",
+     "hook_key": "proof_led",
+     "pain_key": "effort",
+     "angle_key": "user_case_story",
+     "proof_key": "customer_review",
+     "offer_key": "bundle",
+     "audience_key": "cold_unaware",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "價值理念與身分認同溝通",
+     "format_key": "single_image",
+     "hook_key": "contrast_flip",
+     "pain_key": "identity",
+     "angle_key": "identity_affiliation",
+     "proof_key": "founder_voice",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    }
+   ]
+  },
+  {
+   "name": "互動再行銷承接組",
+   "role": "retarget",
+   "channel": "meta",
+   "audience_key": "warm_engaged",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 157.0,
+   "ads": [
+    {
+     "name": "看過內容後的疑慮一次解答",
+     "format_key": "video",
+     "hook_key": "proof_led",
+     "pain_key": "uncertainty",
+     "angle_key": "objection_qa_barrage",
+     "proof_key": "customer_review",
+     "offer_key": "guarantee",
+     "audience_key": "warm_engaged",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "互動受眾的限時回訪優惠",
+     "format_key": "single_image",
+     "hook_key": "contrast_flip",
+     "pain_key": "cost",
+     "angle_key": "limited_time_offer",
+     "proof_key": "sales_numbers",
+     "offer_key": "limited_time",
+     "audience_key": "warm_engaged",
+     "product": "超能特惠組 · 3盒（免運）",
+     "price": 999.0,
+     "headline": "讀書工作通勤，少一個步驟",
+     "body": "讀書讀到一半，還要找水、拆包裝，思緒就被打斷。把日常補充放進課表裡，需要時直接入口，不用另外配水，坐在圖書館、教室或自習室，都能少一個步驟。給每天在課業和通勤間趕時間的你，把補充安排得更簡單，專注時不用再為準備工作分心。",
+     "asset_ready_source": null
+    }
+   ]
+  }
+ ],
+ "kpi": {},
+ "hypothesis": null,
+ "notes": "exported from MarketingOS by scripts/drill/export_plan.py"
+}

@@ -148,3 +148,17 @@ What the drill cost the fixture this time: `fake_meta mirror` mirrored the ads-m
 retired schedule tree), and its fallback to `accounts[0]` when a brand had no bound account put one persona's
 campaigns under another persona's account — now it refuses instead. Loop-2 campaigns dated in the future were
 time-shifted by SQL so outcomes could exist (a fixture step, noted in each run).
+
+## Drill 6 additions (2026-09-26) — planner vs product, compressed time
+
+`docs/drills/drill-6/` holds the plan, contract, judge rubric, brand facts, report and the two code audits.
+New stand-in tooling, drill only:
+
+- `scripts/drill/clock.py set YYYY-MM-DD` — `today_for_org` and `db.now_utc` follow the file `.scratch/drill/today`;
+  `serve.py` / `worker.py` install it. The browser's own date and `runtime._due` (real clock) do not move:
+  request syncs by hand (`external_sync.request_sync`) and tell personas to set review windows explicitly.
+- `scripts/drill/tw_sim.py run plan.json --judge fit.json --out rows.json [--prior …]` — Taiwan Meta simulator
+  (calendar, audience pools built by prior delivery, fatigue, judge multipliers). Invented numbers; relative only.
+- `scripts/drill/export_plan.py <brand> --period N --campaign <id>` — product campaign → contract JSON.
+- `scripts/drill/fake_meta.py load-rows <brand> rows.json` — simulator rows → stand-in insights (then `pull --until`).
+- Account `900000000000006` ← `EAAG-drill-token-beast`.

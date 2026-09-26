@@ -11,7 +11,7 @@ import argparse
 
 import uvicorn
 
-from scripts.drill import fake_meta
+from scripts.drill import clock, fake_meta
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="python -m scripts.drill.serve")
@@ -19,7 +19,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     fake_meta.install()  # before app.main is imported by uvicorn's factory-free import below
+    clock.install()  # drill 6: `.scratch/drill/today` overrides today_for_org
     import app.main
+    print(f"[drill] 時鐘已掛上 {clock.patch_modules()} 處 date/datetime")
 
     print(f"[drill] Meta 替身已掛上，狀態檔 {fake_meta.STATE_PATH}")
     uvicorn.run(app.main.app, host="127.0.0.1", port=args.port)
