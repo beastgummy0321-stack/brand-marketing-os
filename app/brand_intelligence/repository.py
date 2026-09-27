@@ -165,6 +165,14 @@ def set_brand_switches(conn: Conn, brand_id: str, *,
     return after
 
 
+def set_advertising_history(conn: Conn, brand_id: str, value: str, *, actor: str) -> dict:
+    """F33-I01: facade for `app.brand_intelligence.advertising_history.set_advertising_history`
+    (the one writer of `brand.advertising_history`) so other modules reach it through this
+    declared entry. Imported lazily: that module imports `get_brand` from here."""
+    from app.brand_intelligence import advertising_history
+
+    return advertising_history.set_advertising_history(conn, brand_id, value, actor=actor)
+
 
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
 # 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/core/vocab.py

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
  * A fresh account + brand + product (same setup as `ads-target.spec.ts`), then the user journey through the UI:
  * wizard create with an own PNG uploaded in 進階 (its preview made by the worker's task body, below) → 系統這樣理解 →
  * 產生策略 → 自己填總額 → cap → 照這個方式進行 → placement revised and confirmed → the confirmed version assigned
- * to all three planned ads → reload and re-read.
+ * to every planned ad (one per group; the scripted provider follows the roles the prompt offers) → reload and re-read.
  * The webServer's scripted provider answers brief／strategy／delivery plan; no live model or platform account. */
 
 type ApiHeaders = Record<string, string>;
@@ -47,7 +47,7 @@ async function successful(pending: Promise<Response>) {
   return response;
 }
 
-test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 → 展開結構 → 確認素材安排 → 指派三則廣告 → 重新整理還在", async ({ page }) => {
+test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 → 展開結構 → 確認素材安排 → 指派每則廣告 → 重新整理還在", async ({ page }) => {
   test.setTimeout(180_000);
   const stamp = Date.now();
   const errors: string[] = [];
@@ -117,7 +117,9 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   const planned = (await (await successful(plan)).json()).campaign;
   expect(planned.status).toBe("ready");
   const plannedIds: string[] = planned.groups.flatMap((group: { ads: { id: string }[] }) => group.ads.map(ad => ad.id));
-  expect(plannedIds).toHaveLength(3);
+  // One ad per group; the group count follows the roles the strategy prompt offered (F33 Contract P).
+  expect(planned.groups.length).toBeGreaterThan(0);
+  expect(plannedIds).toHaveLength(planned.groups.length);
 
   // --- 素材分頁 → 進階 → 素材安排：改寫文案存新版、只用我的文案確認 ------------------------------------------
   const openPlacements = async () => {
@@ -141,7 +143,7 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   const confirmed = (await (await successful(confirmation)).json()).placement;
   expect(confirmed.confirmed_at).toBeTruthy();
 
-  // --- 指派：確認版本逐一指派給三則計畫中的廣告 ---------------------------------------------------------------
+  // --- 指派：確認版本逐一指派給每一則計畫中的廣告 ---------------------------------------------------------------
   const assignments = page.getByRole("region", { name: "指派首次投放素材", exact: true });
   const adSelect = assignments.getByRole("combobox", { name: "計畫中的廣告", exact: true });
   const versionSelect = assignments.getByRole("combobox", { name: "已確認成品版本", exact: true });
@@ -164,6 +166,6 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   expect(reread.planned_ads.every(ad =>
     ad.assignment_status === "confirmed" && ad.placement_id === confirmed.id && ad.placement_revision === confirmed.revision,
   )).toBe(true);
-  await expect(assignments.getByText(`已指派確認版本 · ${filename} · 版本 ${confirmed.revision}`, { exact: true })).toHaveCount(3);
+  await expect(assignments.getByText(`已指派確認版本 · ${filename} · 版本 ${confirmed.revision}`, { exact: true })).toHaveCount(plannedIds.length);
   expect(errors).toEqual([]);
 });

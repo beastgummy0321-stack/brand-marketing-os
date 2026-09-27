@@ -14,7 +14,7 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 
 from datetime import UTC, datetime
 
-from app.ads import budget, judgment, targets
+from app.ads import budget, calendar_tw, judgment, launch_settings, targets
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -29,7 +29,9 @@ DEPARTMENT_PATH = APP_DIR / "departments" / "ads" / "strategy.md"
 # `mock.patch.object(strategy, "PROVIDER", FakeProvider(...))` 換掉。
 PROVIDER = providers.AnthropicProvider()
 
-_ROLES = frozenset({"new", "retarget", "explore"})
+# F33-I01（ruling 1A）：三個角色的固定順序——【可用角色】那一行照這個順序印（Contract P），
+# `_available_roles()` 只會從這裡拿掉沒有來源的 `retarget`，不會加新角色。
+_ROLE_ORDER = ("new", "retarget", "explore")
 
 # role -> 中文名稱：程式自己填 label，不再叫模型回一個我們已經知道的答案（F04-I03）。
 _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
@@ -216,7 +218,10 @@ def _pct_sum_valid(allocation: list[dict]) -> bool:
     return (99 <= pct_sum <= 101) and all(row["pct"] >= 0 for row in allocation)
 
 
-def _validate_reply(data) -> dict | None:
+def _validate_reply(data, available: frozenset[str]) -> dict | None:
+    """`available` 是程式列給模型的【可用角色】（Contract P）：回覆點名一個不在裡面的角色
+    （例如沒有再行銷來源的品牌被分了 `retarget`）就整包退回 `None`——`plan.py` 會把每個
+    分配到的角色展開成投放組，一個交接時拿不到受眾的再行銷組不能活到那一步。"""
     if not isinstance(data, dict):
         return None
     allocation = data.get("allocation")
@@ -227,7 +232,7 @@ def _validate_reply(data) -> dict | None:
         if not isinstance(item, dict):
             return None
         role = item.get("role")
-        if role not in _ROLES:
+        if role not in available:
             return None
         pct = item.get("pct")
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
@@ -274,6 +279,75 @@ def _apply_amounts(allocation: list[dict], total: float | None) -> list[dict]:
     ]
 
 
+def _count_text(value) -> str:
+    """一個平台讀回的合計：`None` 是「這個欄位沒追蹤到」，不是 0（不編數字）。"""
+    if value is None:
+        return "不知道（沒追蹤到）"
+    number = float(value)
+    return f"{int(number):,}" if number.is_integer() else f"{number:,}"
+
+
+def _starting_point_section(brand: dict, history: dict | None, reads: dict, campaign: dict) -> str:
+    """F33-I01：程式早就知道、以前卻沒進 prompt 的「這個品牌從哪裡開始」。每一行不知道就寫
+    不知道；沒讀過平台資料寫「還沒讀過」，不是 0。訂單不在 ads 模組（`may_depend_on` 沒有
+    `orders`），所以固定一行叫模型別假設有回購名單。"""
+    advertising_history = brand.get("advertising_history")
+    if advertising_history == "has_history":
+        asked = "精靈答過：投放過"
+    elif advertising_history == "none":
+        asked = "精靈答過：沒投放過"
+    else:
+        asked = "精靈還沒問"
+
+    if history is None:
+        history_text = "沒有可用的花費歷史"
+    else:
+        history_text = f"{history['source_text']}（樣本 {history['sample_days']} 天）"
+
+    if not reads["external_rows_ever"]:
+        readback = "還沒讀過平台資料"
+    elif not reads["external_rows_90d"]:
+        readback = "近 90 天沒有資料（更早的有讀過）"
+    else:
+        readback = (
+            f"點擊 {_count_text(reads['external_clicks_90d'])}、"
+            f"購買 {_count_text(reads['external_purchases_90d'])}"
+        )
+
+    loop_purchases = reads["loop_purchases"]
+    loop_text = f"{_count_text(loop_purchases)} 筆" if loop_purchases else "沒有"
+
+    pixels = launch_settings.cached_pixels(campaign)
+    pixel_text = f"已讀到 {len(pixels)} 個像素" if pixels is not None else "還沒讀像素"
+
+    return "【這個品牌的起點】\n" + "\n".join([
+        f"- 投放過沒：{asked}",
+        f"- 花費歷史：{history_text}",
+        f"- 近 90 天平台讀回：{readback}",
+        f"- 迴圈購買（已結案的活動）：{loop_text}",
+        f"- 像素：{pixel_text}",
+        "- 訂單：訂單資料不在這裡，別假設有回購名單",
+    ])
+
+
+def _available_roles(brand: dict, reads: dict) -> list[str]:
+    """Ruling 1A：`retarget` 只在有再行銷來源時才列——精靈答過投放過、近 90 天平台讀回有點擊、
+    或任何一種購買（迴圈或平台）> 0。只有「> 0」，大小交給模型衡量。`new`／`explore` 永遠在。"""
+    has_source = (
+        brand.get("advertising_history") == "has_history"
+        or (reads["external_clicks_90d"] or 0) > 0
+        or (reads["external_purchases_90d"] or 0) > 0
+        or (reads["loop_purchases"] or 0) > 0
+    )
+    return [role for role in _ROLE_ORDER if role != "retarget" or has_source]
+
+
+def _available_roles_section(roles: list[str]) -> str:
+    """Contract P：第一行正好是 `【可用角色】`，第二行是角色 key 用「、」接起來（固定順序）。
+    e2e 的腳本供應商照這段文字決定回幾個角色，改字先看 F33-I00。"""
+    return "【可用角色】\n" + "、".join(roles)
+
+
 def _cap_text(cap: float | None) -> str:
     """The one cap as the strategy prompt reads it (F28-I01) -- `未設定`, never a guessed number."""
     return "未設定" if cap is None else f"{round(cap):,}"
@@ -313,6 +387,13 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     )
     scenarios_text = _scenarios_section(scenario_result)
 
+    reads = ads_repo.starting_point_reads(conn, org_id, brand_id)
+    starting_point_text = _starting_point_section(brand, history, reads, campaign)
+    available_roles = _available_roles(brand, reads)
+    roles_text = _available_roles_section(available_roles)
+    # F33-I02（Contract Q）：靜態台灣行事曆只列跟期間重疊的列；表外年份會附「沒有資料」的註記。
+    calendar_text = calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
+
     knowledge_item_ids = (
         [f["id"] for f in facts_basis]
         + [p["product_id"] for p in prices_basis]
@@ -327,6 +408,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + f"objective：{campaign['objective']}\n"
         + f"上限（每筆購買成本）：{_cap_text(cap)}\n"
         + f"期間：{campaign['start_date']} ~ {campaign['end_date']}"
+        + "\n\n" + starting_point_text
+        + "\n\n" + roles_text
+        + "\n\n" + calendar_text
         + "\n\n" + facts_text
         + "\n\n" + products_text
         + "\n\n" + learnings_text
@@ -346,7 +430,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     if task_row["status"] != "succeeded":
         raise ValueError("strategy_failed")
     data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
-    strategy_payload = _validate_reply(data) if data is not None else None
+    strategy_payload = (
+        _validate_reply(data, frozenset(available_roles)) if data is not None else None
+    )
     if strategy_payload is None:
         raise ValueError("strategy_failed")
 

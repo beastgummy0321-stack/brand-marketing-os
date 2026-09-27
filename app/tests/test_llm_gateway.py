@@ -1085,6 +1085,30 @@ class ScriptedProviderTest(unittest.TestCase):
         self.assertIn("not_scripted", str(cm.exception))
         self.assertEqual(self._rows_for_brand(), [])
 
+    def _strategy_reply(self, content):
+        row = gateway.run_task(
+            self.conn, FakeProvider(), brand_id=self.brand["id"], task_type="ads_strategy",
+            prompt_template_id="tpl", prompt_template_version="v1",
+            system="sys", messages=[{"role": "user", "content": content}],
+            context=self._context(),
+        )
+        self.assertEqual(row["status"], "succeeded")
+        return gateway.parse_json_reply(row["rendered_output"])
+
+    def test_strategy_reply_allocates_only_the_offered_roles(self):
+        # Contract P (F33): `【可用角色】` + one line of keys; content may also be text blocks.
+        blocks = [{"type": "text", "text": "前言\n\n【可用角色】\nnew、explore\n\n【其他】"}]
+        reply = self._strategy_reply(blocks)
+        self.assertEqual(
+            [(row["role"], row["pct"]) for row in reply["allocation"]],
+            [("new", 60), ("explore", 40)],
+        )
+        self.assertEqual(reply["why"], providers.SCRIPTED_REPLIES["ads_strategy"]["why"])
+
+    def test_strategy_reply_without_offered_roles_keeps_the_fixed_three(self):
+        reply = self._strategy_reply("提示裡沒有可用角色段落")
+        self.assertEqual(reply, providers.SCRIPTED_REPLIES["ads_strategy"])
+
 
 class ParseJsonReplyShapeTest(unittest.TestCase):
     """守 API 契約：parse_json_reply 絕不回傳模型沒送出的形狀（六個呼叫端共用這一支）。

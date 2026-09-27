@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.ads import budget, change_control_launch, plan, strategy
+from app.ads import external_repository as external
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -71,6 +72,11 @@ _VALID_REPLY = json.dumps({
 
 
 class StrategyTestBase(unittest.TestCase):
+    # F33-I01：`_VALID_REPLY` 分了 `retarget`，而 `retarget` 只在品牌有再行銷來源時才是可用
+    # 角色（Contract P）——基底把精靈答案設成「投放過」讓既有測試的品牌合格；要測一個
+    # 從沒投放過的品牌就把這個旗標關掉。
+    ELIGIBLE = True
+
     def setUp(self):
         self.org_id = coredb.DEV_ORG_ID
         self.brand = bi_repo.create_brand(
@@ -78,6 +84,10 @@ class StrategyTestBase(unittest.TestCase):
             actor=ACTOR,
         )
         self.brand_id = self.brand["id"]
+        if self.ELIGIBLE:
+            self.brand = bi_repo.set_advertising_history(
+                web.conn, self.brand_id, "has_history", actor=ACTOR,
+            )
         self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
         self.economics = bi_repo.save_product_economics(
             web.conn, self.brand_id, self.product["id"], actor=ACTOR,
@@ -807,6 +817,34 @@ class CurrentCpaScenariosTest(StrategyTestBase):
         self.assertNotIn("success_", prompt)
 
 
+class CalendarInStrategyPromptTest(StrategyTestBase):
+    """F33-I02（ruling 2A、Contract Q）：策略 prompt 帶【投放期間內的行事曆】，只列跟期間重疊
+    的列——預設 Campaign 2026-10-01～10-10 跨國慶日；跨到表外的年份要有「沒有資料」的註記，
+    不能安靜地變成空白。"""
+
+    def _prompt(self, **overrides) -> str:
+        self.campaign = self._create_campaign(**overrides)
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        self._generate()
+        return provider.calls[0]["messages"][0]["content"]
+
+    def test_prompt_lists_the_calendar_rows_overlapping_the_period(self):
+        prompt = self._prompt()
+        self.assertIn("【投放期間內的行事曆】\n", prompt)
+        self.assertIn("國慶日", prompt)
+        self.assertNotIn("雙 11 檔", prompt)
+        self.assertNotIn("不要假設沒有活動", prompt)
+        # 行事曆段落接在 F33-I01 的兩段之後（Contract P 的段落文字不動）；任務檔前面也提到
+        # 這兩個標題，所以取最後一次出現的位置才是真正的段落。
+        self.assertLess(prompt.rindex("【可用角色】"), prompt.rindex("【投放期間內的行事曆】"))
+
+    def test_period_outside_the_table_gets_the_coverage_note(self):
+        prompt = self._prompt(start_date="2028-03-01", end_date="2028-03-10")
+        self.assertIn("【投放期間內的行事曆】\n期間內沒有登記的假日、考季或檔期\n", prompt)
+        self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
+
+
 class BudgetCapSelectionTest(StrategyTestBase):
     """F28-I03: a total above the budget cap (`constraints_json.budget`) is saved only with an
     explicit confirmation, which is recorded; within the cap, or with no cap, as before.
@@ -896,6 +934,10 @@ class BudgetCapRoutesTest(StrategyTestBase):
         self.brand_id = bi_repo.create_brand(
             web.conn, org_id=org_id, name="測試品牌：預算上限", client_name=None, actor=ACTOR,
         )["id"]
+        # F33-I01：`_VALID_REPLY` 帶 `retarget`，品牌要先合格（同 `StrategyTestBase`）。
+        bi_repo.set_advertising_history(
+            web.conn, self.brand_id, "has_history", actor=ACTOR,
+        )
         self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
         self.campaign = self._create_campaign(constraints_json={"budget": 20000})
         strategy.PROVIDER = _fake(_VALID_REPLY)
@@ -1004,3 +1046,182 @@ class BudgetCapRoutesTest(StrategyTestBase):
         response = self._put({"budget_cap": 50000}, live["id"])
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["campaign"]["constraints_json"], {"budget": 50000})
+
+
+# F33-I01：一個從沒投放過的品牌只有 new／explore 兩個可用角色，模型照著回兩個。
+_TWO_ROLE_REPLY = json.dumps({
+    "allocation": [
+        {"role": "new", "pct": 70, "rationale": "沒投放過，先找新客"},
+        {"role": "explore", "pct": 30, "rationale": "測試素材角度"},
+    ],
+    "why": ["這個品牌沒有暖受眾"], "unknowns": [], "alternatives": [],
+}, ensure_ascii=False)
+
+
+class StartingPointFreshBrandTest(StrategyTestBase):
+    """F33-I01（ruling 1A、Contract P）：從沒投放過的品牌——精靈還沒問、沒有花費歷史、沒讀過
+    平台資料——prompt 每一行都寫「不知道／還沒」而不是 0，【可用角色】只有 `new、explore`，
+    分了 `retarget` 的回覆整包退回、什麼都不存。"""
+
+    ELIGIBLE = False
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+
+    def _prompt(self, reply: str) -> tuple[str, dict]:
+        provider = _fake(reply)
+        strategy.PROVIDER = provider
+        detail = self._generate()
+        return provider.calls[0]["messages"][0]["content"], detail
+
+    def _observe(self, *, day, clicks, purchases) -> None:
+        """一筆既有活動的廣告層讀回（`metric_scope='ad'`），走 ads 自己的外部來源寫入路徑。"""
+        imported = external.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="既有活動",
+        )
+        entity = external.upsert_entity(web.conn, self.org_id, self.brand_id, imported["id"], {
+            "platform": "meta", "source_account": "act_1", "native_kind": "ad",
+            "native_id": f"ad_{uuid4().hex[:8]}",
+        })
+        external.upsert_observation(web.conn, self.org_id, self.brand_id, imported["id"], {
+            "entity_id": entity["id"], "day": day, "metric_scope": "ad", "attribution_key": "a",
+            "currency": "TWD", "source": "meta", "spend": 100, "clicks": clicks,
+            "purchases": purchases,
+        })
+        web.conn.commit()
+
+    def test_fresh_brand_prompt_states_every_unknown_and_offers_new_and_explore_only(self):
+        prompt, detail = self._prompt(_TWO_ROLE_REPLY)
+
+        self.assertIn("【可用角色】\nnew、explore\n", prompt)
+        self.assertIn("【這個品牌的起點】\n", prompt)
+        self.assertIn("- 投放過沒：精靈還沒問", prompt)
+        self.assertIn("- 花費歷史：沒有可用的花費歷史", prompt)
+        self.assertIn("- 近 90 天平台讀回：還沒讀過平台資料", prompt)
+        self.assertIn("- 迴圈購買（已結案的活動）：沒有", prompt)
+        self.assertIn("- 像素：還沒讀像素", prompt)
+        self.assertIn("- 訂單：訂單資料不在這裡，別假設有回購名單", prompt)
+        self.assertNotIn("點擊 0", prompt)  # 沒讀過不是 0
+        roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
+        self.assertEqual(roles, ["new", "explore"])
+
+    def test_fresh_brand_refuses_a_reply_that_names_retarget_and_saves_nothing(self):
+        strategy.PROVIDER = _fake(_VALID_REPLY)
+
+        with self.assertRaises(ValueError) as ctx:
+            self._generate()
+        self.assertEqual(str(ctx.exception), "strategy_failed")
+
+        campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        self.assertEqual(campaign["status"], "draft")
+        self.assertEqual(campaign["budget_basis_json"], {})
+
+    def test_wizard_answer_none_is_quoted_and_still_offers_no_retarget(self):
+        bi_repo.set_advertising_history(
+            web.conn, self.brand_id, "none", actor=ACTOR,
+        )
+        prompt, _ = self._prompt(_TWO_ROLE_REPLY)
+        self.assertIn("- 投放過沒：精靈答過：沒投放過", prompt)
+        self.assertIn("【可用角色】\nnew、explore\n", prompt)
+
+    def test_external_clicks_in_the_last_90_days_offer_retarget(self):
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        self._observe(day=today - timedelta(days=5), clicks=12, purchases=None)
+
+        prompt, detail = self._prompt(_VALID_REPLY)
+
+        self.assertIn("【可用角色】\nnew、retarget、explore\n", prompt)
+        self.assertIn("- 近 90 天平台讀回：點擊 12、購買 不知道（沒追蹤到）", prompt)
+        roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
+        self.assertEqual(roles, ["new", "retarget", "explore"])
+
+    def test_platform_rows_with_zero_clicks_read_as_zero_and_offer_no_retarget(self):
+        """讀過平台、真的是 0——那就印 0，不印「還沒讀過」；0 個點擊不是再行銷來源。"""
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        self._observe(day=today - timedelta(days=5), clicks=0, purchases=0)
+
+        prompt, _ = self._prompt(_TWO_ROLE_REPLY)
+
+        self.assertIn("- 近 90 天平台讀回：點擊 0、購買 0", prompt)
+        self.assertIn("【可用角色】\nnew、explore\n", prompt)
+
+    def test_rows_older_than_90_days_say_so_and_do_not_offer_retarget(self):
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        self._observe(day=today - timedelta(days=120), clicks=40, purchases=None)
+
+        prompt, _ = self._prompt(_TWO_ROLE_REPLY)
+
+        self.assertIn("- 近 90 天平台讀回：近 90 天沒有資料（更早的有讀過）", prompt)
+        self.assertIn("【可用角色】\nnew、explore\n", prompt)
+
+    def test_closed_loop_purchases_offer_retarget_and_are_counted(self):
+        tag = uuid4().hex[:8]
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        closed = self._create_campaign(status="closed")
+        group = web.conn.execute(
+            "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key,"
+            " name, role, daily_budget) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (f"adg_{tag}", self.org_id, self.brand_id, closed["id"], "meta", "新客組", "new",
+             400),
+        ).fetchone()
+        for offset, spend, purchases in ((3, 400, 2), (2, 600, 2)):
+            web.conn.execute(
+                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
+                " entity_id, day, spend, purchases, source) VALUES"
+                " (%s, %s, %s, %s, 'group', %s, %s, %s, %s, 'simulated')",
+                (f"ado_{tag}_{offset}", self.org_id, self.brand_id, closed["id"], group["id"],
+                 today - timedelta(days=offset), spend, purchases),
+            )
+        web.conn.commit()
+
+        prompt, detail = self._prompt(_VALID_REPLY)
+
+        self.assertIn("- 迴圈購買（已結案的活動）：4 筆", prompt)
+        self.assertIn("- 花費歷史：上一期日預算（樣本 2 天）", prompt)
+        self.assertIn("【可用角色】\nnew、retarget、explore\n", prompt)
+        roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
+        self.assertEqual(roles, ["new", "retarget", "explore"])
+
+
+class StartingPointEligibleBrandTest(StrategyTestBase):
+    """F33-I01：精靈答過「投放過」的品牌——三個角色都可用，三角色的回覆照存。"""
+
+    def test_has_history_brand_offers_retarget_and_saves_the_three_role_reply(self):
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        detail = self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("- 投放過沒：精靈答過：投放過", prompt)
+        self.assertIn("【可用角色】\nnew、retarget、explore\n", prompt)
+        roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
+        self.assertEqual(roles, ["new", "retarget", "explore"])
+
+    def test_cached_pixels_are_counted_in_the_starting_point(self):
+        self.campaign = self._create_campaign(context_json={
+            "product_ids": [self.product["id"]],
+            "launch_settings": {"pixels": {"items": [{"id": "px1"}, {"id": "px2"}]}},
+        })
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("- 像素：已讀到 2 個像素", prompt)
+
+
+class ValidateReplyAvailableSetTest(unittest.TestCase):
+    """`_validate_reply` 拿的是程式列的可用角色集合，不是寫死的三個。"""
+
+    def test_a_role_outside_the_available_set_is_refused(self):
+        data = json.loads(_VALID_REPLY)
+        self.assertIsNone(strategy._validate_reply(data, frozenset({"new", "explore"})))
+        validated = strategy._validate_reply(data, frozenset({"new", "retarget", "explore"}))
+        self.assertIsNotNone(validated)
+        assert validated is not None
+        self.assertEqual([row["role"] for row in validated["allocation"]],
+                         ["new", "retarget", "explore"])

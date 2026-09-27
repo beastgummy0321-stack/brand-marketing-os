@@ -858,6 +858,48 @@ def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     }
 
 
+def starting_point_reads(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+    """F33-I01: the ads-owned counts behind the strategy prompt's 【這個品牌的起點】 and the
+    available-roles rule (`app.ads.strategy._available_roles`). `external_rows_ever` tells
+    「還沒讀過平台資料」 apart from a real 0 over the last 90 days; a NULL sum means the metric was
+    never tracked, never a counted zero. Ad-scope rows only, monthly budget rows excluded (the
+    same grain `home_overview` reads). `loop_purchases` sums the group-level purchases of closed
+    campaigns -- the same rows `budget_history` reads. Orders live in another module and are
+    not read here."""
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    since = today - timedelta(days=90)
+    external = conn.execute(
+        "SELECT COUNT(*) AS rows_ever,"
+        " COUNT(*) FILTER (WHERE day >= %s) AS rows_90d,"
+        " SUM(clicks) FILTER (WHERE day >= %s) AS clicks,"
+        " SUM(purchases) FILTER (WHERE day >= %s) AS purchases"
+        " FROM ads_external_daily WHERE org_id = %s AND brand_id = %s"
+        " AND metric_scope = 'ad' AND attribution_key <> %s",
+        (since, since, since, org_id, brand_id,
+         external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY),
+    ).fetchone()
+    loop = conn.execute(
+        "SELECT SUM(o.purchases) AS purchases FROM ads_outcome_daily o"
+        " JOIN ads_campaign c ON c.org_id = o.org_id AND c.brand_id = o.brand_id"
+        " AND c.id = o.campaign_id"
+        " WHERE o.org_id = %s AND o.brand_id = %s AND o.entity_kind = 'group'"
+        " AND c.status = 'closed'",
+        (org_id, brand_id),
+    ).fetchone()
+    assert external is not None and loop is not None  # 都是聚合查詢，永遠有一列
+    return {
+        "external_rows_ever": external["rows_ever"] > 0,
+        "external_rows_90d": external["rows_90d"] > 0,
+        "external_clicks_90d": (
+            int(external["clicks"]) if external["clicks"] is not None else None
+        ),
+        "external_purchases_90d": (
+            float(external["purchases"]) if external["purchases"] is not None else None
+        ),
+        "loop_purchases": float(loop["purchases"]) if loop["purchases"] is not None else None,
+    }
+
+
 def save_strategy(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                    budget_basis_json: dict) -> dict:
     """F03-I05: 策略＋預算情境＋依據整包寫進 `ads_campaign.budget_basis_json`——沒有新表
