@@ -22,7 +22,7 @@ import { LibraryPage } from "./LibraryPage";
 
 const mockFetchLibrary = vi.mocked(fetchLibrary);
 const DATA: LibraryData = {
-  brand: { id: "brand-1", name: "測試品牌", client_name: null, status: "active", market_region: "TW", conversion_goal: "purchase", advertising_history: null, delete_impact: [] },
+  brand: { id: "brand-1", name: "測試品牌", client_name: null, status: "active", market_region: "TW", conversion_goal: "purchase", advertising_history: null, regulatory_regime: null, delete_impact: [] },
   products: [], facts: [], rules: [], claims: [], assets: [], channels: [], customer_voices: [],
 };
 
