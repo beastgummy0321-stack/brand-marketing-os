@@ -100,7 +100,15 @@ class SuggestionsTest(unittest.TestCase):
         return suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
 
     def test_original_preserved_unknown_budget_allowed_and_success_reused(self):
-        row = self.placement()
+        # F34 Contract S: a `food_tw` brand gets the 食安法 note in `notes` only (ruling 2B).
+        brands.set_regulatory_regime(self.conn, self.brand, "food_tw", actor="test")
+        row = self.placement(
+            {
+                "headline": " 原標題 ",
+                "body": " 原文\n照留，十分鐘內治療疲勞 ",
+                "description": "原說明",
+            }
+        )
         self.reply([row])
         batch = self.request([row])
         done = self.run_batch(batch)
@@ -109,7 +117,15 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(result["original_copy"], row["copy_fields"])
         self.assertEqual(result["suggested_copy"], {})
         self.assertEqual(result["status"], "awaiting_confirmation")
+        self.assertEqual(result["pending_reasons"], [])
         self.assertTrue(result["notes"])
+        statutory = [n for n in result["notes"] if n.startswith("食安法提醒：")]
+        self.assertEqual(len(statutory), 1)
+        self.assertIn("治療", statutory[0])
+        self.assertIn("食安法第 28 條", statutory[0])
+        self.assertIsNone(
+            policy.statutory_note(self.conn, self.org, self.brand, {"body": "了解更多"})
+        )
         same = self.request([row], "new-button")
         self.assertEqual(same["id"], batch["id"])
         confirmed = suggestions.confirm(

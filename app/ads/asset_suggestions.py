@@ -305,6 +305,9 @@ def _result(conn, org, brand, data, item, answer):
     if not campaign["goal_text"] or not campaign["objective"]:
         problems.append("請補活動目標，才能確認此批用途。")
     notes = []
+    statutory = policy.statutory_note(conn, org, brand, effective)
+    if statutory is not None:
+        notes.append(statutory)
     if campaign["cap"] is None:
         notes.append("上限待補，不保證曝光或花費。")
     if item["media_status"] != "ready":

@@ -75,6 +75,15 @@ def violations(conn, org, brand, copy, sources, forbidden, *, generated):
     return problems
 
 
+def statutory_note(conn, org, brand, copy):
+    """F34 Contract S note for 補文案 `notes` (plain strings), or None. Never a `problems`
+    entry: the reminder is for the human reading the copy (ruling 2B, warn only)."""
+    warning = workbench.validate_claims(conn, org, brand, None, copy)["statutory_warning"]
+    if warning is None:
+        return None
+    return "食安法提醒：" + "、".join(t["term"] for t in warning["terms"]) + warning["sentence"]
+
+
 def validate_reply(data, placements):
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
         raise ValueError("模型回覆格式不完整，未採用。")
