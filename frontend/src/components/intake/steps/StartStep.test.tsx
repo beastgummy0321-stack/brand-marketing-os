@@ -17,15 +17,16 @@ vi.mock("@/lib/intakeApi", async () => {
 });
 vi.mock("@/lib/libraryApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/libraryApi")>("@/lib/libraryApi");
-  return { ...actual, setAdvertisingHistory: vi.fn() };
+  return { ...actual, setAdvertisingHistory: vi.fn(), setRegulatoryRegime: vi.fn() };
 });
 
 import { submitIntakeStart } from "@/lib/intakeApi";
-import { setAdvertisingHistory } from "@/lib/libraryApi";
+import { setAdvertisingHistory, setRegulatoryRegime } from "@/lib/libraryApi";
 import { StartStep } from "./StartStep";
 
 const mockSubmitIntakeStart = vi.mocked(submitIntakeStart);
 const mockSetAdvertisingHistory = vi.mocked(setAdvertisingHistory);
+const mockSetRegulatoryRegime = vi.mocked(setRegulatoryRegime);
 
 afterEach(() => {
   cleanup();
@@ -89,5 +90,33 @@ describe("StartStep", () => {
     expect(textbox(/品牌名稱/).value).toBe("");
     expect(textbox(/描述/).value).toBe("");
     expect(screen.queryByText("幫你留著上次填的")).toBeNull();
+  });
+
+  // F34-I01: 適用法規（選填）checkbox card on the create path.
+  it("勾了「台灣食品」，建立後把品牌的適用法規設成 food_tw", async () => {
+    mockSubmitIntakeStart.mockResolvedValue({ brand_id: "brd_new", quick: false } as never);
+    mockSetAdvertisingHistory.mockResolvedValue(undefined as never);
+    mockSetRegulatoryRegime.mockResolvedValue("food_tw");
+    const onSubmitted = vi.fn();
+    render(<StartStep brandId={null} onSubmitted={onSubmitted} />);
+    await userEvent.type(textbox(/品牌名稱/), "虛構品牌");
+    await userEvent.click(screen.getByLabelText("完全沒投放過"));
+    await userEvent.click(screen.getByLabelText(/台灣食品/));
+    await userEvent.click(screen.getByRole("button", { name: "建立品牌並開始初掃" }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalled());
+    expect(mockSetRegulatoryRegime).toHaveBeenCalledWith("brd_new", "food_tw");
+  });
+
+  it("沒勾「台灣食品」就不碰適用法規", async () => {
+    mockSubmitIntakeStart.mockResolvedValue({ brand_id: "brd_new", quick: false } as never);
+    mockSetAdvertisingHistory.mockResolvedValue(undefined as never);
+    const onSubmitted = vi.fn();
+    render(<StartStep brandId={null} onSubmitted={onSubmitted} />);
+    await userEvent.type(textbox(/品牌名稱/), "虛構品牌");
+    await userEvent.click(screen.getByLabelText("完全沒投放過"));
+    await userEvent.click(screen.getByRole("button", { name: "建立品牌並開始初掃" }));
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalled());
+    expect(mockSetAdvertisingHistory).toHaveBeenCalledWith("brd_new", "none");
+    expect(mockSetRegulatoryRegime).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { IntakeDraft, IntakePhoto } from "@/lib/intakeApi";
 import { fetchIntakeDraft, submitIntakeRestart, submitIntakeStart, uploadIntakePhoto } from "@/lib/intakeApi";
-import { setAdvertisingHistory } from "@/lib/libraryApi";
+import { setAdvertisingHistory, setRegulatoryRegime } from "@/lib/libraryApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 type PastAds = "has_history" | "none";
@@ -94,6 +94,8 @@ export function StartStep({
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [pastAds, setPastAds] = useState<PastAds | null>(kept?.pastAds ?? null);
+  // F34-I01: 適用法規（選填）。Not part of KeptText: unchecked = NULL, nothing to keep.
+  const [foodRegime, setFoodRegime] = useState(false);
 
   useEffect(() => {
     writeKeptText(keptKey, { brandName, clientName, description, urls, pastAds });
@@ -145,6 +147,7 @@ export function StartStep({
       });
       clearKeptText(keptKey);
       await setAdvertisingHistory(res.brand_id, pastAds);
+      if (foodRegime) await setRegulatoryRegime(res.brand_id, "food_tw");
       onSubmitted(res);
     }
   });
@@ -282,6 +285,20 @@ export function StartStep({
               <p className="text-xs text-muted-foreground">之後可選擇回顧歷史投放。要接手目前活動，請到投放中心從已連線帳戶匯入；這個選項不會替你匯入活動。</p>
             )}
             {pastAds === "none" && <p className="text-xs text-muted-foreground">可先建立第一份投放計畫；已知商品與成本會作為建議依據，預算仍由你確認。</p>}
+          </div>
+        )}
+
+        {!isRestart && (
+          <div className="flex flex-col gap-2 text-sm">
+            <span className="font-medium text-foreground">適用法規（選填）</span>
+            <label
+              className={`flex cursor-pointer flex-col gap-0.5 rounded-md border p-3 ${foodRegime ? "border-primary bg-primary/5" : "border-border"}`}
+            >
+              <span className="flex items-center gap-2">
+                <input type="checkbox" checked={foodRegime} onChange={(e) => setFoodRegime(e.target.checked)} />
+                <span className="font-medium text-foreground">台灣食品：文案標出食安法通常不能用的字，只提醒不擋</span>
+              </span>
+            </label>
           </div>
         )}
 
