@@ -381,3 +381,50 @@ class UserAssetsTest(unittest.TestCase):
         self.assertEqual(
             repo.list_placements(self.conn, self.org, self.brand, self.campaign)[0]["revision"], 1
         )
+
+    def test_statutory_warning_is_listed_per_placement_and_never_blocks_confirm(self):
+        """F34 Contract S + ruling 2B: a `food_tw` brand sees the reminder on the placement
+        list with the ads closing clause; confirming the same copy still succeeds. A brand
+        without a regime carries `statutory_warning: None`."""
+        copy = {"headline": "下午不用撐", "body": "十分鐘內治療你的疲勞", "description": "隨身補給"}
+        item = self.original(copy)
+        self.conn.execute(
+            "UPDATE ads_user_asset SET status='ready' WHERE id=%s", (item["asset_id"],)
+        )
+        self.conn.execute(
+            "UPDATE ads_campaign SET goal_text='認識品牌',objective='awareness' WHERE id=%s",
+            (self.campaign,),
+        )
+        placed = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"], copy, "test"
+        )
+        placed = repo.revise(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            placed["id"],
+            1,
+            {"purpose": "品牌介紹"},
+            "test",
+        )
+        self.conn.commit()
+        url = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/placements"
+        listed = self.client.get(url)
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertIsNone(listed.json()["placements"][0]["statutory_warning"])
+
+        brands.set_regulatory_regime(self.conn, self.brand, "food_tw", actor="test")
+        self.conn.commit()
+        warned = self.client.get(url).json()["placements"][0]["statutory_warning"]
+        self.assertIsNotNone(warned)
+        self.assertIn("治療", [t["term"] for t in warned["terms"]])
+        self.assertTrue(all(t["tier_label"] for t in warned["terms"]))
+        self.assertTrue(warned["sentence"].endswith("確認無誤仍可確認安排。"))
+        self.assertNotIn("選定", warned["sentence"])
+        self.assertTrue(warned["href"].startswith("https://"))
+        confirmed = self.client.post(
+            f"{url}/{placed['id']}/confirm", json={"expected_revision": placed["revision"]}
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(confirmed.json()["placement"]["status"], "manual_ready")

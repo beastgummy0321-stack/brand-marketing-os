@@ -13,6 +13,8 @@ export interface Placement {
   purpose: string | null; destination_entity_id: string | null; start_date: string | null; end_date: string | null;
   status: string; pending_reason: string; pending_reasons?: string[]; required: boolean; confirmed_at: string | null;
   suggestion_batch_id: string | null;
+  /** F34 Contract S: 食安法 §28 wording reminder for a `food_tw` brand, `null` otherwise. Warn only (ruling 2B). */
+  statutory_warning?: { terms: { term: string; tier_label: string }[]; sentence: string; href: string } | null;
 }
 export interface SuggestionResult { id: string; revision: number; original_copy: CopyFields; suggested_copy: CopyFields; effective_copy: CopyFields; purpose: string; pending_reasons: string[]; notes: string[]; destination_entity_id: string | null; start_date: string | null; end_date: string | null; required: boolean; status: string; unknowns: string[] }
 export interface SuggestionBatch { id: string; status: string; error: string | null; created_at: string; results?: SuggestionResult[]; input_json?: { placements: { id: string; revision: number }[] }; remaining_count?: number; usage_notice?: string; retry_notice?: string; stale?: boolean }
