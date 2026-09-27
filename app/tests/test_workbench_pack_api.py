@@ -750,7 +750,8 @@ if __name__ == "__main__":
 
 # -- F34-I02（Contract S）：版本列表帶 statutory_warning，只提醒不擋 ----------------------------
 
-_ROUND = {"sets": [{"body": "十分鐘內治療你的午後疲勞"}, {"body": "幫助你把下午撐完，精神旺盛到下班"}]}
+_ROUND = {"sets": [{"body": "十分鐘內治療你的午後疲勞"},
+                   {"body": "幫助你把下午撐完，精神旺盛到下班"}]}
 
 
 class StatutoryWarningTest(_WorkbenchPackApiTestBase):

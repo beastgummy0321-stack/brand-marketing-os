@@ -124,6 +124,7 @@ def test_statutory_warning_carries_terms_labels_and_closing_sentence():
     }
     assert warning["sentence"] == "食品廣告通常不能這樣講（食安法第 28 條）。確認無誤仍可選定。"
     assert warning["href"] == "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=L0040140"
-    ads = claims.statutory_warning(claims.statutory("治療", "food_tw"), closing="確認無誤仍可確認安排。")
+    ads = claims.statutory_warning(claims.statutory("治療", "food_tw"),
+                                   closing="確認無誤仍可確認安排。")
     assert ads is not None
     assert ads["sentence"].endswith("確認無誤仍可確認安排。")

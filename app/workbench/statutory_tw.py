@@ -5,9 +5,10 @@
 
 Sources (lead's read, 2026-09-27; extend when the regulation changes):
 - 食品安全衛生管理法 §28 and 食品標示宣傳或廣告詞句涉及不實誇張易生誤解或醫療效能之認定準則
-  (衛福部): `REGULATION_URL`. §4 defines wording that 不實、誇張或易生誤解 (incl. 維持或改變人體器官、
-  組織、生理或外觀之功能 and the 「健康」 product-name rule); §5 defines 醫療效能 (預防、改善、減輕、
-  診斷或治療疾病; 降低導致疾病有關之體內成分; 中藥材效能). 附件一 lists 27 「通常得使用之詞句」,
+  (衛福部): `REGULATION_URL`. §4 defines wording that 不實、誇張或易生誤解 (incl.
+  維持或改變人體器官、組織、生理或外觀之功能 and the 「健康」 product-name rule); §5 defines
+  醫療效能 (預防、改善、減輕、診斷或治療疾病; 降低導致疾病有關之體內成分; 中藥材效能).
+  附件一 lists 27 「通常得使用之詞句」,
   copied verbatim into `ALLOWED_PHRASES` and stripped before matching.
 - 健康食品管理法 §6 (「健康食品」／保健功效 need a permit): `HEALTH_FOOD_ACT_URL`.
 
