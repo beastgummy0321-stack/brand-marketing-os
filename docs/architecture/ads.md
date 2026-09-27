@@ -1615,3 +1615,17 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
   Extend the table yearly; nothing fetches it at runtime.
 - **e2e scripted AI follows the prompt**: the scripted `ads_strategy`／`ads_delivery_plan` replies use the roles the
   prompt offers or adopted, so a fresh e2e brand runs with two roles.
+
+### 6.38 食安法 statutory wording is a soft reminder（ruled 2026-09-27；built in F34）
+- **The brand declares its regime** (user ruling 1A): `brand.regulatory_regime` (`'food_tw'` or NULL) is set by the user in the
+  intake start step or the brand profile page. It is not inferred from facts, industry or product names; a brand with no
+  regime gets no statutory check at all (the common flow stays industry-neutral).
+- **Reminder, never a gate** (user rulings 2B + extra): matching wording in uploaded copy or generated copy produces a warning
+  the user reads and can confirm past — no block, no fix round, no ❌, and no new prompt constraint (the user: more prompt
+  limits make copy generic). Launch approval does not look at it.
+- **The list is data, matched by program**: `app/workbench/statutory_tw.py` holds curated trigger patterns per statutory
+  category (認定準則 §4 function／「健康」品名, §5 medical efficacy, 健康食品管理法 §6) with the article as `basis` and a source
+  URL, plus 附件一's 「通常得使用之詞句」 verbatim as allowed phrases stripped before matching. The regulation defines
+  categories, not words, so the patterns are editable; 附件二 nutrient-function phrases are not modelled. One check behind
+  `workbench.validate_claims` (`statutory_hits`／`statutory_warning`); surfaces are the workbench version list, the ads
+  placement list and 補文案 notes.
