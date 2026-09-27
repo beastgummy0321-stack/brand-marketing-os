@@ -174,6 +174,15 @@ def set_advertising_history(conn: Conn, brand_id: str, value: str, *, actor: str
     return advertising_history.set_advertising_history(conn, brand_id, value, actor=actor)
 
 
+def set_regulatory_regime(conn: Conn, brand_id: str, value: str | None, *, actor: str) -> dict:
+    """F34-I01 (Contract R): facade for `app.brand_intelligence.regulatory_regime.set_regulatory_regime`
+    (the one writer of `brand.regulatory_regime`; `None` clears). Imported lazily for the same
+    reason as `set_advertising_history`."""
+    from app.brand_intelligence import regulatory_regime
+
+    return regulatory_regime.set_regulatory_regime(conn, brand_id, value, actor=actor)
+
+
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
 # 見 app/llm/methodology.py）。只有 'website' 屬於網站型——值域見 app/core/vocab.py
 # CHANNEL_TYPES，不自己發明值。

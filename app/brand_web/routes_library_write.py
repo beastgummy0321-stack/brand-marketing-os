@@ -26,7 +26,7 @@ handler 與它們 redirect 落地用的 GET hub 頁整批刪除了（只留 `_cr
 from fastapi import APIRouter, Request
 
 import app.storage as storage
-from app.brand_intelligence import advertising_history
+from app.brand_intelligence import advertising_history, regulatory_regime
 from app.brand_intelligence import repository as repo
 from app.brand_web import routes as brand_routes
 from app.brand_web.routes_library import (
@@ -415,6 +415,25 @@ async def brand_advertising_history_api(request: Request, brand_id: str):
     except ValueError as exc:
         return JSONResponse({"errors": {"value": str(exc)}}, status_code=400)
     return {"data": {"advertising_history": updated["advertising_history"]}}
+
+
+# ---- F34-I01（Contract R）：品牌適用哪一套廣告法規，`null` 清除；跟上面的
+# advertising-history 同形狀的 PUT。 ----
+
+@router.put("/api/library/brands/{brand_id}/regulatory-regime")
+async def brand_regulatory_regime_api(request: Request, brand_id: str):
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
+    body = await _json_body(request)
+    raw = body.get("value")
+    value = None if raw is None else str(raw)
+    try:
+        updated = regulatory_regime.set_regulatory_regime(
+            web.conn, brand_id, value, actor=str(actor.user_id),
+        )
+    except ValueError as exc:
+        return JSONResponse({"errors": {"value": str(exc)}}, status_code=400)
+    return {"data": {"regulatory_regime": updated["regulatory_regime"]}}
 
 
 # ---- 顧客原話封存／刪除：舊表單端點（`app/brand_web/routes.py`
