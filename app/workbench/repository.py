@@ -1304,8 +1304,13 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         )
     if versions:
         claim_sources = claims.sources(conn, brand_id, product_id)
+        regime = claims.regime(conn, brand_id)
         for version in versions:
             version["claim_warning"] = claims.warning(version["body"], claim_sources, brand_id)
+            # F34-I02 Contract S: same advisory shape beside claim_warning, never a block.
+            version["statutory_warning"] = claims.statutory_warning(
+                claims.statutory(version["body"], regime),
+            )
     if part == "image_prompt":
         variant_count = _image_variant_count(request_json)
         for version, r in zip(versions, (dict(row) for row in rows), strict=True):

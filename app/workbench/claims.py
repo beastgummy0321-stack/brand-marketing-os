@@ -8,6 +8,7 @@ import re
 from urllib.parse import quote
 
 from app.brand_intelligence import repository as bi_repo
+from app.workbench import statutory_tw
 
 # Bounded coverage: these are fulfilment/endorsement families, not all possible factual claims.
 RISK = re.compile(
@@ -106,4 +107,39 @@ def warning(value, rows: list[dict], brand_id: str) -> dict | None:
             "請確認品牌能提供文案描述的內容；確認無誤即可選定，不必先新增智庫資料。"
         ),
         "href": f"/brands/{quote(brand_id, safe='')}/library?tab=claims",
+    }
+
+
+# -- F34-I02 (Contract S): 食安法 §28 wording reminder, warn-only like `warning` above ----------
+
+STATUTORY_SENTENCE = "食品廣告通常不能這樣講（食安法第 28 條）。"
+
+
+def regime(conn, brand_id: str) -> str | None:
+    """The brand's `regulatory_regime` (`food_tw` or None) — the same read-only
+    `bi_repo` dependency `sources` already uses."""
+    brand = bi_repo.get_brand(conn, brand_id)
+    return brand.get("regulatory_regime") if brand else None
+
+
+def statutory(value, regime: str | None) -> list[dict]:
+    """`statutory_tw.hits` over every string in `value` (same walk as `unsupported`),
+    deduplicated by term across strings. `[]` unless `regime == "food_tw"`."""
+    found: dict[str, dict] = {}
+    for text in _strings(value):
+        for hit in statutory_tw.hits(text, regime):
+            found.setdefault(hit["term"], hit)
+    return list(found.values())
+
+
+def statutory_warning(hits: list[dict], *, closing: str = "確認無誤仍可選定。") -> dict | None:
+    """Contract S shape for the screens: `{"terms": [{"term", "tier_label"}], "sentence",
+    "href"}`, or `None` when there is nothing to remind about."""
+    if not hits:
+        return None
+    return {
+        "terms": [{"term": h["term"], "tier_label": statutory_tw.TIER_LABELS[h["tier"]]}
+                  for h in hits],
+        "sentence": STATUTORY_SENTENCE + closing,
+        "href": statutory_tw.REGULATION_URL,
     }

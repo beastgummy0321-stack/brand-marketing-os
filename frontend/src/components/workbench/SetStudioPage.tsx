@@ -539,20 +539,49 @@ export function VersionBadge({
   useEffect(() => setConfirming(false), [version.id, version.selected_at]);
   const blockedByFull = !selected && Boolean(full);
   const failedLines = version.validation_warning?.lines ?? [];
-  const needsConfirm = !selected && (Boolean(version.claim_warning) || failedLines.length > 0);
-  const showWarning = !selected && (Boolean(version.claim_warning) || (confirming && failedLines.length > 0));
+  const statute = version.statutory_warning ?? null;
+  const advisory = Boolean(version.claim_warning) || Boolean(statute);
+  const needsConfirm = !selected && (advisory || failedLines.length > 0);
+  const showWarning = !selected && (advisory || (confirming && failedLines.length > 0));
   return (
     <div className="flex flex-wrap items-center gap-2">
       {showWarning && (
         <div role="status" className="w-full rounded-md bg-warning/10 p-3 text-sm text-warning">
+          {statute && (
+            <div data-slot="statute-note" className="flex flex-col gap-1.5 text-[13px]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <b className="font-semibold text-warning-strong">食安法提醒</b>
+                {statute.terms.map((t) => (
+                  <span
+                    key={t.term}
+                    className="inline-flex items-center gap-1 rounded-full border border-warning/35 bg-card px-2 text-xs font-semibold text-warning-strong"
+                  >
+                    {t.term}
+                    <span className="text-[11px] font-normal text-warning">{t.tier_label}</span>
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span>{statute.sentence}</span>
+                <a
+                  className="font-medium text-warning-strong underline underline-offset-[3px]"
+                  href={statute.href}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  衛福部認定準則
+                </a>
+              </div>
+            </div>
+          )}
           {version.claim_warning && (
             <>
-              <p>{version.claim_warning.message}</p>
+              <p className={cn(statute && "mt-2")}>{version.claim_warning.message}</p>
               <Link className="underline" to={version.claim_warning.href}>前往品牌智庫補充資料（選用）</Link>
             </>
           )}
           {confirming && failedLines.length > 0 && (
-            <div className={cn(version.claim_warning && "mt-2")}>
+            <div className={cn(advisory && "mt-2")}>
               <p>這一版有沒通過的檢查：</p>
               <ul className="mt-1 flex flex-col gap-0.5 text-xs">
                 {failedLines.map((line) => <li key={line}>{line}</li>)}

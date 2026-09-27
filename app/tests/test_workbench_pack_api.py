@@ -746,3 +746,50 @@ class VisualSpecWarningTest(_WorkbenchPackApiTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# -- F34-I02（Contract S）：版本列表帶 statutory_warning，只提醒不擋 ----------------------------
+
+_ROUND = {"sets": [{"body": "十分鐘內治療你的午後疲勞"},
+                   {"body": "幫助你把下午撐完，精神旺盛到下班"}]}
+
+
+class StatutoryWarningTest(_WorkbenchPackApiTestBase):
+    def test_food_tw_brand_lists_statutory_warning_beside_claim_warning(self):
+        bi_repo.set_regulatory_regime(web.conn, self.brand_id, "food_tw", actor=ACTOR)
+        pack = self._submit_pack([self._one_set("1", {"copy": 1})])
+        brief = self._briefs(pack)[0]
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="copy", generation_round=1,
+            body_json=[_ROUND, _ROUND],
+            coordinates_json=None, llm_task_id=None,
+        )
+        versions = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]["products"]["copy"]["versions"]
+        by_index = {v["version_index"]: v for v in versions}
+        warning = by_index[1]["statutory_warning"]
+        assert warning["terms"] == [{"term": "治療", "tier_label": "醫療效能"}]
+        assert warning["sentence"] == "食品廣告通常不能這樣講（食安法第 28 條）。確認無誤仍可選定。"
+        assert warning["href"] == "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=L0040140"
+        assert by_index[1]["claim_warning"] is None
+        assert by_index[2]["statutory_warning"] is None
+
+    def test_brand_without_regime_lists_none(self):
+        pack = self._submit_pack([self._one_set("1", {"copy": 1})])
+        brief = self._briefs(pack)[0]
+        workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="copy", generation_round=1,
+            body_json=[{"sets": [{"body": "十分鐘內治療你的午後疲勞"}]}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        versions = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]["products"]["copy"]["versions"]
+        assert versions[0]["statutory_warning"] is None
+        result = workbench_module.validate_claims(
+            web.conn, self.org_id, self.brand_id, None, {"body": "治療"},
+        )
+        assert result["statutory_hits"] == [] and result["statutory_warning"] is None
