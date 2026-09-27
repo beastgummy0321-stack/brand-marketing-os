@@ -9,7 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from app import storage
+from app import storage, workbench
 from app.ads import media_probe
 from app.ads import user_assets as service
 from app.ads import user_assets_repository as repo
@@ -221,14 +221,34 @@ def content(request: Request, brand_id: str, asset_id: str, kind: str):
     return Response(data, media_type=mime, headers=headers)
 
 
+# F34 Contract S: the workbench sentence closes with 「確認無誤仍可選定。」; the ads card
+# closes with the action it sits next to. Warn only (ruling 2B): nothing here blocks confirm.
+STATUTORY_CLOSING = ("確認無誤仍可選定。", "確認無誤仍可確認安排。")
+
+
+def _statutory_warning(conn, org, brand, copy_fields):
+    warning = workbench.validate_claims(conn, org, brand, None, copy_fields)["statutory_warning"]
+    if warning is None:
+        return None
+    return {**warning, "sentence": warning["sentence"].replace(*STATUTORY_CLOSING)}
+
+
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}/placements")
 def placements(request: Request, brand_id: str, campaign_id: str, history: bool = False):
     actor = web.require_actor(request)
+    conn = db.current()
     try:
+        rows = repo.list_placements(conn, actor.org_id, brand_id, campaign_id, history)
         return {
-            "placements": repo.list_placements(
-                db.current(), actor.org_id, brand_id, campaign_id, history
-            )
+            "placements": [
+                {
+                    **row,
+                    "statutory_warning": _statutory_warning(
+                        conn, actor.org_id, brand_id, row["copy_fields"]
+                    ),
+                }
+                for row in rows
+            ]
         }
     except ValueError as exc:
         raise _error(exc) from exc

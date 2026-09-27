@@ -32,13 +32,12 @@ are folded in here; the drill report and audits stay in `docs/drills/drill-6/`).
   fresh brand → roles 新客／探索 only and 起點 facts in the rationale; Beast Gummy → 再行銷 allowed; a period over
   10/9–10/11 → 國慶日 in the reasons or unknowns.
 
-## Next step (drill report §6 order; user ruling pending)
-1. **#9 食安法禁語閘** — `/dig` first. Today: forbidden rules only injected into prompts (`context_compiler.py:154-158`);
-   brand `forbidden` substring match on uploaded／suggested copy (`asset_suggestion_policy.py:52-63`,
-   `review_policy.py:81-84`); workbench regex warnings never block (`workbench/claims.py:1-19`); generated copy never
-   checked after generation. `docs/backlog/issue-u1-banned-words-gate.md` is UI wording, not ad compliance — do not reuse
-   it as the ticket. Decisions needed: source of the statutory list (食安法 §28 + 衛福部 公告 wording list, program data
-   like `calendar_tw.py`), block vs warn, where the gate sits (workbench output check + ads launch approval).
+## Next step (drill report §6 order; #9 done in F34, continue from #1)
+1. ~~**#9 食安法禁語閘**~~ — built as **F34** (2026-09-27／28, rules in `docs/architecture/ads.md` §6.38): per-brand
+   「適用法規」 flag (`brand.regulatory_regime`, 台灣食品 only), statutory word table `app/workbench/statutory_tw.py`
+   behind `workbench.validate_claims`, soft reminders on the workbench version list, the ads placement list and 補文案
+   notes. Warn only, no prompt changes. Prototype (the UI spec) at `.harness/scratch/prototype/f34-statutory/index.html`.
+   Not modelled: 附件二 nutrient-function phrases; `review_policy` recommendation copy is not checked.
 2. **#1 文案與廣告格兩條路** — approved workbench copy never fills an ad slot; 「只準備新文案」 is a dead end on a draft
    campaign (`change_control_launch.py:27`, `MaterialTaskEditor.tsx:72`). Design question, not a bug fix.
 3. **#16 商品重複建立** — 「賣什麼與數字」 step creates a second product when no `product_id` (`routes_offerings_api.py:119,143`;

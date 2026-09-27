@@ -138,7 +138,15 @@ def set_action_url(conn, org_id: str, brand_id: str, brief_id: str) -> str | Non
 
 
 def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, value) -> dict:
-    """Read-only bounded promise-family check; never a complete semantic fact verifier."""
+    """Read-only bounded promise-family check; never a complete semantic fact verifier.
+
+    Public shape (F34-I02, Contract S adds the last two):
+        unsupported_promises: list[str]
+        scope: "fulfilment_and_endorsement_families"
+        statutory_hits: list[{"term", "tier": "medical"|"function"|"health_food", "basis"}]
+        statutory_warning: {"terms": [{"term", "tier_label"}], "sentence", "href"} | None
+    `statutory_*` are `[]`／`None` unless the brand's `regulatory_regime` is `food_tw`; they
+    are reminders for the human reading the copy, never a block (F34 ruling 2B)."""
     from app.brand_intelligence import repository as brands
     from app.workbench import claims
 
@@ -148,4 +156,8 @@ def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, va
     if product_id is not None and brands.get_product(conn, brand_id, product_id) is None:
         raise ValueError("找不到此品牌商品。")
     missing = claims.unsupported(value, claims.sources(conn, brand_id, product_id))
-    return {"unsupported_promises": missing, "scope": "fulfilment_and_endorsement_families"}
+    hits = claims.statutory(value, brand.get("regulatory_regime"))
+    return {
+        "unsupported_promises": missing, "scope": "fulfilment_and_endorsement_families",
+        "statutory_hits": hits, "statutory_warning": claims.statutory_warning(hits),
+    }

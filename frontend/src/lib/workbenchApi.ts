@@ -104,6 +104,9 @@ export interface PromptCard {
 export interface ProductVersion {
   /** Advisory only. The user may confirm and select without adding a source. */
   claim_warning?: { message: string; href: string } | null;
+  /** F34 Contract S: 食安法 §28 wording reminder for a `food_tw` brand, `null` otherwise.
+   * Advisory like `claim_warning` — the same one-click confirm selects it; nothing is blocked. */
+  statutory_warning?: { terms: { term: string; tier_label: string }[]; sentence: string; href: string } | null;
   /** Feature Contract L: this version's own failed-check (❌) lines, `null` when none.
    * Advisory like `claim_warning` — selecting it takes one explicit confirm. */
   validation_warning?: { lines: string[] } | null;

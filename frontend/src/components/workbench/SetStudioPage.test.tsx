@@ -125,6 +125,48 @@ describe("優惠來源僅提醒，由使用者確認", () => {
     expect((screen.getByRole("button", { name: "完成此素材組" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("F34 食安法提醒：列出字詞與句子，確認後仍可選定", async () => {
+    const detail = setDetail({ required_parts: ["copy"], products: { copy: {
+      state: "待選定", selected: 0, required: 1, generation_settings: {}, versions: [{
+        id: "copy_statute", version_index: 1, generation_round: 1, selected_at: null,
+        body: { body: "十分鐘內治療你的午後疲勞，幫你減肥又提神，健康食品等級的安心配方" },
+        claim_warning: null,
+        statutory_warning: {
+          terms: [
+            { term: "治療", tier_label: "醫療效能" },
+            { term: "減肥", tier_label: "改變生理功能" },
+            { term: "健康食品", tier_label: "未取得許可不得使用" },
+          ],
+          sentence: "食品廣告通常不能這樣講（食安法第 28 條）。確認無誤仍可選定。",
+          href: "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=L0040140",
+        },
+      }],
+    } } });
+    mockGetSet.mockResolvedValue(detail);
+    const selected = structuredClone(detail);
+    selected.products.copy!.versions[0].selected_at = "2026-09-27T00:00:00Z";
+    selected.products.copy!.selected = 1;
+    selected.products.copy!.state = "已選定";
+    mockSelectVersion.mockResolvedValue(selected);
+    renderStudio();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("食安法提醒");
+    for (const word of ["治療", "醫療效能", "減肥", "改變生理功能", "健康食品", "未取得許可不得使用"]) {
+      expect(status.textContent).toContain(word);
+    }
+    expect(status.textContent).toContain("食品廣告通常不能這樣講（食安法第 28 條）。確認無誤仍可選定。");
+    const link = screen.getByRole("link", { name: "衛福部認定準則" });
+    expect(link.getAttribute("href")).toBe("https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=L0040140");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.queryByRole("link", { name: "前往品牌智庫補充資料（選用）" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "選定" }));
+    expect(mockSelectVersion).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "確認無誤，選定此版" }));
+    expect(mockSelectVersion).toHaveBeenCalledWith("brd_1", "set_1", "copy_statute");
+    expect(await screen.findByRole("button", { name: "✓ 已選定" })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("沒有警告的版本直接選定", async () => {
     const detail = setDetail();
     mockGetSet.mockResolvedValue(detail);

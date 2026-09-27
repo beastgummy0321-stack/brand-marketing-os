@@ -103,6 +103,7 @@ export interface LibraryBrandProfile {
   market_region: string | null;
   conversion_goal: string | null;
   advertising_history: "has_history" | "none" | null;
+  regulatory_regime: "food_tw" | null;
   delete_impact: { label: string; count: number }[];
 }
 
@@ -450,6 +451,19 @@ export async function setAdvertisingHistory(
     "PUT",
   );
   return result.data.advertising_history;
+}
+
+/** F34-I01（Contract R）：品牌適用哪一套廣告法規；`null` 清除（= 不適用）。PUT，同上。 */
+export async function setRegulatoryRegime(
+  brandId: string,
+  value: "food_tw" | null,
+): Promise<"food_tw" | null> {
+  const result = await postJson<{ data: { regulatory_regime: "food_tw" | null } }>(
+    `/api/library/brands/${encodeURIComponent(brandId)}/regulatory-regime`,
+    { value },
+    "PUT",
+  );
+  return result.data.regulatory_regime;
 }
 
 /** 回傳訊息含備份位置與素材資料夾刪除的 warn，呼叫端刪完導頁前先讓使用者看一眼。 */
