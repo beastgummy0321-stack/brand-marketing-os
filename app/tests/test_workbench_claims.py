@@ -87,3 +87,43 @@ class TestAdoptionWarning(_WorkbenchPackApiTestBase):
         )
         assert response.status_code == 200
         assert response.json()["pack"]["status"] == "done"
+
+
+# -- F34-I02 (Contract S): 食安法 §28 wording reminder ------------------------------------------
+
+_FOOD_TEXT = "十分鐘內治療你的午後疲勞，幫你減肥又提神，健康食品等級，早上吃還能改善便秘、降血糖。"
+
+
+def test_statutory_hits_with_expected_tiers_for_food_tw():
+    hits = claims.statutory({"body": _FOOD_TEXT}, "food_tw")
+    tiers = {h["term"]: h["tier"] for h in hits}
+    assert tiers["治療"] == "medical"
+    assert tiers["減肥"] == "function"
+    assert tiers["健康食品"] == "health_food"
+    assert tiers["改善便秘"] == "medical"
+    assert tiers["降血糖"] == "medical"
+    assert all(h["basis"] for h in hits)
+
+
+@pytest.mark.parametrize("text", ["幫助消化", "改善生活", "調整體質", "精神旺盛"])
+def test_statutory_allowed_or_bare_phrases_do_not_hit(text):
+    assert claims.statutory({"body": text}, "food_tw") == []
+
+
+def test_statutory_is_empty_without_regime():
+    assert claims.statutory({"body": _FOOD_TEXT}, None) == []
+    assert claims.statutory_warning([]) is None
+
+
+def test_statutory_warning_carries_terms_labels_and_closing_sentence():
+    warning = claims.statutory_warning(claims.statutory({"body": _FOOD_TEXT}, "food_tw"))
+    assert warning is not None
+    assert {t["term"]: t["tier_label"] for t in warning["terms"]} == {
+        "治療": "醫療效能", "減肥": "改變生理功能", "健康食品": "未取得許可不得使用",
+        "改善便秘": "醫療效能", "降血糖": "醫療效能",
+    }
+    assert warning["sentence"] == "食品廣告通常不能這樣講（食安法第 28 條）。確認無誤仍可選定。"
+    assert warning["href"] == "https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=L0040140"
+    ads = claims.statutory_warning(claims.statutory("治療", "food_tw"), closing="確認無誤仍可確認安排。")
+    assert ads is not None
+    assert ads["sentence"].endswith("確認無誤仍可確認安排。")
