@@ -77,6 +77,14 @@ class LibraryBundleTest(unittest.TestCase):
         self.assertEqual(data["brand"]["name"], "晨露茶飲－智庫整包")
         self.assertEqual(data["brand"]["delete_impact"], [])
 
+    def test_brand_regulatory_regime_in_bundle(self):
+        """F34-I01（Contract R）：新品牌是 None；facade 設了之後整包帶 "food_tw"。"""
+        resp = self.client.get(f"/api/library/brands/{self.bid}")
+        self.assertIsNone(resp.json()["data"]["brand"]["regulatory_regime"])
+        repo.set_regulatory_regime(web.conn, self.bid, "food_tw", actor=ACTOR)
+        resp = self.client.get(f"/api/library/brands/{self.bid}")
+        self.assertEqual(resp.json()["data"]["brand"]["regulatory_regime"], "food_tw")
+
     def test_unknown_brand_is_404(self):
         resp = self.client.get("/api/library/brands/brd_不存在")
         self.assertEqual(resp.status_code, 404)

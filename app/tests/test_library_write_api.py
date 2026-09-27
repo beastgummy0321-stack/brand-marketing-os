@@ -272,6 +272,33 @@ class LibraryWriteApiTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 404)
 
+    # ---- F34-I01（Contract R）：適用法規 ----
+
+    def test_regulatory_regime_put_sets_and_clears(self):
+        brand_id = self._new_brand("法規品牌")
+        resp = self.client.put(
+            f"/api/library/brands/{brand_id}/regulatory-regime", json={"value": "food_tw"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"], {"regulatory_regime": "food_tw"})
+        self.assertEqual(repo.get_brand(web.conn, brand_id)["regulatory_regime"], "food_tw")
+
+        resp = self.client.put(
+            f"/api/library/brands/{brand_id}/regulatory-regime", json={"value": None},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"], {"regulatory_regime": None})
+        self.assertIsNone(repo.get_brand(web.conn, brand_id)["regulatory_regime"])
+
+    def test_regulatory_regime_put_rejects_unknown_value(self):
+        brand_id = self._new_brand("法規品牌")
+        resp = self.client.put(
+            f"/api/library/brands/{brand_id}/regulatory-regime", json={"value": "drug"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("value", resp.json()["errors"])
+        self.assertIsNone(repo.get_brand(web.conn, brand_id)["regulatory_regime"])
+
 
 class AssetKindLabelTest(unittest.TestCase):
     """F07-I13 item 14: `product_photo` 的人話標籤要在後端與前端一致（app/core/vocab.py:74，

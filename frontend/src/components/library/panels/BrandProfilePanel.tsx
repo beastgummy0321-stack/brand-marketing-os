@@ -9,6 +9,7 @@ import {
   PERSONA_TYPES,
   saveBrandProfile,
   setAdvertisingHistory,
+  setRegulatoryRegime,
   type LibraryBrandProfile,
 } from "@/lib/libraryApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
@@ -75,6 +76,7 @@ function ProfileView({
   const [historyValue, setHistoryValue] = useState<"" | "has_history" | "none">(
     profile.advertising_history ?? "",
   );
+  const [regimeValue, setRegimeValue] = useState<"" | "food_tw">(profile.regulatory_regime ?? "");
 
   const form = useFormSubmit(async () => {
     await saveBrandProfile(brandId, {
@@ -87,6 +89,9 @@ function ProfileView({
     });
     if (historyValue !== "" && historyValue !== profile.advertising_history) {
       await setAdvertisingHistory(brandId, historyValue);
+    }
+    if ((regimeValue || null) !== profile.regulatory_regime) {
+      await setRegulatoryRegime(brandId, regimeValue || null);
     }
     onSaved();
   });
@@ -241,6 +246,18 @@ function ProfileView({
             把過去的廣告帶進來 →
           </Link>
         )}
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium text-foreground">適用法規</span>
+          <select
+            value={regimeValue}
+            onChange={(e) => setRegimeValue(e.target.value as "" | "food_tw")}
+            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+          >
+            <option value="">不適用</option>
+            <option value="food_tw">台灣食品：文案標出食安法通常不能用的字，只提醒不擋</option>
+          </select>
+        </label>
 
         {form.error && <p className="text-sm text-danger">{form.error}</p>}
         <div>
