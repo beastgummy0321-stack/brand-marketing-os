@@ -373,6 +373,15 @@ class ReviewCopyEditableReadTimeTest(unittest.TestCase):
         )
         self.end = settings.today_for_org(self.conn, org_id=self.org) - timedelta(days=1)
         self.start = self.end - timedelta(days=2)
+        # F37 Contract Q: review evidence refuses a never-read campaign, so the observed window
+        # and its equal-length prior period carry the coverage a clean platform read records.
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={"status": "success", "coverage": {
+                "start": (self.start - timedelta(days=3)).isoformat(),
+                "end": self.end.isoformat(),
+            }},
+        )
         self.fake = providers.FakeProvider()
         self.fake.name = "anthropic"
         patch.object(review_rounds, "PROVIDER", self.fake).start()
