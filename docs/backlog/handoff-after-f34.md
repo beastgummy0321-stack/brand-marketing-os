@@ -51,7 +51,7 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
    every existing parent with its `product_id`. Remaining latent gap → one small yellow-batch item: `create_product` has 9
    callers and only the two scan paths dedupe by name; add a partial unique index on `(brand_id, name)` for parents and
    make `create_product` return the existing active parent on a name match.
-3. **Yellow batch** (report §4, one feature of small fixes): #4 ask the per-sale target before showing 打平 559
+3. **Yellow batch — carved as F36 on 2026-09-28** (rules in ads.md §6.40; queue `.work/ready/F36-I01…I10`; #13 only its step A, #16 as the guard item). Original list: #4 ask the per-sale target before showing 打平 559
    (`budget.py:36`, `CapBlock.tsx:117`); #17 「套用到全部」 in the 自帶素材 fold (#2 done in F35;
    `UserAssetPlacements.tsx:73`); #13 one data source for connections／home／成效／review (`home_overview.py:97`,
    `routes.py:825`, `review_evidence.py:243`); #15 「照上一期」 ÷ days with spend (`channels.py:113`); #8 audience hint

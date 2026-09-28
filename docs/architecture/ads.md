@@ -1652,3 +1652,26 @@ Dig of drill-6 gap #1; prototype `.harness/scratch/prototype/f35-slot-copy/index
 - Root cause recorded: one placement concept (file + copy), two copy homes (workbench output on the ad's set, placement
   `copy_fields`) and no program path between them; the F30 readiness rule demoted "pack approved" to progress without a
   visible state. Drill-6 gaps #2 and #17 share this cause and mostly dissolve with it.
+
+### 6.40 Drill-6 yellow batch（ruled 2026-09-28；built in F36）
+Eight rulings from the dig of report §4 (each claim re-verified in code first; #16 「商品重複」 turned out to be the designed
+parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.html` (`#/cap`, `#/upload`, `#/placements`).
+- **The user states the cap, break-even is a hint** (#4): wizard step 2 gains an optional 「每賣一筆最多花」 chip, empty by
+  default, saved as `target_basis='own'`; the §6.32 provisional break-even still applies when it stays empty. No ROAS input,
+  no brand-level default.
+- **Account history divides by days that spent** (#15): 「照上一期」 = 30-day spend ÷ days with spend > 0; `sample_days` says so.
+  Coupling it to the connections coverage proof waits for the pipeline decision below.
+- **Review evidence refuses an uncovered window** (#13-A): same `_window_covered` rule triage grades with; the missing days are
+  named. The manual-ingest pipeline for real campaigns (performance tab / `ads_outcome_daily` / closeout source) is a
+  separate /dig — two ingestion pipelines is the root cause behind #13 and #15.
+- **Self-brought copy has a batch default and an apply-to-all** (#17): 「本批共用原文」 on upload, 「套用到全部待處理」 in the
+  fold (overwrites unconfirmed placements only). **The AI block is what it does** (#19): 「補空白文案」, disabled with its reason
+  when nothing is blank, pointing to the slot picker; no regeneration (§6.9.3 stands).
+- **The checklist shows the plan's audience as a read-only hint** (#8): role + audience coordinate labels, computed at view
+  time, never in the frozen snapshot or readback; never a platform targeting mapping.
+- **One organisation clock** (#20): `/api/identity/me` carries `timezone` + `today`; date defaults in the ads UI use
+  `lib/orgClock`; `revisit_at` inputs keep the browser instant.
+- **Same-name parent products are get-or-create** (#16 guard): partial unique indexes on active rows; `create_product`
+  returns the existing row on a trimmed, case-insensitive match within the same parent scope.
+- Text fixes: the scan step's empty message keys on cards ∪ scanned names (#6); the workbench empty state names
+  「投放結構 → 開始做素材 →」 (#5).
