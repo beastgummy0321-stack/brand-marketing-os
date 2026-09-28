@@ -447,12 +447,10 @@ class BudgetHistoryTest(StrategyTestBase):
         web.conn.commit()
         return local_id
 
-    def test_no_loop_history_falls_back_to_bound_account_recent_spend(self):
-        """F05-I11／演練四 V-13：迴圈自己沒有已結案花費，但品牌綁了廣告帳戶且帳戶近 30 天
-        有真花費——退回讀帳戶歷史，不是誤判成沒投放過。"""
-        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+    def _upsert_account_days(self, account_id: str, days: list[tuple[int, float]]) -> None:
+        """`days` = [(offset_from_today, spend), ...] campaign-level rows on the bound account."""
         today = coresettings.today_for_org(web.conn, org_id=self.org_id)
-        for offset, spend in ((5, 300), (10, 600)):
+        for offset, spend in days:
             meta_repo.upsert_entity_spend(web.conn, self.org_id, account_id, [{
                 "level": "campaign", "entity_id": "camp-1", "entity_name": "camp-1",
                 "campaign_id": "camp-1", "adset_id": None, "ad_id": None,
@@ -463,17 +461,58 @@ class BudgetHistoryTest(StrategyTestBase):
             }])
         web.conn.commit()
 
+    def test_no_loop_history_falls_back_to_bound_account_recent_spend(self):
+        """F05-I11／演練四 V-13：迴圈自己沒有已結案花費，但品牌綁了廣告帳戶且帳戶近 30 天
+        有真花費——退回讀帳戶歷史，不是誤判成沒投放過。F36-I05（演練六 #15，裁決 B）：
+        分母是「有花費的天數」——只投 2 天（300＋600）的帳戶日均是 450，不是 900/30。"""
+        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self._upsert_account_days(account_id, [(5, 300), (10, 600)])
+
         history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
         self.assertIsNotNone(history)
         self.assertEqual(history["source"], "meta_account")
-        self.assertEqual(history["last_daily_budget"], round(900 / 30))
+        self.assertEqual(history["last_daily_budget"], 450)
         self.assertIsNone(history["cpa"])  # 沒追蹤到轉換事件，不是 0
-        self.assertEqual(history["sample_days"], 30)
+        self.assertEqual(history["sample_days"], 2)
         self.assertIsNone(history["sample_ads"])
+        self.assertEqual(history["source_text"], "Meta 近 30 天有投放的 2 天平均日花費")
+
+    def test_account_history_caption_prints_source_text_unchanged(self):
+        """F36-I05 #3: `budget._history_scenarios` prints `source_text` as-is — the day count
+        lives there once; the caption must not re-add a 「30 天」 of its own."""
+        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self._upsert_account_days(account_id, [(5, 300), (10, 600)])
+        history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
+
+        scenarios = budget._history_scenarios(history, 14)
+        captions = [row["caption"] for row in scenarios["scenarios"]]
+        self.assertTrue(all(
+            c.startswith("Meta 近 30 天有投放的 2 天平均日花費 NT$450 ×") for c in captions
+        ), captions)
+        self.assertTrue(all(c.count("30 天") == 1 for c in captions), captions)
+        self.assertEqual(scenarios["basis"]["sample_days"], 2)
+
+    def test_account_history_with_thirty_full_days_is_unchanged(self):
+        """30 天窗每天都有花費 → 分母仍是 30，結果跟以前一模一樣（不是回歸）。"""
+        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self._upsert_account_days(account_id, [(offset, 100) for offset in range(30)])
+
+        history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
+        self.assertIsNotNone(history)
+        self.assertEqual(history["last_daily_budget"], 100)
+        self.assertEqual(history["sample_days"], 30)
+        self.assertEqual(history["source_text"], "Meta 近 30 天有投放的 30 天平均日花費")
 
     def test_bound_account_with_zero_recent_spend_is_still_cold_start(self):
         """帳戶接了，但 30 天內沒有任何花費——誠實冷啟動，不假裝有歷史。"""
         self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self.assertIsNone(ads_repo.budget_history(web.conn, self.org_id, self.brand_id))
+
+    def test_bound_account_with_only_zero_spend_rows_is_still_cold_start(self):
+        """F36-I05: rows exist but every day spent 0 — zero days with spend > 0 is「沒有歷史」,
+        never a division by zero or a NT$0 base."""
+        account_id = self._connect_and_bind_account(f"act_{uuid4().hex[:8]}")
+        self._upsert_account_days(account_id, [(3, 0), (7, 0)])
         self.assertIsNone(ads_repo.budget_history(web.conn, self.org_id, self.brand_id))
 
     def test_null_purchases_day_excluded_from_median_and_sample_ads_never_treated_as_zero(self):
