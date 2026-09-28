@@ -58,8 +58,9 @@ function mmdd(iso: string): string {
  * ad groups → ads with grades and cost per result) and the back bar. Everything the prototype does not show stays on
  * this tab, folded (CLAUDE.md three-layer rule): each plan group's 「進階：編輯這一組」 holds its node editors and
  * its manual launch settings; the campaign-wide 「調整結構（進階）」 (the pre-v10 label, kept: e2e specs open it)
- * holds the next-step button (`nextStep()`, never dispatching twice), the old numbers strip, the budget summary, channel status, 新增節點 and — on an imported campaign — the read-only
- * platform entity tree. A campaign with no groups keeps the old empty state and its next step. */
+ * holds the in-fold next-step button (`nextStep()` for 新增廣告 and the strategy steps), the old numbers strip, the budget summary, channel status, 新增節點 and — on an imported campaign — the read-only
+ * platform entity tree. The material hand-off (`dispatch` → 「開始做素材 →」, never dispatching twice; `make_assets` → 「前往素材 →」)
+ * is the bar's primary (F35 ruling 3). A campaign with no groups keeps the old empty state and its next step. */
 export function DeliveryTab({
   brandId,
   campaign: c,
@@ -222,6 +223,9 @@ export function DeliveryTab({
   }
 
   const step = nextStep(c);
+  // F35 ruling 3: the material hand-off is the bar's primary on a planned campaign, not a button in the 進階 fold.
+  // 「開始做素材 →」 dispatches the pack once; after that 「前往素材 →」. An imported campaign keeps the plain bar.
+  const barStep = !imported && (step.id === "dispatch" || step.id === "make_assets") ? step.id : null;
 
   if (!imported && c.groups.length === 0) {
     return (
@@ -368,18 +372,15 @@ export function DeliveryTab({
 
       <Disclosure label="調整結構（進階）">
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            {step.id === "add_ad" ? (
-              <StepButton onClick={() => setAddAdOpen(true)}>新增廣告 →</StepButton>
-            ) : step.id === "dispatch" ? (
-              <StepButton onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
-                {dispatching ? "交棒中…" : "開始做素材 →"}
-              </StepButton>
-            ) : (
-              <NextStepButton step={step} onChangeTab={requestTabChange} />
-            )}
-            {dispatchError && <p className="text-sm text-danger">{dispatchError}</p>}
-          </div>
+          {!barStep && (
+            <div className="flex flex-col gap-1.5">
+              {step.id === "add_ad" ? (
+                <StepButton onClick={() => setAddAdOpen(true)}>新增廣告 →</StepButton>
+              ) : (
+                <NextStepButton step={step} onChangeTab={requestTabChange} />
+              )}
+            </div>
+          )}
 
           {imported && (
             <p className="text-sm text-muted-foreground">
@@ -512,7 +513,18 @@ export function DeliveryTab({
         </div>
       </Disclosure>
 
-      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }} />
+      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}
+        hint={barStep === "dispatch" ? "交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳" : barStep === "make_assets" ? "工作檯做好的文案會出現在素材頁的格子裡" : undefined}>
+        {barStep === "dispatch" && (
+          <>
+            {dispatchError && <p role="alert" className="text-sm text-danger">{dispatchError}</p>}
+            <Button onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
+              {dispatching ? "交棒中…" : "開始做素材 →"}
+            </Button>
+          </>
+        )}
+        {barStep === "make_assets" && <Button onClick={() => requestTabChange("assets")}>前往素材 →</Button>}
+      </ActionBar>
 
       {addGroupOpen && (
         <AddGroupDialog

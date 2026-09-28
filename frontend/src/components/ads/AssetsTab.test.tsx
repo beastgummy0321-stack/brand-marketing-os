@@ -13,7 +13,16 @@ import { getAssets, getCampaign, setAssetReady } from "@/lib/adsApi";
 import { getSlots } from "@/lib/adsSlotsApi";
 import { AssetsTab } from "./AssetsTab";
 
-vi.mock("./MaterialTasksPanel", () => ({ MaterialTasksPanel: () => <p>素材分流入口</p> }));
+/** The real request panel renders behind a marker line (the deep-link cases find the marker; the F35 case reads its cards). */
+vi.mock("./MaterialTasksPanel", async () => {
+  const actual = await vi.importActual<typeof import("./MaterialTasksPanel")>("./MaterialTasksPanel");
+  return { MaterialTasksPanel: (props: Parameters<typeof actual.MaterialTasksPanel>[0]) => <><p>素材分流入口</p><actual.MaterialTasksPanel {...props} /></> };
+});
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org", getAccessToken: async () => "test_token" }));
+vi.mock("@/lib/adsMaterialApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsMaterialApi")>("@/lib/adsMaterialApi");
+  return { ...actual, listMaterialTasks: vi.fn().mockResolvedValue({ tasks: [] }) };
+});
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 vi.mock("./UserAssetPlacements", () => ({ UserAssetPlacements: () => <div>自帶素材安排</div> }));
 
@@ -338,6 +347,27 @@ describe("AssetsTab 進階 fold（F30-I11）", () => {
     } finally {
       window.location.hash = "";
     }
+  });
+
+  it("a draft campaign's fold offers three material sources, never 只準備新文案 (F35 ruling 3)", async () => {
+    render(
+      <MemoryRouter initialEntries={["/brands/brd_1/ads/campaigns/cmp_1?material_new=1"]}>
+        <AssetsTab brandId="brd_1" campaign={campaign({ status: "draft" })} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /使用已有成品/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /回收外部生圖/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /請工作台準備新圖/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /只準備新文案/ })).toBeNull();
+  });
+
+  it("a live campaign's fold keeps all four sources", async () => {
+    render(
+      <MemoryRouter initialEntries={["/brands/brd_1/ads/campaigns/cmp_1?material_new=1"]}>
+        <AssetsTab brandId="brd_1" campaign={campaign({ status: "live" })} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /只準備新文案/ })).toBeTruthy();
   });
 
   it("without a deep link the fold stays closed and the old panels are not read", async () => {

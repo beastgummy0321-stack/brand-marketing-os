@@ -1,9 +1,10 @@
 /** frontend/src/components/ads/DeliveryTab.test.tsx — F06-I02 behaviours, v10 layout (F30-I08): the tab shows the
  * structure tree; each group's node editors and manual settings sit in its closed 「進階：編輯這一組（…）」 fold, and
- * the next-step button, numbers, budget and 新增節點 sit in the closed campaign-wide 「調整結構（進階）」. No node is
- * selected by default. The tree itself is covered in `workspace/StructureTab.test.tsx`. */
+ * the in-fold next-step button, numbers, budget and 新增節點 sit in the closed campaign-wide 「調整結構（進階）」. No node
+ * is selected by default. F35 ruling 3: the material hand-off (「開始做素材 →」／「前往素材 →」) is the action bar's
+ * primary with its hint, not a button in the fold. The tree itself is covered in `workspace/StructureTab.test.tsx`. */
 import type { ReactElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -142,6 +143,19 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   };
 }
 
+/** The sticky action bar (`patterns/ActionBar`, `data-slot="action-bar"`): its primary and hint. */
+function actionBar() {
+  const bar = document.querySelector<HTMLElement>("[data-slot=action-bar]");
+  if (!bar) throw new Error("action bar not rendered");
+  return bar;
+}
+function barButton(name: string) {
+  return within(actionBar()).getByRole("button", { name });
+}
+function barHint() {
+  return actionBar().querySelector("small")?.textContent ?? null;
+}
+
 function renderTab(c: CampaignDetail, onCampaignChange = vi.fn(), onChangeTab = vi.fn(), brandId = "brd_1") {
   return {
     onCampaignChange,
@@ -158,20 +172,30 @@ describe("DeliveryTab（F06-I02）", () => {
     sessionStorage.clear();
   });
 
-  it("預設面：結構樹與返回總覽；兩種進階收合都是關的，沒有未綁定／儲存變更／日期輸入框；開始做素材 → 在活動進階裡", async () => {
-    const user = userEvent.setup();
+  it("預設面：結構樹與返回總覽；兩種進階收合都是關的，沒有未綁定／儲存變更／日期輸入框；開始做素材 → 是動作列的主按鈕、帶提示", async () => {
     renderTab(campaign());
     expect(screen.getByRole("heading", { name: "活動 → 廣告組 → 廣告" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
     expect(screen.getByRole("button", { name: "調整結構（進階）" }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }).getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: "開始做素材 →" })).toBeNull();
+    expect(barButton("開始做素材 →")).toBeTruthy();
+    expect(barHint()).toBe("交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳");
     expect(screen.queryByText("未綁定")).toBeNull();
     expect(screen.queryByText("儲存變更")).toBeNull();
     expect(document.querySelector("input[type=date]")).toBeNull();
+  });
 
+  it("下一步是交棒時，「調整結構（進階）」裡不再有開始做素材（只在動作列）", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign());
     await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    expect(screen.getByRole("button", { name: "開始做素材 →" }).className).toContain("h-12");
+    expect(screen.getAllByRole("button", { name: "開始做素材 →" })).toHaveLength(1);
+    const summary = screen.getByRole("button", { name: "調整結構（進階）" });
+    const fold = document.getElementById(summary.getAttribute("aria-controls")!)!;
+    expect(within(fold).queryByRole("button", { name: "開始做素材 →" })).toBeNull();
+    expect(within(fold).queryByRole("button", { name: "前往素材 →" })).toBeNull();
+    expect(within(fold).getByRole("button", { name: "新增節點" })).toBeTruthy();
+    expect(actionBar().contains(screen.getByRole("button", { name: "開始做素材 →" }))).toBe(true);
   });
 
   it("每個投放組各有一個「進階：編輯這一組」；在這一組新增廣告時預設選這一組", async () => {
@@ -191,8 +215,8 @@ describe("DeliveryTab（F06-I02）", () => {
     vi.mocked(getCampaign).mockResolvedValue(dispatched);
     const { onCampaignChange, onChangeTab } = renderTab(campaign());
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+    expect(barHint()).toBe("交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳");
+    await user.click(barButton("開始做素材 →"));
 
     expect(dispatchPack).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(getCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
@@ -207,25 +231,47 @@ describe("DeliveryTab（F06-I02）", () => {
     vi.mocked(getCampaign).mockResolvedValue(fresh);
     const { onChangeTab } = renderTab(campaign());
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+    expect(barHint()).toBe("交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳");
+    await user.click(barButton("開始做素材 →"));
 
     expect(onChangeTab).toHaveBeenCalledWith("assets");
     expect(screen.queryByText("已經交棒過了")).toBeNull();
   });
 
-  it("已經有任務包：按鈕是「前往素材 →」，按下去跳素材、不呼叫 dispatchPack", async () => {
+  it("交棒失敗、重讀後仍沒有 pack_id：錯誤印在動作列旁，按鈕還在", async () => {
+    const user = userEvent.setup();
+    vi.mocked(dispatchPack).mockRejectedValue(new Error("工作檯暫時沒回應"));
+    vi.mocked(getCampaign).mockResolvedValue(campaign());
+    const { onChangeTab } = renderTab(campaign());
+
+    await user.click(barButton("開始做素材 →"));
+
+    expect(within(actionBar()).getByRole("alert").textContent).toBe("工作檯暫時沒回應");
+    expect(barButton("開始做素材 →")).toBeTruthy();
+    expect(onChangeTab).not.toHaveBeenCalled();
+  });
+
+  it("已經有任務包：動作列主按鈕是「前往素材 →」、提示換成工作檯文案會出現在格子裡；按下去跳素材、不呼叫 dispatchPack", async () => {
     const user = userEvent.setup();
     const { onChangeTab } = renderTab(
       campaign({ asset_readiness: { ready_count: 0, total: 2, pack_id: "pk_1" } }),
     );
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    const button = screen.getByRole("button", { name: "前往素材 →" });
-    await user.click(button);
+    expect(barHint()).toBe("工作檯做好的文案會出現在素材頁的格子裡");
+    expect(screen.queryByRole("button", { name: "開始做素材 →" })).toBeNull();
+    await user.click(barButton("前往素材 →"));
 
     expect(onChangeTab).toHaveBeenCalledWith("assets");
     expect(dispatchPack).not.toHaveBeenCalled();
+  });
+
+  it("讀回的平台活動：動作列只有返回總覽，沒有主按鈕也沒有提示", () => {
+    renderTab(campaign({ origin: "imported", groups: [], external_view: {
+      entities: [], observations: [], next_entity_cursor: null, next_observation_cursor: null,
+      window: { start: "2026-01-01", end: "2026-01-15" }, connections: [], sync: {}, coverage: {},
+    } }));
+    expect(within(actionBar()).queryAllByRole("button")).toHaveLength(0);
+    expect(barHint()).toBeNull();
   });
 
   it("有策略、沒投放組：讀規則不自己採用，按「前往策略 →」跳策略分頁", async () => {
@@ -328,8 +374,7 @@ describe("DeliveryTab（F06-I02）", () => {
     const beforeUnload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(beforeUnload);
     expect(beforeUnload.defaultPrevented).toBe(true);
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+    await user.click(barButton("開始做素材 →"));
 
     expect(confirm).toHaveBeenCalledWith("還有未儲存的變更，確定要離開嗎？");
     expect(dispatchPack).not.toHaveBeenCalled();
@@ -348,8 +393,8 @@ describe("DeliveryTab（F06-I02）", () => {
     await user.clear(name);
     await user.type(name, "不保存直接前往");
 
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    await user.click(screen.getByRole("button", { name: "開始做素材 →" }));
+    expect(barHint()).toBe("交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳");
+    await user.click(barButton("開始做素材 →"));
 
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(onChangeTab).toHaveBeenCalledWith("assets");
@@ -458,8 +503,7 @@ describe("DeliveryTab failed reads (F29-I10 Contract K)", () => {
     renderTab(campaign());
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("座標選項、通路連線狀態讀取失敗");
-    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
-    expect(screen.getByRole("button", { name: "開始做素材 →" })).toBeTruthy();
+    expect(barButton("開始做素材 →")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重試" }));
     expect(vi.mocked(fetchCoordinates)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(fetchChannels)).toHaveBeenCalledTimes(2);
