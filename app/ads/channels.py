@@ -95,23 +95,38 @@ def account_spend_history(
     誠實冷啟動；不用 ROAS 或客單價反推 CPA（呼叫端只認 `total["cpa"]` 原樣穿過）。
     `conversion_goal` 由呼叫端讀好傳進來（別的模組的表，容器規範不在這裡查），
     `spend_summary` 的 `level="campaign"` 語意就是這裡回的「帳戶層級」加總。
-    「今天」用 `app.core.settings.today_for_org`，不是機器的 `date.today()`。"""
+    「今天」用 `app.core.settings.today_for_org`，不是機器的 `date.today()`。
+
+    F36-I05（演練六 #15，裁決 B）：`daily_spend` 的分母是**這 30 天窗裡真的有花費（> 0）的
+    天數**，不是常數 30——只投 7 天的帳戶，日均不該被沒投放的 23 天稀釋。逐日花費讀
+    `meta_repo.daily_entity_spend(level="campaign")` 再按 `spend_date` 加總；`days` 回的
+    就是這個有花費天數，0 天＝沒有歷史（回 `None`）。窗仍是 30 天，CPA 仍沿用
+    `spend_summary` 整段的誠實加總。"""
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     if not account_ids:
         return None
     today = coresettings.today_for_org(conn, org_id=org_id)
     since = today - timedelta(days=30)
+    until = today + timedelta(days=1)
+    spend_by_date: dict = {}
+    for row in meta_repo.daily_entity_spend(
+        conn, org_id, account_ids, since, until, level="campaign",
+    ):
+        spend_by_date[row["spend_date"]] = (
+            spend_by_date.get(row["spend_date"], 0.0) + row["spend"]
+        )
+    days_with_spend = sum(1 for spend in spend_by_date.values() if spend > 0)
+    if not days_with_spend:
+        return None
+    total_spend = sum(spend for spend in spend_by_date.values() if spend > 0)
     summary = meta_repo.spend_summary(
-        conn, org_id, account_ids, since, today + timedelta(days=1),
+        conn, org_id, account_ids, since, until,
         level="campaign", conversion_goal=conversion_goal,
     )
-    total = summary["total"]
-    if not total["spend"]:
-        return None
     return {
-        "cpa": total["cpa"],
-        "daily_spend": total["spend"] / 30,
-        "days": 30,
+        "cpa": summary["total"]["cpa"],
+        "daily_spend": total_spend / days_with_spend,
+        "days": days_with_spend,
         "channel_label": "Meta",
     }
 

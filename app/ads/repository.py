@@ -842,7 +842,8 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
 def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     """F05-I11: 迴圈自己沒有已結案花費時的退路——讀這個品牌綁的廣告帳戶近 30 天真實花費。
     `conversion_goal` 只在這裡讀一次（`app.brand_intelligence.repository.get_brand` 既有
-    facade），CPA 該用哪個轉換事件由它決定。"""
+    facade），CPA 該用哪個轉換事件由它決定。F36-I05（裁決 B）：`sample_days` 與
+    `source_text` 都印 `channels.account_spend_history` 算出的「有花費天數」，不再寫死 30。"""
     brand = bi_repo.get_brand(conn, brand_id)
     conversion_goal = brand["conversion_goal"] if brand else None
     hist = channels.account_spend_history(conn, org_id, brand_id, conversion_goal)
@@ -851,10 +852,10 @@ def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     return {
         "last_daily_budget": round(hist["daily_spend"]),
         "cpa": hist["cpa"],
-        "sample_days": 30,
+        "sample_days": hist["days"],
         "sample_ads": None,
         "source": channels.ACCOUNT_SOURCE,
-        "source_text": f"{hist['channel_label']} 近 30 天平均日花費",
+        "source_text": f"{hist['channel_label']} 近 30 天有投放的 {hist['days']} 天平均日花費",
     }
 
 
