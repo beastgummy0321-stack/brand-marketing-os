@@ -8,7 +8,6 @@ Shape (container contract §7): every handler is `require_actor` -> `require_bra
 repository/brief function -> wrap.
 """
 
-from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -42,9 +41,7 @@ from app.ads import (
     triage_routes,
     wizard_options,
 )
-from app.ads.adapters import simulated
 from app.brand_intelligence import repository as bi_repo
-from app.core import settings as coresettings
 
 
 def _legacy_campaign_guard(request: Request):
@@ -816,36 +813,6 @@ def get_performance(request: Request, brand_id: str, campaign_id: str):
         return {"origin": "imported", "external_view": external_repository.external_view(
             web.conn, actor.org_id, brand_id, campaign_id)}
     try:
-        result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
-    except ValueError as exc:
-        code = str(exc)
-        status, message = _OUTCOME_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
-    return result
-
-
-@router.post("/brands/{brand_id}/campaigns/{campaign_id}/ingest")
-def ingest_outcome(request: Request, brand_id: str, campaign_id: str):
-    """F03-I11：一個端點，依這個 Campaign 是怎麼發布的派工——模擬通路（`external_id` 帶
-    `sim_` 前綴，`app/ads/adapters/simulated.py::_fake_external_id`）補到今天為止缺的天數；
-    其餘（含手動配對進來的 Meta 綁定）拉既有每日拉取已經存好的 `meta_entity_spend`，這裡
-    不多打一次 Meta（6 小時排程跟更新鈕是 F04）。"""
-    actor = web.require_actor(request)
-    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    campaign = repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id)
-    if campaign is None:
-        raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
-    try:
-        external_id = campaign.get("external_id") or ""
-        if external_id.startswith("sim_"):
-            simulated.generate_outcomes(web.conn, actor.org_id, brand_id, campaign_id)
-        else:
-            today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
-            start = campaign.get("start_date") or today
-            outcome.ingest_meta(
-                web.conn, actor.org_id, brand_id, campaign_id, start=start,
-                end=today + timedelta(days=1),
-            )
         result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
     except ValueError as exc:
         code = str(exc)

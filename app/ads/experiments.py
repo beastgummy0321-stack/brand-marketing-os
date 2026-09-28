@@ -6,7 +6,7 @@ import math
 from datetime import date, timedelta
 from itertools import combinations
 
-from app.ads import live_creative, repository, simulation_mode
+from app.ads import live_creative, outcome, repository, simulation_mode
 from app.core import settings
 from app.core.db import jsonb, now_utc
 
@@ -327,24 +327,27 @@ def propose(conn, org_id, brand_id, campaign_id):
     return _build_proposal(conn, org_id, brand_id, campaign_id, detail)
 
 
+def _window_rows(conn, org_id, brand_id, campaign_id, kind, entity_ids, start, end):
+    """`outcome.rows` (Contract P) of `entity_ids` at `kind` within `[start, end]`."""
+    wanted = set(entity_ids)
+    return [
+        row for row in outcome.rows(conn, org_id, brand_id, campaign_id, kind)
+        if row["entity_id"] in wanted and start <= row["day"] <= end
+    ]
+
+
 def _rows(conn, org_id, brand_id, campaign_id, proposal):
-    return conn.execute(
-        "SELECT * FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND entity_kind='ad' AND entity_id=ANY(%s) AND day BETWEEN %s AND %s ORDER BY day",
-        (
-            org_id,
-            brand_id,
-            campaign_id,
-            [v["ad_id"] for v in proposal["variants"]],
-            proposal["window"]["start"],
-            proposal["window"]["end"],
-        ),
-    ).fetchall()
+    return _window_rows(
+        conn, org_id, brand_id, campaign_id, "ad",
+        [v["ad_id"] for v in proposal["variants"]],
+        date.fromisoformat(proposal["window"]["start"]),
+        date.fromisoformat(proposal["window"]["end"]),
+    )
 
 
 def evaluate(rows, ad_ids, start, end, rules, metric="cpa"):
     """The one judge core (F29-I04 Contract F), shared by a confirmed plan's `judge` and the
-    automatic pairs (`ab_pairs`). `rows` are `ads_outcome_daily` ad rows of `ad_ids`; only the
+    automatic pairs (`ab_pairs`). `rows` are `outcome.rows` ad rows of `ad_ids`; only the
     days in `[start, end]` count. Unknown stays unknown: a missing day or an untracked purchase
     count blocks the judgement and is never summed as 0. There is no data-source gate -- real
     and simulated rows are read the same way. Returns `{state, reason, totals, difference,
@@ -363,7 +366,9 @@ def evaluate(rows, ad_ids, start, end, rules, metric="cpa"):
     min_conversions = rules.get("min_conversions_each", rules.get("min_purchases_each"))
     relative_difference = rules["relative_difference"]
     required = {start + timedelta(days=i) for i in range((end - start).days + 1)}
-    tracked_keys = ("purchases", "revenue") if metric == "roas" else ("purchases",)
+    # A platform row may carry an unknown spend; it blocks the judgement like an untracked
+    # purchase count, never summed as 0.
+    tracked_keys = ("spend", "purchases", "revenue") if metric == "roas" else ("spend", "purchases")
     totals, missing, untracked = [], False, False
     for ad_id in ad_ids:
         own = [r for r in rows if r["entity_id"] == ad_id and r["day"] in required]
@@ -374,7 +379,7 @@ def evaluate(rows, ad_ids, start, end, rules, metric="cpa"):
         untracked = untracked or not known
         total = {"ad_id": ad_id, "days_present": len(present), "spend": None, "purchases": None,
                  "revenue": None, "value": None}
-        if complete:
+        if complete and all(r["spend"] is not None for r in own):
             total["spend"] = sum(float(r["spend"]) for r in own)
             if known:
                 total["purchases"] = sum(float(r["purchases"]) for r in own)
@@ -432,20 +437,14 @@ def judge(conn, org_id, brand_id, campaign_id, proposal, confirmed, stale):
     if today < end or (end - start).days + 1 < min_days:
         return {**result, "reason": f"尚未完成至少 {min_days} 天的共同觀察期間。"}
     rows = _rows(conn, org_id, brand_id, campaign_id, proposal)
-    cap_hit = conn.execute(
-        "SELECT 1 FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND entity_kind='group' AND entity_id=%s AND day BETWEEN %s AND %s "
-        "AND spend >= %s LIMIT 1",
-        (
-            org_id,
-            brand_id,
-            campaign_id,
-            proposal["shared"]["group_id"],
-            start,
-            end,
-            proposal["shared"]["daily_budget"],
-        ),
-    ).fetchone()
+    daily_budget = float(proposal["shared"]["daily_budget"])
+    cap_hit = any(
+        row["spend"] is not None and float(row["spend"]) >= daily_budget
+        for row in _window_rows(
+            conn, org_id, brand_id, campaign_id, "group",
+            [proposal["shared"]["group_id"]], start, end,
+        )
+    )
     if cap_hit:
         return {**result, "reason": "已碰到預設每日預算停止條件，先檢查配量；暫不判優劣。"}
     variants = proposal["variants"]

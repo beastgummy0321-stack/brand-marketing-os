@@ -18,7 +18,8 @@ Shapes other modules may use:
 
 Everything else in this package (`repository.py`, `routes.py`) is private — nothing outside
 this package imports them. This module owns `ads_campaign`/`ads_delivery_group`/`ads_ad`/
-`ads_action`/`ads_outcome_daily` and may depend on `app.workbench` (readiness/handoff, existing
+`ads_action` plus the `ads_external_*` platform tables (the one performance source, F37) and
+may depend on `app.workbench` (readiness/handoff, existing
 public entries only — §0's "Workbench handoff" rule) plus the usual `app.core`/`app.shared.web`/
 `app.identity`/`app.brand_intelligence` (read-only) facades every module reaches through. It
 does not import or touch `app.schedule`, `app.meta`, `app.main`, or another module's tables
