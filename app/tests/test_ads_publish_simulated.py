@@ -257,6 +257,16 @@ class GenerateOutcomesIdempotentTest(SimulatedPublishTestBase):
         self.assertEqual(len(group_days), 4)
 
 
+class NoChainIsNeverMarkedReadTest(SimulatedPublishTestBase):
+    def test_generate_without_a_simulated_chain_records_no_coverage(self):
+        detail = self._campaign(start_date=self.today - timedelta(days=2), end_date=self.today)
+
+        simulated.generate_outcomes(web.conn, self.org_id, self.brand_id, detail["id"], seed=1)
+
+        self.assertEqual(self._daily(detail["id"]), [])
+        self.assertIsNone(self._coverage(detail["id"]))
+
+
 class GenerateOutcomesDeterministicTest(SimulatedPublishTestBase):
     def test_same_seed_gives_the_same_numbers(self):
         start = self.today - timedelta(days=3)

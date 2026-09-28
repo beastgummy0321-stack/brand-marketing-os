@@ -62,6 +62,25 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
             )
         )
 
+    def test_disjoint_saved_days_never_mark_the_gap_as_read(self):
+        self.start()
+        first = self.today - timedelta(days=6)
+        self.save([self.row()], day=first)
+        self.save([self.row()], day=first + timedelta(days=2))
+
+        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
+        self.assertEqual(sync["observations"]["coverage"],
+                         {"start": first.isoformat(), "end": first.isoformat()})
+        missing = outcome.summary(*self.args)["coverage"]["missing_days"]
+        self.assertIn((first + timedelta(days=1)).isoformat(), missing)
+        self.assertNotIn(first.isoformat(), missing)
+
+        self.save([self.row()], day=first + timedelta(days=1))
+        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
+        self.assertEqual(sync["observations"]["coverage"],
+                         {"start": first.isoformat(),
+                          "end": (first + timedelta(days=1)).isoformat()})
+
     def test_zero_and_missing_are_distinct_and_resend_does_not_accumulate(self):
         self.start()
         zero = self.row(spend=0.0, impressions=0, clicks=0, purchases=0, revenue=0.0)
