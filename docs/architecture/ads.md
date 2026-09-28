@@ -1643,6 +1643,12 @@ Dig of drill-6 gap #1; prototype `.harness/scratch/prototype/f35-slot-copy/index
   placement; a ready slot's copy is changed by a new version in the workbench, not in the slot.
 - **A draft has no copy-only material task** (user ruling 3): 「只準備新文案」 exits only to 「修改原廣告」, so it is offered
   on campaigns with platform ads only. 「開始做素材 →」 is the bar's primary on 投放結構 (§6.2 as designed; v10 had folded it).
+- **As built (F35-I01)**: the copy half prefers, in order, the assigned material's copy, the pending placement's copy
+  (blank headline and body → `image_only`), then the ad's *selected* workbench version — which outranks "pack still being
+  worked" (`assets.readiness == in_progress`); the pack lock is a separate fact. Purpose auto-fill = the ad's name; a
+  confirmation that still has `pending_reasons` (zero budget, missing field) leaves the slot waiting, nothing is forced.
+  Ads tests fake the workbench facade (`adopted_output`／`material_source`／`material_options`) — ads-owned files may
+  neither import workbench internals nor name workbench tables in SQL.
 - Root cause recorded: one placement concept (file + copy), two copy homes (workbench output on the ad's set, placement
   `copy_fields`) and no program path between them; the F30 readiness rule demoted "pack approved" to progress without a
   visible state. Drill-6 gaps #2 and #17 share this cause and mostly dissolve with it.
