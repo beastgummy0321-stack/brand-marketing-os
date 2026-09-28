@@ -130,7 +130,9 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await openPlacements();
   const placement = page.getByRole("article").filter({ has: page.getByRole("heading", { name: `${filename} · 第` }) });
   await expect(placement).toHaveCount(1);
-  await placement.getByText("編輯原文與內部安排", { exact: true }).click();
+  // F36-I03: an unconfirmed card's editor is open by default; only click the summary when it is still closed.
+  const fold = placement.locator("details").first();
+  if (!(await fold.evaluate((d) => (d as HTMLDetailsElement).open))) await placement.getByText("編輯原文與內部安排", { exact: true }).click();
   await placement.getByRole("textbox", { name: `${filename}安排標題`, exact: true }).fill("探索品牌");
   await placement.getByRole("textbox", { name: `${filename}安排內文`, exact: true }).fill("了解更多");
   await placement.getByRole("textbox", { name: `${filename}安排說明`, exact: true }).fill("品牌介紹");
