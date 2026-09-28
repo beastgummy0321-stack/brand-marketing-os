@@ -57,6 +57,11 @@ class LiveCreativeTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.campaign, name="新客", role="new",
             daily_budget=500,
         )["id"]
+        # F37 Contract Q: closeout refuses an unread window; the window was read in full.
+        outcome_seed.set_coverage(
+            self.conn, self.org, self.brand, self.campaign,
+            self.today - timedelta(days=6), self.today,
+        )
         self.conn.commit()
         # ad_id -> the fake set; (set_id, part) -> the output its workbench selection shows now.
         self.sets: dict = {}

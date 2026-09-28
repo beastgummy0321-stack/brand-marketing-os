@@ -197,6 +197,13 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
     def test_partial_recovery_cannot_be_judged_as_complete(self):
         self.start()
         self.save([self.row(purchases=100)])
-        closed = closeout.close(*self.args, actor="tester")
+        # F37 Contract Q: the unsaved days are unread days; a recovery campaign has no platform
+        # to re-read, so the skip is open (lead decision 2026-09-29) but never a default.
+        with self.assertRaises(closeout.CoverageMissing) as caught:
+            closeout.close(*self.args, actor="tester")
+        self.assertTrue(caught.exception.payload["can_skip"])
+        self.assertEqual(len(caught.exception.payload["missing_days"]), 6)
+        closed = closeout.close(*self.args, actor="tester", skip_missing=True)
         self.assertEqual(closed["verdict"], "看不出")
+        self.assertEqual(len(closed["verdict_json"]["missing_days"]), 6)
         self.assertIn("缺日或缺廣告", closed["verdict_json"]["missing"])
