@@ -26,7 +26,28 @@ def _campaign_field(campaign: dict) -> dict:
     }
 
 
-def _group_field(group: dict) -> dict:
+def _audience_hint_fields(campaign: dict) -> dict:
+    """group id -> the 「受眾提示」 field, from the one helper `launch_view` uses for its own
+    checklist (Contract V), so both lists print the same text. Lazy import: `launch_view` reaches
+    `adapters/__init__` through `external_sync`, the same seam `adapters.platform_url` notes."""
+    from app.ads import launch_view
+    from app.core import db
+
+    hints = launch_view.audience_hints(
+        db.current(), campaign["org_id"], campaign["brand_id"], campaign
+    )
+    return {
+        group_id: {
+            "key": launch_view.AUDIENCE_HINT_KEY, "label": launch_view.AUDIENCE_HINT_LABEL,
+            "value": text,
+            "reason": "方案裡這組要打的人，只供參考；平台受眾照你自己的判斷設定，"
+                      "回來核對時不比對這一項。",
+        }
+        for group_id, text in hints.items()
+    }
+
+
+def _group_field(group: dict, audience_hint: dict | None = None) -> dict:
     fields = [
         {"label": "廣告組合名稱", "value": group["name"], "reason": _NAME_REASON},
         {"label": "每日預算", "value": group["daily_budget"], "reason": "這組廣告一天要花多少。"},
@@ -37,6 +58,10 @@ def _group_field(group: dict) -> dict:
     if group.get("end_date"):
         fields.append({"label": "結束日期", "value": group["end_date"],
                         "reason": "這組什麼時候停止投放。"})
+    if audience_hint:
+        # F36-I07 (Contract V): after the date rows, the same row `launch_view` shows -- the
+        # plan's role and audience coordinates, read-only, never a platform targeting mapping.
+        fields.append(audience_hint)
     return {"level": "group", "id": group["id"], "name": group["name"], "fields": fields}
 
 
@@ -71,10 +96,12 @@ def describe(campaign: dict) -> dict:
     平台後台照這份清單一字不差地建。"""
     checklist = [_campaign_field(campaign)]
     records = {g["id"]: g for g in manual_settings.handoff(campaign)["groups"]}
+    hints = _audience_hint_fields(campaign)
     for group in campaign.get("groups") or []:
         item = _group_field({**group,
                              "start_date": group.get("start_date") or campaign.get("start_date"),
-                             "end_date": group.get("end_date") or campaign.get("end_date")})
+                             "end_date": group.get("end_date") or campaign.get("end_date")},
+                            hints.get(group["id"]))
         record = records[group["id"]]
         item["fields"].append({"label": "人工上架設定狀態", "value": record["status"],
                                "reason": "待補：" + "、".join(record["missing"])

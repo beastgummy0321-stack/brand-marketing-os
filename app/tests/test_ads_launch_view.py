@@ -249,10 +249,110 @@ class LaunchViewTest(unittest.TestCase):
             ["name", "group", "material", "copy.title", "copy.body", "copy.description"],
         )
         group = {f["key"]: f["value"] for f in self.items(view)["新客"]["fields"]}
-        self.assertEqual(list(group), ["name", "budget_amount", "start_date", "end_date"])
+        # F36-I07 Contract V: the audience hint sits after the date rows; the fixture ads carry
+        # no audience key, so the group's role alone is the hint.
+        self.assertEqual(
+            list(group), ["name", "budget_amount", "start_date", "end_date", "audience_hint"]
+        )
         self.assertEqual(group["budget_amount"], 300.0)
+        self.assertEqual(group["audience_hint"], "新客")
         self.assertEqual(ad["parent_name"], "新客")
         self.assertIsNone(view["settings_readback"])
+
+    # -- F36-I07 Contract V: the plan's audience as a read-only hint on the group row ------------
+
+    def seed_audience(self, key, label):
+        self.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'audience',%s,%s)",
+            (db.new_id("crd"), self.org, self.brand, key, label),
+        )
+
+    def add_group(self, name, role, ads):
+        """A second group of `role` with `ads` = [(name, audience_key)] in plan order."""
+        group = db.new_id("adg")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture',%s,200,%s)",
+            (group, self.org, self.brand, self.campaign, name, role),
+        )
+        ids = []
+        for ad_name, audience_key in ads:
+            ids.append(db.new_id("ada"))
+            self.conn.execute(
+                "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name,audience_key) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (ids[-1], self.org, self.brand, self.campaign, group, ad_name, audience_key),
+            )
+        self.conn.commit()
+        return group, ids
+
+    def hint_rows(self, item):
+        return [(f["label"], f["value"]) for f in item["fields"] if f["key"] == "audience_hint"]
+
+    def test_the_group_row_shows_the_plans_role_and_audience_labels_read_only(self):
+        self.seed_audience("warm_engaged", "互動過的人")
+        self.seed_audience("customer_repeat", "回購客")
+        group, (first, second, third) = self.add_group(
+            "再行銷",
+            "retarget",
+            [
+                ("回購主圖", "warm_engaged"),
+                ("回購影片", "customer_repeat"),
+                ("回購輪播", "warm_engaged"),  # a repeated key is listed once
+            ],
+        )
+        self.assign(first)
+
+        view = self.view()
+        item = self.items(view)["再行銷"]
+        self.assertEqual(self.hint_rows(item), [("受眾提示", "再行銷・互動過的人、回購客")])
+        keys = [f["key"] for f in item["fields"]]
+        self.assertEqual(keys.index("audience_hint"), keys.index("end_date") + 1)
+        # Deferred ads still belong to the plan: the hint reads the plan, not the batch.
+        self.assertEqual({d["ad_id"] for d in view["deferred_ads"]}, {self.waiting, second, third})
+
+        # The approval freezes platform-shaped fields only: the hint is computed at view time and
+        # never written into the item's expected values, so readback compares what it always did.
+        self.approve()
+        view = self.view()
+        self.assertEqual(
+            self.hint_rows(self.items(view)["再行銷"]), [("受眾提示", "再行銷・互動過的人、回購客")]
+        )
+        frozen = launch_view.launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        self.assertNotIn("role", frozen["plan_json"]["launch_snapshot"]["groups"][0])
+        expected = self.conn.execute(
+            "SELECT expected_json FROM ads_handoff_item WHERE campaign_id=%s AND planned_id=%s",
+            (self.campaign, group),
+        ).fetchone()["expected_json"]
+        self.assertNotIn("audience_hint", expected)
+        self.assertNotIn("受眾", str(expected))
+
+    def test_an_audience_key_without_a_vocabulary_row_prints_itself(self):
+        self.seed_audience("warm_engaged", "互動過的人")
+        self.add_group(
+            "探索", "explore", [("冷受眾", "cold_lookalike"), ("暖受眾", "warm_engaged")]
+        )
+        self.assertEqual(
+            self.hint_rows(self.items()["探索"]), [("受眾提示", "探索・cold_lookalike、互動過的人")]
+        )
+
+    def test_a_group_with_neither_role_nor_audience_keys_has_no_hint_row(self):
+        # `role` is NOT NULL in the table, so the helper is the seam that can be shown empty.
+        detail = {
+            "groups": [
+                {"id": "g_bare", "role": None, "ads": [{"audience_key": None}, {}]},
+                {"id": "g_keys", "role": None, "ads": [{"audience_key": "warm_engaged"}]},
+            ]
+        }
+        self.assertEqual(
+            launch_view.audience_hints(self.conn, self.org, self.brand, detail),
+            {"g_keys": "warm_engaged"},
+        )
+        hints = launch_view.audience_hints(self.conn, self.org, self.brand, detail)
+        node = {"id": "g_bare", "name": "無角色", "daily_budget": 100}
+        fields = launch_view._fields("group", node, None, {"groups": [node]}, hints)
+        self.assertNotIn("audience_hint", [f["key"] for f in fields])
 
     def test_the_manual_checklist_lists_only_the_ads_the_snapshot_carries(self):
         response = self.client.get(self.base.removesuffix("/launch") + "/publish")

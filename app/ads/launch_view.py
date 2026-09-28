@@ -9,6 +9,7 @@ from datetime import datetime
 from app.ads import change_control_data as changes
 from app.ads import change_control_launch as launch
 from app.ads import channels, external_sync, handoff_check, handoff_data, manual_settings, targets
+from app.ads import repository as ads_repo
 
 _STATES = {
     "pending": "todo",
@@ -33,6 +34,12 @@ _COPY_FIELDS = (
 _SETTING_LABELS = {f["key"]: f["label"] for f in manual_settings.FIELDS}
 # Bounded platform reads per readback call (pages of one listing).
 _PAGE_LIMIT = 20
+# F36-I07 (Contract V): the plan's group roles, a local copy of `strategy._ROLE_LABELS` -- this
+# module never imports the strategy layer. An unknown role would print its key (there is none:
+# the column is CHECK-constrained to these three).
+_ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
+AUDIENCE_HINT_KEY = "audience_hint"
+AUDIENCE_HINT_LABEL = "受眾提示"
 
 
 def _plain(value):
@@ -41,6 +48,40 @@ def _plain(value):
 
 def _number(value):
     return None if value is None else float(value)
+
+
+# -- the audience hint (F36-I07, Contract V) ------------------------------------------------------
+
+
+def audience_hints(conn, org, brand, detail):
+    """group id -> 「<角色>・<受眾 label1>、<label2>」 for every group of `detail`
+    (`repository.campaign_detail`) that has a role or an ad with an `audience_key`. Read-only
+    help for the person building the ad set by hand: the plan's role and the distinct audience
+    coordinates of the group's ads, in the brand's own words (`coordinate_vocabulary`, dimension
+    `audience`; a key without a vocabulary row prints itself). Never a platform targeting
+    mapping, never part of the frozen snapshot or `expected_json` -- computed at view time only,
+    so readback (`handoff_check`) is untouched and an approved launch never goes stale over it."""
+    labels = {
+        row["key"]: row["label"]
+        for row in ads_repo.coordinate_vocabulary(conn, org, brand)
+        if row["dimension"] == "audience"
+    }
+    hints = {}
+    for group in detail.get("groups") or []:
+        role = group.get("role")
+        keys = []
+        for ad in group.get("ads") or []:
+            key = ad.get("audience_key")
+            if key and key not in keys:
+                keys.append(key)
+        parts = [
+            _ROLE_LABELS.get(role, role) if role else None,
+            "、".join(labels.get(key, key) for key in keys) if keys else None,
+        ]
+        text = "・".join(part for part in parts if part)
+        if text:
+            hints[group["id"]] = text
+    return hints
 
 
 # -- the view -------------------------------------------------------------------------------------
@@ -56,7 +97,7 @@ def _nodes(snapshot):
     return found
 
 
-def _fields(kind, node, parent_name, snapshot):
+def _fields(kind, node, parent_name, snapshot, hints=None):
     if kind == "campaign":
         rows = [
             ("name", "名稱", node.get("name")),
@@ -82,6 +123,12 @@ def _fields(kind, node, parent_name, snapshot):
                 node.get("start_date") or snapshot.get("start_date"),
             ),
             ("end_date", _LABELS["end_date"], node.get("end_date") or snapshot.get("end_date")),
+            # Contract V: after the date rows, only for a group that has a hint.
+            *(
+                [(AUDIENCE_HINT_KEY, AUDIENCE_HINT_LABEL, hints[node["id"]])]
+                if hints and node["id"] in hints
+                else []
+            ),
             *(
                 ("manual_settings." + key, _SETTING_LABELS.get(key, key), value)
                 for key, value in values.items()
@@ -104,7 +151,7 @@ def _fields(kind, node, parent_name, snapshot):
     return [{"key": key, "label": label, "value": _plain(value)} for key, label, value in rows]
 
 
-def _planned_items(snapshot):
+def _planned_items(snapshot, hints):
     """Before approval: the batch the approval would freeze, nothing done yet."""
     return [
         {
@@ -112,7 +159,7 @@ def _planned_items(snapshot):
             "kind": kind,
             "name": node.get("name"),
             "parent_name": parent_name,
-            "fields": _fields(kind, node, parent_name, snapshot),
+            "fields": _fields(kind, node, parent_name, snapshot, hints),
             "state": "todo",
             "mismatches": [],
             "unreadable": [],
@@ -146,11 +193,11 @@ def _reason(row, state):
     return None
 
 
-def _item(row, state, snapshot, nodes):
+def _item(row, state, snapshot, nodes, hints):
     evidence = row["evidence_json"] or {}
     node, parent_name = nodes.get((row["planned_kind"], row["planned_id"]), (None, None))
     fields = (
-        _fields(row["planned_kind"], node, parent_name, snapshot)
+        _fields(row["planned_kind"], node, parent_name, snapshot, hints)
         if node is not None
         else [{"key": "name", "label": "名稱", "value": row["name"]}]
     )
@@ -227,6 +274,11 @@ def view(conn, org, brand, campaign_id):
     campaign = changes.campaign(conn, org, brand, campaign_id)
     deferred: list = []
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
+    # Contract V: the hint is read from the plan as it is now (the snapshot carries only
+    # platform-shaped keys), keyed by group id so a frozen group finds its own.
+    hints = audience_hints(
+        conn, org, brand, ads_repo.campaign_detail(conn, org, brand, campaign_id) or {}
+    )
     change_set = launch.launch_set(conn, org, brand, campaign_id)
     if change_set is None:
         return {
@@ -234,7 +286,7 @@ def view(conn, org, brand, campaign_id):
             "version": None,
             "approved_at": None,
             "summary": _summary(current, campaign, current, deferred),
-            "items": _planned_items(current),
+            "items": _planned_items(current, hints),
             "deferred_ads": deferred,
             "read_at": None,
             "settings_readback": None,
@@ -252,6 +304,7 @@ def view(conn, org, brand, campaign_id):
             "changed" if row["id"] in changed else _STATES.get(row["status"], "unknown"),
             frozen,
             nodes,
+            hints,
         )
         for row in rows
     ]
