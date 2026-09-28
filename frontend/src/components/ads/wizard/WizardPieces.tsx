@@ -57,17 +57,21 @@ export function ProductPickCard({ product }: { product: WizardProduct }) {
   );
 }
 
-export type UnderstoodKey = "product" | "objective" | "dates" | "budget" | "platform" | "audience";
+/** The six campaign fields plus `cap` (F36-I04: 「每賣一筆最多花」, the optional per-sale cap saved through the target). */
+export type UnderstoodKey = "product" | "objective" | "dates" | "budget" | "platform" | "audience" | "cap";
 const FIELD_ICON: Record<UnderstoodKey, LucideIcon> = {
-  product: Box, objective: Target, dates: CalendarDays, budget: DollarSign, platform: InfinityIcon, audience: Smile,
+  product: Box, objective: Target, dates: CalendarDays, budget: DollarSign, platform: InfinityIcon, audience: Smile, cap: Target,
 };
 
 const CHIP_BOX = "flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left";
 const ICON_TILE = "grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-accent-foreground";
 
 /** `.uchip`: one understood field — icon tile, label, the value in bold, 「猜的，請確認」 on a dashed border when
- * the system guessed it, a pen. Pressing it opens `editor` in place (`.uchip` with the primary border). */
-export function UnderstoodField({ field, label, value, guessed, editing, onEdit, editor }: {
+ * the system guessed it, a pen. Pressing it opens `editor` in place (`.uchip` with the primary border).
+ * F36 `capChip()` adds three optional states the six fields never set: `empty` (`.uchip.empty`: a neutral dashed
+ * border and a muted value — an optional field left blank, not a guess), a `hint` line under the value (`.val`),
+ * and `wide` (`.uchip.editing` spans both grid columns while editing). */
+export function UnderstoodField({ field, label, value, guessed, editing, onEdit, editor, empty, hint, wide }: {
   field: UnderstoodKey;
   label: string;
   value: ReactNode;
@@ -76,27 +80,33 @@ export function UnderstoodField({ field, label, value, guessed, editing, onEdit,
   /** Omitted = the field cannot be edited right now (its options did not load). */
   onEdit?: () => void;
   editor?: ReactNode;
+  empty?: boolean;
+  hint?: ReactNode;
+  wide?: boolean;
 }) {
   const Icon = FIELD_ICON[field];
   const tile = <span aria-hidden="true" className={ICON_TILE}><Icon className="size-4" strokeWidth={1.75} /></span>;
   const name = <span className="w-16 shrink-0 text-xs text-muted-foreground">{label}</span>;
   if (editing && editor) {
     return (
-      <div data-field={field} className={cn(CHIP_BOX, "flex-wrap border-primary")}>
+      <div data-field={field} className={cn(CHIP_BOX, "flex-wrap border-primary", wide && "md:col-span-2")}>
         {tile}{name}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{editor}</div>
       </div>
     );
   }
+  const text = <b className={cn("min-w-0 flex-1 text-[15px]", empty ? "font-medium text-muted-foreground" : "font-semibold", "[overflow-wrap:anywhere]")}>{value}</b>;
   const body = (
     <>
       {tile}{name}
-      <b className="min-w-0 flex-1 text-[15px] font-semibold [overflow-wrap:anywhere]">{value}</b>
+      {hint
+        ? <span className="flex min-w-0 flex-1 flex-col gap-0.5">{text}<span className="text-xs text-muted-foreground">{hint}</span></span>
+        : text}
       {guessed && <Chip tone="warn">猜的，請確認</Chip>}
       {onEdit && <span aria-hidden="true" className="text-muted-foreground">✎</span>}
     </>
   );
-  const box = cn(CHIP_BOX, guessed ? "border-dashed border-grade-watch/55" : "border-border");
+  const box = cn(CHIP_BOX, guessed ? "border-dashed border-grade-watch/55" : empty ? "border-dashed border-border" : "border-border");
   return onEdit
     ? <button type="button" data-field={field} aria-label={`改${label}`} onClick={onEdit} className={cn(box, "hover:border-primary")}>{body}</button>
     : <div data-field={field} className={box}>{body}</div>;

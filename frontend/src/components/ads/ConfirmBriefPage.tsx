@@ -1,6 +1,5 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Target } from "lucide-react";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -9,10 +8,9 @@ import {
   type CampaignDetail, type CampaignFieldSources, type PatchCampaignInput,
 } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
-import { putTarget, type CapView } from "@/lib/adsTriageApi";
+import { putTarget } from "@/lib/adsTriageApi";
 import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { cn } from "@/lib/utils";
 import { ActionBar, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
 import { UnderstoodField, UnderstoodSkeleton, newCampaignPath, wizardSteps, type UnderstoodKey } from "./wizard/WizardPieces";
 
@@ -47,7 +45,7 @@ function capCompareText(value: number, breakEven: number | null, price: number |
   ].filter(Boolean).join("・");
 }
 
-type FieldKey = UnderstoodKey | "cap";
+const CAP_LABEL = "每賣一筆最多花";
 
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
@@ -65,7 +63,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
   const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
   const [saved, setSaved] = useState<CampaignDetail | null>(null);
-  const [editing, setEditing] = useState<FieldKey | null>(null);
+  const [editing, setEditing] = useState<UnderstoodKey | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -128,7 +126,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     void save(key, patch);
   };
   const cancel = () => { setEditing(null); setSaveError(null); };
-  const edit = (key: FieldKey) => () => { setSaveError(null); setEditing(key); };
+  const edit = (key: UnderstoodKey) => () => { setSaveError(null); setEditing(key); };
 
   /** The cap is not a campaign field: it goes through the target writer (revision-guarded) and the campaign is
    * re-read so the chip and the strategy call both see the saved value. */
@@ -145,9 +143,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     }
   }
 
-  type FieldRow = { label: string; value: string; editable: boolean; editor: ReactNode } &
-    ({ key: UnderstoodKey; source: keyof CampaignFieldSources } | { key: "cap"; source: null });
-  const fields: FieldRow[] = [
+  /** `source: null` = the cap: not a campaign field, never a guess; `hint` is its line under the value. */
+  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources | null; label: string; value: string; editable: boolean; editor: ReactNode; hint?: string }[] = [
     {
       key: "product", source: "product", label: "商品", value: productName, editable: products.length > 0,
       editor: <SelectEditor label="商品" initial={productId ?? ""} busy={saving} onCancel={cancel}
@@ -182,7 +179,10 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => done("audience", "audience", v !== audience, { audience_hint: v })} />,
     },
     {
-      key: "cap", source: null, label: "每賣一筆最多花", value: cap.own_value === null ? "" : `NT$${fmt(cap.own_value)}`, editable: true,
+      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : `NT$${fmt(cap.own_value)}`, editable: true,
+      hint: cap.own_value === null
+        ? (cap.break_even !== null ? `先不填就用打平 NT$${fmt(cap.break_even)}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
+        : capCompareText(cap.own_value, cap.break_even, cap.price),
       // An empty 完成 keeps whatever was there (no clear action here); an unchanged value just closes.
       editor: <CapEditor initial={cap.own_value} breakEven={cap.break_even} price={cap.price} busy={saving} onCancel={cancel}
         onDone={(v) => { if (v === null || v === cap.own_value) cancel(); else void saveCap(v); }} />,
@@ -208,7 +208,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       <FlowHeader steps={steps} current={1} title="系統這樣理解" purpose="不對就點一下改" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {fields.map((f) => (f.source === null
-          ? <CapField key={f.key} cap={cap} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
+          ? <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "還沒填（選填）"} empty={!f.value} hint={f.hint} wide
+              guessed={false} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
           : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
               editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}
@@ -277,47 +278,6 @@ function BudgetEditor({ initial, busy, onDone, onCancel }: {
       <DoneButton disabled={busy || !ok} onClick={() => { if (ok) onDone(value); }} />
     </>
   );
-}
-
-/** `.uchip` for the cap (prototype F36 `capChip()`): the same box, tile, label and pen as `UnderstoodField` (whose
- * key set and icon map are the six campaign fields), plus the `.val` column — empty = dashed border (not the warn
- * dash of a guess) with 「還沒填（選填）」 and the break-even hint; set = `NT$N` with the 比打平 line; editing spans
- * both grid columns with the primary border. */
-const CHIP_BOX = "flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left";
-const ICON_TILE = "grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-accent-foreground";
-const CAP_LABEL = "每賣一筆最多花";
-
-function CapField({ cap, editing, onEdit, editor }: { cap: CapView; editing: boolean; onEdit?: () => void; editor: ReactNode }) {
-  const tile = <span aria-hidden="true" className={ICON_TILE}><Target className="size-4" strokeWidth={1.75} /></span>;
-  const name = <span className="w-16 shrink-0 text-xs text-muted-foreground">{CAP_LABEL}</span>;
-  if (editing) {
-    return (
-      <div data-field="cap" className={cn(CHIP_BOX, "flex-wrap border-primary md:col-span-2")}>
-        {tile}{name}
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{editor}</div>
-      </div>
-    );
-  }
-  const empty = cap.own_value === null;
-  const hint = empty
-    ? (cap.break_even !== null ? `先不填就用打平 NT$${fmt(cap.break_even)}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
-    : capCompareText(cap.own_value as number, cap.break_even, cap.price);
-  const body = (
-    <>
-      {tile}{name}
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <b className={cn("text-[15px] [overflow-wrap:anywhere]", empty ? "font-medium text-muted-foreground" : "font-semibold")}>
-          {empty ? "還沒填（選填）" : `NT$${fmt(cap.own_value)}`}
-        </b>
-        {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-      </span>
-      {onEdit && <span aria-hidden="true" className="text-muted-foreground">✎</span>}
-    </>
-  );
-  const box = cn(CHIP_BOX, "border-border", empty && "border-dashed");
-  return onEdit
-    ? <button type="button" data-field="cap" aria-label={`改${CAP_LABEL}`} onClick={onEdit} className={cn(box, "hover:border-primary")}>{body}</button>
-    : <div data-field="cap" className={box}>{body}</div>;
 }
 
 /** The cap editor (prototype: `.money` input, 「用打平 N」, the live preview line, 完成／取消). Enter saves, Escape
