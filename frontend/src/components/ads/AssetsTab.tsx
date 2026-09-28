@@ -28,6 +28,7 @@ import {
 } from "@/lib/adsApi";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
 import { AssetsBody } from "./workspace/AssetsBody";
+import { isDraftCampaign } from "./workspace/WorkspaceHead";
 
 /** The workbench／manual progress of a planned ad — a progress note only. Whether the ad can go out is
  * `material_ready` (Done #7: `ready_count` counts confirmed material only), so no note says 已就位. */
@@ -269,6 +270,7 @@ export function AssetsTab(props: Parameters<typeof LegacyAssetsTab>[0]) {
     <Disclosure label="進階：素材需求、自帶素材與人工交接" open={advancedOpen} onOpenChange={setAdvancedOpen}>
       <div className="flex flex-col gap-4">
         <MaterialTasksPanel brandId={props.brandId} campaignId={props.campaign.id} refreshKey={requestsRefresh}
+          draft={isDraftCampaign(props.campaign, null)}
           onSaved={() => setMaterialRefresh((value) => value + 1)} />
         <div id="material-placements"><Disclosure label="素材安排與人工交接" open={placementsOpen} onOpenChange={setPlacementsOpen}>
           <UserAssetPlacements key={`${props.brandId}:${props.campaign.id}:${materialRefresh}:${slotUploads}`} brandId={props.brandId} campaign={props.campaign} onChanged={() => setPlacementRefresh((value) => value + 1)} />

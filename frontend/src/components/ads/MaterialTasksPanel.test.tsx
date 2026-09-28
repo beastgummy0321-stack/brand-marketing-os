@@ -13,6 +13,29 @@ const task: api.MaterialTask = { id: "task_a", campaign_id: "campaign_a", revisi
 function page(brandId = "brand_a", query = "") { return <MemoryRouter initialEntries={[`/${query}`]}><MaterialTasksPanel brandId={brandId} campaignId="campaign_a" /></MemoryRouter>; }
 beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); vi.mocked(api.listMaterialTasks).mockResolvedValue({ tasks: [] }); vi.mocked(api.materialOptions).mockResolvedValue({ options: [] }); });
 
+const SOURCE_CARDS = ["使用已有成品", "回收外部生圖", "請工作台準備新圖"];
+
+it("a draft campaign offers three sources, never 只準備新文案 (F35 ruling 3); a saved copy task still shows and opens", async () => {
+  const user = userEvent.setup();
+  const copyTask = { ...task, id: "task_copy", mode: "copy" as const, title: "只準備新文案" };
+  vi.mocked(api.listMaterialTasks).mockResolvedValue({ tasks: [copyTask] });
+  render(<MemoryRouter initialEntries={["/"]}><MaterialTasksPanel brandId="brand_a" campaignId="campaign_a" draft /></MemoryRouter>);
+  expect(await screen.findByText("已保存的需求")).toBeTruthy();
+  const cards = screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent).filter(t => t !== "已保存的需求");
+  expect(cards).toEqual(SOURCE_CARDS);
+  const saved = screen.getByRole("button", { name: /只準備新文案 · 版本 1/ });
+  await user.click(saved);
+  expect(screen.getByRole("heading", { level: 3, name: "只準備新文案" })).toBeTruthy();
+  expect(screen.getByText("圖片保持不變；在工作台整理新的文字方向。")).toBeTruthy();
+});
+
+it("without draft (a live campaign) all four sources show, 只準備新文案 included", async () => {
+  render(page());
+  await screen.findByRole("button", { name: /使用已有成品/ });
+  const cards = screen.getAllByRole("heading", { level: 3 }).map(h => h.textContent);
+  expect(cards).toEqual([...SOURCE_CARDS, "只準備新文案"]);
+});
+
 it("saves existing artwork without dispatching a generation", async () => {
   const user = userEvent.setup(); vi.mocked(api.saveMaterialOperation).mockResolvedValue({ task }); render(page());
   await user.click(await screen.findByRole("button", { name: /使用已有成品/ }));
