@@ -7,7 +7,7 @@ import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, r
 import { existingCampaigns, externalView, type NativeEntity } from "@/lib/adsExternalApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org" }) }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsHandoffApi", async () => ({ ...await vi.importActual("@/lib/adsHandoffApi"), getHandoff: vi.fn(), reportHandoff: vi.fn(), checkHandoff: vi.fn(), reconsiderHandoff: vi.fn(), createNewAdHandoff: vi.fn(), refreshHandoffSources: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
 const node = (id: string, kind = "ad", parent: string | null = "group"): NativeEntity => ({ id, platform: "fixture", source_account: "account", native_kind: kind, native_id: id, parent_native_id: parent, name: `平台 ${id}`, native_label: kind, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {}, currency: null, last_success_at: null, sync_error: null, creative: {} });

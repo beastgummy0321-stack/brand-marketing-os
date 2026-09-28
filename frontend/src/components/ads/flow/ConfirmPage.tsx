@@ -19,6 +19,7 @@ import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
 import { AbEvidence, abApproveLabel, useAbContext } from "./AbEvidence";
@@ -68,6 +69,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const { timezone } = useOrgClock();
   const homeHref = `/brands/${brandId}/ads`;
 
   // Contract K: the queue is its own read. On the propose routes it is the page's content; on a set's route it is
@@ -217,7 +219,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       const found = data.change_sets.find((s) => s.id === existingId);
       const cleanup = triageItem?.cleanup;
       if (found && proposeKind === "cleanup" && cleanup && found.status === "draft" && intent === "approve" && !samePick(found, pick.ticked)) {
-        return createCleanupSet(brandId, campaignId, cleanup, operationId, found.id, cleanupPick);
+        return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, found.id, cleanupPick);
       }
       if (found) return found;
     }
@@ -227,14 +229,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       return createChangeSet(brandId, campaignId, {
         operation_id: operationId,
         title: budgetTitle(scale.owner.name),
-        month: currentBudgetMonth(),
+        month: currentBudgetMonth(timezone),
         items: [buildBudgetDraftItem(scale.owner.id, scale.to)],
       });
     }
     if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
-      return createCleanupSet(brandId, campaignId, cleanup, operationId, undefined, cleanupPick);
+      return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, undefined, cleanupPick);
     }
     if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
@@ -242,7 +244,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     return createChangeSet(brandId, campaignId, {
       operation_id: operationId,
       title: pauseTitle(triageItem.triage.name),
-      month: currentBudgetMonth(),
+      month: currentBudgetMonth(timezone),
       items: [buildPauseDraftItem(triageItem.triage.entity_id, undefined, angleChoice)],
     });
   }

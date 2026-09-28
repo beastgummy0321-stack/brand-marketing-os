@@ -17,6 +17,7 @@ import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import { formatSyncTime } from "@/lib/format";
 import { CopyPage } from "./CopyPage";
 
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
   ...(await importOriginal<typeof reviewApi>()),
   getReview: vi.fn(),

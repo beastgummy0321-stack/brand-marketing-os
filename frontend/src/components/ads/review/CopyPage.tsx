@@ -17,6 +17,7 @@ import {
 } from "@/lib/adsChangeApi";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
@@ -126,6 +127,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
 }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { timezone } = useOrgClock();
   const homeHref = `/brands/${brandId}/ads`;
 
   const [review, setReview] = useState<ReviewRound | null>(null);
@@ -263,7 +265,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
     const draft: ChangeDraft = {
       operation_id: operationId,
       title: `改文案「${truncate(review.evidence_json.target.name ?? "未命名廣告", 60)}」`,
-      month: currentBudgetMonth(),
+      month: currentBudgetMonth(timezone),
       items: [{ kind: "copy", target_id: review.entity_id, after, reason: trimmedReason }],
       ...(rec ? { review_id: review.id, recommendation_id: rec.id } : {}),
     };

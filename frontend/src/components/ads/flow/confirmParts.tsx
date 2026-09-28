@@ -7,6 +7,7 @@ import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { Chip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
@@ -192,7 +193,8 @@ function MiniBudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: n
 export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, brandId }: {
   item: ChangeItem | undefined; scale: QueueScale | null; bestAdThumbnailUrl: string | null; brandId: string;
 }) {
-  const budgetRead = useApiRead((signal) => getMonthlyBudget(brandId, currentBudgetMonth(), signal), [brandId]);
+  const { timezone } = useOrgClock();
+  const budgetRead = useApiRead((signal) => getMonthlyBudget(brandId, currentBudgetMonth(timezone), signal), [brandId, timezone]);
   const budget = budgetRead.data;
   const budgetError = budgetRead.status === "error";
   const before = scale ? scale.from : item?.before.daily_amount ?? null;

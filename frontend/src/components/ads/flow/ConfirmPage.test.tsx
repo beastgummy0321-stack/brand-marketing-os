@@ -14,6 +14,7 @@ import type { QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsT
 import * as anglesApi from "@/lib/adsAnglesApi";
 import { ConfirmPage } from "./ConfirmPage";
 
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof changeApi>()),
   getChangeControl: vi.fn(), createChangeSet: vi.fn(), approveChangeSet: vi.fn(),
