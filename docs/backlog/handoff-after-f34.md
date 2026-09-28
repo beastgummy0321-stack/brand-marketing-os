@@ -36,8 +36,8 @@ claim in code first (file:line below are as of `c4409a20`). Replaces `handoff-af
   changed type). Authorize→last merge ≈ 45 min, integrate ≈ 5 min.
 
 ## Drill-6 progress (report §3 table, 21 rows; #21 is a drill limitation, not a fix)
-Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report §6 (1–3) plus #1／#2 (F35). Remaining 11: #3 #4
-#5 #6 #8 #13 #15 #16 #17 #20 and #19 (unverified in code).
+Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report §6 (1–3) plus #1／#2 (F35). Remaining 10 + #16 (re-verified: design, not a bug; one guard item in the yellow batch): #3 #4
+#5 #6 #8 #13 #15 #17 #20 and #19 (unverified in code).
 
 ## Next step (recommended order)
 1. **#1 文案與廣告格兩條路 — built in F35, user accepted 2026-09-28** (rules in ads.md §6.39). Slot = 圖｜文案 with
@@ -45,9 +45,12 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
    in one call; 「選一版文案」 on image-only slots; drafts hide 「只準備新文案」; 「開始做素材 →」 is the bar's primary on
    投放結構. #2 (upload falling into 進階) is dissolved by the same change; #17 (「套用到全部」) remains for uploads through
    the 自帶素材 fold only.
-2. **#16 商品重複建立** — small bug, can ride with the yellow batch: 「賣什麼與數字」 creates a second product when no
-   `product_id` (`routes_offerings_api.py:119,143`; `OfferingsStep.tsx:114`); the scan checklist dedupes
-   (`intake/state.py:303-331`), this step does not.
+2. **#16 商品重複建立 — re-verified 2026-09-28: not a bug** (user agreed). The "two rows per product" are the designed
+   parent + sell-way pair (ARCHITECTURE §8: economics hang on the sell-way; `budget.py:66` picks the first sell-way for a
+   parent; `wizard_options._sellable` never lists both). The dev DB has no same-name parent anywhere; step 3 pre-fills
+   every existing parent with its `product_id`. Remaining latent gap → one small yellow-batch item: `create_product` has 9
+   callers and only the two scan paths dedupe by name; add a partial unique index on `(brand_id, name)` for parents and
+   make `create_product` return the existing active parent on a name match.
 3. **Yellow batch** (report §4, one feature of small fixes): #4 ask the per-sale target before showing 打平 559
    (`budget.py:36`, `CapBlock.tsx:117`); #17 「套用到全部」 in the 自帶素材 fold (#2 done in F35;
    `UserAssetPlacements.tsx:73`); #13 one data source for connections／home／成效／review (`home_overview.py:97`,
