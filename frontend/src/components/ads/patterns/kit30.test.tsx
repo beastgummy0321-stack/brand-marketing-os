@@ -176,6 +176,31 @@ describe("SlotGrid", () => {
     expect(within(tiles[2]).getByText("接上後開放")).toBeTruthy();
     expect(within(tiles[2]).queryByRole("button")).toBeNull();
   });
+
+  it("F35 two halves: the copy half on a ready tile, the copy-only and image-only variants with their dashed half", () => {
+    render(
+      <SlotGrid label="廣告組 B">
+        <SlotTile variant="ready" name="通勤路上一顆" thumbnailUrl={null} copy={{ label: "已確認", text: "通勤路上，一顆就好　捷運上不用找水。" }} status={<span>已確認</span>} />
+        <SlotTile variant="copy-only" name="看過還在猶豫的你" copy={{ label: "工作檯第 1 版", text: "讀書工作通勤，少一個步驟　免配水、免拆包裝。" }}
+          imageActions={<button type="button">上傳</button>} extra={<a href="/workbench">看圖片提示詞</a>} status={<span>有文案，缺圖</span>} />
+        <SlotTile variant="image-only" name="體驗包 3 入免運" thumbnailUrl="https://scontent.example/c.jpg"
+          copyActions={<button type="button">選一版文案</button>} status={<span>有圖，缺文案</span>} />
+      </SlotGrid>,
+    );
+    const tiles = within(screen.getByRole("list", { name: "廣告組 B" })).getAllByRole("listitem");
+    expect(tiles.map((t) => t.dataset.variant)).toEqual(["ready", "copy-only", "image-only"]);
+    expect(within(tiles[0]).getByText(/文案 · 已確認/)).toBeTruthy();
+    expect(within(tiles[0]).getByText(/^通勤路上，一顆就好\s捷運上不用找水。$/).className).toContain("line-clamp-2");
+    expect(within(tiles[1]).getByText("缺圖")).toBeTruthy();
+    expect(within(tiles[1]).getByRole("button", { name: "上傳" })).toBeTruthy();
+    expect(within(tiles[1]).getByText(/文案 · 工作檯第 1 版/)).toBeTruthy();
+    expect(within(tiles[1]).getByRole("link", { name: "看圖片提示詞" })).toBeTruthy();
+    expect(within(tiles[1]).getByText("有文案，缺圖")).toBeTruthy();
+    expect(within(tiles[2]).getByText("缺文案")).toBeTruthy();
+    expect(within(tiles[2]).getByRole("button", { name: "選一版文案" })).toBeTruthy();
+    expect(tiles[2].querySelector('img[src="https://scontent.example/c.jpg"]')).toBeTruthy();
+    expect(within(tiles[2]).queryByText(/文案 · /)).toBeNull();
+  });
 });
 
 describe("TreeRows", () => {

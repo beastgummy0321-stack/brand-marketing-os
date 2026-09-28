@@ -7,12 +7,13 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
-import { fetchSlotThumbnail, getSlots, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
-import { createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
+import { chooseSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
+import { AssetApiError, createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
 import { AssetsBody } from "./AssetsBody";
 
 vi.mock("@/lib/adsSlotsApi", async (original) => ({
-  ...await original<typeof import("@/lib/adsSlotsApi")>(), getSlots: vi.fn(), uploadIntoSlot: vi.fn(), fetchSlotThumbnail: vi.fn(),
+  ...await original<typeof import("@/lib/adsSlotsApi")>(),
+  getSlots: vi.fn(), uploadIntoSlot: vi.fn(), fetchSlotThumbnail: vi.fn(), getSlotCopyOptions: vi.fn(), chooseSlotCopy: vi.fn(),
 }));
 vi.mock("@/lib/adsMaterialApi", async (original) => ({ ...await original<typeof import("@/lib/adsMaterialApi")>(), cancelMaterialTask: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async (original) => ({
@@ -23,7 +24,7 @@ const IMG = "https://scontent.example/creative/2.jpg";
 const AUTH = "/api/ads/brands/brd_1/user-assets/uas_1/thumbnail";
 
 function slot(overrides: Partial<Slot>): Slot {
-  return { ad_id: "ad_x", entity_id: null, name: "廣告", state: "ready", thumbnail_url: IMG, confirmed: true, replace_task_id: null, ...overrides };
+  return { ad_id: "ad_x", entity_id: null, name: "廣告", state: "ready", thumbnail_url: IMG, confirmed: true, replace_task_id: null, copy: null, workbench_href: null, ...overrides };
 }
 
 function slots(overrides: Partial<CampaignSlots> = {}): CampaignSlots {
@@ -269,7 +270,7 @@ describe("AssetsBody — uploading into a slot", () => {
     await screen.findByRole("heading", { name: "3／5 格已備妥" });
     pick("早晨第一口・單圖");
     const next = await screen.findByRole("status");
-    expect(next.textContent).toContain("這一格已備妥");
+    expect(next.textContent).toBe("已放進「早晨第一口・單圖」這一格，文案跟著帶進去了，這一格備妥。");
     expect(putUpload).not.toHaveBeenCalled();
     expect(within(next).queryByRole("button")).toBeNull();
   });
@@ -293,5 +294,181 @@ describe("AssetsBody — uploading into a slot", () => {
     expect(await screen.findByRole("heading", { name: "1／1 格已備妥" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /上傳/ })).toBeNull();
     expect(screen.queryByText(/確認上架清單/)).toBeNull();
+  });
+});
+
+describe("AssetsBody — two halves (F35 Contract T)", () => {
+  const SET_HREF = "/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1";
+  const copy1 = { source: "workbench" as const, label: "工作檯第 1 版", headline: "讀書工作通勤，少一個步驟", body: "免配水、免拆包裝，一顆 50 mg，思緒不被打斷。", description: null };
+  const copy2 = { source: "placement" as const, label: "已確認", headline: "通勤路上，一顆就好", body: "捷運上不用找水，包裝單手撕開。", description: "免配水" };
+  /** The realistic draft: one copy-only, one ready, one image-only, one missing (the drill-6 names, longest first). */
+  const twoHalves = () => slots({ groups: [
+    { group_id: "g1", name: "再行銷興趣承接（看過商品頁 30 天）", slots: [
+      slot({ ad_id: "a1", name: "看過還在猶豫的你重新確認購買理由（再行銷單圖）", state: "copy_only", confirmed: false, thumbnail_url: null, copy: copy1, workbench_href: SET_HREF }),
+    ] },
+    { group_id: "g2", name: "探索受眾與訊息組合", slots: [
+      slot({ ad_id: "a2", name: "用日常情境示範・通勤路上一顆", state: "ready", copy: copy2, workbench_href: SET_HREF }),
+      slot({ ad_id: "a3", name: "真實使用感受・午後三點的第二口", state: "missing", confirmed: false, thumbnail_url: null, workbench_href: SET_HREF }),
+    ] },
+    { group_id: "g3", name: "新客觸及與購買", slots: [
+      slot({ ad_id: "a4", name: "新客觸及・體驗包 3 入免運（後來加的廣告，沒有工作檯版本）", state: "image_only", confirmed: false, thumbnail_url: IMG, copy: null, workbench_href: null }),
+    ] },
+  ] });
+  const options = () => ({ options: [
+    { set_id: "wb_set_1", version_id: "wo_1", label: "超能特惠組 · 版本 1", copy_fields: { headline: "讀書工作通勤，少一個步驟", body: "免配水、免拆包裝，一顆 50 mg，思緒不被打斷。" } },
+    { set_id: "wb_set_3", version_id: "wo_3", label: "新客觸及與購買 · 版本 1", copy_fields: { headline: "第一次試，3 入免運", body: "體驗包 3 入，不喜歡免費退。" } },
+  ] });
+  const tile = (name: string) => screen.getByText(name).closest("[data-slot=slot-tile]") as HTMLElement;
+  const NAME_COPY_ONLY = "看過還在猶豫的你重新確認購買理由（再行銷單圖）";
+  const NAME_IMAGE_ONLY = "新客觸及・體驗包 3 入免運（後來加的廣告，沒有工作檯版本）";
+
+  it("the four states: their chips, the image half, the copy half and the dashed halves", async () => {
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    const copyOnly = tile(NAME_COPY_ONLY);
+    expect(copyOnly.dataset.variant).toBe("copy-only");
+    expect(within(copyOnly).getByText("有文案，缺圖")).toBeTruthy();
+    expect(within(copyOnly).getByText("缺圖")).toBeTruthy();
+    expect(within(copyOnly).getByRole("button", { name: `上傳：${NAME_COPY_ONLY}` })).toBeTruthy();
+    expect(within(copyOnly).getByText(/文案 · 工作檯第 1 版/)).toBeTruthy();
+    expect(within(copyOnly).getByText(/^讀書工作通勤，少一個步驟\s免配水、免拆包裝，一顆 50 mg，思緒不被打斷。$/)).toBeTruthy();
+    expect(within(copyOnly).queryByRole("button", { name: /選一版文案/ })).toBeNull();
+
+    const ready = tile("用日常情境示範・通勤路上一顆");
+    expect(ready.dataset.variant).toBe("ready");
+    expect(within(ready).getByText("已確認", { selector: "[data-slot=chip]" })).toBeTruthy();
+    expect(within(ready).getByText(/文案 · 已確認/)).toBeTruthy();
+    expect(within(ready).getByText(/^通勤路上，一顆就好\s捷運上不用找水，包裝單手撕開。$/)).toBeTruthy();
+    expect(ready.querySelector(`img[src="${IMG}"]`)).toBeTruthy();
+
+    const imageOnly = tile(NAME_IMAGE_ONLY);
+    expect(imageOnly.dataset.variant).toBe("image-only");
+    expect(within(imageOnly).getByText("有圖，缺文案")).toBeTruthy();
+    expect(within(imageOnly).getByText("缺文案")).toBeTruthy();
+    expect(within(imageOnly).getByRole("button", { name: `選一版文案：${NAME_IMAGE_ONLY}` })).toBeTruthy();
+    expect(imageOnly.querySelector(`img[src="${IMG}"]`)).toBeTruthy();
+    expect(within(imageOnly).queryByRole("button", { name: /上傳/ })).toBeNull();
+
+    const missing = screen.getByText("缺 1 則").closest("[data-slot=slot-tile]") as HTMLElement;
+    expect(missing.dataset.variant).toBe("missing");
+    // The missing tile's 從素材工作檯 goes to the ad's own set when it has one (the /app prefix stripped for the router).
+    expect(within(missing).getByRole("link", { name: "從素材工作檯" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1");
+    // Progress: only the ready slot is ok.
+    expect(screen.getByRole("img", { name: "1／4 格已備妥" }).querySelectorAll("[data-state=ok]").length).toBe(1);
+  });
+
+  it("看圖片提示詞 on a copy-only tile links to the ad's workbench set, and is absent when the ad has no set", async () => {
+    const data = twoHalves();
+    data.groups[0].slots.push(slot({ ad_id: "a5", name: "沒有集合的文案", state: "copy_only", confirmed: false, thumbnail_url: null, copy: copy1, workbench_href: null }));
+    data.total = 5;
+    vi.mocked(getSlots).mockResolvedValue(data);
+    renderBody();
+    await screen.findByRole("heading", { name: "1／5 格已備妥" });
+    expect(within(tile(NAME_COPY_ONLY)).getByRole("link", { name: "看圖片提示詞" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1");
+    expect(within(tile("沒有集合的文案")).queryByRole("link", { name: "看圖片提示詞" })).toBeNull();
+  });
+
+  function pickFile(name: string) {
+    const file = new File(["png"], "morning.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText(`選擇「${name}」的檔案`), { target: { files: [file] } });
+    return file;
+  }
+  const completeBatch = () => ({ batch: { id: "ub_1", uploads: [{ id: "up_1", batch_id: "ub_1", filename: "morning.png", expected_size: 3, status: "complete" as const, error: null, asset_id: "uas_2", copy_fields: {} }] } });
+
+  it("an upload into a copy-only slot sends no copy_fields; the confirmed placement makes the slot ready with no next step", async () => {
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    vi.mocked(createUploadBatch).mockResolvedValue(completeBatch());
+    const after = twoHalves();
+    after.groups[0].slots[0] = slot({ ad_id: "a1", name: NAME_COPY_ONLY, state: "ready", thumbnail_url: IMG, copy: { ...copy1, source: "placement", label: "已確認" }, workbench_href: SET_HREF });
+    after.ready = 2;
+    vi.mocked(uploadIntoSlot).mockResolvedValue({ placement: placement({ confirmed_at: "2026-09-28T02:00:00Z", purpose: NAME_COPY_ONLY }), slots: after });
+    const { props } = renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    pickFile(NAME_COPY_ONLY);
+    const next = await screen.findByRole("status");
+    expect(next.textContent).toBe(`已放進「${NAME_COPY_ONLY}」這一格，文案跟著帶進去了，這一格備妥。`);
+    expect(within(next).queryByRole("button")).toBeNull();
+    expect(uploadIntoSlot).toHaveBeenCalledWith("brd_1", "cmp_1", "a1", { upload_id: "up_1" });
+    expect(screen.getByRole("heading", { name: "2／4 格已備妥" })).toBeTruthy();
+    expect(tile(NAME_COPY_ONLY).dataset.variant).toBe("ready");
+    expect(props.onPlacementChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("an upload into an ad without copy comes back image-only: the line says to pick a version, no next-step button", async () => {
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    vi.mocked(createUploadBatch).mockResolvedValue(completeBatch());
+    const after = twoHalves();
+    after.groups[1].slots[1] = slot({ ad_id: "a3", name: "真實使用感受・午後三點的第二口", state: "image_only", confirmed: false, thumbnail_url: IMG, workbench_href: SET_HREF });
+    vi.mocked(uploadIntoSlot).mockResolvedValue({ placement: placement({ pending_reason: "文案缺少標題與內文" }), slots: after });
+    renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    pickFile("真實使用感受・午後三點的第二口");
+    const next = await screen.findByRole("status");
+    expect(next.textContent).toBe("已放進「真實使用感受・午後三點的第二口」這一格；還缺文案，選一版就備妥。");
+    expect(within(next).queryByRole("button")).toBeNull();
+    expect(within(tile("真實使用感受・午後三點的第二口")).getByRole("button", { name: /選一版文案/ })).toBeTruthy();
+  });
+
+  it("選一版文案 opens the picker over the workbench versions; choosing writes the version and renders the returned slots", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    vi.mocked(getSlotCopyOptions).mockResolvedValue(options());
+    const after = twoHalves();
+    after.groups[2].slots[0] = slot({ ad_id: "a4", name: NAME_IMAGE_ONLY, state: "ready", thumbnail_url: IMG, copy: { source: "placement", label: "已確認", headline: "第一次試，3 入免運", body: "體驗包 3 入，不喜歡免費退。", description: null } });
+    after.ready = 2;
+    vi.mocked(chooseSlotCopy).mockResolvedValue({ placement: placement({ confirmed_at: "2026-09-28T02:00:00Z" }), slots: after });
+    const { props } = renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    await user.click(screen.getByRole("button", { name: /選一版文案/ }));
+    const dialog = await screen.findByRole("dialog", { name: `選一版文案放進「${NAME_IMAGE_ONLY}」` });
+    expect(getSlotCopyOptions).toHaveBeenCalledWith("brd_1", "cmp_1", expect.any(AbortSignal));
+    const list = await within(dialog).findByRole("list", { name: "文案版本" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "超能特惠組 · 版本 1讀書工作通勤，少一個步驟　免配水、免拆包裝，一顆 50 mg，思緒不被打斷。",
+      "新客觸及與購買 · 版本 1第一次試，3 入免運　體驗包 3 入，不喜歡免費退。",
+    ]);
+    // Focus lands on the first option.
+    expect(document.activeElement).toBe(rows[0]);
+    await user.click(rows[1]);
+    expect(chooseSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "a4", { set_id: "wb_set_3", version_id: "wo_3" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("heading", { name: "2／4 格已備妥" })).toBeTruthy();
+    expect(tile(NAME_IMAGE_ONLY).dataset.variant).toBe("ready");
+    expect(screen.getByRole("status").textContent).toBe("文案已放進這一格，備妥。");
+    expect(props.onPlacementChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 409 from the choice stays inside the picker with its message; Escape closes it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    vi.mocked(getSlotCopyOptions).mockResolvedValue(options());
+    vi.mocked(chooseSlotCopy).mockRejectedValue(new AssetApiError("這一格還沒有圖，先上傳圖再選文案。", 409));
+    renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    await user.click(screen.getByRole("button", { name: /選一版文案/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click((await within(dialog).findAllByRole("listitem"))[0]);
+    expect(await within(dialog).findByRole("alert")).toHaveProperty("textContent", "沒有放進去：這一格還沒有圖，先上傳圖再選文案。");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a failed options read is ReadFailed inside the picker, with 重試", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(twoHalves());
+    vi.mocked(getSlotCopyOptions).mockRejectedValueOnce(new Error("連線逾時")).mockResolvedValue(options());
+    renderBody();
+    await screen.findByRole("heading", { name: "1／4 格已備妥" });
+    await user.click(screen.getByRole("button", { name: /選一版文案/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("文案版本讀不到：連線逾時")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "重試" }));
+    expect(await within(dialog).findByRole("list", { name: "文案版本" })).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
