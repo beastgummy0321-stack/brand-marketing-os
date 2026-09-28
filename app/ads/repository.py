@@ -679,21 +679,62 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     return entries
 
 
+# F37 Contract P: the one mapping from platform rows to this module's local nodes. A performance
+# row of an internal campaign is an `ads_external_daily` row (monthly account-budget rows
+# excluded) of the platform entity whose `native_id` a local node carries as its `external_id`
+# -- the same binding `ab_pairs._entities` reads. `{scope}` is `adset`/`ad`, `{table}` the local
+# node table; both come from `_PERF_KIND`, never from a caller. A local node with no bound
+# platform id, or a platform row with no local node, has no row here.
+_PERF_JOIN = (
+    " FROM ads_external_daily d"
+    " JOIN ads_external_entity e ON e.org_id = d.org_id AND e.brand_id = d.brand_id"
+    " AND e.campaign_id = d.campaign_id AND e.id = d.entity_id"
+    " JOIN {table} n ON n.org_id = d.org_id AND n.brand_id = d.brand_id"
+    " AND n.campaign_id = d.campaign_id AND n.external_id = e.native_id"
+    " WHERE d.metric_scope = '{scope}' AND d.attribution_key <> %s"
+)
+_PERF_KIND = {
+    "group": {"table": "ads_delivery_group", "scope": "adset"},
+    "ad": {"table": "ads_ad", "scope": "ad"},
+}
+
+
+def _perf_join(kind: str) -> str:
+    if kind not in _PERF_KIND:
+        raise ValueError("performance_kind_unknown")
+    return _PERF_JOIN.format(**_PERF_KIND[kind])
+
+
+def performance_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
+                     kind: str) -> list[dict]:
+    """F37 Contract P: this campaign's daily platform rows at the group (`adset`) or ad grain,
+    keyed by the LOCAL node id (`entity_id`), ordered by `day, entity_id`. Unknown metrics stay
+    `NULL` -- nothing here coerces them."""
+    rows = conn.execute(
+        "SELECT n.id AS entity_id, d.day, d.spend, d.impressions, d.clicks, d.purchases,"
+        " d.revenue, d.currency, d.source, d.observed_at"
+        + _perf_join(kind)
+        + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s"
+        " ORDER BY d.day, n.id",
+        (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, campaign_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict:
-    """Campaign-level totals sum `entity_kind = 'group'` rows only. `ads_outcome_daily` also
-    carries `entity_kind = 'ad'` rows (for the per-ad 花費占比), and those are never summed
-    into a campaign total — summing both levels double-counts (§0 "money totals belong to the
-    group level"). `purchases`／`revenue` are nullable (F16-I01): `SUM()` already ignores `NULL`
-    rows on its own, so no `COALESCE` here — when every row is untracked the sum comes back
-    `NULL`/`None`, never a fabricated 0. `spend` stays `COALESCE`d to 0 — spend is always
-    tracked, and `row_count` is how callers already tell "no data at all" apart from "zero
-    spend"."""
+    """Campaign-level totals sum the group-grain rows of `performance_rows` only (Contract P).
+    Ad-grain rows exist too (for the per-ad 花費占比) and are never summed into a campaign
+    total -- summing both levels double-counts (§0 "money totals belong to the group level").
+    `purchases`／`revenue` may be `NULL` (untracked): `SUM()` already ignores `NULL` rows on its
+    own, so no `COALESCE` here -- when every row is untracked the sum comes back `NULL`/`None`,
+    never a fabricated 0. `spend` stays `COALESCE`d to 0 for the no-row case, and `row_count` is
+    how callers already tell "no data at all" apart from "zero spend"."""
     row = conn.execute(
-        "SELECT COALESCE(SUM(spend), 0) AS spend, SUM(purchases) AS purchases,"
-        " SUM(revenue) AS revenue, COUNT(*) AS row_count"
-        " FROM ads_outcome_daily WHERE org_id = %s AND brand_id = %s AND campaign_id = %s"
-        " AND entity_kind = 'group'",
-        (org_id, brand_id, campaign_id),
+        "SELECT COALESCE(SUM(d.spend), 0) AS spend, SUM(d.purchases) AS purchases,"
+        " SUM(d.revenue) AS revenue, COUNT(*) AS row_count"
+        + _perf_join("group")
+        + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s",
+        (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, campaign_id),
     ).fetchone()
     return dict(row) if row is not None else {
         "spend": 0, "purchases": None, "revenue": None, "row_count": 0,
@@ -789,17 +830,18 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     `last_daily_budget` = 最近一個 `status='closed'` Campaign 的投放組日預算合計。用
     `coresettings.today_for_org` 而非機器的 `date.today()`（`app/core/settings.py:293`）。
 
-    F05-I11：這個品牌自己的迴圈（`ads_outcome_daily`）沒有已結案的花費時，退回讀它綁的廣告
-    帳戶近 30 天真實花費（`app.ads.channels.account_spend_history`，平台名字只住在
-    `channels.py`）——「投放過但還沒在新迴圈裡結案」不等於「沒投放過」（演練四 V-13）。帳戶
-    也沒有花費才是誠實冷啟動。"""
+    F05-I11：這個品牌自己的迴圈（F37：`performance_rows` 同一條 group
+    粒度的平台列）沒有已結案的花費時，退回讀它綁的廣告帳戶近 30 天真實花費
+    （`app.ads.channels.account_spend_history`，平台名字只住在 `channels.py`）——
+    「投放過但還沒在新迴圈裡結案」不等於「沒投放過」（演練四 V-13）。帳戶也沒有花費才是
+    誠實冷啟動。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     since = today - timedelta(days=30)
     daily_rows = conn.execute(
-        "SELECT day, SUM(spend) AS spend, SUM(purchases) AS purchases FROM ads_outcome_daily"
-        " WHERE org_id = %s AND brand_id = %s AND entity_kind = 'group' AND day >= %s"
-        " GROUP BY day",
-        (org_id, brand_id, since),
+        "SELECT d.day, SUM(d.spend) AS spend, SUM(d.purchases) AS purchases"
+        + _perf_join("group")
+        + " AND d.org_id = %s AND d.brand_id = %s AND d.day >= %s GROUP BY d.day",
+        (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, since),
     ).fetchall()
     daily_cpas = [
         float(row["spend"]) / float(row["purchases"])
@@ -823,10 +865,11 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     sample_ads_row = conn.execute(
         "SELECT COUNT(DISTINCT a.id) AS n FROM ads_ad a WHERE a.org_id = %s"
         " AND a.brand_id = %s AND a.local_state = 'bound' AND a.campaign_id IN ("
-        "   SELECT DISTINCT campaign_id FROM ads_outcome_daily"
-        "   WHERE org_id = %s AND brand_id = %s AND entity_kind = 'group' AND day >= %s"
-        "   AND purchases > 0)",
-        (org_id, brand_id, org_id, brand_id, since),
+        "   SELECT DISTINCT d.campaign_id"
+        + _perf_join("group")
+        + "   AND d.org_id = %s AND d.brand_id = %s AND d.day >= %s AND d.purchases > 0)",
+        (org_id, brand_id, external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY,
+         org_id, brand_id, since),
     ).fetchone()
     assert total_row is not None and sample_ads_row is not None  # 都是聚合查詢，永遠有一列
     return {
@@ -880,12 +923,12 @@ def starting_point_reads(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
          external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY),
     ).fetchone()
     loop = conn.execute(
-        "SELECT SUM(o.purchases) AS purchases FROM ads_outcome_daily o"
-        " JOIN ads_campaign c ON c.org_id = o.org_id AND c.brand_id = o.brand_id"
-        " AND c.id = o.campaign_id"
-        " WHERE o.org_id = %s AND o.brand_id = %s AND o.entity_kind = 'group'"
-        " AND c.status = 'closed'",
-        (org_id, brand_id),
+        "SELECT SUM(d.purchases) AS purchases"
+        + _perf_join("group")
+        + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id IN ("
+        " SELECT c.id FROM ads_campaign c WHERE c.org_id = %s AND c.brand_id = %s"
+        " AND c.status = 'closed')",
+        (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, org_id, brand_id),
     ).fetchone()
     assert external is not None and loop is not None  # 都是聚合查詢，永遠有一列
     return {

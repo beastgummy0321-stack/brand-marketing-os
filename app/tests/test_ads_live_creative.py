@@ -21,6 +21,7 @@ from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
+from app.tests.fixtures.ads_external import outcome_seed
 
 ACTOR = "test"
 _COORDS = {
@@ -127,12 +128,10 @@ class LiveCreativeTest(unittest.TestCase):
 
     def _ad_rows(self, ad_id, *, purchases):
         for offset in range(3):
-            self.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
-                " VALUES (%s,%s,%s,%s,'ad',%s,%s,100,100,10,%s,200,'simulated')",
-                (db.new_id("ado"), self.org, self.brand, self.campaign, ad_id,
-                 self.today - timedelta(days=offset), purchases),
+            outcome_seed.seed_day(
+                self.conn, self.org, self.brand, self.campaign, "ad", ad_id,
+                self.today - timedelta(days=offset), spend=100, impressions=100, clicks=10,
+                purchases=purchases, revenue=200, source="simulated",
             )
         self.conn.commit()
 

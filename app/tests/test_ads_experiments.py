@@ -8,8 +8,9 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.ads import closeout, experiments, plan, repository, simulation_recovery
-from app.core.db import jsonb, new_id
+from app.core.db import jsonb
 from app.shared import web
+from app.tests.fixtures.ads_external import outcome_seed
 
 from .test_ads_publish_simulated import SimulatedPublishTestBase
 
@@ -343,12 +344,10 @@ class ExperimentTest(SimulatedPublishTestBase):
             day = self.today - timedelta(days=i)
             for j, ad in enumerate(self.ads):
                 purchases = None if (j == 1 and day == untracked_day) else 10
-                web.conn.execute(
-                    "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id,"
-                    " entity_kind, entity_id, day, spend, purchases, revenue, source)"
-                    " VALUES (%s,%s,%s,%s,'ad',%s,%s,%s,%s,NULL,'meta')",
-                    (new_id("ado"), self.org_id, self.brand_id, self.args[-1], ad["id"], day,
-                     100.0 if j == 0 else 200.0, purchases),
+                outcome_seed.seed_day(
+                    web.conn, self.org_id, self.brand_id, self.args[-1], "ad", ad["id"], day,
+                    spend=100.0 if j == 0 else 200.0, purchases=purchases, revenue=None,
+                    source="meta",
                 )
 
     def test_real_platform_rows_are_judged_without_a_simulation_gate(self):

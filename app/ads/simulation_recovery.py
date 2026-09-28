@@ -4,10 +4,10 @@ import hashlib
 import json
 from datetime import date
 
-from app.ads import repository, simulation_mode
+from app.ads import outcome, repository, simulation_mode
 from app.ads.adapters import simulated
 from app.core import config, settings
-from app.core.db import jsonb, new_id, now_utc
+from app.core.db import jsonb, now_utc
 from app.meta import repository as meta_repo
 
 METRICS = ("spend", "impressions", "clicks", "purchases", "revenue")
@@ -38,9 +38,9 @@ def eligibility(conn, org_id, brand_id) -> str | None:
     if meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id):
         return "這個品牌已綁真實廣告帳戶，請另建隔離測試品牌。"
     if conn.execute(
-        "SELECT 1 FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s "
-        "AND source <> 'simulated' LIMIT 1",
-        (org_id, brand_id),
+        "SELECT 1 FROM ads_external_daily WHERE org_id=%s AND brand_id=%s "
+        "AND source <> %s LIMIT 1",
+        (org_id, brand_id, simulated.SOURCE),
     ).fetchone():
         return "這個品牌已有真實成效，不能改成模擬品牌。"
     for campaign in repository.list_campaigns(conn, org_id, brand_id):
@@ -75,11 +75,9 @@ def start(conn, org_id, brand_id, campaign_id, *, actor, confirm_isolation):
     context = dict(detail.get("context_json") or {})
     if context.get("simulation_recovery"):
         return
-    if conn.execute(
-        "SELECT 1 FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s LIMIT 1",
-        (org_id, brand_id, campaign_id),
-    ).fetchone():
+    if outcome.rows(conn, org_id, brand_id, campaign_id, "group") or outcome.rows(
+        conn, org_id, brand_id, campaign_id, "ad",
+    ):
         raise ValueError("此活動已有示意成效；請另建一個活動，避免把既有資料混入手動回收。")
     if not simulation_mode.enabled(conn, org_id, brand_id):
         if not confirm_isolation:
@@ -106,12 +104,11 @@ def read_day(conn, org_id, brand_id, campaign_id, day: date):
     detail = _campaign(conn, org_id, brand_id, campaign_id)
     recovery = (detail.get("context_json") or {}).get("simulation_recovery") or {}
     saved = recovery.get("days", {}).get(day.isoformat(), {})
-    rows = conn.execute(
-        "SELECT entity_id AS ad_id, spend, impressions, clicks, purchases, revenue "
-        "FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND day=%s AND entity_kind='ad' AND source='simulated' ORDER BY entity_id",
-        (org_id, brand_id, campaign_id, day),
-    ).fetchall()
+    rows = [
+        {"ad_id": r["entity_id"], **{key: r[key] for key in METRICS}}
+        for r in outcome.rows(conn, org_id, brand_id, campaign_id, "ad")
+        if r["day"] == day and r["source"] == simulated.SOURCE
+    ]
     return {
         "enabled": simulation_mode.enabled(conn, org_id, brand_id),
         "reason": eligibility(conn, org_id, brand_id),
@@ -120,7 +117,7 @@ def read_day(conn, org_id, brand_id, campaign_id, day: date):
         "revision": saved.get("revision", 0),
         "saved_at": saved.get("saved_at"),
         "saved_by": saved.get("saved_by"),
-        "rows": [dict(r) for r in rows],
+        "rows": rows,
         "receipts": recovery.get("days", {}),
         "closed": detail["status"] == "closed",
     }
@@ -165,19 +162,28 @@ def save_day(
     if revision != previous.get("revision", 0):
         raise ValueError("此日期已被其他操作更新，請重新讀取再修改。")
     conn.execute(
-        "DELETE FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-        "AND day=%s AND source='simulated'",
-        (org_id, brand_id, campaign_id, day),
+        "DELETE FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND day=%s AND source=%s",
+        (org_id, brand_id, campaign_id, day, simulated.SOURCE),
     )
+    natives = {
+        n["id"]: n["external_id"]
+        for g in detail["groups"] for n in (g, *g["ads"]) if n.get("external_id")
+    }
     totals = {}
+    out = []
     for row in rows:
         group_id = ads[row["ad_id"]]
         total = totals.setdefault(group_id, dict.fromkeys(METRICS, 0))
         for key in METRICS:
             total[key] += row[key]
-        _insert(conn, org_id, brand_id, campaign_id, day, "ad", row["ad_id"], row)
+        out.append(_row("ad", natives.get(row["ad_id"]), day, row))
     for group_id, values in totals.items():
-        _insert(conn, org_id, brand_id, campaign_id, day, "group", group_id, values)
+        out.append(_row("adset", natives.get(group_id), day, values))
+    simulated.write_rows(
+        conn, org_id, brand_id, campaign_id, [r for r in out if r["native_id"]],
+        simulated.entity_ids(conn, org_id, brand_id, campaign_id),
+    )
     recovery["days"][day.isoformat()] = {
         "revision": revision + 1,
         "hash": digest,
@@ -191,25 +197,17 @@ def save_day(
         "UPDATE ads_campaign SET context_json=%s WHERE org_id=%s AND brand_id=%s AND id=%s",
         (jsonb(context), org_id, brand_id, campaign_id),
     )
+    # After the context write above (it replaces `context_json` whole): this day now counts as
+    # read, the same recorded coverage a platform sync extends (Contract R).
+    simulated.extend_coverage(conn, org_id, brand_id, campaign_id, detail, day, day)
 
 
-def _insert(conn, org_id, brand_id, campaign_id, day, kind, entity_id, values):
-    conn.execute(
-        "INSERT INTO ads_outcome_daily (id,org_id,brand_id,campaign_id,entity_kind,entity_id,"
-        "day,spend,impressions,clicks,purchases,revenue,source) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'simulated')",
-        (
-            new_id("ado"),
-            org_id,
-            brand_id,
-            campaign_id,
-            kind,
-            entity_id,
-            day,
-            round(values["spend"], 2),
-            values["impressions"],
-            values["clicks"],
-            values["purchases"],
-            round(values["revenue"], 2),
-        ),
-    )
+def _row(kind, native_id, day, values):
+    """One simulated observation row (`simulated.write_rows` shape) of this saved day."""
+    return {
+        "native_kind": kind, "native_id": native_id, "metric_scope": kind, "day": day,
+        "spend": round(values["spend"], 2), "impressions": values["impressions"],
+        "clicks": values["clicks"], "purchases": values["purchases"],
+        "revenue": round(values["revenue"], 2), "currency": simulated.CURRENCY,
+        "attribution_key": simulated.ATTRIBUTION_KEY, "source": simulated.SOURCE,
+    }

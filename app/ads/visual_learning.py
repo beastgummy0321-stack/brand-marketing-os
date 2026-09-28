@@ -1,6 +1,7 @@
 """app/ads/visual_learning.py — F07-I11: 結案時把「這次選中的圖」跟成效兜起來，寫成
 `source_track="visual"` 的學習（ARCHITECTURE.md §6.3 items 19-20；F07 決策 31）。沒有模型
-呼叫——比對的數字全部來自 `outcome._bucket`／`sample_bucket`，跟 `closeout.py` 判活動本身用
+呼叫——比對的數字全部來自 `outcome.rows`（F37 Contract P，平台同步列）經 `outcome._bucket`／
+`sample_bucket`，跟 `closeout.py` 判活動本身用
 的是同一套分桶規則,只是這裡按圖片指紋（`body_json.fingerprint`）分組而不是整個 Campaign。
 "這是相關，不代表是造成" 這句話寫死在句子裡——一個維度贏不代表那個維度是原因。
 
