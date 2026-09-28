@@ -382,6 +382,42 @@ class UserAssetsTest(unittest.TestCase):
             repo.list_placements(self.conn, self.org, self.brand, self.campaign)[0]["revision"], 1
         )
 
+    def test_attach_purpose_is_a_program_keyword_never_a_request_field(self):
+        """F35 Contract T: `attach(..., purpose=)` stores the purpose on revision 1 (the slot
+        upload fills it with the ad's name); `POST …/placements` never takes it from the body."""
+        item = self.original()
+        placed = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"], {}, "test",
+            purpose="晨光隨行杯・日常出發",
+        )
+        self.conn.commit()
+        self.assertEqual((placed["revision"], placed["purpose"]), (1, "晨光隨行杯・日常出發"))
+        self.assertEqual(
+            repo.placement(self.conn, self.org, self.brand, self.campaign, placed["id"])["purpose"],
+            "晨光隨行杯・日常出發",
+        )
+        with self.assertRaises(ValueError):
+            repo.attach(
+                self.conn, self.org, self.brand, self.campaign, item["asset_id"], {}, "test",
+                purpose="x" * 4001,
+            )
+        with self.assertRaises(ValueError):
+            repo.attach_selected(
+                self.conn, self.org, self.brand, self.campaign, {"asset_id": item["asset_id"]},
+                "test", purpose={"not": "text"},
+            )
+
+        # The same original placed in another campaign through the route: `purpose` in the body
+        # is not a request field and never reaches the row.
+        other_campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="另一個"
+        )["id"]
+        self.conn.commit()
+        url = f"/api/ads/brands/{self.brand}/campaigns/{other_campaign}/placements"
+        created = self.client.post(url, json={"upload_id": item["id"], "purpose": "偷帶的用途"})
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertIsNone(created.json()["placement"]["purpose"])
+
     def test_statutory_warning_is_listed_per_placement_and_never_blocks_confirm(self):
         """F34 Contract S + ruling 2B: a `food_tw` brand sees the reminder on the placement
         list with the ads closing clause; confirming the same copy still succeeds. A brand

@@ -292,6 +292,45 @@ async def upload_into_slot(request: Request, brand_id: str, campaign_id: str, ad
         raise _error(exc) from exc
 
 
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/slots/copy-options")
+def slot_copy_options(request: Request, brand_id: str, campaign_id: str):
+    """F35 Contract T: the brand's workbench copy versions for the slot picker."""
+    from app.ads import slots
+
+    actor = web.require_actor(request)
+    try:
+        return slots.copy_options(db.current(), actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        if str(exc) == "campaign_unknown":
+            raise web.ApiError(404, "campaign_unknown", str(exc)) from exc
+        raise _error(exc) from exc
+
+
+_SLOT_COPY_ERRORS = {
+    "slot_no_file": (409, "slot_no_file", "這一格還沒有圖，先上傳圖再選文案。"),
+    "文案選項無效。": (400, "slot_copy_invalid", "文案選項無效。"),
+    "campaign_unknown": (404, "campaign_unknown", "campaign_unknown"),
+}
+
+
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/slots/{ad_id}/copy")
+async def choose_slot_copy(request: Request, brand_id: str, campaign_id: str, ad_id: str):
+    """F35 Contract T: put one workbench copy version into a slot that already has a file."""
+    from app.ads import slots
+
+    actor = web.require_actor(request)
+    body = await _json(request)
+    try:
+        return slots.choose_copy(
+            db.current(), actor.org_id, brand_id, campaign_id, ad_id, body, str(actor.user_id)
+        )
+    except ValueError as exc:
+        mapped = _SLOT_COPY_ERRORS.get(str(exc))
+        if mapped is not None:
+            raise web.ApiError(*mapped) from exc
+        raise _error(exc) from exc
+
+
 @router.patch("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}")
 async def revise(request: Request, brand_id: str, campaign_id: str, placement_id: str):
     actor = web.require_actor(request)

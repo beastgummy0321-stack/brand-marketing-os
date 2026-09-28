@@ -4,6 +4,11 @@ Readiness is the launch snapshot's rule (a confirmed assignment), a file uploade
 waits until its placement is confirmed and is then assigned to that planned ad, a launched
 app-built ad carries its platform ad and that ad's replace request, an imported campaign's slots
 are its live platform ads, and the open replace requests are listed with their own state.
+
+F35 Contract T: each planned slot carries its copy half (`copy`) and `workbench_href`; a file
+uploaded into a slot carries the ad's selected workbench copy in, fills the purpose with the
+ad's name, confirms and assigns in the same call; a slot with a file but no copy takes one of
+the brand's workbench copy versions through `POST …/slots/{ad}/copy`.
 """
 
 from datetime import timedelta
@@ -31,6 +36,11 @@ from app.core import db, settings
 from app.main import app
 
 COPY = {"headline": "標題", "body": "文案", "description": "說明"}
+WORKBENCH_COPY = {"headline": "晨光標題", "body": "工作檯寫的內文", "description": "工作檯說明"}
+
+
+def placement_copy(label, fields=None):
+    return {"source": "placement", "label": label, **(fields or COPY)}
 
 
 @pytest.fixture
@@ -166,6 +176,34 @@ def replace(env, entity_id, campaign=None):
     )
 
 
+def workbench_copy(env, ad, copy=None, *, adopt=True):
+    """Dispatch the campaign pack (once), write one copy output on this ad's set and select
+    it -- the state the workbench leaves behind when the user picked a version."""
+    from app.workbench import repository as workbench_repo
+
+    conn, org, brand, campaign = env["conn"], env["org"], env["brand"], env["campaign"]
+    if legacy_assets.pack_id(conn, org, brand, campaign) is None:
+        workbench.register_tasks()
+        legacy_assets.dispatch_pack(conn, org, brand, campaign)
+    brief = workbench.briefs_for_source(
+        conn, org, brand, legacy_assets.PACK_SOURCE_KIND,
+        {"ads_campaign_id": campaign, "ads_ad_id": ad},
+    )[-1]
+    output = workbench_repo.write_output(
+        conn, org_id=org, brand_id=brand, brief_id=brief["id"], part="copy",
+        generation_round=1, body_json=[{"sets": [copy or WORKBENCH_COPY]}],
+        coordinates_json=None, llm_task_id=None,
+    )[0]
+    if adopt:
+        workbench_repo.select_version(conn, org, brand, output["id"])
+    conn.commit()
+    return {"set_id": brief["id"], "version_id": output["id"]}
+
+
+def base(env):
+    return f"/api/ads/brands/{env['brand']}/campaigns/{env['campaign']}"
+
+
 # -- draft: ready / in progress / missing --------------------------------------------------------
 
 
@@ -185,13 +223,17 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     assert slot[ready_ad] == {
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
+        "copy": placement_copy("已確認"), "workbench_href": None,
     }
-    # Uploaded, not confirmed: not launchable yet, and not assigned (material stays confirmed-only).
+    # Uploaded, its original still pending: not confirmable yet, so not launchable and not
+    # assigned (material stays confirmed-only); the copy half shows what came with the file.
     assert slot[uploaded_ad]["state"] == "in_progress"
     assert slot[uploaded_ad]["confirmed"] is False
     assert slot[uploaded_ad]["thumbnail_url"] is None  # its preview is not made yet
+    assert slot[uploaded_ad]["copy"] == placement_copy("待確認")
     assert slot[missing_ad]["state"] == "missing"
     assert slot[missing_ad]["thumbnail_url"] is None
+    assert (slot[missing_ad]["copy"], slot[missing_ad]["workbench_href"]) == (None, None)
     ad = campaigns.get_ad(env["conn"], env["org"], env["brand"], uploaded_ad)
     assert ad["material_placement_id"] is None
     assert ad["slot_placement_id"] == result["placement"]["id"]
@@ -226,37 +268,43 @@ def test_a_revised_assignment_is_in_progress_not_ready(env):
 
 
 def test_upload_waits_for_confirmation_then_assigns_the_confirmed_revision(env):
+    """A placement the program cannot confirm (its copy misses a field) waits in the slot; the
+    slot follows the placement id through the user's revision and confirmation."""
     ad = env["ads"][1]
     asset = user_asset(env)
     client = TestClient(app)
-    base = f"/api/ads/brands/{env['brand']}/campaigns/{env['campaign']}"
+    partial = {"headline": "標題", "body": "文案"}
 
     response = client.post(
-        f"{base}/slots/{ad}/upload", json={"asset_id": asset, "copy_fields": COPY}
+        f"{base(env)}/slots/{ad}/upload", json={"asset_id": asset, "copy_fields": partial}
     )
     assert response.status_code == 200, response.text
     placement = response.json()["placement"]
+    assert placement["confirmed_at"] is None
+    assert placement["purpose"] == "通勤情境單圖"  # filled by the program, not confirmed yet
     slot = by_ad(response.json()["slots"])[ad]
     assert (slot["state"], slot["thumbnail_url"]) == ("in_progress", thumb(env, asset))
+    assert slot["copy"] == placement_copy("待確認", {**partial, "description": None})
 
-    # The manual confirmation needs a purpose, i.e. a new revision: the slot follows the id.
+    # Completing the copy is a new revision: the slot follows the id.
     revised = client.patch(
-        f"{base}/placements/{placement['id']}",
-        json={"expected_revision": 1, "purpose": "產品介紹"},
+        f"{base(env)}/placements/{placement['id']}",
+        json={"expected_revision": 1, "copy_fields": COPY},
     )
     assert revised.status_code == 200, revised.text
     assert revised.json()["placement"]["revision"] == 2
-    assert by_ad(client.get(f"{base}/slots").json())[ad]["state"] == "in_progress"
+    assert by_ad(client.get(f"{base(env)}/slots").json())[ad]["state"] == "in_progress"
 
     confirmed = client.post(
-        f"{base}/placements/{placement['id']}/confirm", json={"expected_revision": 2}
+        f"{base(env)}/placements/{placement['id']}/confirm", json={"expected_revision": 2}
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["placement"]["confirmed_at"]
 
-    view = client.get(f"{base}/slots").json()
+    view = client.get(f"{base(env)}/slots").json()
     assert by_ad(view)[ad]["state"] == "ready"
     assert by_ad(view)[ad]["confirmed"] is True
+    assert by_ad(view)[ad]["copy"] == placement_copy("已確認")
     assert view["ready"] == 1
     row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
     assert (row["material_placement_id"], row["material_placement_revision"]) == (
@@ -267,6 +315,209 @@ def test_upload_waits_for_confirmation_then_assigns_the_confirmed_revision(env):
         env["conn"], env["org"], env["brand"], env["campaign"], row
     )
     assert material["assignment_status"] == "confirmed"
+
+
+def test_upload_with_full_copy_confirms_and_assigns_in_one_call(env):
+    """No workbench set: an explicit complete copy plus the program's purpose is enough."""
+    ad = env["ads"][1]
+    asset = user_asset(env)
+    result = upload(env, ad, {"asset_id": asset, "copy_fields": COPY})
+    assert result["placement"]["confirmed_at"]
+    assert result["placement"]["purpose"] == "通勤情境單圖"
+    assert result["placement"]["status"] == "manual_ready"
+    slot = by_ad(result["slots"])[ad]
+    assert (slot["state"], slot["confirmed"]) == ("ready", True)
+    assert slot["copy"] == placement_copy("已確認")
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
+    assert row["material_placement_id"] == result["placement"]["id"]
+    assert row["slot_placement_id"] is None
+
+
+# -- F35 Contract T: the copy half ---------------------------------------------------------------
+
+
+def test_selected_workbench_copy_shows_as_copy_only_and_never_counts_as_ready(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad)
+    view = read(env)
+    slot = by_ad(view)[ad]
+    assert slot["state"] == "copy_only"
+    assert slot["confirmed"] is False
+    assert slot["thumbnail_url"] is None
+    assert slot["copy"] == {"source": "workbench", "label": "工作檯第 1 版", **WORKBENCH_COPY}
+    assert slot["workbench_href"] and slot["workbench_href"].startswith(
+        f"/app/brands/{env['brand']}/workbench/packs/"
+    )
+    assert view["ready"] == 0
+    # The other ads have a set (the pack is being worked) but nothing selected: in_progress.
+    others = {a: s for a, s in by_ad(view).items() if a != ad}
+    assert {s["state"] for s in others.values()} == {"in_progress"}
+    assert all(s["copy"] is None and s["workbench_href"] for s in others.values())
+
+
+def test_unselected_workbench_version_is_not_the_ads_copy(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad, adopt=False)
+    slot = by_ad(read(env))[ad]
+    assert (slot["state"], slot["copy"]) == ("in_progress", None)
+
+
+def test_upload_into_a_slot_with_workbench_copy_is_ready_at_once(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad)
+    asset = user_asset(env)
+    client = TestClient(app)
+    response = client.post(f"{base(env)}/slots/{ad}/upload", json={"asset_id": asset})
+    assert response.status_code == 200, response.text
+    placement = response.json()["placement"]
+    assert placement["confirmed_at"]
+    assert placement["purpose"] == "晨光隨行杯・日常出發"
+    assert placement["copy_fields"] == WORKBENCH_COPY
+    slot = by_ad(response.json()["slots"])[ad]
+    assert (slot["state"], slot["thumbnail_url"]) == ("ready", thumb(env, asset))
+    assert slot["copy"] == placement_copy("已確認", WORKBENCH_COPY)
+    assert response.json()["slots"]["ready"] == 1
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
+    assert (row["material_placement_id"], row["material_placement_revision"]) == (
+        placement["id"], 1,
+    )
+    assert row["slot_placement_id"] is None
+
+
+def test_upload_with_explicit_copy_keeps_it_over_the_workbench_copy(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad)
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": COPY})
+    assert result["placement"]["copy_fields"] == COPY
+    assert result["placement"]["confirmed_at"]
+    assert by_ad(result["slots"])[ad]["copy"] == placement_copy("已確認")
+
+
+def test_upload_by_upload_id_without_copy_carries_the_workbench_copy(env):
+    conn, ad = env["conn"], env["ads"][0]
+    workbench_copy(env, ad)
+    asset = user_asset(env)
+    batch = user_assets.create_batch(
+        conn, env["org"], env["brand"], [{"filename": "fall.png", "size": 1}], "human"
+    )
+    upload_id = batch["uploads"][0]["id"]
+    conn.execute(
+        "UPDATE ads_asset_upload SET status='complete',asset_id=%s WHERE id=%s",
+        (asset, upload_id),
+    )
+    conn.commit()
+    result = upload(env, ad, {"upload_id": upload_id})
+    assert result["placement"]["copy_fields"] == WORKBENCH_COPY
+    assert by_ad(result["slots"])[ad]["state"] == "ready"
+
+
+def test_image_only_slot_takes_a_workbench_version_through_the_picker(env):
+    picked_ad, other_ad = env["ads"][1], env["ads"][2]
+    # The brand's copy version lives on another ad's set; `picked_ad` has nothing selected.
+    option = workbench_copy(env, other_ad)
+    client = TestClient(app)
+
+    listed = client.get(f"{base(env)}/slots/copy-options")
+    assert listed.status_code == 200, listed.text
+    options = listed.json()["options"]
+    assert [(o["set_id"], o["version_id"]) for o in options] == [
+        (option["set_id"], option["version_id"])
+    ]
+    assert options[0]["copy_fields"] == WORKBENCH_COPY
+    assert options[0]["label"]
+
+    # No file yet: no picker.
+    refused = client.post(f"{base(env)}/slots/{picked_ad}/copy", json=option)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"] == {
+        "code": "slot_no_file", "message": "這一格還沒有圖，先上傳圖再選文案。", "details": None,
+    }
+
+    asset = user_asset(env)
+    uploaded = client.post(f"{base(env)}/slots/{picked_ad}/upload", json={"asset_id": asset})
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["placement"]["confirmed_at"] is None
+    slot = by_ad(uploaded.json()["slots"])[picked_ad]
+    assert (slot["state"], slot["copy"], slot["thumbnail_url"]) == (
+        "image_only", None, thumb(env, asset),
+    )
+    assert slot["confirmed"] is False
+
+    bad_bodies = (
+        {"set_id": option["set_id"]}, {**option, "extra": 1}, {"set_id": 1, "version_id": 2},
+    )
+    for bad in bad_bodies:
+        response = client.post(f"{base(env)}/slots/{picked_ad}/copy", json=bad)
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["code"] == "slot_copy_invalid"
+    unknown = client.post(
+        f"{base(env)}/slots/{picked_ad}/copy",
+        json={"set_id": option["set_id"], "version_id": "wbo_missing"},
+    )
+    assert unknown.status_code == 409
+    assert unknown.json()["error"]["message"] == "找不到這個文案版本。"
+
+    chosen = client.post(f"{base(env)}/slots/{picked_ad}/copy", json=option)
+    assert chosen.status_code == 200, chosen.text
+    placement = chosen.json()["placement"]
+    assert placement["id"] == uploaded.json()["placement"]["id"]
+    assert placement["revision"] == 2
+    assert placement["copy_fields"] == WORKBENCH_COPY
+    assert placement["purpose"] == "通勤情境單圖"
+    assert placement["confirmed_at"]
+    slot = by_ad(chosen.json()["slots"])[picked_ad]
+    assert (slot["state"], slot["confirmed"]) == ("ready", True)
+    assert slot["copy"] == placement_copy("已確認", WORKBENCH_COPY)
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], picked_ad)
+    assert (row["material_placement_id"], row["material_placement_revision"]) == (
+        placement["id"], 2,
+    )
+    assert row["slot_placement_id"] is None
+    # Once ready the slot has no picker any more (changing copy = a new workbench version).
+    again = client.post(f"{base(env)}/slots/{picked_ad}/copy", json=option)
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "slot_no_file"
+
+
+def test_copy_options_and_picker_refuse_imported_and_unknown_campaigns(env):
+    client = TestClient(app)
+    imported = external_repository.create_imported_campaign(
+        env["conn"], env["org"], env["brand"], name="既有活動"
+    )["id"]
+    env["conn"].commit()  # the route reads on its own connection
+    prefix = f"/api/ads/brands/{env['brand']}/campaigns"
+    assert client.get(f"{prefix}/adc_missing/slots/copy-options").status_code == 404
+    assert client.get(f"{prefix}/{imported}/slots/copy-options").status_code == 409
+    with pytest.raises(ValueError, match="slot_no_file"):
+        slots.choose_copy(
+            env["conn"], env["org"], env["brand"], env["campaign"], env["ads"][0],
+            {"set_id": "s", "version_id": "v"}, "human",
+        )
+
+
+def test_pending_placement_with_zero_known_budget_stays_in_progress(env):
+    """The confirmation is refused by `pending_reasons` (a zero platform budget): the slot keeps
+    waiting with its copy shown, never ready."""
+    conn, ad = env["conn"], env["ads"][0]
+    workbench_copy(env, ad)
+    conn.execute(
+        "UPDATE ads_delivery_group SET daily_budget=0 WHERE id=%s", (env["group"],)
+    )
+    conn.commit()
+    platform_entity(
+        env, "root", native_kind="campaign", currency="TWD", budget_type="daily",
+        budget_amount=0,
+    )
+    result = upload(env, ad, {"asset_id": user_asset(env)})
+    assert result["placement"]["confirmed_at"] is None
+    assert result["placement"]["copy_fields"] == WORKBENCH_COPY
+    slot = by_ad(result["slots"])[ad]
+    assert (slot["state"], slot["confirmed"]) == ("in_progress", False)
+    assert slot["copy"] == placement_copy("待確認", WORKBENCH_COPY)
+    assert result["slots"]["ready"] == 0
+    row = campaigns.get_ad(conn, env["org"], env["brand"], ad)
+    assert row["material_placement_id"] is None
+    assert row["slot_placement_id"] == result["placement"]["id"]
 
 
 def test_upload_by_upload_id_uses_the_placement_path_and_an_already_confirmed_file_assigns(env):
@@ -332,14 +583,20 @@ def test_upload_after_an_approved_launch_refuses_frozen_ads_and_fills_deferred_o
     # The ad the approved batch froze is refused, like `handoff_assignment.assign`.
     with pytest.raises(ValueError, match="首次投放清單已核准"):
         upload(env, frozen_ad, {"asset_id": user_asset(env)})
-    # The ad deferred from the batch for lack of material takes its file (F30 Unresolved 1).
+    # The ad deferred from the batch for lack of material takes its file (F30 Unresolved 1);
+    # with a complete copy the program confirms and assigns it in the same call.
     asset = user_asset(env)
     result = upload(env, deferred_ad, {"asset_id": asset, "copy_fields": COPY})
-    assert by_ad(result["slots"])[deferred_ad]["state"] == "in_progress"
+    assert by_ad(result["slots"])[deferred_ad]["state"] == "ready"
     row = campaigns.get_ad(env["conn"], env["org"], env["brand"], deferred_ad)
-    assert row["slot_placement_id"] == result["placement"]["id"]
-    with pytest.raises(ValueError, match="首次投放清單已核准"):
-        upload(env, frozen_ad, {"asset_id": user_asset(env)})
+    assert row["material_placement_id"] == result["placement"]["id"]
+    assert row["slot_placement_id"] is None
+    # The plan changed under the approved launch: it is stale now, and the re-approval is the
+    # later version that takes the deferred ad out (F28 "Stale launch"); nothing is frozen.
+    assert change_control_launch.is_stale(env["conn"], env["org"], env["brand"], env["campaign"])
+    assert not change_control_launch.material_frozen(
+        env["conn"], env["org"], env["brand"], env["campaign"], frozen_ad
+    )
 
 
 # -- launched app-built ads and replace requests -------------------------------------------------
@@ -369,7 +626,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
     assert slot[launched_ad] == {
         "ad_id": launched_ad, "entity_id": entity["id"], "name": "晨光隨行杯・日常出發",
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
-        "replace_task_id": task["id"],
+        "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -468,6 +725,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
     assert first == {
         "ad_id": None, "entity_id": b1["id"], "name": "晨光 1", "state": "ready",
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
+        "copy": None, "workbench_href": None,
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
