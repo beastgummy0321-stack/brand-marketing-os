@@ -50,6 +50,10 @@ class VisualLearningTestBase(unittest.TestCase):
             "target_cost": target,
             "start_date": start_date, "end_date": end_date, "status": "live",
         }, created_by=ACTOR)
+        # F37 Contract Q: closeout refuses an unread window; the window was read in full.
+        outcome_seed.set_coverage(
+            self.conn, self.org_id, self.brand_id, campaign["id"], start_date, end_date,
+        )
         self.conn.commit()
         return campaign
 

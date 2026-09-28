@@ -826,6 +826,7 @@ def get_performance(request: Request, brand_id: str, campaign_id: str):
 
 class CloseCampaignRequest(BaseModel):
     reason: str | None = None
+    skip_missing: bool = False
 
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/close")
@@ -839,8 +840,17 @@ def close_campaign(request: Request, brand_id: str, campaign_id: str,
     try:
         closeout.close(
             web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
-            reason=body.reason,
+            reason=body.reason, skip_missing=body.skip_missing,
         )
+    except closeout.CoverageMissing as exc:
+        # F37 Contract Q: the envelope's `details` carries the days and whether the skip is open
+        # (same shape as `over_cap_unconfirmed` above).
+        payload = exc.payload
+        message = (
+            "這個活動還沒讀過平台資料，先重新讀取平台。" if payload["never_synced"]
+            else f"有 {len(payload['missing_days'])} 天還沒讀到平台資料，先重新讀取平台。"
+        )
+        raise web.ApiError(409, "coverage_missing", message, payload) from exc
     except ValueError as exc:
         code = str(exc)
         status, message = _OUTCOME_ERRORS.get(code, (400, code))

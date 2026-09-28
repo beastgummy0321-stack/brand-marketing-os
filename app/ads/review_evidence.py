@@ -247,7 +247,11 @@ def snapshot(
     # Lazy import: `triage` imports this module for `aggregate`.
     from app.ads import triage
 
-    missing = triage._missing_days(triage._coverage(campaign), prior_start, end)
+    gap = triage.coverage_gap(campaign, prior_start, end)
+    if gap["never_synced"]:
+        # F37 Contract Q (ruling 4): never read is not "nothing missing" (F36 as-built gap).
+        raise ValueError("這個活動還沒讀過平台資料；先重新讀取平台。")
+    missing = gap["missing_days"]
     if missing:
         listed = "、".join(date.fromisoformat(day).strftime("%m/%d") for day in missing[:5]) + (
             "…" if len(missing) > 5 else ""
