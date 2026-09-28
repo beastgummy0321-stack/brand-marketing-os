@@ -8,7 +8,13 @@ import { getMaterialTask, listMaterialTasks, materialPath, MaterialRequestError,
 import { MaterialTaskEditor, materialModes } from "./MaterialTaskEditor";
 import { ReadFailed } from "./patterns";
 
-function Panel({ brandId, campaignId, onSaved, refreshKey = 0 }: { brandId: string; campaignId: string; onSaved?: () => void; refreshKey?: number }) {
+/** F35 ruling 3: a draft campaign has no platform ad to rewrite, so 「只準備新文案」 (`copy`, whose only exit is 修改原廣告) is
+ * not offered as a source. `materialModes` itself stays whole: saved copy tasks still render and open. */
+function sourceModes(draft: boolean): [MaterialMode, typeof materialModes[MaterialMode]][] {
+  return (Object.entries(materialModes) as [MaterialMode, typeof materialModes[MaterialMode]][]).filter(([value]) => !draft || value !== "copy");
+}
+
+function Panel({ brandId, campaignId, onSaved, refreshKey = 0, draft = false }: { brandId: string; campaignId: string; onSaved?: () => void; refreshKey?: number; draft?: boolean }) {
   const [params, setParams] = useSearchParams();
   const linkedTask = params.get("material");
   const key = `material-operation:${getOrgId()}:${brandId}:${campaignId}`;
@@ -62,7 +68,7 @@ function Panel({ brandId, campaignId, onSaved, refreshKey = 0 }: { brandId: stri
     {readError && <ReadFailed what={readError} onRetry={() => setReload(value => value + 1)} />}
     {tasks === null ? (readError ? null : <p role="status">正在讀取素材任務…</p>) : task || mode ? <MaterialTaskEditor key={task ? `${task.id}:${task.revision}:${reload}` : `new:${mode}`} brandId={brandId} campaignId={campaignId} task={task} mode={task?.mode ?? mode!} busy={busy || Boolean(pending)} onDirtyChange={setDirty} save={save} onCancel={() => { setSelected(null); setMode(null); }} reviewId={params.get("review") ?? undefined} recommendationId={params.get("recommendation") ?? undefined} /> : <>
       {params.get("material_new") && <p className="rounded-md bg-accent p-3 text-sm">從上次檢討交棒的新需求：請選擇素材來源，保存時會連回原建議。</p>}
-      <div className="grid gap-3 lg:grid-cols-2">{(Object.entries(materialModes) as [MaterialMode, typeof materialModes[MaterialMode]][]).map(([value, item]) => <button key={value} disabled={busy || Boolean(pending)} className="surface p-4 text-left transition-colors hover:border-primary focus-visible:outline-primary" onClick={() => setMode(value)}><h3 className="font-semibold">{item.title}</h3><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></button>)}</div>
+      <div className={`grid gap-3 ${draft ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>{sourceModes(draft).map(([value, item]) => <button key={value} disabled={busy || Boolean(pending)} className="surface p-4 text-left transition-colors hover:border-primary focus-visible:outline-primary" onClick={() => setMode(value)}><h3 className="font-semibold">{item.title}</h3><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></button>)}</div>
       {tasks.length > 0 && <section className="surface"><div className="surface-header"><h3 className="font-semibold">已保存的需求</h3></div><div className="divide-y divide-border">{tasks.map(row => <button className="flex w-full items-center justify-between gap-4 p-4 text-left hover:bg-muted" key={row.id} disabled={busy} onClick={() => { setSelected(row.id); setMode(null); }}><div><p className="font-medium">{row.title}</p><p className="mt-1 text-xs text-muted-foreground">{materialModes[row.mode].title} · 版本 {row.revision}{row.review_id ? " · 承接檢討" : ""}</p></div><Badge variant="outline">{row.placement_id ? "成品已採用" : row.pack_id ? "工作台已交接" : row.candidates.length ? "待挑選成品" : "待準備"}</Badge></button>)}</div></section>}
     </>}
     <Button variant="ghost" size="sm" disabled={busy || dirty} onClick={() => setReload(value => value + 1)}><RefreshCw className="mr-2 size-4" />重新讀取素材任務</Button>

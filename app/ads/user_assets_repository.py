@@ -225,7 +225,16 @@ def list_placements(conn, org, brand, campaign_id, history=False):
     return [dict(row) for row in rows]
 
 
-def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor):
+def validate_purpose(value):
+    """The same bound `revise` applies to `purpose`; None is "not set"."""
+    if value is not None and (not isinstance(value, str) or len(value) > 4000):
+        raise ValueError("安排文字欄位格式或長度無效。")
+    return value
+
+
+def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor, *, purpose=None):
+    """`purpose` is a program-side keyword (the slot upload fills it with the ad's name); it is
+    never a request-body field of `POST …/placements`."""
     campaign = campaigns.get_campaign(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("找不到活動。")
@@ -233,6 +242,7 @@ def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor):
         raise ValueError("活動已結案，只能查看素材歷史。")
     get_asset(conn, org, brand, asset_id)
     validate_copy(copy_fields)
+    validate_purpose(purpose)
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
         (f"asset-placement:{org}:{brand}:{campaign_id}:{asset_id}",),
@@ -248,16 +258,17 @@ def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor):
         return dict(existing)
     row = conn.execute(
         "INSERT INTO ads_asset_placement(id,revision,org_id,brand_id,campaign_id,asset_id,"
-        "copy_fields,created_by) "
-        "VALUES(%s,1,%s,%s,%s,%s,%s,%s) RETURNING *",
-        (new_id("aap"), org, brand, campaign_id, asset_id, jsonb(copy_fields), actor),
+        "copy_fields,purpose,created_by) "
+        "VALUES(%s,1,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (new_id("aap"), org, brand, campaign_id, asset_id, jsonb(copy_fields), purpose, actor),
     ).fetchone()
     return dict(row)
 
 
-def attach_selected(conn, org, brand, campaign_id, body, actor):
+def attach_selected(conn, org, brand, campaign_id, body, actor, *, purpose=None):
     """Place a finished upload (`upload_id`, its own copy unless `copy_fields` is given) or a
-    brand original (`asset_id`) in the campaign -- the placements route and the slot upload."""
+    brand original (`asset_id`) in the campaign -- the placements route and the slot upload.
+    `purpose` is passed through to `attach` by the program only; the body keys are unchanged."""
     copy_fields = body.get("copy_fields")
     asset_id = body.get("asset_id")
     if body.get("upload_id"):
@@ -268,7 +279,14 @@ def attach_selected(conn, org, brand, campaign_id, body, actor):
         if copy_fields is None:
             copy_fields = item["copy_fields"]
     return attach(
-        conn, org, brand, campaign_id, asset_id, {} if copy_fields is None else copy_fields, actor
+        conn,
+        org,
+        brand,
+        campaign_id,
+        asset_id,
+        {} if copy_fields is None else copy_fields,
+        actor,
+        purpose=purpose,
     )
 
 
