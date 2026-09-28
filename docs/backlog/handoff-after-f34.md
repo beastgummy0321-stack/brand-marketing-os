@@ -40,7 +40,7 @@ Done 7／20: #7 #9 #10 #11 #12 #14 #18 — the whole red group of report §6 (1�
 #15 #16 #17 #20 and #19 (unverified in code).
 
 ## Next step (recommended order)
-1. **#1 文案與廣告格兩條路** — `/dig` first; it is a design question, not a bug. Approved workbench copy never fills an
+1. **#1 文案與廣告格兩條路** — **carved as F35 on 2026-09-28** (rules in ads.md §6.39, queue `.work/ready/F35-I0[1-3].md`). Original note: `/dig` first; it is a design question, not a bug. Approved workbench copy never fills an
    ad slot; 「只準備新文案」 is a dead end on a draft campaign (`change_control_launch.py:27`, `MaterialTaskEditor.tsx:72`).
    Decide: does an approved copy set become a placement (`ads_asset_placement`) automatically, or does the slot pick from
    approved sets? Where does the user see "this slot has copy but no image"? Same UI rule as F34: prototype first, one

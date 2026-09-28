@@ -1629,3 +1629,20 @@ in `.work/features/F30.md` (see Git history after close). UI spec: `docs/design/
   categories, not words, so the patterns are editable; 附件二 nutrient-function phrases are not modelled. One check behind
   `workbench.validate_claims` (`statutory_hits`／`statutory_warning`); surfaces are the workbench version list, the ads
   placement list and 補文案 notes.
+
+### 6.39 文案與廣告格一條路（ruled 2026-09-28；built in F35）
+Dig of drill-6 gap #1; prototype `.harness/scratch/prototype/f35-slot-copy/index.html` approved the same day (not in Git).
+- **The slot is two halves, 圖｜文案** (user ruling 1). A planned ad's slot reads `copy` from the program: the ad's selected
+  workbench copy (the set the campaign pack bound to it) or the copy of the placement in the slot. Visible states 已確認 /
+  有文案，缺圖 (`copy_only`) / 有圖，缺文案 (`image_only`) / 缺 1 則. Copy alone never makes a slot ready — §6.34's one
+  readiness rule (a confirmed placement, i.e. a file) is unchanged, as is the launch batch.
+- **The file is the trigger, the copy rides along** (user ruling 2). When a file lands in a slot (upload; later 站內出圖),
+  the program carries the ad's workbench copy into the placement, fills the purpose with the ad's name, confirms it through
+  the existing no-AI confirmation and assigns it. No 進階 detour for the common path. A slot with a file and no copy offers
+  「選一版文案」 from the brand's workbench copy versions (`workbench.material_options(part="copy")`), written into that
+  placement; a ready slot's copy is changed by a new version in the workbench, not in the slot.
+- **A draft has no copy-only material task** (user ruling 3): 「只準備新文案」 exits only to 「修改原廣告」, so it is offered
+  on campaigns with platform ads only. 「開始做素材 →」 is the bar's primary on 投放結構 (§6.2 as designed; v10 had folded it).
+- Root cause recorded: one placement concept (file + copy), two copy homes (workbench output on the ad's set, placement
+  `copy_fields`) and no program path between them; the F30 readiness rule demoted "pack approved" to progress without a
+  visible state. Drill-6 gaps #2 and #17 share this cause and mostly dissolve with it.
