@@ -81,10 +81,62 @@ def env():
         )
         ads.append(ad)
     conn.commit()
-    return {
-        "conn": conn, "org": org, "brand": brand, "campaign": campaign, "group": group,
-        "ads": ads, "today": today,
-    }
+    # The workbench's copy versions are faked through its public facade (the way
+    # test_ads_live_creative does): `slots.workbench` is the `app.workbench` module, so every
+    # caller sees the patch. `briefs_for_source` / `set_action_url` stay real -- the pack is
+    # really dispatched, so the ad->set link and the studio URL are real.
+    versions: dict = {}  # brief id -> {"id", "copy", "adopted", "name"}
+
+    def adopted_output(conn, org_id, brand_id, brief_id, part):
+        row = versions.get(brief_id)
+        if row is None or part != "copy":
+            return None
+        return {
+            "id": row["id"], "brief_id": brief_id, "part": "copy", "generation_round": 1,
+            "version_index": 1, "is_adopted": row["adopted"],
+            "adopted_at": db.now_utc() if row["adopted"] else None,
+            "body_json": {"sets": [row["copy"]]},
+        }
+
+    def material_source(conn, org_id, brand_id, set_id, version_id, card_index=None):
+        row = versions.get(set_id)
+        if row is None or row["id"] != version_id:
+            raise ValueError("找不到此品牌的提示詞或文案版本。")
+        return {
+            "source": "workbench", "set_id": set_id, "version_id": version_id,
+            "card_index": None, "part": "copy", "pack_id": None,
+            "text": "\n".join(row["copy"].values()), "copy_fields": dict(row["copy"]),
+        }
+
+    def material_options(conn, org_id, brand_id, *, part=None):
+        return [
+            {
+                "set_id": set_id, "version_id": row["id"], "part": "copy", "card_index": None,
+                "label": f"{row['name']} · 版本 1", "text": "\n".join(row["copy"].values()),
+                "copy_fields": dict(row["copy"]),
+            }
+            for set_id, row in versions.items()
+            if row["adopted"] and part in (None, "copy")
+        ]
+
+    patchers = [
+        patch.object(workbench, name, side_effect=target)
+        for name, target in (
+            ("adopted_output", adopted_output),
+            ("material_source", material_source),
+            ("material_options", material_options),
+        )
+    ]
+    for patcher in patchers:
+        patcher.start()
+    try:
+        yield {
+            "conn": conn, "org": org, "brand": brand, "campaign": campaign, "group": group,
+            "ads": ads, "today": today, "versions": versions,
+        }
+    finally:
+        for patcher in patchers:
+            patcher.stop()
 
 
 def user_asset(env, *, status="ready", thumbnail=True):
@@ -177,29 +229,23 @@ def replace(env, entity_id, campaign=None):
 
 
 def workbench_copy(env, ad, copy=None, *, adopt=True):
-    """Dispatch the campaign pack (once), write one copy output on this ad's set and select
-    it -- the state the workbench leaves behind when the user picked a version. The row is
-    written with SQL (a fixture, the shape `workbench.repository._slice_body` reads: one
-    round's `{"sets": [...]}`, version 1 = `sets[0]`); the ads module itself only reads it
-    through the `app.workbench` facade."""
+    """Dispatch the campaign pack (once), then give this ad's real set one copy version in the
+    faked workbench facade (selected unless `adopt=False`) -- the state the workbench leaves
+    behind when the user picked a version."""
     conn, org, brand, campaign = env["conn"], env["org"], env["brand"], env["campaign"]
     if legacy_assets.pack_id(conn, org, brand, campaign) is None:
         workbench.register_tasks()
         legacy_assets.dispatch_pack(conn, org, brand, campaign)
+        conn.commit()
     brief = workbench.briefs_for_source(
         conn, org, brand, legacy_assets.PACK_SOURCE_KIND,
         {"ads_campaign_id": campaign, "ads_ad_id": ad},
     )[-1]
     version_id = db.new_id("wbo")
-    conn.execute(
-        "INSERT INTO workbench_output(id,org_id,brand_id,brief_id,part,generation_round,"
-        "version_index,body_json,adopted_at) VALUES(%s,%s,%s,%s,'copy',1,1,%s,%s)",
-        (
-            version_id, org, brand, brief["id"], db.jsonb({"sets": [copy or WORKBENCH_COPY]}),
-            db.now_utc() if adopt else None,
-        ),
-    )
-    conn.commit()
+    env["versions"][brief["id"]] = {
+        "id": version_id, "copy": copy or WORKBENCH_COPY, "adopted": adopt,
+        "name": brief.get("name") or "文案",
+    }
     return {"set_id": brief["id"], "version_id": version_id}
 
 
