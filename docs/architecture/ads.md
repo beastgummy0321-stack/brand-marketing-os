@@ -1675,3 +1675,8 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   returns the existing row on a trimmed, case-insensitive match within the same parent scope.
 - Text fixes: the scan step's empty message keys on cards ∪ scanned names (#6); the workbench empty state names
   「投放結構 → 開始做素材 →」 (#5).
+- **As built (F36, 2026-09-28)**: `currentBudgetMonth()` takes the org timezone but nine callers outside the six converted
+  screens (ChangeControl, ManualHandoffPanel, flow/*, review/*, month/*) still call it without one and get the Taipei
+  default — follow-up. A campaign with no recorded observations coverage (never synced) passes the review gate, as triage
+  treats it. The manual adapter's 「受眾提示」 row is read through `db.current()` inside `describe(campaign)` (the adapter
+  signature takes no connection). `ReviewWindow.missing_days` is on the payload but not yet in the frontend type.
