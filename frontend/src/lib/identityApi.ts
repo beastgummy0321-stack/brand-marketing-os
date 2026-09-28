@@ -6,13 +6,11 @@ export interface OrgOut {
   kind: string;
   role: string;
   /** F36-I08 (Contract U): IANA name of the org's timezone, from `settings.org_timezone`.
-   * The API always sends it; typed optional only so pre-F36 fixtures in other features'
-   * tests (`components/layout/Topbar.test.tsx`) keep compiling — `useOrgClock()` in
-   * `@/lib/orgClock` resolves a missing value to the default zone. Read it through that hook. */
-  timezone?: string;
+   * Read it through `useOrgClock()` in `@/lib/orgClock`, not directly. */
+  timezone: string;
   /** F36-I08 (Contract U): YYYY-MM-DD in `timezone` at response time. Boot value only; the
    * hook recomputes from the timezone so a long-open tab does not freeze on the load date. */
-  today?: string;
+  today: string;
 }
 export interface Identity {
   user: { id: string; email: string };
