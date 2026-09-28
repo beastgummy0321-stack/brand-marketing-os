@@ -20,6 +20,7 @@ from app.ads import (
     change_control_data,
     change_control_launch,
     handoff_assignment,
+    launch_view,
     plan,
     routes,
 )
@@ -180,6 +181,51 @@ class ChecklistContentTest(PublishTestBase):
             self.assertNotIn("配對", hint)
             self.assertNotIn("比對", hint)
             self.assertIn("核對", hint)
+
+
+class AudienceHintOnChecklistTest(PublishTestBase):
+    """F36-I07 Contract V: the manual checklist prints the same read-only 「受眾提示」 row per
+    group as the launch view -- one helper (`launch_view.audience_hints`), two checklists."""
+
+    def test_group_rows_carry_the_plans_audience_hint_and_match_the_launch_view(self):
+        detail = self._adopted_campaign()
+        web.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'audience','aud_rt1','回購客')",
+            (coredb.new_id("crd"), self.org_id, self.brand_id),
+        )
+        web.conn.commit()
+
+        described = manual_adapter.describe(detail)
+
+        by_name = {n["name"]: n for n in described["checklist"]}
+        rows = {
+            name: [(f["key"], f["label"], f["value"]) for f in by_name[name]["fields"]
+                   if f.get("key") == "audience_hint"]
+            for name in ("新客組", "再行銷組", "探索組")
+        }
+        self.assertEqual(rows["再行銷組"], [("audience_hint", "受眾提示", "再行銷・回購客")])
+        # A key the brand's vocabulary does not know prints itself.
+        self.assertEqual(rows["新客組"], [("audience_hint", "受眾提示", "新客・aud_new1")])
+        self.assertEqual(rows["探索組"], [("audience_hint", "受眾提示", "探索・aud_ex1")])
+        labels = [f["label"] for f in by_name["再行銷組"]["fields"]]
+        self.assertEqual(labels.index("受眾提示"), labels.index("結束日期") + 1)
+        self.assertNotIn(
+            "受眾提示", [f["label"] for n in described["checklist"] if n["level"] != "group"
+                        for f in n["fields"]],
+        )
+
+        # The launch view's group row is the same text.
+        view = launch_view.view(web.conn, self.org_id, self.brand_id, detail["id"])
+        view_rows = {
+            i["name"]: [(f["label"], f["value"]) for f in i["fields"]
+                        if f["key"] == "audience_hint"]
+            for i in view["items"] if i["kind"] == "group"
+        }
+        self.assertEqual(
+            view_rows,
+            {name: [(label, value) for _, label, value in rows[name]] for name in rows},
+        )
 
 
 class AutoMetaAdapterTest(PublishTestBase):
