@@ -53,6 +53,10 @@ class SimulatedReader:
     def read_creatives(self, conn, org_id, brand_id, account, **kwargs) -> SourcePage:
         return SourcePage([])
 
+    def pixels(self, conn, org_id, brand_id, account) -> list[dict]:
+        # A simulated account has no tracking pixels; `launch_settings` shows this as unreadable.
+        raise SourceReadError("模擬通路沒有可讀的像素。", "unsupported")
+
     def monthly_supported(self) -> bool:
         # No account-month spend proof exists for a simulated account, so the sync job asks
         # for no `monthly:` task (the month budget never lists this account: not in CHANNELS).

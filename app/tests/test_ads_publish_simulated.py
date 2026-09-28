@@ -16,6 +16,7 @@ import app.shared.web as web
 from app.ads import channels, external_repository, external_sync, outcome, plan
 from app.ads import repository as ads_repo
 from app.ads.adapters import simulated, simulated_read
+from app.ads.adapters.external import SourceReadError
 from app.ads.adapters.simulated_read import SimulatedReader
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -439,6 +440,9 @@ class ReReadThroughTheSyncPipelineTest(SimulatedPublishTestBase):
         self.assertEqual(account["timezone_name"],
                          str(coresettings.org_timezone(web.conn, org_id=self.org_id)))
         self.assertNotIn("simulated", {c["key"] for c in channels.CHANNELS})
+        with self.assertRaises(SourceReadError) as ctx:
+            reader.pixels(web.conn, self.org_id, self.brand_id, account)
+        self.assertEqual(ctx.exception.code, "unsupported")
 
 
 class NoMetaEntitySpendWriteTest(SimulatedPublishTestBase):
