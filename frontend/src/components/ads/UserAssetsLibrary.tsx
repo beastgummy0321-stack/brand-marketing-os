@@ -4,12 +4,14 @@ import { Button } from "@/components/layout/ui/button";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, AssetApiError, retryPreview, type AssetLibrary, type AssetUpload, type CopyFields } from "@/lib/adsUserAssetsApi";
 import { AuthAssetMedia } from "./AuthAssetMedia";
+import { Chip } from "./patterns";
 
 export const COPY_FIELDS = [{ key: "headline", label: "標題" }, { key: "body", label: "內文" }, { key: "description", label: "說明" }] as const;
 export function CopyEditor({ value, onChange, prefix, disabled = false }: { value: CopyFields; onChange: (copy: CopyFields) => void; prefix: string; disabled?: boolean }) {
   return <div className="grid gap-3 lg:grid-cols-3">{COPY_FIELDS.map(f => <label key={f.key} className="text-sm">{f.label}<Textarea aria-label={`${prefix}${f.label}`} maxLength={4000} disabled={disabled} value={value[f.key] ?? ""} onChange={e => onChange({ ...value, [f.key]: e.target.value })} /></label>)}</div>;
 }
-interface LocalFile { key: string; file: File; copy: CopyFields; error?: string }
+/** F36 ruling D: one 「本批共用原文」 per batch; a file carries its own `copy` only after 「這張另外寫」 (`own`). */
+interface LocalFile { key: string; file: File; copy: CopyFields; own?: boolean; error?: string }
 export function uploadChunks<T extends { file: File; copy: CopyFields }>(items: T[]): T[][] {
   const chunks: T[][] = []; let current: T[] = [];
   const size = (rows: T[]) => new TextEncoder().encode(JSON.stringify({ files: rows.map(v => ({ filename: v.file.name, size: v.file.size, content_type: v.file.type, copy_fields: v.copy })) })).length;
@@ -31,7 +33,7 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
   onAttach?: (upload: AssetUpload) => Promise<void>; onAttachAsset?: (id: string) => Promise<void>; readOnly?: boolean;
 }) {
   const [library, setLibrary] = useState<AssetLibrary>(emptyLibrary);
-  const [local, setLocal] = useState<LocalFile[]>([]); const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [local, setLocal] = useState<LocalFile[]>([]); const [shared, setShared] = useState<CopyFields>({}); const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false); const [loading, setLoading] = useState(false); const [error, setError] = useState("");
   useAssetDraftGuard(local.length > 0);
   const [stages, setStages] = useState<Record<string, string>>({});
@@ -65,7 +67,8 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
     const signal = controller.current.signal;
     setBusy(true); setError(""); const accepted = new Set<string>(); const queue: { upload: AssetUpload; file: File }[] = [];
     try {
-      for (const chunk of uploadChunks(local)) {
+      // Files without their own copy send the shared copy as their `copy_fields`; the batch API stays per file.
+      for (const chunk of uploadChunks(local.map(v => v.own ? v : { ...v, copy: shared }))) {
         if (signal.aborted) break;
         try {
           const { batch } = await createUploadBatch(brandId, chunk.map(v => ({ filename: v.file.name, size: v.file.size, content_type: v.file.type, copy_fields: v.copy })));
@@ -74,7 +77,7 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
           setSelected(prev => new Set([...prev, ...batch.uploads.map(u => u.id)]));
         } catch (e) { if (signal.aborted) return; setError(`部分批次尚未建立，選檔與原文保留：${e instanceof Error ? e.message : String(e)}`); }
       }
-      setLocal(prev => prev.filter(v => !accepted.has(v.key)));
+      const remaining = local.filter(v => !accepted.has(v.key)); setLocal(remaining); if (!remaining.length) setShared({});
       await twoAtATime(queue, async ({ upload, file }) => { if (upload.status !== "failed") await send(upload, file, signal); });
       if (!signal.aborted) await load();
     } finally { if (!signal.aborted) setBusy(false); }
@@ -109,7 +112,12 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
     {!readOnly && <label className="text-sm font-medium">選擇圖片或影片<input aria-label="選擇自帶素材" type="file" multiple accept="image/*,video/*" disabled={busy} className="ml-3" onChange={e => {
       const next = Array.from(e.target.files ?? []).map(file => ({ key: crypto.randomUUID(), file, copy: {} })); setLocal(prev => [...prev, ...next]); e.target.value = "";
     }} /></label>}
-    {local.length > 0 && <div className="flex flex-col gap-3"><p>待上傳 {local.length} 檔，分成 {uploadChunks(local).length} 批。可先填原文；空白欄位稍後可補。</p><div className="max-h-96 overflow-auto space-y-3">{local.map(item => <div key={item.key} className="rounded border border-border p-3"><div className="flex justify-between"><p>{item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)} MiB</p><Button variant="ghost" disabled={busy} onClick={() => setLocal(v => v.filter(f => f.key !== item.key))}>移除此選檔</Button></div><CopyEditor prefix={`${item.file.name}原文`} value={item.copy} disabled={busy} onChange={copy => setLocal(v => v.map(f => f.key === item.key ? { ...f, copy } : f))} /></div>)}</div><Button disabled={busy} onClick={() => void start()}>保存原檔與原文</Button></div>}
+    {local.length > 0 && <div className="flex flex-col gap-3"><p>待上傳 {local.length} 檔，分成 {uploadChunks(local).length} 批。</p>
+      <div className="flex flex-col gap-2.5 rounded-[10px] border border-primary bg-primary/5 p-3.5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">本批共用原文</h3><p className="text-xs text-muted-foreground">這一批 {local.length} 檔都用這份；某一張要不一樣，在它那張按「這張另外寫」。</p></div><Chip tone="accent">套在 {local.filter(f => !f.own).length} 檔</Chip></div><CopyEditor prefix="共用" value={shared} disabled={busy} onChange={setShared} /></div>
+      <div className="flex max-h-[30rem] flex-col gap-2.5 overflow-auto">{local.map(item => <div key={item.key} className="flex flex-col gap-2 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p>{item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)} MiB</p><div className="flex flex-wrap items-center gap-2">{item.own
+        ? <><Chip>自己的原文</Chip><Button variant="link" size="sm" disabled={busy} onClick={() => setLocal(v => v.map(f => f.key === item.key ? { ...f, own: false } : f))}>改回共用</Button></>
+        : <><Chip tone="accent">沿用共用原文</Chip><Button variant="link" size="sm" disabled={busy} onClick={() => setLocal(v => v.map(f => f.key === item.key ? { ...f, own: true, copy: { ...shared } } : f))}>這張另外寫</Button></>}<Button variant="ghost" size="sm" disabled={busy} onClick={() => setLocal(v => v.filter(f => f.key !== item.key))}>移除</Button></div></div>{item.own && <CopyEditor prefix={`${item.file.name}原文`} value={item.copy} disabled={busy} onChange={copy => setLocal(v => v.map(f => f.key === item.key ? { ...f, copy } : f))} />}</div>)}</div>
+      <div className="flex flex-wrap items-center gap-3"><Button disabled={busy} onClick={() => void start()}>保存原檔與原文</Button><span className="text-sm text-muted-foreground">{local.length} 檔各帶自己的原文送出（共用的那幾檔＝同一份）</span></div></div>}
     {loading && <p role="status">讀取品牌素材中…</p>}{busy && <p role="status">處理中，完成原檔 {library.uploads.filter(u => selected.has(u.id) && u.status === "complete").length}／{selected.size} 檔。請等待目前步驟完成。</p>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
     <details open={library.uploads.length > 0}><summary className="cursor-pointer font-medium">品牌上傳紀錄 · 已載入 {library.uploads.length} 筆{library.next_upload_cursor ? "，尚有更多" : ""}</summary><div className="mt-3 max-h-96 overflow-auto divide-y divide-border">{library.uploads.map(u => <div key={u.id} className="flex flex-col gap-2 py-3">

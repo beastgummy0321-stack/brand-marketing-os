@@ -74,6 +74,24 @@ describe("durable upload UI", () => {
     expect(vi.mocked(createUploadBatch).mock.calls.map(c => c[1].length)).toEqual([10, 1]);
     expect(await screen.findByText("photo10.png")).toBeTruthy();
   });
+  it("sends the shared copy for every file and keeps a file's own copy after 這張另外寫", async () => {
+    vi.mocked(createUploadBatch).mockImplementation(async (_brand, files) => ({ batch: { id: "batch1", uploads: files.map((f, i) => ({ ...upload(`u${i + 1}`, "pending"), filename: f.filename, copy_fields: f.copy_fields })) } }));
+    vi.mocked(putUpload).mockImplementation(async (_brand, id) => ({ upload: upload(id) }));
+    render(<UserAssetsLibrary brandId="b1" />); const user = userEvent.setup();
+    await user.upload(screen.getByLabelText("選擇自帶素材"), [new File(["x"], "a.png", { type: "image/png" }), new File(["x"], "b.png", { type: "image/png" })]);
+    expect(screen.getByText("套在 2 檔")).toBeTruthy(); expect(screen.getAllByText("沿用共用原文")).toHaveLength(2);
+    await user.type(screen.getByLabelText("共用標題"), "共用標"); await user.type(screen.getByLabelText("共用內文"), "共用文");
+    expect(screen.queryByLabelText("b.png原文標題")).toBeNull();
+    await user.click(screen.getAllByRole("button", { name: "這張另外寫" })[1]);
+    expect(screen.getByText("套在 1 檔")).toBeTruthy(); expect(screen.getByText("自己的原文")).toBeTruthy();
+    expect(screen.getByLabelText("b.png原文標題")).toHaveProperty("value", "共用標"); // seeded from the shared copy
+    await user.clear(screen.getByLabelText("b.png原文標題")); await user.type(screen.getByLabelText("b.png原文標題"), "自己的");
+    await user.type(screen.getByLabelText("共用標題"), "改"); // later shared edits do not leak into the own file
+    await user.click(screen.getByRole("button", { name: "保存原檔與原文" }));
+    await waitFor(() => expect(createUploadBatch).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createUploadBatch).mock.calls[0][1].map(f => f.copy_fields)).toEqual([{ headline: "共用標改", body: "共用文" }, { headline: "自己的", body: "共用文" }]);
+    expect(screen.queryByRole("button", { name: "改回共用" })).toBeNull();
+  });
   it("bounds long Chinese originals by UTF-8 bytes without dropping copy", () => {
     const rows = Array.from({ length: 3 }, (_, i) => ({ file: new File(["x"], `${i}.png`), copy: { headline: "字".repeat(4000), body: "字".repeat(4000), description: "字".repeat(4000) } }));
     expect(uploadChunks(rows).map(c => c.length)).toEqual([1, 1, 1]);
@@ -142,11 +160,51 @@ describe("placement and evidence UI", () => {
     expect(nextStep(campaign).target).toBe("assets");
   });
   it("shows all required pending rows beyond a ten-item suggestion batch", async () => {
-    vi.mocked(listPlacements).mockResolvedValue({ placements: Array.from({ length: 11 }, (_, i) => placement(`p${i}`)) });
+    vi.mocked(listPlacements).mockResolvedValue({ placements: Array.from({ length: 11 }, (_, i) => ({ ...placement(`p${i}`), copy_fields: {} })) });
+    vi.mocked(suggestAssets).mockResolvedValue({ batch: { id: "s1", status: "queued", created_at: "2026-01-01", error: null }, limits: { codex_notice: "" } });
     viewPlacements(); const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "選取前 10 件待處理" }));
-    expect(screen.getByText(/必用 11 件.*待處理 11 件/)).toBeTruthy();
-    expect(screen.getByText(/未選取或超出批次的 1 件/)).toBeTruthy(); expect(screen.getByText(/p10.png · 第 1 版/)).toBeTruthy();
+    expect(await screen.findByText(/必用 11 件.*待處理 11 件/)).toBeTruthy();
+    expect(screen.getByText("11 件有空白欄")).toBeTruthy(); expect(screen.getByText(/其餘 1 件仍保留待處理/)).toBeTruthy(); expect(screen.getByText(/p10.png · 第 1 版/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "為 10 件補空白文案" }));
+    await waitFor(() => expect(suggestAssets).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(suggestAssets).mock.calls[0][2]).toHaveLength(10);
+  });
+  it("applies one copy to every unconfirmed placement, never to a confirmed one, and reports the count", async () => {
+    const confirmed = { ...placement("p1", 2), confirmed_at: "2026-01-01" };
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [confirmed, placement("p2"), placement("p3")] });
+    vi.mocked(revisePlacement).mockImplementation(async (_b, _c, id) => ({ placement: placement(id, 2) }));
+    viewPlacements(); const user = userEvent.setup();
+    expect(await screen.findByText("會蓋掉那 2 件已填的字；已確認的 1 件不動。")).toBeTruthy();
+    await user.type(screen.getByLabelText("套用標題"), "統一標題");
+    await user.click(screen.getByRole("button", { name: "套用到 2 件待處理" }));
+    expect(await screen.findByText("已套到 2 件待處理，各存了一版；逐件檢查並確認。")).toBeTruthy();
+    expect(revisePlacement).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(revisePlacement).mock.calls.map(c => c[2])).toEqual(["p2", "p3"]);
+    // Only copy_fields + expected_revision: purpose／dates stay untouched; extra original keys survive; blank slots overwrite.
+    expect(vi.mocked(revisePlacement).mock.calls[0][3]).toEqual({ copy_fields: { headline: "統一標題", body: "", description: "", caption: "額外原文" }, expected_revision: 1 });
+    expect(screen.queryByText(/伺服器已是第 2 版/)).toBeNull(); // the reloaded revision is adopted, not flagged as a conflict
+  });
+  it("stops apply-to-all at a 409 and names the conflicting file", async () => {
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p2"), placement("p3")] });
+    vi.mocked(revisePlacement).mockRejectedValueOnce(new AssetApiError("素材版本已更新", 409));
+    viewPlacements(); const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "套用到 2 件待處理" }));
+    expect(await screen.findByText(/p2.png 已有新版本，套用停在這件（已套 0 件）/)).toBeTruthy();
+    expect(revisePlacement).toHaveBeenCalledTimes(1); expect(screen.queryByText(/已套到/)).toBeNull();
+  });
+  it("disables 補空白文案 with its reason when nothing is blank, counts blanks otherwise, and links to the slot picker", async () => {
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p1")] });
+    const { unmount } = viewPlacements();
+    expect(await screen.findByText("沒有空白欄")).toBeTruthy(); expect(screen.getByText("文案齊了")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "為 0 件補空白文案" })).toHaveProperty("disabled", true);
+    expect(screen.getByText("選取的都填滿了，沒有可補的欄位。")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "到素材頁選一版文案 →" }).getAttribute("href")).toMatch(/\?tab=assets$/);
+    unmount();
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p1"), { ...placement("p2"), copy_fields: { headline: "只有標題" } }] });
+    viewPlacements();
+    expect(await screen.findByText("1 件有空白欄")).toBeTruthy(); expect(screen.getByText("缺 2 欄")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "為 1 件補空白文案" })).toHaveProperty("disabled", false);
+    expect(screen.queryByText("選取的都填滿了，沒有可補的欄位。")).toBeNull();
   });
   it("manual confirmation passes null batch and preserves a pending risk reason", async () => {
     vi.mocked(listPlacements).mockResolvedValue({ placements: [placement()] });
@@ -158,8 +216,8 @@ describe("placement and evidence UI", () => {
     vi.mocked(listPlacements).mockResolvedValueOnce({ placements: [placement()] }).mockResolvedValue({ placements: [placement("p1", 2)] });
     vi.mocked(revisePlacement).mockRejectedValue(new AssetApiError("素材版本已更新", 409));
     viewPlacements(); const user = userEvent.setup();
-    await user.click(await screen.findByText("編輯原文與內部安排"));
-    await user.clear(screen.getByLabelText("p1.png安排標題")); await user.type(screen.getByLabelText("p1.png安排標題"), "我的修改");
+    // The editor of an unconfirmed card is open by default (prototype #/placements).
+    await user.clear(await screen.findByLabelText("p1.png安排標題")); await user.type(screen.getByLabelText("p1.png安排標題"), "我的修改");
     await user.click(screen.getByRole("button", { name: "儲存為新版安排" }));
     expect(await screen.findByText(/伺服器已是第 2 版/)).toBeTruthy(); expect(screen.getByLabelText("p1.png安排標題")).toHaveProperty("value", "我的修改");
     expect(revisePlacement).toHaveBeenCalledWith("b1", "c1", "p1", expect.objectContaining({ expected_revision: 1, copy_fields: expect.objectContaining({ headline: "我的修改", caption: "額外原文" }) }));
