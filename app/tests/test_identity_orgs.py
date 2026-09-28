@@ -1,12 +1,15 @@
 """app/tests/test_identity_orgs.py — 票 03-1：組織改名、邀請、移除成員。"""
 
 import unittest
+from datetime import datetime
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
+from app.core import settings as core_settings
 from app.identity import repository as identity_repo
 
 from .identity_test_helpers import mint_hs256
@@ -25,6 +28,61 @@ class OrgManagementTest(unittest.TestCase):
         token = mint_hs256(sub=str(user_id), email=f"owner-{user_id.hex[:8]}@example.com")
         me = self.client.get("/api/identity/me", headers=self._auth(token))
         return token, me.json()["org"]["id"]
+
+    def test_me_carries_org_timezone_and_today(self):
+        """F36-I08（drill-6 #20，Contract U）：/me 的 org 帶組織時區與該時區的今天。
+        沒設定時是 Asia/Taipei；設了非預設時區後 today 要跟那個時區走（挑一個跟台北
+        隔著日界線的時區，兩邊算出的日期在一天裡有 18 小時不同，才驗得到「不是機器的今天」）。"""
+        token, org_id = self._new_owner()
+        me = self.client.get("/api/identity/me", headers=self._auth(token)).json()
+        self.assertEqual(me["org"]["timezone"], core_settings.DEFAULT_ORG_TIMEZONE)
+        self.assertEqual(
+            me["org"]["today"],
+            datetime.now(ZoneInfo(core_settings.DEFAULT_ORG_TIMEZONE)).date().isoformat(),
+        )
+
+        core_settings.set_setting(
+            web.conn, core_settings.ORG_TIMEZONE_SETTING, "Pacific/Pago_Pago", org_id=org_id
+        )
+        me = self.client.get("/api/identity/me", headers=self._auth(token)).json()
+        expected_today = datetime.now(ZoneInfo("Pacific/Pago_Pago")).date().isoformat()
+        self.assertEqual(me["org"]["timezone"], "Pacific/Pago_Pago")
+        self.assertEqual(me["org"]["today"], expected_today)
+        # `orgs` 是逐組織的：同一個組織在清單裡也要帶同一個時鐘。
+        listed = next(o for o in me["orgs"] if o["id"] == org_id)
+        self.assertEqual(listed["timezone"], "Pacific/Pago_Pago")
+        self.assertEqual(listed["today"], expected_today)
+
+    def test_org_out_producers_share_the_clock(self):
+        """OrgOut 是共用模型：改名、接受邀請回的 org 也要帶 timezone／today，不能只有 /me 有。"""
+        owner_token, org_id = self._new_owner()
+        core_settings.set_setting(
+            web.conn, core_settings.ORG_TIMEZONE_SETTING, "Pacific/Kiritimati", org_id=org_id
+        )
+        expected_today = datetime.now(ZoneInfo("Pacific/Kiritimati")).date().isoformat()
+        renamed = self.client.post(
+            "/api/identity/orgs/current/rename",
+            json={"name": "時鐘公司"},
+            headers=self._auth(owner_token),
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["timezone"], "Pacific/Kiritimati")
+        self.assertEqual(renamed.json()["today"], expected_today)
+
+        create_resp = self.client.post(
+            "/api/identity/invites",
+            json={"email": "clock@example.com", "role": "member"},
+            headers=self._auth(owner_token),
+        )
+        token_str = create_resp.json()["accept_url"].split("token=")[1]
+        invitee_id = uuid4()
+        invitee_token = mint_hs256(sub=str(invitee_id), email="clock@example.com")
+        accept_resp = self.client.post(
+            f"/api/identity/invites/{token_str}/accept", headers=self._auth(invitee_token)
+        )
+        self.assertEqual(accept_resp.status_code, 200, accept_resp.text)
+        self.assertEqual(accept_resp.json()["org"]["timezone"], "Pacific/Kiritimati")
+        self.assertEqual(accept_resp.json()["org"]["today"], expected_today)
 
     def test_rename_current_org_turns_personal_into_company(self):
         token, org_id = self._new_owner()
