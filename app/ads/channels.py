@@ -136,6 +136,11 @@ def external_reader(platform):
     if platform == "meta":
         from app.ads.adapters.meta_read import MetaReader
         return MetaReader()
+    if platform == "simulated":
+        # F37 Contract R: the simulated channel reads like a platform; it is never a
+        # user-facing row of `CHANNELS`.
+        from app.ads.adapters.simulated_read import SimulatedReader
+        return SimulatedReader()
     return None
 
 

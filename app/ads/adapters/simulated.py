@@ -179,6 +179,13 @@ def day_rows(detail: dict, day: date, rng: random.Random) -> list[dict]:
     return out
 
 
+def day_rng(campaign_id: str, day: date, seed: int | None = None) -> random.Random:
+    """The one seed rule for a simulated day: keyed by the campaign (or an explicit `seed`) and
+    the day only, so a day's rows never depend on the window they were generated in --
+    publish-time `generate_outcomes` and a later 重新讀取 (`SimulatedReader`) agree."""
+    return random.Random(f"{campaign_id if seed is None else seed}:{day.isoformat()}")
+
+
 def entity_ids(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     """`(native_kind, native_id) -> ads_external_entity.id` of this campaign's simulated chain."""
     return {
@@ -230,8 +237,10 @@ def extend_coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
 def generate_outcomes(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                        until: date | None = None, seed: int | None = None) -> None:
     """補齊 `start_date` 到 `min(end_date, until or today)` 每一天缺的成效——`until` 之外／
-    今天之後一律不生（§0「nothing beyond today」），`seed` 給定時整批可重現（驗收要能重跑同
-    一份螢幕）。寫完把這段範圍併進活動已讀到的覆蓋紀錄（Contract R）。"""
+    今天之後一律不生（§0「nothing beyond today」）。每天的數字由 `day_rng(campaign_id, day)`
+    決定，所以之後重新讀取平台（`SimulatedReader`）產生同一份數字；`seed` 給定時改用它當鍵，
+    不同 Campaign 也得到同一份螢幕（驗收要能重跑）。寫完把這段範圍併進活動已讀到的覆蓋紀錄
+    （Contract R）。"""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
@@ -256,7 +265,6 @@ def generate_outcomes(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: s
         for row in outcome.rows(conn, org_id, brand_id, campaign_id, "group")
     }
     ids = entity_ids(conn, org_id, brand_id, campaign_id)
-    rng = random.Random(seed)
     day = start_date
     while day <= end_date:
         # 這天已經有這個投放組的成效——整組（含底下廣告）跳過，不覆寫也不補洞
@@ -265,7 +273,10 @@ def generate_outcomes(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: s
             if group.get("external_id") and (group["id"], day) in existing:
                 skip.add(group["external_id"])
                 skip.update(a["external_id"] for a in group["ads"] if a.get("external_id"))
-        rows = [r for r in day_rows(detail, day, rng) if r["native_id"] not in skip]
+        rows = [
+            r for r in day_rows(detail, day, day_rng(campaign_id, day, seed))
+            if r["native_id"] not in skip
+        ]
         write_rows(conn, org_id, brand_id, campaign_id, rows, ids)
         day += timedelta(days=1)
     if ids:  # no simulated entity chain -> nothing was written, so nothing is marked read

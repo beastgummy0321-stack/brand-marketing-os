@@ -10,11 +10,13 @@ same numbers; nothing in the module writes to `meta_entity_spend`.
 import random
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 import app.shared.web as web
-from app.ads import outcome, plan
+from app.ads import channels, external_repository, external_sync, outcome, plan
 from app.ads import repository as ads_repo
-from app.ads.adapters import simulated
+from app.ads.adapters import simulated, simulated_read
+from app.ads.adapters.simulated_read import SimulatedReader
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
@@ -285,6 +287,27 @@ class GenerateOutcomesDeterministicTest(SimulatedPublishTestBase):
         stripped_b = [{k: v for k, v in r.items() if k not in _skip} for r in rows_b]
         self.assertEqual(stripped_a, stripped_b)
 
+        detail_c = self._published_later(start)
+        simulated.generate_outcomes(web.conn, self.org_id, self.brand_id, detail_c["id"], seed=43)
+        stripped_c = [{k: v for k, v in r.items() if k not in _skip}
+                      for r in self._outcome_rows(detail_c["id"])]
+        self.assertNotEqual(stripped_a, stripped_c)
+
+    def test_without_a_seed_a_day_is_keyed_by_campaign_and_day_only(self):
+        start = self.today - timedelta(days=3)
+        detail = self._published_later(start)
+
+        simulated.generate_outcomes(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        bound = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])
+        day = start + timedelta(days=2)
+        expected = simulated.day_rows(bound, day, simulated.day_rng(detail["id"], day))
+        written = [r for r in self._daily(detail["id"]) if r["day"] == day]
+        self.assertEqual(
+            sorted((r["metric_scope"], float(r["spend"])) for r in written),
+            sorted((r["metric_scope"], float(r["spend"])) for r in expected),
+        )
+
     def test_day_rows_is_pure(self):
         detail = self._campaign(start_date=self.today, end_date=self.today)
         simulated.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
@@ -299,6 +322,120 @@ class GenerateOutcomesDeterministicTest(SimulatedPublishTestBase):
             a["external_id"] for g in bound["groups"] for a in g["ads"]
         }
         self.assertTrue({r["native_id"] for r in first} <= natives)
+
+
+class ReReadThroughTheSyncPipelineTest(SimulatedPublishTestBase):
+    """Contract R: 「重新讀取平台」 on a simulated campaign is the ordinary sync job."""
+
+    def setUp(self):
+        super().setUp()
+        for target, name in ((external_sync.background, "enqueue"),
+                             (external_sync.background, "is_active")):
+            patcher = patch.object(target, name, return_value=name == "enqueue")
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _run(self, start, end):
+        job = external_sync.request_sync(
+            web.conn, self.org_id, self.brand_id, "simulated", "sim", start=start, end=end,
+        )
+        web.conn.commit()
+        for _ in range(20):
+            external_sync.run_sync(self.org_id, self.brand_id, job["id"])
+            job = external_repository.get_job(web.conn, self.org_id, self.brand_id, job["id"])
+            if job["status"] not in {"pending", "running"}:
+                return job
+        self.fail("sync job did not finish")
+
+    def _identity(self, rows):
+        return sorted(
+            (r["entity_id"], r["day"], r["metric_scope"], float(r["spend"]), r["purchases"],
+             float(r["revenue"]), r["impressions"], r["clicks"])
+            for r in rows
+        )
+
+    def test_re_read_regenerates_the_same_rows_and_records_the_window(self):
+        start = self.today - timedelta(days=24)
+        detail = self._campaign(start_date=start, end_date=self.today)
+        simulated.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        published = self._identity(self._daily(detail["id"]))
+        # More rows than one source page holds, so the read crosses a page boundary.
+        self.assertGreater(len(published), simulated_read.PAGE_SIZE)
+
+        window = (self.today - timedelta(days=29), self.today)
+        job = self._run(*window)
+
+        task = job["tasks"][f"{detail['id']}:observations:{window[0]}:{window[1]}"]
+        self.assertEqual(task["status"], "succeeded")
+        self.assertEqual(self._coverage(detail["id"]),
+                         {"start": window[0].isoformat(), "end": window[1].isoformat()})
+        campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+        self.assertEqual(
+            campaign["context_json"]["external_sync"]["observations"]["status"], "success",
+        )
+        daily = self._daily(detail["id"])
+        # A re-read neither duplicates nor changes a number: one row per (entity, day, scope).
+        self.assertEqual(self._identity(daily), published)
+        keys = [(r["entity_id"], r["day"], r["metric_scope"]) for r in daily]
+        self.assertEqual(len(keys), len(set(keys)))
+
+        self._run(*window)
+        self.assertEqual(self._identity(self._daily(detail["id"])), published)
+
+    def test_re_read_fills_a_day_that_was_never_written(self):
+        start = self.today - timedelta(days=2)
+        detail = self._campaign(start_date=start, end_date=self.today, groups=1)
+        simulated.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        published = self._identity(self._daily(detail["id"]))
+        web.conn.execute(
+            "DELETE FROM ads_external_daily WHERE campaign_id = %s AND day = %s",
+            (detail["id"], start),
+        )
+
+        self._run(start, self.today)
+
+        self.assertEqual(self._identity(self._daily(detail["id"])), published)
+
+    def test_nothing_is_read_after_today_or_for_a_closed_or_recovering_campaign(self):
+        detail = self._campaign(start_date=self.today - timedelta(days=2),
+                                end_date=self.today + timedelta(days=5))
+        simulated.publish(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        reader = channels.external_reader("simulated")
+        self.assertIsInstance(reader, SimulatedReader)
+        (account,) = reader.accounts(web.conn, self.org_id, self.brand_id)
+        root = ads_repo.get_campaign(
+            web.conn, self.org_id, self.brand_id, detail["id"],
+        )["external_id"]
+
+        def read(start, end):
+            return reader.read_observations(
+                web.conn, self.org_id, self.brand_id, account, native_id=root,
+                start=start.isoformat(), end=end.isoformat(),
+            ).items
+
+        tomorrow = self.today + timedelta(days=1)
+        self.assertEqual(read(tomorrow, tomorrow + timedelta(days=3)), [])
+        self.assertTrue(read(self.today, self.today))
+        self.assertTrue(all(r["day"] <= self.today for r in read(self.today, tomorrow)))
+
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json || %s::jsonb WHERE id = %s",
+            ('{"simulation_recovery": {"active": true}}', detail["id"]),
+        )
+        self.assertEqual(read(self.today, self.today), [])
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json - 'simulation_recovery',"
+            " status = 'closed' WHERE id = %s", (detail["id"],),
+        )
+        self.assertEqual(read(self.today, self.today), [])
+
+    def test_the_account_reads_in_the_org_clock(self):
+        reader = channels.external_reader("simulated")
+        (account,) = reader.accounts(web.conn, self.org_id, self.brand_id)
+        self.assertEqual(account["account_id"], "sim")
+        self.assertEqual(account["timezone_name"],
+                         str(coresettings.org_timezone(web.conn, org_id=self.org_id)))
+        self.assertNotIn("simulated", {c["key"] for c in channels.CHANNELS})
 
 
 class NoMetaEntitySpendWriteTest(SimulatedPublishTestBase):
