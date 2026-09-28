@@ -2,7 +2,7 @@
  * `status === "ended"` 出現，但那個狀態沒有任何程式會寫——這支測試證明 `live` 也看得到
  * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。 */
 import { render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -14,9 +14,26 @@ import { PerformanceTab } from "./PerformanceTab";
 
 vi.mock("@/lib/useEchart", () => ({ useEchart: () => ({ current: null }) }));
 
+// F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
+// timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
+let orgTimezone = "Asia/Taipei";
 vi.mock("@/components/layout/WorkspaceContext", () => ({
-  useWorkspace: () => ({ scope: "user:org" }),
+  useWorkspace: () => ({
+    scope: "user:org", brands: [], brandsLoading: false, brandsError: null, refreshBrands: () => {},
+    identity: {
+      user: { id: "usr_1", email: "a@example.com" },
+      org: { id: "org_test", name: "測試組織", kind: "personal", role: "owner", timezone: orgTimezone, today: "2020-01-01" },
+      orgs: [],
+    },
+  }),
 }));
+// 2026-02-28 10:30Z: Kiritimati (UTC+14) is already 2026-03-01 00:30; UTC and the test runner zone
+// (Asia/Taipei, UTC+8 = 18:30) are still on 2026-02-28. Only `Date` is faked so timers stay real.
+const KIRITIMATI_INSTANT = new Date("2026-02-28T10:30:00Z");
+function useKiritimati() {
+  beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(KIRITIMATI_INSTANT); });
+  afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
+}
 
 vi.mock("@/lib/adsExperimentApi", () => ({
   readComparison: vi.fn(),
@@ -387,5 +404,26 @@ describe("PerformanceTab `?ad=` 深連結（F27-I22）", () => {
     await screen.findByRole("heading", { name: "目前成果" });
     expect(screen.queryByText("這則廣告沒有成效資料")).toBeNull();
     expect(screen.queryByText("點擊率")).toBeNull();
+  });
+});
+
+describe("F36-I09 組織時鐘：提前結案說明", () => {
+  useKiritimati();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPerformance).mockResolvedValue(performance());
+    vi.mocked(readComparison).mockResolvedValue({
+      proposal: null, missing: "缺少合格對照", stale: false, closed: false, simulation: false,
+      confirmed: null, result: { verdict: "看不出", reason: "缺資料", values: [] },
+    });
+    vi.mocked(readSimulation).mockResolvedValue({
+      enabled: true, reason: null, started: false, day: "2026-01-01", revision: 0,
+      saved_at: null, saved_by: null, rows: [], closed: false, receipts: {},
+    });
+  });
+  it("end_date 等於組織的今天（UTC+14 已是 3/1）就不是提前結束；瀏覽器的 2/28 會誤判成提前", async () => {
+    renderTab(campaign({ status: "live", end_date: "2026-03-01" }));
+    expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
+    expect(screen.queryByText(/現在結案等於提前結束/)).toBeNull();
   });
 });

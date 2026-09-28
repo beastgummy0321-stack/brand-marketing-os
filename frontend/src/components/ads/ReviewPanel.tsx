@@ -8,6 +8,7 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { getOrgId } from "@/lib/auth";
 import { createReview, decideReview, getReview, getReviews, type ReviewRound, type ReviewsData, type ReviewStatus } from "@/lib/adsReviewApi";
+import { useOrgClock, type OrgClock } from "@/lib/orgClock";
 import { ReviewEvidence } from "./ReviewEvidence";
 import { ReviewTracking } from "./ReviewTracking";
 import { Disclosure } from "./patterns";
@@ -15,13 +16,13 @@ import { Disclosure } from "./patterns";
 const labels: Record<ReviewStatus, string> = { waiting: "資料不足，等待補齊", queued: "已安排檢討", running: "正在整理建議", ready: "建議已備妥", completed: "本次檢討完成", deferred: "本次檢討暫緩", unjudgeable: "本次無法判定", failed: "本次未完成", unknown: "結果尚未確認" };
 const directions = { retain: "保留現有投放", observe: "先觀察，再決定", adjust: "調整後繼續觀察", new_test: "準備下一個測試" };
 const evidenceLabels: Record<string, string> = { current: "本期單則廣告資料", previous: "前期單則廣告資料", conditions: "投放條件與素材歷史", campaign: "活動目標", "commerce.current": "本期商城與通路證據", "commerce.previous": "前期商城與通路證據", previous_review: "上一輪判讀與操作結果", source_review: "新測試承接的原廣告判讀" };
-function defaults() {
-  const end = new Date(); end.setDate(end.getDate() - 1);
-  const start = new Date(end); start.setDate(start.getDate() - 6);
-  return { start: start.toLocaleDateString("sv-SE"), end: end.toLocaleDateString("sv-SE") };
+// F36-I09 (ruling G): the observation window ends on the org's yesterday, not the browser's.
+function defaults(clock: OrgClock) {
+  return { start: clock.shift(-7), end: clock.shift(-1) };
 }
 function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: string; onGoal: () => void }) {
   const [params, setParams] = useSearchParams();
+  const clock = useOrgClock();
   const requestedReview = params.get("review");
   const [data, setData] = useState<ReviewsData | null>(null);
   const [selected, setSelected] = useState<string | null>(params.get("review"));
@@ -30,7 +31,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
   const [reload, setReload] = useState(0);
   const [form, setForm] = useState(false);
   const [target, setTarget] = useState("");
-  const [period, setPeriod] = useState(defaults);
+  const [period, setPeriod] = useState(() => defaults(clock));
   const [previousId, setPreviousId] = useState<string>();
   const [decision, setDecision] = useState<"completed" | "deferred" | "unjudgeable" | null>(null);
   const [reason, setReason] = useState("");
@@ -83,7 +84,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
     finally { if (!signal.aborted) setBusy(false); }
   }
   function next() {
-    const range = defaults();
+    const range = defaults(clock);
     if (review && review.window_end >= range.end) {
       setError("目前還沒有晚於本次觀察期的完整日期。請待新的資料到齊後準備下一輪；補齊原期間資料可使用「重新檢查本期資料」。"); return;
     }
@@ -91,7 +92,7 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
   }
   function another() {
     const reviewed = new Set(data?.reviews.map(row => row.entity_id));
-    setPreviousId(undefined); setTarget(data?.targets.find(row => !reviewed.has(row.id))?.id ?? target); setPeriod(defaults()); setError(""); setForm(true);
+    setPreviousId(undefined); setTarget(data?.targets.find(row => !reviewed.has(row.id))?.id ?? target); setPeriod(defaults(clock)); setError(""); setForm(true);
   }
   function refreshCurrent() {
     if (!review) return;

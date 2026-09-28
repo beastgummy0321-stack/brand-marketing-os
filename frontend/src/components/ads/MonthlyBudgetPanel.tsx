@@ -5,9 +5,12 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { getOrgId } from "@/lib/auth";
 import { getMonthlyBudget, saveMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import { DEFAULT_ORG_TIMEZONE, orgToday } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 
-export const currentBudgetMonth = () => `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+/** F36-I09 (ruling G): the budget month is the org's today (YYYY-MM), not the browser's. Pass
+ * `useOrgClock().timezone`; callers without a workspace fall back to the org default. */
+export const currentBudgetMonth = (timezone: string = DEFAULT_ORG_TIMEZONE) => orgToday(timezone).slice(0, 7);
 export function budgetMoney(value: number | null, currency: string | null) {
   return value === null ? "尚待確認" : `${currency ?? "幣別待確認"} ${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
 }

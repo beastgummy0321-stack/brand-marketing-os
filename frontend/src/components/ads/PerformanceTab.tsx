@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/layout/ui/dialog";
 import { useEchart } from "@/lib/useEchart";
+import { useOrgClock } from "@/lib/orgClock";
 import { CHART_COLOR_AXIS_TEXT, CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
 import { formatCount, formatCurrency, formatMetaRoas, formatPercent } from "@/lib/format";
 import {
@@ -194,7 +195,7 @@ export function PerformanceTab({
   const nativeData = useMemo(() => nativePerformance(c.external_view, selectedScope?.key), [c.external_view, selectedScope?.key]);
   const published = c.status === "live" || c.status === "ended" || c.status === "closed";
   const labels = c.labels ?? DEFAULT_LABELS;
-  const today = new Date().toLocaleDateString("sv-SE");
+  const { today } = useOrgClock(); // F36-I09 (ruling G): org calendar, not the browser's
 
   const [state, setState] = useState<
     | { status: "loading" }
