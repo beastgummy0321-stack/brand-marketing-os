@@ -5,8 +5,18 @@ import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./
 
 /** F30 Contract F: the assets tab's slots — one planned ad (app-built) or one platform ad (imported).
  * `ready` = the launch rule (a confirmed material, or already a platform ad); `in_progress` = a file
- * uploaded into the slot waiting for confirmation, a revised material, or a workbench pack being worked. */
-export type SlotState = "ready" | "missing" | "in_progress";
+ * uploaded into the slot waiting for confirmation, a revised material, or a workbench pack being worked.
+ * F35 Contract T: the slot is two halves, the image and the copy. `copy_only` = the ad's selected workbench
+ * copy is known but no file is in the slot yet (an upload carries the copy in and the slot is ready at once);
+ * `image_only` = a file is in the slot but its placement has no headline and no body (the picker,
+ * `chooseSlotCopy`, fills the other half). Copy never makes a slot ready on its own. */
+export type SlotState = "ready" | "missing" | "in_progress" | "copy_only" | "image_only";
+/** The copy half: the ad's selected workbench version (`workbench`, label 「工作檯第 N 版」) before any file, or the
+ * placement's effective copy once a file is in the slot (`placement`, label 已確認／待確認). */
+export interface SlotCopy {
+  source: "workbench" | "placement"; label: string;
+  headline: string | null; body: string | null; description: string | null;
+}
 export interface Slot {
   ad_id: string | null; entity_id: string | null; name: string; state: SlotState;
   /** A platform creative URL, or an authenticated same-origin user-asset path (see `isAuthThumbnail`). */
@@ -14,7 +24,13 @@ export interface Slot {
   confirmed: boolean;
   /** The open 「換掉這一則」 request on this slot's platform ad, if any. */
   replace_task_id: string | null;
+  /** `null` on an imported campaign and on a planned ad with neither a file nor a selected workbench copy. */
+  copy: SlotCopy | null;
+  /** The ad's workbench set (an `/app/…` path, see `internalHref`); `null` when the ad has no set. */
+  workbench_href: string | null;
 }
+/** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
+export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
 export interface SlotGroup { group_id: string | null; name: string; slots: Slot[] }
 export type ReplaceRequestLabel = "等素材工作檯" | "有候選圖" | "已採用";
 export interface ReplaceRequest {
@@ -34,6 +50,14 @@ export const getSlots = (brand: string, campaign: string, signal?: AbortSignal) 
  * (`confirmPlacement`); the confirmation assigns it. 409 `placement_copy_conflict` carries the current placement. */
 export const uploadIntoSlot = (brand: string, campaign: string, adId: string, body: SlotUpload, signal?: AbortSignal) =>
   assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/upload`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+
+/** The brand's workbench copy versions, for the picker on an `image_only` slot. */
+export const getSlotCopyOptions = (brand: string, campaign: string, signal?: AbortSignal) =>
+  assetRequest<{ options: SlotCopyOption[] }>(`${slotsPath(brand, campaign)}/copy-options`, { signal });
+/** Put one workbench copy version into a slot that already has a file: the placement takes the copy and the ad's
+ * name as purpose, is confirmed and assigned. 409 `slot_no_file` when the slot has no pending placement. */
+export const chooseSlotCopy = (brand: string, campaign: string, adId: string, body: { set_id: string; version_id: string }, signal?: AbortSignal) =>
+  assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
 
 /** A user-asset thumbnail is served behind the bearer token, so a bare `<img src>` cannot load it. */
 export const isAuthThumbnail = (url: string | null): url is string => !!url && url.startsWith(`${BASE}/`);
