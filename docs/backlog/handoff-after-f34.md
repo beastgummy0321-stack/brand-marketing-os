@@ -36,21 +36,20 @@ claim in code first (file:line below are as of `c4409a20`). Replaces `handoff-af
   changed type). Authorize→last merge ≈ 45 min, integrate ≈ 5 min.
 
 ## Drill-6 progress (report §3 table, 21 rows; #21 is a drill limitation, not a fix)
-Done 7／20: #7 #9 #10 #11 #12 #14 #18 — the whole red group of report §6 (1–3). Remaining 13: #1 #2 #3 #4 #5 #6 #8 #13
-#15 #16 #17 #20 and #19 (unverified in code).
+Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report §6 (1–3) plus #1／#2 (F35). Remaining 11: #3 #4
+#5 #6 #8 #13 #15 #16 #17 #20 and #19 (unverified in code).
 
 ## Next step (recommended order)
-1. **#1 文案與廣告格兩條路** — **carved as F35 on 2026-09-28** (rules in ads.md §6.39, queue `.work/ready/F35-I0[1-3].md`). Original note: `/dig` first; it is a design question, not a bug. Approved workbench copy never fills an
-   ad slot; 「只準備新文案」 is a dead end on a draft campaign (`change_control_launch.py:27`, `MaterialTaskEditor.tsx:72`).
-   Decide: does an approved copy set become a placement (`ads_asset_placement`) automatically, or does the slot pick from
-   approved sets? Where does the user see "this slot has copy but no image"? Same UI rule as F34: prototype first, one
-   hash per screen, lead compares side-by-sides. Start the dig by reading `docs/architecture/ads.md` §6.x on material
-   tasks／slots and `app/ads/slots.py`.
+1. **#1 文案與廣告格兩條路 — built in F35, user accepted 2026-09-28** (rules in ads.md §6.39). Slot = 圖｜文案 with
+   `copy_only`／`image_only` states; a slot upload carries the ad's selected workbench copy, fills the purpose and confirms
+   in one call; 「選一版文案」 on image-only slots; drafts hide 「只準備新文案」; 「開始做素材 →」 is the bar's primary on
+   投放結構. #2 (upload falling into 進階) is dissolved by the same change; #17 (「套用到全部」) remains for uploads through
+   the 自帶素材 fold only.
 2. **#16 商品重複建立** — small bug, can ride with the yellow batch: 「賣什麼與數字」 creates a second product when no
    `product_id` (`routes_offerings_api.py:119,143`; `OfferingsStep.tsx:114`); the scan checklist dedupes
    (`intake/state.py:303-331`), this step does not.
 3. **Yellow batch** (report §4, one feature of small fixes): #4 ask the per-sale target before showing 打平 559
-   (`budget.py:36`, `CapBlock.tsx:117`); #2／#17 slot copy inline + 「套用到全部」 (`AssetsBody.tsx:237`,
+   (`budget.py:36`, `CapBlock.tsx:117`); #17 「套用到全部」 in the 自帶素材 fold (#2 done in F35;
    `UserAssetPlacements.tsx:73`); #13 one data source for connections／home／成效／review (`home_overview.py:97`,
    `routes.py:825`, `review_evidence.py:243`); #15 「照上一期」 ÷ days with spend (`channels.py:113`); #8 audience hint
    in the manual handoff list (`handoff_data.py:66`, `manual_settings.py:12`); #20 one 「今天」 source
