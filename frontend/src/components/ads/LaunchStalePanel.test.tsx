@@ -6,7 +6,7 @@ import { ManualHandoffPanel } from "./ManualHandoffPanel";
 import { assignPlannedMaterial, getHandoff, getPlannedMaterials, HandoffRequestRejected, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchStale } from "@/lib/adsHandoffApi";
 import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
 
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org" }) }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsHandoffApi", async () => ({ ...await vi.importActual("@/lib/adsHandoffApi"), getHandoff: vi.fn(), reapproveLaunch: vi.fn(), revertLaunch: vi.fn(), getPlannedMaterials: vi.fn(), assignPlannedMaterial: vi.fn(), checkHandoff: vi.fn(), reportHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
 
