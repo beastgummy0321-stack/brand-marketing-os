@@ -199,6 +199,24 @@ class ExternalSyncTest(unittest.TestCase):
         )
         self.assertEqual(self.reader.calls[-1], ("list", {"after": "page2"}))
 
+    def test_monthly_tasks_only_for_a_reader_that_can_prove_a_month(self):
+        # The test reader has no `monthly_supported` (like MetaReader): it keeps its month task.
+        self.assertFalse(hasattr(self.reader, "monthly_supported"))
+        month = "monthly:" + settings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
+        job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        self.assertIn(month, job["tasks"])
+
+        self.reader.monthly_supported = lambda: False
+        other = setup_brand(self.conn)[1]
+        job = sync.request_sync(self.conn, self.org, other, "other", "account")
+        for _ in range(12):
+            sync.run_sync(self.org, other, job["id"])
+            job = repo.get_job(self.conn, self.org, other, job["id"])
+            if job["status"] not in {"pending", "running"}:
+                break
+        self.assertFalse([k for k in job["tasks"] if k.startswith("monthly:")])
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+
     def test_generic_adapter_import_and_source_observations(self):
         self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
         first = repo.import_cached(

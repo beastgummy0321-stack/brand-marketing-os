@@ -53,6 +53,11 @@ class SimulatedReader:
     def read_creatives(self, conn, org_id, brand_id, account, **kwargs) -> SourcePage:
         return SourcePage([])
 
+    def monthly_supported(self) -> bool:
+        # No account-month spend proof exists for a simulated account, so the sync job asks
+        # for no `monthly:` task (the month budget never lists this account: not in CHANNELS).
+        return False
+
     def read_monthly(self, conn, org_id, brand_id, account, *, start, end, cursor=None,
                      **kwargs) -> SourcePage:
         return SourcePage([])

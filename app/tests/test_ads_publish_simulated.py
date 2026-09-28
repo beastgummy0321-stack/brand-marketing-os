@@ -365,6 +365,9 @@ class ReReadThroughTheSyncPipelineTest(SimulatedPublishTestBase):
         window = (self.today - timedelta(days=29), self.today)
         job = self._run(*window)
 
+        # No month-spend proof exists for a simulated account: no monthly task, a clean job.
+        self.assertEqual(job["status"], "succeeded")
+        self.assertFalse([k for k in job["tasks"] if k.startswith("monthly:")])
         task = job["tasks"][f"{detail['id']}:observations:{window[0]}:{window[1]}"]
         self.assertEqual(task["status"], "succeeded")
         self.assertEqual(self._coverage(detail["id"]),
