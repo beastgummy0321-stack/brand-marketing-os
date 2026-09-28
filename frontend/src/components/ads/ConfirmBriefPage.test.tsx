@@ -1,5 +1,7 @@
 /** ConfirmBriefPage (F30-I05): wizard v10 step 2 「系統這樣理解」 — six fields, guessed ones marked, in-place edits
- * that PATCH one field, independent read failures, and 產生策略 as the only model call. */
+ * that PATCH one field, independent read failures, and 產生策略 as the only model call.
+ * F36-I04: the optional seventh chip 「每賣一筆最多花」 — empty by default with break-even as hint only, saved through
+ * `putTarget {basis:"own"}`, the campaign re-read afterwards. */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -8,11 +10,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail, CampaignFieldSources } from "@/lib/adsApi";
 import { generateStrategy, getCampaign, patchCampaign } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
+import { putTarget, type CapView } from "@/lib/adsTriageApi";
 import { getWizardOptions, patchAudienceHint, type WizardOptions } from "@/lib/adsWizardApi";
 import { ConfirmBriefPage } from "./ConfirmBriefPage";
 
 vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), patchCampaign: vi.fn(), generateStrategy: vi.fn() }));
 vi.mock("@/lib/adsLaunchApi", async (original) => ({ ...await original<object>(), fetchChannels: vi.fn() }));
+vi.mock("@/lib/adsTriageApi", async (original) => ({ ...await original<object>(), putTarget: vi.fn() }));
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), patchAudienceHint: vi.fn() }));
 
 const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)";
@@ -45,6 +49,13 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   };
 }
 const field = (key: string) => document.querySelector(`[data-field="${key}"]`) as HTMLElement;
+/** The prototype's numbers: a product with economics (售價 999, 打平 559), the cap not yet stated. */
+function capView(overrides: Partial<CapView> = {}): CapView {
+  return {
+    value: 559, basis: "break_even", own_value: null, break_even: 559, price: 999, product_id: "prd_2",
+    result_kind: "purchase", result_label: "購買", missing: [], revision: 3, ...overrides,
+  };
+}
 
 function renderPage() {
   return render(
@@ -65,10 +76,10 @@ beforeEach(() => {
 });
 
 describe("ConfirmBriefPage (F30-I05)", () => {
-  it("shows the six understood fields with their values; 主打／素材 are not shown before the strategy", async () => {
+  it("shows the six understood fields and the optional cap chip with their values; 主打／素材 are not shown before the strategy", async () => {
     renderPage();
     expect(await screen.findByText(LONG)).toBeTruthy();
-    for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾方向"]) expect(screen.getByText(label)).toBeTruthy();
+    for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾方向", "每賣一筆最多花"]) expect(screen.getByText(label)).toBeTruthy();
     expect(within(field("objective")).getByText("購買")).toBeTruthy();
     expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
     expect(within(field("budget")).getByText("NT$30,000")).toBeTruthy();
@@ -204,5 +215,116 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     expect(screen.getByRole("link", { name: "回到選商品與目標" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
     await user.click(screen.getByRole("button", { name: "進階" }));
     expect(screen.getByRole("link", { name: "先處理自帶素材與手動交接" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
+  });
+});
+
+describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () => {
+  it("is empty by default with break-even as a hint only, not marked as a guess; the bar says the cap falls back to break-even", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView() }));
+    renderPage();
+    await screen.findByText(LONG);
+    const chip = field("cap");
+    expect(within(chip).getByText("還沒填（選填）")).toBeTruthy();
+    expect(within(chip).getByText("先不填就用打平 NT$559：售價 999 扣成本、運費後的一筆利潤")).toBeTruthy();
+    expect(within(chip).queryByText("猜的，請確認")).toBeNull();
+    expect(chip.className).toContain("border-dashed");
+    expect(chip.className).not.toContain("border-grade-watch");
+    expect(screen.getByText("有 1 項是猜的・上限沒填會先用打平")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "產生策略 →" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("完成 saves through putTarget with basis own; the campaign is re-read and the chip shows the saved value", async () => {
+    vi.mocked(getCampaign)
+      .mockResolvedValueOnce(campaign({ cap: capView() }))
+      .mockResolvedValueOnce(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600, revision: 4 }) }));
+    vi.mocked(putTarget).mockResolvedValue({} as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    const chip = field("cap");
+    expect(chip.className).toContain("md:col-span-2");
+    expect(within(chip).getByText("填一個整數金額；留空＝先用打平 559")).toBeTruthy();
+    await user.type(within(chip).getByLabelText("每賣一筆最多花"), "600");
+    expect(within(chip).getByText("比打平 559 高 41・ROAS 參考 1.7")).toBeTruthy();
+    await user.click(within(chip).getByRole("button", { name: "完成" }));
+    expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 600, expected_revision: 3 });
+    expect(await within(field("cap")).findByText("NT$600")).toBeTruthy();
+    expect(within(field("cap")).getByText("比打平 559 高 41・ROAS 參考 1.7")).toBeTruthy();
+    expect(getCampaign).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
+    expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
+  });
+
+  it("「用打平」 fills the input with break-even; Enter saves it; a lower value reads 低", async () => {
+    vi.mocked(getCampaign)
+      .mockResolvedValueOnce(campaign({ cap: capView() }))
+      .mockResolvedValueOnce(campaign({ cap: capView({ value: 559, basis: "own", own_value: 559, revision: 4 }) }));
+    vi.mocked(putTarget).mockResolvedValue({} as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+    await user.type(input, "500");
+    expect(within(field("cap")).getByText("比打平 559 低 59・ROAS 參考 2.0")).toBeTruthy();
+    await user.click(within(field("cap")).getByRole("button", { name: "用打平 559" }));
+    expect(input.value).toBe("559");
+    await user.type(input, "{Enter}");
+    expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 559, expected_revision: 3 });
+    expect(await within(field("cap")).findByText("NT$559")).toBeTruthy();
+  });
+
+  it("an invalid amount disables 完成 with the message; Escape cancels without saving; an empty 完成 keeps the old value", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600 }) }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+    expect(input.value).toBe("600");
+    await user.clear(input);
+    await user.type(input, "0");
+    expect(within(field("cap")).getByText("請填大於 0 的整數金額")).toBeTruthy();
+    expect(within(field("cap")).getByRole("button", { name: "完成" }).hasAttribute("disabled")).toBe(true);
+    await user.clear(input);
+    await user.click(within(field("cap")).getByRole("button", { name: "完成" }));
+    expect(putTarget).not.toHaveBeenCalled();
+    expect(within(field("cap")).getByText("NT$600")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "{Escape}");
+    expect(putTarget).not.toHaveBeenCalled();
+    expect(within(field("cap")).queryByRole("textbox")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    await user.click(within(field("cap")).getByRole("button", { name: "取消" }));
+    expect(within(field("cap")).queryByRole("textbox")).toBeNull();
+  });
+
+  it("without a break-even there is no hint, no 用打平 button and no bar suffix; the ROAS part still shows with a price", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: null, basis: null, break_even: null, price: 999, missing: ["product_cost"] }) }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("cap")).getByText("還沒填（選填）")).toBeTruthy();
+    expect(within(field("cap")).queryByText(/先不填就用打平/)).toBeNull();
+    expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    expect(within(field("cap")).queryByRole("button", { name: /用打平/ })).toBeNull();
+    expect(within(field("cap")).getByText("填一個整數金額")).toBeTruthy();
+    await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "500");
+    expect(within(field("cap")).getByText("ROAS 參考 2.0")).toBeTruthy();
+  });
+
+  it("keeps the editor open with the error when the target save fails", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView() }));
+    vi.mocked(putTarget).mockRejectedValue(new Error("這個活動的上限剛被更新。"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
+    await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "600{Enter}");
+    expect(await screen.findByText("這個活動的上限剛被更新。")).toBeTruthy();
+    expect(within(field("cap")).getByRole("textbox")).toBeTruthy();
+    expect(getCampaign).toHaveBeenCalledTimes(1);
   });
 });
