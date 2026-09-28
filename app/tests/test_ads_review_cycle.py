@@ -54,12 +54,44 @@ class ReviewCycleTest(unittest.TestCase):
         )
         self.end = settings.today_for_org(self.conn, org_id=self.org) - timedelta(days=1)
         self.start = self.end - timedelta(days=2)
+        # F36-I06: evidence refuses a window with unsynced days (same coverage rule triage grades
+        # with), so the fixture carries the observations coverage a clean sync would have
+        # recorded -- broad enough for every window below; the gate tests narrow it themselves.
+        # Inlined (not `self.set_coverage`): the monitor/retry tests borrow this setUp alone.
+        external_repository.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            section="observations",
+            state={
+                "last_success_at": db.now_utc().isoformat(),
+                "coverage": {
+                    "start": (self.end - timedelta(days=90)).isoformat(),
+                    "end": self.end.isoformat(),
+                },
+            },
+        )
         self.fake = providers.FakeProvider()
         self.fake.name = "anthropic"
         patch.object(review_rounds, "PROVIDER", self.fake).start()
         patch.object(providers, "resolve_model", return_value="claude-haiku-4-5").start()
         self.enqueue = patch.object(review_jobs, "enqueue").start()
         self.addCleanup(patch.stopall)
+        self.conn.commit()
+
+    def set_coverage(self, start, end):
+        external_repository.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            section="observations",
+            state={
+                "last_success_at": db.now_utc().isoformat(),
+                "coverage": {"start": start.isoformat(), "end": end.isoformat()},
+            },
+        )
         self.conn.commit()
 
     def observation(
@@ -545,6 +577,40 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertNotEqual(
             client.get(base.replace(self.brand, "another-brand") + "/reviews").status_code, 200
         )
+
+    def test_unsynced_day_inside_window_or_prior_period_is_refused(self):
+        self.observation()
+        prior_start = self.start - timedelta(days=3)
+        # Last day of the window never synced: refused, and the refusal names that day.
+        self.set_coverage(prior_start, self.end - timedelta(days=1))
+        with self.assertRaisesRegex(
+            ValueError,
+            "觀察期間（含前期）有 1 天還沒讀到平台資料："
+            + self.end.strftime("%m/%d")
+            + "；先重新讀取平台，或改選期間。",
+        ):
+            self.request()
+        # A gap only in the equal-length prior period is still a gap the comparison rests on.
+        self.set_coverage(self.start, self.end)
+        with self.assertRaisesRegex(ValueError, "有 3 天還沒讀到平台資料"):
+            self.request()
+        # More than five missing days: the first five are listed, then an ellipsis.
+        self.set_coverage(prior_start - timedelta(days=60), prior_start - timedelta(days=30))
+        listed = "、".join((prior_start + timedelta(days=i)).strftime("%m/%d") for i in range(5))
+        with self.assertRaisesRegex(ValueError, f"有 6 天還沒讀到平台資料：{listed}…；"):
+            self.request()
+        # Refused like the date guards: nothing was recorded.
+        workspace = review_rounds.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["reviews"], [])
+
+    def test_gap_outside_the_window_passes_and_window_reports_no_missing_days(self):
+        self.observation()
+        prior_start = self.start - timedelta(days=3)
+        # Coverage exactly the window plus its prior period; everything before it never synced.
+        self.set_coverage(prior_start, self.end)
+        row = self.request()
+        self.assertEqual(row["evidence_json"]["window"]["missing_days"], [])
+        self.assertEqual(row["evidence_json"]["current"]["days_present"], 1)
 
     def test_window_limit_is_thirty_one_complete_days(self):
         self.observation()

@@ -240,6 +240,22 @@ def snapshot(
         raise ValueError("觀察結束日於來源帳戶時區尚未完整結束，請改選更早的日期。")
     prior_end = start - timedelta(days=1)
     prior_start = start - timedelta(days=(end - start).days + 1)
+    # F36-I06 (drill-6 #13, ruling C): an unsynced day is missing evidence, not "no row". The
+    # rows read below cannot tell the two apart, so the window (current AND its equal-length
+    # prior period) must sit inside the campaign's recorded observations sync coverage -- the
+    # same rule `triage._window_covered` grades with, refused here like the date guards above.
+    # Lazy import: `triage` imports this module for `aggregate`.
+    from app.ads import triage
+
+    missing = triage._missing_days(triage._coverage(campaign), prior_start, end)
+    if missing:
+        listed = "、".join(date.fromisoformat(day).strftime("%m/%d") for day in missing[:5]) + (
+            "…" if len(missing) > 5 else ""
+        )
+        raise ValueError(
+            f"觀察期間（含前期）有 {len(missing)} 天還沒讀到平台資料：{listed}；"
+            "先重新讀取平台，或改選期間。"
+        )
     rows = conn.execute(
         "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
         "AND entity_id=%s AND day BETWEEN %s AND %s ORDER BY day,id LIMIT 2001",
@@ -399,6 +415,8 @@ def snapshot(
             "previous_end": prior_end,
             "timezone": timezone,
             "org_timezone": str(settings.org_timezone(conn, org_id=org)),
+            # Always empty here: a window with unsynced days was refused above (F36-I06).
+            "missing_days": [],
         },
         "current": current,
         "previous": previous,
