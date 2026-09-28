@@ -86,3 +86,18 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
 (the 6-hour throttle `runtime._due` uses the real clock). Browser dates do not move: tell personas to set review
 windows explicitly. Launch configs in `.claude/launch.json`: `drill-backend` (stand-in server on 8710), `prototype`
 (static server for `.harness/scratch/prototype` on 8741).
+
+## #13-B dig rulings (2026-09-28) — one performance pipeline
+Root cause re-verified: after F32 readback (`handoff_check.py:426-446`) a real internal campaign feeds TWO pipelines —
+A: `app/meta/daily_pull` (03:00) → `meta_entity_spend` → user `POST …/ingest` → `ads_outcome_daily` (no coverage record;
+readers: PerformanceTab, closeout verdict, `budget_history`, `starting_point.loop_purchases`, `ab_pairs`, `experiments`,
+`visual_learning`, `simulation_recovery`); B: `external_sync` (05:00 + 重新讀取) → `ads_external_daily` + coverage
+(readers: home, workspace 14d, triage, review_evidence, month_*). Simulated campaigns only feed A.
+User rulings: (1) B is the only source; the simulated adapter registers `ads_external_entity` nodes and writes observations
+like a platform, `ads_outcome_daily` is retired (readers go through one read seam keyed by native id, as `ab_pairs._entities`
+already does); (2) 「更新成效」 becomes the same 「重新讀取平台」 action imported campaigns use; (3) closeout refuses when the
+campaign window has missing coverage days (same `triage._missing_days` rule as review), names them, offers 重新讀取; only
+after a re-read of that range ends `failed` may the user 跳過缺日結案 (verdict 看不出, missing days recorded). Also in this
+round: a never-synced campaign must not pass the review gate (F36 as-built gap), `ReviewWindow.missing_days` frontend type,
+`currentBudgetMonth()` 12 no-arg callers. Out of scope: `app/schedule` and `daily_pull` stay (cockpit reads
+`meta_entity_spend`); #15 account history keeps reading `meta_entity_spend` (B has no account-wide read).

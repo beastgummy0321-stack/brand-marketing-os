@@ -48,7 +48,7 @@ git history (retired F03 plan). Current visual references are in `docs/design/ad
    approved, sync state (`pending_manual` / `confirmed_manual` / `auto_synced`), platform ref,
    reversible by a reverse action. It replaces `campaign_period_budget_version`. Budget raises still
    pass through `app/core/approval.py` (`max_daily_amount` stays the brake).
-6. **Outcome attribution is by bound entity.** One `ads_outcome_daily` row per (entity, day), fed
+6. **Outcome attribution is by bound entity** (superseded by §6.41 once F37 lands: platform sync rows, no `ads_outcome_daily`). One `ads_outcome_daily` row per (entity, day), fed
    either by the Meta ingest (read `meta_entity_spend` through `app.meta.repository`) or by the
    simulated adapter. 重疊分帳 (ADR 0053's day-splitting between overlapping 檔期) does not come
    along; a campaign owns the entities bound to it.
@@ -1680,3 +1680,22 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   default — follow-up. A campaign with no recorded observations coverage (never synced) passes the review gate, as triage
   treats it. The manual adapter's 「受眾提示」 row is read through `db.current()` inside `describe(campaign)` (the adapter
   signature takes no connection). `ReviewWindow.missing_days` is on the payload but not yet in the frontend type.
+
+### 6.41 One performance pipeline（ruled 2026-09-28；planned as F37）
+- **The platform sync is the only performance source** (user ruling 1). `ads_external_daily` + the campaign's recorded
+  `external_sync.observations.coverage` feed every performance reader of internal and imported campaigns alike: the
+  performance tab, closeout, budget history, A/B pairs, experiments, visual learning, the strategy starting point, the home,
+  the workspace, triage and review. Internal campaigns map platform rows to local nodes through `ads_ad`/`ads_delivery_group
+  .external_id = ads_external_entity.native_id` (`outcome.rows`, adset rows = group grain). `POST …/ingest`,
+  `outcome.ingest_meta` and `ads_outcome_daily` are retired; `app/meta/daily_pull` → `meta_entity_spend` stays for the
+  schedule cockpit and the account-history base (§6.40 #15). Supersedes rule 6 of §0 and the "two tables never cross"
+  paragraph of §6.11.
+- **The simulated channel is a platform** (ruling 1): it registers an `ads_external_entity` chain (platform `simulated`,
+  account `sim`), writes observations and records coverage; `channels.external_reader("simulated")` re-reads the same
+  deterministic rows, so no reader branches on real／simulated.
+- **One refresh action** (ruling 2): the performance tab's button is 「重新讀取平台」 = `POST …/campaigns/{c}/sync`.
+- **Closeout refuses missing days** (ruling 3): the window `start_date … min(end_date, org yesterday)` must sit inside the
+  recorded coverage; otherwise 409 `coverage_missing` names the days and offers 重新讀取. `skip_missing` is accepted only
+  while the last observations read ended in error; the verdict is then 看不出 with the days recorded.
+- **Never synced is not covered** (ruling 4): review evidence refuses a campaign with no recorded coverage.
+- Prototype `.harness/scratch/prototype/f37-pipeline/index.html` (`#/perf`, `#/close`).
