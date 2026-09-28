@@ -830,10 +830,11 @@ def budget_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     `last_daily_budget` = 最近一個 `status='closed'` Campaign 的投放組日預算合計。用
     `coresettings.today_for_org` 而非機器的 `date.today()`（`app/core/settings.py:293`）。
 
-    F05-I11：這個品牌自己的迴圈（F37：`performance_rows` 同一條 group 粒度的平台列）沒有已結案的花費時，退回讀它綁的廣告
-    帳戶近 30 天真實花費（`app.ads.channels.account_spend_history`，平台名字只住在
-    `channels.py`）——「投放過但還沒在新迴圈裡結案」不等於「沒投放過」（演練四 V-13）。帳戶
-    也沒有花費才是誠實冷啟動。"""
+    F05-I11：這個品牌自己的迴圈（F37：`performance_rows` 同一條 group
+    粒度的平台列）沒有已結案的花費時，退回讀它綁的廣告帳戶近 30 天真實花費
+    （`app.ads.channels.account_spend_history`，平台名字只住在 `channels.py`）——
+    「投放過但還沒在新迴圈裡結案」不等於「沒投放過」（演練四 V-13）。帳戶也沒有花費才是
+    誠實冷啟動。"""
     today = coresettings.today_for_org(conn, org_id=org_id)
     since = today - timedelta(days=30)
     daily_rows = conn.execute(

@@ -38,6 +38,15 @@ def bind_platform(conn, org_id, brand_id, campaign_detail) -> dict:
     campaign_native = detail.get("external_id") or f"tc_{campaign_id}"
 
     def register(kind, native_id, name, parent=None):
+        # A node already on a platform of this campaign keeps that entity (one native id, one
+        # entity -- a second copy would make the binding ambiguous).
+        existing = conn.execute(
+            "SELECT id FROM ads_external_entity WHERE org_id = %s AND brand_id = %s"
+            " AND campaign_id = %s AND native_kind = %s AND native_id = %s",
+            (org_id, brand_id, campaign_id, kind, native_id),
+        ).fetchall()
+        if len(existing) == 1:
+            return existing[0]["id"]
         fields = {
             "platform": PLATFORM, "source_account": SOURCE_ACCOUNT, "native_kind": kind,
             "native_id": native_id, "name": name, "native_status": "ACTIVE",
@@ -73,19 +82,29 @@ def seed_day(conn, org_id, brand_id, campaign_id, kind, local_id, day: date, *, 
              impressions=0, clicks=0, purchases=None, revenue=None, source="test",
              attribution_key=ATTRIBUTION_KEY, currency="TWD") -> dict:
     """One observation of local node `local_id` (`kind` "group"/"ad") on `day`, written the way
-    a platform read writes it. The node must be bound (`bind_platform`)."""
-    node = conn.execute(
-        f"SELECT external_id FROM {_TABLE[kind]}"  # noqa: S608 — module constant
-        " WHERE org_id = %s AND brand_id = %s AND id = %s",
-        (org_id, brand_id, local_id),
-    ).fetchone()
-    if node is None or not node["external_id"]:
-        raise ValueError("node_not_bound")
-    entity = conn.execute(
-        "SELECT id FROM ads_external_entity WHERE org_id = %s AND brand_id = %s"
-        " AND campaign_id = %s AND native_kind = %s AND native_id = %s",
-        (org_id, brand_id, campaign_id, _SCOPE[kind], node["external_id"]),
-    ).fetchone()
+    a platform read writes it. A node not yet on the test platform is bound first
+    (`bind_platform` over its whole campaign)."""
+
+    def lookup():
+        node = conn.execute(
+            f"SELECT external_id FROM {_TABLE[kind]}"  # noqa: S608 — module constant
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (org_id, brand_id, local_id),
+        ).fetchone()
+        if node is None:
+            raise ValueError("node_unknown")
+        if not node["external_id"]:
+            return None
+        return conn.execute(
+            "SELECT id FROM ads_external_entity WHERE org_id = %s AND brand_id = %s"
+            " AND campaign_id = %s AND native_kind = %s AND native_id = %s",
+            (org_id, brand_id, campaign_id, _SCOPE[kind], node["external_id"]),
+        ).fetchone()
+
+    entity = lookup()
+    if entity is None:
+        bind_platform(conn, org_id, brand_id, campaign_id)
+        entity = lookup()
     if entity is None:
         raise ValueError("entity_not_registered")
     return external_repository.upsert_observation(conn, org_id, brand_id, campaign_id, {

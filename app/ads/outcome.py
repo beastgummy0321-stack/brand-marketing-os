@@ -108,14 +108,15 @@ def _coverage(conn: _AnyConn, org_id: str, campaign: dict) -> dict:
     yesterday = coresettings.today_for_org(conn, org_id=org_id) - timedelta(days=1)
     end = campaign.get("end_date")
     end = min(end, yesterday) if end is not None else yesterday
-    has_window = start is not None and end >= start
-    gap = triage.coverage_gap(campaign, start, end) if has_window else {
-        **triage.coverage_gap(campaign, end, end), "missing_days": [],
-    }
+    if start is None or end < start:
+        never_synced = triage.coverage_gap(campaign, end, end)["never_synced"]
+        return {"start": None, "end": None, "expected": 0, "missing": 0, "missing_days": [],
+                "never_synced": never_synced}
+    gap = triage.coverage_gap(campaign, start, end)
     return {
-        "start": start.isoformat() if has_window else None,
-        "end": end.isoformat() if has_window else None,
-        "expected": (end - start).days + 1 if has_window else 0,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "expected": (end - start).days + 1,
         "missing": len(gap["missing_days"]),
         "missing_days": gap["missing_days"],
         "never_synced": gap["never_synced"],

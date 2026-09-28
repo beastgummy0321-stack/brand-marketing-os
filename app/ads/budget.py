@@ -8,10 +8,10 @@ nothing here reads a rule card (ruling 4: AI only pre-fills, the arithmetic is o
 
 `history` design note (no other caller exists yet, so this is this issue's call): the last-30-day
 median CPA and the previous campaign's daily budget are aggregates over `ads_external_daily`
-through `repository.performance_rows`'s join (`repository.budget_history` computes them once); `scenarios()` takes the
-result as `history` (`None`/falsy when the brand has no settled spend yet) instead of querying it
-itself, so this file stays a pure dict-in/dict-out calculator that a unit test can drive without a
-database.
+through `repository.performance_rows`'s join (`repository.budget_history` computes them once);
+`scenarios()` takes the result as `history` (`None`/falsy when the brand has no settled spend
+yet) instead of querying it itself, so this file stays a pure dict-in/dict-out calculator that
+a unit test can drive without a database.
 """
 
 import math

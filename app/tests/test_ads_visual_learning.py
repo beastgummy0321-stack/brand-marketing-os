@@ -17,6 +17,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.shared import web
+from app.tests.fixtures.ads_external import outcome_seed
 
 ACTOR = "測試員"
 
@@ -67,23 +68,19 @@ class VisualLearningTestBase(unittest.TestCase):
 
     def _group_outcome(self, campaign_id: str, group_id: str, day, *, spend: float,
                         purchases: int, revenue: float) -> None:
-        self.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
-            " VALUES (%s, %s, %s, %s, 'group', %s, %s, %s, 100, 10, %s, %s, 'simulated')",
-            (coredb.new_id("ado"), self.org_id, self.brand_id, campaign_id, group_id, day,
-             spend, purchases, revenue),
+        outcome_seed.seed_day(
+            self.conn, self.org_id, self.brand_id, campaign_id, "group", group_id, day,
+            spend=spend, impressions=100, clicks=10, purchases=purchases, revenue=revenue,
+            source="simulated",
         )
         self.conn.commit()
 
     def _ad_outcome(self, campaign_id: str, ad_id: str, day, *, spend: float, purchases: int,
                      revenue: float) -> None:
-        self.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
-            " VALUES (%s, %s, %s, %s, 'ad', %s, %s, %s, 100, 10, %s, %s, 'simulated')",
-            (coredb.new_id("ado"), self.org_id, self.brand_id, campaign_id, ad_id, day,
-             spend, purchases, revenue),
+        outcome_seed.seed_day(
+            self.conn, self.org_id, self.brand_id, campaign_id, "ad", ad_id, day,
+            spend=spend, impressions=100, clicks=10, purchases=purchases, revenue=revenue,
+            source="simulated",
         )
         self.conn.commit()
 

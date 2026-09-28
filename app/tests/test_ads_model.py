@@ -1,7 +1,7 @@
 """app/tests/test_ads_model.py — F03-I01: the Campaign object exists as rows and can be read
 (ARCHITECTURE.md §0/§6). Falsifiers for the shared contract: a campaign with groups and ads
 round-trips through `campaign_detail`, brand isolation never leaks a campaign across brands,
-`ads_outcome_daily`'s unique key rejects a duplicate (entity, day), an ad has no budget column,
+the same node and day read twice stays one performance row, an ad has no budget column,
 and `budget_total` is derived from group daily budgets while `budget_planned` never changes
 underneath it.
 
@@ -11,14 +11,17 @@ one write this issue owns.
 """
 
 import unittest
+from datetime import date
 
 import psycopg
 
 import app.shared.web as web
+from app.ads import outcome
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core.db import new_id
+from app.tests.fixtures.ads_external import outcome_seed
 
 ACTOR = "測試員"
 
@@ -139,25 +142,32 @@ class BrandIsolationTest(_AdsModelTestBase):
 
 
 class OutcomeDailyUniqueTest(_AdsModelTestBase):
-    def test_duplicate_entity_day_rejected(self):
+    def test_duplicate_entity_day_is_one_row(self):
+        """F37: a performance row is a platform observation; the same node and day read twice
+        is the same row (`ads_external_daily`'s unique key via upsert), never two."""
         campaign = ads_repo.create_campaign(
             web.conn, self.org_id, self.brand_id, _campaign_payload(), created_by=ACTOR,
         )
         group_id = self._insert_group(campaign["id"], daily_budget=200)
         web.conn.commit()
 
-        def _insert_outcome():
-            web.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, source) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("ado"), self.org_id, self.brand_id, campaign["id"], "group",
-                 group_id, "2026-11-01", 100, "simulated"),
-            )
-
-        _insert_outcome()
+        for spend in (100, 120):
+            outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, campaign["id"], "group",
+                                  group_id, date(2026, 11, 1), spend=spend)
         web.conn.commit()
+
+        rows = outcome.rows(web.conn, self.org_id, self.brand_id, campaign["id"], "group")
+        self.assertEqual([(r["day"], float(r["spend"])) for r in rows],
+                         [(date(2026, 11, 1), 120.0)])
         with self.assertRaises(psycopg.errors.UniqueViolation):
-            _insert_outcome()
+            web.conn.execute(
+                "INSERT INTO ads_external_daily (id, org_id, brand_id, campaign_id, entity_id,"
+                " day, metric_scope, attribution_key, currency, spend, source)"
+                " SELECT %s, org_id, brand_id, campaign_id, entity_id, day, metric_scope,"
+                " attribution_key, currency, spend, source FROM ads_external_daily"
+                " WHERE campaign_id = %s LIMIT 1",
+                (new_id("aed"), campaign["id"]),
+            )
         web.conn.rollback()
 
 
@@ -217,27 +227,17 @@ class NoGroupsMeansNoTotalTest(_AdsModelTestBase):
 
 class OutcomeTotalsGroupOnlyTest(_AdsModelTestBase):
     def test_campaign_total_sums_group_rows_only_not_ad_rows(self):
-        """`entity_kind = 'ad'` rows exist for per-ad 花費占比 and must never be summed into
+        """Ad-grain rows exist for per-ad 花費占比 and must never be summed into
         the campaign total — summing both levels double-counts (review fix 1)."""
         campaign = ads_repo.create_campaign(
             web.conn, self.org_id, self.brand_id, _campaign_payload(), created_by=ACTOR,
         )
         group_id = self._insert_group(campaign["id"], daily_budget=200)
         ad_id = self._insert_ad(campaign["id"], group_id)
-        web.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, purchases, revenue, source)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("ado"), self.org_id, self.brand_id, campaign["id"], "group",
-             group_id, "2026-11-01", 100, 2, 1000, "simulated"),
-        )
-        web.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, purchases, revenue, source)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (new_id("ado"), self.org_id, self.brand_id, campaign["id"], "ad",
-             ad_id, "2026-11-01", 40, 1, 400, "simulated"),
-        )
+        outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, campaign["id"], "group",
+                              group_id, date(2026, 11, 1), spend=100, purchases=2, revenue=1000)
+        outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, campaign["id"], "ad",
+                              ad_id, date(2026, 11, 1), spend=40, purchases=1, revenue=400)
         web.conn.commit()
 
         detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])

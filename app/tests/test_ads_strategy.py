@@ -23,6 +23,7 @@ from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import providers
 from app.meta import repository as meta_repo
+from app.tests.fixtures.ads_external import outcome_seed
 
 from .identity_test_helpers import mint_hs256
 
@@ -416,13 +417,9 @@ class BudgetHistoryTest(StrategyTestBase):
              "bound"),
         )
         for day, spend, purchases in (("2026-10-01", 400, 2), ("2026-10-02", 600, 2)):
-            web.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, purchases, source) VALUES"
-                " (%s, %s, %s, %s, 'group', %s, %s, %s, %s, 'simulated')",
-                (f"ado_{day}", self.org_id, self.brand_id, closed["id"], group["id"], day,
-                 spend, purchases),
-            )
+            outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, closed["id"], "group",
+                                  group["id"], day, spend=spend, purchases=purchases,
+                                  source="simulated")
         web.conn.commit()
 
         history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
@@ -539,21 +536,13 @@ class BudgetHistoryTest(StrategyTestBase):
             (f"ada_{tag}", self.org_id, self.brand_id, closed["id"], group["id"], "測試廣告",
              "bound"),
         )
-        web.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, purchases, source) VALUES"
-            " (%s, %s, %s, %s, 'group', %s, %s, %s, NULL, 'meta')",
-            (f"ado_{tag}_null", self.org_id, self.brand_id, closed["id"], group["id"],
-             "2026-10-01", 5000),
-        )
+        outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, closed["id"], "group",
+                              group["id"], "2026-10-01", spend=5000, purchases=None,
+                              source="meta")
         for day, spend, purchases in (("2026-10-02", 400, 2), ("2026-10-03", 600, 2)):
-            web.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, purchases, source) VALUES"
-                " (%s, %s, %s, %s, 'group', %s, %s, %s, %s, 'simulated')",
-                (f"ado_{tag}_{day}", self.org_id, self.brand_id, closed["id"], group["id"], day,
-                 spend, purchases),
-            )
+            outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, closed["id"], "group",
+                                  group["id"], day, spend=spend, purchases=purchases,
+                                  source="simulated")
         web.conn.commit()
 
         history = ads_repo.budget_history(web.conn, self.org_id, self.brand_id)
@@ -1205,13 +1194,9 @@ class StartingPointFreshBrandTest(StrategyTestBase):
              400),
         ).fetchone()
         for offset, spend, purchases in ((3, 400, 2), (2, 600, 2)):
-            web.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, purchases, source) VALUES"
-                " (%s, %s, %s, %s, 'group', %s, %s, %s, %s, 'simulated')",
-                (f"ado_{tag}_{offset}", self.org_id, self.brand_id, closed["id"], group["id"],
-                 today - timedelta(days=offset), spend, purchases),
-            )
+            outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, closed["id"], "group",
+                                  group["id"], today - timedelta(days=offset), spend=spend,
+                                  purchases=purchases, source="simulated")
         web.conn.commit()
 
         prompt, detail = self._prompt(_VALID_REPLY)

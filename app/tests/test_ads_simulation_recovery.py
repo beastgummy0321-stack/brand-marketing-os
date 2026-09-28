@@ -127,8 +127,6 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         self.start()
         with self.assertRaisesRegex(ValueError, "隔離模擬"):
             manual.publish(*self.args, actor="tester")
-        with self.assertRaisesRegex(ValueError, "隔離模擬"):
-            outcome.ingest_meta(*self.args, start=self.today, end=self.today)
 
     def test_old_random_data_is_rejected_before_brand_is_marked(self):
         simulated.publish(*self.args, actor="tester")

@@ -16,6 +16,7 @@ from app.ads import external_repository as external
 from app.ads import repository as ads_repo
 from app.core.db import jsonb, new_id
 from app.shared import web
+from app.tests.fixtures.ads_external import outcome_seed
 
 from .test_ads_publish_simulated import ACTOR, SimulatedPublishTestBase
 
@@ -71,6 +72,17 @@ class AbPairsTest(SimulatedPublishTestBase):
             external_name=ad["name"], external_status="ACTIVE",
         )
 
+    def ambiguous(self, ad, native):
+        """F37: rows reach an ad only through its binding (Contract P), so an ad that loses its
+        platform id has no rows and its pair is not judged. The loser that is still read but
+        cannot be paused is the ambiguous one: a second platform entity with the same native id
+        (`ab_pairs._entities` maps only an unambiguous binding)."""
+        return external.upsert_entity(
+            web.conn, self.org_id, self.brand_id, self.cid,
+            {"platform": "other", "source_account": "account", "native_id": native,
+             "native_kind": "ad", "native_status": "ACTIVE"},
+        )
+
     def fill(self, ad, *, days=7, spend=100.0, purchases=2, skip=(), untracked=()):
         """`days` days ending yesterday. `purchases` is per day, or a list (oldest first); `skip`
         and `untracked` are offsets back from yesterday (0 = yesterday)."""
@@ -80,14 +92,10 @@ class AbPairsTest(SimulatedPublishTestBase):
                 continue
             day = self.yesterday - timedelta(days=offset)
             count = None if offset in untracked else per_day[days - 1 - offset]
-            web.conn.execute(
-                "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-                " entity_id, day, spend, impressions, clicks, purchases, revenue, currency,"
-                " source) VALUES (%s,%s,%s,%s,'ad',%s,%s,%s,1000,10,%s,NULL,'TWD','meta')"
-                " ON CONFLICT (entity_kind, entity_id, day) DO UPDATE SET spend=excluded.spend,"
-                " purchases=excluded.purchases",
-                (new_id("ado"), self.org_id, self.brand_id, self.cid, ad["id"], day, spend,
-                 count),
+            outcome_seed.seed_day(
+                web.conn, self.org_id, self.brand_id, self.cid, "ad", ad["id"], day,
+                spend=spend, impressions=1000, clicks=10, purchases=count, revenue=None,
+                source="meta",
             )
         web.conn.commit()
 
@@ -244,7 +252,8 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.fill(self.a)
         self.fill(self.b, spend=80.0, skip=(3,))
         web.conn.execute(
-            "UPDATE ads_outcome_daily SET source='simulated' WHERE entity_id=%s", (self.b["id"],)
+            "UPDATE ads_external_daily SET source='simulated' WHERE entity_id=%s",
+            (self.entities[self.b["id"]]["id"],),
         )
         web.conn.commit()
         self.assertEqual(self.pair()["state"], "unreadable")
@@ -313,7 +322,13 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual(ab["state"], "judged")
         self.assertEqual(ac["state"], "no_difference")
         self.assertIn(self.a["id"], (ac["a"]["ad_id"], ac["b"]["ad_id"]))
-        self.assertIsNone((ac["a"] if ac["a"]["ad_id"] == c["id"] else ac["b"])["entity_id"])
+        # `fill` put c on the test platform (a performance row exists only for a bound ad).
+        c_entity = web.conn.execute(
+            "SELECT e.id FROM ads_external_entity e JOIN ads_ad a ON a.external_id = e.native_id"
+            " WHERE a.id = %s AND e.campaign_id = %s", (c["id"], self.cid),
+        ).fetchone()
+        self.assertEqual((ac["a"] if ac["a"]["ad_id"] == c["id"] else ac["b"])["entity_id"],
+                         c_entity["id"])
 
     def test_a_hook_edited_after_dispatch_still_pairs_on_the_dispatch_hook(self):
         # F31-I05 Contract O: each set was dispatched with the ad's hook at that time; editing B
@@ -347,12 +362,9 @@ class AbPairsTest(SimulatedPublishTestBase):
 
     def test_budget_hit_days_do_not_stop_an_automatic_pair(self):
         # Real delivery spends the whole daily budget (500) every day -- still judged.
-        web.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, purchases, source) VALUES (%s,%s,%s,%s,'group',%s,%s,500,"
-            "28,'meta')",
-            (new_id("ado"), self.org_id, self.brand_id, self.cid, self.group["id"],
-             self.yesterday),
+        outcome_seed.seed_day(
+            web.conn, self.org_id, self.brand_id, self.cid, "group", self.group["id"],
+            self.yesterday, spend=500, purchases=28, source="meta",
         )
         self.judged()
         self.assertEqual(self.pair()["state"], "judged")
@@ -399,12 +411,18 @@ class AbPairsTest(SimulatedPublishTestBase):
         with self.assertRaises(ab_pairs.NotJudged):
             self.pause()
         self.judged()
+        self.ambiguous(self.a, "n-a")
+        web.conn.commit()
+        self.assertEqual(self.pair()["state"], "judged")
+        self.assertIsNone(self.pair()["a"]["entity_id"])
+        with self.assertRaises(ab_pairs.LoserUnbound):
+            self.pause()
+        # An ad that lost its platform id has no performance rows at all -> not judged.
         web.conn.execute(
             "UPDATE ads_ad SET external_id=NULL WHERE id=%s", (self.a["id"],)
         )
         web.conn.commit()
-        self.assertIsNone(self.pair()["a"]["entity_id"])
-        with self.assertRaises(ab_pairs.LoserUnbound):
+        with self.assertRaises(ab_pairs.NotJudged):
             self.pause()
         self.assertEqual(self.ab_sets(), [])
 
@@ -464,13 +482,12 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual(unknown.status_code, 404, unknown.text)
         self.assertEqual(unknown.json()["error"]["code"], "ab_pair_unknown")
         self.judged()
-        web.conn.execute(
-            "UPDATE ads_ad SET external_id=NULL WHERE id=%s", (self.a["id"],)
-        )
+        duplicate = self.ambiguous(self.a, "n-a")
         web.conn.commit()
         unbound = client.post(url, json={"operation_id": "op-3"})
         self.assertEqual(unbound.status_code, 409, unbound.text)
         self.assertEqual(unbound.json()["error"]["code"], "ab_loser_unbound")
+        web.conn.execute("DELETE FROM ads_external_entity WHERE id=%s", (duplicate["id"],))
         self.bind(self.a, "n-a")
         web.conn.commit()
         created = client.post(url, json={"operation_id": "op-4"})
