@@ -2,18 +2,43 @@
  * 「進階：舊版成效與檢討」 fold, the two independent reads (campaign, workspace progress) and the step targets. The tab
  * bodies are stubs: each has its own tests. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { assetHandoff, type Placement } from "@/lib/adsUserAssetsApi";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
-import { completeExternalView } from "@/lib/adsExternalApi";
+import { completeExternalView, existingCampaigns } from "@/lib/adsExternalApi";
 import { getCampaignWorkspace, type CampaignWorkspace as WorkspaceRead } from "@/lib/adsWorkspaceApi";
 import type { StepTarget } from "./nextStep";
 import { CampaignWorkspace } from "./CampaignWorkspace";
+import { AssetHandoffPanel } from "./AssetHandoffPanel";
+import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ brands: [], scope: "test" }) }));
+// F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
+// timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
+let orgTimezone = "Asia/Taipei";
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    scope: "user:org", brands: [], brandsLoading: false, brandsError: null, refreshBrands: () => {},
+    identity: {
+      user: { id: "usr_1", email: "a@example.com" },
+      org: { id: "org_test", name: "測試組織", kind: "personal", role: "owner", timezone: orgTimezone, today: "2020-01-01" },
+      orgs: [],
+    },
+  }),
+}));
+// 2026-02-28 10:30Z: Kiritimati (UTC+14) is already 2026-03-01 00:30; UTC and the test runner zone
+// (Asia/Taipei, UTC+8 = 18:30) are still on 2026-02-28. Only `Date` is faked so timers stay real.
+const KIRITIMATI_INSTANT = new Date("2026-02-28T10:30:00Z");
+function useKiritimati() {
+  beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(KIRITIMATI_INSTANT); });
+  afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
+}
 vi.mock("@/lib/adsApi", () => ({ getCampaign: vi.fn() }));
 vi.mock("@/lib/adsWorkspaceApi", () => ({ getCampaignWorkspace: vi.fn() }));
-vi.mock("@/lib/adsExternalApi", () => ({ completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn() }));
+vi.mock("@/lib/adsExternalApi", () => ({ completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), existingCampaigns: vi.fn() }));
+// F36-I09: `AssetHandoffPanel` and `currentBudgetMonth` have no suite of their own; this is the nearest one (issue Done #4).
+vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), assetHandoff: vi.fn(), bindingAction: vi.fn(), bindingCandidates: vi.fn(), versionMetrics: vi.fn() }));
+vi.mock("./AuthAssetMedia", () => ({ AuthAssetMedia: () => null }));
 let go: ((t: StepTarget) => void) | null = null;
 vi.mock("./workspace/OverviewBody", () => ({
   capOf: () => null,
@@ -147,4 +172,22 @@ it("'publish' on a campaign that cannot publish (imported) opens the assets tab 
   go!("publish");
   expect(await screen.findByText("共用素材")).toBeTruthy();
   expect(screen.getByTestId("where").textContent).toBe("?tab=assets");
+});
+
+describe("F36-I09 組織時鐘：交接面板與月預算月份", () => {
+  useKiritimati();
+  const placement: Placement = { id: "p1", revision: 1, is_current: true, asset_id: "asset1", filename: "p1.png", mime_type: "image/png", asset_status: "ready", asset_error: null, copy_fields: { headline: "原標題" }, suggested_copy: {}, purpose: "產品介紹", destination_entity_id: null, start_date: null, end_date: null, status: "pending", pending_reason: "尚待確認安排", required: true, confirmed_at: null, suggestion_batch_id: null };
+  it("版本成效日期預設是組織的最近 30 天（UTC+14 已是 3/1），不再是 UTC 的今天", async () => {
+    vi.mocked(existingCampaigns).mockResolvedValue({ sources: [] } as unknown as Awaited<ReturnType<typeof existingCampaigns>>);
+    vi.mocked(assetHandoff).mockResolvedValue({ original_copy: {}, suggested_copy: {}, effective_copy: {}, tracking_name: "MOS-p1-v1", notice: "內部確認不代表已上架", destination_entity_id: null, download_url: "/api/private", purpose: "產品介紹", start_date: null, end_date: null, bindings: [] });
+    render(<MemoryRouter><AssetHandoffPanel brandId="b" campaignId="c" placement={placement} readOnly={false} /></MemoryRouter>);
+    await screen.findByText("內部確認不代表已上架");
+    expect((screen.getByLabelText("版本成效開始日") as HTMLInputElement).value).toBe("2026-01-31");
+    expect((screen.getByLabelText("版本成效結束日") as HTMLInputElement).value).toBe("2026-03-01");
+  });
+  it("currentBudgetMonth 依組織時區取月份：UTC+14 已是 2026-03，台北還在 2026-02", () => {
+    expect(currentBudgetMonth("Pacific/Kiritimati")).toBe("2026-03");
+    expect(currentBudgetMonth("Asia/Taipei")).toBe("2026-02");
+    expect(currentBudgetMonth()).toBe("2026-02");
+  });
 });

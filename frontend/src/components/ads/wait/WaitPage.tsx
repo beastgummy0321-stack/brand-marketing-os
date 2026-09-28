@@ -9,6 +9,7 @@ import { listCampaigns, type CampaignSyncState } from "@/lib/adsApi";
 import { getTriage, type TriageItem } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { getConnections, type AdsConnections } from "@/lib/adsConnectionsApi";
+import { useOrgClock } from "@/lib/orgClock";
 import { ActionBar, Chip, DayTiles, ResultHero, TodoRow } from "../patterns";
 
 /** 本機日曆日期小工具（同 `connections/DataConnectionsPage.tsx` 的先例，各自留一份，見那個
@@ -26,10 +27,6 @@ function addDaysLocal(iso: string, days: number): string {
   const dt = new Date(y, m - 1, d);
   dt.setDate(dt.getDate() + days);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-}
-function todayLocalString(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 function last7Days(endIso: string): string[] {
   const days: string[] = [];
@@ -136,6 +133,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   const [busy, setBusy] = useState(false);
   const [syncId, setSyncId] = useState<string | null>(null);
   const [syncActionError, setSyncActionError] = useState<string | null>(null);
+  const clock = useOrgClock(); // F36-I09 (ruling G): the tiles end on the org's today when coverage is unknown
   const lifetime = useRef(new AbortController());
   useEffect(() => {
     lifetime.current = new AbortController();
@@ -259,7 +257,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
 
   const { campaignName, sync, coverage, missingDays, items, ordersMissing } = state;
   const rows = buildRows(brandId, sync, coverage, missingDays, items, ordersMissing);
-  const tiles = last7Days(coverage?.end ?? todayLocalString());
+  const tiles = last7Days(coverage?.end ?? clock.today);
   const missingSet = new Set(missingDays);
   const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatSyncTime(sync.last_success_at)}` : "尚未同步";
 

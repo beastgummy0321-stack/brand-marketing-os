@@ -17,7 +17,7 @@ import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
 import type { CampaignDetail } from "@/lib/adsApi";
 
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn(), errorMessageFrom: () => "error" }));
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));

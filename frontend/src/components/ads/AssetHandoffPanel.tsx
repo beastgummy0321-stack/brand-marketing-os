@@ -3,6 +3,7 @@ import { Button } from "@/components/layout/ui/button";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { existingCampaigns, type NativeEntity, type SourceAccount } from "@/lib/adsExternalApi";
 import { assetHandoff, bindingAction, bindingCandidates, versionMetrics, type AssetHandoff, type BindingCandidate, type Placement, type VersionMetrics } from "@/lib/adsUserAssetsApi";
+import { useOrgClock } from "@/lib/orgClock";
 import { AuthAssetMedia } from "./AuthAssetMedia";
 import { COPY_FIELDS } from "./UserAssetsLibrary";
 
@@ -11,8 +12,10 @@ function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = 
   const [sources, setSources] = useState<SourceAccount[]>([]); const [sourceIndex, setSourceIndex] = useState("");
   const [candidates, setCandidates] = useState<BindingCandidate[]>([]); const [cursor, setCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState(""); const [checked, setChecked] = useState(false); const [metrics, setMetrics] = useState<VersionMetrics | null>(null);
-  const [start, setStart] = useState(() => new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
-  const [end, setEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  // F36-I09 (ruling G): version-metrics window defaults to the org's last 30 days (was UTC).
+  const clock = useOrgClock();
+  const [start, setStart] = useState(() => clock.shift(-29));
+  const [end, setEnd] = useState(() => clock.today);
   const lifetime = useRef(new AbortController());
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
   async function load(signal: AbortSignal) { const result = await assetHandoff(brandId, campaignId, p); if (!signal.aborted) setHandoff(result); }

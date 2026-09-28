@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useSearchParams } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as reviews from "@/lib/adsReviewApi";
 import * as changes from "@/lib/adsChangeApi";
 import type { NativeEntity } from "@/lib/adsExternalApi";
@@ -10,6 +10,26 @@ import { ReviewPanel } from "./ReviewPanel";
 import { ChangeControl } from "./ChangeControl";
 
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
+// F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
+// timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
+let orgTimezone = "Asia/Taipei";
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    scope: "user:org", brands: [], brandsLoading: false, brandsError: null, refreshBrands: () => {},
+    identity: {
+      user: { id: "usr_1", email: "a@example.com" },
+      org: { id: "org_test", name: "測試組織", kind: "personal", role: "owner", timezone: orgTimezone, today: "2020-01-01" },
+      orgs: [],
+    },
+  }),
+}));
+// 2026-02-28 10:30Z: Kiritimati (UTC+14) is already 2026-03-01 00:30; UTC and the test runner zone
+// (Asia/Taipei, UTC+8 = 18:30) are still on 2026-02-28. Only `Date` is faked so timers stay real.
+const KIRITIMATI_INSTANT = new Date("2026-02-28T10:30:00Z");
+function useKiritimati() {
+  beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(KIRITIMATI_INSTANT); });
+  afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
+}
 // The v10 timeline above the fold reads its own endpoint; this suite asserts the change-set request is the first `apiFetch`.
 vi.mock("./workspace/ChangesTab", () => ({ ChangesTab: () => null }));
 vi.mock("./ReviewTracking", () => ({ ReviewTracking: () => null }));
@@ -270,5 +290,22 @@ describe("廣告檢討的證據與使用者決定", () => {
     await screen.findByRole("button", { name: "核准這份變更清單" });
     expect(screen.getByText("使用者修訂後的測試內文")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "保存清單，檢視並核准" })).toBeNull();
+  });
+});
+
+describe("F36-I09 組織時鐘：觀察期間預設", () => {
+  useKiritimati();
+  it("結束日是組織的昨天（UTC+14 已是 3/1），不是瀏覽器的；下一輪門檻也用同一個今天", async () => {
+    const user = userEvent.setup();
+    const completed = round("completed");
+    // Browser clock (2/28) would refuse: 2/27 >= 2/27. The org clock (3/1) allows it: 2/27 < 2/28.
+    completed.window_end = "2026-02-27";
+    vi.mocked(reviews.getReviews).mockResolvedValue(data(completed));
+    render(page());
+    await user.click(await screen.findByRole("button", { name: "準備下一次檢討" }));
+    expect(screen.queryByText(/目前還沒有晚於本次觀察期的完整日期/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "調整觀察期間" }));
+    expect((screen.getByLabelText("開始日期") as HTMLInputElement).value).toBe("2026-02-22");
+    expect((screen.getByLabelText("結束日期") as HTMLInputElement).value).toBe("2026-02-28");
   });
 });
