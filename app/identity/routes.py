@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import app.shared.web as web
+from app.core import settings as core_settings
 from app.core.config import settings
 from app.core.db import now_utc
 from app.identity import ActorContext, Forbidden, NotFound, authenticate
@@ -31,6 +32,12 @@ class OrgOut(BaseModel):
     name: str
     kind: str
     role: str
+    # F36-I08 (drill-6 #20, ruling G, Contract U): the org clock rides on the one read the
+    # SPA already does at boot, so every date default can read "today" from one place
+    # instead of the browser clock. Both values come from app/core/settings.py
+    # (org_timezone / today_for_org); this route only exposes them.
+    timezone: str
+    today: str  # YYYY-MM-DD in `timezone`
 
 
 class MeResponse(BaseModel):
@@ -62,6 +69,15 @@ class CreateInviteResponse(BaseModel):
 
 class AcceptInviteResponse(BaseModel):
     org: OrgOut
+
+
+def _org_out(org_id: str, *, name: str, kind: str, role: str) -> OrgOut:
+    """The only OrgOut producer: every response that names an org carries that org's own
+    timezone and today (the `orgs` list is per-membership, so it is per org, not per actor)."""
+    tz = core_settings.org_timezone(web.conn, org_id=org_id)
+    today = core_settings.today_for_org(web.conn, org_id=org_id)
+    return OrgOut(id=org_id, name=name, kind=kind, role=role,
+                  timezone=tz.key, today=today.isoformat())
 
 
 def _require_owner(actor: ActorContext) -> None:
@@ -108,9 +124,9 @@ def me(request: Request):
     memberships = repo.list_memberships(web.conn, actor.user_id)
     return MeResponse(
         user=UserOut(id=actor.user_id, email=actor.email),
-        org=OrgOut(id=actor.org_id, name=org["name"], kind=org["kind"], role=actor.role),
+        org=_org_out(actor.org_id, name=org["name"], kind=org["kind"], role=actor.role),
         orgs=[
-            OrgOut(id=m["org_id"], name=m["org_name"], kind=m["org_kind"], role=m["role"])
+            _org_out(m["org_id"], name=m["org_name"], kind=m["org_kind"], role=m["role"])
             for m in memberships
         ],
     )
@@ -125,7 +141,7 @@ def rename_current_org(request: Request, body: RenameOrgRequest):
         raise ApiError(400, "invalid_name", "組織名稱不能是空的。")
     repo.rename_organisation(web.conn, actor.org_id, name)
     web.conn.commit()
-    return OrgOut(id=actor.org_id, name=name, kind="company", role=actor.role)
+    return _org_out(actor.org_id, name=name, kind="company", role=actor.role)
 
 
 @router.post("/invites", response_model=CreateInviteResponse)
@@ -167,7 +183,7 @@ def accept_invite(request: Request, token: str):
     org = repo.get_organisation(web.conn, invite["org_id"])
     assert org is not None, f"invite.org_id 指向不存在的組織：{invite['org_id']}"
     return AcceptInviteResponse(
-        org=OrgOut(id=org["id"], name=org["name"], kind=org["kind"], role=invite["role"])
+        org=_org_out(org["id"], name=org["name"], kind=org["kind"], role=invite["role"])
     )
 
 
