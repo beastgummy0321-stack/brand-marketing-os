@@ -5,6 +5,12 @@ export interface OrgOut {
   name: string;
   kind: string;
   role: string;
+  /** F36-I08 (Contract U): IANA name of the org's timezone, from `settings.org_timezone`.
+   * Read it through `useOrgClock()` in `@/lib/orgClock`, not directly. */
+  timezone: string;
+  /** F36-I08 (Contract U): YYYY-MM-DD in `timezone` at response time. Boot value only; the
+   * hook recomputes from the timezone so a long-open tab does not freeze on the load date. */
+  today: string;
 }
 export interface Identity {
   user: { id: string; email: string };

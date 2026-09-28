@@ -5,10 +5,10 @@
  * （缺天存在就不重複列）、「重新檢查」＝`syncCampaign`＋poll 直到不是 pending／running 才
  * 重新讀取、忙碌時停用、訂單讀取失敗不拖累整頁、頭部提示（最近同步／尚未同步）、找不到
  * Campaign。 */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
@@ -38,6 +38,26 @@ vi.mock("@/lib/adsConnectionsApi", async () => {
   return { ...actual, getConnections: vi.fn() };
 });
 vi.mock("@/lib/adsExternalApi", () => ({ syncCampaign: vi.fn(), syncJob: vi.fn() }));
+// F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
+// timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
+let orgTimezone = "Asia/Taipei";
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    scope: "user:org", brands: [], brandsLoading: false, brandsError: null, refreshBrands: () => {},
+    identity: {
+      user: { id: "usr_1", email: "a@example.com" },
+      org: { id: "org_test", name: "測試組織", kind: "personal", role: "owner", timezone: orgTimezone, today: "2020-01-01" },
+      orgs: [],
+    },
+  }),
+}));
+// 2026-02-28 10:30Z: Kiritimati (UTC+14) is already 2026-03-01 00:30; UTC and the test runner zone
+// (Asia/Taipei, UTC+8 = 18:30) are still on 2026-02-28. Only `Date` is faked so timers stay real.
+const KIRITIMATI_INSTANT = new Date("2026-02-28T10:30:00Z");
+function useKiritimati() {
+  beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(KIRITIMATI_INSTANT); });
+  afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
+}
 
 const mockListCampaigns = vi.mocked(listCampaigns);
 const mockGetTriage = vi.mocked(getTriage);
@@ -375,5 +395,18 @@ describe("WaitPage（F24-I03）讀取失敗與找不到", () => {
     mockGetTriage.mockResolvedValue(triage());
     renderPage();
     expect(await screen.findByText("找不到這個 Campaign。")).toBeTruthy();
+  });
+});
+
+describe("F36-I09 組織時鐘：沒有覆蓋範圍時的七天格", () => {
+  useKiritimati();
+  it("格子結束在組織的今天（UTC+14 已是 3/1），不是瀏覽器的 2/28", async () => {
+    mockGetTriage.mockResolvedValue({ window_days: 28, items: [], closed: EMPTY_CLOSED });
+    renderPage();
+    await screen.findByText("資料不足，這個活動先不判斷");
+    const tiles = screen.getByLabelText("每日資料");
+    expect(within(tiles).getByLabelText("2026-03-01")).toBeTruthy();
+    expect(within(tiles).getByLabelText("2026-02-23")).toBeTruthy();
+    expect(within(tiles).queryByLabelText("2026-02-22")).toBeNull();
   });
 });

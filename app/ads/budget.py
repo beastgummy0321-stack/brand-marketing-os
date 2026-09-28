@@ -142,6 +142,8 @@ def _history_scenarios(history: dict, days: int) -> dict:
             # 30-day median CPA is context in `basis`, never a factor in this arithmetic.
             # F05-I11: `base_text` names where the base number came from (this brand's own
             # 迴圈 or its bound ad account) — never a hard-coded platform name here.
+            # F36-I05: printed unchanged — the day count (「有投放的 N 天」) already lives in
+            # `source_text`; this caption never re-adds a 「30 天」 of its own.
             "caption": f"{base_text} NT${round(last_daily)} ×{mult:g}",
         })
     basis = {

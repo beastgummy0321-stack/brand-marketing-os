@@ -128,13 +128,20 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
   } else if (state.status === "error") {
     content = <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
   } else if (isEmptyBrand) {
+    // F36-I02 (drill-6 #5): the real entry since F35 is 「開始做素材 →」 on a draft campaign's
+    // 投放結構 tab, so the empty state names it and links to the campaigns list.
     content = (
-      <EmptyState
-        title="目前沒有任務包"
-        description="＋ 自由創作 自己開一個工作；或到投放中心派工，讓排程送任務包過來。"
-        actionLabel="＋ 自由創作"
-        onAction={() => navigate(`/brands/${brandId}/workbench/new`)}
-      />
+      <div className="flex flex-col gap-2">
+        <EmptyState
+          title="目前沒有任務包"
+          description="＋ 自由創作 自己開一個工作；或到投放中心打開一個活動，在「投放結構」按「開始做素材 →」，任務包就會送過來。"
+          actionLabel="＋ 自由創作"
+          onAction={() => navigate(`/brands/${brandId}/workbench/new`)}
+        />
+        <Button asChild variant="link" className="h-auto self-center p-0 text-sm">
+          <Link to={`/brands/${brandId}/ads/campaigns`}>前往投放中心 →</Link>
+        </Button>
+      </div>
     );
   } else if (packs.length === 0) {
     content = (

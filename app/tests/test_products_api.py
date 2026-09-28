@@ -122,6 +122,28 @@ class ProductCreateTest(_BaseProductsApiTest):
         self.assertIn("error", resp.json())
         self.assertEqual(repo.list_products(web.conn, self.bid), [])
 
+    def test_manual_create_with_existing_name_lands_on_existing_product(self):
+        """F36-I10 (drill-6 #16): a second manual add with the same name (spacing / case
+        variants included) returns the existing product's id and creates no row."""
+        first = self._create_product("超能特惠組")
+        for variant in ("超能特惠組", " 超能特惠組 ", "超能特惠組\t"):
+            resp = self.client.post(f"/api/products/brands/{self.bid}",
+                                     json={"name": variant, "source_url": ""})
+            self.assertEqual(resp.status_code, 200, variant)
+            self.assertEqual(resp.json()["id"], first, repr(variant))
+        products = repo.list_products(web.conn, self.bid)
+        self.assertEqual([p["id"] for p in products], [first])
+
+    def test_manual_create_after_archive_makes_a_new_active_product(self):
+        """An archived same-name product does not block a new active one (Contract W)."""
+        first = self._create_product("超能特惠組")
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{first}/archive")
+        self.assertEqual(resp.status_code, 204)
+        second = self._create_product("超能特惠組")
+        self.assertNotEqual(second, first)
+        statuses = {p["id"]: p["status"] for p in repo.list_products(web.conn, self.bid)}
+        self.assertEqual(statuses, {first: "archived", second: "active"})
+
 
 class ProductDetailTest(_BaseProductsApiTest):
     def test_bundle_shape(self):

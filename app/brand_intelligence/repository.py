@@ -22,6 +22,8 @@
 
 from datetime import date
 
+import psycopg
+
 # Owned Channel 已拆進 repository_channels.py（票 B2-library，本檔行數頂到
 # docs/tech-debt.md 凍結上限，不得再加）；這裡 re-export，讓既有 `repo.create_channel()`
 # 等呼叫端寫法不必改。
@@ -315,8 +317,18 @@ def delete_brand(conn: Conn, brand_id: str, *, actor: str) -> dict:
 
 def create_product(conn: Conn, brand_id: str, *, name: str, actor: str,
                     parent_id: str | None = None) -> dict:
+    """get-or-create; the index is the backstop.
+
+    F36-I10 (drill-6 #16, Contract W): an active product whose trimmed, case-insensitive
+    name already exists in the same scope (same brand for a parent, same parent for a
+    sell-way) is returned unchanged -- no insert, no audit, no update. Archived rows do not
+    count, so a new active product may reuse an archived name. The two partial unique
+    indexes in `20260928000001_brand_intelligence_product_active_name_unique.sql` catch
+    anything that slips past this lookup (rename / restore go through `update_product`).
+    """
     _require(name, "product.name 為必填")
     _require(actor, "actor 為必填")
+    name = name.strip()
     if get_brand(conn, brand_id) is None:
         raise ValueError(f"找不到品牌：{brand_id}")
     if parent_id is not None:
@@ -325,6 +337,13 @@ def create_product(conn: Conn, brand_id: str, *, name: str, actor: str,
             raise ValueError(f"找不到母產品：{parent_id}")
         if parent["parent_id"] is not None:
             raise ValueError("賣法只能掛在母產品底下，不能再往下一層")
+    existing = _row(conn.execute(
+        "SELECT * FROM product WHERE brand_id = %s AND parent_id IS NOT DISTINCT FROM %s"
+        " AND status = 'active' AND lower(btrim(name)) = lower(%s)",
+        (brand_id, parent_id, name),
+    ).fetchone())
+    if existing is not None:
+        return existing
     product_id = new_id("prd")
     ts = now_utc()
     row = {
@@ -375,10 +394,17 @@ def update_product(conn: Conn, brand_id: str, product_id: str, *,
     if before is None:
         raise ValueError(f"找不到產品：{product_id}")
     ts = now_utc()
-    conn.execute(
-        "UPDATE product SET name = %s, status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
-        (name, status, ts, product_id, brand_id),
-    )
+    try:
+        conn.execute(
+            "UPDATE product SET name = %s, status = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
+            (name, status, ts, product_id, brand_id),
+        )
+    except psycopg.errors.UniqueViolation:
+        # F36-I10: rename or restore collided with an active same-name product in the same
+        # scope (partial unique indexes, see create_product). Roll back so the connection is
+        # usable again, then surface it as the same ValueError family the routes map to 4xx.
+        conn.rollback()
+        raise ValueError("已有同名產品") from None
     after = get_product(conn, brand_id, product_id)
     org_id = _org_id_for_brand(conn, brand_id)
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=product_id,

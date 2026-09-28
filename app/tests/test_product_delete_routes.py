@@ -80,6 +80,21 @@ class ProductDeleteRouteTest(unittest.TestCase):
         self.client.post(f"/api/products/brands/{brand_id}/products/{product_id}/archive")
         self.assertEqual(repo.get_product(web.conn, brand_id, product_id)["status"], "active")
 
+    def test_restore_refused_with_409_while_active_same_name_exists(self):
+        """F36-I10 (drill-6 #16): archive A, add a new active A (allowed), then restoring the
+        old one via the route is a 409 「已有同名產品」 and the old row stays archived."""
+        brand_id, old_id, name = self._new_brand_and_product("同名恢復路由產品")
+        resp = self.client.post(f"/api/products/brands/{brand_id}/products/{old_id}/archive")
+        self.assertEqual(resp.status_code, 204)
+        new_id = repo.create_product(web.conn, brand_id, name=name, actor=ACTOR)["id"]
+        self.assertNotEqual(new_id, old_id)
+
+        resp = self.client.post(f"/api/products/brands/{brand_id}/products/{old_id}/archive")
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("已有同名產品", resp.json()["error"])
+        self.assertEqual(repo.get_product(web.conn, brand_id, old_id)["status"], "archived")
+        self.assertEqual(repo.get_product(web.conn, brand_id, new_id)["status"], "active")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ import {
   type CampaignDetail, type CampaignFieldSources, type PatchCampaignInput,
 } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
+import { putTarget } from "@/lib/adsTriageApi";
 import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { ActionBar, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
@@ -33,11 +34,28 @@ function budgetText(budget: unknown) {
 }
 const numericBudget = (budget: unknown) => (typeof budget === "number" && Number.isFinite(budget) && budget > 0 ? budget : null);
 
+/** F36-I04 cap chip helpers (wording copied from `strategy/CapBlock.tsx`, ROAS at one decimal per the F36 prototype). */
+const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
+const roas = (price: number, cap: number) => (price / cap).toFixed(1);
+/** 「比打平 N 高/低 M・ROAS 參考 R」 — each part only when its inputs are known; "" when neither is. */
+function capCompareText(value: number, breakEven: number | null, price: number | null) {
+  return [
+    breakEven !== null && (value >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(value - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - value)}`),
+    price !== null && `ROAS 參考 ${roas(price, value)}`,
+  ].filter(Boolean).join("・");
+}
+
+const CAP_LABEL = "每賣一筆最多花";
+
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
  * the strategy). A field the system guessed (`field_sources === "system"`) is dashed with 「猜的，請確認」; pressing a
  * field edits it in place and `PATCH`es that one field (no re-parse). 「產生策略」 is the second and last model call
- * of the wizard (ARCHITECTURE.md §6.1 item 11) and lands on the strategy tab. */
+ * of the wizard (ARCHITECTURE.md §6.1 item 11) and lands on the strategy tab.
+ *
+ * F36-I04 (drill-6 #4, ruling A): a seventh, optional chip 「每賣一筆最多花」 — empty by default with the product's
+ * break-even as hint text only, saved through `PUT …/target {basis:"own"}` so the strategy reads the user's cap
+ * instead of `targets.resolve` falling back to break-even before the user said anything. Never a guess, no default. */
 export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
@@ -110,7 +128,23 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const cancel = () => { setEditing(null); setSaveError(null); };
   const edit = (key: UnderstoodKey) => () => { setSaveError(null); setEditing(key); };
 
-  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources; label: string; value: string; editable: boolean; editor: ReactNode }[] = [
+  /** The cap is not a campaign field: it goes through the target writer (revision-guarded) and the campaign is
+   * re-read so the chip and the strategy call both see the saved value. */
+  const cap = campaign.cap;
+  async function saveCap(value: number) {
+    setSaving(true); setSaveError(null);
+    try {
+      await putTarget(brandId, campaignId, { basis: "own", value, expected_revision: cap.revision });
+      setSaved(await getCampaign(brandId, campaignId)); setEditing((now) => (now === "cap" ? null : now));
+    } catch (err) {
+      setSaveError(message(err, "儲存上限失敗，請稍後再試。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** `source: null` = the cap: not a campaign field, never a guess; `hint` is its line under the value. */
+  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources | null; label: string; value: string; editable: boolean; editor: ReactNode; hint?: string }[] = [
     {
       key: "product", source: "product", label: "商品", value: productName, editable: products.length > 0,
       editor: <SelectEditor label="商品" initial={productId ?? ""} busy={saving} onCancel={cancel}
@@ -144,8 +178,19 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       editor: <TextEditor label="受眾方向" initial={audience} busy={saving} onCancel={cancel}
         onDone={(v) => done("audience", "audience", v !== audience, { audience_hint: v })} />,
     },
+    {
+      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : `NT$${fmt(cap.own_value)}`, editable: true,
+      hint: cap.own_value === null
+        ? (cap.break_even !== null ? `先不填就用打平 NT$${fmt(cap.break_even)}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
+        : capCompareText(cap.own_value, cap.break_even, cap.price),
+      // An empty 完成 keeps whatever was there (no clear action here); an unchanged value just closes.
+      editor: <CapEditor initial={cap.own_value} breakEven={cap.break_even} price={cap.price} busy={saving} onCancel={cancel}
+        onDone={(v) => { if (v === null || v === cap.own_value) cancel(); else void saveCap(v); }} />,
+    },
   ];
-  const guesses = fields.filter((f) => guessed(f.source)).length;
+  const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length;
+  const capUnfilled = cap.own_value === null && cap.break_even !== null;
+  const barHint = [guesses ? `有 ${guesses} 項是猜的` : null, capUnfilled ? "上限沒填會先用打平" : null].filter(Boolean).join("・") || undefined;
 
   async function handleGenerate() {
     setGenerating(true); setGenerateError(null);
@@ -162,9 +207,11 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     <>
       <FlowHeader steps={steps} current={1} title="系統這樣理解" purpose="不對就點一下改" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {fields.map((f) => (
-          <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
-            editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
+        {fields.map((f) => (f.source === null
+          ? <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "還沒填（選填）"} empty={!f.value} hint={f.hint} wide
+              guessed={false} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
+          : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
+              editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}
       </div>
       {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
@@ -175,7 +222,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         <Link className="text-sm text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=assets`}>先處理自帶素材與手動交接</Link>
       </Disclosure>
     </>,
-    <ActionBar back={{ label: "上一步", to: backHref }} hint={guesses ? `有 ${guesses} 項是猜的` : undefined}>
+    <ActionBar back={{ label: "上一步", to: backHref }} hint={barHint}>
       <Button onClick={() => void handleGenerate()} disabled={generating || saving || editing !== null}>
         {generating ? "產生中…" : "產生策略 →"}
       </Button>
@@ -229,6 +276,36 @@ function BudgetEditor({ initial, busy, onDone, onCancel }: {
         <MoneyInput label="預算上限" value={value} onChange={setValue} invalid={value === 0} className="w-full" onEnter={() => { if (ok && !busy) onDone(value); }} />
       </div>
       <DoneButton disabled={busy || !ok} onClick={() => { if (ok) onDone(value); }} />
+    </>
+  );
+}
+
+/** The cap editor (prototype: `.money` input, 「用打平 N」, the live preview line, 完成／取消). Enter saves, Escape
+ * cancels. `onDone(null)` = the input was left empty (the caller keeps the previous value; nothing is cleared). */
+function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
+  initial: number | null; breakEven: number | null; price: number | null; busy: boolean;
+  onDone: (value: number | null) => void; onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const invalid = value !== null && value < 1;
+  const preview = value === null
+    ? <span className="text-muted-foreground">{breakEven !== null ? `填一個整數金額；留空＝先用打平 ${fmt(breakEven)}` : "填一個整數金額"}</span>
+    : invalid
+      ? <span className="text-danger">請填大於 0 的整數金額</span>
+      : <span className="text-muted-foreground">{capCompareText(value, breakEven, price)}</span>;
+  const beFill = breakEven !== null ? Math.round(breakEven) : null;
+  const submit = () => { if (!invalid && !busy) onDone(value); };
+  return (
+    <>
+      <div onKeyDown={onEscape(onCancel)} className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <MoneyInput label={CAP_LABEL} value={value} onChange={setValue} invalid={invalid} onEnter={submit} />
+          {beFill !== null && <Button size="sm" variant="outline" disabled={busy} onClick={() => setValue(beFill)}>用打平 {fmt(beFill)}</Button>}
+        </div>
+        <div className="min-h-4 text-xs" aria-live="polite">{preview}</div>
+      </div>
+      <DoneButton disabled={busy || invalid} onClick={submit} />
+      <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
     </>
   );
 }

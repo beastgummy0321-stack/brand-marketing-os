@@ -30,8 +30,8 @@ vi.mock("@/lib/jobsApi", () => ({
 
 const IDENTITY: Identity = {
   user: { id: "usr_1", email: "beastgummy0321@gmail.com" },
-  org: { id: "org_bughunt", name: "示例組織", kind: "personal", role: "owner" },
-  orgs: [{ id: "org_bughunt", name: "示例組織", kind: "personal", role: "owner" }],
+  org: { id: "org_bughunt", name: "示例組織", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" },
+  orgs: [{ id: "org_bughunt", name: "示例組織", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }],
 };
 
 const BRANDS: DashboardBrandCard[] = [

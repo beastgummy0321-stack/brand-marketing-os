@@ -117,6 +117,32 @@ class OfferingsPostTest(_Base):
         resp = self._post(bid, [])
         self.assertEqual(resp.status_code, 400)
 
+    def test_resave_with_typed_existing_parent_name_creates_no_row(self):
+        """F36-I10 (drill-6 #16): step 3 re-saved with the parent name typed again (no
+        `product_id`, spacing differs) lands on the existing parent and sell-way rows —
+        `create_product` is get-or-create, so the second save only updates the economics."""
+        bid = self._create_full()
+        offering = {
+            "parent": {"name": "薑黃錠"},
+            "variants": [{"label": "單瓶", "selling_price": 600,
+                          "unit_variable_cost": 200, "shipping_cost": 80}],
+        }
+        self.assertEqual(self._post(bid, [offering]).status_code, 204)
+        before = {p["id"]: p for p in bi_repo.list_products(web.conn, bid)}
+        self.assertEqual(len(before), 2)
+
+        resaved = {
+            "parent": {"name": " 薑黃錠 "},
+            "variants": [{"label": "單瓶", "selling_price": 650,
+                          "unit_variable_cost": 200, "shipping_cost": 80}],
+        }
+        self.assertEqual(self._post(bid, [resaved]).status_code, 204)
+        after = {p["id"]: p for p in bi_repo.list_products(web.conn, bid)}
+        self.assertEqual(set(after), set(before), "re-save must not create a product row")
+        variant_id = next(pid for pid, p in after.items() if p["parent_id"] is not None)
+        econ = bi_repo.get_product_economics(web.conn, bid, variant_id)
+        self.assertEqual(econ["selling_price"], 650.0)
+
 
 class OfferingsChoiceTest(_Base):
     """F31-I01 Contract M: the step's two choices are stored on the draft and a save advances

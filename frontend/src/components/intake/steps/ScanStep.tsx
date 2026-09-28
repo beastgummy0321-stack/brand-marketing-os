@@ -175,7 +175,7 @@ export function ScanStep({
             <p className="text-sm font-medium text-foreground">產品卡草稿</p>
             <p className="text-xs text-muted-foreground">我從你的照片和網址讀出來的；價格看不出來時，問答會再問你。</p>
           </div>
-          {draft.product_card_drafts.length > 0 ? (
+          {draft.product_card_drafts.length > 0 && (
             <div className="flex flex-col gap-2">
               {draft.product_card_drafts.map((card) => (
                 <PhotoProductCard
@@ -193,7 +193,11 @@ export function ScanStep({
                 />
               ))}
             </div>
-          ) : (
+          )}
+          {/* Buildable products = photo cards ∪ scanned names: a URL-only scan fills `scan_products`
+              and leaves `product_card_drafts` empty (app/intake/ai.py), so keying on cards alone
+              showed this message beside a list of detected names (drill-6 #6). */}
+          {draft.product_card_drafts.length === 0 && scannedProducts.length === 0 && (
             <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
               這次沒有讀出可建立的產品；你仍可照原本流程往下回答問題。
             </p>

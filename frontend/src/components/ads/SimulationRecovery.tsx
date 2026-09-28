@@ -4,6 +4,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/layout/ui/dialog";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { readSimulation, saveSimulation, startSimulation, type SimulationDay, type SimulationRow } from "@/lib/adsSimulationApi";
+import { useOrgClock } from "@/lib/orgClock";
 
 const FIELDS = [["spend", "花費"], ["impressions", "曝光"], ["clicks", "點擊"], ["purchases", "轉換數"], ["revenue", "營收"]] as const;
 type Values = Record<(typeof FIELDS)[number][0], string>;
@@ -17,7 +18,7 @@ function entries(c: CampaignDetail, rows: SimulationRow[]): Record<string, Entry
 export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }: {
   brandId: string; campaign: CampaignDetail; onChanged: (c: CampaignDetail) => void; onSaved: () => void;
 }) {
-  const today = new Date().toLocaleDateString("sv-SE");
+  const { today } = useOrgClock(); // F36-I09 (ruling G): org calendar, not the browser's
   const [day, setDay] = useState(c.start_date || today);
   const [data, setData] = useState<SimulationDay | null>(null);
   const [values, setValues] = useState<Record<string, Entry>>({});

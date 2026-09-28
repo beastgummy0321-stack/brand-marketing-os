@@ -154,6 +154,43 @@ class ProductDeleteTest(unittest.TestCase):
         self.assertEqual(restored["status"], "active")
         self.assertIsNotNone(repo.get_product(self.conn, bid, pid))
 
+    def test_restore_is_refused_while_an_active_same_name_product_exists(self):
+        """F36-I10 (drill-6 #16): archive A, create a new active A (allowed — archived rows do
+        not block), then restoring the old one hits the partial unique index and surfaces as
+        ValueError("已有同名產品"); the old row stays archived and the connection stays usable."""
+        bid = repo.create_brand(self.conn, name="測試皂坊（同名恢復）", client_name="測試客戶",
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
+        old = repo.create_product(self.conn, bid, name="超能特惠組", actor="測試員")["id"]
+        repo.update_product(self.conn, bid, old, name="超能特惠組", status="archived",
+                             actor="測試員")
+
+        new = repo.create_product(self.conn, bid, name="超能特惠組", actor="測試員")["id"]
+        self.assertNotEqual(new, old, "an archived same-name product must not block a new one")
+        self.assertEqual(repo.get_product(self.conn, bid, new)["status"], "active")
+
+        with self.assertRaises(ValueError) as ctx:
+            repo.update_product(self.conn, bid, old, name="超能特惠組", status="active",
+                                 actor="測試員")
+        self.assertEqual(str(ctx.exception), "已有同名產品")
+        self.assertEqual(repo.get_product(self.conn, bid, old)["status"], "archived")
+        self.assertEqual(repo.get_product(self.conn, bid, new)["status"], "active")
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM audit_log WHERE entity_type = 'product' AND action = 'update' "
+            "AND entity_id = %s AND after_json->>'status' = 'active'", (old,)).fetchone(),
+            "the refused restore must not leave an update audit")
+
+    def test_rename_onto_an_active_same_name_product_is_refused(self):
+        bid = repo.create_brand(self.conn, name="測試皂坊（同名改名）", client_name="測試客戶",
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
+        keep = repo.create_product(self.conn, bid, name="薑黃錠", actor="測試員")["id"]
+        other = repo.create_product(self.conn, bid, name="魚油", actor="測試員")["id"]
+        with self.assertRaises(ValueError) as ctx:
+            repo.update_product(self.conn, bid, other, name=" 薑黃錠 ", status="active",
+                                 actor="測試員")
+        self.assertEqual(str(ctx.exception), "已有同名產品")
+        self.assertEqual(repo.get_product(self.conn, bid, other)["name"], "魚油")
+        self.assertEqual(repo.get_product(self.conn, bid, keep)["name"], "薑黃錠")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -391,7 +391,13 @@ def product_archive(request: Request, brand_id: str, product_id: str):
     brand = require_brand(brand_id, actor)
     product = require_product(brand, product_id)
     new_status = "archived" if product["status"] == "active" else "active"
-    repo.update_product(web.conn, brand_id, product_id, name=product["name"], status=new_status, actor=str(actor.user_id))
+    try:
+        repo.update_product(web.conn, brand_id, product_id, name=product["name"], status=new_status,
+                            actor=str(actor.user_id))
+    except ValueError as exc:
+        # F36-I10: restore collided with an active same-name product (partial unique index,
+        # surfaced by the repository as ValueError("已有同名產品")).
+        return _error(409, str(exc))
     return Response(status_code=204)
 
 
