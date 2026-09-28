@@ -178,9 +178,10 @@ def replace(env, entity_id, campaign=None):
 
 def workbench_copy(env, ad, copy=None, *, adopt=True):
     """Dispatch the campaign pack (once), write one copy output on this ad's set and select
-    it -- the state the workbench leaves behind when the user picked a version."""
-    from app.workbench import repository as workbench_repo
-
+    it -- the state the workbench leaves behind when the user picked a version. The row is
+    written with SQL (a fixture, the shape `workbench.repository._slice_body` reads: one
+    round's `{"sets": [...]}`, version 1 = `sets[0]`); the ads module itself only reads it
+    through the `app.workbench` facade."""
     conn, org, brand, campaign = env["conn"], env["org"], env["brand"], env["campaign"]
     if legacy_assets.pack_id(conn, org, brand, campaign) is None:
         workbench.register_tasks()
@@ -189,15 +190,17 @@ def workbench_copy(env, ad, copy=None, *, adopt=True):
         conn, org, brand, legacy_assets.PACK_SOURCE_KIND,
         {"ads_campaign_id": campaign, "ads_ad_id": ad},
     )[-1]
-    output = workbench_repo.write_output(
-        conn, org_id=org, brand_id=brand, brief_id=brief["id"], part="copy",
-        generation_round=1, body_json=[{"sets": [copy or WORKBENCH_COPY]}],
-        coordinates_json=None, llm_task_id=None,
-    )[0]
-    if adopt:
-        workbench_repo.select_version(conn, org, brand, output["id"])
+    version_id = db.new_id("wbo")
+    conn.execute(
+        "INSERT INTO workbench_output(id,org_id,brand_id,brief_id,part,generation_round,"
+        "version_index,body_json,adopted_at) VALUES(%s,%s,%s,%s,'copy',1,1,%s,%s)",
+        (
+            version_id, org, brand, brief["id"], db.jsonb({"sets": [copy or WORKBENCH_COPY]}),
+            db.now_utc() if adopt else None,
+        ),
+    )
     conn.commit()
-    return {"set_id": brief["id"], "version_id": output["id"]}
+    return {"set_id": brief["id"], "version_id": version_id}
 
 
 def base(env):
