@@ -10,6 +10,7 @@ from datetime import date
 
 from app.ads import budget, calendar_tw, channels
 from app.ads import repository as ads_repo
+from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
@@ -64,6 +65,33 @@ def _vocabulary_text(rows: list) -> str:
 
 def _vocabulary_lookup(rows: list) -> dict:
     return {(row["dimension"], row["key"]): row for row in rows}
+
+
+def _prompt_rows(rows: list, available_proof: set[str], has_end_date: bool) -> list:
+    """F38 decision 1/3: the model's menu only offers the proof kinds the brand has confirmed
+    evidence for (plus `none`), and `offer/limited_time` only when the campaign has an end date
+    (the workbench quotes that date as the copy's one deadline). Every other row passes through.
+    `coordinate_vocabulary` itself stays unfiltered -- hand edits and label lookups use it."""
+    allowed_proof = available_proof | {"none"}
+    kept = []
+    for row in rows:
+        if row["dimension"] == "proof" and row["key"] not in allowed_proof:
+            continue
+        if row["dimension"] == "offer" and row["key"] == "limited_time" and not has_end_date:
+            continue
+        kept.append(row)
+    return kept
+
+
+def _gate_reply(groups: list, lookup: dict) -> None:
+    """A proof/offer key outside the filtered menu becomes `none` in place (F38 agent choice:
+    the menu already told the model what exists; a stray key is a wording slip, not a retry)."""
+    for group in groups:
+        for ad in group["ads"]:
+            coords = ad["coordinates"]
+            for dim in ("proof", "offer"):
+                if (dim, coords[dim]) not in lookup:
+                    coords[dim] = "none"
 
 
 def _validate_reply(data, roles: set) -> list | None:
@@ -143,7 +171,11 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     daily_total = round(float(campaign["budget_planned"]) / days)
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
-    vocabulary_rows = ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
+    vocabulary_rows = _prompt_rows(
+        ads_repo.coordinate_vocabulary(conn, org_id, brand_id),
+        bi_repo.available_proof_keys(conn, brand_id),
+        campaign["end_date"] is not None,
+    )
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
 
     allocation_text = "\n".join(
@@ -177,6 +209,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     validated_groups = _validate_reply(data, roles) if data is not None else None
     if validated_groups is None:
         raise ValueError("delivery_plan_failed")
+    _gate_reply(validated_groups, vocab_lookup)
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。

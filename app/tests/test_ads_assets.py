@@ -87,7 +87,8 @@ class AssetsTestBase(unittest.TestCase):
 
     def _direct_campaign(self, *, campaign_start, campaign_end, group_role: str = "new",
                           group_start=None, group_end=None,
-                          format_key: str | None = "single_image"):
+                          format_key: str | None = "single_image",
+                          offer_key: str | None = None):
         """F07-I10：繞過 LLM 展開，直接建一個 Campaign／一個投放組／一支廣告，讓天數與
         format_key 完全可控（`_variant_count` 的落點測試用）。"""
         campaign = {
@@ -108,6 +109,8 @@ class AssetsTestBase(unittest.TestCase):
             start_date=group_start, end_date=group_end,
         )
         coordinates = {"format": format_key} if format_key is not None else {}
+        if offer_key is not None:
+            coordinates["offer"] = offer_key
         ad = ads_repo.create_ad(
             web.conn, self.org_id, self.brand_id, campaign_row["id"], group["id"],
             name="廣告", coordinates=coordinates, coordinates_snapshot={},
@@ -553,6 +556,42 @@ class FormatKeyDrivesRequiredOutputsTest(AssetsTestBase):
         )
         pack_id = assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_row["id"])
         self.assertIsNotNone(pack_id)
+
+
+# -- F38 decision 3：限時限量的截止日＝投放組（否則 Campaign）的結束日 ----------------------
+
+class OfferDeadlineTest(AssetsTestBase):
+    def test_limited_time_ad_carries_the_campaign_end_date(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-14", offer_key="limited_time",
+        )
+        request = self._dispatched_set(campaign_row["id"])["request"]
+        self.assertEqual(request["offer_deadline"], "2026-10-14")
+
+    def test_group_end_date_wins_over_campaign_end_date(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-30",
+            group_start="2026-10-01", group_end="2026-10-07", offer_key="limited_time",
+        )
+        request = self._dispatched_set(campaign_row["id"])["request"]
+        self.assertEqual(request["offer_deadline"], "2026-10-07")
+
+    def test_other_offers_carry_no_deadline(self):
+        for offer_key in ("none", None):
+            with self.subTest(offer_key=offer_key):
+                campaign_row, _group, _ad = self._direct_campaign(
+                    campaign_start="2026-10-01", campaign_end="2026-10-14",
+                    offer_key=offer_key,
+                )
+                request = self._dispatched_set(campaign_row["id"])["request"]
+                self.assertNotIn("offer_deadline", request)
+
+    def test_limited_time_without_any_end_date_carries_no_deadline(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start=None, campaign_end=None, offer_key="limited_time",
+        )
+        request = self._dispatched_set(campaign_row["id"])["request"]
+        self.assertNotIn("offer_deadline", request)
 
 
 if __name__ == "__main__":
