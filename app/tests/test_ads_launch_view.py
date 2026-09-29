@@ -308,7 +308,8 @@ class LaunchViewTest(unittest.TestCase):
         view = self.view()
         item = self.items(view)["再行銷"]
         self.assertEqual(
-            self.hint_rows(item), [("受眾提示", "再行銷・互動過的人、回購客・只投：互動過或買過的人")]
+            self.hint_rows(item),
+            [("受眾提示", "再行銷・互動過的人、回購客・只投：互動過或買過的人")],
         )
         keys = [f["key"] for f in item["fields"]]
         self.assertEqual(keys.index("audience_hint"), keys.index("end_date") + 1)

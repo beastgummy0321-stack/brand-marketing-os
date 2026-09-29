@@ -899,7 +899,8 @@ def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
         "sample_ads": None,
         "source": channels.ACCOUNT_SOURCE,
         "source_text": (
-            f"{hist['channel_label']} 廣告帳戶全部活動，近 30 天有投放的 {hist['days']} 天平均日花費"
+            f"{hist['channel_label']} 廣告帳戶全部活動，"
+            f"近 30 天有投放的 {hist['days']} 天平均日花費"
         ),
     }
 

@@ -40,7 +40,11 @@ _PAGE_LIMIT = 20
 _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
 # F38 (decision 3): a fixed exclusion sentence per plan role -- text only, no lookup, never a
 # platform audience mapping.
-_ROLE_EXCLUSIONS = {"new": "排除：已購買者", "explore": "排除：已購買者", "retarget": "只投：互動過或買過的人"}
+_ROLE_EXCLUSIONS = {
+    "new": "排除：已購買者",
+    "explore": "排除：已購買者",
+    "retarget": "只投：互動過或買過的人",
+}
 AUDIENCE_HINT_KEY = "audience_hint"
 AUDIENCE_HINT_LABEL = "受眾提示"
 
@@ -57,17 +61,17 @@ def _number(value):
 
 
 def audience_hints(conn, org, brand, detail):
-    """group id -> 「<角色>・<受眾 label1>、<label2>・簡報受眾：<text>・<排除句>」 for every group of
-    `detail` (`repository.campaign_detail`) that yields at least one part. Read-only help for
-    the person building the ad set by hand: the plan's role, the distinct audience coordinates
-    of the group's ads in the brand's own words (`coordinate_vocabulary`, dimension `audience`;
-    a key without a vocabulary row prints itself), the brief's own audience text
-    (`context_json.audience_hint`, skipped when empty) and a fixed per-role exclusion sentence
-    (F38: `new`/`explore` -> 「排除：已購買者」, `retarget` -> 「只投：互動過或買過的人」; no role,
-    no sentence). Never a platform targeting mapping (F36 ruling E: no age/interest inference,
-    no Meta field), never part of the frozen snapshot or `expected_json` -- computed at view
-    time only, so readback (`handoff_check`) is untouched and an approved launch never goes
-    stale over it."""
+    """group id -> 「<角色>・<受眾 label1>、<label2>・簡報受眾：<text>・<排除句>」 for every
+    group of `detail` (`repository.campaign_detail`) that yields at least one part. Read-only
+    help for the person building the ad set by hand: the plan's role, the distinct audience
+    coordinates of the group's ads in the brand's own words (`coordinate_vocabulary`,
+    dimension `audience`; a key without a vocabulary row prints itself), the brief's own
+    audience text (`context_json.audience_hint`, skipped when empty) and a fixed per-role
+    exclusion sentence (F38: `new`/`explore` -> 「排除：已購買者」, `retarget` ->
+    「只投：互動過或買過的人」; no role, no sentence). Never a platform targeting mapping
+    (F36 ruling E: no age/interest inference, no Meta field), never part of the frozen
+    snapshot or `expected_json` -- computed at view time only, so readback (`handoff_check`)
+    is untouched and an approved launch never goes stale over it."""
     labels = {
         row["key"]: row["label"]
         for row in ads_repo.coordinate_vocabulary(conn, org, brand)
