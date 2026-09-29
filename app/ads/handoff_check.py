@@ -584,3 +584,45 @@ def confirm_setting(conn, org, brand, campaign, key, actor):
     )
     conn.commit()
     return handoff_data.workspace(conn, org, brand, campaign)
+
+
+def confirm_all(conn, org, brand, campaign, actor):
+    """`POST …/handoff/launch/confirm-all` (drill-7 #18: 27 unreadable fields clicked one by one):
+    the user looked at the platform once and says every field the read could not see is the same.
+    Every launch item field and every launch setting the readback still reports as unreadable goes
+    through `confirm_field` / `confirm_setting`; readable, already confirmed and differing fields
+    are skipped, never refused. Each of those two commits as it does on its own, so a call cut
+    short is finished by the next one (every step is idempotent). Answers with the counts and the
+    same payload `GET …/launch` returns; nothing is written to a platform."""
+    changes.lock(conn, org, brand)
+    change_set, _ = _readback_set(conn, org, brand, campaign)
+    items = 0
+    if change_set is not None:
+        rows = conn.execute(
+            "SELECT id,evidence_json FROM ads_handoff_item WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND change_set_id=%s AND status IN ('unknown','deviated') "
+            "ORDER BY created_at,id",
+            (org, brand, campaign, change_set["id"]),
+        ).fetchall()
+        for row in rows:
+            evidence = row["evidence_json"] or {}
+            confirmed = evidence.get("confirmed") or {}
+            for field in evidence.get("unreadable") or []:
+                if field["key"] in confirmed:
+                    continue
+                confirm_field(conn, org, brand, campaign, row["id"], field["key"], actor)
+                items += 1
+    readback = settings_readback(conn, org, brand, campaign) or {}
+    settings = 0
+    for field in readback.get("fields", []):
+        if field["state"] == "unreadable":
+            confirm_setting(conn, org, brand, campaign, field["key"], actor)
+            settings += 1
+    # Lazy import: `launch_view` reads this module (cycle), and the view it builds is the answer.
+    from app.ads import launch_view
+
+    return {
+        "confirmed_items": items,
+        "confirmed_settings": settings,
+        "view": launch_view.view(conn, org, brand, campaign),
+    }

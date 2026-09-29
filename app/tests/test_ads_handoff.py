@@ -270,6 +270,119 @@ class HandoffTest(unittest.TestCase):
     def _status(self):
         return campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)["status"]
 
+    def _client(self):
+        from fastapi.testclient import TestClient
+
+        from app.ads import handoff_routes
+        from app.main import app
+
+        if not any(getattr(route, "path", "").endswith("/confirm-all") for route in app.routes):
+            app.include_router(handoff_routes.router)
+        return TestClient(app), f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+
+    def _read_back_with_unreadable_fields(self):
+        """A read-back launch whose ad set cannot see 2 launch settings and whose items cannot see
+        3 fields: the group's landing URL, the ad's description and its material."""
+        _, nodes = self.launch()
+        frozen = nodes["group"]["expected_json"]["launch_settings"]
+        audience = frozen["audience"]
+
+        def read(value):
+            return {"state": "read", "value": value}
+
+        self.native_group["launch_settings"] = {
+            "optimization_event": read(frozen["optimization_event"]),
+            "bid_strategy": read(frozen["bid_strategy"]),
+            "age": read({"age_min": audience["age_min"], "age_max": audience["age_max"]}),
+            "gender": read(audience["gender"]),
+            "countries": read({"countries": audience["countries"]}),
+            "pixel_id": {"state": "unreadable", "reason": "沒有權限讀取像素。"},
+            "placement": {"state": "unreadable", "reason": "平台沒有回傳版位。"},
+        }
+        self.native_ad["launch_settings"] = {
+            "utm": read(nodes["ad"]["expected_json"]["launch_settings"]["utm"])
+        }
+        del self.native_ad["creative"]["fields"]["description"]
+        self.check(nodes["campaign"], "campaign", "root")
+        group = self.check(nodes["group"], "adset", "group")
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(group["status"], "unknown", group["evidence_json"])
+        self.assertEqual(ad["status"], "unknown", ad["evidence_json"])
+        return group, ad
+
+    def test_confirm_all_marks_every_unreadable_field_in_one_call(self):
+        """Drill-7 #18: one request confirms every unreadable setting and item field; a second
+        call has nothing left; readable fields are untouched."""
+        group, ad = self._read_back_with_unreadable_fields()
+        client, base = self._client()
+
+        def readback(view):
+            return {f["key"]: f["state"] for f in view["settings_readback"]["fields"]}
+
+        def unreadable(view):
+            return {
+                (i["name"], u["key"]): u["confirmed"]
+                for i in view["items"]
+                for u in i["unreadable"]
+            }
+
+        before = client.get(base + "/launch").json()
+        self.assertEqual(
+            {k: s for k, s in readback(before).items() if s != "match"},
+            {"pixel_id": "unreadable", "placement": "unreadable"},
+        )
+        self.assertEqual(
+            unreadable(before),
+            {
+                ("計畫投放組", "manual_settings.landing_url"): False,
+                ("原廣告", "copy.description"): False,
+                ("原廣告", "material"): False,
+            },
+        )
+
+        first = client.post(base + "/handoff/launch/confirm-all")
+        self.assertEqual(first.status_code, 200, first.text)
+        result = first.json()
+        self.assertEqual(result["confirmed_items"], 3)
+        self.assertEqual(result["confirmed_settings"], 2)
+        view = result["view"]
+        self.assertEqual(set(view), set(before), "the same payload GET …/launch returns")
+        self.assertEqual(
+            readback(view),
+            readback(before) | {"pixel_id": "self_confirmed", "placement": "self_confirmed"},
+        )
+        self.assertTrue(all(unreadable(view).values()), unreadable(view))
+        self.assertEqual({i["state"] for i in view["items"]}, {"verified"})
+        # A readable field is untouched: only the unreadable keys are recorded as confirmed.
+        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description", "material"})
+        self.assertEqual(item["evidence_json"]["material_evidence"], "user_verified")
+        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, group["id"])
+        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"manual_settings.landing_url"})
+        launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(set(launch["plan_json"]["settings_confirmed"]), {"pixel_id", "placement"})
+
+        second = client.post(base + "/handoff/launch/confirm-all")
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(
+            (second.json()["confirmed_items"], second.json()["confirmed_settings"]), (0, 0)
+        )
+        self.assertEqual(second.json()["view"]["items"], view["items"])
+
+    def test_confirm_all_with_nothing_unreadable_answers_zeros_and_the_view(self):
+        client, base = self._client()
+        # Before any launch is approved there is nothing to confirm: still 200, not a refusal.
+        response = client.post(base + "/handoff/launch/confirm-all")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            {
+                "confirmed_items": 0,
+                "confirmed_settings": 0,
+                "view": client.get(base + "/launch").json(),
+            },
+        )
+
     def test_campaign_readback_binds_ready_campaign_to_live(self):
         # F32-I01: `live` means "bound to a platform object by readback" (2026-09-26 ruling).
         # A hand-launched campaign left `ready` could never reach the close-out entry.
