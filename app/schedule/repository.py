@@ -186,6 +186,14 @@ _SEED_COORDINATES: dict = {
 # this set hides it from the list/toggle surface `list_brand_coordinates` reads.
 RETIRED_COORDINATES: frozenset[tuple[str, str]] = frozenset({("format", "flexible")})
 
+# Drill-4 ruling RC-C, built in F38: promo offers are the brand's choice, not a default.
+# New brands get these seeded disabled (only `offer/none` on); the brand enables real offers
+# in the coordinate screen. Proof keys are not listed: proof is gated by evidence facts.
+DEFAULT_OFF_COORDINATES: frozenset[tuple[str, str]] = frozenset(
+    ("offer", key) for key in
+    ("discount", "bundle", "free_shipping", "trial_sample", "guarantee", "limited_time")
+)
+
 
 def ensure_coordinates_seeded(conn: _AnyConn, org_id: str, brand_id: str) -> None:
     """讀座標之前先確認七個維度的種子都下過——逐維度探測，不是只認 `dimension='angle'`
@@ -213,10 +221,12 @@ def ensure_coordinates_seeded(conn: _AnyConn, org_id: str, brand_id: str) -> Non
         for key, category, label, situation in rows:
             conn.execute(
                 "INSERT INTO brand_coordinate (id, org_id, brand_id, dimension, key, label,"
-                " category, attributes_json) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                " category, attributes_json, disabled_at)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END)"
                 " ON CONFLICT (brand_id, dimension, key) DO NOTHING",
                 (new_id("crd"), org_id, brand_id, dimension, key, label, category,
-                 jsonb({"situation": situation})),
+                 jsonb({"situation": situation}),
+                 (dimension, key) in DEFAULT_OFF_COORDINATES),
             )
     conn.commit()
 
