@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CampaignDetail, CampaignFieldSources } from "@/lib/adsApi";
+import type { CampaignDetail } from "@/lib/adsApi";
+import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
 import { generateStrategy, getCampaign, patchCampaign } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget, type CapView } from "@/lib/adsTriageApi";
@@ -326,5 +327,67 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     expect(await screen.findByText("這個活動的上限剛被更新。")).toBeTruthy();
     expect(within(field("cap")).getByRole("textbox")).toBeTruthy();
     expect(getCampaign).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** F40-I12 (drill-7 #10): the campaign-level landing URL sits in the main block, tagged 「從「追蹤」分頁搬來」, and
+ * edits go through the campaign PATCH's `landing_url` (F40-I04 2b); the 追蹤 tab keeps its per-group values. */
+describe("ConfirmBriefPage landing URL (F40-I12)", () => {
+  const URL = "https://beastgummy.tw/shop";
+  const withUrl = (landing_url: string | null) => campaign({ context_json: { product_ids: ["prd_1"], audience_hint: "上班族", landing_url, field_sources: sources({ landing_url: landing_url ? "copied" : "system" }) } });
+
+  it("shows the URL with its tag in the main block, blank as 還沒填（選填）, never as a guess", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(withUrl(URL));
+    const view = renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("landing_url")).getByText("落地頁")).toBeTruthy();
+    expect(within(field("landing_url")).getByText("從「追蹤」分頁搬來")).toBeTruthy();
+    expect(within(field("landing_url")).getByText(URL)).toBeTruthy();
+    expect(within(field("landing_url")).queryByText("猜的，請確認")).toBeNull();
+    expect(screen.getByText("有 1 項是猜的")).toBeTruthy(); // the audience only; the landing URL is never counted
+    view.unmount();
+    vi.mocked(getCampaign).mockResolvedValue(withUrl(null));
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("landing_url")).getByText("還沒填（選填）")).toBeTruthy();
+    expect(within(field("landing_url")).queryByText("猜的，請確認")).toBeNull();
+  });
+
+  it("an edit PATCHes landing_url and shows the saved value; blank clears with null; an unchanged value just closes", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(withUrl(URL));
+    vi.mocked(patchCampaign).mockResolvedValue(withUrl("https://beastgummy.tw/new"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改落地頁" }));
+    const input = within(field("landing_url")).getByLabelText("落地頁");
+    expect(input).toHaveProperty("value", URL);
+    await user.clear(input);
+    await user.type(input, "https://beastgummy.tw/new{Enter}");
+    expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { landing_url: "https://beastgummy.tw/new" });
+    expect(await within(field("landing_url")).findByText("https://beastgummy.tw/new")).toBeTruthy();
+    expect(patchAudienceHint).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "改落地頁" }));
+    await user.click(within(field("landing_url")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenCalledTimes(1);
+    expect(within(field("landing_url")).getByText("https://beastgummy.tw/new")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "改落地頁" }));
+    await user.clear(within(field("landing_url")).getByLabelText("落地頁"));
+    await user.click(within(field("landing_url")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenLastCalledWith("brd_1", "cmp_1", { landing_url: null });
+  });
+
+  it("keeps the editor open with the server's message when the URL is refused", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(withUrl(URL));
+    vi.mocked(patchCampaign).mockRejectedValue(new Error("落地頁請填完整的 http 或 https 網址，不可包含密碼。"));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改落地頁" }));
+    await user.type(within(field("landing_url")).getByLabelText("落地頁"), "x{Enter}");
+    expect(await screen.findByText("落地頁請填完整的 http 或 https 網址，不可包含密碼。")).toBeTruthy();
+    expect(within(field("landing_url")).getByLabelText("落地頁")).toBeTruthy();
+    await user.click(within(field("landing_url")).getByRole("button", { name: "取消" }));
+    expect(within(field("landing_url")).getByText(URL)).toBeTruthy();
   });
 });

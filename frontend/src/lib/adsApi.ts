@@ -9,6 +9,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
+import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
@@ -165,7 +166,7 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——讀前先檢查 `.strategy` 存不存在。 */
   budget_basis_json: Partial<AdsBudgetBasisJson>;
   budget_total: number | null;
-  context_json: Record<string, unknown>;
+  context_json: CampaignContextJson;
   constraints_json: Record<string, unknown>;
   verdict: string | null;
   verdict_json: Record<string, unknown>;
@@ -227,22 +228,12 @@ export interface CampaignDraft extends CampaignDetail {
   parsed: boolean;
 }
 
-/** F04-I11：`context_json.field_sources` 的六格——`"user"`＝你說的，`"system"`＝行銷駕駛艙
- * 沒聽到就幫你補的（ARCHITECTURE.md §6.1 第 11 條）。 */
-export type FieldSource = "user" | "system";
-
-export interface CampaignFieldSources {
-  product: FieldSource;
-  objective: FieldSource;
-  platform: FieldSource;
-  budget: FieldSource;
-  dates: FieldSource;
-  audience: FieldSource;
-}
+// F40-I12: `FieldSource` / `CampaignFieldSources` / `CampaignCreateExtras` / `CampaignContextJson` live in
+// `adsCampaignTypes.ts` (this file's 800-line cap); pages import them from there.
 
 /** `POST /campaigns` 的請求體——一句話＋選填的投放期間（兩個都留空讓行銷駕駛艙從句子判斷）
  * ＋選填的額外限制。 */
-export interface CreateCampaignInput {
+export interface CreateCampaignInput extends CampaignCreateExtras {
   goal_text: string;
   start_date?: string;
   end_date?: string;
@@ -259,6 +250,10 @@ export interface PatchCampaignInput {
   end_date?: string;
   constraints_json?: Record<string, unknown>;
   product_ids?: string[];
+  /** 受眾方向；空字串清掉（`adsWizardApi.patchAudienceHint` 同一個鍵）。 */
+  audience_hint?: string | null;
+  /** F40-I04 (2b)：活動層落地頁 `context_json.landing_url`；`null`／空字串清掉。 */
+  landing_url?: string | null;
 }
 
 // -- F03-I05：策略（POST .../strategy 與 .../strategy/scenario）------------------------------
