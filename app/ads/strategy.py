@@ -14,7 +14,15 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 
 from datetime import UTC, datetime
 
-from app.ads import budget, calendar_tw, coordinate_learning, judgment, launch_settings, targets
+from app.ads import (
+    budget,
+    calendar_tw,
+    coordinate_learning,
+    judgment,
+    launch_settings,
+    learning,
+    targets,
+)
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -320,14 +328,47 @@ def _starting_point_section(brand: dict, history: dict | None, reads: dict, camp
     pixels = launch_settings.cached_pixels(campaign)
     pixel_text = f"已讀到 {len(pixels)} 個像素" if pixels is not None else "還沒讀像素"
 
+    # F39-I05 (drill-7 #5): once the brand has closed campaigns through the system, the wizard
+    # answer is only an initial value and the closed periods are stated as facts.
+    closed_lines = _closed_campaign_lines(reads)
+    if closed_lines:
+        asked = (
+            f"{asked}（初始值；已用這個系統結案 {reads['closed_campaigns']} 期，"
+            "以下列實際結果為準）"
+        )
+
     return "【這個品牌的起點】\n" + "\n".join([
         f"- 投放過沒：{asked}",
+        *closed_lines,
         f"- 花費歷史：{history_text}",
         f"- 近 90 天平台讀回：{readback}",
         f"- 迴圈購買（已結案的活動）：{loop_text}",
         f"- 像素：{pixel_text}",
         "- 訂單：訂單資料不在這裡，別假設有回購名單",
     ])
+
+
+def _closed_campaign_lines(reads: dict) -> list[str]:
+    """F39-I05: 「已結案 N 期；最近一期…」 -- one line, only with N >= 1. A missing number or
+    verdict prints 「—」 (older `verdict_json` shapes are not backfilled); money prints the way
+    the learning sentence prints it."""
+    closed_campaigns = reads.get("closed_campaigns") or 0
+    if closed_campaigns < 1:
+        return []
+    last = reads.get("last_closed") or {}
+    actual = _money_or_dash(last.get("actual"))
+    target = _money_or_dash(last.get("target"))
+    verdict = last.get("verdict") or "—"
+    return [
+        f"- 已結案：{closed_campaigns} 期；最近一期「{last.get('name') or '—'}」"
+        f"每筆 {actual} 對上限 {target}，結果 {verdict}"
+    ]
+
+
+def _money_or_dash(value) -> str:
+    if value is None:
+        return "—"
+    return str(learning._number(float(value)))
 
 
 def _available_roles(brand: dict, reads: dict) -> list[str]:

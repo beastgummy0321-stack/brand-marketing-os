@@ -934,7 +934,28 @@ def starting_point_reads(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
         (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, org_id, brand_id),
     ).fetchone()
     assert external is not None and loop is not None  # 都是聚合查詢，永遠有一列
+    # F39-I05: how many campaigns this brand closed through the system, and the latest one's
+    # judged numbers -- one query: the window count rides on the latest closed row.
+    last_closed = conn.execute(
+        "SELECT COUNT(*) OVER () AS closed_campaigns, name, verdict, verdict_json"
+        " FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND status = 'closed'"
+        " ORDER BY closed_at DESC NULLS LAST, created_at DESC LIMIT 1",
+        (org_id, brand_id),
+    ).fetchone()
+    if last_closed is None:
+        closed_campaigns, last_closed_read = 0, None
+    else:
+        verdict_json = last_closed["verdict_json"]
+        if not isinstance(verdict_json, dict):
+            verdict_json = {}
+        closed_campaigns = int(last_closed["closed_campaigns"])
+        last_closed_read = {
+            "name": last_closed["name"], "verdict": last_closed["verdict"],
+            "actual": verdict_json.get("actual"), "target": verdict_json.get("target"),
+        }
     return {
+        "closed_campaigns": closed_campaigns,
+        "last_closed": last_closed_read,
         "external_rows_ever": external["rows_ever"] > 0,
         "external_rows_90d": external["rows_90d"] > 0,
         "external_clicks_90d": (

@@ -1207,6 +1207,10 @@ class StartingPointFreshBrandTest(StrategyTestBase):
         self.assertIn("- 像素：還沒讀像素", prompt)
         self.assertIn("- 訂單：訂單資料不在這裡，別假設有回購名單", prompt)
         self.assertNotIn("點擊 0", prompt)  # 沒讀過不是 0
+        # F39-I05：沒結案過的品牌，起點段一個字都不多——沒有「初始值」也沒有「已結案」那行。
+        self.assertIn("- 投放過沒：精靈還沒問\n- 花費歷史：", prompt)
+        self.assertNotIn("初始值", prompt)
+        self.assertNotIn("- 已結案：", prompt)
         roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
         self.assertEqual(roles, ["new", "explore"])
 
@@ -1312,6 +1316,55 @@ class StartingPointEligibleBrandTest(StrategyTestBase):
 
         prompt = provider.calls[0]["messages"][0]["content"]
         self.assertIn("- 像素：已讀到 2 個像素", prompt)
+
+
+class StartingPointClosedCampaignsTest(StrategyTestBase):
+    """F39-I05（drill-7 #5）：品牌用這個系統結案過之後，精靈答案只是初始值，起點段多一行
+    「已結案 N 期；最近一期…」，數字照 `closed_at` 最新那期的 `verdict_json` 印。"""
+
+    def _close(self, name: str, *, closed_at: str, verdict: str | None,
+               verdict_json: dict) -> dict:
+        closed = self._create_campaign(name=name, status="closed")
+        web.conn.execute(
+            "UPDATE ads_campaign SET verdict = %s, verdict_json = %s, closed_at = %s"
+            " WHERE id = %s",
+            (verdict, coredb.jsonb(verdict_json), closed_at, closed["id"]),
+        )
+        web.conn.commit()
+        return closed
+
+    def test_two_closed_campaigns_turn_the_wizard_answer_into_an_initial_value(self):
+        self._close("第一期", closed_at="2026-08-31T00:00:00Z", verdict="未達成",
+                    verdict_json={"actual": 420.0, "target": 300.0})
+        self._close("第二期", closed_at="2026-09-20T00:00:00Z", verdict="達成",
+                    verdict_json={"actual": 255.456, "target": 300.0})
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn(
+            "- 投放過沒：精靈答過：投放過（初始值；已用這個系統結案 2 期，以下列實際結果為準）\n"
+            "- 已結案：2 期；最近一期「第二期」每筆 255.46 對上限 300，結果 達成\n"
+            "- 花費歷史：",
+            prompt,
+        )
+        self.assertNotIn("第一期", prompt)
+
+    def test_an_older_verdict_json_without_numbers_prints_a_dash(self):
+        """Blocked-if 條款：舊形狀的 `verdict_json` 缺 `actual`／`target` 就印「—」，不回填。"""
+        self._close("舊的一期", closed_at="2026-09-01T00:00:00Z", verdict=None,
+                    verdict_json={})
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("- 已結案：1 期；最近一期「舊的一期」每筆 — 對上限 —，結果 —\n", prompt)
 
 
 class ValidateReplyAvailableSetTest(unittest.TestCase):
