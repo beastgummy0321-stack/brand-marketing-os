@@ -268,5 +268,104 @@ class CalendarInDeliveryPlanPromptTest(PlanTestBase):
         self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
 
 
+def _plan_reply(proof: str, offer: str = "none") -> str:
+    def coords(tag: str) -> dict:
+        return {**_coordinates(tag), "proof": proof, "offer": offer}
+    return json.dumps({"groups": [
+        {"role": role, "name": f"{role} 組", "ads": [
+            {"name": f"{role}-廣告一", "coordinates": coords(role)},
+        ]}
+        for role in ("new", "retarget", "explore")
+    ]}, ensure_ascii=False)
+
+
+class PromptRowsTest(unittest.TestCase):
+    """F38 decision 1/3: `_prompt_rows` is the model's menu -- proof kinds the brand has
+    evidence for (+ none), `limited_time` only with an end date, everything else untouched."""
+
+    _ROWS = [
+        {"dimension": "proof", "key": "customer_review", "label": "顧客評論原話"},
+        {"dimension": "proof", "key": "lab_report", "label": "檢驗報告／認證"},
+        {"dimension": "proof", "key": "none", "label": "無證明"},
+        {"dimension": "offer", "key": "limited_time", "label": "限時限量"},
+        {"dimension": "offer", "key": "none", "label": "無優惠"},
+        {"dimension": "hook", "key": "lab_report", "label": "同名但不同維度"},
+        {"dimension": "audience", "key": "moms", "label": "媽媽"},
+    ]
+
+    def _keys(self, rows: list) -> list:
+        return [(r["dimension"], r["key"]) for r in rows]
+
+    def test_proof_rows_filtered_to_available_plus_none(self):
+        kept = self._keys(plan._prompt_rows(self._ROWS, {"customer_review"}, True))
+        self.assertIn(("proof", "customer_review"), kept)
+        self.assertIn(("proof", "none"), kept)
+        self.assertNotIn(("proof", "lab_report"), kept)
+
+    def test_no_evidence_leaves_only_none_proof(self):
+        kept = self._keys(plan._prompt_rows(self._ROWS, set(), True))
+        self.assertEqual([k for k in kept if k[0] == "proof"], [("proof", "none")])
+
+    def test_limited_time_dropped_without_end_date(self):
+        self.assertIn(("offer", "limited_time"),
+                      self._keys(plan._prompt_rows(self._ROWS, set(), True)))
+        kept = self._keys(plan._prompt_rows(self._ROWS, set(), False))
+        self.assertNotIn(("offer", "limited_time"), kept)
+        self.assertIn(("offer", "none"), kept)
+
+    def test_other_dimensions_untouched(self):
+        kept = plan._prompt_rows(self._ROWS, set(), False)
+        others = [r for r in self._ROWS if r["dimension"] not in ("proof", "offer")]
+        self.assertEqual([r for r in kept if r["dimension"] not in ("proof", "offer")], others)
+
+
+class ProofGateInPlanTest(PlanTestBase):
+    """F38 decision 1: the plan prompt offers only evidenced proof kinds; a reply naming a
+    proof kind the brand has no evidence for is stored as `none`, an evidenced one is kept."""
+
+    # The seeded six-dimension vocabulary's proof rows (migration 20260904000002), inserted the
+    # way test_ads_launch_view seeds audience rows -- a brand made here has no vocabulary yet.
+    _PROOF_ROWS = (
+        ("customer_review", "顧客評論原話"), ("expert_endorsement", "專家背書"),
+        ("lab_report", "檢驗報告／認證"), ("media_coverage", "媒體報導"), ("none", "無證明"),
+    )
+
+    def setUp(self):
+        super().setUp()
+        for key, label in self._PROOF_ROWS:
+            web.conn.execute(
+                "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+                "VALUES(%s,%s,%s,'proof',%s,%s)",
+                (coredb.new_id("crd"), self.org_id, self.brand_id, key, label),
+            )
+
+    def _run(self, proof: str) -> tuple[dict, str]:
+        campaign = self._create_adopted_campaign()
+        provider = _fake(_plan_reply(proof))
+        plan.PROVIDER = provider
+        detail = self._adopt(campaign["id"])
+        return detail, provider.calls[0]["messages"][0]["content"]
+
+    def _proof_keys(self, detail: dict) -> set:
+        return {ad["proof_key"] for g in detail["groups"] for ad in g["ads"]}
+
+    def test_unevidenced_proof_is_stored_as_none_and_not_offered(self):
+        detail, prompt = self._run("lab_report")
+        self.assertEqual(self._proof_keys(detail), {"none"})
+        self.assertIn("proof｜none｜無證明", prompt)
+        self.assertNotIn("檢驗報告／認證", prompt)
+
+    def test_evidenced_proof_is_offered_and_kept(self):
+        bi_repo.create_brand_fact(
+            web.conn, self.brand_id, actor=ACTOR, fact_type="proof", label="顧客評論",
+            value="「吃了三週真的有感」—— 王小姐", status="confirmed", confirmed_by=ACTOR,
+            fact_key="customer_review",
+        )
+        detail, prompt = self._run("customer_review")
+        self.assertEqual(self._proof_keys(detail), {"customer_review"})
+        self.assertIn("proof｜customer_review｜", prompt)
+        self.assertNotIn("檢驗報告／認證", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

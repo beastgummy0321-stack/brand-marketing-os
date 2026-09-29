@@ -109,6 +109,14 @@ def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str,
         # 票面：「anything else」；F07-I03 已經讓那個格式失去「彈性」這個選項）。
         required_outputs = {"copy": 1, "image_prompt": 1}
         request["variant_count"] = _variant_count(group, campaign)
+    if ad.get("offer_key") == "limited_time":
+        # F38 decision 3: the group's (else the campaign's) end date is the copy's only allowed
+        # deadline; with neither, no key -- the workbench then writes the 無優惠 version.
+        deadline = group.get("end_date") or campaign.get("end_date")
+        if deadline is not None:
+            request["offer_deadline"] = (
+                deadline.isoformat() if hasattr(deadline, "isoformat") else str(deadline)
+            )
     return {
         "name": ad["name"],
         "source_ref": _set_source_ref(campaign_id, ad["id"]),
