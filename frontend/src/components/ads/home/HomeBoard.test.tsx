@@ -3,7 +3,7 @@
  * Unknown numbers print the prototype's unknown words, never 0; money goes through the kit formatter; glossary words
  * are `Term`s, so their sentences are stripped before comparing text (`plain`). */
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
@@ -115,10 +115,39 @@ describe("MonthMoney", () => {
   });
 });
 
+/** The band reads the brand from the home route (`/brands/:brandId/ads`) for its 重新讀取平台 link. */
+const wrapOnHome = (node: React.ReactNode) => render(
+  <MemoryRouter initialEntries={["/brands/b/ads"]}><Routes><Route path="/brands/:brandId/ads" element={node} /></Routes></MemoryRouter>,
+);
+
 describe("QualityBand", () => {
-  it("an unknown month spend grades nothing and says why", () => {
-    wrap(<QualityBand state={ready(home({ spent: null, quality: null }))} onRetry={vi.fn()} />);
-    expect(screen.getByText("9 月已花還不完整（有一天的花費沒讀到），先不分級")).toBeTruthy();
+  // F40-I07 (drill-7 #8, prototype `#/home`): three honest empty states — the day is named, a failed block is a
+  // failure, and a month with nothing spent says so; none prints 0 or blames 「有一天的花費沒讀到」 for every null.
+  it("(i) unread day: names it and 重新讀取平台 opens that campaign's 成效 tab", () => {
+    const h = home({ spent: null, quality: null, campaigns: [campaign(), campaign({ campaign_id: "cmp_gap", missing_days: ["2026-09-03"] })] });
+    wrapOnHome(<QualityBand state={ready(h)} onRetry={vi.fn()} />);
+    expect(screen.getByText("9 月已花還不完整（09/03 沒讀到），先不分級")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "重新讀取平台" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_gap?tab=performance");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("(ii) spend known but no grades: 分級讀取失敗 in danger tone with 重試 reloading the board", () => {
+    const onRetry = vi.fn();
+    wrapOnHome(<QualityBand state={ready(home({ spent: 10081, quality: null }))} onRetry={onRetry} />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe("分級讀取失敗");
+    expect(alert.className).toContain("text-danger");
+    fireEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/還不完整|沒讀到/)).toBeNull();
+  });
+
+  it("(iii) nothing spent this month: one sentence, no button, no band", () => {
+    wrapOnHome(<QualityBand state={ready(home({ spent: 0, quality: { buckets: [] } }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("9 月還沒有花費資料，先不分級")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByText(/0 元|NT\$0/)).toBeNull();
   });
 
   it("buckets render through the kit band with the month label", () => {
