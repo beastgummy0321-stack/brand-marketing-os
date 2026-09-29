@@ -1,7 +1,9 @@
 /** F30-I11: the assets tab body (prototype `tabAssets()`) over real-shaped `GET …/slots` fixtures — a draft with
  * ready／missing／in-progress slots, a live campaign with a 「換掉這一則」 request, a request whose replaced ad was
- * deleted, an authenticated thumbnail, the slot upload and its next step, and the slots read failing on its own. */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ * deleted, an authenticated thumbnail, the slot upload and its next step, and the slots read failing on its own.
+ * F40-I09 (prototype `#/assets`): the tab polls while a slot is 處理中 and stops when none is, a video-format slot asks
+ * for a video and refuses a photo, and a thumbnail two slots share prints 「同一張圖，文案不同」 with 換一張. */
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -470,5 +472,133 @@ describe("AssetsBody — two halves (F35 Contract T)", () => {
     expect(await within(dialog).findByRole("list", { name: "文案版本" })).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("AssetsBody — F40-I09: the tab updates itself and says what each slot needs (prototype #/assets)", () => {
+  const P1 = "/api/ads/brands/brd_1/user-assets/uas_11/thumbnail";
+  const P2 = "/api/ads/brands/brd_1/user-assets/uas_12/thumbnail";
+  const copyA = { source: "placement" as const, label: "已確認", headline: "練完就補一顆", body: "忙到沒空吃飯也不怕", description: null };
+  const copyB = { source: "placement" as const, label: "已確認", headline: "捷運上的 30 秒", body: "把今天的維他命補齊", description: null };
+  const copyC = { source: "workbench" as const, label: "工作檯第 1 版", headline: "讀到凌晨一點", body: "讓軟糖陪你撐完最後一章", description: null };
+  /** The prototype's four tiles: one 處理中, one sharing its photo with the first, one video-format, one ready. */
+  const fourTiles = (first: Slot["state"] = "in_progress") => slots({ groups: [
+    { group_id: "g_new", name: "新客", slots: [
+      slot({ ad_id: "a1", name: "運動後與忙碌日常", state: first, confirmed: first === "ready", thumbnail_url: P1, copy: copyA, format_key: "single_image" }),
+      slot({ ad_id: "a2", name: "早晨通勤", state: "ready", thumbnail_url: P1, copy: copyB, format_key: "single_image" }),
+      slot({ ad_id: "a3", name: "深夜讀書", state: "copy_only", confirmed: false, thumbnail_url: null, copy: copyC, format_key: "video" }),
+      slot({ ad_id: "a4", name: "上班日午休", state: "ready", thumbnail_url: P2, copy: copyB, format_key: "single_image" }),
+    ] },
+  ] });
+  const tile = (name: string) => screen.getByText(name).closest("[data-slot=slot-tile]") as HTMLElement;
+
+  beforeEach(() => { vi.mocked(fetchSlotThumbnail).mockResolvedValue(new Blob(["png"])); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("polls every 3 s while a slot is 處理中, the tile says so, and the poll flips it to 已確認 and stops", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSlots).mockResolvedValueOnce(fourTiles("in_progress")).mockResolvedValueOnce(fourTiles("in_progress")).mockResolvedValue(fourTiles("ready"));
+    const view = renderBody();
+    await act(async () => {});
+    expect(screen.getByRole("heading", { name: "2／4 格已備妥" })).toBeTruthy();
+    const running = tile("運動後與忙碌日常");
+    expect(within(running).getByText("處理中")).toBeTruthy();
+    expect(within(running).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+    // No caption on the tile still being processed, even though it shares its photo.
+    expect(within(running).queryByText("同一張圖，文案不同")).toBeNull();
+    expect(getSlots).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(getSlots).toHaveBeenCalledTimes(2);
+    expect(within(tile("運動後與忙碌日常")).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(getSlots).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("heading", { name: "3／4 格已備妥" })).toBeTruthy();
+    const done = tile("運動後與忙碌日常");
+    expect(within(done).getByText("已確認・剛處理好")).toBeTruthy();
+    expect(within(done).queryByText("處理中・自動更新，不用重整")).toBeNull();
+
+    // Nothing is in progress any more: the interval is gone.
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+    expect(getSlots).toHaveBeenCalledTimes(3);
+    view.unmount();
+  });
+
+  it("unmounting while a slot is 處理中 clears the poll", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSlots).mockResolvedValue(fourTiles("in_progress"));
+    const view = renderBody();
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(getSlots).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+    expect(getSlots).toHaveBeenCalledTimes(2);
+  });
+
+  it("a video-format slot asks for a video script, offers 上傳影片 instead of 上傳, and refuses a photo before any upload", async () => {
+    vi.mocked(getSlots).mockResolvedValue(fourTiles("ready"));
+    renderBody();
+    await screen.findByRole("heading", { name: "3／4 格已備妥" });
+    const video = tile("深夜讀書");
+    expect(within(video).getByText("這格要影片腳本，照片不算")).toBeTruthy();
+    expect(within(video).getByText("缺影片")).toBeTruthy();
+    expect(within(video).getByRole("button", { name: "上傳影片：深夜讀書" })).toBeTruthy();
+    expect(within(video).queryByRole("button", { name: "上傳：深夜讀書" })).toBeNull();
+    expect(within(video).getByLabelText("選擇「深夜讀書」的檔案").getAttribute("accept")).toBe("video/*");
+
+    const photo = new File(["png"], "night.png", { type: "image/png" });
+    fireEvent.change(within(video).getByLabelText("選擇「深夜讀書」的檔案"), { target: { files: [photo] } });
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "「深夜讀書」沒有上傳成功：這格要影片腳本，照片不算");
+    expect(createUploadBatch).not.toHaveBeenCalled();
+    expect(uploadIntoSlot).not.toHaveBeenCalled();
+    expect(within(tile("深夜讀書")).getByText("缺影片")).toBeTruthy();
+  });
+
+  it("a video-format slot with no copy is the dashed placeholder with the same sentence", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "g", name: "新客", slots: [
+      slot({ ad_id: "a3", name: "深夜讀書", state: "missing", confirmed: false, thumbnail_url: null, copy: null, format_key: "video" }),
+    ] }] }));
+    renderBody();
+    await screen.findByRole("heading", { name: "0／1 格已備妥" });
+    const list = screen.getByRole("list", { name: "新客" });
+    expect(within(list).getByText("這格要影片腳本，照片不算")).toBeTruthy();
+    expect(within(list).queryByText("缺 1 則")).toBeNull();
+    expect(within(list).getByRole("button", { name: "上傳影片：深夜讀書" })).toBeTruthy();
+    expect(within(list).getByRole("link", { name: "從素材工作檯" })).toBeTruthy();
+  });
+
+  it("two slots showing the same photo say 同一張圖，文案不同, and 換一張 reopens the upload into that slot", async () => {
+    vi.mocked(getSlots).mockResolvedValue(fourTiles("ready"));
+    vi.mocked(createUploadBatch).mockResolvedValue({ batch: { id: "ub_1", uploads: [{ id: "up_1", batch_id: "ub_1", filename: "other.png", expected_size: 3, status: "complete", error: null, asset_id: "uas_13", copy_fields: {} }] } });
+    vi.mocked(uploadIntoSlot).mockResolvedValue({ placement: placement({ confirmed_at: "2026-09-29T02:00:00Z" }), slots: fourTiles("ready") });
+    renderBody();
+    await screen.findByRole("heading", { name: "3／4 格已備妥" });
+    const shared = tile("早晨通勤");
+    expect(within(shared).getByText("同一張圖，文案不同")).toBeTruthy();
+    expect(within(shared).getByText("已確認")).toBeTruthy();
+    expect(within(tile("運動後與忙碌日常")).getByText("同一張圖，文案不同")).toBeTruthy();
+    // The one photo nobody else uses says nothing.
+    expect(within(tile("上班日午休")).queryByText("同一張圖，文案不同")).toBeNull();
+
+    const swap = within(shared).getByRole("button", { name: "換一張：早晨通勤" });
+    const input = within(shared).getByLabelText("選擇「早晨通勤」的檔案") as HTMLInputElement;
+    const click = vi.spyOn(input, "click");
+    fireEvent.click(swap);
+    expect(click).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { files: [new File(["png"], "other.png", { type: "image/png" })] } });
+    await waitFor(() => expect(uploadIntoSlot).toHaveBeenCalledWith("brd_1", "cmp_1", "a2", { upload_id: "up_1" }));
+  });
+
+  it("an imported campaign's platform ads sharing one creative get the caption but no 換一張", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: null, name: "Advantage+ 購物・全台", slots: [
+      slot({ ad_id: null, entity_id: "aex_1", name: "UGC_開箱_v3_1080x1350", thumbnail_url: IMG }),
+      slot({ ad_id: null, entity_id: "aex_2", name: "UGC_開箱_v3_1080x1080", thumbnail_url: IMG }),
+    ] }] }));
+    renderBody(campaign({ origin: "imported", status: "live" }));
+    await screen.findByRole("heading", { name: "2／2 格已備妥" });
+    expect(screen.getAllByText("同一張圖，文案不同")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /換一張/ })).toBeNull();
   });
 });
