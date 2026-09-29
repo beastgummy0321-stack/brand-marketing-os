@@ -1,12 +1,15 @@
+import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeOverview } from "@/lib/adsHomeApi";
 import { GradeBand, MoneyRule, type BandBucket } from "../patterns";
 import { monthNumber } from "./MonthMoney";
+import { bandState } from "./status";
 
-/** Home money-quality band (prototype v10 `homeBand()`, `.bandc`): how much of the month's one 已花 figure landed in
- * each grade. `quality.buckets` sum to `spent` exactly (F28-I06); `null` quality means the spend is not fully known
- * (or the block failed) and nothing is graded — said once, never drawn as 0. */
+/** Home money-quality band (prototype v10 `homeBand()`, `.bandc`; F40 `#/home` for the empty states): how much of
+ * the month's one 已花 figure landed in each grade. `quality.buckets` sum to `spent` exactly (F28-I06); when nothing
+ * can be graded the band says which of the three reasons applies (`home/status.ts::bandState`) — said once, never
+ * drawn as 0. */
 export function QualityBand({ state, onRetry }: {
   state: { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
   onRetry: () => void;
@@ -20,21 +23,40 @@ export function QualityBand({ state, onRetry }: {
           <Button variant="outline" size="sm" onClick={onRetry}>重新讀取</Button>
         </div>
       )}
-      {state.status === "ready" && <Band home={state.home} />}
+      {state.status === "ready" && <Band home={state.home} onRetry={onRetry} />}
     </section>
   );
 }
 
-function Band({ home }: { home: HomeOverview }) {
+function Band({ home, onRetry }: { home: HomeOverview; onRetry: () => void }) {
+  // The home board has no platform-sync action of its own; 重新讀取平台 opens the first gapped campaign's 成效 tab,
+  // where the existing sync button lives (issue Done 1.i). The brand comes from the route (`/brands/:brandId/ads`).
+  const { brandId } = useParams<{ brandId: string }>();
   const label = `${monthNumber(home.month)} 月已花`;
-  if (home.quality === null) {
+  const band = bandState(home);
+  if (band.kind === "missing_days") {
     return (
-      <p className="text-sm text-muted-foreground">
-        {home.spent === null ? `${label}還不完整（有一天的花費沒讀到），先不分級` : "分級暫時讀取不到"}
-      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">{band.sentence}</p>
+        <Button asChild variant="outline" size="sm">
+          <Link to={`/brands/${brandId ?? ""}/ads/campaigns/${band.campaign_id}?tab=performance`}>重新讀取平台</Link>
+        </Button>
+      </div>
     );
   }
-  const buckets: BandBucket[] = home.quality.buckets.map((b) => ({
+  if (band.kind === "read_failed") {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <p role="alert" className="text-sm font-medium text-danger">{band.sentence}</p>
+        <Button variant="outline" size="sm" onClick={onRetry}>重試</Button>
+      </div>
+    );
+  }
+  if (band.kind === "no_spend") {
+    return <p className="text-sm text-muted-foreground">{band.sentence}</p>;
+  }
+  // `band` only when `quality` carries a graded amount (`bandState`), so the buckets exist here.
+  const buckets: BandBucket[] = (home.quality?.buckets ?? []).map((b) => ({
     grade: b.grade, amount: b.amount, count: b.count,
     ads: b.ads.map((a) => ({ entity_id: a.entity_id, name: a.name ?? "未命名廣告", thumbnail_url: a.thumbnail_url, spend: a.spend })),
   }));

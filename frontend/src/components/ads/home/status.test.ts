@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
-import { cleanupAction, isQueueItemDone, settleAction } from "./status";
+import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
+import { bandState, cleanupAction, isQueueItemDone, settleAction } from "./status";
 
 // F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
 const settleRow = (overrides: Partial<SettleQueueRow> = {}): SettleQueueRow => ({
@@ -75,5 +76,50 @@ describe("isQueueItemDone", () => {
   it("a trend class of worse never turns another row kind into a review row", () => {
     const refresh = queueItem({ kind_key: "refresh_creative", triage: triageItem({ class: "worse" }), proposal: deferredReview });
     expect(isQueueItemDone(refresh)).toBe(false);
+  });
+});
+
+// F40-I07（drill-7 #8）：首頁分級帶的三種空狀態只看 payload，順序＝缺天 → 分級讀取失敗 → 沒花費 → 正常帶。
+const homeCampaign = (overrides: Partial<HomeCampaign> = {}): HomeCampaign => ({
+  campaign_id: "cmp_1", name: "日常商品推廣", origin: "internal", status: "live", month_spend: null, purchases: null,
+  cost_per_purchase: null, cap: null, active_ads: 2, daily_budget: null, missing_days: [], sync_state: "ok",
+  data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null }, handoff: null, draft: null,
+  ...overrides,
+});
+const homeOverview = (overrides: Partial<HomeOverview> = {}): HomeOverview => ({
+  month: "2026-10", day_of_month: 5, days_in_month: 31, currency: "TWD", spent: null, money: null, pace: null,
+  quality: null, timeline: null, campaigns: [homeCampaign()], sync: null,
+  ...overrides,
+});
+
+describe("bandState", () => {
+  it("(i) spend unknown because a day is unread: names the day and points at that campaign", () => {
+    const home = homeOverview({ campaigns: [homeCampaign({ campaign_id: "cmp_ok" }), homeCampaign({ campaign_id: "cmp_gap", missing_days: ["2026-10-03"] })] });
+    expect(bandState(home)).toEqual({ kind: "missing_days", sentence: "10 月已花還不完整（10/03 沒讀到），先不分級", campaign_id: "cmp_gap" });
+  });
+
+  it("(i) several unread days are listed once each; more than three become a count", () => {
+    const two = homeOverview({ campaigns: [homeCampaign({ missing_days: ["2026-10-03", "2026-10-01"] }), homeCampaign({ campaign_id: "c2", missing_days: ["2026-10-03"] })] });
+    expect(bandState(two)).toMatchObject({ sentence: "10 月已花還不完整（10/01、10/03 沒讀到），先不分級" });
+    const many = homeOverview({ campaigns: [homeCampaign({ missing_days: ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"] })] });
+    expect(bandState(many)).toMatchObject({ sentence: "10 月已花還不完整（4 天沒讀到），先不分級" });
+  });
+
+  it("(ii) spend known but the quality block failed reads as a failure, never as no data", () => {
+    expect(bandState(homeOverview({ spent: 10081, quality: null }))).toEqual({ kind: "read_failed", sentence: "分級讀取失敗" });
+    // A gap elsewhere does not turn a failed block into 「還不完整」.
+    expect(bandState(homeOverview({ spent: 10081, quality: null, campaigns: [homeCampaign({ missing_days: ["2026-10-03"] })] }))).toMatchObject({ kind: "read_failed" });
+  });
+
+  it("(iii) nothing spent: empty buckets, or unknown／zero spend with every day read", () => {
+    const sentence = "10 月還沒有花費資料，先不分級";
+    expect(bandState(homeOverview({ spent: 0, quality: { buckets: [] } }))).toEqual({ kind: "no_spend", sentence });
+    expect(bandState(homeOverview({ spent: 0, quality: { buckets: [{ grade: "on_target", amount: 0, count: 0, ads: [] }] } }))).toMatchObject({ kind: "no_spend" });
+    expect(bandState(homeOverview({ spent: null, quality: null }))).toMatchObject({ kind: "no_spend", sentence });
+    expect(bandState(homeOverview({ spent: null, quality: null, campaigns: null }))).toMatchObject({ kind: "no_spend" });
+  });
+
+  it("normal: any graded amount draws the band", () => {
+    expect(bandState(homeOverview({ spent: 10081, quality: { buckets: [{ grade: "on_target", amount: 3120, count: 1, ads: [] }, { grade: "ungraded", amount: 6961, count: 3, ads: [] }] } }))).toEqual({ kind: "band" });
   });
 });
