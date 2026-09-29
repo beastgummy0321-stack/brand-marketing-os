@@ -915,7 +915,19 @@ def _pack_completion(pack_row: dict, sets_done: int, sets_total: int) -> tuple:
         items.append({"key": key, "label": label, "ok": ok, "overridden": overridden})
     can_approve = all(item["ok"] for item in items)
     missing = sets_total - sets_done
-    blocking_text = f"尚有 {missing} 個素材組未完成" if missing > 0 else ""
+    # F40-I05 (drill-7 #14): the grey 「核准整包」 never stays silent — every reason is
+    # named, joined by 「；」. The missing-set sentence already explains an unticked
+    # `required_outputs_met`, so that item is only listed by label when no set is missing.
+    reasons = []
+    if missing > 0:
+        reasons.append(f"尚有 {missing} 個素材組未完成")
+    unticked = [
+        item["label"] for item in items
+        if not item["ok"] and (item["key"] != "required_outputs_met" or missing == 0)
+    ]
+    if unticked:
+        reasons.append("還沒勾" + "".join(f"「{label}」" for label in unticked))
+    blocking_text = "；".join(reasons) if not can_approve else ""
     return items, can_approve, blocking_text
 
 
