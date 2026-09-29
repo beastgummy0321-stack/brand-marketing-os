@@ -101,7 +101,12 @@ def account_spend_history(
     天數**，不是常數 30——只投 7 天的帳戶，日均不該被沒投放的 23 天稀釋。逐日花費讀
     `meta_repo.daily_entity_spend(level="campaign")` 再按 `spend_date` 加總；`days` 回的
     就是這個有花費天數，0 天＝沒有歷史（回 `None`）。窗仍是 30 天，CPA 仍沿用
-    `spend_summary` 整段的誠實加總。"""
+    `spend_summary` 整段的誠實加總。
+
+    F38 (decision 4): the account base stays on `meta_entity_spend`, not the sync table -- the
+    sync table's monthly rows only hold campaigns bound to this brand, so unbound campaigns in
+    the same account would be dropped and the base would undercount. The two sources stay; the
+    caller's caption (`repository._account_history`) names this one as 「Meta 廣告帳戶全部活動」."""
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     if not account_ids:
         return None

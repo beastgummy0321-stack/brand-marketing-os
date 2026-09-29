@@ -472,7 +472,7 @@ class BudgetHistoryTest(StrategyTestBase):
         self.assertIsNone(history["cpa"])  # 沒追蹤到轉換事件，不是 0
         self.assertEqual(history["sample_days"], 2)
         self.assertIsNone(history["sample_ads"])
-        self.assertEqual(history["source_text"], "Meta 近 30 天有投放的 2 天平均日花費")
+        self.assertEqual(history["source_text"], "Meta 廣告帳戶全部活動，近 30 天有投放的 2 天平均日花費")
 
     def test_account_history_caption_prints_source_text_unchanged(self):
         """F36-I05 #3: `budget._history_scenarios` prints `source_text` as-is — the day count
@@ -484,7 +484,7 @@ class BudgetHistoryTest(StrategyTestBase):
         scenarios = budget._history_scenarios(history, 14)
         captions = [row["caption"] for row in scenarios["scenarios"]]
         self.assertTrue(all(
-            c.startswith("Meta 近 30 天有投放的 2 天平均日花費 NT$450 ×") for c in captions
+            c.startswith("Meta 廣告帳戶全部活動，近 30 天有投放的 2 天平均日花費 NT$450 ×") for c in captions
         ), captions)
         self.assertTrue(all(c.count("30 天") == 1 for c in captions), captions)
         self.assertEqual(scenarios["basis"]["sample_days"], 2)
@@ -498,7 +498,7 @@ class BudgetHistoryTest(StrategyTestBase):
         self.assertIsNotNone(history)
         self.assertEqual(history["last_daily_budget"], 100)
         self.assertEqual(history["sample_days"], 30)
-        self.assertEqual(history["source_text"], "Meta 近 30 天有投放的 30 天平均日花費")
+        self.assertEqual(history["source_text"], "Meta 廣告帳戶全部活動，近 30 天有投放的 30 天平均日花費")
 
     def test_bound_account_with_zero_recent_spend_is_still_cold_start(self):
         """帳戶接了，但 30 天內沒有任何花費——誠實冷啟動，不假裝有歷史。"""
