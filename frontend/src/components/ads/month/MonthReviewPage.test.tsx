@@ -4,7 +4,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import {
@@ -17,6 +17,10 @@ import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { MonthReviewPage } from "./MonthReviewPage";
 import { monthCsvName, monthCsvRows, shiftMonth, weekBars } from "./monthCsv";
 
+// F37-I05 (ruling 4c): the page reads the budget month from the org clock (`useWorkspace().identity.org`);
+// the timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
+let orgTimezone = "Asia/Taipei";
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: orgTimezone, today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsMonthApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsMonthApi")>("@/lib/adsMonthApi");
   return { ...actual, getMonthSummary: vi.fn(), dismissSuggestion: vi.fn() };
@@ -290,6 +294,23 @@ describe("MonthReviewPage — past month", () => {
     await user.click(screen.getByRole("button", { name: `${PREV} 月` }));
     expect(await screen.findByRole("heading", { level: 1, name: `${PREV} 月回顧` })).toBeTruthy();
     await waitFor(() => expect(mockSummary).toHaveBeenLastCalledWith("brd_bughunt", LAST, expect.anything()));
+  });
+});
+
+describe("MonthReviewPage — org clock", () => {
+  // 2026-02-28 10:30Z: Kiritimati (UTC+14) is already 2026-03-01 00:30, while UTC and the test runner zone
+  // (Asia/Taipei, 18:30) are still on 2026-02-28. Only `Date` is faked so timers stay real.
+  beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-02-28T10:30:00Z")); });
+  afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
+
+  it("opens on the organisation's month, not the browser's or Taipei's", async () => {
+    mockSummary.mockResolvedValue(summary({ month: "2026-03" }));
+    mockHome.mockResolvedValue(home({ month: "2026-03", day_of_month: 1, days_in_month: 31, pace: { budget_amount: 60000, available: 60000, projected_month_end: 0, daily: [] } }));
+    renderPage();
+    expect(await screen.findByRole("heading", { level: 1, name: "3 月回顧" })).toBeTruthy();
+    expect(mockSummary).toHaveBeenCalledWith("brd_bughunt", "2026-03", expect.anything());
+    expect(mockHome).toHaveBeenCalledWith("brd_bughunt", "2026-03", expect.anything());
+    expect(screen.getByRole("button", { name: "2 月" })).toBeTruthy();
   });
 });
 

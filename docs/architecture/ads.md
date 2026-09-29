@@ -48,7 +48,7 @@ git history (retired F03 plan). Current visual references are in `docs/design/ad
    approved, sync state (`pending_manual` / `confirmed_manual` / `auto_synced`), platform ref,
    reversible by a reverse action. It replaces `campaign_period_budget_version`. Budget raises still
    pass through `app/core/approval.py` (`max_daily_amount` stays the brake).
-6. **Outcome attribution is by bound entity** (superseded by §6.41 once F37 lands: platform sync rows, no `ads_outcome_daily`). One `ads_outcome_daily` row per (entity, day), fed
+6. **Outcome attribution is by bound entity** (superseded by §6.41, F37: platform sync rows; `ads_outcome_daily` dropped). One `ads_outcome_daily` row per (entity, day), fed
    either by the Meta ingest (read `meta_entity_spend` through `app.meta.repository`) or by the
    simulated adapter. 重疊分帳 (ADR 0053's day-splitting between overlapping 檔期) does not come
    along; a campaign owns the entities bound to it.
@@ -1681,7 +1681,7 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   treats it. The manual adapter's 「受眾提示」 row is read through `db.current()` inside `describe(campaign)` (the adapter
   signature takes no connection). `ReviewWindow.missing_days` is on the payload but not yet in the frontend type.
 
-### 6.41 One performance pipeline（ruled 2026-09-28；planned as F37）
+### 6.41 One performance pipeline（ruled 2026-09-28；built in F37）
 - **The platform sync is the only performance source** (user ruling 1). `ads_external_daily` + the campaign's recorded
   `external_sync.observations.coverage` feed every performance reader of internal and imported campaigns alike: the
   performance tab, closeout, budget history, A/B pairs, experiments, visual learning, the strategy starting point, the home,
@@ -1699,3 +1699,12 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   while the last observations read ended in error; the verdict is then 看不出 with the days recorded.
 - **Never synced is not covered** (ruling 4): review evidence refuses a campaign with no recorded coverage.
 - Prototype `.harness/scratch/prototype/f37-pipeline/index.html` (`#/perf`, `#/close`).
+- **As built (F37, 2026-09-29)**: the read seam is `repository.performance_rows` / `outcome.rows` (Contract P); readers never
+  query `ads_external_daily` for internal performance themselves. A reader declares `monthly_supported()` (missing ⇒ True);
+  `request_sync` schedules `monthly:` tasks only for readers that can prove an account month, so a simulated sync job ends
+  `succeeded`. `SimulatedReader` regenerates rows per day from `simulated.day_rng(campaign_id, day)` (idempotent re-read) and
+  answers `pixels`/`verify_native` with `unsupported`. Simulated coverage joins a new range only when it overlaps or touches
+  the recorded one — disjoint recovery days never mark the gap as read. The close 409 uses the standard `ApiError` envelope:
+  `error.details = {missing_days, never_synced, can_skip}`; an isolated simulation recovery can always skip (no platform to
+  re-read); a skipped close writes 看不出 and no visual learning. Migration `20260929000001_ads_drop_outcome_daily.sql`.
+  Simulated campaigns published before F37 have no entity chain and get no new rows (re-publish; test data).

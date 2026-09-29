@@ -79,7 +79,7 @@ function round(status: reviews.ReviewStatus = "waiting"): reviews.ReviewRound {
     result_json: {}, evidence_json: {
       target,
       window: { start: "2026-09-01", end: "2026-09-07", previous_start: "2026-08-25",
-        previous_end: "2026-08-31", timezone: null },
+        previous_end: "2026-08-31", timezone: null, missing_days: [] },
       current: period(), previous: { row_count: 0, days_present: 0, days_expected: 7,
         missing_days: 7, series: [] },
       commerce: { current: commerce(), previous: { ...commerce(), order_summary: {

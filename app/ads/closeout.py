@@ -15,7 +15,7 @@ a no-op that returns the already-closed row unchanged, no second learning (§0 "
 guard stays status='closed' on the campaign row; do not query the ledger for it").
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from app.ads import learning as ads_learning
 from app.ads import outcome, repository, simulation_mode, targets, visual_learning
@@ -57,8 +57,44 @@ def _judge(cap: dict, campaign: dict, totals: dict, sample_bucket: str,
     return ("達成" if actual <= target else "未達成"), verdict_json
 
 
+class CoverageMissing(ValueError):
+    """F37 Contract Q: the campaign window has days the platform read never covered (or nothing
+    was ever read). `str(exc)` is the route code `coverage_missing`; `payload` is what the route
+    returns so the user sees which days and whether the skip is open."""
+
+    def __init__(self, payload: dict):
+        super().__init__("coverage_missing")
+        self.payload = payload
+
+
+def _missing_sentence(gap: dict) -> str:
+    if gap["never_synced"]:
+        return "還沒讀過平台資料"
+    days = gap["missing_days"]
+    listed = "、".join(date.fromisoformat(day).strftime("%m/%d") for day in days)
+    return f"有 {len(days)} 天沒讀到平台資料：{listed}"
+
+
+def _coverage_check(campaign: dict, coverage: dict, skip_missing: bool) -> dict | None:
+    """F37 Contract Q (ruling 3): refuse a window the platform read does not cover. `coverage` is
+    `outcome.summary()`'s block -- `triage.coverage_gap` over `start_date … min(end_date, org
+    yesterday)`, the one rule the performance tab and review share. The skip opens only after the
+    last observations read ended `error` (every successful read resets the status), or for an
+    isolated simulation recovery, whose only "read" is the user typing days in. Returns the gap
+    when a permitted skip goes ahead, `None` when the window is fully covered."""
+    gap = {"never_synced": coverage["never_synced"], "missing_days": coverage["missing_days"]}
+    if not gap["never_synced"] and not gap["missing_days"]:
+        return None
+    context = campaign.get("context_json") or {}
+    status = ((context.get("external_sync") or {}).get("observations") or {}).get("status")
+    can_skip = status == "error" or bool(context.get("simulation_recovery"))
+    if skip_missing and can_skip:
+        return gap
+    raise CoverageMissing({**gap, "can_skip": can_skip})
+
+
 def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
-          reason: str | None = None) -> dict:
+          reason: str | None = None, skip_missing: bool = False) -> dict:
     """結案：判 verdict → 寫一條學習（`app/ads/learning.py::write_learning`，它自己
     commit——檔案慣例）→ 一次 UPDATE 把 `verdict`／`verdict_json`／`status='closed'`／
     `closed_at` 落地，順序固定（§0「Close in the order record_learning(...) -> one UPDATE」）。
@@ -71,6 +107,9 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     if campaign["status"] == "closed":
         return campaign
 
+    result = outcome.summary(conn, org_id, brand_id, campaign_id)
+    skipped_gap = _coverage_check(campaign, result["coverage"], skip_missing)
+
     recovery = (campaign.get("context_json") or {}).get("simulation_recovery")
     if recovery:
         # record_learning commits internally. Freeze recovery before that commit releases the lock.
@@ -82,7 +121,6 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     brand = bi_repo.get_brand(conn, brand_id)
     labels = conversion_labels(brand.get("conversion_goal") if brand else None)
 
-    result = outcome.summary(conn, org_id, brand_id, campaign_id)
     totals = result["totals"]
     days = _days(campaign["start_date"], campaign["end_date"])
     # `sample_bucket` takes an int. `purchases` is `None` only when no day of the campaign carries
@@ -110,14 +148,24 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         if incomplete_simulation:
             verdict = "看不出"
             verdict_json["missing"] = "模擬回收尚有缺日或缺廣告，不把缺資料視為零。"
+    if skipped_gap is not None:
+        # A skipped gap is 看不出 whatever the partial rows say; a recovery campaign keeps its
+        # receipts sentence (the existing rule already names what is missing there).
+        verdict = "看不出"
+        if not incomplete_simulation:
+            verdict_json["missing"] = _missing_sentence(skipped_gap)
+        verdict_json["missing_days"] = skipped_gap["missing_days"]
     if reason:
         verdict_json["close_reason"] = reason
 
     learning_row = ads_learning.write_learning(
         conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor,
     )
-    visual_rows = [] if incomplete_simulation else visual_learning.write_visual_learnings(
-        conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
+    # Partial data teaches no visual pattern: the same stance the incomplete recovery takes.
+    visual_rows = [] if incomplete_simulation or skipped_gap is not None else (
+        visual_learning.write_visual_learnings(
+            conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
+        )
     )
     verdict_json["learning_ids"] = [learning_row["id"], *[r["id"] for r in visual_rows]]
 

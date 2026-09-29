@@ -8,6 +8,7 @@ import { existingCampaigns, externalView, type NativeEntity, type SourceAccount 
 import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffIdentity, type HandoffItem, type HandoffWorkspace, type NewAdHandoffRequest } from "@/lib/adsHandoffApi";
 import { formatSyncTime } from "@/lib/format";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
 import { SettingsReadback } from "./publish/SettingsReadback";
@@ -218,8 +219,9 @@ function NewAdForm({ brandId, campaignId, scope, data }: { brandId: string; camp
   const navigate = useNavigate();
   const storageKey = `ads-new-ad-handoff:${scope}:${brandId}:${campaignId}`;
   const [pending, setPending] = useState<Pending | null>(() => { try { const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as Pending | null; return saved?.request?.operation_id ? saved : null; } catch { return null; } });
+  const { timezone } = useOrgClock();
   const [title, setTitle] = useState(pending?.request.title ?? "");
-  const [month, setMonth] = useState(pending?.request.month ?? currentBudgetMonth());
+  const [month, setMonth] = useState(pending?.request.month ?? currentBudgetMonth(timezone));
   const [placementId, setPlacementId] = useState(pending?.request.placement_id ?? "");
   const [destination, setDestination] = useState(pending?.request.destination_entity_id ?? "");
   const [reason, setReason] = useState(pending?.request.reason ?? "");

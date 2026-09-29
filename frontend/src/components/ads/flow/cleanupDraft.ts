@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { createChangeSet, type ChangeItem, type ChangeSet } from "@/lib/adsChangeApi";
 import type { QueueCleanup, QueueCleanupAd, QueueItem } from "@/lib/adsTriageApi";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { buildCleanupDraftItems, changeStepPath, cleanupTitle } from "./changeFlow";
 
 /** How a cleanup draft's frozen close list differs from the queue row's current `cleanup.ads` — `added` = ads the
@@ -40,7 +41,7 @@ export function declinedIdsOf(set: ChangeSet | null | undefined): string[] {
  * `supersedesId` replaces an outdated draft with the latest proposal. F29-I14: `declinedIds` are the proposed ads the
  * user unticked — they are left out of the items and sent as `declined_ids` (Contract B: remembered at approval). */
 export function createCleanupSet(
-  brandId: string, campaignId: string, cleanup: QueueCleanup, operationId: string, supersedesId?: string,
+  brandId: string, campaignId: string, cleanup: QueueCleanup, operationId: string, timezone: string, supersedesId?: string,
   declinedIds: string[] = [],
 ): Promise<ChangeSet> {
   const declined = new Set(declinedIds);
@@ -48,7 +49,7 @@ export function createCleanupSet(
   return createChangeSet(brandId, campaignId, {
     operation_id: operationId,
     title: cleanupTitle(cleanup.campaign_name),
-    month: currentBudgetMonth(),
+    month: currentBudgetMonth(timezone),
     items: buildCleanupDraftItems(cleanup.ads.filter((ad) => !declined.has(ad.entity_id))),
     ...(supersedesId ? { supersedes_id: supersedesId } : {}),
     source: "cleanup",
@@ -114,6 +115,7 @@ export function useCleanupRebuild({ brandId, campaignId, setId, isCleanup, propo
   setBusy: (value: boolean) => void; setChangeSet: (set: ChangeSet) => void; setActionError: (message: string | null) => void;
 }): { drift: CleanupDrift | null; draftProposalId: string | null; adopt: () => Promise<void> } {
   const navigate = useNavigate();
+  const { timezone } = useOrgClock();
   // One operation id per page, so a retry after a lost response replays the same set.
   const [operationId] = useState(() => `triage-cleanup-adopt:${setId ?? campaignId}:${crypto.randomUUID()}`);
   const drift = isCleanup ? cleanupDrift(changeSet, triageItem?.cleanup) : null;
@@ -131,7 +133,7 @@ export function useCleanupRebuild({ brandId, campaignId, setId, isCleanup, propo
     setActionError(null);
     try {
       // The user's own unticks that the latest proposal still proposes carry over (Contract B).
-      const rebuilt = await createCleanupSet(brandId, campaignId, cleanup, operationId, changeSet.id, declinedIdsOf(changeSet));
+      const rebuilt = await createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, changeSet.id, declinedIdsOf(changeSet));
       setChangeSet(rebuilt);
       navigate(changeStepPath(brandId, campaignId, rebuilt.id, "confirm"), { replace: true });
     } catch (err) {

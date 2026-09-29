@@ -19,6 +19,10 @@ class ExternalReader(Protocol):
         self, conn, org_id, brand_id, account, *, start, end, cursor=None, **kwargs
     ) -> SourcePage: ...
     def binding_kinds(self) -> tuple[str, ...]: ...
+
+    # Whether the source can prove an account's whole-month spend (`read_monthly` with an
+    # `account_campaign_day` coverage proof). A reader without this method counts as True.
+    def monthly_supported(self) -> bool: ...
     def verify_native(
         self,
         conn,

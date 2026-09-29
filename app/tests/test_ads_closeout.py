@@ -13,12 +13,16 @@ there is no unattended auto-close path, close-out is always a person's or an exp
 import unittest
 from datetime import timedelta
 
-from app.ads import closeout, jobs, plan
+from fastapi.testclient import TestClient
+
+import app.main as main
+from app.ads import closeout, external_repository, jobs, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.shared import web
+from app.tests.fixtures.ads_external import outcome_seed
 
 ACTOR = "測試員"
 
@@ -34,12 +38,19 @@ class CloseoutTestBase(unittest.TestCase):
         self.today = coresettings.today_for_org(self.conn, org_id=self.org_id)
         self.conn.commit()
 
-    def _campaign(self, *, cap, start_date, end_date, status="live", context=None) -> dict:
+    def _campaign(self, *, cap, start_date, end_date, status="live", context=None,
+                  covered=True) -> dict:
+        """`covered` records a successful platform read over the whole window (F37 Contract Q:
+        closeout refuses an unread window, so every verdict case starts honestly covered)."""
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": f"測試 Campaign {cap}", "goal_text": "衝一波", "objective": "購買",
             "target_cost": cap, "context_json": context or {},
             "start_date": start_date, "end_date": end_date, "status": status,
         }, created_by=ACTOR)
+        if covered:
+            outcome_seed.set_coverage(
+                self.conn, self.org_id, self.brand_id, campaign["id"], start_date, end_date,
+            )
         self.conn.commit()
         return campaign
 
@@ -52,12 +63,10 @@ class CloseoutTestBase(unittest.TestCase):
     def _outcome_row(self, campaign_id: str, group_id: str, day, *, spend: float,
                       purchases: int | None, revenue: float | None,
                       source: str = "simulated") -> None:
-        self.conn.execute(
-            "INSERT INTO ads_outcome_daily (id, org_id, brand_id, campaign_id, entity_kind,"
-            " entity_id, day, spend, impressions, clicks, purchases, revenue, source)"
-            " VALUES (%s, %s, %s, %s, 'group', %s, %s, %s, 100, 10, %s, %s, %s)",
-            (coredb.new_id("ado"), self.org_id, self.brand_id, campaign_id, group_id, day,
-             spend, purchases, revenue, source),
+        outcome_seed.seed_day(
+            self.conn, self.org_id, self.brand_id, campaign_id, "group", group_id, day,
+            spend=spend, impressions=100, clicks=10, purchases=purchases, revenue=revenue,
+            source=source,
         )
         self.conn.commit()
 
@@ -308,6 +317,135 @@ class CapResolutionTest(CloseoutTestBase):
         self.assertEqual(closed["verdict"], "看不出")
         self.assertIsNone(closed["verdict_json"]["target"])
         self.assertIn("上限沒有設定", closed["verdict_json"]["missing"])
+
+
+class CoverageGateTest(CloseoutTestBase):
+    """F37 Contract Q (ruling 3): closeout refuses a window the platform read does not cover and
+    names the days; the skip opens only after the last read ended `error` (or for an isolated
+    simulation recovery, whose only read is the user typing days in) and then closes 看不出."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(main.app)
+
+    def _gapped(self) -> dict:
+        """Five-day window (today-5 … today-1, all complete) read only for its last three days,
+        which carry 30 purchases at 100 each -- 達成 against 300 if the gap were ignored."""
+        start = self.today - timedelta(days=5)
+        campaign = self._campaign(
+            cap=300, start_date=start, end_date=self.today - timedelta(days=1), covered=False,
+        )
+        outcome_seed.set_coverage(
+            self.conn, self.org_id, self.brand_id, campaign["id"],
+            start + timedelta(days=2), self.today - timedelta(days=1),
+        )
+        group = self._group(campaign["id"])
+        for offset in range(2, 5):
+            self._outcome_row(campaign["id"], group["id"], start + timedelta(days=offset),
+                              spend=1000.0, purchases=10, revenue=5000.0)
+        self.conn.commit()
+        return campaign
+
+    def _read_failed(self, campaign_id: str) -> None:
+        external_repository.record_sync(
+            self.conn, self.org_id, self.brand_id, campaign_id, section="observations",
+            state={"status": "error", "error": "平台逾時"},
+        )
+        self.conn.commit()
+
+    def _close_route(self, campaign_id: str, **body):
+        return self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/close", json=body,
+        )
+
+    def _learning_count(self) -> int:
+        return len(bi_repo.list_learnings(self.conn, self.brand_id))
+
+    def _unread(self) -> list[str]:
+        start = self.today - timedelta(days=5)
+        return [start.isoformat(), (start + timedelta(days=1)).isoformat()]
+
+    def test_gap_without_a_failed_read_is_409_naming_the_days_and_writes_nothing(self):
+        campaign = self._gapped()
+        resp = self._close_route(campaign["id"])
+        self.assertEqual(resp.status_code, 409, resp.text)
+        error = resp.json()["error"]
+        self.assertEqual(error["code"], "coverage_missing")
+        self.assertIn("有 2 天還沒讀到平台資料", error["message"])
+        self.assertEqual(error["details"], {
+            "missing_days": self._unread(), "never_synced": False, "can_skip": False,
+        })
+        # An explicit skip without a failed read is refused the same way.
+        resp = self._close_route(campaign["id"], skip_missing=True)
+        self.assertEqual(resp.status_code, 409, resp.text)
+        self.assertFalse(resp.json()["error"]["details"]["can_skip"])
+        row = ads_repo.get_campaign(self.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(row["status"], "live")
+        self.assertEqual(self._learning_count(), 0)
+
+    def test_never_synced_is_refused_as_never_read_not_a_wall_of_dates(self):
+        campaign = self._campaign(
+            cap=300, start_date=self.today - timedelta(days=5),
+            end_date=self.today - timedelta(days=1), covered=False,
+        )
+        resp = self._close_route(campaign["id"])
+        self.assertEqual(resp.status_code, 409, resp.text)
+        error = resp.json()["error"]
+        self.assertIn("還沒讀過平台資料", error["message"])
+        self.assertEqual(error["details"],
+                         {"missing_days": [], "never_synced": True, "can_skip": False})
+        self.assertEqual(self._learning_count(), 0)
+
+    def test_after_a_failed_read_the_explicit_skip_closes_inconclusive_with_the_days(self):
+        campaign = self._gapped()
+        self._read_failed(campaign["id"])
+        resp = self._close_route(campaign["id"])
+        self.assertEqual(resp.status_code, 409, resp.text)  # never a default skip
+        self.assertTrue(resp.json()["error"]["details"]["can_skip"])
+
+        resp = self._close_route(campaign["id"], skip_missing=True)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        closed = ads_repo.get_campaign(self.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(closed["status"], "closed")
+        self.assertEqual(closed["verdict"], "看不出")
+        days = self._unread()
+        self.assertEqual(closed["verdict_json"]["missing_days"], days)
+        listed = "、".join(
+            f"{day[5:7]}/{day[8:10]}" for day in days
+        )
+        self.assertEqual(closed["verdict_json"]["missing"], f"有 2 天沒讀到平台資料：{listed}")
+        self.assertEqual(self._learning_count(), 1)
+
+    def test_fully_covered_window_judges_as_before(self):
+        campaign = self._gapped()
+        outcome_seed.set_coverage(
+            self.conn, self.org_id, self.brand_id, campaign["id"],
+            self.today - timedelta(days=5), self.today - timedelta(days=1),
+        )
+        self.conn.commit()
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        self.assertEqual(closed["verdict"], "達成")
+        self.assertNotIn("missing_days", closed["verdict_json"])
+
+    def test_recovery_campaign_with_no_saved_day_may_skip_and_keeps_the_receipts_rule(self):
+        """Lead decision 2026-09-29: a recovery campaign has no platform to re-read, so its skip
+        is open whenever the gap is non-empty; the receipts rule still makes it 看不出."""
+        campaign = self._campaign(
+            cap=300, start_date=self.today - timedelta(days=3),
+            end_date=self.today - timedelta(days=1), covered=False,
+            context={"simulation_recovery": {"days": {}}},
+        )
+        with self.assertRaises(closeout.CoverageMissing) as caught:
+            closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        self.assertEqual(caught.exception.payload,
+                         {"missing_days": [], "never_synced": True, "can_skip": True})
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"],
+                                actor=ACTOR, skip_missing=True)
+        self.assertEqual(closed["status"], "closed")
+        self.assertEqual(closed["verdict"], "看不出")
+        self.assertEqual(closed["verdict_json"]["missing"],
+                         "模擬回收尚有缺日或缺廣告，不把缺資料視為零。")
+        self.assertEqual(closed["verdict_json"]["missing_days"], [])
 
 
 class ExpiredActivityRemainsOpenTest(CloseoutTestBase):

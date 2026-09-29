@@ -61,11 +61,13 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
     return () => { lifetime.current.abort(); request.current?.abort(); };
   }, []);
 
-  const load = useCallback(() => {
+  // `quiet`: the reload after a platform read keeps the current body mounted (an open close dialog
+  // or opened fold survives it; F37 — the dialog re-enables 確認結案 once the read ends).
+  const load = useCallback((quiet = false) => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
-    setState({ status: "loading" });
+    if (!quiet) setState({ status: "loading" });
     getCampaign(brandId, campaignId)
       .then(async (campaign) => {
         if (controller.signal.aborted) return;
@@ -82,7 +84,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
       });
   }, [brandId, campaignId]);
 
-  useEffect(load, [load]);
+  useEffect(() => load(), [load]);
 
   async function refreshPlatform() {
     if (syncing) return;
@@ -108,7 +110,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
         else {
           setSyncId(null); setSyncing(false);
           if (result.job.error) setSyncError(result.job.error);
-          load();
+          load(true);
           reloadWorkspace();
         }
       } catch (err) {
@@ -157,7 +159,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   const platformSync = { onSync: () => void refreshPlatform(), syncing, error: syncError };
   let body: ReactNode = null;
   if (state.status === "error") {
-    body = <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />;
+    body = <EmptyState title="讀取失敗" description={state.message} onAction={() => load()} actionLabel="重新載入" />;
   } else if (!campaign || !slot) {
     body = <Skeleton className="h-60 w-full" />;
   } else if (tab === "overview") {
@@ -180,7 +182,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
       <Disclosure label="進階：舊版成效與檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
         <div className="flex flex-col gap-4">
           <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
-          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} />
+          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError} />
         </div>
       </Disclosure>
     );

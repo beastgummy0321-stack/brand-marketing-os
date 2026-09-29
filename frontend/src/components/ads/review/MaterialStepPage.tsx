@@ -21,6 +21,7 @@ import { materialModes } from "../MaterialTaskEditor";
 import { UserAssetPlacements } from "../UserAssetPlacements";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { ActionBar, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
@@ -237,6 +238,7 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
   readyPlacements: HandoffPlacement[]; placementsLoading: boolean;
 }) {
   const navigate = useNavigate();
+  const { timezone } = useOrgClock();
   const [operationId] = useState(() => `review-material-handoff:${review.id}:${crypto.randomUUID()}`);
   const [placementId, setPlacementId] = useState("");
   const [title, setTitle] = useState("");
@@ -268,7 +270,7 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
     const trimmedTitle = title.trim(), trimmedReason = reason.trim();
     if (!trimmedTitle || !trimmedReason) { setError("請填寫新廣告名稱與理由。"); return; }
     const request: NewAdHandoffRequest = pending ?? {
-      operation_id: operationId, title: trimmedTitle, month: currentBudgetMonth(),
+      operation_id: operationId, title: trimmedTitle, month: currentBudgetMonth(timezone),
       placement_id: selected.id, revision: selected.revision, destination_entity_id: destinationEntityId,
       reason: trimmedReason, replaces_entity_id: review.entity_id,
       ...(newTestRecommendationId ? { review_id: review.id, recommendation_id: newTestRecommendationId } : {}),

@@ -257,14 +257,6 @@
       ],
       "symbol": "ads_action"
     },
-    "ads_outcome_daily": {
-      "owner": "ads",
-      "kind": "sql-table",
-      "definition": [
-        "supabase/migrations/*_ads_*.sql"
-      ],
-      "symbol": "ads_outcome_daily"
-    },
     "campaign_period": {
       "owner": "schedule",
       "kind": "sql-table",
@@ -587,8 +579,8 @@ because `intake.may_depend_on = ["ads"]`);
 `workbench_pack`, `workbench_brief`, `workbench_output` and `workbench_visual_identity` (the
 derived brand visual identity cache, one row per brand knowledge version, §5.9 — a cache of what
 the brand facts imply, not a second brand data model) belong to `workbench`; the
-campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group`, `ads_ad`,
-`ads_action` and `ads_outcome_daily` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
+campaign/period tables belong to `schedule`; `ads_campaign`, `ads_delivery_group`, `ads_ad`
+and `ads_action` belong to `ads`. Physical definitions live in the shared `supabase/migrations/` directory, one file
 per module prefix (`<timestamp>_<module>_<desc>.sql`); an applied migration is never edited, a
 correction is a new file.
 **Avoid table-name collisions in the textual checker** (2026-09-15, F07-I02 block). The checker's

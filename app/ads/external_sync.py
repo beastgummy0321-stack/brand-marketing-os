@@ -55,8 +55,14 @@ def _last_covered(old):
     return old.get("last_covered")
 
 
+def monthly_supported(reader):
+    """A reader that cannot prove an account's whole month gets no `monthly:` task (it would
+    only ever fail and hold the job `partial`); a reader without the method is assumed able."""
+    return bool(getattr(reader, "monthly_supported", lambda: True)())
+
+
 def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None):
-    account_reader(conn, org_id, brand_id, platform, source_account)
+    reader, _ = account_reader(conn, org_id, brand_id, platform, source_account)
     today = settings.today_for_org(conn, org_id=org_id)
     month_request_start = start or end or today
     end = end or today
@@ -85,7 +91,7 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
     requested = {"list": {"section": "list"}}
     # Explicit backfills cover each touched month; daily/default reads cover this month.
     month = month_request_start.replace(day=1)
-    while month <= end:
+    while monthly_supported(reader) and month <= end:
         month_end = month.replace(day=calendar.monthrange(month.year, month.month)[1])
         requested["monthly:" + month.strftime("%Y-%m")] = {
             "section": "monthly",

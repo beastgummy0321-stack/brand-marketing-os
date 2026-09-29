@@ -3,11 +3,10 @@ dismissal. Read-only aggregation plus one small write (dismiss); no LLM call, no
 (ARCHITECTURE.md §0 "程式整理，LLM 判斷").
 
 Scope: `campaigns` only ever lists `origin='imported'` campaigns -- Contract G's spend/result
-grain is `ads_external_daily` (`metric_scope='ad'`), the same triage/existing-campaign data a
-system-built (internal) campaign never writes (it is judged through `ads_outcome_daily` instead,
-`repository.list_campaigns`'s own grain). Listing an internal campaign here would always read
-`spend=None`/`verdict="unjudged"`, silently contradicting its real judged state elsewhere --
-never a divergent, misleading second "judgment" for the same campaign.
+grain is `ads_external_daily` (`metric_scope='ad'`). Since F37 a system-built (internal)
+campaign reads the same grain too (`repository.performance_rows`), but it is judged through
+`repository.list_campaigns` / closeout; listing it here as well would be a divergent second
+"judgment" for the same campaign.
 
 Correction 6: month sums read only `metric_scope='ad'` rows -- the monthly-budget account rollup
 rows (`external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY`) are always written under

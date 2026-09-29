@@ -17,6 +17,7 @@ import { ConfirmPage } from "./ConfirmPage";
 import { HandoffPage } from "./HandoffPage";
 import { VerifyPage } from "./VerifyPage";
 
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof changeApi>()),
   getChangeControl: vi.fn(), approveChangeSet: vi.fn(), decideChangeSet: vi.fn(), createChangeSet: vi.fn(), actOnChangeItem: vi.fn(),

@@ -603,6 +603,20 @@ class ReviewCycleTest(unittest.TestCase):
         workspace = review_rounds.workspace(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(workspace["reviews"], [])
 
+    def test_never_synced_campaign_is_refused_not_passed(self):
+        # F37 Contract Q (ruling 4): no recorded read is not "nothing missing" (F36 as-built gap).
+        self.observation()
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json - 'external_sync'"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s",
+            (self.org, self.brand, self.campaign),
+        )
+        self.conn.commit()
+        with self.assertRaisesRegex(ValueError, "^這個活動還沒讀過平台資料；先重新讀取平台。$"):
+            self.request()
+        workspace = review_rounds.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["reviews"], [])
+
     def test_gap_outside_the_window_passes_and_window_reports_no_missing_days(self):
         self.observation()
         prior_start = self.start - timedelta(days=3)

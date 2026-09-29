@@ -10,6 +10,7 @@ import { ChangeRequestRejected, actOnChangeItem, approveChangeSet, createChangeS
 import { ChangeComposer } from "./ChangeComposer";
 import { ChangeSetView } from "./ChangeSetView";
 import { currentBudgetMonth, MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 import type { TimelineRow } from "@/lib/adsWorkspaceApi";
 import { isAbSet } from "./flow/changeFlow";
@@ -32,6 +33,7 @@ function scrollWhenShown(id: string, frames = 10) {
 
 function Control({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const [search, setSearch] = useSearchParams();
+  const { timezone } = useOrgClock();
   // v10 (F30-I09): the timeline is the tab; the composer, month budget and manual handoff live in the fold
   // 「進階：自己建一份變更」. A link that lands on something inside it (a set, a recommendation or material copy to
   // compose from, an unsent save) opens it.
@@ -75,11 +77,11 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       const item = review.result_json.recommendations?.find(row => row.id === recommendationId);
       if (item?.recommendation !== "adjust" || !item.suggested_copy || !(item.suggested_copy.body || item.suggested_copy.title) || !["ready", "completed"].includes(review.status)) { setError("這份建議目前不能建立文案變更，請回到成效檢討確認最新結果。"); return; }
       loadedRecommendation.current = recommendationKey;
-      setInitialDraft({ title: `${review.evidence_json.target.name ?? "廣告"}文案測試`, month: currentBudgetMonth(), review_id: review.id, recommendation_id: item.id, items: [{ kind: "copy", target_id: item.target_id, after: item.suggested_copy, reason: item.hypothesis }] });
+      setInitialDraft({ title: `${review.evidence_json.target.name ?? "廣告"}文案測試`, month: currentBudgetMonth(timezone), review_id: review.id, recommendation_id: item.id, items: [{ kind: "copy", target_id: item.target_id, after: item.suggested_copy, reason: item.hypothesis }] });
       setSupersedesId(undefined); setComposing(true);
     }).catch(() => { if (!controller.signal.aborted) setError("檢討建議尚未讀取完成，請回到成效頁重新查看。"); });
     return () => controller.abort();
-  }, [brandId, campaignId, reviewId, recommendationId, pending]);
+  }, [brandId, campaignId, reviewId, recommendationId, pending, timezone]);
   const materialId = materialParam;
   useEffect(() => {
     if (!materialId || pending || !data || loadedRecommendation.current === `material:${materialId}`) return;
@@ -90,11 +92,11 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       if (task.mode !== "copy" || !Object.keys(after).length) { setError("這份素材需求尚未保存可用文案，請回到素材頁選定版本。"); return; }
       loadedRecommendation.current = `material:${materialId}`;
       const sourceTarget = task.review_context?.entity_id;
-      setInitialDraft({ title: `${task.title}（原廣告文案）`, month: currentBudgetMonth(), material_task_id: task.id, material_revision: task.revision, items: [{ kind: "copy", target_id: typeof sourceTarget === "string" ? sourceTarget : data.targets.find(row => row.native_kind === "ad")?.id ?? "", after, reason: task.instruction || "測試這份已保存的文案方向，圖片保持不變。" }] });
+      setInitialDraft({ title: `${task.title}（原廣告文案）`, month: currentBudgetMonth(timezone), material_task_id: task.id, material_revision: task.revision, items: [{ kind: "copy", target_id: typeof sourceTarget === "string" ? sourceTarget : data.targets.find(row => row.native_kind === "ad")?.id ?? "", after, reason: task.instruction || "測試這份已保存的文案方向，圖片保持不變。" }] });
       setSupersedesId(undefined); setComposing(true);
     }).catch(() => { if (!controller.signal.aborted) setError("素材版本尚未讀取完成，請回素材頁核對已保存的內容。"); });
     return () => controller.abort();
-  }, [brandId, campaignId, materialId, pending, data]);
+  }, [brandId, campaignId, materialId, pending, data, timezone]);
   function update(set: ChangeSet) {
     setData(previous => previous ? { ...previous, change_sets: [set, ...previous.change_sets.filter(row => row.id !== set.id)] } : previous);
     select(set.id); setBudgetRefresh(value => value + 1);
@@ -157,10 +159,10 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
     <ChangesTab brandId={brandId} campaignId={campaignId} refreshKey={budgetRefresh} inFold={inFold} onOpenInFold={openInFold} />
     <Disclosure label="進階：自己建一份變更" open={advancedOpen} onOpenChange={setAdvancedOpen}><div id="changes-advanced" className="space-y-4">
     <div className="flex flex-wrap items-start justify-between gap-3"><p className="text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p>{data && !composing && data.targets.length > 0 && <Button variant="outline" disabled={busy} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); }}>建立變更清單</Button>}</div>
-    <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth()} refresh={budgetRefresh} compact />
+    <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth(timezone)} refresh={budgetRefresh} compact />
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
-    {data && composing && <><p className="text-sm text-muted-foreground">{initialDraft?.review_id ? "已承接上一輪判讀；文案仍是待驗假設，可調整後再核准。" : ""}</p><ChangeComposer key={initialDraft?.material_task_id ?? initialDraft?.review_id ?? supersedesId ?? "new"} targets={data.targets} month={currentBudgetMonth()} pending={pending} initialDraft={initialDraft} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} /></>}
+    {data && composing && <><p className="text-sm text-muted-foreground">{initialDraft?.review_id ? "已承接上一輪判讀；文案仍是待驗假設，可調整後再核准。" : ""}</p><ChangeComposer key={initialDraft?.material_task_id ?? initialDraft?.review_id ?? supersedesId ?? "new"} targets={data.targets} month={currentBudgetMonth(timezone)} pending={pending} initialDraft={initialDraft} initial={supersedesId ? data.change_sets.find(set => set.id === supersedesId) : undefined} busy={busy} onSave={value => void save(value)} onClose={() => setComposing(false)} /></>}
     {data && !composing && selected && <ChangeSetView key={selected.id + selected.status} set={selected} busy={busy}
       onApprove={() => void mutate(signal => approveChangeSet(brandId, campaignId, selected, signal))}
       onDecision={value => void mutate(signal => decideChangeSet(brandId, campaignId, selected.id, value, signal))}

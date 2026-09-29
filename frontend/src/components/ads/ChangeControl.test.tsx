@@ -10,6 +10,7 @@ import { MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
 
 // The handoff panel reports whether it lists anything to verify (`onHandoffWork`); tests set what it reports.
 const handoff = vi.hoisted(() => ({ work: false }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("./ManualHandoffPanel", async () => {
   const { useEffect } = await import("react");
   return { ManualHandoffPanel: ({ onHandoffWork }: { onHandoffWork?: (hasWork: boolean) => void }) => { useEffect(() => { onHandoffWork?.(handoff.work); }, [onHandoffWork]); return null; } };

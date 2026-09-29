@@ -17,7 +17,7 @@ campaigns have no coordinates, so no pairs.
 
 from datetime import timedelta
 
-from app.ads import change_control, experiments, live_creative, repository, triage
+from app.ads import change_control, experiments, live_creative, outcome, repository, triage
 from app.core import settings
 
 RULES = {
@@ -67,13 +67,11 @@ def _entities(conn, org, brand, campaign_id, ads):
 
 
 def _outcome_rows(conn, org, brand, campaign_id, ad_ids, last_day):
+    """The ad-grain performance rows (`outcome.rows`, Contract P) of `ad_ids` up to `last_day`."""
+    wanted = set(ad_ids)
     return [
-        dict(row)
-        for row in conn.execute(
-            "SELECT * FROM ads_outcome_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-            "AND entity_kind='ad' AND entity_id = ANY(%s) AND day <= %s ORDER BY day",
-            (org, brand, campaign_id, ad_ids, last_day),
-        ).fetchall()
+        row for row in outcome.rows(conn, org, brand, campaign_id, "ad")
+        if row["entity_id"] in wanted and row["day"] <= last_day
     ]
 
 
@@ -99,7 +97,8 @@ def _decisions(conn, org, brand, campaign_id):
 def _first_delivery(rows, ad_id, last_day):
     days = [
         r["day"] for r in rows
-        if r["entity_id"] == ad_id and r["day"] <= last_day and float(r["spend"]) > 0
+        if r["entity_id"] == ad_id and r["day"] <= last_day
+        and r["spend"] is not None and float(r["spend"]) > 0
     ]
     return min(days) if days else None
 
@@ -132,7 +131,7 @@ def _missing(days, sides):
     }
 
 
-# `ads_outcome_daily.source` of simulated delivery (`adapters/simulated.py`).
+# The `source` of simulated delivery rows (`adapters/simulated.py`).
 _SIMULATED_SOURCE = "simulated"
 
 

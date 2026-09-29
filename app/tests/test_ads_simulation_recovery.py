@@ -62,6 +62,25 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
             )
         )
 
+    def test_disjoint_saved_days_never_mark_the_gap_as_read(self):
+        self.start()
+        first = self.today - timedelta(days=6)
+        self.save([self.row()], day=first)
+        self.save([self.row()], day=first + timedelta(days=2))
+
+        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
+        self.assertEqual(sync["observations"]["coverage"],
+                         {"start": first.isoformat(), "end": first.isoformat()})
+        missing = outcome.summary(*self.args)["coverage"]["missing_days"]
+        self.assertIn((first + timedelta(days=1)).isoformat(), missing)
+        self.assertNotIn(first.isoformat(), missing)
+
+        self.save([self.row()], day=first + timedelta(days=1))
+        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
+        self.assertEqual(sync["observations"]["coverage"],
+                         {"start": first.isoformat(),
+                          "end": (first + timedelta(days=1)).isoformat()})
+
     def test_zero_and_missing_are_distinct_and_resend_does_not_accumulate(self):
         self.start()
         zero = self.row(spend=0.0, impressions=0, clicks=0, purchases=0, revenue=0.0)
@@ -127,8 +146,6 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         self.start()
         with self.assertRaisesRegex(ValueError, "隔離模擬"):
             manual.publish(*self.args, actor="tester")
-        with self.assertRaisesRegex(ValueError, "隔離模擬"):
-            outcome.ingest_meta(*self.args, start=self.today, end=self.today)
 
     def test_old_random_data_is_rejected_before_brand_is_marked(self):
         simulated.publish(*self.args, actor="tester")
@@ -180,6 +197,13 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
     def test_partial_recovery_cannot_be_judged_as_complete(self):
         self.start()
         self.save([self.row(purchases=100)])
-        closed = closeout.close(*self.args, actor="tester")
+        # F37 Contract Q: the unsaved days are unread days; a recovery campaign has no platform
+        # to re-read, so the skip is open (lead decision 2026-09-29) but never a default.
+        with self.assertRaises(closeout.CoverageMissing) as caught:
+            closeout.close(*self.args, actor="tester")
+        self.assertTrue(caught.exception.payload["can_skip"])
+        self.assertEqual(len(caught.exception.payload["missing_days"]), 6)
+        closed = closeout.close(*self.args, actor="tester", skip_missing=True)
         self.assertEqual(closed["verdict"], "看不出")
+        self.assertEqual(len(closed["verdict_json"]["missing_days"]), 6)
         self.assertIn("缺日或缺廣告", closed["verdict_json"]["missing"])

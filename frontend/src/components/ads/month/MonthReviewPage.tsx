@@ -10,6 +10,7 @@ import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ActionBar, CampaignChip, Chip, ReadFailed, formatAmount, type ObjectiveKey } from "../patterns";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { useOrgClock } from "@/lib/orgClock";
 import { GradeBuckets, GradeSplit, MissingNote } from "./MonthGrades";
 import { MonthFootnote, RejectedCard } from "./RejectedCards";
 import { downloadMonthCsv, monthNum, shiftMonth, weekBars, type WeekBar } from "./monthCsv";
@@ -177,7 +178,8 @@ function Suggestions({ brandId, month, summary }: { brandId: string; month: stri
 
 export function MonthReviewPage({ brandId }: { brandId: string }) {
   const homeHref = `/brands/${brandId}/ads`;
-  const thisMonth = useMemo(() => currentBudgetMonth(), []);
+  const { timezone } = useOrgClock();
+  const thisMonth = useMemo(() => currentBudgetMonth(timezone), [timezone]);
   const lastMonth = shiftMonth(thisMonth, -1);
   const [params, setParams] = useSearchParams();
   const month = params.get("month") === lastMonth ? lastMonth : thisMonth;

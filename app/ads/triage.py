@@ -226,6 +226,17 @@ def _coverage(campaign):
     return date.fromisoformat(start), date.fromisoformat(end)
 
 
+def coverage_gap(campaign, start, end):
+    """F37 Contract Q: the unread days of `[start, end]` against this campaign's recorded
+    observations coverage -- the one rule the performance tab, closeout and review share with
+    triage (`_coverage` / `_missing_days`, so it is capped at 31 the same way). Never synced is
+    its own answer (`never_synced: True`, `missing_days: []`), never a wall of dates."""
+    coverage = _coverage(campaign)
+    if coverage is None:
+        return {"never_synced": True, "missing_days": []}
+    return {"never_synced": False, "missing_days": _missing_days(coverage, start, end)}
+
+
 def _window_covered(coverage, start, end):
     """A user can request any <=31-day sync range, so a 28-day judgement window may rest on far
     fewer actually-synced days -- `_result_view` only ever judges rows that exist, so an unsynced

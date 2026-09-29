@@ -20,6 +20,7 @@ import * as handoffApi from "@/lib/adsHandoffApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 import { MaterialStepPage } from "./MaterialStepPage";
 
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
   ...(await importOriginal<typeof reviewApi>()),
   getReview: vi.fn(),
@@ -52,7 +53,7 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
     result_json: { recommendations: [], limitations: [] },
     evidence_json: {
       target: { id: "aex_1", name: "晨光隨行杯・隨時有你", platform: "meta", source_account: "acc_1", native_id: "native_1" },
-      window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei" },
+      window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei", missing_days: [] },
       current: { row_count: 0, days_present: 0, days_expected: 0, missing_days: 0, series: [] },
       previous: { row_count: 0, days_present: 0, days_expected: 0, missing_days: 0, series: [] },
       commerce: {
