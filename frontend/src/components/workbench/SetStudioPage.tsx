@@ -19,12 +19,7 @@ import {
   type SetProduct,
 } from "@/lib/workbenchApi";
 import { ImagePart } from "./ImagePart";
-
-const PART_LABEL: Record<ProductPart, string> = {
-  copy: "文案",
-  image_prompt: "圖片",
-  video_script: "腳本",
-};
+import { PART_LABEL, regenerateLabel } from "./regenerateLabel";
 
 const SET_STATUS_TONE: Record<string, string> = {
   已完成: "bg-success/10 text-success",
@@ -426,18 +421,15 @@ function ProductPanel({
     (p) => (set.products[p] as SetProduct | undefined)?.state === "已選定",
   );
   const generating = running || ["queued", "running"].includes(set.generation?.status ?? "");
-  // F40-I11 (drill-7 #16): the round belongs to another part when this browser started a
-  // different one. With no starter known, a product that already has versions is not the one
-  // being filled — the first round queues every required part, so an empty product's own job
-  // is in flight — and the label says 「另一個部分」 rather than a bare 生成中….
-  const otherPartLabel: string | null = !generating || running || runningPart === part
-    ? null
-    : runningPart
-      ? PART_LABEL[runningPart]
-      : product.state === "未生成"
-        ? null
-        : "另一個部分";
-  const waitReason = otherPartLabel ? `正在生成${otherPartLabel}，完成後才能再生成` : null;
+  // F40-I11 (drill-7 #16): the rule lives in `regenerateLabel.ts`; this file only renders it.
+  const runLabel = regenerateLabel({
+    part,
+    generating,
+    ownRequestInFlight: running,
+    runningPart,
+    productState: product.state,
+    idleLabel: part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`,
+  });
   const locked = set.lock.locked;
   const showOutput = product.versions.length > 0 || (!generating && set.generation?.status !== "failed");
   const missingLabels = set.required_parts
@@ -465,17 +457,11 @@ function ProductPanel({
         </div>
         <Button
           disabled={generating || locked}
-          title={waitReason ?? undefined}
-          aria-label={waitReason ?? undefined}
+          title={runLabel.title}
+          aria-label={runLabel.title}
           onClick={() => void handleRun()}
         >
-          {waitReason
-            ? waitReason
-            : generating
-              ? "生成中…"
-              : part === "image_prompt"
-                ? "再生成一輪（10 張）"
-                : `再生成 ${count} 張`}
+          {runLabel.label}
         </Button>
       </div>
 
