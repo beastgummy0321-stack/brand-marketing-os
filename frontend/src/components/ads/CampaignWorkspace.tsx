@@ -37,8 +37,9 @@ const SLOTS: Record<"structure" | "assets" | "changes", (p: TabSlotProps) => Rea
 
 /** v10 (F30-I07) campaign workspace (prototype `campPage()`): the head (`WorkspaceHead`: chips, stage rail, tabs
  * with the open-decision count) over one tab body. 總覽 is `OverviewBody` (draft／gap／live from `GET …/workspace`,
- * the old overview folded under 進階); 成效 (`perf`) is the F29 detail body with the old review and platform charts
- * folded under 「進階：舊版成效與檢討」. `?tab=performance` and `/detail` land on `perf`. The campaign itself and the
+ * the old overview folded under 進階); 成效 (`perf`) is the F29 detail body (F40-I06: with the 這期狀態列 on top, fed the
+ * campaign and the platform read) with the old review and platform charts folded under 「進階：每日資料、次要指標與舊版
+ * 檢討」. `?tab=performance` and `/detail` land on `perf`. The campaign itself and the
  * workspace progress are two reads that fail independently. */
 function Workspace({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -179,7 +180,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
     // The old review panel and platform charts (incl. the comparison plan and simulation tools) stay reachable on a
     // draft too — folded, never deleted.
     const advanced = (
-      <Disclosure label="進階：舊版成效與檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
+      <Disclosure label="進階：每日資料、次要指標與舊版檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
         <div className="flex flex-col gap-4">
           <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
           <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError} />
@@ -188,7 +189,8 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
     );
     body = isDraftCampaign(campaign, ws)
       ? <DraftPerf brandId={brandId} campaign={campaign} onGo={go} advanced={advanced} />
-      : <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={advanced} />;
+      : <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={advanced}
+          campaign={campaign} onCampaignChange={updateCampaign} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError} />;
   } else {
     body = SLOTS[tab](slot);
   }

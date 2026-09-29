@@ -114,6 +114,10 @@ export interface TriageItem {
   // F27-I09 Done #7: optional for the same reason -- real responses always carry it
   // (`app/ads/triage.py::classify`).
   campaign_objective?: CampaignObjectiveFamily;
+  // F40-I01: the local ad bound to this platform ad, `null` when the platform ad was not built here
+  // (the detail page's 「平台上另有 N 則不是這裡建的」 line). Optional only for older hand-written
+  // factories; `undefined` is unknown, never "unmatched".
+  bound_ad_id?: string | null;
 }
 /** F29 Contract D (`app/ads/repository.py::campaign_data_status`): one per-campaign data state for
  * the window the caller judged — triage `data.status` and home rows `data_status` are the same

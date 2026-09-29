@@ -90,8 +90,8 @@ async function captureDesktopEvidence(page: Page, name: string) {
 }
 
 async function openPerformanceDetails(page: Page) {
-  // F30-I07: the platform charts moved into the perf tab's 「進階：舊版成效與檢討」 fold.
-  const details = page.getByRole("button", { name: "進階：舊版成效與檢討", exact: true });
+  // F30-I07: the platform charts moved into the perf tab's 進階 fold (F40-I06 label: 每日資料、次要指標與舊版檢討).
+  const details = page.getByRole("button", { name: "進階：每日資料、次要指標與舊版檢討", exact: true });
   await expect(details).toHaveAttribute("aria-expanded", "false");
   await details.click();
   await expect(details).toHaveAttribute("aria-expanded", "true");

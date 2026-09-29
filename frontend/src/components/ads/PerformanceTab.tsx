@@ -7,29 +7,21 @@ import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { cn } from "@/lib/utils";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/layout/ui/dialog";
 import { useEchart } from "@/lib/useEchart";
 import { useOrgClock } from "@/lib/orgClock";
 import { CHART_COLOR_AXIS_TEXT, CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
 import { formatCount, formatCurrency, formatMetaRoas, formatPercent } from "@/lib/format";
 import {
-  closeCampaign,
-  CoverageMissingError,
   getPerformance,
   type CampaignDetail,
   type CampaignLabels,
   type CampaignPerformance,
 } from "@/lib/adsApi";
+import { CloseCampaignDialog, DayChips, EARLY_CLOSE_SENTENCE, coveredRange, shortDay } from "./CloseCampaignDialog";
 import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
-import { Chip, Disclosure } from "./patterns";
+import { Disclosure } from "./patterns";
 import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./nativePerformance";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -84,9 +76,6 @@ function learningSentence(c: CampaignDetail): string | null {
   const num = (v: number | null | undefined) => (typeof v === "number" ? Math.round(v * 100) / 100 : v);
   return `「${c.name}」每筆成本上限 ${num(vj.target) ?? "－"}，實際 ${num(vj.actual) ?? "－"}，結果${c.verdict}（樣本${sample}）。`;
 }
-
-/** F04-I23：結案卡與確認對話框共用同一句，`live` 時都要看到——只宣告一次，不抽成新元件。 */
-const EARLY_CLOSE_SENTENCE = "提前結案會用到目前為止的成效判定，判定後這個 Campaign 不再更新成效";
 
 const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
   達成: "default",
@@ -150,82 +139,6 @@ function TrendChart({ daily, native, currency }: { daily: PerformanceView["daily
   return <div ref={ref} className="h-64 w-full" />;
 }
 
-/** `2026-09-27` → `09/27` (prototype day chips). */
-function shortDay(day: string): string {
-  return day.slice(5).replace("-", "/");
-}
-
-function DayChips({ days }: { days: string[] }) {
-  return (
-    <span className="flex flex-wrap gap-1.5">
-      {days.map((day) => <Chip key={day} className="rounded-md px-2 py-0.5">{shortDay(day)}</Chip>)}
-    </span>
-  );
-}
-
-/** F37 資料狀態: the part of the campaign window the platform read has covered. `coverage.start/end`
- * is the window itself (`start_date … min(end_date, org yesterday)`), so trailing unread days are
- * trimmed off before saying 「平台已讀到」; gaps in the middle stay listed by the warning line. */
-function coveredRange(start: string, end: string, missing: string[]): { first: string; last: string } | null {
-  const gone = new Set(missing);
-  const days: string[] = [];
-  for (let t = Date.parse(`${start}T00:00:00Z`); t <= Date.parse(`${end}T00:00:00Z`) && days.length <= 400; t += 86_400_000) {
-    days.push(new Date(t).toISOString().slice(0, 10));
-  }
-  const read = days.filter((day) => !gone.has(day));
-  return read.length ? { first: read[0], last: read[read.length - 1] } : null;
-}
-
-/** F37 (prototype `#/close`): the close dialog's refusal when the platform read does not cover the
- * window. 缺日 = amber (re-read first, 確認結案 held); 重讀仍失敗 (`can_skip`) = red with the sync error
- * and the explicit skip. The server re-validates every close, so this only mirrors its last answer. */
-function CoverageNote({ gap, syncError, syncing, reread, onSync, onSkip, closing }: {
-  gap: CoverageMissingError;
-  syncError: string | null;
-  syncing: boolean;
-  reread: boolean;
-  onSync?: () => void;
-  onSkip: () => void;
-  closing: boolean;
-}) {
-  const n = gap.missing_days.length;
-  const syncButton = (label: string) => (
-    <Button type="button" variant="outline" size="sm" onClick={() => onSync?.()} disabled={!onSync || syncing || closing}>
-      <RefreshCw size={14} className={syncing ? "animate-spin" : "hidden"} />
-      {syncing ? "讀取中…" : label}
-    </Button>
-  );
-  if (gap.can_skip) {
-    return (
-      <div role="alert" className="flex flex-col gap-1.5 rounded-md border border-danger/30 bg-danger/10 p-3 text-sm">
-        <b className="font-semibold">重新讀取失敗：{syncError || "上次讀取平台沒有成功；已保留前次資料。"}</b>
-        <p className="text-xs">
-          {gap.never_synced ? "還沒讀到任何平台資料。" : `仍有 ${n} 天讀不到（${gap.missing_days.map(shortDay).join("、")}）。`}
-          可以先跳過這幾天結案，判定會是「看不出」並記下缺的日期。
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {syncButton("再讀一次")}
-          <Button type="button" variant="outline" size="sm" onClick={onSkip} disabled={syncing || closing}>
-            仍讀不到，跳過缺日結案
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div role="alert" className="flex flex-col gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
-      <b className="font-semibold">
-        {gap.never_synced ? "這個活動還沒讀過平台資料，先讀取再結案。" : `有 ${n} 天還沒讀到平台資料，先補讀再結案。`}
-      </b>
-      {n > 0 && <DayChips days={gap.missing_days} />}
-      <p className="text-xs text-muted-foreground">
-        {reread ? "已重新讀取；按「確認結案」再核對一次。" : "缺的日子不會被當成 0；讀到之後這裡會自動放行。"}
-      </p>
-      <div>{syncButton("重新讀取平台")}</div>
-    </div>
-  );
-}
-
 function Kpi({ label, value, caption }: { label: string; value: string; caption: string }) {
   return (
     <article className="surface p-4">
@@ -283,13 +196,8 @@ export function PerformanceTab({
     | { status: "ready"; data: CampaignPerformance }
   >({ status: "loading" });
   const [comparisonRefresh, setComparisonRefresh] = useState(0);
+  // F40-I06: the dialog itself is `CloseCampaignDialog` (shared with the 這期狀態列); mounted only while open.
   const [closeOpen, setCloseOpen] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const [closeError, setCloseError] = useState<string | null>(null);
-  const [coverageGap, setCoverageGap] = useState<CoverageMissingError | null>(null);
-  // A platform read finished after the last refusal: 確認結案 is released and the next click
-  // re-validates on the server (the server, not this flag, decides).
-  const [reread, setReread] = useState(false);
 
   const load = useCallback(() => {
     if (!published || imported) return;
@@ -304,43 +212,15 @@ export function PerformanceTab({
   useEffect(load, [load]);
 
   // The workspace's platform read ended (syncing true → false): reload the numbers and the opened
-  // comparison, and release a held 確認結案.
+  // comparison (the open close dialog releases its own held 確認結案).
   const wasSyncing = useRef(syncing);
   useEffect(() => {
     if (wasSyncing.current && !syncing) {
       load();
       setComparisonRefresh((current) => current + 1);
-      setReread(true);
     }
     wasSyncing.current = syncing;
   }, [syncing, load]);
-
-  async function handleClose(skipMissing = false) {
-    if (imported) return;
-    setClosing(true);
-    setCloseError(null);
-    try {
-      const updated = skipMissing
-        ? await closeCampaign(brandId, c.id, { skip_missing: true })
-        : await closeCampaign(brandId, c.id);
-      onCampaignChange(updated);
-      setCloseOpen(false);
-      setCoverageGap(null);
-    } catch (err) {
-      if (err instanceof CoverageMissingError) {
-        setCoverageGap(err);
-        setReread(false);
-      } else {
-        setCloseError(err instanceof Error ? err.message : "結案失敗，請稍後再試。");
-      }
-    } finally {
-      setClosing(false);
-    }
-  }
-
-  const observations = (c.context_json.external_sync as { observations?: { error?: unknown } } | undefined)?.observations;
-  const lastSyncError = syncError || (typeof observations?.error === "string" ? observations.error : null);
-  const confirmHeld = coverageGap !== null && (!reread || syncing);
 
   const comparison = imported ? <Disclosure label="成效比較"><p className="text-sm text-muted-foreground">{c.capabilities?.unavailable.comparison ?? "既有平台活動不支援內部成效比較。"}</p></Disclosure> : <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
     hasSavedComparison={hasSavedComparison(c)} refreshToken={`${c.status}:${comparisonRefresh}`}
@@ -404,7 +284,7 @@ export function PerformanceTab({
                 </span>
               )}
             </span>
-            <Button disabled={imported} onClick={() => { setCoverageGap(null); setCloseError(null); setCloseOpen(true); }}>立即結案</Button>
+            <Button disabled={imported} onClick={() => setCloseOpen(true)}>立即結案</Button>
           </div>
         </div>
       )}
@@ -414,28 +294,10 @@ export function PerformanceTab({
       {comparison}
       {recovery}
 
-      <Dialog open={closeOpen} onOpenChange={(open) => !open && setCloseOpen(false)}>
-        <DialogContent>
-          <DialogTitle>結案</DialogTitle>
-          <DialogDescription>
-            結案後會對照成功條件寫下判定，並在品牌智庫留一條學習，Campaign 之後會被鎖定，不能再改。
-            {c.status === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
-          </DialogDescription>
-          {coverageGap && (
-            <CoverageNote gap={coverageGap} syncError={lastSyncError} syncing={syncing} reread={reread}
-              onSync={onSync} onSkip={() => void handleClose(true)} closing={closing} />
-          )}
-          {closeError && <p className="text-sm text-danger">{closeError}</p>}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setCloseOpen(false)} disabled={closing}>
-              取消
-            </Button>
-            <Button type="button" onClick={() => void handleClose()} disabled={closing || confirmHeld}>
-              {closing ? "結案中…" : "確認結案"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {closeOpen && (
+        <CloseCampaignDialog brandId={brandId} campaign={c} onClose={() => setCloseOpen(false)}
+          onCampaignChange={onCampaignChange} onSync={onSync} syncing={syncing} syncError={syncError} />
+      )}
     </div>
   );
 }

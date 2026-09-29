@@ -710,9 +710,18 @@ export interface OutcomeCoverage {
   never_synced: boolean;
 }
 
+/** F40-I01: the period's one-ruler grade (`app/ads/outcome.py::_period_grade` through
+ * `triage.grade_window`) the 成效分頁's 「這期狀態列」 prints beside 整期合計 -- the backend's answer,
+ * never a frontend copy of the ruler. `label` is the word to show as is. */
+export interface PeriodGrade {
+  grade: "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
+  label: string;
+}
+
 /** `GET .../performance` 的回應形狀——數字只來自平台同步表（F37 Contract P）。 */
 export interface CampaignPerformance {
-  totals: OutcomeBucket;
+  /** `grade` is optional only for hand-written test fixtures; real responses always carry it (F40-I01). */
+  totals: OutcomeBucket & { grade?: PeriodGrade };
   daily: OutcomeDailyPoint[];
   groups: OutcomeGroupRow[];
   ads: OutcomeAdRow[];
