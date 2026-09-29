@@ -1708,3 +1708,25 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   `error.details = {missing_days, never_synced, can_skip}`; an isolated simulation recovery can always skip (no platform to
   re-read); a skipped close writes 看不出 and no visual learning. Migration `20260929000001_ads_drop_outcome_daily.sql`.
   Simulated campaigns published before F37 have no entity chain and get no new rows (re-publish; test data).
+
+### 6.42 Drill-6 closeout（ruled 2026-09-29；F38）
+Five program rules, no LLM judgment (dig of `docs/backlog/handoff-after-f37.md` Remaining 1–5).
+- **Proof is derived from confirmed brand facts** (ruling 1). A 「證據」 brand fact (`fact_type='proof'`, `fact_key` = one of the
+  six `proof` coordinate keys) is the only thing that makes that proof kind available; an active customer-voice row makes
+  `customer_review` available. `app.brand_intelligence.repository.available_proof_keys(conn, brand_id)` is the one reader. The
+  delivery plan (`plan.py`) and the copy prompt (`workbench/jobs.py`) offer only available kinds + 無證明; a stray key in a model
+  reply becomes `none`. `coordinate_vocabulary` itself stays the label lookup for existing ads. The coordinate screen's proof
+  toggle keeps meaning 「allow this creative kind」; both toggle and evidence must hold.
+- **Promo offers are off by default** (drill-4 RC-C, ruling 2): `ensure_coordinates_seeded` seeds the six promo `offer` keys
+  disabled, only `none` on; existing brands switched off once by migration `…_schedule_offer_default_off.sql` (test data); a brand
+  enables real offers in the coordinate screen.
+- **限時限量 carries the campaign's end date and nothing else** (ruling 2b): `assets._ad_set` hands `request.offer_deadline` (group
+  end date, else campaign end date) to the workbench for a `limited_time` ad; `prompts.brief_text` prints it as the only allowed
+  deadline, or tells the copy to write the 無優惠 version when no deadline arrived. No new coordinate attribute, no screen.
+- **The audience hint says who the brief targets and whom the role excludes** (ruling 4, extends §6.40 #8): 「<角色>・<受眾座標>・
+  簡報受眾：<context_json.audience_hint>・排除：已購買者｜只投：互動過或買過的人」. Still computed at view time, never in the
+  snapshot/readback, never a platform targeting mapping (F36 ruling E).
+- **Two performance sources for budget history, named** (ruling 5, closes §6.40 #15): the account base stays on
+  `meta_entity_spend` because the sync table's monthly rows only hold campaigns bound to this brand (unbound account campaigns
+  would be dropped → undercount); the caption reads 「Meta 廣告帳戶全部活動，近 30 天有投放的 N 天平均日花費」.
+- Prototype `.harness/scratch/prototype/f38-proof/index.html` (`#/fact`).

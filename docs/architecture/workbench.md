@@ -293,7 +293,11 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
     migration), unread. Nobody picks a look; the catalogue changes only by a planner-reviewed code
     edit.
 11. **In-site image generation is a reserved port, not a feature.** `app/workbench/image_port.py`
-    is one module with one stub: no provider, no key, no cost, no billing, no automation. It
+    is one module with one stub: no provider, no key, no cost, no billing, no automation.
+    F38 (2026-09-29, user ruling): the port's call shape is fixed but still inert —
+    `generate(prompt_cards, *, aspect, count, brand_id) -> list[GeneratedImage{provider, job_id, storage_key, prompt_label}]`
+    raises `image_port_not_connected`; picking a provider and a cost cap is a separate user decision, and prompt cards stay
+    the product until then. It
     reports 未接上 and the API repeats that, so the 圖片 tab defaults to the prompt view.
     「顯示提示詞」 is a permanent toggle, not a fallback: the same version cards render as
     plain-text prompt cards with a copy button each plus 「複製全部」. Since F07 each image version

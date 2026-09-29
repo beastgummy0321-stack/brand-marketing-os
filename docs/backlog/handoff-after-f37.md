@@ -19,32 +19,11 @@ Re-verify each claim in code first (file:line as of `8ef6d5ec`).
 Done 19, half 2 → **≈ 83 %**. Done: #1 #2 #4 #5 #6 #7 #9 #10 #11 #12 #13 #14 #16 #17 #18 #19 #20, plus planning failures
 "17 ads one copy" (F35) and "524／天" (F36 #15). Not re-measured: the A-vs-B ROAS gap (2.25 vs 0.38) has not been re-run.
 
-## Remaining (the scope of the next feature)
-1. **Proof coordinates claim evidence the brand does not have** (report §4 規劃失敗). Verified 2026-09-29 on the dev DB:
-   `brd_bughunt` has all 7 `proof` keys enabled (`customer_review`, `lab_report`, `sales_numbers`, `media_coverage`,
-   `expert_endorsement`, `founder_voice`, `none`). Seeds: `app/schedule/repository.py:155-164`; the plan/prompt vocabulary is
-   every enabled row (`app/ads/repository.py:1012-1023 coordinate_vocabulary`, `disabled_at IS NULL`); `plan.py:28` lets the
-   delivery plan pick any of them. No rule ties a proof key to a confirmed brand fact (`strategy.py:52 _brand_facts_section`
-   reads confirmed facts but nothing gates `proof`). **Open question for /dig:** gate by default-off seeds (like RC-C below)
-   vs. derive "available proof" from confirmed brand facts at plan time (program rule, no LLM), vs. both.
-2. **Offers default on; 「限時限量」 has no deadline** (report §4). All 7 `offer` keys enabled for `brd_bughunt`.
-   **Already ruled, never built:** drill-4 ruling RC-C (`docs/backlog/issue-drill-4-root-causes-pending-rulings.md:63-65`):
-   `ensure_coordinates_seeded` seeds the six promo offer keys with `disabled_at = now()`, only `none` on; brands enable real
-   offers in the existing coordinate screen; existing test brands get a one-off UPDATE (test data). `limited_time` needs a
-   deadline decision in /dig (e.g. enabling it requires an end date; copy never invents one).
-3. **#3 站內出圖** — `app/workbench/image_port.py` is a reserved seat (`connected()` always False). It spends money and needs a
-   **provider decision from the user** (which service, cost cap) before it can be carved; ARCHITECTURE §5.11. If the user does
-   not pick a provider in /dig, leave it out of the feature and say so — do not stub it.
-4. **#8 audience suggestions — half** (F36 built a read-only 「受眾提示」 row: role + audience labels, `launch_view.py:41-56`).
-   Report asked for age／interest／exclusion suggestions on the manual checklist. F36 ruling E: never a platform targeting
-   mapping. **Open question:** is a plain-language suggestion line (program-derived from the plan's audience coordinates +
-   brand facts, not Meta targeting) wanted, or is the hint enough (mark done)?
-5. **#15 account-history source — half** (F36 fixed the divisor). `channels.account_spend_history` (`channels.py:89`) still
-   reads `meta_entity_spend` via `app/meta/daily_pull`, while connections/home read the sync table. F37 kept it because the sync
-   table has no account-wide read (only bound campaigns). **Open question:** move the account base to the sync `monthly`
-   account rows (`read_monthly`, `MONTHLY_BUDGET_ATTRIBUTION_KEY`) or accept two sources with a caption naming which one.
-
-After the feature: run **drill 7** (same script as drill 6, `docs/drills/README.md`) to measure the A-vs-B gap.
+## Remaining → carved as F38 (2026-09-29)
+Items 1–5 were dug and ruled on 2026-09-29 (rulings in `docs/architecture/ads.md` §6.42, `docs/architecture/intake.md` F38,
+`docs/architecture/workbench.md` §5.11) and carved into `.work/features/F38.md` (five issues). #3 站內出圖: the user chose to fix
+the port's call shape only — no provider, prompt cards stay the product. After F38: run **drill 7** (`docs/drills/README.md`) to
+re-measure the A-vs-B gap.
 
 ## Unverified / open (carried)
 - `test_ads_launch_view::test_an_audience_key_without_a_vocabulary_row_prints_itself` failed once under `-n 4` (F37-I03),
@@ -82,4 +61,4 @@ After the feature: run **drill 7** (same script as drill 6, `docs/drills/README.
 Launch configs in `.claude/launch.json`: `drill-backend` (8710), `prototype` (static server for `.harness/scratch/prototype`, 8741).
 
 ## Next step
-New session: `/dig` items 1, 2, 4, 5 (and ask the user for a provider for 3) → `/carve` one feature → plan approval → `/crank`.
+F38 is carved: approve the plan once, `/crank`, apply the two migrations to 54322 before merge, then drill 7.

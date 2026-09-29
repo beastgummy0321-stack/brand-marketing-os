@@ -105,3 +105,12 @@ These are decided. A worker implements them; it does not re-open them.
   `llm_task` error when that job wrote one, else `JOB_FAILED_MESSAGE`; otherwise the `llm_task` row rule. A handler whose
   save fails after a successful AI call sends its notice and re-raises, so the job ends failed. Research re-asks once when
   the reply's table cannot be read.
+
+### F38 (2026-09-29): 「證據」 brand facts
+- `brand_fact.fact_type='proof'` carries a required `fact_key` ∈ {customer_review, expert_endorsement, lab_report, sales_numbers,
+  media_coverage, founder_voice} (CHECK-constrained; other types keep NULL). Labels = the `proof` coordinate seed labels
+  (`app/core/vocab.py::PROOF_KINDS`, copied). Entry point: the library FactPanel (「哪一種證據？」 select); the wizard's truth cards
+  do not propose 證據 cards yet (candidate).
+- `available_proof_keys(conn, brand_id)` (facade) = confirmed proof facts' keys ∪ {customer_review} when an active customer-voice
+  row exists. Readers: `app/ads/plan.py`, `app/workbench/jobs.py` (ads.md §6.42). Evidence text reaches the copy prompt through
+  `workbench/claims.prompt_sources` (proof facts always listed, regardless of the RISK regex).
