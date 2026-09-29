@@ -1765,3 +1765,37 @@ model only the campaign sentence; the ledger knew per-ad grades, the planners ne
   `request.calendar_note`, group window else campaign window); `ScriptedProvider._reply_for` rebuilds a per-role scene for the
   e2e backend. `external_repository` also binds `observed_at` on the insert path (the column DEFAULT would have kept real time).
   Migration `20260929000010_ads_ad_scene.sql` applied to the dev DB and registered.
+
+### 6.44 Drill-7 frontend batch（ruled 2026-09-29；built in F40）
+Prototype `.harness/scratch/prototype/f40-screens/` (approved 2026-09-29) is the layout spec; screenshots in `shots/`.
+- **成效 tab = the campaign detail page.** `detail/PeriodStatusRow.tsx` sits above the ruler for live/ended/closed campaigns:
+  整期合計 (spend, purchases, cost per result with the one-ruler grade from `outcome.summary().totals.grade`, ROAS), data status
+  (coverage chip, latest read), 重新讀取平台 and 結案這一期 (the F37 close dialog now lives in `CloseCampaignDialog.tsx`, shared with
+  the folded old panel), and the caption 「整期＝活動期間的合計；每月回顧只算當月天數」. Period days = calendar window through today.
+  Title 「在投 N 則」 keeps counting platform ads that are not closed; two program lines name local ads never built
+  (`local_state !== 'bound'`) and platform ads with no bound local ad (`triage item.bound_ad_id === null`). The fold is
+  「進階：每日資料、次要指標與舊版檢討」. Drill-7 #7's premise was wrong: the stand-in had built all 6 entities.
+- **Home quality band** picks its sentence from the payload alone (`home/status.ts::bandState`): missing days (link to that
+  campaign's 成效), read failure (重試), no spend, normal.
+- **Approve page 「本月預算放得下」** (`flow/confirmParts.tsx::BudgetFitCard`): formula headline, 4-segment bar, the 預留 line from
+  `month_budget.calculate().ongoing_owners`; no month budget → 「設定 N 月月預算 →」 (links to the ads home money card; no
+  dedicated route exists) and the approve button's reason beside it; premise changed → 「重新檢查」 replaces the silent auto-rebuild
+  for budget sets only.
+- **Assets tab** polls `getSlots` every 3 s while any slot is 處理中; a `format_key='video'` slot asks for a video and refuses a photo;
+  one original may back several ads: `ads_asset_placement` is unique per `(campaign, asset, ad_id)` with NULL `ad_id` for library
+  attaches (`20260929000011_ads_asset_placement_per_ad.sql`; `attach(ad_id=…)`, `revise` keeps it). The 主力／探索 count chip of the
+  prototype is **not built**: the slots payload has no role per slot (backlog: `slots.py` role counts).
+- **Pack page 「核准整包」** disabled reason = `blocking_text` naming missing sets and every unticked completion item; the 探索
+  ratio stays a warning (F07 decision 29). The prototype's one-click 「改為探索」 is not built (no API changes a set's slot).
+- **Readback 「全部標記」**: `POST …/handoff/launch/confirm-all` loops `confirm_field`/`confirm_setting` under `changes.lock`;
+  each confirms with its own commit (those functions commit themselves), so the call is idempotent rather than atomic — a call
+  cut short is finished by the next one. Frontend bar in `publish/SettingsReadback.tsx::UnreadAllBar`; confirmed rows keep the
+  kit wording 「你確認一樣」.
+- **New campaign copies the previous one** (`brief.create_draft` → `_copy_from_previous`): platform, `audience_hint`, own cap,
+  landing URL (`context_json.landing_url`, else the previous first group's manual value); `context_json.copied_from =
+  {campaign_id, name, fields}`, `field_sources` values `"copied"`. The PATCH accepts `landing_url`; `manual_settings.handoff`
+  shows the campaign default per group with `sources.landing_url = "campaign"`. Form: 「這次怎麼投」 block, 受眾方向 is free text
+  (not the prototype's select), 「清空重填」.
+- **Small fixes**: truth-card answers survive a panel save (`TruthCardStep.load` keeps answers whose item still exists);
+  the workbench regenerate button names the running part (`workbench/regenerateLabel.ts`; after a reload the payload cannot
+  tell which part runs — backlog: per-part status in the set payload).
