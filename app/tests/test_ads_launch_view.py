@@ -250,12 +250,13 @@ class LaunchViewTest(unittest.TestCase):
         )
         group = {f["key"]: f["value"] for f in self.items(view)["新客"]["fields"]}
         # F36-I07 Contract V: the audience hint sits after the date rows; the fixture ads carry
-        # no audience key, so the group's role alone is the hint.
+        # no audience key and the brief has no audience text, so the group's role and its fixed
+        # exclusion sentence (F38) are the hint.
         self.assertEqual(
             list(group), ["name", "budget_amount", "start_date", "end_date", "audience_hint"]
         )
         self.assertEqual(group["budget_amount"], 300.0)
-        self.assertEqual(group["audience_hint"], "新客")
+        self.assertEqual(group["audience_hint"], "新客・排除：已購買者")
         self.assertEqual(ad["parent_name"], "新客")
         self.assertIsNone(view["settings_readback"])
 
@@ -306,7 +307,10 @@ class LaunchViewTest(unittest.TestCase):
 
         view = self.view()
         item = self.items(view)["再行銷"]
-        self.assertEqual(self.hint_rows(item), [("受眾提示", "再行銷・互動過的人、回購客")])
+        self.assertEqual(
+            self.hint_rows(item),
+            [("受眾提示", "再行銷・互動過的人、回購客・只投：互動過或買過的人")],
+        )
         keys = [f["key"] for f in item["fields"]]
         self.assertEqual(keys.index("audience_hint"), keys.index("end_date") + 1)
         # Deferred ads still belong to the plan: the hint reads the plan, not the batch.
@@ -317,7 +321,8 @@ class LaunchViewTest(unittest.TestCase):
         self.approve()
         view = self.view()
         self.assertEqual(
-            self.hint_rows(self.items(view)["再行銷"]), [("受眾提示", "再行銷・互動過的人、回購客")]
+            self.hint_rows(self.items(view)["再行銷"]),
+            [("受眾提示", "再行銷・互動過的人、回購客・只投：互動過或買過的人")],
         )
         frozen = launch_view.launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         self.assertNotIn("role", frozen["plan_json"]["launch_snapshot"]["groups"][0])
@@ -334,8 +339,50 @@ class LaunchViewTest(unittest.TestCase):
             "探索", "explore", [("冷受眾", "cold_lookalike"), ("暖受眾", "warm_engaged")]
         )
         self.assertEqual(
-            self.hint_rows(self.items()["探索"]), [("受眾提示", "探索・cold_lookalike、互動過的人")]
+            self.hint_rows(self.items()["探索"]),
+            [("受眾提示", "探索・cold_lookalike、互動過的人・排除：已購買者")],
         )
+
+    # -- F38 (decision 3): the brief's own audience text and the role's exclusion sentence -------
+
+    def set_brief_audience(self, text):
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json || jsonb_build_object("
+            "'audience_hint', %s::text) WHERE id = %s",
+            (text, self.campaign),
+        )
+        self.conn.commit()
+
+    def test_the_hint_carries_the_briefs_audience_and_the_roles_exclusion(self):
+        self.seed_audience("warm_engaged", "互動過的人")
+        self.add_group("再行銷", "retarget", [("回購主圖", "warm_engaged")])
+        self.set_brief_audience("  25–40 歲上班族 ")
+
+        items = self.items()
+        self.assertEqual(
+            self.hint_rows(items["再行銷"]),
+            [("受眾提示", "再行銷・互動過的人・簡報受眾：25–40 歲上班族・只投：互動過或買過的人")],
+        )
+        # The fixture's `new` group has no audience keys: role, brief, exclusion.
+        self.assertEqual(
+            self.hint_rows(items["新客"]),
+            [("受眾提示", "新客・簡報受眾：25–40 歲上班族・排除：已購買者")],
+        )
+
+    def test_a_new_group_without_a_brief_hint_prints_role_and_exclusion(self):
+        self.seed_audience("cold_broad", "廣泛新客")
+        self.add_group("新客二", "new", [("新客主圖", "cold_broad")])
+        self.assertEqual(
+            self.hint_rows(self.items()["新客二"]), [("受眾提示", "新客・廣泛新客・排除：已購買者")]
+        )
+
+    def test_an_empty_or_blank_brief_hint_adds_no_part(self):
+        for text in ("", "   "):
+            with self.subTest(text=text):
+                self.set_brief_audience(text)
+                self.assertEqual(
+                    self.hint_rows(self.items()["新客"]), [("受眾提示", "新客・排除：已購買者")]
+                )
 
     def test_a_group_with_neither_role_nor_audience_keys_has_no_hint_row(self):
         # `role` is NOT NULL in the table, so the helper is the seam that can be shown empty.
