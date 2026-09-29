@@ -1758,3 +1758,10 @@ model only the campaign sentence; the ledger knew per-ad grades, the planners ne
 - **One clock** on `month_budget._fresh` and the sync table's `observed_at` (`app.core.db.now_utc()`, which the drill clock
   rebinds); audit `updated_at`/`status_changed_at` stay SQL `now()`.
 - Frontend items from the same report (E/D/F, #10, #18) are F40 after its own dig and prototype.
+- **As built (F39, 2026-09-29)**: `app/ads/coordinate_learning.py` (write + `scoreboard` + `scoreboard_section`; constants
+  `SOURCE_TRACK`, `DIMENSIONS`, `EMPTY_SECTION`); the 上一期 lines print all seven keys. Strategy inserts the section after
+  【過去的學習】, the plan after the calendar; `basis.coordinate_scoreboard` and the plan's `knowledge_item_ids` carry the row ids.
+  `plan._validate_scene` / `_scenes_differ_across_audiences`; the brief builder is `assets._ad_set` (hands `request.scene` and
+  `request.calendar_note`, group window else campaign window); `ScriptedProvider._reply_for` rebuilds a per-role scene for the
+  e2e backend. `external_repository` also binds `observed_at` on the insert path (the column DEFAULT would have kept real time).
+  Migration `20260929000010_ads_ad_scene.sql` applied to the dev DB and registered.
