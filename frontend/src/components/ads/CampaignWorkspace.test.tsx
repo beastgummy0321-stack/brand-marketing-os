@@ -1,5 +1,5 @@
 /** F30-I07: the v10 workspace frame — tab routing (six tabs, `perf` key, `?tab=performance` redirect), the perf tab's
- * 「進階：舊版成效與檢討」 fold, the two independent reads (campaign, workspace progress) and the step targets. The tab
+ * 「進階：每日資料、次要指標與舊版檢討」 fold, the two independent reads (campaign, workspace progress) and the step targets. The tab
  * bodies are stubs: each has its own tests. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { assetHandoff, type Placement } from "@/lib/adsUserAssetsApi";
@@ -109,7 +109,7 @@ it("?tab=performance lands on perf keeping ?ad=; the old review and platform cha
   renderAt("/brands/b/ads/campaigns/c?tab=performance&ad=ad_1");
   await screen.findByText("F29 成效本體");
   expect(screen.getByTestId("where").textContent).toBe("?tab=perf&ad=ad_1");
-  expect(screen.getByRole("button", { name: "進階：舊版成效與檢討" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "進階：每日資料、次要指標與舊版檢討" }).getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByText("單則廣告檢討")).toBeTruthy();
   expect(screen.getByText("共用成效")).toBeTruthy();
 });
@@ -117,7 +117,7 @@ it("?tab=performance lands on perf keeping ?ad=; the old review and platform cha
 it("perf without ?ad= or ?review= keeps the old review and platform charts folded (and unread)", async () => {
   renderAt("/brands/b/ads/campaigns/c?tab=perf");
   await screen.findByText("F29 成效本體");
-  expect(screen.getByRole("button", { name: "進階：舊版成效與檢討" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.getByRole("button", { name: "進階：每日資料、次要指標與舊版檢討" }).getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByText("單則廣告檢討")).toBeNull();
 });
 
@@ -158,7 +158,7 @@ it("step targets: the old 'performance' key opens perf (a draft's empty perf kee
   await screen.findByText("v10 總覽");
   go!("performance");
   expect(await screen.findByText("還沒上架，沒有成效")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "進階：舊版成效與檢討" })).toBeTruthy(); // the comparison plan stays reachable on a draft
+  expect(screen.getByRole("button", { name: "進階：每日資料、次要指標與舊版檢討" })).toBeTruthy(); // the comparison plan stays reachable on a draft
   expect(screen.getByTestId("where").textContent).toBe("?tab=perf");
   fireEvent.click(screen.getByRole("button", { name: "確認上架清單 →" }));
   expect(await screen.findByText("發布頁")).toBeTruthy();

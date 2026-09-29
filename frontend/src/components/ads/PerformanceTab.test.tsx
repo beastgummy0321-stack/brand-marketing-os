@@ -1,6 +1,8 @@
 /** frontend/src/components/ads/PerformanceTab.test.tsx — F04-I23: 結案卡片今天只在
  * `status === "ended"` 出現，但那個狀態沒有任何程式會寫——這支測試證明 `live` 也看得到
- * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。 */
+ * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。
+ * F40-I06: the dialog itself now lives in `CloseCampaignDialog.tsx` (shared with the 成效分頁's 這期狀態列); the
+ * 立即結案 cases below prove the folded old panel still opens it, and the F37 cases prove its behaviour is unchanged. */
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
