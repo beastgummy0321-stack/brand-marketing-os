@@ -98,10 +98,12 @@ class LibraryBundleTest(unittest.TestCase):
         fact = data["facts"][0]
         self.assertEqual(
             set(fact.keys()),
-            {"id", "fact_type", "fact_type_label", "label", "value", "status",
+            {"id", "fact_type", "fact_type_label", "fact_key", "fact_key_label", "label", "value", "status",
              "confirmed_by", "confirmed_at", "stale_label", "source_reference"},
         )
         self.assertEqual(fact["fact_type_label"], "定位")
+        self.assertIsNone(fact["fact_key"])  # F38-I01: only proof facts carry a kind
+        self.assertIsNone(fact["fact_key_label"])
         self.assertIsInstance(fact["confirmed_at"], str)  # ISO 字串，不是 datetime 物件
 
     def test_rule_claim_asset_channel_shape_fields_match_contract(self):

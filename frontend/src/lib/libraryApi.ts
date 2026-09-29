@@ -18,6 +18,9 @@ export interface LibraryBrandFact {
   id: string;
   fact_type: string;
   fact_type_label: string;
+  /** F38-I01: which evidence kind a 「證據」 fact is; null for every other type. */
+  fact_key: string | null;
+  fact_key_label: string | null;
   label: string;
   value: string;
   status: "confirmed" | "pending";
@@ -130,6 +133,17 @@ export const BRAND_FACT_TYPES: [string, string][] = [
   ["channel", "通路"],
   ["regulatory", "法規限制"],
   ["visual_base", "視覺基礎"],
+  ["proof", "證據"],
+];
+
+/** F38-I01: the six evidence kinds of a 「證據」 fact (= `app/core/vocab.py` PROOF_KINDS). */
+export const PROOF_KINDS: [string, string][] = [
+  ["customer_review", "顧客評論原話"],
+  ["expert_endorsement", "專家背書"],
+  ["lab_report", "檢驗報告／認證"],
+  ["sales_numbers", "銷售數據"],
+  ["media_coverage", "媒體報導"],
+  ["founder_voice", "創辦人第一手"],
 ];
 
 export const RULE_TYPES: [string, string][] = [
@@ -250,7 +264,14 @@ async function postJson<T>(path: string, body: unknown = {}, method: string = "P
 
 export async function createFact(
   brandId: string,
-  fields: { fact_type: string; label: string; value: string; status: string; source_reference: string },
+  fields: {
+    fact_type: string;
+    fact_key?: string | null;
+    label: string;
+    value: string;
+    status: string;
+    source_reference: string;
+  },
 ): Promise<void> {
   await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/facts`, fields);
 }
@@ -258,7 +279,7 @@ export async function createFact(
 export async function updateFact(
   brandId: string,
   factId: string,
-  fields: { fact_type: string; label: string; value: string; source_reference: string },
+  fields: { fact_type: string; fact_key?: string | null; label: string; value: string; source_reference: string },
 ): Promise<void> {
   await postJson(
     `/api/library/brands/${encodeURIComponent(brandId)}/facts/${encodeURIComponent(factId)}/edit`,

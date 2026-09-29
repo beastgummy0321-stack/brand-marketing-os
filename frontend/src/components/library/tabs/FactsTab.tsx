@@ -212,6 +212,7 @@ function FactCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge>{fact.fact_type_label}</Badge>
+          {fact.fact_key_label && <span className="text-xs text-muted-foreground">{fact.fact_key_label}</span>}
           {fact.stale_label && <Badge tone="warning">{fact.stale_label}</Badge>}
           <strong className="text-sm text-foreground">{fact.label}</strong>
         </div>

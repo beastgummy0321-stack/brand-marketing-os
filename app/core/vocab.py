@@ -18,6 +18,19 @@ BRAND_FACT_TYPES = [
     ("channel", "通路"),
     ("regulatory", "法規限制"),
     ("visual_base", "視覺基礎"),
+    ("proof", "證據"),
+]
+
+# F38-I01: the six evidence kinds a 「證據」 brand fact can be -- exactly the six `proof`
+# coordinate keys (labels copied from the proof seed in app/schedule/repository.py, not
+# imported; `none` is not evidence and is not listed here).
+PROOF_KINDS = [
+    ("customer_review", "顧客評論原話"),
+    ("expert_endorsement", "專家背書"),
+    ("lab_report", "檢驗報告／認證"),
+    ("sales_numbers", "銷售數據"),
+    ("media_coverage", "媒體報導"),
+    ("founder_voice", "創辦人第一手"),
 ]
 
 PRODUCT_FACT_TYPES = [
@@ -167,6 +180,10 @@ def _label(pairs, value):
 
 def brand_fact_type_label(v):
     return _label(BRAND_FACT_TYPES, v)
+
+
+def proof_kind_label(v):
+    return _label(PROOF_KINDS, v)
 
 
 def product_fact_type_label(v):

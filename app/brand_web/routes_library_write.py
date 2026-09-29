@@ -60,6 +60,16 @@ def _str_field(body: dict, key: str) -> str:
 
 # ---- 品牌事實 ----
 
+_PROOF_KIND_KEYS = {k for k, _ in md.PROOF_KINDS}
+
+
+def _proof_key_error(fact_type: str, fact_key: str) -> str | None:
+    """F38-I01: a 「證據」 fact must say which of the six kinds it is."""
+    if clean(fact_type) == "proof" and fact_key not in _PROOF_KIND_KEYS:
+        return "請選擇哪一種證據。"
+    return None
+
+
 @router.post("/api/library/brands/{brand_id}/facts")
 async def fact_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
@@ -70,9 +80,12 @@ async def fact_create_api(request: Request, brand_id: str):
     value = _str_field(body, "value")
     status = _str_field(body, "status") or "pending"
     source_reference = _str_field(body, "source_reference")
+    fact_key = clean(_str_field(body, "fact_key"))
     errors = {}
     if not clean(fact_type):
         errors["fact_type"] = "請選擇這是哪一類事實。"
+    if key_error := _proof_key_error(fact_type, fact_key):
+        errors["fact_key"] = key_error
     if not clean(label):
         errors["label"] = "請填寫這條事實的名稱。"
     if not clean(value):
@@ -85,7 +98,7 @@ async def fact_create_api(request: Request, brand_id: str):
     confirmed_by = str(actor.user_id) if status == "confirmed" else None
     row = repo.create_brand_fact(
         web.conn, brand_id, actor=str(actor.user_id), fact_type=fact_type, label=clean(label), value=clean(value),
-        status=status, source_reference_id=src_id, confirmed_by=confirmed_by,
+        status=status, source_reference_id=src_id, confirmed_by=confirmed_by, fact_key=fact_key or None,
     )
     return {"data": _fact_shape(brand_id, row)}
 
@@ -102,9 +115,12 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
     label = _str_field(body, "label")
     value = _str_field(body, "value")
     source_reference = _str_field(body, "source_reference")
+    fact_key = clean(_str_field(body, "fact_key"))
     errors = {}
     if not clean(fact_type):
         errors["fact_type"] = "請選擇這是哪一類事實。"
+    if key_error := _proof_key_error(fact_type, fact_key):
+        errors["fact_key"] = key_error
     if not clean(label):
         errors["label"] = "請填寫這條事實的名稱。"
     if not clean(value):
@@ -113,7 +129,8 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
         return JSONResponse({"errors": errors}, status_code=400)
     src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference) or fact["source_reference_id"]
     row = repo.update_brand_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id), fact_type=fact_type,
-                                  label=clean(label), value=clean(value), source_reference_id=src_id)
+                                  label=clean(label), value=clean(value), source_reference_id=src_id,
+                                  fact_key=fact_key or None)
     return {"data": _fact_shape(brand_id, row)}
 
 
