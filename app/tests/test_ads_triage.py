@@ -511,6 +511,56 @@ class TriageTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class TriageBoundAdIdTest(TriageTest):
+    """F40-I01: every item names the local `ads_ad` bound to its platform ad (`bound_ad_id`) --
+    the one field the detail page needs to tell a platform ad with no bound local ad from a
+    local ad never built -- read in one query for the whole campaign, joined by `native_id`."""
+
+    def bind_local_ad(self, external_id, *, local_state="bound"):
+        group, ad = db.new_id("adg"), db.new_id("ada")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture','組',100,'new')",
+            (group, self.org, self.brand, self.campaign),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name,external_id,"
+            "local_state) VALUES(%s,%s,%s,%s,%s,'本地廣告',%s,%s)",
+            (ad, self.org, self.brand, self.campaign, group, external_id, local_state),
+        )
+        self.conn.commit()
+        return ad
+
+    def test_item_names_the_local_ad_bound_to_its_native_id(self):
+        local_ad = self.bind_local_ad("ad1")
+        item = self.classify_one()
+        self.assertEqual(item["bound_ad_id"], local_ad)
+
+    def test_item_with_no_local_ad_reads_none(self):
+        item = self.classify_one()
+        self.assertIsNone(item["bound_ad_id"])
+
+    def test_a_detached_local_ad_does_not_count_as_bound(self):
+        self.bind_local_ad("ad1", local_state="detached")
+        item = self.classify_one()
+        self.assertIsNone(item["bound_ad_id"])
+
+    def test_bound_ad_id_is_one_query_for_the_campaign_never_per_item(self):
+        self.bind_local_ad("ad1")
+        for i in range(3):
+            external.upsert_entity(
+                self.conn, self.org, self.brand, self.campaign,
+                {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+                 "native_id": f"ad_extra_{i}", "name": f"廣告{i}",
+                 "parent_native_kind": "campaign", "parent_native_id": "c1"},
+            )
+        self.conn.commit()
+        counting = _CountingConn(self.conn)
+        result = triage.classify(counting, self.org, self.brand, self.campaign)
+        self.assertEqual(len(result["items"]), 4)
+        self.assertEqual(sum(1 for sql in counting.calls if "FROM ads_ad " in sql), 1)
+
+
 class TriageDataViewTest(unittest.TestCase):
     def setUp(self):
         self.conn, self.org = db.current(), db.DEV_ORG_ID
@@ -766,6 +816,26 @@ class TriageClosedAdsTest(unittest.TestCase):
         self.assertIsNone(item["spend"])
         self.assertIsNone(item["cost_per_result"])
         self.assertEqual(item["result_label"], result_kinds.label(None))
+        self.assertIsNone(item["bound_ad_id"])
+
+    def test_closed_item_names_its_bound_local_ad(self):
+        # F40-I01: the closed block carries `bound_ad_id` too (a paused platform ad the user
+        # built here is still "built", never counted as an unmatched platform ad).
+        self.make_ad("paused_bound", native_status="PAUSED")
+        group, local_ad = db.new_id("adg"), db.new_id("ada")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture','組',100,'new')",
+            (group, self.org, self.brand, self.campaign),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name,external_id,"
+            "local_state) VALUES(%s,%s,%s,%s,%s,'本地廣告','paused_bound','bound')",
+            (local_ad, self.org, self.brand, self.campaign, group),
+        )
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(result["closed"]["items"][0]["bound_ad_id"], local_ad)
 
     def test_closed_items_capped_with_truncated_flag(self):
         for i in range(3):

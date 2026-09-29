@@ -272,7 +272,7 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     assert slot[ready_ad] == {
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
-        "copy": placement_copy("已確認"), "workbench_href": None,
+        "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
     }
     # Uploaded, its original still pending: not confirmable yet, so not launchable and not
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
@@ -676,6 +676,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
         "ad_id": launched_ad, "entity_id": entity["id"], "name": "晨光隨行杯・日常出發",
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
+        "format_key": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -774,7 +775,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
     assert first == {
         "ad_id": None, "entity_id": b1["id"], "name": "晨光 1", "state": "ready",
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
-        "copy": None, "workbench_href": None,
+        "copy": None, "workbench_href": None, "format_key": None,
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
@@ -783,6 +784,17 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
             env["conn"], env["org"], env["brand"], imported, b1["id"],
             {"asset_id": user_asset(env)}, "human",
         )
+
+
+def test_slot_carries_the_planned_ads_format_key(env):
+    """F40-I01: a planned slot names its ad's own `format_key` (so the assets tab can say a
+    video-format slot needs a script); an ad without one reads `None`."""
+    video_ad, plain_ad, _ = env["ads"]
+    env["conn"].execute("UPDATE ads_ad SET format_key='video' WHERE id=%s", (video_ad,))
+    env["conn"].commit()
+    slot = by_ad(read(env))
+    assert slot[video_ad]["format_key"] == "video"
+    assert slot[plain_ad]["format_key"] is None
 
 
 def test_slots_route_reads_and_unknown_campaign_is_404(env):

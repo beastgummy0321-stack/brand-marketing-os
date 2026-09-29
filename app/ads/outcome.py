@@ -97,7 +97,7 @@ def _daily_series(rows: list) -> list:
     return [{"day": day, **_bucket(day_rows)} for day, day_rows in sorted(by_day.items())]
 
 
-def _coverage(conn: _AnyConn, org_id: str, campaign: dict) -> dict:
+def _coverage(campaign: dict, today: date) -> dict:
     """Contract P's `coverage`: the campaign window `start_date … min(end_date, org yesterday)`
     checked against the recorded platform-read coverage by `triage.coverage_gap` (the rule
     triage/closeout/review share). No window (no start date, or it starts today or later) ⇒
@@ -105,7 +105,7 @@ def _coverage(conn: _AnyConn, org_id: str, campaign: dict) -> dict:
     from app.ads import triage  # 延遲 import 避免循環
 
     start = campaign.get("start_date")
-    yesterday = coresettings.today_for_org(conn, org_id=org_id) - timedelta(days=1)
+    yesterday = today - timedelta(days=1)
     end = campaign.get("end_date")
     end = min(end, yesterday) if end is not None else yesterday
     if start is None or end < start:
@@ -123,21 +123,77 @@ def _coverage(conn: _AnyConn, org_id: str, campaign: dict) -> dict:
     }
 
 
+def _window_days(campaign: dict, today: date, daily: list) -> int:
+    """The period the status row grades: `start_date … min(end_date, today)` in calendar days
+    (today included -- `totals` already sums today's rows). A campaign with no window yet (no
+    start date, or one after its end) is graded over the days it actually has rows for."""
+    start, end = campaign.get("start_date"), campaign.get("end_date")
+    end = min(end, today) if end is not None else today
+    if start is None or end < start:
+        return len(daily)
+    return (end - start).days + 1
+
+
+def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dict | None:
+    """The one result view `triage.grade_window` reads, cut from the SAME `_bucket` totals the
+    tab prints (never a second aggregation): `result_count` = `totals.purchases`,
+    `cost_per_result` = `totals.cpa`. Untracked everywhere (`purchases` `None`) is no view; a
+    period with an untracked day or an unknown spend, or across two currencies, keeps its number
+    but reads as unknown through `reason` -- the same signals `review_evidence.aggregate` and
+    `triage._ad_window` give, so the period grade never outruns a per-ad grade."""
+    if totals["purchases"] is None:
+        return None
+    currencies = {r["currency"] for r in group_rows}
+    reason = None
+    if len(currencies) > 1:
+        reason = "mixed_currency"
+    elif any(r["purchases"] is None or r["spend"] is None for r in group_rows):
+        reason = "result_unknown_days"
+    return {
+        "metric_scope": "group", "currency": next(iter(currencies)) if len(currencies) == 1
+        else None, "result_kind": result_kind, "result_count": totals["purchases"],
+        "cost_per_result": totals["cpa"], "reason": reason,
+    }
+
+
+def _period_grade(campaign: dict, totals: dict, group_rows: list, daily: list, cap: dict,
+                  today: date) -> dict:
+    """F40-I01: `totals.grade` = the one cap ruler (`triage.grade_window`, ads.md §6.33) over the
+    whole period -- `{grade, label}`, `grade` in on_target|watch|over|wasted|insufficient|
+    no_target. No cap, or a cap with no result kind anywhere (the precondition `triage` and
+    `period_grades._grade` share), is `no_target`."""
+    from app.ads import triage  # 延遲 import 避免循環
+
+    if cap["value"] is not None and cap["result_kind"] is None:
+        return {"grade": "no_target", "label": triage.GRADE_LABELS["no_target"]}
+    grade, label, _reason = triage.grade_window(
+        _period_view(totals, group_rows, cap["result_kind"]), totals["spend"], cap["value"],
+        _window_days(campaign, today, daily),
+    )
+    return {"grade": grade, "label": label}
+
+
 def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     """成效分頁的整包 payload：campaign 層總計（只算投放組粒度的列，§0「Money totals
     belong to the group level」）、每日序列、每投放組／每廣告一列（含花費占比）、資料覆蓋率
-    跟最後更新時間。"""
+    跟最後更新時間。F40-I01: `totals.grade` is the period's one-ruler grade the 成效分頁's
+    「這期狀態列」 prints beside 整期合計 (`_period_grade`, the backend's answer -- never a
+    frontend copy of the ruler)."""
     from app.ads import repository as ads_repo
+    from app.ads import targets
 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    today = coresettings.today_for_org(conn, org_id=org_id)
 
     group_rows = rows(conn, org_id, brand_id, campaign_id, "group")
     ad_rows = rows(conn, org_id, brand_id, campaign_id, "ad")
 
     totals = _bucket(group_rows)
     daily = _daily_series(group_rows)
+    cap = targets.resolve(conn, org_id, brand_id, detail)
+    totals["grade"] = _period_grade(detail, totals, group_rows, daily, cap, today)
 
     group_total_spend = sum(
         float(r["spend"]) for r in group_rows if r["spend"] is not None
@@ -178,6 +234,6 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
         "daily": daily,
         "groups": groups_table,
         "ads": ads_table,
-        "coverage": _coverage(conn, org_id, detail),
+        "coverage": _coverage(detail, today),
         "last_data_at": last_data_at,
     }
