@@ -926,7 +926,9 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
 
         self.assertIn(_SCOREBOARD_HEADER, prompt)
         self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
-        self.assertIn("上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt)
+        self.assertIn(
+            "上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt,
+        )
         # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【座標成績表】，取最後一次。
         self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_SCOREBOARD_HEADER))
         self.assertLess(prompt.rindex(_SCOREBOARD_HEADER), prompt.rindex("【程式算好的預算情境"))
