@@ -878,6 +878,72 @@ class CalendarInStrategyPromptTest(StrategyTestBase):
         self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
 
 
+_SCOREBOARD_HEADER = "【座標成績表（已結案活動，程式統計；划算＝每筆成本在上限內）】"
+_SCOREBOARD_EMPTY = "【座標成績表】（還沒有結案過的廣告，沒有成績表）"
+
+
+class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
+    """F39-I02（outcome 2）：策略 prompt 帶程式統計的【座標成績表】，接在【過去的學習】之後；
+    `basis.coordinate_scoreboard` 列出它用到的學習列 id（查看策略依據要等於模型真的看過的）。
+    空品牌就寫「還沒有成績表」、id 空陣列。成績表列來自 I01 寫的 `source_track='coordinate'`
+    學習列——這裡直接用公開的 `record_learning` 種一列。"""
+
+    def _seed_scoreboard(self) -> dict:
+        closed = self._create_campaign(
+            name="上一期 Campaign", start_date="2026-09-01", end_date="2026-09-10",
+            status="closed",
+        )
+        group = plan.create_group(
+            web.conn, self.org_id, self.brand_id, closed["id"], name="上一期新客組", role="new",
+            daily_budget=500,
+        )
+        ad = plan.create_ad(
+            web.conn, self.org_id, self.brand_id, closed["id"], group["id"], name="上一期-免運",
+            coordinates=_coordinates("last"),
+        )
+        keys = _coordinates("last")
+        scope = "coord；grade=on_target；" + "；".join(
+            f"{dim}={keys[dim]}"
+            for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+        )
+        return bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR,
+            learning_text="「上一期-免運」每筆 200（上限 300）＝划算", applicability_scope=scope,
+            confidence="observed", sample_size="1 則廣告",
+            source_cycle_id=f"{closed['id']}:{ad['id']}", source_track="coordinate",
+        )
+
+    def _generate_and_capture(self) -> tuple[str, dict]:
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        detail = self._generate()
+        return provider.calls[0]["messages"][0]["content"], detail
+
+    def test_scoreboard_reaches_the_prompt_and_the_basis(self):
+        learning = self._seed_scoreboard()
+        prompt, detail = self._generate_and_capture()
+
+        self.assertIn(_SCOREBOARD_HEADER, prompt)
+        self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
+        self.assertIn("上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt)
+        # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【座標成績表】，取最後一次。
+        self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_SCOREBOARD_HEADER))
+        self.assertLess(prompt.rindex(_SCOREBOARD_HEADER), prompt.rindex("【程式算好的預算情境"))
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertEqual(basis["coordinate_scoreboard"], [learning["id"]])
+        self.assertIn(learning["id"], basis["knowledge_item_ids"])
+        # 成績表列不是句子學習：`basis.learnings` 仍然只讀 `ads` 軌。
+        self.assertEqual(basis["learnings"], [])
+
+    def test_empty_brand_says_there_is_no_scoreboard(self):
+        prompt, detail = self._generate_and_capture()
+
+        self.assertIn(_SCOREBOARD_EMPTY, prompt)
+        self.assertNotIn(_SCOREBOARD_HEADER, prompt)
+        self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_scoreboard"], [])
+
+
 class BudgetCapSelectionTest(StrategyTestBase):
     """F28-I03: a total above the budget cap (`constraints_json.budget`) is saved only with an
     explicit confirmation, which is recorded; within the cap, or with no cap, as before.

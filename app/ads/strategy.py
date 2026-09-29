@@ -14,7 +14,7 @@ ever recomputes `budget_planned` from them (F03.md "One source of truth for mone
 
 from datetime import UTC, datetime
 
-from app.ads import budget, calendar_tw, judgment, launch_settings, targets
+from app.ads import budget, calendar_tw, coordinate_learning, judgment, launch_settings, targets
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
@@ -370,6 +370,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     facts_text, facts_basis = _brand_facts_section(conn, brand_id)
     products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
+    # F39-I02：程式統計的【座標成績表】接在學習句子之後——上一期哪則廣告划算、哪則太貴，
+    # 讓分配的 `rationale` 點得出名字；空表就寫「還沒有成績表」，規則不生效。
+    board_text, board_ids = coordinate_learning.scoreboard_section(conn, org_id, brand_id)
 
     brand = bi_repo.get_brand(conn, brand_id)
     assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
@@ -398,6 +401,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         [f["id"] for f in facts_basis]
         + [p["product_id"] for p in prices_basis]
         + [row["id"] for row in learnings_basis]
+        + board_ids
     )
 
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
@@ -414,6 +418,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n" + facts_text
         + "\n\n" + products_text
         + "\n\n" + learnings_text
+        + "\n\n" + board_text
         + "\n\n" + scenarios_text
     )
 
@@ -448,6 +453,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         "knowledge_item_ids": knowledge_item_ids, "llm_task_id": task_row["id"],
         "input_context_hash": task_row["input_context_hash"],
         "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
+        "coordinate_scoreboard": board_ids,
         "estimated_fields": estimated_fields,
     }
     assumption_note = _assumption_note(prices_basis)
