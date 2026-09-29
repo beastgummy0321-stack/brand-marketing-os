@@ -37,8 +37,11 @@ def brief_text(brief: dict, product_name: str | None) -> str:
     `workbench_brief` 列（工作檯的來源是一張工單，不是活動樹節點）。長度／變體數／字數帶
     已經寫在 `copy.md`／`image_prompt.md` 本身，這裡不重複。F07-I09（Decision 25）：舊全域
     風格庫退休，這裡不再帶「風格：」那一行——看圖片提示詞怎麼決定視覺是 §5.9 的事，這支只服務
-    copy／video_script。"""
+    copy／video_script。F39-I04（outcomes 3–4）：`request_json.scene`（這則廣告的情境，一句）
+    與 `request_json.calendar_note`（投放期間的行事曆，ads 側用程式算好的行）由交件方帶進
+    `request_json`，有值才各印一段——順序：座標 → 情境 → 截止日 → 行事曆 → visual_tone。"""
     coordinates = brief.get("coordinates_snapshot_json") or {}
+    request = brief.get("request_json") or {}
     lines = ["## 這張工單", f"產品：{product_name or '（無）'}"]
     if coordinates:
         # 票 05（ADR 0069 §3）：這組座標是樹交下來的，文案要照這組座標寫，不是可改可不改
@@ -48,16 +51,29 @@ def brief_text(brief: dict, product_name: str | None) -> str:
             + "\n例外：優惠與證明分類不是已確認事實；須另有已確認來源，"
             "否則使用無優惠／無證明。"
         )
-    deadline = (brief.get("request_json") or {}).get("offer_deadline")
+    scene = request.get("scene")
+    if isinstance(scene, str) and scene.strip():
+        lines.append(
+            f"情境：{scene.strip()}（五組文案的畫面都發生在這個情境裡，不得換成別的情境；"
+            "標題與內文要看得出這個情境）"
+        )
+    deadline = request.get("offer_deadline")
     if deadline:
         lines.append(
             f"限時截止日：{deadline}（限時限量文案只能寫這一個日期，不得另造期限或數量）"
         )
     elif coordinates.get("offer") in _LIMITED_TIME:
         lines.append("這組座標寫了限時限量但沒有截止日：寫無優惠版本，不提期限。")
+    calendar_note = request.get("calendar_note")
+    if isinstance(calendar_note, str) and calendar_note.strip():
+        # Same caveat the plan／strategy prompts carry (F38 calendar_tw.prompt_section).
+        lines.append(
+            "投放期間的行事曆：\n" + calendar_note.strip()
+            + "\n（只在它真的會影響買家時寫進標題或 hook，不必硬套節慶）"
+        )
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
-    free_text = (brief.get("request_json") or {}).get("free_text")
+    free_text = request.get("free_text")
     if free_text:
         lines.append(f"自由指示：{free_text}")
     return "\n".join(lines)
