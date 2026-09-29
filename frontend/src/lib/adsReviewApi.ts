@@ -49,7 +49,7 @@ export interface ReviewRound {
   result_json: { recommendations?: Recommendation[]; limitations?: string[]; rejected?: { reason: string } | null };
   evidence_json: {
     target: Pick<NativeEntity, "id" | "name" | "platform" | "source_account" | "native_id">;
-    window: { start: string; end: string; previous_start: string; previous_end: string; timezone: string | null };
+    window: { start: string; end: string; previous_start: string; previous_end: string; timezone: string | null; missing_days: string[] };
     current: ReviewPeriod; previous: ReviewPeriod;
     commerce: { current: CommerceEvidence; previous: CommerceEvidence };
     conditions: {

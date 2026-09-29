@@ -7,12 +7,13 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
-import { closeCampaign, getPerformance, ingestOutcome } from "@/lib/adsApi";
+import { closeCampaign, CoverageMissingError, getPerformance } from "@/lib/adsApi";
 import { readComparison } from "@/lib/adsExperimentApi";
 import { readSimulation } from "@/lib/adsSimulationApi";
 import { PerformanceTab } from "./PerformanceTab";
 
 vi.mock("@/lib/useEchart", () => ({ useEchart: () => ({ current: null }) }));
+vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org", getAccessToken: async () => "test_token", setOrgId: vi.fn(), signOut: vi.fn() }));
 
 // F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
 // timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.
@@ -52,7 +53,6 @@ vi.mock("@/lib/adsApi", async () => {
   return {
     ...actual,
     getPerformance: vi.fn(),
-    ingestOutcome: vi.fn(),
     closeCampaign: vi.fn(),
   };
 });
@@ -73,7 +73,7 @@ function performance(): CampaignPerformance {
     daily: [],
     groups: [],
     ads: [],
-    coverage: { expected: 0, missing: 0 },
+    coverage: { start: null, end: null, expected: 0, missing: 0, missing_days: [], never_synced: false },
     last_data_at: null,
   };
 }
@@ -181,7 +181,6 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getPerformance).mockResolvedValue(performance());
-    vi.mocked(ingestOutcome).mockResolvedValue(performance());
     vi.mocked(readComparison).mockResolvedValue({
       proposal: null, missing: "缺少合格對照", stale: false, closed: false, simulation: false,
       confirmed: null, result: { verdict: "看不出", reason: "缺資料", values: [] },
@@ -299,18 +298,148 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     expect(readSimulation).not.toHaveBeenCalled();
   });
 
-  it("成效重新整理後，已展開的比較同步重新讀取；未使用時仍不讀取", async () => {
+  it("F37：自建活動的「重新讀取平台」就是工作區的平台同步；讀完重載成效，已展開的比較也重讀", async () => {
     const user = userEvent.setup();
-    renderTab(campaign({ status: "live" }));
+    const sync = vi.fn();
+    const c = campaign({ status: "live" });
+    const view = (syncing: boolean) => (
+      <MemoryRouter>
+        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} syncing={syncing} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(view(false));
     await screen.findByRole("heading", { name: "目前成果" });
-    await user.click(screen.getByRole("button", { name: "重新整理成效" }));
-    await waitFor(() => expect(ingestOutcome).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "重新整理成效" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重新讀取平台" }));
+    expect(sync).toHaveBeenCalledOnce();
+    expect(getPerformance).toHaveBeenCalledTimes(1);
     expect(readComparison).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "素材比較（選用）" }));
     await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(1));
-    await user.click(screen.getByRole("button", { name: "重新整理成效" }));
+    rerender(view(true));
+    expect((screen.getByRole("button", { name: /讀取中/ }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(view(false));
+    await waitFor(() => expect(getPerformance).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("F37 資料狀態：平台讀到哪一天、哪幾天還沒讀到", () => {
+  const coverage = (o: Partial<CampaignPerformance["coverage"]>) => ({
+    ...performance(), coverage: { start: "2026-09-01", end: "2026-09-28", expected: 28, missing: 0, missing_days: [], never_synced: false, ...o },
+  });
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it("全部讀到：說平台已讀到的期間，沒有警告行", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(coverage({}));
+    renderTab(campaign({ status: "live" }));
+    expect(await screen.findByText("資料狀態：平台已讀到 09/01 ～ 09/28；來源為平台回報。")).toBeTruthy();
+    expect(screen.queryByText(/還沒讀到平台資料：/)).toBeNull();
+  });
+
+  it("缺日：已讀到的期間不含尾端缺日，警告行列出日子並說不算 0", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(coverage({ missing: 2, missing_days: ["2026-09-27", "2026-09-28"] }));
+    renderTab(campaign({ status: "live" }));
+    expect(await screen.findByText("資料狀態：平台已讀到 09/01 ～ 09/26；來源為平台回報。")).toBeTruthy();
+    expect(screen.getByText(/有 2 天還沒讀到平台資料：/).textContent).toContain("這幾天不算 0，按「重新讀取平台」補讀。");
+    expect(screen.getByText("09/27")).toBeTruthy();
+    expect(screen.getByText("09/28")).toBeTruthy();
+  });
+
+  it("缺超過 5 天：只列前 5 天再接「…」", async () => {
+    const days = ["2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26"];
+    vi.mocked(getPerformance).mockResolvedValue(coverage({ missing: 7, missing_days: days }));
+    renderTab(campaign({ status: "live" }));
+    expect(await screen.findByText(/有 7 天還沒讀到平台資料：/)).toBeTruthy();
+    expect(screen.getByText("09/24")).toBeTruthy();
+    expect(screen.queryByText("09/25")).toBeNull();
+    expect(screen.getByText("…")).toBeTruthy();
+  });
+
+  it("從沒讀過：說還沒讀過平台資料，不是一整排日子", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(coverage({ never_synced: true, missing: 0, missing_days: [] }));
+    renderTab(campaign({ status: "live" }));
+    expect(await screen.findByText("資料狀態：還沒讀過平台資料；來源為平台回報。")).toBeTruthy();
+    expect(screen.queryByText(/平台已讀到/)).toBeNull();
+  });
+});
+
+describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", () => {
+  function renderClose(onSync = vi.fn(), syncing = false, extra: Partial<CampaignDetail> = {}) {
+    const c = campaign({ status: "ended", ...extra });
+    const onCampaignChange = vi.fn();
+    const view = (s: boolean) => (
+      <MemoryRouter>
+        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={vi.fn()} onSync={onSync} syncing={s} />
+      </MemoryRouter>
+    );
+    const utils = render(view(syncing));
+    return { c, onCampaignChange, rerenderSyncing: (s: boolean) => utils.rerender(view(s)) };
+  }
+  const gap = (can_skip: boolean) => new CoverageMissingError("有 2 天還沒讀到平台資料，先重新讀取平台。", {
+    missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip,
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPerformance).mockResolvedValue(performance());
+  });
+
+  it("409 缺日：日子列成小方塊、確認結案鎖住，「重新讀取平台」呼叫同步；讀完才重新放行", async () => {
+    const user = userEvent.setup();
+    const sync = vi.fn();
+    vi.mocked(closeCampaign).mockRejectedValue(gap(false));
+    const { rerenderSyncing } = renderClose(sync);
+    await user.click(await screen.findByRole("button", { name: "立即結案" }));
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await screen.findByText("有 2 天還沒讀到平台資料，先補讀再結案。")).toBeTruthy();
+    expect(dialog.textContent).toContain("09/27");
+    expect(dialog.textContent).toContain("09/28");
+    expect(screen.getByText("缺的日子不會被當成 0；讀到之後這裡會自動放行。")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "仍讀不到，跳過缺日結案" })).toBeNull();
+
+    const reads = screen.getAllByRole("button", { name: "重新讀取平台" });
+    await user.click(reads[reads.length - 1]);
+    expect(sync).toHaveBeenCalledOnce();
+    rerenderSyncing(true);
+    expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(true);
+    rerenderSyncing(false);
+    await waitFor(() => expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it("can_skip（上次讀取失敗）：紅色說明帶同步錯誤，「仍讀不到，跳過缺日結案」送 skip_missing: true", async () => {
+    const user = userEvent.setup();
+    const closed = campaign({ status: "closed", verdict: "看不出" });
+    vi.mocked(closeCampaign).mockRejectedValueOnce(gap(true)).mockResolvedValueOnce(closed);
+    const { c, onCampaignChange } = renderClose(vi.fn(), false, {
+      context_json: { external_sync: { observations: { status: "error", error: "來源讀取失敗或連線已解除；已保留前次資料。" } } },
+    });
+    await user.click(await screen.findByRole("button", { name: "立即結案" }));
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+
+    expect(await screen.findByText("重新讀取失敗：來源讀取失敗或連線已解除；已保留前次資料。")).toBeTruthy();
+    expect(screen.getByText(/仍有 2 天讀不到（09\/27、09\/28）/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "再讀一次" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "仍讀不到，跳過缺日結案" }));
+    expect(closeCampaign).toHaveBeenLastCalledWith("brd_1", c.id, { skip_missing: true });
+    await waitFor(() => expect(onCampaignChange).toHaveBeenCalledWith(closed));
+  });
+
+  it("從沒讀過：說先讀取再結案，不列日子", async () => {
+    const user = userEvent.setup();
+    vi.mocked(closeCampaign).mockRejectedValue(new CoverageMissingError("這個活動還沒讀過平台資料，先重新讀取平台。", {
+      missing_days: [], never_synced: true, can_skip: false,
+    }));
+    renderClose();
+    await user.click(await screen.findByRole("button", { name: "立即結案" }));
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+    expect(await screen.findByText("這個活動還沒讀過平台資料，先讀取再結案。")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
@@ -331,13 +460,13 @@ it("imported shares the KPI layout and sync while disabling internal operations"
   expect(screen.getByText(/活動 · USD · 7d · 2026-09-01 ～ 2026-09-30/)).toBeTruthy();
   expect(screen.getByText("目前成果")).toBeTruthy(); expect(screen.getByText("12 USD")).toBeTruthy(); expect(screen.queryByText(/保守值/)).toBeNull();
   expect((screen.getByRole("button", { name: "立即結案" }) as HTMLButtonElement).disabled).toBe(true);
-  await userEvent.click(screen.getByRole("button", { name: "重新整理成效" })); expect(sync).toHaveBeenCalledOnce();
+  await userEvent.click(screen.getByRole("button", { name: "重新讀取平台" })); expect(sync).toHaveBeenCalledOnce();
   await userEvent.click(screen.getByRole("button", { name: /查看每日資料/ }));
   await userEvent.selectOptions(screen.getByLabelText("資料範圍"), JSON.stringify(["ad", "USD", "7d"]));
   expect(screen.getAllByText("999 USD").length).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: "成效比較" }));
   expect(screen.getByText("既有平台活動不支援內部成效比較。")).toBeTruthy();
-  expect(getPerformance).not.toHaveBeenCalled(); expect(ingestOutcome).not.toHaveBeenCalled(); expect(readComparison).not.toHaveBeenCalled(); expect(closeCampaign).not.toHaveBeenCalled();
+  expect(getPerformance).not.toHaveBeenCalled(); expect(readComparison).not.toHaveBeenCalled(); expect(closeCampaign).not.toHaveBeenCalled();
 });
 
 
@@ -425,5 +554,32 @@ describe("F36-I09 組織時鐘：提前結案說明", () => {
     renderTab(campaign({ status: "live", end_date: "2026-03-01" }));
     expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
     expect(screen.queryByText(/現在結案等於提前結束/)).toBeNull();
+  });
+});
+
+// F37 Contract S: the real `closeCampaign` reads the standard envelope's `error.details` (F37-I03) and
+// throws `CoverageMissingError`; any other 409 stays a plain Error with the server's message.
+describe("closeCampaign 409 coverage_missing", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
+
+  it("reads error.details into CoverageMissingError and sends skip_missing", async () => {
+    const { closeCampaign: realClose } = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+    const fetchMock = reply(409, { error: { code: "coverage_missing", message: "有 2 天還沒讀到平台資料，先重新讀取平台。",
+      details: { missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip: true } } });
+    vi.stubGlobal("fetch", fetchMock);
+    const err = await realClose("brd_1", "cmp_1", { skip_missing: true }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CoverageMissingError);
+    expect(err).toMatchObject({ missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip: true, message: "有 2 天還沒讀到平台資料，先重新讀取平台。" });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ reason: null, skip_missing: true });
+  });
+
+  it("another 409 is a plain Error with the server message", async () => {
+    const { closeCampaign: realClose } = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
+    vi.stubGlobal("fetch", reply(409, { error: { code: "campaign_locked", message: "已鎖定" } }));
+    const err = await realClose("brd_1", "cmp_1").catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(CoverageMissingError);
+    expect((err as Error).message).toBe("已鎖定");
   });
 });
