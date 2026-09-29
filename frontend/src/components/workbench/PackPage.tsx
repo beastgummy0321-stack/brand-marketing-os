@@ -165,15 +165,25 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <div className="flex flex-col items-end gap-1">
-                  <Button
-                    disabled={!pack.can_approve || pack.status === "done"}
-                    onClick={() => void handleApprove()}
-                  >
-                    {pack.status === "done" ? "已核准" : "核准整包"}
-                  </Button>
-                  {pack.status !== "done" && pack.blocking_text && (
-                    <span className="text-xs text-muted-foreground">{pack.blocking_text}</span>
-                  )}
+                  {/* F40-I05（drill-7 #14）：按鈕灰掉時，原因與按鈕同一行（參考原型 #/assets 底列
+                   * 的「⚠ …」）；文字整段來自後端 `blocking_text`，這裡不重算。 */}
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    {pack.status !== "done" && !pack.can_approve && pack.blocking_text && (
+                      <span
+                        role="note"
+                        aria-label="核准整包停用原因"
+                        className="text-xs font-medium text-warning"
+                      >
+                        ⚠ {pack.blocking_text}
+                      </span>
+                    )}
+                    <Button
+                      disabled={!pack.can_approve || pack.status === "done"}
+                      onClick={() => void handleApprove()}
+                    >
+                      {pack.status === "done" ? "已核准" : "核准整包"}
+                    </Button>
+                  </div>
                   {pack.image_exploration_warning && (
                     <span className="text-xs text-muted-foreground">{pack.image_exploration_warning}</span>
                   )}

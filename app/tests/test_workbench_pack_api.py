@@ -793,3 +793,65 @@ class StatutoryWarningTest(_WorkbenchPackApiTestBase):
             web.conn, self.org_id, self.brand_id, None, {"body": "治療"},
         )
         assert result["statutory_hits"] == [] and result["statutory_warning"] is None
+
+
+# -- 案例 14：`blocking_text` 逐項點名（F40-I05，drill-7 #14 站 18c）---------------------------
+# 「核准整包」灰掉時後端必須說出每一個原因：素材組沒做完照舊，完成條件沒勾的按標籤列出；
+# 三項都 ok 時為空字串。
+
+class BlockingTextNamesEveryReasonTest(_WorkbenchPackApiTestBase):
+    def _pack_with_all_sets_done(self) -> str:
+        pack_id = self._submit_pack([self._one_set("1", {"copy": 1})])
+        brief = self._briefs(pack_id)[0]
+        outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="copy", generation_round=1, body_json=[{"sets": []}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+        return pack_id
+
+    def _tick(self, pack_id: str, key: str) -> None:
+        resp = self.client.post(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}/completion",
+            json={"key": key, "checked": True},
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def _pack(self, pack_id: str) -> dict:
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["pack"]
+
+    def test_sets_done_but_one_box_unticked_names_that_box(self):
+        pack_id = self._pack_with_all_sets_done()
+        self._tick(pack_id, "brand_rules_checked")
+        pack = self._pack(pack_id)
+        self.assertIs(pack["can_approve"], False)
+        self.assertEqual(pack["blocking_text"], "還沒勾「可核准整包並回報上游」")
+
+    def test_sets_done_and_both_boxes_unticked_names_both(self):
+        pack = self._pack(self._pack_with_all_sets_done())
+        self.assertIs(pack["can_approve"], False)
+        self.assertEqual(
+            pack["blocking_text"], "還沒勾「確認內容符合品牌規範」「可核准整包並回報上游」",
+        )
+        self.assertNotIn("素材組未完成", pack["blocking_text"])
+
+    def test_missing_sets_and_unticked_boxes_are_joined(self):
+        pack = self._pack(self._submit_pack([self._one_set("1", {"copy": 1})]))
+        self.assertIs(pack["can_approve"], False)
+        self.assertEqual(
+            pack["blocking_text"],
+            "尚有 1 個素材組未完成；還沒勾「確認內容符合品牌規範」「可核准整包並回報上游」",
+        )
+        # The missing-set sentence already covers `required_outputs_met`; it is not repeated.
+        self.assertNotIn("完成所有素材組", pack["blocking_text"])
+
+    def test_all_ticked_is_empty(self):
+        pack_id = self._pack_with_all_sets_done()
+        for key in ("brand_rules_checked", "ready_to_report"):
+            self._tick(pack_id, key)
+        pack = self._pack(pack_id)
+        self.assertIs(pack["can_approve"], True)
+        self.assertEqual(pack["blocking_text"], "")
