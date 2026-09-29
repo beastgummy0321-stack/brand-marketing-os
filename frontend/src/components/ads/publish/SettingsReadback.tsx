@@ -5,6 +5,27 @@ import type { HandoffWorkspace } from "@/lib/adsHandoffApi";
 import { confirmLaunchSetting, type SettingsReadback as Readback, type SettingsReadbackKey } from "@/lib/adsLaunchSettingsApi";
 import { ReadbackRow, ReadbackSummary, ResultHero } from "../patterns";
 
+/** Drill-7 #18, prototype `.rbbar` of `#/readback`: the yellow bar over the list — 「N 項讀不到」 with the reason the
+ * payload gives for those fields in brackets (every distinct `reason` the readback returned; nothing invented when
+ * it gives none), the primary 「我在 <platform> 都看過了，全部標記」 and 「逐項標記」. The host wires the two actions;
+ * `busy` disables both while any action runs, `running` labels the primary while its own request is out. */
+export function UnreadAllBar({ count, reasons, platform, busy = false, running = false, onAll, onEach }: {
+  count: number; reasons: (string | null | undefined)[]; platform: string; busy?: boolean; running?: boolean;
+  onAll: () => void; onEach: () => void;
+}) {
+  const reason = [...new Set(reasons.filter((r): r is string => typeof r === "string" && r.trim() !== ""))].join("；");
+  return (
+    <div data-slot="unread-all-bar" role="group" aria-label="全部標記" className="flex flex-wrap items-center gap-3 rounded-[10px] bg-zone-watch px-4 py-3">
+      <span className="min-w-[220px] flex-1 text-sm">
+        <b>{count} 項讀不到</b>
+        {reason && <span className="ml-1 text-xs text-muted-foreground">（{reason}）</span>}
+      </span>
+      <Button disabled={busy} onClick={onAll}>{running ? "記錄中…" : `我在 ${platform} 都看過了，全部標記`}</Button>
+      <Button variant="outline" disabled={busy} onClick={onEach}>逐項標記</Button>
+    </div>
+  );
+}
+
 /** F29-I16 verify stage (prototype v10 `pubVerify()` hero + 投放設定讀回 card, hash `pub/fall/verify`): every approved
  * launch setting against the platform read — 對上了, 不一樣 (the platform's value beside ours) or 讀不到 with its
  * reason and 「我看過了，一樣」. The hero counts the setting differences; 回平台改 when any differ. Nothing here
