@@ -51,7 +51,7 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
    every existing parent with its `product_id`. Remaining latent gap → one small yellow-batch item: `create_product` has 9
    callers and only the two scan paths dedupe by name; add a partial unique index on `(brand_id, name)` for parents and
    make `create_product` return the existing active parent on a name match.
-3. **Yellow batch — built in F36 on 2026-09-28 (pending user acceptance)**; follow-ups: #13-B (retire the manual-ingest pipeline for real campaigns — own /dig), `currentBudgetMonth()` no-arg callers, `ReviewWindow.missing_days` frontend type (rules in ads.md §6.40; queue `.work/ready/F36-I01…I10`; #13 only its step A, #16 as the guard item). Original list: #4 ask the per-sale target before showing 打平 559
+3. **Yellow batch — built in F36 on 2026-09-28 (pending user acceptance)**; follow-ups #13-B, `currentBudgetMonth()` no-arg callers and `ReviewWindow.missing_days` — **built in F37 on 2026-09-29 (pending user acceptance; ads.md §6.41)** (rules in ads.md §6.40; queue `.work/ready/F36-I01…I10`; #13 only its step A, #16 as the guard item). Original list: #4 ask the per-sale target before showing 打平 559
    (`budget.py:36`, `CapBlock.tsx:117`); #17 「套用到全部」 in the 自帶素材 fold (#2 done in F35;
    `UserAssetPlacements.tsx:73`); #13 one data source for connections／home／成效／review (`home_overview.py:97`,
    `routes.py:825`, `review_evidence.py:243`); #15 「照上一期」 ÷ days with spend (`channels.py:113`); #8 audience hint
@@ -61,6 +61,10 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
 4. **#3 站內出圖** — still 「接上後開放」 (`workbench/image_port.py:14`); known P2, needs a provider decision first.
 
 ## Unverified / open
+- `test_ads_launch_view::test_an_audience_key_without_a_vocabulary_row_prints_itself` failed once under `-n 4` during F37-I03 and
+  passed 3/3 alone (suspected order dependence on the shared vocabulary rows); green in the F37 integration run.
+- After F37 the dev DB's `ads_outcome_daily` is gone; simulated campaigns published before F37 show no performance until
+  re-published.
 - Gap #19 (asset AI 「取得建議」 only fills 用途, never regenerates copy): seen by the persona, not yet checked in code.
 - Whether readback 「讀不到」 26/27 items is only the drill stand-in (no creative fields mirrored).
 - Judge leniency (Haiku scored A 1.3–1.35 across the board) — ranking holds, multipliers soft.
@@ -87,7 +91,7 @@ Done 9／20: #1 #2 #7 #9 #10 #11 #12 #14 #18 — the whole red group of report �
 windows explicitly. Launch configs in `.claude/launch.json`: `drill-backend` (stand-in server on 8710), `prototype`
 (static server for `.harness/scratch/prototype` on 8741).
 
-## #13-B dig rulings (2026-09-28) — one performance pipeline
+## #13-B dig rulings (2026-09-28) — one performance pipeline (built in F37, rules now in ads.md §6.41)
 Root cause re-verified: after F32 readback (`handoff_check.py:426-446`) a real internal campaign feeds TWO pipelines —
 A: `app/meta/daily_pull` (03:00) → `meta_entity_spend` → user `POST …/ingest` → `ads_outcome_daily` (no coverage record;
 readers: PerformanceTab, closeout verdict, `budget_history`, `starting_point.loop_purchases`, `ab_pairs`, `experiments`,
