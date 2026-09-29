@@ -4,10 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
-import {
-  generateStrategy, getCampaign, patchCampaign,
-  type CampaignDetail, type CampaignFieldSources, type PatchCampaignInput,
-} from "@/lib/adsApi";
+import { generateStrategy, getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";

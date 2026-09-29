@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CampaignDetail, CampaignFieldSources } from "@/lib/adsApi";
+import type { CampaignDetail } from "@/lib/adsApi";
+import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
 import { generateStrategy, getCampaign, patchCampaign } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget, type CapView } from "@/lib/adsTriageApi";

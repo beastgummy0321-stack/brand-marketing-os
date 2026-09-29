@@ -6,10 +6,8 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import {
-  createCampaign, getCampaign, listCampaigns, patchCampaign,
-  type CampaignCreateExtras, type CampaignDetail, type PatchCampaignInput,
-} from "@/lib/adsApi";
+import { createCampaign, getCampaign, listCampaigns, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import type { CampaignCreateExtras } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";

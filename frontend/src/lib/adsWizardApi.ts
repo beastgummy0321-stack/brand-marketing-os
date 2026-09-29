@@ -18,6 +18,7 @@
  *   `dates_required`, `end_before_start`. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow, type CampaignDetail, type CampaignDraft } from "./adsApi";
+import type { CampaignCreateExtras } from "./adsCampaignTypes";
 
 export interface WizardProduct {
   id: string;
@@ -46,7 +47,9 @@ export interface WizardOptions {
   objectives: WizardObjective[];
 }
 
-export interface CampaignPicks {
+/** F40-I04／I12: the four 「這次怎麼投」 values ride along (`CampaignCreateExtras`); a missing one is copied from the
+ * previous campaign by the server. */
+export interface CampaignPicks extends CampaignCreateExtras {
   /** Exactly one id, taken from `WizardOptions.products` (anything else is `product_unknown`). */
   product_ids: [string];
   objective: string;
