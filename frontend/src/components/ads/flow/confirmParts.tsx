@@ -1,13 +1,13 @@
+import { useId } from "react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { formatCount } from "@/lib/format";
-import { getMonthlyBudget, type ChangeItem, type MonthlyBudget } from "@/lib/adsChangeApi";
+import type { ChangeItem, MonthlyBudget, OngoingOwner } from "@/lib/adsChangeApi";
 import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
-import { useApiRead } from "@/lib/useApiRead";
-import { budgetMoney, currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import type { ApiRead } from "@/lib/useApiRead";
 import { Chip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
@@ -152,35 +152,141 @@ function Swatch({ tone }: { tone: keyof typeof SWATCH_TONE }) {
   return <span aria-hidden="true" className={`inline-block size-2 rounded-sm ${SWATCH_TONE[tone]}`} />;
 }
 
-/** 三段可用度長條＋圖例，跟 `home/BudgetCard.tsx` 同一份色碼與誠實未知邏輯（原型 `budgetBar()`）。
- * `extra`（這次加碼，F25-I03 `scale.month.extra_needed`）> 0 時多畫一段成功色，「可用」跟著扣掉
- * `extra`（原型 `available-extra`）——沒有 `extra` 的既有（非 scale）預算變更清單維持原本兩段。
- * 圖例固定印已花／預留／可用（`extra` 才印這次加碼），即使長條本身因為總額未知只能畫灰階，
- * 數字仍照實印（design-system §7「誠實的空狀態」，同 `home/BudgetCard.tsx` 的做法）。 */
-function MiniBudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: number }) {
-  const { amount, known_spend, ongoing_estimate, available, currency } = budget;
-  const known = amount !== null && amount > 0 && known_spend !== null && ongoing_estimate !== null && available !== null;
+/** `YYYY-MM` → the month number the copy names (「10 月」). */
+function monthOf(month: string): number {
+  return Number(month.split("-")[1]) || 0;
+}
+/** A month-budget amount as the prototype prints it (bare, thousands-separated); `null` is the honest unknown. */
+function money(value: number | null): string {
+  return value === null ? "尚待確認" : formatAmount(value);
+}
+
+/** The word 預留 with its definition on hover／focus／tap (prototype `term("reserve", "預留")`, same `.term` look
+ * as `patterns/Term.tsx`). The shared glossary has no entry for it and `patterns/` is outside this page's scope,
+ * so the one sentence lives here beside the only card that uses it. */
+function ReserveTerm() {
+  const id = useId();
+  return (
+    <span
+      data-slot="term" tabIndex={0} aria-describedby={id}
+      onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}
+      className="group/term relative inline cursor-help border-b border-dotted border-current outline-offset-2"
+    >
+      預留
+      <span
+        role="tooltip" id={id}
+        className="absolute top-[calc(100%+6px)] left-0 z-30 hidden w-max max-w-[min(260px,70vw)] rounded-lg bg-foreground px-[11px] py-2 text-left text-xs leading-normal font-normal tracking-normal whitespace-normal text-white group-hover/term:block group-focus/term:block"
+      >
+        還在跑的活動這個月剩下的天數要花的錢，先留著不算可用；跑完就還回來。
+      </span>
+    </span>
+  );
+}
+
+const RESERVE_OWNERS_SHOWN = 3;
+/** The 預留 explanation under the bar (issue Done 1): one clause per running budget owner, largest commitment
+ * first, at most three named, the rest counted as 「等 N 項」. No owner → no line (nothing is reserved for). */
+function reserveLine(owners: OngoingOwner[]): string | null {
+  if (owners.length === 0) return null;
+  const sorted = [...owners].sort((a, b) => b.commitment - a.commitment);
+  const parts = sorted.slice(0, RESERVE_OWNERS_SHOWN)
+    .map((o) => `${o.name ?? "未命名投放組"} 還有 ${o.days} 天沒跑完，每天 ${formatAmount(o.daily)}`);
+  const more = sorted.length > RESERVE_OWNERS_SHOWN ? `等 ${sorted.length} 項` : "";
+  return `預留＝${parts.join("；")}${more} 先留著；跑完就還回來。`;
+}
+
+/** 四段長條＋圖例（F40 原型 `budgetBar()`：已花／預留／這次要花／還剩），跟 `home/BudgetCard.tsx` 同一份
+ * 色碼與誠實未知邏輯。預留＝`ongoing_estimate + reserved_increases`（後端 `preflight` 從 `available` 扣掉的
+ * 兩筆）；`extra`（這次要花，F25-I03 `scale.month.extra_needed`）> 0 才多畫一段成功色並從還剩扣掉——
+ * 沒有 `extra` 的既有（非 scale）預算變更清單維持三段。總額未知時長條只畫灰階，數字仍照實印
+ * （design-system §7「誠實的空狀態」）。 */
+function BudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: number }) {
+  const { amount, known_spend, ongoing_estimate, reserved_increases, available } = budget;
+  const reserved = ongoing_estimate === null ? null : ongoing_estimate + reserved_increases;
+  const known = amount !== null && amount > 0 && known_spend !== null && reserved !== null && available !== null;
   const pct = (v: number) => Math.max(0, Math.min(100, (v / (amount as number)) * 100));
-  const availableAfterExtra = available === null ? null : available - extra;
+  const left = available === null ? null : available - extra;
   return (
     <div className="mt-2 space-y-1.5">
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
         {known && (
           <>
             <div className="bg-chart-rest" style={{ width: `${pct(known_spend as number)}%` }} />
-            <div className="bg-border" style={{ width: `${pct(ongoing_estimate as number)}%` }} />
+            <div className="bg-border" style={{ width: `${pct(reserved as number)}%` }} />
             {extra > 0 && <div className="bg-success" style={{ width: `${pct(extra)}%` }} />}
-            <div className="bg-primary" style={{ width: `${pct(Math.max(0, availableAfterExtra as number))}%` }} />
+            <div className="bg-primary" style={{ width: `${pct(Math.max(0, left as number))}%` }} />
           </>
         )}
       </div>
       <div className="numeric flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {budgetMoney(known_spend, currency)}</span>
-        <span className="inline-flex items-center gap-1.5"><Swatch tone="border" />預留 {budgetMoney(ongoing_estimate, currency)}</span>
-        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone="success" />這次加碼 {budgetMoney(extra, currency)}</span>}
-        <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />可用 {budgetMoney(availableAfterExtra, currency)}</span>
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {money(known_spend)}</span>
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="border" /><ReserveTerm /> {money(reserved)}</span>
+        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone="success" />這次要花 {money(extra)}</span>}
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />還剩 {money(left)}</span>
       </div>
     </div>
+  );
+}
+
+/** 「本月預算放得下」卡的三個狀態（F40-I08，原型 `#/approve`）：(iii) `premiseChanged`——核准被 409 擋下、
+ * 前提變了，標題＋「重新檢查」（重建草稿，`ConfirmPage` 的既有動作）；(ii) 這個月還沒設月預算——標題＋
+ * 「設定 N 月月預算 →」連去月預算所在的投放中心首頁；(i) 放得下——算式標題（月預算 − 已花 − 預留）、
+ * 四段長條、`ongoing_owners` 的預留說明。`uncertainties` 三態都照印在標題下（後端 `preflight` 的原句）。
+ * 核准鈕該不該灰、旁邊的原因，由 `ConfirmPage` 從同一份 `read` 判斷（`approveBlock`），不在這裡另算一份。 */
+export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref }: {
+  read: ApiRead<MonthlyBudget | null>; month: string; extra?: number;
+  premiseChanged: boolean; busy: boolean; onRecheck: () => void; budgetHref: string;
+}) {
+  const id = useId();
+  const budget = read.data;
+  const n = monthOf(budget?.month ?? month);
+  const state = premiseChanged ? "recheck" : budget && budget.amount === null ? "unset" : "fit";
+  const reserved = budget && budget.ongoing_estimate !== null ? budget.ongoing_estimate + budget.reserved_increases : null;
+  const fits = budget?.available !== null && budget?.available !== undefined && budget.available - extra >= 0;
+  const line = reserveLine(budget?.ongoing_owners ?? []);
+  return (
+    <section aria-labelledby={id} className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id={id} className="text-sm font-medium">本月預算放得下</h2>
+        {state === "recheck" && <Chip tone="warn">要重新檢查</Chip>}
+        {state === "unset" && <Chip tone="warn">還沒設月預算</Chip>}
+        {state === "fit" && fits && <Chip tone="ok">放得下</Chip>}
+      </div>
+      {state === "recheck" && (
+        <div className="mt-3 flex flex-wrap items-center gap-3.5">
+          <p className="text-sm"><b>計畫、素材或月份已改變</b><span className="text-muted-foreground">，這批內容要重新對一次</span></p>
+          <Button variant="outline" disabled={busy} onClick={onRecheck}>{busy ? "檢查中…" : "重新檢查"}</Button>
+        </div>
+      )}
+      {state === "unset" && (
+        <div className="mt-3 flex flex-wrap items-center gap-3.5">
+          <p className="text-sm"><b>{n} 月還沒設月預算</b><span className="text-muted-foreground">，算不出放不放得下</span></p>
+          <Button asChild><Link to={budgetHref}>設定 {n} 月月預算 →</Link></Button>
+        </div>
+      )}
+      {state === "fit" && read.status === "error" && (
+        <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-warning">
+          月預算暫時讀取不到，不影響上面的核准內容。
+          <Button variant="outline" size="sm" onClick={read.reload}>重試</Button>
+        </p>
+      )}
+      {state === "fit" && read.status !== "error" && !budget && <p className="mt-2 text-sm text-muted-foreground">正在整理月預算…</p>}
+      {state === "fit" && budget && (
+        <>
+          <p className="mt-3 text-sm">
+            <b>{n} 月還能花 {money(budget.available)}</b>
+            <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}）</span>
+          </p>
+          <BudgetBar budget={budget} extra={extra} />
+          {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
+        </>
+      )}
+      {budget && budget.uncertainties.length > 0 && (
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {budget.uncertainties.map((reason) => <li key={reason}>{reason}</li>)}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -190,13 +296,11 @@ function MiniBudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: n
  * 佇列，同 `PauseEvidence` 的 fallback）就退回只有名稱／金額／原因的版本——`item` 這時才派上用場
  * （`scale` 有值時一律讀 `scale`/`triage` 這組即時資料，不讀凍結在 `item.before/after` 的舊值，
  * 這樣第一次進頁面、`item` 都還沒建立時也能完整顯示提議內容）。 */
-export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, brandId }: {
-  item: ChangeItem | undefined; scale: QueueScale | null; bestAdThumbnailUrl: string | null; brandId: string;
+export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
+  item: ChangeItem | undefined; scale: QueueScale | null; bestAdThumbnailUrl: string | null;
+  /** F40-I08: the month-budget card's inputs; the read itself lives in `ConfirmPage` (it also gates 核准). */
+  fit: Omit<Parameters<typeof BudgetFitCard>[0], "extra">;
 }) {
-  const { timezone } = useOrgClock();
-  const budgetRead = useApiRead((signal) => getMonthlyBudget(brandId, currentBudgetMonth(timezone), signal), [brandId, timezone]);
-  const budget = budgetRead.data;
-  const budgetError = budgetRead.status === "error";
   const before = scale ? scale.from : item?.before.daily_amount ?? null;
   const after = scale ? scale.to : item?.after.daily_amount ?? null;
   const pct = before !== null && after !== null && before > 0 ? Math.round(((after - before) / before) * 100) : null;
@@ -243,17 +347,7 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, brandId }: {
         )}
         {!scale && <p className="mt-3 text-sm text-muted-foreground">原因：{item?.reason}</p>}
       </div>
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="text-sm font-medium">本月預算放得下</h2>
-        {budgetError && (
-          <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-warning">
-            月預算暫時讀取不到，不影響上面的核准內容。
-            <Button variant="outline" size="sm" onClick={budgetRead.reload}>重試</Button>
-          </p>
-        )}
-        {!budgetError && !budget && <p className="mt-2 text-sm text-muted-foreground">正在整理月預算…</p>}
-        {budget && <MiniBudgetBar budget={budget} extra={extra} />}
-      </div>
+      <BudgetFitCard {...fit} extra={extra} />
     </>
   );
 }
