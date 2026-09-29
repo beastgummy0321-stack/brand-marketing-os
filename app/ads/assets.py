@@ -11,8 +11,10 @@ Readiness is read through the workbench's **existing** public entries only
 workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fidelity).
 """
 
+from datetime import date
+
 from app import workbench
-from app.ads import change_control_launch, channels, handoff_assignment, plan
+from app.ads import calendar_tw, change_control_launch, channels, handoff_assignment, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 
@@ -117,6 +119,20 @@ def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str,
             request["offer_deadline"] = (
                 deadline.isoformat() if hasattr(deadline, "isoformat") else str(deadline)
             )
+    # F39-I03 (outcomes 3 and 4): the planned scene and the calendar lines for the group's
+    # (else the campaign's) window ride the same request channel as `offer_deadline`; the
+    # workbench prints them in the brief. Absent scene / empty window -> key omitted.
+    if ad.get("scene"):
+        request["scene"] = ad["scene"]
+    window = (group.get("start_date"), group.get("end_date"))
+    if window[0] is None or window[1] is None:  # same fallback as `_variant_count`
+        window = (campaign.get("start_date"), campaign.get("end_date"))
+    start: date | None = plan._parse_date(window[0])
+    end: date | None = plan._parse_date(window[1])
+    if start is not None and end is not None:
+        note_lines = calendar_tw.note_lines(start, end)
+        if note_lines:
+            request["calendar_note"] = "\n".join(note_lines)
     return {
         "name": ad["name"],
         "source_ref": _set_source_ref(campaign_id, ad["id"]),

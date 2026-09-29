@@ -6,7 +6,7 @@ from app.ads import ad_status, channels
 from app.ads.external_models import ExternalEntity, ExternalObservation
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings
-from app.core.db import jsonb, new_id
+from app.core.db import jsonb, new_id, now_utc
 
 # F16-I06: the one shared, platform-neutral definition of an account-month budget source row
 # (written by `app.ads.adapters.meta_read.MetaReader.read_monthly` / `app.ads.external_sync`'s
@@ -143,15 +143,17 @@ def upsert_observation(
     data["result_count"] = result_count
     data["result_action"] = result_action
     data["result_attribution"] = result_attribution
-    columns = list(data)
+    # F39-I06: `observed_at` is product time -- bound from `now_utc()` on insert and update
+    # alike (one clock; the drill rebinds that name), never the column DEFAULT or SQL `now()`.
+    # `updated_at`/`status_changed_at` on the entity table are audit stamps and stay SQL `now()`.
+    columns = [*data, "observed_at"]
     values = [jsonb(value) if key == "availability" else value for key, value in data.items()]
+    values.append(now_utc())
     row = conn.execute(
         "INSERT INTO ads_external_daily (id,org_id,brand_id,campaign_id," + ",".join(columns) + ") "
         "VALUES (" + ",".join(["%s"] * (4 + len(columns))) + ") "
         "ON CONFLICT (org_id,brand_id,entity_id,day,metric_scope,attribution_key,currency) "
-        "DO UPDATE SET "
-        + ",".join(key + "=EXCLUDED." + key for key in columns)
-        + ",observed_at=now() RETURNING *",
+        "DO UPDATE SET " + ",".join(key + "=EXCLUDED." + key for key in columns) + " RETURNING *",
         (new_id("aed"), org_id, brand_id, campaign_id, *values),
     ).fetchone()
     if heal_superseded_attribution and not is_monthly_budget_row(data["attribution_key"]):
@@ -278,10 +280,10 @@ def cache_listing(conn, org_id, brand_id, platform, account, item):
     conn.execute(
         "INSERT INTO "
         "ads_external_listing(id,org_id,brand_id,platform,source_account,"
-        "native_kind,native_id,snapshot) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT "
+        "native_kind,native_id,snapshot,observed_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT "
         "(org_id,brand_id,platform,source_account,native_kind,native_id) DO UPDATE SET "
-        "snapshot=EXCLUDED.snapshot,observed_at=now()",
+        "snapshot=EXCLUDED.snapshot,observed_at=EXCLUDED.observed_at",
         (
             new_id("ael"),
             org_id,
@@ -291,6 +293,7 @@ def cache_listing(conn, org_id, brand_id, platform, account, item):
             model.native_kind,
             model.native_id,
             jsonb(model.model_dump(mode="json")),
+            now_utc(),
         ),
     )
 

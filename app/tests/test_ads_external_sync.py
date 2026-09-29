@@ -886,3 +886,72 @@ class ExternalSyncTest(unittest.TestCase):
                 other.commit()
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(self.reader.calls[-1], ("list", {"after": "page2"}))
+
+
+class ObservedAtClockTest(unittest.TestCase):
+    """F39-I06 (drill-7 #17, one clock): the sync table's `observed_at` is bound from the
+    module-level `now_utc` (the name the drill clock rebinds) on insert and on update alike --
+    never SQL `now()` nor the column default."""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.org, self.brand = setup_brand(self.conn)
+        self.campaign = repo.create_imported_campaign(
+            self.conn, self.org, self.brand, name="時鐘"
+        )
+        self.entity = repo.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign["id"],
+            {"platform": "other", "source_account": "a", "native_kind": "root", "native_id": "1"},
+        )
+
+    def _observation(self, spend):
+        return {
+            "entity_id": self.entity["id"], "day": date(2026, 9, 3), "metric_scope": "root",
+            "attribution_key": "k", "source": "other", "currency": "TWD", "spend": spend,
+        }
+
+    def _stored(self, row_id):
+        return self.conn.execute(
+            "SELECT observed_at FROM ads_external_daily WHERE id=%s", (row_id,)
+        ).fetchone()["observed_at"]
+
+    def test_daily_observed_at_follows_module_now_utc_on_insert_and_update(self):
+        first = datetime(2026, 9, 3, 8, 0, tzinfo=UTC)
+        with patch.object(repo, "now_utc", return_value=first):
+            row = repo.upsert_observation(
+                self.conn, self.org, self.brand, self.campaign["id"], self._observation(10)
+            )
+        self.assertEqual(row["observed_at"], first)
+        self.assertEqual(self._stored(row["id"]), first)
+        later = first + timedelta(days=2, hours=1)
+        with patch.object(repo, "now_utc", return_value=later):
+            updated = repo.upsert_observation(
+                self.conn, self.org, self.brand, self.campaign["id"], self._observation(20)
+            )
+        self.assertEqual(updated["id"], row["id"])
+        self.assertEqual(updated["spend"], 20)
+        self.assertEqual(self._stored(row["id"]), later)
+
+    def test_listing_observed_at_follows_module_now_utc(self):
+        item = {
+            "platform": "other", "source_account": "a", "native_kind": "portfolio",
+            "native_id": "root", "native_status": "ACTIVE",
+        }
+        moment = datetime(2026, 9, 3, 9, 30, tzinfo=UTC)
+        with patch.object(repo, "now_utc", return_value=moment):
+            repo.cache_listing(self.conn, self.org, self.brand, "other", "a", item)
+        stored = self.conn.execute(
+            "SELECT observed_at FROM ads_external_listing WHERE org_id=%s AND brand_id=%s AND "
+            "platform='other' AND source_account='a' AND native_id='root'",
+            (self.org, self.brand),
+        ).fetchone()["observed_at"]
+        self.assertEqual(stored, moment)
+        later = moment + timedelta(hours=5)
+        with patch.object(repo, "now_utc", return_value=later):
+            repo.cache_listing(self.conn, self.org, self.brand, "other", "a", item)
+        stored = self.conn.execute(
+            "SELECT observed_at FROM ads_external_listing WHERE org_id=%s AND brand_id=%s AND "
+            "platform='other' AND source_account='a' AND native_id='root'",
+            (self.org, self.brand),
+        ).fetchone()["observed_at"]
+        self.assertEqual(stored, later)

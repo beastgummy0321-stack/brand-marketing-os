@@ -92,5 +92,27 @@ class PromptSectionTest(unittest.TestCase):
         self.assertNotIn("期間內沒有登記", text)
 
 
+class NoteLinesTest(unittest.TestCase):
+    """F39-I03: `note_lines` is exactly the row lines `prompt_section` prints (same wording,
+    same order), without the header, the empty line or the coverage note."""
+
+    def test_note_lines_equal_the_lines_inside_prompt_section(self):
+        start, end = date(2026, 9, 26), date(2026, 10, 16)
+        lines = calendar_tw.note_lines(start, end)
+        section = calendar_tw.prompt_section(start, end).split("\n")
+        self.assertEqual(lines, section[1:])
+        self.assertTrue(lines)
+        self.assertIn("- 10/09～10/11 國慶日（假日）", lines)
+
+    def test_convention_rows_keep_their_note_suffix(self):
+        lines = calendar_tw.note_lines(date(2026, 11, 1), date(2026, 11, 5))
+        self.assertEqual(lines, ["- 11/01～11/11 雙 11 檔（檔期）：概略檔期，各校／各平台不同"])
+
+    def test_quiet_window_yields_no_lines(self):
+        self.assertEqual(calendar_tw.note_lines(date(2026, 7, 20), date(2026, 7, 25)), [])
+        # Uncovered year: no lines either -- the coverage note belongs to the prompt section.
+        self.assertEqual(calendar_tw.note_lines(date(2028, 3, 1), date(2028, 3, 10)), [])
+
+
 if __name__ == "__main__":
     unittest.main()

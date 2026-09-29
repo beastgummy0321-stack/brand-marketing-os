@@ -48,13 +48,16 @@ def _coordinates(tag: str) -> dict:
 _VALID_PLAN_REPLY = json.dumps({
     "groups": [
         {"role": "new", "name": "新客組", "ads": [
-            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1"),
+             "scene": "上班族午休在辦公室滑手機找點心"},
         ]},
         {"role": "retarget", "name": "再行銷組", "ads": [
-            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1")},
+            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1"),
+             "scene": "看過商品頁的人晚上在家猶豫要不要下單"},
         ]},
         {"role": "explore", "name": "探索組", "ads": [
-            {"name": "探索-廣告一", "coordinates": _coordinates("ex1")},
+            {"name": "探索-廣告一", "coordinates": _coordinates("ex1"),
+             "scene": "健身房的人運動完在櫃檯看補給品"},
         ]},
     ],
 }, ensure_ascii=False)
@@ -878,6 +881,74 @@ class CalendarInStrategyPromptTest(StrategyTestBase):
         self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
 
 
+_SCOREBOARD_HEADER = "【座標成績表（已結案活動，程式統計；划算＝每筆成本在上限內）】"
+_SCOREBOARD_EMPTY = "【座標成績表】（還沒有結案過的廣告，沒有成績表）"
+
+
+class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
+    """F39-I02（outcome 2）：策略 prompt 帶程式統計的【座標成績表】，接在【過去的學習】之後；
+    `basis.coordinate_scoreboard` 列出它用到的學習列 id（查看策略依據要等於模型真的看過的）。
+    空品牌就寫「還沒有成績表」、id 空陣列。成績表列來自 I01 寫的 `source_track='coordinate'`
+    學習列——這裡直接用公開的 `record_learning` 種一列。"""
+
+    def _seed_scoreboard(self) -> dict:
+        closed = self._create_campaign(
+            name="上一期 Campaign", start_date="2026-09-01", end_date="2026-09-10",
+            status="closed",
+        )
+        group = plan.create_group(
+            web.conn, self.org_id, self.brand_id, closed["id"], name="上一期新客組", role="new",
+            daily_budget=500,
+        )
+        ad = plan.create_ad(
+            web.conn, self.org_id, self.brand_id, closed["id"], group["id"], name="上一期-免運",
+            coordinates=_coordinates("last"),
+        )
+        keys = _coordinates("last")
+        scope = "coord；grade=on_target；" + "；".join(
+            f"{dim}={keys[dim]}"
+            for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+        )
+        return bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR,
+            learning_text="「上一期-免運」每筆 200（上限 300）＝划算", applicability_scope=scope,
+            confidence="observed", sample_size="1 則廣告",
+            source_cycle_id=f"{closed['id']}:{ad['id']}", source_track="coordinate",
+        )
+
+    def _generate_and_capture(self) -> tuple[str, dict]:
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        detail = self._generate()
+        return provider.calls[0]["messages"][0]["content"], detail
+
+    def test_scoreboard_reaches_the_prompt_and_the_basis(self):
+        learning = self._seed_scoreboard()
+        prompt, detail = self._generate_and_capture()
+
+        self.assertIn(_SCOREBOARD_HEADER, prompt)
+        self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
+        self.assertIn(
+            "上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt,
+        )
+        # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【座標成績表】，取最後一次。
+        self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_SCOREBOARD_HEADER))
+        self.assertLess(prompt.rindex(_SCOREBOARD_HEADER), prompt.rindex("【程式算好的預算情境"))
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertEqual(basis["coordinate_scoreboard"], [learning["id"]])
+        self.assertIn(learning["id"], basis["knowledge_item_ids"])
+        # 成績表列不是句子學習：`basis.learnings` 仍然只讀 `ads` 軌。
+        self.assertEqual(basis["learnings"], [])
+
+    def test_empty_brand_says_there_is_no_scoreboard(self):
+        prompt, detail = self._generate_and_capture()
+
+        self.assertIn(_SCOREBOARD_EMPTY, prompt)
+        self.assertNotIn(_SCOREBOARD_HEADER, prompt)
+        self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_scoreboard"], [])
+
+
 class BudgetCapSelectionTest(StrategyTestBase):
     """F28-I03: a total above the budget cap (`constraints_json.budget`) is saved only with an
     explicit confirmation, which is recorded; within the cap, or with no cap, as before.
@@ -1136,6 +1207,10 @@ class StartingPointFreshBrandTest(StrategyTestBase):
         self.assertIn("- 像素：還沒讀像素", prompt)
         self.assertIn("- 訂單：訂單資料不在這裡，別假設有回購名單", prompt)
         self.assertNotIn("點擊 0", prompt)  # 沒讀過不是 0
+        # F39-I05：沒結案過的品牌，起點段一個字都不多——沒有「初始值」也沒有「已結案」那行。
+        self.assertIn("- 投放過沒：精靈還沒問\n- 花費歷史：", prompt)
+        self.assertNotIn("初始值", prompt)
+        self.assertNotIn("- 已結案：", prompt)
         roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
         self.assertEqual(roles, ["new", "explore"])
 
@@ -1241,6 +1316,55 @@ class StartingPointEligibleBrandTest(StrategyTestBase):
 
         prompt = provider.calls[0]["messages"][0]["content"]
         self.assertIn("- 像素：已讀到 2 個像素", prompt)
+
+
+class StartingPointClosedCampaignsTest(StrategyTestBase):
+    """F39-I05（drill-7 #5）：品牌用這個系統結案過之後，精靈答案只是初始值，起點段多一行
+    「已結案 N 期；最近一期…」，數字照 `closed_at` 最新那期的 `verdict_json` 印。"""
+
+    def _close(self, name: str, *, closed_at: str, verdict: str | None,
+               verdict_json: dict) -> dict:
+        closed = self._create_campaign(name=name, status="closed")
+        web.conn.execute(
+            "UPDATE ads_campaign SET verdict = %s, verdict_json = %s, closed_at = %s"
+            " WHERE id = %s",
+            (verdict, coredb.jsonb(verdict_json), closed_at, closed["id"]),
+        )
+        web.conn.commit()
+        return closed
+
+    def test_two_closed_campaigns_turn_the_wizard_answer_into_an_initial_value(self):
+        self._close("第一期", closed_at="2026-08-31T00:00:00Z", verdict="未達成",
+                    verdict_json={"actual": 420.0, "target": 300.0})
+        self._close("第二期", closed_at="2026-09-20T00:00:00Z", verdict="達成",
+                    verdict_json={"actual": 255.456, "target": 300.0})
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn(
+            "- 投放過沒：精靈答過：投放過（初始值；已用這個系統結案 2 期，以下列實際結果為準）\n"
+            "- 已結案：2 期；最近一期「第二期」每筆 255.46 對上限 300，結果 達成\n"
+            "- 花費歷史：",
+            prompt,
+        )
+        self.assertNotIn("第一期", prompt)
+
+    def test_an_older_verdict_json_without_numbers_prints_a_dash(self):
+        """Blocked-if 條款：舊形狀的 `verdict_json` 缺 `actual`／`target` 就印「—」，不回填。"""
+        self._close("舊的一期", closed_at="2026-09-01T00:00:00Z", verdict=None,
+                    verdict_json={})
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        self._generate()
+
+        prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("- 已結案：1 期；最近一期「舊的一期」每筆 — 對上限 —，結果 —\n", prompt)
 
 
 class ValidateReplyAvailableSetTest(unittest.TestCase):

@@ -10,6 +10,11 @@ _outcome_totals"). 看不出 is a real verdict, not a rounding of an unknown int
 — it is what gets written whenever no cap resolves, the sample bucket is 低,
 or the metric being judged is itself untracked; it never falls back to 未達成.
 
+F39-I01: after the visual track, `coordinate_learning.write_coordinate_learnings` writes one
+`source_track='coordinate'` learning per ad the one ruler grades over the campaign window (grade +
+seven coordinate keys in `applicability_scope`); partial data (skipped gap, incomplete recovery)
+writes none of them, and their ids join `verdict_json["learning_ids"]`.
+
 Duplicate guard: `ads_campaign.status = 'closed'` on the row itself — a second `close()` call is
 a no-op that returns the already-closed row unchanged, no second learning (§0 "the duplicate
 guard stays status='closed' on the campaign row; do not query the ledger for it").
@@ -17,8 +22,15 @@ guard stays status='closed' on the campaign row; do not query the ledger for it"
 
 from datetime import date, timedelta
 
+from app.ads import (
+    coordinate_learning,
+    outcome,
+    repository,
+    simulation_mode,
+    targets,
+    visual_learning,
+)
 from app.ads import learning as ads_learning
-from app.ads import outcome, repository, simulation_mode, targets, visual_learning
 from app.ads.judgment import conversion_labels
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy, jsonb
@@ -167,7 +179,16 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
             conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
         )
     )
-    verdict_json["learning_ids"] = [learning_row["id"], *[r["id"] for r in visual_rows]]
+    coordinate_rows = [] if incomplete_simulation or skipped_gap is not None else (
+        coordinate_learning.write_coordinate_learnings(
+            conn, org_id, brand_id, campaign_id, actor=actor,
+        )
+    )
+    verdict_json["learning_ids"] = [
+        learning_row["id"],
+        *[r["id"] for r in visual_rows],
+        *[r["id"] for r in coordinate_rows],
+    ]
 
     conn.execute(
         "UPDATE ads_campaign SET verdict = %s, verdict_json = %s, status = 'closed',"

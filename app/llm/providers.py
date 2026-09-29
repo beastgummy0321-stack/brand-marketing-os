@@ -63,6 +63,9 @@ SCRIPTED_REPLIES: dict[str, dict] = {
                 "name": f"e2e {role} ad",
                 "coordinates": dict.fromkeys(
                     ("audience", "pain", "angle", "hook", "proof", "offer", "format"), "e2e"),
+                # F39-I03: one scene per ad. All three share the `e2e` audience key, so sharing
+                # a scene would pass the validator; each role still gets its own sentence.
+                "scene": f"e2e {role} 受眾晚上在家滑手機看到這支廣告",
             }]}
             for role in ("new", "retarget", "explore")
         ],
@@ -848,6 +851,8 @@ class ScriptedProvider:
                     {"role": role, "name": f"e2e {role} group", "ads": [{
                         "name": f"e2e {role} ad",
                         "coordinates": dict(template["ads"][0]["coordinates"]),
+                        # F39-I03: same per-role scene wording as the SCRIPTED_REPLIES template.
+                        "scene": f"e2e {role} 受眾晚上在家滑手機看到這支廣告",
                     }]}
                     for role in roles
                 ],
