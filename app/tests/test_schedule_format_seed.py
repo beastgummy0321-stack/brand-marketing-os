@@ -128,6 +128,52 @@ class TestScheduleFormatSeed(unittest.TestCase):
         b_flexible = _row(brand_b, "flexible")
         self.assertEqual(b_flexible["disabled_at"].isoformat(), "2026-01-01T00:00:00+00:00")
 
+    def test_offer_default_off_migration_text(self) -> None:
+        """F38-I05 (RC-C): the one-off migration switches promo offers off, never `none`."""
+        sql = (
+            pathlib.Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+            / "20260929000003_schedule_offer_default_off.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("disabled_at", sql)
+        self.assertIn("disabled_at = now()", sql)
+        self.assertIn("dimension = 'offer'", sql)
+        self.assertIn("key <> 'none'", sql)
+        self.assertIn("disabled_at IS NULL", sql)
+
+    def test_fresh_brand_promo_offers_seeded_disabled(self) -> None:
+        """F38-I05 (RC-C): a new brand gets only `offer/none` enabled; the six promo offers are
+        seeded disabled. Proof stays enabled — it is gated by evidence facts, not by seed."""
+        conn = db_current()
+        org_id = DEV_ORG_ID
+        brand_id = bi_repo.create_brand(conn, name="測試品牌：優惠預設關", client_name=None,
+                                         actor="測試員", org_id=org_id)["id"]
+        ensure_coordinates_seeded(conn, org_id, brand_id)
+        rows = conn.execute(
+            "SELECT dimension, key, disabled_at FROM brand_coordinate"
+            " WHERE brand_id = %s AND dimension IN ('offer', 'proof')",
+            (brand_id,),
+        ).fetchall()
+        offer = {r["key"]: r["disabled_at"] for r in rows if r["dimension"] == "offer"}
+        proof = {r["key"]: r["disabled_at"] for r in rows if r["dimension"] == "proof"}
+
+        self.assertIsNone(offer["none"])
+        promo = {"discount", "bundle", "free_shipping", "trial_sample", "guarantee",
+                 "limited_time"}
+        self.assertEqual(set(offer) - {"none"}, promo)
+        for key in promo:
+            self.assertIsNotNone(offer[key], f"offer/{key} should be seeded disabled")
+        self.assertEqual(len(proof), 7)
+        for key, disabled_at in proof.items():
+            self.assertIsNone(disabled_at, f"proof/{key} must stay enabled")
+
+        # every other seeded dimension stays enabled
+        others = conn.execute(
+            "SELECT count(*) AS n FROM brand_coordinate WHERE brand_id = %s"
+            " AND dimension NOT IN ('offer') AND disabled_at IS NOT NULL",
+            (brand_id,),
+        ).fetchone()["n"]
+        self.assertEqual(others, 0)
+
     def test_format_specs_have_no_flexible_line(self) -> None:
         """F07-I13 item 2: F07-I03 removed the 彈性格式 line from
         `app/methodology/meta-format-specs.md`; the source link `flexible-ad-format/` stays."""
