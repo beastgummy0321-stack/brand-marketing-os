@@ -42,7 +42,7 @@ export function TruthCardStep({
     setSaveError(null);
     fetchTruthCard(brandId)
       .then((data) => {
-        // drill-7 #13a: answers are client-only, so a re-read after a side-panel save must not wipe them.
+        // drill-7 item 13a: answers are client-only, so a re-read after a side-panel save must not wipe them.
         // Keep the answers whose item still needs confirmation; the first load starts from an empty map anyway.
         const stillNeeded = new Set(data.needs_confirmation.map((item) => item.id));
         setAnswers((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => stillNeeded.has(id))));
