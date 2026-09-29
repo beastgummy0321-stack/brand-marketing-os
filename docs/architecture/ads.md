@@ -1735,3 +1735,26 @@ Five program rules, no LLM judgment (dig of `docs/backlog/handoff-after-f37.md` 
   proof facts first, then RISK-word rows, cap 20. `brief_text` prints 「限時截止日：…」 from `request.offer_deadline`, or the
   無優惠 instruction when the coordinates say 限時限量 without one. Migrations `20260929000002_brand_intelligence_brand_fact_key.sql`
   and `20260929000003_schedule_offer_default_off.sql` (the latter disabled 12,624 promo rows on the dev DB).
+
+### 6.43 Drill-7 red items and backend yellows（ruled 2026-09-29；F39）
+Root cause (drill-7 report §3 #1–#2): the coordinate-choosing model (`plan.py`) received no learning at all and the strategy
+model only the campaign sentence; the ledger knew per-ad grades, the planners never read them. Program tallies, model chooses.
+- **Per-ad coordinate learnings.** `closeout.close` writes one `source_track='coordinate'` learning per ad graded by the one
+  ruler over the campaign window (`period_grades.grade_period`, same sample gate as the month review); ungraded ads write
+  nothing. `applicability_scope` = `coord；grade=<g>；audience=…；pain=…；angle=…；hook=…；proof=…；offer=…；format=…`,
+  `source_cycle_id = <campaign>:<ad>`, confidence `observed`; the text carries the numbers. Partial data (skipped gap,
+  incomplete simulation) writes none, as the visual track already does.
+- **Coordinate scoreboard in both planners.** `coordinate_learning.scoreboard_section` (per-dimension tallies + the last closed
+  campaign's 划算 and 太貴／沒賣出 ads with coordinates) is inserted into the strategy prompt after the learnings and into the
+  delivery-plan prompt before the vocabulary. The department texts require reusing one 划算 combination verbatim, not reusing a
+  太貴／沒賣出 one unchanged, and naming the reused ad in `rationale`. No program gate on the reply (drill 8 measures adherence).
+- **One scene per ad, distinct across audiences.** The delivery-plan reply carries `scene` (6–60 chars) per ad; ads whose
+  `audience` keys differ must have different scenes or the plan is rejected. Stored on `ads_ad.scene`
+  (migration `…_ads_ad_scene.sql`), handed to the workbench as `request.scene`; `brief_text` binds the five copy sets to it.
+- **The calendar reaches the copy** as `request.calendar_note` (program lines from `calendar_tw.note_lines` for the group's or
+  campaign's window; the workbench cannot import ads). Same caveat as the planners: only when it really affects the buyer.
+- **Starting point counts closed campaigns**: 「已結案 N 期；最近一期…」 line; the wizard answer is marked an initial value once N ≥ 1.
+  Role availability unchanged.
+- **One clock** on `month_budget._fresh` and the sync table's `observed_at` (`app.core.db.now_utc()`, which the drill clock
+  rebinds); audit `updated_at`/`status_changed_at` stay SQL `now()`.
+- Frontend items from the same report (E/D/F, #10, #18) are F40 after its own dig and prototype.
