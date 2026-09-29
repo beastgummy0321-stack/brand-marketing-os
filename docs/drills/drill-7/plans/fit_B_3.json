@@ -1,0 +1,32 @@
+{
+  "ads": {
+    "學生上課到通勤都能用的日常選擇": {
+      "fit": 1.2,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Hook names 讀書備考 during mid-term season; copy explains 免配水放進包包"
+    },
+    "運動後與上班日都適合的實用選擇": {
+      "fit": 1.2,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Concrete situation (讀書) with mechanism (不用沖泡工具) and free shipping offer; audience mismatch between audience_key (cold_unaware) and copy (targets readers)"
+    },
+    "通勤途中也能輕鬆使用的生活提案": {
+      "fit": 1.2,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Hook names 讀到一半找水找杯子; copy explains 免配水放進書包"
+    },
+    "學生與運動族都在意的使用感受": {
+      "fit": 1.3,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Concrete situation (讀書桌上堆杯子) with mechanism (免配水) and trial sample offer for explore phase"
+    }
+  }
+}

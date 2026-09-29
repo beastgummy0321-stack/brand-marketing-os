@@ -1,0 +1,103 @@
+{
+ "side": "B",
+ "period": 2,
+ "campaign_id": "adc_01M3NRDABQF21N9BBBS8W23SC0",
+ "name": "推「超能特惠組 · 3 盒免運」，想要的結果：購買，期間 2026-10-03 …",
+ "start_date": "2026-10-03",
+ "end_date": "2026-10-09",
+ "objective": "購買",
+ "success_metric": null,
+ "success_target": null,
+ "result_kind": null,
+ "status": "ready",
+ "budget_planned": 10500.0,
+ "daily_budget_total": 1500.0,
+ "goal_text": "推「超能特惠組 · 3 盒免運」，想要的結果：購買，期間 2026-10-03 ~ 2026-10-09，這個活動最多花 10500。",
+ "groups": [
+  {
+   "name": "新客｜日常舒適使用探索",
+   "role": "new",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 1050.0,
+   "ads": [
+    {
+     "name": "學生族｜不費力的日常使用體驗",
+     "format_key": "video",
+     "hook_key": "pain_question",
+     "pain_key": "effort",
+     "angle_key": "daily_use_sharing",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "超能特惠組 · 3 盒免運",
+     "price": 999.0,
+     "headline": "讀書補給，還要找杯子？",
+     "body": "還在為讀書中途找水、找杯子，打斷自己的節奏？Beast Gummy 是咖啡因機能軟糖，每顆含 150mg 咖啡因，放進筆袋或包包就能帶著走。自習、備考、通勤途中，想補給時直接取用，少一個沖泡步驟。先看清楚標示，再依自己的習慣安排食用時機。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "上班通勤族｜忙碌日常的簡單選擇",
+     "format_key": "carousel",
+     "hook_key": "contrast_flip",
+     "pain_key": "effort",
+     "angle_key": "moment_anchoring",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "超能特惠組 · 3 盒免運",
+     "price": 999.0,
+     "headline": "讀書補給，不必先找杯子",
+     "body": "你以為讀到一半要先找咖啡、找杯子，才有補給？其實一顆 Beast Gummy 就能放進書包，讀書、備考或趕去自習室時，拿出一顆咖啡因機能軟糖，少一道準備飲品的步驟。每顆含 150mg 咖啡因，先看清標示，再依自己的習慣安排。想把補給放進讀書節奏，從下一次坐下來開始。",
+     "asset_ready_source": null
+    }
+   ]
+  },
+  {
+   "name": "探索｜不同生活情境訊息測試",
+   "role": "explore",
+   "channel": "meta",
+   "audience_key": "cold_unaware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 450.0,
+   "ads": [
+    {
+     "name": "日常選擇｜第一次了解就知道怎麼用",
+     "format_key": "single_image",
+     "hook_key": "proof_led",
+     "pain_key": "uncertainty",
+     "angle_key": "product_explainer",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "超能特惠組 · 3 盒免運",
+     "price": 999.0,
+     "headline": "每顆150mg，先看懂再決定",
+     "body": "第一次看到超能特惠組，先不用猜它是不是適合你。它是咖啡因機能軟糖，每顆含150mg咖啡因，形式方便在日常移動中帶著。你可以先對照自己的咖啡因習慣與食用時機，再決定要不要把三盒組帶回去。價格999元，資訊看清楚，選擇才踏實。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "運動日常｜從不舒服到更自在",
+     "format_key": "video",
+     "hook_key": "contrast_flip",
+     "pain_key": "experience",
+     "angle_key": "user_case_story",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "超能特惠組 · 3 盒免運",
+     "price": 999.0,
+     "headline": "你以為補給一定要找水？",
+     "body": "讀到一半，才發現自己又在找杯子、找水、找能帶走的東西。Beast Gummy 是咖啡因機能軟糖，放進包包就能帶著走，免配水的使用情境更適合讀書、備考與移動中的補給。每顆含 150mg 咖啡因，先看清標示，再依自己的習慣安排。把補給變簡單，讀書節奏不用一直被打斷。",
+     "asset_ready_source": null
+    }
+   ]
+  }
+ ],
+ "kpi": {},
+ "hypothesis": null,
+ "notes": "exported from MarketingOS by scripts/drill/export_plan.py; period 2: 2 ads had no photo (one photo per slot) and were not on the launch checklist, so they were not built in Meta and are dropped here: 運動族｜運動後也能舒適使用、學生與通勤族｜找到適合自己的使用方式"
+}

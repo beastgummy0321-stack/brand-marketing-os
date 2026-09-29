@@ -162,3 +162,14 @@ New stand-in tooling, drill only:
 - `scripts/drill/export_plan.py <brand> --period N --campaign <id>` — product campaign → contract JSON.
 - `scripts/drill/fake_meta.py load-rows <brand> rows.json` — simulator rows → stand-in insights (then `pull --until`).
 - Account `900000000000006` ← `EAAG-drill-token-beast`.
+
+## Drill 7 (2026-09-29) — the same drill 6, B side only, after F38
+
+`docs/drills/drill-7/`: `plan.md` (what changed: only the system version and the two F38 steps — proof facts
+registered, promo offers enabled by hand), `sim_B_1..3.md`, `simulation-summary.md`, `report.md` (A-vs-B before/after
+table first), `plans/` (run logs, exported plans, judge fits). Side A is reused from drill 6, never re-run.
+Result: B 0.38 -> 1.46 total ROAS, A still 2.25.
+What the drill cost the fixture this time: the drill clock covers `now_utc` only; `ads.month_budget._fresh`
+(`datetime.now`) and `observed_at` (SQL `now()`) keep real time, so a planning day earlier than the real date
+blocks launch approval and a later one zeroes the month known spend (report §3 #17). Start the worker as a detached
+process, not a shell background job.

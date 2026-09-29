@@ -1,0 +1,32 @@
+{
+  "ads": {
+    "運動後與忙碌日常的一站式補給": {
+      "fit": 1.20,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "150mg 咖啡因、免配水機制清楚，三盒免運符合冷客漏斗。"
+    },
+    "學生上課到通勤都能輕鬆補給": {
+      "fit": 1.20,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "讀書、備考指向學生，150mg 機制具體，SKU 漏斗符合。"
+    },
+    "從早八到下班都撐住的日常選擇": {
+      "fit": 1.20,
+      "tags": ["worker", "driver"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "轉乘趕車指向通勤族，150mg 數字具體，三盒免運漏斗符合。"
+    },
+    "不靠硬撐也能完成今天的補給": {
+      "fit": 1.20,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "150mg 咖啡因、免配水、備考前看清標示機制清楚。"
+    }
+  }
+}
