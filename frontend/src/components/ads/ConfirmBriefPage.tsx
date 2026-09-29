@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { Link2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
@@ -11,15 +12,13 @@ import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { ActionBar, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
+import { cn } from "@/lib/utils";
+import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
 import { UnderstoodField, UnderstoodSkeleton, newCampaignPath, wizardSteps, type UnderstoodKey } from "./wizard/WizardPieces";
 
-interface CampaignContext {
-  product_ids?: string[];
-  audience_hint?: string | null;
-  field_sources?: Partial<CampaignFieldSources>;
-}
 interface CampaignConstraints { platform?: unknown; budget?: unknown }
+/** The seven `UnderstoodField`s plus the campaign-level landing URL (F40-I12, its own piece below). */
+type EditKey = UnderstoodKey | "landing_url";
 
 const message = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 const md = (d: string) => d.slice(5).replace("-", "/");
@@ -63,7 +62,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
   const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
   const [saved, setSaved] = useState<CampaignDetail | null>(null);
-  const [editing, setEditing] = useState<UnderstoodKey | null>(null);
+  const [editing, setEditing] = useState<EditKey | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -91,7 +90,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     );
   }
 
-  const context = (campaign.context_json ?? {}) as CampaignContext;
+  const context = campaign.context_json ?? {};
   const constraints = (campaign.constraints_json ?? {}) as CampaignConstraints;
   const sources = context.field_sources ?? {};
   const guessed = (key: keyof CampaignFieldSources) => (sources[key] ?? "system") === "system";
@@ -100,6 +99,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const objectives = options.data?.objectives ?? [];
   const platform = typeof constraints.platform === "string" ? constraints.platform : null;
   const audience = context.audience_hint ?? "";
+  const landingUrl = context.landing_url ?? "";
 
   const productName = !productId ? ""
     : products.find((p) => p.id === productId)?.name
@@ -107,11 +107,11 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const objectiveLabel = objectives.find((o) => o.key === campaign.objective)?.label ?? campaign.objective ?? "";
   const platformLabel = channels.data?.find((c) => c.key === platform)?.label ?? platform ?? "";
 
-  async function save(key: UnderstoodKey, patch: PatchCampaignInput | { audience_hint: string }) {
+  async function save(key: EditKey, patch: PatchCampaignInput | { audience_hint: string }) {
     setSaving(true); setSaveError(null);
     try {
       const updated = "audience_hint" in patch
-        ? await patchAudienceHint(brandId, campaignId, patch.audience_hint)
+        ? await patchAudienceHint(brandId, campaignId, patch.audience_hint ?? null)
         : await patchCampaign(brandId, campaignId, patch);
       setSaved(updated); setEditing((now) => (now === key ? null : now));
     } catch (err) {
@@ -126,7 +126,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     void save(key, patch);
   };
   const cancel = () => { setEditing(null); setSaveError(null); };
-  const edit = (key: UnderstoodKey) => () => { setSaveError(null); setEditing(key); };
+  const edit = (key: EditKey) => () => { setSaveError(null); setEditing(key); };
 
   /** The cap is not a campaign field: it goes through the target writer (revision-guarded) and the campaign is
    * re-read so the chip and the strategy call both see the saved value. */
@@ -213,6 +213,9 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
           : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
               editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}
+        <LandingUrlField value={landingUrl} editing={editing === "landing_url"} onEdit={!generating ? edit("landing_url") : undefined}
+          editor={<UrlEditor initial={landingUrl} busy={saving} onCancel={cancel}
+            onDone={(v) => { if (v === landingUrl) cancel(); else void save("landing_url", { landing_url: v || null }); }} />} />
       </div>
       {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
       {options.status === "error" && <ReadFailed what={`商品和目標清單讀不到（${options.error}）；這兩項先不能改，其他照常`} onRetry={options.reload} />}
@@ -305,6 +308,50 @@ function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
         <div className="min-h-4 text-xs" aria-live="polite">{preview}</div>
       </div>
       <DoneButton disabled={busy || invalid} onClick={submit} />
+      <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
+    </>
+  );
+}
+
+/** F40-I12 (drill-7 #10): the campaign-level landing URL (`context_json.landing_url`), shown in the main block with
+ * the 「從「追蹤」分頁搬來」 tag — the same `.uchip` box as the seven understood fields (`UnderstoodField` keys are the
+ * six campaign fields plus the cap; this one has its own piece). Optional: blank reads 「還沒填（選填）」 on a neutral
+ * dashed border, never a guess. Saved through the campaign PATCH (`landing_url`; blank clears). */
+function LandingUrlField({ value, editing, onEdit, editor }: { value: string; editing: boolean; onEdit?: () => void; editor: ReactNode }) {
+  const box = "flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left";
+  const tile = <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-accent-foreground"><Link2 className="size-4" strokeWidth={1.75} /></span>;
+  const name = <span className="flex shrink-0 items-center gap-2"><span className="text-xs text-muted-foreground">落地頁</span><Chip tone="accent">從「追蹤」分頁搬來</Chip></span>;
+  if (editing) {
+    return (
+      <div data-field="landing_url" className={cn(box, "flex-wrap border-primary md:col-span-2")}>
+        {tile}{name}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{editor}</div>
+      </div>
+    );
+  }
+  const body = (
+    <>
+      {tile}{name}
+      <b className={cn("min-w-0 flex-1 text-[15px] [overflow-wrap:anywhere]", value ? "font-semibold" : "font-medium text-muted-foreground")}>{value || "還沒填（選填）"}</b>
+      {onEdit && <span aria-hidden="true" className="text-muted-foreground">✎</span>}
+    </>
+  );
+  const border = value ? "border-border" : "border-dashed border-border";
+  return onEdit
+    ? <button type="button" data-field="landing_url" aria-label="改落地頁" onClick={onEdit} className={cn(box, border, "md:col-span-2 hover:border-primary")}>{body}</button>
+    : <div data-field="landing_url" className={cn(box, border, "md:col-span-2")}>{body}</div>;
+}
+
+function UrlEditor({ initial, busy, onDone, onCancel }: {
+  initial: string; busy: boolean; onDone: (value: string) => void; onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const submit = () => onDone(value.trim());
+  return (
+    <>
+      <Input autoFocus aria-label="落地頁" type="url" value={value} placeholder="https://" onChange={(e) => setValue(e.target.value)} className="min-w-0 flex-1"
+        onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); submit(); } else onEscape(onCancel)(e); }} />
+      <DoneButton disabled={busy} onClick={submit} />
       <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
     </>
   );
