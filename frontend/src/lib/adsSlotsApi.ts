@@ -28,6 +28,9 @@ export interface Slot {
   copy: SlotCopy | null;
   /** The ad's workbench set (an `/app/…` path, see `internalHref`); `null` when the ad has no set. */
   workbench_href: string | null;
+  /** F40-I01: the planned ad's own `ads_ad.format_key` (`"video"` = the slot needs a video, a photo is refused);
+   * `null` for an ad without one and for an imported campaign's platform ad. Optional only for older fixtures. */
+  format_key?: string | null;
 }
 /** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
 export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
