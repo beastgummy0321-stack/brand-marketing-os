@@ -84,6 +84,10 @@ function SetStudio({
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [pollError, setPollError] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<ProductPart | null>(null);
+  /** F40-I11 (drill-7 #16): `set.generation.status` is one brief-level field shared by every
+   * part, so the payload cannot say which part is running. The page remembers the part this
+   * browser started so the other tabs' buttons can name it; cleared when the round ends. */
+  const [startedPart, setStartedPart] = useState<ProductPart | null>(null);
 
   function load() {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
@@ -118,6 +122,9 @@ function SetStudio({
 
   const generating = state.status === "ready" &&
     ["queued", "running"].includes(state.set.generation?.status ?? "");
+  useEffect(() => {
+    if (!generating) setStartedPart(null);
+  }, [generating]);
   useEffect(() => {
     if (!generating) return;
     let cancelled = false;
@@ -223,6 +230,8 @@ function SetStudio({
                     brandId={brandId}
                     set={set}
                     part={part}
+                    runningPart={generating ? startedPart : null}
+                    onRunStarted={setStartedPart}
                     onUpdated={applyUpdated}
                     onSwitchPart={openPart}
                     onFinish={finishSet}
@@ -356,6 +365,8 @@ function ProductPanel({
   brandId,
   set,
   part,
+  runningPart,
+  onRunStarted,
   onUpdated,
   onSwitchPart,
   onFinish,
@@ -363,6 +374,9 @@ function ProductPanel({
   brandId: string;
   set: SetDetail;
   part: ProductPart;
+  /** The part this browser started in the round now running, `null` when unknown. */
+  runningPart: ProductPart | null;
+  onRunStarted: (part: ProductPart | null) => void;
   onUpdated: (next: SetDetail) => void;
   onSwitchPart: (part: ProductPart) => void;
   onFinish: () => void;
@@ -382,12 +396,14 @@ function ProductPanel({
   async function handleRun(runCount?: number) {
     setRunning(true);
     setError(null);
+    onRunStarted(part);
     try {
       // 圖片：Decision 28，永遠不帶數量——一輪固定 10 張，由後端決定。
       const arg = part === "image_prompt" ? undefined : (runCount ?? count);
       const next = await runProduct(brandId, set.id, part, arg);
       onUpdated(next);
     } catch (err) {
+      onRunStarted(null);
       setError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
     } finally {
       setRunning(false);
@@ -410,6 +426,18 @@ function ProductPanel({
     (p) => (set.products[p] as SetProduct | undefined)?.state === "已選定",
   );
   const generating = running || ["queued", "running"].includes(set.generation?.status ?? "");
+  // F40-I11 (drill-7 #16): the round belongs to another part when this browser started a
+  // different one. With no starter known, a product that already has versions is not the one
+  // being filled — the first round queues every required part, so an empty product's own job
+  // is in flight — and the label says 「另一個部分」 rather than a bare 生成中….
+  const otherPartLabel: string | null = !generating || running || runningPart === part
+    ? null
+    : runningPart
+      ? PART_LABEL[runningPart]
+      : product.state === "未生成"
+        ? null
+        : "另一個部分";
+  const waitReason = otherPartLabel ? `正在生成${otherPartLabel}，完成後才能再生成` : null;
   const locked = set.lock.locked;
   const showOutput = product.versions.length > 0 || (!generating && set.generation?.status !== "failed");
   const missingLabels = set.required_parts
@@ -435,12 +463,19 @@ function ProductPanel({
             已選 {product.selected}／需要 {product.required}
           </span>
         </div>
-        <Button disabled={generating || locked} onClick={() => void handleRun()}>
-          {generating
-            ? "生成中…"
-            : part === "image_prompt"
-              ? "再生成一輪（10 張）"
-              : `再生成 ${count} 張`}
+        <Button
+          disabled={generating || locked}
+          title={waitReason ?? undefined}
+          aria-label={waitReason ?? undefined}
+          onClick={() => void handleRun()}
+        >
+          {waitReason
+            ? waitReason
+            : generating
+              ? "生成中…"
+              : part === "image_prompt"
+                ? "再生成一輪（10 張）"
+                : `再生成 ${count} 張`}
         </Button>
       </div>
 
