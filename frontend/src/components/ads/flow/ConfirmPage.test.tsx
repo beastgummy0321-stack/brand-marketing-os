@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as changeApi from "@/lib/adsChangeApi";
-import { ChangeRequestRejected, type ChangeItem, type ChangeSet } from "@/lib/adsChangeApi";
+import { ChangeRequestRejected, type ChangeItem, type ChangeSet, type MonthlyBudget } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import * as anglesApi from "@/lib/adsAnglesApi";
@@ -105,6 +105,15 @@ function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     ...overrides,
   });
 }
+/** `GET …/monthly-budget` as `app/ads/month_budget.py::preflight` shapes it (F40-I01 adds `ongoing_owners`). */
+function monthlyBudget(overrides: Partial<MonthlyBudget> = {}): MonthlyBudget {
+  return {
+    month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
+    reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
+    ongoing_owners: [{ entity_id: "aex_owner_G", name: "廣告組 G・廣泛受眾", daily: 1000, days: 28, commitment: 28000 }],
+    ...overrides,
+  };
+}
 function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
   return {
     id: "item_1", kind: "pause", target_id: "aex_1",
@@ -173,6 +182,9 @@ beforeEach(() => {
   // F28-I11: the cleanup proposal reads the campaign triage for its daily budget only; a failure is tolerated.
   vi.mocked(triageApi.getTriage).mockRejectedValue(new Error("not needed"));
   vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+  // F40-I08: a budget set reads the month budget as soon as the page mounts (it gates 核准), so the default is a
+  // month that fits; the three-state tests override it.
+  vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget());
   vi.mocked(anglesApi.getAngles).mockResolvedValue({ status: "ready", candidates: ["日常出發情境", "辦公室情境", "提問式貼文"], error: null });
 });
 
@@ -466,8 +478,8 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     expect(screen.getByText("主力穩定 2 個觀察期")).toBeTruthy();
     expect(screen.getByText("加碼後等 3–5 天再看")).toBeTruthy();
     expect(await screen.findByText("本月預算放得下")).toBeTruthy();
-    expect(screen.getByText(/這次加碼/)).toBeTruthy();
-    expect(screen.getByText(/TWD 1,800/)).toBeTruthy();
+    expect(screen.getByText(/這次要花 1,800/)).toBeTruthy();
+    expect(screen.getByText(/還剩 8,200/)).toBeTruthy();
   });
 
   it("找不到這個 owner 的加預算提議：不誤用暫停提議的措辭", async () => {
@@ -519,49 +531,140 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
   });
 
-  it("前提變了的 409（非月預算訊息）：仍照既有規則重建一次再核准", async () => {
+  it("前提變了的 409（非月預算訊息，暫停提議）：仍照既有規則靜默重建一次再核准", async () => {
     const user = userEvent.setup();
-    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
-    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
-      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
-      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
-    });
-    const draft = changeSet({
-      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
-    });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
+    const draft = changeSet();
     vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce({ ...draft, id: "acs_rebuilt" });
     vi.mocked(changeApi.approveChangeSet)
       .mockRejectedValueOnce(new ChangeRequestRejected("這項變更所依據的設定已改變，請依現況重新建立清單。"))
       .mockResolvedValueOnce({ ...draft, id: "acs_rebuilt", status: "approved" });
-    renderAt(proposeBudgetPath);
-    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+    renderAt(proposePath);
+    await user.click(await screen.findByRole("button", { name: /核准暫停，接著到平台操作/ }));
     await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(2));
     expect(vi.mocked(changeApi.createChangeSet).mock.calls[1][2].supersedes_id).toBe("acs_1");
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(2));
   });
 });
 
-describe("ConfirmPage：重建後仍失敗", () => {
-  it("重建的草稿核准又被擋：導到正典網址後錯誤訊息仍在、按鈕不卡在處理中", async () => {
+describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
+  const budgetDraft = () => changeSet({
+    title: "加碼「廣告組 G・廣泛受眾」",
+    items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
+  });
+  const card = () => screen.getByRole("region", { name: "本月預算放得下" });
+
+  it("(i) 放得下：算式標題、四段圖例、預留說明點名還在跑的投放組；核准可按、旁邊沒有原因", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget({
+      amount: 10500, known_spend: 0, ongoing_estimate: 7500, reserved_increases: 0, available: 3000,
+      ongoing_owners: [{ entity_id: "aex_prev", name: "9 月活動", daily: 1500, days: 5, commitment: 7500 }],
+    }));
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("9 月還能花 3,000")).toBeTruthy();
+    const text = seen(card());
+    expect(text).toContain("放得下");
+    expect(text).toContain("（月預算 10,500 − 已花 0 − 預留 7,500）");
+    expect(text).toContain("已花 0");
+    expect(text).toContain("預留 7,500");
+    expect(text).toContain("這次要花 1,800");
+    expect(text).toContain("還剩 1,200");
+    expect(text).toContain("預留＝9 月活動 還有 5 天沒跑完，每天 1,500 先留著；跑完就還回來。");
+    // The word 預留 carries its definition (hidden until hover／focus), not printed as running text.
+    expect(card().querySelector("[data-slot=term] [role=tooltip]")?.textContent).toContain("跑完就還回來");
+    const approve = screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" });
+    expect((approve as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+  });
+
+  it("(i) 幾個投放組都在跑：依承諾金額排序、最多點名三個、其餘算「等 N 項」", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget({
+      ongoing_owners: [
+        { entity_id: "a", name: "小的", daily: 100, days: 2, commitment: 200 },
+        { entity_id: "b", name: "最大", daily: 1500, days: 5, commitment: 7500 },
+        { entity_id: "c", name: "第二", daily: 800, days: 4, commitment: 3200 },
+        { entity_id: "d", name: "第三", daily: 300, days: 3, commitment: 900 },
+      ],
+    }));
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("預留＝最大 還有 5 天沒跑完，每天 1,500；第二 還有 4 天沒跑完，每天 800；第三 還有 3 天沒跑完，每天 300等 4 項 先留著；跑完就還回來。")).toBeTruthy();
+  });
+
+  it("(ii) 還沒設月預算：標題、「設定 N 月月預算 →」連去投放中心，核准灰掉、旁邊寫原因", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget({
+      amount: null, known_spend: null, ongoing_estimate: null, available: null, can_increase: false, ongoing_owners: [],
+      uncertainties: ["尚未設定 2026-09 的月總額。"],
+    }));
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("9 月還沒設月預算")).toBeTruthy();
+    const text = seen(card());
+    expect(text).toContain("還沒設月預算");
+    expect(text).toContain("，算不出放不放得下");
+    expect(text).toContain("尚未設定 2026-09 的月總額。");
+    expect(text).not.toContain("還能花");
+    expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.getByText("⚠ 要先設 9 月月預算")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("(iii) 核准被「前提變了」擋下：標題＋「重新檢查」，核准灰掉、旁邊寫原因；重新檢查才重建草稿（帶 supersedes_id），不自動再核准", async () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
-    vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
-      month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
-      reserved_increases: 0, available: 10000, uncertainties: [], can_increase: true, period_end: "2026-09-30", confirmed_at: null, notice: "",
-    });
-    const draft = changeSet({
-      items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
-    });
+    const draft = budgetDraft();
     const rebuilt = { ...draft, id: "acs_rebuilt" };
     vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce(rebuilt);
-    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ change_sets: [rebuilt] } as never);
-    // Real latency: the second approve answers after the rebuilt set has already re-rendered the page.
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [rebuilt] });
+    vi.mocked(changeApi.approveChangeSet).mockRejectedValueOnce(new ChangeRequestRejected("這項變更所依據的設定已改變，請依現況重新建立清單。"));
+    renderAt(proposeBudgetPath);
+    await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+
+    expect(await screen.findByText("計畫、素材或月份已改變")).toBeTruthy();
+    const text = seen(card());
+    expect(text).toContain("要重新檢查");
+    expect(text).toContain("，這批內容要重新對一次");
+    expect(text).not.toContain("還能花");
+    expect(screen.getByText("⚠ 內容變了，先按「重新檢查」")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
+    expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "重新檢查" }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(changeApi.createChangeSet).mock.calls[1][2].supersedes_id).toBe("acs_1");
+    // The rebuilt draft takes over the page on its own confirm URL (the set route reads it back); 核准 is the
+    // user's next press, not automatic.
+    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalled());
+    expect(await screen.findByText("9 月還能花 10,000")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/⚠/)).toBeNull();
+    expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("(iii) 重新檢查後再被擋：照舊顯示後端訊息，不再無限提供重新檢查、按鈕不卡在處理中", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    const draft = budgetDraft();
+    const rebuilt = { ...draft, id: "acs_rebuilt" };
+    vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce(rebuilt);
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [rebuilt] });
+    // Real latency: the answer lands after the page has re-rendered.
     vi.mocked(changeApi.approveChangeSet).mockImplementation(() => new Promise((_, reject) =>
       setTimeout(() => reject(new ChangeRequestRejected("這個物件已有相同操作待核對，請先處理原清單。")), 50)));
     renderAt(proposeBudgetPath);
     await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
+    await user.click(await screen.findByRole("button", { name: "重新檢查" }));
+    // Wait for the rebuilt set's own page (it reads the set back) before pressing 核准 there.
+    await waitFor(() => expect(changeApi.getChangeControl).toHaveBeenCalled());
+    expect(await screen.findByText("9 月還能花 10,000")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }));
     expect(await screen.findByText("這個物件已有相同操作待核對，請先處理原清單。")).toBeTruthy();
     expect(screen.queryByText(/處理中/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新檢查" })).toBeNull();
+    expect(changeApi.createChangeSet).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -980,7 +1083,7 @@ describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
     expect(await screen.findByText("月預算暫時讀取不到，不影響上面的核准內容。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重試" }));
-    expect(await screen.findByText(/可用 /)).toBeTruthy();
+    expect(await screen.findByText(/還剩 /)).toBeTruthy();
     expect(changeApi.getMonthlyBudget).toHaveBeenCalledTimes(2);
   });
 });

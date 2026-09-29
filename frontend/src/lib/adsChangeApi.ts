@@ -2,11 +2,16 @@ import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
 
+/** F40-I01 (`app/ads/month_budget.py::preflight` `ongoing_owners`): one budget owner still running this month --
+ * `days` left × `daily` = `commitment`, the share of `ongoing_estimate` it holds. Largest commitment first. */
+export interface OngoingOwner { entity_id: string; name: string | null; daily: number; days: number; commitment: number }
 export interface MonthlyBudget {
   month: string; currency: string | null; amount: number | null; revision: number;
   known_spend: number | null; ongoing_estimate: number | null; reserved_increases: number;
   available: number | null; uncertainties: string[]; can_increase: boolean;
   period_end: string; confirmed_at: string | null; notice: string;
+  /** Optional: older payloads (and test literals built before F40-I01) carry no breakdown. */
+  ongoing_owners?: OngoingOwner[];
 }
 export type ChangeKind = "copy" | "budget" | "pause";
 // `titles`/`bodies` (Contract B, F27-I02): a dynamic-creative copy change carries these instead
