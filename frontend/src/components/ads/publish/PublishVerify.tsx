@@ -1,16 +1,19 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import { confirmLaunchItemField, fetchLaunchView, readbackLaunch, type LaunchItem, type LaunchView } from "@/lib/adsLaunchApi";
+import { confirmAllLaunchFields, confirmLaunchItemField, fetchLaunchView, readbackLaunch, type LaunchItem, type LaunchView } from "@/lib/adsLaunchApi";
 import { confirmLaunchSetting, type SettingsReadbackKey } from "@/lib/adsLaunchSettingsApi";
 import { ActionBar, Chip, DiffRow, ReadbackRow, ReadbackSummary, ResultHero, TodoRow, UnreadChip, type ChipTone } from "../patterns";
 import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, timeText, type LaunchPlatform } from "./PublishFlow";
+import { UnreadAllBar } from "./SettingsReadback";
 
 /** F30-I13 step 3 (prototype v10 `pubVerify()`, hash `pub/fall/verify`): one result hero over the items and the launch
  * settings (all the same／N differ／V of N checked, with the read time), each item's state with the approved value
  * beside the platform's for a mismatch, fields the read cannot see with 「我看過了，一樣」, the settings readback, and
  * 重新讀回. The next action depends on the case: 回活動總覽, 回平台改 or 繼續建剩下的. 「我看過了」 only records that
- * the user checked by eye; nothing is written to a platform. */
+ * the user checked by eye; nothing is written to a platform.
+ * Drill-7 #18 (F40 prototype `#/readback`): while any field is still unreadable, one bar over the list marks them all
+ * in one request; 回活動總覽 waits until the view reports nothing unreadable. */
 
 const errorText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 
@@ -18,6 +21,8 @@ const CHIP: Record<LaunchItem["state"], [ChipTone, string]> = {
   verified: ["ok", "相符"], mismatch: ["warn", "不符"], built: ["neutral", "待讀回"], unknown: ["neutral", "待確認"],
   todo: ["neutral", "還沒建"], changed: ["warn", "有變更"],
 };
+
+const UNREAD_SELECTOR = "[data-slot=item-unread][data-variant=unreadable] button, [data-slot=readback-row][data-variant=unreadable] button";
 
 export function PublishVerify({ brandId, campaignId, name, view, platform, onView }: {
   brandId: string;
@@ -29,6 +34,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   async function run(key: string, fallback: string, action: () => Promise<LaunchView>) {
     if (busy) return;
@@ -44,7 +50,14 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
     await confirmLaunchSetting(brandId, campaignId, key);
     return fetchLaunchView(brandId, campaignId);
   });
+  const confirmAll = () => run("all", "全部標記失敗，請再按一次。", () => confirmAllLaunchFields(brandId, campaignId));
   const readAgain = () => run("readback", "讀回核對失敗，請稍後再試。", () => readbackLaunch(brandId, campaignId));
+  // 「逐項標記」 only moves the user to the first field still waiting for their eye.
+  const goToFirstUnread = () => {
+    const first = listRef.current?.querySelector<HTMLElement>(UNREAD_SELECTOR);
+    first?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    first?.focus();
+  };
 
   const n = view.items.length;
   const ok = view.items.filter((i) => i.state === "verified").length;
@@ -53,22 +66,53 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
   const fields = view.settings_readback?.fields ?? [];
   const nDiff = fields.filter((f) => f.state === "differ").length;
   const nNa = fields.filter((f) => f.state === "unreadable").length;
-  const nOk = fields.length - nDiff - nNa;
-  const all = n > 0 && ok === n && nDiff === 0;
+  const nMatch = fields.filter((f) => f.state === "match").length;
+  const nSeenSettings = fields.filter((f) => f.state === "self_confirmed").length;
+  // Fields the read could not see: still waiting for the user's eye (unread) or already confirmed by it (seen).
+  const unreadItemFields = view.items.flatMap((i) => i.unreadable.filter((u) => !u.confirmed));
+  const seen = nSeenSettings + view.items.reduce((s, i) => s + i.unreadable.filter((u) => u.confirmed).length, 0);
+  const unread = nNa + unreadItemFields.length;
+  const blockedItems = view.items.filter((i) => i.state !== "verified" && i.unreadable.some((u) => !u.confirmed)).length;
+  // Items the platform still has to answer for: built or read without an answer, beyond those only waiting on an eye.
+  const awaiting = n - ok - dev - todo - blockedItems;
+  const all = n > 0 && ok === n && nDiff === 0 && nNa === 0;
   const readAt = timeText(view.read_at);
   const at = readAt ? `讀回於 ${readAt}` : "還沒有讀回時間";
+  const reasons = [
+    ...fields.filter((f) => f.state === "unreadable").map((f) => f.reason),
+    ...view.items.filter((i) => i.unreadable.some((u) => !u.confirmed)).map((i) => i.reason),
+  ];
+  const settingsNote = fields.length ? `・投放設定 ${nMatch} 項對上了` : "";
 
   const hero = all
-    ? <ResultHero tone="ok" title={`${n} 項都和核准的一樣`} note={`${fields.length ? `投放設定 ${nOk} 項對上了${nNa ? `・${nNa} 項讀不到` : ""}・` : ""}${at}`} />
+    ? seen > 0
+      ? <ResultHero tone="ok" title="投放設定都核對過了" note={`${n} 項都和核准的一樣${settingsNote}・${seen} 項你在 ${platform.label} 看過・${at}`} />
+      : <ResultHero tone="ok" title={`${n} 項都和核准的一樣`} note={`${fields.length ? `投放設定 ${nMatch} 項對上了・` : ""}${at}`} />
     : dev + nDiff > 0
       ? <ResultHero tone="warn" title={`${dev + nDiff} 項和核准的不一樣`} note={`其他 ${ok} 項已核對・${at}`} />
-      : <ResultHero tone="neutral" mark={String(ok)} title={`${ok}／${n} 已核對`}
-        note={[todo ? `還有 ${todo} 項沒建` : null, n - ok - todo ? `${n - ok - todo} 項待讀回或確認` : null, at].filter(Boolean).join("・")} />;
+      : unread > 0 && todo === 0 && awaiting === 0
+        ? <ResultHero tone="warn" mark="!" title={`${unread} 項還沒核對`}
+          note={`${ok} 項已核對${settingsNote}${seen ? `・${seen} 項你看過` : ""}・${unread} 項讀不到，請到 ${platform.label} 看一眼・${at}`} />
+        : <ResultHero tone="neutral" mark={String(ok)} title={`${ok}／${n} 已核對`}
+          note={[todo ? `還有 ${todo} 項沒建` : null, n - ok - todo ? `${n - ok - todo} 項待讀回或確認` : null, at].filter(Boolean).join("・")} />;
+
+  const primary = all
+    ? <Button asChild><Link to={campaignPath(brandId, campaignId)}>回活動總覽 →</Link></Button>
+    : dev + nDiff > 0
+      ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>回平台改 →</Link></Button>
+      : todo + awaiting > 0 || unread === 0
+        ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>繼續建剩下的 →</Link></Button>
+        : <Button disabled>回活動總覽 →</Button>;
+  const waitingOnEye = !all && dev + nDiff === 0 && todo + awaiting === 0 && unread > 0;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" ref={listRef}>
       <PublishHead brandId={brandId} campaignId={campaignId} current={2} name={name} view={view} title="讀回核對" purpose="逐項比對平台上的設定" />
       {hero}
+      {unread > 0 && (
+        <UnreadAllBar count={unread} reasons={reasons} platform={platform.label} busy={busy !== null} running={busy === "all"}
+          onAll={() => void confirmAll()} onEach={goToFirstUnread} />
+      )}
       <section aria-label="上架項目核對" className="surface px-[22px] py-5">
         {view.items.map((item, i) => {
           const [tone, label] = CHIP[item.state];
@@ -82,7 +126,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
                   beforeLabel="核准的" afterLabel={`${platform.label} 目前`} />
               ))}
               {item.unreadable.map((u) => (
-                <div key={u.key} className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <div key={u.key} data-slot="item-unread" data-variant={u.confirmed ? "confirmed" : "unreadable"} className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-muted-foreground">{byKey.get(u.key)?.label ?? u.label}</span>
                   <b className="min-w-0 font-semibold [overflow-wrap:anywhere]">{fieldText(byKey.get(u.key)?.value ?? null)}</b>
                   {u.confirmed ? <Chip tone="ok">你確認一樣</Chip> : <>
@@ -116,12 +160,9 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
       )}
 
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-      <ActionBar back={{ label: "到平台完成", to: publishPath(brandId, campaignId, "platform") }}>
+      <ActionBar back={{ label: "到平台完成", to: publishPath(brandId, campaignId, "platform") }} hint={waitingOnEye ? "全部核對完才算上架完成" : undefined}>
         <Button variant="outline" disabled={busy !== null} onClick={() => void readAgain()}>{busy === "readback" ? "讀回中…" : "⟳ 重新讀回"}</Button>
-        <Button asChild>
-          {all ? <Link to={campaignPath(brandId, campaignId)}>回活動總覽 →</Link>
-            : <Link to={publishPath(brandId, campaignId, "platform")}>{dev + nDiff > 0 ? "回平台改" : "繼續建剩下的"} →</Link>}
-        </Button>
+        {primary}
       </ActionBar>
     </div>
   );

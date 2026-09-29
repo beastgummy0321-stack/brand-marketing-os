@@ -151,3 +151,14 @@ export const unreportLaunchItem = (brandId: string, campaignId: string, itemId: 
 export const confirmLaunchItemField = (brandId: string, campaignId: string, itemId: string, key: string) =>
   launchRequest(`${launchPath(brandId, campaignId)}/items/${encodeURIComponent(itemId)}/confirm`,
     "POST", "確認失敗，請稍後再試。", { key });
+
+/** Drill-7 #18: the user looked at the platform once and says every setting and item field the readback still
+ * reports as unreadable is the same (`POST …/handoff/launch/confirm-all`, one request instead of one per field).
+ * Answers with the refreshed launch view; readable, confirmed and differing fields are left alone, and nothing
+ * is written to a platform. */
+export async function confirmAllLaunchFields(brandId: string, campaignId: string): Promise<LaunchView> {
+  const url = `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/handoff/launch/confirm-all`;
+  const res = await apiFetch(url, { method: "POST" });
+  const data = await parseJsonOrThrow<{ confirmed_items: number; confirmed_settings: number; view: LaunchView }>(res, "全部標記失敗，請再按一次。");
+  return data.view;
+}

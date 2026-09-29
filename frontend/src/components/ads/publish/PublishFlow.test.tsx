@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCampaign, getPublish, publishCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { reportHandoff } from "@/lib/adsHandoffApi";
 import {
-  confirmLaunchItemField, fetchChannels, fetchLaunchView, readbackLaunch, unreportLaunchItem,
+  confirmAllLaunchFields, confirmLaunchItemField, fetchChannels, fetchLaunchView, readbackLaunch, unreportLaunchItem,
   type LaunchItem, type LaunchView,
 } from "@/lib/adsLaunchApi";
 import { confirmLaunchSetting } from "@/lib/adsLaunchSettingsApi";
@@ -20,6 +20,7 @@ vi.mock("@/lib/adsApi", async () => {
 vi.mock("@/lib/adsHandoffApi", () => ({ reportHandoff: vi.fn(), getHandoff: vi.fn() }));
 vi.mock("@/lib/adsLaunchApi", () => ({
   fetchChannels: vi.fn(), fetchLaunchView: vi.fn(), readbackLaunch: vi.fn(), unreportLaunchItem: vi.fn(), confirmLaunchItemField: vi.fn(),
+  confirmAllLaunchFields: vi.fn(),
 }));
 vi.mock("@/lib/adsLaunchSettingsApi", () => ({ confirmLaunchSetting: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_1" }));
@@ -255,6 +256,30 @@ describe("讀回核對", () => {
     fireEvent.click(screen.getByRole("button", { name: "我看過了，一樣" }));
     await waitFor(() => expect(confirmLaunchItemField).toHaveBeenCalledWith("brd_1", "cmp_1", "h2", "manual_settings.landing_url"));
     expect(await screen.findByText("2／3 已核對")).toBeTruthy();
+  });
+
+  it("the done button enables only after the view reports nothing unreadable; 全部標記 gets there in one request", async () => {
+    const verified = { h1: { state: "verified" as const }, h2: { state: "verified" as const }, h3: { state: "verified" as const } };
+    const pixel = (state: "unreadable" | "self_confirmed") => ({ read_at: read.read_at, fields: [
+      { key: "utm" as const, label: "UTM", expected_label: "utm_source=meta", observed_label: "utm_source=meta", state: "match" as const, reason: null },
+      { key: "pixel_id" as const, label: "像素", expected_label: "晨光官網像素（…4821）", observed_label: null, state, reason: "像素的讀取權限沒開" },
+    ] });
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView(verified, { ...read, settings_readback: pixel("unreadable") }));
+    vi.mocked(confirmAllLaunchFields).mockResolvedValue(approvedView(verified, { ...read, settings_readback: pixel("self_confirmed") }));
+    renderAt("verify");
+    expect(await screen.findByText("1 項還沒核對")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "回活動總覽 →" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("全部核對完才算上架完成")).toBeTruthy();
+    const bar = screen.getByRole("group", { name: "全部標記" });
+    expect(bar.textContent).toContain("1 項讀不到（像素的讀取權限沒開）");
+    fireEvent.click(within(bar).getByRole("button", { name: "我在 Meta 都看過了，全部標記" }));
+    expect(await screen.findByText("投放設定都核對過了")).toBeTruthy();
+    expect(confirmAllLaunchFields).toHaveBeenCalledTimes(1);
+    expect(confirmAllLaunchFields).toHaveBeenCalledWith("brd_1", "cmp_1");
+    expect(fetchLaunchView).toHaveBeenCalledTimes(1); // the answer is the view; no second read
+    expect(screen.queryByRole("group", { name: "全部標記" })).toBeNull();
+    expect(screen.getByText("你確認一樣")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "回活動總覽 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
   });
 
   it("重新讀回 reads the batch again in place", async () => {
