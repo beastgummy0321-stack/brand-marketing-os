@@ -1298,7 +1298,6 @@ _CHILD_TABLES = (
     ("ads_external_sync_job", "既有活動同步"),
     ("ads_external_daily", "既有活動來源成效"),
     ("ads_external_entity", "既有活動來源結構"),
-    ("ads_outcome_daily", "投放中心成效"),
     ("ads_action", "投放中心操作紀錄"),
     ("ads_change_set", "廣告變更核准清單"),
     ("ads_review_round", "單則廣告檢討紀錄"),
