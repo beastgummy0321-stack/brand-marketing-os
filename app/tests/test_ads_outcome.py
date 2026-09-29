@@ -322,6 +322,58 @@ class CoverageNamesUnreadDaysTest(OutcomeTestBase):
                                     "missing_days": [], "never_synced": False})
 
 
+class PeriodGradeTest(OutcomeTestBase):
+    """F40-I01: `totals.grade` is the one cap ruler (`triage.grade_window`) over the whole period,
+    read from the SAME totals the tab prints -- the 「這期狀態列」's grade comes from here, never a
+    frontend copy of the ruler."""
+
+    def _seven_days(self, *, cap, spend_per_day=400.0, purchases_per_day=2):
+        detail, _group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today - timedelta(days=6), end_date=self.today, cap=cap,
+        )
+        for i in range(7):
+            self._insert_row(detail["id"], detail["groups"][0]["id"],
+                              self.today - timedelta(days=i), spend=spend_per_day,
+                              purchases=purchases_per_day, revenue=None)
+        return detail
+
+    def test_grade_matches_the_one_ruler_over_the_period(self):
+        from app.ads import triage
+
+        detail = self._seven_days(cap=300)  # 2800 / 14 = 200 per result <= 300
+
+        result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
+
+        totals = result["totals"]
+        self.assertEqual(totals["grade"], {"grade": "on_target", "label": "划算"})
+        view = {"result_count": totals["purchases"], "cost_per_result": totals["cpa"],
+                "result_kind": "purchase", "reason": None}
+        grade, label, _reason = triage.grade_window(view, totals["spend"], 300, 7)
+        self.assertEqual(totals["grade"], {"grade": grade, "label": label})
+
+    def test_over_the_watch_band_is_too_expensive(self):
+        detail = self._seven_days(cap=150)  # 200 > 150 * 1.2
+
+        totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
+
+        self.assertEqual(totals["grade"], {"grade": "over", "label": "太貴"})
+
+    def test_no_cap_is_no_target(self):
+        detail = self._seven_days(cap=None)
+
+        totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
+
+        self.assertEqual(totals["grade"], {"grade": "no_target", "label": "未判斷"})
+
+    def test_untracked_or_too_thin_is_insufficient_never_a_zero(self):
+        detail, _group_ext, _ad_ext = self._bound_campaign(cap=300)
+
+        totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
+
+        self.assertEqual(totals["grade"]["grade"], "insufficient")
+        self.assertIsNone(totals["purchases"])
+
+
 class SampleBucketBoundaryTest(unittest.TestCase):
     def test_boundaries_are_exact(self):
         self.assertEqual(outcome.sample_bucket(9, 5), "低")
