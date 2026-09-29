@@ -34,10 +34,13 @@ markdown fence 包起來、物件前後不留一個字。**
   `{"role", "name", "ads"}`：
   - `role`：`new`／`retarget`／`explore` 其中之一，對應下面給你的角色分配。
   - `name`：這個投放組的中文名稱，看得出角色跟這次投放的主題。
-  - `ads`：這個投放組底下的廣告，1～3 支，每一項是 `{"name", "coordinates"}`：
+  - `ads`：這個投放組底下的廣告，1～3 支，每一項是 `{"name", "coordinates", "scene"}`：
     - `name`：追蹤名稱（見上面規則）。
     - `coordinates`：`{"audience", "pain", "angle", "hook", "proof", "offer", "format"}`
       七個鍵，每個值都是詞彙表裡對應維度的一個 `key`。
+    - `scene`：一句 6～60 字的具體情境（誰、在哪、正在做什麼），文案會發生在這個情境裡；
+      不同受眾的廣告要用不同情境，廣告名稱要跟情境一致（名字寫運動族，情境就是運動場景）。
+      同一支廣告只有一個情境；不同受眾卻用同一句情境，整份回覆會被退回。
 
 ## 回覆——只有下面這個物件，不要加任何其他文字或符號
 
@@ -52,7 +55,8 @@ markdown fence 包起來、物件前後不留一個字。**
           "coordinates": {
             "audience": "……", "pain": "……", "angle": "……", "hook": "……",
             "proof": "……", "offer": "……", "format": "……"
-          }
+          },
+          "scene": "……"
         }
       ]
     }

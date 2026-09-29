@@ -3,6 +3,8 @@
 (nothing is re-asked); output: `ads_delivery_group` and `ads_ad` rows the pack, the publish
 adapter and the outcome attribution all key off; trace: the `llm_task` row for the generated
 names/coordinates and one `ads_action` row for every edit that lands on an already-bound node.
+F39-I03: every planned ad also carries one `scene` (6–60 chars, the moment its copy happens
+in) and ads for different audiences must carry different scenes, or the plan is rejected.
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
@@ -29,6 +31,8 @@ _ROLES = frozenset({"new", "retarget", "explore"})
 _COORDINATE_DIMENSIONS = ("audience", "pain", "angle", "hook", "proof", "offer", "format")
 _MAX_GROUPS = 4
 _MAX_ADS_PER_GROUP = 3
+_SCENE_MIN_CHARS = 6
+_SCENE_MAX_CHARS = 60
 
 PLAN_FAILED_MESSAGE = "AI 沒能整理出可用的投放結構，請再試一次。"
 BUDGET_EXCEEDS_APPROVAL_MESSAGE = "這個金額超過目前核准的每日上限，請先重新核准這個品牌的投放預算。"
@@ -94,9 +98,30 @@ def _gate_reply(groups: list, lookup: dict) -> None:
                     coords[dim] = "none"
 
 
+def _validate_scene(value) -> str | None:
+    """F39-I03 (outcome 3): one sentence, 6–60 chars after strip, else `None`."""
+    if not isinstance(value, str):
+        return None
+    scene = value.strip()
+    if not _SCENE_MIN_CHARS <= len(scene) <= _SCENE_MAX_CHARS:
+        return None
+    return scene
+
+
+def _scenes_differ_across_audiences(validated_groups: list) -> bool:
+    """F39-I03: two ads whose `audience` keys differ must not share one scene string (exact match
+    after strip); ads of the same audience may. Drill-7 §3 #3 saw 12 ads with one scene."""
+    audiences_by_scene: dict[str, set] = {}
+    for group in validated_groups:
+        for ad in group["ads"]:
+            audiences_by_scene.setdefault(ad["scene"], set()).add(ad["coordinates"]["audience"])
+    return all(len(audiences) == 1 for audiences in audiences_by_scene.values())
+
+
 def _validate_reply(data, roles: set) -> list | None:
-    """回覆形狀對不上、角色沒有一字不差對上給的角色集合、座標少一個維度或不是字串，一律
-    `None`——呼叫端翻成 `ValueError("delivery_plan_failed")`，不落地半份投放結構。"""
+    """回覆形狀對不上、角色沒有一字不差對上給的角色集合、座標少一個維度或不是字串、情境
+    缺了或長度不對、不同受眾共用同一個情境，一律 `None`——呼叫端翻成
+    `ValueError("delivery_plan_failed")`，不落地半份投放結構。"""
     if not isinstance(data, dict):
         return None
     groups = data.get("groups")
@@ -139,11 +164,16 @@ def _validate_reply(data, roles: set) -> list | None:
                 if not isinstance(value, str) or not value.strip():
                     return None
                 coords[dim] = value.strip()
+            scene = _validate_scene(ad.get("scene"))
+            if scene is None:
+                return None
             seen_ad_names.add(ad_name)
-            validated_ads.append({"name": ad_name, "coordinates": coords})
+            validated_ads.append({"name": ad_name, "coordinates": coords, "scene": scene})
         validated_groups.append({"role": role, "name": name.strip(), "ads": validated_ads})
 
     if seen_roles != roles:  # 角色不能少也不能多（department file 的規則）
+        return None
+    if not _scenes_differ_across_audiences(validated_groups):
         return None
     return validated_groups
 
@@ -242,6 +272,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
             ads_repo.create_ad(
                 conn, org_id, brand_id, campaign_id, group_row["id"], name=ad["name"],
                 coordinates=ad["coordinates"], coordinates_snapshot=snapshot,
+                scene=ad["scene"],
             )
 
     ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "ready")

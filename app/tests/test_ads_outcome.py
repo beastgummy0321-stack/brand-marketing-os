@@ -37,7 +37,7 @@ _VALID_PLAN_REPLY = (
     '{"groups": [{"role": "new", "name": "新客組", "ads": '
     '[{"name": "新客-廣告一", "coordinates": '
     '{"audience": "a", "pain": "p", "angle": "an", "hook": "h", "proof": "pr", "offer": "o",'
-    ' "format": "f"}}]}]}'
+    ' "format": "f"}, "scene": "上班族午休在辦公室滑手機找點心"}]}]}'
 )
 
 

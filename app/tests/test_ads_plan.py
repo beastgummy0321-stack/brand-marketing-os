@@ -39,13 +39,16 @@ def _coordinates(tag: str) -> dict:
 _VALID_PLAN_REPLY = json.dumps({
     "groups": [
         {"role": "new", "name": "新客組", "ads": [
-            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1"),
+             "scene": "上班族午休在辦公室滑手機找點心"},
         ]},
         {"role": "retarget", "name": "再行銷組", "ads": [
-            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1")},
+            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1"),
+             "scene": "看過商品頁的人晚上在家猶豫要不要下單"},
         ]},
         {"role": "explore", "name": "探索組", "ads": [
-            {"name": "探索-廣告一", "coordinates": _coordinates("ex1")},
+            {"name": "探索-廣告一", "coordinates": _coordinates("ex1"),
+             "scene": "健身房的人運動完在櫃檯看補給品"},
         ]},
     ],
 }, ensure_ascii=False)
@@ -339,10 +342,93 @@ def _plan_reply(proof: str, offer: str = "none") -> str:
         return {**_coordinates(tag), "proof": proof, "offer": offer}
     return json.dumps({"groups": [
         {"role": role, "name": f"{role} 組", "ads": [
-            {"name": f"{role}-廣告一", "coordinates": coords(role)},
+            {"name": f"{role}-廣告一", "coordinates": coords(role),
+             "scene": f"{role} 受眾晚上在家滑手機看到這支廣告"},
         ]}
         for role in ("new", "retarget", "explore")
     ]}, ensure_ascii=False)
+
+
+def _scene_reply(scenes: dict, *, audiences: dict | None = None) -> str:
+    """Three roles, one ad each. `scenes` maps role -> scene (a missing role leaves the key
+    out); `audiences` maps role -> audience key (default: one distinct key per role)."""
+    groups = []
+    for role in ("new", "retarget", "explore"):
+        coords = _coordinates(role)
+        if audiences and role in audiences:
+            coords["audience"] = audiences[role]
+        ad = {"name": f"{role}-廣告一", "coordinates": coords}
+        if role in scenes:
+            ad["scene"] = scenes[role]
+        groups.append({"role": role, "name": f"{role} 組", "ads": [ad]})
+    return json.dumps({"groups": groups}, ensure_ascii=False)
+
+
+_SCENES = {
+    "new": "上班族午休在辦公室滑手機找點心",
+    "retarget": "看過商品頁的人晚上在家猶豫要不要下單",
+    "explore": "健身房的人運動完在櫃檯看補給品",
+}
+
+
+class SceneRuleTest(PlanTestBase):
+    """F39-I03 (outcome 3): every ad needs one `scene` of 6–60 chars; ads of different
+    audiences must not share a scene; the same audience may. An accepted plan stores the scene
+    on `ads_ad.scene` and `campaign_detail` returns it."""
+
+    def _adopt_reply(self, reply: str) -> dict:
+        campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(reply)
+        return self._adopt(campaign["id"])
+
+    def _assert_failed(self, reply: str) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._adopt_reply(reply)
+        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+
+    def test_reply_without_a_scene_fails(self):
+        self._assert_failed(_scene_reply({k: v for k, v in _SCENES.items() if k != "retarget"}))
+
+    def test_scene_outside_6_to_60_chars_fails(self):
+        self._assert_failed(_scene_reply({**_SCENES, "new": "太短了"}))
+        self._assert_failed(_scene_reply({**_SCENES, "new": "很長" * 31}))
+        self._assert_failed(_scene_reply({**_SCENES, "new": "   "}))
+
+    def test_two_audiences_sharing_one_scene_fails(self):
+        self._assert_failed(_scene_reply({**_SCENES, "retarget": _SCENES["new"]}))
+        # Exact match after strip: surrounding whitespace does not make it a different scene.
+        self._assert_failed(_scene_reply({**_SCENES, "retarget": "  " + _SCENES["new"] + " "}))
+
+    def test_same_audience_sharing_a_scene_is_accepted(self):
+        detail = self._adopt_reply(_scene_reply(
+            {**_SCENES, "retarget": _SCENES["new"]},
+            audiences={"new": "aud_shared", "retarget": "aud_shared"},
+        ))
+        scenes = {ad["name"]: ad["scene"] for g in detail["groups"] for ad in g["ads"]}
+        self.assertEqual(scenes["new-廣告一"], _SCENES["new"])
+        self.assertEqual(scenes["retarget-廣告一"], _SCENES["new"])
+
+    def test_accepted_plan_stores_the_scene_on_each_ad(self):
+        detail = self._adopt_reply(_scene_reply({**_SCENES, "new": "  " + _SCENES["new"] + " "}))
+        by_role = {g["role"]: g["ads"][0] for g in detail["groups"]}
+        self.assertEqual(by_role["new"]["scene"], _SCENES["new"])  # stripped
+        self.assertEqual(by_role["retarget"]["scene"], _SCENES["retarget"])
+        self.assertEqual(by_role["explore"]["scene"], _SCENES["explore"])
+        stored = ads_repo.get_ad(web.conn, self.org_id, self.brand_id, by_role["explore"]["id"])
+        assert stored is not None
+        self.assertEqual(stored["scene"], _SCENES["explore"])
+
+    def test_hand_made_ad_has_no_scene(self):
+        campaign = self._create_adopted_campaign()
+        group = plan.create_group(
+            web.conn, self.org_id, self.brand_id, campaign["id"], name="手動組", role="new",
+            daily_budget=100,
+        )
+        ad = plan.create_ad(
+            web.conn, self.org_id, self.brand_id, campaign["id"], group["id"], name="手動廣告",
+            coordinates=_coordinates("hand"),
+        )
+        self.assertIsNone(ad["scene"])
 
 
 class PromptRowsTest(unittest.TestCase):

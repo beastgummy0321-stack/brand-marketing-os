@@ -150,13 +150,19 @@ def _line(row: dict) -> str:
     return text + f"：{row['note']}" if row["note"] else text
 
 
+def note_lines(start: date, end: date) -> list[str]:
+    """F39-I03 (outcome 4): the `- MM/DD～MM/DD name（kind）` lines for the overlapping rows,
+    exactly as `prompt_section` prints them -- the ads side joins them into the workbench brief's
+    `request.calendar_note`. Empty when nothing overlaps (the caller then omits the key)."""
+    return [_line(row) for row in events_between(start, end)]
+
+
 def prompt_section(start: date | None, end: date | None) -> str:
     """The section both prompts append (strategy and delivery plan): header, one line per
     overlapping row or the explicit empty line, then the coverage note when one applies."""
     if start is None or end is None:
         return SECTION_HEADER + "\n期間還沒設定，對不上行事曆"
-    rows = events_between(start, end)
-    lines = [_line(row) for row in rows] or [EMPTY_LINE]
+    lines = note_lines(start, end) or [EMPTY_LINE]
     note = coverage_note(start, end)
     if note is not None:
         lines.append(note)
