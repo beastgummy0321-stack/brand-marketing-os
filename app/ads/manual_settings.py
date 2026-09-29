@@ -61,12 +61,29 @@ FIELDS = [
 LEGACY_KEYS = frozenset({"placements", "bidding", "optimization_event", "tracking", "utm"})
 
 
+def validate_landing_url(value: str) -> None:
+    """The one landing-URL rule (a group's setting and, F40-I04, the campaign default alike):
+    a complete http/https URL with a host and no embedded credentials."""
+    url = urlparse(value)
+    if url.scheme not in {"http", "https"} or not url.netloc or url.username or url.password:
+        raise ValueError("landing_url_invalid")
+
+
 def handoff(campaign: dict) -> dict:
-    saved = (campaign.get("context_json") or {}).get("manual_delivery") or {}
+    context = campaign.get("context_json") or {}
+    saved = context.get("manual_delivery") or {}
+    # F40-I04: the landing URL given at create time (`context_json.landing_url`) is the default
+    # of every group that has none of its own -- shown as the value with `sources.landing_url
+    # = "campaign"` and counted as filled; a group's own saved value keeps winning.
+    campaign_landing_url = context.get("landing_url") or None
     groups = []
     for group in campaign.get("groups") or []:
         record = saved.get(group["id"]) or {}
-        values = record.get("values") or {}
+        values = dict(record.get("values") or {})
+        sources = {}
+        if campaign_landing_url and not values.get("landing_url"):
+            values["landing_url"] = campaign_landing_url
+            sources["landing_url"] = "campaign"
         missing = [f["label"] for f in FIELDS if f["required"] and not values.get(f["key"])]
         if group.get("role") == "retarget" and not values.get("audience_id"):
             missing.append("再行銷受眾 ID")
@@ -79,6 +96,7 @@ def handoff(campaign: dict) -> dict:
                 "id": group["id"],
                 "name": group["name"],
                 "values": values,
+                "sources": sources,
                 "missing": missing,
                 "status": "待補設定" if missing else "資料已填齊，待平台核對",
                 "saved_at": record.get("saved_at"),
@@ -117,9 +135,7 @@ def save(
         raise ValueError("manual_settings_invalid")
     values = {k: v.strip() for k, v in values.items()}
     if values.get("landing_url"):
-        url = urlparse(values["landing_url"])
-        if url.scheme not in {"http", "https"} or not url.netloc or url.username or url.password:
-            raise ValueError("landing_url_invalid")
+        validate_landing_url(values["landing_url"])
     ad_ids = {
         r["id"]
         for r in conn.execute(

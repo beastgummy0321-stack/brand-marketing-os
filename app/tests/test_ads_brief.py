@@ -694,5 +694,266 @@ class PatchAudienceHintTest(_BriefTestBase):
             )
 
 
+class CopyFromPreviousTest(_BriefTestBase):
+    """F40-I04 (drill-7 #10): a new campaign starts from the previous one. The four values the
+    request did not supply -- platform, audience direction, cap, landing URL -- are copied from
+    the brand's latest non-draft campaign and named in `context_json.copied_from`; request
+    values always win; a first campaign copies nothing."""
+
+    _EMPTY = json.dumps({"objective": "購買", "cap": None, "product_ids": []})
+    _FOUR = {
+        "platform": "meta", "audience_hint": "夜跑愛好者", "cap": 450,
+        "landing_url": "https://shop.example.test/vest",
+    }
+
+    def _previous(self, picks=None, **overrides):
+        """A campaign that went past draft: the source the next campaign copies from."""
+        brief.PROVIDER = _fake(self._EMPTY)
+        detail = self._create(picks=picks if picks is not None else dict(self._FOUR),
+                              **overrides)
+        web.conn.execute(
+            "UPDATE ads_campaign SET status = 'live' WHERE id = %s", (detail["id"],),
+        )
+        return detail
+
+    def test_first_campaign_copies_nothing(self):
+        brief.PROVIDER = _fake(self._EMPTY)
+        detail = self._create()
+        self.assertNotIn("copied_from", detail["context_json"])
+        self.assertIsNone(detail["context_json"]["landing_url"])
+        self.assertEqual(detail["context_json"]["field_sources"]["landing_url"], "system")
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
+
+    def test_request_values_land_on_the_first_campaign(self):
+        detail = self._previous()
+        self.assertEqual(detail["constraints_json"]["platform"], "meta")
+        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
+        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/vest")
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        sources = detail["context_json"]["field_sources"]
+        for key in ("platform", "audience", "cap", "landing_url"):
+            self.assertEqual(sources[key], "user", key)
+
+    def test_second_campaign_copies_the_four_values_and_names_them(self):
+        previous = self._previous()
+        brief.PROVIDER = _fake(self._EMPTY)
+
+        detail = self._create(goal_text="再推一波夜跑背心")
+
+        self.assertEqual(detail["context_json"]["copied_from"], {
+            "campaign_id": previous["id"], "name": previous["name"],
+            "fields": ["platform", "audience_hint", "cap", "landing_url"],
+        })
+        self.assertEqual(detail["constraints_json"]["platform"], "meta")
+        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
+        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/vest")
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        self.assertEqual(detail["cap"]["basis"], "own")
+        sources = detail["context_json"]["field_sources"]
+        for key in ("platform", "audience", "cap", "landing_url"):
+            self.assertEqual(sources[key], "copied", key)
+        self.assertEqual(detail["status"], "draft")
+
+    def test_request_value_overrides_the_copy(self):
+        self._previous()
+        brief.PROVIDER = _fake(self._EMPTY)
+
+        detail = self._create(
+            goal_text="再推一波夜跑背心",
+            picks={"platform": "google_ads", "landing_url": "https://shop.example.test/new"},
+        )
+
+        self.assertEqual(detail["constraints_json"]["platform"], "google_ads")
+        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/new")
+        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        self.assertEqual(detail["context_json"]["copied_from"]["fields"],
+                         ["audience_hint", "cap"])
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual(sources["platform"], "user")
+        self.assertEqual(sources["landing_url"], "user")
+        self.assertEqual(sources["audience"], "copied")
+        self.assertEqual(sources["cap"], "copied")
+
+    def test_what_the_sentence_said_also_beats_the_copy(self):
+        self._previous()
+        brief.PROVIDER = _fake(json.dumps({
+            "objective": "購買", "cap": 380, "product_ids": [], "audience_hint": "通勤族",
+            "platform": "tiktok",
+        }, ensure_ascii=False))
+
+        detail = self._create(goal_text="每筆 380 以內，TikTok 推給通勤族")
+
+        self.assertEqual(detail["constraints_json"]["platform"], "tiktok")
+        self.assertEqual(detail["context_json"]["audience_hint"], "通勤族")
+        self.assertEqual(detail["cap"]["own_value"], 380)
+        self.assertEqual(detail["context_json"]["copied_from"]["fields"], ["landing_url"])
+
+    def test_a_draft_is_never_the_source_and_the_latest_non_draft_wins(self):
+        older = self._previous()
+        newer = self._previous(picks={**self._FOUR, "audience_hint": "晨跑族"})
+        web.conn.execute(
+            "UPDATE ads_campaign SET created_at = created_at - interval '1 day' WHERE id = %s",
+            (older["id"],),
+        )
+        brief.PROVIDER = _fake(self._EMPTY)
+        self._create(goal_text="一份沒送出的草稿", picks={"audience_hint": "草稿受眾"})
+
+        detail = self._create(goal_text="再推一波")
+
+        self.assertEqual(detail["context_json"]["copied_from"]["campaign_id"], newer["id"])
+        self.assertEqual(detail["context_json"]["audience_hint"], "晨跑族")
+
+    def test_break_even_cap_and_missing_values_are_not_copied(self):
+        previous = self._previous(picks={"platform": "meta"})
+        web.conn.execute(
+            "UPDATE ads_campaign SET target_basis = 'break_even', target_cost = NULL"
+            " WHERE id = %s", (previous["id"],),
+        )
+        brief.PROVIDER = _fake(self._EMPTY)
+
+        detail = self._create(goal_text="再推一波")
+
+        self.assertEqual(detail["context_json"]["copied_from"]["fields"], ["platform"])
+        self.assertIsNone(detail["cap"]["own_value"])
+        self.assertIsNone(detail["context_json"]["audience_hint"])
+        self.assertIsNone(detail["context_json"]["landing_url"])
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
+
+    def test_landing_url_falls_back_to_the_previous_first_groups_manual_setting(self):
+        previous = self._previous(picks={"platform": "meta"})
+        first = ads_repo.create_group(
+            web.conn, self.org_id, self.brand_id, previous["id"], channel_key="meta",
+            name="新客", role="new", daily_budget=100,
+        )
+        second = ads_repo.create_group(
+            web.conn, self.org_id, self.brand_id, previous["id"], channel_key="meta",
+            name="再行銷", role="retarget", daily_budget=100,
+        )
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json || %s WHERE id = %s",
+            (coredb.jsonb({"manual_delivery": {
+                second["id"]: {"values": {"landing_url": "https://shop.example.test/second"}},
+                first["id"]: {"values": {"landing_url": "https://shop.example.test/first"}},
+            }}), previous["id"]),
+        )
+        brief.PROVIDER = _fake(self._EMPTY)
+
+        detail = self._create(goal_text="再推一波")
+
+        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/first")
+        self.assertIn("landing_url", detail["context_json"]["copied_from"]["fields"])
+
+    def test_extras_are_refused_before_any_model_call(self):
+        brief.PROVIDER = _fake(self._EMPTY)
+        for picks, code in (
+            ({"platform": "line"}, "platform_unknown"),
+            ({"audience_hint": 12}, "audience_hint_unknown"),
+            ({"cap": "450"}, "target_value_unknown"),
+            ({"cap": 0}, "target_value_unknown"),
+            ({"landing_url": "javascript:alert(1)"}, "landing_url_invalid"),
+            ({"landing_url": "https://user:pw@shop.example.test/"}, "landing_url_invalid"),
+            ({"landing_url": ["https://shop.example.test/"]}, "landing_url_unknown"),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                self._create(picks=picks)
+            self.assertEqual(str(ctx.exception), code, picks)
+        self.assertEqual(self._task_count(), 0)
+
+
+class CopyFromPreviousRouteTest(_BriefTestBase):
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(main.app)
+        self.url = f"/api/ads/brands/{self.brand_id}/campaigns"
+
+    def _post(self, **body):
+        payload = {"goal_text": "幫夜跑背心衝購買", "start_date": "2026-10-01",
+                   "end_date": "2026-10-31"}
+        payload.update(body)
+        return self.client.post(self.url, json=payload)
+
+    def test_create_passes_the_four_keys_through_and_the_next_create_copies_them(self):
+        brief.PROVIDER = _fake("{}")
+        res = self._post(platform="meta", audience_hint="夜跑愛好者", cap=450,
+                         landing_url="https://shop.example.test/vest",
+                         product_ids=[self.product["id"]], objective="購買", budget=30000)
+        self.assertEqual(res.status_code, 200, res.text)
+        first = res.json()["campaign"]
+        self.assertEqual(first["constraints_json"]["platform"], "meta")
+        self.assertEqual(first["context_json"]["landing_url"], "https://shop.example.test/vest")
+        self.assertEqual(first["cap"]["own_value"], 450)
+        self.assertNotIn("copied_from", first["context_json"])
+        web.conn.execute(
+            "UPDATE ads_campaign SET status = 'live' WHERE id = %s", (first["id"],),
+        )
+        web.conn.commit()  # the request reads through its own connection
+
+        res = self._post(cap=500)
+        self.assertEqual(res.status_code, 200, res.text)
+        second = res.json()["campaign"]
+        self.assertEqual(second["context_json"]["copied_from"], {
+            "campaign_id": first["id"], "name": first["name"],
+            "fields": ["platform", "audience_hint", "landing_url"],
+        })
+        self.assertEqual(second["cap"]["own_value"], 500)
+        self.assertEqual(second["context_json"]["field_sources"]["cap"], "user")
+        self.assertEqual(second["context_json"]["field_sources"]["platform"], "copied")
+        self.assertEqual(second["manual_handoff"]["groups"], [])
+
+    def test_refusals_are_400_with_their_codes(self):
+        brief.PROVIDER = _fake("{}")
+        for body, code in (
+            ({"platform": "line"}, "platform_unknown"),
+            ({"cap": "abc"}, "target_value_unknown"),
+            ({"audience_hint": ["x"]}, "audience_hint_unknown"),
+            ({"landing_url": "ftp://shop.example.test/"}, "landing_url_invalid"),
+        ):
+            res = self._post(**body)
+            self.assertEqual(res.status_code, 400, (body, res.text))
+            self.assertEqual(res.json()["error"]["code"], code, body)
+        self.assertEqual(self._task_count(), 0)
+
+
+class PatchLandingUrlTest(_BriefTestBase):
+    def test_patch_sets_validates_and_clears_landing_url_as_the_users(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        self.assertEqual(detail["context_json"]["field_sources"]["landing_url"], "system")
+        web.conn.commit()  # the request reads through its own connection
+        client = TestClient(main.app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+
+        res = client.patch(url, json={"landing_url": " https://shop.example.test/vest "})
+        self.assertEqual(res.status_code, 200, res.text)
+        context = res.json()["campaign"]["context_json"]
+        self.assertEqual(context["landing_url"], "https://shop.example.test/vest")
+        self.assertEqual(context["field_sources"]["landing_url"], "user")
+        self.assertEqual(context["product_ids"], detail["context_json"]["product_ids"])
+
+        res = client.patch(url, json={"landing_url": "javascript:alert(1)"})
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertEqual(res.json()["error"]["code"], "landing_url_invalid")
+
+        res = client.patch(url, json={"landing_url": None, "audience_hint": "通勤族"})
+        self.assertEqual(res.status_code, 200, res.text)
+        context = res.json()["campaign"]["context_json"]
+        self.assertIsNone(context["landing_url"])
+        self.assertEqual(context["audience_hint"], "通勤族")
+
+    def test_imported_campaign_refuses_landing_url(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create()
+        web.conn.execute(
+            "UPDATE ads_campaign SET origin = 'imported' WHERE id = %s", (detail["id"],),
+        )
+        web.conn.commit()
+        res = TestClient(main.app).patch(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}",
+            json={"landing_url": "https://shop.example.test/vest"},
+        )
+        self.assertEqual(res.status_code, 409, res.text)
+
+
 if __name__ == "__main__":
     unittest.main()
