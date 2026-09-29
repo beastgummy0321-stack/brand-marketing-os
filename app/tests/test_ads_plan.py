@@ -268,6 +268,72 @@ class CalendarInDeliveryPlanPromptTest(PlanTestBase):
         self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
 
 
+_SCOREBOARD_HEADER = "【座標成績表（已結案活動，程式統計；划算＝每筆成本在上限內）】"
+_SCOREBOARD_EMPTY = "【座標成績表】（還沒有結案過的廣告，沒有成績表）"
+
+
+class CoordinateScoreboardInDeliveryPlanPromptTest(PlanTestBase):
+    """F39-I02（outcome 2）：展開投放組的 prompt 帶程式統計的【座標成績表】，位置在行事曆之後、
+    詞彙表之前（詞彙表永遠最後）；空品牌就寫「還沒有成績表」。成績表列來自 I01 寫的
+    `source_track='coordinate'` 學習列——這裡直接用公開的 `record_learning` 種一列。"""
+
+    def _seed_scoreboard(self) -> dict:
+        closed = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
+            "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
+            "status": "closed",
+        }, created_by=ACTOR)
+        group = plan.create_group(
+            web.conn, self.org_id, self.brand_id, closed["id"], name="上一期新客組", role="new",
+            daily_budget=500,
+        )
+        ad = plan.create_ad(
+            web.conn, self.org_id, self.brand_id, closed["id"], group["id"], name="上一期-免運",
+            coordinates=_coordinates("last"),
+        )
+        keys = _coordinates("last")
+        scope = "coord；grade=on_target；" + "；".join(
+            f"{dim}={keys[dim]}"
+            for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+        )
+        return bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR,
+            learning_text="「上一期-免運」每筆 200（上限 300）＝划算", applicability_scope=scope,
+            confidence="observed", sample_size="1 則廣告",
+            source_cycle_id=f"{closed['id']}:{ad['id']}", source_track="coordinate",
+        )
+
+    def _prompt(self) -> str:
+        campaign = self._create_adopted_campaign()
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+        self._adopt(campaign["id"])
+        return provider.calls[0]["messages"][0]["content"]
+
+    def test_section_sits_between_the_calendar_and_the_vocabulary(self):
+        self._seed_scoreboard()
+        prompt = self._prompt()
+        self.assertIn(_SCOREBOARD_HEADER, prompt)
+        self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
+        self.assertIn(
+            "上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt,
+        )
+        # 任務檔前面也提到【投放期間內的行事曆】與【座標成績表】，取最後一次出現的才是段落本身。
+        calendar_at = prompt.rindex("【投放期間內的行事曆】")
+        board_at = prompt.rindex(_SCOREBOARD_HEADER)
+        vocabulary_at = prompt.rindex("【座標詞彙")
+        self.assertLess(calendar_at, board_at)
+        self.assertLess(board_at, vocabulary_at)
+        self.assertNotIn(_SCOREBOARD_EMPTY, prompt)
+
+    def test_empty_brand_says_there_is_no_scoreboard(self):
+        prompt = self._prompt()
+        self.assertIn(_SCOREBOARD_EMPTY, prompt)
+        self.assertNotIn(_SCOREBOARD_HEADER, prompt)
+        self.assertLess(prompt.rindex("【投放期間內的行事曆】"), prompt.rindex(_SCOREBOARD_EMPTY))
+        self.assertLess(prompt.rindex(_SCOREBOARD_EMPTY), prompt.rindex("【座標詞彙"))
+
+
 def _plan_reply(proof: str, offer: str = "none") -> str:
     def coords(tag: str) -> dict:
         return {**_coordinates(tag), "proof": proof, "offer": offer}
