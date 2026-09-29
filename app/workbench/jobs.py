@@ -236,6 +236,15 @@ def _resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | 
     return value
 
 
+def _proof_evidenced(rows: list, available: set[str]) -> list:
+    """F38 decision 1: the copy prompt offers only the proof kinds the brand has registered
+    evidence for (plus `none`). Drops the other `proof` rows so neither the vocabulary text
+    nor `validate.vocabulary_by_dimension` sees them. Only the copy branch filters; the image
+    task context keeps resolving old proof keys from the unfiltered rows."""
+    allowed = available | {"none"}
+    return [r for r in rows if r["dimension"] != "proof" or r.get("key") in allowed]
+
+
 def _coordinate_label(rows: list, dimension: str, value: str | None) -> tuple[str | None, str]:
     """回 `(label, situation)`——`value` 解不出詞彙表列時，`label` 就是 `value` 本身、
     `situation` 是空字串（工作單照樣看得懂一個品牌自建的座標值，只是沒有補充說明）。"""
@@ -715,7 +724,10 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     copy_length = request.get("copy_length") or "short"
     vocabulary: dict = {}
     if part == "copy":
-        coordinate_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
+        coordinate_rows = _proof_evidenced(
+            repository.list_coordinate_vocabulary(conn, org_id, brand_id),
+            bi_repo.available_proof_keys(conn, brand_id),
+        )
         vocabulary = validate.vocabulary_by_dimension(coordinate_rows)
         coordinate_text = prompts.coordinate_vocabulary_text(coordinate_rows)
         prompt = prompts.copy_prompt(

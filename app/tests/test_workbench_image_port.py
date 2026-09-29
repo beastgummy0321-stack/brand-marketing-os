@@ -24,7 +24,7 @@ class ImagePortTest(unittest.TestCase):
     def test_connected_is_false_and_generate_raises(self):
         self.assertFalse(image_port.connected())
         with self.assertRaises(NotImplementedError):
-            image_port.generate()
+            image_port.generate([], aspect="4:5", count=1, brand_id="b")
 
 
 def _fingerprint(*, slot="exploit", slot_label="主力"):
