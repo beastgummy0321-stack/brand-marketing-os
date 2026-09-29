@@ -7,6 +7,7 @@ import app.shared.web as web
 from app.ads import manual_settings
 from app.ads import repository as repo
 from app.ads.adapters import manual
+from app.core.db import jsonb
 from app.tests.test_ads_plan import PlanTestBase
 
 
@@ -83,6 +84,32 @@ class TestManualSettings(PlanTestBase):
         assert any(f["label"] == "開始日期" for f in checklist)
         assert any(f["value"] == "group_456" and "不代表已配對" in f["reason"] for f in checklist)
         assert detail["budget_planned"] == self.campaign["budget_planned"]
+
+    def test_group_without_landing_url_reads_the_campaign_default(self):
+        # F40-I04: the landing URL given at create time (`context_json.landing_url`) fills every
+        # group that has none of its own, marked `sources.landing_url = "campaign"`, and counts
+        # as filled; the group's own saved value keeps winning.
+        web.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json || %s WHERE id = %s",
+            (jsonb({"landing_url": "https://example.test/campaign"}), self.cid),
+        )
+        detail = repo.campaign_detail(web.conn, self.org_id, self.brand_id, self.cid)
+        assert detail is not None
+        record = detail["manual_handoff"]["groups"][0]
+        assert record["values"]["landing_url"] == "https://example.test/campaign"
+        assert record["sources"] == {"landing_url": "campaign"}
+        assert "落地頁網址" not in record["missing"]
+        assert record["saved_at"] is None  # nothing was saved on the group itself
+        # The saved document is untouched: the default is read, never written into the group.
+        assert "manual_delivery" not in (detail["context_json"] or {})
+
+        detail = manual_settings.save(
+            web.conn, self.org_id, self.brand_id, self.cid, self.group["id"],
+            {"landing_url": "https://example.test/own"}, actor="tester",
+        )
+        record = detail["manual_handoff"]["groups"][0]
+        assert record["values"]["landing_url"] == "https://example.test/own"
+        assert record["sources"] == {}
 
     def test_retarget_missing_pool_never_reports_ready(self):
         response = self.client.put(self.url, json={"values": {"audience_source": "網站訪客"}})
