@@ -5,7 +5,6 @@
  * F40-I06 (prototype `#/perf`, `#/detail`): the 「這期狀態列」 on top of `CampaignPerfBody` (five cells, the backend's
  * period grade, the data-status chips, 重新讀取平台／結案這一期 opening the shared close dialog, closed／imported states)
  * and the two program lines under the ruler title (local ads never built, platform ads not built here). */
-import { writeFileSync } from "node:fs";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -838,39 +837,6 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
     expect(screen.queryByTestId("period-status-row")).toBeNull();
     expect(getPerformance).not.toHaveBeenCalled();
-  });
-
-  /** Opt-in 參考圖｜成品 evidence (no backend may run in the worker's tree): `UI_EVIDENCE_DIR=<dir> npx vitest run …`
-   * writes the rendered row + ruler title for the normal, missing-days and closed states as text and one HTML page. */
-  it.runIf(process.env.UI_EVIDENCE_DIR)("dumps the rendered row and title lines into UI_EVIDENCE_DIR", async () => {
-    const dir = process.env.UI_EVIDENCE_DIR!;
-    const readable = (node: Node | null): string => !node ? "" : node.nodeType === Node.TEXT_NODE
-      ? node.textContent ?? ""
-      : (node as Element).getAttribute?.("role") === "tooltip" ? "" : [...node.childNodes].map(readable).join(" ");
-    const clean = (node: Node | null) => readable(node).replace(/\s+/g, " ").trim();
-    const pages: string[] = [];
-    for (const [title, c, missing] of [
-      ["perf-normal", campaignDetail(), []],
-      ["perf-missing-days", campaignDetail(), ["2026-10-01", "2026-10-02"]],
-      ["perf-closed", campaignDetail({ status: "closed" }), []],
-      ["detail-title-lines-draft", campaignDetail({ status: "draft" }), []],
-    ] as [string, CampaignDetail, string[]][]) {
-      vi.mocked(getPerformance).mockResolvedValue(perf({ missing: missing.length, missing_days: missing }));
-      const utils = render(
-        <MemoryRouter initialEntries={[`${WS}?tab=perf`]}>
-          <CampaignPerfBody brandId="brd_1" campaignId="cmp_1" origin="internal" campaign={c} onCampaignChange={vi.fn()} onSync={vi.fn()} />
-        </MemoryRouter>,
-      );
-      if (c.status !== "draft") await within(screen.getByTestId("period-status-row")).findByText("10,081 元");
-      const card = await screen.findByRole("region", { name: "對照上限" });
-      const statusRow = utils.container.querySelector("[data-testid=period-status-row]");
-      const head = card.querySelector("h2")!.parentElement!;
-      const lines = card.querySelector("[data-testid=program-lines]");
-      pages.push(`<h2 style="font:600 14px sans-serif;margin:24px 0 8px">${title}</h2><div class="flex flex-col gap-4" style="max-width:1180px">${statusRow?.outerHTML ?? "<p>(draft: no status row)</p>"}<section class="surface px-[22px] py-5">${head.outerHTML}${lines?.outerHTML ?? ""}<p class="text-xs text-muted-foreground">（尺規與各則列照現況，這裡略）</p></section></div>`);
-      writeFileSync(`${dir}/${title}.txt`, `ROW>> ${clean(statusRow)}\n\nTITLE>> ${clean(head)}\n\nLINES>> ${clean(lines)}\n`);
-      utils.unmount();
-    }
-    writeFileSync(`${dir}/perf-status-row.vitest-dom.html`, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>F40-I06 成品（vitest DOM）</title><link rel="stylesheet" href="app.css"></head><body style="background:#f6f7fb;padding:24px;font-family:Inter,Noto Sans TC,sans-serif"><h1 style="font:650 20px sans-serif">F40-I06 成品：這期狀態列 + 在投標題（vitest+jsdom 渲染的 DOM，套 build 後的 app.css）</h1><p style="font:12px sans-serif;color:#626b80">參考圖：reference-prototype-perf.png（#/perf）、reference-prototype-detail.png（#/detail）。無後端，非真截圖。</p>${pages.join("")}</body></html>`);
   });
 
   it("period helpers: days count through today only; a long gap prints as a range", () => {
