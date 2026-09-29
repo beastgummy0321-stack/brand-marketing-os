@@ -20,8 +20,8 @@ import { CHART_COLOR_AXIS_TEXT, CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@
 import { formatCount, formatCurrency, formatMetaRoas, formatPercent } from "@/lib/format";
 import {
   closeCampaign,
+  CoverageMissingError,
   getPerformance,
-  ingestOutcome,
   type CampaignDetail,
   type CampaignLabels,
   type CampaignPerformance,
@@ -29,7 +29,7 @@ import {
 import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
-import { Disclosure } from "./patterns";
+import { Chip, Disclosure } from "./patterns";
 import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./nativePerformance";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -150,6 +150,82 @@ function TrendChart({ daily, native, currency }: { daily: PerformanceView["daily
   return <div ref={ref} className="h-64 w-full" />;
 }
 
+/** `2026-09-27` → `09/27` (prototype day chips). */
+function shortDay(day: string): string {
+  return day.slice(5).replace("-", "/");
+}
+
+function DayChips({ days }: { days: string[] }) {
+  return (
+    <span className="flex flex-wrap gap-1.5">
+      {days.map((day) => <Chip key={day} className="rounded-md px-2 py-0.5">{shortDay(day)}</Chip>)}
+    </span>
+  );
+}
+
+/** F37 資料狀態: the part of the campaign window the platform read has covered. `coverage.start/end`
+ * is the window itself (`start_date … min(end_date, org yesterday)`), so trailing unread days are
+ * trimmed off before saying 「平台已讀到」; gaps in the middle stay listed by the warning line. */
+function coveredRange(start: string, end: string, missing: string[]): { first: string; last: string } | null {
+  const gone = new Set(missing);
+  const days: string[] = [];
+  for (let t = Date.parse(`${start}T00:00:00Z`); t <= Date.parse(`${end}T00:00:00Z`) && days.length <= 400; t += 86_400_000) {
+    days.push(new Date(t).toISOString().slice(0, 10));
+  }
+  const read = days.filter((day) => !gone.has(day));
+  return read.length ? { first: read[0], last: read[read.length - 1] } : null;
+}
+
+/** F37 (prototype `#/close`): the close dialog's refusal when the platform read does not cover the
+ * window. 缺日 = amber (re-read first, 確認結案 held); 重讀仍失敗 (`can_skip`) = red with the sync error
+ * and the explicit skip. The server re-validates every close, so this only mirrors its last answer. */
+function CoverageNote({ gap, syncError, syncing, reread, onSync, onSkip, closing }: {
+  gap: CoverageMissingError;
+  syncError: string | null;
+  syncing: boolean;
+  reread: boolean;
+  onSync?: () => void;
+  onSkip: () => void;
+  closing: boolean;
+}) {
+  const n = gap.missing_days.length;
+  const syncButton = (label: string) => (
+    <Button type="button" variant="outline" size="sm" onClick={() => onSync?.()} disabled={!onSync || syncing || closing}>
+      <RefreshCw size={14} className={syncing ? "animate-spin" : "hidden"} />
+      {syncing ? "讀取中…" : label}
+    </Button>
+  );
+  if (gap.can_skip) {
+    return (
+      <div role="alert" className="flex flex-col gap-1.5 rounded-md border border-danger/30 bg-danger/10 p-3 text-sm">
+        <b className="font-semibold">重新讀取失敗：{syncError || "上次讀取平台沒有成功；已保留前次資料。"}</b>
+        <p className="text-xs">
+          {gap.never_synced ? "還沒讀到任何平台資料。" : `仍有 ${n} 天讀不到（${gap.missing_days.map(shortDay).join("、")}）。`}
+          可以先跳過這幾天結案，判定會是「看不出」並記下缺的日期。
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {syncButton("再讀一次")}
+          <Button type="button" variant="outline" size="sm" onClick={onSkip} disabled={syncing || closing}>
+            仍讀不到，跳過缺日結案
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div role="alert" className="flex flex-col gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+      <b className="font-semibold">
+        {gap.never_synced ? "這個活動還沒讀過平台資料，先讀取再結案。" : `有 ${n} 天還沒讀到平台資料，先補讀再結案。`}
+      </b>
+      {n > 0 && <DayChips days={gap.missing_days} />}
+      <p className="text-xs text-muted-foreground">
+        {reread ? "已重新讀取；按「確認結案」再核對一次。" : "缺的日子不會被當成 0；讀到之後這裡會自動放行。"}
+      </p>
+      <div>{syncButton("重新讀取平台")}</div>
+    </div>
+  );
+}
+
 function Kpi({ label, value, caption }: { label: string; value: string; caption: string }) {
   return (
     <article className="surface p-4">
@@ -166,8 +242,9 @@ function hasSavedComparison(campaign: CampaignDetail) {
 }
 
 /** 成效 tab（F03-I16）：素材／策略／結構那幾頁是「編輯」，這頁是「唯讀＋兩個動作」
- * （重新整理成效、立即結案）——所有數字只認 `getPerformance`／`ingestOutcome`，絕不讀
- * `campaign_detail.outcome`（那是列表卡片的 SQL 小計，§0「Two total-derivers exist」）。 */
+ * （重新讀取平台、立即結案）——所有數字只認 `getPerformance`（F37：平台同步表），絕不讀
+ * `campaign_detail.outcome`（那是列表卡片的 SQL 小計，§0「Two total-derivers exist」）。
+ * 重新讀取平台一律是工作區的 `onSync`（同一個 `POST …/sync` 工作，自建與既有活動都一樣）。 */
 export function PerformanceTab({
   brandId,
   campaign: c,
@@ -175,6 +252,7 @@ export function PerformanceTab({
   onChangeTab,
   onSync,
   syncing = false,
+  syncError = "",
 }: {
   brandId: string;
   campaign: CampaignDetail;
@@ -182,6 +260,8 @@ export function PerformanceTab({
   onChangeTab: (target: StepTarget) => void;
   onSync?: () => void;
   syncing?: boolean;
+  /** The workspace's last sync failure (job error); the close dialog's 重讀仍失敗 note shows it. */
+  syncError?: string;
 }) {
   const { scope: draftScope } = useWorkspace();
   const [searchParams] = useSearchParams();
@@ -202,11 +282,14 @@ export function PerformanceTab({
     | { status: "error"; message: string }
     | { status: "ready"; data: CampaignPerformance }
   >({ status: "loading" });
-  const [refreshing, setRefreshing] = useState(false);
   const [comparisonRefresh, setComparisonRefresh] = useState(0);
   const [closeOpen, setCloseOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
+  const [coverageGap, setCoverageGap] = useState<CoverageMissingError | null>(null);
+  // A platform read finished after the last refusal: 確認結案 is released and the next click
+  // re-validates on the server (the server, not this flag, decides).
+  const [reread, setReread] = useState(false);
 
   const load = useCallback(() => {
     if (!published || imported) return;
@@ -220,34 +303,44 @@ export function PerformanceTab({
 
   useEffect(load, [load]);
 
-  async function handleRefresh() {
-    if (imported) { onSync?.(); return; }
-    setRefreshing(true);
-    try {
-      const data = await ingestOutcome(brandId, c.id);
-      setState({ status: "ready", data });
+  // The workspace's platform read ended (syncing true → false): reload the numbers and the opened
+  // comparison, and release a held 確認結案.
+  const wasSyncing = useRef(syncing);
+  useEffect(() => {
+    if (wasSyncing.current && !syncing) {
+      load();
       setComparisonRefresh((current) => current + 1);
-    } catch (err) {
-      setState({ status: "error", message: err instanceof Error ? err.message : "重新整理成效失敗。" });
-    } finally {
-      setRefreshing(false);
+      setReread(true);
     }
-  }
+    wasSyncing.current = syncing;
+  }, [syncing, load]);
 
-  async function handleClose() {
+  async function handleClose(skipMissing = false) {
     if (imported) return;
     setClosing(true);
     setCloseError(null);
     try {
-      const updated = await closeCampaign(brandId, c.id);
+      const updated = skipMissing
+        ? await closeCampaign(brandId, c.id, { skip_missing: true })
+        : await closeCampaign(brandId, c.id);
       onCampaignChange(updated);
       setCloseOpen(false);
+      setCoverageGap(null);
     } catch (err) {
-      setCloseError(err instanceof Error ? err.message : "結案失敗，請稍後再試。");
+      if (err instanceof CoverageMissingError) {
+        setCoverageGap(err);
+        setReread(false);
+      } else {
+        setCloseError(err instanceof Error ? err.message : "結案失敗，請稍後再試。");
+      }
     } finally {
       setClosing(false);
     }
   }
+
+  const observations = (c.context_json.external_sync as { observations?: { error?: unknown } } | undefined)?.observations;
+  const lastSyncError = syncError || (typeof observations?.error === "string" ? observations.error : null);
+  const confirmHeld = coverageGap !== null && (!reread || syncing);
 
   const comparison = imported ? <Disclosure label="成效比較"><p className="text-sm text-muted-foreground">{c.capabilities?.unavailable.comparison ?? "既有平台活動不支援內部成效比較。"}</p></Disclosure> : <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
     hasSavedComparison={hasSavedComparison(c)} refreshToken={`${c.status}:${comparisonRefresh}`}
@@ -289,7 +382,7 @@ export function PerformanceTab({
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
-          data={state.data} labels={labels} refreshing={refreshing} onRefresh={() => void handleRefresh()}
+          data={state.data} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync}
           highlightAd={highlightAd} />
       )}
 
@@ -311,7 +404,7 @@ export function PerformanceTab({
                 </span>
               )}
             </span>
-            <Button disabled={imported} onClick={() => setCloseOpen(true)}>立即結案</Button>
+            <Button disabled={imported} onClick={() => { setCoverageGap(null); setCloseError(null); setCloseOpen(true); }}>立即結案</Button>
           </div>
         </div>
       )}
@@ -328,12 +421,16 @@ export function PerformanceTab({
             結案後會對照成功條件寫下判定，並在品牌智庫留一條學習，Campaign 之後會被鎖定，不能再改。
             {c.status === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
           </DialogDescription>
+          {coverageGap && (
+            <CoverageNote gap={coverageGap} syncError={lastSyncError} syncing={syncing} reread={reread}
+              onSync={onSync} onSkip={() => void handleClose(true)} closing={closing} />
+          )}
           {closeError && <p className="text-sm text-danger">{closeError}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setCloseOpen(false)} disabled={closing}>
               取消
             </Button>
-            <Button type="button" onClick={() => void handleClose()} disabled={closing}>
+            <Button type="button" onClick={() => void handleClose()} disabled={closing || confirmHeld}>
               {closing ? "結案中…" : "確認結案"}
             </Button>
           </DialogFooter>
@@ -376,6 +473,16 @@ function PerformanceReady({
   const roas = (value: number | null) => native && value === null ? "未知" : formatMetaRoas(value);
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
+  // F37 Contract P: the internal campaign's platform-read coverage (the native view has its own caption).
+  const coverage = native ? null : data.coverage;
+  const missingDays = coverage?.missing_days ?? [];
+  const covered = coverage?.start && coverage.end ? coveredRange(coverage.start, coverage.end, missingDays) : null;
+  const readStatus = !coverage
+    ? latestDay ? `最新資料日 ${latestDay}` : "還沒有每日資料"
+    : coverage.never_synced ? "還沒讀過平台資料"
+    : covered ? `平台已讀到 ${shortDay(covered.first)} ～ ${shortDay(covered.last)}`
+    : coverage.start ? "這段期間還沒讀到平台資料"
+    : "還沒有完整的一天可讀";
   // F27-I22：`廣告花費占比` 那張表才有「這則廣告」的列——比對不到就是這次資料範圍裡沒有它
   // （不同資料範圍／幣別／歸因，或這則廣告根本沒有花費資料），不是程式錯誤，印一行誠實訊息。
   const matchedAd = highlightAd !== null ? data.ads.find((a) => a.ad_id === highlightAd) ?? null : null;
@@ -399,16 +506,21 @@ function PerformanceReady({
           <h2>目前成果</h2>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing || refreshDisabled}>
             <RefreshCw size={14} className={refreshing ? "animate-spin" : "hidden"} />
-            {refreshing ? "整理中…" : "重新整理成效"}
+            {refreshing ? "讀取中…" : "重新讀取平台"}
           </Button>
         </div>
         <div className="surface-body flex flex-col gap-2">
           <p className="text-sm font-medium">{outcome}</p>
           {native && <p className="text-xs text-muted-foreground">{scopeCaption}。僅彙整已讀回資料，完整性未知。</p>}
-          <p className="text-xs text-muted-foreground">
-            資料狀態：{latestDay ? `最新資料日 ${latestDay}` : "還沒有每日資料"}；來源為{source}。
-            {(data.coverage?.expected ?? 0) > 0 && ` 缺少 ${data.coverage?.missing}／${data.coverage?.expected} 個廣告日。`}
-          </p>
+          <p className="text-xs text-muted-foreground">資料狀態：{readStatus}；來源為{source}。</p>
+          {missingDays.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-warning">
+              有 {missingDays.length} 天還沒讀到平台資料：
+              <DayChips days={missingDays.slice(0, 5)} />
+              {missingDays.length > 5 && <span>…</span>}
+              這幾天不算 0，按「重新讀取平台」補讀。
+            </div>
+          )}
           {(t.purchases === null || t.revenue === null) && <p className="text-xs text-warning">
             {native ? "轉換或營收未知時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。" : "轉換或營收未追蹤時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。"}
           </p>}
@@ -446,7 +558,7 @@ function PerformanceReady({
           <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
             {(data.coverage?.expected ?? 0) > 0 && (
               <li>
-                {data.coverage?.missing} 個廣告日沒有資料（共 {data.coverage?.expected} 個）
+                {data.coverage?.missing} 天沒讀到平台資料（期間共 {data.coverage?.expected} 天）
               </li>
             )}
             <li>{data.last_data_at ? `最新資料日：${data.daily[data.daily.length - 1]?.day ?? "－"}` : "還沒有資料"}</li>

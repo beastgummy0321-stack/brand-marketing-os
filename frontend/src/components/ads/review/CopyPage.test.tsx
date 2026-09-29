@@ -75,7 +75,7 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
     },
     evidence_json: {
       target: { id: "aex_1", name: "晨光隨行杯・隨時有你", platform: "meta", source_account: "acc_1", native_id: "native_1" },
-      window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei" },
+      window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei", missing_days: [] },
       current: period(), previous: period(),
       commerce: { current: commerce(), previous: commerce() },
       conditions: {

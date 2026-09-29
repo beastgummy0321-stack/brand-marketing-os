@@ -699,13 +699,18 @@ export interface OutcomeAdRow extends OutcomeBucket {
   spend_share: number | null;
 }
 
+/** F37 Contract P: coverage of the platform read over the campaign window (`start_date` …
+ * min(end_date, org yesterday)). `never_synced` = the platform was never read, not "nothing missing". */
 export interface OutcomeCoverage {
+  start: string | null;
+  end: string | null;
   expected: number;
   missing: number;
+  missing_days: string[];
+  never_synced: boolean;
 }
 
-/** `GET/POST .../performance` 與 `.../ingest` 共用的回應形狀（一個 action，兩邊派工，
- * §0「One endpoint」）。 */
+/** `GET .../performance` 的回應形狀——數字只來自平台同步表（F37 Contract P）。 */
 export interface CampaignPerformance {
   totals: OutcomeBucket;
   daily: OutcomeDailyPoint[];
@@ -725,35 +730,55 @@ export async function getPerformance(
   return parseJsonOrThrow<CampaignPerformance>(res, "讀取成效失敗。");
 }
 
-/** 依這個 Campaign 怎麼發布的派工：模擬通路補到今天缺的天數；其餘拉既有的 Meta 每日拉取
- * 結果，不多打一次 Meta。回傳跟 `getPerformance` 同一份 payload。 */
-export async function ingestOutcome(
-  brandId: string,
-  campaignId: string,
-): Promise<CampaignPerformance> {
-  const res = await apiFetch(
-    `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/ingest`,
-    { method: "POST" },
-  );
-  return parseJsonOrThrow<CampaignPerformance>(res, "更新成效失敗。");
-}
-
 // -- F03-I12：結案 -----------------------------------------------------------------------------
 
-/** 手動結案——結案永遠是使用者動作，沒有活動過了結束日就自動結案這回事（F16-I05）。 */
+/** F37 Contract Q/S: the close route refuses a window the platform read does not cover with 409
+ * `coverage_missing`; `error.details` names the days and whether the skip is open (`can_skip`, only
+ * after the last platform read failed). */
+export class CoverageMissingError extends Error {
+  missing_days: string[];
+  never_synced: boolean;
+  can_skip: boolean;
+  constructor(message: string, details: { missing_days: string[]; never_synced: boolean; can_skip: boolean }) {
+    super(message);
+    this.missing_days = details.missing_days;
+    this.never_synced = details.never_synced;
+    this.can_skip = details.can_skip;
+  }
+}
+
+/** 手動結案——結案永遠是使用者動作，沒有活動過了結束日就自動結案這回事（F16-I05）。
+ * `skip_missing` 只在 `CoverageMissingError.can_skip` 之後由使用者明確選擇（F37 ruling 3）。 */
 export async function closeCampaign(
   brandId: string,
   campaignId: string,
-  reason?: string,
+  body: { reason?: string; skip_missing?: boolean } = {},
 ): Promise<CampaignDetail> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/close`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: reason ?? null }),
+      body: JSON.stringify({ reason: body.reason ?? null, skip_missing: body.skip_missing ?? false }),
     },
   );
+  if (res.status === 409) {
+    type Details = { missing_days?: unknown; never_synced?: unknown; can_skip?: unknown };
+    let error: { code?: string; message?: string; details?: Details } | undefined;
+    try {
+      error = ((await res.clone().json()) as { error?: typeof error }).error;
+    } catch {
+      // Not JSON: the generic path below reports the fallback message.
+    }
+    if (error?.code === "coverage_missing" && error.details) {
+      const d = error.details;
+      throw new CoverageMissingError(error.message ?? "還有日子沒讀到平台資料，先重新讀取平台。", {
+        missing_days: Array.isArray(d.missing_days) ? d.missing_days.filter((x): x is string => typeof x === "string") : [],
+        never_synced: d.never_synced === true,
+        can_skip: d.can_skip === true,
+      });
+    }
+  }
   const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "結案失敗。");
   return data.campaign;
 }
