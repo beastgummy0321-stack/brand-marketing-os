@@ -45,6 +45,27 @@ def test_pending_forbidden_other_product_never_support():
         facts.assert_called_once_with(None, "brand", status="confirmed")
 
 
+def test_confirmed_proof_fact_is_a_prompt_source_without_risk_word():
+    with patch.object(claims.bi_repo, "list_brand_facts", return_value=[
+        {"id": "proof", "fact_type": "proof", "value": "SGS 重金屬檢驗合格"},
+        {"id": "plain", "fact_type": "product", "value": "每包 20 公克"},
+    ]), patch.object(claims.bi_repo, "list_claims_for_brand", return_value=[]):
+        rows = claims.sources(None, "brand", None)
+    ids = [r["id"] for r in claims.prompt_sources(rows)]
+    assert ids == ["proof"]
+    text = claims.policy(rows)
+    assert "## 優惠、背書與已登記的證據來源" in text
+    assert "- [proof] SGS 重金屬檢驗合格" in text
+
+
+def test_proof_rows_come_first_and_cap_stays_20():
+    risky = [{"id": f"r{i}", "text": "折扣", "proof": False} for i in range(25)]
+    proof = [{"id": "p", "text": "SGS 重金屬檢驗合格", "proof": True}]
+    got = claims.prompt_sources(risky + proof)
+    assert len(got) == 20
+    assert got[0]["id"] == "p"
+
+
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):
     def test_legacy_output_warns_but_selection_and_pack_approval_continue(self):
         pack = self._submit_pack([self._one_set("1", {"copy": 1})])

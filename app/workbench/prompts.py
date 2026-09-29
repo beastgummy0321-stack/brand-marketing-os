@@ -28,6 +28,10 @@ IMAGE_COORDINATE_LABELS = {
 }
 
 
+# F38 decision 3: the 限時限量 offer, by key or by label (a snapshot may carry either).
+_LIMITED_TIME = {"limited_time", "限時限量"}
+
+
 def brief_text(brief: dict, product_name: str | None) -> str:
     """組『這張工單』段——比照 `scripts/workbench_probe.py::_worksheet_text`，改吃
     `workbench_brief` 列（工作檯的來源是一張工單，不是活動樹節點）。長度／變體數／字數帶
@@ -44,6 +48,13 @@ def brief_text(brief: dict, product_name: str | None) -> str:
             + "\n例外：優惠與證明分類不是已確認事實；須另有已確認來源，"
             "否則使用無優惠／無證明。"
         )
+    deadline = (brief.get("request_json") or {}).get("offer_deadline")
+    if deadline:
+        lines.append(
+            f"限時截止日：{deadline}（限時限量文案只能寫這一個日期，不得另造期限或數量）"
+        )
+    elif coordinates.get("offer") in _LIMITED_TIME:
+        lines.append("這組座標寫了限時限量但沒有截止日：寫無優惠版本，不提期限。")
     lines.append(f"visual_tone：{brief.get('visual_tone') or '（無）'}")
     lines.append(f"visual_concept：{brief.get('visual_concept') or '（無）'}")
     free_text = (brief.get("request_json") or {}).get("free_text")
