@@ -1729,4 +1729,9 @@ Five program rules, no LLM judgment (dig of `docs/backlog/handoff-after-f37.md` 
 - **Two performance sources for budget history, named** (ruling 5, closes §6.40 #15): the account base stays on
   `meta_entity_spend` because the sync table's monthly rows only hold campaigns bound to this brand (unbound account campaigns
   would be dropped → undercount); the caption reads 「Meta 廣告帳戶全部活動，近 30 天有投放的 N 天平均日花費」.
-- Prototype `.harness/scratch/prototype/f38-proof/index.html` (`#/fact`).
+- Prototype `.harness/scratch/prototype/f38-proof/index.html` (`#/fact`, `#/coords`, `#/checklist`, `#/budget`).
+- **As built (F38, 2026-09-29)**: the gate is `plan._prompt_rows` + `plan._gate_reply` (ads) and `jobs._proof_evidenced`
+  (workbench copy branch only; the image task context still resolves old proof keys). `claims.prompt_sources` lists confirmed
+  proof facts first, then RISK-word rows, cap 20. `brief_text` prints 「限時截止日：…」 from `request.offer_deadline`, or the
+  無優惠 instruction when the coordinates say 限時限量 without one. Migrations `20260929000002_brand_intelligence_brand_fact_key.sql`
+  and `20260929000003_schedule_offer_default_off.sql` (the latter disabled 12,624 promo rows on the dev DB).

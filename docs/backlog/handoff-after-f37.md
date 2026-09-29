@@ -28,6 +28,9 @@ re-measure the A-vs-B gap.
 ## Unverified / open (carried)
 - `test_ads_launch_view::test_an_audience_key_without_a_vocabulary_row_prints_itself` failed once under `-n 4` (F37-I03),
   passed 3/3 alone; suspected order dependence on shared vocabulary rows.
+  F38-I03 saw a sibling flake: `test_the_group_row_shows_the_plans_role_and_audience_labels_read_only` got the two audience
+  labels in reverse order once (passed on rerun) — `audience_hints` keeps ad iteration order, which is not stable for ads
+  created in the same instant. Likely one root cause for both.
 - Readback 「讀不到」 26/27 items may be only the drill stand-in (no creative fields mirrored).
 - Judge leniency (Haiku scored A 1.3–1.35) — ranking holds, multipliers soft.
 - `ads_action.sync_state='confirmed_manual'`: column exists, no writer, read once in `judgment.py:196` (dead path, left).

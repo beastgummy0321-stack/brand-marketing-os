@@ -498,11 +498,13 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
                        label: str, value: str, status: str,
                        source_reference_id: str | None = None,
                        confidence: str | None = None,
-                       confirmed_by: str | None = None) -> dict:
+                       confirmed_by: str | None = None,
+                       fact_key: str | None = None) -> dict:
     _require(fact_type, "brand_fact.fact_type 為必填")
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
+    fact_key = _proof_fact_key(fact_type, fact_key)
     if status not in ("confirmed", "pending"):
         raise ValueError("brand_fact.status 只能是 confirmed 或 pending")
     if status == "confirmed":
@@ -510,18 +512,18 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
     fact_id = new_id("bft")
     ts = now_utc()
     row = {
-        "id": fact_id, "brand_id": brand_id, "fact_type": fact_type, "label": label, "value": value,
-        "status": status, "source_reference_id": source_reference_id, "confidence": confidence,
+        "id": fact_id, "brand_id": brand_id, "fact_type": fact_type, "fact_key": fact_key,
+        "label": label, "value": value, "status": status, "source_reference_id": source_reference_id, "confidence": confidence,
         "confirmed_by": confirmed_by if status == "confirmed" else None,
         "confirmed_at": ts if status == "confirmed" else None,
         "created_at": ts, "updated_at": ts,
     }
     org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
-        "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, label, value, status, source_reference_id, "
-        "confidence, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], org_id, row["brand_id"], row["fact_type"], row["label"], row["value"], row["status"],
+        "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, fact_key, label, value, status, "
+        "source_reference_id, confidence, confirmed_by, confirmed_at, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], org_id, row["brand_id"], row["fact_type"], row["fact_key"], row["label"], row["value"], row["status"],
          row["source_reference_id"], row["confidence"], row["confirmed_by"], row["confirmed_at"],
          row["created_at"], row["updated_at"]),
     )
@@ -530,6 +532,39 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
                 action="create", actor=actor, before=None, after=row)
     conn.commit()
     return row
+
+
+# F38-I01: the six evidence kinds a proof fact may name (= the six `proof` coordinate keys;
+# the DB CHECK in 20260929000002_brand_intelligence_brand_fact_key.sql holds the same list).
+PROOF_FACT_KEYS = ("customer_review", "expert_endorsement", "lab_report",
+                   "sales_numbers", "media_coverage", "founder_voice")
+
+
+def _proof_fact_key(fact_type: str, fact_key: str | None) -> str | None:
+    """A proof fact must name one of the six kinds; every other type stores NULL."""
+    if fact_type != "proof":
+        return None
+    if fact_key not in PROOF_FACT_KEYS:
+        raise ValueError("brand_fact.fact_key 必須是六種證據之一")
+    return fact_key
+
+
+def available_proof_keys(conn: Conn | ConnProxy, brand_id: str) -> set[str]:
+    """Which proof kinds this brand has real evidence for (F38 decision 1; read-only, no LLM).
+
+    = `fact_key` of every confirmed proof fact, plus `customer_review` when the brand has at
+    least one active customer-voice record. Readers: the ads and workbench prompt builders.
+    """
+    keys = {r["fact_key"] for r in conn.execute(
+        "SELECT DISTINCT fact_key FROM brand_fact WHERE brand_id = %s AND status = 'confirmed' "
+        "AND fact_type = 'proof' AND fact_key IS NOT NULL", (brand_id,)
+    ).fetchall()}
+    has_voice = conn.execute(
+        "SELECT 1 FROM customer_voice WHERE brand_id = %s AND status = 'active' LIMIT 1", (brand_id,)
+    ).fetchone() is not None  # same filter as list_customer_voices(status="active")
+    if has_voice:
+        keys.add("customer_review")
+    return keys
 
 
 def get_brand_fact(conn: Conn, brand_id: str, fact_id: str) -> dict | None:
@@ -552,13 +587,15 @@ def list_brand_facts(conn: Conn, brand_id: str, status: str | None = None) -> li
 def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
                        fact_type: str, label: str, value: str,
                        source_reference_id: str | None = None,
-                       confidence: str | None = None) -> dict:
+                       confidence: str | None = None,
+                       fact_key: str | None = None) -> dict:
     """編輯事實內容。人工編輯直接生效、不退回待確認（決策 0013 用戶優先：
     人親手改的內容本身就是最高權威的確認；編輯者成為最新確認人）。"""
     _require(fact_type, "brand_fact.fact_type 為必填")
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
+    fact_key = _proof_fact_key(fact_type, fact_key)
     before = get_brand_fact(conn, brand_id, fact_id)
     if before is None:
         raise ValueError(f"找不到品牌事實：{fact_id}")
@@ -567,10 +604,10 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
-        "UPDATE brand_fact SET fact_type = %s, label = %s, value = %s, "
+        "UPDATE brand_fact SET fact_type = %s, fact_key = %s, label = %s, value = %s, "
         "source_reference_id = %s, confidence = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s "
         "WHERE id = %s AND brand_id = %s",
-        (fact_type, label, value, source_reference_id, confidence,
+        (fact_type, fact_key, label, value, source_reference_id, confidence,
          confirmed_by, confirmed_at, ts, fact_id, brand_id),
     )
     after = get_brand_fact(conn, brand_id, fact_id)

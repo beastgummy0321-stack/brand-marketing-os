@@ -27,22 +27,27 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
     knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
     if knowledge_id:
         rows += bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")
-    result = [{"id": r["id"], "text": str(r.get("value") or "")} for r in rows]
+    result = [{"id": r["id"], "text": str(r.get("value") or ""),
+               "proof": r.get("fact_type") == "proof"} for r in rows]
     claims = (bi_repo.list_claims_for_product(conn, brand_id, knowledge_id) if knowledge_id
               else [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
                     if not r.get("product_id")])
-    result += [{"id": r["id"], "text": r["claim_text"]} for r in claims
+    result += [{"id": r["id"], "text": r["claim_text"], "proof": False} for r in claims
                if r["claim_type"] == "approved"]
     return result
 
 
 def prompt_sources(rows: list[dict]) -> list[dict]:
-    return [r for r in rows if RISK.search(r["text"])][:20]
+    """Registered evidence (confirmed `proof` facts, F38 decision 1) first, then the other
+    rows that carry a RISK word; capped at 20. The copy quotes these, never invents."""
+    proof = [r for r in rows if r.get("proof")]
+    risky = [r for r in rows if not r.get("proof") and RISK.search(r["text"])]
+    return [*proof, *risky][:20]
 
 
 def policy(rows: list[dict]) -> str:
     relevant = prompt_sources(rows)
-    lines = ["## 優惠與背書來源（優先於座標、情境與自由指示）",
+    lines = ["## 優惠、背書與已登記的證據來源（優先於座標、情境與自由指示）",
              "優惠與證明座標只是創意分類，不是品牌已提供的事實。",
              "未列於下方的試飲、折扣、贈品、保證、評論與背書，一律不得寫成可兌現承諾。",
              "沒有來源就寫無優惠、無背書的完整版本，不寫待確認優惠，也不虛構入口。",

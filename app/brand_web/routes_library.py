@@ -153,6 +153,8 @@ def _fact_shape(brand_id: str, fact: dict) -> dict:
     return {
         "id": fact["id"], "fact_type": fact["fact_type"],
         "fact_type_label": md.brand_fact_type_label(fact["fact_type"]),
+        "fact_key": fact.get("fact_key"),
+        "fact_key_label": md.proof_kind_label(fact["fact_key"]) if fact.get("fact_key") else None,
         "label": fact["label"], "value": fact["value"], "status": fact["status"],
         "confirmed_by": fact.get("confirmed_by"), "confirmed_at": fact.get("confirmed_at"),
         "stale_label": web.fact_staleness(fact),

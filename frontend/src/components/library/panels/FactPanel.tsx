@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import {
   BRAND_FACT_TYPES,
+  PROOF_KINDS,
   createFact,
   updateFact,
   type LibraryBrandFact,
@@ -25,6 +26,9 @@ export function FactPanel({
 }) {
   const editing = fact !== null;
   const [factType, setFactType] = useState(fact?.fact_type ?? "");
+  const [factKey, setFactKey] = useState(fact?.fact_key ?? "");
+  const [kindMissing, setKindMissing] = useState(false);
+  const isProof = factType === "proof";
   const [labelText, setLabelText] = useState(fact?.label ?? "");
   const [value, setValue] = useState(fact?.value ?? "");
   const [status, setStatus] = useState<"confirmed" | "pending">(fact?.status ?? "pending");
@@ -34,6 +38,7 @@ export function FactPanel({
     if (editing) {
       await updateFact(brandId, fact.id, {
         fact_type: factType,
+        fact_key: isProof ? factKey : null,
         label: labelText,
         value,
         source_reference: sourceReference,
@@ -41,6 +46,7 @@ export function FactPanel({
     } else {
       await createFact(brandId, {
         fact_type: factType,
+        fact_key: isProof ? factKey : null,
         label: labelText,
         value,
         status,
@@ -67,6 +73,11 @@ export function FactPanel({
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
+          // 證據 must name its kind; shown inline under the select, as the server would say.
+          if (isProof && !factKey) {
+            setKindMissing(true);
+            return;
+          }
           void form.submit();
         }}
       >
@@ -74,7 +85,11 @@ export function FactPanel({
           <span className="font-medium text-foreground">這是哪一類事實？</span>
           <select
             value={factType}
-            onChange={(e) => setFactType(e.target.value)}
+            onChange={(e) => {
+              setFactType(e.target.value);
+              setFactKey("");
+              setKindMissing(false);
+            }}
             required
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           >
@@ -89,6 +104,34 @@ export function FactPanel({
           </select>
         </label>
 
+        {isProof && (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-foreground">哪一種證據？</span>
+            <select
+              value={factKey}
+              onChange={(e) => {
+                setFactKey(e.target.value);
+                setKindMissing(false);
+              }}
+              aria-invalid={kindMissing}
+              className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
+            >
+              <option value="" disabled>
+                請選擇
+              </option>
+              {PROOF_KINDS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted-foreground">
+              投放與文案只會引用這裡登記過的證據；沒登記的種類不會出現在廣告裡。
+            </span>
+            {kindMissing && <span className="text-xs text-danger">請選擇哪一種證據。</span>}
+          </label>
+        )}
+
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">這條事實叫什麼？</span>
           <input
@@ -96,7 +139,7 @@ export function FactPanel({
             value={labelText}
             onChange={(e) => setLabelText(e.target.value)}
             required
-            placeholder="例如「主要購買者輪廓」"
+            placeholder={isProof ? "例如「PChome 4.8 星、1,200 則評論」" : "例如「主要購買者輪廓」"}
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
         </label>

@@ -204,10 +204,17 @@ class AudienceHintOnChecklistTest(PublishTestBase):
                    if f.get("key") == "audience_hint"]
             for name in ("新客組", "再行銷組", "探索組")
         }
-        self.assertEqual(rows["再行銷組"], [("audience_hint", "受眾提示", "再行銷・回購客")])
+        self.assertEqual(
+            rows["再行銷組"],
+            [("audience_hint", "受眾提示", "再行銷・回購客・只投：互動過或買過的人")],
+        )
         # A key the brand's vocabulary does not know prints itself.
-        self.assertEqual(rows["新客組"], [("audience_hint", "受眾提示", "新客・aud_new1")])
-        self.assertEqual(rows["探索組"], [("audience_hint", "受眾提示", "探索・aud_ex1")])
+        self.assertEqual(
+            rows["新客組"], [("audience_hint", "受眾提示", "新客・aud_new1・排除：已購買者")]
+        )
+        self.assertEqual(
+            rows["探索組"], [("audience_hint", "受眾提示", "探索・aud_ex1・排除：已購買者")]
+        )
         labels = [f["label"] for f in by_name["再行銷組"]["fields"]]
         self.assertEqual(labels.index("受眾提示"), labels.index("結束日期") + 1)
         self.assertNotIn(

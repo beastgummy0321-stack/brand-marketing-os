@@ -146,9 +146,12 @@ class _WorkbenchTestBase(unittest.TestCase):
         # 座標詞彙表是 app.schedule 的表，工作檯只讀（repository.py 檔頭）；測試用 schedule
         # 既有的種子函式播種，再撿真的 label 組回覆，不手刻中文字串（種子內容變了測試不必
         # 跟著改）。
+        # F38 decision 1: this brand registers no evidence, so the copy vocabulary only offers
+        # the `none` proof kind — pick it by key.
         coordinate_rows = schedule_repo.list_coordinates(web.conn, self.org_id, self.brand_id)
         self.coordinates = {
-            dim: next(r["label"] for r in coordinate_rows if r["dimension"] == dim)
+            dim: next(r["label"] for r in coordinate_rows if r["dimension"] == dim
+                      and (dim != "proof" or r["key"] == "none"))
             for dim in workbench_prompts.COORDINATE_KEYS
         }
         self._orig_provider = workbench_jobs.PROVIDER
