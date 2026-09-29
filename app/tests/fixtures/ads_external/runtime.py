@@ -341,6 +341,10 @@ def install_assembly(context, *, durable=False):
                                             "format",
                                         )
                                     },
+                                    # F39-I03: the validator requires a scene per ad; the
+                                    # three roles share one audience key, so one wording
+                                    # per role is enough and still reads distinct.
+                                    "scene": f"{role} 受眾晚上在家滑手機看到這支廣告",
                                 }
                             ],
                         }

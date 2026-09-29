@@ -47,8 +47,10 @@ def _coordinates(tag: str) -> dict:
 _VALID_PLAN_REPLY = json.dumps({
     "groups": [
         {"role": "new", "name": "新客組", "ads": [
-            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
-            {"name": "新客-廣告二", "coordinates": _coordinates("new2")},
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1"),
+             "scene": "上班族午休在辦公室滑手機找點心"},
+            {"name": "新客-廣告二", "coordinates": _coordinates("new2"),
+             "scene": "媽媽晚上哄睡小孩後在客廳看手機"},
         ]},
     ],
 }, ensure_ascii=False)
@@ -592,6 +594,57 @@ class OfferDeadlineTest(AssetsTestBase):
         )
         request = self._dispatched_set(campaign_row["id"])["request"]
         self.assertNotIn("offer_deadline", request)
+
+
+# -- F39-I03（outcome 3／4）：情境與行事曆走 request 進工作檯工單 ----------------------------
+
+class SceneAndCalendarNoteTest(AssetsTestBase):
+    _NATIONAL_DAY_LINE = "- 10/09～10/11 國慶日（假日）"
+    _DOUBLE_11_LINE = "- 11/01～11/11 雙 11 檔（檔期）：概略檔期，各校／各平台不同"
+
+    def _sets_by_name(self, campaign_id: str) -> dict:
+        with mock.patch.object(
+            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack,
+        ) as submit_pack:
+            assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_id)
+        return {s["name"]: s for s in submit_pack.call_args.args[-1]["sets"]}
+
+    def test_adopted_ads_hand_their_scene_and_the_calendar_to_the_brief(self):
+        campaign = self._adopted_campaign()  # 2026-10-01～10-14 covers 國慶日
+        sets = self._sets_by_name(campaign["id"])
+        self.assertEqual(
+            sets["新客-廣告一"]["request"]["scene"], "上班族午休在辦公室滑手機找點心",
+        )
+        self.assertEqual(
+            sets["新客-廣告二"]["request"]["scene"], "媽媽晚上哄睡小孩後在客廳看手機",
+        )
+        for s in sets.values():
+            self.assertIn(self._NATIONAL_DAY_LINE, s["request"]["calendar_note"].split("\n"))
+
+    def test_campaign_inside_a_calendar_row_gets_that_line(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-08", campaign_end="2026-10-12",
+        )
+        request = self._dispatched_set(campaign_row["id"])["request"]
+        self.assertEqual(request["calendar_note"], self._NATIONAL_DAY_LINE)
+        self.assertNotIn("scene", request)  # hand-made ad: no scene, no key
+
+    def test_group_window_wins_over_the_campaign_window(self):
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-11-30",
+            group_start="2026-11-01", group_end="2026-11-05",
+        )
+        request = self._dispatched_set(campaign_row["id"])["request"]
+        self.assertEqual(request["calendar_note"], self._DOUBLE_11_LINE)
+
+    def test_quiet_window_or_no_dates_omits_the_note(self):
+        for start, end in (("2026-07-20", "2026-07-25"), (None, None)):
+            with self.subTest(start=start, end=end):
+                campaign_row, _group, _ad = self._direct_campaign(
+                    campaign_start=start, campaign_end=end,
+                )
+                request = self._dispatched_set(campaign_row["id"])["request"]
+                self.assertNotIn("calendar_note", request)
 
 
 if __name__ == "__main__":

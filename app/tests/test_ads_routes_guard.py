@@ -241,13 +241,16 @@ def _coordinates(tag: str) -> dict:
 _PLAN_REPLY = json.dumps({
     "groups": [
         {"role": "new", "name": "新客組", "ads": [
-            {"name": "新客-廣告一", "coordinates": _coordinates("new1")},
+            {"name": "新客-廣告一", "coordinates": _coordinates("new1"),
+             "scene": "上班族午休在辦公室滑手機找點心"},
         ]},
         {"role": "retarget", "name": "再行銷組", "ads": [
-            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1")},
+            {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1"),
+             "scene": "看過商品頁的人晚上在家猶豫要不要下單"},
         ]},
         {"role": "explore", "name": "探索組", "ads": [
-            {"name": "探索-廣告一", "coordinates": _coordinates("ex1")},
+            {"name": "探索-廣告一", "coordinates": _coordinates("ex1"),
+             "scene": "健身房的人運動完在櫃檯看補給品"},
         ]},
     ],
 }, ensure_ascii=False)
