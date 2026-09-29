@@ -267,3 +267,20 @@ class MonthlyPersistenceTest(unittest.TestCase):
                 expected_revision=0,
                 actor="test",
             )
+
+
+class FreshnessClockTest(unittest.TestCase):
+    """F39-I06 (drill-7 #17, one clock): `_fresh` reads the module-level `now_utc`, the name the
+    drill clock rebinds -- never `datetime.now`, which the drill cannot move."""
+
+    def test_fresh_follows_module_now_utc(self):
+        from datetime import UTC, datetime, timedelta
+
+        stamp = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+        with patch.object(budget, "now_utc", return_value=stamp + timedelta(hours=25)):
+            self.assertFalse(budget._fresh(stamp.isoformat()))
+        with patch.object(budget, "now_utc", return_value=stamp + timedelta(hours=23)):
+            self.assertTrue(budget._fresh(stamp.isoformat()))
+        with patch.object(budget, "now_utc", return_value=stamp + timedelta(hours=23)):
+            self.assertTrue(budget._fresh(stamp.replace(tzinfo=None).isoformat() + "Z"))
+        self.assertFalse(budget._fresh(None))

@@ -14,6 +14,7 @@ from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.core.audit import write_audit
+from app.core.db import now_utc
 
 NOTICE = "節慶包含在月總額內。這是系統提醒與核准前檢查，不是平台限額，也不會讓平台自動停花。"
 
@@ -65,7 +66,9 @@ def _fresh(value):
     stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=UTC)
-    return datetime.now(UTC) - stamp < timedelta(hours=24)
+    # F39-I06: one clock -- `now_utc` is a module-level name so the drill clock
+    # (`scripts/drill/clock.py::patch_modules`) can rebind it; never `datetime.now`.
+    return now_utc() - stamp < timedelta(hours=24)
 
 
 def calculate(*, amount, currency, start, today, entities, observations, pending, uncertainties):
