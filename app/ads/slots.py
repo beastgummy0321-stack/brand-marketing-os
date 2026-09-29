@@ -384,7 +384,7 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
                 },
             }
     placement = user_assets.attach_selected(
-        conn, org, brand, campaign_id, body, actor, purpose=ad["name"]
+        conn, org, brand, campaign_id, body, actor, purpose=ad["name"], ad_id=ad["id"]
     )
     conn.execute(
         "UPDATE ads_ad SET slot_placement_id=%s,updated_at=now() WHERE org_id=%s "
