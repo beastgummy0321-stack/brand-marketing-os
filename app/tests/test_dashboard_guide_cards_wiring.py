@@ -74,7 +74,8 @@ class OverviewNextStepWiringTest(unittest.TestCase):
                                    conversion_goal="purchase", actor=ACTOR)
 
         card = self._card(brand_id)
-        self.assertIn("建檔進行中（第 2 步，共 5 步）", card["next_step"]["title"])
+        # F42-I04: seven brand-onboarding steps; a description-only brand skips the scan (step 2).
+        self.assertIn("建檔進行中（第 3 步，共 7 步）", card["next_step"]["title"])
         self.assertEqual(card["next_step"]["action_url"], f"/app/brands/{brand_id}/intake")
 
 

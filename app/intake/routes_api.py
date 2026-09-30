@@ -32,7 +32,7 @@ from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id, now_iso, now_utc
-from app.intake import ai, paste_parse, script, state
+from app.intake import ai, onboarding, paste_parse, script, state
 from app.intake import repository as ir
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
@@ -95,17 +95,31 @@ async def brand_start(request: Request):
     if not brand_name:
         return _error(400, "請填寫品牌名稱。")
     description = clean(str(form.get("description") or ""))
-    urls = [clean(str(u)) for u in form.getlist("urls") if clean(str(u))]
-    bad = state.invalid_url(urls)
-    if bad:
-        return _error(400, f"「{bad}」不是有效的網址，請以 https:// 或 http:// 開頭。")
-    photos = state.resolve_photo_tokens([str(t) for t in form.getlist("photo_tokens")])
+    # F42-I04: brand onboarding step 1 also sends the photo kinds (parallel to photo_tokens),
+    # the market region and the regulatory regime; every photo becomes a brand-level asset.
+    tokens = [str(t) for t in form.getlist("photo_tokens")]
+    kinds = [str(k) for k in form.getlist("photo_kinds")]
+    try:
+        urls = onboarding.check_urls([str(u) for u in form.getlist("urls")])
+        onboarding.check_photo_kinds(kinds, len(tokens))
+        market_region = onboarding.check_market_region(form.get("market_region"))
+        regime = onboarding.check_regime(form.get("regulatory_regime"))
+    except ValueError as exc:
+        return _error(400, str(exc))
+    photos = onboarding.resolve_photos(tokens, kinds)
     client_name = clean(str(form.get("client_name") or ""))
+    actor_id = str(actor.user_id)
     brand = repo.create_brand(web.conn, org_id=actor.org_id, name=brand_name,
-                               client_name=client_name or None, actor=str(actor.user_id))
+                               client_name=client_name or None, actor=actor_id)
     schedule.seed_brand_vocabulary(web.conn, actor.org_id, brand["id"])
+    if market_region:
+        repo.set_brand_switches(web.conn, brand["id"], market_region=market_region,
+                                conversion_goal=None, actor=actor_id)
+    if regime:
+        repo.set_regulatory_regime(web.conn, brand["id"], regime, actor=actor_id)
+    onboarding.save_new_photos(web.conn, brand["id"], photos, actor=actor_id)
     state.start_draft(web.conn, brand["id"], brand_name, description=description,
-                      urls=urls, photos=photos, actor=str(actor.user_id))
+                      urls=urls, photos=photos, actor=actor_id)
     # quick 恆為 False（2026-09-14 起草稿永遠建立）；留著這個鍵只因為
     # frontend/src/lib/intakeApi.ts 還在讀它，那個檔另有票在動，不在這張票拿掉。
     return {"brand_id": brand["id"], "quick": False}
@@ -740,10 +754,12 @@ async def review_item_post(request: Request, brand_id: str, i: int):
 # T2 新端點拆在小檔；本檔已接近 800 行，不再把新功能直接塞進來。
 from app.intake import research  # noqa: E402
 from app.intake.routes_offerings_api import router as offerings_router  # noqa: E402
+from app.intake.routes_onboarding_api import router as onboarding_router  # noqa: E402
 from app.intake.routes_t2_api import router as t2_router  # noqa: E402
 from app.intake.routes_tools_api import router as tools_router  # noqa: E402
 
 router.include_router(t2_router)
 router.include_router(offerings_router)
 router.include_router(tools_router)
+router.include_router(onboarding_router)
 router.include_router(research.router)

@@ -75,7 +75,8 @@ async def conversion_goal_post(request: Request, brand_id: str):
         market_region=brand["market_region"], conversion_goal=conversion_goal,
         actor=str(actor.user_id),
     )
-    draft = state.require_draft(brand_id, conn=conn)
-    if draft["step"] < 4:
-        state.touch(draft, f"/brands/{brand_id}/intake/tools", 4, conn=conn)
+    # F42-I04: the tools step is step 6; a completed brand (no open draft) just saves the goal.
+    draft = state.get_draft(brand_id, conn=conn)
+    if draft is not None and draft["step"] < 6:
+        state.touch(draft, f"/brands/{brand_id}/intake/tools", 6, conn=conn)
     return Response(status_code=204)

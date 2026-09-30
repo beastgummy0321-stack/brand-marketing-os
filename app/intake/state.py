@@ -21,12 +21,16 @@ from app.intake import repository as ir
 
 REFRESH_SECONDS = 3  # 進度頁 <meta refresh> 秒數（原設計文件 §19.4 範例已刪）
 
+# F42-I04: the seven brand-onboarding steps (prototype `#/b1`–`#/b7`). A draft without URLs
+# and photos has nothing to scan and starts at step 3 (step 2 is skipped).
 WIZARD_STEPS = [
-    (1, "起始輸入"),
-    (2, "初步印象"),
-    (3, "賣什麼與數字"),
-    (4, "接工具"),
-    (5, "品牌知識"),
+    (1, "基本"),
+    (2, "AI 讀網站"),
+    (3, "品牌是誰"),
+    (4, "證據與政策"),
+    (5, "素材"),
+    (6, "接工具"),
+    (7, "完成"),
 ]
 
 
@@ -256,13 +260,15 @@ def start_draft(conn, brand_id: str, brand_name: str, *, description: str, urls:
                 photos: list, actor: str) -> dict:
     """S4.9／S4.10 共用判斷：草稿永遠建立（2026-09-14 修法——F05 之後精靈第 3／4／5 步
     （賣什麼與數字／接工具／品牌知識）跟掃描無關，『沒東西可掃』不再等於『沒事做』，
-    S4.9 時代『陽春路徑不建草稿』的假設已經不成立）。描述／網址／照片三者皆空時，建完
+    S4.9 時代『陽春路徑不建草稿』的假設已經不成立）。網址與照片皆空時（F42-I04），建完
     草稿後照 `skip_scan` 把初掃標成做完、停在第 3 步；這條路徑上不准有任何模型呼叫，
     『不花錢』的性質原封不動保住。呼叫端（JSON API）先各自建好／取得品牌，這裡只管
     「建了草稿之後要不要略過初掃」這一刀，不重複寫兩次。"""
     draft = new_draft(brand_id, brand_name, description=description, urls=urls, photos=photos,
                       actor=actor, conn=conn)
-    if not description and not urls and not photos:
+    # F42-I04: only URLs and photos are scanned (brand onboarding step 2); a description alone
+    # no longer starts one.
+    if not urls and not photos:
         skip_scan(draft)
         draft["step"] = 3
         save(draft, conn)
