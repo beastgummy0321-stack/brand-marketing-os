@@ -69,9 +69,9 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
     [["authorization", raw.authorization], ["x-org-id", raw["x-org-id"]]].filter((e): e is [string, string] => Boolean(e[1])),
   );
   await page.getByRole("link", { name: "新增品牌" }).first().click();
-  await page.getByLabel("品牌名稱（必填）").fill(`冷啟動驗收品牌 ${stamp}`);
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await page.getByLabel("品牌名稱", { exact: true }).fill(`冷啟動驗收品牌 ${stamp}`);
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
+  await page.getByRole("button", { name: "下一步 →" }).click();
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
   const brandId = new URL(page.url()).pathname.split("/")[3];
   const productName = `冷啟動商品 ${stamp}`;

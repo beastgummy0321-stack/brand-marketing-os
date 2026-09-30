@@ -57,13 +57,13 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   // --- /intake/new：建檔精靈第一步，走陽春路徑（只填名稱，不花錢、不呼叫 AI）-----
   await page.getByRole("link", { name: "新增品牌" }).first().click();
   await assertNoOverflow("/intake/new");
-  await expect(page.getByText("品牌名稱（必填）")).toBeVisible();
-  await page.getByLabel("品牌名稱（必填）").fill(brandName);
+  await expect(page.getByLabel("品牌名稱", { exact: true })).toBeVisible();
+  await page.getByLabel("品牌名稱", { exact: true }).fill(brandName);
 
   // --- 投放史二選一（F05-I06）：做在步驟一表單裡，量選完後的表單寬度，再送出 --------
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
   await assertNoOverflow("/intake/new（投放史二選一）");
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await page.getByRole("button", { name: "下一步 →" }).click();
 
   // 沒東西可掃，草稿直接停在精靈第 3 步，網址是 /intake 不是品牌頁根。
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);

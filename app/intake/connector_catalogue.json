@@ -1,0 +1,23 @@
+{
+  "_comment": "app/intake/connector_catalogue.json — F42-I04: the brand onboarding's connector registry (step 接工具). One row per connector: what the system can read once it is connected (`reads`). `live` = the system can connect it today; every other row is a seat (「即將開放」). Per-brand state (Meta bound or not) is computed by app/intake/onboarding.py, not stored here. Same idea as app/schedule/channel_catalogue.json: adding GA4 / a shop platform / MCP is one more row, not a new screen.",
+  "connectors": [
+    {"key": "meta", "group": "廣告平台", "label": "Meta 廣告", "icon": "M",
+     "reads": "花費、曝光、點擊、購買", "live": true, "link": null},
+    {"key": "google", "group": "廣告平台", "label": "Google Ads", "icon": "G",
+     "reads": "花費、搜尋字詞、轉換", "live": false, "link": null},
+    {"key": "tiktok", "group": "廣告平台", "label": "TikTok 廣告", "icon": "T",
+     "reads": "花費、觀看、轉換", "live": false, "link": null},
+    {"key": "ga4", "group": "網站與流量", "label": "Google Analytics 4", "icon": "GA",
+     "reads": "網站流量、轉換路徑、加入購物車", "live": false, "link": null},
+    {"key": "gsc", "group": "網站與流量", "label": "Search Console（SEO）", "icon": "SC",
+     "reads": "自然搜尋字詞、排名、點擊", "live": false, "link": null},
+    {"key": "shop", "group": "商店與訂單", "label": "購物平台（SHOPLINE、Shopify、91APP、CYBERBIZ…）", "icon": "店",
+     "reads": "訂單、退款、商品、會員", "live": false, "link": null},
+    {"key": "csv", "group": "商店與訂單", "label": "上傳訂單檔", "icon": "CSV",
+     "reads": "訂單、退款", "live": true, "link": "/brands/{brand_id}/orders"},
+    {"key": "mcp", "group": "給 AI 用的接口", "label": "MCP 伺服器", "icon": "MCP",
+     "reads": "讓 AI 直接查你其他系統的資料（例如 CRM、客服紀錄）", "live": false, "link": null},
+    {"key": "api", "group": "給 AI 用的接口", "label": "自訂 API", "icon": "API",
+     "reads": "照你提供的網址與欄位讀資料", "live": false, "link": null}
+  ]
+}

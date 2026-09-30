@@ -35,18 +35,17 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
 
   // --- 建檔精靈：只填品牌名稱，走不花錢的陽春路徑 ---------------------------
   await page.getByRole("link", { name: "新增品牌" }).first().click();
-  await expect(page.getByText("品牌名稱（必填）")).toBeVisible();
-  await page.getByLabel("品牌名稱（必填）").fill(brandName);
+  await expect(page.getByRole("heading", { name: "建立品牌", exact: true })).toBeVisible();
+  await page.getByLabel("品牌名稱", { exact: true }).fill(brandName);
 
-  // --- 投放史二選一（F05-I06）：做在步驟一表單裡，沒選不能往下；這裡選「完全沒投放過」，
-  // 陽春路徑不牽涉背景補拉。--------------------------------------------------
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  // --- 投放史二選一（F05-I06）：做在步驟一表單裡，沒選不能往下；這裡選「完全沒投過」，
+  // 陽春路徑不牽涉背景補拉。沒給網站和照片，按鈕是「下一步」不是「讓系統讀網站」。-----------
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
+  await page.getByRole("button", { name: "下一步 →" }).click();
 
-  // --- 沒東西可掃，草稿直接停在第 3 步：驗證這一段沒有跑過模型（US$ 0.00）---------
+  // --- 沒東西可掃：略過第 2 步（AI 讀網站），草稿直接停在第 3 步「品牌是誰」（F42-I06）------
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
-  await expect(page.getByRole("heading", { name: "你賣的是什麼、一次成交值多少" })).toBeVisible();
-  await expect(page.getByText("US$ 0.00").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "品牌是誰", exact: true })).toBeVisible();
 
   const brandId = new URL(page.url()).pathname.split("/")[3];
 

@@ -45,6 +45,8 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 
 from collections.abc import Callable
 
+from app.intake.state import WIZARD_STEPS
+
 MAX_CARDS = 3
 
 
@@ -69,12 +71,13 @@ def _rule_intake_in_progress(facts: dict) -> dict | None:
     「這個品牌能不能正常運作」的前提，登記在其之後、其餘一般提醒之前（票 B3-intake，
     GRILL-B3-intake.md「拿不準的點」第 3 條裁決：併進本票，卡片形狀沿用既有 API 不新增
     欄位）。「入口存在、點下去去對的地方」用既有 `app/intake/state.py` 的 `_resume_path`
-    續接判斷，這裡只轉文字，不重算。"""
+    續接判斷，這裡只轉文字，不重算。總步數讀 intake 的步驟清單（F42-I04：七步的品牌建檔），
+    不在這裡寫死數字。"""
     draft = facts.get("intake_draft")
     if not draft:
         return None
     return {
-        "title": f"建檔進行中（第 {draft['step']} 步，共 5 步）・繼續建檔",
+        "title": f"建檔進行中（第 {draft['step']} 步，共 {len(WIZARD_STEPS)} 步）・繼續建檔",
         "action_url": draft["resume_path"],
     }
 
@@ -145,7 +148,7 @@ def demo() -> None:
                               "pending_facts_count": 0,
                               "intake_draft": {"step": 2, "resume_path": "/app/brands/b/intake"}})
     assert cards_with_draft == [{
-        "title": "建檔進行中（第 2 步，共 5 步）・繼續建檔",
+        "title": "建檔進行中（第 2 步，共 7 步）・繼續建檔",
         "action_url": "/app/brands/b/intake",
     }]
     assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,

@@ -1,4 +1,4 @@
-"""app/tests/test_intake_tools_api.py — 精靈第 4 步「接工具」JSON API（F05-I08）。
+"""app/tests/test_intake_tools_api.py — 精靈「接工具」JSON API（F05-I08；F42-I04 起是第 6 步）。
 
 不重測 Meta 權杖／綁定本身（那是 `test_meta_credentials.py` 的範圍，這支路由直接沿用
 既有端點，一個字都沒改）。這裡只驗證這一步自己的兩支新端點：GET /tools 的形狀、
@@ -102,16 +102,35 @@ class ConversionGoalPostTest(_Base):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("成效目標", resp.json()["error"])
 
-    def test_does_not_rewind_step_past_five(self):
+    def test_advances_an_earlier_step_to_the_tools_step(self):
+        # F42-I04: 接工具 is step 6 of the seven brand-onboarding steps.
+        bid = self._create_full()
+        resp = self.client.post(
+            f"/api/intake/brands/{bid}/conversion-goal", json={"conversion_goal": "lead"},
+        )
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(intake_state.require_draft(bid, conn=web.conn)["step"], 6)
+
+    def test_does_not_rewind_step_past_six(self):
         bid = self._create_full()
         draft = intake_state.require_draft(bid, conn=web.conn)
-        intake_state.touch(draft, f"/brands/{bid}/intake/knowledge", 5, conn=web.conn)
+        intake_state.touch(draft, f"/brands/{bid}/intake", 7, conn=web.conn)
         resp = self.client.post(
             f"/api/intake/brands/{bid}/conversion-goal", json={"conversion_goal": "lead"},
         )
         self.assertEqual(resp.status_code, 204)
         draft = intake_state.require_draft(bid, conn=web.conn)
-        self.assertEqual(draft["step"], 5)
+        self.assertEqual(draft["step"], 7)
+
+    def test_completed_brand_saves_the_goal_without_a_draft(self):
+        bid = self._create_full()
+        intake_state.complete_draft(intake_state.require_draft(bid, conn=web.conn), conn=web.conn)
+        resp = self.client.post(
+            f"/api/intake/brands/{bid}/conversion-goal", json={"conversion_goal": "booking"},
+        )
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(bi_repo.get_brand(web.conn, bid)["conversion_goal"], "booking")
+        self.assertIsNone(intake_state.get_draft(bid, conn=web.conn))
 
     def test_other_org_brand_returns_404(self):
         bid = self._create_full()

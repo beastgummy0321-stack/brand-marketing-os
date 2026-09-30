@@ -13,7 +13,6 @@ import { ClaimsTab } from "./tabs/ClaimsTab";
 import { CoordinatesTab } from "./tabs/CoordinatesTab";
 import { CustomerVoiceTab } from "./tabs/CustomerVoiceTab";
 import { FactsTab } from "./tabs/FactsTab";
-import { ResearchReportsTab } from "./tabs/ResearchReportsTab";
 import { RulesTab } from "./tabs/RulesTab";
 
 type TabKey =
@@ -23,7 +22,6 @@ type TabKey =
   | "assets"
   | "channels"
   | "customer-voice"
-  | "research-reports"
   | "coordinates";
 
 const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number }[] = [
@@ -33,11 +31,10 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
   { key: "assets", label: "官方素材", count: (d) => d.assets.length },
   { key: "channels", label: "自有渠道", count: (d) => d.channels.length },
   { key: "customer-voice", label: "人物誌與顧客原話", count: (d) => d.customer_voices.length },
-  { key: "research-reports", label: "調研報告" },
   { key: "coordinates", label: "創意座標" },
 ];
 
-const ADVANCED_TAB_KEYS: TabKey[] = ["research-reports", "coordinates"];
+const ADVANCED_TAB_KEYS: TabKey[] = ["coordinates"];
 
 type LoadState =
   | { status: "loading" }
@@ -159,7 +156,6 @@ export function LibraryPage({ brandId }: { brandId: string }) {
         {activeTab === "customer-voice" && (
           <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
         )}
-        {activeTab === "research-reports" && <ResearchReportsTab brandId={brandId} />}
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
 
         </div>
@@ -186,10 +182,10 @@ export function LibraryPage({ brandId }: { brandId: string }) {
     <div className="flex flex-col gap-4">
       <PageHeader title="品牌智庫" description={state.status === "ready" ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={
         <>
-          {/* 品牌調研（建檔精靈）想按就按：沒跑過 → 直接是調研表單；跑過 → 「再跑一次調研」；
-              跑到一半 → 接著上次的步驟。一次只開一輪（後端 restart 路由擋第二輪）。 */}
+          {/* The brand onboarding (F42), same label as the 經營概況 title-row link (F42-I12); distinct from
+              the 品牌資料 button next to it, which edits the brand profile. */}
           <Button asChild variant="outline">
-            <Link to={`/brands/${encodeURIComponent(brandId)}/intake`}>品牌調研</Link>
+            <Link to={`/brands/${encodeURIComponent(brandId)}/intake`}>品牌資料（建檔時填的）</Link>
           </Button>
           <Button variant="outline" onClick={() => setProfileOpen(true)} disabled={state.status !== "ready"}>品牌資料</Button>
         </>

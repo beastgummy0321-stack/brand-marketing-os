@@ -74,6 +74,24 @@ SCRIPTED_REPLIES: dict[str, dict] = {
         "topic": None, "outputs": [{"part": "image_prompt", "count": 1}], "style_hint": None,
         "platform": None, "size": None, "audience": None, "key_message": None,
     },
+    # F42-I05: brand onboarding prefill; passes `app.intake.ai.validate_prefill_reply` whenever at
+    # least one page was read (every note names 「頁面 1」). No digits outside the policy param.
+    "intake_prefill": {
+        "positioning": {"value": "（腳本回覆）給忙到沒空吃飯的人的維他命軟糖", "note": "頁面 1"},
+        "tone": {"values": ["親切", "直接"], "note": "頁面 1"},
+        "visual": {"value": "（腳本回覆）明亮、自然光、暖色系", "note": "頁面 1"},
+        "proof": [{"fact_key": "founder_voice", "text": "（腳本回覆）創辦人自己吞不下藥丸才做了軟糖",
+                   "note": "頁面 1"}],
+        "policies": [{"key": "ship_threshold", "params": {"threshold": 999}, "note": "頁面 1"}],
+        "products": [{"name": "（腳本回覆）綜合維他命軟糖", "url": None}],
+        "not_found": ["媒體報導", "銷售數據"],
+    },
+    # F42-I05: 「自訂」. One shape for every block: each block reads only its own keys
+    # (app/intake/custom.py `check_reply`); no digits, so any sentence passes the number check.
+    "intake_custom": {
+        "value": "（腳本回覆）整理好的一句話", "label": "腳本整理", "fact_key": "customer_review",
+        "text": "（腳本回覆）整理好的一句話", "offer_key": "none", "sentence": "（腳本回覆）整理好的政策",
+    },
 }
 
 
@@ -196,6 +214,8 @@ TASK_TYPE_LABELS = {
     "intake_question": "建檔精靈：追問",
     "intake_paste_fix": "建檔精靈：貼上格式修復",
     "intake_research": "建檔精靈：系統自動調研",
+    "intake_prefill": "品牌建檔：AI 讀網站與品牌照片",
+    "intake_custom": "品牌建檔：自訂整理",
     "product_scan": "產品建檔：讀取網址",
     "product_handoff_fix": "產品交接：格式修復",
     "brand_report": "品牌智庫報告",
@@ -222,6 +242,8 @@ TASK_DEFAULTS = {
     "intake_question": {"model": None, "thinking": "low"},
     "intake_paste_fix": {"model": None, "thinking": "low"},
     "intake_research": {"model": None, "thinking": "high"},
+    "intake_prefill": {"model": None, "thinking": "low"},
+    "intake_custom": {"model": None, "thinking": "low"},
     "product_scan": {"model": None, "thinking": "low"},
     "product_handoff_fix": {"model": None, "thinking": "low"},
     # 分析型任務：不確定，留中檔

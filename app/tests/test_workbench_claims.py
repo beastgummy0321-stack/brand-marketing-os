@@ -4,8 +4,12 @@ from unittest.mock import patch
 import pytest
 
 import app.shared.web as web
+from app.brand_intelligence import repository as bi_repo
+from app.core import db as coredb
 from app.tests.test_workbench_pack_api import _WorkbenchPackApiTestBase
 from app.workbench import claims, repository
+
+ACTOR = "測試員"
 
 
 @pytest.mark.parametrize("value", [
@@ -35,6 +39,7 @@ def test_metadata_is_not_a_consumer_promise():
 
 def test_pending_forbidden_other_product_never_support():
     with patch.object(claims.bi_repo, "list_brand_facts", return_value=[]) as facts, \
+         patch.object(claims.bi_repo, "offer_sources", return_value=[]), \
          patch.object(claims.bi_repo, "list_claims_for_brand", return_value=[
              {"id": "other", "product_id": "other", "claim_type": "approved", "claim_text": "試飲"},
              {"id": "bad", "product_id": None, "claim_type": "forbidden", "claim_text": "折扣"},
@@ -49,7 +54,8 @@ def test_confirmed_proof_fact_is_a_prompt_source_without_risk_word():
     with patch.object(claims.bi_repo, "list_brand_facts", return_value=[
         {"id": "proof", "fact_type": "proof", "value": "SGS 重金屬檢驗合格"},
         {"id": "plain", "fact_type": "product", "value": "每包 20 公克"},
-    ]), patch.object(claims.bi_repo, "list_claims_for_brand", return_value=[]):
+    ]), patch.object(claims.bi_repo, "list_claims_for_brand", return_value=[]), \
+         patch.object(claims.bi_repo, "offer_sources", return_value=[]):
         rows = claims.sources(None, "brand", None)
     ids = [r["id"] for r in claims.prompt_sources(rows)]
     assert ids == ["proof"]
@@ -64,6 +70,92 @@ def test_proof_rows_come_first_and_cap_stays_20():
     got = claims.prompt_sources(risky + proof)
     assert len(got) == 20
     assert got[0]["id"] == "p"
+
+
+# -- F42-I03: the copy guard accepts the words of an offer the brand really has ---------------
+
+_SHIP = "三盒 NT$999 免運"
+
+
+def _offer_brand(policies: list, price: float | None) -> tuple[str, str]:
+    """A brand with `policies` (bi_repo.save_brand_policies) and one product priced `price` NT$."""
+    brand_id = bi_repo.create_brand(web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：優惠守門",
+                                    client_name=None, actor=ACTOR)["id"]
+    product_id = bi_repo.create_product(web.conn, brand_id, name="測試軟糖", actor=ACTOR)["id"]
+    if price is not None:
+        bi_repo.save_product_economics(web.conn, brand_id, product_id, actor=ACTOR,
+                                       selling_price=price, currency="TWD", confirmed_by=ACTOR)
+    if policies:
+        bi_repo.save_brand_policies(web.conn, brand_id, policies, actor=ACTOR)
+    web.conn.commit()
+    return brand_id, product_id
+
+
+def _guard(policies: list, price: float | None, copy) -> tuple[list[dict], list[str]]:
+    brand_id, product_id = _offer_brand(policies, price)
+    rows = claims.sources(web.conn, brand_id, product_id)
+    return rows, claims.unsupported(copy, rows)
+
+
+_SHIP_999 = [{"key": "ship_threshold", "params": {"threshold": 999}}]
+
+
+def test_free_shipping_policy_covers_product_at_threshold():
+    rows, missing = _guard(_SHIP_999, 999, {"headline": _SHIP})
+    assert rows == [
+        {"id": "offer:free_shipping", "text": "滿 NT$999 免運", "proof": False,
+         "offer_key": "free_shipping"},
+    ]
+    assert missing == []
+
+
+def test_free_shipping_policy_below_threshold_is_flagged():
+    rows, missing = _guard(_SHIP_999, 998, {"headline": _SHIP})
+    assert rows == []  # the policy reaches the copy only through offer_sources
+    assert "滿 NT$999 免運" not in claims.policy(rows)
+    assert missing == ["免運"]
+
+
+def test_no_policy_flags_as_before():
+    rows, missing = _guard([], 999, {"headline": _SHIP})
+    assert rows == []
+    assert missing == ["免運"]
+
+
+def test_proof_words_keep_the_exact_sentence_rule_beside_an_offer():
+    _, missing = _guard(_SHIP_999, 999, {"body": f"{_SHIP}，專家推薦"})
+    assert missing == ["專家推薦"]
+
+
+def test_first_order_discount_policy():
+    first = [{"key": "first_order", "params": {"content": "首購 9 折"}}]
+    for copy in ("首購 9 折", "首購9折，優惠只到結帳"):
+        _, missing = _guard(first, 999, {"headline": copy})
+        assert missing == [], copy
+    # Without the policy the same words are flagged as today.
+    assert _guard([], 999, {"headline": "首購9折"})[1] == ["9折"]
+
+
+def test_available_family_does_not_cover_other_offer_families():
+    rows = [{"id": "offer:free_shipping", "text": "滿 NT$999 免運", "proof": False,
+             "offer_key": "free_shipping"}]
+    assert claims.unsupported("免運又加贈試吃包，退款保證", rows) == ["加贈", "試吃", "退款保證"]
+    assert claims.unsupported("免運優惠", rows) == []  # 優惠 counts when any offer is present
+    assert claims.unsupported("優惠", []) == ["優惠"]
+
+
+def test_offer_rows_are_prompt_sources_with_their_ids():
+    rows, _ = _guard([{"key": "first_order", "params": {"content": "首購 9 折"}}], 999, "")
+    text = claims.policy(rows)
+    assert "- [offer:discount] 新會員首購禮：首購 9 折" in text
+    assert text.count("新會員首購禮：首購 9 折") == 1  # only the offer row, not the policy fact
+
+
+def test_cooling_off_exemption_is_not_a_copy_source():
+    disclosure = "本店商品為易腐敗之食品，依法不適用七天猶豫期。"
+    rows, _ = _guard([{"key": "cooling_off_exempt", "params": {"disclosure": disclosure}}],
+                     999, "")
+    assert rows == []
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):

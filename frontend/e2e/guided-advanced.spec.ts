@@ -33,9 +33,9 @@ async function register(page: Page, prefix: string): Promise<ApiHeaders> {
 
 async function createBrand(page: Page, name: string): Promise<string> {
   await page.getByRole("link", { name: "新增品牌" }).first().click();
-  await page.getByLabel("品牌名稱（必填）").fill(name);
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await page.getByLabel("品牌名稱", { exact: true }).fill(name);
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
+  await page.getByRole("button", { name: "下一步 →" }).click();
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
   return new URL(page.url()).pathname.split("/")[3];
 }

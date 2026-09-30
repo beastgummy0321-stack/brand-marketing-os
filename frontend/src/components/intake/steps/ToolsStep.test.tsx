@@ -1,38 +1,187 @@
-import { render, screen } from "@testing-library/react";
+/** frontend/src/components/intake/steps/ToolsStep.test.tsx — brand onboarding #/b6 接上工具 (F42-I11): connector rows and
+ * states from a registry fixture shaped like `app/intake/connector_catalogue.json`, Meta's inline token → account → bind
+ * panel, the conversion goal saved on change, and the bar. All API calls are fakes. */
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ToolsStep } from "./ToolsStep";
-import { fetchMetaAccounts } from "@/lib/metaApi";
+import { saveConversionGoal } from "@/lib/intakeApi";
+import { fetchOnboardingTools, type Connector, type OnboardingTools } from "@/lib/intakeOnboardingApi";
+import { bindMetaAccount, connectMetaToken, fetchMetaAccounts, startMetaBackfill } from "@/lib/metaApi";
+import { BRAND_STEPS, type StepNav } from "../OnboardingStepHead";
 
-vi.mock("@/lib/intakeApi", () => ({
-  fetchIntakeTools: vi.fn().mockResolvedValue({ conversion_goal: "purchase", conversion_goal_options: [{ key: "purchase", label: "購買" }], bound_account_ids: ["bound"] }),
-  saveConversionGoal: vi.fn(),
-}));
+vi.mock("@/lib/intakeApi", () => ({ saveConversionGoal: vi.fn() }));
+vi.mock("@/lib/intakeOnboardingApi", () => ({ fetchOnboardingTools: vi.fn() }));
 vi.mock("@/lib/metaApi", () => ({
-  fetchMetaAccounts: vi.fn().mockResolvedValue({ token_tail: "fixture", accounts: [{ id: "bound", name: "已連線測試帳戶" }] }),
-  bindMetaAccount: vi.fn(), connectMetaToken: vi.fn(), fetchMetaBackfillStatus: vi.fn(), startMetaBackfill: vi.fn(),
+  fetchMetaAccounts: vi.fn(),
+  bindMetaAccount: vi.fn(),
+  connectMetaToken: vi.fn(),
+  fetchMetaBackfillStatus: vi.fn().mockResolvedValue({ running: false }),
+  startMetaBackfill: vi.fn(),
 }));
 
-it("reuses the saved account and goal, lets the user start a plan, and only continues research on request", async () => {
-  const next = vi.fn();
-  render(<MemoryRouter><ToolsStep brandId="cold" onNext={next} /></MemoryRouter>);
-  expect((await screen.findByRole("link", { name: "先建立投放計畫" })).getAttribute("href")).toBe("/brands/cold/ads/new");
-  expect(screen.getByRole("radio", { name: "購買" })).toHaveProperty("checked", true);
-  expect(screen.getByText(/已指定給這個品牌：已連線測試帳戶/)).toBeTruthy();
-  expect(next).not.toHaveBeenCalled();
-  expect(screen.queryByPlaceholderText("貼上 Meta 存取權杖")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "繼續品牌研究（選用）" }));
-  expect(next).toHaveBeenCalledTimes(1);
+const row = (key: string, group: string, label: string, icon: string, reads: string, state: Connector["state"], link: string | null = null): Connector => ({
+  key, group, label, icon, reads, state, note: state === "seat" ? "即將開放" : "", link,
 });
 
-it("keeps drafting available when account lookup fails without claiming connection is confirmed", async () => {
-  vi.mocked(fetchMetaAccounts).mockRejectedValueOnce(new Error("權限已失效"));
-  const next = vi.fn();
-  render(<MemoryRouter><ToolsStep brandId="cold" onNext={next} /></MemoryRouter>);
-  expect((await screen.findByRole("link", { name: "先建立投放計畫" })).getAttribute("href")).toBe("/brands/cold/ads/new");
-  expect(screen.getByText("權限已失效")).toBeTruthy();
-  expect(screen.getByText(/目前無法確認帳戶與目標設定/)).toBeTruthy();
-  expect(screen.queryByText(/已指定給這個品牌/)).toBeNull();
-  expect(next).not.toHaveBeenCalled();
+const REGISTRY: Connector[] = [
+  row("meta", "廣告平台", "Meta 廣告", "M", "花費、曝光、點擊、購買", "available"),
+  row("google", "廣告平台", "Google Ads", "G", "花費、搜尋字詞、轉換", "seat"),
+  row("tiktok", "廣告平台", "TikTok 廣告", "T", "花費、觀看、轉換", "seat"),
+  row("ga4", "網站與流量", "Google Analytics 4", "GA", "網站流量、轉換路徑、加入購物車", "seat"),
+  row("gsc", "網站與流量", "Search Console（SEO）", "SC", "自然搜尋字詞、排名、點擊", "seat"),
+  row("shop", "商店與訂單", "購物平台（SHOPLINE、Shopify、91APP、CYBERBIZ…）", "店", "訂單、退款、商品、會員", "seat"),
+  row("csv", "商店與訂單", "上傳訂單檔", "CSV", "訂單、退款", "available", "/brands/brd_x/orders"),
+  row("mcp", "給 AI 用的接口", "MCP 伺服器", "MCP", "讓 AI 直接查你其他系統的資料（例如 CRM、客服紀錄）", "seat"),
+  row("api", "給 AI 用的接口", "自訂 API", "API", "照你提供的網址與欄位讀資料", "seat"),
+];
+
+const GOALS = [{ key: "purchase", label: "購買" }, { key: "lead", label: "留資料" }, { key: "booking", label: "預約" }];
+
+function tools(over: Partial<OnboardingTools> = {}): OnboardingTools {
+  return { connectors: REGISTRY, conversion_goal: "purchase", conversion_goal_options: GOALS, ...over };
+}
+
+const CONNECTED: Connector[] = REGISTRY.map((c) => (c.key === "meta" ? { ...c, state: "connected", note: "已接上：Beast Gummy 主帳戶" } : c));
+
+const NAV: StepNav = { crumb: [{ label: "品牌建檔", strong: true }], steps: BRAND_STEPS, current: 6 };
+
+function renderStep(onNext = vi.fn(), back = vi.fn()) {
+  render(
+    <MemoryRouter>
+      <ToolsStep brandId="brd_x" nav={NAV} back={{ label: "素材", onClick: back }} onNext={onNext} />
+    </MemoryRouter>,
+  );
+  return { onNext, back };
+}
+
+const connectorRow = (name: string) => screen.getByText(name).closest("[data-slot=connector]") as HTMLElement;
+
+beforeEach(() => {
+  vi.mocked(fetchOnboardingTools).mockReset().mockResolvedValue(tools());
+  vi.mocked(saveConversionGoal).mockReset().mockResolvedValue(undefined);
+  vi.mocked(fetchMetaAccounts).mockReset();
+  vi.mocked(bindMetaAccount).mockReset().mockResolvedValue(undefined);
+  vi.mocked(connectMetaToken).mockReset();
+  vi.mocked(startMetaBackfill).mockReset().mockResolvedValue({} as never);
+});
+
+it("shows one card per connector group, each row saying what it reads and its state", async () => {
+  renderStep();
+
+  expect(await screen.findByRole("heading", { level: 2, name: "廣告平台" })).toBeTruthy();
+  expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(["廣告平台", "網站與流量", "商店與訂單", "給 AI 用的接口"]);
+  expect(screen.getByText("接上後系統能讀：花費、曝光、點擊、購買")).toBeTruthy();
+  expect(within(connectorRow("Meta 廣告")).getByRole("button", { name: "接上" })).toBeTruthy();
+  expect(within(connectorRow("上傳訂單檔")).getByRole("link", { name: "接上" }).getAttribute("href")).toBe("/brands/brd_x/orders");
+  expect(screen.getAllByText("即將開放")).toHaveLength(7);
+  expect(within(connectorRow("Google Ads")).queryByRole("button")).toBeNull();
+  expect(screen.queryByText(/已接上/)).toBeNull();
+});
+
+it("shows Meta connected with its account and offers 再接一個帳戶 (multi-account binding adds, never replaces)", async () => {
+  vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ connectors: CONNECTED }));
+  renderStep();
+
+  expect(await screen.findByText("✓ 已接上：Beast Gummy 主帳戶")).toBeTruthy();
+  expect(within(connectorRow("Meta 廣告")).getByRole("button", { name: "再接一個帳戶" })).toBeTruthy();
+});
+
+it("binds a Meta account from the inline panel: token → account → 指定給這個品牌 → backfill, then the row re-reads", async () => {
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({ token_tail: null, accounts: [] });
+  vi.mocked(connectMetaToken).mockResolvedValue({
+    token_tail: "abcd",
+    accounts: [{ id: "act_1", account_id: "1001", name: "主帳戶", currency: "TWD", connected_at: "", bound_brand_ids: [] }],
+  });
+  renderStep();
+
+  await userEvent.click(await screen.findByRole("button", { name: "接上" }));
+  await userEvent.click(await screen.findByRole("button", { name: "讀取帳戶" }));
+  expect(screen.getByText("請貼上 Meta 存取權杖。")).toBeTruthy();
+  await userEvent.type(screen.getByPlaceholderText("貼上 Meta 存取權杖"), "EAAB-token");
+  await userEvent.click(screen.getByRole("button", { name: "讀取帳戶" }));
+  expect(connectMetaToken).toHaveBeenCalledWith("EAAB-token");
+
+  await userEvent.click(await screen.findByRole("radio", { name: /主帳戶/ }));
+  vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ connectors: CONNECTED }));
+  await userEvent.click(screen.getByRole("button", { name: "指定給這個品牌" }));
+
+  expect(bindMetaAccount).toHaveBeenCalledWith("brd_x", "act_1");
+  expect(startMetaBackfill).toHaveBeenCalledWith("brd_x");
+  expect(await screen.findByText("✓ 已接上：Beast Gummy 主帳戶")).toBeTruthy();
+});
+
+it("再接一個帳戶 opens the panel with the bound account marked and no token field", async () => {
+  vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ connectors: CONNECTED }));
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({
+    token_tail: "abcd",
+    accounts: [
+      { id: "act_1", account_id: "1001", name: "主帳戶", currency: "TWD", connected_at: "", bound_brand_ids: ["brd_x"] },
+      { id: "act_2", account_id: "1002", name: "副帳戶", currency: "TWD", connected_at: "", bound_brand_ids: [] },
+    ],
+  });
+  renderStep();
+
+  await userEvent.click(await screen.findByRole("button", { name: "再接一個帳戶" }));
+  expect(await screen.findByText("已指定給這個品牌")).toBeTruthy();
+  expect(screen.getByRole("radio", { name: /主帳戶/ })).toHaveProperty("disabled", true);
+  expect(screen.queryByPlaceholderText("貼上 Meta 存取權杖")).toBeNull();
+  await userEvent.click(screen.getByRole("radio", { name: /副帳戶/ }));
+  await userEvent.click(screen.getByRole("button", { name: "指定給這個品牌" }));
+  expect(bindMetaAccount).toHaveBeenCalledWith("brd_x", "act_2");
+});
+
+it("saves the conversion goal on change", async () => {
+  renderStep();
+
+  const group = await screen.findByRole("radiogroup", { name: "成效目標" });
+  expect(within(group).getByRole("radio", { name: "購買" }).getAttribute("aria-checked")).toBe("true");
+  await userEvent.click(within(group).getByRole("radio", { name: "留資料" }));
+
+  expect(saveConversionGoal).toHaveBeenCalledWith("brd_x", "lead");
+  await waitFor(() => expect(within(group).getByRole("radio", { name: "留資料" }).getAttribute("aria-checked")).toBe("true"));
+});
+
+it("keeps the old goal and says so when saving fails", async () => {
+  vi.mocked(saveConversionGoal).mockRejectedValue(new Error("儲存失敗"));
+  renderStep();
+
+  const group = await screen.findByRole("radiogroup", { name: "成效目標" });
+  await userEvent.click(within(group).getByRole("radio", { name: "預約" }));
+
+  expect(await screen.findByText("儲存失敗")).toBeTruthy();
+  expect(within(group).getByRole("radio", { name: "購買" }).getAttribute("aria-checked")).toBe("true");
+});
+
+it("picks no goal when none is saved yet", async () => {
+  vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ conversion_goal: null }));
+  renderStep();
+
+  const group = await screen.findByRole("radiogroup", { name: "成效目標" });
+  expect(within(group).queryByRole("radio", { checked: true })).toBeNull();
+});
+
+it("bar: back to 素材, the reconnect hint, and 完成品牌建檔 without connecting anything", async () => {
+  const { onNext, back } = renderStep();
+
+  await screen.findByRole("heading", { level: 2, name: "廣告平台" });
+  expect(screen.getByText("之後回到「品牌資料」或投放中心的資料連線再接")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "← 素材" }));
+  expect(back).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "完成品牌建檔 →" }));
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(bindMetaAccount).not.toHaveBeenCalled();
+});
+
+it("a failed read offers 重新載入 and still lets the user finish", async () => {
+  vi.mocked(fetchOnboardingTools).mockRejectedValueOnce(new Error("讀取失敗了"));
+  const { onNext } = renderStep();
+
+  expect(await screen.findByText("讀取失敗了")).toBeTruthy();
+  expect(screen.queryByText(/已接上/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "重新載入" }));
+  expect(await screen.findByRole("heading", { level: 2, name: "廣告平台" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "完成品牌建檔 →" }));
+  expect(onNext).toHaveBeenCalledTimes(1);
 });

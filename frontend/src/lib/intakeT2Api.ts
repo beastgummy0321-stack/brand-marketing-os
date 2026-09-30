@@ -1,23 +1,6 @@
-/** T2 真相卡／人物誌 API。信封拆解與錯誤處理照 trackingApi.ts；不混進舊逐條確認路徑。 */
-import type { IntakeReviewItem } from "./intakeApi";
+/** 人物誌 API（圖書館 `PersonaSection` 讀它）。信封拆解與錯誤處理照 trackingApi.ts。
+ * F42-I14 拆掉了這裡原本的真相卡呼叫。 */
 import { apiFetch, errorMessageFrom } from "./http";
-
-export type TruthCardBucket = "accepted" | "needs_confirmation" | "forbidden";
-export type TruthAnswerKind = "price" | "claim_permission" | null;
-
-export interface TruthCardItem extends Omit<IntakeReviewItem, "dup_hint" | "severity"> {
-  outcome: "pending" | "confirmed" | "pending_saved" | "discarded";
-  status: string;
-  landed: boolean;
-  landed_pending: boolean;
-  answer_kind: TruthAnswerKind;
-}
-
-export interface TruthCard {
-  accepted: TruthCardItem[];
-  needs_confirmation: TruthCardItem[];
-  forbidden: TruthCardItem[];
-}
 
 export interface Persona {
   id: string;
@@ -94,16 +77,6 @@ async function putJson(path: string, body: unknown): Promise<void> {
 }
 
 const base = (brandId: string) => `/api/intake/brands/${encodeURIComponent(brandId)}`;
-
-export const fetchTruthCard = (brandId: string): Promise<TruthCard> => getJson(`${base(brandId)}/truth-card`);
-
-export const confirmTruthCard = (
-  brandId: string,
-  answers: Record<string, { value?: string; decision?: "can_say" | "cannot_say" }>,
-): Promise<void> => postJson(`${base(brandId)}/truth-card/confirm`, { answers });
-
-export const moveTruthCardItem = (brandId: string, index: number, target: TruthCardBucket): Promise<void> =>
-  postJson(`${base(brandId)}/truth-card/items/${encodeURIComponent(index)}/move`, { target });
 
 export const fetchPersonas = (brandId: string): Promise<PersonaBundle> => getJson(`${base(brandId)}/personas`);
 

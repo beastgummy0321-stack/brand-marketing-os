@@ -5,7 +5,7 @@
 import { apiFetch } from "./http";
 
 export type ActiveJobKind =
-  | "scan" | "question" | "paste_fix" | "research" | "persona" | "product_research" | "library_convert"
+  | "scan" | "persona" | "product_research" | "library_convert"
   | "brand_report" | "schedule_plan" | "schedule_tree" | "schedule_diagnosis" | "workbench_generate"
   | "meta_pull" | "meta_backfill" | "ads_sync" | "ads_runtime" | "ads_review" | "ads_angles"
   | "ads_asset_preview" | "ads_asset_suggestions" | "other";
@@ -42,9 +42,6 @@ export interface ActiveJobsSnapshot {
 /** Read after 「正在」 too (the top-bar pill says 「正在同步成效」), so every label is a verb phrase. */
 export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
   scan: "建檔初掃",
-  question: "建檔問答",
-  paste_fix: "建檔貼回修格式",
-  research: "整理品牌知識",
   persona: "生成人物誌",
   product_research: "調研產品",
   library_convert: "轉換智庫原話",

@@ -92,7 +92,7 @@ export function FactsTab({
                   key={fact.id}
                   fact={fact}
                   brandId={brandId}
-                  onEdit={() => setPanel({ mode: "edit", fact })}
+                  onEdit={fact.fact_type === "policy" ? undefined : () => setPanel({ mode: "edit", fact })}
                   onChanged={onChanged}
                 />
               ))}
@@ -117,7 +117,7 @@ export function FactsTab({
                 key={fact.id}
                 fact={fact}
                 brandId={brandId}
-                onEdit={() => setPanel({ mode: "edit", fact })}
+                onEdit={fact.fact_type === "policy" ? undefined : () => setPanel({ mode: "edit", fact })}
                 onConfirm={() => setPanel({ mode: "confirm", fact })}
                 onChanged={onChanged}
               />
@@ -203,7 +203,8 @@ function FactCard({
 }: {
   fact: LibraryBrandFact;
   brandId: string;
-  onEdit: () => void;
+  /** Absent for 「全店政策」: policies are edited in brand onboarding only (F42-I01). */
+  onEdit?: () => void;
   onConfirm?: () => void;
   onChanged: () => void;
 }) {
@@ -212,7 +213,10 @@ function FactCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge>{fact.fact_type_label}</Badge>
-          {fact.fact_key_label && <span className="text-xs text-muted-foreground">{fact.fact_key_label}</span>}
+          {/* F42-I01: a policy's key is internal; its Chinese name is already the label. */}
+          {fact.fact_type === "proof" && fact.fact_key_label && (
+            <span className="text-xs text-muted-foreground">{fact.fact_key_label}</span>
+          )}
           {fact.stale_label && <Badge tone="warning">{fact.stale_label}</Badge>}
           <strong className="text-sm text-foreground">{fact.label}</strong>
         </div>
@@ -226,9 +230,11 @@ function FactCard({
               確認這條
             </button>
           )}
-          <button type="button" onClick={onEdit} className="text-xs text-primary hover:underline">
-            修改
-          </button>
+          {onEdit && (
+            <button type="button" onClick={onEdit} className="text-xs text-primary hover:underline">
+              修改
+            </button>
+          )}
           <InlineDeleteButton
             confirmText={`確定要刪除「${fact.label}」？`}
             onDelete={async () => {

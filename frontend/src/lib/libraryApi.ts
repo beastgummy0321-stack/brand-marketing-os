@@ -18,7 +18,8 @@ export interface LibraryBrandFact {
   id: string;
   fact_type: string;
   fact_type_label: string;
-  /** F38-I01: which evidence kind a 「證據」 fact is; null for every other type. */
+  /** F38-I01: which evidence kind a 「證據」 fact is; F42-I01: a 「全店政策」 fact's registry key
+   * (its Chinese name is `label`); null for every other type. */
   fact_key: string | null;
   fact_key_label: string | null;
   label: string;
@@ -56,7 +57,7 @@ export interface LibraryClaim {
 
 export interface LibraryAsset {
   id: string;
-  asset_kind: "logo" | "product_photo" | "packaging" | "other";
+  asset_kind: "logo" | "product_photo" | "packaging" | "store" | "team" | "brand_image" | "other";
   asset_kind_label: string;
   title: string | null;
   product_id: string | null;
@@ -134,6 +135,8 @@ export const BRAND_FACT_TYPES: [string, string][] = [
   ["regulatory", "法規限制"],
   ["visual_base", "視覺基礎"],
   ["proof", "證據"],
+  // F42-I01: shown in the list only -- policies are written by brand onboarding, not this form.
+  ["policy", "全店政策"],
 ];
 
 /** F38-I01: the six evidence kinds of a 「證據」 fact (= `app/core/vocab.py` PROOF_KINDS). */
@@ -171,6 +174,10 @@ export const ASSET_KINDS: [string, string][] = [
   ["logo", "Logo"],
   ["product_photo", "商品參考照"],
   ["packaging", "包裝"],
+  // F42-I01: brand photos (brand onboarding step 素材).
+  ["store", "門市／工作室"],
+  ["team", "團隊／創辦人"],
+  ["brand_image", "品牌形象"],
   ["other", "其他"],
 ];
 
