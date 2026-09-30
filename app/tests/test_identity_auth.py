@@ -42,9 +42,6 @@ _MINIMAL_BODIES = {
 # - 檔案上傳三條：body 是 multipart/form-data（`File(...)`），這個 sweep 只送 JSON，
 #   422 是「body 形狀不對」不是「沒驗證登入」——這三條路由原始碼裡都已經有
 #   `require_actor(request)`，讀原始碼可以核對，不是安全缺口。
-# - handoff/{provider}：provider 名稱檢查（僅收 claude／chatgpt）寫在 require_actor()
-#   之前，用假的 provider 名稱會先 404；真正的 provider 值仍然會先驗證登入，不可被
-#   利用來繞過租戶界線（require_brand 檢查在 provider 合法時一定會跑到）。
 _SWEEP_SKIP: dict[tuple[str, str], str] = {
     ("/api/settings", "GET"): "設定頁全域作用域，slice ④ 才分組織（identity-inventory.md）",
     ("/api/settings/api-key/clear-db", "POST"): "同上，設定頁全域作用域",
@@ -53,8 +50,6 @@ _SWEEP_SKIP: dict[tuple[str, str], str] = {
     ("/api/intake/photos", "POST"): "multipart 檔案上傳，route 內已有 require_actor",
     ("/api/brands/{brand_id}/orders/import", "POST"):
         "multipart 檔案上傳，route 內已有 require_actor",
-    ("/api/intake/brands/{brand_id}/handoff/{provider}", "GET"):
-        "provider 名稱檢查在 require_actor() 之前，合法 provider 值仍會驗證登入",
 }
 
 _PATH_PARAM = re.compile(r"\{[^}]+\}")

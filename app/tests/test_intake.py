@@ -1,41 +1,27 @@
-"""app/tests/test_intake.py — 建檔精靈接真：草稿持久化、LLM 串接、花費、R10 出口。
+"""app/tests/test_intake.py — 品牌建檔草稿：持久化與花費上限預設值。
 
-兩份原始文件皆已被 5eca0db 清除；欄位權威見 supabase/migrations/ 本身。
-全程用 FakeProvider（跟 test_llm_gateway 同風格），不發任何真實網路請求；
-「無金鑰人話錯誤」那條用真的 AnthropicProvider——它在打出網路請求之前就會擋下。
+欄位權威見 supabase/migrations/ 本身。全程不發任何真實網路請求。F42-I14 拆掉舊階段（初掃印象、
+照片產品卡、AI 問答、交接包操作卡）後，這裡只留草稿本身的測試；預填與七步各有自己的測試檔
+（test_intake_prefill.py、test_intake_onboarding_api.py…）。
 """
 
 import io
-import json
 import os
 import unittest
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
-import app.background as background_module
 import app.intake as intake_module
 import app.main as main
 import app.shared.web as web
 from app import storage
 from app.core import db as coredb
 from app.intake import ai as intake_ai
-from app.intake import card_test, script, state
 from app.intake import repository as ir
-from app.llm import pricing
-from app.llm.providers import (
-    FakeProvider,
-    ProviderResponse,
-    Usage,
-)
+from app.intake import script, state
 
 _BRAND_SEQ = [0]
-
-
-def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderResponse:
-    return ProviderResponse(output_text=text, structured=None,
-                            usage=Usage(input_tokens=in_tok, output_tokens=out_tok),
-                            stop_reason="end_turn")
 
 
 class IntakeWizardTest(unittest.TestCase):
@@ -76,18 +62,6 @@ class IntakeWizardTest(unittest.TestCase):
         assert resp.status_code == 200
         return resp.json()["brand_id"]
 
-    def _run_scan(self, brand_id: str, in_tok: int = 100, out_tok: int = 50):
-        # 票 09：初掃搬上 app.background 佇列，run_worker(wait=False) 跑到底才回來，
-        # 不必再輪詢等行程內背景執行緒（比照 test_intake_api.py／test_product_scan.py）。
-        intake_ai.PROVIDER = FakeProvider(response=_fake_response(
-            json.dumps({"impressions": script.SCAN_IMPRESSIONS}, ensure_ascii=False),
-            in_tok=in_tok, out_tok=out_tok))
-        resp = self.client.post(f"/api/intake/brands/{brand_id}/scan/start")
-        assert resp.status_code == 200
-        web.conn.commit()
-        background_module.app().run_worker(wait=False)
-        return self.client.get(f"/api/intake/brands/{brand_id}/scan/status")
-
     # -- 草稿持久化 ----------------------------------------------------------
 
     def test_draft_persisted_and_survives_restart(self):
@@ -111,189 +85,6 @@ class IntakeWizardTest(unittest.TestCase):
         coresettings.set_setting(web.conn, "intake_budget_limit", "55", org_id=coredb.DEV_ORG_ID)
         brand_id = self._new_wizard_brand()
         self.assertEqual(ir.get_active_draft(web.conn, brand_id)["cost_limit"], 55.0)
-
-    # -- 初掃 ----------------------------------------------------------------
-
-    def test_scan_success_stores_impressions_and_real_cost(self):
-        brand_id = self._new_wizard_brand()
-        # in_tok/out_tok 選會湊出整數分的數字（llm_task.cost 是 numeric(14,2)，02-2
-        # 決策：金額欄一律存到分——100/50 token 算出來的 $0.0035 連一分錢都不到，存進去
-        # 四捨五入變 $0，不是這條測試想驗的東西，02-3c 前就一直是這個舊 SQLite 殘留數字）。
-        resp = self._run_scan(brand_id, in_tok=1_000_000, out_tok=1_000_000)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["data"]["status"], "done")
-
-        draft = state.get_draft(brand_id)
-        self.assertTrue(draft["scan_done"])
-        self.assertEqual(len(draft["scan_impressions"]), len(script.SCAN_IMPRESSIONS))
-        # 花費＝真實 token 成本（usage × pricing），即時 SUM llm_task.cost
-        # T2：同一批背景流程會再讀一張上傳照片，因此網址掃描＋照片各記一筆成本。
-        expected = pricing.calculate_cost("claude-opus-5", 1_000_000, 1_000_000) * 2
-        self.assertAlmostEqual(draft["cost_spent"], expected, places=2)
-        # COPY trim：兩筆成本項目各自的中文文案不測，測「確實各記一筆」這件事
-        self.assertEqual(len(draft["cost_items"]), 2)
-        # scan_llm_task_id 回填
-        row = ir.get_active_draft(web.conn, brand_id)
-        self.assertIsNotNone(row["scan_llm_task_id"])
-
-
-
-    # -- 成本上限（F04-I06） --------------------------------------------------
-
-    def test_photo_scan_capped_at_max(self):
-        """15 張照片只打 12 次模型；第 13 張起卡片標成 skipped、不呼叫。"""
-        brand_id = self._new_wizard_brand()
-        draft = state.get_draft(brand_id, conn=web.conn)
-        draft["photos"] = [
-            {"token": f"tok{i}", "storage_key": f"{coredb.DEV_ORG_ID}/dummy{i}.jpg",
-             "name": f"p{i}.jpg", "size_mb": 0.1}
-            for i in range(15)
-        ]
-        calls = []
-
-        def fake_run(conn, draft, **kwargs):
-            calls.append(kwargs["task_type"])
-            return {"status": "succeeded", "structured_output_json": {
-                "readable": True, "name": "產品", "specification": "規格",
-                "selling_points": [], "gaps": [],
-            }}
-
-        with mock.patch.object(intake_ai, "_run", side_effect=fake_run), \
-             mock.patch.object(storage, "get", return_value=(b"x", "image/jpeg")):
-            cards = intake_ai._read_photo_products(web.conn, draft)
-
-        self.assertEqual(len(calls), intake_ai.MAX_PHOTO_SCANS)
-        self.assertEqual(len(cards), 15)
-        skipped = cards[intake_ai.MAX_PHOTO_SCANS:]
-        self.assertEqual(len(skipped), 3)
-        self.assertTrue(all(c["status"] == "skipped" for c in skipped))
-        self.assertIn("一次最多讀 12 張照片", skipped[0]["message"])
-        self.assertEqual(len(draft["product_card_drafts"]), 15)
-
-    def test_question_context_truncated_to_recent(self):
-        """出題只帶最近 8 條初步印象、最近 3 題問答，並補上截斷說明。"""
-        brand_id = self._new_wizard_brand()
-        draft = state.get_draft(brand_id, conn=web.conn)
-        draft["scan_done"] = True
-        draft["scan_impressions"] = [
-            {"looks_like": "產品線", "title": f"印象{i}", "content": f"內容{i}", "basis": "推測"}
-            for i in range(12)
-        ]
-        draft["answers"] = [
-            {"question": f"問題{i}", "choice_label": f"選項{i}", "note": ""}
-            for i in range(6)
-        ]
-        draft["qa"] = [{"aspect": "產品線", "question": "q", "suggested": {}, "branches": []}]
-
-        captured = {}
-
-        def fake_run(conn, draft, *, task_type, purpose, system, user_text, options=None,
-                     content_blocks=None):
-            captured["user_text"] = user_text
-            return {"status": "succeeded", "id": "llt_fake", "structured_output_json": {"done": False,
-                    "aspect": "價格帶", "question": "下一題", "suggested": {"label": "a", "desc": "b"}}}
-
-        with mock.patch.object(intake_ai, "_run", side_effect=fake_run):
-            intake_ai.run_next_question(web.conn, draft)
-
-        user_text = captured["user_text"]
-        self.assertEqual(user_text.count("已問過："), intake_ai.MAX_ANSWER_LINES)
-        self.assertEqual(
-            sum(1 for line in user_text.split("\n") if line.startswith("初步印象（")),
-            intake_ai.MAX_IMPRESSION_LINES,
-        )
-        self.assertIn("另有 4 條初步印象沒有列出。", user_text)
-        self.assertIn("更早的問答已收斂成下面的「已覆蓋面向」。", user_text)
-        self.assertIn("未覆蓋面向：", user_text)
-
-    # -- 引導問答 ------------------------------------------------------------
-
-
-    # -- W12 超限攔截 ---------------------------------------------------------
-
-
-    # -- 貼回、R10、完成 -------------------------------------------------------
-
-
-    # -- 操作卡實測工具 --------------------------------------------------------
-
-    def test_card_test_without_key_exits_zero_with_human_message(self):
-        # 無金鑰：印人話提示、exit code 0、不發任何請求
-        with mock.patch("builtins.print") as fake_print:
-            code = card_test.main()
-        self.assertEqual(code, 0)
-        printed = " ".join(str(c) for c in fake_print.call_args_list)
-        self.assertIn("金鑰", printed)
-
-
-class CardV2AndScopeToleranceTest(unittest.TestCase):
-    """操作卡 v2（Beast Gummy 事件修正）：目的宣言、法規降級、合法值枚舉、貼回容錯。"""
-
-    # 借用精靈測試的環境隔離與流程 helper，不繼承（避免父類測試重跑一遍）
-    setUp = IntakeWizardTest.setUp
-    tearDown = IntakeWizardTest.tearDown
-    _new_wizard_brand = IntakeWizardTest._new_wizard_brand
-    _run_scan = IntakeWizardTest._run_scan
-
-    @staticmethod
-    def _paste_text(scope: str) -> str:
-        return (
-            "種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源\n"
-            "品牌事實 | 定位 | 定位一句話 | 中高價位的機能軟糖。 | 整個品牌 | 官網\n"
-            f"產品事實 | 核心資訊 | 規格 | 一包十顆、免配水。 | {scope} | 官網"
-        )
-
-    def test_card_v2_prompt_contents(self):
-        draft = {"brand_name": "測試品牌", "description": "描述", "scan_impressions": [], "answers": []}
-        prompt = script.build_prompt(draft, "deep", known_products=["產品A", "產品B"])
-        # 目的宣言與風險定位鐵則
-        self.assertIn("品牌事實庫", prompt)
-        self.assertIn("風險標記的定位", prompt)
-        self.assertIn("不得因法規疑慮而否決", prompt)
-        # 合法「適用範圍」值直接枚舉
-        self.assertIn("「整個品牌」、「產品A」、「產品B」", prompt)
-        # 刪掉的章節與嚴苛措辭不得殘留
-        self.assertNotIn("品牌現況健檢", prompt)
-        self.assertNotIn("宣稱稽核", prompt)
-        self.assertNotIn("一律當高風險", prompt)
-        # 新競品三軸與法規備忘
-        self.assertIn("搶同一個需求", prompt)
-        self.assertIn("法規備忘", prompt)
-        # v2.1：標點指示、市場數據不入表、複製方式指引
-        self.assertIn("正常的標點符號", prompt)
-        self.assertIn("不要塞進表", prompt)
-        self.assertIn("不要用滑鼠框選", script._CARD_SHARED_STEP_5)
-        # 標準版同樣收斂
-        std = script.build_prompt(draft, "standard", known_products=[])
-        self.assertIn("法規備忘", std)
-        self.assertNotIn("有沒有踩到", std)
-
-
-
-
-
-
-
-
-
-
-class ReintakeLoopTest(unittest.TestCase):
-    """issue #1 重新調研迴圈：重跑入口、交接包帶已確認事實、重複提示、批次待確認、規則嚴重度。"""
-
-    setUp = IntakeWizardTest.setUp
-    tearDown = IntakeWizardTest.tearDown
-    _new_wizard_brand = IntakeWizardTest._new_wizard_brand
-    _run_scan = IntakeWizardTest._run_scan
-
-    @staticmethod
-    def _table(*rows) -> str:
-        return "種類 | 分類 | 標題 | 內容 | 適用範圍 | 佐證來源\n" + "\n".join(rows)
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

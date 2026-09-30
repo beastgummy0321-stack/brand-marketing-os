@@ -3,7 +3,7 @@
  * opening step 7, and `?step=N` re-entry. The API calls are fakes (importActual + override), no server.
  * F42-I08: the walk goes through the real steps, so every step's onboarding fetch/save has a working
  * default here (`answerEveryStep`, reset before each test); a step issue adds no mocks to this file. */
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,10 @@ vi.mock("@/lib/intakeOnboardingApi", async () => {
     saveOnboardingMedia: vi.fn(),
     fetchOnboardingTools: vi.fn(),
   };
+});
+vi.mock("@/lib/adsLaunchApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsLaunchApi")>("@/lib/adsLaunchApi");
+  return { ...actual, fetchLaunchReadiness: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({
@@ -67,6 +71,7 @@ import {
   saveOnboardingMedia,
   startOnboardingScan,
 } from "@/lib/intakeOnboardingApi";
+import { fetchLaunchReadiness, type LaunchReadiness } from "@/lib/adsLaunchApi";
 import { IntakeWizard } from "./IntakeWizard";
 
 const mockStatus = vi.mocked(fetchOnboardingStatus);
@@ -109,6 +114,14 @@ const EVIDENCE: OnboardingEvidence = {
 };
 const MEDIA: OnboardingMedia = { media: null };
 const TOOLS: OnboardingTools = { connectors: [], conversion_goal: null, conversion_goal_options: [] };
+// Step 7 (DoneStep) reads the launch readiness on mount (a brand with no product yet).
+const READINESS: LaunchReadiness = {
+  state: "red",
+  items: [{ key: "offering", label: "商品", state: "red", reason: "還沒有商品", fix_label: "建第一個商品", fix_href: "/brands/brd_x/products" }],
+  notes: [],
+  primary: { label: "先補齊地基", href: "/brands/brd_x/ads" },
+  secondary: null,
+};
 
 /** Every step's fetch/save answers without a server; a test overrides only what it is about. */
 function answerEveryStep() {
@@ -127,6 +140,7 @@ function answerEveryStep() {
   vi.mocked(completeOnboarding).mockResolvedValue({
     step: 7, completed: true, skipped_scan: false, prefill_status: "done", prefill_error: null,
   });
+  vi.mocked(fetchLaunchReadiness).mockResolvedValue(READINESS);
 }
 
 beforeEach(() => {
@@ -134,6 +148,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Unmount first: a step's mount effects (step 7 calls completeOnboarding in a passive effect) can
+  // still be pending when the last assertion passes; unmounting inside act flushes them while the
+  // defaults above are still in place. Resetting first left those calls returning undefined.
+  cleanup();
   vi.resetAllMocks();
 });
 
@@ -208,6 +226,8 @@ describe("IntakeWizard", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "品牌建好了" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "先看商品頁" }).getAttribute("href")).toBe("/brands/brd_x/products");
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith("brd_x"));
+    expect(await screen.findByText("還沒有商品")).toBeTruthy();
   });
 
   it("建檔已完成、網址帶 ?step=3：顯示第 3 步，下一步走到 ?step=4，每個步驟點都能點", async () => {
@@ -232,6 +252,7 @@ describe("IntakeWizard", () => {
     renderWizard("/brands/brd_x/intake?step=9");
 
     expect(await screen.findByRole("heading", { level: 1, name: "品牌建好了" })).toBeTruthy();
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith("brd_x"));
   });
 
   it("品牌不存在時顯示找不到，而不是一片空白", async () => {
