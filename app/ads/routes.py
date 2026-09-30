@@ -185,12 +185,14 @@ class CreateCampaignRequest(BaseModel):
     product_ids: Any = None
     objective: Any = None
     budget: Any = None
-    # F40-I04: the four values a new campaign states up front (else copied from the previous
-    # campaign); accepted on the picks path and the sentence path alike.
+    # F40-I04: values a new campaign may state up front, accepted on the picks path and the
+    # sentence path alike (F43-I04: on a structured create, what is not stated comes from the
+    # picked sell-way). `customer_group_ids` is the picks path's audience override.
     platform: Any = None
     audience_hint: Any = None
     cap: Any = None
     landing_url: Any = None
+    customer_group_ids: Any = None
 
 
 LANDING_URL_INVALID_MESSAGE = "落地頁請填完整的 http 或 https 網址，不可包含密碼。"
@@ -204,12 +206,14 @@ _CREATE_CAMPAIGN_ERRORS = {
     "objective_unknown": (400, "請選一個想要的結果。"),
     "budget_invalid": (400, "「這個活動最多花」請填大於 0 的數字。"),
     "products_required": (400, "請選一個商品。"),
-    "product_unknown": (400, "這個商品不屬於這個品牌。"),
+    # F43-I04: only a finished sell-way of this brand is pickable.
+    "product_unknown": (400, "這個賣法不能選：不屬於這個品牌、已下架，或商品還沒建完。"),
     "platform_unknown": (400, "這個平台不在通路清單裡。"),
     "audience_hint_unknown": (400, "受眾方向要是文字。"),
     "target_value_unknown": (400, "上限必須是大於 0 的數字。"),
     "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
     "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
+    "customer_group_unknown": (400, "受眾只能選這個賣法的顧客群。"),
 }
 
 
@@ -226,7 +230,7 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
     picks = {
         "product_ids": body.product_ids, "objective": body.objective, "budget": body.budget,
         "platform": body.platform, "audience_hint": body.audience_hint, "cap": body.cap,
-        "landing_url": body.landing_url,
+        "landing_url": body.landing_url, "customer_group_ids": body.customer_group_ids,
     }
     try:
         campaign = brief.create_draft(

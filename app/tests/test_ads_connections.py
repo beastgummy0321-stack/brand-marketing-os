@@ -376,18 +376,29 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(days["2026-09-18"], "ok")
         self.assertEqual(days["2026-09-19"], "future")
 
-    def test_costless_products_are_named(self):
-        with_cost = brands.create_product(self.conn, self.brand, name="經典款", actor=ACTOR)
-        brands.save_product_economics(
-            self.conn, self.brand, with_cost["id"], actor=ACTOR, currency="TWD",
-            confirmed_by=ACTOR, selling_price=500, unit_variable_cost=200,
-        )
-        brands.create_product(self.conn, self.brand, name="秋季新色", actor=ACTOR)
+    def test_costless_sell_ways_are_named(self):
+        # F43-I04: judged on the finished sell-ways the wizard offers; a knowledge product
+        # without a sell-way is not counted.
+        product = brands.create_product(self.conn, self.brand, name="經典款", actor=ACTOR)
+        brands.create_product(self.conn, self.brand, name="還沒有賣法", actor=ACTOR)
+        for name, economics in (("單瓶", {"selling_price": 500, "unit_variable_cost": 200}),
+                                ("秋季新色", {"selling_price": 520})):
+            brands.save_sell_way(
+                self.conn, self.brand, name=name, actor=ACTOR, economics=economics,
+                components=[{"product_id": product["id"], "qty": 1}],
+            )
         self.conn.commit()
         source = self._source(self._read(), "product_costs")
         self.assertEqual(source["state"], "missing_cost")
-        self.assertEqual(source["note"], "2 個商品，1 個有成本；秋季新色缺成本")
+        self.assertEqual(source["note"], "2 個賣法，1 個有成本；經典款 · 秋季新色缺成本")
         self.assertEqual(source["action"]["href"], f"/brands/{self.brand}/products")
+
+    def test_no_finished_sell_way_is_never_and_opens_product_onboarding(self):
+        brands.create_product(self.conn, self.brand, name="還沒有賣法", actor=ACTOR)
+        self.conn.commit()
+        source = self._source(self._read(), "product_costs")
+        self.assertEqual((source["state"], source["note"]), ("never", "還沒有商品"))
+        self.assertEqual(source["action"]["href"], f"/brands/{self.brand}/products/new")
 
     # --- org timezone and the route ---------------------------------------------------------
 

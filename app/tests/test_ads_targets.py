@@ -126,6 +126,35 @@ class ResolveTargetTest(unittest.TestCase):
         self.assertIsNone(result["basis"])
         self.assertIn("product_cost", result["missing"])
 
+    # -- F43-I04: the knowledge product behind the sell-way rides along --------------------------
+
+    def test_knowledge_product_id_is_the_sell_ways_first_product(self):
+        gummy = bi_repo.create_product(web.conn, self.brand_id, name="軟糖", actor="測試員")["id"]
+        tea = bi_repo.create_product(web.conn, self.brand_id, name="濾掛", actor="測試員")["id"]
+        single = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單盒", actor="測試員",
+            components=[{"product_id": gummy, "qty": 1}], economics={"selling_price": 399},
+        )["id"]
+        bundle = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="茶點組", actor="測試員",
+            components=[{"product_id": tea, "qty": 1}, {"product_id": gummy, "qty": 1}],
+            economics={"selling_price": 599},
+        )["id"]
+        for sell_way, knowledge in ((single, gummy), (bundle, tea)):
+            result = targets.resolve(web.conn, self.org_id, self.brand_id, {
+                "id": "nonexistent", "origin": "internal", "result_kind": None,
+                "context_json": {"product_ids": [sell_way]},
+            })
+            # No cost anywhere: the 「去填商品成本」 link opens the knowledge product.
+            self.assertEqual((result["product_id"], result["knowledge_product_id"]),
+                             (sell_way, knowledge))
+            self.assertIn("product_cost", result["missing"])
+        none = targets.resolve(web.conn, self.org_id, self.brand_id, {
+            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "context_json": {"product_ids": []},
+        })
+        self.assertIsNone(none["knowledge_product_id"])
+
     # -- no cap and no break-even: unresolved, never this campaign's own past actual ----------
 
     def test_engagement_with_spend_history_is_unresolved_never_trailing_actual(self):
