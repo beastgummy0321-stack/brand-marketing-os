@@ -106,6 +106,20 @@ class LibraryBundleTest(unittest.TestCase):
         self.assertIsNone(fact["fact_key_label"])
         self.assertIsInstance(fact["confirmed_at"], str)  # ISO 字串，不是 datetime 物件
 
+    def test_policy_fact_in_bundle(self):
+        """F42-I01: a store policy saved by onboarding shows in the library's facts with its
+        type label 「全店政策」, its registry label and the composed sentence."""
+        repo.save_brand_policies(web.conn, self.bid,
+                                 [{"key": "ship_threshold", "params": {"threshold": "999"}}], actor=ACTOR)
+        data = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]
+        [fact] = data["facts"]
+        self.assertEqual(fact["fact_type"], "policy")
+        self.assertEqual(fact["fact_type_label"], "全店政策")
+        self.assertEqual(fact["fact_key"], "ship_threshold")
+        self.assertEqual(fact["label"], "滿額免運")
+        self.assertEqual(fact["value"], "滿 NT$999 免運")
+        self.assertEqual(fact["status"], "confirmed")
+
     def test_rule_claim_asset_channel_shape_fields_match_contract(self):
         rule = repo.create_rule(web.conn, self.bid, actor=ACTOR, rule_type="tone",
                                  content="不能用「最」字", severity="hard")

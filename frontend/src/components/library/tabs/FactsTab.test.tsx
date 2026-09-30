@@ -91,3 +91,40 @@ describe("證據事實（F38-I01）", () => {
     expect(screen.queryByText("哪一種證據？")).toBeNull();
   });
 });
+
+describe("全店政策（F42-I01）", () => {
+  it("a policy row shows its type badge and name, no internal key and no 修改", () => {
+    render(
+      <FactsTab
+        brandId="brd_1"
+        facts={[
+          fact({}),
+          fact({
+            id: "bft_3",
+            fact_type: "policy",
+            fact_type_label: "全店政策",
+            fact_key: "ship_threshold",
+            fact_key_label: "ship_threshold",
+            label: "滿額免運",
+            value: "滿 NT$999 免運",
+          }),
+        ]}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.getAllByText("全店政策").some((el) => el.tagName !== "BUTTON")).toBe(true);
+    expect(screen.getByText("滿額免運")).toBeTruthy();
+    expect(screen.getByText("滿 NT$999 免運")).toBeTruthy();
+    expect(screen.queryByText("ship_threshold")).toBeNull();
+    // only the positioning row can be edited here
+    expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(1);
+  });
+
+  it("the new-fact panel does not offer 全店政策", () => {
+    render(<FactsTab brandId="brd_1" facts={[]} onChanged={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "新增品牌事實" }));
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toContain("證據");
+    expect(options).not.toContain("全店政策");
+  });
+});

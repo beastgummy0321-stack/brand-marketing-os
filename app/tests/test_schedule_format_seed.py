@@ -140,39 +140,64 @@ class TestScheduleFormatSeed(unittest.TestCase):
         self.assertIn("key <> 'none'", sql)
         self.assertIn("disabled_at IS NULL", sql)
 
-    def test_fresh_brand_promo_offers_seeded_disabled(self) -> None:
-        """F38-I05 (RC-C): a new brand gets only `offer/none` enabled; the six promo offers are
-        seeded disabled. Proof stays enabled — it is gated by evidence facts, not by seed."""
+    def test_fresh_brand_offers_seeded_enabled(self) -> None:
+        """F42-I01: offers are derived from confirmed store policies (`available_offer_keys`),
+        not gated by the seed -- a new brand gets all seven offer rows enabled (the toggle stays a
+        brand veto). Replaces F38-I05's 「seeded disabled」 case."""
         conn = db_current()
         org_id = DEV_ORG_ID
-        brand_id = bi_repo.create_brand(conn, name="測試品牌：優惠預設關", client_name=None,
+        brand_id = bi_repo.create_brand(conn, name="測試品牌：優惠預設開", client_name=None,
                                          actor="測試員", org_id=org_id)["id"]
         ensure_coordinates_seeded(conn, org_id, brand_id)
-        rows = conn.execute(
-            "SELECT dimension, key, disabled_at FROM brand_coordinate"
-            " WHERE brand_id = %s AND dimension IN ('offer', 'proof')",
+        offer = {r["key"]: r["disabled_at"] for r in conn.execute(
+            "SELECT key, disabled_at FROM brand_coordinate"
+            " WHERE brand_id = %s AND dimension = 'offer'",
             (brand_id,),
-        ).fetchall()
-        offer = {r["key"]: r["disabled_at"] for r in rows if r["dimension"] == "offer"}
-        proof = {r["key"]: r["disabled_at"] for r in rows if r["dimension"] == "proof"}
+        ).fetchall()}
 
-        self.assertIsNone(offer["none"])
-        promo = {"discount", "bundle", "free_shipping", "trial_sample", "guarantee",
-                 "limited_time"}
-        self.assertEqual(set(offer) - {"none"}, promo)
-        for key in promo:
-            self.assertIsNotNone(offer[key], f"offer/{key} should be seeded disabled")
-        self.assertEqual(len(proof), 7)
-        for key, disabled_at in proof.items():
-            self.assertIsNone(disabled_at, f"proof/{key} must stay enabled")
+        self.assertEqual(set(offer), {"none", "discount", "bundle", "free_shipping",
+                                      "trial_sample", "guarantee", "limited_time"})
+        for key, disabled_at in offer.items():
+            self.assertIsNone(disabled_at, f"offer/{key} should be seeded enabled")
 
-        # every other seeded dimension stays enabled
-        others = conn.execute(
+        # no seeded dimension starts disabled
+        disabled = conn.execute(
             "SELECT count(*) AS n FROM brand_coordinate WHERE brand_id = %s"
-            " AND dimension NOT IN ('offer') AND disabled_at IS NOT NULL",
+            " AND disabled_at IS NOT NULL",
             (brand_id,),
         ).fetchone()["n"]
-        self.assertEqual(others, 0)
+        self.assertEqual(disabled, 0)
+        self.assertFalse(hasattr(schedule_repo, "DEFAULT_OFF_COORDINATES"))
+
+    def test_offer_default_on_migration_behaviour(self) -> None:
+        """F42-I01: 20261001000002 re-enables every offer row (undoing F38's default-off on test
+        data) and leaves other dimensions' disabled rows alone."""
+        conn = db_current()
+        org_id = DEV_ORG_ID
+        brand_id = bi_repo.create_brand(conn, name="測試品牌：優惠遷移", client_name=None,
+                                         actor="測試員", org_id=org_id)["id"]
+        ensure_coordinates_seeded(conn, org_id, brand_id)
+        conn.execute(
+            "UPDATE brand_coordinate SET disabled_at = now() WHERE brand_id = %s"
+            " AND ((dimension = 'offer' AND key <> 'none')"
+            " OR (dimension = 'format' AND key = 'video'))",
+            (brand_id,),
+        )
+        conn.commit()
+
+        sql = (
+            pathlib.Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+            / "20261001000002_schedule_offer_default_on.sql"
+        ).read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT dimension, key, disabled_at FROM brand_coordinate"
+            " WHERE brand_id = %s AND disabled_at IS NOT NULL",
+            (brand_id,),
+        ).fetchall()
+        self.assertEqual([(r["dimension"], r["key"]) for r in rows], [("format", "video")])
 
     def test_format_specs_have_no_flexible_line(self) -> None:
         """F07-I13 item 2: F07-I03 removed the 彈性格式 line from

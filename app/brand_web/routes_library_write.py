@@ -70,6 +70,15 @@ def _proof_key_error(fact_type: str, fact_key: str) -> str | None:
     return None
 
 
+def _policy_type_error(fact_type: str) -> str | None:
+    """F42-I01: store policies (「全店政策」) are written only by brand onboarding
+    (`repo.save_brand_policies` composes their sentence from the registry); the library's
+    free-form fact form may neither create one nor edit one."""
+    if clean(fact_type) == "policy":
+        return "全店政策請在品牌建檔裡設定。"
+    return None
+
+
 @router.post("/api/library/brands/{brand_id}/facts")
 async def fact_create_api(request: Request, brand_id: str):
     actor = require_actor(request)
@@ -84,6 +93,8 @@ async def fact_create_api(request: Request, brand_id: str):
     errors = {}
     if not clean(fact_type):
         errors["fact_type"] = "請選擇這是哪一類事實。"
+    if type_error := _policy_type_error(fact_type):
+        errors["fact_type"] = type_error
     if key_error := _proof_key_error(fact_type, fact_key):
         errors["fact_key"] = key_error
     if not clean(label):
@@ -119,6 +130,8 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
     errors = {}
     if not clean(fact_type):
         errors["fact_type"] = "請選擇這是哪一類事實。"
+    if type_error := _policy_type_error(fact["fact_type"]) or _policy_type_error(fact_type):
+        errors["fact_type"] = type_error
     if key_error := _proof_key_error(fact_type, fact_key):
         errors["fact_key"] = key_error
     if not clean(label):
