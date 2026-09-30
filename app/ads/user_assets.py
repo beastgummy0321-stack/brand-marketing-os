@@ -1,6 +1,7 @@
 """Upload compensation and asynchronous previews through the storage facade only."""
 
 import hashlib
+import logging
 
 from app import background, storage
 from app.ads import media_probe
@@ -8,6 +9,8 @@ from app.ads import user_assets_repository as repo
 from app.core.db import connection, new_id, set_tenant_scope
 
 TASK = "background.ads_user_asset_preview"
+
+logger = logging.getLogger(__name__)
 
 
 def acquire_slot(conn, org, brand, kind="upload"):
@@ -212,6 +215,7 @@ def process_preview(org_id, brand_id, asset_id):
             slot = acquire_slot(conn, org_id, brand_id, "preview")
         except ValueError:
             return  # Durable pending row is retried by the dispatcher.
+        ready = False
         try:
             changed = conn.execute(
                 "UPDATE ads_user_asset SET "
@@ -267,6 +271,7 @@ def process_preview(org_id, brand_id, asset_id):
                     ),
                 )
                 conn.commit()
+                ready = True
             except Exception as exc:
                 conn.rollback()
                 reason = (
@@ -285,6 +290,22 @@ def process_preview(org_id, brand_id, asset_id):
                 conn.commit()
         finally:
             release_slot(conn, slot)
+        if ready:
+            _settle_waiting_slots(conn, org_id, brand_id, asset_id)
+
+
+def _settle_waiting_slots(conn, org_id, brand_id, asset_id):
+    """Drill-8 #4: the slots waiting on this now-ready original are confirmed and assigned here,
+    where the preview finishes. A failure is logged and swallowed: the asset stays `ready`, the
+    slot keeps waiting and the user's own confirmation still works."""
+    # Lazy, the way `slots` reaches `asset_suggestions`: `slots` loads the launch modules.
+    from app.ads import slots
+
+    try:
+        slots.settle_ready_asset(conn, org_id, brand_id, asset_id)
+    except Exception:
+        conn.rollback()
+        logger.exception("settling slots for ready asset %s failed", asset_id)
 
 
 def dispatch_pending(timestamp):

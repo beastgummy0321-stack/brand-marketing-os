@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 /** Cold start, self-seeding (2026-09-26 ruling: runs in the normal `npm run e2e`, no context file, no `/__f13`).
  * A fresh account + brand + product (same setup as `ads-target.spec.ts`), then the user journey through the UI:
  * wizard create with an own PNG uploaded in 進階 (its preview made by the worker's task body, below) → 系統這樣理解 →
- * 產生策略 → 自己填總額 → cap → 照這個方式進行 → placement revised and confirmed → the confirmed version assigned
- * to every planned ad (one per group; the scripted provider follows the roles the prompt offers) → reload and re-read.
+ * 產生策略 → 自己填總額 → cap → 照這個方式進行 → placement revised and confirmed → the confirmed version placed into
+ * every planned ad (one per group; the scripted provider follows the roles the prompt offers) through the slot upload
+ * (F41-I01: each ad gets its own placement of that original, confirmed and assigned) → reload and re-read.
  * The webServer's scripted provider answers brief／strategy／delivery plan; no live model or platform account. */
 
 type ApiHeaders = Record<string, string>;
@@ -150,13 +151,19 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   const adSelect = assignments.getByRole("combobox", { name: "計畫中的廣告", exact: true });
   const versionSelect = assignments.getByRole("combobox", { name: "已確認成品版本", exact: true });
   await expect(versionSelect.getByRole("option", { name: `${filename} · 版本 ${confirmed.revision}`, exact: true })).toHaveCount(1);
+  const placedByAd = new Map<string, { id: string; revision: number }>();
   for (const adId of plannedIds) {
     await adSelect.selectOption(adId);
     await versionSelect.selectOption(confirmed.id);
-    const saved = responseFor(page, `/launch-materials/${adId}`, "PUT");
+    const saved = responseFor(page, `/slots/${adId}/upload`, "POST");
     await assignments.getByRole("button", { name: "保存素材指派", exact: true }).click();
     const result = await successful(saved);
-    expect(result.request().postDataJSON()).toEqual({ placement_id: confirmed.id, revision: confirmed.revision });
+    expect(result.request().postDataJSON()).toEqual({ placement_id: confirmed.id });
+    const placed = (await result.json()).placement;
+    // No workbench copy was selected (the memory queue made none), so the confirmed version's own copy rides in.
+    expect(placed.ad_id).toBe(adId);
+    expect(placed.confirmed_at).toBeTruthy();
+    placedByAd.set(adId, { id: placed.id, revision: placed.revision });
   }
 
   // --- 重新整理：指派從伺服器讀回來還在 --------------------------------------------------------------------
@@ -166,8 +173,11 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   const reread = (await (await successful(reopened)).json()) as { planned_ads: PlannedAd[] };
   expect(reread.planned_ads.map(ad => ad.id).sort()).toEqual([...plannedIds].sort());
   expect(reread.planned_ads.every(ad =>
-    ad.assignment_status === "confirmed" && ad.placement_id === confirmed.id && ad.placement_revision === confirmed.revision,
+    ad.assignment_status === "confirmed" && ad.placement_id === placedByAd.get(ad.id)?.id && ad.placement_revision === placedByAd.get(ad.id)?.revision,
   )).toBe(true);
-  await expect(assignments.getByText(`已指派確認版本 · ${filename} · 版本 ${confirmed.revision}`, { exact: true })).toHaveCount(plannedIds.length);
+  for (const revision of new Set([...placedByAd.values()].map(p => p.revision))) {
+    const count = [...placedByAd.values()].filter(p => p.revision === revision).length;
+    await expect(assignments.getByText(`已指派確認版本 · ${filename} · 版本 ${revision}`, { exact: true })).toHaveCount(count);
+  }
   expect(errors).toEqual([]);
 });

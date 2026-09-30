@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { assignPlannedMaterial, getPlannedMaterials, type PlannedMaterialWorkspace } from "@/lib/adsHandoffApi";
+import { uploadIntoSlot } from "@/lib/adsSlotsApi";
 
 type Props = { brandId: string; campaignId: string; refreshKey?: number; onSaved?: () => void };
 const statusLabel = { unassigned: "尚未指派", confirmed: "已指派確認版本", stale: "素材已更新，需重新指派" };
@@ -35,10 +36,21 @@ function Assignments({ brandId, campaignId, refreshKey = 0, onSaved }: Props) {
     const active = controller.current;
     setBusy(true); setError(""); setNotice("");
     try {
-      const result = await assignPlannedMaterial(brandId, campaignId, ad.id, { placement_id: clear ? null : placement!.id, revision: clear ? null : placement!.revision }, active.signal);
-      if (active.signal.aborted) return;
-      setData(result); setPlacementId("");
-      setNotice(clear ? "已解除這則廣告的素材指派。" : "素材版本已指派，首次上架清單會核對這份對應。");
+      if (clear) {
+        const result = await assignPlannedMaterial(brandId, campaignId, ad.id, { placement_id: null, revision: null }, active.signal);
+        if (active.signal.aborted) return;
+        setData(result); setNotice("已解除這則廣告的素材指派。");
+      } else {
+        // F41-I01: the same path as putting a file in the ad's slot — the ad's selected workbench copy rides in, and the
+        // slot upload's own refusals (ad already on the platform, same file with other copy) show verbatim below.
+        const { placement: placed } = await uploadIntoSlot(brandId, campaignId, ad.id, { placement_id: placement!.id }, active.signal);
+        if (active.signal.aborted) return;
+        const next = await getPlannedMaterials(brandId, campaignId, active.signal);
+        if (active.signal.aborted) return;
+        setData(next);
+        setNotice(placed.confirmed_at ? "素材版本已指派，首次上架清單會核對這份對應。" : `已放進「${ad.name}」這一格；${placed.pending_reason || "確認文案與用途後才算備妥"}。`);
+      }
+      setPlacementId("");
       onSaved?.();
     } catch (err) { if (!active.signal.aborted) setError(err instanceof Error ? err.message : "保存結果尚未確認，請重新讀取核對指派，勿重做平台操作。"); }
     finally { if (!active.signal.aborted) setBusy(false); }
