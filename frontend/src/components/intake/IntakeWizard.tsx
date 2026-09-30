@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -61,14 +61,16 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 
   if (!brandId) {
     return (
-      <StartStep
-        brandId={null}
-        nav={{ crumb: brandCrumb(""), steps: BRAND_STEPS, current: 1 }}
-        onSaved={({ brand_id }) => {
-          refreshBrands();
-          navigate(`/brands/${encodeURIComponent(brand_id)}/intake`);
-        }}
-      />
+      <Page>
+        <StartStep
+          brandId={null}
+          nav={{ crumb: brandCrumb(""), steps: BRAND_STEPS, current: 1 }}
+          onSaved={({ brand_id }) => {
+            refreshBrands();
+            navigate(`/brands/${encodeURIComponent(brand_id)}/intake`);
+          }}
+        />
+      </Page>
     );
   }
 
@@ -164,11 +166,16 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   }
 
   return (
-    <>
+    <Page>
       {flowError && <p role="alert" className="text-sm text-danger">{flowError}</p>}
       {body}
-    </>
+    </Page>
   );
+}
+
+/** Prototype `.wrap`: the flow's content is at most 1180px wide. */
+function Page({ children }: { children: ReactNode }) {
+  return <div className="flex max-w-[1180px] flex-col gap-4">{children}</div>;
 }
 
 /** `?step=N` of a completed brand: anything but an integer 1..7 reads as not given (F05-I14:

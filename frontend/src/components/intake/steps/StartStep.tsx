@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { submitIntakeStart, uploadIntakePhoto } from "@/lib/intakeApi";
 import type { AdvertisingHistory, BrandPhoto, BrandPhotoKind } from "@/lib/intakeOnboardingApi";
@@ -277,9 +278,9 @@ export function StartStep({
               />
             ))}
             {urls.length < MAX_URLS && (
-              <button type="button" className="self-start text-[13px] font-medium text-primary hover:underline" onClick={() => setUrls((prev) => [...prev, ""])}>
+              <Button type="button" variant="link" className="h-auto self-start p-0 text-[13px]" onClick={() => setUrls((prev) => [...prev, ""])}>
                 ＋再加一個
-              </button>
+              </Button>
             )}
           </div>
         </Row>
@@ -360,7 +361,7 @@ export function StartStep({
   );
 }
 
-const IN = "h-auto rounded-lg bg-card px-3 py-[9px] text-sm shadow-none";
+const IN = "h-auto w-full rounded-lg bg-card px-3 py-[9px] text-sm shadow-none";
 
 /** Prototype `.q`: label column (bold + one small note) and the field. */
 function Row({ label, note, children }: { label: ReactNode; note?: string; children: ReactNode }) {

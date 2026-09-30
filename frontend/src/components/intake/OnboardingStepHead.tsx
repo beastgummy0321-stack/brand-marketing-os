@@ -58,7 +58,7 @@ export function OnboardingStepHead({ crumb, steps, current, canSelect, onSelect,
           </Fragment>
         ))}
       </nav>
-      <div className="mt-3 mb-5">
+      <div className="mt-3 mb-1">
         <ol className="mb-3.5 flex flex-wrap items-center gap-y-1.5">
           {steps.map((label, i) => {
             const step = i + 1;
