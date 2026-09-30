@@ -41,15 +41,18 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
     knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
     if knowledge_id:
         rows += bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")
+    # Store policies (incl. the cooling-off exemption) reach the copy only through their one
+    # resolver, `offer_sources` below, so a policy that does not cover this product never shows.
     result = [{"id": r["id"], "text": str(r.get("value") or ""),
-               "proof": r.get("fact_type") == "proof"} for r in rows]
+               "proof": r.get("fact_type") == "proof"} for r in rows
+              if r.get("fact_type") != "policy"]
     claims = (bi_repo.list_claims_for_product(conn, brand_id, knowledge_id) if knowledge_id
               else [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
                     if not r.get("product_id")])
     result += [{"id": r["id"], "text": r["claim_text"], "proof": False} for r in claims
                if r["claim_type"] == "approved"]
     # F42: the offer families the brand's confirmed policies make available for this product
-    # (threshold policies against its price). The policy facts themselves are already above.
+    # (threshold policies against its price), each with its registered sentence.
     result += [{"id": f"offer:{o['offer_key']}", "text": o["sentence"], "proof": False,
                 "offer_key": o["offer_key"]}
                for o in bi_repo.offer_sources(conn, brand_id, product_id)]
@@ -58,14 +61,12 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
 
 def prompt_sources(rows: list[dict]) -> list[dict]:
     """Registered evidence (confirmed `proof` facts, F38 decision 1) first, then the available
-    offers' registered sentences (F42), then the other rows that carry a RISK word (a policy
-    fact whose sentence is already listed as an offer is not repeated); capped at 20. The copy
-    quotes these, never invents."""
+    offers' registered sentences (F42), then the other rows that carry a RISK word; capped at
+    20. The copy quotes these, never invents."""
     proof = [r for r in rows if r.get("proof")]
     offers = [r for r in rows if r.get("offer_key")]
-    listed = {r["text"] for r in offers}
     risky = [r for r in rows if not r.get("proof") and not r.get("offer_key")
-             and r["text"] not in listed and RISK.search(r["text"])]
+             and RISK.search(r["text"])]
     return [*proof, *offers, *risky][:20]
 
 

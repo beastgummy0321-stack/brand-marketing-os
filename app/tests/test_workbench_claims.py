@@ -102,7 +102,7 @@ _SHIP_999 = [{"key": "ship_threshold", "params": {"threshold": 999}}]
 
 def test_free_shipping_policy_covers_product_at_threshold():
     rows, missing = _guard(_SHIP_999, 999, {"headline": _SHIP})
-    assert [r for r in rows if r.get("offer_key")] == [
+    assert rows == [
         {"id": "offer:free_shipping", "text": "滿 NT$999 免運", "proof": False,
          "offer_key": "free_shipping"},
     ]
@@ -111,7 +111,8 @@ def test_free_shipping_policy_covers_product_at_threshold():
 
 def test_free_shipping_policy_below_threshold_is_flagged():
     rows, missing = _guard(_SHIP_999, 998, {"headline": _SHIP})
-    assert not any(r.get("offer_key") for r in rows)
+    assert rows == []  # the policy reaches the copy only through offer_sources
+    assert "滿 NT$999 免運" not in claims.policy(rows)
     assert missing == ["免運"]
 
 
@@ -147,7 +148,14 @@ def test_offer_rows_are_prompt_sources_with_their_ids():
     rows, _ = _guard([{"key": "first_order", "params": {"content": "首購 9 折"}}], 999, "")
     text = claims.policy(rows)
     assert "- [offer:discount] 新會員首購禮：首購 9 折" in text
-    assert text.count("新會員首購禮：首購 9 折") == 1  # the policy fact itself is not repeated
+    assert text.count("新會員首購禮：首購 9 折") == 1  # only the offer row, not the policy fact
+
+
+def test_cooling_off_exemption_is_not_a_copy_source():
+    disclosure = "本店商品為易腐敗之食品，依法不適用七天猶豫期。"
+    rows, _ = _guard([{"key": "cooling_off_exempt", "params": {"disclosure": disclosure}}],
+                     999, "")
+    assert rows == []
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):
