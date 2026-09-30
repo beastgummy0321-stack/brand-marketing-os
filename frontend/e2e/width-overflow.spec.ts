@@ -144,13 +144,18 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/ads/campaigns`);
   await assertNoOverflow("/brands/:brandId/ads/campaigns");
 
-  // --- /brands/:brandId/ads/new：建立精靈 v10（F30-I05）——第一步選商品、結果、預算上限，
+  // --- /brands/:brandId/ads/new：建立活動（F43-I15 瘦身）——第一步選賣法、結果、預算上限，
   // 第二步「系統這樣理解」確認欄位、按「產生策略」才進工作區頁 ----------------------------
   await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
   await assertNoOverflow("/brands/:brandId/ads/new");
-  await page.getByRole("radio", { name: new RegExp(`寬度測試產品 ${stamp}`) }).click();
+  const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
+  await expect(shelf.getByText(`寬度測試產品 ${stamp}`, { exact: true })).toBeVisible();
+  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "進階：這期不一樣（平台、受眾、每筆上限、落地頁）", exact: true }).click();
+  await expect(page.getByLabel("每筆上限")).toBeVisible();
+  await assertNoOverflow("/brands/:brandId/ads/new（進階：這期不一樣 打開）");
   await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
 
   // --- /brands/:brandId/ads/new/:campaignId（系統這樣理解）---------------------------
