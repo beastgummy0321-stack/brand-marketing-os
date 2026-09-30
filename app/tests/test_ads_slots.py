@@ -608,6 +608,139 @@ def test_upload_by_upload_id_uses_the_placement_path_and_an_already_confirmed_fi
     assert (library["ad_id"], library["is_current"], library["revision"]) == (None, True, 1)
 
 
+# -- F41-I01: the advanced 「將成品指派給計畫中的廣告」 panel places through the slot upload ---
+
+
+LIBRARY_COPY = {"headline": "舊標題", "body": "素材庫上傳時的舊文案", "description": "舊說明"}
+
+
+def library_placement(env, asset, copy=None):
+    """A finished asset placed in the campaign without an ad and confirmed -- a row of the
+    advanced panel's `ready_placements`."""
+    placement = user_assets.attach(
+        env["conn"], env["org"], env["brand"], env["campaign"], asset, copy or LIBRARY_COPY,
+        "librarian",
+    )
+    env["conn"].execute(
+        "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='librarian' WHERE id=%s",
+        (placement["id"],),
+    )
+    env["conn"].commit()
+    return placement
+
+
+def place(env, ad, placement_id):
+    return TestClient(app).post(
+        f"{base(env)}/slots/{ad}/upload", json={"placement_id": placement_id}
+    )
+
+
+def material(env, ad):
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
+    return row, handoff_assignment.material_snapshot(
+        env["conn"], env["org"], env["brand"], env["campaign"], row
+    )
+
+
+def test_placing_a_finished_asset_carries_the_ads_workbench_copy(env):
+    """The ad's selected workbench copy rides in over the library upload's old copy, the way a
+    slot upload does; the library row itself stays untouched."""
+    ad = env["ads"][0]
+    workbench_copy(env, ad)
+    asset = user_asset(env)
+    library = library_placement(env, asset)
+
+    response = place(env, ad, library["id"])
+    assert response.status_code == 200, response.text
+    placed = response.json()["placement"]
+    assert placed["id"] != library["id"]
+    assert (placed["asset_id"], placed["ad_id"], placed["copy_fields"]) == (
+        asset, ad, WORKBENCH_COPY,
+    )
+    assert placed["confirmed_at"]
+    row, snapshot = material(env, ad)
+    assert row["material_placement_id"] == placed["id"]
+    assert snapshot["copy_fields"] == WORKBENCH_COPY
+    assert snapshot["assignment_status"] == "confirmed"
+    assert by_ad(response.json()["slots"])[ad]["state"] == "ready"
+    kept = user_assets.placement(
+        env["conn"], env["org"], env["brand"], env["campaign"], library["id"]
+    )
+    assert (kept["ad_id"], kept["revision"], kept["copy_fields"]) == (None, 1, LIBRARY_COPY)
+
+
+def test_placing_a_finished_asset_without_workbench_copy_keeps_its_own_copy(env):
+    """No selected workbench copy (e.g. the memory queue never made one): the placement's own
+    effective copy is the copy, as an upload's own copy is for `{upload_id}`."""
+    ad = env["ads"][1]
+    library = library_placement(env, user_asset(env))
+
+    response = place(env, ad, library["id"])
+    assert response.status_code == 200, response.text
+    assert response.json()["placement"]["copy_fields"] == LIBRARY_COPY
+    row, snapshot = material(env, ad)
+    assert row["material_placement_id"] == response.json()["placement"]["id"]
+    assert snapshot["copy_fields"] == LIBRARY_COPY
+    assert snapshot["assignment_status"] == "confirmed"
+
+
+def test_placing_a_finished_asset_explicit_copy_still_wins(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad)
+    library = library_placement(env, user_asset(env))
+    result = upload(env, ad, {"placement_id": library["id"], "copy_fields": COPY})
+    assert result["placement"]["copy_fields"] == COPY
+
+
+def test_placing_a_finished_asset_surfaces_the_slot_uploads_own_refusals(env):
+    """One rule set: the advanced panel gets the slot upload's refusals unchanged -- an ad
+    already on the platform, and the same file already in this ad with different copy."""
+    conn = env["conn"]
+    launched_ad, deferred_ad, redone_ad = env["ads"]
+    assign_confirmed(env, launched_ad, user_asset(env))
+    launch(env)
+    entity = platform_entity(env, "n1")
+    conn.execute(
+        "UPDATE ads_handoff_item SET entity_id=%s WHERE campaign_id=%s AND planned_kind='ad' "
+        "AND planned_id=%s",
+        (entity["id"], env["campaign"], launched_ad),
+    )
+    conn.commit()
+    upload(env, deferred_ad, {"asset_id": user_asset(env), "copy_fields": COPY})
+    assert change_control_launch.is_stale(conn, env["org"], env["brand"], env["campaign"])
+    asset = user_asset(env)
+    library = library_placement(env, asset)
+
+    on_platform = place(env, launched_ad, library["id"])
+    assert on_platform.status_code == 409, on_platform.text
+    assert on_platform.json()["error"]["code"] == "user_asset_unavailable"
+    assert on_platform.json()["error"]["message"] == (
+        "這則廣告已在平台上；要換素材請用「換掉這一則」。"
+    )
+
+    # The ad took this file with its workbench copy, then the user selected another version.
+    ref = workbench_copy(env, redone_ad)
+    assert by_ad(upload(env, redone_ad, {"asset_id": asset})["slots"])[redone_ad]["state"] == (
+        "ready"
+    )
+    env["versions"][ref["set_id"]]["copy"] = {**WORKBENCH_COPY, "body": "換過的工作檯內文"}
+    conflict = place(env, redone_ad, library["id"])
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "placement_copy_conflict"
+    assert conflict.json()["error"]["details"]["placement"]["ad_id"] == redone_ad
+
+
+def test_placing_refuses_a_mixed_or_unknown_source(env):
+    ad = env["ads"][0]
+    asset = user_asset(env)
+    with pytest.raises(ValueError, match="上傳欄位無效"):
+        upload(env, ad, {"placement_id": "aap_x", "asset_id": asset})
+    with pytest.raises(ValueError, match="上傳欄位無效"):
+        upload(env, ad, {"placement_id": 3})
+    with pytest.raises(ValueError, match="找不到素材安排"):
+        upload(env, ad, {"placement_id": "aap_missing"})
+
+
 def test_upload_refuses_unfinished_uploads_foreign_ads_and_bad_bodies(env):
     conn, ad = env["conn"], env["ads"][0]
     batch = user_assets.create_batch(

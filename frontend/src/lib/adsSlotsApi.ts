@@ -43,8 +43,13 @@ export interface CampaignSlots {
   ready: number; total: number; groups: SlotGroup[];
   requests: ReplaceRequest[]; requests_truncated: boolean;
 }
-/** `{upload_id}` (a finished upload, its own copy unless given) or `{asset_id}` — same as `POST …/placements`. */
-export type SlotUpload = { upload_id: string; copy_fields?: CopyFields } | { asset_id: string; copy_fields?: CopyFields };
+/** `{upload_id}` (a finished upload, its own copy unless given) or `{asset_id}` — same as `POST …/placements`.
+ * F41-I01: `{placement_id}` = a finished asset already placed in this campaign (the advanced 「將成品指派給計畫中的廣告」
+ * panel); the ad's selected workbench copy rides in, else that placement's own copy. */
+export type SlotUpload =
+  | { upload_id: string; copy_fields?: CopyFields }
+  | { asset_id: string; copy_fields?: CopyFields }
+  | { placement_id: string; copy_fields?: CopyFields };
 
 const slotsPath = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/slots`;
 
