@@ -166,12 +166,11 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         actions={
           <>
             {/* F42-I12: low-key re-entry into brand onboarding (prototype f41-onboarding `#/home` `.lnk`). */}
-            <Link
-              to={`/brands/${encodeURIComponent(brandId)}/intake`}
-              className="mr-2 text-[13px] font-medium whitespace-nowrap text-primary hover:underline"
-            >
-              品牌資料（建檔時填的）
-            </Link>
+            <Button asChild variant="link" className="mr-2 h-auto p-0 text-[13px]">
+              <Link to={`/brands/${encodeURIComponent(brandId)}/intake`}>
+                品牌資料（建檔時填的）
+              </Link>
+            </Button>
             <Button asChild variant="outline">
               <Link to={`/brands/${encodeURIComponent(brandId)}/ads`}>
                 前往投放中心

@@ -127,7 +127,9 @@ function CheckRow({ item }: { item: ReadinessItem }) {
           <Link to={item.fix_href}>{item.fix_label} →</Link>
         </Button>
       ) : item.state !== "green" ? (
-        <Link to={item.fix_href} className="text-[13px] font-medium whitespace-nowrap text-primary hover:underline">去改</Link>
+        <Button asChild variant="link" className="h-auto p-0 text-[13px]">
+          <Link to={item.fix_href}>去改</Link>
+        </Button>
       ) : null}
     </li>
   );
