@@ -8,7 +8,7 @@ import { getCampaign, getPublish, publishCampaign, type CampaignDetail } from "@
 import { reportHandoff } from "@/lib/adsHandoffApi";
 import {
   confirmAllLaunchFields, confirmLaunchItemField, fetchChannels, fetchLaunchView, readbackLaunch, unreportLaunchItem,
-  type LaunchItem, type LaunchView,
+  type LaunchItem, type LaunchMonthBudget, type LaunchView,
 } from "@/lib/adsLaunchApi";
 import { confirmLaunchSetting } from "@/lib/adsLaunchSettingsApi";
 import { PublishPage } from "../PublishPage";
@@ -149,6 +149,81 @@ describe("確認上架清單", () => {
     expect(await screen.findByText("投放設定卡・唯讀")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "核准上架清單 →" })).toBeNull();
     expect(screen.getByRole("link", { name: "到平台完成 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish/platform");
+  });
+});
+
+/** F41-I03's list-step block, real shape: `month_budget.view(..., additional=[launch])` — this launch (`extra`) is already
+ * inside `reserved_increases` and `available` — plus the backend's own blocker and its sentence. */
+function monthBlock(o: Partial<LaunchMonthBudget> = {}): LaunchMonthBudget {
+  return {
+    month: "2026-10", currency: "TWD", amount: 32000, revision: 1, known_spend: 20068, ongoing_estimate: 0,
+    reserved_increases: 10000, available: 1932, uncertainties: [], can_increase: true, period_end: "2026-10-31",
+    confirmed_at: "2026-09-30T02:00:00Z", notice: "", ongoing_owners: [], extra: 10000, blocker: null, blocker_text: null, ...o,
+  };
+}
+const monthCard = () => screen.getByRole("region", { name: "本月預算放得下" });
+async function approveButton() {
+  return (await screen.findByRole("button", { name: "核准上架清單 →" })) as HTMLButtonElement;
+}
+
+describe("確認上架清單・本月預算 (F41-I05)", () => {
+  it("fits: the month before this launch, this launch on top, and approval open", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock() }));
+    renderAt("list");
+    const approve = await approveButton();
+    await waitFor(() => expect(approve.disabled).toBe(false));
+    const card = monthCard();
+    expect(within(card).getByText("放得下")).toBeTruthy();
+    expect(within(card).getByText("10 月還能花 11,932")).toBeTruthy();
+    expect(within(card).getByText("這期要花 10,000", { exact: false })).toBeTruthy();
+    expect(within(card).getByText("還剩 1,932", { exact: false })).toBeTruthy();
+    expect(screen.getByText("核准不會改動平台")).toBeTruthy();
+  });
+
+  it("unset: a link to set the month budget, and approval waits with the backend's sentence", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
+      amount: null, revision: 0, available: null, confirmed_at: null, blocker: "unset", blocker_text: "要先設 10 月月預算",
+    }) }));
+    renderAt("list");
+    expect(await screen.findByText("⚠ 要先設 10 月月預算")).toBeTruthy();
+    const card = monthCard();
+    expect(within(card).getByText("還沒設月預算")).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect((await approveButton()).disabled).toBe(true);
+  });
+
+  it("short: 放不下, what is left against what this launch needs, the two ways out, and approval waits", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
+      amount: 21000, available: -9068, blocker: "short", blocker_text: "10 月預算不夠這期花",
+    }) }));
+    renderAt("list");
+    expect(await screen.findByText("⚠ 10 月預算不夠這期花")).toBeTruthy();
+    const card = monthCard();
+    expect(within(card).getByText("放不下")).toBeTruthy();
+    expect(within(card).queryByText("放得下")).toBeNull();
+    expect(within(card).getByText("10 月只剩 932")).toBeTruthy();
+    expect(within(card).getByText("不夠 9,068", { exact: false })).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(within(card).getByRole("link", { name: "改這期總預算" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=strategy");
+    expect((await approveButton()).disabled).toBe(true);
+  });
+
+  it("an earlier blocker still speaks first; the month reason waits its turn", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({
+      summary: { ...view().summary, ads: 0, slots_ready: 0 },
+      month_budget: monthBlock({ amount: null, available: null, blocker: "unset", blocker_text: "要先設 10 月月預算" }),
+    }));
+    renderAt("list");
+    expect(await screen.findByText("還沒有任何一則廣告的素材就緒，先到素材補圖")).toBeTruthy();
+    expect(screen.queryByText("⚠ 要先設 10 月月預算")).toBeNull();
+  });
+
+  it("no month block (older backend, or null): no card and no extra blocker", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: null }));
+    renderAt("list");
+    const approve = await approveButton();
+    await waitFor(() => expect(approve.disabled).toBe(false));
+    expect(screen.queryByRole("region", { name: "本月預算放得下" })).toBeNull();
   });
 });
 

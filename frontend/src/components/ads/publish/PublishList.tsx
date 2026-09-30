@@ -2,10 +2,12 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { getPublish, publishCampaign, type CampaignDetail } from "@/lib/adsApi";
-import type { LaunchView } from "@/lib/adsLaunchApi";
+import type { MonthlyBudget } from "@/lib/adsChangeApi";
+import type { LaunchMonthBudget, LaunchView } from "@/lib/adsLaunchApi";
 import { getOrgId } from "@/lib/auth";
-import { useApiRead } from "@/lib/useApiRead";
+import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
+import { BudgetFitCard } from "../flow/confirmParts";
 import { ActionBar, CopyField, CopyFields, ReadFailed, TodoRow, formatAmount } from "../patterns";
 import { LaunchSettingsCard } from "./LaunchSettingsCard";
 import { ItemTitle, PublishHead, campaignPath, fieldText, periodText, publishPath, summaryFields } from "./PublishFlow";
@@ -42,6 +44,19 @@ function capTile(campaign: CampaignDetail | null, ownCap: number | null) {
   return { label, value: `${amount} 元`, unknown: false, note };
 }
 
+/** F41-I05: the launch view's month block as the month-budget card reads it. The card (shared with the add-budget
+ * page) takes the month *before* the change and draws `extra` on top; the backend's block already carries this
+ * launch inside `reserved_increases` and `available`, so it is taken back out here, once. The block arrives with the
+ * list, so the read is always settled. */
+function monthRead(block: LaunchMonthBudget): ApiRead<MonthlyBudget | null> {
+  const data: MonthlyBudget = {
+    ...block,
+    reserved_increases: block.reserved_increases - block.extra,
+    available: block.available === null ? null : block.available + block.extra,
+  };
+  return { status: "ready", data, error: null, reload: () => {} };
+}
+
 export function PublishList({ brandId, campaignId, name, campaign, campaignFailed, onCampaignRetry, onCampaignSaved, view, onApproved }: {
   brandId: string;
   campaignId: string;
@@ -69,11 +84,15 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
   const [error, setError] = useState<string | null>(null);
 
   const hash = hashRead.status === "ready" ? hashRead.data : null;
-  const blocker = campaignFailed ? "活動資料讀不到，先按重試"
+  const month = approved ? null : view.month_budget ?? null;
+  const pageBlocker = campaignFailed ? "活動資料讀不到，先按重試"
     : settingsBlocker
     ?? (s.ads === 0 ? "還沒有任何一則廣告的素材就緒，先到素材補圖"
       : hashRead.status === "error" ? "核准內容讀不到，請重新開啟本頁"
       : !hash ? "正在取得本版核准內容" : null);
+  // F41-I05: the month rule has one owner (the backend's launch preflight); its reason is printed verbatim, last.
+  const monthBlocker = month?.blocker_text ?? null;
+  const blocker = pageBlocker ?? monthBlocker;
 
   async function approve() {
     if (busy || blocker || !hash) return;
@@ -105,6 +124,12 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
         <Tile label="素材" value={`${s.slots_ready}／${s.slots_total}`}
           note={missing ? `缺圖的那 ${missing} 則先不建立，不會花到錢；補上圖後再加上去` : "都齊了"} />
       </section>
+
+      {month && (
+        <BudgetFitCard read={monthRead(month)} month={month.month} extra={month.extra} premiseChanged={false} busy={false}
+          onRecheck={() => {}} budgetHref={`/brands/${encodeURIComponent(brandId)}/ads`}
+          launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy` }} />
+      )}
 
       {campaign ? (
         <LaunchSettingsCard brandId={brandId} campaign={campaign} locked={approved}
@@ -141,7 +166,10 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       ) : (
         <ActionBar back={{ label: "素材", to: `${campaignPath(brandId, campaignId)}?tab=assets` }}
           exit={{ label: "先不要，回投放中心", to: `/brands/${encodeURIComponent(brandId)}/ads` }}
-          hint={blocker ?? "核准不會改動平台"}>
+          hint={blocker === null ? "核准不會改動平台" : pageBlocker ?? undefined}>
+          {pageBlocker === null && monthBlocker && (
+            <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {monthBlocker}</span>
+          )}
           <Button disabled={busy || blocker !== null} onClick={() => void approve()}>{busy ? "核准中…" : "核准上架清單 →"}</Button>
         </ActionBar>
       )}

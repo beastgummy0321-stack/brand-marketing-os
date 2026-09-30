@@ -2,6 +2,7 @@
  * 只是為了不撐破 800 行慣例，共用 `parseJsonOrThrow`／`BASE` 從那邊 import，不重寫一份。 */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
+import type { MonthlyBudget } from "./adsChangeApi";
 import type { SettingsReadback } from "./adsLaunchSettingsApi";
 
 /** F05-I04：可投放檢查表——`app/ads/readiness.py::launch_readiness()` 的回傳形狀，瀏覽器逐字印
@@ -114,6 +115,16 @@ export interface LaunchItem {
   reason: string | null;
 }
 
+/** F41-I03 (`change_control_launch.py::month_fit`): the list step's month-budget block. The money fields are the
+ * `getMonthlyBudget` view with this launch's reservation already added (`reserved_increases` includes `extra`, and
+ * `available` is what is left after it), plus `extra` itself and the backend's approval refusal, if any, mirroring
+ * `month_budget.preflight` in its order. `blocker_text` is printed verbatim; the browser never recomputes the rule. */
+export interface LaunchMonthBudget extends MonthlyBudget {
+  extra: number;
+  blocker: "unset" | "uncertain" | "short" | null;
+  blocker_text: string | null;
+}
+
 export interface DeferredAd { ad_id: string; name: string; group_name: string }
 
 export interface LaunchView {
@@ -125,6 +136,8 @@ export interface LaunchView {
   deferred_ads: DeferredAd[];
   read_at: string | null;
   settings_readback: SettingsReadback | null;
+  /** Null on approved steps; absent from an older backend (and from test literals). Either way: no card, no blocker. */
+  month_budget?: LaunchMonthBudget | null;
 }
 
 const launchPath = (brandId: string, campaignId: string) =>

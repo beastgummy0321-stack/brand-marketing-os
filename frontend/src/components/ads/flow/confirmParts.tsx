@@ -13,7 +13,8 @@ import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
 
 /** The evidence and learn cards of the confirm step (`ConfirmPage`), split out so the page stays under the
- * 800-line cap (`architectureBoundaries.test.ts`). Each card is page-private; nothing else imports them. */
+ * 800-line cap (`architectureBoundaries.test.ts`). The cards are page-private except `BudgetFitCard`, which the
+ * first-launch list (`publish/PublishList.tsx`, F41-I05) reuses so the month-budget card exists once. */
 
 /** 暫停提議的證據卡：有 triage 就是完整量尺版；triage 已經不在佇列裡（entered by :setId 且
  * 廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。 */
@@ -147,7 +148,7 @@ export function CopyEvidence({ item }: { item: ChangeItem }) {
 // 圖例色點跟長條分段同一組 token，跟 `home/BudgetCard.tsx::Swatch` 同一份色碼（design-system
 // §2.1，v7 原型的 `.lg i`）——不 import 那支：`home/`／`flow/` 是同一個功能資料夾底下的兩顆小零
 // 件，各自留一份比為了一顆兩行的 dot 特地打通兩邊耦合合理。
-const SWATCH_TONE = { "chart-rest": "bg-chart-rest", border: "bg-border", success: "bg-success", primary: "bg-primary" } as const;
+const SWATCH_TONE = { "chart-rest": "bg-chart-rest", border: "bg-border", success: "bg-success", danger: "bg-danger", primary: "bg-primary" } as const;
 function Swatch({ tone }: { tone: keyof typeof SWATCH_TONE }) {
   return <span aria-hidden="true" className={`inline-block size-2 rounded-sm ${SWATCH_TONE[tone]}`} />;
 }
@@ -199,13 +200,17 @@ function reserveLine(owners: OngoingOwner[]): string | null {
  * 色碼與誠實未知邏輯。預留＝`ongoing_estimate + reserved_increases`（後端 `preflight` 從 `available` 扣掉的
  * 兩筆）；`extra`（這次要花，F25-I03 `scale.month.extra_needed`）> 0 才多畫一段成功色並從還剩扣掉——
  * 沒有 `extra` 的既有（非 scale）預算變更清單維持三段。總額未知時長條只畫灰階，數字仍照實印
- * （design-system §7「誠實的空狀態」）。 */
-function BudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: number }) {
+ * （design-system §7「誠實的空狀態」）。`launch`（F41-I05 第一次上架清單，原型 `#/publish` 的 `budgetBar()`）：
+ * 這段叫「這期要花」，放不下時截到剩下的額度、改畫危險色，最後一格印「不夠 X」。 */
+function BudgetBar({ budget, extra = 0, launch = false }: { budget: MonthlyBudget; extra?: number; launch?: boolean }) {
   const { amount, known_spend, ongoing_estimate, reserved_increases, available } = budget;
   const reserved = ongoing_estimate === null ? null : ongoing_estimate + reserved_increases;
   const known = amount !== null && amount > 0 && known_spend !== null && reserved !== null && available !== null;
   const pct = (v: number) => Math.max(0, Math.min(100, (v / (amount as number)) * 100));
   const left = available === null ? null : available - extra;
+  const short = launch && left !== null && left < 0;
+  const extraWidth = launch && available !== null ? Math.min(extra, Math.max(0, available)) : extra;
+  const extraTone = short ? "danger" : "success";
   return (
     <div className="mt-2 space-y-1.5">
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
@@ -213,7 +218,7 @@ function BudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: numbe
           <>
             <div className="bg-chart-rest" style={{ width: `${pct(known_spend as number)}%` }} />
             <div className="bg-border" style={{ width: `${pct(reserved as number)}%` }} />
-            {extra > 0 && <div className="bg-success" style={{ width: `${pct(extra)}%` }} />}
+            {extra > 0 && <div className={SWATCH_TONE[extraTone]} style={{ width: `${pct(extraWidth)}%` }} />}
             <div className="bg-primary" style={{ width: `${pct(Math.max(0, left as number))}%` }} />
           </>
         )}
@@ -221,8 +226,8 @@ function BudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: numbe
       <div className="numeric flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {money(known_spend)}</span>
         <span className="inline-flex items-center gap-1.5"><Swatch tone="border" /><ReserveTerm /> {money(reserved)}</span>
-        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone="success" />這次要花 {money(extra)}</span>}
-        <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />還剩 {money(left)}</span>
+        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone={extraTone} />{launch ? "這期要花" : "這次要花"} {money(extra)}</span>}
+        <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />{short ? `不夠 ${money(-(left as number))}` : `還剩 ${money(left)}`}</span>
       </div>
     </div>
   );
@@ -232,17 +237,21 @@ function BudgetBar({ budget, extra = 0 }: { budget: MonthlyBudget; extra?: numbe
  * 前提變了，標題＋「重新檢查」（重建草稿，`ConfirmPage` 的既有動作）；(ii) 這個月還沒設月預算——標題＋
  * 「設定 N 月月預算 →」連去月預算所在的投放中心首頁；(i) 放得下——算式標題（月預算 − 已花 − 預留）、
  * 四段長條、`ongoing_owners` 的預留說明。`uncertainties` 三態都照印在標題下（後端 `preflight` 的原句）。
- * 核准鈕該不該灰、旁邊的原因，由 `ConfirmPage` 從同一份 `read` 判斷（`approveBlock`），不在這裡另算一份。 */
-export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref }: {
+ * 核准鈕該不該灰、旁邊的原因，由 `ConfirmPage` 從同一份 `read` 判斷（`approveBlock`），不在這裡另算一份。
+ * `launch`（F41-I05，原型 `#/publish`）只給第一次上架清單：多一個 (iv) 放不下——「N 月只剩 X」、「這期要花 Y」、
+ * 「提高 N 月月預算」（`budgetHref`）與「改這期總預算」（`launch.strategyHref`）；沒給時 `ConfirmPage` 照舊。 */
+export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref, launch }: {
   read: ApiRead<MonthlyBudget | null>; month: string; extra?: number;
   premiseChanged: boolean; busy: boolean; onRecheck: () => void; budgetHref: string;
+  launch?: { strategyHref: string };
 }) {
   const id = useId();
   const budget = read.data;
   const n = monthOf(budget?.month ?? month);
-  const state = premiseChanged ? "recheck" : budget && budget.amount === null ? "unset" : "fit";
-  const reserved = budget && budget.ongoing_estimate !== null ? budget.ongoing_estimate + budget.reserved_increases : null;
   const fits = budget?.available !== null && budget?.available !== undefined && budget.available - extra >= 0;
+  const state = premiseChanged ? "recheck" : budget && budget.amount === null ? "unset"
+    : launch && budget && budget.available !== null && !fits ? "short" : "fit";
+  const reserved = budget && budget.ongoing_estimate !== null ? budget.ongoing_estimate + budget.reserved_increases : null;
   const line = reserveLine(budget?.ongoing_owners ?? []);
   return (
     <section aria-labelledby={id} className="rounded-xl border border-border bg-card p-5">
@@ -250,8 +259,23 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
         <h2 id={id} className="text-sm font-medium">本月預算放得下</h2>
         {state === "recheck" && <Chip tone="warn">要重新檢查</Chip>}
         {state === "unset" && <Chip tone="warn">還沒設月預算</Chip>}
+        {state === "short" && <Chip tone="bad">放不下</Chip>}
         {state === "fit" && fits && <Chip tone="ok">放得下</Chip>}
       </div>
+      {state === "short" && budget && launch && (
+        <>
+          <p className="mt-3 text-sm">
+            <b>{n} 月只剩 {money(budget.available)}</b>
+            <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}），這期要花 {money(extra)}</span>
+          </p>
+          <BudgetBar budget={budget} extra={extra} launch />
+          {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
+            <Button variant="outline" size="sm" asChild><Link to={budgetHref}>提高 {n} 月月預算</Link></Button>
+            <Button variant="ghost" size="sm" asChild><Link to={launch.strategyHref}>改這期總預算</Link></Button>
+          </div>
+        </>
+      )}
       {state === "recheck" && (
         <div className="mt-3 flex flex-wrap items-center gap-3.5">
           <p className="text-sm"><b>計畫、素材或月份已改變</b><span className="text-muted-foreground">，這批內容要重新對一次</span></p>
@@ -277,7 +301,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
             <b>{n} 月還能花 {money(budget.available)}</b>
             <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}）</span>
           </p>
-          <BudgetBar budget={budget} extra={extra} />
+          <BudgetBar budget={budget} extra={extra} launch={launch !== undefined} />
           {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
         </>
       )}
