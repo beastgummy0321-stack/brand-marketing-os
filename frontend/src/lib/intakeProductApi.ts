@@ -313,6 +313,9 @@ export interface Bundle extends SellWayMoney {
   };
 }
 
+/** `POST …/bundles/preview`: a bundle not created yet, as `GET …/bundles/{id}` would show it. */
+export type BundlePreview = Omit<Bundle, "id"> & { id: null };
+
 export interface BundleInput extends MoneyInput {
   name: string;
   /** ≥2 different finished products. */
@@ -408,6 +411,10 @@ export const saveProductSellWays = (
 
 export const createBundle = (brandId: string, input: BundleInput): Promise<Bundle> =>
   send(`${brandBase(brandId)}/bundles`, json("POST", input));
+
+/** 新增組合's numbers before 「建立組合」: `createBundle`'s body, nothing written; 400 on the same refusals. */
+export const previewBundle = (brandId: string, input: BundleInput): Promise<BundlePreview> =>
+  send(`${brandBase(brandId)}/bundles/preview`, json("POST", input));
 
 export const fetchBundle = (brandId: string, bundleId: string): Promise<Bundle> =>
   send(`${brandBase(brandId)}/bundles/${encodeURIComponent(bundleId)}`);
