@@ -106,8 +106,15 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await expect(page.getByText("還沒有商品")).toBeVisible();
   await assertNoOverflow("/brands/:brandId/products（空）");
 
-  // --- 手動新增一個產品（同 ads-target.spec.ts，同步、不花錢），商品頁出現它的卡片 ---------------
-  const product = await api<{ id: string }>(page, headers, "POST", `/api/products/brands/${brandId}`, { name: `寬度測試產品 ${stamp}` });
+  // --- 用商品建檔建一個商品（同 ads-target.spec.ts：建立 → 賣法與價格 → 完成，同步、不花錢），商品頁出現它的卡片；
+  // F43-I04：只有建完的賣法能在建立精靈裡選，所以不再用手動新增產品 -----------------------------------
+  const intake = `/api/intake/brands/${brandId}/products`;
+  const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: `寬度測試產品 ${stamp}` });
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
+    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+  });
+  await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
+  const product = { id: onboarded.data.product_id };
   await page.reload();
   await expect(page.getByRole("link", { name: `寬度測試產品 ${stamp}` })).toBeVisible();
   await assertNoOverflow("/brands/:brandId/products");
