@@ -1,14 +1,209 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { useParams } from "react-router-dom";
+import type { OnboardingIdentity } from "@/lib/intakeOnboardingApi";
+import { fetchOnboardingIdentity, saveOnboardingIdentity } from "@/lib/intakeOnboardingApi";
+import { useAuthedImage } from "@/lib/useAuthedImage";
+import { useFormSubmit } from "@/lib/useFormSubmit";
+import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
+import { AiTag } from "../shared/AiTag";
+import { CustomEscape } from "../shared/CustomEscape";
 
-/** Brand onboarding #/b3 品牌是誰 (prototype `R.b3`). Stub so the seven steps are walkable end to end;
- * F42-I08 fills the step's cards and saves them on 下一步. */
+/** Prototype `chips(…, 2)`: at most two tones; picking a third drops the oldest. */
+const TONE_MAX = 2;
+
+/** Brand onboarding `#/b3` 品牌是誰 (prototype `R.b3` of `.harness/scratch/prototype/f41-onboarding/index.html`):
+ * positioning, tone (1–2) and visual style, pre-filled from `GET …/onboarding/identity` with the scan's tag
+ * until the user changes the field; each block ends with 「自訂」. 下一步 saves the three through
+ * `PUT …/onboarding/identity` and moves on only after the server confirmed; an error keeps the user here. */
 export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
+  const { brandId = "" } = useParams<{ brandId: string }>();
+  const [loaded, setLoaded] = useState<OnboardingIdentity | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [positioning, setPositioning] = useState("");
+  const [tones, setTones] = useState<string[]>([]);
+  const [toneOptions, setToneOptions] = useState<string[]>([]);
+  const [visual, setVisual] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchOnboardingIdentity(brandId)
+      .then((identity) => {
+        if (cancelled) return;
+        setLoaded(identity);
+        setPositioning(identity.positioning.value);
+        setTones(identity.tone.values.slice(0, TONE_MAX));
+        setToneOptions(withTones(identity.tone.options, identity.tone.values));
+        setVisual(identity.visual.value);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  const { saving, error, submit } = useFormSubmit(async () => {
+    await saveOnboardingIdentity(brandId, { positioning: positioning.trim(), tone: tones, visual: visual.trim() });
+    onNext();
+  });
+
+  const head = <OnboardingStepHead {...nav} title="品牌是誰" purpose="廣告的口氣和畫面跟著這裡走" />;
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col gap-4">
+        {head}
+        <p role="alert" className="text-sm text-danger">{loadError}</p>
+        <OnboardingBar back={back} />
+      </div>
+    );
+  }
+
+  function pickTone(tone: string) {
+    setTones((prev) => {
+      if (prev.includes(tone)) return prev.filter((t) => t !== tone);
+      return [...prev, tone].slice(-TONE_MAX);
+    });
+  }
+
+  /** Replace a text field with the 自訂 value; × puts the previous text back unless the user edited it since. */
+  function replaceWith(current: string, set: (update: (prev: string) => string) => void) {
+    return (value: string) => {
+      set(() => value);
+      return () => set((now) => (now === value ? current : now));
+    };
+  }
+
   return (
-    <div className="flex flex-col gap-4">
-      <OnboardingStepHead {...nav} title="品牌是誰" purpose="廣告的口氣和畫面跟著這裡走" />
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (loaded && !saving) void submit();
+      }}
+    >
+      {head}
+      {loaded && (
+        <section className="rounded-xl border border-border bg-card px-[22px] py-5">
+          <Row label={<label htmlFor="b3-positioning">一句話說你的品牌</label>} note="寫給顧客看的那種">
+            <textarea
+              id="b3-positioning"
+              rows={2}
+              className="w-full rounded-lg border border-input bg-card px-3 py-[9px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none focus-visible:outline-none"
+              value={positioning}
+              onChange={(e) => setPositioning(e.target.value)}
+            />
+            {positioning === loaded.positioning.value && <Tag source={loaded.positioning.source} note={loaded.positioning.note} />}
+            <CustomEscape
+              brandId={brandId}
+              block="positioning"
+              placeholder="例如：我們不是保健品，是給懶人的營養零食"
+              onValue={replaceWith(positioning, setPositioning)}
+            />
+          </Row>
+          <Row label="說話的口氣" note="挑 1～2 個">
+            <div role="group" aria-label="說話的口氣" className="flex flex-wrap gap-2">
+              {toneOptions.map((tone) => {
+                const on = tones.includes(tone);
+                return (
+                  <button
+                    key={tone}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => pickTone(tone)}
+                    className={cn(
+                      "rounded-full border px-[13px] py-[5px] text-[13px] font-medium hover:border-primary",
+                      on ? "border-primary bg-[#faf8ff] text-accent-foreground shadow-[0_0_0_1px_var(--color-primary)]" : "border-border bg-card",
+                    )}
+                  >
+                    {tone}
+                  </button>
+                );
+              })}
+            </div>
+            {sameTones(tones, loaded.tone.values) && <Tag source={loaded.tone.source} note={loaded.tone.note} gap="mt-1.5" />}
+            <CustomEscape
+              brandId={brandId}
+              block="tone"
+              placeholder="例如：像健身房的教練朋友，講話直、偶爾吐槽"
+              onOption={({ label }) => {
+                const existed = toneOptions.includes(label);
+                const before = tones;
+                if (!existed) setToneOptions((prev) => [...prev, label]);
+                setTones((prev) => (prev.includes(label) ? prev : [...prev, label].slice(-TONE_MAX)));
+                return () => {
+                  if (!existed) setToneOptions((prev) => prev.filter((t) => t !== label));
+                  setTones((prev) => (prev.includes(label) && !before.includes(label) ? prev.filter((t) => t !== label) : prev));
+                };
+              }}
+            />
+          </Row>
+          <Row label="畫面風格" note="從你的產品照看出來的">
+            <div className="flex flex-wrap items-center gap-3">
+              {loaded.visual.photo_urls.map((url) => (
+                <Thumb key={url} url={url} />
+              ))}
+              {visual && <span className="text-[12.5px]">{visual}</span>}
+              {visual === loaded.visual.value && <AiTag source={loaded.visual.source} note={loaded.visual.note} />}
+            </div>
+            <div className="mt-3.5">
+              <CustomEscape
+                brandId={brandId}
+                block="visual"
+                placeholder="例如：黑底、霓虹感、健身房器材，不要粉嫩"
+                onValue={replaceWith(visual, setVisual)}
+              />
+            </div>
+          </Row>
+        </section>
+      )}
+
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+
       <OnboardingBar back={back}>
-        <BarNext label="下一步" onClick={onNext} />
+        <BarNext type="submit" label="下一步" disabled={!loaded || saving} />
       </OnboardingBar>
+    </form>
+  );
+}
+
+/** The step's option list plus any pre-filled tone the list does not carry (an AI tone outside the vocabulary). */
+function withTones(options: string[], values: string[]): string[] {
+  return [...options, ...values.filter((v) => !options.includes(v))];
+}
+
+function sameTones(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((t) => b.includes(t));
+}
+
+function Tag({ source, note, gap = "mt-1" }: { source: OnboardingIdentity["positioning"]["source"]; note: string; gap?: string }) {
+  if (source === "saved") return null;
+  return (
+    <div className={gap}>
+      <AiTag source={source} note={note} />
     </div>
   );
+}
+
+/** Prototype `.q`: label column (bold + one small note) and the field. */
+function Row({ label, note, children }: { label: ReactNode; note?: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[170px_minmax(0,1fr)] items-start gap-x-5 gap-y-2.5 border-t border-border py-3.5 first:border-t-0 first:pt-0 last:pb-0">
+      <div>
+        <b className="block text-sm font-semibold">{label}</b>
+        {note && <span className="mt-0.5 block text-xs text-muted-foreground">{note}</span>}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+/** Prototype `th(…, 56)`: a brand photo thumbnail. */
+function Thumb({ url }: { url: string }) {
+  const { src } = useAuthedImage(url);
+  return src
+    ? <img src={src} alt="" className="size-14 rounded-lg object-cover" />
+    : <span className="size-14 rounded-lg bg-muted" aria-hidden="true" />;
 }

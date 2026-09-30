@@ -1,10 +1,12 @@
 /** frontend/src/components/intake/IntakeWizard.test.tsx — the seven-step brand onboarding shell
  * (F42-I06): the step dots, step 2 skipped when the brand gave no website or photo, a completed brand
- * opening step 7, and `?step=N` re-entry. The API calls are fakes (importActual + override), no server. */
+ * opening step 7, and `?step=N` re-entry. The API calls are fakes (importActual + override), no server.
+ * F42-I08: the walk goes through the real steps, so every step's onboarding fetch/save has a working
+ * default here (`answerEveryStep`, reset before each test); a step issue adds no mocks to this file. */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeApi")>("@/lib/intakeApi");
@@ -12,7 +14,23 @@ vi.mock("@/lib/intakeApi", async () => {
 });
 vi.mock("@/lib/intakeOnboardingApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeOnboardingApi")>("@/lib/intakeOnboardingApi");
-  return { ...actual, fetchOnboardingStatus: vi.fn(), completeOnboarding: vi.fn(), fetchOnboardingBasics: vi.fn() };
+  return {
+    ...actual,
+    fetchOnboardingStatus: vi.fn(),
+    completeOnboarding: vi.fn(),
+    fetchOnboardingBasics: vi.fn(),
+    saveOnboardingBasics: vi.fn(),
+    fetchOnboardingScan: vi.fn(),
+    startOnboardingScan: vi.fn(),
+    proposeCustom: vi.fn(),
+    fetchOnboardingIdentity: vi.fn(),
+    saveOnboardingIdentity: vi.fn(),
+    fetchOnboardingEvidence: vi.fn(),
+    saveOnboardingEvidence: vi.fn(),
+    fetchOnboardingMedia: vi.fn(),
+    saveOnboardingMedia: vi.fn(),
+    fetchOnboardingTools: vi.fn(),
+  };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({
@@ -24,16 +42,99 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 
 import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
-import type { OnboardingStatus } from "@/lib/intakeOnboardingApi";
-import { fetchOnboardingBasics, fetchOnboardingStatus } from "@/lib/intakeOnboardingApi";
+import type {
+  OnboardingBasics,
+  OnboardingEvidence,
+  OnboardingIdentity,
+  OnboardingMedia,
+  OnboardingScan,
+  OnboardingStatus,
+  OnboardingTools,
+} from "@/lib/intakeOnboardingApi";
+import {
+  completeOnboarding,
+  fetchOnboardingBasics,
+  fetchOnboardingEvidence,
+  fetchOnboardingIdentity,
+  fetchOnboardingMedia,
+  fetchOnboardingScan,
+  fetchOnboardingStatus,
+  fetchOnboardingTools,
+  proposeCustom,
+  saveOnboardingBasics,
+  saveOnboardingEvidence,
+  saveOnboardingIdentity,
+  saveOnboardingMedia,
+  startOnboardingScan,
+} from "@/lib/intakeOnboardingApi";
 import { IntakeWizard } from "./IntakeWizard";
 
 const mockStatus = vi.mocked(fetchOnboardingStatus);
 const mockDraft = vi.mocked(fetchIntakeDraft);
 const mockBasics = vi.mocked(fetchOnboardingBasics);
 
+// Real-shaped answers of each step's GET (a brand whose scan read one page); each PUT answers its GET.
+const BASICS: OnboardingBasics = {
+  name: "山嵐手作果醬 Mountain Mist Handmade Jam Co.",
+  urls: ["https://mountainmist.example/"],
+  photos: [],
+  market_region: "TW",
+  regulatory_regime: "food_tw",
+  advertising_history: "has_history",
+  client_name: "",
+  description: "",
+};
+const SCAN: OnboardingScan = {
+  status: "done",
+  error: null,
+  found: [{ area: "品牌是誰", text: "手工小批果醬・語氣溫柔", note: "頁面 1" }],
+  not_found: ["媒體報導", "銷售數據"],
+  prefilled: 3,
+  pages_read: 1,
+  photos_read: 0,
+};
+const IDENTITY: OnboardingIdentity = {
+  positioning: { value: "山裡的水果，小鍋慢慢熬", source: "ai", note: "頁面 1" },
+  tone: { values: ["溫柔"], options: ["親切", "專業", "直接", "幽默", "溫柔", "熱血"], source: "ai", note: "頁面 1" },
+  visual: { value: "木桌、自然光", source: "none", note: "", photo_urls: [] },
+};
+const EVIDENCE: OnboardingEvidence = {
+  proof: [],
+  proof_kinds: [{ key: "customer_review", label: "顧客評價" }],
+  policies: [],
+  policy_types: [],
+  cooling_off: { applies: true, disclosure: "" },
+  forbidden: [],
+  regime_label: "台灣食品（食安法）",
+};
+const MEDIA: OnboardingMedia = { media: null };
+const TOOLS: OnboardingTools = { connectors: [], conversion_goal: null, conversion_goal_options: [] };
+
+/** Every step's fetch/save answers without a server; a test overrides only what it is about. */
+function answerEveryStep() {
+  mockBasics.mockResolvedValue(BASICS);
+  vi.mocked(saveOnboardingBasics).mockResolvedValue(BASICS);
+  vi.mocked(fetchOnboardingScan).mockResolvedValue(SCAN);
+  vi.mocked(startOnboardingScan).mockResolvedValue(SCAN);
+  vi.mocked(proposeCustom).mockResolvedValue({ block: "tone", kind: "option", option: { label: "像鄰居" } });
+  vi.mocked(fetchOnboardingIdentity).mockResolvedValue(IDENTITY);
+  vi.mocked(saveOnboardingIdentity).mockResolvedValue(IDENTITY);
+  vi.mocked(fetchOnboardingEvidence).mockResolvedValue(EVIDENCE);
+  vi.mocked(saveOnboardingEvidence).mockResolvedValue(EVIDENCE);
+  vi.mocked(fetchOnboardingMedia).mockResolvedValue(MEDIA);
+  vi.mocked(saveOnboardingMedia).mockResolvedValue({ media: "photo" });
+  vi.mocked(fetchOnboardingTools).mockResolvedValue(TOOLS);
+  vi.mocked(completeOnboarding).mockResolvedValue({
+    step: 7, completed: true, skipped_scan: false, prefill_status: "done", prefill_error: null,
+  });
+}
+
+beforeEach(() => {
+  answerEveryStep();
+});
+
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 function status(overrides: Partial<OnboardingStatus> = {}): OnboardingStatus {
