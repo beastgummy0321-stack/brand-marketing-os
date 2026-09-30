@@ -45,12 +45,12 @@ def _evidence_item(confirmed: list, brand_id: str) -> dict:
     """Green with at least one confirmed proof or store-policy fact (onboarding step 4). The
     cooling-off exemption is a legal notice, not something an ad can say, so it is not counted."""
     proof = sum(1 for fact in confirmed if fact["fact_type"] == "proof")
-    policy = sum(1 for fact in confirmed
-                 if fact["fact_type"] == "policy" and fact.get("fact_key") != COOLING_OFF_EXEMPT_KEY)
+    policy = sum(1 for fact in confirmed if fact["fact_type"] == "policy"
+                 and fact.get("fact_key") != COOLING_OFF_EXEMPT_KEY)
     fix = {"label": "證據與政策", "fix_href": _intake_step(brand_id, 4)}
     if proof or policy:
-        return {"key": "evidence", "state": "green", "reason": f"品牌證據 {proof} 項・政策 {policy} 項",
-                "fix_label": "去改", **fix}
+        return {"key": "evidence", "state": "green",
+                "reason": f"品牌證據 {proof} 項・政策 {policy} 項", "fix_label": "去改", **fix}
     return {"key": "evidence", "state": "yellow",
             "reason": "還沒有登記證據或政策；廣告只會講產品本身",
             "fix_label": "去登記證據與政策", **fix}

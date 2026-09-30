@@ -258,9 +258,9 @@ _PLAN_REPLY = json.dumps({
 
 class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
     """F04-I24 falsifier: every route that returns `{"campaign": ...}` returns the same shape as
-    GET — `campaign_detail` + `asset_readiness` — never a bare `campaign_detail` missing the
-    field `StrategyTab.tsx` reads unconditionally (drill 4, custom-budget scenario -> white
-    screen)."""
+    GET — `campaign_detail` + `asset_readiness` (+ F42-I02 `materials`) — never a bare
+    `campaign_detail` missing the field `StrategyTab.tsx` reads unconditionally (drill 4,
+    custom-budget scenario -> white screen)."""
 
     def setUp(self):
         self.client = TestClient(main.app)
@@ -296,6 +296,9 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
         readiness = response.json()["campaign"]["asset_readiness"]
         self.assertIsInstance(readiness["total"], int)
         self.assertIsInstance(readiness["ready_count"], int)
+        # F42-I02: the strategy tab reads 「這期會用」 from the same shape.
+        materials = response.json()["campaign"]["materials"]
+        self.assertEqual(set(materials), {"offers", "proof", "media"})
 
     def test_every_route_back_to_campaign_carries_asset_readiness(self):
         create = self.client.post(

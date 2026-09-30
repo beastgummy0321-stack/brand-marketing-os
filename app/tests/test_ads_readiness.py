@@ -173,7 +173,8 @@ class EvidenceTest(ReadinessTestBase):
         self.assertEqual(item["state"], "yellow")
         self.assertEqual(item["reason"], "還沒有登記證據或政策；廣告只會講產品本身")
         bi_repo.save_brand_policies(web.conn, self.brand_id, [
-            {"key": "cooling_off_exempt", "params": {"disclosure": "本商品為易腐敗食品，不適用七天猶豫期"}},
+            {"key": "cooling_off_exempt",
+             "params": {"disclosure": "本商品為易腐敗食品，不適用七天猶豫期"}},
         ], actor=ACTOR)
         self.assertEqual(self._item("evidence")["state"], "yellow")
 
