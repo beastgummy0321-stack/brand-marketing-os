@@ -206,7 +206,8 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const capHint = capShown === null
     ? (way && way.cap_per_sale === null ? "這個賣法還算不出打平；可以自己填" : "")
     : breakEven === null ? ""
-      : capShown >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(capShown - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - capShown)}`;
+      : capShown === breakEven ? `等於打平 ${fmt(breakEven)}`
+      : capShown > breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(capShown - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - capShown)}`;
   /** Only the changed fold values go out; the server takes the rest from the brand and the sell-way (F43-I04). */
   const extras: CampaignCreateExtras & Pick<CampaignPicks, "customer_group_ids"> = {
     ...(platformChanged && platform ? { platform } : {}),
@@ -371,7 +372,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
               {data.default_objective && <span className="text-xs text-muted-foreground">預設＝品牌的成效目標</span>}
             </div>
             <div className="surface-body">
-              <PickGroup label="想要的結果" value={objective} onChange={(v) => !locked && setObjective(v)} className="flex flex-wrap gap-3 [&>*]:w-[180px]">
+              <PickGroup label="想要的結果" value={objective} onChange={(v) => !locked && setObjective(v)} className="flex flex-wrap gap-3 [&>*]:w-[170px]">
                 {data.objectives.filter((o) => o.available).map((o) => <PickCard key={o.key} value={o.key} title={o.label} note={o.description} />)}
               </PickGroup>
               {data.objectives.some((o) => !o.available) && (

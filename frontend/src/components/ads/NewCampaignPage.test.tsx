@@ -226,7 +226,7 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     expect(source("受眾")).toBe("來自商品：2 群顧客");
     expect(value("每筆上限")).toBe("669");
     expect(source("每筆上限")).toBe("來自賣法「三盒組」");
-    expect(screen.getByText("比打平 669 高 0")).toBeTruthy();
+    expect(screen.getByText("等於打平 669")).toBeTruthy();
     expect(value("落地頁")).toBe(VITAMIN_URL);
     expect(source("落地頁")).toBe("來自商品頁");
   });

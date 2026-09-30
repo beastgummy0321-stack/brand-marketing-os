@@ -242,7 +242,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     renderPage();
     await screen.findByText(LONG);
     expect(screen.getByRole("link", { name: "← 上一步" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
-    expect(screen.getByRole("link", { name: "回到選商品與目標" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
+    expect(screen.getByRole("link", { name: "回到建立活動" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
     await user.click(screen.getByRole("button", { name: "進階" }));
     expect(screen.getByRole("link", { name: "先處理自帶素材與手動交接" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
   });

@@ -16,13 +16,13 @@ import { Chip, FlowHeader, PickCard, ReadFailed, WaitLine, formatAmount, type Fl
 export const newCampaignPath = (brandId: string, createdId?: string | null) =>
   `/brands/${brandId}/ads/new${createdId ? `?created=${encodeURIComponent(createdId)}` : ""}`;
 
-/** `newHead()`: 選商品與目標 → 系統理解 → 策略. Step 1 links back only once a campaign exists (its picks reload
- * from it; going back never creates a second campaign). */
+/** `newHead()` (F43-I15: the f41-onboarding `#/new` dots): 建立活動 → 系統理解 → 產生策略. Step 1 links back only once
+ * a campaign exists (its picks reload from it; going back never creates a second campaign). */
 export function wizardSteps(brandId: string, createdId?: string | null): FlowStep[] {
   return [
-    { label: "選商品與目標", to: createdId ? newCampaignPath(brandId, createdId) : undefined },
+    { label: "建立活動", to: createdId ? newCampaignPath(brandId, createdId) : undefined },
     { label: "系統理解" },
-    { label: "策略" },
+    { label: "產生策略" },
   ];
 }
 
