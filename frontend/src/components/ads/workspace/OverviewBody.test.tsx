@@ -20,7 +20,7 @@ vi.mock("@/lib/adsTriageApi", async () => {
 });
 
 const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: "prd_cup", result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
-const NO_CAP = { ...CAP, value: null, basis: null, own_value: null, break_even: null, product_id: "prd_fall" };
+const NO_CAP = { ...CAP, value: null, basis: null, own_value: null, break_even: null, product_id: "prd_fall", knowledge_product_id: "kp_fall" };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "cmp_daily", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", cap: CAP,
     budget_planned: 30000, labels: { conversion: "購買", count: "購買數", cpa: "每次購買成本" }, groups: [], ...o } as unknown as CampaignDetail;
@@ -92,9 +92,19 @@ describe("draft (v10 camp/fall/overview)", () => {
     fireEvent.click(within(bar()).getByRole("button", { name: "去設上限 →" }));
     expect(onGo).toHaveBeenLastCalledWith("strategy");
     expect(document.querySelector('[data-slot=target-ruler][data-variant="empty"]')).toBeTruthy();
-    expect(screen.getByRole("link", { name: "去填商品成本" }).getAttribute("href")).toBe("/brands/brd_1/products/prd_fall?tab=economics-view");
+    // F43-I16: cost lives on the sell-way's knowledge product, step 4 (賣法與價格) of product onboarding.
+    expect(screen.getByRole("link", { name: "去填商品成本" }).getAttribute("href")).toBe("/brands/brd_1/products/kp_fall/onboarding?step=4");
     expect(getCampaignStructure).not.toHaveBeenCalled();
     expect(getQueue).not.toHaveBeenCalled();
+  });
+
+  it("去填商品成本 without a knowledge product (no product yet, or an older payload) opens the products page", () => {
+    for (const cap of [{ ...NO_CAP, product_id: null, knowledge_product_id: null }, { ...NO_CAP, knowledge_product_id: undefined }]) {
+      const { unmount } = renderBody(detail({ status: "draft", cap: cap as never, budget_planned: null }),
+        ws({ stage: { key: "plan", done: [] }, pending_count: 0, draft: DRAFT, totals: null }));
+      expect(screen.getByRole("link", { name: "去填商品成本" }).getAttribute("href")).toBe("/brands/brd_1/products");
+      unmount();
+    }
   });
 
   it("cap, budget and slots done, launch not approved: 3／4 with 查看, bar 確認上架清單; without the publish page it goes to assets", () => {

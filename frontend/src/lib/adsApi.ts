@@ -157,8 +157,9 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   name: string;
   goal_text: string | null;
   objective: string;
-  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`). */
-  cap: CapView;
+  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`); F43-I04: `knowledge_product_id` is the
+   * sell-way's first knowledge product (null without a product) — 「去填商品成本」 opens its 賣法與價格 step. */
+  cap: CapView & { knowledge_product_id?: string | null };
   start_date: string | null;
   end_date: string | null;
   status: CampaignStatus;

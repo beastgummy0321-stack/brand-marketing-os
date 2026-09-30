@@ -136,7 +136,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <Chip tone="warn">沒有商品成本</Chip>
             <Button asChild variant="link" size="sm" className="h-auto px-0">
-              <Link to={cap.product_id ? `/brands/${brandId}/products/${cap.product_id}?tab=economics-view` : `/brands/${brandId}/products`}>去填商品成本</Link>
+              <Link to={cap.knowledge_product_id ? `/brands/${brandId}/products/${cap.knowledge_product_id}/onboarding?step=4` : `/brands/${brandId}/products`}>去填商品成本</Link>
             </Button>
           </div>
         )}
