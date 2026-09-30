@@ -26,7 +26,8 @@ RISK = re.compile(
 # keep the exact-sentence rule; so do offer words outside this table (促銷, 體驗券, ...).
 _OFFER_FAMILIES = [
     (re.compile(r"免運"), "free_shipping"),
-    (re.compile(r"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|discount", re.IGNORECASE), "discount"),
+    (re.compile(r"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|"
+                r"discount", re.IGNORECASE), "discount"),
     (re.compile(r"贈品|加贈|買[一二三四五六七八九十\d]+送"), "bundle"),
     (re.compile(r"試用|試吃|試飲|試喝"), "trial_sample"),
     (re.compile(r"退款保證|保證退款"), "guarantee"),
