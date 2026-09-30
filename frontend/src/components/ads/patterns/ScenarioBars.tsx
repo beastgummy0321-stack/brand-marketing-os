@@ -90,25 +90,43 @@ export function ScenarioBars({ rows, budgetCap, selected, onSelect, resultCap = 
   );
 }
 
-const PART_FILL = ["bg-chart-revenue", "bg-chart-spend", "bg-chart-aqua", "bg-chart-soft", "bg-chart-rest"];
+/** Fill per allocation part, in the order the bar draws its non-zero parts. */
+export const ALLOCATION_FILL = ["bg-chart-revenue", "bg-chart-spend", "bg-chart-aqua", "bg-chart-soft", "bg-chart-rest"] as const;
+
+/** The fill each drawn part gets (a 0% part is not drawn and gets none) — exported so a caller that prints its own
+ * per-part rows (the strategy tab's 「預算怎麼分」) paints the same swatch as the bar segment. */
+export function allocationFills(parts: { key: string; pct: number }[]): Record<string, string> {
+  const fills: Record<string, string> = {};
+  parts.filter((p) => p.pct > 0).forEach((p, i) => { fills[p.key] = ALLOCATION_FILL[i % ALLOCATION_FILL.length]; });
+  return fills;
+}
 
 /** `.alloc` + legend: how the period budget splits across audiences. `total === null` prints percentages only
- * (「選好預算後算金額」 is the caller's heading note). */
-export function AllocationBar({ parts, total }: { parts: { key: string; label: string; pct: number }[]; total: number | null }) {
+ * (「選好預算後算金額」 is the caller's heading note). `legend={false}` is the F41 prototype's thin `.bb` bar — no text
+ * in the segments and no legend line — for a caller that prints one row per part itself (swatches: `allocationFills`). */
+export function AllocationBar({ parts, total, legend = true }: { parts: { key: string; label: string; pct: number }[]; total: number | null; legend?: boolean }) {
   const shown = parts.filter((p) => p.pct > 0);
+  const fills = allocationFills(parts);
+  if (!legend) {
+    return (
+      <div data-slot="allocation-bar" className="my-2.5 flex h-3 overflow-hidden rounded-md bg-muted" aria-hidden="true">
+        {shown.map((p) => <i key={p.key} data-key={p.key} className={cn("block", fills[p.key])} style={{ width: `${p.pct}%` }} />)}
+      </div>
+    );
+  }
   return (
     <div data-slot="allocation-bar">
       <div className="flex h-[34px] gap-0.5 overflow-hidden rounded-lg">
-        {shown.map((p, i) => (
-          <i key={p.key} className={cn("flex items-center overflow-hidden px-2.5 text-[12.5px] font-semibold whitespace-nowrap text-white not-italic", PART_FILL[i % PART_FILL.length])} style={{ width: `${p.pct}%` }}>
+        {shown.map((p) => (
+          <i key={p.key} className={cn("flex items-center overflow-hidden px-2.5 text-[12.5px] font-semibold whitespace-nowrap text-white not-italic", fills[p.key])} style={{ width: `${p.pct}%` }}>
             {p.pct >= 15 ? `${p.label} ${p.pct}%` : `${p.pct}%`}
           </i>
         ))}
       </div>
       <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-        {shown.map((p, i) => (
+        {shown.map((p) => (
           <span key={p.key}>
-            <i className={cn("mr-1.5 inline-block size-2 rounded-[2px]", PART_FILL[i % PART_FILL.length])} />
+            <i className={cn("mr-1.5 inline-block size-2 rounded-[2px]", fills[p.key])} />
             {p.label} {p.pct}%{total !== null && `・${formatAmount(Math.round((total * p.pct) / 100))}`}
           </span>
         ))}

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { BudgetScenarioRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
+import type { AdsBudgetBasisJson, BudgetScenarioRow, CampaignDetail, DeliveryGroupRow, StrategyBasis } from "@/lib/adsApi";
 import { adoptStrategy, patchCampaign, selectScenario } from "@/lib/adsApi";
 import { getTriage, type CapView } from "@/lib/adsTriageApi";
 import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
@@ -249,6 +249,96 @@ describe("StrategyTab (F28-I09)", () => {
     await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
     expect(screen.getByText("新客比例高：通勤情境近 30 天在新客的每筆成本最低")).toBeTruthy();
     expect(screen.getByText("新受眾的實際轉換率仍需驗證")).toBeTruthy();
+  });
+
+  describe("F41-I04: reasons per role and the learnings the plan used (prototype f41-drill8 ②)", () => {
+    /** Realistic shapes: three roles with one null rationale; amounts the API split from the saved 30,000. */
+    function withReasons(basis: Partial<StrategyBasis> = {}): CampaignDetail {
+      const c = campaign({ budget_planned: 30000, budget_scenario: "cap" });
+      const json = c.budget_basis_json as AdsBudgetBasisJson;
+      json.basis = { ...json.basis, ...basis };
+      json.strategy.allocation = [
+        { role: "new", label: "新客", pct: 60, rationale: "沿用上一期划算的「高強度日程中的輕鬆準備」，新客預算大多給它。", amount: 18000 },
+        { role: "retarget", label: "再行銷", pct: 30, rationale: null, amount: 9000 },
+        { role: "explore", label: "探索", pct: 10, rationale: "試「三盒 NT$999 另送一盒」，看優惠拉不拉得動新客。", amount: 3000 },
+      ];
+      return c;
+    }
+    const LONG_AD = "高強度日程中的輕鬆準備・通勤族上班前三十秒就能完成的每日營養補給方案（第二版）";
+    const COORD = [
+      {
+        grade: "on_target" as const, grade_label: "划算", cost_per_result: 421.6, ad_name: LONG_AD, campaign_name: "綜合維他命軟糖・10/03～10/09",
+        coordinates: [{ dimension: "audience", dimension_label: "受眾", label: "陌生、知道問題" }, { dimension: "effort", dimension_label: "痛點", label: "太麻煩" }],
+      },
+      {
+        grade: "over" as const, grade_label: "太貴", cost_per_result: null, ad_name: "考前一週的安心", campaign_name: "綜合維他命軟糖・10/03～10/09",
+        coordinates: [{ dimension: "format", dimension_label: "格式", label: "輪播" }],
+      },
+    ];
+    const VERDICT = { id: "lrn_1", text: "綜合維他命軟糖：新客在通勤情境划算", level: "product", needs_revalidation: false };
+
+    it("each role row prints its percent, amount and the planner's reason; a null reason leaves no empty line", async () => {
+      renderTab(withReasons());
+      const rows = await screen.findAllByRole("listitem");
+      const byRole = (role: string) => document.querySelector(`[data-slot=allocation-row][data-role=${role}]`) as HTMLElement;
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+      expect(byRole("new").textContent).toContain("60%・18,000 元");
+      expect(within(byRole("new")).getByText("沿用上一期划算的「高強度日程中的輕鬆準備」，新客預算大多給它。")).toBeTruthy();
+      expect(byRole("retarget").textContent).toBe("再行銷30%・9,000 元");
+      expect(byRole("retarget").querySelector("p")).toBeNull();
+      expect(within(byRole("explore")).getByText("試「三盒 NT$999 另送一盒」，看優惠拉不拉得動新客。")).toBeTruthy();
+      // The bar is the thin one: no legend line repeating the rows.
+      expect(document.querySelector("[data-slot=allocation-bar]")?.textContent).toBe("");
+    });
+
+    it("before a budget is chosen the rows print only the percent, even though generating filled `amount`", async () => {
+      const c = withReasons();
+      c.budget_planned = null;
+      c.budget_scenario = null;
+      renderTab(c);
+      expect(await screen.findByText("選好預算後算金額")).toBeTruthy();
+      const row = document.querySelector("[data-slot=allocation-row][data-role=new]") as HTMLElement;
+      expect(row.textContent).toContain("60%");
+      expect(row.textContent).not.toContain("元");
+    });
+
+    it("用到的學習 in the why fold: grade chip with its cost, 「ad」（period）, Chinese coordinate chips, never a raw key", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({ coordinate_learnings: COORD, learnings: [VERDICT] }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      const [good, bad] = screen.getAllByRole("listitem").filter((li) => li.getAttribute("data-slot") === "coordinate-learning");
+      expect(within(good).getByText("划算・每筆 421").getAttribute("data-tone")).toBe("ok");
+      expect(good.textContent).toContain(`「${LONG_AD}」（綜合維他命軟糖・10/03～10/09）`);
+      expect(within(good).getByText("受眾：陌生、知道問題")).toBeTruthy();
+      expect(within(good).getByText("痛點：太麻煩")).toBeTruthy();
+      expect(good.textContent).not.toMatch(/effort|audience/);
+      expect(within(bad).getByText("太貴・每筆 —").getAttribute("data-tone")).toBe("over");
+      // 策略依據 lists what the model read: the coordinate rows, then the surviving verdict line.
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      const panel = screen.getByRole("dialog", { name: "策略依據" });
+      expect(within(panel).getByText("划算・每筆 421")).toBeTruthy();
+      expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
+      expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
+    });
+
+    it("a strategy from before F41 (no coordinate_learnings) shows the verdict lines only", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({ learnings: [VERDICT] }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      expect(screen.queryByRole("heading", { name: "用到的學習" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      const panel = screen.getByRole("dialog", { name: "策略依據" });
+      expect(panel.querySelector("[data-slot=coordinate-learning]")).toBeNull();
+      expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
+    });
+
+    it("no learnings of either kind: the panel keeps today's empty line", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons());
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("沒有可用的學習紀錄。")).toBeTruthy();
+    });
   });
 
   it("imported: the cap block is shown, the budget and allocation cards are not, the internal goal saves", async () => {
