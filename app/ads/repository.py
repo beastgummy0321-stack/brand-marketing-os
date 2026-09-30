@@ -365,7 +365,11 @@ def save_campaign_target(
         product_ids = [product_id] if product_id else context_json.get("product_ids") or []
         if not product_ids:
             raise ValueError("product_unknown")
-        existing = bi_repo.get_product_economics(cast(Conn, conn), brand_id, product_ids[0]) or {}
+        # F43-I01: merge onto the stored row (`raw=True`), never the effective one -- writing the
+        # effective values back would freeze a derived list price / bundle cost into a number.
+        existing = bi_repo.get_product_economics(
+            cast(Conn, conn), brand_id, product_ids[0], raw=True
+        ) or {}
         selling_price = price if price is not None else existing.get("selling_price")
         currency = existing.get("currency")
         if selling_price is None or currency is None:

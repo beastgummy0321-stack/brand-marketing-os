@@ -41,12 +41,53 @@ class ProductDeleteTest(unittest.TestCase):
             (db.new_id("lrn"), db.DEV_ORG_ID, brand_id, pid, db.now_utc(), db.now_utc()),
         )
         self.conn.commit()
+        # F43-I01: the product is a component of a bundle, has a customer group and a prefill.
+        other = repo.create_product(self.conn, brand_id, name=f"{name}-搭配品",
+                                    actor="測試員")["id"]
+        repo.save_sell_way(self.conn, brand_id, name=f"{name}-組合",
+                           components=[{"product_id": pid, "qty": 1},
+                                       {"product_id": other, "qty": 2}],
+                           economics={"selling_price": 250}, actor="測試員")
+        repo.save_customer_groups(self.conn, brand_id, pid,
+                                  [{"who": "測試客群", "pain_keys": ["effort"]}], actor="測試員")
+        # The prefill row is seeded with SQL: this legacy test may not import intake internals;
+        # the delete below must clear it through intake's cleanup registration.
+        self.conn.execute(
+            "INSERT INTO intake_product_prefill (product_id, org_id, brand_id, status) "
+            "VALUES (%s, %s, %s, 'done')", (pid, db.DEV_ORG_ID, brand_id))
+        self.conn.commit()
         return pid
 
     def _row_counts(self, product_id):
-        return {t: self.conn.execute(
+        counts = {t: self.conn.execute(
             f"SELECT COUNT(*) AS n FROM {t} WHERE product_id = %s", (product_id,)).fetchone()["n"]
             for t, _label in repo.PRODUCT_CHILD_TABLES}
+        counts["intake_product_prefill"] = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM intake_product_prefill WHERE product_id = %s",
+            (product_id,)).fetchone()["n"]
+        return counts
+
+    def test_archived_bundle_takes_its_component_rows_along(self):
+        """F43-I01: a component row belongs to the sell-way too -- deleting the bundle clears it,
+        the component products stay."""
+        bid = repo.create_brand(self.conn, name="測試皂坊（組合刪除）", client_name="測試客戶",
+                                 actor="測試員", org_id=db.DEV_ORG_ID)["id"]
+        a = repo.create_product(self.conn, bid, name="皂 A", actor="測試員")["id"]
+        b = repo.create_product(self.conn, bid, name="皂 B", actor="測試員")["id"]
+        bundle = repo.save_sell_way(self.conn, bid, name="雙皂組",
+                                    components=[{"product_id": a, "qty": 1},
+                                                {"product_id": b, "qty": 1}],
+                                    economics={"selling_price": 300}, actor="測試員")["id"]
+        repo.update_product(self.conn, bid, bundle, name="雙皂組", status="archived",
+                             actor="測試員")
+        counts = repo.delete_product(self.conn, bid, bundle, actor="測試員")
+
+        self.assertEqual(counts["賣法組成"], 2)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) AS n FROM product_component WHERE brand_id = %s",
+            (bid,)).fetchone()["n"], 0)
+        self.assertIsNotNone(repo.get_product(self.conn, bid, a))
+        self.assertIsNotNone(repo.get_product(self.conn, bid, b))
 
     def test_active_product_cannot_be_deleted(self):
         bid = repo.create_brand(self.conn, name="測試皂坊（產品刪除）", client_name="測試客戶",

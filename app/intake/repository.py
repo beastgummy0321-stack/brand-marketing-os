@@ -1,4 +1,4 @@
-"""app/intake/repository.py — intake_draft / intake_item 兩張表的存取層。
+"""app/intake/repository.py — intake_draft / intake_item / intake_product_prefill 的存取層。
 
 介面契約與欄位權威原文件皆已被 5eca0db 清除；欄位權威現在是
 supabase/migrations/ 本身。一律 conn 開頭、一律帶 brand_id 過濾
@@ -37,6 +37,9 @@ def _row_to_dict(row) -> dict | None:
     return dict(row) if row is not None else None
 
 
+_PRODUCT_PREFILL_LABEL = "商品建檔 AI 預填"
+
+
 def count_brand_data(conn: db.Conn, brand_id: str) -> list:
     """回傳 [(中文名稱, 筆數)]，給品牌刪除確認頁列出本模組會被清掉的資料。"""
     return [
@@ -44,20 +47,77 @@ def count_brand_data(conn: db.Conn, brand_id: str) -> list:
             "SELECT COUNT(*) AS n FROM intake_draft WHERE brand_id = %s", (brand_id,)).fetchone()["n"]),
         ("建檔精靈逐條紀錄", conn.execute(
             "SELECT COUNT(*) AS n FROM intake_item WHERE brand_id = %s", (brand_id,)).fetchone()["n"]),
+        (_PRODUCT_PREFILL_LABEL, conn.execute(
+            "SELECT COUNT(*) AS n FROM intake_product_prefill WHERE brand_id = %s",
+            (brand_id,)).fetchone()["n"]),
     ]
 
 
 def delete_brand_data(conn: db.Conn, brand_id: str) -> dict:
-    """品牌被刪除時，清掉本模組掛在該品牌下的草稿與逐條紀錄（決策 0015）。
+    """品牌被刪除時，清掉本模組掛在該品牌下的草稿、逐條紀錄與商品預填（決策 0015）。
 
     稽核由呼叫端（品牌刪除那筆 audit_log）一起記，這裡不另外寫。
     只下 DELETE，不 commit、不 rollback——交易的開關統一在最外層的
     brand_intelligence.delete_brand()（Q4 全有全無）。
     """
     counts = dict(count_brand_data(conn, brand_id))
+    conn.execute("DELETE FROM intake_product_prefill WHERE brand_id = %s", (brand_id,))
     conn.execute("DELETE FROM intake_item WHERE brand_id = %s", (brand_id,))
     conn.execute("DELETE FROM intake_draft WHERE brand_id = %s", (brand_id,))
     return counts
+
+
+def count_product_data(conn: db.Conn, brand_id: str, product_id: str) -> list:
+    """F43-I01: [(中文名稱, 筆數)] of this module's rows under one product (its product prefill)."""
+    return [(_PRODUCT_PREFILL_LABEL, conn.execute(
+        "SELECT COUNT(*) AS n FROM intake_product_prefill WHERE brand_id = %s AND product_id = %s",
+        (brand_id, product_id)).fetchone()["n"])]
+
+
+def delete_product_data(conn: db.Conn, brand_id: str, product_id: str) -> dict:
+    """F43-I01: product delete clears the product's prefill (DELETE only, no commit -- the caller
+    `brand_intelligence.delete_product()` owns the transaction)."""
+    counts = dict(count_product_data(conn, brand_id, product_id))
+    conn.execute("DELETE FROM intake_product_prefill WHERE brand_id = %s AND product_id = %s",
+                 (brand_id, product_id))
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# intake_product_prefill (F43-I01): the product-onboarding AI read of a product page -- a proposal
+# per step, never a confirmed fact. One row per product.
+# ---------------------------------------------------------------------------
+
+def get_product_prefill(conn: db.Conn, brand_id: str, product_id: str) -> dict | None:
+    """The product's prefill row `{product_id, status, prefill_json, llm_task_id, updated_at, ...}`,
+    or None when never read. Readers: product onboarding (each step's 「AI 從商品頁讀到」, the
+    onboarding status)."""
+    return _row_to_dict(conn.execute(
+        "SELECT * FROM intake_product_prefill WHERE brand_id = %s AND product_id = %s",
+        (brand_id, product_id)).fetchone())
+
+
+def save_product_prefill(conn: db.Conn, brand_id: str, product_id: str, *, status: str,
+                         prefill_json: dict | None = None, llm_task_id: str | None = None) -> dict:
+    """Upsert the product's prefill (status + the read result / its llm_task). The product must be
+    this brand's (read through the brand_intelligence facade). Writer: the product prefill job."""
+    if not status:
+        raise ValueError("intake_product_prefill.status 為必填")
+    product = bi_repo.get_product(conn, brand_id, product_id)
+    if product is None:
+        raise ValueError(f"找不到產品：{product_id}")
+    conn.execute(
+        """INSERT INTO intake_product_prefill (product_id, org_id, brand_id, status, prefill_json,
+               llm_task_id, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (product_id) DO UPDATE SET status = EXCLUDED.status,
+               prefill_json = EXCLUDED.prefill_json, llm_task_id = EXCLUDED.llm_task_id,
+               updated_at = EXCLUDED.updated_at""",
+        (product_id, product["org_id"], brand_id, status,
+         db.jsonb(prefill_json) if prefill_json is not None else None, llm_task_id, db.now_utc()),
+    )
+    conn.commit()
+    return get_product_prefill(conn, brand_id, product_id) or {}
 
 
 def create_draft(conn: db.Conn, brand_id: str, description: str,
@@ -203,5 +263,6 @@ def create_items(conn: db.Conn, brand_id: str, draft_id: str, rows: list) -> int
 # ---------------------------------------------------------------------------
 
 cleanup.register("建檔精靈", count_brand=count_brand_data, delete_brand=delete_brand_data,
-                 brand_tables={"intake_draft", "intake_item"},
-                 count_product=None, delete_product=None, product_tables=frozenset())
+                 brand_tables={"intake_draft", "intake_item", "intake_product_prefill"},
+                 count_product=count_product_data, delete_product=delete_product_data,
+                 product_tables={"intake_product_prefill"})
