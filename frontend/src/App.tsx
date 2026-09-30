@@ -24,7 +24,7 @@ import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
-import { ProductListPage } from "@/components/products/ProductListPage";
+import { ProductsPage } from "@/components/intake";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -371,12 +371,12 @@ function WorkbenchSetRoute() {
   );
 }
 
-/** 產品清單（S6，票 B2-products）。 */
+/** 商品頁（F43-I07，原型 f41-onboarding `#/plist`）：商品與組合卡片，取代舊產品清單。 */
 function ProductListRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
     <>
-      <ProductListPage brandId={brandId ?? ""} />
+      <ProductsPage brandId={brandId ?? ""} />
     </>
   );
 }
