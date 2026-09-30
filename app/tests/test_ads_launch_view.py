@@ -721,7 +721,9 @@ class LaunchViewTest(unittest.TestCase):
             fit = self.view()["month_budget"]
             self.assertEqual(fit["blocker"], "short")
             self.assertEqual(fit["blocker_text"], f"{self.month_number()} 月預算不夠這期花")
-            self.assertLess(fit["available"], 0)
+            # The money fields are the month before this launch; `extra` on top does not fit.
+            self.assertEqual(fit["available"], 100.0)
+            self.assertLess(fit["available"] - fit["extra"], 0)
             self.assertEqual(fit["amount"], 100.0)
             self.assertTrue(self.refused())
         # An unverified balance: the preflight's own sentence.
@@ -742,10 +744,13 @@ class LaunchViewTest(unittest.TestCase):
             self.assertIsNone(fit["blocker"])
             self.assertIsNone(fit["blocker_text"])
             self.assertGreater(fit["extra"], 0)
-            self.assertEqual(fit["reserved_increases"], fit["extra"])
+            # The month as it stands without this launch (what `getMonthlyBudget` reads); the card
+            # stacks `extra` on top.
             before = month_budget.view(self.conn, self.org, self.brand, month)
             self.assertEqual(before["reserved_increases"], 0)
-            self.assertEqual(fit["available"], before["available"] - fit["extra"])
+            self.assertEqual(fit["reserved_increases"], 0)
+            self.assertEqual(fit["available"], before["available"])
+            self.assertGreaterEqual(fit["available"] - fit["extra"], 0)
             self.assertFalse(self.refused())
             after = month_budget.view(self.conn, self.org, self.brand, month)
             self.assertEqual(after["reserved_increases"], fit["extra"])
