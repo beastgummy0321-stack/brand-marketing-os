@@ -115,10 +115,12 @@ async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: stri
   await page.getByLabel("這個活動最多花").fill("30000");
   await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
   await expect(page.getByRole("heading", { name: "系統這樣理解" })).toBeVisible();
-  await expect(page.getByText("商品", { exact: true })).toBeVisible();
-  await expect(page.getByText("結果", { exact: true })).toBeVisible();
-  await expect(page.getByText("預算上限", { exact: true })).toBeVisible();
-  await expect(page.getByText("期間", { exact: true })).toBeVisible();
+  // The brief's row labels, read inside the page: the shell's sidebar also has a 「商品」 link (F43-I14).
+  const main = page.getByRole("main");
+  await expect(main.getByText("商品", { exact: true })).toBeVisible();
+  await expect(main.getByText("結果", { exact: true })).toBeVisible();
+  await expect(main.getByText("預算上限", { exact: true })).toBeVisible();
+  await expect(main.getByText("期間", { exact: true })).toBeVisible();
   await captureDesktopEvidence(page, "campaign-understood");
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
   await page.getByRole("button", { name: "產生策略 →" }).click();

@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,8 +22,11 @@ vi.mock("./DashboardWidgets", () => ({
   number: (value: number) => value.toLocaleString("zh-TW"),
 }));
 vi.mock("@/lib/metaApi", () => ({ fetchMetaSpend: vi.fn() }));
+vi.mock("@/lib/intakeProductApi", () => ({ fetchProductsPage: vi.fn() }));
+vi.mock("@/lib/useAuthedImage", () => ({ useAuthedImage: () => ({ src: undefined }) }));
 
 import { fetchMetaSpend, type MetaSpendSummary } from "@/lib/metaApi";
+import { fetchProductsPage, type ProductsPage } from "@/lib/intakeProductApi";
 import { CockpitPage } from "./CockpitPage";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
@@ -43,8 +47,43 @@ function spend(overrides: Partial<MetaSpendSummary> = {}): MetaSpendSummary {
   };
 }
 
-function view(data: MetaSpendSummary) {
+// Real shape of GET /api/intake/brands/{b}/products (app/intake/product_onboarding.py): a ready
+// product with two sell-ways, a draft stopped at step 2, and a bundle of both.
+function productsPage(overrides: Partial<ProductsPage> = {}): ProductsPage {
+  return {
+    products: [
+      {
+        id: "prd_multi", name: "綜合維他命軟糖", thumbnail_url: null, state: "ready", step: null,
+        summary: "2 群顧客・證據 2・說法 3",
+        sell_ways: [
+          { id: "sw_one", name: "單盒", price: 399, break_even: 249, offer_labels: [] },
+          { id: "sw_three", name: "三盒組", price: 999, break_even: 669, offer_labels: ["組合價 省 198"] },
+        ],
+      },
+      {
+        id: "prd_bio", name: "益生菌軟糖", thumbnail_url: null, state: "draft", step: 2,
+        summary: "建到一半：還沒確認顧客", sell_ways: [],
+      },
+    ],
+    bundles: [
+      {
+        id: "bdl_duo", name: "雙效組", price: 799, break_even: 539, offer_labels: ["組合價 省 59"],
+        thumbnails: [], state: "ready",
+        components: [
+          { product_id: "prd_multi", name: "綜合維他命軟糖", qty: 1 },
+          { product_id: "prd_bio", name: "益生菌軟糖", qty: 1 },
+        ],
+      },
+    ],
+    suggestions: [],
+    ...overrides,
+  };
+}
+
+function view(data: MetaSpendSummary, products: ProductsPage | Error = productsPage({ products: [], bundles: [] })) {
   vi.mocked(fetchMetaSpend).mockResolvedValue(data);
+  if (products instanceof Error) vi.mocked(fetchProductsPage).mockRejectedValue(products);
+  else vi.mocked(fetchProductsPage).mockResolvedValue(products);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -91,5 +130,56 @@ describe("CockpitPage 品牌資料入口（F42-I12）", () => {
     view(spend());
     const link = await screen.findByRole("link", { name: "品牌資料（建檔時填的）" });
     expect(link.getAttribute("href")).toBe("/brands/brd_1/intake");
+  });
+});
+
+describe("CockpitPage 你的商品（F43-I14）", () => {
+  const block = () => screen.getByRole("region", { name: "你的商品" });
+
+  it("商品與組合各一張精簡卡片，動作連到建新商品與新增組合", async () => {
+    view(spend(), productsPage());
+    expect(await screen.findByText("單盒 399・三盒組 999")).toBeTruthy();
+    const region = block();
+    expect(within(region).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual([
+      "/brands/brd_1/products/bundles/new",
+      "/brands/brd_1/products/new",
+      "/brands/brd_1/products/prd_multi/onboarding",
+      "/brands/brd_1/products/prd_bio/onboarding?step=2",
+      "/brands/brd_1/products/prd_bio/onboarding?step=2",
+      "/brands/brd_1/products/bundles/bdl_duo",
+    ]);
+    expect(within(region).getByRole("link", { name: "＋建新商品" })).toBeTruthy();
+    expect(within(region).getByRole("link", { name: "＋新增組合" })).toBeTruthy();
+    expect(within(region).getByRole("link", { name: "繼續 →" }).getAttribute("href")).toBe(
+      "/brands/brd_1/products/prd_bio/onboarding?step=2",
+    );
+    expect(within(region).getByText("建到一半：還沒確認顧客")).toBeTruthy();
+    expect(within(region).getByText("組合・799")).toBeTruthy();
+    expect(within(region).getAllByText("可以投放")).toHaveLength(2);
+  });
+
+  it("還沒有商品：只留標題與兩個動作，不另外說話", async () => {
+    view(spend());
+    await screen.findByText("資料讀取於 3 小時前");
+    const region = block();
+    await vi.waitFor(() => expect(fetchProductsPage).toHaveBeenCalledWith("brd_1"));
+    await vi.waitFor(() => expect(region.querySelectorAll(".animate-pulse")).toHaveLength(0));
+    expect(region.querySelector("[data-slot=product-card]")).toBeNull();
+    expect(within(region).getAllByRole("link")).toHaveLength(2);
+    expect(within(region).queryByRole("alert")).toBeNull();
+  });
+
+  it("讀取失敗只在區塊內顯示重試，經營概況其他內容照常", async () => {
+    view(spend(), new Error("讀取商品失敗。"));
+    expect(await within(block()).findByRole("alert")).toBeTruthy();
+    expect(within(block()).getByText("商品讀取失敗：讀取商品失敗。")).toBeTruthy();
+    expect(within(block()).getByRole("link", { name: "＋建新商品" })).toBeTruthy();
+    expect(screen.getByText("1,200")).toBeTruthy();
+    expect(screen.getByText("活動表")).toBeTruthy();
+
+    vi.mocked(fetchProductsPage).mockResolvedValue(productsPage());
+    await userEvent.click(within(block()).getByRole("button", { name: "重新載入" }));
+    expect(await within(block()).findByText("單盒 399・三盒組 999")).toBeTruthy();
+    expect(within(block()).queryByRole("alert")).toBeNull();
   });
 });
