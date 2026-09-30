@@ -5,6 +5,8 @@ The HTTP contract of the seven brand-onboarding screens (`#/b1`–`#/b7`), all u
 only authenticates (`require_brand` tenant check on every route), parses the body and maps a
 `ValueError` to 400 `{"error": 〈Chinese message〉}`. Reads are wrapped in the usual
 `{data, generated_at}` envelope; PUTs return the step's fresh GET shape the same way.
+F42-I05 adds `GET|POST …/scan` (the website/photo prefill, `app/intake/ai.py`) and
+`POST …/custom` (「自訂」, `app/intake/custom.py`; a proposal only, nothing saved).
 
 Entry point: this file's `router`, included at the end of `app/intake/routes_api.py`.
 """
@@ -14,9 +16,10 @@ from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.core.db import Conn
-from app.intake import onboarding
+from app.intake import custom, onboarding
 from app.meta import repository as meta_repo
 from app.shared import web
 from app.shared.web import JSONResponse, require_actor, require_brand
@@ -71,6 +74,43 @@ def onboarding_status(request: Request, brand_id: str):
 @router.post(_BASE + "/complete")
 def onboarding_complete(request: Request, brand_id: str):
     return _read(request, brand_id, onboarding.complete)
+
+
+@router.get(_BASE + "/scan")
+def scan_get(request: Request, brand_id: str):
+    return _read(request, brand_id, onboarding.scan_status)
+
+
+@router.post(_BASE + "/scan")
+def scan_post(request: Request, brand_id: str):
+    """Start the website/photo prefill (F42-I05) once; returns the GET shape. 400: no open draft
+    or nothing to read; 409: the draft cost cap refused before any call."""
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
+    try:
+        data = onboarding.start_scan(_conn(), brand_id, org_id=actor.org_id)
+    except onboarding.ScanRefused as exc:
+        return _error(409, str(exc))
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return _envelope(data)
+
+
+@router.post(_BASE + "/custom")
+async def custom_post(request: Request, brand_id: str):
+    """「自訂」 (F42-I05): `{block, text}` → one proposal; nothing is saved (the step's PUT saves).
+    422 = the AI's reply is outside the block's contract."""
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
+    body = await _json_body(request)
+    try:  # the model call is blocking: keep it off the event loop
+        data = await run_in_threadpool(custom.propose, _conn(), brand_id,
+                                       str(body.get("block") or ""), str(body.get("text") or ""))
+    except custom.CustomRefused as exc:
+        return _error(exc.status_code, exc.message)
+    except ValueError:
+        return _error(422, custom.UNREADABLE_MESSAGE)
+    return _envelope(data)
 
 
 @router.get(_BASE + "/basics")

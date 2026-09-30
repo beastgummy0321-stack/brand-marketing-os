@@ -59,6 +59,52 @@ export interface OnboardingBasicsInput {
   photo_kinds?: BrandPhotoKind[];
 }
 
+// ---- 2 AI 讀網站 (F42-I05) ----
+
+export interface ScanFoundRow {
+  /** 品牌是誰 · 品牌證據 · 政策 · 可能的商品 (in this order; a row only when something was found). */
+  area: string;
+  text: string;
+  /** Where it was read (「頁面 1」「about 頁」「品牌照片」…); "" = no note given. */
+  note: string;
+}
+
+export interface OnboardingScan {
+  status: PrefillStatus;
+  /** The failure message when `status` is `failed`, else null. */
+  error: string | null;
+  found: ScanFoundRow[];
+  /** Areas the scan looked for and did not find (「媒體報導」「銷售數據」…). */
+  not_found: string[];
+  /** Fields steps 3/4 will show pre-filled (positioning, tone, visual, each proof, each policy). */
+  prefilled: number;
+  pages_read: number;
+  photos_read: number;
+}
+
+// ---- 自訂 (F42-I05): a proposal only; the step's PUT saves it ----
+
+export type CustomBlock = "positioning" | "tone" | "visual" | "brand_proof" | "policy" | "forbidden";
+
+export type CustomProposal =
+  | { block: "positioning" | "visual"; kind: "value"; value: string }
+  | { block: "tone"; kind: "option"; option: { label: string } }
+  | { block: "brand_proof"; kind: "option"; option: { fact_key: ProofKind; label: string; text: string } }
+  | {
+      block: "policy";
+      kind: "option";
+      /** Ready to append to `OnboardingEvidenceInput.policies` as `{key, params, sentence}`. */
+      option: {
+        key: "custom";
+        label: string;
+        offer_key: OfferKey;
+        offer_label: string;
+        sentence: string;
+        params: { label: string; offer_key: OfferKey };
+      };
+    }
+  | { block: "forbidden"; kind: "option"; option: { text: string } };
+
 // ---- 3 品牌是誰 ----
 
 export interface SourcedText {
@@ -225,7 +271,20 @@ export const fetchOnboardingStatus = (brandId: string): Promise<OnboardingStatus
 export const completeOnboarding = (brandId: string): Promise<OnboardingStatus> =>
   send(`${base(brandId)}/complete`, json("POST", {}));
 
-export const fetchOnboardingBasics = (brandId: string): Promise<OnboardingBasics> =>
+export const fetchOnboardingScan = (brandId: string): Promise<OnboardingScan> =>
+  send(`${base(brandId)}/scan`);
+
+/** Starts the scan once (no-op while running or after a read); returns the status. 409 = the
+ * AI cost cap refused, 400 = nothing to read / onboarding already completed. */
+export const startOnboardingScan = (brandId: string): Promise<OnboardingScan> =>
+  send(`${base(brandId)}/scan`, json("POST", {}));
+
+/** 「自訂」: one sentence (≤200 chars) → one proposal; nothing is saved. 422 carries
+ * 「AI 整理不出來，換個說法再試一次」. */
+export const proposeCustom = (brandId: string, block: CustomBlock, text: string): Promise<CustomProposal> =>
+  send(`${base(brandId)}/custom`, json("POST", { block, text }));
+
+export const fetchOnboardingBasics =(brandId: string): Promise<OnboardingBasics> =>
   send(`${base(brandId)}/basics`);
 
 export const saveOnboardingBasics = (brandId: string, input: OnboardingBasicsInput): Promise<OnboardingBasics> =>

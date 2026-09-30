@@ -70,18 +70,23 @@ def advance(conn: Conn, brand_id: str, step: int) -> None:
         ir.update_draft(conn, brand_id, row["id"], current_step=step + 1)
 
 
-def _prefill_status(row: dict | None, brand_id: str, is_open: bool) -> tuple[str, str | None]:
+def _prefill_status(conn: Conn, row: dict | None, brand_id: str,
+                    is_open: bool) -> tuple[str, str | None]:
+    """done = the draft holds a prefill; running/failed = the prefill job (F42-I05, lock
+    `ai.prefill_lock`); a job that ended without a prefill is failed too (its handler raises)."""
     if row is not None and row.get("prefill_json") is not None:
         return "done", None
-    if not is_open:
+    if not is_open or row is None:
         return "none", None
-    from app.background import JOB_FAILED_MESSAGE, job_outcome
+    from app.background import is_active, job_outcome
+    from app.intake import ai
 
-    outcome = job_outcome(f"intake_scan:{brand_id}")
-    if outcome == "active":
+    lock = ai.prefill_lock(brand_id)
+    outcome = job_outcome(lock)
+    if outcome == "active" or (outcome is None and is_active(lock)):
         return "running", None
-    if outcome == "failed":
-        return "failed", JOB_FAILED_MESSAGE
+    if outcome in ("failed", "succeeded"):
+        return "failed", ai.prefill_failure_message(conn, row)
     return "none", None
 
 
@@ -90,7 +95,7 @@ def status(conn: Conn, brand_id: str) -> dict:
     open_row = _open_draft(conn, brand_id)
     row = open_row or ir.get_latest_completed_draft(conn, brand_id)
     has_scan_input = bool(row and (row.get("research_urls_json") or row.get("photos_json")))
-    prefill_status, prefill_error = _prefill_status(row, brand_id, open_row is not None)
+    prefill_status, prefill_error = _prefill_status(conn, row, brand_id, open_row is not None)
     return {
         "step": open_row["current_step"] if open_row else STEP_DONE,
         "completed": open_row is None,
@@ -109,6 +114,104 @@ def complete(conn: Conn, brand_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Step 2 AI 讀網站 (F42-I05)
+# ---------------------------------------------------------------------------
+
+class ScanRefused(Exception):
+    """The draft cost cap refuses the prefill call before it is queued (router: 409)."""
+
+
+def _join(items: list, sep: str = "・") -> str:
+    return sep.join(i for i in items if i)
+
+
+def _notes(*items) -> str:
+    return "、".join(dict.fromkeys(str(i.get("note") or "") for i in items if i and i.get("note")))
+
+
+def _found_rows(prefill: dict) -> list:
+    """`found` rows in the prototype's order (品牌是誰／品牌證據／政策／可能的商品): one row per
+    area, built from the checked prefill only."""
+    rows = []
+    positioning, tone, visual = (_ai_block(prefill, k) for k in ("positioning", "tone", "visual"))
+    identity = _join([f"「{positioning['value']}」" if positioning.get("value") else "",
+                      f"語氣{'、'.join(tone['values'])}" if tone.get("values") else "",
+                      f"畫面{visual['value']}" if visual.get("value") else ""])
+    if identity:
+        rows.append({"area": "品牌是誰", "text": identity,
+                     "note": _notes(positioning, tone, visual)})
+    proof = [p for p in prefill.get("proof") or [] if isinstance(p, dict)]
+    if proof:
+        rows.append({"area": "品牌證據", "note": _notes(*proof), "text": _join(
+            [f"{_PROOF_LABELS.get(str(p.get('fact_key')), '')}：{p.get('text') or ''}"
+             for p in proof])})
+    shaped = (_ai_policy(p) for p in prefill.get("policies") or [] if isinstance(p, dict))
+    policies = [s for s in shaped if s is not None]
+    if policies:
+        rows.append({"area": "政策", "text": _join([p["sentence"] or p["label"] for p in policies]),
+                     "note": _notes(*policies)})
+    products = [p for p in prefill.get("products") or [] if isinstance(p, dict) and p.get("name")]
+    if products:
+        rows.append({"area": "可能的商品", "note": "",
+                     "text": _join([p["name"] for p in products], "、")})
+    return rows
+
+
+def _prefilled_count(prefill: dict) -> int:
+    """How many fields steps 3/4 will show pre-filled: positioning, tone, visual, each proof,
+    each policy (products are not pre-filled into a brand step)."""
+    return (sum(1 for k in ("positioning", "tone", "visual") if _ai_block(prefill, k))
+            + len(prefill.get("proof") or []) + len(prefill.get("policies") or []))
+
+
+def scan_status(conn: Conn, brand_id: str) -> dict:
+    """`GET …/onboarding/scan`: the prefill job's state and what it found."""
+    open_row = _open_draft(conn, brand_id)
+    row = open_row or ir.get_latest_completed_draft(conn, brand_id)
+    status_, error = _prefill_status(conn, row, brand_id, open_row is not None)
+    value = (row or {}).get("prefill_json")
+    prefill = value if isinstance(value, dict) else {}
+    return {
+        "status": status_,
+        "error": error,
+        "found": _found_rows(prefill),
+        "not_found": [str(a) for a in prefill.get("not_found") or []],
+        "prefilled": _prefilled_count(prefill),
+        "pages_read": int(prefill.get("pages_read") or 0),
+        "photos_read": int(prefill.get("photos_read") or 0),
+    }
+
+
+def start_scan(conn: Conn, brand_id: str, *, org_id: str) -> dict:
+    """`POST …/onboarding/scan`: queue the prefill job once. No-op while it runs or once it has
+    read something; a scan that read nothing (0 pages, 0 photos) or failed can be started again.
+    ValueError: no open draft / nothing to read. ScanRefused: the draft cost cap (checked before
+    anything is queued, so no call is made)."""
+    from app.background import enqueue, is_active
+    from app.intake import ai
+
+    draft = state.get_draft(brand_id, conn)
+    if draft is None:
+        raise ValueError("品牌建檔已經完成，不需要再讀一次網站。")
+    if not draft["urls"] and not brand_photo_assets(conn, brand_id):
+        raise ValueError("沒有網站或品牌照片可以讀，這一步可以跳過。")
+    current = scan_status(conn, brand_id)
+    if current["status"] == "running" or (
+            current["status"] == "done" and (current["pages_read"] or current["photos_read"])):
+        return current
+    if state.would_exceed(draft, ai.COST_PREFILL):
+        raise ScanRefused(
+            f"這次建檔的 AI 用量已到上限（US$ {draft['cost_spent']:.2f}／"
+            f"US$ {draft['budget_limit']:.2f}），AI 先不讀網站；可以直接往下自己填。")
+    lock = ai.prefill_lock(brand_id)
+    if current["status"] == "done":  # read nothing last time: clear it so the status reads running
+        ir.update_draft(conn, brand_id, draft["id"], prefill_json=None)
+    if not is_active(lock):
+        enqueue("background.intake_scan", org_id=org_id, lock=lock, brand_id=brand_id, prefill=True)
+    return scan_status(conn, brand_id)
+
+
+# ---------------------------------------------------------------------------
 # Step 1 基本
 # ---------------------------------------------------------------------------
 
@@ -117,14 +220,19 @@ def _photo_url(brand_id: str, asset: dict) -> str:
     return f"/brands/{brand_id}/assets/file/{asset['id']}/{Path(asset['storage_key']).name}"
 
 
-def brand_photos(conn: Conn, brand_id: str) -> list:
-    """Brand photos = active official assets without a product, of a brand-photo kind."""
+def brand_photo_assets(conn: Conn, brand_id: str) -> list:
+    """Brand photos = active official assets without a product, of a brand-photo kind (oldest
+    first; full rows, with `storage_key`)."""
     assets = [a for a in bi_repo.list_official_assets(conn, brand_id)
               if a.get("product_id") is None and a.get("status") == "active"
               and a["asset_kind"] in BRAND_PHOTO_KINDS]
     assets.sort(key=lambda a: (a["created_at"], a["id"]))
+    return assets
+
+
+def brand_photos(conn: Conn, brand_id: str) -> list:
     return [{"id": a["id"], "kind": a["asset_kind"], "url": _photo_url(brand_id, a)}
-            for a in assets]
+            for a in brand_photo_assets(conn, brand_id)]
 
 
 def check_photo_kinds(kinds: list, count: int) -> list:
@@ -282,6 +390,26 @@ def _fact_tones(fact: dict) -> list:
             if t.strip() and len(t.strip()) <= MAX_TONE_CHARS]
 
 
+def _tone_options(saved_tones: list) -> list:
+    return list(vocab.TONES) + [t for t in saved_tones if t not in vocab.TONES]
+
+
+def custom_options(conn: Conn, brand_id: str, block: str) -> list:
+    """The labels a 「自訂」 block currently offers (input of `app/intake/custom.py`, F42-I05):
+    tone → the tone chips; policy → the registry's labels + the brand's own policies; forbidden →
+    the saved phrases. Other blocks have no option list."""
+    if block == "tone":
+        fact = _latest_fact(conn, brand_id, "tone")
+        return _tone_options(_fact_tones(fact) if fact else [])
+    if block == "policy":
+        saved = [p["label"] for p in bi_repo.list_brand_policies(conn, brand_id)
+                 if p["key"] == vocab.CUSTOM_POLICY_KEY]
+        return [p["label"] for p in vocab.POLICY_TYPES] + saved
+    if block == "forbidden":
+        return [r["content"] for r in _forbidden_rules(conn, brand_id)]
+    return []
+
+
 def _ai_block(prefill: dict, key: str) -> dict:
     block = prefill.get(key)
     return block if isinstance(block, dict) else {}
@@ -309,7 +437,7 @@ def get_identity(conn: Conn, brand_id: str) -> dict:
                 "note": str(ai_tone.get("note") or "")}
     else:
         tone = {"values": [], "source": "none", "note": ""}
-    tone["options"] = list(vocab.TONES) + [t for t in saved_tones if t not in vocab.TONES]
+    tone["options"] = _tone_options(saved_tones)
     visual = _text_field(_latest_fact(conn, brand_id, "visual_base"), _ai_block(prefill, "visual"))
     visual["photo_urls"] = [p["url"] for p in brand_photos(conn, brand_id)]
     return {
