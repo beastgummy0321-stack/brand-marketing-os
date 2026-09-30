@@ -1,6 +1,7 @@
 /** frontend/src/components/intake/shared/CustomEscape.test.tsx — 「自訂」 under an AI-judged onboarding block
- * (F42-I08): a `value` proposal goes to `onValue`, an `option` proposal to `onOption`, each listed as
- * 「你自訂」 whose × runs the caller's undo; the server's 422 message stays in the box; 取消 keeps nothing.
+ * (F42-I08, F42-I09): a `value` proposal goes to `onValue`, an `option` proposal to `onOption`; the box lists
+ * nothing of its own (the caller shows the result where it lives, marked `CustomMark`); the server's 422
+ * message stays in the box; 取消 keeps nothing.
  * No server: `proposeCustom` is a fake. */
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -12,7 +13,7 @@ vi.mock("@/lib/intakeOnboardingApi", async () => {
 });
 
 import { proposeCustom } from "@/lib/intakeOnboardingApi";
-import { CustomEscape } from "./CustomEscape";
+import { CustomEscape, CustomMark } from "./CustomEscape";
 
 const mockPropose = vi.mocked(proposeCustom);
 
@@ -26,10 +27,9 @@ const box = () => screen.getByRole("textbox");
 const organise = () => screen.getByRole("button", { name: "讓 AI 整理" });
 
 describe("CustomEscape", () => {
-  it("value：整理好的文字交給 onValue，列成「你自訂」，× 會還原", async () => {
+  it("value：整理好的文字交給 onValue，框關上，自己不再列一份", async () => {
     const user = userEvent.setup();
-    const undo = vi.fn();
-    const onValue = vi.fn(() => undo);
+    const onValue = vi.fn();
     mockPropose.mockResolvedValue({ block: "positioning", kind: "value", value: "給懶人的營養零食" });
     render(<CustomEscape brandId="brd_1" block="positioning" placeholder="例如：我們不是保健品" onValue={onValue} />);
 
@@ -42,18 +42,13 @@ describe("CustomEscape", () => {
 
     expect(mockPropose).toHaveBeenCalledWith("brd_1", "positioning", "我們不是保健品，是給懶人的營養零食");
     expect(onValue).toHaveBeenCalledWith("給懶人的營養零食");
-    expect(screen.getByText("你自訂")).toBeTruthy();
-    expect(screen.getByText("給懶人的營養零食")).toBeTruthy();
-    expect(screen.getByText("AI 照你的描述整理；不對就再說一次")).toBeTruthy();
+    expect(screen.queryByText("你自訂")).toBeNull();
+    expect(screen.queryByText("給懶人的營養零食")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(openButton()).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "拿掉「給懶人的營養零食」" }));
-    expect(undo).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("你自訂")).toBeNull();
   });
 
-  it("option：整理好的選項交給 onOption（不交給 onValue），列成「你自訂」", async () => {
+  it("option：整理好的選項交給 onOption（不交給 onValue），自己不再列一份", async () => {
     const user = userEvent.setup();
     const onValue = vi.fn();
     const onOption = vi.fn();
@@ -66,10 +61,10 @@ describe("CustomEscape", () => {
 
     expect(onOption).toHaveBeenCalledWith({ label: "教練朋友" });
     expect(onValue).not.toHaveBeenCalled();
-    expect(screen.getByText("教練朋友")).toBeTruthy();
+    expect(screen.queryByText("教練朋友")).toBeNull();
   });
 
-  it("政策、證據、禁語的選項列出給人看的那句", async () => {
+  it("政策的選項整包交給 onOption", async () => {
     const user = userEvent.setup();
     mockPropose.mockResolvedValue({
       block: "policy",
@@ -90,8 +85,14 @@ describe("CustomEscape", () => {
     await user.type(box(), "買滿三個月的顧客，第四個月送一包隨身包");
     await user.click(organise());
 
-    expect(onOption).toHaveBeenCalledWith(expect.objectContaining({ key: "custom", offer_key: "bundle" }));
-    expect(screen.getByText("連續訂滿三個月，第四個月送隨身包")).toBeTruthy();
+    expect(onOption).toHaveBeenCalledWith(expect.objectContaining({ key: "custom", offer_key: "bundle", sentence: "連續訂滿三個月，第四個月送隨身包" }));
+    expect(screen.queryByText("連續訂滿三個月，第四個月送隨身包")).toBeNull();
+  });
+
+  it("CustomMark：預設寫「你自訂」，也可以換字", () => {
+    render(<><CustomMark /><CustomMark>你選的</CustomMark></>);
+    expect(screen.getByText("你自訂").getAttribute("data-slot")).toBe("custom-mark");
+    expect(screen.getByText("你選的")).toBeTruthy();
   });
 
   it("422：伺服器的話留在框裡，框不關、文字還在、什麼都沒交出去", async () => {

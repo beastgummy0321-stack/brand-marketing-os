@@ -127,7 +127,7 @@ describe("IdentityStep", () => {
     expect(picked()).toEqual(["幽默"]);
   });
 
-  it("自訂口氣：加進清單並選上，超過兩個拿掉最早的；× 還原", async () => {
+  it("自訂口氣：加進口氣選項並選上、標「你自訂」（只出現這一處），超過兩個拿掉最早的；它的 × 拿掉", async () => {
     mockFetch.mockResolvedValue(prefilled());
     mockPropose.mockResolvedValue({ block: "tone", kind: "option", option: { label: "教練朋友" } });
     renderStep();
@@ -141,15 +141,19 @@ describe("IdentityStep", () => {
     expect(mockPropose).toHaveBeenCalledWith("brd_1", "tone", "像健身房的教練朋友，講話直");
     expect(toneButton("教練朋友").getAttribute("aria-pressed")).toBe("true");
     expect(toneButton("親切").getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByText("你自訂")).toBeTruthy();
+    const group = screen.getByRole("group", { name: "說話的口氣" });
+    expect(screen.getAllByText("你自訂").length).toBe(1);
+    expect(group.textContent).toContain("你自訂");
+    expect(screen.queryByText("✦ 從網站文字判斷")).toBeNull();
     expect(mockSave).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "拿掉「教練朋友」" }));
+    expect(screen.queryByText("你自訂")).toBeNull();
     expect(screen.queryByRole("button", { name: "教練朋友" })).toBeNull();
     expect(picked()).toEqual(["直接"]);
   });
 
-  it("自訂品牌一句話：取代欄位內容，按下一步才存", async () => {
+  it("自訂品牌一句話：取代欄位內容，欄位的標籤改成「你自訂」（只出現這一處），按下一步才存", async () => {
     mockFetch.mockResolvedValue(prefilled());
     mockPropose.mockResolvedValue({ block: "positioning", kind: "value", value: "給懶人的營養零食" });
     mockSave.mockResolvedValue(prefilled());
@@ -162,6 +166,9 @@ describe("IdentityStep", () => {
     await userEvent.click(screen.getByRole("button", { name: "讓 AI 整理" }));
 
     expect(positioningBox().value).toBe("給懶人的營養零食");
+    expect(screen.queryByText("✦ about 頁")).toBeNull();
+    expect(screen.getAllByText("你自訂").length).toBe(1);
+    expect(screen.queryByRole("button", { name: "拿掉「給懶人的營養零食」" })).toBeNull();
     expect(mockSave).not.toHaveBeenCalled();
     await userEvent.click(nextButton());
 
@@ -171,6 +178,24 @@ describe("IdentityStep", () => {
       tone: ["親切", "直接"],
       visual: "明亮、自然光、桌面小物、暖色系",
     });
+  });
+
+  it("自訂畫面風格：換掉文字，AI 標籤換成「你自訂」；再手改品牌一句話時那個欄位不掛「你自訂」", async () => {
+    mockFetch.mockResolvedValue(prefilled());
+    mockPropose.mockResolvedValue({ block: "visual", kind: "value", value: "黑底、霓虹感" });
+    renderStep();
+    await screen.findByLabelText("一句話說你的品牌");
+
+    const escape = document.querySelector('[data-slot="custom-escape"][data-block="visual"]') as HTMLElement;
+    await userEvent.click(escape.querySelector("button") as HTMLButtonElement);
+    await userEvent.type(screen.getByRole("textbox", { name: /覺得上面列的不對/ }), "黑底、霓虹感、不要粉嫩");
+    await userEvent.click(screen.getByRole("button", { name: "讓 AI 整理" }));
+
+    expect(await screen.findByText("黑底、霓虹感")).toBeTruthy();
+    expect(screen.queryByText("✦ 從品牌照片看出")).toBeNull();
+    expect(screen.getAllByText("你自訂").length).toBe(1);
+    await userEvent.type(positioningBox(), "！");
+    expect(screen.getAllByText("你自訂").length).toBe(1);
   });
 
   it("下一步：送出三個欄位，伺服器確認後才往下", async () => {
