@@ -433,15 +433,19 @@ class SceneRuleTest(PlanTestBase):
 
 
 class PromptRowsTest(unittest.TestCase):
-    """F38 decision 1/3: `_prompt_rows` is the model's menu -- proof kinds the brand has
-    evidence for (+ none), `limited_time` only with an end date, everything else untouched."""
+    """F38 decision 1/3 + F42: `_prompt_rows` is the model's menu -- proof kinds the brand has
+    evidence for (+ none), offers the brand can honour (+ none), `limited_time` only with an end
+    date, no `video` for a photo-only brand, everything else untouched."""
 
     _ROWS = [
         {"dimension": "proof", "key": "customer_review", "label": "顧客評論原話"},
         {"dimension": "proof", "key": "lab_report", "label": "檢驗報告／認證"},
         {"dimension": "proof", "key": "none", "label": "無證明"},
+        {"dimension": "offer", "key": "free_shipping", "label": "免運"},
         {"dimension": "offer", "key": "limited_time", "label": "限時限量"},
         {"dimension": "offer", "key": "none", "label": "無優惠"},
+        {"dimension": "format", "key": "single_image", "label": "單圖"},
+        {"dimension": "format", "key": "video", "label": "影片"},
         {"dimension": "hook", "key": "lab_report", "label": "同名但不同維度"},
         {"dimension": "audience", "key": "moms", "label": "媽媽"},
     ]
@@ -449,27 +453,46 @@ class PromptRowsTest(unittest.TestCase):
     def _keys(self, rows: list) -> list:
         return [(r["dimension"], r["key"]) for r in rows]
 
+    def _menu(self, proof: set, end_date: bool, offers: set = frozenset({"limited_time"}),
+              media: str | None = None) -> list:
+        return plan._prompt_rows(self._ROWS, proof, end_date, set(offers), media)
+
     def test_proof_rows_filtered_to_available_plus_none(self):
-        kept = self._keys(plan._prompt_rows(self._ROWS, {"customer_review"}, True))
+        kept = self._keys(self._menu({"customer_review"}, True))
         self.assertIn(("proof", "customer_review"), kept)
         self.assertIn(("proof", "none"), kept)
         self.assertNotIn(("proof", "lab_report"), kept)
 
     def test_no_evidence_leaves_only_none_proof(self):
-        kept = self._keys(plan._prompt_rows(self._ROWS, set(), True))
+        kept = self._keys(self._menu(set(), True))
         self.assertEqual([k for k in kept if k[0] == "proof"], [("proof", "none")])
 
     def test_limited_time_dropped_without_end_date(self):
-        self.assertIn(("offer", "limited_time"),
-                      self._keys(plan._prompt_rows(self._ROWS, set(), True)))
-        kept = self._keys(plan._prompt_rows(self._ROWS, set(), False))
+        self.assertIn(("offer", "limited_time"), self._keys(self._menu(set(), True)))
+        kept = self._keys(self._menu(set(), False))
         self.assertNotIn(("offer", "limited_time"), kept)
         self.assertIn(("offer", "none"), kept)
 
+    def test_offer_rows_filtered_to_available_plus_none(self):
+        kept = self._keys(self._menu(set(), True, offers={"free_shipping"}))
+        self.assertEqual([k for k in kept if k[0] == "offer"],
+                         [("offer", "free_shipping"), ("offer", "none")])
+        kept = self._keys(self._menu(set(), True, offers=set()))
+        self.assertEqual([k for k in kept if k[0] == "offer"], [("offer", "none")])
+
+    def test_video_dropped_only_for_a_photo_only_brand(self):
+        def formats(media):
+            return [k for k in self._keys(self._menu(set(), True, media=media)) if k[0] == "format"]
+
+        self.assertEqual(formats("photo"), [("format", "single_image")])
+        self.assertIn(("format", "video"), formats("photo_video"))
+        self.assertIn(("format", "video"), formats(None))  # never asked -> no format filter
+
     def test_other_dimensions_untouched(self):
-        kept = plan._prompt_rows(self._ROWS, set(), False)
-        others = [r for r in self._ROWS if r["dimension"] not in ("proof", "offer")]
-        self.assertEqual([r for r in kept if r["dimension"] not in ("proof", "offer")], others)
+        kept = self._menu(set(), False, media="photo")
+        gated = ("proof", "offer", "format")
+        others = [r for r in self._ROWS if r["dimension"] not in gated]
+        self.assertEqual([r for r in kept if r["dimension"] not in gated], others)
 
 
 class ProofGateInPlanTest(PlanTestBase):
@@ -518,6 +541,111 @@ class ProofGateInPlanTest(PlanTestBase):
         self.assertEqual(self._proof_keys(detail), {"customer_review"})
         self.assertIn("proof｜customer_review｜", prompt)
         self.assertNotIn("檢驗報告／認證", prompt)
+
+
+def _format_reply(fmt: str) -> str:
+    return json.dumps({"groups": [
+        {"role": role, "name": f"{role} 組", "ads": [
+            {"name": f"{role}-廣告一",
+             "coordinates": {**_coordinates(role), "proof": "none", "offer": "none",
+                             "format": fmt},
+             "scene": f"{role} 受眾晚上在家滑手機看到這支廣告"},
+        ]}
+        for role in ("new", "retarget", "explore")
+    ]}, ensure_ascii=False)
+
+
+class BrandDataGatesInPlanTest(PlanTestBase):
+    """F42 (drill-8 red #1 #2): the plan's menu offers an `offer` key only when a confirmed store
+    policy supports it for the campaign's product (a threshold policy needs the product's price
+    to reach it), and a photo-only brand never gets a `video` format -- a stray `video` reply is
+    stored as the menu's first allowed format."""
+
+    # The seeded offer/format rows (app/schedule/repository.py::_SEED_COORDINATES), inserted the
+    # way ProofGateInPlanTest seeds proof rows -- a brand made here has no vocabulary yet.
+    _ROWS = (
+        ("offer", "free_shipping", "免運"), ("offer", "discount", "折扣"),
+        ("offer", "none", "無優惠"),
+        ("format", "single_image", "單圖"), ("format", "carousel", "輪播"),
+        ("format", "video", "影片"),
+    )
+
+    def setUp(self):
+        super().setUp()
+        for dimension, key, label in self._ROWS:
+            web.conn.execute(
+                "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (coredb.new_id("crd"), self.org_id, self.brand_id, dimension, key, label),
+            )
+        web.conn.commit()
+
+    def _campaign_with_product(self, price: float) -> dict:
+        product_id = bi_repo.create_product(
+            web.conn, self.brand_id, name="綜合維他命軟糖", actor=ACTOR,
+        )["id"]
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, product_id, selling_price=price, currency="TWD",
+            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
+        )
+        campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                 {"product_ids": [product_id]})
+        return campaign
+
+    def _prompt_for(self, campaign: dict, reply: str) -> tuple[dict, str]:
+        provider = _fake(reply)
+        plan.PROVIDER = provider
+        detail = self._adopt(campaign["id"])
+        return detail, provider.calls[0]["messages"][0]["content"]
+
+    def _save_free_shipping_999(self) -> None:
+        bi_repo.save_brand_policies(web.conn, self.brand_id, [
+            {"key": "ship_threshold", "params": {"threshold": 999}},
+        ], actor=ACTOR)
+
+    def test_threshold_policy_reached_by_the_product_price_offers_free_shipping(self):
+        self._save_free_shipping_999()
+        _, prompt = self._prompt_for(self._campaign_with_product(999), _plan_reply("none"))
+        self.assertIn("offer｜free_shipping｜免運", prompt)
+        self.assertNotIn("offer｜discount｜", prompt)
+        self.assertIn("offer｜none｜無優惠", prompt)
+
+    def test_product_price_below_the_threshold_leaves_free_shipping_out(self):
+        self._save_free_shipping_999()
+        detail, prompt = self._prompt_for(
+            self._campaign_with_product(998), _plan_reply("none", offer="free_shipping"),
+        )
+        self.assertNotIn("offer｜free_shipping｜", prompt)
+        self.assertEqual({ad["offer_key"] for g in detail["groups"] for ad in g["ads"]}, {"none"})
+
+    def test_brand_without_policies_is_offered_no_offer(self):
+        _, prompt = self._prompt_for(self._campaign_with_product(999), _plan_reply("none"))
+        self.assertNotIn("offer｜free_shipping｜", prompt)
+        self.assertNotIn("offer｜discount｜", prompt)
+        self.assertIn("offer｜none｜無優惠", prompt)
+
+    def test_photo_only_brand_gets_no_video_and_a_stray_video_becomes_an_allowed_format(self):
+        bi_repo.set_media_capability(web.conn, self.brand_id, "photo", actor=ACTOR)
+        detail, prompt = self._prompt_for(self._create_adopted_campaign(), _format_reply("video"))
+        self.assertNotIn("format｜video｜", prompt)
+        allowed = {"single_image", "carousel"}
+        for key in allowed:
+            self.assertIn(f"format｜{key}｜", prompt)
+        formats = {ad["format_key"] for g in detail["groups"] for ad in g["ads"]}
+        self.assertEqual(len(formats), 1)
+        self.assertLessEqual(formats, allowed)
+
+    def test_photo_and_video_brand_keeps_video(self):
+        bi_repo.set_media_capability(web.conn, self.brand_id, "photo_video", actor=ACTOR)
+        detail, prompt = self._prompt_for(self._create_adopted_campaign(), _format_reply("video"))
+        self.assertIn("format｜video｜影片", prompt)
+        self.assertEqual({ad["format_key"] for g in detail["groups"] for ad in g["ads"]}, {"video"})
+
+    def test_media_never_asked_keeps_video(self):
+        detail, prompt = self._prompt_for(self._create_adopted_campaign(), _format_reply("video"))
+        self.assertIn("format｜video｜影片", prompt)
+        self.assertEqual({ad["format_key"] for g in detail["groups"] for ad in g["ads"]}, {"video"})
 
 
 if __name__ == "__main__":

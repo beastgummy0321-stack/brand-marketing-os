@@ -29,6 +29,7 @@ from app.ads import (
     handoff_assignment,
     judgment,
     manual_settings_routes,
+    materials_in_hand,
     outcome,
     plan,
     readiness,
@@ -111,6 +112,14 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
     )
     campaign["labels"] = _conversion_labels(brand_id)
     campaign["simulation_mode"] = simulation_mode.enabled(web.conn, actor.org_id, brand_id)
+    # F42-I02：策略分頁「這期會用：…」讀的品牌手上素材（優惠＋支撐句、證據、素材能力）；
+    # 既有 Campaign 不是這套規劃出來的，固定 None（形狀不變）。
+    campaign["materials"] = (
+        None if campaign.get("origin") == "imported" else materials_in_hand.read(
+            web.conn, actor.org_id, brand_id,
+            (campaign.get("context_json") or {}).get("product_ids") or [],
+        )
+    )
     return campaign
 
 

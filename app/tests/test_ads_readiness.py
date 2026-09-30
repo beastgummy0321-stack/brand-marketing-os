@@ -1,10 +1,11 @@
-"""app/tests/test_ads_readiness.py — F05-I04 falsifiers: a brand new brand is red on all three
-rows with a `secondary` action; real offering numbers + a set conversion_goal + a fully-pulled
-bound account turns all three green; an economics row carrying `assumptions_json` turns
-`offering` yellow (never red) with "假設" named in the reason and `fix_label == "去改"`; a bound
-account whose backfill hasn't finished turns `channel` yellow and the overall state follows the
-worst row; `notes[0]` always names the confirmed fact count, including 0 (which never blocks
-green).
+"""app/tests/test_ads_readiness.py — F05-I04 / F42-I02 falsifiers: the checklist lists the five
+brand rows of the onboarding completion screen in order (identity, evidence, media, channel,
+offering), each with its own fix link; identity/media are yellow until set, evidence is green
+with one confirmed proof or store policy (the cooling-off exemption does not count); the ad
+account row carries the conversion goal and turns red without one (the old `goal` row is merged);
+a brand with no product is red 「還沒有商品」 with 「建第一個商品」 to the products page; an
+economics row carrying `assumptions_json` turns `offering` yellow (never red); the overall state
+follows the worst row; `notes[0]` always names the confirmed fact count, including 0.
 """
 
 import unittest
@@ -19,6 +20,8 @@ from app.meta import repository as meta_repo
 
 ACTOR = "測試員"
 
+_KEYS = ["identity", "evidence", "media", "channel", "offering"]
+
 
 class ReadinessTestBase(unittest.TestCase):
     def setUp(self):
@@ -29,6 +32,13 @@ class ReadinessTestBase(unittest.TestCase):
         )
         self.brand_id = self.brand["id"]
         web.conn.commit()
+
+    def _result(self, *, background_active: bool = False) -> dict:
+        with mock.patch.object(channels, "background_is_active", return_value=background_active):
+            return readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+
+    def _item(self, key: str, **kwargs) -> dict:
+        return next(i for i in self._result(**kwargs)["items"] if i["key"] == key)
 
     def _connect_account(self, *, backfill_done: bool) -> None:
         meta_repo.save_token(web.conn, self.org_id, "tok")
@@ -49,6 +59,43 @@ class ReadinessTestBase(unittest.TestCase):
             }])
         web.conn.commit()
 
+    def _fact(self, fact_type: str, value: str, *, status: str = "confirmed",
+              fact_key: str | None = None) -> None:
+        bi_repo.create_brand_fact(
+            web.conn, self.brand_id, actor=ACTOR, fact_type=fact_type, label=fact_type,
+            value=value, status=status, confirmed_by=ACTOR if status == "confirmed" else None,
+            fact_key=fact_key,
+        )
+        web.conn.commit()
+
+    def _set_goal(self) -> None:
+        bi_repo.set_brand_switches(
+            web.conn, self.brand_id, market_region="TW", conversion_goal="purchase", actor=ACTOR,
+        )
+        web.conn.commit()
+
+    def _add_product(self, name: str = "測試商品", **economics) -> str:
+        product_id = bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)["id"]
+        if economics:
+            bi_repo.save_product_economics(
+                web.conn, self.brand_id, product_id, currency="TWD", confirmed_by=ACTOR,
+                actor=ACTOR, **economics,
+            )
+        return product_id
+
+    def _fill_other_rows(self):
+        """Every row but the ad account green."""
+        self._fact("positioning", "給忙到沒空吃飯的人的維他命軟糖")
+        self._fact("tone", "親切、直接")
+        self._fact("proof", "創辦人自己每天吃", fact_key="founder_voice")
+        bi_repo.set_media_capability(web.conn, self.brand_id, "photo", actor=ACTOR)
+        self._real_product()
+        self._set_goal()
+
+    def _real_product(self, name: str = "測試商品", **extra) -> str:
+        return self._add_product(name, selling_price=500, unit_variable_cost=150,
+                                 shipping_cost=50, **extra)
+
 
 def coresettings_today(org_id):
     from app.core import settings as coresettings
@@ -56,144 +103,180 @@ def coresettings_today(org_id):
 
 
 class BrandNewBrandTest(ReadinessTestBase):
-    def test_all_three_rows_are_red_with_a_secondary_action(self):
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+    def test_five_brand_rows_in_order(self):
+        result = self._result()
+        self.assertEqual([item["key"] for item in result["items"]], _KEYS)
+        self.assertEqual([item["label"] for item in result["items"]],
+                         ["品牌是誰", "證據與政策", "素材", "廣告帳戶", "商品"])
+        self.assertNotIn("goal", [item["key"] for item in result["items"]])
+
+    def test_new_brand_colours_and_secondary_action(self):
+        result = self._result()
+        states = {item["key"]: item["state"] for item in result["items"]}
+        self.assertEqual(states, {"identity": "yellow", "evidence": "yellow", "media": "yellow",
+                                  "channel": "red", "offering": "red"})
         self.assertEqual(result["state"], "red")
-        self.assertTrue(all(item["state"] == "red" for item in result["items"]))
         self.assertEqual(result["primary"]["label"], "先補齊地基")
         self.assertIsNotNone(result["secondary"])
         self.assertEqual(result["secondary"]["label"], "還是要先建立")
 
-    def test_fix_href_names_the_wizard_step_that_fixes_it(self):
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        by_key = {item["key"]: item for item in result["items"]}
-        self.assertTrue(by_key["offering"]["fix_href"].endswith("/intake?step=3"))
-        self.assertTrue(by_key["goal"]["fix_href"].endswith("/intake?step=4"))
-        self.assertTrue(by_key["channel"]["fix_href"].endswith("/intake?step=4"))
+    def test_fix_href_names_the_onboarding_step_or_the_products_page(self):
+        by_key = {item["key"]: item for item in self._result()["items"]}
+        base = f"/brands/{self.brand_id}"
+        self.assertEqual(by_key["identity"]["fix_href"], f"{base}/intake?step=3")
+        self.assertEqual(by_key["evidence"]["fix_href"], f"{base}/intake?step=4")
+        self.assertEqual(by_key["media"]["fix_href"], f"{base}/intake?step=5")
+        self.assertEqual(by_key["channel"]["fix_href"], f"{base}/intake?step=6")
+        self.assertEqual(by_key["offering"]["fix_href"], f"{base}/products")
 
-    def test_red_primary_jumps_to_the_worst_rows_own_step(self):
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        offering = next(i for i in result["items"] if i["key"] == "offering")
-        self.assertEqual(result["primary"]["href"], offering["fix_href"])
+    def test_red_primary_jumps_to_the_first_worst_rows_own_link(self):
+        result = self._result()
+        worst = next(i for i in result["items"] if i["state"] == "red")
+        self.assertEqual(worst["key"], "channel")
+        self.assertEqual(result["primary"]["href"], worst["fix_href"])
 
     def test_notes_report_zero_confirmed_facts_without_blocking(self):
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        self.assertIn("0", result["notes"][0]["text"])
+        self.assertIn("0", self._result()["notes"][0]["text"])
+
+
+class IdentityTest(ReadinessTestBase):
+    def test_confirmed_positioning_and_tone_make_identity_green(self):
+        self._fact("positioning", "給忙到沒空吃飯的人的維他命軟糖")
+        self._fact("tone", "親切、直接")
+        self.assertEqual(self._item("identity")["state"], "green")
+
+    def test_positioning_alone_or_unconfirmed_tone_stays_yellow(self):
+        self._fact("positioning", "給忙到沒空吃飯的人的維他命軟糖")
+        self.assertEqual(self._item("identity")["state"], "yellow")
+        self._fact("tone", "親切、直接", status="pending")
+        self.assertEqual(self._item("identity")["state"], "yellow")
+
+
+class EvidenceTest(ReadinessTestBase):
+    def test_one_confirmed_proof_makes_evidence_green_with_counts(self):
+        self._fact("proof", "創辦人自己每天吃", fact_key="founder_voice")
+        item = self._item("evidence")
+        self.assertEqual(item["state"], "green")
+        self.assertEqual(item["reason"], "品牌證據 1 項・政策 0 項")
+
+    def test_one_policy_makes_evidence_green_with_counts(self):
+        bi_repo.save_brand_policies(web.conn, self.brand_id, [
+            {"key": "ship_threshold", "params": {"threshold": 999}},
+            {"key": "cod", "params": {}},
+        ], actor=ACTOR)
+        item = self._item("evidence")
+        self.assertEqual(item["state"], "green")
+        self.assertEqual(item["reason"], "品牌證據 0 項・政策 2 項")
+
+    def test_nothing_or_only_the_cooling_off_exemption_is_yellow(self):
+        item = self._item("evidence")
+        self.assertEqual(item["state"], "yellow")
+        self.assertEqual(item["reason"], "還沒有登記證據或政策；廣告只會講產品本身")
+        bi_repo.save_brand_policies(web.conn, self.brand_id, [
+            {"key": "cooling_off_exempt",
+             "params": {"disclosure": "本商品為易腐敗食品，不適用七天猶豫期"}},
+        ], actor=ACTOR)
+        self.assertEqual(self._item("evidence")["state"], "yellow")
+
+    def test_pending_proof_does_not_count(self):
+        self._fact("proof", "創辦人自己每天吃", status="pending", fact_key="founder_voice")
+        self.assertEqual(self._item("evidence")["state"], "yellow")
+
+
+class MediaTest(ReadinessTestBase):
+    def test_never_asked_is_yellow(self):
+        self.assertEqual(self._item("media")["state"], "yellow")
+
+    def test_each_capability_is_green_with_its_own_reason(self):
+        for value, reason in (("photo", "素材：只有照片"), ("photo_video", "素材：照片和影片")):
+            bi_repo.set_media_capability(web.conn, self.brand_id, value, actor=ACTOR)
+            item = self._item("media")
+            self.assertEqual((item["state"], item["reason"]), ("green", reason))
 
 
 class OfferingTest(ReadinessTestBase):
-    def _add_product(self):
-        return bi_repo.create_product(web.conn, self.brand_id, name="測試商品", actor=ACTOR)["id"]
+    def test_no_product_is_red_with_build_first_product(self):
+        item = self._item("offering")
+        self.assertEqual(item["state"], "red")
+        self.assertEqual(item["reason"], "還沒有商品")
+        self.assertEqual(item["fix_label"], "建第一個商品")
+        self.assertEqual(item["fix_href"], f"/brands/{self.brand_id}/products")
+
+    def test_product_without_numbers_stays_red(self):
+        self._add_product()
+        item = self._item("offering")
+        self.assertEqual(item["state"], "red")
+        self.assertIn("數字", item["reason"])
 
     def test_real_numbers_make_offering_green(self):
-        product_id = self._add_product()
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, product_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-        )
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        offering = next(i for i in result["items"] if i["key"] == "offering")
-        self.assertEqual(offering["state"], "green")
+        self._real_product()
+        self.assertEqual(self._item("offering")["state"], "green")
 
     def test_assumptions_make_offering_yellow_not_red(self):
-        product_id = self._add_product()
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, product_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-            assumptions=["cost"],
-        )
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        offering = next(i for i in result["items"] if i["key"] == "offering")
-        self.assertEqual(offering["state"], "yellow")
-        self.assertIn("假設", offering["reason"])
-        self.assertEqual(offering["fix_label"], "去改")
+        self._real_product(assumptions=["cost"])
+        item = self._item("offering")
+        self.assertEqual(item["state"], "yellow")
+        self.assertIn("假設", item["reason"])
+        self.assertEqual(item["fix_label"], "去改")
 
     def test_assumption_reason_names_the_assumed_product_not_the_real_one(self):
-        real_id = bi_repo.create_product(web.conn, self.brand_id, name="A商品", actor=ACTOR)["id"]
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, real_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-        )
-        assumed_id = bi_repo.create_product(
-            web.conn, self.brand_id, name="B商品", actor=ACTOR,
-        )["id"]
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, assumed_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-            assumptions=["close_rate"],
-        )
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        offering = next(i for i in result["items"] if i["key"] == "offering")
-        self.assertEqual(offering["state"], "yellow")
-        self.assertIn("B商品", offering["reason"])
-        self.assertIn("成交率", offering["reason"])
-        self.assertNotIn("A商品的", offering["reason"])
-
-
-class GoalTest(ReadinessTestBase):
-    def test_setting_conversion_goal_makes_it_green(self):
-        bi_repo.set_brand_switches(
-            web.conn, self.brand_id, market_region="TW", conversion_goal="purchase", actor=ACTOR,
-        )
-        web.conn.commit()
-        result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        goal = next(i for i in result["items"] if i["key"] == "goal")
-        self.assertEqual(goal["state"], "green")
+        self._real_product("A商品")
+        self._real_product("B商品", assumptions=["close_rate"])
+        item = self._item("offering")
+        self.assertEqual(item["state"], "yellow")
+        self.assertIn("B商品", item["reason"])
+        self.assertIn("成交率", item["reason"])
+        self.assertNotIn("A商品的", item["reason"])
 
 
 class ChannelTest(ReadinessTestBase):
-    def _make_offering_and_goal_green(self):
-        product_id = bi_repo.create_product(
-            web.conn, self.brand_id, name="測試商品", actor=ACTOR,
-        )["id"]
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, product_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-        )
-        bi_repo.set_brand_switches(
-            web.conn, self.brand_id, market_region="TW", conversion_goal="purchase", actor=ACTOR,
-        )
-        web.conn.commit()
+    def test_goal_without_account_is_red_and_names_the_goal(self):
+        self._set_goal()
+        item = self._item("channel")
+        self.assertEqual(item["state"], "red")
+        self.assertIn("還沒接上廣告帳戶", item["reason"])
+        self.assertTrue(item["reason"].endswith("・成效目標：購買"))
+        self.assertEqual(item["fix_label"], "去接廣告帳戶")
+
+    def test_missing_goal_turns_a_finished_account_red(self):
+        self._connect_account(backfill_done=True)
+        item = self._item("channel")
+        self.assertEqual(item["state"], "red")
+        self.assertTrue(item["reason"].endswith("・成效目標：還沒設定"))
+        self.assertEqual(item["fix_label"], "去設定成效目標")
 
     def test_bound_but_not_backfilled_is_yellow_and_overall_state_follows(self):
-        self._make_offering_and_goal_green()
+        self._fill_other_rows()
         self._connect_account(backfill_done=False)
-        with mock.patch.object(channels, "background_is_active", return_value=False):
-            result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+        result = self._result()
         channel = next(i for i in result["items"] if i["key"] == "channel")
         self.assertEqual(channel["state"], "yellow")
+        self.assertIn("還沒有任何花費紀錄", channel["reason"])
+        self.assertIn("・成效目標：購買", channel["reason"])
         self.assertEqual(result["state"], "yellow")
         self.assertEqual(result["primary"]["label"], "進入投放中心（有假設值）")
         self.assertIsNone(result["secondary"])
-        self.assertIn("還沒有任何花費紀錄", channel["reason"])
 
     def test_backfill_still_running_is_yellow(self):
-        self._make_offering_and_goal_green()
+        self._set_goal()
         self._connect_account(backfill_done=True)
-        with mock.patch.object(channels, "background_is_active", return_value=True):
-            result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
-        channel = next(i for i in result["items"] if i["key"] == "channel")
+        channel = self._item("channel", background_active=True)
         self.assertEqual(channel["state"], "yellow")
         self.assertIn("花費還在拉", channel["reason"])
 
 
 class AllGreenTest(ReadinessTestBase):
-    def test_real_numbers_goal_and_finished_backfill_are_all_green(self):
-        product_id = bi_repo.create_product(
-            web.conn, self.brand_id, name="測試商品", actor=ACTOR,
-        )["id"]
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, product_id, selling_price=500, currency="TWD",
-            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=150, shipping_cost=50,
-        )
-        bi_repo.set_brand_switches(
-            web.conn, self.brand_id, market_region="TW", conversion_goal="purchase", actor=ACTOR,
-        )
-        web.conn.commit()
+    def test_every_row_set_and_a_finished_backfill_are_all_green(self):
+        self._fill_other_rows()
         self._connect_account(backfill_done=True)
-        with mock.patch.object(channels, "background_is_active", return_value=False):
-            result = readiness.launch_readiness(web.conn, self.org_id, self.brand_id)
+        result = self._result()
+        self.assertEqual([item["state"] for item in result["items"]], ["green"] * 5)
         self.assertEqual(result["state"], "green")
-        self.assertTrue(all(item["state"] == "green" for item in result["items"]))
         self.assertEqual(result["primary"]["label"], "進入投放中心")
         self.assertIsNone(result["secondary"])
+        channel = next(i for i in result["items"] if i["key"] == "channel")
+        self.assertTrue(channel["reason"].endswith("花費資料齊全・成效目標：購買"))
+
+
+if __name__ == "__main__":
+    unittest.main()

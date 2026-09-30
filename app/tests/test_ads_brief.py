@@ -636,6 +636,8 @@ class StructuredCreateRouteTest(_BriefTestBase):
         self.assertEqual(campaign["constraints_json"]["budget"], 30000)
         self.assertTrue(campaign["goal_text"])
         self.assertIn("asset_readiness", campaign)
+        # F42-I02: a brand with no policies, proof or media answer has nothing in hand.
+        self.assertEqual(campaign["materials"], {"offers": [], "proof": [], "media": None})
 
     def test_refusals_are_400_with_their_codes_not_422(self):
         brief.PROVIDER = _fake("{}")
