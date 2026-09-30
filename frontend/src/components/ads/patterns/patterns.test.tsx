@@ -386,6 +386,18 @@ describe("v9 pieces（F28-I07）", () => {
     expect(screen.getByText("新客 70%", { selector: "i" })).toBeTruthy();
     expect(screen.queryByText(/・/)).toBeNull();
   });
+
+  it("AllocationBar legend={false}：細條、段內無字、無圖例；allocationFills 與段色一致、0% 不上色", async () => {
+    const { AllocationBar, allocationFills } = await import("./ScenarioBars");
+    const parts = [{ key: "new", label: "新客", pct: 70 }, { key: "re", label: "再行銷", pct: 0 }, { key: "x", label: "探索", pct: 30 }];
+    const { container } = render(<AllocationBar parts={parts} total={10000} legend={false} />);
+    const bar = container.querySelector("[data-slot=allocation-bar]") as HTMLElement;
+    expect(bar.textContent).toBe("");
+    const fills = allocationFills(parts);
+    expect(fills).toEqual({ new: "bg-chart-revenue", x: "bg-chart-spend" });
+    expect(bar.querySelector("[data-key=x]")?.className).toContain(fills.x);
+    expect(bar.querySelector("[data-key=re]")).toBeNull();
+  });
 });
 
 describe("v10 kit（F29-I09）", () => {
