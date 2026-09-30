@@ -76,7 +76,8 @@
       "public": "app/intake/__init__.py",
       "may_depend_on": [
         "ads",
-        "schedule"
+        "schedule",
+        "workbench"
       ],
       "owns": [
         "app/intake/**",
@@ -84,6 +85,8 @@
         "frontend/src/components/intake/**",
         "frontend/src/lib/intakeApi.ts",
         "frontend/src/lib/intakeT2Api.ts",
+        "frontend/src/lib/intakeOnboardingApi.ts",
+        "frontend/src/lib/intakeProductApi.ts",
         "supabase/migrations/*_intake_*.sql"
       ]
     }
