@@ -185,6 +185,13 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   action_lines?: AdsActionLine[];
   /** F05-I12：同 `CampaignCard.labels`；選填只為了既有測試 fixture，後端不會漏。 */
   labels?: CampaignLabels;
+  /** F42-I02 (`app/ads/materials_in_hand.py`): the brand's offers／proof／media the plan may use; `null` on an
+   * imported campaign. Optional only for hand-written fixtures. */
+  materials?: {
+    offers: { key: string; label: string; sentence: string }[];
+    proof: { key: string; label: string; text: string }[];
+    media: "photo" | "photo_video" | null;
+  } | null;
 }
 
 /** F04-I08：`app/ads/judgment.py::action_line()` 的回傳形狀，加上呼叫端補的 campaign

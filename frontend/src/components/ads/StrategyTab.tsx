@@ -50,6 +50,26 @@ function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }
   );
 }
 
+const MEDIA_LABEL = { photo: "只排照片（單圖、輪播）", photo_video: "照片和影片" } as const;
+
+/** Prototype F41 ② `used` (F42-I13): what the plan may say — one chip per registered offer 「label：sentence」, per
+ * proof its label (the proof text in the chip's title and accessible name), and the media the brand makes. Nothing
+ * registered → one muted chip; `media` null (never asked) → no media chip. */
+function MaterialsRow({ materials }: { materials: NonNullable<CampaignDetail["materials"]> }) {
+  const empty = materials.offers.length === 0 && materials.proof.length === 0;
+  return (
+    <div data-slot="materials-used" className="mb-3 flex flex-wrap items-center gap-1.5">
+      <span className="text-[12.5px] text-muted-foreground">這期會用：</span>
+      {materials.offers.map((o) => <Chip key={`offer-${o.key}`} data-kind="offer">{o.label}：{o.sentence}</Chip>)}
+      {materials.proof.map((p) => (
+        <Chip key={`proof-${p.key}`} data-kind="proof" title={p.text} aria-label={`${p.label}：${p.text}`}>{p.label}</Chip>
+      ))}
+      {empty && <Chip data-kind="none">沒有登記優惠與證據，廣告只講產品本身</Chip>}
+      {materials.media && <Chip data-kind="media">{MEDIA_LABEL[materials.media]}</Chip>}
+    </div>
+  );
+}
+
 /** 策略 tab（F28-I09，prototype v9 `tabStrategy()`）：一個上限（`CapBlock`）→ 這一期的總預算（`BudgetScenarios`，
  * internal only）→ 預算怎麼分 → 兩個收合（為什麼這樣建議／進階設定），底部一條動作列。v10 (F30-I07): 進階設定 holds the
  * launch settings every ad set uses (`LaunchSettingsCard`, the prototype's advanced fields; read only once the launch
@@ -222,6 +242,7 @@ export function StrategyTab({
                   )}
                 </div>
               </div>
+              {c.materials && <MaterialsRow materials={c.materials} />}
               {allocationPct === null ? (
                 <>
                   <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} total={allocationTotal} legend={false} />
