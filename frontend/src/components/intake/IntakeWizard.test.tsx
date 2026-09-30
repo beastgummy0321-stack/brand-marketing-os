@@ -1,104 +1,144 @@
-/** frontend/src/components/intake/IntakeWizard.test.tsx — 票 04（plan-quality）：品牌從沒建檔過
- * （`GET .../draft` 404）跟品牌建檔已完成，都要能開新一輪調研，不能卡在「找不到建檔進度」
- * 空狀態或只剩「前往品牌頁」。全程假 fetchIntakeDraft／fetchTruthCard，不連任何伺服器
- * （跟 `frontend/src/components/auth/OrgMenu.test.tsx` 同一套 importActual+覆寫的假法）。 */
+/** frontend/src/components/intake/IntakeWizard.test.tsx — the seven-step brand onboarding shell
+ * (F42-I06): the step dots, step 2 skipped when the brand gave no website or photo, a completed brand
+ * opening step 7, and `?step=N` re-entry. The API calls are fakes (importActual + override), no server. */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeApi")>("@/lib/intakeApi");
-  return { ...actual, fetchIntakeDraft: vi.fn(), fetchOfferings: vi.fn() };
+  return { ...actual, fetchIntakeDraft: vi.fn() };
 });
-vi.mock("@/lib/intakeT2Api", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/intakeT2Api")>("@/lib/intakeT2Api");
-  return { ...actual, fetchTruthCard: vi.fn(), fetchPersonas: vi.fn().mockRejectedValue(new Error("not mocked")) };
+vi.mock("@/lib/intakeOnboardingApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/intakeOnboardingApi")>("@/lib/intakeOnboardingApi");
+  return { ...actual, fetchOnboardingStatus: vi.fn(), completeOnboarding: vi.fn(), fetchOnboardingBasics: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
-  useWorkspace: () => ({ refreshBrands: vi.fn() }),
+  useWorkspace: () => ({
+    scope: "usr_1:org_1",
+    refreshBrands: vi.fn(),
+    brands: [{ brand_id: "brd_x", brand_name: "山嵐手作果醬 Mountain Mist Handmade Jam Co." }],
+  }),
 }));
 
 import type { IntakeDraft } from "@/lib/intakeApi";
-import { fetchIntakeDraft, fetchOfferings } from "@/lib/intakeApi";
-import { fetchTruthCard } from "@/lib/intakeT2Api";
+import { fetchIntakeDraft } from "@/lib/intakeApi";
+import type { OnboardingStatus } from "@/lib/intakeOnboardingApi";
+import { fetchOnboardingBasics, fetchOnboardingStatus } from "@/lib/intakeOnboardingApi";
 import { IntakeWizard } from "./IntakeWizard";
 
-const mockFetchIntakeDraft = vi.mocked(fetchIntakeDraft);
-const mockFetchOfferings = vi.mocked(fetchOfferings);
-const mockFetchTruthCard = vi.mocked(fetchTruthCard);
+const mockStatus = vi.mocked(fetchOnboardingStatus);
+const mockDraft = vi.mocked(fetchIntakeDraft);
+const mockBasics = vi.mocked(fetchOnboardingBasics);
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderWizard(brandId: string, initialEntry?: string) {
+function status(overrides: Partial<OnboardingStatus> = {}): OnboardingStatus {
+  return { step: 3, completed: false, skipped_scan: true, prefill_status: "none", prefill_error: null, ...overrides };
+}
+
+function Where() {
+  const loc = useLocation();
+  return <output data-testid="where">{loc.pathname + loc.search}</output>;
+}
+
+function renderWizard(initialEntry = "/brands/brd_x/intake") {
   return render(
-    <MemoryRouter initialEntries={initialEntry ? [initialEntry] : ["/"]}>
-      <IntakeWizard brandId={brandId} />
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/brands/:brandId/intake" element={<><IntakeWizard brandId="brd_x" /><Where /></>} />
+      </Routes>
     </MemoryRouter>,
   );
 }
 
 describe("IntakeWizard", () => {
-  it("品牌從沒建檔過（draft 404）時顯示重新調研表單，不是找不到建檔進度空狀態", async () => {
-    mockFetchIntakeDraft.mockRejectedValue(new Error("找不到建檔進度"));
+  it("七個步驟點都在，目前這一步標成 current，麵包屑是品牌建檔 › 品牌", async () => {
+    mockStatus.mockResolvedValue(status({ step: 3 }));
+    mockDraft.mockResolvedValue({ scan_done: true } as unknown as IntakeDraft);
 
-    renderWizard("brd_x");
+    renderWizard();
 
-    await waitFor(() => expect(screen.getByText("開始這一輪調研")).toBeTruthy());
-    expect(screen.queryByText("找不到建檔進度")).toBeNull();
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌是誰" })).toBeTruthy();
+    const steps = screen.getAllByRole("listitem").map((li) => li.textContent);
+    // Steps before the current one carry a check mark instead of their number.
+    expect(steps).toEqual(["基本", "AI 讀網站", "3品牌是誰", "4證據與政策", "5素材", "6接工具", "7完成"]);
+    expect(screen.getByRole("listitem", { current: "step" }).textContent).toBe("3品牌是誰");
+    expect(screen.getByRole("navigation", { name: "建檔位置" }).textContent).toBe("品牌建檔›山嵐手作果醬 Mountain Mist Handmade Jam Co.");
   });
 
-  it("建檔已完成的品牌按「再跑一次調研」會換成重新調研表單", async () => {
-    mockFetchIntakeDraft.mockResolvedValue({ completed: true, brand_name: "測試品牌", step: 5, photos: [] } as unknown as IntakeDraft);
-    mockFetchTruthCard.mockResolvedValue({ accepted: [], needs_confirmation: [], forbidden: [] });
+  it("沒給網站和照片：第 2 步跳過——返回直接回基本，第 2 步的點不能點", async () => {
+    mockStatus.mockResolvedValue(status({ step: 3, skipped_scan: true }));
+    mockDraft.mockResolvedValue({ scan_done: true } as unknown as IntakeDraft);
+    mockBasics.mockReturnValue(new Promise(() => {}));
 
-    renderWizard("brd_done");
+    renderWizard();
 
-    const restartButton = await screen.findByText("再跑一次調研");
-    await userEvent.click(restartButton);
+    await screen.findByRole("heading", { level: 1, name: "品牌是誰" });
+    expect(screen.queryByRole("button", { name: "回到AI 讀網站" })).toBeNull();
+    expect(screen.getByRole("button", { name: "回到基本" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "← 基本" }));
 
-    await waitFor(() => expect(screen.getByText("開始這一輪調研")).toBeTruthy());
+    expect(await screen.findByRole("heading", { level: 1, name: "建立品牌" })).toBeTruthy();
   });
 
-  it("建檔已完成但網址帶 ?step=3 時顯示第 3 步而不是完成畫面，且有「回到完成畫面」", async () => {
-    mockFetchIntakeDraft.mockResolvedValue({ completed: true, brand_name: "測試品牌", step: 5, photos: [], cost_items: [] } as unknown as IntakeDraft);
-    mockFetchOfferings.mockResolvedValue({ offerings: [], benchmarks: {} } as never);
+  it("一路按下一步走到接工具", async () => {
+    mockStatus.mockResolvedValue(status({ step: 3 }));
+    mockDraft.mockResolvedValue({ scan_done: true } as unknown as IntakeDraft);
 
-    renderWizard("brd_done", "/brands/brd_done/intake?step=3");
+    renderWizard();
 
-    await waitFor(() => expect(screen.getByText("你賣的是什麼、一次成交值多少")).toBeTruthy());
-    expect(screen.getByText("回到完成畫面")).toBeTruthy();
-    expect(screen.queryByText("再跑一次調研")).toBeNull();
+    await screen.findByRole("heading", { level: 1, name: "品牌是誰" });
+    await userEvent.click(screen.getByRole("button", { name: "下一步 →" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌的證據與政策" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "← 品牌是誰" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "下一步 →" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "你交得出哪些素材" })).toBeTruthy();
   });
 
-  it("建檔已完成、走 ?step=3 深連結時按「調整上限」看得到預算面板", async () => {
-    mockFetchIntakeDraft.mockResolvedValue({
-      completed: true,
-      brand_name: "測試品牌",
-      step: 5,
-      photos: [],
-      cost_items: [],
-      cost_spent: 0,
-      budget_limit: 5,
-    } as unknown as IntakeDraft);
-    mockFetchOfferings.mockResolvedValue({ offerings: [], benchmarks: {} } as never);
+  it("建檔已完成、網址沒帶 step：打開第 7 步「品牌建好了」", async () => {
+    mockStatus.mockResolvedValue(status({ step: 7, completed: true, skipped_scan: false }));
+    mockDraft.mockResolvedValue({ scan_done: true, completed: true } as unknown as IntakeDraft);
 
-    renderWizard("brd_done", "/brands/brd_done/intake?step=3");
+    renderWizard();
 
-    await waitFor(() => expect(screen.getByText("你賣的是什麼、一次成交值多少")).toBeTruthy());
-    await userEvent.click(screen.getByText("調整上限"));
-
-    expect(await screen.findByText("這次建檔最多可以花多少？")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌建好了" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "先看商品頁" }).getAttribute("href")).toBe("/brands/brd_x/products");
   });
 
-  it("建檔已完成且網址不帶 step 參數時仍然是完成畫面", async () => {
-    mockFetchIntakeDraft.mockResolvedValue({ completed: true, brand_name: "測試品牌", step: 5, photos: [] } as unknown as IntakeDraft);
-    mockFetchTruthCard.mockResolvedValue({ accepted: [], needs_confirmation: [], forbidden: [] });
+  it("建檔已完成、網址帶 ?step=3：顯示第 3 步，下一步走到 ?step=4，每個步驟點都能點", async () => {
+    mockStatus.mockResolvedValue(status({ step: 7, completed: true, skipped_scan: false }));
+    mockDraft.mockResolvedValue({ scan_done: true, completed: true } as unknown as IntakeDraft);
 
-    renderWizard("brd_done");
+    renderWizard("/brands/brd_x/intake?step=3");
 
-    await waitFor(() => expect(screen.getByText("再跑一次調研")).toBeTruthy());
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌是誰" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "回到AI 讀網站" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "回到完成" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "下一步 →" }));
+
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌的證據與政策" })).toBeTruthy();
+    expect(screen.getByTestId("where").textContent).toBe("/brands/brd_x/intake?step=4");
+  });
+
+  it("建檔已完成、?step 不是 1～7 的整數：當沒給，打開第 7 步", async () => {
+    mockStatus.mockResolvedValue(status({ step: 7, completed: true }));
+    mockDraft.mockRejectedValue(new Error("找不到建檔進度"));
+
+    renderWizard("/brands/brd_x/intake?step=9");
+
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌建好了" })).toBeTruthy();
+  });
+
+  it("品牌不存在時顯示找不到，而不是一片空白", async () => {
+    mockStatus.mockRejectedValue(new Error("找不到這筆資料。"));
+    mockDraft.mockRejectedValue(new Error("找不到建檔進度"));
+
+    renderWizard();
+
+    await waitFor(() => expect(screen.getByText("找不到這個品牌")).toBeTruthy());
   });
 });

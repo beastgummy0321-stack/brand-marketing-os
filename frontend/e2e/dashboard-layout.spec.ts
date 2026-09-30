@@ -8,10 +8,10 @@ test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({
   await page.getByLabel("密碼").fill(`layout-password-${stamp}`);
   await page.getByRole("button", { name: "註冊", exact: true }).click();
   await page.getByRole("link", { name: "新增品牌" }).first().click();
-  await page.getByLabel("品牌名稱（必填）").fill(`版面測試 A ${stamp}`);
+  await page.getByLabel("品牌名稱", { exact: true }).fill(`版面測試 A ${stamp}`);
   // F05-I06：投放史二選一做在步驟一表單裡，沒選不能往下。
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
+  await page.getByRole("button", { name: "下一步 →" }).click();
   // 沒東西可掃，草稿直接停在精靈第 3 步；回品牌頁才看得到經營概況。
   await page.waitForURL(/\/app\/brands\/brd_.+\/intake/);
   const firstBrandId = new URL(page.url()).pathname.split("/")[3];
@@ -47,9 +47,9 @@ test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({
 
   // Browser-only preferences must not leak to a newly created brand in the same organization.
   await page.goto("/app/intake/new");
-  await page.getByLabel("品牌名稱（必填）").fill(`版面測試 B ${stamp}`);
-  await page.getByRole("radio", { name: "完全沒投放過" }).check();
-  await page.getByRole("button", { name: "建立品牌並開始初掃" }).click();
+  await page.getByLabel("品牌名稱", { exact: true }).fill(`版面測試 B ${stamp}`);
+  await page.getByRole("radio", { name: "完全沒投過" }).check();
+  await page.getByRole("button", { name: "下一步 →" }).click();
   await page.waitForURL(/\/app\/brands\/brd_.+\/intake/);
   const secondBrandId = new URL(page.url()).pathname.split("/")[3];
   await page.goto(`/app/brands/${secondBrandId}`);
