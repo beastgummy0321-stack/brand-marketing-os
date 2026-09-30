@@ -116,9 +116,9 @@ export interface LaunchItem {
 }
 
 /** F41-I03 (`change_control_launch.py::month_fit`): the list step's month-budget block. The money fields are the
- * `getMonthlyBudget` view with this launch's reservation already added (`reserved_increases` includes `extra`, and
- * `available` is what is left after it), plus `extra` itself and the backend's approval refusal, if any, mirroring
- * `month_budget.preflight` in its order. `blocker_text` is printed verbatim; the browser never recomputes the rule. */
+ * `getMonthlyBudget` view of the month as it stands without this launch, plus `extra` (what this launch reserves)
+ * and the backend's approval refusal, if any, judged with the launch and mirroring `month_budget.preflight` in its
+ * order. `blocker_text` is printed verbatim; the browser never recomputes the rule. */
 export interface LaunchMonthBudget extends MonthlyBudget {
   extra: number;
   blocker: "unset" | "uncertain" | "short" | null;

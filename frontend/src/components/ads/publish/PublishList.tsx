@@ -44,17 +44,11 @@ function capTile(campaign: CampaignDetail | null, ownCap: number | null) {
   return { label, value: `${amount} 元`, unknown: false, note };
 }
 
-/** F41-I05: the launch view's month block as the month-budget card reads it. The card (shared with the add-budget
- * page) takes the month *before* the change and draws `extra` on top; the backend's block already carries this
- * launch inside `reserved_increases` and `available`, so it is taken back out here, once. The block arrives with the
+/** F41-I05: the launch view's month block handed to the month-budget card as it is — the backend already gives the
+ * month before this launch, and the card draws `extra` on top (as on the add-budget page). The block arrives with the
  * list, so the read is always settled. */
 function monthRead(block: LaunchMonthBudget): ApiRead<MonthlyBudget | null> {
-  const data: MonthlyBudget = {
-    ...block,
-    reserved_increases: block.reserved_increases - block.extra,
-    available: block.available === null ? null : block.available + block.extra,
-  };
-  return { status: "ready", data, error: null, reload: () => {} };
+  return { status: "ready", data: block, error: null, reload: () => {} };
 }
 
 export function PublishList({ brandId, campaignId, name, campaign, campaignFailed, onCampaignRetry, onCampaignSaved, view, onApproved }: {

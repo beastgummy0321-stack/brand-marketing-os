@@ -152,12 +152,12 @@ describe("確認上架清單", () => {
   });
 });
 
-/** F41-I03's list-step block, real shape: `month_budget.view(..., additional=[launch])` — this launch (`extra`) is already
- * inside `reserved_increases` and `available` — plus the backend's own blocker and its sentence. */
+/** F41-I03's list-step block, real shape: `month_budget.view(...)` of the month without this launch, this launch's
+ * `extra`, and the backend's own blocker (judged with the launch) and its sentence. */
 function monthBlock(o: Partial<LaunchMonthBudget> = {}): LaunchMonthBudget {
   return {
     month: "2026-10", currency: "TWD", amount: 32000, revision: 1, known_spend: 20068, ongoing_estimate: 0,
-    reserved_increases: 10000, available: 1932, uncertainties: [], can_increase: true, period_end: "2026-10-31",
+    reserved_increases: 0, available: 11932, uncertainties: [], can_increase: true, period_end: "2026-10-31",
     confirmed_at: "2026-09-30T02:00:00Z", notice: "", ongoing_owners: [], extra: 10000, blocker: null, blocker_text: null, ...o,
   };
 }
@@ -194,7 +194,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
 
   it("short: 放不下, what is left against what this launch needs, the two ways out, and approval waits", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
-      amount: 21000, available: -9068, blocker: "short", blocker_text: "10 月預算不夠這期花",
+      amount: 21000, available: 932, blocker: "short", blocker_text: "10 月預算不夠這期花",
     }) }));
     renderAt("list");
     expect(await screen.findByText("⚠ 10 月預算不夠這期花")).toBeTruthy();

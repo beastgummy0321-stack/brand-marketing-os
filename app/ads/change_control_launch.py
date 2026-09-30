@@ -159,10 +159,11 @@ _UNCERTAIN_TEXT = "餘額尚不確定，暫不能核准新增花費；可補資�
 def month_fit(conn, org, brand, campaign_id, snapshot) -> dict:
     """F41-I03 (drill-8 #6): the first-launch list page's 「本月預算放得下」 card, computed
     from exactly what `_approve_set` hands `month_budget.preflight` -- `snapshot["month"]` and
-    `[_launch_item(...)]` -- without raising. The money fields are `month_budget.view(...)` with
-    the launch item added (the `getMonthlyBudget` shape, so the card reads it unchanged), plus
-    `extra` (the reservation this launch adds), `blocker` and `blocker_text`. `blocker` mirrors
-    preflight's refusals in its order: amount unknown -> `unset`, uncertainties -> `uncertain`,
+    `[_launch_item(...)]` -- without raising. The money fields are `month_budget.view(...)` as the
+    month stands WITHOUT this launch (the `getMonthlyBudget` shape: the card draws `extra` on top
+    of it, as on the add-budget page), plus `extra` (the reservation this launch adds), `blocker`
+    and `blocker_text`. `blocker` is judged on the view WITH the launch and mirrors preflight's
+    refusals in its order: amount unknown -> `unset`, uncertainties -> `uncertain`,
     available < 0 -> `short`; else `None`. Read-only: no lock, no write."""
     month = snapshot["month"]
     item = _launch_item(conn, org, brand, campaign_id, snapshot)
@@ -178,7 +179,7 @@ def month_fit(conn, org, brand, campaign_id, snapshot) -> dict:
     else:
         blocker, text = None, None
     return {
-        **budget,
+        **without,
         "extra": budget["reserved_increases"] - without["reserved_increases"],
         "blocker": blocker,
         "blocker_text": text,
