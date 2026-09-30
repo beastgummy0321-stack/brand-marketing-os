@@ -2,7 +2,8 @@
  * step calls `complete` once; the readiness rows print verbatim; a red 商品 row carries the one primary
  * 「建第一個商品 →」, an all-green brand has no red CTA, a yellow row gets 「去改」 to its step; a failed read keeps the
  * head and bar and offers the retry. No server: the API calls are fakes with the shape of
- * `app/ads/readiness.py::launch_readiness()`. */
+ * `app/ads/readiness.py::launch_readiness()`. The chip names the overall state in fixed words (還差商品 / 還要補齊 /
+ * 有假設值 / 可以投放), never the API's button label. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -76,6 +77,8 @@ function renderStep(back = { label: "接工具", onClick: vi.fn() }) {
   return { back };
 }
 
+const chip = () =>
+  within(screen.getByRole("region", { name: "可以開始投放了嗎" })).getByText(/./, { selector: "[data-slot=chip]" });
 const row = (label: string) => screen.getByText(label, { selector: "b" }).closest("li") as HTMLElement;
 
 afterEach(() => {
@@ -106,7 +109,8 @@ describe("DoneStep", () => {
     const cta = await screen.findByRole("link", { name: "建第一個商品 →" });
     expect(cta.getAttribute("href")).toBe(`/brands/${B}/products`);
     expect(within(row("商品")).getByRole("link", { name: "建第一個商品 →" })).toBe(cta);
-    expect(screen.getByText("還差商品").getAttribute("data-tone")).toBe("warn");
+    expect(chip().textContent).toBe("還差商品");
+    expect(chip().getAttribute("data-tone")).toBe("warn");
     // Green rows carry no action.
     expect(within(row("品牌是誰")).queryByRole("link")).toBeNull();
   });
@@ -119,7 +123,23 @@ describe("DoneStep", () => {
     expect(screen.queryByRole("link", { name: /→$/ })).toBeNull();
     expect(screen.queryByRole("link", { name: "去改" })).toBeNull();
     expect(screen.queryByText("還差商品")).toBeNull();
-    expect(screen.getByText("進入投放中心").getAttribute("data-tone")).toBe("ok");
+    expect(chip().textContent).toBe("可以投放");
+    expect(chip().getAttribute("data-tone")).toBe("ok");
+  });
+
+  it("names any other red state 還要補齊, not the API's button label", async () => {
+    mockComplete.mockResolvedValue(done);
+    const channelRed: ReadinessItem = {
+      ...channel, state: "red", reason: "已接上 Meta，花費資料齊全・成效目標：還沒設定", fix_label: "去設定成效目標",
+    };
+    mockReadiness.mockResolvedValue(readiness([identity, evidence, media, channelRed, offeringGreen], "red", "先補齊地基"));
+    renderStep();
+    await screen.findByText("已接上 Meta，花費資料齊全・成效目標：還沒設定");
+    expect(chip().textContent).toBe("還要補齊");
+    expect(chip().getAttribute("data-tone")).toBe("bad");
+    expect(screen.queryByText("先補齊地基")).toBeNull();
+    expect(screen.queryByRole("link", { name: /→$/ })).toBeNull();
+    expect(within(row("廣告帳戶")).getByRole("link", { name: "去改" }).getAttribute("href")).toBe(`/brands/${B}/intake?step=6`);
   });
 
   it("gives a yellow row 去改 to its step", async () => {
@@ -132,7 +152,8 @@ describe("DoneStep", () => {
     const fix = within(row("證據與政策")).getByRole("link", { name: "去改" });
     expect(fix.getAttribute("href")).toBe(`/brands/${B}/intake?step=4`);
     expect(screen.getAllByRole("link", { name: "去改" })).toHaveLength(1);
-    expect(screen.getByText("進入投放中心（有假設值）").getAttribute("data-tone")).toBe("warn");
+    expect(chip().textContent).toBe("有假設值");
+    expect(chip().getAttribute("data-tone")).toBe("warn");
   });
 
   it("keeps the head and bar when the read fails and retries in the rows area", async () => {

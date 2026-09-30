@@ -95,7 +95,14 @@ export function DoneStep({ brandId, nav, back }: { brandId: string; nav: StepNav
   );
 }
 
-/** The worst state as a chip: 「還差商品」 when the 商品 row is red, otherwise the state's wording from the API. */
+/** Chip words per overall state: they describe the state (never a button label such as `primary.label`). */
+const STATE_WORDS: Record<ReadinessState, string> = {
+  red: "還要補齊",
+  yellow: "有假設值",
+  green: "可以投放",
+};
+
+/** The overall state as a chip: 「還差商品」 when the 商品 row is red, otherwise the fixed words of the state. */
 function StateChip({ readiness }: { readiness: LaunchReadiness }) {
   const offeringRed = readiness.items.some((item) => item.key === OFFERING_KEY && item.state === "red");
   const tone = offeringRed || readiness.state === "yellow" ? "warn" : readiness.state === "red" ? "bad" : "ok";
@@ -105,7 +112,7 @@ function StateChip({ readiness }: { readiness: LaunchReadiness }) {
       data-tone={tone}
       className={cn("inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap", CHIP[tone])}
     >
-      {offeringRed ? "還差商品" : readiness.primary.label}
+      {offeringRed ? "還差商品" : STATE_WORDS[readiness.state]}
     </span>
   );
 }
