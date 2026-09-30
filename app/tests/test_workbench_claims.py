@@ -100,13 +100,20 @@ def _guard(policies: list, price: float | None, copy) -> tuple[list[dict], list[
 _SHIP_999 = [{"key": "ship_threshold", "params": {"threshold": 999}}]
 
 
+def _policy_id(brand_id: str, fact_key: str) -> str:
+    return next(r["id"] for r in bi_repo.list_brand_facts(web.conn, brand_id, status="confirmed")
+                if r["fact_type"] == "policy" and r["fact_key"] == fact_key)
+
+
 def test_free_shipping_policy_covers_product_at_threshold():
-    rows, missing = _guard(_SHIP_999, 999, {"headline": _SHIP})
+    brand_id, product_id = _offer_brand(_SHIP_999, 999)
+    rows = claims.sources(web.conn, brand_id, product_id)
+    # F43 lead note: the id names its source (here the policy fact), not only the offer key.
     assert rows == [
-        {"id": "offer:free_shipping", "text": "滿 NT$999 免運", "proof": False,
-         "offer_key": "free_shipping"},
+        {"id": f"offer:free_shipping:{_policy_id(brand_id, 'ship_threshold')}",
+         "text": "滿 NT$999 免運", "proof": False, "offer_key": "free_shipping"},
     ]
-    assert missing == []
+    assert claims.unsupported({"headline": _SHIP}, rows) == []
 
 
 def test_free_shipping_policy_below_threshold_is_flagged():
@@ -145,9 +152,11 @@ def test_available_family_does_not_cover_other_offer_families():
 
 
 def test_offer_rows_are_prompt_sources_with_their_ids():
-    rows, _ = _guard([{"key": "first_order", "params": {"content": "首購 9 折"}}], 999, "")
-    text = claims.policy(rows)
-    assert "- [offer:discount] 新會員首購禮：首購 9 折" in text
+    brand_id, product_id = _offer_brand(
+        [{"key": "first_order", "params": {"content": "首購 9 折"}}], 999)
+    text = claims.policy(claims.sources(web.conn, brand_id, product_id))
+    policy_id = _policy_id(brand_id, "first_order")
+    assert f"- [offer:discount:{policy_id}] 新會員首購禮：首購 9 折" in text
     assert text.count("新會員首購禮：首購 9 折") == 1  # only the offer row, not the policy fact
 
 
@@ -156,6 +165,101 @@ def test_cooling_off_exemption_is_not_a_copy_source():
     rows, _ = _guard([{"key": "cooling_off_exempt", "params": {"disclosure": disclosure}}],
                      999, "")
     assert rows == []
+
+
+# -- F43-I03: a sell-way reads every knowledge product; its own price sentence is a source ------
+
+_THREE_PACK = "三盒組優惠價 NT$999（原價 NT$1,197）"
+
+
+def _knowledge_product(brand_id: str, name: str, fact: str, claim: str) -> str:
+    product_id = bi_repo.create_product(web.conn, brand_id, name=name, actor=ACTOR)["id"]
+    bi_repo.create_product_fact(web.conn, brand_id, product_id, actor=ACTOR, fact_type="ingredient",
+                                label="成分", value=fact, status="confirmed", confirmed_by=ACTOR)
+    bi_repo.create_claim(web.conn, brand_id, actor=ACTOR, claim_text=claim, claim_type="approved",
+                         product_id=product_id)
+    return product_id
+
+
+def _sell_way(brand_id: str, name: str, components: list, price: float,
+              list_price: float | None) -> str:
+    return bi_repo.save_sell_way(
+        web.conn, brand_id, name=name, actor=ACTOR,
+        components=[{"product_id": p, "qty": q} for p, q in components],
+        economics={"selling_price": price, "list_price": list_price,
+                   "unit_variable_cost": 300, "shipping_cost": 60},
+    )["id"]
+
+
+def _brand(policies: list | None = None) -> str:
+    brand_id = bi_repo.create_brand(web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：賣法來源",
+                                    client_name=None, actor=ACTOR)["id"]
+    if policies:
+        bi_repo.save_brand_policies(web.conn, brand_id, policies, actor=ACTOR)
+    return brand_id
+
+
+def test_bundle_sources_read_every_knowledge_product():
+    brand_id = _brand()
+    gummy = _knowledge_product(brand_id, "晨光軟糖", "每顆含維生素C 60mg", "晨光軟糖一天兩顆")
+    tea = _knowledge_product(brand_id, "午後花茶", "洛神花與玫瑰花瓣", "午後花茶冷泡也好喝")
+    _knowledge_product(brand_id, "別的商品", "別的商品的成分", "別的商品的說法")
+    brand_claim = bi_repo.create_claim(web.conn, brand_id, actor=ACTOR, claim_text="台灣製造",
+                                       claim_type="approved")
+    bundle = _sell_way(brand_id, "早午組合", [(gummy, 1), (tea, 1)], 999, 1300)
+    rows = claims.sources(web.conn, brand_id, bundle)
+    facts = {f["value"]: f["id"] for p in (gummy, tea)
+             for f in bi_repo.list_product_facts(web.conn, brand_id, p)}
+    product_claims = {c["claim_text"]: c["id"] for p in (gummy, tea)
+                      for c in bi_repo.list_claims_for_product(web.conn, brand_id, p)}
+    # The sources rows of a two-product bundle (evidence for the issue's Verify).
+    assert rows == [
+        {"id": facts["每顆含維生素C 60mg"], "text": "每顆含維生素C 60mg", "proof": False},
+        {"id": facts["洛神花與玫瑰花瓣"], "text": "洛神花與玫瑰花瓣", "proof": False},
+        {"id": product_claims["晨光軟糖一天兩顆"], "text": "晨光軟糖一天兩顆", "proof": False},
+        {"id": brand_claim["id"], "text": "台灣製造", "proof": False},
+        {"id": product_claims["午後花茶冷泡也好喝"], "text": "午後花茶冷泡也好喝", "proof": False},
+        {"id": f"offer:bundle:{bundle}", "text": "早午組合優惠價 NT$999（原價 NT$1,300）",
+         "proof": False, "offer_key": "bundle"},
+    ]
+    assert not [r for r in rows if "別的商品" in r["text"]]
+
+
+def test_sell_way_price_sentence_backs_its_offer_words():
+    brand_id = _brand()
+    gummy = _knowledge_product(brand_id, "測試軟糖", "每包 20 公克", "測試軟糖好吃")
+    three = _sell_way(brand_id, "三盒組", [(gummy, 3)], 999, 1197)
+    rows = claims.sources(web.conn, brand_id, three)
+    offers = [r for r in rows if r.get("offer_key")]
+    assert offers == [{"id": f"offer:bundle:{three}", "text": f"測試軟糖 · {_THREE_PACK}",
+                       "proof": False, "offer_key": "bundle"}]
+    assert claims.unsupported({"headline": _THREE_PACK}, rows) == []
+    assert f"- [offer:bundle:{three}] 測試軟糖 · {_THREE_PACK}" in claims.policy(rows)
+    # The family is the sell-way's (bundle), not every offer word.
+    assert claims.unsupported({"headline": "三盒組免運"}, rows) == ["免運"]
+
+
+def test_sell_way_without_a_lower_price_does_not_back_youhui():
+    brand_id = _brand()
+    gummy = _knowledge_product(brand_id, "測試軟糖", "每包 20 公克", "測試軟糖好吃")
+    same = _sell_way(brand_id, "三盒組", [(gummy, 3)], 999, 999)
+    rows = claims.sources(web.conn, brand_id, same)
+    assert not [r for r in rows if r.get("offer_key")]
+    assert claims.unsupported({"headline": _THREE_PACK}, rows) == ["優惠"]
+
+
+def test_policy_and_sell_way_sharing_an_offer_key_get_their_own_rows():
+    brand_id = _brand([{"key": "first_order", "params": {"content": "首購 9 折"}}])
+    gummy = _knowledge_product(brand_id, "測試軟糖", "每包 20 公克", "測試軟糖好吃")
+    single = _sell_way(brand_id, "單盒特價", [(gummy, 1)], 800, 1000)
+    offers = [r for r in claims.sources(web.conn, brand_id, single) if r.get("offer_key")]
+    assert offers == [
+        {"id": f"offer:discount:{_policy_id(brand_id, 'first_order')}",
+         "text": "新會員首購禮：首購 9 折", "proof": False, "offer_key": "discount"},
+        {"id": f"offer:discount:{single}",
+         "text": "測試軟糖 · 單盒特價優惠價 NT$800（原價 NT$1,000）",
+         "proof": False, "offer_key": "discount"},
+    ]
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):

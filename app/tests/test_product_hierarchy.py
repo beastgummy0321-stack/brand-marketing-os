@@ -1,7 +1,8 @@
 """app/tests/test_product_hierarchy.py — F05-I02: knowledge lives on the mother product
 (ARCHITECTURE.md §8 item 1). `context_compiler.compile()` resolves a sell way's `product_id`
-through `bi_repo.knowledge_product_id()` before reading facts, so a sell way with no facts of
-its own still gets the mother product's confirmed facts in the prompt text.
+through `bi_repo.knowledge_product_ids()` before reading facts, so a sell way with no facts of
+its own still gets the mother product's confirmed facts in the prompt text, and a bundle (F43)
+gets every component product's.
 
 This file does not belong to any managed module, so it must not import `app.ads.*` or
 `app.workbench.*` internals (the architecture checker would flag it) — only `context_compiler`
@@ -15,6 +16,7 @@ import psycopg
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import rule_cards
 from app.llm import context_compiler
 
 ACTOR = "測試員"
@@ -46,6 +48,57 @@ class ContextCompilerFollowsMotherProductTest(unittest.TestCase):
         text, _ids, _bv, _pv = context_compiler.compile(
             web.conn, self.brand_id, self.mother["id"])
         self.assertIn("薑黃萃取物", text)
+
+
+class ContextCompilerReadsEveryBundleProductTest(unittest.TestCase):
+    """F43-I03: a bundle sell-way (several components) gets the facts, claims and rules of every
+    knowledge product it sells, under the one shared fact/claim cap (hard rule 6)."""
+
+    def setUp(self):
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=coredb.DEV_ORG_ID, name="測試品牌：組合讀兩個商品", client_name=None,
+            actor=ACTOR,
+        )["id"]
+        self.gummy, self.tea, self.other = (
+            bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)["id"]
+            for name in ("晨光軟糖", "午後花茶", "別的商品"))
+        for product_id, value in ((self.gummy, "每顆含維生素C 60mg"),
+                                  (self.tea, "洛神花與玫瑰花瓣"),
+                                  (self.other, "別的商品的成分")):
+            bi_repo.create_product_fact(
+                web.conn, self.brand_id, product_id, actor=ACTOR, fact_type="ingredient",
+                label="成分", value=value, status="confirmed", confirmed_by=ACTOR,
+            )
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="午後花茶冷泡也好喝",
+                             claim_type="approved", product_id=self.tea)
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="晨光軟糖治百病",
+                             claim_type="forbidden", product_id=self.gummy)
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="台灣製造",
+                             claim_type="approved")
+        bi_repo.create_rule(web.conn, self.brand_id, actor=ACTOR, rule_type="tone",
+                            content="花茶不說能瘦", severity="hard", product_id=self.tea)
+        self.bundle = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="早午組合", actor=ACTOR,
+            components=[{"product_id": self.gummy, "qty": 1}, {"product_id": self.tea, "qty": 1}],
+            economics={"selling_price": 999},
+        )["id"]
+
+    def test_bundle_reads_both_products(self):
+        text, ids, _bv, _pv = context_compiler.compile(web.conn, self.brand_id, self.bundle)
+        for expected in ("每顆含維生素C 60mg", "洛神花與玫瑰花瓣", "午後花茶冷泡也好喝",
+                         "晨光軟糖治百病", "花茶不說能瘦"):
+            self.assertIn(expected, text)
+        self.assertNotIn("別的商品的成分", text)
+        self.assertEqual(text.count("台灣製造"), 1)  # a brand-wide claim is listed once
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_bundle_facts_share_one_cap(self):
+        rule_cards.set_value(web.conn, self.brand_id, "rule_prompt_cap", "max_active_rules",
+                             1.0, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        text, _ids, _bv, _pv = context_compiler.compile(web.conn, self.brand_id, self.bundle)
+        section = text.split("【事實】產品事實\n", 1)[1].split("\n\n", 1)[0]
+        # Newest first under one cap of 1: the tea fact stays, the gummy fact is counted, not shown.
+        self.assertEqual(section, "- 成分：洛神花與玫瑰花瓣\n（另有 1 筆較舊的產品事實沒有列出）")
 
 
 class SameNameGuardTest(unittest.TestCase):

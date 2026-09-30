@@ -1,11 +1,12 @@
 """app/tests/test_workbench_product_line.py — F07-I07 (ARCHITECTURE.md §5.7 Decision 13):
-`repository.reference_line()` — the pure, DB-free rule for the worksheet's `商品參考` line.
+`repository.reference_line()` — the pure, DB-free rule for the worksheet's `商品參考` line —
+and (F43-I03) `jobs.photo_product_id()`, which bundle component's photos it uses.
 No DB, no model call.
 """
 
 import unittest
 
-from app.workbench import repository
+from app.workbench import jobs, repository
 
 
 def _asset(product_id, title=None, asset_kind="product_photo"):
@@ -65,6 +66,33 @@ class ReferenceLineTest(unittest.TestCase):
         assets = [_asset(None, title="品牌形象照"), _asset("prd_1", title="商品照")]
         line = repository.reference_line(assets, "prd_1", None)
         self.assertEqual(line, "商品參考：商品照（有參考照）")
+
+
+class BundlePhotoProductTest(unittest.TestCase):
+    """F43-I03: `jobs.photo_product_id()` picks which knowledge product of a sell-way (a bundle
+    has several) the reference line uses."""
+
+    def test_bundle_picks_the_component_that_has_photos(self):
+        assets = [_asset(None, title="品牌形象照"), _asset("prd_tea", title="花茶照"),
+                  _asset("prd_gummy", title="軟糖說明", asset_kind="logo")]
+        knowledge_id = jobs.photo_product_id(assets, ["prd_gummy", "prd_tea"])
+        self.assertEqual(knowledge_id, "prd_tea")
+        self.assertEqual(repository.reference_line(assets, knowledge_id, "早午組合"),
+                         "商品參考：花茶照（有參考照）")
+
+    def test_first_component_with_photos_wins(self):
+        assets = [_asset("prd_tea", title="花茶照"), _asset("prd_gummy", title="軟糖照")]
+        self.assertEqual(jobs.photo_product_id(assets, ["prd_gummy", "prd_tea"]), "prd_gummy")
+
+    def test_no_component_photo_keeps_first_product_then_brand_level(self):
+        assets = [_asset(None, title="品牌形象照")]
+        knowledge_id = jobs.photo_product_id(assets, ["prd_gummy", "prd_tea"])
+        self.assertEqual(knowledge_id, "prd_gummy")
+        self.assertEqual(repository.reference_line(assets, knowledge_id, None),
+                         "商品參考：品牌形象照（有參考照）")
+
+    def test_no_product(self):
+        self.assertIsNone(jobs.photo_product_id([_asset("prd_1")], []))
 
 
 if __name__ == "__main__":

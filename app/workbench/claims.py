@@ -5,7 +5,9 @@ pack summaries and previous model output are never evidence. Read current source
 old and new versions alike. These warnings never prevent adoption or pack approval.
 One exception (F42 decision 「copy guard」): an offer word whose family is backed by a confirmed,
 structured store policy available for the ad's product (`bi_repo.offer_sources`) is not flagged,
-because the policy registry already knows its fulfilment place (the store's checkout).
+because the policy registry already knows its fulfilment place (the store's checkout). F43: the
+sell-way's own confirmed list-price offer (「〈name〉優惠價 NT$x（原價 NT$y）」, also from
+`offer_sources`) backs its family (`bundle` / `discount`) the same way.
 """
 import re
 from urllib.parse import quote
@@ -38,25 +40,46 @@ _META = {"validation", "warnings", "coordinates", "fingerprint", "round",
 
 
 def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
-    rows = bi_repo.list_brand_facts(conn, brand_id, status="confirmed")
-    knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
-    if knowledge_id:
+    """Confirmed brand facts, then the confirmed facts and approved claims of every knowledge
+    product of the sell-way (F43: a bundle has several, `bi_repo.knowledge_product_ids`), then
+    one row per offer sentence of `bi_repo.offer_sources` (store policies, the sell-way's own
+    list-price offer)."""
+    brand_rows = bi_repo.list_brand_facts(conn, brand_id, status="confirmed")
+    knowledge_ids = bi_repo.knowledge_product_ids(conn, brand_id, product_id) if product_id else []
+    rows = list(brand_rows)
+    for knowledge_id in knowledge_ids:
         rows += bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")
     # Store policies (incl. the cooling-off exemption) reach the copy only through their one
     # resolver, `offer_sources` below, so a policy that does not cover this product never shows.
     result = [{"id": r["id"], "text": str(r.get("value") or ""),
                "proof": r.get("fact_type") == "proof"} for r in rows
               if r.get("fact_type") != "policy"]
-    claims = (bi_repo.list_claims_for_product(conn, brand_id, knowledge_id) if knowledge_id
-              else [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
-                    if not r.get("product_id")])
+    if knowledge_ids:
+        # Brand-wide claims come back once per knowledge product; keep each claim once.
+        by_id: dict[str, dict] = {}
+        for knowledge_id in knowledge_ids:
+            for r in bi_repo.list_claims_for_product(conn, brand_id, knowledge_id):
+                by_id.setdefault(r["id"], r)
+        claims = list(by_id.values())
+    else:
+        claims = [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
+                  if not r.get("product_id")]
     result += [{"id": r["id"], "text": r["claim_text"], "proof": False} for r in claims
                if r["claim_type"] == "approved"]
-    # F42: the offer families the brand's confirmed policies make available for this product
-    # (threshold policies against its price), each with its registered sentence.
-    result += [{"id": f"offer:{o['offer_key']}", "text": o["sentence"], "proof": False,
-                "offer_key": o["offer_key"]}
-               for o in bi_repo.offer_sources(conn, brand_id, product_id)]
+    # F42/F43: the offer families available for this product -- the brand's confirmed policies
+    # (threshold policies against its price) and the sell-way's own list-price offer -- each with
+    # its registered sentence. A policy and the sell-way (or two policies) may share an offer key,
+    # so the id names its source (the policy fact, else the sell-way); one row per sentence.
+    policy_ids = {str(r.get("value") or ""): r["id"] for r in brand_rows
+                  if r.get("fact_type") == "policy"}
+    seen: set[str] = set()
+    for o in bi_repo.offer_sources(conn, brand_id, product_id):
+        if o["sentence"] in seen:
+            continue
+        seen.add(o["sentence"])
+        source_id = policy_ids.get(o["sentence"]) or product_id or brand_id
+        result.append({"id": f"offer:{o['offer_key']}:{source_id}", "text": o["sentence"],
+                       "proof": False, "offer_key": o["offer_key"]})
     return result
 
 
@@ -81,8 +104,8 @@ def policy(rows: list[dict]) -> str:
              "『模擬測試』不能解除此限制。",
              *[f"- [{r['id']}] {r['text']}" for r in relevant]]
     if any(r.get("offer_key") for r in relevant):
-        lines.append("[offer:…] 是品牌已登記、本商品適用的全店政策（在店家結帳時兌現），"
-                     "可照原字句寫，不改門檻或內容。")
+        lines.append("[offer:…] 是品牌已登記、本商品適用的優惠：全店政策（在店家結帳時兌現）"
+                     "或這個賣法本身的優惠價與原價，可照原字句寫，不改門檻、價格或內容。")
     if not relevant:
         lines.append("（沒有已確認的優惠或背書來源）")
     return "\n".join(lines)
