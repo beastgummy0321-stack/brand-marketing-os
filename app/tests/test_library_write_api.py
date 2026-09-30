@@ -53,6 +53,41 @@ class LibraryWriteApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("label", resp.json()["errors"])
 
+    def test_fact_create_refuses_policy_type(self):
+        """F42-I01: 「全店政策」 is written only by brand onboarding -- the library's free-form
+        fact route refuses it with a field error (400), never a 500 from the DB CHECK."""
+        brand_id = self._new_brand("事實品牌")
+        resp = self.client.post(
+            f"/api/library/brands/{brand_id}/facts",
+            json={"fact_type": "policy", "fact_key": "ship_threshold", "label": "滿額免運",
+                  "value": "滿 NT$999 免運", "status": "confirmed"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("fact_type", resp.json()["errors"])
+        self.assertEqual(repo.list_brand_facts(web.conn, brand_id), [])
+
+    def test_fact_edit_refuses_policy_both_ways(self):
+        """F42-I01: a fact cannot be turned into a policy, and a policy fact cannot be edited
+        through the library (its sentence is composed from the registry params)."""
+        brand_id = self._new_brand("事實品牌")
+        fact = repo.create_brand_fact(web.conn, brand_id, actor=ACTOR, fact_type="tone",
+                                       label="語調", value="活潑", status="pending")
+        resp = self.client.post(
+            f"/api/library/brands/{brand_id}/facts/{fact['id']}/edit",
+            json={"fact_type": "policy", "label": "x", "value": "y"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("fact_type", resp.json()["errors"])
+
+        [policy] = repo.save_brand_policies(
+            web.conn, brand_id, [{"key": "ship_threshold", "params": {"threshold": 999}}], actor=ACTOR)
+        resp = self.client.post(
+            f"/api/library/brands/{brand_id}/facts/{policy['id']}/edit",
+            json={"fact_type": "positioning", "label": "x", "value": "y"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(repo.get_brand_fact(web.conn, brand_id, policy["id"])["value"], "滿 NT$999 免運")
+
     def test_fact_update_unknown_id_404(self):
         brand_id = self._new_brand("事實品牌")
         resp = self.client.post(
@@ -315,6 +350,20 @@ class AssetKindLabelTest(unittest.TestCase):
             / "frontend" / "src" / "lib" / "libraryApi.ts"
         ).read_text(encoding="utf-8")
         self.assertEqual(text.count('["product_photo", "商品參考照"]'), 1)
+
+    def test_brand_photo_kinds_match_frontend(self):
+        """F42-I01: the three brand-photo kinds and the 「全店政策」 fact type carry the same
+        label on both sides."""
+        import pathlib
+
+        from app.core import vocab
+        text = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "frontend" / "src" / "lib" / "libraryApi.ts"
+        ).read_text(encoding="utf-8")
+        for key in ("store", "team", "brand_image"):
+            self.assertIn(f'["{key}", "{dict(vocab.ASSET_KINDS)[key]}"]', text)
+        self.assertIn(f'["policy", "{dict(vocab.BRAND_FACT_TYPES)["policy"]}"]', text)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,9 @@ import {
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { PanelSaveButton } from "../shared/PanelSaveButton";
 
+/** F42-I01: 「全店政策」 is written only by brand onboarding (the server refuses it here too). */
+const CREATABLE_FACT_TYPES = BRAND_FACT_TYPES.filter(([v]) => v !== "policy");
+
 /** 新增／編輯品牌事實側板（契約 S5.12）：編輯不能改狀態，比照舊版 `fact_new.html` 編輯
  * 模式沒有狀態欄位。`fact` 傳 null＝新增。 */
 export function FactPanel({
@@ -96,7 +99,7 @@ export function FactPanel({
             <option value="" disabled>
               請選擇
             </option>
-            {BRAND_FACT_TYPES.map(([v, l]) => (
+            {CREATABLE_FACT_TYPES.map(([v, l]) => (
               <option key={v} value={v}>
                 {l}
               </option>

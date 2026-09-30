@@ -34,7 +34,7 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     list_channels,
     update_channel,
 )
-from app.core import cleanup
+from app.core import cleanup, vocab
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
@@ -183,6 +183,30 @@ def set_regulatory_regime(conn: Conn, brand_id: str, value: str | None, *, actor
     from app.brand_intelligence import regulatory_regime
 
     return regulatory_regime.set_regulatory_regime(conn, brand_id, value, actor=actor)
+
+
+# F42-I01: which media the brand can hand in (brand onboarding step 素材). NULL = never asked
+# (no format filter); the DB CHECK in 20261001000001_brand_intelligence_brand_onboarding.sql
+# holds the same list.
+MEDIA_CAPABILITIES = ("photo", "photo_video")
+
+
+def set_media_capability(conn: Conn, brand_id: str, value: str, *, actor: str) -> dict:
+    """The one writer of `brand.media_capability` ('photo' = photo only, 'photo_video'). Audited
+    and bumps the brand's knowledge version (the plan's formats follow it)."""
+    _require(actor, "actor 為必填")
+    if value not in MEDIA_CAPABILITIES:
+        raise ValueError(f"media_capability 只能是 {'/'.join(MEDIA_CAPABILITIES)} 其中之一")
+    before = get_brand(conn, brand_id)
+    if before is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
+    conn.execute("UPDATE brand SET media_capability = %s WHERE id = %s", (value, brand_id))
+    _bump_brand_version(conn, brand_id)
+    after = get_brand(conn, brand_id)
+    write_audit(conn, org_id=before["org_id"], brand_id=brand_id, entity_type="brand", entity_id=brand_id,
+                action="media_capability", actor=actor, before=before, after=after)
+    conn.commit()
+    return after
 
 
 # 方法論開關名（中文，供 app/methodology/README.md 對照表的（需要：X）條件比對，
@@ -541,7 +565,10 @@ PROOF_FACT_KEYS = ("customer_review", "expert_endorsement", "lab_report",
 
 
 def _proof_fact_key(fact_type: str, fact_key: str | None) -> str | None:
-    """A proof fact must name one of the six kinds; every other type stores NULL."""
+    """A proof fact must name one of the six kinds; every other type stores NULL. A store policy
+    (F42-I01) is written only by `save_brand_policies`, never through the generic fact writers."""
+    if fact_type == "policy":
+        raise ValueError("全店政策只能在品牌建檔裡設定")
     if fact_type != "proof":
         return None
     if fact_key not in PROOF_FACT_KEYS:
@@ -565,6 +592,188 @@ def available_proof_keys(conn: Conn | ConnProxy, brand_id: str) -> set[str]:
     if has_voice:
         keys.add("customer_review")
     return keys
+
+
+# ---------------------------------------------------------------------------
+# Store policies (F42-I01): brand_fact rows with fact_type 'policy'; registry = vocab.POLICY_TYPES
+# ---------------------------------------------------------------------------
+
+def _policy_offer_key(fact_key: str, params: dict | None) -> str | None:
+    """The offer key a policy fact becomes: registry -> its `offer_key`; custom -> its
+    `params.offer_key`; the cooling-off exemption (and anything unknown) -> None."""
+    if fact_key == vocab.CUSTOM_POLICY_KEY:
+        return (params or {}).get("offer_key")
+    spec = vocab.POLICY_TYPES_BY_KEY.get(fact_key)
+    return spec["offer_key"] if spec else None
+
+
+def _policy_view(row: dict) -> dict:
+    return {
+        "id": row["id"], "key": row["fact_key"], "label": row["label"],
+        "params": row["params_json"] or {}, "sentence": row["value"],
+        "offer_key": _policy_offer_key(row["fact_key"], row["params_json"]),
+        "status": row["status"],
+    }
+
+
+def list_brand_policies(conn: Conn | ConnProxy, brand_id: str) -> list:
+    """The brand's store policies, oldest first: `{id, key, label, params, sentence, offer_key,
+    status}` (`key` = registry key, `custom` or `cooling_off_exempt`)."""
+    return [_policy_view(dict(r)) for r in conn.execute(
+        "SELECT * FROM brand_fact WHERE brand_id = %s AND fact_type = 'policy' "
+        "ORDER BY created_at, id", (brand_id,)
+    ).fetchall()]
+
+
+def _desired_policy(item) -> tuple[tuple, dict]:
+    """Validate one `save_brand_policies` item -> (match key, row fields). ValueError on any
+    unknown key/param or bad value."""
+    if not isinstance(item, dict) or not isinstance(item.get("key"), str):
+        raise ValueError("每一條全店政策都要有 key")
+    key, params = item["key"], item.get("params") or {}
+    if not isinstance(params, dict):
+        raise ValueError(f"全店政策 {key} 的 params 必須是物件")
+    if key == vocab.CUSTOM_POLICY_KEY:
+        unknown = set(params) - {"label", "offer_key"}
+        if unknown:
+            raise ValueError(f"自訂政策沒有這個欄位：{'、'.join(sorted(unknown))}")
+        label = str(params.get("label") or "").strip()
+        offer_key = params.get("offer_key")
+        sentence = str(item.get("sentence") or "").strip()
+        _require(label, "自訂政策要有名稱")
+        if offer_key not in vocab.OFFER_LABELS:
+            raise ValueError("自訂政策要選廣告裡會當成哪一種優惠")
+        _require(sentence, "自訂政策要有廣告上會寫的那句話")
+        return (key, label), {"label": label, "params_json": {"label": label, "offer_key": offer_key},
+                              "value": sentence}
+    if key == vocab.COOLING_OFF_EXEMPT_KEY:
+        unknown = set(params) - {"disclosure"}
+        if unknown:
+            raise ValueError(f"猶豫期例外沒有這個欄位：{'、'.join(sorted(unknown))}")
+        disclosure = vocab.policy_sentence(key, params)
+        return (key,), {"label": vocab.COOLING_OFF_EXEMPT_LABEL,
+                        "params_json": {"disclosure": disclosure}, "value": disclosure}
+    clean_params = vocab.normalize_policy_params(key, params)
+    return (key,), {"label": vocab.POLICY_TYPES_BY_KEY[key]["label"], "params_json": clean_params,
+                    "value": vocab.policy_sentence(key, clean_params)}
+
+
+def _policy_match_key(row: dict) -> tuple:
+    if row["fact_key"] == vocab.CUSTOM_POLICY_KEY:
+        return (row["fact_key"], (row["params_json"] or {}).get("label"))
+    return (row["fact_key"],)
+
+
+def save_brand_policies(conn: Conn, brand_id: str, policies: list, *, actor: str) -> list:
+    """Replace the brand's store policies with `policies` (full-list semantics; F42 decision
+    「where each brand fact lives」). Each item is `{key, params}` with a `POLICY_TYPES` key,
+    `{key: "custom", params: {label, offer_key}, sentence}`, or `{key: "cooling_off_exempt",
+    params: {disclosure}}`. Registry sentences are composed by `vocab.policy_sentence`. Every item
+    is validated before anything is written (ValueError = nothing saved). Rows are matched by
+    key (custom: by label): changed ones are updated, new ones inserted, rows not in the list
+    deleted -- each audited; all saved rows are confirmed by `actor`. One commit."""
+    _require(actor, "actor 為必填")
+    if not isinstance(policies, list):
+        raise ValueError("policies 必須是清單")
+    desired: dict[tuple, dict] = {}
+    for item in policies:
+        match, fields = _desired_policy(item)
+        if match in desired:
+            raise ValueError(f"全店政策重複：{fields['label']}")
+        desired[match] = fields
+    org_id = _org_id_for_brand(conn, brand_id)
+    existing = [dict(r) for r in conn.execute(
+        "SELECT * FROM brand_fact WHERE brand_id = %s AND fact_type = 'policy' ORDER BY created_at, id",
+        (brand_id,)).fetchall()]
+    ts = now_utc()
+    changed = False
+    try:
+        for row in existing:
+            fields = desired.pop(_policy_match_key(row), None)
+            if fields is None:
+                conn.execute("DELETE FROM brand_fact WHERE id = %s AND brand_id = %s", (row["id"], brand_id))
+                write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact",
+                            entity_id=row["id"], action="delete", actor=actor, before=row, after=None,
+                            reason="品牌建檔：這條全店政策不在新的清單裡")
+                changed = True
+                continue
+            if (row["label"], row["value"], row["params_json"], row["status"]) == (
+                    fields["label"], fields["value"], fields["params_json"], "confirmed"):
+                continue
+            conn.execute(
+                "UPDATE brand_fact SET label = %s, value = %s, params_json = %s, status = 'confirmed', "
+                "confirmed_by = %s, confirmed_at = %s, updated_at = %s WHERE id = %s AND brand_id = %s",
+                (fields["label"], fields["value"], jsonb(fields["params_json"]), actor, ts, ts,
+                 row["id"], brand_id))
+            write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact", entity_id=row["id"],
+                        action="update", actor=actor, before=row,
+                        after=get_brand_fact(conn, brand_id, row["id"]))
+            changed = True
+        for (fact_key, *_), fields in desired.items():
+            fact_id = new_id("bft")
+            after = {"id": fact_id, "brand_id": brand_id, "fact_type": "policy", "fact_key": fact_key,
+                     **fields, "status": "confirmed", "confirmed_by": actor, "confirmed_at": ts,
+                     "created_at": ts, "updated_at": ts}
+            conn.execute(
+                "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, fact_key, label, value, params_json, "
+                "status, confirmed_by, confirmed_at, created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'policy', %s, %s, %s, %s, 'confirmed', %s, %s, %s, %s)",
+                (fact_id, org_id, brand_id, fact_key, fields["label"], fields["value"],
+                 jsonb(fields["params_json"]), actor, ts, ts, ts))
+            write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="brand_fact", entity_id=fact_id,
+                        action="create", actor=actor, before=None, after=after)
+            changed = True
+        if changed:
+            _bump_brand_version(conn, brand_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return list_brand_policies(conn, brand_id)
+
+
+def _offer_policy_rows(conn: Conn | ConnProxy, brand_id: str, product_id: str | None) -> list:
+    """(offer_key, sentence) of every confirmed policy fact that makes an offer available --
+    the one rule behind `available_offer_keys` and `offer_sources`."""
+    price = None
+    if product_id is not None:
+        econ = get_product_economics(conn, brand_id, product_id)
+        # Only a confirmed NT$ price is a fact the NT$ thresholds can be compared with.
+        if econ and econ["status"] == "confirmed" and econ["currency"] == "TWD":
+            price = float(econ["selling_price"])
+    out = []
+    for row in conn.execute(
+        "SELECT fact_key, value, params_json FROM brand_fact WHERE brand_id = %s "
+        "AND fact_type = 'policy' AND status = 'confirmed' ORDER BY created_at, id", (brand_id,)
+    ).fetchall():
+        params = row["params_json"] or {}
+        offer_key = _policy_offer_key(row["fact_key"], params)
+        if not offer_key or offer_key == "none":
+            continue
+        spec = vocab.POLICY_TYPES_BY_KEY.get(row["fact_key"])
+        threshold = params.get(spec["threshold"]) if spec and spec["threshold"] else None
+        if threshold and product_id is not None and (price is None or price < threshold):
+            continue
+        out.append((offer_key, row["value"]))
+    return out
+
+
+def available_offer_keys(conn: Conn | ConnProxy, brand_id: str, product_id: str | None = None) -> set[str]:
+    """Which `offer` coordinate keys this brand can truthfully use (F42 decision 「offer
+    availability」; read-only, no LLM). = the offer keys of the brand's confirmed store-policy
+    facts, except `none`; custom policies contribute their own `offer_key`. A threshold policy
+    (滿額免運, 超商免運, 滿額折, 滿額贈) counts only when `product_id is None` or the product's
+    current confirmed NT$ price ≥ the threshold; an unknown price does not count (a 超商免運 with
+    no threshold always counts). F43 adds the sell-way's own discount/bundle. The coordinate
+    toggle stays a brand veto on top (enabled ∩ available). Readers: planner, copy guard."""
+    return {offer_key for offer_key, _ in _offer_policy_rows(conn, brand_id, product_id)}
+
+
+def offer_sources(conn: Conn | ConnProxy, brand_id: str, product_id: str | None = None) -> list:
+    """`[{"offer_key", "sentence"}]`: the policy sentence(s) behind each key of
+    `available_offer_keys` (same rule, same order) -- the one resolver for 「which sentence
+    supports this offer」. Readers: the copy guard, the strategy tab's 「這期會用」."""
+    return [{"offer_key": k, "sentence": s} for k, s in _offer_policy_rows(conn, brand_id, product_id)]
 
 
 def get_brand_fact(conn: Conn, brand_id: str, fact_id: str) -> dict | None:
@@ -599,6 +808,8 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     before = get_brand_fact(conn, brand_id, fact_id)
     if before is None:
         raise ValueError(f"找不到品牌事實：{fact_id}")
+    if before["fact_type"] == "policy":
+        raise ValueError("全店政策只能在品牌建檔裡修改")
     was_confirmed = before["status"] == "confirmed"
     ts = now_utc()
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
