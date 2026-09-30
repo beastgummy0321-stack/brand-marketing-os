@@ -1053,7 +1053,9 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def setUp(self):
         super().setUp()
-        self.today = datetime.now(UTC).date()
+        # The org's own today (the clock the spend window uses), not the UTC date: on a month's
+        # first morning in Taipei the UTC date is still last month (`today_for_org`, 票 04-1b).
+        self.today = coresettings.today_for_org(web.conn, org_id=coredb.DEV_ORG_ID)
         self._external_account_ids: dict = {}
         self.account_id = self._connect_account(coredb.DEV_ORG_ID, "測試廣告帳號")
         meta_repo.bind(web.conn, coredb.DEV_ORG_ID, self.brand["id"], self.account_id)
