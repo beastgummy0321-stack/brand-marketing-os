@@ -30,7 +30,16 @@ import { isDraftCampaign } from "./WorkspaceHead";
  * (the returned `placement.confirmed_at`); a file whose ad has no copy comes back `image_only` and the tile offers the
  * picker (a kit `Dialog` over `getSlotCopyOptions` → `chooseSlotCopy`); anything else still waits in 進階 for the user
  * to confirm (「去確認安排 →」). User-uploaded thumbnails sit behind the bearer token and are fetched, never linked.
- * The slots read fails on its own (`ReadFailed` + 重試); `advanced` (the folded old panels) stays usable. */
+ * The slots read fails on its own (`ReadFailed` + 重試); `advanced` (the folded old panels) stays usable.
+ * F40-I09 (drill-7 #14 #6, prototype `#/assets`): while any slot is 處理中 the slots are re-read every 3 s (the tile says
+ * 「處理中・自動更新，不用重整」 and flips to 已確認・剛處理好 by itself); a `format_key === "video"` slot asks for a video
+ * (「這格要影片腳本，照片不算」, 上傳影片; a photo is refused before any upload); a thumbnail that another slot in the same
+ * response shows too prints 「同一張圖，文案不同」 with 換一張 (one original may back several ads, never a warning). */
+
+const POLL_MS = 3000;
+const VIDEO_NEEDED = "這格要影片腳本，照片不算";
+const SHARED_IMAGE = "同一張圖，文案不同";
+const isVideoSlot = (slot: Slot) => slot.format_key === "video";
 
 const CARD = "surface px-[22px] py-5";
 const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
@@ -132,25 +141,64 @@ function copyText(copy: SlotCopy): { label: string; text: string } {
   return { label: copy.label, text: text || copy.description || "" };
 }
 
-function ReadySlot({ slot }: { slot: Slot }) {
+/** A ready or in-progress slot. `shared`: another slot in the same response shows the same thumbnail (one original
+ * backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was 處理中 in an
+ * earlier read of the same screen and the poll flipped it (「已確認・剛處理好」). */
+function ReadySlot({ slot, shared, justDone, busy, onPick }: {
+  slot: Slot; shared: boolean; justDone: boolean; busy: boolean; onPick: (file: File) => void;
+}) {
   const thumb = useShownThumbnail(slot.thumbnail_url);
-  const status = slot.state === "in_progress"
-    ? <Chip tone="accent">處理中</Chip>
-    : slot.replace_task_id ? <Chip tone="warn">要換掉</Chip> : <Chip tone="ok">已確認</Chip>;
+  const inProgress = slot.state === "in_progress";
+  const chip = inProgress
+    ? <Chip tone="accent"><Spinner />處理中</Chip>
+    : slot.replace_task_id ? <Chip tone="warn">要換掉</Chip> : <Chip tone="ok">{justDone ? "已確認・剛處理好" : "已確認"}</Chip>;
+  const status = (
+    <div className="flex flex-col items-start gap-1">
+      {shared && !inProgress && (
+        <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground" data-slot="slot-shared">
+          {SHARED_IMAGE}
+          {slot.ad_id !== null && <UploadAction slot={slot} busy={busy} onPick={onPick} label="換一張" variant="link" />}
+        </span>
+      )}
+      {chip}
+      {inProgress && <span className="text-[11px] text-muted-foreground" data-slot="slot-polling">處理中・自動更新，不用重整</span>}
+    </div>
+  );
   return <SlotTile variant="ready" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} status={status} />;
 }
 
-/** The hidden file input and its 上傳 button, shared by the missing tile and the copy-only tile's image half. */
-function UploadAction({ slot, busy, onPick }: { slot: Slot; busy: boolean; onPick: (file: File) => void }) {
+/** The small spinner inside the 處理中 chip (the prototype's `.spin`). */
+function Spinner() {
+  return <span aria-hidden="true" className="inline-block size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-chart-soft border-t-primary" />;
+}
+
+/** The hidden file input and its button, shared by the missing tile, the copy-only tile's image half, the video
+ * placeholder (上傳影片, `accept="video/*"`) and the shared-image caption (換一張, a link). The input's `accept` is
+ * only a hint to the file dialog; `upload()` still refuses a photo on a video slot. */
+function UploadAction({ slot, busy, onPick, label, variant = "outline" }: {
+  slot: Slot; busy: boolean; onPick: (file: File) => void; label?: string; variant?: "outline" | "link";
+}) {
   const input = useRef<HTMLInputElement>(null);
+  const video = isVideoSlot(slot);
+  const text = label ?? (video ? "上傳影片" : "上傳");
   return (
     <>
-      <input ref={input} type="file" accept="image/*,video/*" className="hidden" aria-label={`選擇「${slot.name}」的檔案`}
+      <input ref={input} type="file" accept={video ? "video/*" : "image/*,video/*"} className="hidden" aria-label={`選擇「${slot.name}」的檔案`}
         onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onPick(file); }} />
-      <Button variant="outline" size="sm" disabled={busy} aria-label={`上傳：${slot.name}`} onClick={() => input.current?.click()}>
-        {busy ? "上傳中…" : "上傳"}
+      <Button variant={variant} size={variant === "link" ? "xs" : "sm"} disabled={busy} aria-label={`${text}：${slot.name}`} onClick={() => input.current?.click()}>
+        {busy ? "上傳中…" : text}
       </Button>
     </>
+  );
+}
+
+/** The image half of a video-format slot: the dashed placeholder sentence over 上傳影片 (never the photo button). */
+function VideoPlaceholder({ slot, busy, onPick }: { slot: Slot; busy: boolean; onPick: (file: File) => void }) {
+  return (
+    <div className="flex flex-col items-center gap-1.5" data-slot="slot-video">
+      <b className="text-xs font-semibold text-accent-foreground">{VIDEO_NEEDED}</b>
+      {slot.ad_id !== null && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
+    </div>
   );
 }
 
@@ -159,10 +207,19 @@ function MissingSlot({ slot, workbenchHref, busy, onPick }: {
 }) {
   // Only a planned ad takes an upload (an imported campaign's slots are platform ads, always ready).
   const canUpload = slot.ad_id !== null;
+  const to = internalHref(slot.workbench_href ?? workbenchHref);
+  if (isVideoSlot(slot)) {
+    return (
+      <SlotTile variant="missing" title={VIDEO_NEEDED} status={<Chip tone="warn">缺影片</Chip>} actions={<>
+        {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
+        <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
+      </>} />
+    );
+  }
   return (
     <SlotTile variant="missing" actions={<>
       {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-      <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href ?? workbenchHref)}>從素材工作檯</Link></Button>
+      <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
     </>} />
   );
 }
@@ -173,13 +230,14 @@ function CopyOnlySlot({ slot, workbenchHref, busy, onPick }: {
 }) {
   // `copy_only` always carries its copy (Contract T); a row without one is drawn as missing rather than blank.
   if (!slot.copy) return <MissingSlot slot={slot} workbenchHref={workbenchHref} busy={busy} onPick={onPick} />;
+  const video = isVideoSlot(slot);
   return (
     <SlotTile variant="copy-only" name={slot.name} copy={copyText(slot.copy)}
-      imageActions={<UploadAction slot={slot} busy={busy} onPick={onPick} />}
+      imageActions={video ? <VideoPlaceholder slot={slot} busy={busy} onPick={onPick} /> : <UploadAction slot={slot} busy={busy} onPick={onPick} />}
       extra={slot.workbench_href
         ? <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>
         : undefined}
-      status={<Chip tone="warn">有文案，缺圖</Chip>} />
+      status={<Chip tone="warn">{video ? "缺影片" : "有文案，缺圖"}</Chip>} />
   );
 }
 
@@ -283,8 +341,42 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
   const workbenchHref = packId ? `/brands/${brandId}/workbench/packs/${packId}` : `/brands/${brandId}/workbench`;
   const draft = isDraftCampaign(c, null);
 
+  const slots = data?.groups.flatMap((g) => g.slots) ?? [];
+  // Polling: while any slot is 處理中 (a file being confirmed, a revised material, a workbench pack being made) the
+  // slots are re-read every 3 s in place; the interval goes when none is in progress or the body unmounts.
+  const polling = slots.some((s) => s.state === "in_progress");
+  useEffect(() => {
+    if (!polling) return;
+    const timer = setInterval(reload, POLL_MS);
+    return () => clearInterval(timer);
+  }, [polling, reload]);
+  // The ads that a poll flipped from 處理中 to ready on this screen (「已確認・剛處理好」).
+  const wasInProgress = useRef<Set<string>>(new Set());
+  const [justDone, setJustDone] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (!data) return;
+    const now = new Set<string>();
+    const done: string[] = [];
+    for (const s of data.groups.flatMap((g) => g.slots)) {
+      if (!s.ad_id) continue;
+      if (s.state === "in_progress") now.add(s.ad_id);
+      else if (s.state === "ready" && wasInProgress.current.has(s.ad_id)) done.push(s.ad_id);
+    }
+    wasInProgress.current = now;
+    if (done.length) setJustDone((prev) => new Set([...prev, ...done]));
+  }, [data]);
+  // One original backing several ads: a thumbnail that more than one slot in this response shows.
+  const thumbnailCount = new Map<string, number>();
+  for (const s of slots) if (s.thumbnail_url) thumbnailCount.set(s.thumbnail_url, (thumbnailCount.get(s.thumbnail_url) ?? 0) + 1);
+  const isShared = (s: Slot) => !!s.thumbnail_url && (thumbnailCount.get(s.thumbnail_url) ?? 0) > 1;
+
   async function upload(slot: Slot, file: File) {
     if (!slot.ad_id || uploading) return;
+    if (isVideoSlot(slot) && !file.type.startsWith("video/")) {
+      // Refused before any byte goes up: the slot's format needs a video.
+      setNote({ name: slot.name, error: VIDEO_NEEDED });
+      return;
+    }
     setUploading(slot.ad_id);
     setNote(null);
     try {
@@ -309,7 +401,6 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     }
   }
 
-  const slots = data?.groups.flatMap((g) => g.slots) ?? [];
   const ready = data?.ready ?? null;
   const total = data?.total ?? null;
   const missing = ready !== null && total !== null ? total - ready : 0;
@@ -362,7 +453,10 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
                       return <CopyOnlySlot key={key} slot={s} workbenchHref={workbenchHref} busy={uploading === s.ad_id} onPick={(file) => void upload(s, file)} />;
                     }
                     if (s.state === "image_only") return <ImageOnlySlot key={key} slot={s} onPickCopy={() => { setNote(null); setPicking(s); }} />;
-                    return <ReadySlot key={key} slot={s} />;
+                    return (
+                      <ReadySlot key={key} slot={s} shared={isShared(s)} justDone={!!s.ad_id && justDone.has(s.ad_id)}
+                        busy={uploading === s.ad_id} onPick={(file) => void upload(s, file)} />
+                    );
                   })}
                   <SlotTile variant="reserved" title="站內出圖" note="接上後開放" />
                 </SlotGrid>

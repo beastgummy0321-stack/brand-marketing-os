@@ -1,4 +1,5 @@
 import type { CampaignStatus } from "@/lib/adsApi";
+import type { HomeOverview } from "@/lib/adsHomeApi";
 import type {
   QueueItem, QueuePauseProposal, QueueProposal, QueueReviewProposal, SettleQueueRow,
 } from "@/lib/adsTriageApi";
@@ -239,4 +240,37 @@ export function settleAction(brandId: string, row: SettleQueueRow): ProposalActi
   return row.status === "open"
     ? { label: "開始結算", href, done: false }
     : { label: "✓ 已寫進筆記本", href, done: true };
+}
+
+/** F40-I07 (drill-7 #8): what the home quality band shows when there is nothing to grade — decided from the payload
+ * alone (`home/QualityBand.tsx` only renders it), in this order:
+ * (i) `quality` and `spent` both unknown and some campaign has unread days → the month's spend is incomplete: name
+ *     the days and offer 重新讀取平台 (the first such campaign's 成效 tab, where the sync lives);
+ * (ii) `spent` known but `quality` null → the guarded quality block failed, not "no data": 分級讀取失敗 + 重試;
+ * (iii) nothing spent (no bucket has an amount, or `spent` is 0／null with every day read) → 還沒有花費資料;
+ * otherwise the normal band. `null` is never read as 0 (adsHomeApi rules). */
+export type BandState =
+  | { kind: "band" }
+  | { kind: "missing_days"; sentence: string; campaign_id: string }
+  | { kind: "read_failed"; sentence: string }
+  | { kind: "no_spend"; sentence: string };
+
+/** `YYYY-MM-DD` → 「MM/DD」 (prototype 「10/03 沒讀到」). */
+const monthDay = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
+
+export function bandState(home: HomeOverview): BandState {
+  const month = Number(home.month.split("-")[1]);
+  const label = `${Number.isFinite(month) ? month : new Date().getMonth() + 1} 月`;
+  const gapped = (home.campaigns ?? []).filter((c) => c.missing_days.length > 0);
+  if (home.quality === null && home.spent === null && gapped.length > 0) {
+    const days = [...new Set(gapped.flatMap((c) => c.missing_days))].sort();
+    const when = days.length <= 3 ? `${days.map(monthDay).join("、")} 沒讀到` : `${days.length} 天沒讀到`;
+    return { kind: "missing_days", sentence: `${label}已花還不完整（${when}），先不分級`, campaign_id: gapped[0].campaign_id };
+  }
+  if (home.quality === null && home.spent !== null) {
+    return { kind: "read_failed", sentence: "分級讀取失敗" };
+  }
+  const graded = home.quality !== null && home.quality.buckets.some((b) => b.amount > 0);
+  if (!graded) return { kind: "no_spend", sentence: `${label}還沒有花費資料，先不分級` };
+  return { kind: "band" };
 }

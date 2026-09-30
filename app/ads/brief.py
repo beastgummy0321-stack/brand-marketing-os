@@ -15,6 +15,11 @@ and the response carries `parsed: false` instead of raising.
 F28-I01: the sentence only ever yields one number for judging, the cost-per-purchase cap
 (`cap`, stored as `target_cost` with `target_basis='own'`). A ROAS or a count in the sentence is
 not converted into a cap; a reply without `cap` still parses (no cap).
+
+F40-I04 (drill-7 #10): a new campaign starts from the previous one. Whatever the request did
+not supply of platform / audience direction / cap / landing URL is copied from the brand's
+latest non-draft campaign, recorded in `context_json.copied_from` and marked `"copied"` in
+`field_sources`; request values always win, and with no previous campaign nothing changes.
 """
 
 import calendar
@@ -22,11 +27,11 @@ import json
 import math
 from datetime import date, timedelta
 
-from app.ads import channels, objectives, wizard_options
+from app.ads import channels, external_models, manual_settings, objectives, wizard_options
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
-from app.core.db import APP_DIR
+from app.core.db import APP_DIR, jsonb
 from app.core.vocab import CONVERSION_GOAL_LABELS
 from app.llm import context_compiler, gateway, providers
 
@@ -235,6 +240,150 @@ def _check_picks(conn, brand_id: str, picks: dict) -> dict:
     }
 
 
+# F40-I04: the four values a new campaign may state up front (and, when it does not, copies
+# from the previous campaign). Structured picks (`_check_picks`) are a separate concern: these
+# are accepted on the picks path and the sentence path alike.
+_STRUCTURED_KEYS = ("product_ids", "objective", "budget")
+_COPIED_KEYS = ("platform", "audience_hint", "cap", "landing_url")
+
+
+def _check_extras(picks: dict) -> dict:
+    """Validate the request's platform / audience_hint / cap / landing_url before any model
+    call, with the rules the existing edit paths use: platform through `channels.CHANNELS`,
+    cap with the one cap rule (`target_value_unknown`, same code as `PUT .../target`), the
+    landing URL with `manual_settings.validate_landing_url`. Missing keys stay `None`."""
+    platform = picks.get("platform")
+    if platform is not None and platform not in {c["key"] for c in channels.CHANNELS}:
+        raise ValueError("platform_unknown")
+    audience_hint = picks.get("audience_hint")
+    if audience_hint is not None:
+        if not isinstance(audience_hint, str):
+            raise ValueError("audience_hint_unknown")
+        audience_hint = audience_hint.strip() or None
+    cap = picks.get("cap")
+    if cap is not None:
+        if not _valid_budget(cap):
+            raise ValueError("target_value_unknown")
+        cap = float(cap)
+    landing_url = picks.get("landing_url")
+    if landing_url is not None:
+        if not isinstance(landing_url, str):
+            raise ValueError("landing_url_unknown")
+        landing_url = landing_url.strip() or None
+        if landing_url is not None:
+            manual_settings.validate_landing_url(landing_url)
+    return {
+        "platform": platform, "audience_hint": audience_hint, "cap": cap,
+        "landing_url": landing_url,
+    }
+
+
+def _previous_campaign(conn, org_id: str, brand_id: str) -> dict | None:
+    """The brand's latest campaign that went past draft (`status <> 'draft'`, newest
+    `created_at` first) -- the one a new campaign starts from. `None` for a first campaign."""
+    row = conn.execute(
+        "SELECT id, name, target_cost, target_basis, context_json, constraints_json"
+        " FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND status <> 'draft'"
+        " ORDER BY created_at DESC, id DESC LIMIT 1",
+        (org_id, brand_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _previous_landing_url(conn, org_id: str, brand_id: str, previous: dict) -> str | None:
+    """The previous campaign's landing URL: its `context_json.landing_url`, else the first of
+    its groups (in plan order) that recorded one in `manual_delivery`."""
+    context = previous.get("context_json") or {}
+    if context.get("landing_url"):
+        return context["landing_url"]
+    records = context.get("manual_delivery") or {}
+    if not records:
+        return None
+    rows = conn.execute(
+        "SELECT id FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s"
+        " AND campaign_id = %s ORDER BY created_at, id",
+        (org_id, brand_id, previous["id"]),
+    ).fetchall()
+    for row in rows:
+        value = ((records.get(row["id"]) or {}).get("values") or {}).get("landing_url")
+        if value:
+            return value
+    return None
+
+
+def _copy_from_previous(conn, org_id: str, brand_id: str, campaign: dict) -> None:
+    """F40-I04: fill whatever the request did not supply of the four values from the previous
+    campaign, in place. `context_json.copied_from` names the source and the copied fields;
+    each copied slot in `field_sources` becomes `"copied"`. No previous campaign: no change."""
+    previous = _previous_campaign(conn, org_id, brand_id)
+    if previous is None:
+        return
+    constraints = campaign["constraints_json"]
+    context = campaign["context_json"]
+    field_sources = context["field_sources"]
+    previous_constraints = previous.get("constraints_json") or {}
+    previous_context = previous.get("context_json") or {}
+    copied: list[str] = []
+
+    previous_platform = previous_constraints.get("platform")
+    if constraints.get("platform") is None and previous_platform in {
+        c["key"] for c in channels.CHANNELS
+    }:
+        constraints["platform"] = previous_platform
+        field_sources["platform"] = "copied"
+        copied.append("platform")
+    if context.get("audience_hint") is None and previous_context.get("audience_hint"):
+        context["audience_hint"] = previous_context["audience_hint"]
+        field_sources["audience"] = "copied"
+        copied.append("audience_hint")
+    # Only a cap the user set themselves travels (`target_basis='own'`): break-even is
+    # recomputed using product economics, never copied as a number.
+    if (campaign.get("target_cost") is None and previous.get("target_basis") == "own"
+            and previous.get("target_cost") is not None):
+        campaign["target_cost"] = float(previous["target_cost"])
+        field_sources["cap"] = "copied"
+        copied.append("cap")
+    if context.get("landing_url") is None:
+        landing_url = _previous_landing_url(conn, org_id, brand_id, previous)
+        if landing_url:
+            context["landing_url"] = landing_url
+            field_sources["landing_url"] = "copied"
+            copied.append("landing_url")
+    context["copied_from"] = {
+        "campaign_id": previous["id"], "name": previous["name"], "fields": copied,
+    }
+
+
+def set_landing_url(conn, org_id: str, brand_id: str, campaign_id: str, value) -> None:
+    """F40-I04 (2b): the brief page's edit of `context_json.landing_url` -- a string (validated
+    like a group's landing URL) or `None`/blank to clear; the slot's `field_sources` becomes
+    `"user"`. Same refusals as the other draft edits: unknown campaign, imported campaign."""
+    row = conn.execute(
+        "SELECT origin, context_json FROM ads_campaign"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s FOR UPDATE",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("campaign_unknown")
+    if row["origin"] == "imported":
+        raise ValueError(external_models.IMPORTED_REASON)
+    if value is not None and not isinstance(value, str):
+        raise ValueError("landing_url_unknown")
+    landing_url = (value.strip() or None) if value is not None else None
+    if landing_url is not None:
+        manual_settings.validate_landing_url(landing_url)
+    context = dict(row["context_json"] or {})
+    context["landing_url"] = landing_url
+    field_sources = dict(context.get("field_sources") or {})
+    field_sources["landing_url"] = "user"
+    context["field_sources"] = field_sources
+    conn.execute(
+        "UPDATE ads_campaign SET context_json = %s, updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb(context), org_id, brand_id, campaign_id),
+    )
+
+
 def _amount_text(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else str(value)
 
@@ -259,8 +408,12 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     F30-I04（Contract D）：`picks`（`{product_ids, objective, budget}`）是建立精靈的結構化
     選擇——商品、目標、日期、預算上限都是使用者自己選的，模型的解析結果不能蓋過它們；
     `goal_text` 可以不填（由選擇組出一句話）；沒給日期時從組織自己的今天起算 30 天。
-    模型照樣同步呼叫一次，只補受眾方向與附註（沒有排隊）。"""
-    structured = picks is not None
+    模型照樣同步呼叫一次，只補受眾方向與附註（沒有排隊）。
+
+    F40-I04：`picks` 另外可帶 `platform`／`audience_hint`／`cap`／`landing_url`（一句話路徑
+    也收）；沒帶的從上一期（最新一個非草稿活動）複製，見 `_copy_from_previous`。"""
+    picks = dict(picks or {})
+    structured = any(picks.get(key) is not None for key in _STRUCTURED_KEYS)
     if not structured and (not isinstance(goal_text, str) or not goal_text.strip()):
         raise ValueError("goal_text_required")
     # F04-I11：兩個都給 -> 照舊驗證（來源 user）；只給一個 -> 拒絕；兩個都沒給 -> 讓模型從
@@ -269,7 +422,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     if start_date or end_date:
         start, end = _validate_dates(start_date, end_date)
     constraints = dict(constraints or {})
-    checked = _check_picks(conn, brand_id, picks) if picks is not None else None
+    extras = _check_extras(picks)
+    checked = _check_picks(conn, brand_id, picks) if structured else None
     goal_composed = False
     dates_source = "user"
     if checked is not None:
@@ -281,6 +435,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             goal_text = _compose_goal_text(checked, start, end)
             goal_composed = True
         constraints["budget"] = checked["budget"]
+    if extras["platform"] is not None:
+        # An explicit platform pick is the user's own, like a chip -- it wins over the model.
+        constraints["platform"] = extras["platform"]
 
     brand_text, knowledge_item_ids, brand_version, _product_version = context_compiler.compile(
         conn, brand_id, include_personas=False,
@@ -363,22 +520,33 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         product_ids = checked["product_ids"]
         fields["objective"] = checked["objective"]
 
+    # F40-I04: a stated value (request first, then what the sentence said) wins; whatever is
+    # still empty is copied from the previous campaign below.
+    audience_hint = extras["audience_hint"] or fields["audience_hint"]
+    if extras["cap"] is not None:
+        target_cost = extras["cap"]
+    else:
+        # A sentence the program composed carries no cap the user stated: whatever the model
+        # read as `cap` is dropped; the cap is set on the strategy page.
+        target_cost = None if goal_composed else fields["cap"]
+    landing_url = extras["landing_url"]
+
     field_sources = {
         "product": "user" if product_ids else "system",
         "objective": "user" if parsed_ok or checked is not None else "system",
         "platform": "user" if constraints.get("platform") is not None else "system",
         "budget": "user" if constraints.get("budget") is not None else "system",
         "dates": dates_source,
-        "audience": "user" if fields["audience_hint"] else "system",
+        "audience": "user" if audience_hint else "system",
+        "cap": "user" if target_cost is not None else "system",
+        "landing_url": "user" if landing_url else "system",
     }
 
     campaign = {
         "name": _draft_name(goal_text),
         "goal_text": goal_text,
         "objective": fields["objective"],
-        # A sentence the program composed carries no cap the user stated: whatever the model
-        # read as `cap` is dropped; the cap is set on the strategy page.
-        "target_cost": None if goal_composed else fields["cap"],
+        "target_cost": target_cost,
         "start_date": start,
         "end_date": end,
         "status": "draft",
@@ -388,12 +556,14 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             "product_ids": product_ids or [],
             "economics_ids": economics_ids,
             "llm_task_id": task_row["id"],
-            "audience_hint": fields["audience_hint"],
+            "audience_hint": audience_hint,
+            "landing_url": landing_url,
             "notes": fields["notes"],
             "field_sources": field_sources,
         },
         "constraints_json": constraints,
     }
+    _copy_from_previous(conn, org_id, brand_id, campaign)
     row = ads_repo.create_campaign(conn, org_id, brand_id, campaign, created_by=actor)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, row["id"])
     assert detail is not None  # 剛剛才插入的那一列，一定讀得到

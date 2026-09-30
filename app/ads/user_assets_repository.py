@@ -1,4 +1,8 @@
-"""Brand-owned originals, durable upload attempts and immutable placement revisions."""
+"""Brand-owned originals, durable upload attempts and immutable placement revisions.
+
+One current placement per (campaign, asset, ad): the same original may back several planned
+ads with their own copy (F40-I02); `ad_id` is NULL for library attaches.
+"""
 
 from datetime import date
 
@@ -232,9 +236,13 @@ def validate_purpose(value):
     return value
 
 
-def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor, *, purpose=None):
-    """`purpose` is a program-side keyword (the slot upload fills it with the ad's name); it is
-    never a request-body field of `POST …/placements`."""
+def attach(
+    conn, org, brand, campaign_id, asset_id, copy_fields, actor, *, purpose=None, ad_id=None
+):
+    """`purpose` and `ad_id` are program-side keywords (the slot upload fills them with the ad's
+    name and id); neither is a request-body field of `POST …/placements`, whose attaches keep
+    `ad_id` NULL. The current row is keyed by (campaign, asset, ad): the same ad with different
+    copy is a `PlacementConflict`; another ad with the same original is a second placement."""
     campaign = campaigns.get_campaign(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("找不到活動。")
@@ -249,8 +257,8 @@ def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor, *, purpo
     )
     existing = conn.execute(
         "SELECT * FROM ads_asset_placement WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND asset_id=%s AND is_current",
-        (org, brand, campaign_id, asset_id),
+        "AND campaign_id=%s AND asset_id=%s AND ad_id IS NOT DISTINCT FROM %s AND is_current",
+        (org, brand, campaign_id, asset_id, ad_id),
     ).fetchone()
     if existing:
         if existing["copy_fields"] != copy_fields:
@@ -258,17 +266,30 @@ def attach(conn, org, brand, campaign_id, asset_id, copy_fields, actor, *, purpo
         return dict(existing)
     row = conn.execute(
         "INSERT INTO ads_asset_placement(id,revision,org_id,brand_id,campaign_id,asset_id,"
-        "copy_fields,purpose,created_by) "
-        "VALUES(%s,1,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-        (new_id("aap"), org, brand, campaign_id, asset_id, jsonb(copy_fields), purpose, actor),
+        "ad_id,copy_fields,purpose,created_by) "
+        "VALUES(%s,1,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        (
+            new_id("aap"),
+            org,
+            brand,
+            campaign_id,
+            asset_id,
+            ad_id,
+            jsonb(copy_fields),
+            purpose,
+            actor,
+        ),
     ).fetchone()
     return dict(row)
 
 
-def attach_selected(conn, org, brand, campaign_id, body, actor, *, purpose=None):
+def attach_selected(
+    conn, org, brand, campaign_id, body, actor, *, purpose=None, ad_id=None
+):
     """Place a finished upload (`upload_id`, its own copy unless `copy_fields` is given) or a
     brand original (`asset_id`) in the campaign -- the placements route and the slot upload.
-    `purpose` is passed through to `attach` by the program only; the body keys are unchanged."""
+    `purpose` and `ad_id` are passed through to `attach` by the program only; the body keys are
+    unchanged."""
     copy_fields = body.get("copy_fields")
     asset_id = body.get("asset_id")
     if body.get("upload_id"):
@@ -287,6 +308,7 @@ def attach_selected(conn, org, brand, campaign_id, body, actor, *, purpose=None)
         {} if copy_fields is None else copy_fields,
         actor,
         purpose=purpose,
+        ad_id=ad_id,
     )
 
 
@@ -355,10 +377,10 @@ def revise(conn, org, brand, campaign_id, placement_id, expected_revision, updat
         (placement_id, old["revision"]),
     )
     row = conn.execute(
-        "INSERT INTO ads_asset_placement(id,revision,org_id,brand_id,campaign_id,asset_id,required,"
-        "copy_fields,suggested_copy,destination_entity_id,purpose,start_date,end_date,"
+        "INSERT INTO ads_asset_placement(id,revision,org_id,brand_id,campaign_id,asset_id,ad_id,"
+        "required,copy_fields,suggested_copy,destination_entity_id,purpose,start_date,end_date,"
         "unknowns,created_by) "
-        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
         (
             placement_id,
             old["revision"] + 1,
@@ -366,6 +388,7 @@ def revise(conn, org, brand, campaign_id, placement_id, expected_revision, updat
             brand,
             campaign_id,
             old["asset_id"],
+            old["ad_id"],
             new["required"],
             jsonb(new["copy_fields"]),
             jsonb({}),

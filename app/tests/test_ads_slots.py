@@ -272,7 +272,7 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     assert slot[ready_ad] == {
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
-        "copy": placement_copy("已確認"), "workbench_href": None,
+        "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
     }
     # Uploaded, its original still pending: not confirmable yet, so not launchable and not
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
@@ -582,7 +582,9 @@ def test_upload_by_upload_id_uses_the_placement_path_and_an_already_confirmed_fi
         (asset, upload_id),
     )
     conn.commit()
-    # The same file already placed and confirmed in this campaign: the upload assigns at once.
+    # The same file already placed and confirmed in this campaign as a library row (no ad):
+    # since F40-I02 the slot upload is keyed by its ad, so it gets its own placement, which the
+    # program confirms and assigns at once; the library row stays current and untouched.
     placement = user_assets.attach(
         conn, env["org"], env["brand"], env["campaign"], asset, COPY, "h"
     )
@@ -593,11 +595,17 @@ def test_upload_by_upload_id_uses_the_placement_path_and_an_already_confirmed_fi
     conn.commit()
 
     result = upload(env, ad, {"upload_id": upload_id})
-    assert result["placement"]["id"] == placement["id"]
+    assert result["placement"]["id"] != placement["id"]
+    assert (result["placement"]["ad_id"], result["placement"]["copy_fields"]) == (ad, COPY)
+    assert result["placement"]["confirmed_at"]
     assert by_ad(result["slots"])[ad]["state"] == "ready"
     row = campaigns.get_ad(conn, env["org"], env["brand"], ad)
-    assert row["material_placement_id"] == placement["id"]
+    assert row["material_placement_id"] == result["placement"]["id"]
     assert row["slot_placement_id"] is None
+    library = user_assets.placement(
+        conn, env["org"], env["brand"], env["campaign"], placement["id"]
+    )
+    assert (library["ad_id"], library["is_current"], library["revision"]) == (None, True, 1)
 
 
 def test_upload_refuses_unfinished_uploads_foreign_ads_and_bad_bodies(env):
@@ -676,6 +684,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
         "ad_id": launched_ad, "entity_id": entity["id"], "name": "晨光隨行杯・日常出發",
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
+        "format_key": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -774,7 +783,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
     assert first == {
         "ad_id": None, "entity_id": b1["id"], "name": "晨光 1", "state": "ready",
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
-        "copy": None, "workbench_href": None,
+        "copy": None, "workbench_href": None, "format_key": None,
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
@@ -783,6 +792,47 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
             env["conn"], env["org"], env["brand"], imported, b1["id"],
             {"asset_id": user_asset(env)}, "human",
         )
+
+
+def test_one_original_uploaded_into_two_slots_backs_both_ads(env):
+    """F40-I02 (drill-7 #6): the same file goes into two slots with its own (still partial,
+    so unconfirmed) copy -- two current placements keyed by ad, two `slot_placement_id`s, one
+    shared thumbnail; the same ad with other copy is still the one conflict."""
+    first_ad, second_ad, _ = env["ads"]
+    asset = user_asset(env)
+    first = upload(env, first_ad, {"asset_id": asset, "copy_fields": {"body": "第一則"}})
+    second = upload(env, second_ad, {"asset_id": asset, "copy_fields": {"body": "第二則"}})
+    assert first["placement"]["id"] != second["placement"]["id"]
+    assert (first["placement"]["ad_id"], second["placement"]["ad_id"]) == (first_ad, second_ad)
+    rows = env["conn"].execute(
+        "SELECT p.asset_id,p.ad_id,p.is_current,a.slot_placement_id FROM ads_asset_placement p "
+        "JOIN ads_ad a ON a.id=p.ad_id WHERE p.campaign_id=%s ORDER BY a.created_at,a.id",
+        (env["campaign"],),
+    ).fetchall()
+    assert [(r["asset_id"], r["ad_id"], r["is_current"], r["slot_placement_id"]) for r in rows] == [
+        (asset, first_ad, True, first["placement"]["id"]),
+        (asset, second_ad, True, second["placement"]["id"]),
+    ]
+    slot = by_ad(second["slots"])
+    assert slot[first_ad]["thumbnail_url"] == slot[second_ad]["thumbnail_url"] == thumb(env, asset)
+    assert (slot[first_ad]["state"], slot[second_ad]["state"]) == ("in_progress", "in_progress")
+    for ad, body in ((first_ad, "第一則"), (second_ad, "第二則")):
+        assert slot[ad]["copy"] == placement_copy(
+            "待確認", {"headline": None, "body": body, "description": None}
+        )
+    with pytest.raises(user_assets.PlacementConflict):
+        upload(env, first_ad, {"asset_id": asset, "copy_fields": {"body": "第三稿"}})
+
+
+def test_slot_carries_the_planned_ads_format_key(env):
+    """F40-I01: a planned slot names its ad's own `format_key` (so the assets tab can say a
+    video-format slot needs a script); an ad without one reads `None`."""
+    video_ad, plain_ad, _ = env["ads"]
+    env["conn"].execute("UPDATE ads_ad SET format_key='video' WHERE id=%s", (video_ad,))
+    env["conn"].commit()
+    slot = by_ad(read(env))
+    assert slot[video_ad]["format_key"] == "video"
+    assert slot[plain_ad]["format_key"] is None
 
 
 def test_slots_route_reads_and_unknown_campaign_is_404(env):

@@ -184,7 +184,9 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         )
         commitment = value * days - today_credit
         ongoing += commitment
-        owners[entity["id"]] = {"daily": value, "days": days, "commitment": commitment}
+        owners[entity["id"]] = {
+            "daily": value, "days": days, "commitment": commitment, "name": entity.get("name"),
+        }
 
     # Multiple not-yet-read-back edits of one budget cannot compound the original
     # forecast. Reserve the greatest approved increase; never net a pending decrease.
@@ -214,6 +216,18 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
     available = (
         money(amount) - spent - ongoing - reserved if amount is not None and not issues else None
     )
+    # F40-I01: the approve page's 預留 breakdown -- one line per budget owner still running
+    # this month (the same `owners` map `ongoing` sums), largest commitment first, so the page
+    # can print 「9 月活動還有 5 天沒跑完，每天 1,500」 without a second calculation.
+    ongoing_owners = [
+        {
+            "entity_id": entity_id, "name": owner["name"], "daily": float(owner["daily"]),
+            "days": owner["days"], "commitment": float(owner["commitment"]),
+        }
+        for entity_id, owner in sorted(
+            owners.items(), key=lambda pair: pair[1]["commitment"], reverse=True,
+        )
+    ]
     return {
         "known_spend": float(spent) if spend_evidence or not issues else None,
         "ongoing_estimate": float(ongoing) if not issues else None,
@@ -222,6 +236,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         "available": float(available) if available is not None else None,
         "uncertainties": issues,
         "can_increase": available is not None and available > 0,
+        "ongoing_owners": ongoing_owners,
         "period_end": end.isoformat(),
         "notice": NOTICE,
     }

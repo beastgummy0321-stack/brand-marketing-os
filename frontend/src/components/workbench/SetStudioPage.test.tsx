@@ -714,3 +714,58 @@ describe("background generation", () => {
     expect((screen.getAllByRole("button", { name: "再生成一輪（10 張）" })[0] as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）", () => {
+  function twoPartDetail(overrides: Partial<SetDetail> = {}): SetDetail {
+    const image = setDetail().products.image_prompt!;
+    return setDetail({
+      required_parts: ["copy", "image_prompt"],
+      products: {
+        copy: { ...copySetDetail().products.copy!, state: "待選定" },
+        image_prompt: { ...image, state: "待選定" },
+      },
+      ...overrides,
+    });
+  }
+
+  it("閒置時是「再生成 N 張」；本頁按了文案後，文案鍵是「生成中…」、圖片鍵寫明正在生成文案", async () => {
+    const idle = twoPartDetail();
+    mockGetSet.mockResolvedValue(idle);
+    mockRunProduct.mockResolvedValue(twoPartDetail({ generation: { status: "queued", error: null } }));
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
+
+    const run = await screen.findByRole("button", { name: "再生成 4 張" });
+    expect((run as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(run);
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 4);
+    const own = await screen.findByRole("button", { name: "生成中…" });
+    expect((own as HTMLButtonElement).disabled).toBe(true);
+    expect(own.getAttribute("title")).toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: "圖片" }));
+    const other = await screen.findByRole("button", { name: "正在生成文案，完成後才能再生成" });
+    expect((other as HTMLButtonElement).disabled).toBe(true);
+    expect(other.getAttribute("title")).toBe("正在生成文案，完成後才能再生成");
+    expect(other.textContent).toBe("正在生成文案，完成後才能再生成");
+    expect(screen.queryByRole("button", { name: "生成中…" })).toBeNull();
+  });
+
+  it("這一輪不是本頁按的：已有版本的部分寫「另一個部分」，還沒生成過的部分維持「生成中…」", async () => {
+    mockGetSet.mockResolvedValue(twoPartDetail({
+      generation: { status: "running", error: null },
+      products: {
+        copy: { ...copySetDetail().products.copy!, state: "待選定" },
+        image_prompt: { state: "未生成", selected: 0, required: 1, generation_settings: {}, versions: [] },
+      },
+    }));
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=image_prompt");
+
+    const own = await screen.findByRole("button", { name: "生成中…" });
+    expect((own as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.click(screen.getByRole("tab", { name: "文案" }));
+    const other = await screen.findByRole("button", { name: "正在生成另一個部分，完成後才能再生成" });
+    expect((other as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "生成中…" })).toBeNull();
+  });
+});

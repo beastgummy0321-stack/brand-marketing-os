@@ -113,6 +113,98 @@ class UserAssetsTest(unittest.TestCase):
             repo.get_upload(self.conn, self.org, self.brand, item["id"])["status"], "complete"
         )
 
+    def planned_ads(self, count):
+        """Hand-made planned ads in one group -- the slot upload's `ad_id` targets."""
+        group = db.new_id("adg")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture','新客',500,'new')",
+            (group, self.org, self.brand, self.campaign),
+        )
+        ads = [db.new_id("ada") for _ in range(count)]
+        for index, ad in enumerate(ads):
+            self.conn.execute(
+                "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (ad, self.org, self.brand, self.campaign, group, f"廣告 {index + 1}"),
+            )
+        self.conn.commit()
+        return ads
+
+    def test_same_ad_different_copy_is_still_a_conflict(self):
+        """F40-I02: the current row is keyed by (campaign, asset, ad); the same ad uploading the
+        same file with different copy still gets `PlacementConflict` with the current row."""
+        item = self.original()
+        (ad,) = self.planned_ads(1)
+        first = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+            item["copy_fields"], "test", ad_id=ad,
+        )
+        self.conn.commit()
+        same = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+            item["copy_fields"], "test", ad_id=ad,
+        )
+        self.assertEqual((same["id"], same["revision"], same["ad_id"]), (first["id"], 1, ad))
+        with self.assertRaises(repo.PlacementConflict) as caught:
+            repo.attach(
+                self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+                {"body": "不同"}, "test", ad_id=ad,
+            )
+        self.assertEqual(caught.exception.current["id"], first["id"])
+        # A library attach (no ad) of the same original is its own row, not this ad's conflict.
+        library = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"], {"body": "不同"},
+            "test",
+        )
+        self.assertIsNone(library["ad_id"])
+        self.assertNotEqual(library["id"], first["id"])
+        with self.assertRaises(repo.PlacementConflict):
+            repo.attach(
+                self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+                {"body": "再不同"}, "test",
+            )
+
+    def test_two_ads_share_one_original_with_their_own_copy(self):
+        """F40-I02 (drill-7 #6, user ruling 2026-09-29): one photo backs two ads, each with its
+        own copy -- two current placements, no conflict; a revision keeps its ad."""
+        item = self.original()
+        first_ad, second_ad = self.planned_ads(2)
+        first = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+            {"body": "第一則文案"}, "test", ad_id=first_ad,
+        )
+        self.conn.commit()
+        second = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+            {"body": "第二則文案"}, "test", ad_id=second_ad,
+        )
+        self.conn.commit()
+        self.assertNotEqual(first["id"], second["id"])
+        current = [
+            (row["asset_id"], row["ad_id"], row["is_current"], row["copy_fields"]["body"])
+            for row in repo.list_placements(self.conn, self.org, self.brand, self.campaign)
+        ]
+        self.assertEqual(
+            current,
+            [
+                (item["asset_id"], first_ad, True, "第一則文案"),
+                (item["asset_id"], second_ad, True, "第二則文案"),
+            ],
+        )
+        revised = repo.revise(
+            self.conn, self.org, self.brand, self.campaign, second["id"], 1,
+            {"copy_fields": {"body": "第二則改稿"}}, "test",
+        )
+        self.assertEqual((revised["revision"], revised["ad_id"]), (2, second_ad))
+        self.conn.commit()
+        with self.assertRaises(repo.PlacementConflict) as caught:
+            repo.attach(
+                self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+                {"body": "第二則文案"}, "test", ad_id=second_ad,
+            )
+        self.assertEqual(caught.exception.current["revision"], 2)
+
     def test_revision_conflict_preserves_current_and_confirmation_history(self):
         item = self.original()
         first = repo.attach(

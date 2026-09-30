@@ -11,9 +11,11 @@ import {
   createChangeSet,
   decideChangeSet,
   getChangeControl,
+  getMonthlyBudget,
   ChangeRequestRejected,
   type ChangeDraft,
   type ChangeSet,
+  type MonthlyBudget,
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
@@ -181,6 +183,22 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same identity list as the angle read above.
   }, [kind, closed, pauseEntityId, brandId, campaignId, item?.id]);
 
+  // F40-I08: the month budget is read here (not inside `BudgetEvidence`) because it also decides whether 核准 can be
+  // pressed — state (ii) of the 本月預算放得下 card (no month budget yet) greys the button with its reason beside it.
+  // Only a budget set reads it; every other kind resolves `null` (same shape as the angle read above).
+  const budgetMonth = currentBudgetMonth(timezone);
+  const budgetRead = useApiRead<MonthlyBudget | null>(
+    (signal) => (kind === "budget" ? getMonthlyBudget(brandId, budgetMonth, signal) : Promise.resolve(null)),
+    [kind, brandId, budgetMonth],
+  );
+  // State (iii): the set whose approve answered 「premise changed」 (a 409 that is not a month-budget message). It
+  // waits here until 重新檢查 rebuilds it — the rebuild is the existing one-shot supersede, now the user's own step
+  // on the budget page instead of a silent retry (issue Done 3). Other kinds keep the silent rebuild below.
+  const [premiseSet, setPremiseSet] = useState<ChangeSet | null>(null);
+  // 「Rebuild once, then show the error」 survives the remount: the rebuilt set's canonical URL is a new page, so the
+  // marker rides router state like `actionError` — a second 「premise changed」 on that page is shown, not re-offered.
+  const [rechecked, setRechecked] = useState<boolean>(() => (location.state as { rechecked?: boolean } | null)?.rechecked ?? false);
+
   // feature Decisions「Step from a change set」：非 confirm 步驟的清單，或還沒對到正典
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
   // 才會真的把人送到那兩頁；這批只加了 propose 與 confirm 兩條路由。
@@ -188,8 +206,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (!changeSet || busy) return;
     const { step } = stepFromChangeSet(changeSet);
     const canonical = changeStepPath(brandId, campaignId, changeSet.id, step);
-    if (canonical !== location.pathname) navigate(canonical, { replace: true, state: actionError ? { actionError } : undefined });
-  }, [changeSet, busy, actionError, brandId, campaignId, location.pathname, navigate]);
+    if (canonical !== location.pathname) {
+      navigate(canonical, { replace: true, state: actionError || rechecked ? { actionError, rechecked } : undefined });
+    }
+  }, [changeSet, busy, actionError, rechecked, brandId, campaignId, location.pathname, navigate]);
 
   // F28-I15: an outdated cleanup draft offers only 「改用最新提議」 (see `cleanupDraft.ts::useCleanupRebuild`).
   const { drift, draftProposalId, adopt } = useCleanupRebuild({
@@ -249,7 +269,27 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     });
   }
 
-  async function approveWithRebuild(target: ChangeSet, rebuilt: boolean): Promise<ChangeSet> {
+  /** The one-shot rebuild after 「premise changed」: the same items under a NEW operation_id with
+   * `supersedes_id` = the refused set (feature Decisions「When approve answers 409 because the premise changed」). */
+  async function rebuildDraft(target: ChangeSet): Promise<ChangeSet> {
+    // F27-I15: a cleanup set's rebuild must carry `source: "cleanup"` again — otherwise the
+    // rebuilt draft would silently stop being the campaign's cleanup proposal (Contract F's
+    // own `_matching_cleanup_set` only matches on `plan_json.source`).
+    // F29-I14: the user's unticked ads ride along (Contract B), or the rebuild would forget them.
+    const declined = cleanupSet ? declinedIdsOf(target) : [];
+    return createChangeSet(brandId, campaignId, {
+      operation_id: crypto.randomUUID(),
+      title: target.title,
+      month: target.month,
+      items: target.items.map(toChangeInput),
+      supersedes_id: target.id,
+      ...(cleanupSet ? { source: "cleanup" as const } : {}),
+      ...(declined.length ? { declined_ids: declined } : {}),
+    } as ChangeDraft & { source?: "cleanup" });
+  }
+
+  /** `null` = the approve was refused because the premise changed and the page now waits for 重新檢查 (budget only). */
+  async function approveWithRebuild(target: ChangeSet, rebuilt: boolean): Promise<ChangeSet | null> {
     try {
       return await approveChangeSet(brandId, campaignId, target);
     } catch (err) {
@@ -260,20 +300,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       // 直接把後端訊息顯示出來，不重建（feature Decisions「a 409 from approve about the month
       // budget shows the backend message and does NOT rebuild」）。
       if (err instanceof ChangeRequestRejected && !rebuilt && !isMonthBudgetRejection(err.message)) {
-        // F27-I15: a cleanup set's rebuild must carry `source: "cleanup"` again — otherwise the
-        // rebuilt draft would silently stop being the campaign's cleanup proposal (Contract F's
-        // own `_matching_cleanup_set` only matches on `plan_json.source`).
-        // F29-I14: the user's unticked ads ride along (Contract B), or the rebuild would forget them.
-        const declined = cleanupSet ? declinedIdsOf(target) : [];
-        const rebuiltSet = await createChangeSet(brandId, campaignId, {
-          operation_id: crypto.randomUUID(),
-          title: target.title,
-          month: target.month,
-          items: target.items.map(toChangeInput),
-          supersedes_id: target.id,
-          ...(cleanupSet ? { source: "cleanup" as const } : {}),
-          ...(declined.length ? { declined_ids: declined } : {}),
-        } as ChangeDraft & { source?: "cleanup" });
+        // F40-I08 (issue Done 3): on the budget page the premise change is the 本月預算放得下 card's
+        // third state — the user rebuilds with 重新檢查, 核准 stays grey with the reason beside it.
+        if (kind === "budget" && !rechecked) { setPremiseSet(target); return null; }
+        if (kind === "budget") throw err;
+        const rebuiltSet = await rebuildDraft(target);
         setChangeSet(rebuiltSet);
         return approveWithRebuild(rebuiltSet, true);
       }
@@ -288,7 +319,25 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     try {
       const target = await ensureWorkingSet();
       const updated = await approveWithRebuild(target, false);
-      setChangeSet(updated);
+      if (updated) setChangeSet(updated);
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** State (iii) 「重新檢查」: rebuild the refused set; the rebuilt draft then takes over the page (its canonical
+   * confirm URL, 核准 enabled again) — nothing is approved here, that is the user's next press. */
+  async function handleRecheck() {
+    if (busy || !premiseSet) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const rebuiltSet = await rebuildDraft(premiseSet);
+      setPremiseSet(null);
+      setRechecked(true);
+      setChangeSet(rebuiltSet);
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -434,6 +483,14 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // Before the cleanup set exists the close list is the user's pick; none ticked leaves nothing to approve.
   const cleanupCloseCount = kind === "cleanup" ? (changeSet ? changeSet.items.length : pick.ticked.length) : 0;
   const nothingPicked = kind === "cleanup" && !changeSet && cleanupCloseCount === 0;
+  // F40-I08: why 核准 is grey on a budget set, printed beside the button (prototype `#/approve` `.reason`):
+  // (iii) the premise changed → 重新檢查 first; (ii) the month has no budget yet → set it first. Same inputs as
+  // the 本月預算放得下 card, so the card's state and the button's reason can never disagree.
+  const budgetMonthNumber = Number((budgetRead.data?.month ?? budgetMonth).split("-")[1]) || 0;
+  const approveBlock = kind !== "budget" ? null
+    : premiseSet ? "內容變了，先按「重新檢查」"
+    : budgetRead.data?.amount === null ? `要先設 ${budgetMonthNumber} 月月預算`
+    : null;
 
   const title = kind === "copy" ? "確認變更"
     : kind === "budget" ? "提議：加預算"
@@ -503,7 +560,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             item={item}
             scale={triageItem?.scale ?? null}
             bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
-            brandId={brandId}
+            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: homeHref }}
           />
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
@@ -562,7 +619,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         {drift ? (
           <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
         ) : !closed ? (
-          <Button disabled={busy || nothingPicked} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
+          <>
+            {approveBlock && <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {approveBlock}</span>}
+            <Button disabled={busy || nothingPicked || approveBlock !== null} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
+          </>
         ) : nextAction ? (
           <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
         ) : null}

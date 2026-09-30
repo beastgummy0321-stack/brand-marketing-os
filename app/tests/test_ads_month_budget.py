@@ -178,6 +178,34 @@ class MonthlyCalculationTest(unittest.TestCase):
         )
         self.assertEqual(result["reserved_increases"], 4200)
 
+    def test_ongoing_owners_name_each_running_entity_with_days_times_daily(self):
+        # F40-I01: the approve page's 預留 breakdown -- 9/10 … 9/14 is 5 days at 100 a day.
+        result = calculate(
+            entities=[root(name="九月活動", end_date="2026-09-14")],
+            observations=[spend("2026-09-09", 900)],
+        )
+        self.assertEqual(result["ongoing_owners"], [
+            {"entity_id": "c", "name": "九月活動", "daily": 100.0, "days": 5,
+             "commitment": 500.0},
+        ])
+        owner = result["ongoing_owners"][0]
+        self.assertEqual(owner["days"] * owner["daily"], owner["commitment"])
+        self.assertEqual(result["ongoing_estimate"], 500)
+
+    def test_ongoing_owners_ordered_by_commitment_desc_and_skip_closed(self):
+        result = calculate(
+            entities=[
+                root(id="small", native_id="1", name="小", end_date="2026-09-11"),
+                root(id="big", native_id="2", name="大", budget_amount=300),
+                root(id="paused", native_id="3", name="停", native_status="PAUSED"),
+            ],
+            observations=[],
+        )
+        self.assertEqual(
+            [(o["entity_id"], o["commitment"]) for o in result["ongoing_owners"]],
+            [("big", 6300.0), ("small", 200.0)],
+        )
+
     def test_parent_and_child_budget_not_silently_summed(self):
         result = calculate(
             entities=[

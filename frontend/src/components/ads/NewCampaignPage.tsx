@@ -6,13 +6,16 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { createCampaign, getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import { createCampaign, getCampaign, listCampaigns, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
+import type { CampaignCreateExtras } from "@/lib/adsCampaignTypes";
+import { fetchChannels } from "@/lib/adsLaunchApi";
+import { putTarget } from "@/lib/adsTriageApi";
 import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
 import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
 import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
-import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed } from "./patterns";
+import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount } from "./patterns";
 import { ObjectiveIcon, ProductPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
 
 /** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
@@ -21,11 +24,27 @@ const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效�
 type CreateRequest = { kind: "picks" } | { kind: "sentence"; text: string };
 
 const message = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
+const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
+const md = (d: string) => d.slice(5).replace("-", "/");
+const SELECT = "h-[42px] w-full rounded-lg border border-input bg-card px-3 text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-muted";
+
+/** The 「這次怎麼投」 values as a campaign holds them (`constraints_json.platform`, `context_json.audience_hint`,
+ * the user's own cap, `context_json.landing_url`); empty text／null where the campaign has none. */
+function howOf(c: CampaignDetail) {
+  const ctx = c.context_json ?? {};
+  const cons = (c.constraints_json ?? {}) as { platform?: unknown };
+  return {
+    platform: typeof cons.platform === "string" ? cons.platform : null,
+    audienceHint: ctx.audience_hint ?? "",
+    cap: c.cap?.own_value ?? null,
+    landingUrl: ctx.landing_url ?? "",
+  };
+}
 
 /** The picks a created campaign already holds, for going back to step 1 without creating a second campaign.
  * Dates the system filled in are not shown as the user's (they stay empty here). */
 function picksOf(c: CampaignDetail) {
-  const ctx = (c.context_json ?? {}) as { product_ids?: string[]; field_sources?: { dates?: string } };
+  const ctx = c.context_json ?? {};
   const cons = (c.constraints_json ?? {}) as { budget?: unknown };
   const userDates = ctx.field_sources?.dates === "user";
   return {
@@ -34,7 +53,49 @@ function picksOf(c: CampaignDetail) {
     startDate: userDates ? c.start_date ?? "" : "",
     endDate: userDates ? c.end_date ?? "" : "",
     budget: typeof cons.budget === "number" && Number.isFinite(cons.budget) && cons.budget > 0 ? cons.budget : null,
+    ...howOf(c),
   };
+}
+
+/** What a new campaign starts from (drill-7 #10, F40-I04's copy rule): the brand's latest campaign that went past
+ * draft. Its four 「這次怎麼投」 values pre-fill the form (the cap only when it was the user's own, like the server);
+ * product, objective, budget and the period follow when the draft holds nothing. `breakEven` belongs to
+ * `capProductId` (the hint's 打平線 is only known while that product stays picked). */
+interface Previous {
+  id: string; name: string;
+  productId: string | null; objective: string | null;
+  startDate: string | null; endDate: string | null; budget: number | null;
+  platform: string | null; audienceHint: string; cap: number | null; landingUrl: string;
+  breakEven: number | null; capProductId: string | null;
+}
+
+async function readPrevious(brandId: string): Promise<Previous | null> {
+  const cards = await listCampaigns(brandId);
+  const latest = cards.filter((c) => c.status !== "draft").sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  if (!latest) return null;
+  const c = await getCampaign(brandId, latest.id);
+  const picks = picksOf(c);
+  const how = howOf(c);
+  // The campaign-level URL, else the first group that recorded one in the 追蹤 (manual handoff) tab — the same
+  // order the server copies in (`brief._previous_landing_url`).
+  const groupUrl = c.manual_handoff?.groups.map((g) => g.values.landing_url ?? "").find(Boolean) ?? "";
+  return {
+    id: c.id, name: c.name, productId: picks.productId, objective: picks.objective,
+    startDate: c.start_date, endDate: c.end_date, budget: picks.budget,
+    platform: how.platform, audienceHint: how.audienceHint, cap: how.cap, landingUrl: how.landingUrl || groupUrl,
+    breakEven: c.cap?.break_even ?? null, capProductId: c.cap?.product_id ?? null,
+  };
+}
+
+/** The period right after the previous one, same length (prototype: 「日期接在上一期後面」). */
+function nextPeriod(start: string | null, end: string | null): { start: string; end: string } | null {
+  if (!start || !end) return null;
+  const s = Date.parse(`${start}T00:00:00Z`);
+  const e = Date.parse(`${end}T00:00:00Z`);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) return null;
+  const day = 86_400_000;
+  const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
+  return { start: iso(e + day), end: iso(e + day + (e - s)) };
 }
 
 /** New-campaign wizard v10 step 1 (F30-I05, prototype `newStep1()`): pick one product and one objective from the
@@ -56,6 +117,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const life = useRef(new AbortController());
   useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
   const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
+  const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
 
   const [initial] = useState(() => readDraft(draftKey));
   const [productId, setProductId] = useState(initial.productId);
@@ -64,6 +126,14 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const [endDate, setEndDate] = useState(initial.endDate);
   const [budget, setBudget] = useState(initial.budget);
   const [goalText, setGoalText] = useState(initial.goalText);
+  const [platform, setPlatform] = useState<string | null>(null);
+  const [audienceHint, setAudienceHint] = useState("");
+  const [cap, setCap] = useState<number | null>(null);
+  const [landingUrl, setLandingUrl] = useState("");
+  const [previous, setPrevious] = useState<Previous | null>(null);
+  /** The bar 「照上一期「〈name〉」帶入，可改」 plus which of period／budget it filled; `null` = nothing was pre-filled
+   * (no previous campaign, or 「清空重填」). */
+  const [copied, setCopied] = useState<{ period: boolean; budget: boolean } | null>(null);
   const [uploads, setUploads] = useState<AssetUpload[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [attached, setAttached] = useState<Set<string>>(new Set());
@@ -88,11 +158,32 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         const p = picksOf(c);
         setCreated(c); setProductId(p.productId); setObjective(p.objective);
         setStartDate(p.startDate); setEndDate(p.endDate); setBudget(p.budget);
+        setPlatform(p.platform); setAudienceHint(p.audienceHint); setCap(p.cap); setLandingUrl(p.landingUrl);
       })
       .catch((e) => { if (!cancelled) setRestoreFailed(message(e, "讀取已建立的活動失敗。")); })
       .finally(() => { if (!cancelled) setRestoring(false); });
     return () => { cancelled = true; };
   }, [brandId, createdId, created?.id, restoreKey]);
+  // Pre-fill from the previous campaign (F40-I12). A campaign this tab already created restores its own values
+  // instead; a read that fails or finds nothing leaves the form as it opened.
+  useEffect(() => {
+    if (createdId) return;
+    let cancelled = false;
+    readPrevious(brandId)
+      .then((prev) => {
+        if (cancelled || !prev) return;
+        setPrevious(prev);
+        setPlatform(prev.platform); setAudienceHint(prev.audienceHint); setCap(prev.cap); setLandingUrl(prev.landingUrl);
+        setProductId((now) => now ?? prev.productId);
+        setObjective((now) => now ?? prev.objective);
+        setBudget((now) => now ?? prev.budget);
+        const period = !initial.startDate && !initial.endDate ? nextPeriod(prev.startDate, prev.endDate) : null;
+        if (period) { setStartDate(period.start); setEndDate(period.end); }
+        setCopied({ period: period !== null, budget: initial.budget === null && prev.budget !== null });
+      })
+      .catch(() => { /* Nothing to copy from: the form opens as before. */ });
+    return () => { cancelled = true; };
+  }, [brandId, createdId, initial]);
   useEffect(() => {
     saveDraft(draftKey, { productId, objective, startDate, endDate, budget, goalText });
   }, [draftKey, productId, objective, startDate, endDate, budget, goalText]);
@@ -115,6 +206,31 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     : oneDate ? "開始和結束要一起填"
     : backwards ? "結束要在開始之後" : "";
   const blocked = !!hint || busy || uploadBusy || restoring || (!!createdId && !created);
+  /** The 打平線 is only known for the previous campaign's product while it stays picked. */
+  const breakEven = previous && previous.capProductId !== null && previous.capProductId === productId ? previous.breakEven : null;
+  const capHint = cap === null
+    ? (breakEven !== null ? `打平線 ${fmt(breakEven)}；上限不超過它才有賺` : "")
+    : [
+      previous && cap === previous.cap ? `上一期 ${fmt(cap)}` : null,
+      breakEven !== null ? (cap >= breakEven ? `比打平線 ${fmt(breakEven)} 高 ${fmt(cap - breakEven)}` : `比打平線 ${fmt(breakEven)} 低 ${fmt(breakEven - cap)}`) : null,
+    ].filter(Boolean).join("・");
+  const periodNote = copied && previous ? [
+    copied.period && previous.startDate && previous.endDate ? `日期接在上一期後面（上一期 ${md(previous.startDate)}～${md(previous.endDate)}）` : null,
+    copied.budget ? "金額照上一期" : null,
+  ].filter(Boolean).join("；") : "";
+  /** The four values as the create sends them; an empty one is left out so the server copies it (F40-I04). */
+  const extras: CampaignCreateExtras = {
+    ...(platform ? { platform } : {}),
+    ...(audienceHint.trim() ? { audience_hint: audienceHint.trim() } : {}),
+    ...(cap !== null && cap > 0 ? { cap } : {}),
+    ...(landingUrl.trim() ? { landing_url: landingUrl.trim() } : {}),
+  };
+  /** 「清空重填」: every field empty, the bar gone, 下一步 disabled until the required ones are set again. */
+  function clearAll() {
+    setCopied(null);
+    setProductId(null); setObjective(null); setStartDate(""); setEndDate(""); setBudget(null);
+    setPlatform(null); setAudienceHint(""); setCap(null); setLandingUrl("");
+  }
 
   /** Attaches the picked uploads not yet attached; returns the failures (the campaign is never re-created). */
   async function attachAll(campaignId: string, signal: AbortSignal) {
@@ -152,19 +268,28 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         if (product.id !== now.productId) patch.product_ids = [product.id];
         if (goal.key !== campaign.objective) patch.objective = goal.key;
         if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, dates);
-        if (budget !== now.budget) patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget };
+        if (budget !== now.budget || platform !== now.platform) {
+          patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget, ...(platform !== now.platform ? { platform } : {}) };
+        }
+        if (audienceHint.trim() !== now.audienceHint) patch.audience_hint = audienceHint.trim();
+        if (landingUrl.trim() !== now.landingUrl) patch.landing_url = landingUrl.trim() || null;
         if (Object.keys(patch).length > 0) campaign = await patchCampaign(brandId, campaign.id, patch);
+        // The cap is not a campaign field: it goes through the target writer (revision-guarded), like step 2.
+        if (cap !== null && cap !== now.cap) {
+          await putTarget(brandId, campaign.id, { basis: "own", value: cap, expected_revision: campaign.cap.revision });
+          campaign = await getCampaign(brandId, campaign.id);
+        }
       } else if (request.kind === "sentence") {
         setPhase("understanding");
         campaign = await createCampaign(brandId, {
           goal_text: request.text.trim(), ...dates,
-          ...(budgetOk ? { constraints: { budget } } : {}),
+          ...(budgetOk ? { constraints: { budget } } : {}), ...extras,
         });
       } else if (product && goal && budget !== null) {
         setPhase("understanding");
         campaign = await createCampaignFromPicks(brandId, {
           product_ids: [product.id], objective: goal.key, budget, ...dates,
-          ...(goalText.trim() ? { goal_text: goalText.trim() } : {}),
+          ...(goalText.trim() ? { goal_text: goalText.trim() } : {}), ...extras,
         });
       }
       if (signal.aborted || !campaign) return;
@@ -204,8 +329,15 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     )}>
       {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit(lastRequest)} />}
       <div className={picking ? "contents" : "hidden"}>
-      <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品和目標" />
+      <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品、目標，還有這次怎麼投" />
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
+      {copied && previous && (
+        <div data-slot="prefill-bar" className="flex flex-wrap items-center gap-3 rounded-[10px] bg-accent px-3.5 py-2.5">
+          <Chip tone="accent">照上一期「{previous.name}」帶入，可改</Chip>
+          <span className="text-sm text-muted-foreground">每一格都能直接改；沒改的就照上一期</span>
+          <Button variant="link" size="sm" className="ml-auto px-0" disabled={locked} onClick={clearAll}>清空重填</Button>
+        </div>
+      )}
       {options.status === "error" ? (
         <ReadFailed what={`商品和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
       ) : !data ? (
@@ -253,6 +385,32 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           </section>
         </>
       )}
+      <section className="surface" aria-labelledby="new-how">
+        <div className="surface-header">
+          <h2 id="new-how">這次怎麼投</h2>
+          <span className="text-sm text-muted-foreground">以前每期重填；現在照上一期帶入</span>
+        </div>
+        <div className="surface-body grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field id="new-platform" label="平台">
+            <select id="new-platform" className={SELECT} value={platform ?? ""} disabled={locked} onChange={(e) => setPlatform(e.target.value || null)}>
+              <option value="" disabled>請選擇</option>
+              {(channels.data ?? (platform ? [{ key: platform, label: platform }] : [])).map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </Field>
+          <Field id="new-audience" label="受眾方向">
+            <Input id="new-audience" value={audienceHint} maxLength={200} disabled={locked} onChange={(e) => setAudienceHint(e.target.value)}
+              placeholder="例如：新客為主、探索一組" className="h-[42px] rounded-lg" />
+          </Field>
+          <Field id="new-sale-cap" label="每賣一筆上限" hint={capHint}>
+            <MoneyInput id="new-sale-cap" value={cap} onChange={setCap} disabled={locked} placeholder="例如 450" onEnter={() => void submit()} />
+          </Field>
+          <Field id="new-landing" label="落地頁" tag={<Chip tone="accent">從「追蹤」分頁搬來</Chip>}>
+            <Input id="new-landing" type="url" value={landingUrl} disabled={locked} onChange={(e) => setLandingUrl(e.target.value)}
+              placeholder="https://" className="h-[42px] rounded-lg" />
+          </Field>
+        </div>
+        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；平台先不能改，其他照常`} onRetry={channels.reload} /></div>}
+      </section>
       <section className="surface" aria-labelledby="new-period">
         <div className="surface-header"><h2 id="new-period">期間與預算上限</h2></div>
         <div className="surface-body flex flex-wrap items-end gap-4">
@@ -266,6 +424,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             <MoneyInput id="new-cap" value={budget} onChange={setBudget} disabled={locked} onEnter={() => void submit()} />
           </Field>
         </div>
+        {periodNote && <p className="surface-body pt-0 text-xs text-muted-foreground">{periodNote}</p>}
       </section>
       <Disclosure label="進階：一句話建立、自帶圖片／影片">
         <div className="flex flex-col gap-4">
@@ -300,11 +459,17 @@ function Shell({ homeHref, bar, children }: { homeHref: string; bar: ReactNode; 
   );
 }
 
-function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+/** A labelled control; `tag` sits beside the label (outside it, so the label text stays the accessible name),
+ * `hint` is the small line under the control (the cap's 打平線 comparison). */
+function Field({ id, label, tag, hint, children }: { id: string; label: string; tag?: ReactNode; hint?: string; children: ReactNode }) {
   return (
     <div>
-      <label htmlFor={id} className="mb-1 block text-xs text-muted-foreground">{label}</label>
+      <div className="mb-1 flex items-center gap-2">
+        <label htmlFor={id} className="block text-xs text-muted-foreground">{label}</label>
+        {tag}
+      </div>
       {children}
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

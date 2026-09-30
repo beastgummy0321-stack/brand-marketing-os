@@ -1,27 +1,43 @@
 /** F28-I10: campaign detail graded against the cap (prototype v9 `tabPerf()`). Covers the header cap chip, the ruler
  * card (title, window chip, missing-days chip, 去改上限, 打平 mark, empty ruler without a cap), default folds, the
  * rows' actions and ruler-dot navigation, `?ad=` deep links, and the three reads failing independently. Realistic
- * fixtures: the longest real names, decimal costs, 0 results, no cap, gap days, an imported campaign. */
+ * fixtures: the longest real names, decimal costs, 0 results, no cap, gap days, an imported campaign.
+ * F40-I06 (prototype `#/perf`, `#/detail`): the 「這期狀態列」 on top of `CampaignPerfBody` (five cells, the backend's
+ * period grade, the data-status chips, 重新讀取平台／結案這一期 opening the shared close dialog, closed／imported states)
+ * and the two program lines under the ruler title (local ads never built, platform ads not built here). */
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AbPair, AbPairsView, AbSide } from "@/lib/adsAbApi";
 import { getAbPairs, pauseAbLoser } from "@/lib/adsAbApi";
-import type { CampaignCard as CampaignCardData } from "@/lib/adsApi";
-import { listCampaigns } from "@/lib/adsApi";
+import type { AdRow, CampaignCard as CampaignCardData, CampaignDetail, CampaignPerformance } from "@/lib/adsApi";
+import { closeCampaign, getPerformance, listCampaigns } from "@/lib/adsApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 import type { MaterialTask } from "@/lib/adsMaterialApi";
 import { MaterialRequestError, cancelMaterialTask, createReplaceRequest, listMaterialTasks } from "@/lib/adsMaterialApi";
 import type { CampaignDataStatus, CampaignTriage, QueueCleanup, QueueItem, QueuePayload, TriageClosedBlock, TriageItem } from "@/lib/adsTriageApi";
 import { getQueue, getTriage } from "@/lib/adsTriageApi";
-import { CampaignDetailPage, dataStatusChip, missingDaysLabel, windowLabel } from "./CampaignDetailPage";
+import { CampaignDetailPage, CampaignPerfBody, dataStatusChip, missingDaysLabel, programLines, windowLabel } from "./CampaignDetailPage";
+import { missingDaysChip, periodDays } from "./PeriodStatusRow";
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
-  return { ...actual, listCampaigns: vi.fn() };
+  return { ...actual, listCampaigns: vi.fn(), getPerformance: vi.fn(), closeCampaign: vi.fn() };
 });
+// F40-I06: the status row reads the org clock (`useOrgClock` → `useWorkspace().identity.org`) for 「今天」 and the
+// period's day count; the timezone is fixed to Taipei and `Date` is faked per case (timers stay real).
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({
+    scope: "user:org", brands: [], brandsLoading: false, brandsError: null, refreshBrands: () => {},
+    identity: {
+      user: { id: "usr_1", email: "a@example.com" },
+      org: { id: "org_test", name: "測試組織", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2020-01-01" },
+      orgs: [],
+    },
+  }),
+}));
 vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
   return { ...actual, getTriage: vi.fn(), getQueue: vi.fn() };
@@ -637,5 +653,229 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await within(screen.getByTestId("ad-row-a8")).findByText("換掉這一則・需求已開")).toBeTruthy();
     expect(screen.queryByText(/素材需求讀不到/)).toBeNull();
+  });
+});
+
+// ---- F40-I06: the 這期狀態列 and the program lines (prototype `#/perf` with its 「還有 2 天沒讀到」 toggle, `#/detail`) ----
+const CAP_450 = { value: 450, basis: "own" as const, own_value: 450, break_even: 520, price: 998, product_id: "prd_1", result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
+function localAd(id: string, name: string, local_state: AdRow["local_state"]): AdRow {
+  return {
+    id, campaign_id: "cmp_1", group_id: "grp_1", name, audience_key: null, pain_key: null, angle_key: null, hook_key: null,
+    proof_key: null, offer_key: null, format_key: null, coordinates_snapshot_json: {}, product_id: null,
+    asset_ready_source: null, asset_ready_by: null, asset_ready_at: null,
+    external_id: local_state === "bound" ? `ext_${id}` : null, external_name: null, external_status: null, local_state, bound_at: null,
+  } as unknown as AdRow;
+}
+/** The drill-7 period-2 shape: 4 built ads, 2 never built (缺圖). */
+function campaignDetail(o: Partial<CampaignDetail> = {}, ads?: AdRow[]): CampaignDetail {
+  return {
+    id: "cmp_1", name: "10 月第一期・讀書與運動", objective: "購買", origin: "internal", status: "live", cap: CAP_450,
+    start_date: "2026-09-26", end_date: "2026-10-02", context_json: {}, constraints_json: {}, verdict: null, verdict_json: {},
+    capabilities: { allowed: [], unavailable: {} }, external_view: null,
+    groups: [{
+      id: "grp_1", campaign_id: "cmp_1", channel_key: "meta", name: "新客", role: "new", daily_budget: 1500, start_date: null, end_date: null,
+      external_id: "ext_g", external_name: null, external_status: null, local_state: "bound", bound_at: null,
+      ads: ads ?? [
+        localAd("l1", "運動後與忙碌日常", "bound"), localAd("l2", "早晨通勤", "bound"), localAd("l3", "深夜讀書", "bound"),
+        localAd("l4", "上班日午休", "bound"), localAd("l5", "週末補眠", "unbound"), localAd("l6", "考前衝刺", "unbound"),
+      ],
+    }],
+    ...o,
+  } as unknown as CampaignDetail;
+}
+type BodyProps = Partial<Parameters<typeof CampaignPerfBody>[0]>;
+function renderBody(c: CampaignDetail, extra: BodyProps = {}) {
+  const onCampaignChange = vi.fn();
+  const onSync = vi.fn();
+  const view = (p: BodyProps) => (
+    <MemoryRouter initialEntries={[`${WS}?tab=perf`]}>
+      <CampaignPerfBody brandId="brd_1" campaignId="cmp_1" origin={c.origin} campaign={c} onCampaignChange={onCampaignChange} onSync={onSync} {...extra} {...p} />
+    </MemoryRouter>
+  );
+  const utils = render(view({}));
+  return { onCampaignChange, onSync, rerender: (p: BodyProps) => utils.rerender(view(p)) };
+}
+
+describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
+  /** `getPerformance` as the backend answers for the same period: 10,081 spent, 19 bought, the period graded 偏貴. */
+  function perf(o: Partial<CampaignPerformance["coverage"]> = {}, totals: Partial<CampaignPerformance["totals"]> = {}): CampaignPerformance {
+    return {
+      totals: { spend: 10081, impressions: 90000, clicks: 1200, purchases: 19, revenue: 18962, cpa: 530.58, ctr: 0.0133, roas: 1.88, roas_conservative: 1.88, grade: { grade: "watch", label: "偏貴" }, ...totals },
+      daily: [], groups: [], ads: [],
+      coverage: { start: "2026-09-26", end: "2026-10-02", expected: 7, missing: 0, missing_days: [], never_synced: false, ...o },
+      last_data_at: "2026-10-02T13:00:00Z",
+    };
+  }
+  /** The 4 platform ads: 3 bound to local ads, 1 built elsewhere (`bound_ad_id: null`). */
+  function platformAds(): TriageItem[] {
+    return [
+      ad("a1", "運動後與忙碌日常", "on_target", 3120, 9, OWN_450, { bound_ad_id: "l1" }),
+      ad("a2", "早晨通勤", "watch", 2760, 6, OWN_450, { bound_ad_id: "l2" }),
+      ad("a3", "深夜讀書", "over", 2601, 4, OWN_450, { bound_ad_id: "l3" }),
+      ad("a4", "上班日午休（平台手動建）", "wasted", 1600, 0, OWN_450, { bound_ad_id: null }),
+    ];
+  }
+  const row = () => screen.getByTestId("period-status-row");
+  /** Cell text as a reader sees it: one space between elements, the glossary tooltips removed. */
+  const readable = (node: Node): string => node.nodeType === Node.TEXT_NODE
+    ? node.textContent ?? ""
+    : (node as Element).getAttribute?.("role") === "tooltip" ? "" : [...node.childNodes].map(readable).join(" ");
+  const cellText = (label: string) => readable(within(row()).getByText(label, { selector: "span" }).parentElement!).replace(/\s+/g, " ").trim();
+
+  beforeEach(() => {
+    // Org today = 2026-10-03 (Taipei), the day after the period ends — the prototype's 「今天 10/03」.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-03T04:00:00Z"));
+    vi.mocked(getTriage).mockResolvedValue(triage(platformAds(), { data: { sync: { state: "ok", error: null, last_success_at: "2026-10-02T13:00:00Z" }, coverage: null, missing_days: [], status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null } } }));
+    vi.mocked(getPerformance).mockResolvedValue(perf());
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("live: five cells from getPerformance totals, the backend's grade chip 對上限 450, 平台已讀到, both buttons and the 整期 caption", async () => {
+    renderBody(campaignDetail());
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(cellText("期間")).toBe("期間 09/26～10/02 7 天");
+    expect(cellText("花費")).toBe("花費 10,081 元 整期合計");
+    expect(cellText("購買")).toBe("購買 19 筆 平台回報");
+    expect(cellText("每賣一筆")).toBe("每賣一筆 531 元 偏貴 對上限 450");
+    expect(cellText("ROAS")).toBe("ROAS 1.88 營收 ÷ 花費");
+    const grade = within(row()).getByText("偏貴").closest("[data-slot=chip]")!;
+    expect(grade.getAttribute("data-grade")).toBe("watch");
+    expect(within(row()).getByText("09/26 開始・10/02 結束・今天 10/03")).toBeTruthy();
+    const ready = within(row()).getByText("平台已讀到 09/26～10/02");
+    expect(ready.getAttribute("data-tone")).toBe("ok");
+    expect(within(row()).getByText("最新 10/02 21:00")).toBeTruthy();
+    expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
+    expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
+    expect(within(row()).getByText("結案後這期成績寫進筆記本，下一期照它規劃")).toBeTruthy();
+    expect(within(row()).getByText("整期＝活動期間的合計；每月回顧只算當月天數，同一則廣告兩邊數字會不同。")).toBeTruthy();
+    expect(within(row()).queryByText("已結案")).toBeNull();
+    // The row sits above the ruler card.
+    const region = await screen.findByRole("region", { name: "對照上限" });
+    expect(row().compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("missing days: the warning chip names them, 不算 0; the read range and the close caption change; the grade stays the backend's", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(perf({ missing: 2, missing_days: ["2026-10-02", "2026-10-01"] }, { grade: { grade: "insufficient", label: "資料不足" } }));
+    renderBody(campaignDetail());
+    const warn = await within(row()).findByText("10/01、10/02 沒讀到，不算 0");
+    expect(warn.getAttribute("data-tone")).toBe("warn");
+    expect(within(row()).getByText("平台已讀到 09/26～09/30・最新 10/02 21:00")).toBeTruthy();
+    expect(within(row()).queryByText("平台已讀到 09/26～10/02")).toBeNull();
+    expect(within(row()).getByText("會先問要不要重新讀取，再結案")).toBeTruthy();
+    expect(within(row()).getByText("資料不足").closest("[data-slot=chip]")!.getAttribute("data-grade")).toBe("insufficient");
+    expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
+  });
+
+  it("重新讀取平台 calls the workspace's sync; while it runs the button says 讀取中…; when it ends the row re-reads its numbers", async () => {
+    const { onSync, rerender } = renderBody(campaignDetail());
+    await within(row()).findByText("10,081 元");
+    fireEvent.click(within(row()).getByRole("button", { name: "重新讀取平台" }));
+    expect(onSync).toHaveBeenCalledTimes(1);
+    rerender({ syncing: true });
+    expect((within(row()).getByRole("button", { name: "讀取中…" }) as HTMLButtonElement).disabled).toBe(true);
+    vi.mocked(getPerformance).mockResolvedValue(perf({}, { spend: 11581, purchases: 21 }));
+    rerender({ syncing: false });
+    expect(await within(row()).findByText("11,581 元")).toBeTruthy();
+    expect(getPerformance).toHaveBeenCalledTimes(2);
+  });
+
+  it("結案這一期 opens the shared close dialog; 確認結案 closes through closeCampaign and hands the campaign back", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const closed = campaignDetail({ status: "closed", verdict: "達成" });
+    vi.mocked(closeCampaign).mockResolvedValue(closed);
+    const { onCampaignChange } = renderBody(campaignDetail());
+    await within(row()).findByText("10,081 元");
+    await user.click(within(row()).getByRole("button", { name: "結案這一期 →" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/結案後會對照成功條件寫下判定/)).toBeTruthy();
+    expect(within(dialog).getByText(/提前結案會用到目前為止的成效判定/)).toBeTruthy(); // live: the early-close sentence
+    await user.click(within(dialog).getByRole("button", { name: "確認結案" }));
+    expect(closeCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
+    expect(onCampaignChange).toHaveBeenCalledWith(closed);
+  });
+
+  it("closed: the numbers stay, the buttons are gone, the chip says 已結案", async () => {
+    renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(within(row()).getByText("已結案")).toBeTruthy();
+    expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
+    expect(within(row()).queryByRole("button", { name: "重新讀取平台" })).toBeNull();
+    expect(within(row()).queryByText(/結案後這期成績/)).toBeNull();
+  });
+
+  it("imported: no close button, the capability's own sentence; totals come from the native view, never getPerformance", async () => {
+    const view = {
+      entities: [{ id: "e1", platform: "meta", source_account: "act_1", native_kind: "adset", native_id: "n1", native_label: null, name: "新客", parent_native_id: null, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "daily", budget_raw: {}, currency: "TWD", last_success_at: "2026-10-02T13:00:00Z", sync_error: null, creative: {} }],
+      observations: [{ id: "o1", entity_id: "e1", day: "2026-10-01", metric_scope: "adset", attribution_key: "default", currency: "TWD", spend: 500, impressions: 100, clicks: 10, purchases: 2, revenue: 1996, availability: {} }],
+      next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-26", end: "2026-10-02" }, connections: [],
+      sync: { entities: { status: "ok", last_success_at: "2026-10-02T13:00:00Z" }, observations: { status: "ok", last_success_at: "2026-10-02T13:30:00Z" } }, coverage: {},
+    } as unknown as CampaignDetail["external_view"];
+    renderBody(campaignDetail({ origin: "imported", capabilities: { allowed: [], unavailable: { close: "既有平台活動不使用內部結案。" } }, external_view: view }), { origin: "imported" });
+    expect(await within(row()).findByText("500 元")).toBeTruthy();
+    expect(cellText("購買")).toBe("購買 2 筆 平台回報");
+    expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
+    expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
+    expect(within(row()).getByText("既有平台活動不使用內部結案。")).toBeTruthy();
+    expect(within(row()).getByText("最新 10/02 21:30")).toBeTruthy(); // the newest external_view.sync section
+    expect(within(row()).getByText("未判斷").closest("[data-slot=chip]")!.getAttribute("data-grade")).toBe("no_target");
+    expect(getPerformance).not.toHaveBeenCalled();
+  });
+
+  it("the totals read fails on its own: the row keeps its buttons and says why with 重試; the ruler card still renders", async () => {
+    vi.mocked(getPerformance).mockRejectedValueOnce(new Error("伺服器忙碌"));
+    renderBody(campaignDetail());
+    expect(await within(row()).findByText(/整期合計讀不到：伺服器忙碌/)).toBeTruthy();
+    expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
+    fireEvent.click(within(row()).getByRole("button", { name: "重試" }));
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+  });
+
+  it("a draft (DraftPerf's case) or no campaign handed in (the standalone page): no row, no totals read", async () => {
+    renderBody(campaignDetail({ status: "draft" }));
+    expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
+    expect(screen.queryByTestId("period-status-row")).toBeNull();
+    expect(getPerformance).not.toHaveBeenCalled();
+  });
+
+  it("period helpers: days count through today only; a long gap prints as a range", () => {
+    expect(periodDays("2026-09-26", "2026-10-02", "2026-10-03")).toBe(7);
+    expect(periodDays("2026-09-26", "2026-10-31", "2026-10-03")).toBe(8); // still running: through today
+    expect(periodDays("2026-10-05", "2026-10-31", "2026-10-03")).toBe(0); // not started
+    expect(periodDays(null, null, "2026-10-03")).toBeNull();
+    expect(missingDaysChip(["2026-10-02"])).toBe("10/02 沒讀到，不算 0");
+    expect(missingDaysChip(["2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30"])).toBe("09/27–09/30 間 4 天 沒讀到，不算 0");
+  });
+});
+
+describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", () => {
+  const built = [ad("a1", "運動後與忙碌日常", "on_target", 3120, 9, OWN_450, { bound_ad_id: "l1" }), ad("a2", "早晨通勤", "watch", 2760, 6, OWN_450, { bound_ad_id: "l2" })];
+  // A draft campaign: no status row, only the program lines are under test here.
+  const withAds = (ads: AdRow[]) => campaignDetail({ status: "draft" }, ads);
+
+  it("unbuilt local ads: the 缺圖 line names them with 到素材補圖 → the assets tab; the title still counts the platform ads", async () => {
+    vi.mocked(getTriage).mockResolvedValue(triage(built));
+    renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound"), localAd("l5", "週末補眠", "unbound"), localAd("l6", "考前衝刺", "unbound")]));
+    expect(await rulerTitle()).toBe("在投 2 則對照上限 450");
+    expect(screen.getByTestId("unbuilt-line").textContent).toBe("另有 2 則沒建到平台（缺圖），不算在投：週末補眠、考前衝刺");
+    expect(screen.getByRole("link", { name: "到素材補圖 →" }).getAttribute("href")).toBe(`${WS}?tab=assets`);
+    expect(screen.queryByTestId("unmatched-line")).toBeNull();
+  });
+
+  it("platform ads not built here (bound_ad_id null): their own line; an older item without the field is not counted", async () => {
+    vi.mocked(getTriage).mockResolvedValue(triage([...built, ad("a4", "上班日午休（平台手動建）", "wasted", 1600, 0, OWN_450, { bound_ad_id: null }), ad("a5", "舊工廠沒帶欄位", "on_target", 900, 3)]));
+    renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound")]));
+    expect(await rulerTitle()).toBe("在投 4 則對照上限 450");
+    expect(screen.getByTestId("unmatched-line").textContent).toBe("平台上另有 1 則不是這裡建的：上班日午休（平台手動建）");
+    expect(screen.queryByTestId("unbuilt-line")).toBeNull();
+  });
+
+  it("every local ad built and every platform ad matched, or no campaign handed in: no program lines", async () => {
+    vi.mocked(getTriage).mockResolvedValue(triage(built));
+    renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound"), localAd("l2", "早晨通勤", "bound")]));
+    await rulerTitle();
+    expect(screen.queryByTestId("program-lines")).toBeNull();
+    expect(programLines(built, undefined)).toEqual({ unbuilt: [], unmatched: [] });
   });
 });

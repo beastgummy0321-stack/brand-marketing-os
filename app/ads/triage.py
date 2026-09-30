@@ -102,9 +102,17 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     # would (`repository.campaign_objective_family`, the one function that tells a system-built
     # campaign's Chinese label apart from an imported campaign's own platform objective).
     campaign_objective = repository.campaign_objective_family(conn, org_id, brand_id, campaign)
+    # F40-I01: every item (active and closed) names the local `ads_ad` bound to its platform ad
+    # (`bound_ad_id`), so the detail page can tell a platform ad with no bound local ad apart
+    # from a local ad never built without a second read. One query for the campaign's bound
+    # ads, joined here by `native_id` -- never per item.
+    bound_ad_by_native = _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id)
     items = [
-        _classify_ad(dict(ad), campaign["name"], campaign_objective, target, cutoff, coverage,
-                      rows_by_entity.get(ad["id"], []))
+        {
+            **_classify_ad(dict(ad), campaign["name"], campaign_objective, target, cutoff,
+                            coverage, rows_by_entity.get(ad["id"], [])),
+            "bound_ad_id": bound_ad_by_native.get(ad["native_id"]),
+        }
         for ad in active_ads
     ]
     # F27-I01 Contract A: ladder/history attaches to ACTIVE items only, never `_closed_block`.
@@ -126,15 +134,28 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     )
     return {
         "window_days": WINDOW_STEPS[-1], "items": items,
-        "closed": _closed_block(closed_ads, rows_by_entity, cutoff),
+        "closed": _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native),
         "data": data,
+    }
+
+
+def _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id) -> dict:
+    """`{external_id: ads_ad.id}` of this campaign's bound local ads (`local_state='bound'`) --
+    the one read behind every item's `bound_ad_id`."""
+    return {
+        row["external_id"]: row["id"]
+        for row in conn.execute(
+            "SELECT id, external_id FROM ads_ad WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND local_state='bound' AND external_id IS NOT NULL",
+            (org_id, brand_id, campaign_id),
+        ).fetchall()
     }
 
 
 _CLOSED_ITEMS_CAP = 50
 
 
-def _closed_item(entity, entity_rows, cutoff):
+def _closed_item(entity, entity_rows, cutoff, bound_ad_by_native):
     """One closed ad's own last-window numbers (feature Decisions "I01") -- the SAME widest
     (`WINDOW_STEPS[-1]`-day) window `classify()` reports as its own `window_days`, sliced from the
     campaign-level read `classify()` already fetched (never a second query)."""
@@ -147,10 +168,11 @@ def _closed_item(entity, entity_rows, cutoff):
         "native_status": entity.get("native_status"), "thumbnail_url": _thumbnail_url(entity),
         "spend": spend, "cost_per_result": view["cost_per_result"] if view else None,
         "result_label": result_kinds.label(view["result_kind"] if view else None),
+        "bound_ad_id": bound_ad_by_native.get(entity["native_id"]),
     }
 
 
-def _closed_block(closed_ads, rows_by_entity, cutoff):
+def _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native):
     """The `closed` block of `classify()`'s result (feature Decisions "I01") -- `paused`/
     `archived` count the two statuses the frontend groups the strip by; every other closed status
     (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`) falls into `other`, so `paused + archived + other
@@ -167,7 +189,7 @@ def _closed_block(closed_ads, rows_by_entity, cutoff):
         else:
             other += 1
     items = [
-        _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff)
+        _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff, bound_ad_by_native)
         for ad in closed_ads[:_CLOSED_ITEMS_CAP]
     ]
     return {

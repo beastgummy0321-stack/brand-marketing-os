@@ -3,18 +3,24 @@
  * and the verify stage's readback (對上了／不一樣／讀不到 + 我看過了，一樣). */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { confirmAllLaunchFields, type LaunchItem, type LaunchUnreadable, type LaunchView } from "@/lib/adsLaunchApi";
 import {
   confirmLaunchSetting, getLaunchSettings, saveLaunchSettings,
-  type LaunchSettingsValues, type LaunchSettingsView, type SettingsReadback as Readback,
+  type LaunchSettingsValues, type LaunchSettingsView, type SettingsReadback as Readback, type SettingsReadbackField,
 } from "@/lib/adsLaunchSettingsApi";
 import type { HandoffWorkspace } from "@/lib/adsHandoffApi";
 import { LaunchSettingsCard } from "./LaunchSettingsCard";
 import { LaunchSettingsCopy } from "./LaunchSettingsCopy";
+import { PublishVerify } from "./PublishVerify";
 import { SettingsReadback } from "./SettingsReadback";
 
 vi.mock("@/lib/adsLaunchSettingsApi", () => ({
   getLaunchSettings: vi.fn(), saveLaunchSettings: vi.fn(), confirmLaunchSetting: vi.fn(),
+}));
+vi.mock("@/lib/adsLaunchApi", () => ({
+  confirmAllLaunchFields: vi.fn(), confirmLaunchItemField: vi.fn(), fetchLaunchView: vi.fn(), readbackLaunch: vi.fn(),
 }));
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope" }) }));
 
@@ -244,5 +250,83 @@ describe("SettingsReadback（verify stage）", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(onConfirmed).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "我看過了，一樣" })).toBeTruthy();
+  });
+});
+
+describe("PublishVerify 全部標記（drill-7 #18）", () => {
+  const REASON = "替身沒回傳這些欄位";
+  const SETTING_KEYS: SettingsReadbackField["key"][] = ["optimization_event", "bid_strategy", "placement", "age", "gender", "countries", "pixel_id", "utm"];
+  const unreadSettings = (state: "unreadable" | "self_confirmed"): Readback => ({
+    read_at: "2026-10-03T01:12:00Z",
+    fields: SETTING_KEYS.map((key) => ({ key, label: key, expected_label: "核准值", observed_label: null, state, reason: REASON })),
+  });
+  const GROUP_KEYS = ["budget_amount", "start_date", "end_date", "manual_settings.landing_url", "audience"];
+  const AD_KEYS = ["headline", "body", "link"];
+  const unread = (keys: string[], confirmed: boolean): LaunchUnreadable[] => keys.map((key) => ({ key, label: key, confirmed }));
+  function item(id: string, kind: LaunchItem["kind"], name: string, keys: string[], confirmed: boolean): LaunchItem {
+    return {
+      id, kind, name, parent_name: null, fields: keys.map((key) => ({ key, label: key, value: `${name}・${key}` })),
+      state: confirmed || keys.length === 0 ? "verified" : "unknown", mismatches: [], unreadable: unread(keys, confirmed),
+      reason: confirmed || keys.length === 0 ? null : REASON,
+    };
+  }
+  // 27 fields on the prototype: 3 read back as the same, 24 the read could not see (8 settings + 2×5 group + 2×3 ad).
+  const readbackView = (confirmed: boolean): LaunchView => ({
+    step: "verify", version: 1, approved_at: "2026-10-03T00:00:00Z", read_at: "2026-10-03T01:12:00Z", deferred_ads: [],
+    summary: { campaigns: 1, groups: 2, ads: 2, daily_total: 1500, start: "2026-10-03", end: "2026-10-09", cap: 450, slots_ready: 2, slots_total: 2 },
+    items: [
+      item("h1", "campaign", "10 月第一期・讀書與運動", [], confirmed),
+      item("h2", "group", "新客", GROUP_KEYS, confirmed), item("h3", "group", "探索", GROUP_KEYS, confirmed),
+      item("h4", "ad", "運動後與忙碌日常", AD_KEYS, confirmed), item("h5", "ad", "早晨通勤", AD_KEYS, confirmed),
+    ],
+    settings_readback: unreadSettings(confirmed ? "self_confirmed" : "unreadable"),
+  });
+  const meta = { label: "Meta", href: null };
+
+  it("24 項讀不到：黃色列寫數量與後端給的原因；按一次全部標記只打一次 API，每列變成已確認，主要動作變回活動總覽", async () => {
+    const onView = vi.fn();
+    vi.mocked(confirmAllLaunchFields).mockResolvedValue(readbackView(true));
+    const user = userEvent.setup();
+    const { rerender } = render(<MemoryRouter><PublishVerify brandId="brd_1" campaignId="cmp_fall" name="10 月第一期" view={readbackView(false)} platform={meta} onView={onView} /></MemoryRouter>);
+    expect(screen.getByText("24 項還沒核對")).toBeTruthy();
+    expect(screen.getByText(/24 項讀不到，請到 Meta 看一眼/)).toBeTruthy();
+    const bar = screen.getByRole("group", { name: "全部標記" });
+    expect(bar.textContent).toContain(`24 項讀不到（${REASON}）`);
+    expect(screen.getAllByRole("button", { name: "我看過了，一樣" })).toHaveLength(24);
+    expect((screen.getByRole("button", { name: "回活動總覽 →" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("全部核對完才算上架完成")).toBeTruthy();
+
+    await user.click(within(bar).getByRole("button", { name: "我在 Meta 都看過了，全部標記" }));
+    await waitFor(() => expect(onView).toHaveBeenCalledWith(readbackView(true)));
+    expect(confirmAllLaunchFields).toHaveBeenCalledTimes(1);
+    expect(confirmAllLaunchFields).toHaveBeenCalledWith("brd_1", "cmp_fall");
+
+    rerender(<MemoryRouter><PublishVerify brandId="brd_1" campaignId="cmp_fall" name="10 月第一期" view={onView.mock.calls[0][0]} platform={meta} onView={onView} /></MemoryRouter>);
+    expect(screen.getByText("投放設定都核對過了")).toBeTruthy();
+    expect(screen.getByText(/24 項你在 Meta 看過/)).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "全部標記" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "我看過了，一樣" })).toBeNull();
+    expect(screen.queryByText("讀不到")).toBeNull();
+    expect(screen.getAllByText("你確認一樣")).toHaveLength(24);
+    expect(screen.getByRole("link", { name: "回活動總覽 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_fall");
+  });
+
+  it("逐項標記不打 API，只把焦點移到第一個還沒看過的欄位；全部標記失敗時列出原因、列維持讀不到", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll; // jsdom has none
+    vi.mocked(confirmAllLaunchFields).mockRejectedValueOnce(new Error("連線中斷"));
+    const onView = vi.fn();
+    const user = userEvent.setup();
+    render(<MemoryRouter><PublishVerify brandId="brd_1" campaignId="cmp_fall" name="10 月第一期" view={readbackView(false)} platform={meta} onView={onView} /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "逐項標記" }));
+    expect(confirmAllLaunchFields).not.toHaveBeenCalled();
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getAllByRole("button", { name: "我看過了，一樣" })[0]);
+
+    await user.click(screen.getByRole("button", { name: "我在 Meta 都看過了，全部標記" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("連線中斷");
+    expect(onView).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "我看過了，一樣" })).toHaveLength(24);
+    expect(screen.getByRole("group", { name: "全部標記" })).toBeTruthy();
   });
 });

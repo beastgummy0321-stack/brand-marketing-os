@@ -176,7 +176,16 @@ class CreateCampaignRequest(BaseModel):
     product_ids: Any = None
     objective: Any = None
     budget: Any = None
+    # F40-I04: the four values a new campaign states up front (else copied from the previous
+    # campaign); accepted on the picks path and the sentence path alike.
+    platform: Any = None
+    audience_hint: Any = None
+    cap: Any = None
+    landing_url: Any = None
 
+
+LANDING_URL_INVALID_MESSAGE = "落地頁請填完整的 http 或 https 網址，不可包含密碼。"
+LANDING_URL_UNKNOWN_MESSAGE = "落地頁網址要是文字。"
 
 _CREATE_CAMPAIGN_ERRORS = {
     "goal_text_required": (400, "請輸入這次投放的目標句子。"),
@@ -187,6 +196,11 @@ _CREATE_CAMPAIGN_ERRORS = {
     "budget_invalid": (400, "「這個活動最多花」請填大於 0 的數字。"),
     "products_required": (400, "請選一個商品。"),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
+    "platform_unknown": (400, "這個平台不在通路清單裡。"),
+    "audience_hint_unknown": (400, "受眾方向要是文字。"),
+    "target_value_unknown": (400, "上限必須是大於 0 的數字。"),
+    "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
+    "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
 }
 
 
@@ -198,12 +212,13 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     # F30-I04: any structured pick present -> the wizard's create (Contract D); otherwise the
-    # original one-sentence create, unchanged.
-    structured = any(v is not None for v in (body.product_ids, body.objective, body.budget))
-    picks = (
-        {"product_ids": body.product_ids, "objective": body.objective, "budget": body.budget}
-        if structured else None
-    )
+    # original one-sentence create. F40-I04: platform / audience_hint / cap / landing_url ride
+    # along on both paths (`brief.create_draft` decides "structured" from the three picks).
+    picks = {
+        "product_ids": body.product_ids, "objective": body.objective, "budget": body.budget,
+        "platform": body.platform, "audience_hint": body.audience_hint, "cap": body.cap,
+        "landing_url": body.landing_url,
+    }
     try:
         campaign = brief.create_draft(
             web.conn, actor.org_id, brand_id, goal_text=body.goal_text or "",
@@ -229,6 +244,8 @@ class PatchCampaignRequest(BaseModel):
     constraints_json: dict | None = None
     product_ids: list[str] | None = None
     audience_hint: str | None = None
+    # F40-I04 (2b): the brief page edits the campaign-level landing URL (string or null).
+    landing_url: str | None = None
 
 
 RETIRED_GOAL_MESSAGE = "成功條件已改成一個上限（每筆成果成本），請在策略頁設定上限。"
@@ -248,6 +265,8 @@ _PATCH_CAMPAIGN_ERRORS = {
     ),
     "product_unknown": (400, "這個商品不屬於這個品牌。"),
     "audience_hint_unknown": (400, "受眾方向要是文字。"),
+    "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
+    "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
 }
 
 
@@ -265,8 +284,15 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
     if unknown:
         raise web.ApiError(422, "field_unknown", "不認得的欄位：" + "、".join(unknown))
     updates = body.model_dump(exclude_unset=True)
+    # F40-I04 (2b): the campaign-level landing URL lives in `context_json.landing_url` and is
+    # written by `brief.set_landing_url` (the create path's owner of that key), after the
+    # same tenant / imported-campaign refusals `update_campaign` applies to the other fields.
+    edit_landing_url = "landing_url" in updates
+    landing_url = updates.pop("landing_url", None)
     try:
         repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
+        if edit_landing_url:
+            brief.set_landing_url(web.conn, actor.org_id, brand_id, campaign_id, landing_url)
     except ValueError as exc:
         code = str(exc)
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))

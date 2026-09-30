@@ -134,6 +134,20 @@ def confirm_launch_setting(
     )
 
 
+@router.post("/handoff/launch/confirm-all")
+def confirm_all_launch(request: Request, brand_id: str, campaign_id: str):
+    """Drill-7 #18: one request confirms by eye every launch setting and item field the readback
+    still reports as unreadable. Empty body; answers `{confirmed_items, confirmed_settings, view}`
+    with the same view `GET …/launch` returns -- zeros and the view when nothing is unreadable."""
+    return _run(
+        request,
+        brand_id,
+        campaign_id,
+        handoff_check.confirm_all,
+        str(web.require_actor(request).user_id),
+    )
+
+
 @router.get("/launch")
 def launch(request: Request, brand_id: str, campaign_id: str):
     """F30 Contract G: the one launch view the publish page reads."""

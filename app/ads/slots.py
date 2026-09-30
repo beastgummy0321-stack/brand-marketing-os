@@ -123,8 +123,11 @@ def _has_copy(fields) -> bool:
 
 def _slot(
     ad_id, entity_id, name, state, thumbnail_url, replace_task_id=None, *, copy=None,
-    workbench_href=None,
+    workbench_href=None, format_key=None,
 ) -> dict:
+    """One slot. F40-I01: `format_key` is the planned ad's own `ads_ad.format_key` (`None` for an
+    ad without one, and for an imported campaign's platform ad) so the assets tab can say a
+    video-format slot needs a script."""
     return {
         "ad_id": ad_id,
         "entity_id": entity_id,
@@ -135,6 +138,7 @@ def _slot(
         "replace_task_id": replace_task_id,
         "copy": copy,
         "workbench_href": workbench_href,
+        "format_key": format_key,
     }
 
 
@@ -153,7 +157,7 @@ def _planned_slot(
     def slot(state, thumbnail, copy, entity_id=None, replace_task_id=None):
         return _slot(
             ad["id"], entity_id, ad["name"], state, thumbnail, replace_task_id, copy=copy,
-            workbench_href=href,
+            workbench_href=href, format_key=ad.get("format_key"),
         )
 
     if entity is not None:
@@ -250,6 +254,7 @@ def _platform_groups(conn, org, brand, campaign, replace_by_entity) -> list:
                 "ready",
                 triage._thumbnail_url(entity),
                 replace_by_entity.get(entity["id"]),
+                format_key=None,
             )
         )
     ordered = sorted(groups.values(), key=lambda g: g["name"])
@@ -379,7 +384,7 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
                 },
             }
     placement = user_assets.attach_selected(
-        conn, org, brand, campaign_id, body, actor, purpose=ad["name"]
+        conn, org, brand, campaign_id, body, actor, purpose=ad["name"], ad_id=ad["id"]
     )
     conn.execute(
         "UPDATE ads_ad SET slot_placement_id=%s,updated_at=now() WHERE org_id=%s "

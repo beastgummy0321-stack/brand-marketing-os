@@ -5,7 +5,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency } from "@/lib/format";
-import { listCampaigns } from "@/lib/adsApi";
+import { listCampaigns, type CampaignDetail } from "@/lib/adsApi";
 import {
   getQueue, getTriage, type CampaignDataStatus, type CampaignTriage, type TriageItem, type TriageTargetView,
 } from "@/lib/adsTriageApi";
@@ -18,12 +18,16 @@ import { AdRowMenu, useReplaceRequests } from "./AdRowMenu";
 import {
   ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, openCleanup, recordHref, trendNote, type GroupKey,
 } from "./GradeGroups";
+import { PeriodStatusRow } from "./PeriodStatusRow";
 
 /** F28-I10, v10 F29-I13: campaign detail = the campaign's active ads graded against its one cap (prototype v10
  * `tabPerf()`, hash `camp/daily/perf`). Since F30-I07 it is the workspace's perf tab body (the workspace head carries
  * the name, chips and tabs; `/detail` redirects there); the body is the full
  * `TargetRuler` card (+ the grade legend once), the automatic A/B block, the grade groups with each row's 「⋯」 menu
  * (換掉這一則／看紀錄) and, under 不在投的, the closed ads. The cap is read-only here — 去改上限 goes to the strategy tab.
+ * F40-I06 (drill-7 #7 #9 #12): the 「這期狀態列」 (`PeriodStatusRow`) sits on top when the caller hands in the
+ * `CampaignDetail` of a live／ended／closed campaign, and the ruler title's 在投 N counts only the platform ads
+ * (the triage items) — the local ads never built and the platform ads not built here are each their own line.
  * Why numbers are missing is the campaign's one `data.status` (Contract D), never a per-section rule. Every read
  * fails on its own (`useApiRead` + `ReadFailed`): triage (ruler + groups), the brand
  * queue (only the rows' 在清理提議／去處理), the A/B pairs and the material list (only 換掉這一則). */
@@ -65,9 +69,20 @@ export function dataStatusChip(status: CampaignDataStatus | null): string | null
   return status.label.replace(/。$/, "");
 }
 
-function RulerCard({ items, status, strategyHref, onAdClick }: {
-  items: TriageItem[]; status: CampaignDataStatus | null; strategyHref: string; onAdClick: (id: string) => void;
+/** F40-I06 (prototype `#/detail`): the two lines under the ruler title that name what the 在投 count leaves out.
+ * `unbuilt` = local ads never built on the platform (`campaign.groups[].ads` with `local_state !== "bound"`),
+ * `unmatched` = platform ads with no bound local ad (`bound_ad_id === null`; `undefined` is unknown, not unmatched). */
+export function programLines(items: TriageItem[], campaign: CampaignDetail | undefined): { unbuilt: string[]; unmatched: string[] } {
+  const unbuilt = (campaign?.groups ?? []).flatMap((g) => g.ads).filter((a) => a.local_state !== "bound").map((a) => a.name);
+  const unmatched = items.filter((i) => i.bound_ad_id === null).map((i) => i.name ?? "（未命名廣告）");
+  return { unbuilt, unmatched };
+}
+
+function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClick }: {
+  items: TriageItem[]; status: CampaignDataStatus | null; strategyHref: string; assetsHref: string;
+  campaign: CampaignDetail | undefined; onAdClick: (id: string) => void;
 }) {
+  const { unbuilt, unmatched } = programLines(items, campaign);
   const target = items[0].target;
   const cap = capOf(target);
   const breakEven = target.break_even ?? null;
@@ -102,6 +117,21 @@ function RulerCard({ items, status, strategyHref, onAdClick }: {
           </Button>
         </div>
       </div>
+      {(unbuilt.length > 0 || unmatched.length > 0) && (
+        <div className="-mt-1.5 mb-3.5 flex flex-col gap-1 text-[12.5px] text-muted-foreground" data-testid="program-lines">
+          {unbuilt.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <span data-testid="unbuilt-line">另有 {unbuilt.length} 則沒建到平台（缺圖），不算在投：{unbuilt.join("、")}</span>
+              <Button asChild variant="link" size="sm" className="h-auto px-0">
+                <Link to={assetsHref}>到素材補圖 →</Link>
+              </Button>
+            </div>
+          )}
+          {unmatched.length > 0 && (
+            <span data-testid="unmatched-line">平台上另有 {unmatched.length} 則不是這裡建的：{unmatched.join("、")}</span>
+          )}
+        </div>
+      )}
       <TargetRuler ads={ads} cap={cap} breakEven={breakEven} size="full" onAdClick={onAdClick} />
       {beLine && (
         <div className="mt-0.5 text-[11.5px] text-muted-foreground">
@@ -189,12 +219,20 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 /** The workspace perf tab body (prototype v10 `tabPerf()` under `wsHead()`): the ruler card, the A/B block, the grade
  * groups, 不在投的 and the bottom bar. The workspace head (name, chips, rail, tabs) is the caller's. `origin`: an
  * imported campaign has no A/B block (never read). */
-export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared }: {
+export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared, campaign, onCampaignChange, onSync, syncing = false, syncError = "" }: {
   brandId: string; campaignId: string; origin: "internal" | "imported" | undefined;
   /** The caller's own triage read (the standalone page shares it with its header); else the body reads it. */
   triage?: ApiRead<CampaignTriage>;
-  /** A same-page fold placed above the bottom bar (the workspace's 「進階：舊版成效與檢討」). */
+  /** A same-page fold placed above the bottom bar (the workspace's 「進階：每日資料、次要指標與舊版檢討」). */
   advanced?: ReactNode;
+  /** F40-I06: the campaign itself (the workspace's read) — with it the 這期狀態列 renders on top for a
+   * live／ended／closed campaign and the ruler title names the local ads never built. */
+  campaign?: CampaignDetail;
+  onCampaignChange?: (campaign: CampaignDetail) => void;
+  /** The workspace's platform read (the row's 重新讀取平台 and the close dialog's re-read). */
+  onSync?: () => void;
+  syncing?: boolean;
+  syncError?: string;
 }) {
   const [searchParams] = useSearchParams();
   const highlightAdParam = searchParams.get("ad");
@@ -233,6 +271,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
 
   const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
   const strategyHref = `${workspaceHref}?tab=strategy`;
+  const assetsHref = `${workspaceHref}?tab=assets`;
 
   const queueItems = queue.status === "ready" ? queue.data : null;
   const actions = useMemo(
@@ -245,9 +284,15 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
   const status = triage.status === "ready" ? triage.data.data?.status ?? null : null;
   const active = items !== null && items.length > 0 ? items : null;
   const breakEven = active?.[0].target.break_even ?? null;
+  const lastSuccessAt = triage.status === "ready" ? triage.data.data?.sync.last_success_at ?? null : null;
+  const withRow = campaign && onCampaignChange && (campaign.status === "live" || campaign.status === "ended" || campaign.status === "closed");
 
   return (
     <div className="flex flex-col gap-4">
+      {withRow && (
+        <PeriodStatusRow brandId={brandId} campaign={campaign} lastSuccessAt={lastSuccessAt} onCampaignChange={onCampaignChange}
+          onSync={onSync} syncing={syncing} syncError={syncError} />
+      )}
       {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
       {triage.status === "error" && (
         <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} />
@@ -265,6 +310,8 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
             items={active}
             status={status}
             strategyHref={strategyHref}
+            assetsHref={assetsHref}
+            campaign={campaign}
             onAdClick={(id) => { const a = actions.get(id); if (a) navigate(a.href); }}
           />
           {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
