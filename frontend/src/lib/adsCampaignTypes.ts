@@ -6,8 +6,9 @@
 
 /** F04-I11：`context_json.field_sources` 的六格——`"user"`＝你說的，`"system"`＝行銷駕駛艙
  * 沒聽到就幫你補的（ARCHITECTURE.md §6.1 第 11 條）。F40-I04：`"copied"`＝建立時沒填、從上一期
- * （最新一個非草稿活動）複製來的。 */
-export type FieldSource = "user" | "system" | "copied";
+ * （最新一個非草稿活動）複製來的（F43-I04 起新活動不再複製，舊活動仍讀得到）。F43-I04：`"sell_way"`＝
+從選的賣法（與它的商品）帶入的（受眾、上限、落地頁）。 */
+export type FieldSource = "user" | "system" | "copied" | "sell_way";
 
 export interface CampaignFieldSources {
   product: FieldSource;
@@ -21,8 +22,8 @@ export interface CampaignFieldSources {
   landing_url?: FieldSource;
 }
 
-/** F40-I04：建立活動時可先說的四個值（`POST /campaigns` 兩條路徑都收）；沒帶的由後端從上一期複製
- * （`app/ads/brief.py::_copy_from_previous`），所以畫面清空的格子不用送 `null`，省略即可。 */
+/** F40-I04：建立活動時可先說的四個值（`POST /campaigns` 兩條路徑都收）。F43-I04：結構化路徑沒帶的由後端從
+ * 品牌與選的賣法帶入（`app/ads/brief.py::_sell_way_defaults`），所以畫面沒改的格子不用送，省略即可。 */
 export interface CampaignCreateExtras {
   /** 通路 key（`channels.py`），例如 `meta`。 */
   platform?: string;
@@ -39,6 +40,8 @@ export interface CampaignContextJson extends Record<string, unknown> {
   product_ids?: string[];
   audience_hint?: string | null;
   landing_url?: string | null;
+  /** F43-I04：這期投的顧客群（賣法的商品的 `product_customer_group` id）；建立時預設全部群。舊活動沒有這個鍵。 */
+  customer_group_ids?: string[];
   copied_from?: CampaignCopiedFrom;
   field_sources?: Partial<CampaignFieldSources>;
 }

@@ -258,8 +258,10 @@ export interface PatchCampaignInput {
   end_date?: string;
   constraints_json?: Record<string, unknown>;
   product_ids?: string[];
-  /** 受眾方向；空字串清掉（`adsWizardApi.patchAudienceHint` 同一個鍵）。 */
+  /** 受眾方向（舊活動的自由文字）；空字串清掉。 */
   audience_hint?: string | null;
+  /** F43-I18：這期投的顧客群（這個賣法的群）；`[]`＝全部群。換賣法而沒帶這個鍵時，後端重設為新賣法的全部群。 */
+  customer_group_ids?: string[];
   /** F40-I04 (2b)：活動層落地頁 `context_json.landing_url`；`null`／空字串清掉。 */
   landing_url?: string | null;
 }
