@@ -28,3 +28,27 @@ class StudioProgressTest(_WorkbenchPackApiTestBase):
         self.assertEqual(
             detail["generation"], {"status": "failed", "error": "provider unavailable"}
         )
+
+
+class SiblingSubtitleTest(_WorkbenchPackApiTestBase):
+    def test_sibling_subtitle_is_the_angle_label_with_the_key_as_fallback(self):
+        """F41-I02 (drill-8 #11): the set sidebar prints the angle's label, never its key; a
+        key with no vocabulary row still prints itself. The vocabulary row is created through
+        the brand-library HTTP door (the table belongs to another module)."""
+        created = self.client.post(
+            f"/api/schedule/brands/{self.brand_id}/coordinates",
+            json={"dimension": "angle", "label": "權威背書", "category": ""},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        angle_key = created.json()["key"]
+        pack_id = self._submit_pack([
+            self._one_set("a", {"copy": 1}, coordinates={"angle": angle_key}),
+            self._one_set("b", {"copy": 1}, coordinates={"angle": "no_such_key"}),
+        ])
+        brief_id = self._briefs(pack_id)[0]["id"]
+
+        resp = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{brief_id}")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        angles = [sibling["angle"] for sibling in resp.json()["set"]["siblings"]]
+        self.assertEqual(angles, ["權威背書", "no_such_key"])

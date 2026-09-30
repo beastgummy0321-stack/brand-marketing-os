@@ -1430,13 +1430,20 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         " ORDER BY created_at",
         (org_id, brand_id, brief["pack_id"]),
     ).fetchall()
+    # F41-I02 (drill-8 #11): the sibling subtitle is the angle's label, the key only as fallback.
+    angle_labels = {
+        row["key"]: row["label"]
+        for row in list_coordinate_vocabulary(conn, org_id, brand_id)
+        if row["dimension"] == "angle"
+    }
     siblings = []
     for r in sibling_rows:
         r = dict(r)
         sib_versions = _versions_by_part(conn, org_id, brand_id, r["id"])
+        angle = (r["coordinates_snapshot_json"] or {}).get("angle")
         siblings.append({
             "id": r["id"], "name": r["name"],
-            "angle": (r["coordinates_snapshot_json"] or {}).get("angle"),
+            "angle": angle_labels.get(angle, angle) if isinstance(angle, str) else angle,
             "status": set_state(r["required_outputs_json"] or {}, sib_versions),
         })
     required_parts = [part for part in _PART_ORDER if part in required_outputs]

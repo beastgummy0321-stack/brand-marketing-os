@@ -8,12 +8,17 @@ Two writers, no model call:
 - `write_coordinate_learnings` runs at closeout: every ad the one ruler grades
   (`period_grades.grade_period` over the campaign window -- the month review's ruler and sample
   gate, never a second grading rule) gets one `source_track="coordinate"` learning whose
-  `applicability_scope` carries the grade and the ad's seven coordinate keys:
-  `coord；grade=<grade>；audience=<k>；pain=<k>；angle=<k>；hook=<k>；proof=<k>；offer=<k>；format=<k>`
-  (a missing key reads `none`). Ungraded ads (資料不足／剛開始／未判斷) write nothing.
+  `applicability_scope` carries the grade, the ad's cost per result and cap, and its seven
+  coordinate keys:
+  `coord；grade=<g>；cpr=<n>；cap=<n>；audience=<k>；pain=<k>；angle=<k>；hook=<k>；proof=<k>；offer=<k>；format=<k>`
+  (a missing key or number reads `none`; rows written before F41-I02 have no `cpr`/`cap` and
+  read back as `None`). The owner-facing `learning_text` names each coordinate by its label
+  (drill-8 #11), never by key. Ungraded ads (資料不足／剛開始／未判斷) write nothing.
   `source_cycle_id = <campaign_id>:<ad_id>` keeps it idempotent per ad.
 - `scoreboard` / `scoreboard_section` read those rows back into per-dimension tallies plus the
-  last closed campaign's 划算 and 太貴／沒賣出 ads with their coordinates. The bias toward reusing a
+  last closed campaign's 划算 and 太貴／沒賣出 ads with their coordinates (prompt lines print
+  `label（dim=key）`); `learning_rows` turns those same ads into the labelled rows the strategy
+  basis shows (「用到的學習」). The bias toward reusing a
   划算 combination is a prompt rule in the department files, not a gate here (CLAUDE.md
   「程式整理，LLM 判斷」).
 
@@ -50,16 +55,76 @@ def _keys(ad: dict) -> dict:
     return {d: ad.get(f"{d}_key") or _MISSING_KEY for d in DIMENSIONS}
 
 
+# The dimension names the owner reads (drill-8 #11: no English codes on screen or in stored text).
+DIMENSION_LABELS = {
+    "audience": "受眾", "pain": "痛點", "angle": "角度", "hook": "標題", "proof": "證據",
+    "offer": "優惠", "format": "格式",
+}
+_UNSET_LABEL = "未設定"
+
+
+def _vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+    """`{(dimension, key): label}` from the brand vocabulary; `_label` falls back to the key."""
+    return {
+        (row["dimension"], row["key"]): row["label"]
+        for row in ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
+    }
+
+
+def _label(labels: dict, dim: str, key: str) -> str:
+    return labels.get((dim, key), key)
+
+
 def _keys_text(keys: dict, joiner: str) -> str:
     return joiner.join(f"{d}={keys[d]}" for d in DIMENSIONS)
 
 
-def _scope(grade: str, keys: dict) -> str:
-    return f"{_SCOPE_PREFIX}；grade={grade}；{_keys_text(keys, '；')}"
+def _labels_text(keys: dict, labels: dict) -> str:
+    """Owner-facing: 「受眾：陌生・知道問題、痛點：太麻煩…」; `none` coordinates are left out."""
+    parts = [
+        f"{DIMENSION_LABELS[d]}：{_label(labels, d, keys[d])}"
+        for d in DIMENSIONS if keys[d] != _MISSING_KEY
+    ]
+    return "、".join(parts) if parts else "座標未設定"
 
 
-def _parse_scope(scope: str) -> tuple[str, dict] | None:
-    """Inverse of `_scope`: `(grade, {dimension: key})`, or `None` for a row that is not ours."""
+def _prompt_coordinates(keys: dict, labels: dict) -> str:
+    """Planner-facing: `label（dim=key）` -- the model reads the words and can still reuse the
+    key verbatim."""
+    return "、".join(
+        f"{_UNSET_LABEL if keys[d] == _MISSING_KEY else _label(labels, d, keys[d])}"
+        f"（{d}={keys[d]}）"
+        for d in DIMENSIONS
+    )
+
+
+def _money(value) -> str:
+    return "—" if value is None else str(ads_learning._number(float(value)))  # noqa: SLF001
+
+
+def _scope_number(value) -> str:
+    return _MISSING_KEY if value is None else _money(value)
+
+
+def _parse_number(value: str | None):
+    if value is None or value == _MISSING_KEY:
+        return None
+    try:
+        return ads_learning._number(float(value))  # noqa: SLF001
+    except ValueError:
+        return None
+
+
+def _scope(grade: str, keys: dict, cost_per_result=None, cap=None) -> str:
+    return (
+        f"{_SCOPE_PREFIX}；grade={grade}；cpr={_scope_number(cost_per_result)}"
+        f"；cap={_scope_number(cap)}；{_keys_text(keys, '；')}"
+    )
+
+
+def _parse_scope(scope: str) -> dict | None:
+    """Inverse of `_scope`: `{grade, keys, cost_per_result, cap}`, or `None` for a row that is
+    not ours. A row without `cpr`/`cap` (written before F41-I02) reads them as `None`."""
     parts = scope.split("；")
     if not parts or parts[0] != _SCOPE_PREFIX:
         return None
@@ -71,17 +136,18 @@ def _parse_scope(scope: str) -> tuple[str, dict] | None:
     grade = fields.get("grade")
     if grade not in _GRADED:
         return None
-    return grade, {d: fields.get(d, _MISSING_KEY) for d in DIMENSIONS}
+    return {
+        "grade": grade,
+        "keys": {d: fields.get(d, _MISSING_KEY) for d in DIMENSIONS},
+        "cost_per_result": _parse_number(fields.get("cpr")),
+        "cap": _parse_number(fields.get("cap")),
+    }
 
 
-def _money(value) -> str:
-    return "—" if value is None else str(ads_learning._number(float(value)))  # noqa: SLF001
-
-
-def _text(ad_name: str, row: dict, keys: dict) -> str:
+def _text(ad_name: str, row: dict, keys: dict, labels: dict) -> str:
     return (
         f"「{ad_name}」每筆 {_money(row['cost_per_result'])}（上限 {_money(row['cap'])}）"
-        f"＝{_GRADE_LABELS[row['grade']]}；{_keys_text(keys, '、')}"
+        f"＝{_GRADE_LABELS[row['grade']]}；{_labels_text(keys, labels)}"
     )
 
 
@@ -128,6 +194,7 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
     ad_by_native = {ad["external_id"]: ad for ad in ads if ad.get("external_id")}
     existing = {row["source_cycle_id"] for row in _rows(conn, brand_id)}
     needs_revalidation = ads_learning._needs_revalidation(conn, brand_id, detail)  # noqa: SLF001
+    labels = _vocabulary(conn, org_id, brand_id)
 
     written: list[dict] = []
     for row in graded:
@@ -140,8 +207,11 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
         keys = _keys(ad)
         written.append(bi_repo.record_learning(
             cast(Conn, conn), brand_id, actor=actor,
-            learning_text=_text(ad.get("name") or row.get("name") or ad["id"], row, keys),
-            applicability_scope=_scope(row["grade"], keys), confidence="observed",
+            learning_text=_text(ad.get("name") or row.get("name") or ad["id"], row, keys, labels),
+            applicability_scope=_scope(
+                row["grade"], keys, row.get("cost_per_result"), row.get("cap"),
+            ),
+            confidence="observed",
             sample_size="高" if row["grade"] in ("on_target", "watch", "over") else "低",
             source_cycle_id=cycle_id, source_track=SOURCE_TRACK,
             needs_revalidation=needs_revalidation,
@@ -170,9 +240,7 @@ def scoreboard(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
         cycle = _split_cycle(row.get("source_cycle_id"))
         if found is None or cycle is None:
             continue
-        grade, keys = found
-        parsed.append({"id": row["id"], "grade": grade, "keys": keys,
-                       "campaign_id": cycle[0], "ad_id": cycle[1]})
+        parsed.append({"id": row["id"], **found, "campaign_id": cycle[0], "ad_id": cycle[1]})
 
     tally: dict = {}
     for item in parsed:
@@ -207,55 +275,80 @@ def scoreboard(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
                 ).fetchall()
             }
             items.sort(key=lambda item: (names.get(item["ad_id"]) or "", item["ad_id"]))
+
+            def _ad(item: dict) -> dict:
+                return {
+                    "name": names.get(item["ad_id"]) or item["ad_id"],
+                    "grade": item["grade"], "grade_label": _GRADE_LABELS[item["grade"]],
+                    "cost_per_result": item["cost_per_result"], "cap": item["cap"],
+                    "coordinates": dict(item["keys"]),
+                }
+
             last = {
                 "campaign_name": campaign["name"],
-                "on_target": [
-                    {"name": names.get(item["ad_id"]) or item["ad_id"],
-                     "coordinates": dict(item["keys"])}
-                    for item in items if item["grade"] == "on_target"
-                ],
-                "bad": [
-                    {"name": names.get(item["ad_id"]) or item["ad_id"],
-                     "grade_label": _GRADE_LABELS[item["grade"]],
-                     "coordinates": dict(item["keys"])}
-                    for item in items if item["grade"] in _BAD
-                ],
+                "on_target": [_ad(item) for item in items if item["grade"] == "on_target"],
+                "bad": [_ad(item) for item in items if item["grade"] in _BAD],
             }
     return {"tally": tally, "last": last, "learning_ids": [item["id"] for item in parsed]}
+
+
+def learning_rows(conn: _AnyConn, org_id: str, brand_id: str, board: dict) -> list[dict]:
+    """The strategy basis's 「用到的學習」 rows (F41-I02): the last closed campaign's ads the
+    prompt showed (`board["last"]`: 划算 first, then 太貴／沒賣出), each with its grade, cost per
+    result and coordinates by label (`none` coordinates omitted). Numbers come from the stored
+    scope, never recomputed from outcome rows; an old row without them carries `None`."""
+    last = board.get("last")
+    if last is None:
+        return []
+    labels = _vocabulary(conn, org_id, brand_id)
+    return [
+        {
+            "grade": ad["grade"], "grade_label": ad["grade_label"],
+            "cost_per_result": ad["cost_per_result"], "ad_name": ad["name"],
+            "campaign_name": last["campaign_name"],
+            "coordinates": [
+                {"dimension": d, "dimension_label": DIMENSION_LABELS[d],
+                 "label": _label(labels, d, ad["coordinates"][d])}
+                for d in DIMENSIONS if ad["coordinates"][d] != _MISSING_KEY
+            ],
+        }
+        for ad in [*last["on_target"], *last["bad"]]
+    ]
 
 
 EMPTY_SECTION = "【座標成績表】（還沒有結案過的廣告，沒有成績表）"
 _HEADER = "【座標成績表（已結案活動，程式統計；划算＝每筆成本在上限內）】"
 
 
-def scoreboard_section(conn: _AnyConn, org_id: str, brand_id: str) -> tuple[str, list[str]]:
+def scoreboard_section(conn: _AnyConn, org_id: str, brand_id: str, *,
+                       board: dict | None = None) -> tuple[str, list[str]]:
     """Prompt text for the strategy and delivery-plan prompts, plus the learning ids it was built
     from. One tally line per dimension/key with at least one graded row (label through the brand
     vocabulary, key as the fallback), then the last closed campaign's 划算 ads and its 太貴／沒賣出
-    ads, each with its seven coordinate keys so a combination can be reused verbatim."""
-    board = scoreboard(conn, org_id, brand_id)
+    ads, each coordinate as `label（dim=key）` so the model reads the words and a combination can
+    still be reused verbatim. `board` = an already-read `scoreboard()` (strategy reuses it for
+    its basis rows), read here when omitted."""
+    if board is None:
+        board = scoreboard(conn, org_id, brand_id)
     if not board["learning_ids"]:
         return EMPTY_SECTION, []
-    labels = {
-        (row["dimension"], row["key"]): row["label"]
-        for row in ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
-    }
+    labels = _vocabulary(conn, org_id, brand_id)
     lines = [_HEADER]
     for dim in DIMENSIONS:
         for key in sorted(board["tally"].get(dim, {})):
             counts = board["tally"][dim][key]
             tallies = "、".join(f"{_GRADE_LABELS[g]} {counts[g]}" for g in _GRADED)
-            lines.append(f"- {dim}｜{key}｜{labels.get((dim, key), key)}：{tallies}")
+            lines.append(f"- {dim}｜{key}｜{_label(labels, dim, key)}：{tallies}")
     last = board["last"]
     if last is not None:
         for ad in last["on_target"]:
             lines.append(
                 f"上一期「{last['campaign_name']}」划算的：「{ad['name']}」"
-                f"（{_keys_text(ad['coordinates'], '、')}）"
+                f"（{_prompt_coordinates(ad['coordinates'], labels)}）"
             )
         for ad in last["bad"]:
             lines.append(
                 f"上一期太貴／沒賣出的：「{ad['name']}」{ad['grade_label']}"
-                f"（{_keys_text(ad['coordinates'], '、')}）"
+                f"（{_prompt_coordinates(ad['coordinates'], labels)}）"
             )
     return "\n".join(lines), board["learning_ids"]

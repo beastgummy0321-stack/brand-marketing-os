@@ -578,8 +578,9 @@ class ProviderFailureTest(StrategyTestBase):
 
 
 class PromptCapsTest(StrategyTestBase):
-    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、25 條學習只送前 10 條；
-    `basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。"""
+    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、12 個商品各一條學習只送前
+    10 條；`basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。F41-I02 之後每個
+    商品只留最新一條，所以上限要靠 12 個不同商品的學習來驗。"""
 
     def test_facts_and_learnings_are_capped_and_basis_matches_the_prompt(self):
         for i in range(45):
@@ -587,10 +588,12 @@ class PromptCapsTest(StrategyTestBase):
                 web.conn, self.brand_id, actor=ACTOR, fact_type="other",
                 label=f"事實{i}", value=f"值{i}", status="confirmed", confirmed_by=ACTOR,
             )
-        for i in range(25):
+        for i in range(12):
+            product = bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i}", actor=ACTOR)
             bi_repo.record_learning(
                 web.conn, self.brand_id, actor=ACTOR, learning_text=f"學習{i}",
                 applicability_scope="brand", confidence="likely", sample_size="1 個活動",
+                product_id=product["id"],
             )
         self.campaign = self._create_campaign()
         provider = _fake(_VALID_REPLY)
@@ -892,6 +895,11 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
     學習列——這裡直接用公開的 `record_learning` 種一列。"""
 
     def _seed_scoreboard(self) -> dict:
+        web.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'audience','aud_last','陌生・知道問題')",
+            (coredb.new_id("crd"), self.org_id, self.brand_id),
+        )
         closed = self._create_campaign(
             name="上一期 Campaign", start_date="2026-09-01", end_date="2026-09-10",
             status="closed",
@@ -928,9 +936,13 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
         prompt, detail = self._generate_and_capture()
 
         self.assertIn(_SCOREBOARD_HEADER, prompt)
-        self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
         self.assertIn(
-            "上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt,
+            "- audience｜aud_last｜陌生・知道問題：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt,
+        )
+        self.assertIn(
+            "上一期「上一期 Campaign」划算的：「上一期-免運」"
+            "（陌生・知道問題（audience=aud_last）、",
+            prompt,
         )
         # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【座標成績表】，取最後一次。
         self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_SCOREBOARD_HEADER))
@@ -940,6 +952,22 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
         self.assertIn(learning["id"], basis["knowledge_item_ids"])
         # 成績表列不是句子學習：`basis.learnings` 仍然只讀 `ads` 軌。
         self.assertEqual(basis["learnings"], [])
+        # F41-I02：「用到的學習」的座標列＝prompt 列出的那幾則，座標用中文名稱。
+        (row,) = basis["coordinate_learnings"]
+        self.assertEqual(
+            {k: row[k] for k in ("grade", "grade_label", "cost_per_result", "ad_name",
+                                 "campaign_name")},
+            {"grade": "on_target", "grade_label": "划算", "cost_per_result": None,
+             "ad_name": "上一期-免運", "campaign_name": "上一期 Campaign"},
+        )
+        self.assertEqual(
+            row["coordinates"][0],
+            {"dimension": "audience", "dimension_label": "受眾", "label": "陌生・知道問題"},
+        )
+        self.assertIn(
+            {"dimension": "pain", "dimension_label": "痛點", "label": "pain_last"},
+            row["coordinates"],
+        )
 
     def test_empty_brand_says_there_is_no_scoreboard(self):
         prompt, detail = self._generate_and_capture()
@@ -947,6 +975,52 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
         self.assertIn(_SCOREBOARD_EMPTY, prompt)
         self.assertNotIn(_SCOREBOARD_HEADER, prompt)
         self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_scoreboard"], [])
+        self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_learnings"], [])
+
+
+class OneCurrentLearningPerProductTest(StrategyTestBase):
+    """F41-I02 (drill-8 #11): two closed periods' verdicts for the same product -> only the newer
+    reaches the prompt and `basis.learnings`; a NULL product is one brand-level row. Event
+    learnings (`ads;` scope: pause／A/B／month settle) are separate findings and all stay."""
+
+    def test_only_the_newest_verdict_per_product_reaches_prompt_and_basis(self):
+        now = coredb.now_utc()
+        for text, scope, product_id, days_ago in (
+            ("舊一期：夜跑背心看不出", "aud_old、offer_old", self.product["id"], 30),
+            ("新一期：夜跑背心划算", "aud_new、offer_new", self.product["id"], 1),
+            ("舊一期：品牌整體太貴", "brand", None, 40),
+            ("新一期：品牌整體划算", "brand", None, 2),
+            ("「保溫」對這群受眾有效", "ads;campaign=x", None, 3),
+            ("「保冷」對這群受眾無效", "ads;campaign=x", None, 50),
+        ):
+            bi_repo.record_learning(
+                web.conn, self.brand_id, actor=ACTOR, learning_text=text,
+                applicability_scope=scope, confidence="observed",
+                sample_size="1 個活動", product_id=product_id,
+                learned_at=now - timedelta(days=days_ago),
+            )
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+
+        detail = self._generate()
+
+        sent_prompt = provider.calls[0]["messages"][0]["content"]
+        self.assertIn("新一期：夜跑背心划算", sent_prompt)
+        self.assertIn("新一期：品牌整體划算", sent_prompt)
+        self.assertNotIn("舊一期：夜跑背心看不出", sent_prompt)
+        self.assertNotIn("舊一期：品牌整體太貴", sent_prompt)
+        texts = [row["text"] for row in detail["budget_basis_json"]["basis"]["learnings"]]
+        self.assertEqual(texts, [
+            "新一期：夜跑背心划算", "新一期：品牌整體划算", "「保溫」對這群受眾有效",
+            "「保冷」對這群受眾無效",
+        ])
+
+
+class DepartmentNamesCoordinatesByLabelTest(unittest.TestCase):
+    def test_the_department_file_forbids_coordinate_keys_in_owner_sentences(self):
+        text = strategy.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertIn("座標一律用中文名稱，不寫英文代碼", text)
 
 
 class BudgetCapSelectionTest(StrategyTestBase):

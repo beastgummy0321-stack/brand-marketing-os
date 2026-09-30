@@ -47,6 +47,8 @@ _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
 # 這段的上限跟 `list_learnings` 的上限一樣是模組層常數：不是可調規則卡（那是給使用者調的
 # 門檻），這裡只是「prompt 別灌爆」的成本上限。
 _MAX_LEARNINGS = 10
+# 讀幾筆來挑「每個商品最新一條」——同一個上限的讀取量，不是 prompt 的條數。
+_LEARNING_SCAN = 200
 
 STRATEGY_FAILED_MESSAGE = "AI 沒能整理出一個可信的策略，請再試一次。"
 
@@ -182,10 +184,35 @@ def _assumption_note(prices_basis: list[dict]) -> str | None:
     return f"用的是假設：{'；'.join(parts)}——之後用真實數字取代。"
 
 
+# 事件學習（暫停確認、A/B、月結算：`ads_learnings.py`／`settle.py`）的 scope 都以這個前綴開頭，
+# 每一條是一個獨立發現；其餘的 ads 軌列是 `learning.write_learning` 寫的「這一期結案判決」句子。
+_EVENT_SCOPE_PREFIX = "ads;"
+
+
+def _newest_per_product(rows: list[dict]) -> list[dict]:
+    """F41-I02 (drill-8 #11): one current campaign verdict per `product_id` -- `rows` come newest
+    first (`learned_at DESC`), so the first verdict of each product wins; a NULL product is one
+    brand-level row. An older period's verdict that contradicts the newer one never reaches the
+    model. Event learnings (`ads;` scope: each one its own finding, never a period verdict) pass
+    through untouched; the order stays newest first."""
+    seen: set = set()
+    kept = []
+    for row in rows:
+        if not (row.get("applicability_scope") or "").startswith(_EVENT_SCOPE_PREFIX):
+            if row.get("product_id") in seen:
+                continue
+            seen.add(row.get("product_id"))
+        kept.append(row)
+    return kept
+
+
 def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     """`list_learnings(conn, brand_id)`——不帶 `product_id`：那是等值過濾，帶了會把幾乎所有
-    品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。"""
-    learnings = bi_repo.list_learnings(conn, brand_id, limit=_MAX_LEARNINGS, source_track="ads")
+    品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。F41-I02：每個商品只留最新一條
+    （`_newest_per_product`），prompt 與 `basis.learnings` 用同一份縮減後的清單。"""
+    learnings = _newest_per_product(
+        bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads"),
+    )[:_MAX_LEARNINGS]
     if not learnings:
         return "【過去的學習】（這個品牌還沒有任何學習記錄）", []
     lines = [
@@ -413,7 +440,12 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
     # F39-I02：程式統計的【座標成績表】接在學習句子之後——上一期哪則廣告划算、哪則太貴，
     # 讓分配的 `rationale` 點得出名字；空表就寫「還沒有成績表」，規則不生效。
-    board_text, board_ids = coordinate_learning.scoreboard_section(conn, org_id, brand_id)
+    # F41-I02：同一份成績表同時產生 prompt 文字與「用到的學習」的座標列（basis 就是模型看過的）。
+    board = coordinate_learning.scoreboard(conn, org_id, brand_id)
+    board_text, board_ids = coordinate_learning.scoreboard_section(
+        conn, org_id, brand_id, board=board,
+    )
+    coordinate_rows = coordinate_learning.learning_rows(conn, org_id, brand_id, board)
 
     brand = bi_repo.get_brand(conn, brand_id)
     assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
@@ -494,7 +526,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         "knowledge_item_ids": knowledge_item_ids, "llm_task_id": task_row["id"],
         "input_context_hash": task_row["input_context_hash"],
         "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
-        "coordinate_scoreboard": board_ids,
+        "coordinate_scoreboard": board_ids, "coordinate_learnings": coordinate_rows,
         "estimated_fields": estimated_fields,
     }
     assumption_note = _assumption_note(prices_basis)

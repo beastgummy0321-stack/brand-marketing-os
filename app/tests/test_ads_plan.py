@@ -319,7 +319,8 @@ class CoordinateScoreboardInDeliveryPlanPromptTest(PlanTestBase):
         self.assertIn(_SCOREBOARD_HEADER, prompt)
         self.assertIn("- audience｜aud_last｜aud_last：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt)
         self.assertIn(
-            "上一期「上一期 Campaign」划算的：「上一期-免運」（audience=aud_last、", prompt,
+            "上一期「上一期 Campaign」划算的：「上一期-免運」（aud_last（audience=aud_last）、",
+            prompt,
         )
         # 任務檔前面也提到【投放期間內的行事曆】與【座標成績表】，取最後一次出現的才是段落本身。
         calendar_at = prompt.rindex("【投放期間內的行事曆】")
