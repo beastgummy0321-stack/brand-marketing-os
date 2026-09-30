@@ -13,7 +13,6 @@ import { ClaimsTab } from "./tabs/ClaimsTab";
 import { CoordinatesTab } from "./tabs/CoordinatesTab";
 import { CustomerVoiceTab } from "./tabs/CustomerVoiceTab";
 import { FactsTab } from "./tabs/FactsTab";
-import { ResearchReportsTab } from "./tabs/ResearchReportsTab";
 import { RulesTab } from "./tabs/RulesTab";
 
 type TabKey =
@@ -23,7 +22,6 @@ type TabKey =
   | "assets"
   | "channels"
   | "customer-voice"
-  | "research-reports"
   | "coordinates";
 
 const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number }[] = [
@@ -33,11 +31,10 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
   { key: "assets", label: "官方素材", count: (d) => d.assets.length },
   { key: "channels", label: "自有渠道", count: (d) => d.channels.length },
   { key: "customer-voice", label: "人物誌與顧客原話", count: (d) => d.customer_voices.length },
-  { key: "research-reports", label: "調研報告" },
   { key: "coordinates", label: "創意座標" },
 ];
 
-const ADVANCED_TAB_KEYS: TabKey[] = ["research-reports", "coordinates"];
+const ADVANCED_TAB_KEYS: TabKey[] = ["coordinates"];
 
 type LoadState =
   | { status: "loading" }
@@ -159,7 +156,6 @@ export function LibraryPage({ brandId }: { brandId: string }) {
         {activeTab === "customer-voice" && (
           <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
         )}
-        {activeTab === "research-reports" && <ResearchReportsTab brandId={brandId} />}
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
 
         </div>

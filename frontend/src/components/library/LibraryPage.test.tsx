@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +13,6 @@ vi.mock("./tabs/ClaimsTab", () => ({ ClaimsTab: () => <p>宣稱內容</p> }));
 vi.mock("./tabs/AssetsTab", () => ({ AssetsTab: () => <p>官方素材內容</p> }));
 vi.mock("./tabs/ChannelsTab", () => ({ ChannelsTab: () => <p>自有渠道內容</p> }));
 vi.mock("./tabs/CustomerVoiceTab", () => ({ CustomerVoiceTab: () => <p>顧客原話內容</p> }));
-vi.mock("./tabs/ResearchReportsTab", () => ({ ResearchReportsTab: () => <p>調研報告內容</p> }));
 vi.mock("./tabs/CoordinatesTab", () => ({ CoordinatesTab: () => <p>創意座標內容</p> }));
 
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
@@ -42,11 +40,11 @@ describe("LibraryPage 一般與進階內容", () => {
     expect(screen.getByText("進階內容").closest("details")?.open).toBe(false);
   });
 
-  it("既有創意座標深連結會打開同頁進階區，也能切到另一個進階分類", async () => {
+  it("既有創意座標深連結會打開同頁進階區", async () => {
     view("/brands/brand-1/library?tab=coordinates");
     expect(await screen.findByText("創意座標內容")).toBeTruthy();
     expect(screen.getByText("進階內容").closest("details")?.open).toBe(true);
-    await userEvent.click(screen.getByRole("button", { name: "調研報告" }));
-    expect(await screen.findByText("調研報告內容")).toBeTruthy();
+    // F42-I14: the 調研報告 tab left with the retired research → paste stage.
+    expect(screen.queryByRole("button", { name: "調研報告" })).toBeNull();
   });
 });
