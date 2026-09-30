@@ -140,7 +140,9 @@ export function ProductCard(props: ProductCardProps) {
   const size = compact ? 30 : 36;
   const thumbs = (
     <span className="flex">
-      {(b.thumbnails.length > 0 ? b.thumbnails : [null]).map((url, i) => <Thumb key={`${i}-${url}`} url={url} size={size} />)}
+      {(b.thumbnails.length > 0 ? b.thumbnails : b.components.map(() => null)).slice(0, 3).map((url, i) => (
+        <Thumb key={`${i}-${url}`} url={url} size={size} />
+      ))}
     </span>
   );
   const line = compact

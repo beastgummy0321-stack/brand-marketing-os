@@ -112,7 +112,7 @@ export function ProductsPage({ brandId }: { brandId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex max-w-[1180px] flex-col gap-4">
       <div className="mb-1 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-[26px] leading-tight font-[650] tracking-[-0.025em]">商品</h1>
