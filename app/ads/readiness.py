@@ -6,7 +6,8 @@ F42-I02: the rows are the brand rows the brand-onboarding completion screen (`#/
 its order -- 品牌是誰 (`identity`)、證據與政策 (`evidence`)、素材 (`media`)、廣告帳戶 (`channel`,
 which now also carries the conversion goal; the separate `goal` row is merged into it)、商品
 (`offering`). Each brand row's fix link opens its own onboarding step (`/intake?step=3..6`); the
-offering row opens the products page.
+offering row opens the products page (F43-I04: product onboarding `/products/new` when there is
+no finished sell-way yet).
 
 Public entry: `app.ads.launch_readiness`（`app/ads/__init__.py` 匯出）。純讀取：不寫任何東西、
 不打模型。只走既有 facade（`app.brand_intelligence.repository`、`app.ads.channels`、
@@ -14,7 +15,7 @@ Public entry: `app.ads.launch_readiness`（`app/ads/__init__.py` 匯出）。純
 只准住在 `app/ads/channels.py`）。
 """
 
-from app.ads import channels
+from app.ads import channels, wizard_options
 from app.ads.budget import breakeven_cpa
 from app.brand_intelligence import repository as bi_repo
 from app.core.vocab import CONVERSION_GOAL_LABELS, COOLING_OFF_EXEMPT_KEY
@@ -68,24 +69,27 @@ def _media_item(brand: dict, brand_id: str) -> dict:
 
 
 def _offering_item(conn, brand_id: str) -> dict:
-    products = bi_repo.list_products(conn, brand_id)
+    """F43-I04: judged on the finished sell-ways the new-campaign wizard offers (the same list,
+    `wizard_options.sellable_products`); none -> red 「還沒有商品」 opening product onboarding."""
+    sell_ways = wizard_options.sellable_products(conn, brand_id)
     best_economics = None
     assumed_product_name = None
     assumed_fields: list[str] = []
-    for product in products:
-        economics = bi_repo.get_product_economics(conn, brand_id, product["id"])
+    for sell_way in sell_ways:
+        economics = sell_way.get("economics")
         assumptions = economics.get("assumptions_json") if economics else None
         if assumptions and assumed_product_name is None:
-            assumed_product_name = product["name"]
+            assumed_product_name = sell_way["name"]
             assumed_fields = list(assumptions)
         if breakeven_cpa(economics) is not None and best_economics is None:
             best_economics = economics
 
     fix = {"label": "商品", "fix_href": f"/brands/{brand_id}/products"}
-    if not products:
+    if not sell_ways:
         return {
             "key": "offering", "state": "red", "reason": "還沒有商品",
             "fix_label": "建第一個商品", **fix,
+            "fix_href": f"/brands/{brand_id}/products/new",
         }
     if best_economics is None:
         return {

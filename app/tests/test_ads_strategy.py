@@ -847,22 +847,9 @@ class CustomerGroupsInStrategyPromptTest(StrategyTestBase):
         self.assertIn("【這個賣法的顧客】（這個商品還沒有建顧客群）", prompt)
 
 
-class BudgetUsesFirstSellWayForMotherProductTest(StrategyTestBase):
-    def test_campaign_on_mother_product_computes_from_first_sell_way(self):
-        mother = bi_repo.create_product(web.conn, self.brand_id, name="薑黃錠", actor=ACTOR)
-        first = bi_repo.create_product(
-            web.conn, self.brand_id, name="薑黃錠 · 單瓶", actor=ACTOR, parent_id=mother["id"])
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, first["id"], actor=ACTOR,
-            selling_price=1200, currency="TWD", confirmed_by=ACTOR,
-            unit_variable_cost=200, shipping_cost=50,
-        )
-
-        economics, product_id = budget._economics_for(
-            web.conn, self.brand_id, [mother["id"]])
-
-        self.assertIsNotNone(economics)
-        self.assertEqual(product_id, first["id"])
+# F43-I04: `BudgetUsesFirstSellWayForMotherProductTest` (the parent -> first-sell-way fallback) was
+# deleted with the fallback -- a campaign always carries a sell-way id; see
+# `test_ads_budget_sell_way.py`.
 
 
 class ScriptedReplyValidatesTest(StrategyTestBase):

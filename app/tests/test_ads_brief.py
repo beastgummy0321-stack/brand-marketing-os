@@ -437,22 +437,40 @@ class ScriptedReplyParsesTest(_BriefTestBase):
         self.assertTrue(detail["parsed"])
 
 
-class StructuredCreateTest(_BriefTestBase):
-    """F30-I04 (Contract D): the wizard creates a campaign from picks -- product, objective,
-    dates and this campaign's spending cap -- with no sentence typed. The picks are the user's
-    own and the model's parse never overrides them."""
+class _SellWayBase(_BriefTestBase):
+    """F43-I04: only a finished sell-way is pickable, so the structured tests pick
+    `self.sell_way` -- the one sell-way of `self.product` (same money as its old economics)."""
+
+    def setUp(self):
+        super().setUp()
+        self.sell_way = self._sell_way("單件", [(self.product, 1)], selling_price=1000,
+                                       unit_variable_cost=300, shipping_cost=100)
+
+    def _sell_way(self, name, components, landing_url=None, **economics):
+        return bi_repo.save_sell_way(
+            web.conn, self.brand_id, name=name, actor=ACTOR, economics=economics,
+            components=[{"product_id": p["id"], "qty": qty} for p, qty in components],
+            landing_url=landing_url,
+        )
 
     def _picks(self, **overrides):
-        picks = {"product_ids": [self.product["id"]], "objective": "名單", "budget": 30000}
+        picks = {"product_ids": [self.sell_way["id"]], "objective": "名單", "budget": 30000}
         picks.update(overrides)
         return picks
 
     def _create_picks(self, picks=None, **overrides):
         return self._create(goal_text="", picks=picks or self._picks(), **overrides)
 
+
+class StructuredCreateTest(_SellWayBase):
+    """F30-I04 (Contract D): the wizard creates a campaign from picks -- sell-way, objective,
+    dates and this campaign's spending cap -- with no sentence typed. The picks are the user's
+    own and the model's parse never overrides them."""
+
     def test_create_without_text_composes_goal_and_keeps_every_pick(self):
         # The model reads the composed sentence back as a different objective and product --
-        # the picks still win; only its audience guess is kept (the one field it adds).
+        # the picks still win. F43-I04: its audience guess is not stored either (the audience
+        # of a structured create is the sell-way's customer groups).
         provider = _fake(json.dumps({
             "objective": "購買", "cap": None, "product_ids": [],
             "audience_hint": "夜跑族", "notes": None,
@@ -462,18 +480,18 @@ class StructuredCreateTest(_BriefTestBase):
         detail = self._create_picks()
 
         self.assertTrue(detail["parsed"])
-        self.assertIn("夜跑背心", detail["goal_text"])
+        self.assertIn("夜跑背心 · 單件", detail["goal_text"])
         self.assertIn("名單", detail["goal_text"])
         self.assertIn("30000", detail["goal_text"])
         self.assertIn(detail["goal_text"], provider.calls[0]["messages"][0]["content"])
         self.assertEqual(detail["objective"], "名單")
-        self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
+        self.assertEqual(detail["context_json"]["product_ids"], [self.sell_way["id"]])
         self.assertEqual(detail["start_date"], datetime.date(2026, 10, 1))
         self.assertEqual(detail["end_date"], datetime.date(2026, 10, 31))
         budget = detail["constraints_json"]["budget"]
         self.assertNotIsInstance(budget, str)
         self.assertEqual(budget, 30000)
-        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑族")
+        self.assertIsNone(detail["context_json"]["audience_hint"])
         sources = detail["context_json"]["field_sources"]
         for key in ("product", "objective", "budget", "dates"):
             self.assertEqual(sources[key], "user", key)
@@ -481,24 +499,35 @@ class StructuredCreateTest(_BriefTestBase):
 
     # -- F41-I03 (drill-8 #5): the default name keeps its dates ----------------------------------
 
-    def _named_product(self, name):
-        return bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)
+    def _named_sell_way(self, product_name, way_name="單品"):
+        product = bi_repo.create_product(web.conn, self.brand_id, name=product_name, actor=ACTOR)
+        return self._sell_way(way_name, [(product, 1)], selling_price=399)
 
-    def test_structured_create_is_named_product_then_dates(self):
+    def test_structured_create_is_named_sell_way_then_dates(self):
         brief.PROVIDER = _fake("{}")
-        product = self._named_product("Beast Gummy 超能特惠組 · 單品")
+        way = self._named_sell_way("Beast Gummy 超能特惠組")
         detail = self._create_picks(
-            picks=self._picks(product_ids=[product["id"]]),
+            picks=self._picks(product_ids=[way["id"]]),
             start_date="2026-10-10", end_date="2026-10-16",
         )
         self.assertEqual(detail["name"], "Beast Gummy 超能特惠組 · 單品・10/10～10/16")
 
+    def test_a_bundle_is_named_by_its_own_name(self):
+        brief.PROVIDER = _fake("{}")
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        bundle = self._sell_way("夜跑安全組", [(self.product, 1), (other, 1)], selling_price=1299)
+        detail = self._create_picks(
+            picks=self._picks(product_ids=[bundle["id"]]),
+            start_date="2026-10-10", end_date="2026-10-16",
+        )
+        self.assertEqual(detail["name"], "夜跑安全組・10/10～10/16")
+
     def test_a_long_product_name_is_shortened_but_the_dates_never_are(self):
         brief.PROVIDER = _fake("{}")
         long_name = "超" * 60
-        product = self._named_product(long_name)
+        way = self._named_sell_way(long_name)
         detail = self._create_picks(
-            picks=self._picks(product_ids=[product["id"]]),
+            picks=self._picks(product_ids=[way["id"]]),
             start_date="2026-10-10", end_date="2026-10-16",
         )
         self.assertEqual(detail["name"], "超" * 30 + "…・10/10～10/16")
@@ -525,7 +554,7 @@ class StructuredCreateTest(_BriefTestBase):
         detail = self._create_picks()
         self.assertFalse(detail["parsed"])
         self.assertEqual(detail["objective"], "名單")
-        self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
+        self.assertEqual(detail["context_json"]["product_ids"], [self.sell_way["id"]])
         self.assertEqual(detail["constraints_json"]["budget"], 30000)
         self.assertEqual(detail["context_json"]["field_sources"]["objective"], "user")
 
@@ -567,31 +596,35 @@ class StructuredCreateTest(_BriefTestBase):
         self.assertIsNone(row["target_cost"])
         self.assertIsNone(row["target_basis"])
 
-    def test_products_must_be_one_the_wizard_lists(self):
+    def test_only_a_finished_sell_way_is_pickable(self):
+        # F43-I04: the list the wizard shows is the only thing a create accepts -- never a
+        # knowledge product itself (with or without sell-ways), an archived sell-way, or a
+        # 建到一半 product's sell-way.
         brief.PROVIDER = _fake("{}")
         other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
-        archived = bi_repo.create_product(web.conn, self.brand_id, name="舊款背心", actor=ACTOR)
+        other_way = self._sell_way("單條", [(other, 1)], selling_price=199)
+        archived = self._sell_way("舊包裝", [(self.product, 1)], selling_price=900)
         bi_repo.update_product(
             web.conn, self.brand_id, archived["id"], name=archived["name"], status="archived",
             actor=ACTOR,
         )
-        parent = bi_repo.create_product(web.conn, self.brand_id, name="夜跑套組", actor=ACTOR)
-        sell_way = bi_repo.create_product(
-            web.conn, self.brand_id, name="夜跑套組 · 單品", actor=ACTOR, parent_id=parent["id"],
-        )
+        half = bi_repo.create_product(web.conn, self.brand_id, name="夜跑頭燈", actor=ACTOR)
+        half_way = self._sell_way("單顆", [(half, 1)], selling_price=590)
+        bi_repo.set_product_onboarding_step(web.conn, self.brand_id, half["id"], 4, actor=ACTOR)
         for bad, code in (
             ([], "products_required"), (None, "products_required"),
             ("prd_x", "products_required"),
-            ([self.product["id"], other["id"]], "products_required"),
+            ([self.sell_way["id"], other_way["id"]], "products_required"),
             (["prd_not_this_brand"], "product_unknown"), ([archived["id"]], "product_unknown"),
-            ([parent["id"]], "product_unknown"),
+            ([self.product["id"]], "product_unknown"), ([other["id"]], "product_unknown"),
+            ([half_way["id"]], "product_unknown"),
         ):
             with self.assertRaises(ValueError) as ctx:
                 self._create_picks(picks=self._picks(product_ids=bad))
             self.assertEqual(str(ctx.exception), code, repr(bad))
         self.assertEqual(self._task_count(), 0)
-        detail = self._create_picks(picks=self._picks(product_ids=[sell_way["id"]]))
-        self.assertEqual(detail["context_json"]["product_ids"], [sell_way["id"]])
+        detail = self._create_picks(picks=self._picks(product_ids=[other_way["id"]]))
+        self.assertEqual(detail["context_json"]["product_ids"], [other_way["id"]])
 
     def test_default_dates_start_from_the_organisations_today(self):
         brief.PROVIDER = _fake(json.dumps({
@@ -615,14 +648,14 @@ class StructuredCreateTest(_BriefTestBase):
         self.assertEqual(str(ctx.exception), "dates_required")
 
 
-class StructuredCreateRouteTest(_BriefTestBase):
+class StructuredCreateRouteTest(_SellWayBase):
     def setUp(self):
         super().setUp()
         self.client = TestClient(main.app)
         self.url = f"/api/ads/brands/{self.brand_id}/campaigns"
 
     def _post(self, **body):
-        payload = {"product_ids": [self.product["id"]], "objective": "購買",
+        payload = {"product_ids": [self.sell_way["id"]], "objective": "購買",
                    "start_date": "2026-10-01", "end_date": "2026-10-31", "budget": 30000}
         payload.update(body)
         return self.client.post(self.url, json=payload)
@@ -648,6 +681,8 @@ class StructuredCreateRouteTest(_BriefTestBase):
             ({"budget": 0}, "budget_invalid"),
             ({"product_ids": "prd_x"}, "products_required"),
             ({"product_ids": ["prd_not_this_brand"]}, "product_unknown"),
+            ({"product_ids": [self.product["id"]]}, "product_unknown"),  # not a sell-way
+            ({"customer_group_ids": ["pcg_not_this_sell_way"]}, "customer_group_unknown"),
         ):
             res = self._post(**body)
             self.assertEqual(res.status_code, 400, (body, res.text))
@@ -729,11 +764,13 @@ class PatchAudienceHintTest(_BriefTestBase):
             )
 
 
-class CopyFromPreviousTest(_BriefTestBase):
-    """F40-I04 (drill-7 #10): a new campaign starts from the previous one. The four values the
-    request did not supply -- platform, audience direction, cap, landing URL -- are copied from
-    the brand's latest non-draft campaign and named in `context_json.copied_from`; request
-    values always win; a first campaign copies nothing."""
+class RequestExtrasTest(_BriefTestBase):
+    """F40-I04's request extras (platform / audience direction / cap / landing URL) still land
+    as the user's on both paths. Its copy-from-previous-campaign tests (the old
+    `CopyFromPreviousTest` / `CopyFromPreviousRouteTest`) were deleted by F43-I04: the feature
+    F43 decision 「the new-campaign page asks only sell-way, goal, dates, budget」 supersedes
+    F40's 「新活動預帶上一期」 for platform / audience / cap / landing; `NoCopyFromPreviousTest`
+    pins that nothing is copied any more."""
 
     _EMPTY = json.dumps({"objective": "購買", "cap": None, "product_ids": []})
     _FOUR = {
@@ -741,26 +778,18 @@ class CopyFromPreviousTest(_BriefTestBase):
         "landing_url": "https://shop.example.test/vest",
     }
 
-    def _previous(self, picks=None, **overrides):
-        """A campaign that went past draft: the source the next campaign copies from."""
-        brief.PROVIDER = _fake(self._EMPTY)
-        detail = self._create(picks=picks if picks is not None else dict(self._FOUR),
-                              **overrides)
-        web.conn.execute(
-            "UPDATE ads_campaign SET status = 'live' WHERE id = %s", (detail["id"],),
-        )
-        return detail
-
-    def test_first_campaign_copies_nothing(self):
+    def test_nothing_stated_leaves_the_sentence_draft_unset(self):
         brief.PROVIDER = _fake(self._EMPTY)
         detail = self._create()
         self.assertNotIn("copied_from", detail["context_json"])
+        self.assertNotIn("customer_group_ids", detail["context_json"])  # no sell-way picked
         self.assertIsNone(detail["context_json"]["landing_url"])
         self.assertEqual(detail["context_json"]["field_sources"]["landing_url"], "system")
         self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
 
-    def test_request_values_land_on_the_first_campaign(self):
-        detail = self._previous()
+    def test_request_values_land_as_the_users(self):
+        brief.PROVIDER = _fake(self._EMPTY)
+        detail = self._create(picks=dict(self._FOUR))
         self.assertEqual(detail["constraints_json"]["platform"], "meta")
         self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
         self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/vest")
@@ -768,116 +797,6 @@ class CopyFromPreviousTest(_BriefTestBase):
         sources = detail["context_json"]["field_sources"]
         for key in ("platform", "audience", "cap", "landing_url"):
             self.assertEqual(sources[key], "user", key)
-
-    def test_second_campaign_copies_the_four_values_and_names_them(self):
-        previous = self._previous()
-        brief.PROVIDER = _fake(self._EMPTY)
-
-        detail = self._create(goal_text="再推一波夜跑背心")
-
-        self.assertEqual(detail["context_json"]["copied_from"], {
-            "campaign_id": previous["id"], "name": previous["name"],
-            "fields": ["platform", "audience_hint", "cap", "landing_url"],
-        })
-        self.assertEqual(detail["constraints_json"]["platform"], "meta")
-        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
-        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/vest")
-        self.assertEqual(detail["cap"]["own_value"], 450)
-        self.assertEqual(detail["cap"]["basis"], "own")
-        sources = detail["context_json"]["field_sources"]
-        for key in ("platform", "audience", "cap", "landing_url"):
-            self.assertEqual(sources[key], "copied", key)
-        self.assertEqual(detail["status"], "draft")
-
-    def test_request_value_overrides_the_copy(self):
-        self._previous()
-        brief.PROVIDER = _fake(self._EMPTY)
-
-        detail = self._create(
-            goal_text="再推一波夜跑背心",
-            picks={"platform": "google_ads", "landing_url": "https://shop.example.test/new"},
-        )
-
-        self.assertEqual(detail["constraints_json"]["platform"], "google_ads")
-        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/new")
-        self.assertEqual(detail["context_json"]["audience_hint"], "夜跑愛好者")
-        self.assertEqual(detail["cap"]["own_value"], 450)
-        self.assertEqual(detail["context_json"]["copied_from"]["fields"],
-                         ["audience_hint", "cap"])
-        sources = detail["context_json"]["field_sources"]
-        self.assertEqual(sources["platform"], "user")
-        self.assertEqual(sources["landing_url"], "user")
-        self.assertEqual(sources["audience"], "copied")
-        self.assertEqual(sources["cap"], "copied")
-
-    def test_what_the_sentence_said_also_beats_the_copy(self):
-        self._previous()
-        brief.PROVIDER = _fake(json.dumps({
-            "objective": "購買", "cap": 380, "product_ids": [], "audience_hint": "通勤族",
-            "platform": "tiktok",
-        }, ensure_ascii=False))
-
-        detail = self._create(goal_text="每筆 380 以內，TikTok 推給通勤族")
-
-        self.assertEqual(detail["constraints_json"]["platform"], "tiktok")
-        self.assertEqual(detail["context_json"]["audience_hint"], "通勤族")
-        self.assertEqual(detail["cap"]["own_value"], 380)
-        self.assertEqual(detail["context_json"]["copied_from"]["fields"], ["landing_url"])
-
-    def test_a_draft_is_never_the_source_and_the_latest_non_draft_wins(self):
-        older = self._previous()
-        newer = self._previous(picks={**self._FOUR, "audience_hint": "晨跑族"})
-        web.conn.execute(
-            "UPDATE ads_campaign SET created_at = created_at - interval '1 day' WHERE id = %s",
-            (older["id"],),
-        )
-        brief.PROVIDER = _fake(self._EMPTY)
-        self._create(goal_text="一份沒送出的草稿", picks={"audience_hint": "草稿受眾"})
-
-        detail = self._create(goal_text="再推一波")
-
-        self.assertEqual(detail["context_json"]["copied_from"]["campaign_id"], newer["id"])
-        self.assertEqual(detail["context_json"]["audience_hint"], "晨跑族")
-
-    def test_break_even_cap_and_missing_values_are_not_copied(self):
-        previous = self._previous(picks={"platform": "meta"})
-        web.conn.execute(
-            "UPDATE ads_campaign SET target_basis = 'break_even', target_cost = NULL"
-            " WHERE id = %s", (previous["id"],),
-        )
-        brief.PROVIDER = _fake(self._EMPTY)
-
-        detail = self._create(goal_text="再推一波")
-
-        self.assertEqual(detail["context_json"]["copied_from"]["fields"], ["platform"])
-        self.assertIsNone(detail["cap"]["own_value"])
-        self.assertIsNone(detail["context_json"]["audience_hint"])
-        self.assertIsNone(detail["context_json"]["landing_url"])
-        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
-
-    def test_landing_url_falls_back_to_the_previous_first_groups_manual_setting(self):
-        previous = self._previous(picks={"platform": "meta"})
-        first = ads_repo.create_group(
-            web.conn, self.org_id, self.brand_id, previous["id"], channel_key="meta",
-            name="新客", role="new", daily_budget=100,
-        )
-        second = ads_repo.create_group(
-            web.conn, self.org_id, self.brand_id, previous["id"], channel_key="meta",
-            name="再行銷", role="retarget", daily_budget=100,
-        )
-        web.conn.execute(
-            "UPDATE ads_campaign SET context_json = context_json || %s WHERE id = %s",
-            (coredb.jsonb({"manual_delivery": {
-                second["id"]: {"values": {"landing_url": "https://shop.example.test/second"}},
-                first["id"]: {"values": {"landing_url": "https://shop.example.test/first"}},
-            }}), previous["id"]),
-        )
-        brief.PROVIDER = _fake(self._EMPTY)
-
-        detail = self._create(goal_text="再推一波")
-
-        self.assertEqual(detail["context_json"]["landing_url"], "https://shop.example.test/first")
-        self.assertIn("landing_url", detail["context_json"]["copied_from"]["fields"])
 
     def test_extras_are_refused_before_any_model_call(self):
         brief.PROVIDER = _fake(self._EMPTY)
@@ -889,6 +808,8 @@ class CopyFromPreviousTest(_BriefTestBase):
             ({"landing_url": "javascript:alert(1)"}, "landing_url_invalid"),
             ({"landing_url": "https://user:pw@shop.example.test/"}, "landing_url_invalid"),
             ({"landing_url": ["https://shop.example.test/"]}, "landing_url_unknown"),
+            # Customer groups belong to a picked sell-way: the sentence path has none.
+            ({"customer_group_ids": ["pcg_x"]}, "customer_group_unknown"),
         ):
             with self.assertRaises(ValueError) as ctx:
                 self._create(picks=picks)
@@ -896,7 +817,7 @@ class CopyFromPreviousTest(_BriefTestBase):
         self.assertEqual(self._task_count(), 0)
 
 
-class CopyFromPreviousRouteTest(_BriefTestBase):
+class RequestExtrasRouteTest(_BriefTestBase):
     def setUp(self):
         super().setUp()
         self.client = TestClient(main.app)
@@ -908,33 +829,17 @@ class CopyFromPreviousRouteTest(_BriefTestBase):
         payload.update(body)
         return self.client.post(self.url, json=payload)
 
-    def test_create_passes_the_four_keys_through_and_the_next_create_copies_them(self):
+    def test_create_passes_the_extras_through(self):
         brief.PROVIDER = _fake("{}")
         res = self._post(platform="meta", audience_hint="夜跑愛好者", cap=450,
-                         landing_url="https://shop.example.test/vest",
-                         product_ids=[self.product["id"]], objective="購買", budget=30000)
+                         landing_url="https://shop.example.test/vest")
         self.assertEqual(res.status_code, 200, res.text)
         first = res.json()["campaign"]
         self.assertEqual(first["constraints_json"]["platform"], "meta")
         self.assertEqual(first["context_json"]["landing_url"], "https://shop.example.test/vest")
         self.assertEqual(first["cap"]["own_value"], 450)
         self.assertNotIn("copied_from", first["context_json"])
-        web.conn.execute(
-            "UPDATE ads_campaign SET status = 'live' WHERE id = %s", (first["id"],),
-        )
-        web.conn.commit()  # the request reads through its own connection
-
-        res = self._post(cap=500)
-        self.assertEqual(res.status_code, 200, res.text)
-        second = res.json()["campaign"]
-        self.assertEqual(second["context_json"]["copied_from"], {
-            "campaign_id": first["id"], "name": first["name"],
-            "fields": ["platform", "audience_hint", "landing_url"],
-        })
-        self.assertEqual(second["cap"]["own_value"], 500)
-        self.assertEqual(second["context_json"]["field_sources"]["cap"], "user")
-        self.assertEqual(second["context_json"]["field_sources"]["platform"], "copied")
-        self.assertEqual(second["manual_handoff"]["groups"], [])
+        self.assertEqual(first["manual_handoff"]["groups"], [])
 
     def test_refusals_are_400_with_their_codes(self):
         brief.PROVIDER = _fake("{}")
@@ -943,11 +848,143 @@ class CopyFromPreviousRouteTest(_BriefTestBase):
             ({"cap": "abc"}, "target_value_unknown"),
             ({"audience_hint": ["x"]}, "audience_hint_unknown"),
             ({"landing_url": "ftp://shop.example.test/"}, "landing_url_invalid"),
+            ({"customer_group_ids": ["pcg_x"]}, "customer_group_unknown"),
         ):
             res = self._post(**body)
             self.assertEqual(res.status_code, 400, (body, res.text))
             self.assertEqual(res.json()["error"]["code"], code, body)
         self.assertEqual(self._task_count(), 0)
+
+
+class SellWayDefaultsTest(_SellWayBase):
+    """F43-I04 (feature F43 Decisions 「Campaign defaults」): a structured create takes what the
+    request does not state from the picked sell-way -- every customer group of its knowledge
+    products, its effective landing, its `cap_per_sale` as the campaign's own cap -- each named
+    `"sell_way"` in `field_sources`; request values win as `"user"`."""
+
+    _EMPTY = json.dumps({"objective": "購買", "cap": None, "product_ids": []})
+
+    def setUp(self):
+        super().setUp()
+        bi_repo.set_product_page_url(web.conn, self.brand_id, self.product["id"],
+                                     "https://shop.example.test/vest", actor=ACTOR)
+        self.groups = bi_repo.save_customer_groups(web.conn, self.brand_id, self.product["id"], [
+            {"who": "下班夜跑的上班族", "pain_keys": ["uncertainty"]},
+            {"who": "帶狗散步的人", "pain_keys": ["effort", "cost"]},
+        ], actor=ACTOR)
+        self.capped = self._sell_way("兩件組", [(self.product, 2)], selling_price=1800,
+                                     unit_variable_cost=600, shipping_cost=100, cap_per_sale=450,
+                                     landing_url="https://shop.example.test/vest-2")
+        brief.PROVIDER = _fake(self._EMPTY)
+
+    def test_the_three_defaults_come_from_the_sell_way(self):
+        detail = self._create_picks(picks=self._picks(product_ids=[self.capped["id"]]))
+
+        context = detail["context_json"]
+        self.assertEqual(context["customer_group_ids"], [g["id"] for g in self.groups])
+        self.assertEqual(context["landing_url"], "https://shop.example.test/vest-2")
+        self.assertEqual(detail["cap"]["own_value"], 450)  # stored as the campaign's own cap
+        self.assertEqual(detail["cap"]["basis"], "own")
+        self.assertEqual(detail["cap"]["break_even"], 1100)  # 1800 − 600 − 100
+        self.assertEqual(detail["objective"], "名單")  # the request's
+        sources = context["field_sources"]
+        self.assertEqual((sources["audience"], sources["landing_url"], sources["cap"]),
+                         ("sell_way", "sell_way", "sell_way"))
+        self.assertEqual(sources["platform"], "system")  # the plan default, unchanged
+        self.assertNotIn("copied_from", context)
+        row = web.conn.execute(
+            "SELECT target_cost, target_basis FROM ads_campaign WHERE id=%s", (detail["id"],),
+        ).fetchone()
+        self.assertEqual((float(row["target_cost"]), row["target_basis"]), (450.0, "own"))
+
+    def test_no_cap_per_sale_is_break_even_and_no_landing_is_the_product_page(self):
+        detail = self._create_picks()  # 「單件」: no cap, no landing of its own
+
+        self.assertIsNone(detail["cap"]["own_value"])
+        self.assertEqual((detail["cap"]["value"], detail["cap"]["basis"]), (600, "break_even"))
+        context = detail["context_json"]
+        self.assertEqual(context["field_sources"]["cap"], "system")
+        self.assertEqual(context["landing_url"], "https://shop.example.test/vest")
+        self.assertEqual(context["field_sources"]["landing_url"], "sell_way")
+
+    def test_a_sell_way_without_groups_or_page_leaves_them_unset(self):
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        way = self._sell_way("單條", [(other, 1)], selling_price=199)
+
+        detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
+
+        context = detail["context_json"]
+        self.assertEqual(context["customer_group_ids"], [])
+        self.assertIsNone(context["landing_url"])
+        sources = context["field_sources"]
+        self.assertEqual((sources["audience"], sources["landing_url"]), ("system", "system"))
+
+    def test_a_bundle_defaults_to_every_group_of_every_product(self):
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other_groups = bi_repo.save_customer_groups(web.conn, self.brand_id, other["id"], [
+            {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
+        ], actor=ACTOR)
+        bundle = self._sell_way("夜跑安全組", [(self.product, 1), (other, 1)],
+                                selling_price=1299)
+
+        detail = self._create_picks(picks=self._picks(product_ids=[bundle["id"]]))
+
+        self.assertEqual(detail["context_json"]["customer_group_ids"],
+                         [g["id"] for g in self.groups + other_groups])
+
+    def test_request_values_win_as_the_users(self):
+        second = self.groups[1]["id"]
+        detail = self._create_picks(picks=self._picks(
+            product_ids=[self.capped["id"]], cap=380, customer_group_ids=[second],
+            landing_url="https://shop.example.test/autumn",
+        ))
+
+        context = detail["context_json"]
+        self.assertEqual(context["customer_group_ids"], [second])
+        self.assertEqual(context["landing_url"], "https://shop.example.test/autumn")
+        self.assertEqual(detail["cap"]["own_value"], 380)
+        sources = context["field_sources"]
+        self.assertEqual((sources["audience"], sources["landing_url"], sources["cap"]),
+                         ("user", "user", "user"))
+
+    def test_customer_groups_must_be_the_sell_ways(self):
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        foreign = bi_repo.save_customer_groups(web.conn, self.brand_id, other["id"], [
+            {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
+        ], actor=ACTOR)[0]["id"]
+        for bad in ([foreign], "pcg_x", [self.groups[0]["id"], 3], {"id": foreign}):
+            with self.assertRaises(ValueError) as ctx:
+                self._create_picks(picks=self._picks(customer_group_ids=bad))
+            self.assertEqual(str(ctx.exception), "customer_group_unknown", repr(bad))
+        self.assertEqual(self._task_count(), 0)
+        # An empty list is no override: every group of the sell-way.
+        detail = self._create_picks(picks=self._picks(customer_group_ids=[]))
+        self.assertEqual(detail["context_json"]["customer_group_ids"],
+                         [g["id"] for g in self.groups])
+        self.assertEqual(detail["context_json"]["field_sources"]["audience"], "sell_way")
+
+
+class NoCopyFromPreviousTest(_SellWayBase):
+    """F43-I04: a previous campaign's platform / audience / cap / landing are never copied."""
+
+    def test_a_live_previous_campaign_is_not_copied(self):
+        brief.PROVIDER = _fake(json.dumps({"objective": "購買", "cap": None, "product_ids": []}))
+        previous = self._create(picks={
+            "platform": "meta", "audience_hint": "夜跑愛好者", "cap": 450,
+            "landing_url": "https://shop.example.test/old",
+        })
+        web.conn.execute("UPDATE ads_campaign SET status = 'live' WHERE id = %s",
+                         (previous["id"],))
+
+        detail = self._create_picks()
+
+        context = detail["context_json"]
+        self.assertNotIn("copied_from", context)
+        self.assertNotIn("platform", detail["constraints_json"])
+        self.assertIsNone(context["audience_hint"])
+        self.assertIsNone(detail["cap"]["own_value"])
+        self.assertIsNone(context["landing_url"])  # the sell-way's product has no page
+        self.assertNotIn("copied", set(context["field_sources"].values()))
 
 
 class PatchLandingUrlTest(_BriefTestBase):

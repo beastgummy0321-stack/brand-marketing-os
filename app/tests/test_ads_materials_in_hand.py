@@ -87,6 +87,27 @@ class MaterialsInHandTest(unittest.TestCase):
         product_id = self._seed()
         self.assertEqual(self._read([product_id])["media"], "photo")
 
+    def test_a_bundle_sell_ways_own_offer_shows_with_its_price_sentence(self):
+        # F43-I04: a campaign carries a sell-way; its own 組合 offer (list price Σ 880 × 3 above
+        # its price) shows beside the policies it reaches, with the facade's price sentence.
+        product_id = self._seed()
+        bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單盒", actor=ACTOR, economics={"selling_price": 880},
+            components=[{"product_id": product_id, "qty": 1}],
+        )
+        three = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="三盒組", actor=ACTOR,
+            economics={"selling_price": 1999, "unit_variable_cost": 450},
+            components=[{"product_id": product_id, "qty": 3}],
+        )
+        offers = self._read([three["id"]])["offers"]
+        self.assertEqual(offers, [
+            {"key": "free_shipping", "label": "免運門檻", "sentence": "滿 NT$999 免運"},
+            {"key": "discount", "label": "折扣", "sentence": "新會員首購禮：全館 9 折"},
+            {"key": "bundle", "label": "組合加贈",
+             "sentence": "綜合維他命軟糖 · 三盒組優惠價 NT$1,999（原價 NT$2,640）"},
+        ])
+
     def test_empty_brand_has_nothing_in_hand(self):
         self.assertEqual(self._read([]), {"offers": [], "proof": [], "media": None})
 
