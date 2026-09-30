@@ -1824,3 +1824,21 @@ rejected: offers, proof and media move to onboarding, F42/F43).
   month view before this launch + `extra` + `blocker` (`unset`/`uncertain`/`short`, judged with the launch, in preflight's order) +
   `blocker_text`; `PublishList` renders the shared `BudgetFitCard` (launch mode adds 放不下 with 提高月預算／改這期總預算) and puts the
   reason beside 核准上架清單.
+
+### 6.46 Brand onboarding feeds the planner（ruled 2026-09-30；built in F42）
+Supersedes §6.42 「Promo offers are off by default」.
+- **Offers are derived data.** `bi_repo.available_offer_keys(conn, brand_id, product_id=None)` = offer keys of the brand's confirmed
+  store-policy facts (intake.md F42); a threshold policy (滿額免運, 超商免運, 滿額折, 滿額贈) counts only when the product's current
+  confirmed NT$ price ≥ the threshold (no product → counts; unknown price → does not). `offer_sources` returns the sentence behind
+  each key. The coordinate toggle is a brand veto on top (enabled ∩ available); offers are seeded enabled again
+  (`20261001000002_schedule_offer_default_on.sql`, `DEFAULT_OFF_COORDINATES` removed). `limited_time` needs both a policy and an
+  end date. F43 adds the sell-way's own discount/bundle.
+- **Formats follow media capability**: `plan._prompt_rows` drops `format/video` when `brand.media_capability == 'photo'`;
+  `_gate_reply` snaps a stray format to the menu's first format.
+- **Copy guard**: store policies reach the copy only as `offer:<key>` rows from `offer_sources` (policy facts are not generic
+  sources); a RISK word whose offer family (免運／折扣…N折／贈品…買N送／試用…試吃／退款保證) is available is not flagged. Proof and
+  endorsement words keep the exact-sentence rule.
+- **Readiness** (`app/ads/readiness.py`): 品牌是誰／證據與政策／素材／廣告帳戶（reason names the 成效目標）／商品, each with a fix link
+  (`intake?step=3/4/5/6`, `/products`). The completion screen's chip describes the state: 可以投放／有假設值／還差商品／還要補齊.
+- **這期會用**: the campaign payload carries `materials` = {offers (with sentence), proof, media} (`app/ads/materials_in_hand.py`);
+  the strategy tab shows it as one chip row in 「預算怎麼分」.

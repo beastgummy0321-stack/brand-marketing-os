@@ -645,8 +645,8 @@ value `flexible` is disabled for every brand and no longer seeded (「若排程�
 
 ## 4. The loop, end to end
 
-品牌建檔精靈 (`intake`) fills 品牌智庫 (`brand_intelligence`) — five steps since F05 (2026-09-14):
-1 起始輸入 · 2 初步印象 · 3 賣什麼與數字 · 4 接工具 · 5 品牌知識, ending on the 可投放檢查表 (§8) →
+品牌建檔 (`intake`) fills 品牌智庫 (`brand_intelligence`) — seven steps since F42 (2026-09-30), each AI-prefilled and
+confirmed: 1 基本 · 2 AI 讀網站 · 3 品牌是誰 · 4 證據與政策 · 5 素材 · 6 接工具 · 7 完成 (the 可投放檢查表, intake.md) →
 the user describes one goal in one
 sentence in 投放中心 (`ads`), which derives a draft Campaign carrying 為什麼做 (`goal_text`), 目標
 (`objective`) and 成功條件 (`success_criterion`) plus the ids of the brand and product rows it used

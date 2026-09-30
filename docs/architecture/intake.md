@@ -71,7 +71,7 @@ These are decided. A worker implements them; it does not re-open them.
    投放中心's 建立 Campaign entry. **It never refuses.** No「N 條 confirmed 事實」threshold: facts
    affect copy quality, not whether money can be spent. Whatever is assumed here is named again in the
    strategy's basis text ——「用的是假設成交率 20%」—— so a number never loses its label downstream.
-6. **The wizard writes the facts it collects.** Measured 2026-09-14 on the drill data: the only
+6. **(Superseded by F42 below.) The wizard writes the facts it collects.** Measured 2026-09-14 on the drill data: the only
    caller of `repository.create_items` is `state.py:284`, fed by the paste step — so **the external
    AI paste is the single writer of `brand_fact`／`product_fact`**, and a user who stops before it
    ends with zero knowledge however many questions they answered (常春健康: paste done → 11 items,
@@ -109,8 +109,36 @@ These are decided. A worker implements them; it does not re-open them.
 ### F38 (2026-09-29): 「證據」 brand facts
 - `brand_fact.fact_type='proof'` carries a required `fact_key` ∈ {customer_review, expert_endorsement, lab_report, sales_numbers,
   media_coverage, founder_voice} (CHECK-constrained; other types keep NULL). Labels = the `proof` coordinate seed labels
-  (`app/core/vocab.py::PROOF_KINDS`, copied). Entry point: the library FactPanel (「哪一種證據？」 select); the wizard's truth cards
-  do not propose 證據 cards yet (candidate).
+  (`app/core/vocab.py::PROOF_KINDS`, copied). Entry points: brand onboarding step 4 and the library FactPanel (「哪一種證據？」 select) — F42.
 - `available_proof_keys(conn, brand_id)` (facade) = confirmed proof facts' keys ∪ {customer_review} when an active customer-voice
   row exists. Readers: `app/ads/plan.py`, `app/workbench/jobs.py` (ads.md §6.42). Evidence text reaches the copy prompt through
   `workbench/claims.prompt_sources` (proof facts always listed, regardless of the RISK regex).
+
+### F42 (2026-09-30): brand onboarding — one interview, AI-prefilled, confirmed step by step
+Supersedes rule 6 above and the F38 「truth cards do not propose 證據」 line. Products are not asked here (F43 product onboarding).
+- **Seven steps** (`app/intake/state.py::WIZARD_STEPS`; routes `…/onboarding/*` in `app/intake/routes_onboarding_api.py`, logic in
+  `app/intake/onboarding.py`): 1 基本 (name, websites ≤5, brand photos by kind logo/store/team/brand_image/other, 投放地區, 適用法規,
+  投過廣告嗎) · 2 AI 讀網站 (skipped when there are no URLs and no photos) · 3 品牌是誰 · 4 證據與政策 · 5 素材 · 6 接工具 · 7 完成
+  (the 可投放檢查表, five rows, ads.md §6.46). A completed brand re-enters at step 7; `?step=N` reopens a step. The low-key entry is
+  the 「品牌資料（建檔時填的）」 link on 經營概況.
+- **One writer per fact, every fact has a field.** The research → paste → truth-card stage, the AI Q&A, the old scan and the old
+  step 3 「賣什麼與數字」 are deleted. Where each fact lives: positioning / tone (`params_json.tones`, 1–2) / visual →
+  `brand_fact` `positioning`/`tone`/`visual_base`; brand proof → `brand_fact` `proof` + `fact_key`; store policy → `brand_fact`
+  `policy` (`fact_key` = registry key or `custom`, `params_json`, `value` = the program-composed sentence; written only by
+  `save_brand_policies`); 7-day cooling-off exemption → policy key `cooling_off_exempt` + disclosure (no row = the law applies);
+  forbidden phrases → `rule` `forbidden_word`; media → `brand.media_capability` ∈ {photo, photo_video} (NULL = never asked);
+  brand photos → `official_asset` with `product_id` NULL.
+- **Store policy registry** = `app/core/vocab.py::POLICY_TYPES` (26 types from SHOPLINE／CYBERBIZ／Shopify／蝦皮／TW supplement
+  shops; 8 `common`; each with params, an offer key or `none`, a threshold param where it has one, and a sentence template). The
+  API ships it to the screen; the frontend keeps no copy. 7 天猶豫期 (消保法 §19) is shown fixed; 「不適用」 only for a statutory
+  exception with its web disclosure text (≥10 chars).
+- **AI prefill** (`app/intake/ai.py::run_prefill`, task `intake_prefill`, job `background.intake_scan(prefill=True)`): one gateway
+  call reads ≤5 fetched pages + ≤5 brand photos, no web search, no user description; each entry is contract-checked on its own
+  (unknown keys dropped, a source note naming something not read is dropped) and stored in `intake_draft.prefill_json`. A prefill
+  is a proposal shown with a source tag (「✦ about 頁」); it is confirmed only by the step's 下一步.
+- **自訂** (`app/intake/custom.py`, task `intake_custom`): one small call turns a plain-language sentence into a field value or a new
+  option for that block (positioning, tone, visual, brand_proof, policy, forbidden), contract-checked (digits must appear in the
+  user's sentence); it returns a proposal only, shown once where it lives, marked 「你自訂」; 下一步 saves it.
+- **Connectors** = `app/intake/connector_catalogue.json` (what each connector reads; Meta live, csv → orders import, the rest seats:
+  Google/TikTok, GA4, Search Console, shop platforms, MCP, custom API). Binding a second Meta account adds it (「再接一個帳戶」);
+  unbinding stays in 設定 → Meta. The conversion goal saves on a completed brand too.
