@@ -33,7 +33,7 @@ const BRAND_NAV = [
   { label: "投放中心", suffix: "/ads", icon: CalendarDays },
   { label: "素材工作檯", suffix: "/workbench", icon: Wand2 },
   { label: "訂單與顧客", suffix: "/orders", icon: Users },
-  { label: "產品", suffix: "/products", icon: Package },
+  { label: "商品", suffix: "/products", icon: Package },
   { label: "品牌智庫", suffix: "/library", icon: BookOpen },
   { label: "顧問分析報告", suffix: "/report", icon: FileChartColumn },
 ];
