@@ -1,131 +1,51 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import type { MetaAccount, MetaAccountsData } from "@/lib/metaApi";
-import {
-  bindMetaAccount,
-  connectMetaToken,
-  fetchMetaAccounts,
-  fetchMetaBackfillStatus,
-  startMetaBackfill,
-} from "@/lib/metaApi";
-import type { IntakeToolsData } from "@/lib/intakeApi";
-import { fetchIntakeTools, saveConversionGoal } from "@/lib/intakeApi";
+import { saveConversionGoal } from "@/lib/intakeApi";
+import { fetchOnboardingTools, type Connector, type OnboardingTools } from "@/lib/intakeOnboardingApi";
+import { cn } from "@/lib/utils";
+import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
+import { MetaConnectPanel } from "./MetaConnectPanel";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; tools: IntakeToolsData; meta: MetaAccountsData };
+  | { status: "ready"; tools: OnboardingTools };
 
-const SKIP_NOTE = "還沒接上廣告帳戶，之後建立 Campaign 時系統會提醒你補。";
+/** Accepted deviation from the prototype's 「之後在「設定 → 接工具」隨時再接」: the places to connect later are this
+ * step (re-entry through 品牌資料) and 投放中心's 資料連線. */
+const HINT = "之後回到「品牌資料」或投放中心的資料連線再接";
 
-/** 精靈第 4 步「接工具」（F05-I08）：Meta 廣告帳戶＋成效目標，GA4 是灰色保留席。
- * 不新做 Meta 的連線／綁定——`bindMetaAccount`／`connectMetaToken` 直接沿用
- * `frontend/src/lib/metaApi.ts`（既有設定頁在用的同一支 client）。這一步的「完成」＝
- * 「已指定給這個品牌」，不是「已貼權杖」；可以整步跳過，跳過不寫成拒絕。 */
-export function ToolsStep({ brandId, onNext }: { brandId: string; onNext: () => void }) {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [tokenInput, setTokenInput] = useState("");
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [assigning, setAssigning] = useState(false);
-  const [assignError, setAssignError] = useState<string | null>(null);
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillNote, setBackfillNote] = useState<string | null>(null);
-  const [goalError, setGoalError] = useState<string | null>(null);
+/** Brand onboarding #/b6 接上工具 (prototype `R.b6` of `.harness/scratch/prototype/f41-onboarding/index.html`): the
+ * connector registry (`GET …/onboarding/tools`) as one card per group, each row saying what the system can read
+ * once connected; only live connectors can be connected, the rest are honest seats (「即將開放」). Meta's 接上／換一個
+ * opens the existing token → account flow inline (`MetaConnectPanel`); a connector with an in-app page (the orders
+ * file) links there. Then 成效目標, saved on change (`POST …/conversion-goal`). Skipping every connector is allowed. */
+export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
+  const [load, setLoad] = useState<LoadState>({ status: "loading" });
+  const [metaOpen, setMetaOpen] = useState(false);
   const [savingGoal, setSavingGoal] = useState(false);
+  const [goalError, setGoalError] = useState<string | null>(null);
 
-  function load() {
-    setState({ status: "loading" });
-    Promise.all([fetchIntakeTools(brandId), fetchMetaAccounts()])
-      .then(([tools, meta]) => setState({ status: "ready", tools, meta }))
-      .catch((err: unknown) =>
-        setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" }),
-      );
-  }
-
-  useEffect(load, [brandId]);
-
-  if (state.status === "loading") {
-    return <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">讀取中…</div>;
-  }
-  if (state.status === "error") {
-    return (
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-6">
-        <p className="text-sm text-danger">{state.message}</p>
-        <button type="button" onClick={load} className="self-start text-sm font-medium text-primary hover:underline">
-          重新載入
-        </button>
-        <p className="text-sm text-muted-foreground">目前無法確認帳戶與目標設定，仍可先起草計畫，投放前再確認連線。</p>
-        <Button asChild className="self-start"><Link to={`/brands/${encodeURIComponent(brandId)}/ads/new`}>先建立投放計畫</Link></Button>
-      </div>
-    );
-  }
-
-  const { tools, meta } = state;
-  const hasToken = meta.token_tail !== null;
-  const assignedAccountId = tools.bound_account_ids[0] ?? null;
-  const assignedAccount = meta.accounts.find((a: MetaAccount) => a.id === assignedAccountId) ?? null;
-
-  async function handleConnectToken() {
-    const token = tokenInput.trim();
-    if (!token) {
-      setTokenError("請貼上 Meta 存取權杖。");
-      return;
-    }
-    setConnecting(true);
-    setTokenError(null);
-    try {
-      const data = await connectMetaToken(token);
-      setTokenInput("");
-      setState({ status: "ready", tools, meta: data });
-    } catch (err) {
-      setTokenError(err instanceof Error ? err.message : "連接失敗，請稍後再試。");
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  async function handleAssign() {
-    if (!selectedAccountId) return;
-    setAssigning(true);
-    setAssignError(null);
-    try {
-      await bindMetaAccount(brandId, selectedAccountId);
-      setBackfilling(true);
-      startMetaBackfill(brandId)
-        .then(() => pollBackfill())
-        .catch(() => setBackfillNote("這次沒拉到，之後可以在設定頁重試。"));
-      load();
-    } catch (err) {
-      setAssignError(err instanceof Error ? err.message : "指定失敗，請稍後再試。");
-    } finally {
-      setAssigning(false);
-    }
-  }
-
-  function pollBackfill() {
-    fetchMetaBackfillStatus(brandId)
-      .then((status) => {
-        if (status.running) {
-          setTimeout(pollBackfill, 3000);
-        } else {
-          setBackfilling(false);
-        }
-      })
-      .catch(() => {
-        setBackfilling(false);
-        setBackfillNote("這次沒拉到，之後可以在設定頁重試。");
+  function reload(quiet = false) {
+    if (!quiet) setLoad({ status: "loading" });
+    fetchOnboardingTools(brandId)
+      .then((tools) => setLoad({ status: "ready", tools }))
+      .catch((err: unknown) => {
+        if (!quiet) setLoad({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
       });
   }
 
-  async function handleSelectGoal(goal: string) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => reload(), [brandId]);
+
+  async function selectGoal(goal: string) {
+    if (load.status !== "ready" || goal === load.tools.conversion_goal) return;
     setSavingGoal(true);
     setGoalError(null);
     try {
       await saveConversionGoal(brandId, goal);
-      load();
+      setLoad({ status: "ready", tools: { ...load.tools, conversion_goal: goal } });
     } catch (err) {
       setGoalError(err instanceof Error ? err.message : "儲存失敗，請稍後再試。");
     } finally {
@@ -134,121 +54,173 @@ export function ToolsStep({ brandId, onNext }: { brandId: string; onNext: () => 
   }
 
   return (
-    <div className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-card">
-      <h2 className="font-display text-lg text-foreground">接工具</h2>
-
-      <div className="flex flex-col gap-3 rounded-md border border-border p-4">
-        <p className="text-sm font-medium text-foreground">Meta 廣告帳戶</p>
-
-        {!hasToken && (
-          <div className="flex flex-col gap-2">
-            <input
-              type="text"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              placeholder="貼上 Meta 存取權杖"
-              className="rounded-md border border-border px-3 py-2 text-sm"
-            />
-            {tokenError && <span className="text-xs text-danger">{tokenError}</span>}
-            <button
-              type="button"
-              onClick={() => void handleConnectToken()}
-              disabled={connecting}
-              className="self-start rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {connecting ? "讀取中…" : "讀取帳戶"}
-            </button>
-          </div>
-        )}
-
-        {hasToken && !assignedAccountId && (
-          <div className="flex flex-col gap-2">
-            {meta.accounts.length === 0 && (
-              <p className="text-sm text-muted-foreground">這把權杖沒有列出任何帳戶。</p>
-            )}
-            {meta.accounts.map((acc) => (
-              <label
-                key={acc.id}
-                className={`flex cursor-pointer items-center gap-2 rounded-md border p-2.5 text-sm ${
-                  selectedAccountId === acc.id ? "border-primary bg-primary/5" : "border-border"
-                }`}
-              >
-                <input
-                  type="radio"
-                  checked={selectedAccountId === acc.id}
-                  onChange={() => setSelectedAccountId(acc.id)}
+    <div className="flex flex-col gap-4">
+      <OnboardingStepHead {...nav} title="接上工具" purpose="接越多，系統看得越清楚；現在只要 Meta 就能開始，其他之後再接" />
+      {load.status === "loading" && <p className="rounded-xl border border-border bg-card px-[22px] py-5 text-sm text-muted-foreground">讀取中…</p>}
+      {load.status === "error" && (
+        <div className="flex flex-col items-start gap-2 rounded-xl border border-border bg-card px-[22px] py-5">
+          <p role="alert" className="text-sm text-danger">{load.message}</p>
+          <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={() => reload()}>重新載入</Button>
+        </div>
+      )}
+      {load.status === "ready" && (
+        <>
+          {groupConnectors(load.tools.connectors).map(([group, rows]) => (
+            <section key={group} data-slot="connector-group" className="rounded-xl border border-border bg-card px-[22px] py-5">
+              <h2 className="mb-3.5 text-base font-semibold">{group}</h2>
+              {rows.map((c) => (
+                <ConnectorRow
+                  key={c.key}
+                  connector={c}
+                  metaOpen={metaOpen}
+                  onToggleMeta={() => setMetaOpen((open) => !open)}
+                  panel={c.key === "meta" && metaOpen ? <MetaConnectPanel brandId={brandId} onBound={() => reload(true)} /> : null}
                 />
-                <span className="font-medium text-foreground">{acc.name}</span>
-                <span className="numeric text-xs text-muted-foreground">{acc.account_id}</span>
-              </label>
-            ))}
-            {assignError && <span className="text-xs text-danger">{assignError}</span>}
-            {meta.accounts.length > 0 && (
-              <button
-                type="button"
-                disabled={!selectedAccountId || assigning}
-                onClick={() => void handleAssign()}
-                className="self-start rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {assigning ? "指定中…" : "指定給這個品牌"}
-              </button>
+              ))}
+            </section>
+          ))}
+          <section className="rounded-xl border border-border bg-card px-[22px] py-5">
+            <div className="grid grid-cols-[170px_minmax(0,1fr)] items-start gap-x-5 gap-y-2.5 max-sm:grid-cols-1">
+              <div>
+                <b className="block text-sm font-semibold">成效目標</b>
+                <span className="mt-0.5 block text-xs text-muted-foreground">廣告要帶來什麼</span>
+              </div>
+              <div className="min-w-0">
+                <GoalSegmented
+                  options={load.tools.conversion_goal_options}
+                  value={load.tools.conversion_goal}
+                  disabled={savingGoal}
+                  onChange={(goal) => void selectGoal(goal)}
+                />
+                {goalError && <p role="alert" className="mt-2 text-xs text-danger">{goalError}</p>}
+              </div>
+            </div>
+          </section>
+        </>
+      )}
+      <OnboardingBar back={back} hint={HINT}>
+        <BarNext label="完成品牌建檔" onClick={onNext} />
+      </OnboardingBar>
+    </div>
+  );
+}
+
+/** Registry order is kept: groups in order of first appearance, rows in registry order within a group. */
+function groupConnectors(connectors: Connector[]): [string, Connector[]][] {
+  const groups = new Map<string, Connector[]>();
+  for (const c of connectors) groups.set(c.group, [...(groups.get(c.group) ?? []), c]);
+  return [...groups.entries()];
+}
+
+/** Prototype `.conn`: icon tile, name, 「接上後系統能讀：…」, the connected note, and the row's action. */
+function ConnectorRow({ connector: c, metaOpen, onToggleMeta, panel }: {
+  connector: Connector;
+  metaOpen: boolean;
+  onToggleMeta: () => void;
+  panel: ReactNode;
+}) {
+  const connected = c.state === "connected";
+  return (
+    <div data-slot="connector" data-state={c.state} className="border-t border-border py-3 first-of-type:border-t-0 first-of-type:pt-0 last:pb-0">
+      <div className="grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "grid size-10 place-items-center rounded-[10px] text-[13px] font-bold",
+            connected ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground",
+          )}
+        >
+          {c.icon}
+        </span>
+        <div className="min-w-0">
+          <b className="font-semibold">{c.label}</b>
+          <div className="text-[11.5px] text-muted-foreground">接上後系統能讀：{c.reads}</div>
+          {connected && c.note && <div className="mt-0.5 text-[11.5px] text-success">✓ {c.note}</div>}
+        </div>
+        <ConnectorAction connector={c} metaOpen={metaOpen} onToggleMeta={onToggleMeta} />
+      </div>
+      {panel && <div className="mt-3 ml-[52px] rounded-lg border border-border bg-background p-3">{panel}</div>}
+    </div>
+  );
+}
+
+function ConnectorAction({ connector: c, metaOpen, onToggleMeta }: { connector: Connector; metaOpen: boolean; onToggleMeta: () => void }) {
+  if (c.state === "seat") {
+    return <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium whitespace-nowrap text-muted-foreground">{c.note || "即將開放"}</span>;
+  }
+  if (c.key === "meta") {
+    return c.state === "connected" ? (
+      <Button type="button" variant="link" className="h-auto p-0 text-[13px]" aria-expanded={metaOpen} onClick={onToggleMeta}>
+        {metaOpen ? "收起" : "換一個"}
+      </Button>
+    ) : (
+      <Button type="button" variant="outline" size="sm" aria-expanded={metaOpen} onClick={onToggleMeta}>
+        {metaOpen ? "收起" : "接上"}
+      </Button>
+    );
+  }
+  if (c.link) {
+    return (
+      <Button asChild variant={c.state === "connected" ? "link" : "outline"} size="sm">
+        <Link to={c.link}>{c.state === "connected" ? "換一個" : "接上"}</Link>
+      </Button>
+    );
+  }
+  return null;
+}
+
+/** Prototype `.seg`: one-of segmented control, radio keyboard pattern (the picked option is the tab stop). No goal saved
+ * yet → nothing is picked; the first option is then the tab stop. */
+function GoalSegmented({ options, value, disabled, onChange }: {
+  options: { key: string; label: string }[];
+  value: string | null;
+  disabled: boolean;
+  onChange: (key: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stop = options.some((o) => o.key === value) ? value : options[0]?.key;
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+    if (disabled || !keys.includes(e.key) || !ref.current) return;
+    e.preventDefault();
+    const radios = Array.from(ref.current.querySelectorAll<HTMLButtonElement>("[role=radio]"));
+    const at = radios.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "Home" ? 0
+      : e.key === "End" ? radios.length - 1
+      : e.key === "ArrowRight" || e.key === "ArrowDown" ? (at + 1) % radios.length
+      : (at - 1 + radios.length) % radios.length;
+    radios[next].focus();
+    onChange(options[next].key);
+  };
+  return (
+    <div
+      ref={ref}
+      role="radiogroup"
+      aria-label="成效目標"
+      onKeyDown={onKeyDown}
+      className="inline-flex overflow-hidden rounded-lg border border-border"
+    >
+      {options.map((o, i) => {
+        const on = o.key === value;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            tabIndex={o.key === stop ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onChange(o.key)}
+            className={cn(
+              "px-3 py-[5px] text-[12.5px] font-medium disabled:cursor-default",
+              i > 0 && "border-l border-border",
+              on ? "bg-primary text-primary-foreground" : "bg-card hover:text-primary",
             )}
-          </div>
-        )}
-
-        {assignedAccountId && (
-          <p className="text-sm text-foreground">
-            已指定給這個品牌：{assignedAccount ? assignedAccount.name : assignedAccountId}
-          </p>
-        )}
-
-        {hasToken && !assignedAccountId && (
-          <p className="text-xs text-muted-foreground">權杖已存，還沒指定給這個品牌。</p>
-        )}
-
-        {backfilling && (
-          <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" />
-            正在把過去的花費拉進來，大約幾分鐘，不影響你先往下走
-          </div>
-        )}
-        {!backfilling && backfillNote && <p className="text-sm text-muted-foreground">{backfillNote}</p>}
-      </div>
-
-      <div className="flex flex-col gap-3 rounded-md border border-border p-4">
-        <p className="text-sm font-medium text-foreground">成效目標</p>
-        <p className="text-xs text-muted-foreground">這決定系統把什麼算成一次成效。</p>
-        {tools.conversion_goal_options.map((g) => (
-          <label
-            key={g.key}
-            className={`flex cursor-pointer items-center gap-2 rounded-md border p-3 text-sm ${
-              tools.conversion_goal === g.key ? "border-primary bg-primary/5" : "border-border"
-            }`}
           >
-            <input
-              type="radio"
-              checked={tools.conversion_goal === g.key}
-              disabled={savingGoal}
-              onChange={() => void handleSelectGoal(g.key)}
-            />
-            <span className="font-medium text-foreground">{g.label}</span>
-          </label>
-        ))}
-        {goalError && <span className="text-xs text-danger">{goalError}</span>}
-      </div>
-
-      <div className="flex cursor-not-allowed items-center justify-between rounded-md border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-        <span className="font-medium">GA4</span>
-        <span>GA4 接上後開放</span>
-      </div>
-
-      <p className="text-sm text-muted-foreground">已保存的商品、成效目標與帳戶可沿用。你可以先建立計畫；品牌研究進度會保留，稍後仍可回來補充。</p>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button asChild><Link to={`/brands/${encodeURIComponent(brandId)}/ads/new`}>先建立投放計畫</Link></Button>
-        <Button type="button" variant="outline" onClick={onNext}>繼續品牌研究（選用）</Button>
-        <Link className="text-sm text-primary underline" to={`/brands/${encodeURIComponent(brandId)}/ads`}>查看投放中心與月額度</Link>
-      </div>
-      {!assignedAccountId && <p className="text-xs text-muted-foreground">{SKIP_NOTE}</p>}
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

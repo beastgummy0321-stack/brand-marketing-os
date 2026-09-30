@@ -6,7 +6,7 @@ import type { IntakeDraft } from "@/lib/intakeApi";
 import { fetchIntakeDraft } from "@/lib/intakeApi";
 import type { OnboardingStatus } from "@/lib/intakeOnboardingApi";
 import { completeOnboarding, fetchOnboardingStatus } from "@/lib/intakeOnboardingApi";
-import { BRAND_STEPS, brandCrumb, OnboardingStepHead, type BarBack, type StepNav } from "./OnboardingStepHead";
+import { BRAND_STEPS, brandCrumb, type BarBack, type StepNav } from "./OnboardingStepHead";
 import { DoneStep } from "./steps/DoneStep";
 import { EvidenceStep } from "./steps/EvidenceStep";
 import { IdentityStep } from "./steps/IdentityStep";
@@ -149,12 +149,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
       body = <MediaStep nav={nav} back={back} onNext={next} />;
       break;
     case 6:
-      body = (
-        <div className="flex flex-col gap-4">
-          <OnboardingStepHead {...nav} title="接上工具" purpose="接越多，系統看得越清楚；現在只要 Meta 就能開始，其他之後再接" />
-          <ToolsStep brandId={brandId} onNext={() => void finishTools()} />
-        </div>
-      );
+      body = <ToolsStep brandId={brandId} nav={nav} back={back} onNext={() => void finishTools()} />;
       break;
     default:
       body = <DoneStep brandId={brandId} nav={nav} back={back} />;
