@@ -360,6 +360,9 @@ def product_detail(request: Request, brand_id: str, product_id: str):
     product = require_product(brand, product_id)
     facts = repo.list_product_facts(web.conn, brand_id, product_id)
     facts_pending = sum(1 for f in facts if f["status"] == "pending")
+    # F43-I01: effective values on purpose. This payload prefills the old economics editor, which
+    # cannot express "derived" (it turns an empty cost into 0 and this route's save refuses null),
+    # so a stored NULL here would be re-saved as 0; the effective number is the lesser harm.
     economics = repo.get_product_economics(web.conn, brand_id, product_id)
     rules = repo.list_rules_for_product(web.conn, brand_id, product_id)
     claims = repo.list_claims_for_product(web.conn, brand_id, product_id)
@@ -541,7 +544,7 @@ def economics_confirm(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
-    existing = repo.get_product_economics(web.conn, brand_id, product_id)
+    existing = repo.get_product_economics(web.conn, brand_id, product_id, raw=True)
     if not existing:
         raise NotFoundKind("產品經濟數字")
     repo.confirm_product_economics(web.conn, brand_id, product_id, confirmed_by=str(actor.user_id),
