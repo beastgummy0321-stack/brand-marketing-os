@@ -3,6 +3,9 @@
 Only confirmed source statements can support a promise. Coordinate labels, prompts,
 pack summaries and previous model output are never evidence. Read current sources for
 old and new versions alike. These warnings never prevent adoption or pack approval.
+One exception (F42 decision 「copy guard」): an offer word whose family is backed by a confirmed,
+structured store policy available for the ad's product (`bi_repo.offer_sources`) is not flagged,
+because the policy registry already knows its fulfilment place (the store's checkout).
 """
 import re
 from urllib.parse import quote
@@ -18,6 +21,18 @@ RISK = re.compile(
     r"熱銷[\d萬千百]+|銷售[\d萬千百]+|free trial|free sample|discount|free shipping|testimonial",
     re.IGNORECASE,
 )
+# F42 decision 「copy guard」: RISK offer words -> the `offer` key of the family they promise.
+# `*` (優惠) is backed by any available offer. Proof and endorsement words have no family and
+# keep the exact-sentence rule; so do offer words outside this table (促銷, 體驗券, ...).
+_OFFER_FAMILIES = [
+    (re.compile(r"免運"), "free_shipping"),
+    (re.compile(r"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|"
+                r"discount", re.IGNORECASE), "discount"),
+    (re.compile(r"贈品|加贈|買[一二三四五六七八九十\d]+送"), "bundle"),
+    (re.compile(r"試用|試吃|試飲|試喝"), "trial_sample"),
+    (re.compile(r"退款保證|保證退款"), "guarantee"),
+    (re.compile(r"優惠"), "*"),
+]
 _META = {"validation", "warnings", "coordinates", "fingerprint", "round",
          "visual_tone", "visual_concept"}
 
@@ -27,22 +42,33 @@ def sources(conn, brand_id: str, product_id: str | None) -> list[dict]:
     knowledge_id = bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
     if knowledge_id:
         rows += bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")
+    # Store policies (incl. the cooling-off exemption) reach the copy only through their one
+    # resolver, `offer_sources` below, so a policy that does not cover this product never shows.
     result = [{"id": r["id"], "text": str(r.get("value") or ""),
-               "proof": r.get("fact_type") == "proof"} for r in rows]
+               "proof": r.get("fact_type") == "proof"} for r in rows
+              if r.get("fact_type") != "policy"]
     claims = (bi_repo.list_claims_for_product(conn, brand_id, knowledge_id) if knowledge_id
               else [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
                     if not r.get("product_id")])
     result += [{"id": r["id"], "text": r["claim_text"], "proof": False} for r in claims
                if r["claim_type"] == "approved"]
+    # F42: the offer families the brand's confirmed policies make available for this product
+    # (threshold policies against its price), each with its registered sentence.
+    result += [{"id": f"offer:{o['offer_key']}", "text": o["sentence"], "proof": False,
+                "offer_key": o["offer_key"]}
+               for o in bi_repo.offer_sources(conn, brand_id, product_id)]
     return result
 
 
 def prompt_sources(rows: list[dict]) -> list[dict]:
-    """Registered evidence (confirmed `proof` facts, F38 decision 1) first, then the other
-    rows that carry a RISK word; capped at 20. The copy quotes these, never invents."""
+    """Registered evidence (confirmed `proof` facts, F38 decision 1) first, then the available
+    offers' registered sentences (F42), then the other rows that carry a RISK word; capped at
+    20. The copy quotes these, never invents."""
     proof = [r for r in rows if r.get("proof")]
-    risky = [r for r in rows if not r.get("proof") and RISK.search(r["text"])]
-    return [*proof, *risky][:20]
+    offers = [r for r in rows if r.get("offer_key")]
+    risky = [r for r in rows if not r.get("proof") and not r.get("offer_key")
+             and RISK.search(r["text"])]
+    return [*proof, *offers, *risky][:20]
 
 
 def policy(rows: list[dict]) -> str:
@@ -54,6 +80,9 @@ def policy(rows: list[dict]) -> str:
              "有來源時僅可逐字引用完整已確認字句，不擴張適用對象、數量、期間或優惠條件；履約入口必須已存在。",
              "『模擬測試』不能解除此限制。",
              *[f"- [{r['id']}] {r['text']}" for r in relevant]]
+    if any(r.get("offer_key") for r in relevant):
+        lines.append("[offer:…] 是品牌已登記、本商品適用的全店政策（在店家結帳時兌現），"
+                     "可照原字句寫，不改門檻或內容。")
     if not relevant:
         lines.append("（沒有已確認的優惠或背書來源）")
     return "\n".join(lines)
@@ -77,7 +106,10 @@ def unsupported(value, rows: list[dict]) -> list[str]:
     A bare category never authorizes its paraphrases. Full confirmed statements are
     required, and offer sources also need a URL or explicit fulfilment location.
     Conservative false positives are preferable to silently enlarging a promise.
+    Exception (F42): an offer word whose family is in the rows' `offer_key` set (confirmed
+    structured policies available for the product, see `sources`) is not reported.
     """
+    available = {row["offer_key"] for row in rows if row.get("offer_key")}
     approved = []
     for row in rows:
         text = row["text"].strip()
@@ -98,8 +130,19 @@ def unsupported(value, rows: list[dict]) -> list[str]:
     for text in _strings(value):
         for statement in sorted(approved, key=len, reverse=True):
             text = text.replace(statement, "")
-        missing.extend(m.group(0) for m in RISK.finditer(text))
+        missing.extend(m.group(0) for m in RISK.finditer(text)
+                       if not _offer_backed(m.group(0), available))
     return list(dict.fromkeys(missing))
+
+
+def _offer_backed(term: str, available: set[str]) -> bool:
+    """True when `term` promises an offer family the brand really has for this product."""
+    if not available:
+        return False
+    for pattern, family in _OFFER_FAMILIES:
+        if pattern.fullmatch(term):
+            return family == "*" or family in available
+    return False
 
 
 def warning(value, rows: list[dict], brand_id: str) -> dict | None:
