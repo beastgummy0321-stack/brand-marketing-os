@@ -21,19 +21,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "處�
  * what the website/photo scan found, as the rows steps 3/4 will pre-fill, and what it did not find — never a
  * decision. On entry the scan is read (`GET …/onboarding/scan`) and started once if it never ran (`POST`); a
  * running scan is read every second. A failed read shows the backend's message with 重試 and lets the user skip
- * to step 3; the head and the bar stay either way.
- *
- * `nav`: when given, this step renders the whole step head; without it the wizard renders the crumb and dots
- * above and this step renders only the title and purpose. `draft`/`onRefresh` are the legacy wizard props (the
- * old intake draft), not read here. */
-export function ScanStep({ brandId, nav, back, onNext }: {
-  brandId: string;
-  nav?: StepNav;
-  back?: BarBack;
-  onNext: () => void;
-  draft?: unknown;
-  onRefresh?: () => void;
-}) {
+ * to step 3; the head and the bar stay either way. */
+export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
   const [view, setView] = useState<View>({ kind: "busy" });
   const alive = useRef(true);
 
@@ -90,15 +79,7 @@ export function ScanStep({ brandId, nav, back, onNext }: {
 
   return (
     <div className="flex flex-col gap-4">
-      {nav ? (
-        <OnboardingStepHead {...nav} title={title} purpose={purpose} />
-      ) : (
-        // The wizard's head above ends with the dots' own gap; pull the title up to the head's spacing.
-        <div className="-mt-5 mb-1">
-          <h1 className="text-[26px] leading-tight font-[650] tracking-[-0.025em]">{title}</h1>
-          {purpose && <p className="mt-1 text-[15px] text-muted-foreground">{purpose}</p>}
-        </div>
-      )}
+      <OnboardingStepHead {...nav} title={title} purpose={purpose} />
 
       {done ? (
         <>
@@ -133,7 +114,8 @@ function purposeLine(scan: OnboardingScan): string {
   return `${read.length ? `讀了 ${read.join("、")}；` : ""}下面是我找到的，後面每一步會先幫你填好，你確認就好`;
 }
 
-/** Prototype `.card` 「找到的東西」 with its `.scan` rows: one per found area, one per area not found. */
+/** Prototype `.card` 「找到的東西」 with its `.scan` rows: one per found area, then one row joining the areas not
+ * found (「媒體報導、銷售數據」). */
 function ScanCard({ scan }: { scan: OnboardingScan }) {
   return (
     <section className="rounded-xl border border-border bg-card px-[22px] py-5">
@@ -147,9 +129,9 @@ function ScanCard({ scan }: { scan: OnboardingScan }) {
         {scan.found.map((row) => (
           <ScanRow key={`found-${row.area}`} area={row.area} text={row.text} tag={row.note ? `✦ 讀到（${row.note}）` : "✦ 讀到"} />
         ))}
-        {scan.not_found.map((area) => (
-          <ScanRow key={`missing-${area}`} area={area} text="沒找到，後面問你；沒有也沒關係" tag="網站上沒找到" missing />
-        ))}
+        {scan.not_found.length > 0 && (
+          <ScanRow area={scan.not_found.join("、")} text="沒找到，後面問你；沒有也沒關係" tag="網站上沒找到" missing />
+        )}
       </ul>
     </section>
   );

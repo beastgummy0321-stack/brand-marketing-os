@@ -1,8 +1,8 @@
 /** frontend/src/components/intake/steps/ScanStep.test.tsx — brand onboarding `#/b2` AI 讀網站 (F42-I07): the found
- * rows (area · text · 「✦ 讀到」 with the note) and one row per area not found; a scan that never ran is started once
+ * rows (area · text · 「✦ 讀到」 with the note) and one row joining the areas not found; a scan that never ran is started once
  * and read until it is done; a failed scan shows the backend's message with 重試 and 「先跳過，自己填」, and the head
  * and bar stay; 「開始確認」 moves on. No server: the API calls are fakes (importActual + override). */
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -39,12 +39,12 @@ const scan = (overrides: Partial<OnboardingScan>): OnboardingScan => ({
   ...DONE, found: [], not_found: [], prefilled: 0, pages_read: 0, photos_read: 0, ...overrides,
 });
 
-function renderStep({ withNav = true } = {}) {
+function renderStep() {
   const onNext = vi.fn();
   const back = { label: "基本", onClick: vi.fn() };
   render(
     <MemoryRouter>
-      <ScanStep brandId="brd_1" nav={withNav ? nav : undefined} back={back} onNext={onNext} />
+      <ScanStep brandId="brd_1" nav={nav} back={back} onNext={onNext} />
     </MemoryRouter>,
   );
   return { onNext, back };
@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("ScanStep", () => {
-  it("shows the found rows with their notes and one row per area not found", async () => {
+  it("shows the found rows with their notes and one row joining the areas not found", async () => {
     mockFetch.mockResolvedValue(DONE);
     renderStep();
 
@@ -69,11 +69,9 @@ describe("ScanStep", () => {
     expect(within(row("品牌證據")).getByText("✦ 讀到（about 頁）")).toBeTruthy();
     expect(within(row("政策")).getByText("✦ 讀到（頁面 1）")).toBeTruthy();
     expect(within(row("可能的商品")).getByText("✦ 讀到")).toBeTruthy();
-    for (const area of ["媒體報導", "銷售數據"]) {
-      expect(within(row(area)).getByText("沒找到，後面問你；沒有也沒關係")).toBeTruthy();
-      expect(within(row(area)).getByText("網站上沒找到")).toBeTruthy();
-    }
-    expect(screen.getAllByRole("listitem").filter((li) => li.closest("[data-slot=scan-rows]"))).toHaveLength(6);
+    expect(within(row("媒體報導、銷售數據")).getByText("沒找到，後面問你；沒有也沒關係")).toBeTruthy();
+    expect(within(row("媒體報導、銷售數據")).getByText("網站上沒找到")).toBeTruthy();
+    expect(screen.getAllByRole("listitem").filter((li) => li.closest("[data-slot=scan-rows]"))).toHaveLength(5);
     expect(mockStart).not.toHaveBeenCalled();
   });
 
@@ -161,11 +159,10 @@ describe("ScanStep", () => {
     expect(await screen.findByText("預填 5 項")).toBeTruthy();
   });
 
-  it("without nav (the wizard draws the dots) still shows the title, purpose and bar", async () => {
-    mockFetch.mockResolvedValue(DONE);
-    renderStep({ withNav: false });
-    expect(await screen.findByRole("heading", { level: 1, name: "我讀完你的網站了" })).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "建檔位置" })).toBeNull();
-    await waitFor(() => expect(screen.getByRole("button", { name: "開始確認 →" })).toBeTruthy());
+  it("no not-found row when the scan found every area", async () => {
+    mockFetch.mockResolvedValue({ ...DONE, not_found: [] });
+    renderStep();
+    await screen.findByText("預填 5 項");
+    expect(screen.queryByText("網站上沒找到")).toBeNull();
   });
 });

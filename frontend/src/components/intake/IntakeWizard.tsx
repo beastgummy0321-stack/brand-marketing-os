@@ -42,7 +42,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     try {
       const [onboarding, draft] = await Promise.all([
         fetchOnboardingStatus(brandId),
-        // Only the legacy scan step reads the draft; a brand without one still has onboarding.
+        // Only read to skip step 2 for a brand without a draft; a brand without one still has onboarding.
         fetchIntakeDraft(brandId).catch(() => null),
       ]);
       setState({ status: "ready", onboarding, draft });
@@ -137,12 +137,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
       );
       break;
     case 2:
-      body = (
-        <div className="flex flex-col gap-4">
-          <OnboardingStepHead {...nav} />
-          <ScanStep brandId={brandId} draft={draft as IntakeDraft} onRefresh={() => void refresh()} onNext={next} />
-        </div>
-      );
+      body = <ScanStep brandId={brandId} nav={nav} back={back} onNext={next} />;
       break;
     case 3:
       body = <IdentityStep nav={nav} back={back} onNext={next} />;
