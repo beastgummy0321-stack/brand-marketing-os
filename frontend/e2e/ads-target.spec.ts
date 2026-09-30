@@ -75,10 +75,10 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   expect(pickedBody.product_id).toBe(product.id);
   expect(pickedBody.result_kind).toBeUndefined();
 
-  // --- 商品沒有成本：誠實說沒有，連到該商品的經濟數字 ------------------------------------------------------
+  // --- 商品沒有成本：誠實說沒有，連到賣法背後那個商品的「賣法與價格」步驟（F43-I16）---------------------------
   await expect(page.getByText("沒有商品成本", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "去填商品成本", exact: true })).toHaveAttribute(
-    "href", `/app/brands/${brandId}/products/${product.id}?tab=economics-view`,
+    "href", `/app/brands/${brandId}/products/${productId}/onboarding?step=4`,
   );
 
   // --- 補上成本（售價 1,580 − 成本 1,000 − 運費 60 = 打平 520）後重新整理：暫用打平 -----------------------
