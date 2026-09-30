@@ -16,6 +16,7 @@ from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
+from app.core import settings as coresettings
 
 
 class AdsLearningFlowTest(unittest.TestCase):
@@ -38,7 +39,7 @@ class AdsLearningFlowTest(unittest.TestCase):
             currency="TWD",
         )
         self.conn.commit()
-        self.month = db.now_utc().strftime("%Y-%m")
+        self.month = coresettings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
         self._ad_seq = 2
 
     def entity(self, native_id, native_kind, **extra):

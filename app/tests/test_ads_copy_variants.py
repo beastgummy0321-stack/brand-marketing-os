@@ -223,7 +223,7 @@ class DynamicCopyChangeControlTest(unittest.TestCase):
             },
         )
         self.conn.commit()
-        self.month = db.now_utc().strftime("%Y-%m")
+        self.month = settings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
 
     def entity(self, native_id, native_kind, **extra):
         return external.upsert_entity(
