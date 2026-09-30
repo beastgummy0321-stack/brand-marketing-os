@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import type { SourcedText } from "@/lib/intakeOnboardingApi";
 import type { CreatedProduct, ProductPhoto, ProductWhat } from "@/lib/intakeProductApi";
@@ -83,6 +84,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
   const [photos, setPhotos] = useState<ProductPhoto[]>(what.photos);
   const [uploading, setUploading] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   /** The `what` the fields were last filled from. */
   const base = useRef(what);
 
@@ -151,22 +153,22 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
             {photos.map((p) => (
               <Thumb key={p.id} url={p.url} />
             ))}
-            <label className={uploading ? "cursor-not-allowed" : "cursor-pointer"}>
-              <span className="inline-flex items-center rounded-lg border border-border bg-card px-3 py-[5px] text-[13px] font-medium whitespace-nowrap hover:border-primary">
-                {uploading ? "上傳中…" : "＋上傳"}
-              </span>
-              <input
-                type="file"
-                accept={PHOTO_ACCEPT}
-                aria-label="上傳商品照"
-                className="sr-only"
-                disabled={uploading}
-                onChange={(e) => {
-                  void upload(e.target.files?.[0]);
-                  e.target.value = "";
-                }}
-              />
-            </label>
+            <Button type="button" variant="outline" size="sm" disabled={uploading} onClick={() => fileInput.current?.click()}>
+              {uploading ? "上傳中…" : "＋上傳"}
+            </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={PHOTO_ACCEPT}
+              aria-label="上傳商品照"
+              className="sr-only"
+              tabIndex={-1}
+              disabled={uploading}
+              onChange={(e) => {
+                void upload(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
           </div>
           {photoError && <p role="alert" className="mt-2 text-xs text-danger">{photoError}</p>}
         </Row>
