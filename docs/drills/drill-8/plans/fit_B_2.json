@@ -1,0 +1,32 @@
+{
+  "ads": {
+    "假日戶外活動前的使用提醒": {
+      "fit": 1.35,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "Explains mechanism thoroughly (每顆含 150mg 咖啡因, 免配水, 口腔黏膜吸收) and targets concrete pre-holiday scenario (出發前, 戶外活動, 朋友都上車了) matching Oct 10–11 National Day weekend."
+    },
+    "長時間工作也能維持舒適": {
+      "fit": 1.20,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Addresses concrete office scenario (連開幾場會, 會議與會議之間) and matching offer (999組合), but lacks mechanism explanation (150mg, absorption, no water) and product proof."
+    },
+    "運動前先建立安心選擇": {
+      "fit": 1.35,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": true,
+      "reason": "Explains mechanism in detail (每顆含 150mg 咖啡因, 再對照訓練安排, 把自己當天從其他來源攝取的咖啡因算進去) with concrete pre-training situation."
+    },
+    "高強度日程中的輕鬆準備": {
+      "fit": 1.20,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "Targets concrete morning chaos before midterm week (玄關手忙腳亂, 工作證, 打卡), but lacks mechanism explanation and specific proof; benefit (少一個要思考的步驟) is generic for any portable product."
+    }
+  }
+}

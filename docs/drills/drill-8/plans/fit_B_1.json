@@ -1,0 +1,32 @@
+{
+  "ads": {
+    "競技族｜比賽前確認使用方式": {
+      "fit": 1.1,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "上場前把補給安排好、150mg 咖啡因，但冷陌生客群不符競技族定位。"
+    },
+    "訓練族｜高強度活動中的使用選擇": {
+      "fit": 1.2,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "訓練後補給、150mg 咖啡因份量清楚說明，冷認知客群適合補給教育。"
+    },
+    "忙碌生活族｜減少每天處理麻煩": {
+      "fit": 1.2,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "通勤座位開工、150mg 咖啡因工作流程說明，冷認知客群與忙碌工作者相符。"
+    },
+    "日常使用者｜先看懂問題再選擇": {
+      "fit": 1.1,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "廣告名稱日常使用者，內容卻專注訓練後補給，定位與內容不一致。"
+    }
+  }
+}

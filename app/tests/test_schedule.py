@@ -1797,15 +1797,18 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
     def test_account_performance_is_the_last_prompt_section(self):
         """red proof（票面 done-check 1）：`schedule_plan()` prompt tuple 拿掉
         `performance_text` 那個元素就會紅——`assertGreater` 的兩個 index 斷言拿不到值。"""
+        # Both spend days sit inside the org's current month window ([月初, 下月初)); `today + 1`
+        # fell into next month on a month's last day and dropped the ROAS row.
+        month_start = coresettings.today_for_org(web.conn, org_id=coredb.DEV_ORG_ID).replace(day=1)
         meta_repo.upsert_entity_spend(web.conn, coredb.DEV_ORG_ID, self.account_id, [
             {"level": "ad", "entity_id": "ad-1", "entity_name": "測試廣告A",
              "campaign_id": "camp-1", "adset_id": "as-1", "ad_id": "ad-1",
-             "spend_date": self.today, "spend": 100.0, "impressions": 100, "clicks": 10,
+             "spend_date": month_start, "spend": 100.0, "impressions": 100, "clicks": 10,
              "roas": 3.0, "actions": None, "action_values": None,
              "attribution_window": "7d_click,1d_view"},
             {"level": "ad", "entity_id": "ad-1", "entity_name": "測試廣告A",
              "campaign_id": "camp-1", "adset_id": "as-1", "ad_id": "ad-1",
-             "spend_date": self.today + timedelta(days=1), "spend": 100.0,
+             "spend_date": month_start + timedelta(days=1), "spend": 100.0,
              "impressions": 100, "clicks": 10, "roas": None, "actions": None,
              "action_values": None, "attribution_window": "7d_click,1d_view"},
         ])

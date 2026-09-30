@@ -350,6 +350,51 @@ def _confirm_if_ready(conn, org, brand, campaign_id, placement, actor) -> None:
     )
 
 
+PREVIEW_ACTOR = "system:preview"
+
+
+def settle_ready_asset(conn, org, brand, asset_id) -> int:
+    """Drill-8 #4: once an original's preview is made (`user_assets.process_preview`, its only
+    reader), confirm and settle every slot still waiting on it -- the same two calls `upload`
+    runs, so a file uploaded while its original was pending reaches `ready` with no second click.
+
+    Only current, unconfirmed placements an `ads_ad` points at through `slot_placement_id` are
+    touched; a library placement (no ad points at it) waits for the user's own confirmation. The
+    actor is the placement's `created_by` (who uploaded it into the slot), else `system:preview`.
+    Returns how many slots were settled (ads whose slot now carries the confirmed placement)."""
+    waiting = conn.execute(
+        "SELECT DISTINCT a.campaign_id,a.slot_placement_id FROM ads_ad a "
+        "JOIN ads_asset_placement p ON p.id=a.slot_placement_id AND p.org_id=a.org_id "
+        "AND p.brand_id=a.brand_id AND p.campaign_id=a.campaign_id AND p.is_current "
+        "WHERE a.org_id=%s AND a.brand_id=%s AND p.asset_id=%s AND p.confirmed_at IS NULL "
+        "ORDER BY a.campaign_id,a.slot_placement_id",
+        (org, brand, asset_id),
+    ).fetchall()
+    settled = 0
+    for row in waiting:
+        campaign_id, placement_id = row["campaign_id"], row["slot_placement_id"]
+        placement = user_assets.placement(conn, org, brand, campaign_id, placement_id)
+        _confirm_if_ready(
+            conn, org, brand, campaign_id, placement, placement["created_by"] or PREVIEW_ACTOR
+        )
+        conn.commit()
+        before = _slot_ads(conn, org, brand, campaign_id, placement_id)
+        settle(conn, org, brand, campaign_id, placement_id)
+        settled += len(before - _slot_ads(conn, org, brand, campaign_id, placement_id))
+    return settled
+
+
+def _slot_ads(conn, org, brand, campaign_id, placement_id) -> set:
+    return {
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM ads_ad WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+            "AND slot_placement_id=%s",
+            (org, brand, campaign_id, placement_id),
+        ).fetchall()
+    }
+
+
 def _slot_ad_for_write(conn, org, brand, campaign_id, ad_id) -> dict:
     ads_repo.require_internal_campaign(conn, org, brand, campaign_id)
     ad = _planned_ad(conn, org, brand, campaign_id, ad_id)
@@ -366,12 +411,31 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
     """`POST …/campaigns/{c}/slots/{ad_id}/upload`: `{upload_id}` (a finished upload) or
     `{asset_id}`, optional `copy_fields` -- the same inputs as `POST …/placements`. Without
     `copy_fields` the ad's selected workbench copy rides in; the purpose is the ad's name; a
-    ready original is confirmed and assigned in this same call (Contract T)."""
-    if not isinstance(body, dict) or set(body) - {"upload_id", "asset_id", "copy_fields"}:
+    ready original is confirmed and assigned in this same call (Contract T).
+
+    F41-I01: `{placement_id}` (a finished asset already placed in this campaign -- the advanced
+    「將成品指派給計畫中的廣告」 panel) places that placement's original for this ad. Its effective
+    copy plays the part an upload's own copy plays for `{upload_id}`: used only when neither
+    `copy_fields` nor the ad's selected workbench copy is there. One rule set, one place."""
+    if not isinstance(body, dict) or set(body) - {
+        "upload_id", "asset_id", "placement_id", "copy_fields"
+    }:
         raise ValueError("上傳欄位無效。")
-    if not body.get("upload_id") and not body.get("asset_id"):
+    if body.get("placement_id") is not None and (
+        not isinstance(body["placement_id"], str)
+        or not body["placement_id"]
+        or body.get("upload_id")
+        or body.get("asset_id")
+    ):
+        raise ValueError("上傳欄位無效。")
+    if not body.get("upload_id") and not body.get("asset_id") and not body.get("placement_id"):
         raise ValueError("請先上傳檔案，或選一個品牌原檔。")
     ad = _slot_ad_for_write(conn, org, brand, campaign_id, ad_id)
+    own_copy = None
+    if body.get("placement_id"):
+        source = user_assets.placement(conn, org, brand, campaign_id, body["placement_id"])
+        own_copy = bindings.effective_copy(source)
+        body = {"asset_id": source["asset_id"], "copy_fields": body.get("copy_fields")}
     if body.get("copy_fields") is None:
         ad_copy = _workbench_copy(
             conn, org, brand, _ad_sets(conn, org, brand, campaign_id).get(ad["id"])
@@ -383,6 +447,8 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
                     k: ad_copy[k] for k in COPY_FIELDS if isinstance(ad_copy.get(k), str)
                 },
             }
+        elif own_copy is not None:
+            body = {**body, "copy_fields": own_copy}
     placement = user_assets.attach_selected(
         conn, org, brand, campaign_id, body, actor, purpose=ad["name"], ad_id=ad["id"]
     )

@@ -24,7 +24,7 @@ ACTOR = "測試員"
 CAP = 100.0
 DAYS = 7
 
-_FILLER = {"pain": "p1", "angle": "a1", "hook": "h1", "proof": "pr1", "format": "f1"}
+_FILLER = {"pain": "effort", "angle": "a1", "hook": "h1", "proof": "pr1", "format": "f1"}
 
 
 class CoordinateLearningTestBase(unittest.TestCase):
@@ -86,6 +86,22 @@ class CoordinateLearningTestBase(unittest.TestCase):
     def _coordinate_rows(self) -> list:
         return bi_repo.list_learnings(self.conn, self.brand_id, source_track="coordinate")
 
+    def _vocabulary(self, *rows: tuple[str, str, str]) -> None:
+        """Brand vocabulary rows `(dimension, key, label)`: the labels the owner reads."""
+        for dimension, key, label in rows:
+            self.conn.execute(
+                "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (coredb.new_id("crd"), self.org_id, self.brand_id, dimension, key, label),
+            )
+        self.conn.commit()
+
+    def _labelled_vocabulary(self) -> None:
+        self._vocabulary(
+            ("audience", "cold_unaware", "陌生・不知道問題"), ("pain", "effort", "太麻煩"),
+            ("offer", "free_shipping", "免運"),
+        )
+
     def _two_graded_ads(self) -> tuple[dict, dict, dict]:
         """Campaign with ad A 划算 (7 × 50 spend, 1 result a day) and ad B 沒賣出 (7 × 50 spend,
         0 results): both past the sample gate (spend >= 3 × cap)."""
@@ -103,6 +119,7 @@ class CoordinateLearningTestBase(unittest.TestCase):
 
 class CloseWritesOneLearningPerGradedAdTest(CoordinateLearningTestBase):
     def test_two_graded_ads_write_two_coordinate_rows_with_the_exact_scope(self):
+        self._labelled_vocabulary()
         campaign, ad_a, ad_b = self._two_graded_ads()
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -114,23 +131,29 @@ class CloseWritesOneLearningPerGradedAdTest(CoordinateLearningTestBase):
         row_a = rows[f"{campaign['id']}:{ad_a['id']}"]
         self.assertEqual(
             row_a["applicability_scope"],
-            "coord；grade=on_target；audience=cold_unaware；pain=p1；angle=a1；hook=h1；proof=pr1"
-            "；offer=free_shipping；format=f1",
+            "coord；grade=on_target；cpr=50；cap=100；audience=cold_unaware；pain=effort；angle=a1"
+            "；hook=h1；proof=pr1；offer=free_shipping；format=f1",
         )
         self.assertEqual(
             row_a["learning_text"],
-            "「A」每筆 50（上限 100）＝划算；audience=cold_unaware、pain=p1、angle=a1、hook=h1"
-            "、proof=pr1、offer=free_shipping、format=f1",
+            "「A」每筆 50（上限 100）＝划算；受眾：陌生・不知道問題、痛點：太麻煩"
+            "、角度：a1、標題：h1、證據：pr1、優惠：免運、格式：f1",
         )
         self.assertEqual(row_a["confidence"], "observed")
         self.assertEqual(row_a["sample_size"], "高")
         row_b = rows[f"{campaign['id']}:{ad_b['id']}"]
         self.assertEqual(
             row_b["applicability_scope"],
-            "coord；grade=wasted；audience=warm_retarget；pain=p1；angle=a1；hook=h1；proof=pr1"
-            "；offer=discount；format=f1",
+            "coord；grade=wasted；cpr=none；cap=100；audience=warm_retarget；pain=effort；angle=a1"
+            "；hook=h1；proof=pr1；offer=discount；format=f1",
         )
-        self.assertTrue(row_b["learning_text"].startswith("「B」每筆 —（上限 100）＝沒賣出；"))
+        # drill-8 #11: the stored text names coordinates by label (key only without a label).
+        self.assertNotIn("pain=", row_a["learning_text"])
+        self.assertEqual(
+            row_b["learning_text"],
+            "「B」每筆 —（上限 100）＝沒賣出；受眾：warm_retarget、痛點：太麻煩、角度：a1"
+            "、標題：h1、證據：pr1、優惠：discount、格式：f1",
+        )
         self.assertEqual(row_b["sample_size"], "低")
         # The campaign sentence stays on the ads track; the closed row carries every id.
         self.assertEqual(
@@ -178,11 +201,7 @@ class ScoreboardSectionTest(CoordinateLearningTestBase):
         self.assertEqual(ids, [])
 
     def test_after_the_close_the_section_tallies_and_names_the_on_target_ad(self):
-        self.conn.execute(
-            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
-            "VALUES(%s,%s,%s,'offer','free_shipping','免運')",
-            (coredb.new_id("crd"), self.org_id, self.brand_id),
-        )
+        self._vocabulary(("offer", "free_shipping", "免運"), ("pain", "effort", "太麻煩"))
         campaign, _ad_a, _ad_b = self._two_graded_ads()
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
@@ -197,13 +216,15 @@ class ScoreboardSectionTest(CoordinateLearningTestBase):
         self.assertIn("- audience｜cold_unaware｜cold_unaware：划算 1、偏貴 0、太貴 0、沒賣出 0",
                       lines)
         self.assertIn(
-            "上一期「測試 座標學習」划算的：「A」（audience=cold_unaware、pain=p1、angle=a1"
-            "、hook=h1、proof=pr1、offer=free_shipping、format=f1）",
+            "上一期「測試 座標學習」划算的：「A」（cold_unaware（audience=cold_unaware）"
+            "、太麻煩（pain=effort）、a1（angle=a1）、h1（hook=h1）、pr1（proof=pr1）"
+            "、免運（offer=free_shipping）、f1（format=f1））",
             lines,
         )
         self.assertIn(
-            "上一期太貴／沒賣出的：「B」沒賣出（audience=warm_retarget、pain=p1、angle=a1、hook=h1"
-            "、proof=pr1、offer=discount、format=f1）",
+            "上一期太貴／沒賣出的：「B」沒賣出（warm_retarget（audience=warm_retarget）"
+            "、太麻煩（pain=effort）、a1（angle=a1）、h1（hook=h1）、pr1（proof=pr1）"
+            "、discount（offer=discount）、f1（format=f1））",
             lines,
         )
         # Dimension order is the learning order: audience lines come before offer lines.
@@ -212,6 +233,72 @@ class ScoreboardSectionTest(CoordinateLearningTestBase):
             lines.index("- offer｜free_shipping｜免運：划算 1、偏貴 0、太貴 0、沒賣出 0"),
         )
         self.assertEqual(set(ids), {row["id"] for row in self._coordinate_rows()})
+        # drill-8 #11: the planner reads the words beside the key it may reuse verbatim.
+        line_a = next(line for line in lines if line.startswith("上一期「"))
+        self.assertIn("（pain=effort）", line_a)
+        self.assertIn("太麻煩", line_a)
+
+
+class ScoreboardRowsTest(CoordinateLearningTestBase):
+    def test_last_ads_carry_grade_numbers_and_the_labelled_display_rows(self):
+        self._labelled_vocabulary()
+        campaign, _ad_a, _ad_b = self._two_graded_ads()
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        board = coordinate_learning.scoreboard(self.conn, self.org_id, self.brand_id)
+
+        (ad_a,) = board["last"]["on_target"]
+        self.assertEqual(
+            (ad_a["grade"], ad_a["grade_label"], ad_a["cost_per_result"], ad_a["cap"]),
+            ("on_target", "划算", 50, 100),
+        )
+        (ad_b,) = board["last"]["bad"]
+        self.assertEqual((ad_b["grade"], ad_b["cost_per_result"], ad_b["cap"]),
+                         ("wasted", None, 100))
+
+        rows = coordinate_learning.learning_rows(self.conn, self.org_id, self.brand_id, board)
+        self.assertEqual([row["ad_name"] for row in rows], ["A", "B"])
+        self.assertEqual(rows[0]["grade"], "on_target")
+        self.assertEqual(rows[0]["grade_label"], "划算")
+        self.assertEqual(rows[0]["cost_per_result"], 50)
+        self.assertEqual(rows[0]["campaign_name"], "測試 座標學習")
+        self.assertEqual(rows[0]["coordinates"][:2], [
+            {"dimension": "audience", "dimension_label": "受眾", "label": "陌生・不知道問題"},
+            {"dimension": "pain", "dimension_label": "痛點", "label": "太麻煩"},
+        ])
+        self.assertIn(
+            {"dimension": "offer", "dimension_label": "優惠", "label": "免運"},
+            rows[0]["coordinates"],
+        )
+        self.assertEqual(rows[1]["grade_label"], "沒賣出")
+        self.assertIsNone(rows[1]["cost_per_result"])
+
+    def test_a_row_written_before_the_numbers_reads_them_as_none(self):
+        campaign = self._campaign(name="舊的一期")
+        group = self._group(campaign["id"])
+        ad = self._ad(campaign["id"], group["id"], name="舊廣告", audience="cold_unaware",
+                      offer="none")
+        bi_repo.record_learning(
+            self.conn, self.brand_id, actor=ACTOR, learning_text="舊句子",
+            applicability_scope="coord；grade=on_target；audience=cold_unaware；pain=effort"
+            "；angle=a1；hook=h1；proof=pr1；offer=none；format=f1",
+            confidence="observed", sample_size="高",
+            source_cycle_id=f"{campaign['id']}:{ad['id']}", source_track="coordinate",
+        )
+        self.conn.execute(
+            "UPDATE ads_campaign SET status = 'closed', closed_at = now() WHERE id = %s",
+            (campaign["id"],),
+        )
+        self.conn.commit()
+
+        board = coordinate_learning.scoreboard(self.conn, self.org_id, self.brand_id)
+        rows = coordinate_learning.learning_rows(self.conn, self.org_id, self.brand_id, board)
+
+        (row,) = rows
+        self.assertEqual(row["grade"], "on_target")
+        self.assertIsNone(row["cost_per_result"])
+        # A `none` coordinate is left out of the display row.
+        self.assertNotIn("offer", [c["dimension"] for c in row["coordinates"]])
 
 
 if __name__ == "__main__":

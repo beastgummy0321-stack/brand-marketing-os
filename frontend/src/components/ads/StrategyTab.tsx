@@ -13,9 +13,13 @@ import {
   selectScenario,
   setAllocation,
   type CampaignDetail,
+  type StrategyCoordinateLearning,
   type StrategyRole,
 } from "@/lib/adsApi";
-import { ActionBar, AllocationBar, Disclosure, formatAmount } from "./patterns";
+import { cn } from "@/lib/utils";
+import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount } from "./patterns";
+// `patterns/index.ts` does not re-export the part fills; same feature folder, so the direct path is allowed.
+import { allocationFills } from "./patterns/ScenarioBars";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
 import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
@@ -23,6 +27,28 @@ import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+
+/** Prototype F41 ② `.lrn` (「用到的學習」): each ad of the last closed period the planner read — grade chip with its cost
+ * per result, 「ad」（campaign）, then one chip per coordinate by its label (the API never sends a raw key here). */
+function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }) {
+  return (
+    <ul>
+      {rows.map((row, i) => (
+        <li key={`${row.ad_name}-${i}`} data-slot="coordinate-learning" className="border-t border-border py-2.5 text-[13px] first:border-t-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : formatAmount(Math.floor(row.cost_per_result))}`} />
+            <span className="min-w-0 [overflow-wrap:anywhere]">「{row.ad_name}」（{row.campaign_name}）</span>
+          </div>
+          {row.coordinates.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {row.coordinates.map((k) => <Chip key={k.dimension}>{k.dimension_label}：{k.label}</Chip>)}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** 策略 tab（F28-I09，prototype v9 `tabStrategy()`）：一個上限（`CapBlock`）→ 這一期的總預算（`BudgetScenarios`，
  * internal only）→ 預算怎麼分 → 兩個收合（為什麼這樣建議／進階設定），底部一條動作列。v10 (F30-I07): 進階設定 holds the
@@ -150,6 +176,12 @@ export function StrategyTab({
   }
 
   const allocationTotal = pickedRow?.total ?? c.budget_planned;
+  // A row's 元: an unsaved pick is priced locally (as the old legend did); otherwise the API's own `amount`, but only
+  // once a budget is saved — generating fills `amount` from the recommended total before the user chose anything.
+  const amountOf = (pct: number, amount: number | null) =>
+    pickedRow?.total != null ? Math.round((pickedRow.total * pct) / 100) : c.budget_planned !== null ? amount : null;
+  const fills = strategy ? allocationFills(strategy.allocation.map((item) => ({ key: item.role, pct: item.pct }))) : {};
+  const coordinateLearnings = basis?.coordinate_learnings ?? [];
   const missingHandoff = c.manual_handoff?.groups.filter((group) => group.missing.length > 0) ?? [];
   const beforeAdoption = step.id === "strategy_adopt";
 
@@ -191,7 +223,27 @@ export function StrategyTab({
                 </div>
               </div>
               {allocationPct === null ? (
-                <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} total={allocationTotal} />
+                <>
+                  <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} total={allocationTotal} legend={false} />
+                  {/* Prototype F41 ② `.why`: one row per role — swatch, label, 「N%・M 元」, and the planner's reason. */}
+                  <ul>
+                    {strategy.allocation.map((item) => {
+                      const amount = formatAmount(amountOf(item.pct, item.amount));
+                      return (
+                        <li key={item.role} data-slot="allocation-row" data-role={item.role} className="flex items-start gap-2.5 border-t border-border py-3 first:border-t-0">
+                          <i className={cn("mt-1.5 size-2.5 shrink-0 rounded-[3px]", fills[item.role] ?? "bg-muted")} aria-hidden="true" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <b className="text-sm font-semibold">{item.label}</b>
+                              <span className="numeric text-sm">{item.pct}%{amount !== null && `・${amount} 元`}</span>
+                            </div>
+                            {item.rationale?.trim() && <p className="mt-0.5 text-[13px] [overflow-wrap:anywhere]">{item.rationale}</p>}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
               ) : (
                 <div className="flex flex-col gap-2">
                   {strategy.allocation.map((item) => (
@@ -250,6 +302,13 @@ export function StrategyTab({
               )}
               {strategy.why.length === 0 && strategy.unknowns.length === 0 && (strategy.learning_goals ?? []).length === 0 && (
                 <p className="text-muted-foreground">這一輪沒有列出原因</p>
+              )}
+              {coordinateLearnings.length > 0 && (
+                // Prototype F41 ② `.lrn`: the last closed period's ads the planner read, by grade and coordinate label.
+                <section aria-labelledby="coordinate-learnings-title">
+                  <h3 id="coordinate-learnings-title" className="mb-1 text-[12.5px] font-semibold">用到的學習</h3>
+                  <CoordinateLearningRows rows={coordinateLearnings} />
+                </section>
               )}
               {basis && (
                 <Button variant="outline" size="sm" className="w-fit" onClick={() => setBasisOpen(true)}>
@@ -336,10 +395,11 @@ export function StrategyTab({
             </section>
             <section>
               <h4 className="mb-2 text-sm font-medium">用到的學習</h4>
+              {coordinateLearnings.length > 0 && <CoordinateLearningRows rows={coordinateLearnings} />}
               {basis.learnings.length === 0 ? (
-                <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
+                coordinateLearnings.length === 0 && <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
               ) : (
-                <ul className="space-y-2 text-sm">
+                <ul className={cn("space-y-2 text-sm", coordinateLearnings.length > 0 && "mt-2 border-t border-border pt-2.5")}>
                   {basis.learnings.map((l) => (
                     <li key={l.id}>
                       <p>{l.text}</p>

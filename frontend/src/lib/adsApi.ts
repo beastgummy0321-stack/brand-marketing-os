@@ -10,6 +10,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
+import type { StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
@@ -279,61 +280,8 @@ export interface BudgetScenarios {
   budget_cap: number | null; // F28-I03: `constraints_json.budget`; unset／0／negative -> null
 }
 
-export type StrategyRole = "new" | "retarget" | "explore";
-
-export interface StrategyAllocationItem {
-  role: StrategyRole;
-  label: string;
-  pct: number;
-  rationale: string | null;
-  /** 已套用 `budget.split()` 的金額，跟 `total` 精準加總——冷啟動沒有依據時是 `null`。 */
-  amount: number | null;
-}
-
-export interface StrategyPayload {
-  allocation: StrategyAllocationItem[];
-  why: string[];
-  unknowns: string[];
-  alternatives: unknown[];
-  /** F04-I13：這一輪想學到什麼，最多 3 條；舊資料沒有這個鍵時當空陣列讀，可選。 */
-  learning_goals?: string[];
-}
-
-export interface StrategyBasisFact {
-  id: string;
-  label: string;
-  updated_at: string;
-}
-
-export interface StrategyBasisPrice {
-  product_id: string;
-  price: number | null;
-  effective_from: string | null;
-  stale: boolean;
-  /** F05-I12：`product_economics.assumptions_json`——非空代表這筆價格用的是假設值。 */
-  assumptions: string[];
-  sell_way_name: string;
-}
-
-export interface StrategyBasisLearning {
-  id: string;
-  text: string;
-  level: string;
-  needs_revalidation: boolean;
-}
-
-/** 查看策略依據：這個策略用到哪些品牌事實／商品價格／學習／llm_task，畫面照這個列。 */
-export interface StrategyBasis {
-  knowledge_item_ids: string[];
-  llm_task_id: string;
-  input_context_hash: string;
-  brand_facts: StrategyBasisFact[];
-  prices: StrategyBasisPrice[];
-  learnings: StrategyBasisLearning[];
-  estimated_fields: string[];
-  /** F05-I12：一個都沒有假設值時這個鍵不存在（後端不落地空字串）。 */
-  assumption_note?: string;
-}
+// F41-I04: the strategy shapes live in `adsStrategyTypes.ts` (this file's 800-line cap); re-exported here.
+export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
 
 /** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
  * Campaign 這一列，沒有另開表。 */

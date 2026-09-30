@@ -28,6 +28,10 @@ markdown fence 包起來、物件前後不留一個字。**
 【座標成績表】有列時，`rationale` 要點名上一期划算的那一則（廣告名）以及這次打算沿用或
 避開的座標；沒有成績表就寫「還沒有結案成績」。
 
+**座標一律用中文名稱，不寫英文代碼。** 老闆會讀 `why`、`rationale`、`learning_goals`、
+`unknowns` 的每一句：提到座標時寫成績表括號前的中文名稱（例如「太麻煩」），不要寫括號裡的
+`pain=effort` 這種代碼，也不要寫 `audience`、`offer` 這類維度英文字。
+
 ## 交付內容
 
 - `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：

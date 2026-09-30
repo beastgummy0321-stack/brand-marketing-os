@@ -173,3 +173,12 @@ What the drill cost the fixture this time: the drill clock covers `now_utc` only
 (`datetime.now`) and `observed_at` (SQL `now()`) keep real time, so a planning day earlier than the real date
 blocks launch approval and a later one zeroes the month known spend (report §3 #17). Start the worker as a detached
 process, not a shell background job.
+
+## Drill 8 (2026-09-30) — B only again, after F39＋F40
+
+`docs/drills/drill-8/`: `plan.md`, `report.md` (three-round A-vs-B table first), `plans/` (run logs, exported plans, fits,
+sims on the product's dates and on A's window). Periods moved +7 days (P1 10/3–10/9) so planning days are later than the
+real date; the A-vs-B table re-simulates B on A's week. Result: B 1.46 -> 1.06 (A 2.25); the F39 loop works, the drop is
+offers never switched on, video slots with photo-only brands, and the rationale not shown.
+What the drill cost the fixture this time: `export_plan.py` read the first revision of a placement instead of the current
+one (fixed: `is_current`), so the rows loaded into the stand-in were judged on stale copy for revised ads.

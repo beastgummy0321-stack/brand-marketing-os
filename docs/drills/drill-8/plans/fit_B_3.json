@@ -1,0 +1,25 @@
+{
+  "ads": {
+    "高強度訓練後的日常補給選擇": {
+      "fit": 1.1,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "收操後，坐在場邊整理護腕、毛巾和耳機；體積小、好攜帶、讓你不用再準備一杯飲品多做幾個步驟"
+    },
+    "比賽前不想增加準備負擔": {
+      "fit": 1.0,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "比賽集合區描述清楚，但audience_key為cold_unaware而copy針對競技族自覺的準備痛點，屬problem_aware"
+    },
+    "高強度日程中的輕鬆準備": {
+      "fit": 1.1,
+      "tags": ["fitness", "worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "下班鐘一響，趕到更衣室才發現裝備還沒整理好；讓你把補給先放進訓練節奏裡解決準備負擔"
+    }
+  }
+}

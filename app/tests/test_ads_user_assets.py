@@ -4,20 +4,25 @@ import asyncio
 import hashlib
 import threading
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.ads import external_repository as external
+from app.ads import repository as campaigns
+from app.ads import slots
 from app.ads import user_assets as service
 from app.ads import user_assets_repository as repo
 from app.ads import user_assets_routes as routes
 from app.brand_intelligence import repository as brands
-from app.core import db
+from app.core import db, settings
 from app.main import app
 
 CONTENT = b"\x89PNG\r\n\x1a\noriginal-bytes"
+OTHER_CONTENT = b"\x89PNG\r\n\x1a\nanother-original"
+FULL_COPY = {"headline": "標題", "body": "文案", "description": "說明"}
 
 
 class UserAssetsTest(unittest.TestCase):
@@ -130,6 +135,125 @@ class UserAssetsTest(unittest.TestCase):
             )
         self.conn.commit()
         return ads
+
+    def internal_ad(self):
+        """An app-built campaign with one planned ad -- the slot upload's target."""
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        campaign = campaigns.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": "預覽後就緒",
+                "goal_text": "檢驗訊息",
+                "objective": "awareness",
+                "start_date": today,
+                "end_date": today + timedelta(days=7),
+            },
+            created_by="test",
+        )["id"]
+        group = db.new_id("adg")
+        ad = db.new_id("ada")
+        self.conn.execute(
+            "INSERT INTO ads_delivery_group(id,org_id,brand_id,campaign_id,channel_key,"
+            "name,daily_budget,role) VALUES(%s,%s,%s,%s,'fixture','新客',500,'new')",
+            (group, self.org, self.brand, campaign),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_ad(id,org_id,brand_id,campaign_id,group_id,name) "
+            "VALUES(%s,%s,%s,%s,%s,'晨光隨行杯・日常出發')",
+            (ad, self.org, self.brand, campaign, group),
+        )
+        self.conn.commit()
+        return campaign, ad
+
+    def upload_bytes(self, content, copy):
+        item = self.batch(copy, size=len(content))
+        service.begin_upload(self.conn, self.org, self.brand, item["id"])
+        return service.accept_upload(self.conn, self.org, self.brand, item["id"], content)
+
+    def preview(self, asset_id):
+        result = {
+            "width": 1080, "height": 1080, "duration": None, "thumbnail": b"poster",
+            "preview": b"preview", "preview_mime": "image/jpeg", "preview_duration": None,
+        }
+        with patch.object(service.media_probe, "preview", return_value=result):
+            service.process_preview(self.org, self.brand, asset_id)
+
+    def test_preview_done_confirms_and_assigns_the_slot_waiting_on_it(self):
+        """Drill-8 #4: a file uploaded into a slot while its original was still pending reaches
+        `ready` when the preview finishes -- no second call. A library placement (no ad points
+        at it) of the same or another original still waits for the user's confirmation."""
+        item = self.original(FULL_COPY)
+        other = self.upload_bytes(OTHER_CONTENT, FULL_COPY)
+        campaign, ad = self.internal_ad()
+        uploaded = slots.upload(
+            self.conn, self.org, self.brand, campaign, ad,
+            {"asset_id": item["asset_id"], "copy_fields": FULL_COPY}, "human",
+        )["placement"]
+        self.assertIsNone(uploaded["confirmed_at"])  # the original is still pending
+        library = repo.attach(
+            self.conn, self.org, self.brand, campaign, item["asset_id"], FULL_COPY, "librarian"
+        )
+        other_library = repo.attach(
+            self.conn, self.org, self.brand, campaign, other["asset_id"], FULL_COPY, "librarian"
+        )
+        self.conn.commit()
+
+        self.preview(item["asset_id"])
+        self.preview(other["asset_id"])
+
+        self.assertEqual(
+            repo.get_asset(self.conn, self.org, self.brand, item["asset_id"])["status"], "ready"
+        )
+        placement = repo.placement(self.conn, self.org, self.brand, campaign, uploaded["id"])
+        self.assertIsNotNone(placement["confirmed_at"])
+        self.assertEqual((placement["created_by"], placement["confirmed_by"]), ("human", "human"))
+        row = campaigns.get_ad(self.conn, self.org, self.brand, ad)
+        self.assertEqual(
+            (row["material_placement_id"], row["material_placement_revision"]),
+            (uploaded["id"], placement["revision"]),
+        )
+        self.assertIsNone(row["slot_placement_id"])
+        for waiting in (library, other_library):
+            self.assertIsNone(
+                repo.placement(self.conn, self.org, self.brand, campaign, waiting["id"])[
+                    "confirmed_at"
+                ]
+            )
+
+    def test_a_failing_settle_after_the_preview_leaves_the_asset_ready(self):
+        """The settle after the preview is best-effort: a failure there never turns the made
+        preview into `error`/`retryable`; the slot keeps waiting and manual confirmation works."""
+        item = self.original(FULL_COPY)
+        campaign, ad = self.internal_ad()
+        uploaded = slots.upload(
+            self.conn, self.org, self.brand, campaign, ad,
+            {"asset_id": item["asset_id"], "copy_fields": FULL_COPY}, "human",
+        )["placement"]
+        with patch.object(slots, "settle_ready_asset", side_effect=RuntimeError("boom")):
+            self.preview(item["asset_id"])
+        asset = repo.get_asset(self.conn, self.org, self.brand, item["asset_id"])
+        self.assertEqual((asset["status"], asset["error"]), ("ready", None))
+        self.assertIsNone(
+            repo.placement(self.conn, self.org, self.brand, campaign, uploaded["id"])[
+                "confirmed_at"
+            ]
+        )
+        self.assertEqual(
+            campaigns.get_ad(self.conn, self.org, self.brand, ad)["slot_placement_id"],
+            uploaded["id"],
+        )
+        confirmed = self.client.post(
+            f"/api/ads/brands/{self.brand}/campaigns/{campaign}/placements/{uploaded['id']}"
+            "/confirm",
+            json={"expected_revision": uploaded["revision"]},
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(
+            campaigns.get_ad(self.conn, self.org, self.brand, ad)["material_placement_id"],
+            uploaded["id"],
+        )
 
     def test_same_ad_different_copy_is_still_a_conflict(self):
         """F40-I02: the current row is keyed by (campaign, asset, ad); the same ad uploading the

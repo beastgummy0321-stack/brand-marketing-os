@@ -41,7 +41,7 @@ def export(brand_id: str, period: int, campaign_id: str | None) -> dict:
                 audience_key = audience_key or a["audience_key"]
                 copy = {}
                 if a["material_placement_id"]:
-                    p = conn.execute("SELECT copy_fields FROM ads_asset_placement WHERE id = %s",
+                    p = conn.execute("SELECT copy_fields FROM ads_asset_placement WHERE id = %s AND is_current",
                                      (a["material_placement_id"],)).fetchone()
                     copy = (p and p["copy_fields"]) or {}
                 live = a["live_creative_json"] or {}

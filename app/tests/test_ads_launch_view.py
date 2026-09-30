@@ -19,6 +19,7 @@ from app.ads import (
     handoff_check,
     handoff_data,
     launch_view,
+    month_budget,
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
@@ -674,6 +675,89 @@ class LaunchViewTest(unittest.TestCase):
         self.assertIsNone(
             change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         )
+
+    # -- F41-I03 (drill-8 #6): the list step carries the launch's month numbers ------------------
+
+    def month_number(self):
+        return self.today.month
+
+    def set_month_budget(self, amount):
+        month = self.today.strftime("%Y-%m")
+        revision = month_budget.view(self.conn, self.org, self.brand, month)["revision"]
+        month_budget.save(
+            self.conn, self.org, self.brand, month=month, currency="TWD", amount=amount,
+            expected_revision=revision, actor="test",
+        )
+
+    def publish_for_real(self):
+        """Approve through the real month preflight (the `approve` helper stubs it)."""
+        frozen = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        return change_control_launch.publish(
+            self.conn, self.org, self.brand, self.campaign, "human", db.new_id("op"),
+            change_control_data.digest(frozen),
+        )
+
+    def refused(self):
+        try:
+            self.publish_for_real()
+        except ValueError:
+            return True
+        return False
+
+    def test_the_list_step_without_a_month_budget_is_unset_and_approve_refuses(self):
+        fit = self.view()["month_budget"]
+        self.assertEqual(fit["month"], self.today.strftime("%Y-%m"))
+        self.assertIsNone(fit["amount"])
+        self.assertEqual(fit["blocker"], "unset")
+        self.assertEqual(fit["blocker_text"], f"要先設 {self.month_number()} 月月預算")
+        self.assertTrue(self.refused())
+
+    def test_the_list_step_month_fit_mirrors_the_approve_preflight(self):
+        month = self.today.strftime("%Y-%m")
+        clean = patch.object(month_budget, "_inventory", side_effect=lambda *a: ([], [], []))
+        with clean:
+            # Too small: the launch's 300/day does not fit.
+            self.set_month_budget(100)
+            fit = self.view()["month_budget"]
+            self.assertEqual(fit["blocker"], "short")
+            self.assertEqual(fit["blocker_text"], f"{self.month_number()} 月預算不夠這期花")
+            # The money fields are the month before this launch; `extra` on top does not fit.
+            self.assertEqual(fit["available"], 100.0)
+            self.assertLess(fit["available"] - fit["extra"], 0)
+            self.assertEqual(fit["amount"], 100.0)
+            self.assertTrue(self.refused())
+        # An unverified balance: the preflight's own sentence.
+        with patch.object(
+            month_budget, "_inventory", side_effect=lambda *a: ([], [], ["帳戶尚未核對"])
+        ):
+            fit = self.view()["month_budget"]
+            self.assertEqual(fit["blocker"], "uncertain")
+            self.assertEqual(
+                fit["blocker_text"],
+                "餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。",
+            )
+            self.assertTrue(self.refused())
+        with clean:
+            # Large enough: no blocker, and `extra` is exactly what the approval reserves.
+            self.set_month_budget(10_000_000)
+            fit = self.view()["month_budget"]
+            self.assertIsNone(fit["blocker"])
+            self.assertIsNone(fit["blocker_text"])
+            self.assertGreater(fit["extra"], 0)
+            # The month as it stands without this launch (what `getMonthlyBudget` reads); the card
+            # stacks `extra` on top.
+            before = month_budget.view(self.conn, self.org, self.brand, month)
+            self.assertEqual(before["reserved_increases"], 0)
+            self.assertEqual(fit["reserved_increases"], 0)
+            self.assertEqual(fit["available"], before["available"])
+            self.assertGreaterEqual(fit["available"] - fit["extra"], 0)
+            self.assertFalse(self.refused())
+            after = month_budget.view(self.conn, self.org, self.brand, month)
+            self.assertEqual(after["reserved_increases"], fit["extra"])
+            # Approved steps carry no card.
+            view = self.view()
+            self.assertEqual(view["step"], "platform")
+            self.assertIsNone(view["month_budget"])
 
     def test_the_view_refuses_another_brands_campaign(self):
         other = brands.create_brand(
