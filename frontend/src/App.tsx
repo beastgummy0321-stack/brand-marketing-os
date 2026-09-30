@@ -275,35 +275,16 @@ function BrandRoute() {
   );
 }
 
-/** 建檔精靈：新品牌（S4，票 B3-intake）。跨品牌總覽「新增品牌」與各處「重新調研」共用
- * 同一個精靈容器，差別只在 `brandId` 有沒有值。 */
+/** 品牌建檔（F42）：新品牌（`/intake/new`）與既有品牌共用同一個七步精靈，差別只在
+ * `brandId` 有沒有值。頁面標題由精靈每一步的步驟頭（麵包屑＋步驟點＋標題）提供，
+ * 這裡不另包 PageHeader（F42-I06：原型只有一個標題）。 */
 function IntakeNewRoute() {
-  return (
-    <>
-      <div className="flex flex-col gap-4">
-        <PageHeader
-          title="新增品牌"
-          description="建立品牌資料，讓後續的分析與規劃有據可循。"
-        />
-        <IntakeWizard brandId={null} />
-      </div>
-    </>
-  );
+  return <IntakeWizard brandId={null} />;
 }
 
 function IntakeRoute() {
   const { brandId } = useParams<{ brandId: string }>();
-  return (
-    <>
-      <div className="flex flex-col gap-4">
-        <PageHeader
-          title="品牌建檔"
-          description="逐步補齊品牌資料與研究成果。"
-        />
-        <IntakeWizard brandId={brandId ?? ""} />
-      </div>
-    </>
-  );
+  return <IntakeWizard brandId={brandId ?? ""} />;
 }
 
 /** 把過去的廣告帶進來（S4，票 past-ads/04，ADR 0067）：跟 IntakeRoute 同一種殼——外面
