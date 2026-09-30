@@ -237,8 +237,8 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
               const u = unit.get(c.product_id);
               const bad = touched && qtyOf(c.qty) === null;
               return (
-                <li key={c.product_id}>
-                  <Item className="first:mt-0">
+                <li key={c.product_id} className="mt-2 first:mt-0">
+                  <Item className="mt-0">
                     <Thumb url={c.thumbnail_url} size={32} />
                     <div className="min-w-0 flex-1">
                       <b className="block font-semibold [overflow-wrap:anywhere]">{c.name}</b>
