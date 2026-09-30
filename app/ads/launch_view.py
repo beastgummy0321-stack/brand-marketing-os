@@ -285,7 +285,9 @@ def _summary(snapshot, campaign, current, deferred):
 def view(conn, org, brand, campaign_id):
     """`GET …/campaigns/{c}/launch`: step, version, approval time, the batch summary, this
     batch's items with their state, the ads deferred for lack of material and the launch-settings
-    readback."""
+    readback. F41-I03: the list step also carries `month_budget` (`launch.month_fit`, the same
+    numbers approve's month preflight uses) for the first-launch list page's 「本月預算放得下」
+    card; approved steps carry `None`."""
     campaign = changes.campaign(conn, org, brand, campaign_id)
     deferred: list = []
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
@@ -305,6 +307,7 @@ def view(conn, org, brand, campaign_id):
             "deferred_ads": deferred,
             "read_at": None,
             "settings_readback": None,
+            "month_budget": launch.month_fit(conn, org, brand, campaign_id, current),
         }
     frozen = change_set["plan_json"]["launch_snapshot"]
     stale = launch.stale(conn, org, brand, campaign_id, current=current)
@@ -333,6 +336,7 @@ def view(conn, org, brand, campaign_id):
         "deferred_ads": deferred,
         "read_at": read_at,
         "settings_readback": handoff_check.settings_readback(conn, org, brand, campaign_id),
+        "month_budget": None,
     }
 
 

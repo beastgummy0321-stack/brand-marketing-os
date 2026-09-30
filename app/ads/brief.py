@@ -201,11 +201,20 @@ def _validate_reply(data) -> dict | None:
     }
 
 
-def _draft_name(goal_text: str) -> str:
-    """草稿名稱：使用者這句話的前 40 字——使用者在畫面上隨時可以改（`PATCH .../campaigns/{id}`
-    的 `name` 欄位），這裡只給一個不空白的起點。"""
-    text = goal_text.strip()
-    return text if len(text) <= 40 else text[:40] + "…"
+_NAME_BASE_LIMIT = 30
+
+
+def _draft_name(base: str, start: date | None = None, end: date | None = None) -> str:
+    """草稿名稱 = `<base>・MM/DD～MM/DD`（F41-I03，drill-8 #5）。`<base>` 在結構化路徑是選的
+    商品名，否則是使用者那句話；只有 `<base>` 會縮短（30 字 +「…」），日期尾巴永遠不切，
+    所以每一期的名稱都不同（讀回綁定才不會撞名）。使用者在畫面上隨時可以改
+    （`PATCH .../campaigns/{id}` 的 `name` 欄位），這裡只給一個不空白的起點。"""
+    text = base.strip()
+    if len(text) > _NAME_BASE_LIMIT:
+        text = text[:_NAME_BASE_LIMIT] + "…"
+    if start is None or end is None:
+        return text
+    return f"{text}・{start:%m/%d}～{end:%m/%d}"
 
 
 def _valid_budget(value) -> bool:
@@ -543,7 +552,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     }
 
     campaign = {
-        "name": _draft_name(goal_text),
+        "name": _draft_name(
+            checked["products"][0]["name"] if checked is not None else goal_text, start, end,
+        ),
         "goal_text": goal_text,
         "objective": fields["objective"],
         "target_cost": target_cost,
