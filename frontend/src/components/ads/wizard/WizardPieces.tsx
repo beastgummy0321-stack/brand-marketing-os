@@ -16,13 +16,13 @@ import { Chip, FlowHeader, PickCard, ReadFailed, WaitLine, formatAmount, type Fl
 export const newCampaignPath = (brandId: string, createdId?: string | null) =>
   `/brands/${brandId}/ads/new${createdId ? `?created=${encodeURIComponent(createdId)}` : ""}`;
 
-/** `newHead()`: 選商品與目標 → 系統理解 → 策略. Step 1 links back only once a campaign exists (its picks reload
- * from it; going back never creates a second campaign). */
+/** `newHead()` (F43-I15: the f41-onboarding `#/new` dots): 建立活動 → 系統理解 → 產生策略. Step 1 links back only once
+ * a campaign exists (its picks reload from it; going back never creates a second campaign). */
 export function wizardSteps(brandId: string, createdId?: string | null): FlowStep[] {
   return [
-    { label: "選商品與目標", to: createdId ? newCampaignPath(brandId, createdId) : undefined },
+    { label: "建立活動", to: createdId ? newCampaignPath(brandId, createdId) : undefined },
     { label: "系統理解" },
-    { label: "策略" },
+    { label: "產生策略" },
   ];
 }
 
@@ -42,17 +42,24 @@ export function priceText(price: number | null, currency: string | null): string
   return !currency || currency === "TWD" ? `NT$${amount}` : `${currency} ${amount}`;
 }
 
-/** A product `PickCard`: the thumbnail is an authenticated URL, loaded through `useAuthedImage` (a failed or
- * missing photo draws the neutral tile). */
-export function ProductPickCard({ product }: { product: WizardProduct }) {
-  const { src } = useAuthedImage(product.thumbnail_url ?? undefined);
+/** 「打平 669・組合價＋免運」: the sell-way's break-even (「缺成本」 when its cost is not set, 「打平算不出」 when the
+ * cost is set but no current price) and its offers (「沒有優惠」 when none). */
+export function sellWayNote(way: WizardProduct): string {
+  const be = way.break_even !== null ? `打平 ${formatAmount(way.break_even) ?? "未知"}` : way.has_cost ? "打平算不出" : "缺成本";
+  return `${be}・${way.offer_labels.length ? way.offer_labels.join("＋") : "沒有優惠"}`;
+}
+
+/** `#/new` `.pk` (F43-I15): one sell-way as a `PickCard` — 「〈賣法〉 〈price〉」 over 「打平 〈be〉・〈offers〉」. The
+ * thumbnail is an authenticated URL, loaded through `useAuthedImage` (a failed or missing photo draws the neutral
+ * tile). */
+export function SellWayPickCard({ way }: { way: WizardProduct }) {
+  const { src } = useAuthedImage(way.thumbnail_url ?? undefined);
   return (
     <PickCard
-      value={product.id}
-      title={product.name}
+      value={way.id}
+      title={`${way.display_name} ${priceText(way.price, way.currency)}`}
       thumbnailUrl={src}
-      note={<span className="numeric">{priceText(product.price, product.currency)}</span>}
-      badge={<Chip tone={product.has_cost ? "ok" : "warn"}>{product.has_cost ? "有成本" : "缺成本"}</Chip>}
+      note={<span className="numeric">{sellWayNote(way)}</span>}
     />
   );
 }

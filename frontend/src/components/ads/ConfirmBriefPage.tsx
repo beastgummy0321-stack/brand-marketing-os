@@ -5,10 +5,10 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { generateStrategy, getCampaign, patchCampaign, type CampaignDetail, type PatchCampaignInput } from "@/lib/adsApi";
-import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
+import type { CampaignFieldSources, FieldSource } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
-import { getWizardOptions, patchAudienceHint } from "@/lib/adsWizardApi";
+import { getWizardOptions } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
@@ -43,6 +43,10 @@ function capCompareText(value: number, breakEven: number | null, price: number |
 }
 
 const CAP_LABEL = "每賣一筆最多花";
+/** The audience editor's 「N 群都投」 option (sent as `customer_group_ids: []`). */
+const ALL_GROUPS = "all";
+/** The landing row's source tag (F43-I15): from the sell-way／product, the user's own, or copied by F40. */
+const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自賣法", user: "你填的", copied: "照上一期" };
 
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
@@ -96,8 +100,17 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const products = options.data?.products ?? [];
   const objectives = options.data?.objectives ?? [];
   const platform = typeof constraints.platform === "string" ? constraints.platform : null;
-  const audience = context.audience_hint ?? "";
   const landingUrl = context.landing_url ?? "";
+  // F43-I15: the audience is the sell-way's customer groups (`context_json.customer_group_ids`, named from the
+  // options); an older campaign without them still reads its free-text `audience_hint`.
+  const groups = products.find((p) => p.id === productId)?.customer_groups ?? [];
+  const groupIds = context.customer_group_ids;
+  const pickedGroups = groups.filter((g) => groupIds?.includes(g.id));
+  const audience = !groupIds ? context.audience_hint ?? ""
+    : pickedGroups.length === 0 ? (groupIds.length === 0 || options.status !== "loading" ? "" : "…")
+    : pickedGroups.length === groups.length && groups.length > 1 ? `${groups.length} 群都投（${pickedGroups.map((g) => g.who).join("、")}）`
+    : pickedGroups.map((g) => g.who).join("、");
+  const groupPick = sources.audience === "user" && groupIds?.length === 1 ? groupIds[0] : ALL_GROUPS;
 
   const productName = !productId ? ""
     : products.find((p) => p.id === productId)?.name
@@ -105,12 +118,10 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const objectiveLabel = objectives.find((o) => o.key === campaign.objective)?.label ?? campaign.objective ?? "";
   const platformLabel = channels.data?.find((c) => c.key === platform)?.label ?? platform ?? "";
 
-  async function save(key: EditKey, patch: PatchCampaignInput | { audience_hint: string }) {
+  async function save(key: EditKey, patch: PatchCampaignInput) {
     setSaving(true); setSaveError(null);
     try {
-      const updated = "audience_hint" in patch
-        ? await patchAudienceHint(brandId, campaignId, patch.audience_hint ?? null)
-        : await patchCampaign(brandId, campaignId, patch);
+      const updated = await patchCampaign(brandId, campaignId, patch);
       setSaved(updated); setEditing((now) => (now === key ? null : now));
     } catch (err) {
       setSaveError(message(err, "更新失敗，請稍後再試。"));
@@ -119,7 +130,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     }
   }
   /** 完成 on an unchanged field the user already owns just closes it; on a guessed one it confirms it. */
-  const done = (key: UnderstoodKey, source: keyof CampaignFieldSources, changed: boolean, patch: PatchCampaignInput | { audience_hint: string }) => {
+  const done = (key: UnderstoodKey, source: keyof CampaignFieldSources, changed: boolean, patch: PatchCampaignInput) => {
     if (!changed && !guessed(source)) { setEditing(null); return; }
     void save(key, patch);
   };
@@ -172,9 +183,10 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => done("platform", "platform", v !== platform, { constraints_json: { ...(campaign.constraints_json ?? {}), platform: v } })} />,
     },
     {
-      key: "audience", source: "audience", label: "受眾方向", value: audience, editable: true,
-      editor: <TextEditor label="受眾方向" initial={audience} busy={saving} onCancel={cancel}
-        onDone={(v) => done("audience", "audience", v !== audience, { audience_hint: v })} />,
+      key: "audience", source: "audience", label: "受眾", value: audience, editable: groups.length > 1,
+      editor: <SelectEditor label="受眾" initial={groupPick} busy={saving} onCancel={cancel}
+        options={[{ key: ALL_GROUPS, label: `${groups.length} 群都投` }, ...groups.map((g) => ({ key: g.id, label: `只投：${g.who}` }))]}
+        onDone={(v) => done("audience", "audience", v !== groupPick, { customer_group_ids: v === ALL_GROUPS ? [] : [v] })} />,
     },
     {
       key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : `NT$${fmt(cap.own_value)}`, editable: true,
@@ -211,7 +223,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
           : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
               editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}
-        <LandingUrlField value={landingUrl} editing={editing === "landing_url"} onEdit={!generating ? edit("landing_url") : undefined}
+        <LandingUrlField value={landingUrl} source={sources.landing_url} editing={editing === "landing_url"} onEdit={!generating ? edit("landing_url") : undefined}
           editor={<UrlEditor initial={landingUrl} busy={saving} onCancel={cancel}
             onDone={(v) => { if (v === landingUrl) cancel(); else void save("landing_url", { landing_url: v || null }); }} />} />
       </div>
@@ -312,13 +324,14 @@ function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
 }
 
 /** F40-I12 (drill-7 #10): the campaign-level landing URL (`context_json.landing_url`), shown in the main block with
- * the 「從「追蹤」分頁搬來」 tag — the same `.uchip` box as the seven understood fields (`UnderstoodField` keys are the
+ * its source tag (F43-I15: `field_sources.landing_url` — 「來自賣法」 for the sell-way's effective landing (its own URL, else the product page); none when unknown) — the same `.uchip` box as the seven understood fields (`UnderstoodField` keys are the
  * six campaign fields plus the cap; this one has its own piece). Optional: blank reads 「還沒填（選填）」 on a neutral
  * dashed border, never a guess. Saved through the campaign PATCH (`landing_url`; blank clears). */
-function LandingUrlField({ value, editing, onEdit, editor }: { value: string; editing: boolean; onEdit?: () => void; editor: ReactNode }) {
+function LandingUrlField({ value, source, editing, onEdit, editor }: { value: string; source?: FieldSource; editing: boolean; onEdit?: () => void; editor: ReactNode }) {
+  const tag = source ? LANDING_SOURCE[source] : undefined;
   const box = "flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left";
   const tile = <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-accent-foreground"><Link2 className="size-4" strokeWidth={1.75} /></span>;
-  const name = <span className="flex shrink-0 items-center gap-2"><span className="text-xs text-muted-foreground">落地頁</span><Chip tone="accent">從「追蹤」分頁搬來</Chip></span>;
+  const name = <span className="flex shrink-0 items-center gap-2"><span className="text-xs text-muted-foreground">落地頁</span>{tag && <Chip tone="accent">{tag}</Chip>}</span>;
   if (editing) {
     return (
       <div data-field="landing_url" className={cn(box, "flex-wrap border-primary md:col-span-2")}>
@@ -351,20 +364,6 @@ function UrlEditor({ initial, busy, onDone, onCancel }: {
         onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); submit(); } else onEscape(onCancel)(e); }} />
       <DoneButton disabled={busy} onClick={submit} />
       <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
-    </>
-  );
-}
-
-function TextEditor({ label, initial, busy, onDone, onCancel }: {
-  label: string; initial: string; busy: boolean; onDone: (value: string) => void; onCancel: () => void;
-}) {
-  const [value, setValue] = useState(initial);
-  const submit = () => onDone(value.trim());
-  return (
-    <>
-      <Input autoFocus aria-label={label} value={value} maxLength={200} onChange={(e) => setValue(e.target.value)} className="min-w-0 flex-1"
-        onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); submit(); } else onEscape(onCancel)(e); }} />
-      <DoneButton disabled={busy} onClick={submit} />
     </>
   );
 }

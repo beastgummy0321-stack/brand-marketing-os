@@ -3,9 +3,14 @@
  * `app/ads/objectives.py` and the structured branch of `POST …/campaigns` exactly.
  *
  * Rules the screen can rely on (never re-derive them here):
- * - `products` are the sellable items, active only, in name order. A product with sell ways is
- *   listed as its sell ways; `price`/`currency` are null when there is no current economics row
- *   (never a stale price). `has_cost` = the current unit variable cost is set.
+ * - `products` are the finished sell-ways (F43-I04, `wizard_options.options()`): single sell-ways
+ *   grouped by knowledge product (name order), then bundles; a knowledge product itself or a
+ *   建到一半 product's sell-way is never listed. `price`/`currency`/`break_even` are null when there
+ *   is no current economics row (never a stale price). `has_cost` = the current unit variable
+ *   cost is set. `cap_per_sale` is effective (the sell-way's own cap, else its break-even).
+ *   `landing_url` is effective (the sell-way's own, else the first product's page).
+ * - `default_objective` (F43-I18) = the brand's conversion goal as an objective key; null = no
+ *   preselection.
  * - `thumbnail_url` is an authenticated same-origin file route (like the library's `file_url`):
  *   load it with `useAuthedImage`, not a bare `<img src>`. null = no product photo.
  * - `objectives` is one merged cross-platform list in display order. Only `available` ones can
@@ -17,16 +22,36 @@
  *   `objective_unknown`, `budget_invalid`, `products_required`, `product_unknown`,
  *   `dates_required`, `end_before_start`. */
 import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow, type CampaignDetail, type CampaignDraft } from "./adsApi";
+import { BASE, parseJsonOrThrow, type CampaignDraft } from "./adsApi";
 import type { CampaignCreateExtras } from "./adsCampaignTypes";
 
+/** One customer group of a sell-way's knowledge products (`product_customer_group`). */
+export interface WizardCustomerGroup {
+  id: string;
+  who: string;
+}
+
+/** One pickable sell-way (the name stays `WizardProduct`: a campaign's `product_ids` hold it). */
 export interface WizardProduct {
   id: string;
+  /** Full stored name (「〈商品〉 · 〈賣法〉」 for a single sell-way, the bundle's own name) -- the campaign name base. */
   name: string;
+  /** The sell-way part of the name (a bundle: its name). */
+  display_name: string;
+  kind: "single" | "bundle";
+  /** The first knowledge product (a bundle has several): the `#/new` section header of a single sell-way. */
+  knowledge_product_id: string;
+  knowledge_product_name: string;
   price: number | null;
   currency: string | null;
   thumbnail_url: string | null;
   has_cost: boolean;
+  break_even: number | null;
+  cap_per_sale: number | null;
+  /** 「組合價」「免運」… each once; empty = no offer. */
+  offer_labels: string[];
+  customer_groups: WizardCustomerGroup[];
+  landing_url: string | null;
 }
 
 /** Platform key (a channel key, e.g. `meta`, `google_ads`) -> that platform's own objective
@@ -45,10 +70,12 @@ export interface WizardObjective {
 export interface WizardOptions {
   products: WizardProduct[];
   objectives: WizardObjective[];
+  /** The brand's conversion goal as an objective key (purchase→購買, lead／booking→名單, awareness→知名度); null = unset. */
+  default_objective: string | null;
 }
 
-/** F40-I04／I12: the four 「這次怎麼投」 values ride along (`CampaignCreateExtras`); a missing one is copied from the
- * previous campaign by the server. */
+/** F43-I04: the 「進階：這期不一樣」 overrides ride along (`CampaignCreateExtras`); a missing one comes from the brand
+ * and the picked sell-way (`field_sources` `"sell_way"`), a sent one is the user's. */
 export interface CampaignPicks extends CampaignCreateExtras {
   /** Exactly one id, taken from `WizardOptions.products` (anything else is `product_unknown`). */
   product_ids: [string];
@@ -59,6 +86,8 @@ export interface CampaignPicks extends CampaignCreateExtras {
   /** This campaign's spending cap, > 0. */
   budget: number;
   goal_text?: string;
+  /** Some of the sell-way's `customer_groups` ids; omitted (or `[]`) = every group. */
+  customer_group_ids?: string[];
 }
 
 const brandPath = (brandId: string) => `${BASE}/brands/${encodeURIComponent(brandId)}`;
@@ -78,20 +107,5 @@ export async function createCampaignFromPicks(
     body: JSON.stringify(picks),
   });
   const data = await parseJsonOrThrow<{ campaign: CampaignDraft }>(res, "建立活動失敗。");
-  return data.campaign;
-}
-
-/** The wizard's 受眾方向 correction (`PATCH` `audience_hint`); an empty string clears it. */
-export async function patchAudienceHint(
-  brandId: string,
-  campaignId: string,
-  audienceHint: string | null,
-): Promise<CampaignDetail> {
-  const res = await apiFetch(`${brandPath(brandId)}/campaigns/${encodeURIComponent(campaignId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ audience_hint: audienceHint }),
-  });
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新受眾方向失敗。");
   return data.campaign;
 }
