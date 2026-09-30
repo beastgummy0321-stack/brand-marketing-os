@@ -1799,3 +1799,28 @@ Prototype `.harness/scratch/prototype/f40-screens/` (approved 2026-09-29) is the
 - **Small fixes**: truth-card answers survive a panel save (`TruthCardStep.load` keeps answers whose item still exists);
   the workbench regenerate button names the running part (`workbench/regenerateLabel.ts`; after a reload the payload cannot
   tell which part runs — backlog: per-part status in the set payload).
+
+### 6.45 Drill-8 small fixes（ruled 2026-09-30；built in F41）
+Prototype `.harness/scratch/prototype/f41-drill8/index.html` screens ②③④ (screen ①, a per-campaign 「這期手上有什麼」 card, was
+rejected: offers, proof and media move to onboarding, F42/F43).
+- **Preview done → slot ready** (drill-8 #4): `user_assets.process_preview`, after the `ready` commit, calls
+  `slots.settle_ready_asset`, which runs the upload's own two steps (`_confirm_if_ready` + `settle`) for every current unconfirmed
+  placement an `ads_ad.slot_placement_id` points at; actor = the placement's `created_by`, else `system:preview`. A failure is
+  logged; the asset stays `ready` and manual confirm still works. Library placements (no ad points at them) still wait.
+- **One rule set for putting a finished asset into a planned ad**: the advanced 「將成品指派給計畫中的廣告」 panel calls
+  `POST …/slots/{ad}/upload` with `{placement_id}`; copy order = explicit `copy_fields` → the ad's selected workbench copy → that
+  placement's own copy. Slot-path refusals surface unchanged (ad already on the platform → 「換掉這一則」; same file, different copy
+  → `placement_copy_conflict`). `PUT …/launch-materials/{ad_id}` stays plain `assign` for the F28 stale-launch exit
+  (`LaunchStalePanel.reassign`) and clearing.
+- **Learnings in Chinese** (#11): coordinate learning text names coordinates by label (`受眾：…、痛點：…`); the scope gains
+  `cpr=`/`cap=` (older rows read `None`); prompt lines print `label（dim=key）`; the strategy basis gains `coordinate_learnings`
+  (the last closed campaign's graded ads, labelled). Strategy prompt keeps one period verdict per product (newest); event learnings
+  (`ads;` scope: pause, A/B, month settle) pass through. Department rule: no English coordinate codes in `why`/`rationale`.
+- **Strategy tab** (#3): 「預算怎麼分」 = thin bar (`AllocationBar legend={false}`) + one row per role (pct, amount, rationale);
+  coordinate learning rows sit in 「為什麼這樣建議」 (fold stays closed by default, F28). Strategy types live in
+  `frontend/src/lib/adsStrategyTypes.ts` (re-exported from `adsApi.ts`, 800-line cap).
+- **Default campaign name** (#5): `<product or sentence, cut at 30>・MM/DD～MM/DD`; the dates are never cut.
+- **First-launch 「本月預算放得下」** (#6): `GET …/launch` list step carries `month_budget` = `change_control_launch.month_fit`: the
+  month view before this launch + `extra` + `blocker` (`unset`/`uncertain`/`short`, judged with the launch, in preflight's order) +
+  `blocker_text`; `PublishList` renders the shared `BudgetFitCard` (launch mode adds 放不下 with 提高月預算／改這期總預算) and puts the
+  reason beside 核准上架清單.
