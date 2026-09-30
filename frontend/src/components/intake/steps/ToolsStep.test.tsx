@@ -80,12 +80,12 @@ it("shows one card per connector group, each row saying what it reads and its st
   expect(screen.queryByText(/已接上/)).toBeNull();
 });
 
-it("shows Meta connected with its account and offers 換一個", async () => {
+it("shows Meta connected with its account and offers 再接一個帳戶 (multi-account binding adds, never replaces)", async () => {
   vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ connectors: CONNECTED }));
   renderStep();
 
   expect(await screen.findByText("✓ 已接上：Beast Gummy 主帳戶")).toBeTruthy();
-  expect(within(connectorRow("Meta 廣告")).getByRole("button", { name: "換一個" })).toBeTruthy();
+  expect(within(connectorRow("Meta 廣告")).getByRole("button", { name: "再接一個帳戶" })).toBeTruthy();
 });
 
 it("binds a Meta account from the inline panel: token → account → 指定給這個品牌 → backfill, then the row re-reads", async () => {
@@ -112,7 +112,7 @@ it("binds a Meta account from the inline panel: token → account → 指定給�
   expect(await screen.findByText("✓ 已接上：Beast Gummy 主帳戶")).toBeTruthy();
 });
 
-it("換一個 opens the panel with the bound account marked and no token field", async () => {
+it("再接一個帳戶 opens the panel with the bound account marked and no token field", async () => {
   vi.mocked(fetchOnboardingTools).mockResolvedValue(tools({ connectors: CONNECTED }));
   vi.mocked(fetchMetaAccounts).mockResolvedValue({
     token_tail: "abcd",
@@ -123,7 +123,7 @@ it("換一個 opens the panel with the bound account marked and no token field",
   });
   renderStep();
 
-  await userEvent.click(await screen.findByRole("button", { name: "換一個" }));
+  await userEvent.click(await screen.findByRole("button", { name: "再接一個帳戶" }));
   expect(await screen.findByText("已指定給這個品牌")).toBeTruthy();
   expect(screen.getByRole("radio", { name: /主帳戶/ })).toHaveProperty("disabled", true);
   expect(screen.queryByPlaceholderText("貼上 Meta 存取權杖")).toBeNull();

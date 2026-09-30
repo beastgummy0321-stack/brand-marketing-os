@@ -18,7 +18,7 @@ const HINT = "之後回到「品牌資料」或投放中心的資料連線再接
 
 /** Brand onboarding #/b6 接上工具 (prototype `R.b6` of `.harness/scratch/prototype/f41-onboarding/index.html`): the
  * connector registry (`GET …/onboarding/tools`) as one card per group, each row saying what the system can read
- * once connected; only live connectors can be connected, the rest are honest seats (「即將開放」). Meta's 接上／換一個
+ * once connected; only live connectors can be connected, the rest are honest seats (「即將開放」). Meta's 接上／再接一個帳戶
  * opens the existing token → account flow inline (`MetaConnectPanel`); a connector with an in-app page (the orders
  * file) links there. Then 成效目標, saved on change (`POST …/conversion-goal`). Skipping every connector is allowed. */
 export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
@@ -151,7 +151,7 @@ function ConnectorAction({ connector: c, metaOpen, onToggleMeta }: { connector: 
   if (c.key === "meta") {
     return c.state === "connected" ? (
       <Button type="button" variant="link" className="h-auto p-0 text-[13px]" aria-expanded={metaOpen} onClick={onToggleMeta}>
-        {metaOpen ? "收起" : "換一個"}
+        {metaOpen ? "收起" : "再接一個帳戶"}
       </Button>
     ) : (
       <Button type="button" variant="outline" size="sm" aria-expanded={metaOpen} onClick={onToggleMeta}>

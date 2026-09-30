@@ -17,7 +17,7 @@ type LoadState =
 
 const BACKFILL_FAILED = "這次沒拉到，之後可以在設定頁重試。";
 
-/** Meta's 接上／換一個 panel under its row in brand onboarding #/b6 (F42-I11). The interaction is the one the old
+/** Meta's 接上／再接一個帳戶 panel under its row in brand onboarding #/b6 (F42-I11). The interaction is the one the old
  * tools step had, lifted out unchanged: paste a token → pick one of the token's ad accounts → 「指定給這個品牌」 →
  * the spend history backfill starts in the background. The Meta client (`frontend/src/lib/metaApi.ts`) is the
  * same one the settings page uses; nothing new is connected here. Binding adds the account to the brand (the
