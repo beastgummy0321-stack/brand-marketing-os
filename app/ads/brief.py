@@ -352,6 +352,44 @@ def set_landing_url(conn, org_id: str, brand_id: str, campaign_id: str, value) -
     )
 
 
+def set_customer_groups(conn, org_id: str, brand_id: str, campaign_id: str, value, *,
+                        picked: bool) -> None:
+    """F43-I18: the draft's audience after a PATCH, against the campaign's *current* sell-way
+    (call after `product_ids` is written). `picked` = the request carried `customer_group_ids`:
+    validated with the create rule (`_check_customer_groups`, `customer_group_unknown`) -- a
+    list of this sell-way's groups is the user's (`field_sources.audience = "user"`); `[]`/`None`
+    is no override. Not picked (the sell-way changed) or no override -> every group of the
+    sell-way, `"sell_way"` (`"system"` when it has none), as the create path stores it. Same
+    refusals as the other draft edits: unknown campaign, imported campaign."""
+    row = conn.execute(
+        "SELECT origin, context_json FROM ads_campaign"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s FOR UPDATE",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("campaign_unknown")
+    if row["origin"] == "imported":
+        raise ValueError(external_models.IMPORTED_REASON)
+    context = dict(row["context_json"] or {})
+    group_ids = [g["id"] for g in wizard_options.product_customer_groups(
+        conn, brand_id, list(context.get("product_ids") or []),
+    )]
+    override = _check_customer_groups(value, group_ids) if picked else None
+    if override is not None:
+        customer_group_ids, source = override, "user"
+    else:
+        customer_group_ids, source = group_ids, ("sell_way" if group_ids else "system")
+    context["customer_group_ids"] = customer_group_ids
+    field_sources = dict(context.get("field_sources") or {})
+    field_sources["audience"] = source
+    context["field_sources"] = field_sources
+    conn.execute(
+        "UPDATE ads_campaign SET context_json = %s, updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb(context), org_id, brand_id, campaign_id),
+    )
+
+
 def _amount_text(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else str(value)
 

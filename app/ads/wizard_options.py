@@ -1,7 +1,8 @@
 """app/ads/wizard_options.py — F30-I04 (Contract B), re-cut by F43-I04: what the new-campaign
 wizard can pick.
 
-`options()` -> `{products: [option], objectives: [objective]}`, one option per finished sell-way:
+`options()` -> `{products: [option], objectives: [objective], default_objective: key|null}`, one
+option per finished sell-way:
 `{id, name, display_name, kind ("single" | "bundle"), knowledge_product_id,
 knowledge_product_name, price|null, currency|null, has_cost, break_even|null, cap_per_sale|null,
 offer_labels, customer_groups [{id, who}], landing_url|null, thumbnail_url|null}`. Pure read, no
@@ -27,6 +28,8 @@ Numbers:
   `available_offer_keys`): its own price offer as 「組合價」 (more than one unit) / 「優惠價」, then
   each brand policy's offer word (「免運」…), each once.
 - `landing_url` = the sell-way's effective landing (its own, else the first product's page).
+- `default_objective` (F43-I18) = the brand's `conversion_goal` through
+  `objectives.for_conversion_goal` (`None` when unset: no preselection).
 - `thumbnail_url` is the newest `product_photo` official asset of the first knowledge product that
   has one -- the authenticated same-origin file route the library uses
   (`/brands/{b}/assets/file/{asset}/{filename}`); `None` when there is no photo.
@@ -93,6 +96,21 @@ def customer_groups(conn, brand_id: str, sell_way: dict) -> list[dict]:
             for group in bi_repo.list_customer_groups(conn, brand_id, product["id"])]
 
 
+def product_customer_groups(conn, brand_id: str, product_ids: list[str]) -> list[dict]:
+    """F43-I18: every customer group behind a campaign's `context_json.product_ids` -- the
+    knowledge products of each (`knowledge_product_ids`, each once), then their groups in
+    position order. For a pickable sell-way this equals `customer_groups` (same resolver); it
+    also answers for a row that is not pickable (an old campaign's product)."""
+    knowledge_ids: list[str] = []
+    for product_id in product_ids:
+        for knowledge_id in bi_repo.knowledge_product_ids(conn, brand_id, product_id):
+            if knowledge_id not in knowledge_ids:
+                knowledge_ids.append(knowledge_id)
+    return customer_groups(conn, brand_id, {"knowledge_products": [
+        {"id": knowledge_id} for knowledge_id in knowledge_ids
+    ]})
+
+
 def _offer_labels(conn, brand_id: str, sell_way_id: str) -> list[str]:
     policy_sentences = {p["sentence"] for p in bi_repo.list_brand_policies(conn, brand_id)
                         if p["status"] == "confirmed"}
@@ -141,4 +159,8 @@ def options(conn, org_id: str, brand_id: str) -> dict:
         _product_option(conn, brand_id, way, today, thumbnails)
         for way in sellable_products(conn, brand_id)
     ]
-    return {"products": products, "objectives": objectives.catalog()}
+    brand = bi_repo.get_brand(conn, brand_id) or {}
+    return {
+        "products": products, "objectives": objectives.catalog(),
+        "default_objective": objectives.for_conversion_goal(brand.get("conversion_goal")),
+    }

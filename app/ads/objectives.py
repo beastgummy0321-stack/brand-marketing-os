@@ -45,6 +45,24 @@ RESERVED = frozenset(row["key"] for row in CATALOG if not row["available"])
 ACCEPTED = AVAILABLE | frozenset(_UNLISTED_ACCEPTED)
 
 
+# F43-I18: the brand's `conversion_goal` -> the objective the new-campaign page preselects. A
+# booking is a contact, not a sale, so it maps like a lead (lead decision 2026-10-01,
+# reversible). A goal not in this table (or unset) preselects nothing.
+_CONVERSION_GOAL_OBJECTIVES = {
+    "purchase": "購買",
+    "lead": "名單",
+    "booking": "名單",
+    "awareness": "知名度",
+}
+
+
+def for_conversion_goal(conversion_goal) -> str | None:
+    """The objective key a brand with this `conversion_goal` starts from, or `None`."""
+    if not isinstance(conversion_goal, str):
+        return None
+    return _CONVERSION_GOAL_OBJECTIVES.get(conversion_goal)
+
+
 def catalog() -> list[dict]:
     """A fresh copy of the catalog, in display order (callers may mutate their copy)."""
     return [{**row, "platforms": dict(row["platforms"])} for row in CATALOG]
