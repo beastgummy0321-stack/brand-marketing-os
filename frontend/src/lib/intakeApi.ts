@@ -4,17 +4,6 @@
 
 import { apiFetch, errorMessageFromResponse } from "./http";
 
-/** Only `shared/LimitCard.tsx` still reads these (the legacy over-cap card; no step renders it any more). */
-export type IntakeJobKind = "scan" | "question" | "paste_fix" | "research";
-
-export interface LimitBlock {
-  kind: IntakeJobKind;
-  amount: number;
-  cost_spent: number;
-  budget_limit: number;
-  suggested_limit: number;
-}
-
 export interface IntakePhoto {
   token: string;
   name: string;

@@ -67,7 +67,6 @@ select = ["E", "F", "W", "I", "B", "UP"]
 "app/dashboard/routes.py" = ["B904"]
 "app/dashboard/routes_pinned_views_api.py" = ["E501"]
 "app/intake/ai.py" = ["E501"]
-"app/intake/paste_parse.py" = ["E501", "E741"]
 "app/intake/repository.py" = ["B007", "E501"]
 "app/intake/routes.py" = ["E501"]
 "app/intake/routes_api.py" = ["B008", "E501"]
@@ -108,8 +107,6 @@ select = ["E", "F", "W", "I", "B", "UP"]
 "app/tests/test_inbox_api.py" = ["E501"]
 "app/tests/test_intake.py" = ["E501"]
 "app/tests/test_intake_api.py" = ["E501"]
-"app/tests/test_intake_api_paste.py" = ["E501"]
-"app/tests/test_intake_research_reports_api.py" = ["E501"]
 "app/tests/test_learnings_api.py" = ["E501"]
 "app/tests/test_library_api.py" = ["E501"]
 "app/tests/test_library_write_api.py" = ["E501"]
@@ -177,7 +174,6 @@ ignore = [
     "app/core/calendar_dismiss.py",
     "app/core/settings.py",
     "app/intake/ai.py",
-    "app/intake/paste_parse.py",
     "app/intake/repository.py",
     "app/intake/routes_api.py",
     "app/intake/routes_t2_api.py",

@@ -121,7 +121,7 @@ export function PolicyCard({ brandId, types, chosen, onChange, cooling, onCoolin
         onClick={() => toggle(type)}
         className={cn(
           "rounded-full border px-[13px] py-[5px] text-[13px] font-medium hover:border-primary",
-          on ? "border-primary bg-[#faf8ff] text-accent-foreground shadow-[0_0_0_1px_var(--color-primary)]" : "border-border bg-card",
+          on ? "border-primary bg-accent/40 text-accent-foreground shadow-[0_0_0_1px_var(--color-primary)]" : "border-border bg-card",
         )}
       >
         {type.label}

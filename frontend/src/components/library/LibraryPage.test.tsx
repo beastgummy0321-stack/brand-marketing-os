@@ -47,4 +47,11 @@ describe("LibraryPage 一般與進階內容", () => {
     // F42-I14: the 調研報告 tab left with the retired research → paste stage.
     expect(screen.queryByRole("button", { name: "調研報告" })).toBeNull();
   });
+
+  it("標題列的建檔入口叫「品牌資料（建檔時填的）」，連到品牌建檔", async () => {
+    view();
+    const link = await screen.findByRole("link", { name: "品牌資料（建檔時填的）" });
+    expect(link.getAttribute("href")).toBe("/brands/brand-1/intake");
+    expect(screen.queryByRole("link", { name: "品牌調研" })).toBeNull();
+  });
 });

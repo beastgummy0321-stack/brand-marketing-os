@@ -69,7 +69,7 @@ export function CustomEscape<B extends CustomBlock>({ brandId, block, placeholde
   return (
     <div data-slot="custom-escape" data-block={block}>
       {open ? (
-        <div className="mt-2.5 rounded-[10px] border border-dashed border-grade-thin bg-[#fcfbff] px-3 py-2.5">
+        <div className="mt-2.5 rounded-[10px] border border-dashed border-grade-thin bg-accent/20 px-3 py-2.5">
           <div id={hintId} className="mb-1.5 text-[11.5px] text-muted-foreground">{HINT}</div>
           <textarea
             rows={2}
@@ -97,7 +97,7 @@ export function CustomEscape<B extends CustomBlock>({ brandId, block, placeholde
         <div className="mt-2.5">
           <button
             type="button"
-            className="rounded-full border border-dashed border-[#b9aef0] bg-card px-[13px] py-[5px] text-[13px] font-semibold text-accent-foreground hover:border-primary hover:bg-[#faf8ff]"
+            className="rounded-full border border-dashed border-primary/50 bg-card px-[13px] py-[5px] text-[13px] font-semibold text-accent-foreground hover:border-primary hover:bg-accent/40"
             onClick={() => setOpen(true)}
           >
             ✎ 自訂：用自己的話說
