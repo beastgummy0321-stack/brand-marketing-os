@@ -23,6 +23,7 @@ raises `NotFound` (router: 404). Entry points: the functions below, called only 
 """
 
 from pathlib import Path
+from typing import cast
 
 from app import ads, workbench
 from app.brand_intelligence import benchmarks as bi_benchmarks
@@ -1233,3 +1234,39 @@ def save_bundle(
         actor=actor,
     )
     return get_bundle(conn, brand_id, saved["id"])
+
+
+class _Uncommitted:
+    """The request connection with `commit()` turned into a no-op, so the facade's writers
+    (`save_sell_way` commits at its end) stay inside one open transaction that `preview_bundle`
+    rolls back. Every other call goes to the real connection."""
+
+    def __init__(self, conn: Conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(sql, params)
+
+    def executemany(self, sql, seq) -> None:
+        self._conn.executemany(sql, seq)
+
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        pass
+
+
+def preview_bundle(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
+    """`POST …/bundles/preview`: the `GET …/bundles/{id}` shape (`id` None) of a bundle not created
+    yet, from `POST …/bundles`'s body. It runs `save_bundle` itself -- the same checks (400 on the
+    same refusals) and the same facade path (effective economics, offers, reused groups / proof)
+    as a saved bundle -- in a transaction that is always rolled back, so nothing is written."""
+    try:
+        view = save_bundle(cast(Conn, _Uncommitted(conn)), brand_id, None, body, actor=actor)
+    finally:
+        conn.rollback()
+    return {**view, "id": None}

@@ -639,6 +639,74 @@ class CompleteBundleTenancyTest(_Base):
         )
         self.assertEqual(self._get(bid, f"/bundles/{created['id']}")["price"], 1099.0)
 
+    def _stored(self, bid: str) -> tuple:
+        """Everything a bundle save writes, as the facade reads it: product rows, sell-ways with
+        their components, and each row's economics."""
+        products = sorted(p["id"] for p in bi_repo.list_products(web.conn, bid))
+        ways = [(w["id"], w["components"]) for w in bi_repo.list_sell_ways(web.conn, bid)]
+        econ = {
+            pid: (e or {}).get("id")
+            for pid in products
+            for e in [bi_repo.get_product_economics(web.conn, bid, pid, raw=True)]
+        }
+        return products, ways, econ
+
+    def test_bundle_preview_computes_like_a_saved_bundle_and_writes_nothing(self):
+        bid = self._brand()
+        vit = self._finished(bid, "綜合維他命軟糖")
+        pro = self._finished(bid, "益生菌軟糖", price=459, cost=110)
+        self._ok_put(
+            bid,
+            self._step(pro, "/who"),
+            {"groups": [{"who": "腸胃敏感族", "pain_keys": ["experience"]}]},
+        )
+        foreign = self._finished(self._brand(), "別人的商品")
+        body = {
+            "name": "雙效組",
+            "components": [{"product_id": vit, "qty": 1}, {"product_id": pro, "qty": 1}],
+            "price": 799,
+            "shipping": 60,
+        }
+        before = self._stored(bid)
+
+        resp = self.client.post(self._url(bid, "/bundles/preview"), json=body)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        preview = resp.json()["data"]
+        self.assertIsNone(preview["id"])
+        self.assertEqual(
+            (preview["list_price"], preview["list_price_note"], preview["cost"]),
+            (858.0, "2 件單價相加", 200.0),
+        )
+        self.assertEqual(
+            (preview["break_even"], preview["cap_per_sale"], preview["offer_labels"]),
+            (539.0, 539.0, ["組合價 省 59"]),
+        )
+        self.assertEqual(
+            [(c["name"], c["unit_price"], c["unit_cost"]) for c in preview["components"]],
+            [("綜合維他命軟糖", 399.0, 90.0), ("益生菌軟糖", 459.0, 110.0)],
+        )
+        self.assertEqual(preview["reused"]["groups"][0]["who"], "腸胃敏感族")
+        self.assertFalse(preview["show_close_rate"])
+        self.assertIn("shipping_cost", preview["benchmarks"])
+        # Nothing was written: no product / component / economics row, no bundle on the page.
+        self.assertEqual(self._stored(bid), before)
+        self.assertEqual(self._get(bid, "/products")["bundles"], [])
+
+        for components, message in (
+            ([{"product_id": vit, "qty": 1}], "至少要放兩個"),
+            ([{"product_id": vit, "qty": 1}, {"product_id": foreign, "qty": 1}], "找不到的商品"),
+        ):
+            resp = self.client.post(
+                self._url(bid, "/bundles/preview"), json={**body, "components": components}
+            )
+            self.assertEqual(resp.status_code, 400, components)
+            self.assertIn(message, resp.json()["error"])
+        self.assertEqual(self._stored(bid), before)
+
+        # The same body then creates the bundle the preview showed (the name is still free).
+        created = self.client.post(self._url(bid, "/bundles"), json=body).json()["data"]
+        self.assertEqual({**preview, "id": created["id"]}, created)
+
     def test_other_org_gets_404_everywhere(self):
         bid = self._brand()
         pid = self._finished(bid, "綜合維他命軟糖")
@@ -657,7 +725,7 @@ class CompleteBundleTenancyTest(_Base):
         for path in ("/what", "/who", "/evidence", "/sell-ways"):
             resp = self.client.put(self._url(bid, self._step(pid, path)), json={}, headers=headers)
             self.assertEqual(resp.status_code, 404, path)
-        for path in ("/products", "/bundles", self._step(pid, "/complete")):
+        for path in ("/products", "/bundles", "/bundles/preview", self._step(pid, "/complete")):
             resp = self.client.post(self._url(bid, path), json={"name": "x"}, headers=headers)
             self.assertEqual(resp.status_code, 404, path)
 

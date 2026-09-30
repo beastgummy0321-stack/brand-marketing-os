@@ -15,6 +15,7 @@ Routes (all under `/api/intake/brands/{brand_id}`):
     POST     /products/{p}/onboarding/custom            「自訂」 product block (F43-I06)
     GET|PUT  /products/{p}/onboarding/what|who|evidence|sell-ways
     POST     /bundles, GET|PUT /bundles/{id}            新增組合 / edit
+    POST     /bundles/preview                           新增組合's numbers (writes nothing)
 
 Entry point: this file's `router`, included at the end of `app/intake/routes_api.py`.
 """
@@ -186,6 +187,13 @@ async def sell_ways_put(request: Request, brand_id: str, product_id: str):
 @router.post(_BRAND + "/bundles")
 async def bundle_post(request: Request, brand_id: str):
     return await _write(request, brand_id, po.save_bundle, None)
+
+
+@router.post(_BRAND + "/bundles/preview")
+async def bundle_preview(request: Request, brand_id: str):
+    """新增組合's numbers before 「建立組合」: POST /bundles's body -> GET /bundles/{id}'s shape
+    (`id` null); writes nothing (the save runs in a rolled-back transaction)."""
+    return await _write(request, brand_id, po.preview_bundle)
 
 
 @router.get(_BRAND + "/bundles/{bundle_id}")
