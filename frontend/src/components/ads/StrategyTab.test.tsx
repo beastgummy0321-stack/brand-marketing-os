@@ -341,6 +341,56 @@ describe("StrategyTab (F28-I09)", () => {
     });
   });
 
+  describe("F42-I13: 「這期會用：…」 inside 預算怎麼分 (prototype f41-drill8 ② `used`)", () => {
+    /** `app/ads/materials_in_hand.py::read` in its real shape: two policy-backed offers, one confirmed proof, photo only. */
+    const MATERIALS: NonNullable<CampaignDetail["materials"]> = {
+      offers: [
+        { key: "bundle", label: "組合加贈", sentence: "三盒 NT$999 另送一盒" },
+        { key: "free_shipping", label: "免運", sentence: "三盒以上免運" },
+      ],
+      proof: [{ key: "lab_test", label: "檢驗報告", text: "SGS 檢驗：重金屬、塑化劑未檢出（2026/08）" }],
+      media: "photo",
+    };
+    const row = () => document.querySelector("[data-slot=materials-used]") as HTMLElement | null;
+
+    it("one chip per offer 「label：sentence」, per proof its label (text in title and name), then the media chip — above the bar", async () => {
+      renderTab(campaign({ materials: MATERIALS }));
+      const section = (await screen.findByRole("heading", { name: "預算怎麼分" })).closest("section") as HTMLElement;
+      const used = row();
+      expect(used && section.contains(used)).toBe(true);
+      expect(used!.compareDocumentPosition(section.querySelector("[data-slot=allocation-bar]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const chips = Array.from(used!.querySelectorAll("[data-slot=chip]")).map((el) => el.textContent);
+      expect(chips).toEqual(["組合加贈：三盒 NT$999 另送一盒", "免運：三盒以上免運", "檢驗報告", "只排照片（單圖、輪播）"]);
+      expect(used!.textContent).toMatch(/^這期會用：/);
+      const proof = within(used!).getByLabelText("檢驗報告：SGS 檢驗：重金屬、塑化劑未檢出（2026/08）");
+      expect(proof.getAttribute("title")).toBe("SGS 檢驗：重金屬、塑化劑未檢出（2026/08）");
+      expect(used!.textContent).not.toMatch(/bundle|free_shipping|lab_test/);
+    });
+
+    it("photo and video reads 照片和影片; media never asked (null) leaves no media chip", async () => {
+      const { unmount } = renderTab(campaign({ materials: { ...MATERIALS, media: "photo_video" } }));
+      expect(within(row()!).getByText("照片和影片")).toBeTruthy();
+      unmount();
+      renderTab(campaign({ materials: { ...MATERIALS, media: null } }));
+      expect(row()!.querySelector("[data-kind=media]")).toBeNull();
+    });
+
+    it("nothing registered: one muted chip says the ads talk about the product only, beside the media chip", async () => {
+      renderTab(campaign({ materials: { offers: [], proof: [], media: "photo" } }));
+      await screen.findByRole("heading", { name: "預算怎麼分" });
+      const chips = Array.from(row()!.querySelectorAll("[data-slot=chip]"));
+      expect(chips.map((el) => el.textContent)).toEqual(["沒有登記優惠與證據，廣告只講產品本身", "只排照片（單圖、輪播）"]);
+      expect(chips[0].getAttribute("data-tone")).toBe("neutral");
+    });
+
+    it("materials absent (imported, or null from the API) → no row", async () => {
+      renderTab(campaign({ materials: null }));
+      await screen.findByRole("heading", { name: "預算怎麼分" });
+      expect(row()).toBeNull();
+      expect(screen.queryByText("這期會用：")).toBeNull();
+    });
+  });
+
   it("imported: the cap block is shown, the budget and allocation cards are not, the internal goal saves", async () => {
     const user = userEvent.setup();
     const imported = campaign({ origin: "imported", budget_basis_json: {}, status: "live" });
