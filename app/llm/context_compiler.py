@@ -101,6 +101,15 @@ def _truncate_by_recency(rows: list, cap: int) -> tuple[list, int]:
     return ordered[:cap], max(len(ordered) - cap, 0)
 
 
+def _union_by_id(lists) -> list:
+    """Rows of several lists, each id once, in `created_at` order (the repository's own order)."""
+    by_id: dict = {}
+    for rows in lists:
+        for r in rows:
+            by_id.setdefault(r["id"], r)
+    return sorted(by_id.values(), key=lambda r: r["created_at"])
+
+
 def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
             include_personas: bool = True):
     """組出最小必要上下文。
@@ -116,13 +125,15 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         raise ValueError(f"找不到品牌：{brand_id}")
 
     product = None
+    knowledge_ids: list[str] = []
     if product_id is not None:
         product = repo.get_product(conn, brand_id, product_id)
         if product is None:
             raise ValueError(f"找不到產品：{product_id}（或不屬於品牌 {brand_id}）")
         # 知識掛母產品、金額掛賣法（ARCHITECTURE.md §8 第 1 條）：往上找母產品的事實／宣稱／規則，
-        # 賣法本身沒有自己的一份知識。
-        product_id = repo.knowledge_product_id(conn, brand_id, product_id)
+        # 賣法本身沒有自己的一份知識。F43：組合賣法有好幾個商品，每個商品的知識都要讀
+        # （`knowledge_product_ids`）；合起來仍共用底下同一個上限（硬性規則 6）。
+        knowledge_ids = repo.knowledge_product_ids(conn, brand_id, product_id)
 
     # 事實／宣稱共用同一張卡的上限（ARCHITECTURE.md §1：上限只寫在一個地方）；讀一次，
     # 底下三份清單各自截斷，不對同一張卡再呼叫三次。
@@ -135,16 +146,18 @@ def compile(conn: Conn, brand_id: str, product_id: str | None = None, *,
         personas.list_personas(conn, brand_id, limit=PERSONA_PROMPT_CAP)
         if include_personas else []
     )
-    product_facts, product_fact_overflow = (
-        _truncate_by_recency(
-            repo.list_product_facts(conn, brand_id, product_id, status="confirmed"), fact_claim_cap
-        )
-        if product_id is not None else ([], 0)
+    product_facts, product_fact_overflow = _truncate_by_recency(
+        [f for knowledge_id in knowledge_ids
+         for f in repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed")],
+        fact_claim_cap,
     )
 
-    if product_id is not None:
-        rules_all = repo.list_rules_for_product(conn, brand_id, product_id)
-        claims_all = repo.list_claims_for_product(conn, brand_id, product_id)
+    if knowledge_ids:
+        # 品牌整體的規則／宣稱每個商品都會回一次，同一筆只留一次。
+        rules_all = _union_by_id(
+            repo.list_rules_for_product(conn, brand_id, k) for k in knowledge_ids)
+        claims_all = _union_by_id(
+            repo.list_claims_for_product(conn, brand_id, k) for k in knowledge_ids)
     else:
         rules_all = [r for r in repo.list_rules_for_brand(conn, brand_id) if r["product_id"] is None]
         claims_all = [c for c in repo.list_claims_for_brand(conn, brand_id) if c["product_id"] is None]
