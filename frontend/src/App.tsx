@@ -24,7 +24,7 @@ import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
-import { ProductsPage } from "@/components/intake";
+import { ProductOnboarding, ProductsPage } from "@/components/intake";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -78,6 +78,8 @@ function App() {
           path="/brands/:brandId/products"
           element={<ProductListRoute />}
         />
+        <Route path="/brands/:brandId/products/new" element={<ProductNewRoute />} />
+        <Route path="/brands/:brandId/products/:productId/onboarding" element={<ProductOnboardingRoute />} />
         <Route
           path="/brands/:brandId/products/:productId"
           element={<ProductDetailRoute />}
@@ -379,6 +381,19 @@ function ProductListRoute() {
       <ProductsPage brandId={brandId ?? ""} />
     </>
   );
+}
+
+/** 商品建檔（F43-I08，原型 f41-onboarding `#/p1`–`#/p5`）：新商品（`…/products/new`）與既有商品
+ * （`…/products/:productId/onboarding?step=N`）共用同一個五步殼，差別只在 `productId` 有沒有值。
+ * 標題由每一步的步驟頭提供，這裡不另包 PageHeader。 */
+function ProductNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <ProductOnboarding brandId={brandId ?? ""} productId={null} />;
+}
+
+function ProductOnboardingRoute() {
+  const { brandId, productId } = useParams<{ brandId: string; productId: string }>();
+  return <ProductOnboarding key={productId} brandId={brandId ?? ""} productId={productId ?? ""} />;
 }
 
 /** 產品詳情（S6，票 B2-products）。 */
