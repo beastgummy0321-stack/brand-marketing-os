@@ -152,6 +152,52 @@ class BrandPoliciesTest(unittest.TestCase):
                                    fact_key="ship_all")
 
 
+class BrandFactParamsTest(unittest.TestCase):
+    """F42-I04: the generic fact writers take an optional `params_json` (a tone fact's tones)."""
+
+    def setUp(self):
+        self.conn = db_current()
+        self.bid = _brand(self.conn)
+
+    def _audit_after(self, fact_id: str, action: str):
+        row = self.conn.execute(
+            "SELECT after_json FROM audit_log WHERE entity_id = %s AND action = %s"
+            " ORDER BY created_at DESC LIMIT 1", (fact_id, action)).fetchone()
+        return row["after_json"]
+
+    def test_create_and_update_write_params_and_audit_them(self):
+        row = repo.create_brand_fact(self.conn, self.bid, actor=ACTOR, fact_type="tone",
+                                     label="語調", value="親切、直接", status="confirmed",
+                                     confirmed_by=ACTOR, params_json={"tones": ["親切", "直接"]})
+        fact = repo.get_brand_fact(self.conn, self.bid, row["id"])
+        self.assertEqual(fact["params_json"], {"tones": ["親切", "直接"]})
+        self.assertEqual(self._audit_after(row["id"], "create")["params_json"],
+                         {"tones": ["親切", "直接"]})
+        after = repo.update_brand_fact(self.conn, self.bid, row["id"], actor=ACTOR,
+                                       fact_type="tone", label="語調", value="溫柔",
+                                       params_json={"tones": ["溫柔"]})
+        self.assertEqual(after["params_json"], {"tones": ["溫柔"]})
+        self.assertEqual(self._audit_after(row["id"], "update")["params_json"], {"tones": ["溫柔"]})
+
+    def test_edit_without_params_clears_them(self):
+        row = repo.create_brand_fact(self.conn, self.bid, actor=ACTOR, fact_type="tone",
+                                     label="語調", value="親切", status="confirmed",
+                                     confirmed_by=ACTOR, params_json={"tones": ["親切"]})
+        after = repo.update_brand_fact(self.conn, self.bid, row["id"], actor=ACTOR,
+                                       fact_type="tone", label="語調", value="專業而親切")
+        self.assertIsNone(after["params_json"])
+
+    def test_params_must_be_an_object_and_policy_still_refused(self):
+        with self.assertRaises(ValueError):
+            repo.create_brand_fact(self.conn, self.bid, actor=ACTOR, fact_type="tone",
+                                   label="語調", value="親切", status="confirmed",
+                                   confirmed_by=ACTOR, params_json=["親切"])  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            repo.create_brand_fact(self.conn, self.bid, actor=ACTOR, fact_type="policy",
+                                   label="x", value="y", status="confirmed", confirmed_by=ACTOR,
+                                   fact_key="ship_all", params_json={})
+
+
 class BrandFactChecksTest(unittest.TestCase):
     """The DB CHECKs of 20261001000001_brand_intelligence_brand_onboarding.sql."""
 

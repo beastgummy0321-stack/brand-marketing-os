@@ -272,6 +272,17 @@ class IdentityTest(_Base):
         self.assertFalse([f for f in bi_repo.list_brand_facts(web.conn, bid)
                           if f["fact_type"] == "visual_base"])
 
+    def test_tones_are_stored_in_params_and_old_rows_fall_back_to_the_value(self):
+        bid = self._create()
+        bi_repo.create_brand_fact(web.conn, bid, actor="test", fact_type="tone", label="語調",
+                                  value="親切、像教練朋友", status="confirmed", confirmed_by="test")
+        self.assertEqual(self._get(bid, "/identity")["tone"]["values"], ["親切", "像教練朋友"])
+        self._put(bid, "/identity", {"positioning": "", "tone": ["專業", "直接"], "visual": ""})
+        [tone] = [f for f in bi_repo.list_brand_facts(web.conn, bid, status="confirmed")
+                  if f["fact_type"] == "tone"]
+        self.assertEqual((tone["value"], tone["params_json"]),
+                         ("專業、直接", {"tones": ["專業", "直接"]}))
+
     def test_tone_count_is_one_or_two(self):
         bid = self._create()
         for tones in ([], ["親切", "專業", "直接"], "親切"):

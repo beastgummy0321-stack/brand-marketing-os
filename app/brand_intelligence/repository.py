@@ -523,12 +523,16 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
                        source_reference_id: str | None = None,
                        confidence: str | None = None,
                        confirmed_by: str | None = None,
-                       fact_key: str | None = None) -> dict:
+                       fact_key: str | None = None,
+                       params_json: dict | None = None) -> dict:
+    """`params_json` (F42-I04, optional): structured detail of `value` (e.g. a `tone` fact's
+    `{"tones": [...]}` from brand onboarding). Policy facts are still refused here."""
     _require(fact_type, "brand_fact.fact_type 為必填")
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
     fact_key = _proof_fact_key(fact_type, fact_key)
+    _check_fact_params(params_json)
     if status not in ("confirmed", "pending"):
         raise ValueError("brand_fact.status 只能是 confirmed 或 pending")
     if status == "confirmed":
@@ -537,17 +541,19 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
     ts = now_utc()
     row = {
         "id": fact_id, "brand_id": brand_id, "fact_type": fact_type, "fact_key": fact_key,
-        "label": label, "value": value, "status": status, "source_reference_id": source_reference_id, "confidence": confidence,
+        "label": label, "value": value, "params_json": params_json, "status": status,
+        "source_reference_id": source_reference_id, "confidence": confidence,
         "confirmed_by": confirmed_by if status == "confirmed" else None,
         "confirmed_at": ts if status == "confirmed" else None,
         "created_at": ts, "updated_at": ts,
     }
     org_id = _org_id_for_brand(conn, brand_id)
     conn.execute(
-        "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, fact_key, label, value, status, "
-        "source_reference_id, confidence, confirmed_by, confirmed_at, created_at, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (row["id"], org_id, row["brand_id"], row["fact_type"], row["fact_key"], row["label"], row["value"], row["status"],
+        "INSERT INTO brand_fact (id, org_id, brand_id, fact_type, fact_key, label, value, params_json, "
+        "status, source_reference_id, confidence, confirmed_by, confirmed_at, created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (row["id"], org_id, row["brand_id"], row["fact_type"], row["fact_key"], row["label"], row["value"],
+         jsonb(params_json) if params_json is not None else None, row["status"],
          row["source_reference_id"], row["confidence"], row["confirmed_by"], row["confirmed_at"],
          row["created_at"], row["updated_at"]),
     )
@@ -562,6 +568,11 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
 # the DB CHECK in 20260929000002_brand_intelligence_brand_fact_key.sql holds the same list).
 PROOF_FACT_KEYS = ("customer_review", "expert_endorsement", "lab_report",
                    "sales_numbers", "media_coverage", "founder_voice")
+
+
+def _check_fact_params(params_json) -> None:
+    if params_json is not None and not isinstance(params_json, dict):
+        raise ValueError("brand_fact.params_json 必須是物件")
 
 
 def _proof_fact_key(fact_type: str, fact_key: str | None) -> str | None:
@@ -797,14 +808,20 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
                        fact_type: str, label: str, value: str,
                        source_reference_id: str | None = None,
                        confidence: str | None = None,
-                       fact_key: str | None = None) -> dict:
+                       fact_key: str | None = None,
+                       params_json: dict | None = None) -> dict:
     """編輯事實內容。人工編輯直接生效、不退回待確認（決策 0013 用戶優先：
-    人親手改的內容本身就是最高權威的確認；編輯者成為最新確認人）。"""
+    人親手改的內容本身就是最高權威的確認；編輯者成為最新確認人）。
+
+    `params_json` (F42-I04) describes the new `value`, so it is written with every edit: an
+    edit that does not pass it (e.g. the library's fact form) clears it -- stale structure must
+    not outlive the value it described (the onboarding reader then falls back to `value`)."""
     _require(fact_type, "brand_fact.fact_type 為必填")
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
     fact_key = _proof_fact_key(fact_type, fact_key)
+    _check_fact_params(params_json)
     before = get_brand_fact(conn, brand_id, fact_id)
     if before is None:
         raise ValueError(f"找不到品牌事實：{fact_id}")
@@ -815,10 +832,11 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     confirmed_by = actor if was_confirmed else before["confirmed_by"]
     confirmed_at = ts if was_confirmed else before["confirmed_at"]
     conn.execute(
-        "UPDATE brand_fact SET fact_type = %s, fact_key = %s, label = %s, value = %s, "
+        "UPDATE brand_fact SET fact_type = %s, fact_key = %s, label = %s, value = %s, params_json = %s, "
         "source_reference_id = %s, confidence = %s, confirmed_by = %s, confirmed_at = %s, updated_at = %s "
         "WHERE id = %s AND brand_id = %s",
-        (fact_type, fact_key, label, value, source_reference_id, confidence,
+        (fact_type, fact_key, label, value, jsonb(params_json) if params_json is not None else None,
+         source_reference_id, confidence,
          confirmed_by, confirmed_at, ts, fact_id, brand_id),
     )
     after = get_brand_fact(conn, brand_id, fact_id)

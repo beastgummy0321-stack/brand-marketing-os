@@ -272,8 +272,9 @@ def _latest_fact(conn: Conn, brand_id: str, fact_type: str) -> dict | None:
 
 
 def _fact_tones(fact: dict) -> list:
-    """The tones of a saved `tone` fact: `params_json.tones` when present, else its value split
-    on 「、」 (how this issue writes it; see the module report on `params_json`)."""
+    """The tones of a saved `tone` fact: `params_json.tones` (written by `put_identity`); a row
+    without it (saved before F42-I04, or last edited in the library's fact form, which clears
+    it) falls back to its value split on 「、」."""
     tones = (fact.get("params_json") or {}).get("tones")
     if isinstance(tones, list):
         return [str(t) for t in tones if str(t).strip()]
@@ -338,9 +339,10 @@ def _check_tones(value) -> list:
     return tones
 
 
-def _replace_fact(conn: Conn, brand_id: str, fact_type: str, value: str, *, actor: str) -> None:
+def _replace_fact(conn: Conn, brand_id: str, fact_type: str, value: str, *, actor: str,
+                  params: dict | None = None) -> None:
     """One confirmed row per type: update the latest confirmed row, create one, or (empty value)
-    delete it."""
+    delete it. `params` = the row's `params_json` (the tone fact's `{"tones": [...]}`)."""
     current = _latest_fact(conn, brand_id, fact_type)
     if not value:
         if current is not None:
@@ -349,10 +351,10 @@ def _replace_fact(conn: Conn, brand_id: str, fact_type: str, value: str, *, acto
     if current is None:
         bi_repo.create_brand_fact(conn, brand_id, actor=actor, fact_type=fact_type,
                                   label=vocab.brand_fact_type_label(fact_type), value=value,
-                                  status="confirmed", confirmed_by=actor)
-    elif current["value"] != value:
+                                  status="confirmed", confirmed_by=actor, params_json=params)
+    elif (current["value"], current.get("params_json")) != (value, params):
         bi_repo.update_brand_fact(conn, brand_id, current["id"], actor=actor, fact_type=fact_type,
-                                  label=current["label"], value=value,
+                                  label=current["label"], value=value, params_json=params,
                                   source_reference_id=current.get("source_reference_id"),
                                   confidence=current.get("confidence"))
 
@@ -362,7 +364,7 @@ def put_identity(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
     visual = _check_text(body.get("visual"), "畫面風格")
     tones = _check_tones(body.get("tone"))
     _replace_fact(conn, brand_id, "positioning", positioning, actor=actor)
-    _replace_fact(conn, brand_id, "tone", "、".join(tones), actor=actor)
+    _replace_fact(conn, brand_id, "tone", "、".join(tones), actor=actor, params={"tones": tones})
     _replace_fact(conn, brand_id, "visual_base", visual, actor=actor)
     advance(conn, brand_id, STEP_IDENTITY)
     return get_identity(conn, brand_id)
