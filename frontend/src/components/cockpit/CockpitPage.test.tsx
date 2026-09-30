@@ -85,3 +85,11 @@ describe("CockpitPage 資料時間與歸因", () => {
     ).toBeTruthy();
   });
 });
+
+describe("CockpitPage 品牌資料入口（F42-I12）", () => {
+  it("標題列右側有「品牌資料（建檔時填的）」連到品牌建檔", async () => {
+    view(spend());
+    const link = await screen.findByRole("link", { name: "品牌資料（建檔時填的）" });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/intake");
+  });
+});
