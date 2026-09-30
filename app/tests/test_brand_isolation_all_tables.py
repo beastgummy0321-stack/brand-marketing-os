@@ -99,6 +99,15 @@ class SiteWideBrandIsolationSchemaTest(unittest.TestCase):
             "以下資料表未通過品牌隔離的結構檢查（鐵則 5，使用者紅線）：\n" + "\n".join(offenders),
         )
 
+    def test_f43_product_tables_are_brand_scoped(self):
+        """F43-I01: the three product-onboarding tables are enumerated and carry a NOT NULL
+        brand_id (none of them is an exception)."""
+        tables = set(self._all_tables())
+        for table in ("product_component", "product_customer_group", "intake_product_prefill"):
+            self.assertIn(table, tables)
+            self.assertNotIn(table, BRAND_AGNOSTIC_EXCEPTIONS)
+            self.assertEqual(self._columns(table)["brand_id"]["is_nullable"], "NO", table)
+
     def test_exceptions_are_still_real_not_a_dead_list(self):
         """例外清單不能變成死名單：清單裡每一項現在真的還「沒有 NOT NULL brand_id」。
 

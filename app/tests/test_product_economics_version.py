@@ -45,3 +45,17 @@ class ProductEconomicsVersionTest(unittest.TestCase):
         self.assertEqual(rows[0]["effective_to"], today)  # 零長度：[today, today)
         self.assertIsNone(rows[1]["effective_to"])
         self.assertEqual(self._open_count(), 1)
+
+    def test_list_price_and_cap_are_versioned_and_kept(self):
+        """F43-I01: list_price / cap_per_sale travel with each version; a save that does not pass
+        them (an editor from before F43) keeps the stored values."""
+        d1, d2 = date(2026, 9, 1), date(2026, 9, 2)
+        with mock.patch.object(repo.coresettings, "today_for_org", return_value=d1):
+            repo.save_product_economics(self.conn, self.bid, self.pid, selling_price=359,
+                                         currency="TWD", confirmed_by="測試員", actor="測試員",
+                                         list_price=399, cap_per_sale=150)
+        self._save(349, d2)
+        self.assertEqual((repo.economics_at(self.conn, self.bid, self.pid, d1)["list_price"],
+                          repo.economics_at(self.conn, self.bid, self.pid, d2)["list_price"],
+                          repo.economics_at(self.conn, self.bid, self.pid, d2)["cap_per_sale"]),
+                         (399, 399, 150))
