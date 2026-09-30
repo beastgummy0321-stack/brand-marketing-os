@@ -228,7 +228,7 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     expect(source("每筆上限")).toBe("來自賣法「三盒組」");
     expect(screen.getByText("等於打平 669")).toBeTruthy();
     expect(value("落地頁")).toBe(VITAMIN_URL);
-    expect(source("落地頁")).toBe("來自商品頁");
+    expect(source("落地頁")).toBe("來自賣法「三盒組」");
   });
 
   it("sends only the changed values and names them 你改的; a value typed back to the default is not sent", async () => {
@@ -247,7 +247,7 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     expect(source("受眾")).toBe("你改的");
     expect(source("每筆上限")).toBe("你改的");
     expect(source("平台")).toBe("你改的");
-    expect(source("落地頁")).toBe("來自商品頁");
+    expect(source("落地頁")).toBe("來自賣法「三盒組」");
     await user.click(next());
     await screen.findByText("第二步頁面");
     expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", {
@@ -262,7 +262,7 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     await pickAll(user);
     await openFold(user);
     await user.clear(screen.getByLabelText("落地頁"));
-    expect(screen.getByText("留空＝用商品頁")).toBeTruthy();
+    expect(screen.getByText("留空＝用賣法的落地頁")).toBeTruthy();
     await user.type(screen.getByLabelText("落地頁"), "https://beastgummy.tw/lp/autumn");
     expect(source("落地頁")).toBe("你改的");
     await user.click(next());
@@ -288,7 +288,8 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     expect(source("受眾")).toBe("來自商品：1 群顧客");
     expect(value("每筆上限")).toBe("");
     expect(screen.getByText("這個賣法還算不出打平；可以自己填")).toBeTruthy();
-    expect(source("落地頁")).toBe("商品頁還沒填網址");
+    expect(source("落地頁")).toBe("來自賣法「單盒」");
+    expect(value("落地頁")).toBe("");
   });
 
   it("a brand with no connected account says so; the platform can still be picked", async () => {

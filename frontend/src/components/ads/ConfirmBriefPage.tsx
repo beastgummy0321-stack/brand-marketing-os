@@ -46,7 +46,7 @@ const CAP_LABEL = "每賣一筆最多花";
 /** The audience editor's 「N 群都投」 option (sent as `customer_group_ids: []`). */
 const ALL_GROUPS = "all";
 /** The landing row's source tag (F43-I15): from the sell-way／product, the user's own, or copied by F40. */
-const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自商品頁", user: "你填的", copied: "照上一期" };
+const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自賣法", user: "你填的", copied: "照上一期" };
 
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
@@ -324,7 +324,7 @@ function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
 }
 
 /** F40-I12 (drill-7 #10): the campaign-level landing URL (`context_json.landing_url`), shown in the main block with
- * its source tag (F43-I15: `field_sources.landing_url` — 「來自商品頁」 for the sell-way's landing; none when unknown) — the same `.uchip` box as the seven understood fields (`UnderstoodField` keys are the
+ * its source tag (F43-I15: `field_sources.landing_url` — 「來自賣法」 for the sell-way's effective landing (its own URL, else the product page); none when unknown) — the same `.uchip` box as the seven understood fields (`UnderstoodField` keys are the
  * six campaign fields plus the cap; this one has its own piece). Optional: blank reads 「還沒填（選填）」 on a neutral
  * dashed border, never a guess. Saved through the campaign PATCH (`landing_url`; blank clears). */
 function LandingUrlField({ value, source, editing, onEdit, editor }: { value: string; source?: FieldSource; editing: boolean; onEdit?: () => void; editor: ReactNode }) {

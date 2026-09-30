@@ -423,8 +423,8 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           <Field id="new-sale-cap" label="每筆上限" hint={capHint} tag={way && <Source changed={capChanged}>{`來自賣法「${way.display_name}」`}</Source>}>
             <MoneyInput id="new-sale-cap" value={capShown} onChange={setCap} disabled={locked || !way} placeholder={way ? "例如 450" : "先選要推什麼"} onEnter={() => void submit()} />
           </Field>
-          <Field id="new-landing" label="落地頁" hint={landing !== undefined && !landing.trim() && way?.landing_url ? "留空＝用商品頁" : undefined}
-            tag={way && <Source changed={landingChanged}>{way.landing_url ? "來自商品頁" : "商品頁還沒填網址"}</Source>}>
+          <Field id="new-landing" label="落地頁" hint={landing !== undefined && !landing.trim() && way?.landing_url ? "留空＝用賣法的落地頁" : undefined}
+            tag={way && <Source changed={landingChanged}>{`來自賣法「${way.display_name}」`}</Source>}>
             <Input id="new-landing" type="url" value={landingShown} disabled={locked || !way} onChange={(e) => setLanding(e.target.value)}
               placeholder="https://" className="h-[42px] rounded-lg" />
           </Field>

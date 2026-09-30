@@ -383,12 +383,12 @@ describe("ConfirmBriefPage landing URL (F40-I12)", () => {
     expect(within(field("landing_url")).queryByText("照上一期")).toBeNull();
   });
 
-  it("names the sell-way's landing 「來自商品頁」 and the user's own 「你填的」 (F43-I15)", async () => {
+  it("names the sell-way's landing 「來自賣法」 and the user's own 「你填的」 (F43-I15)", async () => {
     const tagged = (source: "sell_way" | "user") => campaign({ context_json: { product_ids: ["prd_1"], landing_url: URL, field_sources: sources({ landing_url: source }) } });
     vi.mocked(getCampaign).mockResolvedValue(tagged("sell_way"));
     const view = renderPage();
     await screen.findByText(LONG);
-    expect(within(field("landing_url")).getByText("來自商品頁")).toBeTruthy();
+    expect(within(field("landing_url")).getByText("來自賣法")).toBeTruthy();
     view.unmount();
     vi.mocked(getCampaign).mockResolvedValue(tagged("user"));
     renderPage();
