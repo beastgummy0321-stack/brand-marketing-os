@@ -350,6 +350,51 @@ def _confirm_if_ready(conn, org, brand, campaign_id, placement, actor) -> None:
     )
 
 
+PREVIEW_ACTOR = "system:preview"
+
+
+def settle_ready_asset(conn, org, brand, asset_id) -> int:
+    """Drill-8 #4: once an original's preview is made (`user_assets.process_preview`, its only
+    reader), confirm and settle every slot still waiting on it -- the same two calls `upload`
+    runs, so a file uploaded while its original was pending reaches `ready` with no second click.
+
+    Only current, unconfirmed placements an `ads_ad` points at through `slot_placement_id` are
+    touched; a library placement (no ad points at it) waits for the user's own confirmation. The
+    actor is the placement's `created_by` (who uploaded it into the slot), else `system:preview`.
+    Returns how many slots were settled (ads whose slot now carries the confirmed placement)."""
+    waiting = conn.execute(
+        "SELECT DISTINCT a.campaign_id,a.slot_placement_id FROM ads_ad a "
+        "JOIN ads_asset_placement p ON p.id=a.slot_placement_id AND p.org_id=a.org_id "
+        "AND p.brand_id=a.brand_id AND p.campaign_id=a.campaign_id AND p.is_current "
+        "WHERE a.org_id=%s AND a.brand_id=%s AND p.asset_id=%s AND p.confirmed_at IS NULL "
+        "ORDER BY a.campaign_id,a.slot_placement_id",
+        (org, brand, asset_id),
+    ).fetchall()
+    settled = 0
+    for row in waiting:
+        campaign_id, placement_id = row["campaign_id"], row["slot_placement_id"]
+        placement = user_assets.placement(conn, org, brand, campaign_id, placement_id)
+        _confirm_if_ready(
+            conn, org, brand, campaign_id, placement, placement["created_by"] or PREVIEW_ACTOR
+        )
+        conn.commit()
+        before = _slot_ads(conn, org, brand, campaign_id, placement_id)
+        settle(conn, org, brand, campaign_id, placement_id)
+        settled += len(before - _slot_ads(conn, org, brand, campaign_id, placement_id))
+    return settled
+
+
+def _slot_ads(conn, org, brand, campaign_id, placement_id) -> set:
+    return {
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM ads_ad WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+            "AND slot_placement_id=%s",
+            (org, brand, campaign_id, placement_id),
+        ).fetchall()
+    }
+
+
 def _slot_ad_for_write(conn, org, brand, campaign_id, ad_id) -> dict:
     ads_repo.require_internal_campaign(conn, org, brand, campaign_id)
     ad = _planned_ad(conn, org, brand, campaign_id, ad_id)
