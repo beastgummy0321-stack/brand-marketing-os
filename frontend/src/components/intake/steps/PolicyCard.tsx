@@ -2,7 +2,7 @@ import { useId, useState, type ComponentProps, type ReactNode } from "react";
 import type { OfferKey, OnboardingSource, PolicyItem, PolicyParamValue, PolicyType } from "@/lib/intakeOnboardingApi";
 import { cn } from "@/lib/utils";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape, type CustomOption, type CustomUndo } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark, type CustomOption } from "../shared/CustomEscape";
 
 /** 「全店政策」 of brand onboarding `#/b4` (prototype `policyCard()` of
  * `.harness/scratch/prototype/f41-onboarding/index.html`): the fixed 7 天猶豫期 row, the registry's common
@@ -102,13 +102,13 @@ export function PolicyCard({ brandId, types, chosen, onChange, cooling, onCoolin
     onChange((prev) => prev.map((p) => (p === target ? { ...p, params: { ...p.params, [name]: value } } : p)));
   }
 
-  function addCustom(option: CustomOption<"policy">): CustomUndo {
+  /** A 自訂 policy joins 「你有的」 checked and marked 「你自訂」; its row's × is the undo. */
+  function addCustom(option: CustomOption<"policy">) {
     const item: ChosenPolicy = {
       key: "custom", label: option.label, params: option.params, offer_key: option.offer_key,
       offer_label: option.offer_label, sentence: option.sentence, origin: "custom", note: "",
     };
-    onChange((prev) => [...prev, item]);
-    return () => onChange((prev) => prev.filter((p) => p !== item));
+    onChange((prev) => [...prev.filter((p) => !(p.key === "custom" && p.label === item.label)), item]);
   }
 
   const chip = (type: PolicyType) => {
@@ -224,7 +224,7 @@ function ChosenRow({ policy, spec, onParam, onRemove }: {
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-0.5 text-[11.5px] text-muted-foreground">
           廣告裡會當成：<b className="font-semibold text-foreground">{policy.offer_label}</b>・
-          {policy.origin === "ai" ? <AiTag source="ai" note={policy.note} /> : <Mine>{policy.origin === "custom" ? "你自訂" : "你選的"}</Mine>}
+          {policy.origin === "ai" ? <AiTag source="ai" note={policy.note} /> : <CustomMark>{policy.origin === "custom" ? "你自訂" : "你選的"}</CustomMark>}
         </div>
       </div>
       <RemoveButton label={policy.label} onClick={onRemove} />
@@ -271,10 +271,6 @@ export function Chip({ tone = "neutral", className, ...props }: ComponentProps<"
       {...props}
     />
   );
-}
-
-export function Mine({ children }: { children: ReactNode }) {
-  return <span className="inline-flex items-center rounded bg-zone-ok px-1.5 py-px text-[11px] font-semibold text-success-strong">{children}</span>;
 }
 
 export function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {

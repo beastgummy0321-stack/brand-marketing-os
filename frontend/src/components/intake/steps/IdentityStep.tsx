@@ -7,14 +7,15 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
 
 /** Prototype `chips(…, 2)`: at most two tones; picking a third drops the oldest. */
 const TONE_MAX = 2;
 
 /** Brand onboarding `#/b3` 品牌是誰 (prototype `R.b3` of `.harness/scratch/prototype/f41-onboarding/index.html`):
  * positioning, tone (1–2) and visual style, pre-filled from `GET …/onboarding/identity` with the scan's tag
- * until the user changes the field; each block ends with 「自訂」. 下一步 saves the three through
+ * until the user changes the field; each block ends with 「自訂」, whose result shows where it lives (the field's
+ * tag reads 「你自訂」; a new tone joins the chips marked 「你自訂」 with its own ×). 下一步 saves the three through
  * `PUT …/onboarding/identity` and moves on only after the server confirmed; an error keeps the user here. */
 export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
   const { brandId = "" } = useParams<{ brandId: string }>();
@@ -24,6 +25,10 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
   const [tones, setTones] = useState<string[]>([]);
   const [toneOptions, setToneOptions] = useState<string[]>([]);
   const [visual, setVisual] = useState("");
+  /** 自訂 results: the value a field was filled with, and the tones 自訂 added to the chips. */
+  const [customPositioning, setCustomPositioning] = useState<string | null>(null);
+  const [customVisual, setCustomVisual] = useState<string | null>(null);
+  const [customTones, setCustomTones] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,12 +73,10 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
     });
   }
 
-  /** Replace a text field with the 自訂 value; × puts the previous text back unless the user edited it since. */
-  function replaceWith(current: string, set: (update: (prev: string) => string) => void) {
-    return (value: string) => {
-      set(() => value);
-      return () => set((now) => (now === value ? current : now));
-    };
+  function removeCustomTone(tone: string) {
+    setToneOptions((prev) => prev.filter((t) => t !== tone));
+    setTones((prev) => prev.filter((t) => t !== tone));
+    setCustomTones((prev) => prev.filter((t) => t !== tone));
   }
 
   return (
@@ -95,19 +98,24 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
               value={positioning}
               onChange={(e) => setPositioning(e.target.value)}
             />
-            {positioning === loaded.positioning.value && <Tag source={loaded.positioning.source} note={loaded.positioning.note} />}
+            {positioning === customPositioning
+              ? <div className="mt-1"><CustomMark /></div>
+              : positioning === loaded.positioning.value && <Tag source={loaded.positioning.source} note={loaded.positioning.note} />}
             <CustomEscape
               brandId={brandId}
               block="positioning"
               placeholder="例如：我們不是保健品，是給懶人的營養零食"
-              onValue={replaceWith(positioning, setPositioning)}
+              onValue={(value) => {
+                setPositioning(value);
+                setCustomPositioning(value);
+              }}
             />
           </Row>
           <Row label="說話的口氣" note="挑 1～2 個">
             <div role="group" aria-label="說話的口氣" className="flex flex-wrap gap-2">
               {toneOptions.map((tone) => {
                 const on = tones.includes(tone);
-                return (
+                const chip = (
                   <button
                     key={tone}
                     type="button"
@@ -121,6 +129,16 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
                     {tone}
                   </button>
                 );
+                if (!customTones.includes(tone)) return chip;
+                return (
+                  <span key={tone} className="inline-flex items-center gap-1">
+                    {chip}
+                    <CustomMark />
+                    <button type="button" aria-label={`拿掉「${tone}」`} className="rounded p-1 text-lg leading-none text-muted-foreground hover:text-foreground" onClick={() => removeCustomTone(tone)}>
+                      ×
+                    </button>
+                  </span>
+                );
               })}
             </div>
             {sameTones(tones, loaded.tone.values) && <Tag source={loaded.tone.source} note={loaded.tone.note} gap="mt-1.5" />}
@@ -129,14 +147,12 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
               block="tone"
               placeholder="例如：像健身房的教練朋友，講話直、偶爾吐槽"
               onOption={({ label }) => {
-                const existed = toneOptions.includes(label);
-                const before = tones;
-                if (!existed) setToneOptions((prev) => [...prev, label]);
+                const isNew = !toneOptions.includes(label);
+                if (isNew) {
+                  setToneOptions((prev) => [...prev, label]);
+                  setCustomTones((prev) => [...prev, label]);
+                }
                 setTones((prev) => (prev.includes(label) ? prev : [...prev, label].slice(-TONE_MAX)));
-                return () => {
-                  if (!existed) setToneOptions((prev) => prev.filter((t) => t !== label));
-                  setTones((prev) => (prev.includes(label) && !before.includes(label) ? prev.filter((t) => t !== label) : prev));
-                };
               }}
             />
           </Row>
@@ -146,14 +162,19 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
                 <Thumb key={url} url={url} />
               ))}
               {visual && <span className="text-[12.5px]">{visual}</span>}
-              {visual === loaded.visual.value && <AiTag source={loaded.visual.source} note={loaded.visual.note} />}
+              {visual === customVisual
+                ? <CustomMark />
+                : visual === loaded.visual.value && <AiTag source={loaded.visual.source} note={loaded.visual.note} />}
             </div>
             <div className="mt-3.5">
               <CustomEscape
                 brandId={brandId}
                 block="visual"
                 placeholder="例如：黑底、霓虹感、健身房器材，不要粉嫩"
-                onValue={replaceWith(visual, setVisual)}
+                onValue={(value) => {
+                  setVisual(value);
+                  setCustomVisual(value);
+                }}
               />
             </div>
           </Row>

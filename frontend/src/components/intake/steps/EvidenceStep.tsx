@@ -5,9 +5,9 @@ import { fetchOnboardingEvidence, saveOnboardingEvidence } from "@/lib/intakeOnb
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
 import {
-  blockingReason, Chip, chosenFromItem, EvidenceCard, INPUT, Item, Mine, PolicyCard, RemoveButton,
+  blockingReason, Chip, chosenFromItem, EvidenceCard, INPUT, Item, PolicyCard, RemoveButton,
   type ChosenPolicy, type CoolingOff,
 } from "./PolicyCard";
 
@@ -32,6 +32,8 @@ interface ProofRow {
 interface ForbiddenRow {
   uid: number;
   text: string;
+  /** Added through 「自訂」 on this visit (marked 「你自訂」 instead of 「你自己加的」). */
+  custom: boolean;
 }
 
 /** Brand onboarding `#/b4` 品牌的證據與政策 (prototype `R.b4` of `.harness/scratch/prototype/f41-onboarding/index.html`):
@@ -62,7 +64,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
         })));
         setPolicies(evidence.policies.map(chosenFromItem));
         setCooling({ applies: evidence.cooling_off.applies, disclosure: evidence.cooling_off.disclosure });
-        setForbidden(evidence.forbidden.map((f) => ({ uid: uid.current++, text: f.text })));
+        setForbidden(evidence.forbidden.map((f) => ({ uid: uid.current++, text: f.text, custom: false })));
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -143,7 +145,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
                     {row.origin === "ai" && row.text === row.loadedText && (
                       <div className="mt-0.5"><AiTag source="ai" note={row.note} /></div>
                     )}
-                    {row.origin === "custom" && <div className="mt-0.5"><Mine>你自訂</Mine></div>}
+                    {row.origin === "custom" && <div className="mt-0.5"><CustomMark /></div>}
                   </div>
                   {!row.editing && (
                     <button type="button" className="text-[13px] font-medium whitespace-nowrap text-primary hover:underline" aria-label={`改「${row.text}」`} onClick={() => editProof(row, { editing: true })}>
@@ -180,7 +182,6 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
                   uid: uid.current++, id: null, fact_key, text, loadedText: text, origin: "custom", note: "", editing: false,
                 };
                 setProof((prev) => [...prev, row]);
-                return () => setProof((prev) => prev.filter((p) => p.uid !== row.uid));
               }}
             />
           </EvidenceCard>
@@ -203,7 +204,9 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
               <Item key={row.uid}>
                 <div className="min-w-0 flex-1">
                   <b className="font-semibold [overflow-wrap:anywhere]">{row.text}</b>
-                  <div className="text-[11.5px] text-muted-foreground">你自己加的</div>
+                  {row.custom
+                    ? <div className="mt-0.5"><CustomMark /></div>
+                    : <div className="text-[11.5px] text-muted-foreground">你自己加的</div>}
                 </div>
                 <RemoveButton label={row.text} onClick={() => setForbidden((prev) => prev.filter((f) => f.uid !== row.uid))} />
               </Item>
@@ -213,9 +216,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
               block="forbidden"
               placeholder="例如：不要拿別的品牌比較、不要講「減肥」"
               onOption={({ text }) => {
-                const row = { uid: uid.current++, text };
-                setForbidden((prev) => [...prev, row]);
-                return () => setForbidden((prev) => prev.filter((f) => f.uid !== row.uid));
+                setForbidden((prev) => [...prev.filter((f) => f.text !== text), { uid: uid.current++, text, custom: true }]);
               }}
             />
           </EvidenceCard>

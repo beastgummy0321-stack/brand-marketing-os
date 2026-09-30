@@ -276,6 +276,7 @@ describe("EvidenceStep", () => {
     expect(within(row).getByText("訂滿三個月送隨身包")).toBeTruthy();
     expect(row.textContent).toContain("廣告裡會當成：組合加贈・你自訂");
     expect(screen.getByText("你有的（2）")).toBeTruthy();
+    expect(within(card).getAllByText("你自訂").length).toBe(1);
 
     await userEvent.click(nextButton());
     await waitFor(() => expect(onNext).toHaveBeenCalled());
@@ -300,11 +301,36 @@ describe("EvidenceStep", () => {
     await userEvent.click(within(card).getByRole("button", { name: "✎ 自訂：用自己的話說" }));
     await userEvent.type(within(card).getByRole("textbox"), "不要拿別的品牌比較");
     await userEvent.click(within(card).getByRole("button", { name: "讓 AI 整理" }));
-    await waitFor(() => expect(within(card).getAllByText("你自己加的").length).toBe(2));
+    await waitFor(() => expect(within(card).getByText("不拿別的品牌比較")).toBeTruthy());
+    expect(within(card).getAllByText("你自訂").length).toBe(1);
+    expect(within(card).getAllByText("你自己加的").length).toBe(1);
 
     await userEvent.click(nextButton());
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
     expect(mockSave.mock.calls[0][1].forbidden).toEqual(["不講「最」「第一」", "不拿別的品牌比較"]);
+  });
+
+  it("自訂的證據加進證據清單、標「你自訂」（只出現這一處），它的 × 拿掉", async () => {
+    mockFetch.mockResolvedValue(evidence());
+    mockSave.mockResolvedValue(evidence());
+    mockPropose.mockResolvedValue({
+      block: "brand_proof", kind: "option",
+      option: { fact_key: "media_coverage", label: "媒體報導", text: "上過《好好吃飯》Podcast 第 42 集" },
+    });
+    renderStep();
+
+    const card = await screen.findByRole("region", { name: "讓人相信你的東西（品牌層）" });
+    await userEvent.click(within(card).getByRole("button", { name: "✎ 自訂：用自己的話說" }));
+    await userEvent.type(within(card).getByRole("textbox", { name: /覺得上面列的不對/ }), "我們上過好好吃飯 Podcast");
+    await userEvent.click(within(card).getByRole("button", { name: "讓 AI 整理" }));
+
+    await waitFor(() => expect(within(card).getByText("上過《好好吃飯》Podcast 第 42 集")).toBeTruthy());
+    expect(within(card).getAllByText("你自訂").length).toBe(1);
+    expect(within(card).queryByLabelText("媒體報導")).toBeNull();
+
+    await userEvent.click(within(card).getByRole("button", { name: "拿掉「上過《好好吃飯》Podcast 第 42 集」" }));
+    expect(within(card).queryByText("你自訂")).toBeNull();
+    expect(within(card).getByLabelText("媒體報導")).toBeTruthy();
   });
 
   it("沒有適用法規：不顯示法規標籤與禁語說明", async () => {
