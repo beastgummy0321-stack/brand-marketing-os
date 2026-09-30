@@ -369,9 +369,10 @@ describe("StrategyTab (F28-I09)", () => {
 
     it("photo and video reads 照片和影片; media never asked (null) leaves no media chip", async () => {
       const { unmount } = renderTab(campaign({ materials: { ...MATERIALS, media: "photo_video" } }));
-      expect(within(row()!).getByText("照片和影片")).toBeTruthy();
+      expect(await screen.findByText("照片和影片")).toBeTruthy();
       unmount();
       renderTab(campaign({ materials: { ...MATERIALS, media: null } }));
+      await screen.findByText("組合加贈：三盒 NT$999 另送一盒");
       expect(row()!.querySelector("[data-kind=media]")).toBeNull();
     });
 
