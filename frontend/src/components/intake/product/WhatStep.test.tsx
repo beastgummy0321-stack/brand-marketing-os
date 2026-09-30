@@ -2,7 +2,7 @@
  * the new-product form posts the create; fields the product-page read proposed carry its tag, confirmed ones do not;
  * 下一步 sends `PUT …/onboarding/what` with the typed values and moves on only after the server confirmed; a later
  * `what` (the read finished) fills only the fields the user left alone; a photo goes through the official-asset
- * upload with `product_id`. Fixtures are shaped like `app/intake/product_onboarding.py::get_what()`. No server. */
+ * upload with `product_id`; 「自訂」 under the difference goes through the product call and fills the field marked 你自訂. Fixtures are shaped like `app/intake/product_onboarding.py::get_what()`. No server. */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeProductApi")>("@/lib/intakeProductApi");
-  return { ...actual, createProduct: vi.fn(), fetchProductWhat: vi.fn(), saveProductWhat: vi.fn() };
+  return { ...actual, createProduct: vi.fn(), fetchProductWhat: vi.fn(), proposeProductCustom: vi.fn(), saveProductWhat: vi.fn() };
 });
 vi.mock("@/lib/libraryApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/libraryApi")>("@/lib/libraryApi");
@@ -21,7 +21,7 @@ vi.mock("@/lib/useAuthedImage", () => ({
 }));
 
 import type { ProductWhat } from "@/lib/intakeProductApi";
-import { createProduct, fetchProductWhat, saveProductWhat } from "@/lib/intakeProductApi";
+import { createProduct, fetchProductWhat, proposeProductCustom, saveProductWhat } from "@/lib/intakeProductApi";
 import { uploadAsset } from "@/lib/libraryApi";
 import type { StepNav } from "../OnboardingStepHead";
 import { PRODUCT_STEPS, productCrumb } from "./ProductOnboarding";
@@ -31,6 +31,7 @@ const mockCreate = vi.mocked(createProduct);
 const mockFetch = vi.mocked(fetchProductWhat);
 const mockSave = vi.mocked(saveProductWhat);
 const mockUpload = vi.mocked(uploadAsset);
+const mockCustom = vi.mocked(proposeProductCustom);
 
 const B = "brd_1";
 const P = "prd_vit";
@@ -199,5 +200,29 @@ describe("WhatStep", () => {
     await waitFor(() => expect(document.querySelector(`img[src="blob:${extra.url}"]`)).toBeTruthy());
     expect(mockUpload).toHaveBeenCalledWith(B, { asset_kind: "product_photo", product_id: P, title: "side.jpg", file });
     expect(mockFetch).toHaveBeenCalledWith(B, P);
+  });
+  it("跟別人不一樣的地方的「自訂」走商品那支，結果填進欄位、標「你自訂」，下一步一起存", async () => {
+    mockCustom.mockResolvedValue({ block: "difference", kind: "value", value: "台灣自己的工廠，一批一批驗" });
+    mockSave.mockResolvedValue(prefilled());
+    renderWhat(prefilled());
+
+    await userEvent.click(screen.getByRole("button", { name: "✎ 自訂：用自己的話說" }));
+    expect(screen.getByRole("textbox", { name: /覺得上面列的不對/ }).getAttribute("placeholder")).toBe("例如：我們是台灣自己的工廠做的，一批一批驗");
+    await userEvent.type(screen.getByRole("textbox", { name: /覺得上面列的不對/ }), "我們是台灣自己的工廠做的");
+    await userEvent.click(screen.getByRole("button", { name: "讓 AI 整理" }));
+
+    await waitFor(() => expect(field("跟別人不一樣的地方").value).toBe("台灣自己的工廠，一批一批驗"));
+    expect(mockCustom).toHaveBeenCalledWith(B, P, "difference", "我們是台灣自己的工廠做的");
+    expect(screen.getByText("你自訂")).toBeTruthy();
+    expect(screen.queryByText("網站上沒找到")).toBeNull();
+    await userEvent.type(field("跟別人不一樣的地方"), "！");
+    expect(screen.queryByText("你自訂")).toBeNull();
+    await userEvent.clear(field("跟別人不一樣的地方"));
+    await userEvent.type(field("跟別人不一樣的地方"), "台灣自己的工廠，一批一批驗");
+    expect(screen.getByText("你自訂")).toBeTruthy();
+    await userEvent.click(nextButton());
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalled());
+    expect(mockSave.mock.calls[0][2].difference).toBe("台灣自己的工廠，一批一批驗");
   });
 });

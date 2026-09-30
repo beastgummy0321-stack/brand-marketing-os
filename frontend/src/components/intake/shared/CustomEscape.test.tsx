@@ -1,7 +1,7 @@
 /** frontend/src/components/intake/shared/CustomEscape.test.tsx — 「自訂」 under an AI-judged onboarding block
  * (F42-I08, F42-I09): a `value` proposal goes to `onValue`, an `option` proposal to `onOption`; the box lists
  * nothing of its own (the caller shows the result where it lives, marked `CustomMark`); the server's 422
- * message stays in the box; 取消 keeps nothing.
+ * message stays in the box; 取消 keeps nothing; a caller's `propose` (product onboarding, F43-I08) replaces the brand call.
  * No server: `proposeCustom` is a fake. */
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -145,5 +145,31 @@ describe("CustomEscape", () => {
 
     expect(onValue).not.toHaveBeenCalled();
     expect(screen.queryByText("你自訂")).toBeNull();
+  });
+  it("傳了 propose（商品建檔）：改走它、不打品牌那支，value 與 option 照樣分給 onValue／onOption", async () => {
+    const user = userEvent.setup();
+    const onValue = vi.fn();
+    const onOption = vi.fn();
+    const propose = vi.fn()
+      .mockResolvedValueOnce({ block: "difference", kind: "value", value: "台灣自己的工廠，一批一批驗" })
+      .mockResolvedValueOnce({
+        block: "group",
+        kind: "option",
+        option: { who: "買給爸媽的子女", pain_keys: ["experience"], quote: "長輩吞不下藥丸", when_used: "早餐後" },
+      });
+    const { rerender } = render(<CustomEscape brandId="brd_1" block="difference" placeholder="例如" propose={propose} onValue={onValue} />);
+
+    await user.click(openButton());
+    await user.type(box(), "我們是台灣自己的工廠做的");
+    await user.click(organise());
+    expect(propose).toHaveBeenCalledWith("我們是台灣自己的工廠做的");
+    expect(onValue).toHaveBeenCalledWith("台灣自己的工廠，一批一批驗");
+
+    rerender(<CustomEscape brandId="brd_1" block="group" placeholder="例如" propose={propose} onOption={onOption} />);
+    await user.click(openButton());
+    await user.type(box(), "買給爸媽");
+    await user.click(organise());
+    expect(onOption).toHaveBeenCalledWith({ who: "買給爸媽的子女", pain_keys: ["experience"], quote: "長輩吞不下藥丸", when_used: "早餐後" });
+    expect(mockPropose).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/layout/ui/button";
 import type { CustomBlock, CustomProposal } from "@/lib/intakeOnboardingApi";
 import { proposeCustom } from "@/lib/intakeOnboardingApi";
+import type { ProductCustomBlock, ProductCustomProposal } from "@/lib/intakeProductApi";
 
 /** 「自訂」 under every AI-judged onboarding block, prototype `custom(id, hint)` / `makeCus(id)` of
  * `.harness/scratch/prototype/f41-onboarding/index.html` (`.cusb`, `.cus`, `.mine`): a dashed button opens a
@@ -12,19 +13,27 @@ import { proposeCustom } from "@/lib/intakeOnboardingApi";
  * - `option` (tone, brand_proof, policy, forbidden) → `onOption`: the caller adds it, checked, to its list or
  *   chips, marked `CustomMark` with its own × (the undo).
  * A result shows in ONE place, where it lives: this box lists nothing of its own. Nothing is saved here:
- * the step's 下一步 saves the field or list with everything else. */
+ * the step's 下一步 saves the field or list with everything else.
+ * Product onboarding (F43) passes `propose` (its `POST …/products/{p}/onboarding/custom` call, blocks
+ * `difference`, `group`, `pain`, `product_proof`, `claim`); without it the brand call above is used, which only
+ * knows the brand blocks. */
 
-type OptionProposal = Extract<CustomProposal, { kind: "option" }>;
+/** A brand block (brand onboarding) or a product block (product onboarding, with `propose`). */
+export type AnyCustomBlock = CustomBlock | ProductCustomBlock;
+export type AnyCustomProposal = CustomProposal | ProductCustomProposal;
+type OptionProposal = Extract<AnyCustomProposal, { kind: "option" }>;
 /** The option a block's proposal carries (`{label}` for tone, `{fact_key, label, text}` for brand proof, …). */
-export type CustomOption<B extends CustomBlock> = Extract<OptionProposal, { block: B }>["option"];
+export type CustomOption<B extends AnyCustomBlock> = Extract<OptionProposal, { block: B }>["option"];
 
 const HINT = "覺得上面列的不對、不像你、或選項太少？直接用一句話描述，AI 幫你整理成選項";
 const MAX_CHARS = 200;
 
-export function CustomEscape<B extends CustomBlock>({ brandId, block, placeholder, onValue, onOption }: {
+export function CustomEscape<B extends AnyCustomBlock>({ brandId, block, placeholder, propose, onValue, onOption }: {
   brandId: string;
   block: B;
   placeholder: string;
+  /** One sentence -> the block's proposal; omitted = the brand call (`proposeCustom`, brand blocks only). */
+  propose?: (text: string) => Promise<AnyCustomProposal>;
   onValue?: (value: string) => void;
   onOption?: (option: CustomOption<B>) => void;
 }) {
@@ -54,7 +63,7 @@ export function CustomEscape<B extends CustomBlock>({ brandId, block, placeholde
     setBusy(true);
     setError(null);
     try {
-      const proposal = await proposeCustom(brandId, block, sentence);
+      const proposal = propose ? await propose(sentence) : await proposeCustom(brandId, block as CustomBlock, sentence);
       if (mine !== ticket.current) return;
       if (proposal.kind === "value") handlers.current.onValue?.(proposal.value);
       else handlers.current.onOption?.(proposal.option as CustomOption<B>);

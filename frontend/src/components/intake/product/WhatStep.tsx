@@ -3,12 +3,13 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import type { SourcedText } from "@/lib/intakeOnboardingApi";
 import type { CreatedProduct, ProductPhoto, ProductWhat } from "@/lib/intakeProductApi";
-import { createProduct, fetchProductWhat, saveProductWhat } from "@/lib/intakeProductApi";
+import { createProduct, fetchProductWhat, proposeProductCustom, saveProductWhat } from "@/lib/intakeProductApi";
 import { uploadAsset } from "@/lib/libraryApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
 
 /** Prototype `R.p1` head of `.harness/scratch/prototype/f41-onboarding/index.html`. */
 const TITLE = "這個商品是什麼";
@@ -63,7 +64,8 @@ export function NewProductStep({ brandId, nav, back, onCreated }: {
 
 /** Product onboarding `#/p1` 這個商品是什麼 (prototype `R.p1`): name, product page (also the ads' default landing
  * page), product photos (the existing official-asset upload with `product_id`), intro, mechanism and difference —
- * each text pre-filled by the product-page read with its tag while the field still holds the loaded value.
+ * each text pre-filled by the product-page read with its tag while the field still holds the loaded value; the
+ * difference ends with 「自訂」 (product block `difference`), whose value fills the field marked 「你自訂」.
  * `what` comes from the shell; a newer `what` (the read finished) replaces only the fields the user has not
  * changed. 下一步 saves through `PUT …/onboarding/what` and moves on only after the server confirmed. */
 export function WhatStep({ brandId, productId, nav, back, what, prefillDone, above, onSaved }: {
@@ -85,6 +87,8 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
   const [uploading, setUploading] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  /** The value 「自訂」 filled 跟別人不一樣的地方 with: marked 你自訂 while the field still holds it. */
+  const [customDifference, setCustomDifference] = useState<string | null>(null);
   /** The `what` the fields were last filled from. */
   const base = useRef(what);
 
@@ -130,6 +134,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
 
   const tag = (key: TextKey) => {
     const field: SourcedText = base.current[key];
+    if (key === "difference" && customDifference !== null && texts.difference === customDifference) return <div className="mt-1"><CustomMark /></div>;
     if (texts[key] !== field.value || (field.source === "none" && !prefillDone)) return null;
     return field.source === "saved" ? null : <div className="mt-1"><AiTag source={field.source} note={field.note} /></div>;
   };
@@ -183,6 +188,16 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
         <Row label={<label htmlFor="p1-difference">跟別人不一樣的地方</label>}>
           <Input id="p1-difference" className={IN} value={texts.difference} onChange={(e) => setText("difference")(e.target.value)} maxLength={200} />
           {tag("difference")}
+          <CustomEscape
+            brandId={brandId}
+            block="difference"
+            placeholder="例如：我們是台灣自己的工廠做的，一批一批驗"
+            propose={(text) => proposeProductCustom(brandId, productId, "difference", text)}
+            onValue={(value) => {
+              setText("difference")(value);
+              setCustomDifference(value);
+            }}
+          />
         </Row>
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
