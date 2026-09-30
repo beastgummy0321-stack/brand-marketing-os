@@ -35,6 +35,7 @@ TASK_KINDS: dict[str, tuple[str, str]] = {
     "background.brand_report": ("brand_report", "正在整理五章"),
     "background.intake_scan": ("scan", "讀取網址中"),
     "background.intake_persona": ("persona", "整理人物誌"),
+    "background.intake_product_prefill": ("product_scan", "讀取商品頁中"),
     "background.schedule_plan": ("schedule_plan", "出方案中"),
     "background.schedule_tree": ("schedule_tree", "展開活動樹中"),
     "background.performance_reading": ("schedule_diagnosis", "判讀成效中"),
@@ -62,6 +63,8 @@ def _action_url(conn, org_id: str, brand_id: str, kind: str, args: dict) -> str:
         return f"{base}/library?tab=customer-voice"
     if kind == "scan":
         return f"{base}/intake"
+    if kind == "product_scan":  # F43-I06: the product-page read -> that product's onboarding
+        return f"{base}/products/{args.get('product_id', '')}/onboarding"
     if kind == "workbench_generate":
         return workbench.set_action_url(
             conn, org_id, brand_id, args.get("brief_id", ""),

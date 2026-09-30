@@ -88,9 +88,27 @@ SCRIPTED_REPLIES: dict[str, dict] = {
     },
     # F42-I05: 「自訂」. One shape for every block: each block reads only its own keys
     # (app/intake/custom.py `check_reply`); no digits, so any sentence passes the number check.
+    # F43-I06 adds the product blocks' keys (who／pain_keys／quote／when_used／pain_key／verdict).
     "intake_custom": {
         "value": "（腳本回覆）整理好的一句話", "label": "腳本整理", "fact_key": "customer_review",
         "text": "（腳本回覆）整理好的一句話", "offer_key": "none", "sentence": "（腳本回覆）整理好的政策",
+        "who": "（腳本回覆）整理好的一群顧客", "pain_keys": ["effort"], "quote": "（腳本回覆）顧客原話",
+        "when_used": "（腳本回覆）早上出門前", "pain_key": "effort", "verdict": "ok",
+    },
+    # F43-I06: product onboarding prefill; passes `app.intake.product_prefill.validate_reply`
+    # whenever the product page was read (every note names 「商品頁」). The quote is empty: a
+    # quote must be on the page verbatim, and the e2e page is not this text. The `groups` key
+    # does not trigger ScriptedProvider's delivery-plan template: this prompt has no adopted-role
+    # lines, so `_reply_for` returns the reply unchanged.
+    "intake_product_prefill": {
+        "intro": {"value": "（腳本回覆）一天一顆的綜合維他命軟糖", "note": "商品頁"},
+        "mechanism": {"value": "（腳本回覆）維生素與礦物質做成軟糖", "note": "商品頁"},
+        "difference": {"value": "（腳本回覆）不用吞藥丸", "note": "商品頁"},
+        "groups": [{"who": "（腳本回覆）常加班的上班族", "pain_keys": ["effort"], "quote": "",
+                    "when_used": "（腳本回覆）早上出門前", "note": "商品頁"}],
+        "proof": [{"fact_key": "customer_review", "text": "（腳本回覆）回購很多次", "note": "商品頁"}],
+        "claims": [{"text": "（腳本回覆）每天補足營養", "note": "商品頁"}],
+        "sell_ways": [{"name": "單盒", "qty": 1, "price": 399, "list_price": None, "note": "商品頁"}],
     },
 }
 
@@ -216,6 +234,7 @@ TASK_TYPE_LABELS = {
     "intake_research": "建檔精靈：系統自動調研",
     "intake_prefill": "品牌建檔：AI 讀網站與品牌照片",
     "intake_custom": "品牌建檔：自訂整理",
+    "intake_product_prefill": "商品建檔：AI 讀商品頁與商品照",
     "product_scan": "產品建檔：讀取網址",
     "product_handoff_fix": "產品交接：格式修復",
     "brand_report": "品牌智庫報告",
@@ -244,6 +263,7 @@ TASK_DEFAULTS = {
     "intake_research": {"model": None, "thinking": "high"},
     "intake_prefill": {"model": None, "thinking": "low"},
     "intake_custom": {"model": None, "thinking": "low"},
+    "intake_product_prefill": {"model": None, "thinking": "low"},
     "product_scan": {"model": None, "thinking": "low"},
     "product_handoff_fix": {"model": None, "thinking": "low"},
     # 分析型任務：不確定，留中檔

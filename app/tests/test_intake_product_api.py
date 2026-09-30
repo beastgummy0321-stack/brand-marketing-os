@@ -249,10 +249,12 @@ class StepsTest(_Base):
     def _prefill(self, prefill: dict = _PRODUCT_PREFILL, status: str = "done") -> None:
         ir.save_product_prefill(web.conn, self.bid, self.pid, status=status, prefill_json=prefill)
 
-    def test_status_none_then_prefill_then_failed(self):
+    def test_status_running_then_prefill_then_failed(self):
+        # F43-I06: a create with a page URL queues the product-page read
         data = self._get(self.bid, self._step(self.pid))
         self.assertEqual(
-            data, {"step": 1, "completed": False, "prefill_status": "none", "prefill_error": None}
+            data,
+            {"step": 1, "completed": False, "prefill_status": "running", "prefill_error": None},
         )
         self._prefill()
         self.assertEqual(self._get(self.bid, self._step(self.pid))["prefill_status"], "done")

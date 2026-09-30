@@ -1,7 +1,9 @@
-"""app/tests/test_intake_custom.py — 「自訂：用自己的話說」 of brand onboarding (F42-I05).
+"""app/tests/test_intake_custom.py — 「自訂：用自己的話說」 of brand onboarding (F42-I05) and
+product onboarding (F43-I06).
 
-`POST /api/intake/brands/{b}/onboarding/custom {block, text}` → one proposal, contract-checked,
-nothing saved. FakeProvider only; brand names are fictional.
+`POST /api/intake/brands/{b}/onboarding/custom {block, text}` and
+`POST /api/intake/brands/{b}/products/{p}/onboarding/custom {block, text}` → one proposal,
+contract-checked, nothing saved. FakeProvider only; brand and product names are fictional.
 """
 
 import json
@@ -16,6 +18,7 @@ import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import settings as coresettings
 from app.core import vocab
 from app.intake import custom
 from app.intake import repository as ir
@@ -165,10 +168,143 @@ class CustomRouteTest(unittest.TestCase):
         self.assertEqual(resp.json()["data"]["option"], {"text": "治療"})
 
 
+class ProductCustomRouteTest(unittest.TestCase):
+    """Product blocks (F43-I06): `POST …/products/{p}/onboarding/custom`."""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        web.conn.execute("DELETE FROM app_setting")
+        web.conn.commit()
+        intake_module.register(main.app)
+        self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
+        self._envpatch.start()
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        self._orig_provider = custom.PROVIDER
+        _SEQ[0] += 1
+        resp = self.client.post("/api/intake/brands",
+                                data={"brand_name": f"虛構商品自訂測試品牌{_SEQ[0]}"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.bid = resp.json()["brand_id"]
+        resp = self.client.post(f"/api/intake/brands/{self.bid}/products",
+                                json={"name": "綜合維他命軟糖"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.pid = resp.json()["data"]["product_id"]
+
+    def tearDown(self):
+        custom.PROVIDER = self._orig_provider
+        self._envpatch.stop()
+
+    def _post(self, block: str, text: str, reply=None, pid: str | None = None):
+        if reply is not None:
+            custom.PROVIDER = FakeProvider(response=_response(reply))
+        return self.client.post(
+            f"/api/intake/brands/{self.bid}/products/{pid or self.pid}/onboarding/custom",
+            json={"block": block, "text": text})
+
+    def _saved(self) -> tuple:
+        return (len(bi_repo.list_customer_groups(web.conn, self.bid, self.pid)),
+                len(bi_repo.list_product_facts(web.conn, self.bid, self.pid)),
+                len(bi_repo.list_claims_for_product(web.conn, self.bid, self.pid)))
+
+    def test_each_product_block_returns_a_proposal_and_saves_nothing(self):
+        before = self._saved()
+        cases = [
+            ("difference", "我們是軟糖不是藥丸", {"value": "軟糖，不用吞藥丸"},
+             {"block": "difference", "kind": "value", "value": "軟糖，不用吞藥丸"}),
+            ("group", "常加班的上班族，早上根本沒空，會說每天吞藥丸好麻煩",
+             {"who": "常加班的上班族", "pain_keys": ["effort"], "quote": "每天吞藥丸好麻煩",
+              "when_used": "早上出門前"},
+             {"block": "group", "kind": "option",
+              "option": {"who": "常加班的上班族", "pain_keys": ["effort"],
+                         "quote": "每天吞藥丸好麻煩", "when_used": "早上出門前"}}),
+            ("pain", "怕吃了沒效又浪費錢", {"pain_key": "uncertainty", "quote": "怕吃了沒效白花錢"},
+             {"block": "pain", "kind": "option",
+              "option": {"pain_key": "uncertainty", "label": "怕買錯",
+                         "quote": "怕吃了沒效白花錢"}}),
+            ("product_proof", "有 SGS 檢驗報告", {"fact_key": "lab_report", "text": "SGS 檢驗合格"},
+             {"block": "product_proof", "kind": "option",
+              "option": {"fact_key": "lab_report", "label": "檢驗報告／認證",
+                         "text": "SGS 檢驗合格"}}),
+            ("claim", "可以說一天一顆很方便", {"text": "一天一顆很方便", "verdict": "ok"},
+             {"block": "claim", "kind": "option",
+              "option": {"text": "一天一顆很方便", "verdict": "ok", "statutory": None}}),
+        ]
+        for block, text, reply, expected in cases:
+            with self.subTest(block=block):
+                resp = self._post(block, text, reply)
+                self.assertEqual(resp.status_code, 200, resp.text)
+                self.assertEqual(resp.json()["data"], expected)
+                calls = custom.PROVIDER.calls
+                self.assertEqual(len(calls), 1)
+                self.assertLessEqual(calls[0]["max_tokens"], 600)
+                self.assertIn(text, calls[0]["messages"][0]["content"])
+        self.assertEqual(self._saved(), before)
+
+    def test_group_prompt_offers_the_six_pains_and_the_saved_groups(self):
+        resp = self.client.put(
+            f"/api/intake/brands/{self.bid}/products/{self.pid}/onboarding/who",
+            json={"groups": [{"who": "新手爸媽", "pain_keys": ["uncertainty"]}]})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._post("group", "上班族", {"who": "上班族", "pain_keys": ["effort"]})
+        prompt = custom.PROVIDER.calls[0]["messages"][0]["content"]
+        self.assertIn("已有的選項：新手爸媽", prompt)
+        for key, label in vocab.PAIN_KINDS:
+            self.assertIn(f"{key}＝{label}", prompt)
+
+    def test_statutory_claim_is_forced_to_no(self):
+        bi_repo.set_regulatory_regime(web.conn, self.bid, "food_tw", actor="test")
+        web.conn.commit()
+        resp = self._post("claim", "可以說增強免疫力", {"text": "增強免疫力", "verdict": "ok"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        option = resp.json()["data"]["option"]
+        self.assertEqual(option["verdict"], "no")
+        self.assertIsNotNone(option["statutory"])
+        self.assertIn(option["statutory"]["term"], "增強免疫力")
+
+    def test_product_contract_failures_are_422(self):
+        before = self._saved()
+        for block, text, reply in (
+                ("group", "上班族", {"who": "上班族", "pain_keys": ["made_up"]}),
+                ("group", "上班族", {"who": "上班族", "pain_keys": ["effort", "cost", "identity"]}),
+                ("group", "上班族", {"who": "上班族", "pain_keys": []}),
+                # a number the user never said
+                ("group", "上班族", {"who": "30 歲上班族", "pain_keys": ["effort"]}),
+                ("pain", "太貴了", {"pain_key": "price", "quote": "太貴"}),
+                ("pain", "太貴了", {"pain_key": "cost", "quote": ""}),
+                ("product_proof", "明星推薦", {"fact_key": "celebrity", "text": "明星推薦"}),
+                ("claim", "一天一顆", {"text": "一天一顆", "verdict": "maybe"}),
+                ("claim", "一天一顆", {"text": "一天一顆"}),
+                ("difference", "一句話", "不是 JSON")):
+            with self.subTest(block=block, reply=reply):
+                resp = self._post(block, text, reply)
+                self.assertEqual(resp.status_code, 422)
+                self.assertEqual(resp.json()["error"], "AI 整理不出來，換個說法再試一次")
+        self.assertEqual(self._saved(), before)
+
+    def test_product_route_refusals_without_a_call(self):
+        custom.PROVIDER = FakeProvider(response=_response({"value": "x"}))
+        for block in ("positioning", "persona"):  # a brand block is not a product block
+            self.assertEqual(self._post(block, "一句話").status_code, 400)
+        self.assertEqual(self._post("difference", "一句話", pid="prd_missing").status_code, 404)
+        # and a product block is not a brand block
+        resp = self.client.post(f"/api/intake/brands/{self.bid}/onboarding/custom",
+                                json={"block": "difference", "text": "一句話"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(custom.PROVIDER.calls, [])
+
+    def test_product_cost_cap_refuses_before_calling(self):
+        coresettings.set_setting(web.conn, "intake_budget_limit", "0.01", org_id=coredb.DEV_ORG_ID)
+        web.conn.commit()
+        resp = self._post("difference", "一句話", {"value": "定位"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("上限", resp.json()["error"])
+        self.assertEqual(custom.PROVIDER.calls, [])
+
+
 class ScriptedReplyContractTest(unittest.TestCase):
     def test_scripted_reply_passes_every_block(self):
         reply = json.loads(json.dumps(providers.SCRIPTED_REPLIES["intake_custom"]))
-        for block in custom.BLOCKS:
+        for block in (*custom.BLOCKS, *custom.PRODUCT_BLOCKS):
             with self.subTest(block=block):
                 result = custom.check_reply(block, reply, "任何一句 3 個數字的話")
                 self.assertIn(result["kind"], ("value", "option"))
