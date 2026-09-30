@@ -1,0 +1,88 @@
+{
+ "side": "B",
+ "period": 3,
+ "campaign_id": "adc_01M3R0N4FQGTA1PE70QM0AVYT4",
+ "name": "推「Beast Gummy 超能特惠組 · 單品」，想要的結果：購買，期間 20…",
+ "start_date": "2026-10-17",
+ "end_date": "2026-10-23",
+ "objective": "購買",
+ "success_metric": null,
+ "success_target": null,
+ "result_kind": null,
+ "status": "ready",
+ "budget_planned": 10500.0,
+ "daily_budget_total": 1500.0,
+ "goal_text": "推「Beast Gummy 超能特惠組 · 單品」，想要的結果：購買，期間 2026-10-17 ~ 2026-10-23，這個活動最多花 10500。",
+ "groups": [
+  {
+   "name": "探索｜高強度訓練與競技族群",
+   "role": "explore",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 450.0,
+   "ads": [
+    {
+     "name": "高強度訓練後的日常補給選擇",
+     "format_key": "video",
+     "hook_key": "outcome_led",
+     "pain_key": "effort",
+     "angle_key": "daily_use_sharing",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 超能特惠組 · 單品",
+     "price": 999.0,
+     "headline": "收操後，補給照你的節奏",
+     "body": "高強度訓練收操後，坐在場邊整理護腕、毛巾和耳機，下一次訓練的補給也一起排好。Beast Gummy 單顆含 150mg 咖啡因，體積小、好攜帶，讓你不用再為了準備一杯飲品多做幾個步驟。把一顆放進訓練包，照自己的安排補給。看清楚每顆 150mg，做出適合自己的選擇。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "比賽前不想增加準備負擔",
+     "format_key": "single_image",
+     "hook_key": "pain_question",
+     "pain_key": "effort",
+     "angle_key": "moment_anchoring",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "Beast Gummy 超能特惠組 · 單品",
+     "price": 999.0,
+     "headline": "還在集合區找補給？",
+     "body": "比賽集合區，裝備一項項確認，卻還要翻包找飲料、找杯子？Beast Gummy 單品放進隨身裝備，咖啡因含量清楚，每顆 150mg，不必為了補給多帶一套準備。進場前把該做的事做完，少一個步驟，專心走到起點。到官網看 Beast Gummy 單品。",
+     "asset_ready_source": null
+    }
+   ]
+  },
+  {
+   "name": "新客｜高強度日程中的輕鬆準備",
+   "role": "new",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 1050.0,
+   "ads": [
+    {
+     "name": "高強度日程中的輕鬆準備",
+     "format_key": "video",
+     "hook_key": "pain_question",
+     "pain_key": "effort",
+     "angle_key": "empathy_driven",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 超能特惠組 · 單品",
+     "price": 999.0,
+     "headline": "趕去訓練還在忙著整理裝備？",
+     "body": "下班鐘一響，趕到更衣室才發現裝備還沒整理好？鞋帶、護腕、毛巾一件件塞進包裡，腦中還在排今天的訓練。Beast Gummy 單顆含 150mg 咖啡因，讓你把補給先放進訓練節奏裡。整理好就出發，別讓準備工作拖慢今天的強度。",
+     "asset_ready_source": null
+    }
+   ]
+  }
+ ],
+ "kpi": {},
+ "hypothesis": null,
+ "notes": "exported from MarketingOS by scripts/drill/export_plan.py"
+}

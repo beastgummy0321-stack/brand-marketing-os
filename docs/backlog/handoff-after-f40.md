@@ -12,7 +12,9 @@ Start here in the next session. A board, not an implementation authorization. Re
 - Both migrations applied and registered on the dev DB (54322). The user's backend/worker windows must be restarted before
   any browser check.
 
-## Next: drill 8
+## Next: drill 8 — done 2026-09-30
+Ran; read `docs/drills/drill-8/report.md` §5 and §7 (next = `/dig` red #1 offers/evidence asked in the flow + #2 formats follow the brand's media). Original brief kept below.
+
 Rerun **B only** (same A rows/fit from drill-6), same script/judge/sim as drill 7 (`docs/drills/drill-7/plan.md`), on master
 `e985d59d`. Measure: (1) does period-2/3 planning reuse the period-1 划算 combination and name it in `rationale` (F39 scoreboard
 rule is prompt-only — if not followed, the fallback is a program gate in `plan._validate_reply`); (2) scenes differ per audience
