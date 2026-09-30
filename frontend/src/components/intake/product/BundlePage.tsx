@@ -3,8 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
-import type { Bundle, BundleInput, ProductCardData } from "@/lib/intakeProductApi";
-import { createBundle, fetchBundle, fetchProductsPage, saveBundle } from "@/lib/intakeProductApi";
+import type { Bundle, BundleInput, BundlePreview, ProductCardData } from "@/lib/intakeProductApi";
+import { createBundle, fetchBundle, fetchProductsPage, previewBundle, saveBundle } from "@/lib/intakeProductApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar } from "../OnboardingStepHead";
@@ -16,10 +16,11 @@ import { draftFromMoney, emptyDraft, moneyErrors, moneyInput, SellWayTable, type
  * notes), 落地頁 (required here, optional server-side), and 「廣告會用到的」 (customer groups and proof reused from the
  * component products, as `GET …/bundles/{id}` lists them).
  *
- * Nothing is computed on the page: 原價 / 成本 (the components' sums), 打平線, the default 每筆上限, the offers and each
- * component's 單件 price / cost are the server's view after the last save. A new bundle has no server view until
- * 「建立組合」 posts it (there is no preview route), so its derived cells stay empty; an existing bundle saves (PUT, raw
- * inputs only) whenever focus leaves a field and the form is valid, and the table then shows the recomputed numbers. */
+ * Nothing is computed on the page: 原價 / 成本 (the components' sums), 打平線, the default 每筆上限, the offers, 成交率's
+ * column and each component's 單件 price / cost are the server's view. An existing bundle saves (PUT, raw inputs only)
+ * whenever focus leaves a field or a product is added / removed and the form is valid, and shows the recomputed numbers.
+ * A new bundle asks `POST …/bundles/preview` (nothing written) at the same moments once the server would accept the
+ * form (the landing page is not needed for the numbers) and shows its view the same way; 「建立組合」 posts it. */
 
 interface Comp {
   product_id: string;
@@ -46,7 +47,12 @@ function formErrors(name: string, comps: Comp[], draft: MoneyDraft, showCloseRat
 }
 
 function isValid(errors: ReturnType<typeof formErrors>): boolean {
-  return !errors.name && !errors.comps && !errors.qty && !errors.money && !errors.landing;
+  return canPreview(errors) && !errors.landing;
+}
+
+/** What the server needs to compute the numbers (everything but the landing page the UI requires). */
+function canPreview(errors: ReturnType<typeof formErrors>): boolean {
+  return !errors.name && !errors.comps && !errors.qty && !errors.money;
 }
 
 function toInput(name: string, comps: Comp[], draft: MoneyDraft, showCloseRate: boolean): BundleInput {
@@ -60,8 +66,8 @@ function toInput(name: string, comps: Comp[], draft: MoneyDraft, showCloseRate: 
 export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: string | null }) {
   const navigate = useNavigate();
   const editing = bundleId !== null;
-  /** The server's view after the last save; null for a bundle not created yet. */
-  const [server, setServer] = useState<Bundle | null>(null);
+  /** The server's view: after the last save, or (a new bundle) the last preview; null before either. */
+  const [server, setServer] = useState<Bundle | BundlePreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(!editing);
   const [products, setProducts] = useState<ProductCardData[] | null>(null);
@@ -72,6 +78,8 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   const [picking, setPicking] = useState(!editing);
   const [touched, setTouched] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** Why the last preview failed (kept apart from `saveError`: a late preview must not hide a failed create). */
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const state = useRef({ name, comps, draft });
   state.current = { name, comps, draft };
@@ -140,12 +148,45 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     return run;
   }
 
-  /** Focus left a field of an existing bundle: save it (a no-op while unchanged or invalid). */
+  /** New only: asks the server for the numbers of the form as it is (nothing written); a no-op while unchanged or not
+   * computable. A refusal (e.g. a taken name) clears the numbers and says why. */
+  function preview(): Promise<void> {
+    const run = queue.current.then(async () => {
+      if (bundleId !== null) return;
+      const { name: n, comps: c, draft: d } = state.current;
+      if (!canPreview(formErrors(n, c, d, show))) return;
+      const body = toInput(n, c, d, show);
+      const signature = JSON.stringify(body);
+      if (signature === savedSig.current) return;
+      try {
+        const res = await previewBundle(brandId, body);
+        savedSig.current = signature;
+        if (alive.current) {
+          setServer(res);
+          setPreviewError(null);
+        }
+      } catch (err) {
+        savedSig.current = null;
+        if (alive.current) {
+          setServer(null);
+          setPreviewError(errorText(err, "算不出這個組合的數字，請稍後再試。"));
+        }
+      }
+    });
+    queue.current = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Let the last keystroke settle, then save (edit) or preview (new). */
+  function refresh() {
+    window.setTimeout(() => void (editing ? persist() : preview()), 0);
+  }
+
+  /** Focus left a field: save an existing bundle / preview a new one (a no-op while unchanged or invalid). */
   function onFieldBlur(e: FocusEvent) {
-    if (!editing || (e.target as HTMLElement).tagName !== "INPUT") return;
-    setTouched(true);
-    // Let the last keystroke settle before reading the form.
-    window.setTimeout(() => void persist(), 0);
+    if ((e.target as HTMLElement).tagName !== "INPUT") return;
+    if (editing) setTouched(true);
+    refresh();
   }
 
   async function submit() {
@@ -170,12 +211,12 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   function addComp(product: ProductCardData) {
     setComps((prev) => [...prev, { product_id: product.id, name: product.name, thumbnail_url: product.thumbnail_url, qty: "1" }]);
     setPicking(false);
-    if (editing) window.setTimeout(() => void persist(), 0);
+    refresh();
   }
 
   function removeComp(productId: string) {
     setComps((prev) => prev.filter((c) => c.product_id !== productId));
-    if (editing) window.setTimeout(() => void persist(), 0);
+    refresh();
   }
 
   const title = editing ? "編輯組合" : "新增組合";
@@ -308,6 +349,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
           />
           {touched && errors.landing && <FieldError>{errors.landing}</FieldError>}
         </Row>
+        {previewError && <p role="alert" className="mt-2 text-sm text-danger">{previewError}</p>}
         {saveError && <p role="alert" className="mt-2 text-sm text-danger">{saveError}</p>}
       </section>
 
@@ -409,7 +451,7 @@ function Picker({ brandId, products, remaining, error, onRetry, onPick, onClose 
 }
 
 /** 「廣告會用到的」: the components' customer groups and proof, reused (not copied). */
-function ReusedCard({ bundle }: { bundle: Bundle }) {
+function ReusedCard({ bundle }: { bundle: Bundle | BundlePreview }) {
   const { groups, proof } = bundle.reused;
   const productCount = new Set(bundle.components.map((c) => c.product_id)).size;
   const who = groups.map((g) => (g.pain_labels.length > 0 ? `${g.who}（${g.pain_labels.join("、")}）` : g.who));
