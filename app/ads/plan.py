@@ -71,31 +71,50 @@ def _vocabulary_lookup(rows: list) -> dict:
     return {(row["dimension"], row["key"]): row for row in rows}
 
 
-def _prompt_rows(rows: list, available_proof: set[str], has_end_date: bool) -> list:
+def _prompt_rows(rows: list, available_proof: set[str], has_end_date: bool,
+                 available_offer: set[str], media_capability: str | None) -> list:
     """F38 decision 1/3: the model's menu only offers the proof kinds the brand has confirmed
     evidence for (plus `none`), and `offer/limited_time` only when the campaign has an end date
-    (the workbench quotes that date as the copy's one deadline). Every other row passes through.
-    `coordinate_vocabulary` itself stays unfiltered -- hand edits and label lookups use it."""
+    (the workbench quotes that date as the copy's one deadline). F42 (drill-8 red #1 #2): an
+    `offer` row is offered only when it is `none` or the brand can honour it
+    (`bi_repo.available_offer_keys`; `limited_time` must pass both rules), and `format/video` is
+    dropped for a photo-only brand (`brand.media_capability == "photo"`; NULL = never asked, no
+    format filter). Every other row passes through. `coordinate_vocabulary` itself stays
+    unfiltered -- hand edits and label lookups use it."""
     allowed_proof = available_proof | {"none"}
+    allowed_offer = available_offer | {"none"}
     kept = []
     for row in rows:
         if row["dimension"] == "proof" and row["key"] not in allowed_proof:
             continue
+        if row["dimension"] == "offer" and row["key"] not in allowed_offer:
+            continue
         if row["dimension"] == "offer" and row["key"] == "limited_time" and not has_end_date:
+            continue
+        if row["dimension"] == "format" and row["key"] == "video" and media_capability == "photo":
             continue
         kept.append(row)
     return kept
 
 
-def _gate_reply(groups: list, lookup: dict) -> None:
+def _first_format(rows: list) -> str | None:
+    """The first `format` key of the filtered menu -- where a stray format reply lands (F42)."""
+    return next((row["key"] for row in rows if row["dimension"] == "format"), None)
+
+
+def _gate_reply(groups: list, lookup: dict, first_format: str | None) -> None:
     """A proof/offer key outside the filtered menu becomes `none` in place (F38 agent choice:
-    the menu already told the model what exists; a stray key is a wording slip, not a retry)."""
+    the menu already told the model what exists; a stray key is a wording slip, not a retry).
+    F42: a format key outside the menu (e.g. `video` for a photo-only brand) becomes the menu's
+    first format; a menu with no format rows at all leaves the reply's key as it is."""
     for group in groups:
         for ad in group["ads"]:
             coords = ad["coordinates"]
             for dim in ("proof", "offer"):
                 if (dim, coords[dim]) not in lookup:
                     coords[dim] = "none"
+            if first_format is not None and ("format", coords["format"]) not in lookup:
+                coords["format"] = first_format
 
 
 def _validate_scene(value) -> str | None:
@@ -201,10 +220,16 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     daily_total = round(float(campaign["budget_planned"]) / days)
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
+    # F42: offers are judged against the campaign's first product (its price meets a policy's
+    # threshold or not); a campaign without a product is judged at brand level (`None`).
+    product_ids = (campaign.get("context_json") or {}).get("product_ids") or []
+    brand = bi_repo.get_brand(conn, brand_id) or {}
     vocabulary_rows = _prompt_rows(
         ads_repo.coordinate_vocabulary(conn, org_id, brand_id),
         bi_repo.available_proof_keys(conn, brand_id),
         campaign["end_date"] is not None,
+        bi_repo.available_offer_keys(conn, brand_id, product_ids[0] if product_ids else None),
+        brand.get("media_capability"),
     )
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
 
@@ -243,7 +268,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     validated_groups = _validate_reply(data, roles) if data is not None else None
     if validated_groups is None:
         raise ValueError("delivery_plan_failed")
-    _gate_reply(validated_groups, vocab_lookup)
+    _gate_reply(validated_groups, vocab_lookup, _first_format(vocabulary_rows))
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。
