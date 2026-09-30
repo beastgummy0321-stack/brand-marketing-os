@@ -306,7 +306,12 @@ def _notify_step_done(conn, brand_id: str, brand_name: str, ok: bool, *, verbs: 
     )
 
 
-def background_intake_scan(org_id: str, brand_id: str) -> None:
+def background_intake_scan(org_id: str, brand_id: str, prefill: bool = False) -> None:
+    """`prefill=True` (F42-I05, queued by `POST …/onboarding/scan` under `ai.prefill_lock`): the
+    brand-onboarding website/photo prefill. Without it: the old wizard's scan (removed by F42-I14)."""
+    if prefill:
+        _background_prefill(brand_id)
+        return
     with core_db_connection() as conn:
         brand = repo.get_brand(conn, brand_id)
         brand_name = brand["name"] if brand else brand_id
@@ -321,6 +326,25 @@ def background_intake_scan(org_id: str, brand_id: str) -> None:
                           verbs=("初掃完成，可以回去看初步印象", "初掃失敗，可以回去重試"))
         if error is not None:
             raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
+
+
+def _background_prefill(brand_id: str) -> None:
+    with core_db_connection() as conn:
+        brand = repo.get_brand(conn, brand_id)
+        brand_name = brand["name"] if brand else brand_id
+        error = None
+        try:
+            draft = state.require_draft(brand_id, conn=conn)
+            ok, message = ai.run_prefill(conn, draft)
+            if not ok:
+                error = RuntimeError(message)
+        except Exception as exc:  # noqa: BLE001 — notify first, then re-raise so the job fails
+            conn.rollback()
+            error = exc
+        _notify_step_done(conn, brand_id, brand_name, error is None,
+                          verbs=("AI 讀完網站，可以回去確認", "AI 讀網站失敗，可以回去重試"))
+        if error is not None:
+            raise error  # Contract J: the job ends failed; the status reads the call's error
 
 
 def background_intake_question(org_id: str, brand_id: str) -> None:
