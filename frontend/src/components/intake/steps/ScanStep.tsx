@@ -1,411 +1,175 @@
-import { useEffect, useState } from "react";
-import { ImageOff } from "lucide-react";
-import type { IntakeDraft, ProductCardDraft } from "@/lib/intakeApi";
-import { useAuthedImage } from "@/lib/useAuthedImage";
-import {
-  createProductFromCard,
-  createScannedProducts,
-  fetchScanStatus,
-  retryPhotoProduct,
-  skipPhotoProduct,
-  skipRemainingAi,
-  skipScan,
-  startScan,
-} from "@/lib/intakeApi";
-import { Badge } from "../shared/Badge";
+import { useEffect, useRef, useState } from "react";
+import { fetchOnboardingScan, startOnboardingScan, type OnboardingScan } from "@/lib/intakeOnboardingApi";
+import { cn } from "@/lib/utils";
+import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
-import { LimitCard } from "../shared/LimitCard";
-import { useIntakeJob } from "../useIntakeJob";
-import { ProductNewPanel } from "@/components/products";
 
-/** 初掃＋初掃結果（契約 S4.14–S4.24）：進入這一步且草稿還沒掃過就自動開始背景工作。 */
-export function ScanStep({
-  brandId,
-  draft,
-  onRefresh,
-  onNext,
-}: {
+/** How often a running scan is read again. */
+const POLL_MS = 1000;
+
+type View =
+  /** A request is in flight (entry read, start, retry): the spinner row, no timer. */
+  | { kind: "busy" }
+  /** The job runs: the spinner row, read again after `POLL_MS`. */
+  | { kind: "running"; at: number }
+  | { kind: "failed"; message: string | null }
+  | { kind: "done"; scan: OnboardingScan };
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : "處理失敗，請稍後再試。");
+
+/** Brand onboarding #/b2 AI 讀網站 (prototype `R.b2` of `.harness/scratch/prototype/f41-onboarding/index.html`):
+ * what the website/photo scan found, as the rows steps 3/4 will pre-fill, and what it did not find — never a
+ * decision. On entry the scan is read (`GET …/onboarding/scan`) and started once if it never ran (`POST`); a
+ * running scan is read every second. A failed read shows the backend's message with 重試 and lets the user skip
+ * to step 3; the head and the bar stay either way.
+ *
+ * `nav`: when given, this step renders the whole step head; without it the wizard renders the crumb and dots
+ * above and this step renders only the title and purpose. `draft`/`onRefresh` are the legacy wizard props (the
+ * old intake draft), not read here. */
+export function ScanStep({ brandId, nav, back, onNext }: {
   brandId: string;
-  draft: IntakeDraft;
-  onRefresh: () => void;
+  nav?: StepNav;
+  back?: BarBack;
   onNext: () => void;
+  draft?: unknown;
+  onRefresh?: () => void;
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createdMsg, setCreatedMsg] = useState<string | null>(null);
-  const [manualOpen, setManualOpen] = useState(false);
-  const [retryingToken, setRetryingToken] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const { job, limitBlock, raising, retry, raise } = useIntakeJob(
-    brandId,
-    "scan",
-    !draft.scan_done,
-    () => startScan(brandId),
-    () => fetchScanStatus(brandId),
-    onRefresh,
-  );
+  const [view, setView] = useState<View>({ kind: "busy" });
+  const alive = useRef(true);
 
-  async function handleSkip() {
-    await skipScan(brandId);
-    onRefresh();
+  function apply(scan: OnboardingScan) {
+    if (!alive.current) return;
+    if (scan.status === "done") setView({ kind: "done", scan });
+    else if (scan.status === "failed") setView({ kind: "failed", message: scan.error });
+    // "none" right after a start = the job is queued but not picked up yet: keep reading.
+    else setView({ kind: "running", at: Date.now() });
   }
 
-  async function handleSkipRemaining() {
-    await skipRemainingAi(brandId);
-    onRefresh();
+  function fail(err: unknown) {
+    if (alive.current) setView({ kind: "failed", message: errorText(err) });
   }
 
-  async function handleCreateProducts(names: string[]) {
-    setCreating(true);
-    setActionError(null);
-    try {
-      const res = await createScannedProducts(brandId, names);
-      setCreatedMsg(`已建立 ${res.created_count} 個產品。`);
-      onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "建立產品失敗，請再試一次。");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleCreateCard(card: ProductCardDraft) {
-    setCreating(true);
-    setActionError(null);
-    try {
-      const res = await createProductFromCard(brandId, card.source_photo_token);
-      if (!res.product_id) throw new Error("這張產品卡現在還不能建立，請重新讀一次照片。");
-      setCreatedMsg(`「${card.name}」已建立為產品。`);
-      onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "建立產品失敗，請再試一次。");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function handleRetryCard(card: ProductCardDraft) {
-    setRetryingToken(card.source_photo_token);
-    setActionError(null);
-    try {
-      await retryPhotoProduct(brandId, card.source_photo_token);
-      onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "這張照片暫時讀不到，請再試一次。");
-    } finally {
-      setRetryingToken(null);
-    }
-  }
-
-  async function handleSkipCard(card: ProductCardDraft) {
-    setActionError(null);
-    try {
-      await skipPhotoProduct(brandId, card.source_photo_token);
-      onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "這張照片暫時略過失敗，請再試一次。");
-    }
+  function start() {
+    setView({ kind: "busy" });
+    startOnboardingScan(brandId).then(apply, fail);
   }
 
   useEffect(() => {
-    if (!createdMsg) return;
-    const timer = window.setTimeout(() => setCreatedMsg(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [createdMsg]);
-
-  if (limitBlock) {
-    return <LimitCard block={limitBlock} raising={raising} onRaise={() => void raise()} onSkipRemaining={() => void handleSkipRemaining()} />;
-  }
-
-  if (!draft.scan_done) {
-    if (!job) return <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">準備開始初掃…</div>;
-    return (
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
-        {job.status !== "failed" && draft.photos.length > 0 ? (
-          <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-            正在看你的照片…（{job.stage || "準備中"}）
-          </div>
-        ) : (
-          <IntakeJobRow
-            job={job}
-            runningLabel="AI 正在初掃"
-            actions={[
-              { label: "再試一次（預估 US$0.30）", onClick: () => void retry() },
-              { label: "跳過這一步", onClick: () => void handleSkip() },
-              { label: "前往設定頁", onClick: () => window.location.assign("/app/settings") },
-            ]}
-          />
-        )}
-      </div>
+    let cancelled = false;
+    alive.current = true;
+    setView({ kind: "busy" });
+    fetchOnboardingScan(brandId).then(
+      (scan) => {
+        if (cancelled) return;
+        if (scan.status === "none") start();
+        else apply(scan);
+      },
+      (err: unknown) => {
+        if (!cancelled) fail(err);
+      },
     );
-  }
+    return () => {
+      cancelled = true;
+      alive.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandId]);
 
-  const impressions = draft.scan_impressions;
-  const scannedProducts = [...new Set(draft.scan_products)];
-  const showProductDrafts = draft.photos.length > 0 || draft.urls.some((url) => url.trim());
+  useEffect(() => {
+    if (view.kind !== "running") return;
+    const timer = window.setTimeout(() => {
+      fetchOnboardingScan(brandId).then(apply, fail);
+    }, POLL_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  const done = view.kind === "done" ? view.scan : null;
+  const title = done ? "我讀完你的網站了" : "AI 讀網站";
+  const purpose = done ? purposeLine(done) : undefined;
 
   return (
-    <div className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6 shadow-[var(--shadow-card)]">
-      <div>
-        <h2 className="font-display text-lg text-foreground">我先讀過一遍了</h2>
-        <p className="text-sm text-muted-foreground">這還不是事實，只是讓我知道接下來要問你什麼。</p>
-      </div>
-
-      {impressions.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
-          這次沒有讀到可用的內容。你給的網址都讀不到，或內容太少。可以直接跳過初掃，用問答把重點講給我聽。
-        </div>
+    <div className="flex flex-col gap-4">
+      {nav ? (
+        <OnboardingStepHead {...nav} title={title} purpose={purpose} />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(360px,400px))] gap-3">
-          {impressions.map((imp, i) => (
-            <div key={i} className="flex flex-col gap-1 rounded-md border border-border p-3 text-sm">
-              <Badge>看起來像 {imp.looks_like}</Badge>
-              <p className="font-medium text-foreground">{imp.title}</p>
-              <p className="text-muted-foreground">{imp.content}</p>
-              <p className="text-xs text-muted-foreground">依據：{imp.basis}</p>
-            </div>
-          ))}
+        // The wizard's head above ends with the dots' own gap; pull the title up to the head's spacing.
+        <div className="-mt-5 mb-1">
+          <h1 className="text-[26px] leading-tight font-[650] tracking-[-0.025em]">{title}</h1>
+          {purpose && <p className="mt-1 text-[15px] text-muted-foreground">{purpose}</p>}
         </div>
       )}
 
-      {showProductDrafts && (
-        <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-          <div>
-            <p className="text-sm font-medium text-foreground">產品卡草稿</p>
-            <p className="text-xs text-muted-foreground">我從你的照片和網址讀出來的；價格看不出來時，問答會再問你。</p>
-          </div>
-          {draft.product_card_drafts.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {draft.product_card_drafts.map((card) => (
-                <PhotoProductCard
-                  key={card.source_photo_token}
-                  brandId={brandId}
-                  card={card}
-                  photoName={draft.photos.find((photo) => photo.token === card.source_photo_token)?.name}
-                  created={draft.created_product_names.includes(card.name)}
-                  creating={creating}
-                  retrying={retryingToken === card.source_photo_token}
-                  onCreate={() => void handleCreateCard(card)}
-                  onRetry={() => void handleRetryCard(card)}
-                  onSkip={() => void handleSkipCard(card)}
-                  onManual={() => setManualOpen(true)}
-                />
-              ))}
-            </div>
-          )}
-          {/* Buildable products = photo cards ∪ scanned names: a URL-only scan fills `scan_products`
-              and leaves `product_card_drafts` empty (app/intake/ai.py), so keying on cards alone
-              showed this message beside a list of detected names (drill-6 #6). */}
-          {draft.product_card_drafts.length === 0 && scannedProducts.length === 0 && (
-            <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
-              這次沒有讀出可建立的產品；你仍可照原本流程往下回答問題。
-            </p>
-          )}
-
-          {scannedProducts.length > 0 && (
-            <ScanProductChecklist
-              products={scannedProducts}
-              created={draft.created_product_names}
-              creating={creating}
-              onCreate={(names) => void handleCreateProducts(names)}
-            />
-          )}
-        </div>
+      {done ? (
+        <>
+          <ScanCard scan={done} />
+          <p className="text-[11.5px] text-muted-foreground">
+            系統只預填、不替你決定：每一步按「下一步」才算你確認。商品的細節留到「商品建檔」再問。
+          </p>
+        </>
+      ) : view.kind === "failed" ? (
+        <IntakeJobRow job={{ status: "failed", error: view.message }} runningLabel="正在讀網站…" actions={[{ label: "重試", onClick: start }]} />
+      ) : (
+        <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
       )}
 
-      {actionError && <p role="alert" className="text-sm text-danger">{actionError}</p>}
-
-      {draft.url_results.length > 0 && (
-        <div className="flex flex-col gap-2 text-sm">
-          <button type="button" onClick={() => setDetailsOpen((v) => !v)} className="self-start font-medium text-primary hover:underline">
-            {detailsOpen ? "收起「這次讀了哪些東西」" : "這次讀了哪些東西"}
-          </button>
-          {detailsOpen && (
-            <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-              {draft.url_results.map((r, i) => (
-                <li key={i} className="break-all">
-                  {r.ok ? <Badge tone="success">成功</Badge> : <Badge tone="danger">失敗</Badge>} {r.url}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={onNext}
-        className="self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-      >
-        開始回答問題
-      </button>
-
-      {manualOpen && (
-        <ProductNewPanel
-          brandId={brandId}
-          onClose={() => setManualOpen(false)}
-          onCreated={() => {
-            setManualOpen(false);
-            setCreatedMsg("已建立產品，可以繼續建檔。");
-            onRefresh();
-          }}
-        />
-      )}
-      {createdMsg && (
-        <p role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md bg-foreground px-4 py-2 text-sm text-background shadow-[var(--shadow-card)]">
-          {createdMsg}
-        </p>
-      )}
+      <OnboardingBar back={back}>
+        {view.kind === "failed" ? (
+          <BarNext label="先跳過，自己填" onClick={onNext} />
+        ) : (
+          <BarNext label="開始確認" disabled={!done} onClick={onNext} />
+        )}
+      </OnboardingBar>
     </div>
   );
 }
 
-function PhotoProductCard({
-  brandId,
-  card,
-  photoName,
-  created,
-  creating,
-  retrying,
-  onCreate,
-  onRetry,
-  onSkip,
-  onManual,
-}: {
-  brandId: string;
-  card: ProductCardDraft;
-  photoName: string | undefined;
-  created: boolean;
-  creating: boolean;
-  retrying: boolean;
-  onCreate: () => void;
-  onRetry: () => void;
-  onSkip: () => void;
-  onManual: () => void;
-}) {
-  if (card.status === "skipped") {
-    return <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">這張照片已略過，不會擋住後面的流程。</div>;
-  }
-
-  return (
-    <div className="flex items-start gap-3 rounded-md border border-border p-3 text-sm">
-      <PhotoThumbnail brandId={brandId} photoName={photoName} />
-      <div className="min-w-0 flex-1 space-y-1">
-        {card.status === "ready" ? (
-          <>
-            <p className="font-medium text-foreground">{card.name}</p>
-            {card.specification && <p className="text-muted-foreground">規格：{card.specification}</p>}
-            {card.selling_points.length > 0 && <p className="text-muted-foreground">賣點：{card.selling_points.join("、")}</p>}
-            {card.gaps.map((gap) => (
-              <Badge key={gap} tone="warning">{gap === "價格" ? "💰 價格看不出來——問答時會問你" : `${gap}還不清楚——問答時會問你`}</Badge>
-            ))}
-          </>
-        ) : card.status === "unreadable" ? (
-          <>
-            <p className="font-medium text-foreground">這張我讀不出產品資訊</p>
-            <p className="text-muted-foreground">{card.message ?? "可以自己填，或略過這張照片。"}</p>
-          </>
-        ) : (
-          <>
-            <p className="font-medium text-danger">這張照片暫時讀不到</p>
-            <p className="text-muted-foreground">{card.message ?? "不是你的問題，可以再試一次。"}</p>
-          </>
-        )}
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-2">
-        {card.status === "ready" ? (
-          <button
-            type="button"
-            disabled={created || creating}
-            onClick={onCreate}
-            className="rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {created ? "已建立" : creating ? "建立中…" : "＋建立為產品"}
-          </button>
-        ) : card.status === "unreadable" ? (
-          <>
-            <button type="button" onClick={onManual} className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary">自己填</button>
-            <button type="button" onClick={onSkip} className="text-xs text-muted-foreground hover:underline">略過</button>
-          </>
-        ) : (
-          <button type="button" disabled={retrying} onClick={onRetry} className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50">
-            {retrying ? "重讀中…" : "再試一次"}
-          </button>
-        )}
-      </div>
-    </div>
-  );
+/** 「讀了 3 頁網站、2 張品牌照片；…」: a count of zero is left out. */
+function purposeLine(scan: OnboardingScan): string {
+  const read = [
+    scan.pages_read > 0 ? `${scan.pages_read} 頁網站` : "",
+    scan.photos_read > 0 ? `${scan.photos_read} 張品牌照片` : "",
+  ].filter(Boolean);
+  return `${read.length ? `讀了 ${read.join("、")}；` : ""}下面是我找到的，後面每一步會先幫你填好，你確認就好`;
 }
 
-function PhotoThumbnail({ brandId, photoName }: { brandId: string; photoName: string | undefined }) {
-  // 照片路由要求登入，而 <img> 自己發的請求不會帶權杖——所以繞 apiFetch 拿，
-  // 見 useAuthedImage 檔頭（2026-08-30 實機驗收抓到的，本來就壞）。
-  const url = photoName
-    ? `/brands/${encodeURIComponent(brandId)}/intake/photos/${encodeURIComponent(photoName)}`
-    : undefined;
-  const { src, failed } = useAuthedImage(url);
-  if (!src) {
-    return <span aria-label={failed ? "沒有可用照片縮圖" : "照片縮圖載入中"} className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"><ImageOff className="h-5 w-5" aria-hidden="true" /></span>;
-  }
+/** Prototype `.card` 「找到的東西」 with its `.scan` rows: one per found area, one per area not found. */
+function ScanCard({ scan }: { scan: OnboardingScan }) {
   return (
-    <img
-      src={src}
-      alt="這張產品卡的來源照片"
-      width={56}
-      height={56}
-      className="h-14 w-14 shrink-0 rounded-md object-cover"
-    />
-  );
-}
-
-function ScanProductChecklist({
-  products,
-  created,
-  creating,
-  onCreate,
-}: {
-  products: string[];
-  created: string[];
-  creating: boolean;
-  onCreate: (names: string[]) => void;
-}) {
-  const [checked, setChecked] = useState<Set<string>>(new Set(products));
-
-  return (
-    <div className="flex flex-col gap-2">
-      <ul className="flex flex-col gap-1 text-sm">
-        {products.map((name) => {
-          const isCreated = created.includes(name);
-          return (
-            <li key={name} className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={isCreated || checked.has(name)}
-                disabled={isCreated}
-                onChange={(e) =>
-                  setChecked((prev) => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(name);
-                    else next.delete(name);
-                    return next;
-                  })
-                }
-              />
-              <span className="text-foreground">{name}</span>
-              {isCreated && <Badge tone="success">已建立</Badge>}
-            </li>
-          );
-        })}
+    <section className="rounded-xl border border-border bg-card px-[22px] py-5">
+      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[15px] font-semibold">找到的東西</h2>
+        <span data-slot="chip" data-tone="ok" className="inline-flex items-center rounded-full bg-zone-ok px-2.5 py-0.5 text-xs font-medium whitespace-nowrap text-success">
+          預填 {scan.prefilled} 項
+        </span>
+      </div>
+      <ul data-slot="scan-rows">
+        {scan.found.map((row) => (
+          <ScanRow key={`found-${row.area}`} area={row.area} text={row.text} tag={row.note ? `✦ 讀到（${row.note}）` : "✦ 讀到"} />
+        ))}
+        {scan.not_found.map((area) => (
+          <ScanRow key={`missing-${area}`} area={area} text="沒找到，後面問你；沒有也沒關係" tag="網站上沒找到" missing />
+        ))}
       </ul>
-      <button
-        type="button"
-        disabled={creating || products.every((p) => created.includes(p))}
-        onClick={() => onCreate(products.filter((p) => checked.has(p) && !created.includes(p)))}
-        className="self-start rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+    </section>
+  );
+}
+
+function ScanRow({ area, text, tag, missing = false }: { area: string; text: string; tag: string; missing?: boolean }) {
+  return (
+    <li className="grid grid-cols-[120px_minmax(0,1fr)_auto] items-center gap-3 border-t border-border py-2.5 text-[13px] first:border-t-0">
+      <span className="text-muted-foreground">{area}</span>
+      <span className={cn("[overflow-wrap:anywhere]", missing && "text-muted-foreground")}>{text}</span>
+      <span
+        data-slot="ai-tag"
+        data-source={missing ? "none" : "ai"}
+        className={cn(
+          "inline-flex items-center gap-1 justify-self-end rounded px-1.5 py-px text-[11px] font-semibold whitespace-nowrap",
+          missing ? "bg-muted text-muted-foreground" : "bg-accent text-accent-foreground",
+        )}
       >
-        {creating ? "處理中…" : "建立勾選的產品"}
-      </button>
-    </div>
+        {tag}
+      </span>
+    </li>
   );
 }
