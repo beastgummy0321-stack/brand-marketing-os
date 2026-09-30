@@ -12,9 +12,12 @@ Shapes other modules may use:
                                           # action.
     launch_readiness(conn, org_id, brand_id) -> dict
                                           # F05-I04: the launch readiness checklist
-                                          # (ARCHITECTURE.md §8 第 5 條). This is the only `ads`
-                                          # shape `intake` is allowed to use (manifest
+                                          # (ARCHITECTURE.md §8 第 5 條). With `breakeven_cpa`,
+                                          # the only `ads` shapes `intake` uses (manifest
                                           # `may_depend_on`).
+    breakeven_cpa(economics: dict | None) -> float | None
+                                          # F43-I05: the one break-even formula (budget.py),
+                                          # read by product onboarding.
 
 Everything else in this package (`repository.py`, `routes.py`) is private — nothing outside
 this package imports them. This module owns `ads_campaign`/`ads_delivery_group`/`ads_ad`/
@@ -125,3 +128,11 @@ def launch_readiness(conn, org_id: str, brand_id: str) -> dict:
     from app.ads import readiness as ads_readiness
 
     return ads_readiness.launch_readiness(conn, org_id, brand_id)
+
+
+def breakeven_cpa(economics: dict | None) -> float | None:
+    """F43-I05: the one break-even formula (`app/ads/budget.py` `breakeven_cpa`), exposed for
+    product onboarding (`app/intake/product_onboarding.py`) so intake never re-implements it."""
+    from app.ads.budget import breakeven_cpa as _breakeven_cpa
+
+    return _breakeven_cpa(economics)
