@@ -1027,5 +1027,97 @@ class PatchLandingUrlTest(_BriefTestBase):
         self.assertEqual(res.status_code, 409, res.text)
 
 
+class PatchCustomerGroupsTest(_SellWayBase):
+    """F43-I18: the draft's customer groups are editable after create, with the create rule --
+    only the campaign's sell-way's groups (`customer_group_unknown`), a pick is the user's, `[]`
+    is every group; a sell-way change resets them to the new sell-way's unless the same PATCH
+    sets them."""
+
+    def setUp(self):
+        super().setUp()
+        self.groups = bi_repo.save_customer_groups(web.conn, self.brand_id, self.product["id"], [
+            {"who": "下班夜跑的上班族", "pain_keys": ["uncertainty"]},
+            {"who": "帶狗散步的人", "pain_keys": ["effort", "cost"]},
+        ], actor=ACTOR)
+        self.other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        self.other_groups = bi_repo.save_customer_groups(
+            web.conn, self.brand_id, self.other["id"], [
+                {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
+                {"who": "晚上遛小孩的家長", "pain_keys": ["effort"]},
+            ], actor=ACTOR)
+        self.other_way = self._sell_way("單條", [(self.other, 1)], selling_price=199)
+        brief.PROVIDER = _fake(json.dumps({"objective": "購買", "cap": None, "product_ids": []}))
+        self.detail = self._create_picks()
+        web.conn.commit()  # the request reads through its own connection
+        self.client = TestClient(main.app)
+        self.url = f"/api/ads/brands/{self.brand_id}/campaigns/{self.detail['id']}"
+
+    def _patch(self, **body):
+        return self.client.patch(self.url, json=body)
+
+    def _audience(self, res):
+        self.assertEqual(res.status_code, 200, res.text)
+        context = res.json()["campaign"]["context_json"]
+        return context["customer_group_ids"], context["field_sources"]["audience"]
+
+    def test_a_pick_of_the_sell_ways_groups_is_the_users(self):
+        second = self.groups[1]["id"]
+        self.assertEqual(self._audience(self._patch(customer_group_ids=[second])),
+                         ([second], "user"))
+        # Kept in the sell-way's order, each once.
+        both = [self.groups[1]["id"], self.groups[0]["id"], self.groups[1]["id"]]
+        self.assertEqual(self._audience(self._patch(customer_group_ids=both)),
+                         ([g["id"] for g in self.groups], "user"))
+        # An empty list is no override: every group of the sell-way.
+        self.assertEqual(self._audience(self._patch(customer_group_ids=[])),
+                         ([g["id"] for g in self.groups], "sell_way"))
+
+    def test_a_group_outside_the_sell_way_is_refused(self):
+        before = self.detail["context_json"]["customer_group_ids"]
+        for bad in ([self.other_groups[0]["id"]], ["pcg_x"], "pcg_x", [3], {"id": "pcg_x"}):
+            res = self._patch(customer_group_ids=bad)
+            self.assertEqual(res.status_code, 400, (bad, res.text))
+            self.assertEqual(res.json()["error"]["code"], "customer_group_unknown", repr(bad))
+        row = web.conn.execute(
+            "SELECT context_json FROM ads_campaign WHERE id = %s", (self.detail["id"],),
+        ).fetchone()
+        self.assertEqual(row["context_json"]["customer_group_ids"], before)
+
+    def test_a_sell_way_change_resets_the_groups(self):
+        self._audience(self._patch(customer_group_ids=[self.groups[0]["id"]]))
+
+        res = self._patch(product_ids=[self.other_way["id"]])
+
+        self.assertEqual(self._audience(res),
+                         ([g["id"] for g in self.other_groups], "sell_way"))
+        self.assertEqual(res.json()["campaign"]["context_json"]["product_ids"],
+                         [self.other_way["id"]])
+
+    def test_a_sell_way_change_keeps_the_groups_set_in_the_same_patch(self):
+        pick = self.other_groups[1]["id"]
+        res = self._patch(product_ids=[self.other_way["id"]], customer_group_ids=[pick])
+        self.assertEqual(self._audience(res), ([pick], "user"))
+        # Checked against the new sell-way, not the old one.
+        res = self._patch(product_ids=[self.sell_way["id"]],
+                          customer_group_ids=[self.other_groups[0]["id"]])
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertEqual(res.json()["error"]["code"], "customer_group_unknown")
+
+    def test_a_sell_way_without_groups_resets_to_none(self):
+        bare = bi_repo.create_product(web.conn, self.brand_id, name="鞋帶燈", actor=ACTOR)
+        bare_way = self._sell_way("一組", [(bare, 1)], selling_price=99)
+        web.conn.commit()
+        self.assertEqual(self._audience(self._patch(product_ids=[bare_way["id"]])),
+                         ([], "system"))
+
+    def test_imported_campaign_refuses_customer_groups(self):
+        web.conn.execute(
+            "UPDATE ads_campaign SET origin = 'imported' WHERE id = %s", (self.detail["id"],),
+        )
+        web.conn.commit()
+        res = self._patch(customer_group_ids=[self.groups[0]["id"]])
+        self.assertEqual(res.status_code, 409, res.text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -259,6 +259,9 @@ class PatchCampaignRequest(BaseModel):
     audience_hint: str | None = None
     # F40-I04 (2b): the brief page edits the campaign-level landing URL (string or null).
     landing_url: str | None = None
+    # F43-I18: the fold's audience -- this sell-way's group ids; `[]` = every group. `Any` so a
+    # malformed value is `customer_group_unknown` (the create rule), not a pydantic 422.
+    customer_group_ids: Any = None
 
 
 RETIRED_GOAL_MESSAGE = "成功條件已改成一個上限（每筆成果成本），請在策略頁設定上限。"
@@ -280,6 +283,7 @@ _PATCH_CAMPAIGN_ERRORS = {
     "audience_hint_unknown": (400, "受眾方向要是文字。"),
     "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
     "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
+    "customer_group_unknown": (400, "受眾只能選這個賣法的顧客群。"),
 }
 
 
@@ -302,10 +306,18 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
     # same tenant / imported-campaign refusals `update_campaign` applies to the other fields.
     edit_landing_url = "landing_url" in updates
     landing_url = updates.pop("landing_url", None)
+    # F43-I18: `context_json.customer_group_ids` is `brief.set_customer_groups`'s (the create
+    # path's rule), checked against the sell-way *after* this PATCH's `product_ids` is written;
+    # a sell-way change without groups in the same PATCH resets them to the new sell-way's.
+    pick_groups = "customer_group_ids" in updates
+    group_ids = updates.pop("customer_group_ids", None)
     try:
         repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
         if edit_landing_url:
             brief.set_landing_url(web.conn, actor.org_id, brand_id, campaign_id, landing_url)
+        if pick_groups or "product_ids" in updates:
+            brief.set_customer_groups(web.conn, actor.org_id, brand_id, campaign_id, group_ids,
+                                      picked=pick_groups)
     except ValueError as exc:
         code = str(exc)
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))

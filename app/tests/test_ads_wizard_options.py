@@ -217,9 +217,32 @@ class WizardOptionsTest(unittest.TestCase):
         res = client.get(f"/api/ads/brands/{self.brand_id}/new-campaign/options")
         self.assertEqual(res.status_code, 200, res.text)
         body = res.json()
-        self.assertEqual(set(body), {"products", "objectives"})
+        self.assertEqual(set(body), {"products", "objectives", "default_objective"})
         self.assertEqual(len(body["products"]), 6)
         self.assertEqual(body["objectives"], objectives.catalog())
+        self.assertIsNone(body["default_objective"])  # the brand has no conversion goal yet
+
+    def test_default_objective_is_the_brands_conversion_goal(self):
+        # F43-I18: one table in `objectives`; a booking is a contact, so it maps like a lead.
+        for goal, expected in (("purchase", "購買"), ("lead", "名單"), ("booking", "名單"),
+                               ("awareness", "知名度"), (None, None)):
+            bi_repo.set_brand_switches(web.conn, self.brand_id, market_region=None,
+                                       conversion_goal=goal, actor=ACTOR)
+            payload = wizard_options.options(web.conn, self.org_id, self.brand_id)
+            self.assertEqual(payload["default_objective"], expected, goal)
+            if expected is not None:
+                self.assertIn(expected, objectives.AVAILABLE)
+
+    def test_a_sell_ways_groups_resolve_from_its_product_ids(self):
+        # The campaign PATCH's resolver agrees with the wizard's list for a pickable sell-way.
+        products = self._by_name(wizard_options.options(web.conn, self.org_id, self.brand_id))
+        bundle = products["雙效組"]
+        self.assertEqual(
+            [g["id"] for g in wizard_options.product_customer_groups(
+                web.conn, self.brand_id, [bundle["id"]])],
+            [g["id"] for g in bundle["customer_groups"]],
+        )
+        self.assertEqual(wizard_options.product_customer_groups(web.conn, self.brand_id, []), [])
 
     def test_empty_brand_has_no_products(self):
         empty = bi_repo.create_brand(
@@ -257,6 +280,15 @@ class ObjectiveCatalogTest(unittest.TestCase):
         self.assertEqual(
             brief._OBJECTIVES, frozenset({"購買", "加購物車", "名單", "流量", "知名度"}),
         )
+
+    def test_conversion_goal_table_maps_only_to_available_objectives(self):
+        self.assertEqual(
+            {goal: objectives.for_conversion_goal(goal)
+             for goal in ("purchase", "lead", "booking", "awareness")},
+            {"purchase": "購買", "lead": "名單", "booking": "名單", "awareness": "知名度"},
+        )
+        for unset in (None, "", "unknown", 3):
+            self.assertIsNone(objectives.for_conversion_goal(unset))
 
     def test_check_refuses_reserved_and_unknown(self):
         self.assertEqual(objectives.check("加購物車"), "加購物車")
