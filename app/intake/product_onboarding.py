@@ -295,7 +295,7 @@ def _check_money(item: dict, owner: str, show_close_rate: bool) -> dict:
     if close_rate is not None and not 0 < close_rate <= 1:
         raise ValueError(f"「{owner}」的成交率要在 0 到 1 之間（例如 0.2＝20%）。")
     assumptions = item.get("assumptions") or []
-    if not isinstance(assumptions, list) or not set(assumptions) <= set(_ASSUMPTION_FIELDS):
+    if not isinstance(assumptions, list) or not all(a in _ASSUMPTION_FIELDS for a in assumptions):
         raise ValueError("「參考值」只能標在成本、運費或成交率。")
     return {
         "selling_price": price,
@@ -1039,7 +1039,9 @@ def put_sell_ways(conn: Conn, brand_id: str, product_id: str, body: dict, *, act
             bi_repo.update_product(
                 conn, brand_id, way_id, name=way["name"], status="archived", actor=actor
             )
-    for row in rows:
+    # Existing rows first: a renamed one frees its old name before a new row may take it (a new
+    # row named like an active sell-way would otherwise be that sell-way, Contract W).
+    for row in sorted(rows, key=lambda r: r["id"] is None):
         bi_repo.save_sell_way(
             conn,
             brand_id,
