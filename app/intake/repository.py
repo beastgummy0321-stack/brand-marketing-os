@@ -34,7 +34,7 @@ _DRAFT_FIELDS = {
     "research_urls_json", "scan_sources_json", "scan_impressions_json", "scan_llm_task_id",
     "qa_json", "scan_products_json", "handoff_depth", "handoff_prompt", "handoff_generated_at", "paste_raw",
     "paste_validation_json", "repair_llm_task_id", "cost_limit", "llm_task_refs_json",
-    "completed_at", "offerings_choice_json",
+    "completed_at", "offerings_choice_json", "prefill_json",
 }
 
 

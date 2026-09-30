@@ -93,9 +93,11 @@ class _Base(unittest.TestCase):
         return f"虛構建檔API測試品牌{_SEQ[0]}"
 
     def _create_full(self) -> str:
-        """建立一個有草稿（非陽春路徑）的品牌，回傳 brand_id。"""
+        """建立一個有草稿、要跑初掃（第 2 步）的品牌，回傳 brand_id。F42-I04 起只有網址或
+        照片才會掃，描述本身不算，所以這裡帶一個網址（fetch_url 在 setUp 已換成讀不到）。"""
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": self._brand_name(), "description": "一句測試用的品牌描述文字。",
+            "urls": "https://example.com/about",
         })
         self.assertEqual(resp.status_code, 200)
         body = resp.json()

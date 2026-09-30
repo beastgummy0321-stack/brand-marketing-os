@@ -222,6 +222,12 @@ export interface IntakeStartFields {
   description: string;
   urls: string[];
   photo_tokens: string[];
+  /** F42-I04: brand-photo kind per token, same order (logo|store|team|brand_image|other; default other). */
+  photo_kinds?: string[];
+  /** F42-I04: e.g. "TW"; empty = not set. */
+  market_region?: string;
+  /** F42-I04: "food_tw" or empty. */
+  regulatory_regime?: string;
 }
 
 export function submitIntakeStart(fields: IntakeStartFields): Promise<{ brand_id: string; quick: boolean }> {
@@ -231,8 +237,14 @@ export function submitIntakeStart(fields: IntakeStartFields): Promise<{ brand_id
   form.append("description", fields.description);
   fields.urls.forEach((u) => form.append("urls", u));
   fields.photo_tokens.forEach((t) => form.append("photo_tokens", t));
+  (fields.photo_kinds ?? []).forEach((k) => form.append("photo_kinds", k));
+  if (fields.market_region) form.append("market_region", fields.market_region);
+  if (fields.regulatory_regime) form.append("regulatory_regime", fields.regulatory_regime);
   return postForm(`/api/intake/brands`, form);
 }
+
+/** F42-I04: brand onboarding step 1 (`#/b1`) creates the brand through the same form post. */
+export const createBrand = submitIntakeStart;
 
 export function submitIntakeRestart(
   brandId: string,
