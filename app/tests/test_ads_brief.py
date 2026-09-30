@@ -479,6 +479,39 @@ class StructuredCreateTest(_BriefTestBase):
             self.assertEqual(sources[key], "user", key)
         self.assertEqual(self._task_count(), 1)  # parsing stays synchronous, one call
 
+    # -- F41-I03 (drill-8 #5): the default name keeps its dates ----------------------------------
+
+    def _named_product(self, name):
+        return bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)
+
+    def test_structured_create_is_named_product_then_dates(self):
+        brief.PROVIDER = _fake("{}")
+        product = self._named_product("Beast Gummy 超能特惠組 · 單品")
+        detail = self._create_picks(
+            picks=self._picks(product_ids=[product["id"]]),
+            start_date="2026-10-10", end_date="2026-10-16",
+        )
+        self.assertEqual(detail["name"], "Beast Gummy 超能特惠組 · 單品・10/10～10/16")
+
+    def test_a_long_product_name_is_shortened_but_the_dates_never_are(self):
+        brief.PROVIDER = _fake("{}")
+        long_name = "超" * 60
+        product = self._named_product(long_name)
+        detail = self._create_picks(
+            picks=self._picks(product_ids=[product["id"]]),
+            start_date="2026-10-10", end_date="2026-10-16",
+        )
+        self.assertEqual(detail["name"], "超" * 30 + "…・10/10～10/16")
+
+    def test_sentence_create_names_the_sentence_with_its_dates(self):
+        brief.PROVIDER = _fake("{}")
+        detail = self._create(goal_text="  秋天主打通勤族  ")
+        self.assertEqual(detail["name"], "秋天主打通勤族・10/01～10/31")
+
+    def test_draft_name_without_dates_is_the_base_alone(self):
+        self.assertEqual(brief._draft_name("  夜跑背心 "), "夜跑背心")
+        self.assertEqual(brief._draft_name("跑" * 31), "跑" * 30 + "…")
+
     def test_typed_goal_text_is_kept_verbatim(self):
         brief.PROVIDER = _fake("{}")
         detail = self._create(goal_text="秋天主打通勤族", picks=self._picks())
