@@ -13,6 +13,7 @@ from app.ads import channels, handoff_data, recovery
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
+from app.core import settings as coresettings
 
 
 class _Reader:
@@ -76,7 +77,8 @@ class RecoveryTest(unittest.TestCase):
             "request_hash,content_hash,title,month,status,plan_json,created_by) "
             "VALUES(%s,%s,%s,%s,%s,'fixture','fixture','恢復測試核准',%s,'approved',%s,'test')",
             (change, self.org, self.brand, campaign_id, db.new_id("op"),
-             db.now_utc().strftime("%Y-%m"), db.jsonb({"items": []})),
+             coresettings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m"),
+             db.jsonb({"items": []})),
         )
         self.conn.commit()
         return change
