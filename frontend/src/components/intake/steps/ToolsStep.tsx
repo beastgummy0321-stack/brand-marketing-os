@@ -121,7 +121,7 @@ function ConnectorRow({ connector: c, metaOpen, onToggleMeta, panel }: {
 }) {
   const connected = c.state === "connected";
   return (
-    <div data-slot="connector" data-state={c.state} className="border-t border-border py-3 first-of-type:border-t-0 first-of-type:pt-0 last:pb-0">
+    <div data-slot="connector" data-state={c.state} className="border-t border-border py-3 last:pb-0">
       <div className="grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-3">
         <span
           aria-hidden="true"
@@ -198,7 +198,7 @@ function GoalSegmented({ options, value, disabled, onChange }: {
       role="radiogroup"
       aria-label="成效目標"
       onKeyDown={onKeyDown}
-      className="inline-flex overflow-hidden rounded-lg border border-border"
+      className="flex overflow-hidden rounded-lg border border-border"
     >
       {options.map((o, i) => {
         const on = o.key === value;
