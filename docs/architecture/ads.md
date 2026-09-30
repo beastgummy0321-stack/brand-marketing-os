@@ -1791,7 +1791,7 @@ Prototype `.harness/scratch/prototype/f40-screens/` (approved 2026-09-29) is the
   each confirms with its own commit (those functions commit themselves), so the call is idempotent rather than atomic — a call
   cut short is finished by the next one. Frontend bar in `publish/SettingsReadback.tsx::UnreadAllBar`; confirmed rows keep the
   kit wording 「你確認一樣」.
-- **New campaign copies the previous one** (`brief.create_draft` → `_copy_from_previous`): platform, `audience_hint`, own cap,
+- **(Superseded by §6.47 except the period default.) New campaign copies the previous one** (`brief.create_draft` → `_copy_from_previous`): platform, `audience_hint`, own cap,
   landing URL (`context_json.landing_url`, else the previous first group's manual value); `context_json.copied_from =
   {campaign_id, name, fields}`, `field_sources` values `"copied"`. The PATCH accepts `landing_url`; `manual_settings.handoff`
   shows the campaign default per group with `sources.landing_url = "campaign"`. Form: 「這次怎麼投」 block, 受眾方向 is free text
@@ -1842,3 +1842,16 @@ Supersedes §6.42 「Promo offers are off by default」.
   (`intake?step=3/4/5/6`, `/products`). The completion screen's chip describes the state: 可以投放／有假設值／還差商品／還要補齊.
 - **這期會用**: the campaign payload carries `materials` = {offers (with sentence), proof, media} (`app/ads/materials_in_hand.py`);
   the strategy tab shows it as one chip row in 「預算怎麼分」.
+
+### 6.47 Campaigns pick a sell-way（ruled 2026-09-30；built in F43）
+Supersedes §6.44 「New campaign copies the previous one」 for platform / audience / cap / landing (the period default stays).
+- Only finished sell-ways are pickable (`wizard_options.sellable_products`): options carry kind, knowledge product, price, break-even,
+  cap_per_sale, offer labels, customer groups, landing, thumbnail; `options().default_objective` maps the brand conversion goal
+  (purchase→購買, lead→名單, booking→名單, awareness→知名度; unset → no preselection).
+- Create defaults from the sell-way, each marked `field_sources = "sell_way"`: `context_json.customer_group_ids` = all groups of its
+  knowledge products, landing = the sell-way's effective landing, cap = `cap_per_sale` stored as the campaign's own cap (NULL →
+  break-even, `system`); user overrides in 「進階：這期不一樣」 mark `user`. `PATCH …/campaigns/{c}` accepts `customer_group_ids`
+  (validated; a sell-way change resets them). Budget no longer falls back parent → first child; it reads the picked sell-way.
+- Prompts: strategy and delivery plan get 【這個賣法的顧客】 (≤3 groups per knowledge product, ≤6 in all, pain keys with labels, quote,
+  when); department rule: an ad's `pain` comes from a listed group when groups exist. Claims, workbench jobs and the prompt context
+  read every product of a bundle (`knowledge_product_ids`).

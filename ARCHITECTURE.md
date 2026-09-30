@@ -598,6 +598,10 @@ both write it through `app.brand_intelligence.repository.save_product_economics`
 own SQL, and `ads` reads it through `get_product_economics`. No second table for services and no
 per-offering-type table: the kind of thing being sold is a row's numbers, not a schema.
 
+`product_component` and `product_customer_group` (F43) stay with `product` in `brand_intelligence` on the same terms:
+written and read only through `app/brand_intelligence/repository.py`; the product-onboarding capability lives in `intake`, which may
+call the ads public entry for `breakeven_cpa` and `workbench.validate_claims` for 食安法 flags. `intake_product_prefill` is intake's own.
+
 `learning_ledger` stays where it is — in `brand_intelligence`, which is legacy. It is brand
 knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it and does not write it
 with SQL: `app/brand_intelligence/repository.py` (already a legacy facade, already registered for
