@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Button } from "@/components/layout/ui/button";
 import type { OnboardingSource, ProofKind } from "@/lib/intakeOnboardingApi";
 import type { ClaimVerdict, ProductClaim, ProductEvidence, ProductEvidenceInput } from "@/lib/intakeProductApi";
 import { fetchProductEvidence, proposeProductCustom, saveProductEvidence } from "@/lib/intakeProductApi";
@@ -168,9 +169,9 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
                     )}
                   </div>
                   {!row.editing && (
-                    <button type="button" className="text-[13px] font-medium whitespace-nowrap text-primary hover:underline" aria-label={`改「${row.text}」`} onClick={() => editProof(row, { editing: true })}>
+                    <Button type="button" variant="link" className="h-auto p-0 text-[13px]" aria-label={`改「${row.text}」`} onClick={() => editProof(row, { editing: true })}>
                       改
-                    </button>
+                    </Button>
                   )}
                   <RemoveButton label={row.text} onClick={() => setProof((prev) => prev.filter((p) => p.uid !== row.uid))} />
                 </Item>
