@@ -101,7 +101,7 @@ export function CustomEscape<B extends CustomBlock>({ brandId, block, placeholde
           <textarea
             rows={2}
             aria-labelledby={hintId}
-            className="w-full rounded-lg border border-input bg-card px-3 py-[9px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none"
+            className="w-full rounded-lg border border-input bg-card px-3 py-[9px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none focus-visible:outline-none"
             placeholder={placeholder}
             maxLength={MAX_CHARS}
             value={text}

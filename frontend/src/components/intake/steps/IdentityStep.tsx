@@ -91,7 +91,7 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
             <textarea
               id="b3-positioning"
               rows={2}
-              className="w-full rounded-lg border border-input bg-card px-3 py-[9px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none"
+              className="w-full rounded-lg border border-input bg-card px-3 py-[9px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none focus-visible:outline-none"
               value={positioning}
               onChange={(e) => setPositioning(e.target.value)}
             />
