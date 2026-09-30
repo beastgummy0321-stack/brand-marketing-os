@@ -7,7 +7,9 @@
  * computed by the server — re-read it after each save, never compute it on the page. PUT bodies
  * carry raw inputs only: an empty list price / cost / cap per sale means "derived / break-even".
  * `source` on a prefilled field: `"saved"` = confirmed, `"ai"` = the product-page read's proposal
- * (with `note`), `"none"` = nothing found. A 400 / 404 carries a Chinese `error` message, thrown
+ * (with `note`), `"none"` = nothing found. The product-page read (F43-I06) starts on its own when a
+ * product is created with a page URL; `startProductScan` re-reads; `prefill_status` of the status
+ * reports it. 「自訂」 (`proposeProductCustom`) returns a proposal only: the step's PUT saves it. A 400 / 404 carries a Chinese `error` message, thrown
  * here as an `Error`. Product photos are uploaded with the existing official-asset upload
  * (`uploadAsset` in `libraryApi.ts`, `asset_kind: "product_photo"`, `product_id`). */
 
@@ -80,9 +82,38 @@ export interface ProductOnboardingStatus {
   /** 1 商品是什麼 · 2 誰會買 · 3 證據與說法 · 4 賣法與價格 · 5 完成 (a finished product reads 5). */
   step: number;
   completed: boolean;
+  /** The product-page read: none (never started) · running · done · failed. */
   prefill_status: PrefillStatus;
+  /** Why it failed (the AI's own error, 「AI 有回覆，但格式讀不成…」, 「讀不到商品頁…」, or the AI
+   * cost cap's message when the read was refused at creation); null unless failed. */
   prefill_error: string | null;
 }
+
+// ---- 自訂 (F43-I06): a proposal only; the step's PUT saves it ----
+
+export type ProductCustomBlock = "difference" | "group" | "pain" | "product_proof" | "claim";
+
+export type ProductCustomProposal =
+  | { block: "difference"; kind: "value"; value: string }
+  | {
+      block: "group";
+      kind: "option";
+      /** Ready to append to `saveProductWho` as a group with `source: "custom"`. */
+      option: { who: string; pain_keys: PainKey[]; quote: string; when_used: string };
+    }
+  | {
+      block: "pain";
+      kind: "option";
+      /** A worry mapped to one of the six keys; `quote` fills 「顧客會怎麼說」. */
+      option: { pain_key: PainKey; label: string; quote: string };
+    }
+  | { block: "product_proof"; kind: "option"; option: { fact_key: ProofKind; label: string; text: string } }
+  | {
+      block: "claim";
+      kind: "option";
+      /** A 食安法 hit (`statutory`) forces `verdict: "no"` (not editable). */
+      option: { text: string; verdict: ClaimVerdict; statutory: { term: string; sentence: string } | null };
+    };
 
 // ---- 1 商品是什麼 ----
 
@@ -322,6 +353,20 @@ export const createProduct = (brandId: string, input: { name: string; page_url?:
 
 export const fetchProductOnboarding = (brandId: string, productId: string): Promise<ProductOnboardingStatus> =>
   send(stepBase(brandId, productId));
+
+/** Re-read the product page (no-op while a read runs) -> the status. 400: the product is finished
+ * or has neither a page URL nor a photo; 409: the AI cost cap refused before any call. */
+export const startProductScan = (brandId: string, productId: string): Promise<ProductOnboardingStatus> =>
+  send(`${stepBase(brandId, productId)}/scan`, json("POST", {}));
+
+/** 「自訂」: one sentence -> one proposal (nothing saved). 409 = AI cost cap, 422 = 「AI 整理不出來，
+ * 換個說法再試一次」, 502 = the AI call failed. */
+export const proposeProductCustom = (
+  brandId: string,
+  productId: string,
+  block: ProductCustomBlock,
+  text: string,
+): Promise<ProductCustomProposal> => send(`${stepBase(brandId, productId)}/custom`, json("POST", { block, text }));
 
 /** 400 while a step is not saved yet or the product has no sell-way; idempotent once done. */
 export const completeProductOnboarding = (brandId: string, productId: string): Promise<ProductOnboardingStatus> =>

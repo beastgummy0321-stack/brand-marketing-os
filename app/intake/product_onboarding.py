@@ -7,7 +7,9 @@ Every confirmed value lives in the store the F43 Decisions name and is written t
 is computed here, never on the page: break-even (`app.ads.breakeven_cpa`, the one formula),
 derived list price / cost (the facade's effective `get_product_economics`), offer labels (the
 facade's `offer_sources`, the same rule as `available_offer_keys`) and 食安法 flags
-(`app.workbench.validate_claims`, the public entry; the brand's regime). No model call.
+(`app.workbench.validate_claims`, the public entry; the brand's regime). No model call here: the
+product-page read is `app/intake/product_prefill.py` (queued by `create` when a page URL is given)
+and 「自訂」 is `app/intake/custom.py` (`custom_options` below is its input).
 
 A product being built has `product.onboarding_step` 1–5 (5 = the sell-ways are saved, 完成 not
 pressed yet); each step's PUT moves it to at least step+1 (never back); 完成 sets it NULL. The
@@ -51,9 +53,13 @@ PHOTO_KIND = "product_photo"
 MAX_NAME_CHARS = 60
 MAX_GROUPS = 3
 MAX_PAINS = 2
+MAX_WHO_CHARS = 100
+MAX_QUOTE_CHARS = 200
+MAX_WHEN_CHARS = 100
+MAX_PROOF_CHARS = 200
 MAX_CLAIM_CHARS = 100
 LEAD_GOALS = ("lead", "booking")  # F05 rule 2: these brands see 成交率
-_WHAT_FIELDS = (  # (body key, product_fact type, label, max chars)
+WHAT_FIELDS = (  # (body key, product_fact type, label, max chars)
     ("intro", "core_info", "一句話介紹", 200),
     ("mechanism", "mechanism", "裡面有什麼、怎麼作用", 500),
     ("difference", "differentiation", "跟別人不一樣的地方", 200),
@@ -89,7 +95,7 @@ def _is_knowledge(conn: Conn, brand_id: str, product: dict) -> bool:
     ) == [product["id"]]
 
 
-def _knowledge_product(conn: Conn, brand_id: str, product_id: str) -> dict:
+def knowledge_product(conn: Conn, brand_id: str, product_id: str) -> dict:
     product = bi_repo.get_product(conn, brand_id, product_id)
     if product is None or not _is_knowledge(conn, brand_id, product):
         raise NotFound("找不到這個商品。")
@@ -127,7 +133,7 @@ def _photo_url(brand_id: str, asset: dict) -> str:
     return f"/brands/{brand_id}/assets/file/{asset['id']}/{Path(asset['storage_key']).name}"
 
 
-def _photo_assets(conn: Conn, brand_id: str) -> list:
+def product_photo_assets(conn: Conn, brand_id: str) -> list:
     """Active product photos (the 商品照 path: `official_asset` with `product_id`), oldest first."""
     assets = [
         a
@@ -139,7 +145,7 @@ def _photo_assets(conn: Conn, brand_id: str) -> list:
 
 def _thumbnails(conn: Conn, brand_id: str) -> dict:
     """knowledge product id -> its newest photo URL."""
-    return {a["product_id"]: _photo_url(brand_id, a) for a in _photo_assets(conn, brand_id)}
+    return {a["product_id"]: _photo_url(brand_id, a) for a in product_photo_assets(conn, brand_id)}
 
 
 def _confirmed_facts(conn: Conn, brand_id: str, product_id: str, fact_type: str) -> list:
@@ -407,8 +413,9 @@ def _suggestions(conn: Conn, brand_id: str, taken: set) -> list:
 
 
 def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
-    """`POST …/products` `{name, page_url?}`: a new knowledge product at step 1. A product of the
-    same name is that product (Contract W, as `create_product`): its id is returned unchanged."""
+    """`POST …/products` `{name, page_url?}`: a new knowledge product at step 1; with a page URL
+    the product-page read starts (`product_prefill.start_on_create`). A product of the same name
+    is that product (Contract W, as `create_product`): its id is returned unchanged."""
     name = _check_name(body.get("name"))
     page_url = _check_url(body.get("page_url"), "商品頁網址")
     same = next(
@@ -428,7 +435,10 @@ def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
     product = bi_repo.create_product(conn, brand_id, name=name, actor=actor)
     bi_repo.set_product_onboarding_step(conn, brand_id, product["id"], STEP_WHAT, actor=actor)
     if page_url:
+        from app.intake import product_prefill
+
         bi_repo.set_product_page_url(conn, brand_id, product["id"], page_url, actor=actor)
+        product_prefill.start_on_create(conn, brand_id, product["id"])
     return {"product_id": product["id"], "created": True}
 
 
@@ -438,12 +448,19 @@ def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
 
 
 def _prefill_status(conn: Conn, brand_id: str, product_id: str) -> tuple[str, str | None]:
+    """The row's status (the job writes done / failed + `prefill_json.error`); a row still
+    `running` whose job already ended (worker crash, a worker that does not know the task) reads
+    failed with the queue's message (Contract J), as the brand prefill does."""
     row = ir.get_product_prefill(conn, brand_id, product_id)
     if row is None:
         return "none", None
     status_ = row.get("status")
     if status_ not in _PREFILL_STATUSES:
         status_ = "done" if row.get("prefill_json") is not None else "none"
+    if status_ == "running":
+        from app.intake import product_prefill
+
+        return product_prefill.running_status(product_id)
     if status_ != "failed":
         return status_, None
     error = _ai(row.get("prefill_json")).get("error")
@@ -453,7 +470,7 @@ def _prefill_status(conn: Conn, brand_id: str, product_id: str) -> tuple[str, st
 def status(conn: Conn, brand_id: str, product_id: str) -> dict:
     """`GET …/products/{p}/onboarding`: 1–5 while being built (5 = 賣法 saved, 完成 not pressed);
     a finished product reads step 5, completed."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     step = product.get("onboarding_step")
     prefill_status, prefill_error = _prefill_status(conn, brand_id, product_id)
     return {
@@ -475,7 +492,7 @@ def _active_singles(conn: Conn, brand_id: str, product_id: str) -> list:
 def complete(conn: Conn, brand_id: str, product_id: str, *, actor: str) -> dict:
     """`POST …/onboarding/complete`: idempotent on a finished product; refused while a step is not
     saved yet (the step stopped before 賣法 was saved) or the product has no sell-way."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     step = product.get("onboarding_step")
     if step is not None:
         if step < STEP_DONE:
@@ -503,20 +520,20 @@ def _text_field(saved: dict | None, ai: dict) -> dict:
 def _photos(conn: Conn, brand_id: str, product_id: str) -> list:
     return [
         {"id": a["id"], "url": _photo_url(brand_id, a)}
-        for a in _photo_assets(conn, brand_id)
+        for a in product_photo_assets(conn, brand_id)
         if a["product_id"] == product_id
     ]
 
 
 def get_what(conn: Conn, brand_id: str, product_id: str) -> dict:
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     prefill = _prefill(conn, brand_id, product, STEP_WHAT)
     out = {
         "name": product["name"],
         "page_url": product.get("page_url") or "",
         "photos": _photos(conn, brand_id, product_id),
     }
-    for key, fact_type, _label, _limit in _WHAT_FIELDS:
+    for key, fact_type, _label, _limit in WHAT_FIELDS:
         facts = _confirmed_facts(conn, brand_id, product_id, fact_type)
         out[key] = _text_field(facts[-1] if facts else None, _ai(prefill.get(key)))
     return out
@@ -580,12 +597,12 @@ def put_what(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: s
     """`{name, page_url, intro, mechanism, difference, photo_ids?}`. New photos come from the
     existing official-asset upload (`asset_kind=product_photo`, `product_id`); `photo_ids`
     (optional) = the product photos to keep (absent = keep all)."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     name = _check_name(body.get("name"))
     page_url = _check_url(body.get("page_url"), "商品頁網址")
     texts = {
         fact_type: _text(body.get(key), label, limit)
-        for key, fact_type, label, limit in _WHAT_FIELDS
+        for key, fact_type, label, limit in WHAT_FIELDS
     }
     current = _photos(conn, brand_id, product_id)
     keep = body.get("photo_ids")
@@ -629,7 +646,7 @@ def _ai_group(item: dict) -> dict | None:
 
 
 def get_who(conn: Conn, brand_id: str, product_id: str) -> dict:
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     groups = [
         {
             "id": g["id"],
@@ -656,7 +673,7 @@ def get_who(conn: Conn, brand_id: str, product_id: str) -> dict:
 def _check_group(item, n: int, existing: dict) -> dict:
     if not isinstance(item, dict):
         raise ValueError("顧客群格式不對。")
-    who = _text(item.get("who"), f"第 {n} 群：是誰", 100)
+    who = _text(item.get("who"), f"第 {n} 群：是誰", MAX_WHO_CHARS)
     if not who:
         raise ValueError(f"第 {n} 群還沒寫是誰。")
     pains = item.get("pain_keys")
@@ -676,8 +693,8 @@ def _check_group(item, n: int, existing: dict) -> dict:
         "who": who,
         "pain_keys": pains,
         "source": source,
-        "quote": _text(item.get("quote"), f"第 {n} 群：顧客會怎麼說", 200),
-        "when_used": _text(item.get("when_used"), f"第 {n} 群：什麼時候用", 100),
+        "quote": _text(item.get("quote"), f"第 {n} 群：顧客會怎麼說", MAX_QUOTE_CHARS),
+        "when_used": _text(item.get("when_used"), f"第 {n} 群：什麼時候用", MAX_WHEN_CHARS),
     }
 
 
@@ -685,7 +702,7 @@ def put_who(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: st
     """`{groups: [{id?, who, pain_keys (1–2 of the six), quote, when_used, source?}]}` (≤3, full
     list). `source`: ai (an accepted proposal) / custom (from 自訂) / user; `saved` keeps the
     row's."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     groups = body.get("groups")
     if not isinstance(groups, list):
         raise ValueError("顧客群格式不對。")
@@ -703,7 +720,7 @@ def put_who(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: st
 # ---------------------------------------------------------------------------
 
 
-def _statutory(conn: Conn, brand: dict, text: str) -> dict | None:
+def statutory_flag(conn: Conn, brand: dict, text: str) -> dict | None:
     """The 食安法 flag of one claim sentence (`workbench.validate_claims`, brand regime): the first
     hit's term and 「〈term〉屬〈tier〉（〈basis〉）」; None without a hit (or without a regime)."""
     result = workbench.validate_claims(conn, brand["org_id"], brand["id"], None, text)
@@ -724,7 +741,7 @@ _VERDICTS = {"approved": "ok", "forbidden": "no"}
 
 
 def get_evidence(conn: Conn, brand_id: str, product_id: str) -> dict:
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     brand = _brand(conn, brand_id)
     prefill = _prefill(conn, brand_id, product, STEP_EVIDENCE)
     proof = [
@@ -776,7 +793,7 @@ def get_evidence(conn: Conn, brand_id: str, product_id: str) -> dict:
                 }
             )
     for claim in claims:
-        claim["statutory"] = _statutory(conn, brand, claim["text"])
+        claim["statutory"] = statutory_flag(conn, brand, claim["text"])
         if claim["statutory"] is not None:
             claim["verdict"] = "no"
     return {
@@ -796,7 +813,7 @@ def _check_proof(value, existing_ids: set) -> list:
         fact_key = item.get("fact_key")
         if fact_key not in _PROOF_LABELS:
             raise ValueError("證據要選一種：" + "、".join(_PROOF_LABELS.values()) + "。")
-        text = _text(item.get("text"), _PROOF_LABELS[fact_key], 200)
+        text = _text(item.get("text"), _PROOF_LABELS[fact_key], MAX_PROOF_CHARS)
         fact_id = item.get("id") or None
         if fact_id is not None and fact_id not in existing_ids:
             raise ValueError("找不到要修改的證據，請重新整理後再試。")
@@ -823,7 +840,7 @@ def _check_claims(conn: Conn, brand: dict, value, existing_ids: set) -> list:
         verdict = item.get("verdict")
         if verdict not in ("ok", "no", None):
             raise ValueError("每一句說法請選「可以講」或「不能講」。")
-        if _statutory(conn, brand, text) is not None:
+        if statutory_flag(conn, brand, text) is not None:
             verdict = "no"
         elif verdict is None:
             unset += 1
@@ -836,7 +853,7 @@ def _check_claims(conn: Conn, brand: dict, value, existing_ids: set) -> list:
 def put_evidence(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: str) -> dict:
     """`{proof: [{id?, fact_key, text}], claims: [{id?, text, verdict: ok|no}]}` — full lists.
     Everything is validated before anything is written."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     brand = _brand(conn, brand_id)
     existing_proof = {f["id"]: f for f in _confirmed_facts(conn, brand_id, product_id, "proof")}
     existing_claims = {c["id"]: c for c in _product_claims(conn, brand_id, product_id)}
@@ -902,6 +919,24 @@ def put_evidence(conn: Conn, brand_id: str, product_id: str, body: dict, *, acto
             )
     _advance(conn, brand_id, product, STEP_EVIDENCE, actor=actor)
     return get_evidence(conn, brand_id, product_id)
+
+
+# ---------------------------------------------------------------------------
+# 自訂 input (F43-I06)
+# ---------------------------------------------------------------------------
+
+
+def custom_options(conn: Conn, brand_id: str, product_id: str, block: str) -> list:
+    """The labels a product 「自訂」 block currently has (input of `app/intake/custom.py`, so the
+    proposal does not repeat them): group → the saved groups' 是誰; claim → the saved claims.
+    Other blocks have no option list (pain / proof kinds are the fixed vocabularies). NotFound
+    when the product is not this brand's knowledge product."""
+    knowledge_product(conn, brand_id, product_id)
+    if block == "group":
+        return [g["who"] for g in bi_repo.list_customer_groups(conn, brand_id, product_id)]
+    if block == "claim":
+        return [c["claim_text"] for c in _product_claims(conn, brand_id, product_id)]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -973,7 +1008,7 @@ def _ai_sell_way(product: dict, item: dict, show_close_rate: bool) -> dict | Non
 def get_sell_ways(conn: Conn, brand_id: str, product_id: str) -> dict:
     """The product's active single sell-ways (creation order); none saved yet -> the page read's
     proposals (unsaved, no numbers derived)."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     show = _show_close_rate(_brand(conn, brand_id))
     rows = [
         _sell_way_row(conn, brand_id, product, w, show)
@@ -1029,7 +1064,7 @@ def put_sell_ways(conn: Conn, brand_id: str, product_id: str, body: dict, *, act
     cap_per_sale?, landing_url?, assumptions?}]}` — the full list of this product's single
     sell-ways, raw inputs only (empty list price / cost / cap = derived / break-even; empty landing
     = the product page). A sell-way left out is archived (campaigns may still point at it)."""
-    product = _knowledge_product(conn, brand_id, product_id)
+    product = knowledge_product(conn, brand_id, product_id)
     show = _show_close_rate(_brand(conn, brand_id))
     existing = {w["id"]: w for w in _active_singles(conn, brand_id, product_id)}
     rows = _check_sell_ways(body.get("sell_ways"), existing, show)

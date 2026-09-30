@@ -11,6 +11,8 @@ Routes (all under `/api/intake/brands/{brand_id}`):
     GET|POST /products                                  products page / new product (step 1)
     GET      /products/{p}/onboarding                   step, completed, prefill status
     POST     /products/{p}/onboarding/complete          完成 (step 5 -> done)
+    POST     /products/{p}/onboarding/scan              re-read the product page (F43-I06)
+    POST     /products/{p}/onboarding/custom            「自訂」 product block (F43-I06)
     GET|PUT  /products/{p}/onboarding/what|who|evidence|sell-ways
     POST     /bundles, GET|PUT /bundles/{id}            新增組合 / edit
 
@@ -22,8 +24,10 @@ from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.core.db import Conn
+from app.intake import custom, product_prefill
 from app.intake import product_onboarding as po
 from app.shared import web
 from app.shared.web import JSONResponse, require_actor, require_brand
@@ -101,6 +105,36 @@ def onboarding_complete(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     require_brand(brand_id, actor)
     return _run(lambda: po.complete(_conn(), brand_id, product_id, actor=str(actor.user_id)))
+
+
+@router.post(_STEP + "/scan")
+def onboarding_scan(request: Request, brand_id: str, product_id: str):
+    """Read the product page again (F43-I06) -> the status. 400: finished product / nothing to
+    read; 409: the AI cost cap refused before anything was queued."""
+    require_brand(brand_id, require_actor(request))
+    try:
+        return _run(lambda: product_prefill.start_scan(_conn(), brand_id, product_id))
+    except product_prefill.ScanRefused as exc:
+        return _error(409, str(exc))
+
+
+@router.post(_STEP + "/custom")
+async def onboarding_custom(request: Request, brand_id: str, product_id: str):
+    """「自訂」 product block (F43-I06): `{block, text}` -> one proposal; nothing is saved (the
+    step's PUT saves). 422 = the AI's reply is outside the block's contract."""
+    require_brand(brand_id, require_actor(request))
+    body = await _json_body(request)
+    try:  # the model call is blocking: keep it off the event loop
+        data = await run_in_threadpool(
+            custom.propose, _conn(), brand_id, str(body.get("block") or ""),
+            str(body.get("text") or ""), None, product_id=product_id)
+    except po.NotFound as exc:
+        return _error(404, str(exc))
+    except custom.CustomRefused as exc:
+        return _error(exc.status_code, exc.message)
+    except ValueError:
+        return _error(422, custom.UNREADABLE_MESSAGE)
+    return _envelope(data)
 
 
 # ---- the four steps ----
