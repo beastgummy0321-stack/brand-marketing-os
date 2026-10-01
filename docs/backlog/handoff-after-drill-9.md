@@ -3,8 +3,8 @@
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-f43.md`'s "next" pointer.
 
 ## State
-- F44 (ads carry the sell-way) merged on `feature/ad-sell-way`, integrate green, runtime acceptance passed; waits for the user's
-  side-by-side review to close. Before F44: Drill 9 done: `docs/drills/drill-9/report.md` (B 1.06 → 1.51 on A's window, A 2.25).
+- F44 (ads carry the sell-way) closed 2026-10-01 (user 「通過」), merged to master, not pushed. Next: drill 10 — rerun B against A
+  on the same three periods to measure F44 (offers now reach the ads). Before F44: Drill 9 done: `docs/drills/drill-9/report.md` (B 1.06 → 1.51 on A's window, A 2.25).
 - Nothing running: drill backend and worker stopped. Dev DB keeps the drill-9 org (`beast.drill9@example.com`, brand
   `brd_01M3TWE86JZ1238A9TX3EC9N4S`, campaigns `adc_01M3TXH5Q1WPNN8X5K6D9VW22Z` / `adc_01M3TZYVNCQRTHRZQGR5YB699S` /
   `adc_01M3V2144MNZEJ0VBJ25QMB2A4`) as evidence; the drill clock file still says 2026-10-17 (`scripts.drill.clock set` before reuse).
