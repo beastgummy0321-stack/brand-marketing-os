@@ -22,6 +22,13 @@ _MIGRATION_PATH = (
     / "20260911000001_schedule_brand_coordinate_format_situation.sql"
 )
 
+# F44-I06: seed rows renamed after the six-dimensions migration was applied -- (dimension, key)
+# -> the later schedule migration that renames existing rows to the seed's label. Every row
+# not listed here must still match the six-dimensions migration verbatim.
+_RENAMED_SEEDS = {
+    ("offer", "bundle"): "20261003000001_schedule_bundle_label.sql",
+}
+
 
 class TestScheduleFormatSeed(unittest.TestCase):
     def setUp(self) -> None:
@@ -71,14 +78,28 @@ class TestScheduleFormatSeed(unittest.TestCase):
         self.assertEqual(offer["free_shipping"], "免運")
         # F07-I13 item 12: every (key, label) of every seeded dimension must still appear in the
         # six-dimensions migration verbatim — catches any other seed label quietly reworded.
+        # F44-I06: a row in `_RENAMED_SEEDS` is backed by its rename migration instead, which
+        # must set exactly the seed's label for that dimension and key.
+        migrations = pathlib.Path(__file__).resolve().parents[2] / "supabase" / "migrations"
         six_dims_sql = (
-            pathlib.Path(__file__).resolve().parents[2] / "supabase" / "migrations"
-            / "20260904000002_schedule_brand_coordinate_six_dimensions.sql"
+            migrations / "20260904000002_schedule_brand_coordinate_six_dimensions.sql"
         ).read_text(encoding="utf-8")
+        seeded = set()
         for dimension, rows in _SEED_COORDINATES.items():
             for key, _category, label, _situation in rows:
-                self.assertIn(f"('{key}', '{label}'", six_dims_sql,
-                              f"{dimension}.{key} label drifted from the applied migration")
+                seeded.add((dimension, key))
+                rename = _RENAMED_SEEDS.get((dimension, key))
+                if rename is None:
+                    self.assertIn(f"('{key}', '{label}'", six_dims_sql,
+                                  f"{dimension}.{key} label drifted from the applied migration")
+                    continue
+                rename_sql = "".join((migrations / rename).read_text(encoding="utf-8").split())
+                for clause in (f"SETlabel='{label}'", f"dimension='{dimension}'",
+                               f"key='{key}'"):
+                    self.assertIn(clause, rename_sql,
+                                  f"{dimension}.{key}: {rename} does not rename the row to "
+                                  f"the seed label")
+        self.assertLessEqual(set(_RENAMED_SEEDS), seeded, "rename table lists a row not seeded")
 
     def test_disable_flexible_migration_behaviour(self) -> None:
         """F07-I13 item 11: execute the migration's own SQL text against real rows and check its
