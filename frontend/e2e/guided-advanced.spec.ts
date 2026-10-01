@@ -98,21 +98,32 @@ async function openPerformanceDetails(page: Page) {
 }
 
 async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: string): Promise<string> {
-  // F30-I05: the wizard picks one of the brand's products (manual product, no spend).
+  // F30-I05: the wizard picks one of the brand's products. F43-I04: only a finished sell-way is pickable, so the
+  // product is built through product onboarding (create → 賣法與價格 → 完成; synchronous, no spend).
   const productName = "引導測試新品 500ml";
-  await api(page, headers, "POST", `/api/products/brands/${brandId}`, { name: productName });
+  const intake = `/api/intake/brands/${brandId}/products`;
+  const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: productName });
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
+    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+  });
+  await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
   await page.goto(`/app/brands/${brandId}/ads/new`);
-  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  // F43-I15: 要推什麼 lists the product as a section and its sell-way as the card (「單品 NT$1,580」).
+  const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
+  await expect(shelf.getByText(productName, { exact: true })).toBeVisible();
+  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("開始", { exact: true }).fill(dateOffset(-6));
   await page.getByLabel("結束", { exact: true }).fill(dateOffset(0));
   await page.getByLabel("這個活動最多花").fill("30000");
   await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
   await expect(page.getByRole("heading", { name: "系統這樣理解" })).toBeVisible();
-  await expect(page.getByText("商品", { exact: true })).toBeVisible();
-  await expect(page.getByText("結果", { exact: true })).toBeVisible();
-  await expect(page.getByText("預算上限", { exact: true })).toBeVisible();
-  await expect(page.getByText("期間", { exact: true })).toBeVisible();
+  // The brief's row labels, read inside the page: the shell's sidebar also has a 「商品」 link (F43-I14).
+  const main = page.getByRole("main");
+  await expect(main.getByText("商品", { exact: true })).toBeVisible();
+  await expect(main.getByText("結果", { exact: true })).toBeVisible();
+  await expect(main.getByText("預算上限", { exact: true })).toBeVisible();
+  await expect(main.getByText("期間", { exact: true })).toBeVisible();
   await captureDesktopEvidence(page, "campaign-understood");
   const campaignId = new URL(page.url()).pathname.split("/").pop()!;
   await page.getByRole("button", { name: "產生策略 →" }).click();

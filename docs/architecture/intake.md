@@ -142,3 +142,26 @@ Supersedes rule 6 above and the F38 「truth cards do not propose 證據」 line
 - **Connectors** = `app/intake/connector_catalogue.json` (what each connector reads; Meta live, csv → orders import, the rest seats:
   Google/TikTok, GA4, Search Console, shop platforms, MCP, custom API). Binding a second Meta account adds it (「再接一個帳戶」);
   unbinding stays in 設定 → Meta. The conversion goal saves on a completed brand too.
+
+### F43 (2026-10-01): product onboarding, sell-ways and bundles
+Supersedes rule 1's 「one level only」 / 「not built: bundle auto-arithmetic」 limits; the parent/child 賣法 rows of F05 still read.
+- **Product = knowledge, sell-way = what a campaign sells.** A knowledge product (`product`, `parent_id` NULL, new `page_url`,
+  `onboarding_step` 1–5 while unfinished — such products and their sell-ways are not pickable) carries facts (`core_info` /
+  `mechanism` / `differentiation`), product photos (`official_asset`), 1–3 customer groups (`product_customer_group`: who, 1–2 of the
+  six `pain` keys, quote, when used, source), product proof (`product_fact` `proof` + `fact_key`) and claims (`claim`
+  approved／forbidden; 食安法 hits forced 不能講 via `workbench.validate_claims`). A sell-way is a `product` row with component rows
+  (`product_component`: product × qty; a cross-product bundle has several, `parent_id` NULL) and its own `product_economics`
+  (+ `list_price`, `cap_per_sale`, `landing_url`). Both new tables live in `brand_intelligence`, written only through its facade.
+- **One resolver each**: `knowledge_product_ids(conn, brand, product_id)` (components in order; F05 rows fall back to `parent_id`);
+  `get_product_economics` returns effective values — NULL list price = Σ component single prices, NULL cost = Σ component costs,
+  named in `derived_fields`; `raw=True` for read-then-write callers. Offers from the price itself: list price > price →
+  `bundle` (more than one unit) or `discount`, sentence 「〈name〉優惠價 NT$x（原價 NT$y）」, added to `offer_sources`.
+- **Five steps** (`app/intake/product_onboarding.py`, routes `app/intake/routes_product_api.py`, screens `frontend/src/components/intake/product/`):
+  是什麼 → 誰會買 → 證據與說法 → 賣法與價格 → 完成; routes `/brands/:b/products/new`, `/brands/:b/products/:p/onboarding?step=N`.
+  The product page (`/brands/:b/products`) lists 商品, 組合 and brand-scan suggestions; 經營概況 shows 「你的商品」 on top.
+  Bundles: `/brands/:b/products/bundles/new|:id`; `POST …/bundles/preview` returns the saved-bundle shape without writing (the create
+  path in a rolled-back transaction). Break-even and offers always come from the server.
+- **Product prefill** (`app/intake/product_prefill.py`, task `intake_product_prefill`, job `background.intake_product_prefill`): one
+  call on the product page text + ≤3 product photos, per-entry contract checks, a customer quote must appear in the page text; stored
+  in `intake_product_prefill` (intake-owned) as a proposal. Cost cap = the brand's shared cap (products are usually built after the
+  brand draft is closed). Product 自訂 blocks: difference, group, pain, product_proof, claim (`CustomEscape` takes a `propose`).

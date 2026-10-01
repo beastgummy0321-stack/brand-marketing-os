@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：16 條路由
  * 在 1280 寬時，殼不能橫向溢出視窗——這是 ADR 0051 量過的那件事（固定 1440px 殼在
@@ -22,6 +22,15 @@ import { expect, test } from "@playwright/test";
  * 16 條路由（`App.tsx`）扣掉 `/accept-invite`，共測 15 條。 */
 test.use({ viewport: { width: 1280, height: 800 } });
 
+type ApiHeaders = Record<string, string>;
+
+async function api<T>(page: Page, headers: ApiHeaders, method: string, path: string, data?: unknown): Promise<T> {
+  const response = await page.request.fetch(path, { method, headers, data });
+  const text = await response.text();
+  expect(response.ok(), `${method} ${path} failed: ${response.status()} ${text}`).toBeTruthy();
+  return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
 test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({ page }) => {
   const stamp = Date.now();
   const email = `width-${stamp}@example.com`;
@@ -44,7 +53,11 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto("/app/login");
   await assertNoOverflow("/login");
 
-  // --- 註冊並登入（同 smoke.spec.ts：本機關掉信箱驗證，註冊完當場有 session）-----
+  // --- 註冊並登入（同 smoke.spec.ts：本機關掉信箱驗證，註冊完當場有 session）；註冊後第一個帶身分的
+  // 請求給 API 用的 headers（同 ads-target.spec.ts）-----------------------------------------------
+  const overviewRequest = page.waitForRequest((request) =>
+    request.url().includes("/api/dashboard/overview") && Boolean(request.headers().authorization),
+  );
   await page.getByRole("button", { name: "還沒有帳號？註冊新帳號" }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("密碼").fill(password);
@@ -53,6 +66,10 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   // --- / 跨品牌總覽 -----------------------------------------------------------
   await expect(page.getByRole("link", { name: "新增品牌" }).first()).toBeVisible();
   await assertNoOverflow("/");
+  const raw = (await overviewRequest).headers();
+  const headers: ApiHeaders = Object.fromEntries(
+    [["authorization", raw.authorization], ["x-org-id", raw["x-org-id"]]].filter((e): e is [string, string] => Boolean(e[1])),
+  );
 
   // --- /intake/new：建檔精靈第一步，走陽春路徑（只填名稱，不花錢、不呼叫 AI）-----
   await page.getByRole("link", { name: "新增品牌" }).first().click();
@@ -84,15 +101,31 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/library`);
   await assertNoOverflow("/brands/:brandId/library");
 
-  // --- /brands/:brandId/products ------------------------------------------------
+  // --- /brands/:brandId/products（商品頁，F43-I07）：空品牌只有一個空狀態 -------------------
   await page.goto(`/app/brands/${brandId}/products`);
+  await expect(page.getByText("還沒有商品")).toBeVisible();
+  await assertNoOverflow("/brands/:brandId/products（空）");
+
+  // --- 用商品建檔建一個商品（同 ads-target.spec.ts：建立 → 賣法與價格 → 完成，同步、不花錢），商品頁出現它的卡片；
+  // F43-I04：只有建完的賣法能在建立精靈裡選，所以不再用手動新增產品 -----------------------------------
+  const intake = `/api/intake/brands/${brandId}/products`;
+  const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: `寬度測試產品 ${stamp}` });
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
+    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+  });
+  await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
+  const product = { id: onboarded.data.product_id };
+  await page.reload();
+  await expect(page.getByRole("link", { name: `寬度測試產品 ${stamp}` })).toBeVisible();
   await assertNoOverflow("/brands/:brandId/products");
 
-  // --- /brands/:brandId/products/:productId：手動新增一個產品，不花錢 -------------
-  await page.getByRole("button", { name: "新增產品" }).first().click();
-  await page.getByLabel("產品名稱").fill(`寬度測試產品 ${stamp}`);
-  await page.getByRole("button", { name: "新增這個產品", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/products/prd_`));
+  // --- 新增商品：商品頁的主按鈕 ---------------------------------------------------------------
+  await page.getByRole("link", { name: "＋新增商品" }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/brands/${brandId}/products/new$`));
+  await assertNoOverflow("/brands/:brandId/products/new");
+
+  // --- /brands/:brandId/products/:productId：舊產品詳情頁照舊，靠網址到達 -----------------------
+  await page.goto(`/app/brands/${brandId}/products/${product.id}`);
   await assertNoOverflow("/brands/:brandId/products/:productId");
 
   // --- /brands/:brandId/orders ------------------------------------------------
@@ -111,13 +144,18 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto(`/app/brands/${brandId}/ads/campaigns`);
   await assertNoOverflow("/brands/:brandId/ads/campaigns");
 
-  // --- /brands/:brandId/ads/new：建立精靈 v10（F30-I05）——第一步選商品、結果、預算上限，
+  // --- /brands/:brandId/ads/new：建立活動（F43-I15 瘦身）——第一步選賣法、結果、預算上限，
   // 第二步「系統這樣理解」確認欄位、按「產生策略」才進工作區頁 ----------------------------
   await page.getByRole("link", { name: "建立投放計畫", exact: true }).click();
   await assertNoOverflow("/brands/:brandId/ads/new");
-  await page.getByRole("radio", { name: new RegExp(`寬度測試產品 ${stamp}`) }).click();
+  const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
+  await expect(shelf.getByText(`寬度測試產品 ${stamp}`, { exact: true })).toBeVisible();
+  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("這個活動最多花").fill("30000");
+  await page.getByRole("button", { name: "進階：這期不一樣（平台、受眾、每筆上限、落地頁）", exact: true }).click();
+  await expect(page.getByLabel("每筆上限")).toBeVisible();
+  await assertNoOverflow("/brands/:brandId/ads/new（進階：這期不一樣 打開）");
   await page.getByRole("button", { name: "下一步：系統理解 →", exact: true }).click();
 
   // --- /brands/:brandId/ads/new/:campaignId（系統這樣理解）---------------------------

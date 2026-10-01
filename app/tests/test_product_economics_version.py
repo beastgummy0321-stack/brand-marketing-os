@@ -45,3 +45,56 @@ class ProductEconomicsVersionTest(unittest.TestCase):
         self.assertEqual(rows[0]["effective_to"], today)  # 零長度：[today, today)
         self.assertIsNone(rows[1]["effective_to"])
         self.assertEqual(self._open_count(), 1)
+
+    def test_list_price_and_cap_are_versioned_and_kept(self):
+        """F43-I01: list_price / cap_per_sale travel with each version; a save that does not pass
+        them (an editor from before F43) keeps the stored values."""
+        d1, d2 = date(2026, 9, 1), date(2026, 9, 2)
+        with mock.patch.object(repo.coresettings, "today_for_org", return_value=d1):
+            repo.save_product_economics(self.conn, self.bid, self.pid, selling_price=359,
+                                         currency="TWD", confirmed_by="測試員", actor="測試員",
+                                         list_price=399, cap_per_sale=150)
+        self._save(349, d2)
+        self.assertEqual((repo.economics_at(self.conn, self.bid, self.pid, d1)["list_price"],
+                          repo.economics_at(self.conn, self.bid, self.pid, d2)["list_price"],
+                          repo.economics_at(self.conn, self.bid, self.pid, d2)["cap_per_sale"]),
+                         (399, 399, 150))
+
+    def test_campaign_price_edit_keeps_a_bundle_cost_derived(self):
+        """F43-I01: the campaign target's price edit (`PUT .../target`) merges onto the stored
+        economics (`raw=True`) and writes them back -- a bundle's NULL cost must stay NULL (still
+        derived from its components), never frozen to the effective sum display readers see.
+        Driven over HTTP: the ads repository is private to `app.ads`."""
+        from fastapi.testclient import TestClient
+
+        import app.main as main
+
+        other = repo.create_product(self.conn, self.bid, name="測試濾掛", actor="測試員")["id"]
+        for product_id, name, price, cost in ((self.pid, "單盒", 300, 90),
+                                              (other, "單包", 200, 50)):
+            repo.save_sell_way(self.conn, self.bid, name=name, actor="測試員",
+                               components=[{"product_id": product_id, "qty": 1}],
+                               economics={"selling_price": price, "unit_variable_cost": cost})
+        bundle = repo.save_sell_way(self.conn, self.bid, name="茶點組", actor="測試員",
+                                    components=[{"product_id": self.pid, "qty": 1},
+                                                {"product_id": other, "qty": 2}],
+                                    economics={"selling_price": 599, "shipping_cost": 60})
+        self.assertEqual(bundle["economics"]["unit_variable_cost"], 190)  # 90 + 2 × 50
+        self.conn.commit()
+
+        client = TestClient(main.app)
+        campaigns = f"/api/ads/brands/{self.bid}/campaigns"
+        created = client.post(campaigns, json={
+            "goal_text": "茶點組衝一波", "start_date": "2026-10-01", "end_date": "2026-10-31",
+            "product_ids": [bundle["id"]], "objective": "購買", "budget": 3000,
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        resp = client.put(f"{campaigns}/{created.json()['campaign']['id']}/target",
+                          json={"price": 579, "expected_revision": 0})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        raw = repo.get_product_economics(self.conn, self.bid, bundle["id"], raw=True)
+        self.assertEqual((raw["selling_price"], raw["unit_variable_cost"], raw["list_price"],
+                          raw["shipping_cost"]), (579, None, None, 60))
+        effective = repo.get_product_economics(self.conn, self.bid, bundle["id"])
+        self.assertEqual((effective["unit_variable_cost"], effective["list_price"]), (190, 700))
+        self.assertEqual(effective["derived_fields"], ["list_price", "unit_variable_cost"])

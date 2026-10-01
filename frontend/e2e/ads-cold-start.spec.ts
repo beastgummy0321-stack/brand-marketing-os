@@ -74,8 +74,14 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await page.getByRole("button", { name: "下一步 →" }).click();
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
   const brandId = new URL(page.url()).pathname.split("/")[3];
+  // F43-I04: only a finished sell-way is pickable — product onboarding (create → 賣法與價格 → 完成; synchronous, no spend).
   const productName = `冷啟動商品 ${stamp}`;
-  await api(page, headers, "POST", `/api/products/brands/${brandId}`, { name: productName });
+  const intake = `/api/intake/brands/${brandId}/products`;
+  const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: productName });
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
+    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+  });
+  await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
 
   // --- 建立精靈：商品、購買、預算上限；進階裡上傳一張自己的圖（上傳後自動勾選）--------------------------------
   await page.goto(`/app/brands/${brandId}/ads/new`);
@@ -87,7 +93,10 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await expect(page.getByRole("checkbox", { name: `選取 ${filename}`, exact: true })).toBeChecked();
   await expect(page.getByText("原檔已保存", { exact: true })).toBeVisible();
   runPreviewJob(brandId);
-  await page.getByRole("radio", { name: new RegExp(productName) }).click();
+  // F43-I15: 要推什麼 lists the product as a section and its sell-way as the card (「單品 NT$1,580」).
+  const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
+  await expect(shelf.getByText(productName, { exact: true })).toBeVisible();
+  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("這個活動最多花").fill("30000");
   const creation = responseFor(page, "/campaigns");

@@ -157,8 +157,9 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   name: string;
   goal_text: string | null;
   objective: string;
-  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`). */
-  cap: CapView;
+  /** F28-I01: the one cost-per-result cap (`app/ads/targets.py::resolve`); F43-I04: `knowledge_product_id` is the
+   * sell-way's first knowledge product (null without a product) — 「去填商品成本」 opens its 賣法與價格 step. */
+  cap: CapView & { knowledge_product_id?: string | null };
   start_date: string | null;
   end_date: string | null;
   status: CampaignStatus;
@@ -258,8 +259,10 @@ export interface PatchCampaignInput {
   end_date?: string;
   constraints_json?: Record<string, unknown>;
   product_ids?: string[];
-  /** 受眾方向；空字串清掉（`adsWizardApi.patchAudienceHint` 同一個鍵）。 */
+  /** 受眾方向（舊活動的自由文字）；空字串清掉。 */
   audience_hint?: string | null;
+  /** F43-I18：這期投的顧客群（這個賣法的群）；`[]`＝全部群。換賣法而沒帶這個鍵時，後端重設為新賣法的全部群。 */
+  customer_group_ids?: string[];
   /** F40-I04 (2b)：活動層落地頁 `context_json.landing_url`；`null`／空字串清掉。 */
   landing_url?: string | null;
 }

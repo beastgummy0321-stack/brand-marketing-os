@@ -49,6 +49,7 @@ from app.schedule import tree as tree_mod
 from app.workbench import repository as workbench_repo
 
 from .identity_test_helpers import mint_hs256
+from .org_clock import org_today
 
 ACTOR = "測試員"
 
@@ -1053,7 +1054,8 @@ class BindTreeApiContractTest(_ScheduleApiTestBase):
 
     def setUp(self):
         super().setUp()
-        self.today = datetime.now(UTC).date()
+        # The org's own today (the clock the spend window uses), not the UTC date (org_clock.py).
+        self.today = org_today(web.conn, coredb.DEV_ORG_ID)
         self._external_account_ids: dict = {}
         self.account_id = self._connect_account(coredb.DEV_ORG_ID, "測試廣告帳號")
         meta_repo.bind(web.conn, coredb.DEV_ORG_ID, self.brand["id"], self.account_id)

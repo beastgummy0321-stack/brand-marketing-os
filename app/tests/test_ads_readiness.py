@@ -3,7 +3,8 @@ brand rows of the onboarding completion screen in order (identity, evidence, med
 offering), each with its own fix link; identity/media are yellow until set, evidence is green
 with one confirmed proof or store policy (the cooling-off exemption does not count); the ad
 account row carries the conversion goal and turns red without one (the old `goal` row is merged);
-a brand with no product is red 「還沒有商品」 with 「建第一個商品」 to the products page; an
+a brand with no finished sell-way is red 「還沒有商品」 with 「建第一個商品」 to product onboarding
+(F43-I04: `/products/new`; a bare or 建到一半 product does not count); an
 economics row carrying `assumptions_json` turns `offering` yellow (never red); the overall state
 follows the worst row; `notes[0]` always names the confirmed fact count, including 0.
 """
@@ -75,12 +76,15 @@ class ReadinessTestBase(unittest.TestCase):
         web.conn.commit()
 
     def _add_product(self, name: str = "測試商品", **economics) -> str:
+        """A knowledge product; with `economics`, also its one sell-way (F43-I04: the offering
+        row is judged on finished sell-ways, the ones the new-campaign wizard offers)."""
         product_id = bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)["id"]
         if economics:
-            bi_repo.save_product_economics(
-                web.conn, self.brand_id, product_id, currency="TWD", confirmed_by=ACTOR,
-                actor=ACTOR, **economics,
+            bi_repo.save_sell_way(
+                web.conn, self.brand_id, name="單品", actor=ACTOR, economics=economics,
+                components=[{"product_id": product_id, "qty": 1}],
             )
+        web.conn.commit()
         return product_id
 
     def _fill_other_rows(self):
@@ -127,7 +131,8 @@ class BrandNewBrandTest(ReadinessTestBase):
         self.assertEqual(by_key["evidence"]["fix_href"], f"{base}/intake?step=4")
         self.assertEqual(by_key["media"]["fix_href"], f"{base}/intake?step=5")
         self.assertEqual(by_key["channel"]["fix_href"], f"{base}/intake?step=6")
-        self.assertEqual(by_key["offering"]["fix_href"], f"{base}/products")
+        # No finished sell-way yet: product onboarding (F43-I04).
+        self.assertEqual(by_key["offering"]["fix_href"], f"{base}/products/new")
 
     def test_red_primary_jumps_to_the_first_worst_rows_own_link(self):
         result = self._result()
@@ -200,13 +205,26 @@ class OfferingTest(ReadinessTestBase):
         self.assertEqual(item["state"], "red")
         self.assertEqual(item["reason"], "還沒有商品")
         self.assertEqual(item["fix_label"], "建第一個商品")
-        self.assertEqual(item["fix_href"], f"/brands/{self.brand_id}/products")
+        self.assertEqual(item["fix_href"], f"/brands/{self.brand_id}/products/new")
 
-    def test_product_without_numbers_stays_red(self):
-        self._add_product()
+    def test_product_without_a_finished_sell_way_is_still_no_product(self):
+        # F43-I04: a knowledge product with no sell-way, or a 建到一半 product's sell-way, is
+        # nothing a campaign can pick -> the same red row, opening product onboarding.
+        self._add_product("只有商品")
+        half = self._real_product("建到一半")
+        bi_repo.set_product_onboarding_step(web.conn, self.brand_id, half, 3, actor=ACTOR)
+        web.conn.commit()
+        item = self._item("offering")
+        self.assertEqual((item["state"], item["reason"], item["fix_label"]),
+                         ("red", "還沒有商品", "建第一個商品"))
+        self.assertEqual(item["fix_href"], f"/brands/{self.brand_id}/products/new")
+
+    def test_sell_way_without_numbers_stays_red(self):
+        self._add_product(selling_price=500)  # a price, no cost -> no break-even
         item = self._item("offering")
         self.assertEqual(item["state"], "red")
         self.assertIn("數字", item["reason"])
+        self.assertEqual(item["fix_href"], f"/brands/{self.brand_id}/products")
 
     def test_real_numbers_make_offering_green(self):
         self._real_product()

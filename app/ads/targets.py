@@ -51,12 +51,14 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
     `context_json.product_ids` when given.
 
     Returns the cap view (feature F28 "Cap storage"): `{value, basis: "own"|"break_even"|None,
-    own_value, break_even, price, cost, product_id, result_kind, result_label, missing,
-    revision}`. `break_even`/`price` are read off product economics even when an own cap is set
-    (the ruler's 打平 mark, ROAS 參考 = price ÷ cap). `cost` (F29 Contract D) is the unit cost
-    including shipping from the SAME economics row `break_even` came from, so the screen's
-    「售價 X − 成本含運 Y」 subtracts to the break-even it shows; `None` whenever `break_even` is
-    (no purchase result kind, no product, no cost). `missing` only ever names `"product"`,
+    own_value, break_even, price, cost, product_id, knowledge_product_id, result_kind,
+    result_label, missing, revision}` (`knowledge_product_id`, F43-I04: the first knowledge
+    product of `product_id`, `None` without one). `break_even`/`price` are read off product
+    economics even when an own cap is set (the ruler's 打平 mark, ROAS 參考 = price ÷ cap).
+    `cost` (F29 Contract D) is the unit cost including shipping from the SAME economics row
+    `break_even` came from, so the screen's 「售價 X − 成本含運 Y」 subtracts to the break-even
+    it shows; `None` whenever `break_even` is (no purchase result kind, no product, no cost).
+    `missing` only ever names `"product"`,
     `"product_cost"` or `"result_kind"`. `org_id` stays in the signature (every caller passes
     the tenant) although no read here needs it since the trailing-30 fallback was removed."""
     result_kind = effective_result_kind(campaign)
@@ -92,9 +94,16 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
         value, basis = break_even, "break_even"
     else:
         value, basis = None, None
+    # F43-I04: the knowledge product behind the sell-way (first of `knowledge_product_ids`), so
+    # the 「去填商品成本」 links can open that product's 賣法與價格 step.
+    knowledge_product_id = (
+        bi_repo.knowledge_product_ids(conn, brand_id, used_product_id)[0]
+        if used_product_id else None
+    )
     return {
         "value": value, "basis": basis, "own_value": own_value, "break_even": break_even,
-        "price": price, "cost": cost, "product_id": used_product_id, "result_kind": result_kind,
+        "price": price, "cost": cost, "product_id": used_product_id,
+        "knowledge_product_id": knowledge_product_id, "result_kind": result_kind,
         "result_label": result_kinds.label(result_kind),
         # An own cap is a complete answer: nothing is missing for grading any more.
         "missing": [] if own_value is not None else missing,

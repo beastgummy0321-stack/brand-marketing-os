@@ -78,6 +78,15 @@ class OrgIsolationAllTablesTest(unittest.TestCase):
         self.assertEqual(nullable, [], f"tables with nullable org_id: {nullable}")
         self.assertEqual(no_fk, [], f"tables whose org_id has no FK to organisation(id): {no_fk}")
 
+    def test_f43_product_tables_are_enumerated(self):
+        """F43-I01: the three product-onboarding tables are seen by the gate above (they carry a
+        NOT NULL org_id with its FK like every other tenant table)."""
+        tables = set(self._tables())
+        for t in ("product_component", "product_customer_group", "intake_product_prefill"):
+            self.assertIn(t, tables)
+            self.assertEqual(self._org_id_column(t)["is_nullable"], "NO", t)
+            self.assertTrue(self._fk_to_organisation(t), t)
+
     def test_exempt_set_is_exactly_the_two_documented_tables(self):
         """票 03-1 硬性規則：例外清單只准這兩張、不准悄悄加寬。清單本身要跟現況對得上——
         兩張都真的存在，且清單沒有第三張。"""

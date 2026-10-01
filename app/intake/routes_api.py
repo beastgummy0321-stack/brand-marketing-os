@@ -6,7 +6,8 @@ F42-I14 removed the retired onboarding stage from this file: the old impression 
 (`budget*`, `skip-remaining-ai`), the handoff prompt (`handoff/*`), paste-back (`paste/*`), the
 pending list (`review/*`) and the research reports (`research-reports*`). The seven-step routes
 live in `routes_onboarding_api.py`, personas in `routes_t2_api.py`, step 6 in
-`routes_tools_api.py`; all three are included at the end of this file.
+`routes_tools_api.py`, product onboarding (F43-I05) in `routes_product_api.py`; all four are
+included at the end of this file.
 
 Entry point: this file's `router` (`app/intake/__init__.register` includes it). Depended on by
 `app/intake/__init__.py` only (the background task).
@@ -166,9 +167,11 @@ def background_intake_scan(org_id: str, brand_id: str, prefill: bool = True) -> 
 
 
 from app.intake.routes_onboarding_api import router as onboarding_router  # noqa: E402
+from app.intake.routes_product_api import router as product_router  # noqa: E402
 from app.intake.routes_t2_api import router as t2_router  # noqa: E402
 from app.intake.routes_tools_api import router as tools_router  # noqa: E402
 
 router.include_router(t2_router)
 router.include_router(tools_router)
 router.include_router(onboarding_router)
+router.include_router(product_router)

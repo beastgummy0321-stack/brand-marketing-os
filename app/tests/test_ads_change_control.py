@@ -17,6 +17,7 @@ from app.ads import external_sync
 from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db
+from app.core import settings as coresettings
 
 
 class ChangeControlTest(unittest.TestCase):
@@ -49,7 +50,7 @@ class ChangeControlTest(unittest.TestCase):
             },
         )
         self.conn.commit()
-        self.month = db.now_utc().strftime("%Y-%m")
+        self.month = coresettings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
 
     def entity(self, native_id, native_kind, **extra):
         return external.upsert_entity(
@@ -817,7 +818,8 @@ class ChangeControlTest(unittest.TestCase):
         )
         with patch("app.ads.month_budget.preflight", return_value={}):
             self.approve(first)
-        later = db.now_utc().date().replace(day=1) + timedelta(days=40)
+        org_today = coresettings.today_for_org(self.conn, org_id=self.org)
+        later = org_today.replace(day=1) + timedelta(days=40)
         with patch.object(data.settings, "today_for_org", return_value=later):
             current = data.get(self.conn, self.org, self.brand, self.campaign, first["id"])
             self.assertEqual(current["items"][0]["verification_state"], "stale")
@@ -1206,7 +1208,7 @@ class ChangeControlPlatformUrlTest(unittest.TestCase):
             },
         )
         self.conn.commit()
-        self.month = db.now_utc().strftime("%Y-%m")
+        self.month = coresettings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
 
     def _create(self, ad_id, operation_id):
         return service.create(

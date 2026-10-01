@@ -11,12 +11,12 @@ import type { CampaignCreateExtras } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
-import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
+import { createCampaignFromPicks, getWizardOptions, type CampaignPicks, type WizardProduct } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
 import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
 import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount } from "./patterns";
-import { ObjectiveIcon, ProductPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
+import { SellWayPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
 
 /** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
 const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
@@ -27,82 +27,63 @@ const message = (err: unknown, fallback: string) => (err instanceof Error && err
 const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
 const md = (d: string) => d.slice(5).replace("-", "/");
 const SELECT = "h-[42px] w-full rounded-lg border border-input bg-card px-3 text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:bg-muted";
-
-/** The 「這次怎麼投」 values as a campaign holds them (`constraints_json.platform`, `context_json.audience_hint`,
- * the user's own cap, `context_json.landing_url`); empty text／null where the campaign has none. */
-function howOf(c: CampaignDetail) {
-  const ctx = c.context_json ?? {};
-  const cons = (c.constraints_json ?? {}) as { platform?: unknown };
-  return {
-    platform: typeof cons.platform === "string" ? cons.platform : null,
-    audienceHint: ctx.audience_hint ?? "",
-    cap: c.cap?.own_value ?? null,
-    landingUrl: ctx.landing_url ?? "",
-  };
-}
+/** `app/ads/brief.py::_draft_name`: only the base is shortened (30 characters + 「…」), the date tail never. */
+const NAME_BASE_LIMIT = 30;
+const nameBase = (name: string) => { const t = name.trim(); return t.length > NAME_BASE_LIMIT ? `${t.slice(0, NAME_BASE_LIMIT)}…` : t; };
 
 /** The picks a created campaign already holds, for going back to step 1 without creating a second campaign.
- * Dates the system filled in are not shown as the user's (they stay empty here). */
+ * Dates the system filled in are not shown as the user's (they stay empty here); the fold's audience／cap／landing
+ * are the user's only when `field_sources` says so (otherwise they follow the sell-way, `undefined`). */
 function picksOf(c: CampaignDetail) {
   const ctx = c.context_json ?? {};
-  const cons = (c.constraints_json ?? {}) as { budget?: unknown };
-  const userDates = ctx.field_sources?.dates === "user";
+  const cons = (c.constraints_json ?? {}) as { budget?: unknown; platform?: unknown };
+  const sources = ctx.field_sources ?? {};
+  const groups = ctx.customer_group_ids ?? [];
   return {
     productId: ctx.product_ids?.[0] ?? null,
     objective: c.objective || null,
-    startDate: userDates ? c.start_date ?? "" : "",
-    endDate: userDates ? c.end_date ?? "" : "",
+    startDate: sources.dates === "user" ? c.start_date ?? "" : "",
+    endDate: sources.dates === "user" ? c.end_date ?? "" : "",
     budget: typeof cons.budget === "number" && Number.isFinite(cons.budget) && cons.budget > 0 ? cons.budget : null,
-    ...howOf(c),
+    platform: typeof cons.platform === "string" ? cons.platform : null,
+    groupPick: sources.audience === "user" && groups.length === 1 ? groups[0] : "",
+    cap: sources.cap === "user" ? c.cap?.own_value ?? undefined : undefined,
+    landing: sources.landing_url === "user" ? ctx.landing_url ?? "" : undefined,
   };
 }
 
-/** What a new campaign starts from (drill-7 #10, F40-I04's copy rule): the brand's latest campaign that went past
- * draft. Its four 「這次怎麼投」 values pre-fill the form (the cap only when it was the user's own, like the server);
- * product, objective, budget and the period follow when the draft holds nothing. `breakEven` belongs to
- * `capProductId` (the hint's 打平線 is only known while that product stays picked). */
-interface Previous {
-  id: string; name: string;
-  productId: string | null; objective: string | null;
-  startDate: string | null; endDate: string | null; budget: number | null;
-  platform: string | null; audienceHint: string; cap: number | null; landingUrl: string;
-  breakEven: number | null; capProductId: string | null;
-}
-
-async function readPrevious(brandId: string): Promise<Previous | null> {
+/** F40's period default (kept by F43): the day after the brand's latest non-draft campaign ends, same length. */
+async function readPreviousPeriod(brandId: string) {
   const cards = await listCampaigns(brandId);
   const latest = cards.filter((c) => c.status !== "draft").sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  if (!latest) return null;
-  const c = await getCampaign(brandId, latest.id);
-  const picks = picksOf(c);
-  const how = howOf(c);
-  // The campaign-level URL, else the first group that recorded one in the 追蹤 (manual handoff) tab — the same
-  // order the server copies in (`brief._previous_landing_url`).
-  const groupUrl = c.manual_handoff?.groups.map((g) => g.values.landing_url ?? "").find(Boolean) ?? "";
-  return {
-    id: c.id, name: c.name, productId: picks.productId, objective: picks.objective,
-    startDate: c.start_date, endDate: c.end_date, budget: picks.budget,
-    platform: how.platform, audienceHint: how.audienceHint, cap: how.cap, landingUrl: how.landingUrl || groupUrl,
-    breakEven: c.cap?.break_even ?? null, capProductId: c.cap?.product_id ?? null,
-  };
-}
-
-/** The period right after the previous one, same length (prototype: 「日期接在上一期後面」). */
-function nextPeriod(start: string | null, end: string | null): { start: string; end: string } | null {
-  if (!start || !end) return null;
-  const s = Date.parse(`${start}T00:00:00Z`);
-  const e = Date.parse(`${end}T00:00:00Z`);
+  if (!latest?.start_date || !latest.end_date) return null;
+  const s = Date.parse(`${latest.start_date}T00:00:00Z`);
+  const e = Date.parse(`${latest.end_date}T00:00:00Z`);
   if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) return null;
   const day = 86_400_000;
   const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
-  return { start: iso(e + day), end: iso(e + day + (e - s)) };
+  return { start: iso(e + day), end: iso(e + day + (e - s)), prevStart: latest.start_date, prevEnd: latest.end_date };
 }
 
-/** New-campaign wizard v10 step 1 (F30-I05, prototype `newStep1()`): pick one product and one objective from the
- * catalog, the dates and 「這個活動最多花」, then `createCampaignFromPicks` understands them (one synchronous model
- * call) while step 2's wait line shows, and lands on step 2 (`ConfirmBriefPage`). `?created=<id>` is the campaign
- * this tab already created: its picks reload, a change is a `PATCH`, never a second campaign. The optional sentence
- * and the brand's own images／videos sit folded under 進階. */
+/** Sell-ways in `#/new` order: one section per knowledge product (single sell-ways), then 組合 (bundles). */
+function sections(ways: WizardProduct[]) {
+  const out: { key: string; title: string; ways: WizardProduct[] }[] = [];
+  for (const way of ways) {
+    const key = way.kind === "bundle" ? "bundle" : way.knowledge_product_id;
+    const section = out.find((s) => s.key === key);
+    if (section) section.ways.push(way);
+    else out.push({ key, title: way.kind === "bundle" ? "組合" : way.knowledge_product_name, ways: [way] });
+  }
+  return [...out.filter((s) => s.key !== "bundle"), ...out.filter((s) => s.key === "bundle")];
+}
+
+/** New-campaign step 1, slimmed by F43 (prototype f41-onboarding `#/new`): pick what to sell (a sell-way), the
+ * result (the brand's conversion goal preselected), the dates and 「這個活動最多花」; platform／audience／cap／landing
+ * come from the brand and the sell-way and only change in 「進階：這期不一樣」, which sends a value only when it differs
+ * from that default. `createCampaignFromPicks` understands the picks (one synchronous model call) while step 2's
+ * wait line shows. `?sell_way=<id>` (from 商品建檔 ⑤) preselects a sell-way; `?created=<id>` is the campaign this
+ * tab already created: its picks reload, a change is a `PATCH`, never a second campaign. The optional sentence and
+ * the brand's own images／videos stay folded under 「進階：一句話建立、自帶圖片／影片」. */
 export function NewCampaignPage({ brandId }: { brandId: string }) {
   const { scope } = useWorkspace();
   const draftKey = `campaign-draft:${scope}:${brandId}`;
@@ -114,6 +95,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const homeHref = `/brands/${brandId}/ads`;
   const [search, setSearch] = useSearchParams();
   const createdId = search.get("created");
+  const sellWayParam = search.get("sell_way");
   const life = useRef(new AbortController());
   useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
   const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
@@ -126,14 +108,13 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const [endDate, setEndDate] = useState(initial.endDate);
   const [budget, setBudget] = useState(initial.budget);
   const [goalText, setGoalText] = useState(initial.goalText);
+  /** 「進階：這期不一樣」: `null`／`""`／`undefined` = not changed (the brand's and the sell-way's value shows and
+   * nothing is sent). A cleared cap is `null` and a cleared landing `""` — shown empty, still not sent. */
   const [platform, setPlatform] = useState<string | null>(null);
-  const [audienceHint, setAudienceHint] = useState("");
-  const [cap, setCap] = useState<number | null>(null);
-  const [landingUrl, setLandingUrl] = useState("");
-  const [previous, setPrevious] = useState<Previous | null>(null);
-  /** The bar 「照上一期「〈name〉」帶入，可改」 plus which of period／budget it filled; `null` = nothing was pre-filled
-   * (no previous campaign, or 「清空重填」). */
-  const [copied, setCopied] = useState<{ period: boolean; budget: boolean } | null>(null);
+  const [groupPick, setGroupPick] = useState("");
+  const [cap, setCap] = useState<number | null | undefined>(undefined);
+  const [landing, setLanding] = useState<string | undefined>(undefined);
+  const [previous, setPrevious] = useState<{ start: string; end: string } | null>(null);
   const [uploads, setUploads] = useState<AssetUpload[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [attached, setAttached] = useState<Set<string>>(new Set());
@@ -158,32 +139,36 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
         const p = picksOf(c);
         setCreated(c); setProductId(p.productId); setObjective(p.objective);
         setStartDate(p.startDate); setEndDate(p.endDate); setBudget(p.budget);
-        setPlatform(p.platform); setAudienceHint(p.audienceHint); setCap(p.cap); setLandingUrl(p.landingUrl);
+        setPlatform(p.platform); setGroupPick(p.groupPick); setCap(p.cap); setLanding(p.landing);
       })
       .catch((e) => { if (!cancelled) setRestoreFailed(message(e, "讀取已建立的活動失敗。")); })
       .finally(() => { if (!cancelled) setRestoring(false); });
     return () => { cancelled = true; };
   }, [brandId, createdId, created?.id, restoreKey]);
-  // Pre-fill from the previous campaign (F40-I12). A campaign this tab already created restores its own values
-  // instead; a read that fails or finds nothing leaves the form as it opened.
+  // The period default (F40, kept): only when the draft holds no dates; a read that fails leaves them empty.
   useEffect(() => {
-    if (createdId) return;
+    if (createdId || initial.startDate || initial.endDate) return;
     let cancelled = false;
-    readPrevious(brandId)
-      .then((prev) => {
-        if (cancelled || !prev) return;
-        setPrevious(prev);
-        setPlatform(prev.platform); setAudienceHint(prev.audienceHint); setCap(prev.cap); setLandingUrl(prev.landingUrl);
-        setProductId((now) => now ?? prev.productId);
-        setObjective((now) => now ?? prev.objective);
-        setBudget((now) => now ?? prev.budget);
-        const period = !initial.startDate && !initial.endDate ? nextPeriod(prev.startDate, prev.endDate) : null;
-        if (period) { setStartDate(period.start); setEndDate(period.end); }
-        setCopied({ period: period !== null, budget: initial.budget === null && prev.budget !== null });
+    readPreviousPeriod(brandId)
+      .then((period) => {
+        if (cancelled || !period) return;
+        setPrevious({ start: period.prevStart, end: period.prevEnd });
+        setStartDate((now) => now || period.start); setEndDate((now) => now || period.end);
       })
-      .catch(() => { /* Nothing to copy from: the form opens as before. */ });
+      .catch(() => { /* No period to follow: the dates stay empty. */ });
     return () => { cancelled = true; };
   }, [brandId, createdId, initial]);
+  // Once the options are in: `?sell_way=` picks that sell-way (when it is pickable), and an empty result takes the
+  // brand's conversion goal (`default_objective`; null = no preselection). A created campaign keeps its own picks.
+  const data = options.data;
+  const preset = useRef(false);
+  useEffect(() => {
+    if (!data || preset.current || createdId) return;
+    preset.current = true;
+    if (sellWayParam && data.products.some((p) => p.id === sellWayParam)) setProductId(sellWayParam);
+    const goalKey = data.default_objective;
+    if (goalKey && data.objectives.some((o) => o.key === goalKey && o.available)) setObjective((now) => now ?? goalKey);
+  }, [data, createdId, sellWayParam]);
   useEffect(() => {
     saveDraft(draftKey, { productId, objective, startDate, endDate, budget, goalText });
   }, [draftKey, productId, objective, startDate, endDate, budget, goalText]);
@@ -195,41 +180,45 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     return () => clearInterval(timer);
   }, [phase]);
 
-  const data = options.data;
-  const product = data?.products.find((p) => p.id === productId) ?? null;
+  const way = data?.products.find((p) => p.id === productId) ?? null;
   const goal = data?.objectives.find((o) => o.key === objective && o.available) ?? null;
   const oneDate = !!startDate !== !!endDate;
   const backwards = !!startDate && !!endDate && endDate < startDate;
   const budgetOk = budget !== null && budget > 0;
-  const hint = !product || !goal ? "選好商品和結果"
+  const hint = !way || !goal ? "選好要推什麼和想要的結果"
     : !budgetOk ? "填這個活動最多花"
     : oneDate ? "開始和結束要一起填"
     : backwards ? "結束要在開始之後" : "";
   const blocked = !!hint || busy || uploadBusy || restoring || (!!createdId && !created);
-  /** The 打平線 is only known for the previous campaign's product while it stays picked. */
-  const breakEven = previous && previous.capProductId !== null && previous.capProductId === productId ? previous.breakEven : null;
-  const capHint = cap === null
-    ? (breakEven !== null ? `打平線 ${fmt(breakEven)}；上限不超過它才有賺` : "")
-    : [
-      previous && cap === previous.cap ? `上一期 ${fmt(cap)}` : null,
-      breakEven !== null ? (cap >= breakEven ? `比打平線 ${fmt(breakEven)} 高 ${fmt(cap - breakEven)}` : `比打平線 ${fmt(breakEven)} 低 ${fmt(breakEven - cap)}`) : null,
-    ].filter(Boolean).join("・");
-  const periodNote = copied && previous ? [
-    copied.period && previous.startDate && previous.endDate ? `日期接在上一期後面（上一期 ${md(previous.startDate)}～${md(previous.endDate)}）` : null,
-    copied.budget ? "金額照上一期" : null,
-  ].filter(Boolean).join("；") : "";
-  /** The four values as the create sends them; an empty one is left out so the server copies it (F40-I04). */
-  const extras: CampaignCreateExtras = {
-    ...(platform ? { platform } : {}),
-    ...(audienceHint.trim() ? { audience_hint: audienceHint.trim() } : {}),
-    ...(cap !== null && cap > 0 ? { cap } : {}),
-    ...(landingUrl.trim() ? { landing_url: landingUrl.trim() } : {}),
+
+  // The fold's defaults and what differs from them.
+  const defaultPlatform = channels.data?.find((c) => c.connected)?.key ?? null;
+  const platformShown = platform ?? defaultPlatform;
+  const platformChanged = platform !== null && platform !== defaultPlatform;
+  const groups = way?.customer_groups ?? [];
+  /** One group of several; anything else (all groups, or a sell-way with one group) is 「都投」, sent as nothing. */
+  const groupShown = groups.length > 1 && groups.some((g) => g.id === groupPick) ? groupPick : "";
+  const capShown = cap === undefined ? way?.cap_per_sale ?? null : cap;
+  const capChanged = cap != null && cap > 0 && cap !== way?.cap_per_sale;
+  const landingShown = landing ?? way?.landing_url ?? "";
+  const landingChanged = landing !== undefined && !!landing.trim() && landing.trim() !== (way?.landing_url ?? "");
+  const breakEven = way?.break_even ?? null;
+  const capHint = capShown === null
+    ? (way && way.cap_per_sale === null ? "這個賣法還算不出打平；可以自己填" : "")
+    : breakEven === null ? ""
+      : capShown === breakEven ? `等於打平 ${fmt(breakEven)}`
+      : capShown > breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(capShown - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - capShown)}`;
+  /** Only the changed fold values go out; the server takes the rest from the brand and the sell-way (F43-I04). */
+  const extras: CampaignCreateExtras & Pick<CampaignPicks, "customer_group_ids"> = {
+    ...(platformChanged && platform ? { platform } : {}),
+    ...(groupShown ? { customer_group_ids: [groupShown] } : {}),
+    ...(capChanged && cap != null ? { cap } : {}),
+    ...(landingChanged && landing ? { landing_url: landing.trim() } : {}),
   };
-  /** 「清空重填」: every field empty, the bar gone, 下一步 disabled until the required ones are set again. */
-  function clearAll() {
-    setCopied(null);
-    setProductId(null); setObjective(null); setStartDate(""); setEndDate(""); setBudget(null);
-    setPlatform(null); setAudienceHint(""); setCap(null); setLandingUrl("");
+  /** Another sell-way brings its own audience, cap and landing: the fold's changes to those go back to its values. */
+  function pickWay(id: string) {
+    if (id === productId) return;
+    setProductId(id); setGroupPick(""); setCap(undefined); setLanding(undefined);
   }
 
   /** Attaches the picked uploads not yet attached; returns the failures (the campaign is never re-created). */
@@ -251,8 +240,37 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     navigate(`/brands/${brandId}/ads/new/${campaignId}`);
   }
 
+  /** A created campaign's `PATCH` (and the cap through the target writer): only what differs from the campaign. */
+  async function update(campaign: CampaignDetail, picked: WizardProduct, objectiveKey: string, budgetValue: number) {
+    const now = picksOf(campaign);
+    const ctx = campaign.context_json ?? {};
+    const patch: PatchCampaignInput = {};
+    const wayChanged = picked.id !== now.productId;
+    if (wayChanged) patch.product_ids = [picked.id];
+    if (objectiveKey !== campaign.objective) patch.objective = objectiveKey;
+    if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, { start_date: startDate, end_date: endDate });
+    const platformPatch = platform !== null && platform !== now.platform;
+    if (budgetValue !== now.budget || platformPatch) {
+      patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget: budgetValue, ...(platformPatch ? { platform } : {}) };
+    }
+    // A sell-way change without groups resets them on the server; otherwise send the pick when it changed.
+    if (wayChanged ? !!groupShown : groupShown !== now.groupPick) patch.customer_group_ids = groupShown ? [groupShown] : [];
+    // Landing and cap are written when the user changed them here, or the sell-way changed (its own values then);
+    // an untouched field keeps whatever the campaign holds.
+    const landingNow = landing?.trim() ? landing.trim() : wayChanged ? picked.landing_url ?? "" : null;
+    if (landingNow !== null && landingNow !== (ctx.landing_url ?? "")) patch.landing_url = landingNow || null;
+    let out = Object.keys(patch).length > 0 ? await patchCampaign(brandId, campaign.id, patch) : campaign;
+    // The cap is not a campaign field: it goes through the target writer (revision-guarded), like step 2.
+    const capNow = cap != null && cap > 0 ? cap : wayChanged ? picked.cap_per_sale : null;
+    if (capNow !== null && capNow !== out.cap.own_value) {
+      await putTarget(brandId, out.id, { basis: "own", value: capNow, expected_revision: out.cap.revision });
+      out = await getCampaign(brandId, out.id);
+    }
+    return out;
+  }
+
   async function submit(request: CreateRequest = { kind: "picks" }) {
-    if (request.kind === "picks" && (blocked || !product || !goal || budget === null)) return;
+    if (request.kind === "picks" && (blocked || !way || !goal || budget === null)) return;
     if (request.kind === "sentence" && (!request.text.trim() || busy || uploadBusy || restoring || !!created || !!createdId || oneDate || backwards)) return;
     if (uploads.some((u) => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     const signal = life.current.signal;
@@ -262,40 +280,25 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     if (request.kind === "sentence") setGoalText(request.text);
     try {
       let campaign = created;
-      if (campaign && product && goal && budget !== null) {
-        const now = picksOf(campaign);
-        const patch: PatchCampaignInput = {};
-        if (product.id !== now.productId) patch.product_ids = [product.id];
-        if (goal.key !== campaign.objective) patch.objective = goal.key;
-        if (startDate && endDate && (startDate !== campaign.start_date || endDate !== campaign.end_date)) Object.assign(patch, dates);
-        if (budget !== now.budget || platform !== now.platform) {
-          patch.constraints_json = { ...(campaign.constraints_json ?? {}), budget, ...(platform !== now.platform ? { platform } : {}) };
-        }
-        if (audienceHint.trim() !== now.audienceHint) patch.audience_hint = audienceHint.trim();
-        if (landingUrl.trim() !== now.landingUrl) patch.landing_url = landingUrl.trim() || null;
-        if (Object.keys(patch).length > 0) campaign = await patchCampaign(brandId, campaign.id, patch);
-        // The cap is not a campaign field: it goes through the target writer (revision-guarded), like step 2.
-        if (cap !== null && cap !== now.cap) {
-          await putTarget(brandId, campaign.id, { basis: "own", value: cap, expected_revision: campaign.cap.revision });
-          campaign = await getCampaign(brandId, campaign.id);
-        }
+      if (campaign && way && goal && budget !== null) {
+        campaign = await update(campaign, way, goal.key, budget);
       } else if (request.kind === "sentence") {
         setPhase("understanding");
         campaign = await createCampaign(brandId, {
           goal_text: request.text.trim(), ...dates,
-          ...(budgetOk ? { constraints: { budget } } : {}), ...extras,
+          ...(budgetOk ? { constraints: { budget } } : {}), ...(platformChanged && platform ? { platform } : {}),
         });
-      } else if (product && goal && budget !== null) {
+      } else if (way && goal && budget !== null) {
         setPhase("understanding");
         campaign = await createCampaignFromPicks(brandId, {
-          product_ids: [product.id], objective: goal.key, budget, ...dates,
+          product_ids: [way.id], objective: goal.key, budget, ...dates,
           ...(goalText.trim() ? { goal_text: goalText.trim() } : {}), ...extras,
         });
       }
       if (signal.aborted || !campaign) return;
       setCreated(campaign);
       const id = campaign.id;
-      if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); return next; }, { replace: true });
+      if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); next.delete("sell_way"); return next; }, { replace: true });
       const errors = await attachAll(id, signal);
       if (signal.aborted) return;
       if (errors.length) { setPhase("pick"); setError(`活動已建立，未完成素材仍可重試，不會重建活動。${errors.join("；")}`); setBusy(false); return; }
@@ -310,6 +313,9 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
 
   const picking = phase === "pick";
   const locked = busy || restoring;
+  const nameLine = way && (startDate && endDate && !backwards
+    ? <>活動名稱會叫「<b>{nameBase(way.name)}・{md(startDate)}～{md(endDate)}</b>」</>
+    : <>活動名稱會叫「<b>{nameBase(way.name)}</b>」加上期間（沒填日期就從今天起算 30 天）</>);
   // The pick view stays mounted (hidden) while the create runs, so the upload library keeps its selection for
   // an attach retry.
   return (
@@ -329,55 +335,50 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     )}>
       {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit(lastRequest)} />}
       <div className={picking ? "contents" : "hidden"}>
-      <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選商品、目標，還有這次怎麼投" />
+      <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選要推什麼、推多久、花多少；其他照品牌和商品建檔帶入" />
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
-      {copied && previous && (
-        <div data-slot="prefill-bar" className="flex flex-wrap items-center gap-3 rounded-[10px] bg-accent px-3.5 py-2.5">
-          <Chip tone="accent">照上一期「{previous.name}」帶入，可改</Chip>
-          <span className="text-sm text-muted-foreground">每一格都能直接改；沒改的就照上一期</span>
-          <Button variant="link" size="sm" className="ml-auto px-0" disabled={locked} onClick={clearAll}>清空重填</Button>
-        </div>
-      )}
       {options.status === "error" ? (
-        <ReadFailed what={`商品和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
+        <ReadFailed what={`賣法和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
       ) : !data ? (
         <>
           <Skeleton className="h-[170px] w-full rounded-xl" />
-          <Skeleton className="h-[226px] w-full rounded-xl" />
+          <Skeleton className="h-[140px] w-full rounded-xl" />
         </>
       ) : (
         <>
           <section className="surface" aria-labelledby="new-product">
-            <div className="surface-header"><h2 id="new-product">商品</h2></div>
+            <div className="surface-header"><h2 id="new-product">要推什麼</h2></div>
             <div className="surface-body">
               {data.products.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  還沒有可以推的商品。<Link className="text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/products`}>去新增商品</Link>
+                  還沒有可以推的賣法：商品建完、定好賣法與價格，就能拿來投放。{" "}
+                  <Link className="text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/products/new`}>建第一個商品</Link>
                 </p>
               ) : (
-                <PickGroup label="商品" value={productId} onChange={(v) => !locked && setProductId(v)}>
-                  {data.products.map((p) => <ProductPickCard key={p.id} product={p} />)}
+                <PickGroup label="要推什麼" value={productId} onChange={(v) => !locked && pickWay(v)} className="flex flex-wrap gap-3">
+                  {sections(data.products).map((s, i) => (
+                    <div key={s.key} role="presentation" className="contents">
+                      <p data-slot="pick-section" className={`basis-full text-xs font-semibold text-muted-foreground ${i > 0 ? "mt-1" : ""}`}>{s.title}</p>
+                      {s.ways.map((w) => <SellWayPickCard key={w.id} way={w} />)}
+                    </div>
+                  ))}
                 </PickGroup>
               )}
             </div>
           </section>
           <section className="surface" aria-labelledby="new-goal">
-            <div className="surface-header"><h2 id="new-goal">想要的結果</h2></div>
+            <div className="surface-header">
+              <h2 id="new-goal">想要的結果</h2>
+              {data.default_objective && <span className="text-xs text-muted-foreground">預設＝品牌的成效目標</span>}
+            </div>
             <div className="surface-body">
-              <PickGroup label="目標" value={objective} onChange={(v) => !locked && setObjective(v)} className="grid-cols-2 xl:grid-cols-4">
-                {data.objectives.filter((o) => o.available).map((o) => (
-                  <PickCard key={o.key} value={o.key} title={o.label} note={o.description} icon={<ObjectiveIcon objective={o.key} />} />
-                ))}
+              <PickGroup label="想要的結果" value={objective} onChange={(v) => !locked && setObjective(v)} className="flex flex-wrap gap-3 [&>*]:w-[170px]">
+                {data.objectives.filter((o) => o.available).map((o) => <PickCard key={o.key} value={o.key} title={o.label} note={o.description} />)}
               </PickGroup>
               {data.objectives.some((o) => !o.available) && (
                 <ul aria-label="尚未開放的目標" className="mt-3 flex flex-wrap gap-2">
                   {data.objectives.filter((o) => !o.available).map((o) => (
-                    <li key={o.key}>
-                      <Chip tone="neutral" aria-disabled="true" className="gap-1.5 py-1.5 opacity-80">
-                        <span aria-hidden="true" className="[&_svg]:size-3.5"><ObjectiveIcon objective={o.key} /></span>
-                        {o.label}・尚未開放
-                      </Chip>
-                    </li>
+                    <li key={o.key}><Chip tone="neutral" aria-disabled="true" className="opacity-80">{o.label}・尚未開放</Chip></li>
                   ))}
                 </ul>
               )}
@@ -385,32 +386,6 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           </section>
         </>
       )}
-      <section className="surface" aria-labelledby="new-how">
-        <div className="surface-header">
-          <h2 id="new-how">這次怎麼投</h2>
-          <span className="text-sm text-muted-foreground">以前每期重填；現在照上一期帶入</span>
-        </div>
-        <div className="surface-body grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Field id="new-platform" label="平台">
-            <select id="new-platform" className={SELECT} value={platform ?? ""} disabled={locked} onChange={(e) => setPlatform(e.target.value || null)}>
-              <option value="" disabled>請選擇</option>
-              {(channels.data ?? (platform ? [{ key: platform, label: platform }] : [])).map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-          </Field>
-          <Field id="new-audience" label="受眾方向">
-            <Input id="new-audience" value={audienceHint} maxLength={200} disabled={locked} onChange={(e) => setAudienceHint(e.target.value)}
-              placeholder="例如：新客為主、探索一組" className="h-[42px] rounded-lg" />
-          </Field>
-          <Field id="new-sale-cap" label="每賣一筆上限" hint={capHint}>
-            <MoneyInput id="new-sale-cap" value={cap} onChange={setCap} disabled={locked} placeholder="例如 450" onEnter={() => void submit()} />
-          </Field>
-          <Field id="new-landing" label="落地頁" tag={<Chip tone="accent">從「追蹤」分頁搬來</Chip>}>
-            <Input id="new-landing" type="url" value={landingUrl} disabled={locked} onChange={(e) => setLandingUrl(e.target.value)}
-              placeholder="https://" className="h-[42px] rounded-lg" />
-          </Field>
-        </div>
-        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；平台先不能改，其他照常`} onRetry={channels.reload} /></div>}
-      </section>
       <section className="surface" aria-labelledby="new-period">
         <div className="surface-header"><h2 id="new-period">期間與預算上限</h2></div>
         <div className="surface-body flex flex-wrap items-end gap-4">
@@ -424,8 +399,38 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             <MoneyInput id="new-cap" value={budget} onChange={setBudget} disabled={locked} onEnter={() => void submit()} />
           </Field>
         </div>
-        {periodNote && <p className="surface-body pt-0 text-xs text-muted-foreground">{periodNote}</p>}
+        {(nameLine || previous) && (
+          <div className="surface-body flex flex-col gap-1 pt-0">
+            {nameLine && <p data-slot="name-line" className="text-sm">{nameLine}</p>}
+            {previous && startDate && <p className="text-xs text-muted-foreground">日期接在上一期後面（上一期 {md(previous.start)}～{md(previous.end)}）</p>}
+          </div>
+        )}
       </section>
+      <Disclosure label="進階：這期不一樣（平台、受眾、每筆上限、落地頁）">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field id="new-platform" label="平台" tag={<Source changed={platformChanged}>{defaultPlatform ? "來自品牌：已接上的帳戶" : "品牌還沒接上帳戶"}</Source>}>
+            <select id="new-platform" className={SELECT} value={platformShown ?? ""} disabled={locked || !channels.data} onChange={(e) => setPlatform(e.target.value || null)}>
+              {!platformShown && <option value="" disabled>請選擇</option>}
+              {(channels.data ?? []).map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </Field>
+          <Field id="new-audience" label="受眾" tag={way && <Source changed={!!groupShown}>{groups.length ? `來自商品：${groups.length} 群顧客` : "這個商品還沒有顧客群"}</Source>}>
+            <select id="new-audience" className={SELECT} value={groupShown} disabled={locked || groups.length <= 1} onChange={(e) => setGroupPick(e.target.value)}>
+              <option value="">{!way ? "先選要推什麼" : groups.length ? `${groups.length} 群都投（${groups.map((g) => g.who).join("、")}）` : "還沒有顧客群"}</option>
+              {groups.length > 1 && groups.map((g) => <option key={g.id} value={g.id}>只投：{g.who}</option>)}
+            </select>
+          </Field>
+          <Field id="new-sale-cap" label="每筆上限" hint={capHint} tag={way && <Source changed={capChanged}>{`來自賣法「${way.display_name}」`}</Source>}>
+            <MoneyInput id="new-sale-cap" value={capShown} onChange={setCap} disabled={locked || !way} placeholder={way ? "例如 450" : "先選要推什麼"} onEnter={() => void submit()} />
+          </Field>
+          <Field id="new-landing" label="落地頁" hint={landing !== undefined && !landing.trim() && way?.landing_url ? "留空＝用賣法的落地頁" : undefined}
+            tag={way && <Source changed={landingChanged}>{`來自賣法「${way.display_name}」`}</Source>}>
+            <Input id="new-landing" type="url" value={landingShown} disabled={locked || !way} onChange={(e) => setLanding(e.target.value)}
+              placeholder="https://" className="h-[42px] rounded-lg" />
+          </Field>
+        </div>
+        {channels.status === "error" && <div className="pt-3"><ReadFailed what={`平台清單讀不到（${channels.error}）；平台先照品牌已接上的帳戶，其他照常`} onRetry={channels.reload} /></div>}
+      </Disclosure>
       <Disclosure label="進階：一句話建立、自帶圖片／影片">
         <div className="flex flex-col gap-4">
           <Field id="new-goal-text" label="你這次想做到什麼？">
@@ -459,8 +464,13 @@ function Shell({ homeHref, bar, children }: { homeHref: string; bar: ReactNode; 
   );
 }
 
+/** The fold's source label beside a field (prototype `.src`): where the value comes from, or 「你改的」 once changed. */
+function Source({ changed, children }: { changed: boolean; children: ReactNode }) {
+  return <span data-slot="field-source" className="text-[11.5px] text-muted-foreground">{changed ? "你改的" : children}</span>;
+}
+
 /** A labelled control; `tag` sits beside the label (outside it, so the label text stays the accessible name),
- * `hint` is the small line under the control (the cap's 打平線 comparison). */
+ * `hint` is the small line under the control (the cap's 打平 comparison). */
 function Field({ id, label, tag, hint, children }: { id: string; label: string; tag?: ReactNode; hint?: string; children: ReactNode }) {
   return (
     <div>

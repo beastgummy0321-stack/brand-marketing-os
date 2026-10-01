@@ -779,23 +779,77 @@ class ProductsSectionSellWaysTest(StrategyTestBase):
         self.assertIn("隨身包 沒有價格資料", text)
         self.assertEqual(len(basis), 1)
 
-
-class BudgetUsesFirstSellWayForMotherProductTest(StrategyTestBase):
-    def test_campaign_on_mother_product_computes_from_first_sell_way(self):
-        mother = bi_repo.create_product(web.conn, self.brand_id, name="薑黃錠", actor=ACTOR)
-        first = bi_repo.create_product(
-            web.conn, self.brand_id, name="薑黃錠 · 單瓶", actor=ACTOR, parent_id=mother["id"])
-        bi_repo.save_product_economics(
-            web.conn, self.brand_id, first["id"], actor=ACTOR,
-            selling_price=1200, currency="TWD", confirmed_by=ACTOR,
-            unit_variable_cost=200, shipping_cost=50,
+    def test_bundle_lists_every_component_products_facts_and_one_price_line(self):
+        """F43-I02: a bundle's knowledge is its components' (`knowledge_product_ids`)."""
+        fish_oil = bi_repo.create_product(web.conn, self.brand_id, name="魚油", actor=ACTOR)
+        for product, value in ((self.mother, "薑黃素 95%"), (fish_oil, "rTG 型態")):
+            bi_repo.create_product_fact(
+                web.conn, self.brand_id, product["id"], actor=ACTOR, fact_type="core_info",
+                label="成分", value=value, status="confirmed", confirmed_by=ACTOR,
+            )
+        bundle = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="保養雙入組", actor=ACTOR,
+            components=[{"product_id": self.mother["id"], "qty": 1},
+                        {"product_id": fish_oil["id"], "qty": 1}],
+            economics={"selling_price": 1800, "unit_variable_cost": 400, "shipping_cost": 60},
         )
 
-        economics, product_id = budget._economics_for(
-            web.conn, self.brand_id, [mother["id"]])
+        text, basis = strategy._products_section(
+            web.conn, self.org_id, self.brand_id, [bundle["id"]])
 
-        self.assertIsNotNone(economics)
-        self.assertEqual(product_id, first["id"])
+        self.assertIn("- 薑黃錠｜事實：成分：薑黃素 95%", text)
+        self.assertIn("- 魚油｜事實：成分：rTG 型態", text)
+        self.assertEqual(text.count("賣法："), 1)
+        self.assertIn("保養雙入組 NT$1800", text)
+        self.assertEqual([row["product_id"] for row in basis], [bundle["id"]])
+
+
+class CustomerGroupsInStrategyPromptTest(StrategyTestBase):
+    """F43-I02: 【這個賣法的顧客】 sits right after 【商品】 and its group ids reach
+    `basis.knowledge_item_ids`; a product without groups says so."""
+
+    def _prompt(self) -> tuple[str, dict]:
+        self.campaign = self._create_campaign()
+        provider = _fake(_VALID_REPLY)
+        strategy.PROVIDER = provider
+        detail = self._generate()
+        return provider.calls[0]["messages"][0]["content"], detail
+
+    def test_two_groups_reach_the_prompt_after_the_products_and_the_basis(self):
+        groups = bi_repo.save_customer_groups(web.conn, self.brand_id, self.product["id"], [
+            {"who": "下班後夜跑的上班族", "pain_keys": ["uncertainty"],
+             "quote": "晚上跑步車子看不到我", "when_used": "下班後在河濱夜跑"},
+            {"who": "帶小孩散步的爸媽", "pain_keys": ["effort", "cost"],
+             "quote": "反光條一洗就掉", "when_used": "晚餐後推車散步"},
+        ], actor=ACTOR)
+
+        prompt, detail = self._prompt()
+
+        self.assertIn(
+            "【這個賣法的顧客】\n"
+            "第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）"
+            "｜顧客會說：晚上跑步車子看不到我｜什麼時候用：下班後在河濱夜跑\n"
+            "第 2 群：帶小孩散步的爸媽｜煩惱：太麻煩（pain=effort）、太貴（pain=cost）"
+            "｜顧客會說：反光條一洗就掉｜什麼時候用：晚餐後推車散步",
+            prompt,
+        )
+        products_at = prompt.rindex("【商品】")
+        customers_at = prompt.rindex("【這個賣法的顧客】")
+        learnings_at = prompt.rindex("【過去的學習】")
+        self.assertLess(products_at, customers_at)
+        self.assertLess(customers_at, learnings_at)
+        knowledge_item_ids = detail["budget_basis_json"]["basis"]["knowledge_item_ids"]
+        for group in groups:
+            self.assertIn(group["id"], knowledge_item_ids)
+
+    def test_product_without_groups_says_so(self):
+        prompt, _ = self._prompt()
+        self.assertIn("【這個賣法的顧客】（這個商品還沒有建顧客群）", prompt)
+
+
+# F43-I04: `BudgetUsesFirstSellWayForMotherProductTest` (the parent -> first-sell-way fallback) was
+# deleted with the fallback -- a campaign always carries a sell-way id; see
+# `test_ads_budget_sell_way.py`.
 
 
 class ScriptedReplyValidatesTest(StrategyTestBase):
@@ -1021,6 +1075,10 @@ class DepartmentNamesCoordinatesByLabelTest(unittest.TestCase):
     def test_the_department_file_forbids_coordinate_keys_in_owner_sentences(self):
         text = strategy.DEPARTMENT_PATH.read_text(encoding="utf-8")
         self.assertIn("座標一律用中文名稱，不寫英文代碼", text)
+
+    def test_the_department_file_names_the_group_each_role_targets(self):
+        text = strategy.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertIn("每個角色的 `rationale` 要點名這個角色打的是哪一群", text)
 
 
 class BudgetCapSelectionTest(StrategyTestBase):

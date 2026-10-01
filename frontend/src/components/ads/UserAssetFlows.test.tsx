@@ -46,13 +46,13 @@ beforeEach(() => {
 describe("durable upload UI", () => {
   it("keeps the upload library mounted while creating and retries attach without creating twice", async () => {
     vi.mocked(listUserAssets).mockResolvedValue({ ...library(), uploads: [upload()] });
-    vi.mocked(getWizardOptions).mockResolvedValue({ products: [{ id: "prd_1", name: "商品一", price: 990, currency: "TWD", thumbnail_url: null, has_cost: true }], objectives: [{ key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} }] });
+    vi.mocked(getWizardOptions).mockResolvedValue({ products: [{ id: "prd_1", name: "商品一 · 單盒", display_name: "單盒", kind: "single", knowledge_product_id: "kp_1", knowledge_product_name: "商品一", price: 990, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 600, cap_per_sale: 600, offer_labels: [], customer_groups: [], landing_url: null }], objectives: [{ key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} }], default_objective: null });
     const create = deferred<CampaignDetail & { parsed: boolean }>(); vi.mocked(createCampaignFromPicks).mockReturnValue(create.promise);
     vi.mocked(attachUpload).mockRejectedValueOnce(new Error("附件暫時失敗")).mockResolvedValue({ placement: placement() });
     render(<MemoryRouter><NewCampaignPage brandId="b1" /></MemoryRouter>); const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await user.click(await screen.findByRole("button", { name: /進階：一句話建立/ }));
     await user.click(await screen.findByLabelText("選取 u1.png"));
-    await user.click(screen.getByRole("radio", { name: /商品一/ })); await user.click(screen.getByRole("radio", { name: /購買/ }));
+    await user.click(screen.getByRole("radio", { name: /單盒/ })); await user.click(screen.getByRole("radio", { name: /購買/ }));
     await user.type(screen.getByLabelText("這個活動最多花"), "30000");
     await user.click(screen.getByRole("button", { name: /下一步：系統理解/ }));
     expect(screen.getByText("自帶圖片／影片")).toBeTruthy(); expect(screen.getByLabelText("選取 u1.png")).toHaveProperty("disabled", true);

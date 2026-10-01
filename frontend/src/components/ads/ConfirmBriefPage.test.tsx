@@ -12,25 +12,30 @@ import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
 import { generateStrategy, getCampaign, patchCampaign } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget, type CapView } from "@/lib/adsTriageApi";
-import { getWizardOptions, patchAudienceHint, type WizardOptions } from "@/lib/adsWizardApi";
+import { getWizardOptions, type WizardOptions } from "@/lib/adsWizardApi";
 import { ConfirmBriefPage } from "./ConfirmBriefPage";
 
 vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), patchCampaign: vi.fn(), generateStrategy: vi.fn() }));
 vi.mock("@/lib/adsLaunchApi", async (original) => ({ ...await original<object>(), fetchChannels: vi.fn() }));
 vi.mock("@/lib/adsTriageApi", async (original) => ({ ...await original<object>(), putTarget: vi.fn() }));
-vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), patchAudienceHint: vi.fn() }));
+vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn() }));
 
 const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)";
+const GROUPS = [{ id: "grp_1", who: "加班提神的上班族" }, { id: "grp_2", who: "考前衝刺的學生" }];
 const options: WizardOptions = {
   products: [
-    { id: "prd_1", name: LONG, price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false },
-    { id: "prd_2", name: "Beast Gummy咖啡因機能軟糖・試用包", price: 100, currency: "TWD", thumbnail_url: null, has_cost: true },
+    { id: "prd_1", name: LONG, display_name: LONG, kind: "bundle", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
+      price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false, break_even: null, cap_per_sale: null, offer_labels: ["組合價"],
+      customer_groups: GROUPS, landing_url: "https://beastgummy.tw/shop" },
+    { id: "prd_2", name: "Beast Gummy咖啡因機能軟糖・試用包", display_name: "試用包", kind: "single", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
+      price: 100, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 40, cap_per_sale: 40, offer_labels: [], customer_groups: [], landing_url: null },
   ],
   objectives: [
     { key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} },
     { key: "名單", label: "名單", description: "看每筆名單成本", available: true, platforms: {} },
     { key: "互動", label: "互動", description: "看每次互動成本", available: false, platforms: {} },
   ],
+  default_objective: "購買",
 };
 
 function sources(overrides: Partial<CampaignFieldSources> = {}): CampaignFieldSources {
@@ -80,7 +85,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
   it("shows the six understood fields and the optional cap chip with their values; 主打／素材 are not shown before the strategy", async () => {
     renderPage();
     expect(await screen.findByText(LONG)).toBeTruthy();
-    for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾方向", "每賣一筆最多花"]) expect(screen.getByText(label)).toBeTruthy();
+    for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾", "每賣一筆最多花"]) expect(screen.getByText(label)).toBeTruthy();
     expect(within(field("objective")).getByText("購買")).toBeTruthy();
     expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
     expect(within(field("budget")).getByText("NT$30,000")).toBeTruthy();
@@ -144,22 +149,46 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     expect(within(field("objective")).getByRole("combobox")).toBeTruthy();
   });
 
-  it("confirms a guessed audience through the audience PATCH; an owned unchanged field just closes", async () => {
-    vi.mocked(patchAudienceHint).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_1"], audience_hint: "通勤族", field_sources: sources({ audience: "user" }) } }));
+  it("an old campaign without customer groups still reads its free-text audience", async () => {
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("audience")).getByText("25–40 歲上班族")).toBeTruthy();
+  });
+
+  it("the audience row names the picked customer groups (F43-I15) and edits them with the same select; an owned unchanged field just closes", async () => {
+    const withGroups = (ids: string[], source: "sell_way" | "user") => campaign({ context_json: { product_ids: ["prd_1"], customer_group_ids: ids, field_sources: sources({ audience: source }) } });
+    vi.mocked(getCampaign).mockResolvedValue(withGroups(["grp_1", "grp_2"], "sell_way"));
+    vi.mocked(patchCampaign).mockResolvedValueOnce(withGroups(["grp_2"], "user")).mockResolvedValueOnce(withGroups(["grp_1", "grp_2"], "sell_way"));
     const user = userEvent.setup();
     renderPage();
     await screen.findByText(LONG);
-    await user.click(screen.getByRole("button", { name: "改受眾方向" }));
-    const input = within(field("audience")).getByRole("textbox");
-    await user.clear(input);
-    await user.type(input, "通勤族{Enter}");
-    expect(patchAudienceHint).toHaveBeenCalledWith("brd_1", "cmp_1", "通勤族");
-    expect(await within(field("audience")).findByText("通勤族")).toBeTruthy();
+    expect(await within(field("audience")).findByText("2 群都投（加班提神的上班族、考前衝刺的學生）")).toBeTruthy();
     expect(within(field("audience")).queryByText("猜的，請確認")).toBeNull();
+    expect(screen.queryByText("25–40 歲上班族")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "改受眾" }));
+    const select = within(field("audience")).getByRole("combobox");
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["2 群都投", "只投：加班提神的上班族", "只投：考前衝刺的學生"]);
+    await user.selectOptions(select, "grp_2");
+    await user.click(within(field("audience")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { customer_group_ids: ["grp_2"] });
+    expect(await within(field("audience")).findByText("考前衝刺的學生")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "改受眾" }));
+    await user.selectOptions(within(field("audience")).getByRole("combobox"), "all");
+    await user.click(within(field("audience")).getByRole("button", { name: "完成" }));
+    expect(patchCampaign).toHaveBeenLastCalledWith("brd_1", "cmp_1", { customer_group_ids: [] });
+    expect(await within(field("audience")).findByText(/2 群都投/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "改期間" }));
     await user.click(within(field("dates")).getByRole("button", { name: "完成" }));
-    expect(patchCampaign).not.toHaveBeenCalled();
+    expect(patchCampaign).toHaveBeenCalledTimes(2);
     expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
+  });
+
+  it("a sell-way with fewer than two customer groups has no audience choice", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_2"], customer_group_ids: [], field_sources: sources({ audience: "system" }) } }));
+    renderPage();
+    await screen.findByText("Beast Gummy咖啡因機能軟糖・試用包");
+    expect(screen.queryByRole("button", { name: "改受眾" })).toBeNull();
+    expect(within(field("audience")).getByText("未設定")).toBeTruthy();
   });
 
   it("saves a new cap as a number in the campaign's constraints", async () => {
@@ -213,7 +242,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     renderPage();
     await screen.findByText(LONG);
     expect(screen.getByRole("link", { name: "← 上一步" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
-    expect(screen.getByRole("link", { name: "回到選商品與目標" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
+    expect(screen.getByRole("link", { name: "回到建立活動" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
     await user.click(screen.getByRole("button", { name: "進階" }));
     expect(screen.getByRole("link", { name: "先處理自帶素材與手動交接" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
   });
@@ -330,7 +359,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
   });
 });
 
-/** F40-I12 (drill-7 #10): the campaign-level landing URL sits in the main block, tagged 「從「追蹤」分頁搬來」, and
+/** F40-I12 (drill-7 #10): the campaign-level landing URL sits in the main block, tagged with its source (F43-I15), and
  * edits go through the campaign PATCH's `landing_url` (F40-I04 2b); the 追蹤 tab keeps its per-group values. */
 describe("ConfirmBriefPage landing URL (F40-I12)", () => {
   const URL = "https://beastgummy.tw/shop";
@@ -341,7 +370,7 @@ describe("ConfirmBriefPage landing URL (F40-I12)", () => {
     const view = renderPage();
     await screen.findByText(LONG);
     expect(within(field("landing_url")).getByText("落地頁")).toBeTruthy();
-    expect(within(field("landing_url")).getByText("從「追蹤」分頁搬來")).toBeTruthy();
+    expect(within(field("landing_url")).getByText("照上一期")).toBeTruthy();
     expect(within(field("landing_url")).getByText(URL)).toBeTruthy();
     expect(within(field("landing_url")).queryByText("猜的，請確認")).toBeNull();
     expect(screen.getByText("有 1 項是猜的")).toBeTruthy(); // the audience only; the landing URL is never counted
@@ -351,6 +380,20 @@ describe("ConfirmBriefPage landing URL (F40-I12)", () => {
     await screen.findByText(LONG);
     expect(within(field("landing_url")).getByText("還沒填（選填）")).toBeTruthy();
     expect(within(field("landing_url")).queryByText("猜的，請確認")).toBeNull();
+    expect(within(field("landing_url")).queryByText("照上一期")).toBeNull();
+  });
+
+  it("names the sell-way's landing 「來自賣法」 and the user's own 「你填的」 (F43-I15)", async () => {
+    const tagged = (source: "sell_way" | "user") => campaign({ context_json: { product_ids: ["prd_1"], landing_url: URL, field_sources: sources({ landing_url: source }) } });
+    vi.mocked(getCampaign).mockResolvedValue(tagged("sell_way"));
+    const view = renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("landing_url")).getByText("來自賣法")).toBeTruthy();
+    view.unmount();
+    vi.mocked(getCampaign).mockResolvedValue(tagged("user"));
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("landing_url")).getByText("你填的")).toBeTruthy();
   });
 
   it("an edit PATCHes landing_url and shows the saved value; blank clears with null; an unchanged value just closes", async () => {
@@ -366,7 +409,6 @@ describe("ConfirmBriefPage landing URL (F40-I12)", () => {
     await user.type(input, "https://beastgummy.tw/new{Enter}");
     expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { landing_url: "https://beastgummy.tw/new" });
     expect(await within(field("landing_url")).findByText("https://beastgummy.tw/new")).toBeTruthy();
-    expect(patchAudienceHint).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "改落地頁" }));
     await user.click(within(field("landing_url")).getByRole("button", { name: "完成" }));
     expect(patchCampaign).toHaveBeenCalledTimes(1);

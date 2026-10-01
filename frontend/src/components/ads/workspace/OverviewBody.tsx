@@ -92,7 +92,8 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
     : !draft.budget_set ? { label: "去選預算", target: "strategy" as StepTarget }
     : approved ? { label: "繼續：到平台完成", target: publish }
     : { label: "確認上架清單", target: publish };
-  const productHref = c.cap.product_id ? `/brands/${brandId}/products/${c.cap.product_id}?tab=economics-view` : `/brands/${brandId}/products`;
+  // F43-I16: cost lives on the knowledge product's 賣法與價格 step (onboarding step 4), not the old detail tab.
+  const productHref = c.cap.knowledge_product_id ? `/brands/${brandId}/products/${c.cap.knowledge_product_id}/onboarding?step=4` : `/brands/${brandId}/products`;
 
   return (
     <div className="flex flex-col gap-4">

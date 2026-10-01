@@ -10,10 +10,10 @@ Sources, in screen order:
   state `never`; a platform without a reader is one `platform` row in state `unsupported`
   (listed last).
 - `orders` through the orders facade (`app/orders/repository.py`), `product_costs` through the
-  products facade (the wizard's own product list, `wizard_options.options`, so "has a cost" means
-  exactly what the wizard means). Orders coverage ends at the later of the latest order date and
-  the day before the latest import (org timezone), so an imported day with no orders is `ok`
-  (F31-I07); the wait page reads this same source.
+  products facade (the wizard's own list of finished sell-ways, `wizard_options.options`, so "has
+  a cost" means exactly what the wizard means). Orders coverage ends at the later of the latest
+  order date and the day before the latest import (org timezone), so an imported day with no
+  orders is `ok` (F31-I07); the wait page reads this same source.
 
 An account's days come from pull coverage, never from spend rows (a day read with no spend is
 `ok`). Coverage is the union of the account's `monthly:*` reads in `ads_external_sync_job`
@@ -318,13 +318,15 @@ def _orders(conn, org_id, brand_id, span):
 
 
 def _product_costs(conn, org_id, brand_id):
+    """F43-I04: judged on the finished sell-ways the wizard offers (`wizard_options.options`);
+    none -> 「還沒有商品」 opening product onboarding, the same link as the readiness row."""
     products = wizard_options.options(conn, org_id, brand_id)["products"]
     href = f"/brands/{brand_id}/products"
     if not products:
         return _source("product_costs", "product_costs", None, "商品成本", "never", "還沒有商品",
-                       action={"label": "去建立商品", "href": href})
+                       action={"label": "去建立商品", "href": f"{href}/new"})
     costless = [p["name"] for p in products if not p["has_cost"]]
-    note = f"{len(products)} 個商品，{len(products) - len(costless)} 個有成本"
+    note = f"{len(products)} 個賣法，{len(products) - len(costless)} 個有成本"
     if not costless:
         return _source("product_costs", "product_costs", None, "商品成本", "ok", note)
     shown = "、".join(costless[:3]) + (f" 等 {len(costless)} 個" if len(costless) > 3 else "")

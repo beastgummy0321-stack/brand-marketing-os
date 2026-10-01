@@ -18,6 +18,7 @@ from app.ads import (
     budget,
     calendar_tw,
     coordinate_learning,
+    customer_groups,
     judgment,
     launch_settings,
     learning,
@@ -95,38 +96,29 @@ def _products_section(
     （跟 `app/ads/brief.py::_products_context` 同一條規則）。
 
     一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：知識掛母產品、金額掛賣法。這裡先按
-    `bi_repo.knowledge_product_id()` 分組，一個母產品一個事實區塊＋一行賣法價格清單；
-    `basis` 仍然一個賣法一筆，畫面的「查看策略依據」對得起來。"""
+    `bi_repo.knowledge_product_ids()` 分組（F43：組合有好幾個商品，每個商品各一個事實區塊，
+    同一個上限），一組商品一段事實＋一行賣法價格清單；`basis` 仍然一個賣法一筆，畫面的
+    「查看策略依據」對得起來。"""
     if not product_ids:
         return "【商品】（這個 Campaign 沒有指定商品）", []
     today = coresettings.today_for_org(conn, org_id=org_id)
     fact_cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
 
-    groups: dict[str, list[str]] = {}
+    groups: dict[tuple[str, ...], list[str]] = {}
     for product_id in product_ids:
         product = bi_repo.get_product(conn, brand_id, product_id)
         if product is None:
             continue  # 存的 id 對不到現存商品——不編一個不存在的商品進 prompt
-        mother_id = bi_repo.knowledge_product_id(conn, brand_id, product_id)
-        groups.setdefault(mother_id, []).append(product_id)
+        knowledge_ids = tuple(bi_repo.knowledge_product_ids(conn, brand_id, product_id))
+        groups.setdefault(knowledge_ids, []).append(product_id)
 
     lines: list[str] = []
     basis: list[dict] = []
-    for mother_id, sell_way_ids in groups.items():
-        mother = bi_repo.get_product(conn, brand_id, mother_id)
-        mother_name = mother["name"] if mother else mother_id
-
-        facts = sorted(
-            bi_repo.list_product_facts(conn, brand_id, mother_id, status="confirmed"),
-            key=lambda f: f.get("confirmed_at") or f["created_at"], reverse=True,
-        )
-        kept_facts, omitted_facts = facts[:fact_cap], facts[fact_cap:]
-        fact_text = (
-            "；".join(f"{f['label']}：{f['value']}" for f in kept_facts)
-            if kept_facts else "尚無確認過的事實"
-        )
-        if omitted_facts:
-            fact_text += f"（另有 {len(omitted_facts)} 筆較舊的事實沒有列出）"
+    for knowledge_ids, sell_way_ids in groups.items():
+        fact_lines = [
+            _knowledge_fact_line(conn, brand_id, knowledge_id, fact_cap)
+            for knowledge_id in knowledge_ids
+        ]
 
         sell_way_pieces: list[str] = []
         for product_id in sell_way_ids[:_MAX_SELL_WAYS]:
@@ -154,10 +146,29 @@ def _products_section(
         if sell_way_overflow > 0:
             sell_way_text += f"（另有 {sell_way_overflow} 種賣法沒有列出）"
 
-        lines.append(f"- {mother_name}｜事實：{fact_text}\n  賣法：{sell_way_text}")
+        lines.append("\n".join(fact_lines) + f"\n  賣法：{sell_way_text}")
 
     text = "【商品】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
     return text, basis
+
+
+def _knowledge_fact_line(conn, brand_id: str, knowledge_id: str, fact_cap: int) -> str:
+    """One knowledge product's 「- 〈name〉｜事實：…」 line: confirmed facts newest first, capped
+    at `fact_cap` with a 「另有 N 筆」 note."""
+    product = bi_repo.get_product(conn, brand_id, knowledge_id)
+    name = product["name"] if product else knowledge_id
+    facts = sorted(
+        bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed"),
+        key=lambda f: f.get("confirmed_at") or f["created_at"], reverse=True,
+    )
+    kept_facts, omitted_facts = facts[:fact_cap], facts[fact_cap:]
+    fact_text = (
+        "；".join(f"{f['label']}：{f['value']}" for f in kept_facts)
+        if kept_facts else "尚無確認過的事實"
+    )
+    if omitted_facts:
+        fact_text += f"（另有 {len(omitted_facts)} 筆較舊的事實沒有列出）"
+    return f"- {name}｜事實：{fact_text}"
 
 
 # product_economics.assumptions_json 的欄位名 -> app.brand_intelligence.benchmarks 的 key
@@ -437,6 +448,10 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     product_ids = list((campaign.get("context_json") or {}).get("product_ids") or [])
     facts_text, facts_basis = _brand_facts_section(conn, brand_id)
     products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
+    # F43-I02：這個賣法的顧客群（程式挑好、有上限），接在商品之後；分配的 rationale 點名打哪一群。
+    customers_text, customer_group_ids = customer_groups.prompt_section(
+        conn, org_id, brand_id, campaign,
+    )
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
     # F39-I02：程式統計的【座標成績表】接在學習句子之後——上一期哪則廣告划算、哪則太貴，
     # 讓分配的 `rationale` 點得出名字；空表就寫「還沒有成績表」，規則不生效。
@@ -473,6 +488,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     knowledge_item_ids = (
         [f["id"] for f in facts_basis]
         + [p["product_id"] for p in prices_basis]
+        + customer_group_ids
         + [row["id"] for row in learnings_basis]
         + board_ids
     )
@@ -490,6 +506,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n" + calendar_text
         + "\n\n" + facts_text
         + "\n\n" + products_text
+        + "\n\n" + customers_text
         + "\n\n" + learnings_text
         + "\n\n" + board_text
         + "\n\n" + scenarios_text

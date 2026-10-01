@@ -4,52 +4,54 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NewCampaignPage } from "./NewCampaignPage";
 import { createCampaign, getCampaign, listCampaigns, patchCampaign, type CampaignCard, type CampaignDetail } from "@/lib/adsApi";
+import { putTarget } from "@/lib/adsTriageApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { createCampaignFromPicks, getWizardOptions, type WizardOptions } from "@/lib/adsWizardApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
-import { readDraft, saveDraft } from "./campaignDraft";
+import { clearDraft, readDraft } from "./campaignDraft";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
 vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), listCampaigns: vi.fn(), patchCampaign: vi.fn(), createCampaign: vi.fn() }));
 vi.mock("@/lib/adsLaunchApi", async (original) => ({ ...await original<object>(), fetchChannels: vi.fn() }));
+vi.mock("@/lib/adsTriageApi", async (original) => ({ ...await original<object>(), putTarget: vi.fn() }));
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/useAuthedImage", () => ({ useAuthedImage: vi.fn(() => ({ src: null, failed: true })) }));
 vi.mock("./UserAssetsLibrary", () => ({ UserAssetsLibrary: () => <div>選擇已完成素材</div> }));
 
-const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)";
-const options = (): WizardOptions => ({
+const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)加贈隨身盒與保冷袋";
+const VITAMIN_URL = "https://beastgummy.tw/shop/multivitamin";
+const GROUPS = [{ id: "grp_new", who: "新客為主" }, { id: "grp_try", who: "探索一組" }];
+type Way = WizardOptions["products"][number];
+const sellWay = (over: Partial<Way> & Pick<Way, "id" | "name" | "display_name">): Way => ({
+  kind: "single", knowledge_product_id: "kp_vit", knowledge_product_name: "綜合維他命軟糖", price: 399, currency: "TWD",
+  thumbnail_url: null, has_cost: true, break_even: 249, cap_per_sale: 249, offer_labels: [], customer_groups: GROUPS, landing_url: VITAMIN_URL, ...over,
+});
+/** The prototype's shelf: two sell-ways of one product, one of another (no price, no cost, one group, no page URL),
+ * then a bundle with a long name — in the server's order (single sell-ways grouped by knowledge product, then bundles). */
+const options = (over: Partial<WizardOptions> = {}): WizardOptions => ({
   products: [
-    { id: "prd_a", name: "Beast Gummy咖啡因機能軟糖・三盒", price: 999, currency: "TWD", thumbnail_url: "/api/products/brands/b/products/prd_a/thumbnail", has_cost: true },
-    { id: "prd_b", name: LONG, price: null, currency: null, thumbnail_url: null, has_cost: false },
+    sellWay({ id: "sw_one", name: "綜合維他命軟糖 · 單盒", display_name: "單盒", thumbnail_url: "/brands/b/assets/file/a1/one.png" }),
+    sellWay({ id: "sw_three", name: "綜合維他命軟糖 · 三盒組", display_name: "三盒組", price: 999, break_even: 669, cap_per_sale: 669, offer_labels: ["組合價", "免運"] }),
+    sellWay({ id: "sw_pro", name: "益生菌軟糖 · 單盒", display_name: "單盒", knowledge_product_id: "kp_pro", knowledge_product_name: "益生菌軟糖",
+      price: null, currency: null, has_cost: false, break_even: null, cap_per_sale: null, customer_groups: [{ id: "grp_gut", who: "腸胃敏感的上班族" }], landing_url: null }),
+    sellWay({ id: "sw_duo", name: LONG, display_name: "雙效組", kind: "bundle", price: 799, break_even: 539, cap_per_sale: 500, offer_labels: ["組合價"],
+      landing_url: "https://beastgummy.tw/shop/duo" }),
   ],
   objectives: [
     { key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: { meta: "銷售業績", google_ads: "銷售" } },
     { key: "名單", label: "名單", description: "看每筆名單成本", available: true, platforms: { meta: "潛在顧客", google_ads: "潛在客戶" } },
     { key: "互動", label: "互動", description: "看每次互動成本", available: false, platforms: { meta: "互動", google_ads: "YouTube 觸及、觀看與互動" } },
   ],
+  default_objective: null,
+  ...over,
 });
+/** A campaign as the create stores it: the sell-way's groups, cap and landing, named `"sell_way"`. */
 const draft = (over: Partial<CampaignDetail> = {}) => ({ id: "cmp_new", objective: "購買", start_date: "2026-10-01", end_date: "2026-10-31", goal_text: "g",
-  context_json: { product_ids: ["prd_a"], field_sources: { dates: "system" } }, constraints_json: { budget: 30000 }, parsed: true, ...over }) as unknown as CampaignDetail & { parsed: boolean };
-
-/** The previous period as the prototype has it (drill-7 #10): 「9 月第一期」, 09/26–10/02, Meta, cap 450 against 打平線 520,
- * budget 10,500, the landing URL on the campaign. `status` past draft so it is the one a new campaign copies. */
-const PREV_URL = "https://beastgummy.tw/shop";
-const previous = (over: Partial<CampaignDetail> = {}) => ({
-  id: "cmp_prev", name: "9 月第一期", status: "live", objective: "購買", start_date: "2026-09-26", end_date: "2026-10-02", created_at: "2026-09-25T00:00:00Z",
-  cap: { value: 450, basis: "own", own_value: 450, break_even: 520, price: 998, product_id: "prd_a", result_kind: "purchase", result_label: "購買", missing: [], revision: 2 },
-  context_json: { product_ids: ["prd_a"], audience_hint: "新客為主、探索一組", landing_url: PREV_URL, field_sources: { dates: "user" } },
-  constraints_json: { platform: "meta", budget: 10500 }, ...over,
-}) as unknown as CampaignDetail;
-const card = (id: string, status: string, created_at: string) => ({ id, status, created_at }) as unknown as CampaignCard;
-/** A newer draft and an older ended campaign sit beside it: the latest non-draft one wins. */
-function withPrevious(detail: CampaignDetail = previous()) {
-  vi.mocked(listCampaigns).mockResolvedValue([
-    card("cmp_draft", "draft", "2026-09-29T00:00:00Z"), card("cmp_old", "ended", "2026-08-01T00:00:00Z"), card(detail.id, detail.status, detail.created_at),
-  ]);
-  vi.mocked(getCampaign).mockImplementation(async (_b, id) => { if (id === detail.id) return detail; throw new Error(`unexpected read ${id}`); });
-}
-const PREV_PICKS = { product_ids: ["prd_a"], objective: "購買", budget: 10500, start_date: "2026-10-03", end_date: "2026-10-09" };
-const PREV_EXTRAS = { platform: "meta", audience_hint: "新客為主、探索一組", cap: 450, landing_url: PREV_URL };
+  cap: { own_value: 669, revision: 1 },
+  context_json: { product_ids: ["sw_three"], customer_group_ids: ["grp_new", "grp_try"], landing_url: VITAMIN_URL, field_sources: { dates: "system", audience: "sell_way", cap: "sell_way", landing_url: "sell_way" } },
+  constraints_json: { budget: 30000 }, parsed: true, ...over }) as unknown as CampaignDetail & { parsed: boolean };
+const card = (id: string, status: string, created_at: string, start_date: string | null = null, end_date: string | null = null) =>
+  ({ id, status, created_at, start_date, end_date }) as unknown as CampaignCard;
 
 function view(brandId = "b1", path = `/brands/${brandId}/ads/new`) {
   return render(
@@ -61,53 +63,99 @@ function view(brandId = "b1", path = `/brands/${brandId}/ads/new`) {
     </MemoryRouter>,
   );
 }
-async function pickAll(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("radio", { name: /三盒/ }));
+type User = ReturnType<typeof userEvent.setup>;
+async function pickAll(user: User) {
+  await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
   await user.click(screen.getByRole("radio", { name: /購買/ }));
   await user.type(screen.getByLabelText("這個活動最多花"), "30000");
 }
+const openFold = (user: User) => user.click(screen.getByRole("button", { name: /進階：這期不一樣/ }));
+const openSentence = async (user: User) => user.click(await screen.findByRole("button", { name: /進階：一句話建立/ }));
 const next = () => screen.getByRole("button", { name: /下一步：系統理解/ });
+const radio = (id: string) => screen.getAllByRole("radio").find((r) => r.getAttribute("data-value") === id)!;
+const nameLine = () => document.querySelector("[data-slot=name-line]")?.textContent;
+/** The fold's source label beside a field (`data-slot="field-source"`), by the field's label. */
+const source = (label: string) => screen.getByText(label, { selector: "label" }).parentElement?.querySelector("[data-slot=field-source]")?.textContent ?? null;
+const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement | HTMLSelectElement).value;
 
 beforeEach(() => {
   sessionStorage.clear(); vi.clearAllMocks();
+  // The draft store keeps a memory copy beside sessionStorage: start every test from an empty form.
+  for (const brand of ["b1", "a", "b", "p1", "g1", "g2", "s1", "s2", "save", "known", "retry-ai"]) clearDraft(`campaign-draft:u:o:${brand}`);
   vi.mocked(getWizardOptions).mockResolvedValue(options());
   vi.mocked(listCampaigns).mockResolvedValue([]);
   vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "" }, { key: "google_ads", label: "Google Ads", connected: false, state_text: "" }]);
   vi.mocked(useAuthedImage).mockReturnValue({ src: null, failed: true });
 });
 
-describe("new-campaign wizard step 1 (F30-I05)", () => {
-  it("shows products with price or 價格未填 and 有成本／缺成本, catalog objectives with reserved ones greyed", async () => {
+describe("new-campaign step 1, slimmed (F43-I15, prototype f41-onboarding #/new)", () => {
+  it("lists sell-ways per product, then 組合, each 〈賣法〉 〈price〉 over 打平・offers; no F40 bar or 這次怎麼投 card", async () => {
     view();
-    const long = await screen.findByRole("radio", { name: new RegExp(LONG.replace(/[()+]/g, "\\$&")) });
-    expect(within(long).getByText("價格未填")).toBeTruthy();
-    expect(within(long).getByText("缺成本")).toBeTruthy();
-    const cheap = screen.getByRole("radio", { name: /三盒/ });
-    expect(within(cheap).getByText("NT$999")).toBeTruthy();
-    expect(within(cheap).getByText("有成本")).toBeTruthy();
+    const group = await screen.findByRole("radiogroup", { name: "要推什麼" });
+    const order = Array.from(group.querySelectorAll("[data-slot=pick-section], [role=radio]"))
+      .map((e) => (e.getAttribute("role") === "radio" ? e.getAttribute("data-value") : e.textContent));
+    expect(order).toEqual(["綜合維他命軟糖", "sw_one", "sw_three", "益生菌軟糖", "sw_pro", "組合", "sw_duo"]);
+    expect(within(radio("sw_three")).getByText("三盒組 NT$999")).toBeTruthy();
+    expect(within(radio("sw_three")).getByText("打平 669・組合價＋免運")).toBeTruthy();
+    expect(within(radio("sw_one")).getByText("單盒 NT$399")).toBeTruthy();
+    expect(within(radio("sw_one")).getByText("打平 249・沒有優惠")).toBeTruthy();
+    expect(within(radio("sw_pro")).getByText("單盒 價格未填")).toBeTruthy();
+    expect(within(radio("sw_pro")).getByText("缺成本・沒有優惠")).toBeTruthy();
+    expect(within(radio("sw_duo")).getByText("打平 539・組合價")).toBeTruthy();
+    expect(screen.queryByText(/照上一期/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "這次怎麼投" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "清空重填" })).toBeNull();
     expect(screen.queryByRole("radio", { name: /互動/ })).toBeNull();
     expect(within(screen.getByRole("list", { name: "尚未開放的目標" })).getByText("互動・尚未開放")).toBeTruthy();
-    expect(screen.getAllByRole("radio", { name: /購買|名單/ })).toHaveLength(2);
-    expect(screen.getByLabelText("這個活動最多花")).toBeTruthy();
   });
 
-  it("loads a product thumbnail through the authenticated image hook, never as a bare src", async () => {
+  it("loads a sell-way thumbnail through the authenticated image hook, never as a bare src", async () => {
     vi.mocked(useAuthedImage).mockImplementation((url) => ({ src: url ? "blob:thumb" : null, failed: !url }));
     view();
-    const card = await screen.findByRole("radio", { name: /三盒/ });
-    expect(useAuthedImage).toHaveBeenCalledWith("/api/products/brands/b/products/prd_a/thumbnail");
-    expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:thumb");
-    expect(document.querySelector('img[src^="/api/"]')).toBeNull();
+    await screen.findByRole("radiogroup", { name: "要推什麼" });
+    expect(useAuthedImage).toHaveBeenCalledWith("/brands/b/assets/file/a1/one.png");
+    expect(radio("sw_one").querySelector("img")?.getAttribute("src")).toBe("blob:thumb");
+    expect(document.querySelector('img[src^="/brands/"]')).toBeNull();
   });
 
-  it("keeps the primary action disabled until product, objective and cap are set, then creates from the picks", async () => {
+  it("preselects the brand's conversion goal with its caption; without one nothing is preselected", async () => {
+    vi.mocked(getWizardOptions).mockResolvedValue(options({ default_objective: "名單" }));
+    const first = view("g1");
+    await waitFor(() => expect(screen.getByRole("radio", { name: /名單/ }).getAttribute("aria-checked")).toBe("true"));
+    expect(screen.getByText("預設＝品牌的成效目標")).toBeTruthy();
+    first.unmount();
+    vi.mocked(getWizardOptions).mockResolvedValue(options());
+    view("g2");
+    await screen.findByRole("radio", { name: /購買/ });
+    expect(screen.getAllByRole("radio", { name: /購買|名單/ }).map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(screen.queryByText("預設＝品牌的成效目標")).toBeNull();
+  });
+
+  it("?sell_way= (from 商品建檔 ⑤) preselects that sell-way; an id that is not pickable is ignored", async () => {
+    const first = view("s1", "/brands/s1/ads/new?sell_way=sw_duo");
+    await waitFor(() => expect(radio("sw_duo").getAttribute("aria-checked")).toBe("true"));
+    first.unmount();
+    view("s2", "/brands/s2/ads/new?sell_way=kp_vit");
+    await screen.findByRole("radiogroup", { name: "要推什麼" });
+    expect(screen.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(0);
+  });
+
+  it("with no finished sell-way the section links to 建第一個商品", async () => {
+    vi.mocked(getWizardOptions).mockResolvedValue(options({ products: [] }));
+    view();
+    const link = await screen.findByRole("link", { name: "建第一個商品" });
+    expect(link.getAttribute("href")).toBe("/brands/b1/products/new");
+    expect(screen.queryByRole("radiogroup", { name: "要推什麼" })).toBeNull();
+  });
+
+  it("keeps the primary action disabled until sell-way, result and budget are set, then sends only the picks", async () => {
     vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
     const user = userEvent.setup();
     view();
-    await screen.findByRole("radio", { name: /三盒/ });
+    await screen.findByRole("radiogroup", { name: "要推什麼" });
     expect(next()).toHaveProperty("disabled", true);
-    expect(screen.getByText("選好商品和結果")).toBeTruthy();
-    await user.click(screen.getByRole("radio", { name: /三盒/ }));
+    expect(screen.getByText("選好要推什麼和想要的結果")).toBeTruthy();
+    await user.click(radio("sw_three"));
     await user.click(screen.getByRole("radio", { name: /購買/ }));
     expect(next()).toHaveProperty("disabled", true);
     expect(screen.getByText("填這個活動最多花")).toBeTruthy();
@@ -115,8 +163,38 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     expect(next()).toHaveProperty("disabled", false);
     await user.click(next());
     expect(await screen.findByText("第二步頁面")).toBeTruthy();
-    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", { product_ids: ["prd_a"], objective: "購買", budget: 30000 });
+    // The fold was never touched: platform／audience／cap／landing come from the brand and the sell-way on the server.
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", { product_ids: ["sw_three"], objective: "購買", budget: 30000 });
     expect(readDraft("campaign-draft:u:o:b1").productId).toBeNull();
+  });
+
+  it("names the campaign like the server: 〈sell-way name〉・MM/DD～MM/DD, a long name cut at 30 characters", async () => {
+    const user = userEvent.setup();
+    view();
+    await screen.findByRole("radiogroup", { name: "要推什麼" });
+    expect(nameLine()).toBeUndefined();
+    await user.click(radio("sw_three"));
+    expect(nameLine()).toBe("活動名稱會叫「綜合維他命軟糖 · 三盒組」加上期間（沒填日期就從今天起算 30 天）");
+    await user.type(screen.getByLabelText("開始"), "2026-10-10");
+    await user.type(screen.getByLabelText("結束"), "2026-10-16");
+    expect(nameLine()).toBe("活動名稱會叫「綜合維他命軟糖 · 三盒組・10/10～10/16」");
+    await user.click(radio("sw_duo"));
+    expect(nameLine()).toBe(`活動名稱會叫「${LONG.slice(0, 30)}…・10/10～10/16」`);
+  });
+
+  it("the period starts the day after the latest non-draft campaign ends, same length; nothing else is copied", async () => {
+    vi.mocked(listCampaigns).mockResolvedValue([
+      card("cmp_draft", "draft", "2026-09-29T00:00:00Z", "2026-12-01", "2026-12-31"),
+      card("cmp_old", "ended", "2026-08-01T00:00:00Z", "2026-08-01", "2026-08-07"),
+      card("cmp_prev", "live", "2026-09-25T00:00:00Z", "2026-09-26", "2026-10-02"),
+    ]);
+    view("p1");
+    await waitFor(() => expect(value("開始")).toBe("2026-10-03"));
+    expect(value("結束")).toBe("2026-10-09");
+    expect(screen.getByText("日期接在上一期後面（上一期 09/26～10/02）")).toBeTruthy();
+    expect(value("這個活動最多花")).toBe("");
+    expect(screen.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(0);
+    expect(getCampaign).not.toHaveBeenCalled();
   });
 
   it("asks for both dates or neither and sends them when both are set", async () => {
@@ -132,7 +210,100 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     await screen.findByText("第二步頁面");
     expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", expect.objectContaining({ start_date: "2026-10-01", end_date: "2026-10-31" }));
   });
+});
 
+describe("「進階：這期不一樣」 (F43-I15)", () => {
+  it("is folded, and shows each value with where it comes from", async () => {
+    const user = userEvent.setup();
+    view();
+    await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
+    expect(screen.getByRole("button", { name: /進階：這期不一樣（平台、受眾、每筆上限、落地頁）/ }).getAttribute("aria-expanded")).toBe("false");
+    await openFold(user);
+    expect(value("平台")).toBe("meta");
+    expect(source("平台")).toBe("來自品牌：已接上的帳戶");
+    expect(value("受眾")).toBe("");
+    expect(within(screen.getByLabelText("受眾")).getAllByRole("option").map((o) => o.textContent)).toEqual(["2 群都投（新客為主、探索一組）", "只投：新客為主", "只投：探索一組"]);
+    expect(source("受眾")).toBe("來自商品：2 群顧客");
+    expect(value("每筆上限")).toBe("669");
+    expect(source("每筆上限")).toBe("來自賣法「三盒組」");
+    expect(screen.getByText("等於打平 669")).toBeTruthy();
+    expect(value("落地頁")).toBe(VITAMIN_URL);
+    expect(source("落地頁")).toBe("來自賣法「三盒組」");
+  });
+
+  it("sends only the changed values and names them 你改的; a value typed back to the default is not sent", async () => {
+    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
+    const user = userEvent.setup();
+    view();
+    await pickAll(user);
+    await openFold(user);
+    await user.selectOptions(screen.getByLabelText("受眾"), "grp_try");
+    await user.clear(screen.getByLabelText("每筆上限"));
+    await user.type(screen.getByLabelText("每筆上限"), "600");
+    expect(screen.getByText("比打平 669 低 69")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("平台"), "google_ads");
+    await user.clear(screen.getByLabelText("落地頁"));
+    await user.type(screen.getByLabelText("落地頁"), VITAMIN_URL);
+    expect(source("受眾")).toBe("你改的");
+    expect(source("每筆上限")).toBe("你改的");
+    expect(source("平台")).toBe("你改的");
+    expect(source("落地頁")).toBe("來自賣法「三盒組」");
+    await user.click(next());
+    await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", {
+      product_ids: ["sw_three"], objective: "購買", budget: 30000, platform: "google_ads", customer_group_ids: ["grp_try"], cap: 600,
+    });
+  });
+
+  it("a changed landing URL is sent; a cleared one falls back to the product page and is not sent", async () => {
+    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
+    const user = userEvent.setup();
+    view();
+    await pickAll(user);
+    await openFold(user);
+    await user.clear(screen.getByLabelText("落地頁"));
+    expect(screen.getByText("留空＝用賣法的落地頁")).toBeTruthy();
+    await user.type(screen.getByLabelText("落地頁"), "https://beastgummy.tw/lp/autumn");
+    expect(source("落地頁")).toBe("你改的");
+    await user.click(next());
+    await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenLastCalledWith("b1", expect.objectContaining({ landing_url: "https://beastgummy.tw/lp/autumn" }));
+  });
+
+  it("another sell-way brings its own audience, cap and landing; a one-group sell-way has no audience choice", async () => {
+    const user = userEvent.setup();
+    view();
+    await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
+    await openFold(user);
+    await user.selectOptions(screen.getByLabelText("受眾"), "grp_new");
+    await user.clear(screen.getByLabelText("每筆上限"));
+    await user.type(screen.getByLabelText("每筆上限"), "700");
+    await user.click(radio("sw_duo"));
+    expect(value("受眾")).toBe("");
+    expect(value("每筆上限")).toBe("500");
+    expect(source("每筆上限")).toBe("來自賣法「雙效組」");
+    expect(value("落地頁")).toBe("https://beastgummy.tw/shop/duo");
+    await user.click(radio("sw_pro"));
+    expect(screen.getByLabelText("受眾")).toHaveProperty("disabled", true);
+    expect(source("受眾")).toBe("來自商品：1 群顧客");
+    expect(value("每筆上限")).toBe("");
+    expect(screen.getByText("這個賣法還算不出打平；可以自己填")).toBeTruthy();
+    expect(source("落地頁")).toBe("來自賣法「單盒」");
+    expect(value("落地頁")).toBe("");
+  });
+
+  it("a brand with no connected account says so; the platform can still be picked", async () => {
+    vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: false, state_text: "" }]);
+    const user = userEvent.setup();
+    view();
+    await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
+    await openFold(user);
+    expect(source("平台")).toBe("品牌還沒接上帳戶");
+    expect(value("平台")).toBe("");
+  });
+});
+
+describe("new-campaign step 1 flow (F30-I05, kept)", () => {
   it("shows the wait line while understanding, then the fail box with 重試; 上一步 keeps the picks", async () => {
     let fail!: (e: Error) => void;
     vi.mocked(createCampaignFromPicks).mockReturnValueOnce(new Promise((_r, reject) => { fail = reject; }));
@@ -146,8 +317,8 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     const box = await screen.findByRole("alert");
     expect(within(box).getByText(/AI 暫時沒有回應/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "← 上一步" }));
-    expect(screen.getByRole("radio", { name: /三盒/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "30000");
+    expect(radio("sw_three").getAttribute("aria-checked")).toBe("true");
+    expect(value("這個活動最多花")).toBe("30000");
     vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
     await user.click(next());
     expect(await screen.findByText("第二步頁面")).toBeTruthy();
@@ -168,10 +339,10 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     vi.mocked(getWizardOptions).mockRejectedValueOnce(new Error("讀取商品與目標失敗。"));
     const user = userEvent.setup();
     view();
-    expect(await screen.findByText(/商品和目標清單讀不到/)).toBeTruthy();
+    expect(await screen.findByText(/賣法和目標清單讀不到/)).toBeTruthy();
     expect(screen.queryByRole("radio")).toBeNull();
     await user.click(screen.getByRole("button", { name: "重試" }));
-    expect(await screen.findByRole("radio", { name: /三盒/ })).toBeTruthy();
+    expect(await screen.findByRole("radio", { name: /三盒組/ })).toBeTruthy();
   });
 
   it("restores unsent picks after leaving and isolates another brand", async () => {
@@ -180,33 +351,67 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     await pickAll(user);
     first.unmount();
     const other = view("b");
-    expect((await screen.findByRole("radio", { name: /三盒/ })).getAttribute("aria-checked")).toBe("false");
+    expect((await screen.findByRole("radio", { name: /三盒組/ })).getAttribute("aria-checked")).toBe("false");
     other.unmount();
     view("a");
-    expect((await screen.findByRole("radio", { name: /三盒/ })).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "30000");
+    expect((await screen.findByRole("radio", { name: /三盒組/ })).getAttribute("aria-checked")).toBe("true");
+    expect(value("這個活動最多花")).toBe("30000");
   });
 
-  it("going back to a created campaign reloads its picks and patches changes instead of creating again", async () => {
+  it("going back to a created campaign reloads its picks and patches only what changed", async () => {
     vi.mocked(getCampaign).mockResolvedValue(draft());
     vi.mocked(patchCampaign).mockResolvedValue(draft({ objective: "名單" }));
     const user = userEvent.setup();
     view("b1", "/brands/b1/ads/new?created=cmp_new");
-    await waitFor(() => expect(screen.getByRole("radio", { name: /三盒/ }).getAttribute("aria-checked")).toBe("true"));
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "30000");
-    expect(screen.getByLabelText("開始")).toHaveProperty("value", "");
+    await waitFor(() => expect(radio("sw_three").getAttribute("aria-checked")).toBe("true"));
+    expect(value("這個活動最多花")).toBe("30000");
+    expect(value("開始")).toBe("");
     await user.click(screen.getByRole("radio", { name: /名單/ }));
     await user.click(next());
     expect(await screen.findByText("第二步頁面")).toBeTruthy();
     expect(patchCampaign).toHaveBeenCalledWith("b1", "cmp_new", { objective: "名單" });
+    expect(putTarget).not.toHaveBeenCalled();
     expect(createCampaignFromPicks).not.toHaveBeenCalled();
   });
 
-  it("one-sentence create under 進階: keeps a failed submission and clears the draft only after success", async () => {
+  it("going back: the audience change is a PATCH of customer_group_ids and the cap goes through the target", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(draft());
+    vi.mocked(patchCampaign).mockResolvedValue(draft());
+    vi.mocked(putTarget).mockResolvedValue({} as never);
+    const user = userEvent.setup();
+    view("b1", "/brands/b1/ads/new?created=cmp_new");
+    await waitFor(() => expect(radio("sw_three").getAttribute("aria-checked")).toBe("true"));
+    await openFold(user);
+    await user.selectOptions(screen.getByLabelText("受眾"), "grp_new");
+    await user.clear(screen.getByLabelText("每筆上限"));
+    await user.type(screen.getByLabelText("每筆上限"), "600");
+    await user.click(next());
+    expect(await screen.findByText("第二步頁面")).toBeTruthy();
+    expect(patchCampaign).toHaveBeenCalledWith("b1", "cmp_new", { customer_group_ids: ["grp_new"] });
+    expect(putTarget).toHaveBeenCalledWith("b1", "cmp_new", { basis: "own", value: 600, expected_revision: 1 });
+  });
+
+  it("going back: another sell-way PATCHes it with its landing and cap (the server resets the groups)", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(draft());
+    vi.mocked(patchCampaign).mockResolvedValue(draft({ cap: { own_value: 669, revision: 2 } } as Partial<CampaignDetail>));
+    vi.mocked(putTarget).mockResolvedValue({} as never);
+    const user = userEvent.setup();
+    view("b1", "/brands/b1/ads/new?created=cmp_new");
+    await waitFor(() => expect(radio("sw_three").getAttribute("aria-checked")).toBe("true"));
+    await user.click(radio("sw_duo"));
+    await user.click(next());
+    expect(await screen.findByText("第二步頁面")).toBeTruthy();
+    expect(patchCampaign).toHaveBeenCalledWith("b1", "cmp_new", { product_ids: ["sw_duo"], landing_url: "https://beastgummy.tw/shop/duo" });
+    expect(putTarget).toHaveBeenCalledWith("b1", "cmp_new", { basis: "own", value: 500, expected_revision: 2 });
+  });
+});
+
+describe("「進階：一句話建立、自帶圖片／影片」 (kept, feature Unresolved)", () => {
+  it("one-sentence create: keeps a failed submission and clears the draft only after success", async () => {
     const user = userEvent.setup();
     vi.mocked(createCampaign).mockRejectedValueOnce(new Error("離線"));
     view("save");
-    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await openSentence(user);
     await user.type(screen.getByLabelText("你這次想做到什麼？"), "新品銷售");
     await user.click(screen.getByRole("button", { name: "產生建議" }));
     expect(await screen.findByText(/離線/)).toBeTruthy();
@@ -223,7 +428,7 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     vi.mocked(createCampaign).mockResolvedValue({ id: "suggested", parsed: true } as Awaited<ReturnType<typeof createCampaign>>);
     const user = userEvent.setup();
     view("known");
-    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await openSentence(user);
     await user.click(screen.getByRole("button", { name: "請 AI 依品牌資料建議" }));
     await waitFor(() => expect(createCampaign).toHaveBeenCalledTimes(1));
     expect(createCampaign).toHaveBeenCalledWith("known", { goal_text: expect.stringContaining("沿用已知資訊") });
@@ -233,7 +438,7 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     vi.mocked(createCampaign).mockRejectedValueOnce(new Error("暫時無法連線"));
     const user = userEvent.setup();
     view("retry-ai");
-    await user.click(await screen.findByRole("button", { name: /進階/ }));
+    await openSentence(user);
     await user.click(screen.getByRole("button", { name: "請 AI 依品牌資料建議" }));
     expect(await screen.findByText(/暫時無法連線/)).toBeTruthy();
     expect(readDraft("campaign-draft:u:o:retry-ai").goalText).toContain("沿用已知資訊");
@@ -245,148 +450,26 @@ describe("new-campaign wizard step 1 (F30-I05)", () => {
     expect(createCampaign).toHaveBeenCalledTimes(1);
   });
 
-  it("sends the sentence with the picks when both are given, and the cap with a sentence-only create", async () => {
+  it("sends the sentence with the picks when both are given", async () => {
     vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
     const user = userEvent.setup();
     view();
     await pickAll(user);
-    await user.click(screen.getByRole("button", { name: /進階/ }));
+    await openSentence(user);
     await user.type(screen.getByLabelText("你這次想做到什麼？"), "主打上班族");
     await user.click(next());
     await screen.findByText("第二步頁面");
-    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", { product_ids: ["prd_a"], objective: "購買", budget: 30000, goal_text: "主打上班族" });
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", { product_ids: ["sw_three"], objective: "購買", budget: 30000, goal_text: "主打上班族" });
   });
 
-  it("keeps the brand's own images／videos folded under 進階", async () => {
+  it("keeps the brand's own images／videos folded under it, below 這期不一樣", async () => {
     const user = userEvent.setup();
     view();
-    await screen.findByRole("radio", { name: /三盒/ });
+    await screen.findByRole("radio", { name: /三盒組/ });
+    const folds = screen.getAllByRole("button", { name: /^進階：/ }).map((b) => b.textContent);
+    expect(folds).toEqual(["進階：這期不一樣（平台、受眾、每筆上限、落地頁）", "進階：一句話建立、自帶圖片／影片"]);
     expect(screen.queryByText("選擇已完成素材")).toBeNull();
-    await user.click(screen.getByRole("button", { name: /進階/ }));
+    await openSentence(user);
     expect(screen.getByText("選擇已完成素材")).toBeTruthy();
-  });
-});
-
-/** Prototype `#/new` (F40, drill-7 #10): the form opens pre-filled from the latest non-draft campaign. */
-describe("new-campaign wizard step 1 pre-filled from the previous campaign (F40-I12)", () => {
-  const bar = () => screen.queryByText("照上一期「9 月第一期」帶入，可改");
-  const values = () => ({
-    platform: (screen.getByLabelText("平台") as HTMLSelectElement).value,
-    audience: (screen.getByLabelText("受眾方向") as HTMLInputElement).value,
-    cap: (screen.getByLabelText("每賣一筆上限") as HTMLInputElement).value,
-    landing: (screen.getByLabelText("落地頁") as HTMLInputElement).value,
-  });
-
-  it("shows the bar and the four values under 這次怎麼投, the period after the previous one, and sends the four keys", async () => {
-    withPrevious();
-    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
-    const user = userEvent.setup();
-    view("p1");
-    expect(await screen.findByText("照上一期「9 月第一期」帶入，可改")).toBeTruthy();
-    expect(screen.getByText("每一格都能直接改；沒改的就照上一期")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "這次怎麼投" })).toBeTruthy();
-    expect(values()).toEqual({ platform: "meta", audience: "新客為主、探索一組", cap: "450", landing: PREV_URL });
-    expect(screen.getByText("從「追蹤」分頁搬來")).toBeTruthy();
-    expect(screen.getByText("上一期 450・比打平線 520 低 70")).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /三盒/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("radio", { name: /購買/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText("開始")).toHaveProperty("value", "2026-10-03");
-    expect(screen.getByLabelText("結束")).toHaveProperty("value", "2026-10-09");
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "10500");
-    expect(screen.getByText("日期接在上一期後面（上一期 09/26～10/02）；金額照上一期")).toBeTruthy();
-    expect(next()).toHaveProperty("disabled", false);
-    await user.click(next());
-    expect(await screen.findByText("第二步頁面")).toBeTruthy();
-    expect(createCampaignFromPicks).toHaveBeenCalledWith("p1", { ...PREV_PICKS, ...PREV_EXTRAS });
-  });
-
-  it("an edited value goes out as edited; a cap above the 打平線 reads 高", async () => {
-    withPrevious();
-    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft());
-    const user = userEvent.setup();
-    view("p2");
-    await screen.findByText("照上一期「9 月第一期」帶入，可改");
-    await user.selectOptions(screen.getByLabelText("平台"), "google_ads");
-    await user.clear(screen.getByLabelText("每賣一筆上限"));
-    await user.type(screen.getByLabelText("每賣一筆上限"), "600");
-    expect(screen.getByText("比打平線 520 高 80")).toBeTruthy();
-    await user.clear(screen.getByLabelText("落地頁"));
-    await user.click(next());
-    await screen.findByText("第二步頁面");
-    // The cleared landing URL is left out so the server copies the previous one (F40-I04).
-    expect(createCampaignFromPicks).toHaveBeenCalledWith("p2", { ...PREV_PICKS, platform: "google_ads", audience_hint: "新客為主、探索一組", cap: 600 });
-  });
-
-  it("清空重填 empties every field, hides the bar and disables 下一步 until the required fields are set again", async () => {
-    withPrevious();
-    const user = userEvent.setup();
-    view("p3");
-    await screen.findByText("照上一期「9 月第一期」帶入，可改");
-    await user.click(screen.getByRole("button", { name: "清空重填" }));
-    expect(bar()).toBeNull();
-    expect(values()).toEqual({ platform: "", audience: "", cap: "", landing: "" });
-    expect(screen.getByRole("radio", { name: /三盒/ }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByLabelText("開始")).toHaveProperty("value", "");
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "");
-    expect(screen.queryByText(/日期接在上一期後面/)).toBeNull();
-    expect(next()).toHaveProperty("disabled", true);
-    expect(screen.getByText("選好商品和結果")).toBeTruthy();
-    // The 打平線 belongs to the previous product: it comes back as a hint once that product is picked again.
-    expect(screen.queryByText(/打平線/)).toBeNull();
-    await user.click(screen.getByRole("radio", { name: /三盒/ }));
-    expect(screen.getByText("打平線 520；上限不超過它才有賺")).toBeTruthy();
-    await user.click(screen.getByRole("radio", { name: /購買/ }));
-    await user.type(screen.getByLabelText("這個活動最多花"), "30000");
-    expect(next()).toHaveProperty("disabled", false);
-  });
-
-  it("keeps the draft's own picks and dates, filling only what the draft lacks", async () => {
-    withPrevious();
-    saveDraft("campaign-draft:u:o:p4", { productId: "prd_b", objective: "名單", startDate: "2026-11-01", endDate: "2026-11-07", budget: null, goalText: "" });
-    view("p4");
-    await screen.findByText("照上一期「9 月第一期」帶入，可改");
-    expect(screen.getByRole("radio", { name: /終極組合包/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("radio", { name: /名單/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByLabelText("開始")).toHaveProperty("value", "2026-11-01");
-    expect(screen.getByLabelText("這個活動最多花")).toHaveProperty("value", "10500");
-    expect(screen.getByText("金額照上一期")).toBeTruthy();
-    expect(values()).toEqual({ platform: "meta", audience: "新客為主、探索一組", cap: "450", landing: PREV_URL });
-    // Another product: the previous cap still shows, its 打平線 does not (unknown for this product).
-    expect(screen.getByText("上一期 450")).toBeTruthy();
-    expect(screen.queryByText(/打平線/)).toBeNull();
-  });
-
-  it("without a previous campaign (or when the list cannot be read) the form opens as today", async () => {
-    vi.mocked(listCampaigns).mockResolvedValue([card("cmp_draft", "draft", "2026-09-29T00:00:00Z")]);
-    const first = view("p5");
-    await screen.findByRole("radio", { name: /三盒/ });
-    expect(bar()).toBeNull();
-    expect(values()).toEqual({ platform: "", audience: "", cap: "", landing: "" });
-    expect(next()).toHaveProperty("disabled", true);
-    expect(getCampaign).not.toHaveBeenCalled();
-    first.unmount();
-    vi.mocked(listCampaigns).mockRejectedValue(new Error("離線"));
-    view("p5");
-    await screen.findByRole("radio", { name: /三盒/ });
-    expect(bar()).toBeNull();
-    expect(values().platform).toBe("");
-  });
-
-  it("going back to a created campaign shows its own values without the bar and PATCHes what changed", async () => {
-    vi.mocked(listCampaigns).mockResolvedValue([card("cmp_prev", "live", "2026-09-25T00:00:00Z")]);
-    const created = draft({ context_json: { product_ids: ["prd_a"], audience_hint: "上班族", landing_url: "https://a.tw/x", field_sources: { dates: "system" } }, constraints_json: { budget: 30000, platform: "meta" } });
-    vi.mocked(getCampaign).mockResolvedValue(created);
-    vi.mocked(patchCampaign).mockResolvedValue(created);
-    const user = userEvent.setup();
-    view("p6", "/brands/p6/ads/new?created=cmp_new");
-    await waitFor(() => expect(values()).toEqual({ platform: "meta", audience: "上班族", cap: "", landing: "https://a.tw/x" }));
-    expect(bar()).toBeNull();
-    expect(listCampaigns).not.toHaveBeenCalled();
-    await user.clear(screen.getByLabelText("落地頁"));
-    await user.type(screen.getByLabelText("落地頁"), "https://a.tw/y");
-    await user.click(next());
-    expect(await screen.findByText("第二步頁面")).toBeTruthy();
-    expect(patchCampaign).toHaveBeenCalledWith("p6", "cmp_new", { landing_url: "https://a.tw/y" });
-    expect(createCampaignFromPicks).not.toHaveBeenCalled();
   });
 });

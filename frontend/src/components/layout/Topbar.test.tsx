@@ -147,3 +147,14 @@ describe("Topbar sync status", () => {
     await waitFor(() => expect(getStatusSummary).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("Topbar page label", () => {
+  it("商品頁的位置標籤叫「商品」，跟頁面標題同一個詞（F43-I14）", async () => {
+    vi.mocked(getStatusSummary).mockResolvedValue({ last_success_at: null, failing_campaigns: 0, open_items: 0 });
+    renderTopbar("/brands/brd_bughunt/products");
+    const nav = screen.getByRole("navigation", { name: "目前位置" });
+    expect(nav.textContent).toContain("商品");
+    expect(nav.textContent).not.toContain("產品");
+    await screen.findByText("尚未同步");
+  });
+});

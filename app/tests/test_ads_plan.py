@@ -9,6 +9,7 @@ approved `max_daily_amount` is refused before anything is written.
 
 import json
 import unittest
+from unittest import mock
 
 import app.shared.web as web
 from app.ads import plan
@@ -336,6 +337,57 @@ class CoordinateScoreboardInDeliveryPlanPromptTest(PlanTestBase):
         self.assertNotIn(_SCOREBOARD_HEADER, prompt)
         self.assertLess(prompt.rindex("【投放期間內的行事曆】"), prompt.rindex(_SCOREBOARD_EMPTY))
         self.assertLess(prompt.rindex(_SCOREBOARD_EMPTY), prompt.rindex("【座標詞彙"))
+
+
+class CustomerGroupsInDeliveryPlanPromptTest(PlanTestBase):
+    """F43-I02: 【這個賣法的顧客】 sits after the scoreboard and before the vocabulary (the
+    vocabulary stays last); its group ids reach the task's `knowledge_item_ids`."""
+
+    def _adopt_capturing(self, campaign_id: str) -> tuple[str, list]:
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+        with mock.patch.object(plan.gateway, "run_task", wraps=plan.gateway.run_task) as spy:
+            self._adopt(campaign_id)
+        context = spy.call_args.kwargs["context"]
+        return provider.calls[0]["messages"][0]["content"], context.knowledge_item_ids
+
+    def test_groups_sit_before_the_vocabulary_and_reach_the_knowledge_items(self):
+        product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        groups = bi_repo.save_customer_groups(web.conn, self.brand_id, product["id"], [
+            {"who": "下班後夜跑的上班族", "pain_keys": ["uncertainty"],
+             "quote": "晚上跑步車子看不到我", "when_used": "下班後在河濱夜跑"},
+            {"who": "帶小孩散步的爸媽", "pain_keys": ["effort"]},
+        ], actor=ACTOR)
+        campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                 {"product_ids": [product["id"]]})
+
+        prompt, knowledge_item_ids = self._adopt_capturing(campaign["id"])
+
+        self.assertIn(
+            "第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）"
+            "｜顧客會說：晚上跑步車子看不到我｜什麼時候用：下班後在河濱夜跑", prompt,
+        )
+        customers_at = prompt.rindex("【這個賣法的顧客】")
+        self.assertLess(prompt.rindex(_SCOREBOARD_EMPTY), customers_at)
+        self.assertLess(customers_at, prompt.rindex("【座標詞彙"))
+        for group in groups:
+            self.assertIn(group["id"], knowledge_item_ids)
+
+    def test_campaign_whose_product_has_no_groups_says_so(self):
+        product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                 {"product_ids": [product["id"]]})
+
+        prompt, _ = self._adopt_capturing(campaign["id"])
+
+        self.assertIn("【這個賣法的顧客】（這個商品還沒有建顧客群）", prompt)
+
+    def test_the_department_file_takes_pain_and_scene_from_a_listed_group(self):
+        text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertIn("每支廣告的 `pain` 要從列出的某一群的煩惱", text)
+        self.assertIn("`scene` 要合那一群的「什麼時候用」", text)
 
 
 def _plan_reply(proof: str, offer: str = "none") -> str:

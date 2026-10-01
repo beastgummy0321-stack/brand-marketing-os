@@ -111,9 +111,9 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page.getByRole("button", { name: "生成中…" })).toBeDisabled();
   await expect(page.getByText("還沒有生成過")).toHaveCount(0);
 
-  // --- 產品 -----------------------------------------------------------------
+  // --- 商品（F43-I07）-------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/products`);
-  await expect(page.getByRole("heading", { name: "產品", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "商品", exact: true, level: 1 })).toBeVisible();
 
   // --- 訂單 -----------------------------------------------------------------
   await page.goto(`/app/brands/${brandId}/orders`);

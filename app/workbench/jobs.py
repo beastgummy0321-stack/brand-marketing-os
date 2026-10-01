@@ -483,6 +483,17 @@ def _fingerprint(*, image_task_key, image_task_label, device: str | None, layout
     }
 
 
+def photo_product_id(assets: list, knowledge_ids: list) -> str | None:
+    """F43: the knowledge product whose 商品照 the worksheet's reference line uses -- the first of
+    `knowledge_ids` (a bundle has several) with a `product_photo` in `assets`, else the first
+    one (`reference_line` then falls back to brand-level photos), else None."""
+    for knowledge_id in knowledge_ids:
+        if any(a.get("asset_kind") == "product_photo" and a.get("product_id") == knowledge_id
+               for a in assets):
+            return knowledge_id
+    return knowledge_ids[0] if knowledge_ids else None
+
+
 def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: dict,
                        product: dict | None, product_id: str | None,
                        department_text: str, methodology_text: str, brand_context: str,
@@ -515,10 +526,10 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
         explore_recommended=round_history["explore_recommended"],
     )
 
-    knowledge_id = (
-        bi_repo.knowledge_product_id(conn, brand_id, product_id) if product_id else None
-    )
     assets = bi_repo.list_official_assets(conn, brand_id)
+    knowledge_id = photo_product_id(
+        assets, bi_repo.knowledge_product_ids(conn, brand_id, product_id) if product_id else [],
+    )
     reference = repository.reference_line(assets, knowledge_id, (product or {}).get("name"))
 
     promotion_note = request.get("promotion_note") or ""

@@ -2,7 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { UnderstandingView, UnderstoodField, priceText, wizardSteps } from "./WizardPieces";
+import type { WizardProduct } from "@/lib/adsWizardApi";
+import { UnderstandingView, UnderstoodField, priceText, sellWayNote, wizardSteps } from "./WizardPieces";
 
 describe("wizard pieces (F30-I05)", () => {
   it("prints a price with the kit formatter, a foreign currency by code, and 價格未填 for unknown, zero or non-finite prices", () => {
@@ -12,6 +13,14 @@ describe("wizard pieces (F30-I05)", () => {
     expect(priceText(null, "TWD")).toBe("價格未填");
     expect(priceText(Number.NaN, "TWD")).toBe("價格未填");
     expect(priceText(0, "TWD")).toBe("價格未填");
+  });
+
+  it("a sell-way note is 打平・offers: 缺成本 without a cost, 打平算不出 with a cost but no price, 沒有優惠 without offers", () => {
+    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, offer_labels: ["組合價", "免運"], ...over }) as WizardProduct;
+    expect(sellWayNote(way({}))).toBe("打平 669・組合價＋免運");
+    expect(sellWayNote(way({ break_even: 249.5, offer_labels: [] }))).toBe("打平 249.5・沒有優惠");
+    expect(sellWayNote(way({ break_even: null, has_cost: false }))).toBe("缺成本・組合價＋免運");
+    expect(sellWayNote(way({ break_even: null, offer_labels: [] }))).toBe("打平算不出・沒有優惠");
   });
 
   it("links step 1 back only once a campaign exists", () => {

@@ -18,9 +18,10 @@ vi.mock("@/lib/adsTriageApi", async () => ({
 }));
 vi.mock("@/lib/productsApi", async () => ({ ...(await vi.importActual<object>("@/lib/productsApi")), fetchProductList: vi.fn() }));
 
-function cap(extra: Partial<CapView>): CapView {
+type CampaignCap = CampaignDetail["cap"];
+function cap(extra: Partial<CampaignCap>): CampaignCap {
   return {
-    value: null, basis: null, own_value: null, break_even: null, price: null, product_id: "prd_1",
+    value: null, basis: null, own_value: null, break_even: null, price: null, product_id: "prd_1", knowledge_product_id: "kp_1",
     result_kind: "purchase", result_label: "購買", missing: [], revision: 4, ...extra,
   };
 }
@@ -136,14 +137,23 @@ describe("CapBlock", () => {
     expect(screen.getByText("比打平 520 高 0・ROAS 參考 3.04")).toBeTruthy();
   });
 
-  it("no cap and no product cost: the input is open, 沒有商品成本 links to the product's economics, the ruler is empty", async () => {
+  it("no cap and no product cost: the input is open, 沒有商品成本 links to the product's 賣法與價格 step, the ruler is empty", async () => {
     renderBlock(campaign(NONE, { status: "draft" }));
     expect(await screen.findByText("填一個整數金額")).toBeTruthy();
     expect(screen.getByText("沒有商品成本")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "去填商品成本" }).getAttribute("href")).toBe("/brands/brd_1/products/prd_1?tab=economics-view");
+    // F43-I16: the sell-way's knowledge product (not the sell-way row), onboarding step 4.
+    expect(screen.getByRole("link", { name: "去填商品成本" }).getAttribute("href")).toBe("/brands/brd_1/products/kp_1/onboarding?step=4");
     expect(screen.queryByRole("button", { name: /用打平/ })).toBeNull();
     expect(screen.getByRole("img", { name: "沒設上限，先不分等級" })).toBeTruthy();
     expect(getTriage).not.toHaveBeenCalled();
+  });
+
+  it("去填商品成本 without a knowledge product (null, or an older payload without the field) opens the products page", async () => {
+    for (const c of [cap({ price: 1280, missing: ["product_cost"], knowledge_product_id: null }), cap({ price: 1280, missing: ["product_cost"], knowledge_product_id: undefined })]) {
+      const view = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={campaign(c, { status: "draft" })} onCampaignChange={vi.fn()} /></MemoryRouter>);
+      expect((await screen.findByRole("link", { name: "去填商品成本" })).getAttribute("href")).toBe("/brands/brd_1/products");
+      view.unmount();
+    }
   });
 
   it("409 target_conflict: says so and offers a re-read, never a silent overwrite", async () => {

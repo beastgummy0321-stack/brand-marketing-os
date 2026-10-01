@@ -10,7 +10,7 @@ Private to app/ads (container contract §1): only `routes.py` imports this modul
 
 from datetime import date
 
-from app.ads import budget, calendar_tw, channels, coordinate_learning
+from app.ads import budget, calendar_tw, channels, coordinate_learning, customer_groups
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
@@ -242,18 +242,24 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     # F39-I02：程式統計的【座標成績表】——上一期哪個組合划算、哪個太貴／沒賣出——接在行事曆
     # 之後、詞彙表之前：詞彙表永遠最後，模型答題前最後讀到的是可用的 key。
     board_text, board_ids = coordinate_learning.scoreboard_section(conn, org_id, brand_id)
+    # F43-I02：這個賣法的顧客群（每支廣告的 pain 從列出的群挑、scene 合那群的使用時機），
+    # 接在成績表之後、詞彙表之前。
+    customers_text, customer_group_ids = customer_groups.prompt_section(
+        conn, org_id, brand_id, campaign,
+    )
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
     prompt = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
         + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
         + "\n\n" + board_text
+        + "\n\n" + customers_text
         + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
 
     context = gateway.TaskContext(
         context_scope={"brand_id": brand_id, "campaign_id": campaign_id},
-        knowledge_item_ids=board_ids,
+        knowledge_item_ids=board_ids + customer_group_ids,
         brand_version=(campaign.get("context_json") or {}).get("brand_version") or 0,
     )
     task_row = gateway.run_task(

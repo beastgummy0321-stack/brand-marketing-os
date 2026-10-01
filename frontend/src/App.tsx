@@ -24,7 +24,7 @@ import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
-import { ProductListPage } from "@/components/products/ProductListPage";
+import { BundlePage, ProductOnboarding, ProductsPage } from "@/components/intake";
 import { BrandReportPage } from "@/components/report/BrandReportPage";
 import { OrdersPage } from "@/components/orders/OrdersPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -78,6 +78,10 @@ function App() {
           path="/brands/:brandId/products"
           element={<ProductListRoute />}
         />
+        <Route path="/brands/:brandId/products/new" element={<ProductNewRoute />} />
+        <Route path="/brands/:brandId/products/:productId/onboarding" element={<ProductOnboardingRoute />} />
+        <Route path="/brands/:brandId/products/bundles/new" element={<BundleNewRoute />} />
+        <Route path="/brands/:brandId/products/bundles/:bundleId" element={<BundleEditRoute />} />
         <Route
           path="/brands/:brandId/products/:productId"
           element={<ProductDetailRoute />}
@@ -371,14 +375,39 @@ function WorkbenchSetRoute() {
   );
 }
 
-/** 產品清單（S6，票 B2-products）。 */
+/** 商品頁（F43-I07，原型 f41-onboarding `#/plist`）：商品與組合卡片，取代舊產品清單。 */
 function ProductListRoute() {
   const { brandId } = useParams<{ brandId: string }>();
   return (
     <>
-      <ProductListPage brandId={brandId ?? ""} />
+      <ProductsPage brandId={brandId ?? ""} />
     </>
   );
+}
+
+/** 商品建檔（F43-I08，原型 f41-onboarding `#/p1`–`#/p5`）：新商品（`…/products/new`）與既有商品
+ * （`…/products/:productId/onboarding?step=N`）共用同一個五步殼，差別只在 `productId` 有沒有值。
+ * 標題由每一步的步驟頭提供，這裡不另包 PageHeader。 */
+function ProductNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <ProductOnboarding brandId={brandId ?? ""} productId={null} />;
+}
+
+function ProductOnboardingRoute() {
+  const { brandId, productId } = useParams<{ brandId: string; productId: string }>();
+  return <ProductOnboarding key={productId} brandId={brandId ?? ""} productId={productId ?? ""} />;
+}
+
+/** 新增組合／編輯組合（F43-I13，原型 f41-onboarding `#/bundle`）：新組合（`…/products/bundles/new`）與既有組合
+ * （`…/products/bundles/:bundleId`）共用同一頁，差別只在 `bundleId` 有沒有值。 */
+function BundleNewRoute() {
+  const { brandId } = useParams<{ brandId: string }>();
+  return <BundlePage brandId={brandId ?? ""} bundleId={null} />;
+}
+
+function BundleEditRoute() {
+  const { brandId, bundleId } = useParams<{ brandId: string; bundleId: string }>();
+  return <BundlePage key={bundleId} brandId={brandId ?? ""} bundleId={bundleId ?? ""} />;
 }
 
 /** 產品詳情（S6，票 B2-products）。 */

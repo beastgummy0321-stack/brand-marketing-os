@@ -16,10 +16,16 @@ F28-I01: the sentence only ever yields one number for judging, the cost-per-purc
 (`cap`, stored as `target_cost` with `target_basis='own'`). A ROAS or a count in the sentence is
 not converted into a cap; a reply without `cap` still parses (no cap).
 
-F40-I04 (drill-7 #10): a new campaign starts from the previous one. Whatever the request did
-not supply of platform / audience direction / cap / landing URL is copied from the brand's
-latest non-draft campaign, recorded in `context_json.copied_from` and marked `"copied"` in
-`field_sources`; request values always win, and with no previous campaign nothing changes.
+F43-I04 (feature F43 Decisions 「Campaign defaults」): a structured create picks one sell-way and
+takes the rest from the brand and that sell-way -- `context_json.customer_group_ids` = every
+customer group of its knowledge products (`field_sources.audience = "sell_way"`), landing = its
+effective landing (`"sell_way"`), cap = its `cap_per_sale` when set, stored as the campaign's own
+cap (`field_sources.cap = "sell_way"`; unset -> break-even, resolved by `targets`), objective = the
+request's (the page preselects the brand's goal), platform = the plan default. Request values win
+(`"user"`). F40-I04's copy from the previous campaign is gone (superseded by user decision);
+`audience_hint` stays readable on old campaigns and is still accepted from the request, but the
+model's audience guess is no longer stored on a structured create (the audience is the groups).
+The sentence path gets no sell-way defaults.
 """
 
 import calendar
@@ -237,23 +243,36 @@ def _check_picks(conn, brand_id: str, picks: dict) -> dict:
     if (not isinstance(product_ids, list) or len(product_ids) != 1
             or not isinstance(product_ids[0], str) or not product_ids[0]):
         raise ValueError("products_required")
-    # Only what the wizard lists is pickable (same function, not a second rule): an archived
-    # product or a product represented by its sell ways is `product_unknown`.
+    # Only what the wizard lists is pickable (same function, not a second rule): a knowledge
+    # product, an archived sell-way or a 建到一半 product's sell-way is `product_unknown`.
     by_id = {p["id"]: p for p in wizard_options.sellable_products(conn, brand_id)}
     product = by_id.get(product_ids[0])
     if product is None:
         raise ValueError("product_unknown")
+    group_ids = [g["id"] for g in wizard_options.customer_groups(conn, brand_id, product)]
     return {
         "product_ids": [product["id"]], "products": [product],
         "objective": objective, "budget": budget,
+        "group_ids": group_ids,
+        "customer_group_ids": _check_customer_groups(picks.get("customer_group_ids"), group_ids),
     }
 
 
-# F40-I04: the four values a new campaign may state up front (and, when it does not, copies
-# from the previous campaign). Structured picks (`_check_picks`) are a separate concern: these
-# are accepted on the picks path and the sentence path alike.
+def _check_customer_groups(value, group_ids: list[str]) -> list[str] | None:
+    """F43-I04: the fold's audience override -- `None` or `[]` = not overridden (every group of
+    the sell-way); else a list of this sell-way's group ids (kept in the sell-way's order, each
+    once). Anything else is `customer_group_unknown`."""
+    if value is None or value == []:
+        return None
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value) \
+            or not set(value) <= set(group_ids):
+        raise ValueError("customer_group_unknown")
+    return [group_id for group_id in group_ids if group_id in set(value)]
+
+
+# F30-I04: any of these present -> the wizard's structured create. `_check_extras` (platform /
+# audience_hint / cap / landing_url) is accepted on the picks path and the sentence path alike.
 _STRUCTURED_KEYS = ("product_ids", "objective", "budget")
-_COPIED_KEYS = ("platform", "audience_hint", "cap", "landing_url")
 
 
 def _check_extras(picks: dict) -> dict:
@@ -287,79 +306,19 @@ def _check_extras(picks: dict) -> dict:
     }
 
 
-def _previous_campaign(conn, org_id: str, brand_id: str) -> dict | None:
-    """The brand's latest campaign that went past draft (`status <> 'draft'`, newest
-    `created_at` first) -- the one a new campaign starts from. `None` for a first campaign."""
-    row = conn.execute(
-        "SELECT id, name, target_cost, target_basis, context_json, constraints_json"
-        " FROM ads_campaign WHERE org_id = %s AND brand_id = %s AND status <> 'draft'"
-        " ORDER BY created_at DESC, id DESC LIMIT 1",
-        (org_id, brand_id),
-    ).fetchone()
-    return dict(row) if row is not None else None
-
-
-def _previous_landing_url(conn, org_id: str, brand_id: str, previous: dict) -> str | None:
-    """The previous campaign's landing URL: its `context_json.landing_url`, else the first of
-    its groups (in plan order) that recorded one in `manual_delivery`."""
-    context = previous.get("context_json") or {}
-    if context.get("landing_url"):
-        return context["landing_url"]
-    records = context.get("manual_delivery") or {}
-    if not records:
-        return None
-    rows = conn.execute(
-        "SELECT id FROM ads_delivery_group WHERE org_id = %s AND brand_id = %s"
-        " AND campaign_id = %s ORDER BY created_at, id",
-        (org_id, brand_id, previous["id"]),
-    ).fetchall()
-    for row in rows:
-        value = ((records.get(row["id"]) or {}).get("values") or {}).get("landing_url")
-        if value:
-            return value
-    return None
-
-
-def _copy_from_previous(conn, org_id: str, brand_id: str, campaign: dict) -> None:
-    """F40-I04: fill whatever the request did not supply of the four values from the previous
-    campaign, in place. `context_json.copied_from` names the source and the copied fields;
-    each copied slot in `field_sources` becomes `"copied"`. No previous campaign: no change."""
-    previous = _previous_campaign(conn, org_id, brand_id)
-    if previous is None:
-        return
-    constraints = campaign["constraints_json"]
-    context = campaign["context_json"]
-    field_sources = context["field_sources"]
-    previous_constraints = previous.get("constraints_json") or {}
-    previous_context = previous.get("context_json") or {}
-    copied: list[str] = []
-
-    previous_platform = previous_constraints.get("platform")
-    if constraints.get("platform") is None and previous_platform in {
-        c["key"] for c in channels.CHANNELS
-    }:
-        constraints["platform"] = previous_platform
-        field_sources["platform"] = "copied"
-        copied.append("platform")
-    if context.get("audience_hint") is None and previous_context.get("audience_hint"):
-        context["audience_hint"] = previous_context["audience_hint"]
-        field_sources["audience"] = "copied"
-        copied.append("audience_hint")
-    # Only a cap the user set themselves travels (`target_basis='own'`): break-even is
-    # recomputed using product economics, never copied as a number.
-    if (campaign.get("target_cost") is None and previous.get("target_basis") == "own"
-            and previous.get("target_cost") is not None):
-        campaign["target_cost"] = float(previous["target_cost"])
-        field_sources["cap"] = "copied"
-        copied.append("cap")
-    if context.get("landing_url") is None:
-        landing_url = _previous_landing_url(conn, org_id, brand_id, previous)
-        if landing_url:
-            context["landing_url"] = landing_url
-            field_sources["landing_url"] = "copied"
-            copied.append("landing_url")
-    context["copied_from"] = {
-        "campaign_id": previous["id"], "name": previous["name"], "fields": copied,
+def _sell_way_defaults(checked: dict | None) -> dict:
+    """F43-I04: what the picked sell-way supplies when the request does not -- `{group_ids,
+    customer_group_ids (the request's override or None), landing_url, cap}`; all empty on the
+    sentence path (no sell-way picked)."""
+    if checked is None:
+        return {"group_ids": [], "customer_group_ids": None, "landing_url": None, "cap": None}
+    way = checked["products"][0]
+    cap = (way.get("economics") or {}).get("cap_per_sale")
+    return {
+        "group_ids": checked["group_ids"],
+        "customer_group_ids": checked["customer_group_ids"],
+        "landing_url": way.get("effective_landing_url") or None,
+        "cap": float(cap) if cap is not None else None,
     }
 
 
@@ -385,6 +344,44 @@ def set_landing_url(conn, org_id: str, brand_id: str, campaign_id: str, value) -
     context["landing_url"] = landing_url
     field_sources = dict(context.get("field_sources") or {})
     field_sources["landing_url"] = "user"
+    context["field_sources"] = field_sources
+    conn.execute(
+        "UPDATE ads_campaign SET context_json = %s, updated_at = now()"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (jsonb(context), org_id, brand_id, campaign_id),
+    )
+
+
+def set_customer_groups(conn, org_id: str, brand_id: str, campaign_id: str, value, *,
+                        picked: bool) -> None:
+    """F43-I18: the draft's audience after a PATCH, against the campaign's *current* sell-way
+    (call after `product_ids` is written). `picked` = the request carried `customer_group_ids`:
+    validated with the create rule (`_check_customer_groups`, `customer_group_unknown`) -- a
+    list of this sell-way's groups is the user's (`field_sources.audience = "user"`); `[]`/`None`
+    is no override. Not picked (the sell-way changed) or no override -> every group of the
+    sell-way, `"sell_way"` (`"system"` when it has none), as the create path stores it. Same
+    refusals as the other draft edits: unknown campaign, imported campaign."""
+    row = conn.execute(
+        "SELECT origin, context_json FROM ads_campaign"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s FOR UPDATE",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("campaign_unknown")
+    if row["origin"] == "imported":
+        raise ValueError(external_models.IMPORTED_REASON)
+    context = dict(row["context_json"] or {})
+    group_ids = [g["id"] for g in wizard_options.product_customer_groups(
+        conn, brand_id, list(context.get("product_ids") or []),
+    )]
+    override = _check_customer_groups(value, group_ids) if picked else None
+    if override is not None:
+        customer_group_ids, source = override, "user"
+    else:
+        customer_group_ids, source = group_ids, ("sell_way" if group_ids else "system")
+    context["customer_group_ids"] = customer_group_ids
+    field_sources = dict(context.get("field_sources") or {})
+    field_sources["audience"] = source
     context["field_sources"] = field_sources
     conn.execute(
         "UPDATE ads_campaign SET context_json = %s, updated_at = now()"
@@ -420,7 +417,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     模型照樣同步呼叫一次，只補受眾方向與附註（沒有排隊）。
 
     F40-I04：`picks` 另外可帶 `platform`／`audience_hint`／`cap`／`landing_url`（一句話路徑
-    也收）；沒帶的從上一期（最新一個非草稿活動）複製，見 `_copy_from_previous`。"""
+    也收）。F43-I04：結構化路徑另收 `customer_group_ids`（這個賣法的顧客群）；沒帶的從賣法
+    帶入（`_sell_way_defaults`），不再從上一期複製。"""
     picks = dict(picks or {})
     structured = any(picks.get(key) is not None for key in _STRUCTURED_KEYS)
     if not structured and (not isinstance(goal_text, str) or not goal_text.strip()):
@@ -433,6 +431,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     constraints = dict(constraints or {})
     extras = _check_extras(picks)
     checked = _check_picks(conn, brand_id, picks) if structured else None
+    if checked is None and picks.get("customer_group_ids") not in (None, []):
+        raise ValueError("customer_group_unknown")  # groups belong to a picked sell-way
+    defaults = _sell_way_defaults(checked)
     goal_composed = False
     dates_source = "user"
     if checked is not None:
@@ -529,16 +530,35 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         product_ids = checked["product_ids"]
         fields["objective"] = checked["objective"]
 
-    # F40-I04: a stated value (request first, then what the sentence said) wins; whatever is
-    # still empty is copied from the previous campaign below.
-    audience_hint = extras["audience_hint"] or fields["audience_hint"]
+    # A stated value (request first, then what the sentence said) wins; F43-I04: whatever is
+    # still empty comes from the picked sell-way (`defaults`), named `"sell_way"`.
+    if checked is not None:
+        # The audience of a structured create is the sell-way's customer groups: the model's
+        # audience guess is not stored beside them (only a request's own hint is).
+        audience_hint = extras["audience_hint"]
+    else:
+        audience_hint = extras["audience_hint"] or fields["audience_hint"]
     if extras["cap"] is not None:
         target_cost = extras["cap"]
     else:
         # A sentence the program composed carries no cap the user stated: whatever the model
-        # read as `cap` is dropped; the cap is set on the strategy page.
+        # read as `cap` is dropped.
         target_cost = None if goal_composed else fields["cap"]
+    cap_source = "user" if target_cost is not None else "system"
+    if target_cost is None and defaults["cap"] is not None:
+        target_cost, cap_source = defaults["cap"], "sell_way"
     landing_url = extras["landing_url"]
+    landing_source = "user" if landing_url else "system"
+    if landing_url is None and defaults["landing_url"] is not None:
+        landing_url, landing_source = defaults["landing_url"], "sell_way"
+    audience_source = "user" if audience_hint else "system"
+    customer_group_ids = None
+    if checked is not None:
+        if defaults["customer_group_ids"] is not None:
+            customer_group_ids, audience_source = defaults["customer_group_ids"], "user"
+        else:
+            customer_group_ids = defaults["group_ids"]
+            audience_source = "sell_way" if customer_group_ids else audience_source
 
     field_sources = {
         "product": "user" if product_ids else "system",
@@ -546,9 +566,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         "platform": "user" if constraints.get("platform") is not None else "system",
         "budget": "user" if constraints.get("budget") is not None else "system",
         "dates": dates_source,
-        "audience": "user" if audience_hint else "system",
-        "cap": "user" if target_cost is not None else "system",
-        "landing_url": "user" if landing_url else "system",
+        "audience": audience_source,
+        "cap": cap_source,
+        "landing_url": landing_source,
     }
 
     campaign = {
@@ -574,8 +594,9 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         },
         "constraints_json": constraints,
     }
-    _copy_from_previous(conn, org_id, brand_id, campaign)
-    row = ads_repo.create_campaign(conn, org_id, brand_id, campaign, created_by=actor)
+    if customer_group_ids is not None:
+        campaign["context_json"]["customer_group_ids"] = customer_group_ids
+    row =ads_repo.create_campaign(conn, org_id, brand_id, campaign, created_by=actor)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, row["id"])
     assert detail is not None  # 剛剛才插入的那一列，一定讀得到
     detail["parsed"] = parsed_ok

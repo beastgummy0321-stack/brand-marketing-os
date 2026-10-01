@@ -55,6 +55,7 @@ from app.meta import repository as meta_repo
 from app.schedule import repository as schedule_repo
 
 from .identity_test_helpers import mint_hs256
+from .org_clock import org_today
 
 TOKEN = "EAAtest-fake-meta-token-abcd1234"
 
@@ -810,8 +811,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         """錢的正確性（票 11 審查發現）：改名前後的日列各自留著當天的名稱，若照
         (campaign_id, campaign_name) 分組，同一個活動會裂成兩列、各拿半個月的花費——
         畫面上就少算一半，而且沒有任何錯誤訊息提醒。"""
-        from datetime import UTC, datetime, timedelta
-        month_start = datetime.now(UTC).date().replace(day=1)
+        month_start = org_today(web.conn, self.org_id).replace(day=1)
         self._insert_row("c1", month_start, 1000, 2.0, name="活動一")
         self._insert_row("c1", month_start + timedelta(days=1), 3000, 4.0, name="活動一（改名後）")
 
@@ -824,8 +824,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self.assertAlmostEqual(row["roas"], 3.5, places=2)  # 花費加權：(1000*2+3000*4)/4000
 
     def test_weighted_total_roas_and_null_propagation(self):
-        from datetime import UTC, datetime
-        today = datetime.now(UTC).date()
+        today = org_today(web.conn, self.org_id)
         self._insert_row("c1", today, 1000, 2.0)
         self._insert_row("c2", today, 3000, 4.0)
 
@@ -850,8 +849,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self.assertIsNone(by_id["c3"]["roas"])
 
     def test_rows_outside_this_month_are_excluded(self):
-        from datetime import UTC, datetime, timedelta
-        today = datetime.now(UTC).date()
+        today = org_today(web.conn, self.org_id)
         last_month = today.replace(day=1) - timedelta(days=1)
         self._insert_row("old", last_month, 999, 1.0)
         resp = self.client.get(f"/api/meta/brands/{self.brand_id}/spend", headers=self.auth)

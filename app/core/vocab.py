@@ -268,7 +268,23 @@ PRODUCT_FACT_TYPES = [
     ("scenario", "使用情境"),
     ("audience", "目標客群"),
     ("visual_style", "視覺風格"),
+    # F43-I01: a product's own evidence; `product_fact.fact_key` names which of the six proof
+    # kinds it is (same CHECK pair as brand_fact). Reader: available_proof_keys.
+    ("proof", "證據"),
 ]
+
+# F43-I01: the six `pain` keys a product customer group may name (1-2 each), with the seed labels
+# of the brand `pain` coordinates (app/schedule/repository.py _SEED_COORDINATES, copied, not
+# imported). The DB CHECK on product_customer_group.pain_keys holds the same keys.
+PAIN_KINDS = [
+    ("cost", "太貴"),
+    ("effort", "太麻煩"),
+    ("uncertainty", "怕買錯"),
+    ("availability", "買不到"),
+    ("experience", "用起來不舒服"),
+    ("identity", "不像我"),
+]
+PAIN_KEYS = tuple(k for k, _ in PAIN_KINDS)
 
 RULE_TYPES = [
     ("tone", "語氣"),
@@ -420,6 +436,10 @@ def proof_kind_label(v):
 
 def product_fact_type_label(v):
     return _label(PRODUCT_FACT_TYPES, v)
+
+
+def pain_label(v):
+    return _label(PAIN_KINDS, v)
 
 
 def rule_type_label(v):

@@ -40,8 +40,16 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   await expect(page).toHaveURL(/\/app\/brands\/brd_.+\/intake/);
   const brandId = new URL(page.url()).pathname.split("/")[3];
 
-  // A product with no economics yet (手動新增：同步、不花錢).
-  const product = await api<{ id: string }>(page, headers, "POST", `/api/products/brands/${brandId}`, { name: "晨光隨行杯 500ml 通勤款" });
+  // F43-I04: only a finished sell-way is pickable, so the product is built through product onboarding (create →
+  // 賣法與價格 → 完成; synchronous, no spend): one sell-way with a price and no cost yet.
+  const intake = `/api/intake/brands/${brandId}/products`;
+  const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: "晨光隨行杯 500ml 通勤款" });
+  const productId = onboarded.data.product_id;
+  const sellWays = await api<{ data: { sell_ways: { id: string }[] } }>(page, headers, "PUT", `${intake}/${productId}/onboarding/sell-ways`, {
+    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+  });
+  await api(page, headers, "POST", `${intake}/${productId}/onboarding/complete`);
+  const product = { id: sellWays.data.sell_ways[0].id };
 
   // --- 建一個沒有商品的活動（一句話的建立 API；F30-I05 的建立精靈一定要選商品，這裡要測「沒有商品」的分支）------
   const { campaign } = await api<{ campaign: { id: string } }>(page, headers, "POST", `/api/ads/brands/${brandId}/campaigns`, {
@@ -67,10 +75,10 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   expect(pickedBody.product_id).toBe(product.id);
   expect(pickedBody.result_kind).toBeUndefined();
 
-  // --- 商品沒有成本：誠實說沒有，連到該商品的經濟數字 ------------------------------------------------------
+  // --- 商品沒有成本：誠實說沒有，連到賣法背後那個商品的「賣法與價格」步驟（F43-I16）---------------------------
   await expect(page.getByText("沒有商品成本", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "去填商品成本", exact: true })).toHaveAttribute(
-    "href", `/app/brands/${brandId}/products/${product.id}?tab=economics-view`,
+    "href", `/app/brands/${brandId}/products/${productId}/onboarding?step=4`,
   );
 
   // --- 補上成本（售價 1,580 − 成本 1,000 − 運費 60 = 打平 520）後重新整理：暫用打平 -----------------------

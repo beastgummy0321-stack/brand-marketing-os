@@ -29,6 +29,7 @@ import {
 import { fetchMetaSpend } from "@/lib/metaApi";
 import { formatMetaRoas, formatRelativeHours } from "@/lib/format";
 import { LayoutEditor, metricLabels, widgetLabels } from "./LayoutEditor";
+import { ProductsBlock } from "./ProductsBlock";
 import {
   CampaignTable,
   InboxWidget,
@@ -189,6 +190,8 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           </>
         }
       />
+      {/* F43-I14: products and bundles are created and continued from the brand's home. */}
+      <ProductsBlock brandId={brandId} scope={scope} />
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <div
           className="flex flex-wrap items-center gap-2"
