@@ -658,7 +658,10 @@ class BrandDataGatesInPlanTest(PlanTestBase):
 
     def test_threshold_policy_reached_by_the_product_price_offers_free_shipping(self):
         self._save_free_shipping_999()
-        _, prompt = self._prompt_for(self._campaign_with_product(999), _plan_reply("none"))
+        # F44: an offer in the menu must be used by at least one ad, so the reply takes it.
+        _, prompt = self._prompt_for(
+            self._campaign_with_product(999), _plan_reply("none", offer="free_shipping"),
+        )
         self.assertIn("offer｜free_shipping｜免運", prompt)
         self.assertNotIn("offer｜discount｜", prompt)
         self.assertIn("offer｜none｜無優惠", prompt)
@@ -698,6 +701,123 @@ class BrandDataGatesInPlanTest(PlanTestBase):
         detail, prompt = self._prompt_for(self._create_adopted_campaign(), _format_reply("video"))
         self.assertIn("format｜video｜影片", prompt)
         self.assertEqual({ad["format_key"] for g in detail["groups"] for ad in g["ads"]}, {"video"})
+
+
+def _offer_reply(offers: dict) -> str:
+    """Three roles, one ad each; `offers` maps role -> offer key (a missing role uses `none`)."""
+    return json.dumps({"groups": [
+        {"role": role, "name": f"{role} 組", "ads": [
+            {"name": f"{role}-廣告一",
+             "coordinates": {**_coordinates(role), "proof": "none",
+                             "offer": offers.get(role, "none")},
+             "scene": f"{role} 受眾晚上在家滑手機看到這支廣告"},
+        ]}
+        for role in ("new", "retarget", "explore")
+    ]}, ensure_ascii=False)
+
+
+class OffersInDeliveryPlanPromptTest(PlanTestBase):
+    """F44-I02 (drill-9 red #1): the prompt prints the registered sentence of every offer the
+    filtered menu kept under 【這期可用的優惠】 (after the customers, before the vocabulary), leaves
+    the section out when the menu has no offer, and a plan in which no ad uses an offered key is
+    refused whole. Fixture: a three-pack sell-way with a list price (`bundle`)."""
+
+    _ROWS = (
+        ("offer", "bundle", "組合優惠"), ("offer", "free_shipping", "免運"),
+        ("offer", "none", "無優惠"),
+    )
+    _BUNDLE_LINE = "- offer=bundle｜綜合維他命軟糖 · 三盒組優惠價 NT$999（原價 NT$1,197）"
+
+    def setUp(self):
+        super().setUp()
+        for dimension, key, label in self._ROWS:
+            web.conn.execute(
+                "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (coredb.new_id("crd"), self.org_id, self.brand_id, dimension, key, label),
+            )
+        web.conn.commit()
+
+    def _bundle_campaign(self) -> dict:
+        product_id = bi_repo.create_product(
+            web.conn, self.brand_id, name="綜合維他命軟糖", actor=ACTOR,
+        )["id"]
+        sell_way_id = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="三盒組", actor=ACTOR,
+            components=[{"product_id": product_id, "qty": 3}],
+            economics={"selling_price": 999, "list_price": 1197, "unit_variable_cost": 300,
+                       "shipping_cost": 60},
+        )["id"]
+        campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                 {"product_ids": [sell_way_id]})
+        return campaign
+
+    def _adopt_reply(self, campaign: dict, reply: str) -> tuple[dict, str]:
+        provider = _fake(reply)
+        plan.PROVIDER = provider
+        detail = self._adopt(campaign["id"])
+        return detail, provider.calls[0]["messages"][0]["content"]
+
+    def _offer_keys(self, detail: dict) -> dict:
+        return {g["role"]: g["ads"][0]["offer_key"] for g in detail["groups"]}
+
+    def test_section_prints_the_offer_sentence_between_customers_and_vocabulary(self):
+        _, prompt = self._adopt_reply(self._bundle_campaign(), _offer_reply({"new": "bundle"}))
+        self.assertIn(f"\n\n{plan.OFFERS_HEADER}\n{self._BUNDLE_LINE}\n\n【座標詞彙", prompt)
+        # The department file names the header too; the last occurrence is the section itself.
+        offers_at = prompt.rindex(plan.OFFERS_HEADER)
+        self.assertLess(prompt.rindex("【這個賣法的顧客】"), offers_at)
+        self.assertLess(offers_at, prompt.rindex("【座標詞彙"))
+        self.assertIn("offer｜bundle｜組合優惠", prompt)
+
+    def test_section_lists_only_the_offers_the_menu_kept_each_once(self):
+        # 首購禮 maps to `discount`, which this brand's vocabulary does not have: its sentence
+        # must not be printed. 滿額免運 999 is reached by the three-pack's price.
+        bi_repo.save_brand_policies(web.conn, self.brand_id, [
+            {"key": "first_order", "params": {"content": "首購 9 折"}},
+            {"key": "ship_threshold", "params": {"threshold": 999}},
+        ], actor=ACTOR)
+        _, prompt = self._adopt_reply(self._bundle_campaign(), _offer_reply({"new": "bundle"}))
+        section = prompt[prompt.rindex(plan.OFFERS_HEADER):prompt.rindex("【座標詞彙")]
+        lines = section.strip().splitlines()[1:]
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("- offer=free_shipping｜"), lines[0])
+        self.assertIn("999", lines[0])
+        self.assertEqual(lines[1], self._BUNDLE_LINE)
+        self.assertNotIn("首購 9 折", prompt)
+
+    def test_section_is_left_out_when_the_menu_has_no_offer(self):
+        # No product, no policy: the menu's only offer row is `none`; an all-`none` plan passes.
+        detail, prompt = self._adopt_reply(self._create_adopted_campaign(), _offer_reply({}))
+        department_text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertEqual(
+            prompt.count(plan.OFFERS_HEADER), department_text.count(plan.OFFERS_HEADER),
+        )
+        self.assertNotIn("- offer=", prompt)
+        self.assertEqual(set(self._offer_keys(detail).values()), {"none"})
+
+    def test_all_none_plan_is_refused_when_the_menu_has_an_offer(self):
+        campaign = self._bundle_campaign()
+        # `free_shipping` is not in this menu, so `_gate_reply` turns it into `none` first.
+        for reply in (_offer_reply({}), _offer_reply({"new": "free_shipping"})):
+            with self.assertRaises(ValueError) as ctx:
+                self._adopt_reply(campaign, reply)
+            self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(reloaded["status"], "draft")  # nothing was written
+        self.assertEqual(reloaded["groups"], [])
+
+    def test_one_ad_using_the_offer_passes_and_the_others_keep_none(self):
+        detail, _ = self._adopt_reply(self._bundle_campaign(), _offer_reply({"retarget": "bundle"}))
+        self.assertEqual(
+            self._offer_keys(detail), {"new": "none", "retarget": "bundle", "explore": "none"},
+        )
+
+    def test_the_department_file_requires_one_ad_to_use_a_listed_offer(self):
+        text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertIn("至少要有一支廣告的 `offer` 填列出的某個 key", text)
+        self.assertIn("沒有列這一段，每支廣告的 `offer` 都填 `none`", text)
 
 
 if __name__ == "__main__":

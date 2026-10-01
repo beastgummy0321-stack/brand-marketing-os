@@ -840,6 +840,8 @@ class ScriptedProvider:
     _AVAILABLE_ROLES_HEADER = "【可用角色】"
     # Delivery-plan prompt's adopted-allocation line: `- <role>（<label>）：<pct>%…` (plan.py).
     _ADOPTED_LINE = re.compile(r"^- (\w+)（[^）]*）：\d+(?:\.\d+)?%")
+    # Delivery-plan prompt's 【這期可用的優惠】 line: `- offer=<key>｜<sentence>` (plan.py, F44).
+    _OFFER_LINE = re.compile(r"^- offer=([^｜]+)｜")
 
     def __init__(self, reply: dict):
         self._reply = reply
@@ -866,7 +868,8 @@ class ScriptedProvider:
 
     def _reply_for(self, messages: list) -> dict:
         """Prompt-aware selection (F33-I00): the strategy template follows the roles the prompt
-        offers under `【可用角色】`; the delivery-plan template follows the adopted-allocation lines.
+        offers under `【可用角色】`; the delivery-plan template follows the adopted-allocation lines
+        and, when the prompt lists 【這期可用的優惠】 lines, uses the first listed offer key (F44).
         Any other template, or a prompt without those sections, returns the template unchanged."""
         prompt = self._last_user_text(messages)
         if "allocation" in self._reply:
@@ -887,18 +890,21 @@ class ScriptedProvider:
             if not roles:
                 return self._reply
             template = self._reply["groups"][0]
-            return {
-                **self._reply,
-                "groups": [
-                    {"role": role, "name": f"e2e {role} group", "ads": [{
-                        "name": f"e2e {role} ad",
-                        "coordinates": dict(template["ads"][0]["coordinates"]),
-                        # F39-I03: same per-role scene wording as the SCRIPTED_REPLIES template.
-                        "scene": f"e2e {role} 受眾晚上在家滑手機看到這支廣告",
-                    }]}
-                    for role in roles
-                ],
-            }
+            groups = [
+                {"role": role, "name": f"e2e {role} group", "ads": [{
+                    "name": f"e2e {role} ad",
+                    "coordinates": dict(template["ads"][0]["coordinates"]),
+                    # F39-I03: same per-role scene wording as the SCRIPTED_REPLIES template.
+                    "scene": f"e2e {role} 受眾晚上在家滑手機看到這支廣告",
+                }]}
+                for role in roles
+            ]
+            # F44-I02: the plan is refused when the prompt lists offers and no ad uses one, so
+            # the first group's ad takes the first listed key.
+            offer_key = self._first_offer_key(prompt)
+            if offer_key is not None:
+                groups[0]["ads"][0]["coordinates"]["offer"] = offer_key
+            return {**self._reply, "groups": groups}
         return self._reply
 
     @staticmethod
@@ -937,6 +943,14 @@ class ScriptedProvider:
             if match and match.group(1) not in roles:
                 roles.append(match.group(1))
         return roles
+
+    @classmethod
+    def _first_offer_key(cls, prompt: str) -> str | None:
+        for line in prompt.splitlines():
+            match = cls._OFFER_LINE.match(line.strip())
+            if match:
+                return match.group(1)
+        return None
 
 
 class FakeProvider:
