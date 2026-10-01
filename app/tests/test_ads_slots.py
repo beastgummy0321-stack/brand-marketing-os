@@ -9,6 +9,14 @@ F35 Contract T: each planned slot carries its copy half (`copy`) and `workbench_
 uploaded into a slot carries the ad's selected workbench copy in, fills the purpose with the
 ad's name, confirms and assigns in the same call; a slot with a file but no copy takes one of
 the brand's workbench copy versions through `POST …/slots/{ad}/copy`.
+
+F44-I03: the confirmation judges a slot's copy against the ad's sell-way and offer coordinate
+(real brand rows, the real `validate_claims`), a library placement against the campaign's
+sell-way; a refusal carries Contract C details beside its sentences.
+
+F44-I04 Contract D: a slot whose confirmation was refused keeps the refusal's details and reads
+`blocked` with the first reason and its exit; a clean copy version or `POST …/slots/{ad}/recheck`
+after the cause is removed makes it ready; every slot carries `blocked` and `offer_label`.
 """
 
 from datetime import timedelta
@@ -19,15 +27,16 @@ from fastapi.testclient import TestClient
 
 from app import workbench
 from app.ads import (
-    assets as legacy_assets,
-)
-from app.ads import (
+    asset_suggestions,
     change_control_data,
     change_control_launch,
     external_repository,
     handoff_assignment,
     material_tasks,
     slots,
+)
+from app.ads import (
+    assets as legacy_assets,
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as user_assets
@@ -273,10 +282,13 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
         "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
+        "blocked": None, "offer_label": None,
     }
     # Uploaded, its original still pending: not confirmable yet, so not launchable and not
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
-    assert slot[uploaded_ad]["state"] == "in_progress"
+    # Waiting for a preview is not a refusal: `in_progress`, never `blocked`.
+    assert (slot[uploaded_ad]["state"], slot[uploaded_ad]["blocked"]) == ("in_progress", None)
+    assert result["placement"]["blocked_reasons"] == []
     assert slot[uploaded_ad]["confirmed"] is False
     assert slot[uploaded_ad]["thumbnail_url"] is None  # its preview is not made yet
     assert slot[uploaded_ad]["copy"] == placement_copy("待確認")
@@ -317,8 +329,9 @@ def test_a_revised_assignment_is_in_progress_not_ready(env):
 
 
 def test_upload_waits_for_confirmation_then_assigns_the_confirmed_revision(env):
-    """A placement the program cannot confirm (its copy misses a field) waits in the slot; the
-    slot follows the placement id through the user's revision and confirmation."""
+    """A placement the program cannot confirm (its copy misses a field) waits in the slot,
+    `blocked` with that reason (F44); the slot follows the placement id through the user's
+    revision -- which starts with no stored reason -- and confirmation."""
     ad = env["ads"][1]
     asset = user_asset(env)
     client = TestClient(app)
@@ -332,17 +345,25 @@ def test_upload_waits_for_confirmation_then_assigns_the_confirmed_revision(env):
     assert placement["confirmed_at"] is None
     assert placement["purpose"] == "通勤情境單圖"  # filled by the program, not confirmed yet
     slot = by_ad(response.json()["slots"])[ad]
-    assert (slot["state"], slot["thumbnail_url"]) == ("in_progress", thumb(env, asset))
+    assert (slot["state"], slot["thumbnail_url"]) == ("blocked", thumb(env, asset))
     assert slot["copy"] == placement_copy("待確認", {**partial, "description": None})
+    assert slot["blocked"] == {
+        "text": "請补齊標題、內文與說明，或補充可用品牌事實。", "terms": [], "fix": "copy",
+        "more": 0,
+    }
+    assert response.json()["slots"]["ready"] == 0
 
-    # Completing the copy is a new revision: the slot follows the id.
+    # Completing the copy is a new revision: the slot follows the id, and the new revision has
+    # not been refused yet.
     revised = client.patch(
         f"{base(env)}/placements/{placement['id']}",
         json={"expected_revision": 1, "copy_fields": COPY},
     )
     assert revised.status_code == 200, revised.text
     assert revised.json()["placement"]["revision"] == 2
-    assert by_ad(client.get(f"{base(env)}/slots").json())[ad]["state"] == "in_progress"
+    assert revised.json()["placement"]["blocked_reasons"] == []
+    waiting = by_ad(client.get(f"{base(env)}/slots").json())[ad]
+    assert (waiting["state"], waiting["blocked"]) == ("in_progress", None)
 
     confirmed = client.post(
         f"{base(env)}/placements/{placement['id']}/confirm", json={"expected_revision": 2}
@@ -544,9 +565,10 @@ def test_copy_options_and_picker_refuse_imported_and_unknown_campaigns(env):
         )
 
 
-def test_pending_placement_with_zero_known_budget_stays_in_progress(env):
+def test_pending_placement_with_zero_known_budget_is_blocked_with_no_slot_exit(env):
     """The confirmation is refused by `pending_reasons` (a zero platform budget): the slot keeps
-    waiting with its copy shown, never ready."""
+    waiting with its copy shown, never ready -- `blocked` with the reason, and `fix: None`
+    because neither another copy nor another file fixes a campaign-level reason."""
     conn, ad = env["conn"], env["ads"][0]
     workbench_copy(env, ad)
     conn.execute(
@@ -561,8 +583,14 @@ def test_pending_placement_with_zero_known_budget_stays_in_progress(env):
     assert result["placement"]["confirmed_at"] is None
     assert result["placement"]["copy_fields"] == WORKBENCH_COPY
     slot = by_ad(result["slots"])[ad]
-    assert (slot["state"], slot["confirmed"]) == ("in_progress", False)
+    assert (slot["state"], slot["confirmed"]) == ("blocked", False)
     assert slot["copy"] == placement_copy("待確認", WORKBENCH_COPY)
+    assert slot["blocked"] == {
+        "text": (
+            "目前已知預算為零，本件保留必用待安排；請先核對手動上架計畫，不會修改平台預算。"
+        ),
+        "terms": [], "fix": None, "more": 0,
+    }
     assert result["slots"]["ready"] == 0
     row = campaigns.get_ad(conn, env["org"], env["brand"], ad)
     assert row["material_placement_id"] is None
@@ -817,7 +845,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
         "ad_id": launched_ad, "entity_id": entity["id"], "name": "晨光隨行杯・日常出發",
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
-        "format_key": None,
+        "format_key": None, "blocked": None, "offer_label": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -917,6 +945,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
         "ad_id": None, "entity_id": b1["id"], "name": "晨光 1", "state": "ready",
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
         "copy": None, "workbench_href": None, "format_key": None,
+        "blocked": None, "offer_label": None,  # an imported campaign has no offer coordinate
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
@@ -929,8 +958,9 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
 
 def test_one_original_uploaded_into_two_slots_backs_both_ads(env):
     """F40-I02 (drill-7 #6): the same file goes into two slots with its own (still partial,
-    so unconfirmed) copy -- two current placements keyed by ad, two `slot_placement_id`s, one
-    shared thumbnail; the same ad with other copy is still the one conflict."""
+    so unconfirmed and, since F44, `blocked`) copy -- two current placements keyed by ad, two
+    `slot_placement_id`s, one shared thumbnail; the same ad with other copy is still the one
+    conflict."""
     first_ad, second_ad, _ = env["ads"]
     asset = user_asset(env)
     first = upload(env, first_ad, {"asset_id": asset, "copy_fields": {"body": "第一則"}})
@@ -948,7 +978,7 @@ def test_one_original_uploaded_into_two_slots_backs_both_ads(env):
     ]
     slot = by_ad(second["slots"])
     assert slot[first_ad]["thumbnail_url"] == slot[second_ad]["thumbnail_url"] == thumb(env, asset)
-    assert (slot[first_ad]["state"], slot[second_ad]["state"]) == ("in_progress", "in_progress")
+    assert (slot[first_ad]["state"], slot[second_ad]["state"]) == ("blocked", "blocked")
     for ad, body in ((first_ad, "第一則"), (second_ad, "第二則")):
         assert slot[ad]["copy"] == placement_copy(
             "待確認", {"headline": None, "body": body, "description": None}
@@ -975,3 +1005,459 @@ def test_slots_route_reads_and_unknown_campaign_is_404(env):
     assert ok.json()["total"] == 3
     missing = client.get(f"/api/ads/brands/{env['brand']}/campaigns/adc_missing/slots")
     assert missing.status_code == 404
+
+
+# -- F44-I03: the copy is judged against the ad's sell-way and offer coordinate -------------------
+
+
+# The sell-way's registered offer sentence: 「晨光軟糖 · 三盒組優惠價 NT$999（原價 NT$1,500）」.
+PRICE_COPY = {
+    "headline": "晨光軟糖三盒組",
+    "body": "三盒組優惠價 NT$999（原價 NT$1,500）",
+    "description": "每天兩顆",
+}
+SHIP_999 = [{"key": "ship_threshold", "params": {"threshold": 999}}]
+
+
+def sell_way_campaign(env, *, qty=3, price=999, list_price=1500, policies=None):
+    """The campaign sells one sell-way of a real brand product: `qty` units at `price`, below
+    `list_price` -- its own offer is `bundle` (several units) or `discount` (one unit)."""
+    conn = env["conn"]
+    if policies:
+        brands.save_brand_policies(conn, env["brand"], policies, actor="test")
+    product = brands.create_product(conn, env["brand"], name="晨光軟糖", actor="test")["id"]
+    way = brands.save_sell_way(
+        conn, env["brand"], name="三盒組", actor="test",
+        components=[{"product_id": product, "qty": qty}],
+        economics={
+            "selling_price": price, "list_price": list_price, "unit_variable_cost": 300,
+            "shipping_cost": 60,
+        },
+    )["id"]
+    campaigns.update_campaign(
+        conn, env["org"], env["brand"], env["campaign"], {"product_ids": [way]}
+    )
+    conn.commit()
+    return way
+
+
+def plan_offer(env, ad, key, label):
+    """The offer coordinate the plan gave this ad, with the label its snapshot kept."""
+    env["conn"].execute(
+        "UPDATE ads_ad SET offer_key=%s,coordinates_snapshot_json=%s WHERE id=%s",
+        (key, db.jsonb({"offer": {"key": key, "label": label}}), ad),
+    )
+    env["conn"].commit()
+
+
+def recheck(env, placement):
+    return asset_suggestions.confirm_manual(
+        env["conn"], env["org"], env["brand"], env["campaign"], placement["id"],
+        placement["revision"], "human",
+    )
+
+
+def refusal(kind, text, terms=()):
+    return {"kind": kind, "text": text, "terms": list(terms)}
+
+
+def test_sell_way_price_copy_confirms_on_the_ad_planned_with_that_offer(env):
+    """Drill-9 red #2: the sell-way's own 「優惠價／原價」 on an `offer=bundle` ad is backed."""
+    ad = env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "bundle", "組合優惠")
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    assert result["placement"]["confirmed_at"]
+    assert result["placement"]["status"] == "manual_ready"
+    assert by_ad(result["slots"])[ad]["state"] == "ready"
+
+
+def test_the_same_copy_on_a_no_offer_ad_is_refused_with_the_mismatch(env):
+    ad = env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "none", "無優惠")
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    assert result["placement"]["confirmed_at"] is None
+    assert by_ad(result["slots"])[ad]["state"] == "blocked"
+
+    refused = recheck(env, result["placement"])
+    sentence = "這則規劃的是「無優惠」，文案卻寫了「優惠」。"
+    assert (refused["status"], refused["confirmed_at"]) == ("pending", None)
+    assert refused["pending_reasons"] == [sentence]
+    assert refused["pending_details"] == [refusal("copy", sentence, ["優惠"])]
+
+
+def test_a_word_of_another_offer_family_is_a_mismatch_with_the_planned_offer(env):
+    """The sell-way has 加贈's family (`bundle`), the ad was planned with 免運."""
+    ad = env["ads"][0]
+    sell_way_campaign(env, policies=SHIP_999)
+    plan_offer(env, ad, "free_shipping", "免運")
+    copy = {**COPY, "body": "買三盒加贈一盒"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    assert result["placement"]["confirmed_at"] is None
+    sentence = "這則規劃的是「免運」，文案卻寫了「加贈」。"
+    assert recheck(env, result["placement"])["pending_details"] == [
+        refusal("copy", sentence, ["加贈"])
+    ]
+
+
+def test_a_promise_the_sell_way_does_not_have_is_unbacked(env):
+    """One unit below its list price is a `discount`: nothing registered backs 「加贈」, on any
+    offer coordinate -- the unbacked sentence, not a mismatch."""
+    ad = env["ads"][0]
+    sell_way_campaign(env, qty=1, price=800, list_price=1000)
+    plan_offer(env, ad, "discount", "折扣")
+    copy = {**COPY, "body": "現在下單加贈一盒"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    assert result["placement"]["confirmed_at"] is None
+    sentence = "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。"
+    refused = recheck(env, result["placement"])
+    assert refused["pending_reasons"] == [sentence]
+    assert refused["pending_details"] == [refusal("copy", sentence, ["加贈"])]
+
+
+def test_library_placement_is_judged_with_the_campaigns_sell_way(env):
+    conn = env["conn"]
+    placement = user_assets.attach(
+        conn, env["org"], env["brand"], env["campaign"], user_asset(env), PRICE_COPY, "human",
+        purpose="產品介紹",
+    )
+    conn.commit()
+    # No sell-way on the campaign: brand level, where no offer is registered.
+    assert recheck(env, placement)["pending_details"] == [
+        refusal("copy", "文案寫了「優惠」，品牌資料裡沒有登記這個優惠或背書。", ["優惠"])
+    ]
+    sell_way_campaign(env)
+    confirmed = recheck(env, placement)
+    assert (confirmed["status"], confirmed["ad_id"]) == ("manual_ready", None)
+    assert confirmed["confirmed_at"]
+
+
+def test_snapshot_names_what_each_placement_is_judged_against(env):
+    conn = env["conn"]
+    way = sell_way_campaign(env)
+    planned_ad, edited_ad, bare_ad = env["ads"]
+    plan_offer(env, planned_ad, "bundle", "組合優惠")
+    # Planned with `bundle`, edited to `none` afterwards: the snapshot's label is another key's,
+    # so the label is the brand vocabulary's.
+    plan_offer(env, edited_ad, "bundle", "組合優惠")
+    conn.execute("UPDATE ads_ad SET offer_key='none' WHERE id=%s", (edited_ad,))
+    conn.execute(
+        "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+        "VALUES(%s,%s,%s,'offer','none','無優惠')",
+        (db.new_id("crd"), env["org"], env["brand"]),
+    )
+    placed = {
+        ad: user_assets.attach(
+            conn, env["org"], env["brand"], env["campaign"], user_asset(env), COPY, "human",
+            ad_id=ad,
+        )
+        for ad in (planned_ad, edited_ad, bare_ad, None)
+    }
+    conn.commit()
+    data = asset_suggestions.snapshot(
+        conn, env["org"], env["brand"], env["campaign"],
+        [{"id": p["id"], "revision": 1} for p in placed.values()], "",
+    )
+    assert data["campaign"]["sell_way"] == way
+    judged = {
+        p["ad_id"]: (p["sell_way"], p["offer_key"], p["offer_label"]) for p in data["placements"]
+    }
+    assert judged == {
+        planned_ad: (way, "bundle", "組合優惠"),
+        edited_ad: (way, "none", "無優惠"),
+        bare_ad: (way, None, None),
+        None: (way, None, None),  # a library placement: the campaign's sell-way, no offer
+    }
+
+
+def test_refusal_details_name_the_exit_that_fixes_each_reason(env):
+    conn = env["conn"]
+    failed = user_asset(env, status="error", thumbnail=False)
+    conn.execute("UPDATE ads_user_asset SET error='圖片格式讀不出來。' WHERE id=%s", (failed,))
+    waiting = user_asset(env, status="pending", thumbnail=False)
+    cases = (
+        (failed, COPY, "產品介紹", [refusal("file", "圖片格式讀不出來。")]),
+        (waiting, COPY, "產品介紹", [refusal("wait", "原檔預覽尚未完成，請先完成媒體處理。")]),
+        (
+            user_asset(env), {"headline": "標題"}, None,
+            [
+                refusal("copy", "請补齊標題、內文與說明，或補充可用品牌事實。"),
+                refusal("campaign", "請補這件素材的投放用途。"),
+            ],
+        ),
+    )
+    for asset, copy, purpose, details in cases:
+        placement = user_assets.attach(
+            conn, env["org"], env["brand"], env["campaign"], asset, copy, "human",
+            purpose=purpose,
+        )
+        conn.commit()
+        refused = recheck(env, placement)
+        assert refused["confirmed_at"] is None
+        assert refused["pending_details"] == details
+        assert refused["pending_reasons"] == [d["text"] for d in details]
+
+
+# -- F44-I04 Contract D: a refused slot keeps its reason; the slots read says it ------------------
+
+
+MISMATCH = "這則規劃的是「無優惠」，文案卻寫了「優惠」。"
+CLEAN_COPY = {"headline": "晨光軟糖三盒組", "body": "讀到深夜也有它陪", "description": "每天兩顆"}
+
+
+def blocked(text, terms=(), *, fix, more=0):
+    return {"text": text, "terms": list(terms), "fix": fix, "more": more}
+
+
+def stored_reasons(env, placement_id):
+    return user_assets.placement(
+        env["conn"], env["org"], env["brand"], env["campaign"], placement_id
+    )["blocked_reasons"]
+
+
+def refused_slot(env, ad):
+    """The drill-9 red #2 slot: an ad planned with 無優惠 whose file came with the sell-way's
+    price copy -- the confirmation refuses it."""
+    sell_way_campaign(env)
+    plan_offer(env, ad, "none", "無優惠")
+    return upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+
+
+def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(env):
+    ad, other_ad = env["ads"][0], env["ads"][1]
+    result = refused_slot(env, ad)
+    assert stored_reasons(env, result["placement"]["id"]) == [
+        refusal("copy", MISMATCH, ["優惠"])
+    ]
+    env["conn"].commit()  # the route reads on its own connection
+
+    view = TestClient(app).get(f"{base(env)}/slots")
+    assert view.status_code == 200, view.text
+    assert view.json() == result["slots"]
+    slot = by_ad(view.json())[ad]
+    assert slot == {
+        "ad_id": ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "blocked",
+        "thumbnail_url": thumb(env, result["placement"]["asset_id"]), "confirmed": False,
+        "replace_task_id": None, "copy": placement_copy("待確認", PRICE_COPY),
+        "workbench_href": None, "format_key": None,
+        "blocked": blocked(MISMATCH, ["優惠"], fix="copy"), "offer_label": "無優惠",
+    }
+    # A blocked slot is not ready; the slots nothing was uploaded into carry `blocked: None`.
+    assert (view.json()["ready"], view.json()["total"]) == (0, 3)
+    assert by_ad(view.json())[other_ad]["blocked"] is None
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
+    assert (row["material_placement_id"], row["slot_placement_id"]) == (
+        None, result["placement"]["id"],
+    )
+
+
+def test_choosing_a_clean_copy_version_clears_the_reason_and_the_slot_is_ready(env):
+    ad = env["ads"][0]
+    result = refused_slot(env, ad)
+    option = workbench_copy(env, ad, CLEAN_COPY)
+
+    chosen = TestClient(app).post(f"{base(env)}/slots/{ad}/copy", json=option)
+    assert chosen.status_code == 200, chosen.text
+    placement = chosen.json()["placement"]
+    assert (placement["id"], placement["revision"]) == (result["placement"]["id"], 2)
+    assert placement["confirmed_at"]
+    assert placement["blocked_reasons"] == []
+    slot = by_ad(chosen.json()["slots"])[ad]
+    assert (slot["state"], slot["blocked"]) == ("ready", None)
+    assert slot["copy"] == placement_copy("已確認", CLEAN_COPY)
+    assert chosen.json()["slots"]["ready"] == 1
+    # The refused revision keeps what it was refused for (history), the current one is clean.
+    refused = user_assets.placement(
+        env["conn"], env["org"], env["brand"], env["campaign"], placement["id"], 1
+    )
+    assert refused["blocked_reasons"] == [refusal("copy", MISMATCH, ["優惠"])]
+
+
+def test_recheck_returns_the_same_reason_until_its_cause_is_removed(env):
+    ad = env["ads"][0]
+    result = refused_slot(env, ad)
+    client = TestClient(app)
+
+    again = client.post(f"{base(env)}/slots/{ad}/recheck")
+    assert again.status_code == 200, again.text
+    assert set(again.json()) == {"slots"}
+    slot = by_ad(again.json()["slots"])[ad]
+    assert (slot["state"], slot["blocked"]) == (
+        "blocked", blocked(MISMATCH, ["優惠"], fix="copy"),
+    )
+
+    # The cause removed: the ad's offer coordinate now matches what the copy says.
+    plan_offer(env, ad, "bundle", "組合優惠")
+    fixed = client.post(f"{base(env)}/slots/{ad}/recheck")
+    assert fixed.status_code == 200, fixed.text
+    slot = by_ad(fixed.json()["slots"])[ad]
+    assert (slot["state"], slot["confirmed"], slot["blocked"]) == ("ready", True, None)
+    assert slot["offer_label"] == "組合優惠"
+    assert slot["copy"] == placement_copy("已確認", PRICE_COPY)
+    assert fixed.json()["slots"]["ready"] == 1
+    assert stored_reasons(env, result["placement"]["id"]) == []
+    row = campaigns.get_ad(env["conn"], env["org"], env["brand"], ad)
+    assert (row["material_placement_id"], row["material_placement_revision"]) == (
+        result["placement"]["id"], 1,
+    )
+    assert row["slot_placement_id"] is None
+
+    # Ready now: nothing left to check.
+    done = client.post(f"{base(env)}/slots/{ad}/recheck")
+    assert done.status_code == 409, done.text
+    assert done.json()["error"]["code"] == "slot_no_file"
+
+
+def test_recheck_replaces_the_stored_reasons_with_the_new_refusal(env):
+    """Fixing one cause may leave another: the slot says the reason of the latest refusal."""
+    conn, ad = env["conn"], env["ads"][0]
+    result = refused_slot(env, ad)
+    plan_offer(env, ad, "bundle", "組合優惠")
+    conn.execute("UPDATE ads_delivery_group SET daily_budget=0 WHERE id=%s", (env["group"],))
+    conn.commit()
+    platform_entity(
+        env, "root", native_kind="campaign", currency="TWD", budget_type="daily",
+        budget_amount=0,
+    )
+    view = slots.recheck(conn, env["org"], env["brand"], env["campaign"], ad, "human")["slots"]
+    slot = by_ad(view)[ad]
+    assert slot["state"] == "blocked"
+    assert (slot["blocked"]["fix"], slot["blocked"]["terms"], slot["blocked"]["more"]) == (
+        None, [], 0,
+    )
+    assert slot["blocked"]["text"].startswith("目前已知預算為零")
+    assert [d["kind"] for d in stored_reasons(env, result["placement"]["id"])] == ["campaign"]
+
+
+def test_recheck_refuses_slots_with_nothing_to_check_and_foreign_campaigns(env):
+    client = TestClient(app)
+    empty_ad, ready_ad = env["ads"][0], env["ads"][1]
+    assign_confirmed(env, ready_ad, user_asset(env))
+    for ad in (empty_ad, ready_ad):
+        response = client.post(f"{base(env)}/slots/{ad}/recheck")
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["code"] == "slot_no_file"
+    unknown_ad = client.post(f"{base(env)}/slots/ada_missing/recheck")
+    assert unknown_ad.status_code == 409
+    assert unknown_ad.json()["error"] == {
+        "code": "user_asset_unavailable", "message": "找不到此活動的計畫廣告。", "details": None,
+    }
+    imported = external_repository.create_imported_campaign(
+        env["conn"], env["org"], env["brand"], name="既有活動"
+    )["id"]
+    env["conn"].commit()
+    prefix = f"/api/ads/brands/{env['brand']}/campaigns"
+    missing = client.post(f"{prefix}/adc_missing/slots/{empty_ad}/recheck")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "campaign_unknown"
+    assert client.post(f"{prefix}/{imported}/slots/{empty_ad}/recheck").status_code == 409
+
+
+def test_recheck_while_the_preview_is_not_made_stays_in_progress(env):
+    """Waiting is not a refusal: nothing is stored, the slot keeps `in_progress`."""
+    ad = env["ads"][0]
+    waiting = user_asset(env, status="pending", thumbnail=False)
+    result = upload(env, ad, {"asset_id": waiting, "copy_fields": COPY})
+    view = slots.recheck(
+        env["conn"], env["org"], env["brand"], env["campaign"], ad, "human"
+    )["slots"]
+    assert (by_ad(view)[ad]["state"], by_ad(view)[ad]["blocked"]) == ("in_progress", None)
+    assert stored_reasons(env, result["placement"]["id"]) == []
+
+
+def test_only_details_with_something_to_fix_are_stored(env):
+    """A `wait` detail is never kept: alone it writes nothing, beside others it is left out."""
+    ad = env["ads"][0]
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": {"body": "內文"}})
+    placement = result["placement"]
+    kept = stored_reasons(env, placement["id"])
+    assert [d["kind"] for d in kept] == ["copy"]
+    wait = refusal("wait", "原檔預覽尚未完成，請先完成媒體處理。")
+    other = refusal("copy", "含品牌禁止宣稱，請修訂此安排的文案。")
+    for details, expected in (([wait], kept), ([wait, other], [other])):
+        answer = {**placement, "status": "pending", "pending_details": details}
+        with patch.object(asset_suggestions, "confirm_manual", return_value=answer):
+            slots.recheck(env["conn"], env["org"], env["brand"], env["campaign"], ad, "human")
+        assert stored_reasons(env, placement["id"]) == expected
+
+
+def test_a_failed_original_reads_blocked_with_the_file_exit(env):
+    conn = env["conn"]
+    with_copy, without_copy, refused_ad = env["ads"]
+    failed = user_asset(env, status="error", thumbnail=False)
+    conn.execute("UPDATE ads_user_asset SET error='圖片格式讀不出來。' WHERE id=%s", (failed,))
+    conn.commit()
+    file_reason = "這個檔案處理失敗：圖片格式讀不出來。"
+    result = upload(env, with_copy, {"asset_id": failed, "copy_fields": COPY})
+    # Read from the original itself: the confirmation never ran, so nothing is stored.
+    assert stored_reasons(env, result["placement"]["id"]) == []
+    slot = by_ad(upload(env, without_copy, {"asset_id": failed})["slots"])
+    assert slot[with_copy]["state"] == slot[without_copy]["state"] == "blocked"
+    assert slot[with_copy]["blocked"] == blocked(file_reason, fix="file")
+    assert slot[with_copy]["copy"] == placement_copy("待確認")
+    assert slot[with_copy]["thumbnail_url"] is None
+    # No copy either: the file is what blocks it, not the missing copy (never `image_only`).
+    assert (slot[without_copy]["blocked"], slot[without_copy]["copy"]) == (
+        blocked(file_reason, fix="file"), None,
+    )
+
+    # A slot already refused for its copy whose original then fails: the file first, one more.
+    asset = user_asset(env)
+    upload(env, refused_ad, {"asset_id": asset, "copy_fields": {"headline": "標題", "body": "x"}})
+    conn.execute("UPDATE ads_user_asset SET status='error',error='損毀' WHERE id=%s", (asset,))
+    conn.commit()
+    assert by_ad(read(env))[refused_ad]["blocked"] == blocked(
+        "這個檔案處理失敗：損毀", fix="file", more=1
+    )
+    # A transient failure the dispatcher still retries is not a failed original.
+    conn.execute("UPDATE ads_user_asset SET status='retryable' WHERE id=%s", (failed,))
+    conn.commit()
+    assert by_ad(read(env))[with_copy]["state"] == "in_progress"
+
+
+def test_a_file_without_copy_keeps_its_picker(env):
+    """The missing copy is what the picker is for: the slot stays `image_only`, not `blocked`,
+    even though the refused confirmation's reason is stored."""
+    ad = env["ads"][0]
+    result = upload(env, ad, {"asset_id": user_asset(env)})
+    slot = by_ad(result["slots"])[ad]
+    assert (slot["state"], slot["blocked"], slot["copy"]) == ("image_only", None, None)
+
+
+def test_a_deleted_sell_way_blocks_the_slot_instead_of_failing_the_upload(env):
+    ad = env["ads"][0]
+    way = sell_way_campaign(env)
+    # Only an archived product can be deleted.
+    brands.update_product(
+        env["conn"], env["brand"], way, name="三盒組", status="archived", actor="test"
+    )
+    brands.delete_product(env["conn"], env["brand"], way, actor="test")
+    env["conn"].commit()
+    response = TestClient(app).post(
+        f"{base(env)}/slots/{ad}/upload", json={"asset_id": user_asset(env), "copy_fields": COPY}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["placement"]["confirmed_at"] is None
+    slot = by_ad(response.json()["slots"])[ad]
+    assert (slot["state"], slot["blocked"]) == (
+        "blocked", blocked("找不到此品牌商品。", fix=None),
+    )
+    assert stored_reasons(env, response.json()["placement"]["id"]) == [
+        refusal("campaign", "找不到此品牌商品。")
+    ]
+
+
+def test_every_planned_slot_names_its_ads_offer_coordinate(env):
+    planned_ad, edited_ad, bare_ad = env["ads"]
+    sell_way_campaign(env)
+    plan_offer(env, planned_ad, "bundle", "組合優惠")
+    # Edited to another key after the plan: the label is the brand vocabulary's, else the key.
+    plan_offer(env, edited_ad, "bundle", "組合優惠")
+    env["conn"].execute("UPDATE ads_ad SET offer_key='none' WHERE id=%s", (edited_ad,))
+    env["conn"].commit()
+    result = upload(env, planned_ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    slot = by_ad(result["slots"])
+    assert (slot[planned_ad]["state"], slot[planned_ad]["offer_label"]) == ("ready", "組合優惠")
+    assert (slot[edited_ad]["state"], slot[edited_ad]["offer_label"]) == ("missing", "none")
+    assert slot[bare_ad]["offer_label"] is None

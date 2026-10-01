@@ -10,7 +10,7 @@ or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a r
 
 from typing import cast
 
-from app.ads import live_creative, targets
+from app.ads import live_creative, sell_way, targets
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -64,13 +64,13 @@ def _applicability_scope(detail: dict) -> str:
 def _needs_revalidation(conn: _AnyConn, brand_id: str, campaign: dict) -> bool:
     """§0：來源商品換價（`product_economics` 生效日晚於這個 Campaign 跑的時候）就標
     `needs_revalidation`——180 天的門檻是讀時算的（策略任務那邊），這裡只管換價這一半。
-    只看 `context_json.product_ids` 的第一個：一個 Campaign 通常圍著一個主打商品轉，跟
-    §0「product_id = the ad's own, falling back to the Campaign's first
-    context_json.product_ids entry」用同一個退回順序。"""
-    product_ids = (campaign.get("context_json") or {}).get("product_ids") or []
-    if not product_ids:
+    只看 Campaign 的賣法（`sell_way.of_campaign`，F44 Contract A：`context_json.product_ids`
+    的第一個）：一個 Campaign 通常圍著一個主打商品轉，跟 §0「product_id = the ad's own,
+    falling back to the Campaign's first context_json.product_ids entry」用同一個退回順序。"""
+    product_id = sell_way.of_campaign(campaign)
+    if product_id is None:
         return False
-    econ = bi_repo.get_product_economics(cast(Conn, conn), brand_id, product_ids[0])
+    econ = bi_repo.get_product_economics(cast(Conn, conn), brand_id, product_id)
     end_date = campaign.get("end_date")
     if econ is None or econ.get("effective_from") is None or end_date is None:
         return False

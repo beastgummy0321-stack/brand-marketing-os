@@ -192,6 +192,21 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(confirmed["status"], "pending")
         self.assertIsNone(confirmed["confirmed_at"])
         self.assertEqual(confirmed["copy_fields"]["headline"], "免費試飲")
+        # F44 Contract C: the refusal carries its details beside the sentences, same order.
+        details = confirmed["pending_details"]
+        self.assertEqual(details, done["results"][0]["pending_details"])
+        self.assertEqual(
+            details,
+            [
+                {
+                    "kind": "copy",
+                    "text": "文案寫了「試飲」，品牌資料裡沒有登記這個優惠或背書。",
+                    "terms": ["試飲"],
+                },
+                {"kind": "wait", "text": "原檔預覽尚未完成，請先完成媒體處理。", "terms": []},
+            ],
+        )
+        self.assertEqual(confirmed["pending_reasons"], [d["text"] for d in details])
 
     def test_generated_unsupported_facts_rejected(self):
         row = self.placement({"headline": "原標題"})
@@ -200,6 +215,47 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(done["results"][0]["suggested_copy"], {})
         self.assertTrue(done["results"][0]["pending_reasons"])
+
+    def test_generated_copy_may_cite_the_sell_ways_own_claims(self):
+        """F44-I03: the approved claims of the campaign's sell-way are sources (and knowledge
+        ids) of the batch; another product's claims are not."""
+        product = brands.create_product(self.conn, self.brand, name="晨光軟糖", actor="test")["id"]
+        claim = brands.create_claim(
+            self.conn, self.brand, actor="test", claim_text="晨光軟糖一天兩顆",
+            claim_type="approved", product_id=product,
+        )
+        other = brands.create_product(self.conn, self.brand, name="別的商品", actor="test")["id"]
+        brands.create_claim(
+            self.conn, self.brand, actor="test", claim_text="別的商品的說法",
+            claim_type="approved", product_id=other,
+        )
+        way = brands.save_sell_way(
+            self.conn, self.brand, name="三盒組", actor="test",
+            components=[{"product_id": product, "qty": 3}],
+            economics={
+                "selling_price": 999, "list_price": 1500, "unit_variable_cost": 300,
+                "shipping_cost": 60,
+            },
+        )["id"]
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json=%s WHERE id=%s",
+            (db.jsonb({"product_ids": [way]}), self.campaign),
+        )
+        self.conn.commit()
+        row = self.placement({"headline": "原標題"})
+        answer = {"body": "晨光軟糖一天兩顆", "description": "了解更多"}
+        self.reply([row], answer)
+        batch = self.request([row])
+        data = batch["input_json"]
+        self.assertEqual(data["campaign"]["sell_way"], way)
+        self.assertIn(claim["id"], data["knowledge_ids"])
+        self.assertIn({"id": claim["id"], "text": "晨光軟糖一天兩顆"}, data["sources"])
+        self.assertNotIn("別的商品的說法", [s["text"] for s in data["sources"]])
+        done = self.run_batch(batch)
+        self.assertEqual(done["status"], "succeeded", done.get("error"))
+        result = done["results"][0]
+        self.assertEqual(result["suggested_copy"], answer)
+        self.assertEqual((result["pending_reasons"], result["pending_details"]), ([], []))
 
     def test_missing_and_wrong_ids_are_not_applied_or_retried(self):
         row = self.placement()

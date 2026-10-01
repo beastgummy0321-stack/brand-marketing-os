@@ -5,6 +5,8 @@ adapter and the outcome attribution all key off; trace: the `llm_task` row for t
 names/coordinates and one `ads_action` row for every edit that lands on an already-bound node.
 F39-I03: every planned ad also carries one `scene` (6–60 chars, the moment its copy happens
 in) and ads for different audiences must carry different scenes, or the plan is rejected.
+F44-I02: the prompt lists the registered sentence of every offer the menu kept, and a plan in
+which no ad uses one of them is rejected.
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
@@ -12,6 +14,7 @@ from datetime import date
 
 from app.ads import budget, calendar_tw, channels, coordinate_learning, customer_groups
 from app.ads import repository as ads_repo
+from app.ads import sell_way as sell_way_mod
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core.db import APP_DIR
@@ -95,6 +98,34 @@ def _prompt_rows(rows: list, available_proof: set[str], has_end_date: bool,
             continue
         kept.append(row)
     return kept
+
+
+OFFERS_HEADER = "【這期可用的優惠】"
+
+
+def _menu_offer_keys(rows: list) -> set[str]:
+    """The filtered menu's offer keys other than `none` -- what the planner may truly promise."""
+    return {row["key"] for row in rows if row["dimension"] == "offer" and row["key"] != "none"}
+
+
+def _offers_text(rows: list, sources: list) -> str | None:
+    """F44 (outcome 1): 【這期可用的優惠】, one 「- offer=〈key〉｜〈sentence〉」 line per
+    registered sentence (`bi_repo.offer_sources`, price and list price included) whose key is in
+    the filtered menu, each line once. `None` when the menu has no offer other than `none` -- the
+    section is then left out of the prompt."""
+    menu_keys = _menu_offer_keys(rows)
+    lines = []
+    for source in sources:
+        line = f"- offer={source['offer_key']}｜{source['sentence']}"
+        if source["offer_key"] in menu_keys and line not in lines:
+            lines.append(line)
+    if not lines:
+        return None
+    return OFFERS_HEADER + "\n" + "\n".join(lines)
+
+
+def _uses_an_offer(groups: list) -> bool:
+    return any(ad["coordinates"]["offer"] != "none" for group in groups for ad in group["ads"])
 
 
 def _first_format(rows: list) -> str | None:
@@ -220,18 +251,21 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     daily_total = round(float(campaign["budget_planned"]) / days)
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
-    # F42: offers are judged against the campaign's first product (its price meets a policy's
+    # F42: offers are judged against the campaign's sell-way (its price meets a policy's
     # threshold or not); a campaign without a product is judged at brand level (`None`).
-    product_ids = (campaign.get("context_json") or {}).get("product_ids") or []
+    sell_way = sell_way_mod.of_campaign(campaign)
     brand = bi_repo.get_brand(conn, brand_id) or {}
     vocabulary_rows = _prompt_rows(
         ads_repo.coordinate_vocabulary(conn, org_id, brand_id),
         bi_repo.available_proof_keys(conn, brand_id),
         campaign["end_date"] is not None,
-        bi_repo.available_offer_keys(conn, brand_id, product_ids[0] if product_ids else None),
+        bi_repo.available_offer_keys(conn, brand_id, sell_way),
         brand.get("media_capability"),
     )
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
+    # F44: the sentence behind each offer the menu kept -- the menu row alone
+    # (`offer｜bundle｜…`) does not say what the offer is (drill 9: `offer=none` 13/13).
+    offers_text = _offers_text(vocabulary_rows, bi_repo.offer_sources(conn, brand_id, sell_way))
 
     allocation_text = "\n".join(
         f"- {row['role']}（{row['label']}）：{row['pct']:g}%"
@@ -248,12 +282,14 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         conn, org_id, brand_id, campaign,
     )
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
+    # F44：【這期可用的優惠】接在顧客群之後、詞彙表之前；沒有可用優惠就整段不出現。
     prompt = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
         + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
         + "\n\n" + board_text
         + "\n\n" + customers_text
+        + ("\n\n" + offers_text if offers_text else "")
         + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
 
@@ -275,6 +311,10 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     if validated_groups is None:
         raise ValueError("delivery_plan_failed")
     _gate_reply(validated_groups, vocab_lookup, _first_format(vocabulary_rows))
+    # F44 (outcome 1): the menu offered a real offer and no ad took one -> the whole reply is
+    # refused, like the scene rule; nothing is written.
+    if _menu_offer_keys(vocabulary_rows) and not _uses_an_offer(validated_groups):
+        raise ValueError("delivery_plan_failed")
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。

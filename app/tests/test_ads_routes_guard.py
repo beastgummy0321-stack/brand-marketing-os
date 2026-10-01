@@ -183,6 +183,26 @@ class AdsRoutesValidationStillFiresTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "ready_invalid")
 
+    def test_slot_recheck_is_in_the_walked_table_and_answers_with_domain_codes(self):
+        # F44-I04: the route the two walks above must reach, and -- past the tenant boundary --
+        # its own refusals for the caller's real campaign (no body is read).
+        template = "/api/ads/brands/{brand_id}/campaigns/{campaign_id}/slots/{ad_id}/recheck"
+        self.assertEqual(
+            [sorted(r.methods - {"HEAD", "OPTIONS"}) for r in _ads_routes() if r.path == template],
+            [["POST"]],
+        )
+        prefix = f"/api/ads/brands/{self.brand_id}/campaigns"
+        unknown_ad = self.client.post(
+            f"{prefix}/{self.campaign_id}/slots/some-ad-id/recheck", headers=self.headers,
+        )
+        self.assertEqual(unknown_ad.status_code, 409, unknown_ad.text)
+        self.assertEqual(unknown_ad.json()["error"]["code"], "user_asset_unavailable")
+        unknown_campaign = self.client.post(
+            f"{prefix}/adc_missing/slots/some-ad-id/recheck", headers=self.headers,
+        )
+        self.assertEqual(unknown_campaign.status_code, 404, unknown_campaign.text)
+        self.assertEqual(unknown_campaign.json()["error"]["code"], "campaign_unknown")
+
 
 class NameMatchBindRemovedTest(unittest.TestCase):
     """F31-I08 (item 11): the ads-center name-match bind had no screen calling it and launch

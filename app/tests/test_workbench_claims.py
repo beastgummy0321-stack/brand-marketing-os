@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 import app.shared.web as web
+import app.workbench as workbench_module
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.tests.test_workbench_pack_api import _WorkbenchPackApiTestBase
@@ -262,6 +263,80 @@ def test_policy_and_sell_way_sharing_an_offer_key_get_their_own_rows():
     ]
 
 
+# -- F44-I01 (Contract B): the ad's offer coordinate narrows the offer rows ---------------------
+
+_OFFER_NONE_LINE = "這則廣告的優惠座標是無優惠：不寫任何優惠、優惠價或原價（售價可以寫）。"
+_OFFER_CARRY_LINE = "這則廣告要帶下面 [offer:…] 這個優惠：每一組文案都把它的原字句寫進標題或內文。"
+
+
+def _three_pack_with_free_shipping(brand_id: str | None = None) -> tuple[str, str]:
+    """A sell-way with its own list-price offer (`bundle`) under a 滿 NT$999 免運 store policy."""
+    if brand_id is None:
+        brand_id = _brand(_SHIP_999)
+    else:
+        bi_repo.save_brand_policies(web.conn, brand_id, _SHIP_999, actor=ACTOR)
+    gummy = _knowledge_product(brand_id, "測試軟糖", "每包 20 公克", "測試軟糖好吃")
+    return brand_id, _sell_way(brand_id, "三盒組", [(gummy, 3)], 999, 1197)
+
+
+def test_offer_coordinate_narrows_only_the_offer_rows():
+    brand_id, three = _three_pack_with_free_shipping()
+    every = claims.sources(web.conn, brand_id, three)
+    plain = [r for r in every if not r.get("offer_key")]
+    ship = {"id": f"offer:free_shipping:{_policy_id(brand_id, 'ship_threshold')}",
+            "text": "滿 NT$999 免運", "proof": False, "offer_key": "free_shipping"}
+    bundle = {"id": f"offer:bundle:{three}", "text": f"測試軟糖 · {_THREE_PACK}",
+              "proof": False, "offer_key": "bundle"}
+    assert [r["text"] for r in plain] == ["每包 20 公克", "測試軟糖好吃"]
+    assert every == [*plain, ship, bundle]  # no offer_key = today's rows
+    assert claims.sources(web.conn, brand_id, three, None) == every
+    assert claims.sources(web.conn, brand_id, three, "none") == plain
+    assert claims.sources(web.conn, brand_id, three, "bundle") == [*plain, bundle]
+    assert claims.sources(web.conn, brand_id, three, "free_shipping") == [*plain, ship]
+
+
+def test_policy_says_what_the_offer_coordinate_asks_for():
+    brand_id, three = _three_pack_with_free_shipping()
+
+    def block(offer_key):
+        return claims.policy(claims.sources(web.conn, brand_id, three, offer_key), offer_key)
+
+    unchanged = block(None)
+    assert _OFFER_NONE_LINE not in unchanged and _OFFER_CARRY_LINE not in unchanged
+    assert unchanged == claims.policy(claims.sources(web.conn, brand_id, three))
+
+    none = block("none")
+    assert _OFFER_NONE_LINE in none.split("\n")
+    assert _OFFER_CARRY_LINE not in none
+    assert "- [offer:" not in none
+    assert "（沒有已確認的優惠或背書來源）" in none
+
+    bundle = block("bundle")
+    row = f"- [offer:bundle:{three}] 測試軟糖 · {_THREE_PACK}"
+    assert _OFFER_CARRY_LINE in bundle.split("\n")
+    assert _OFFER_NONE_LINE not in bundle
+    assert bundle.index(_OFFER_CARRY_LINE) < bundle.index(row)  # 「下面」: the line sits above
+    assert "滿 NT$999 免運" not in bundle
+
+    # A key with no row left reads as no offer.
+    gone = block("trial_sample")
+    assert _OFFER_NONE_LINE in gone.split("\n")
+    assert "- [offer:" not in gone
+
+
+def test_validate_claims_judges_against_the_offer_coordinate():
+    brand_id, three = _three_pack_with_free_shipping()
+
+    def missing(**kwargs):
+        return workbench_module.validate_claims(
+            web.conn, coredb.DEV_ORG_ID, brand_id, three, {"headline": _THREE_PACK}, **kwargs,
+        )["unsupported_promises"]
+
+    assert missing() == []  # existing positional callers: every available offer backs it
+    assert missing(offer_key="none") == ["優惠"]
+    assert missing(offer_key="bundle") == []
+
+
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):
     def test_legacy_output_warns_but_selection_and_pack_approval_continue(self):
         pack = self._submit_pack([self._one_set("1", {"copy": 1})])
@@ -304,6 +379,37 @@ class TestAdoptionWarning(_WorkbenchPackApiTestBase):
         )
         assert response.status_code == 200
         assert response.json()["pack"]["status"] == "done"
+
+    def test_offer_version_warns_on_a_no_offer_set_only(self):
+        """F44-I01: the version reader narrows with the brief's own offer coordinate (key or
+        label), so the sell-way's price sentence warns on an `offer=none` set and nowhere else."""
+        _, three = _three_pack_with_free_shipping(self.brand_id)
+        # Seed the brand's coordinate vocabulary so the label 「無優惠」 resolves to `none`.
+        seeded = self.client.get(f"/api/schedule/brands/{self.brand_id}/coordinates")
+        assert seeded.status_code == 200, seeded.text
+        offers = {"key": "none", "label": "無優惠", "bundle": "bundle", "unset": None}
+        pack = self._submit_pack([
+            self._one_set(name, {"copy": 1}, product_id=three,
+                          coordinates={"offer": offer} if offer else {})
+            for name, offer in offers.items()
+        ])
+        warnings = {}
+        for brief in self._briefs(pack):
+            repository.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="copy", generation_round=1,
+                body_json=[{"sets": [{"headline": _THREE_PACK, "body": "三盒一次帶走"}]}],
+                coordinates_json=None, llm_task_id=None,
+            )
+            detail = self.client.get(
+                f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+            ).json()["set"]
+            warnings[brief["name"]] = detail["products"]["copy"]["versions"][0]["claim_warning"]
+        assert set(warnings) == {f"單元 {name}" for name in offers}
+        for name in ("key", "label"):
+            assert "優惠" in warnings[f"單元 {name}"]["message"], name
+        assert warnings["單元 bundle"] is None
+        assert warnings["單元 unset"] is None
 
 
 # -- F34-I02 (Contract S): 食安法 §28 wording reminder ------------------------------------------

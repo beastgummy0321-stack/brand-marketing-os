@@ -1,4 +1,4 @@
-import { apiFetch } from "./http";
+import { apiFetch, errorMessageFrom } from "./http";
 import { BASE } from "./adsApi";
 import type { MaterialReplaces } from "./adsMaterialApi";
 import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./adsUserAssetsApi";
@@ -9,8 +9,14 @@ import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./
  * F35 Contract T: the slot is two halves, the image and the copy. `copy_only` = the ad's selected workbench
  * copy is known but no file is in the slot yet (an upload carries the copy in and the slot is ready at once);
  * `image_only` = a file is in the slot but its placement has no headline and no body (the picker,
- * `chooseSlotCopy`, fills the other half). Copy never makes a slot ready on its own. */
-export type SlotState = "ready" | "missing" | "in_progress" | "copy_only" | "image_only";
+ * `chooseSlotCopy`, fills the other half). Copy never makes a slot ready on its own.
+ * F44 Contract D: `blocked` = the slot's automatic confirmation was refused (or its file failed); the slot says why
+ * (`Slot.blocked`) and is not ready. Nothing changes it by itself, so it is not `in_progress`. */
+export type SlotState = "ready" | "missing" | "in_progress" | "copy_only" | "image_only" | "blocked";
+/** F44 Contract D: why a slot is blocked — the first reason as one sentence, the offending words it quotes (`terms`),
+ * the exit that fixes it (`copy` = another copy version, `file` = another file, `null` = nothing on the slot itself)
+ * and how many other reasons there are (`more`). */
+export interface SlotBlocked { text: string; terms: string[]; fix: "copy" | "file" | null; more: number }
 /** The copy half: the ad's selected workbench version (`workbench`, label 「工作檯第 N 版」) before any file, or the
  * placement's effective copy once a file is in the slot (`placement`, label 已確認／待確認). */
 export interface SlotCopy {
@@ -31,6 +37,11 @@ export interface Slot {
   /** F40-I01: the planned ad's own `ads_ad.format_key` (`"video"` = the slot needs a video, a photo is refused);
    * `null` for an ad without one and for an imported campaign's platform ad. Optional only for older fixtures. */
   format_key?: string | null;
+  /** F44 Contract D: set exactly when `state === "blocked"`. Optional only for older fixtures. */
+  blocked?: SlotBlocked | null;
+  /** F44 Contract D: the planned ad's offer coordinate label (「無優惠」, 「組合優惠」…); `null` for an ad without one
+   * and on an imported campaign. Optional only for older fixtures. */
+  offer_label?: string | null;
 }
 /** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
 export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
@@ -66,6 +77,21 @@ export const getSlotCopyOptions = (brand: string, campaign: string, signal?: Abo
  * name as purpose, is confirmed and assigned. 409 `slot_no_file` when the slot has no pending placement. */
 export const chooseSlotCopy = (brand: string, campaign: string, adId: string, body: { set_id: string; version_id: string }, signal?: AbortSignal) =>
   assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+
+/** A refused recheck. `code` tells `slot_no_file` (the slot has nothing to check any more — re-read the slots) from
+ * the errors whose `message` is for the user (`user_asset_unavailable`, `campaign_unknown`). */
+export class SlotRecheckError extends AssetApiError {
+  code: string | null;
+  constructor(message: string, status: number, code: string | null) { super(message, status); this.code = code; }
+}
+/** F44 Contract D: run a blocked slot's confirmation again (no body). 200 carries the slots whether the slot became
+ * ready or is still blocked (then with the new refusal's reason). */
+export async function recheckSlot(brand: string, campaign: string, adId: string, signal?: AbortSignal): Promise<{ slots: CampaignSlots }> {
+  const res = await apiFetch(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/recheck`, { method: "POST", signal });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new SlotRecheckError(errorMessageFrom(data, "沒有檢查成功，請稍後再試。"), res.status, typeof data?.error?.code === "string" ? data.error.code : null);
+  return data as { slots: CampaignSlots };
+}
 
 /** A user-asset thumbnail is served behind the bearer token, so a bare `<img src>` cannot load it. */
 export const isAuthThumbnail = (url: string | null): url is string => !!url && url.startsWith(`${BASE}/`);

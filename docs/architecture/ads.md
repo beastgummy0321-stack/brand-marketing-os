@@ -1855,3 +1855,27 @@ Supersedes §6.44 「New campaign copies the previous one」 for platform / audi
 - Prompts: strategy and delivery plan get 【這個賣法的顧客】 (≤3 groups per knowledge product, ≤6 in all, pain keys with labels, quote,
   when); department rule: an ad's `pain` comes from a listed group when groups exist. Claims, workbench jobs and the prompt context
   read every product of a bundle (`knowledge_product_ids`).
+
+### 6.48 Ads carry the sell-way（ruled 2026-10-01；built in F44）
+Root cause (drill 9 #1＋#2): every step re-derived 「which sell-way this ad sells」 or skipped it.
+- **One reader** (`app/ads/sell_way.py`): `of_campaign` = first of `context_json.product_ids`; `of_ad` = the ad's own `product_id`,
+  else the campaign's. The campaign owns the sell-way; nothing fills `ads_ad.product_id` at plan time. Readers: planner, pack
+  dispatch, learning revalidation, asset confirmation. `budget._economics_for` (first sell-way with economics) stays its own rule.
+- **Planner**: the prompt lists 【這期可用的優惠】 — one 「- offer=〈key〉｜〈sentence〉」 line per `bi_repo.offer_sources` sentence whose
+  key the filtered menu kept (omitted when the menu has no offer but `none`). Department rule plus program gate: an offer in the
+  menu and every ad `offer=none` → `delivery_plan_failed`, nothing written. The scripted (e2e) reply takes the first listed key.
+- **The offer coordinate decides the copy** (user ruling): `none` → no offer sentence, no offer price / list price; an offer key →
+  that offer's registered sentence. Enforced by the workbench narrowing (`docs/architecture/workbench.md`, `validate_claims(…,
+  offer_key=)`) at generation, on the version list, and at asset confirmation. Known limit: the bare word 「優惠」 is backed by any
+  remaining offer row, so a different offer's price sentence under another offer key is not caught.
+- **Asset confirmation** (`asset_suggestion_policy.violations`) judges copy against the placement's sell-way and its ad's offer
+  coordinate (a library placement: the campaign's sell-way, no coordinate). Refusals are details `{kind: copy | file | campaign |
+  wait, text, terms}`; `pending_reasons` stays their texts. Sentences: 「文案寫了「…」，品牌資料裡沒有登記這個優惠或背書。」 (unbacked),
+  「這則規劃的是「〈offer label〉」，文案卻寫了「…」。」 (coordinate mismatch). AI-filled copy may cite the sell-way's approved claims.
+- **Blocked slot**: a refused auto-confirmation stores its non-`wait` details in `ads_asset_placement.blocked_reasons`; `GET …/slots`
+  returns `state: "blocked"` with `blocked {text, terms, fix: copy | file | null, more}` and every slot's `offer_label`; a failed
+  original reads blocked with `fix: "file"`; a file with no copy stays `image_only`. `POST …/slots/{ad_id}/recheck` runs the
+  confirmation again. The 素材 tab shows 卡住, the reason with its terms marked, the exit (換一版文案／到工作檯改文案／換一張) and
+  再檢查一次; blocked slots do not poll and are not in the launch list.
+- The `bundle` offer label is 「組合優惠」 (seed, `OFFER_LABELS`, and a rename migration for rows still carrying the old seed label).
+

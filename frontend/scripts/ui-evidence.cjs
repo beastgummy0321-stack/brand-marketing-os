@@ -57,7 +57,7 @@ function facts() {
   // Prototype vocabulary -> kit piece. The reference side prints what to build with; the built side prints what was used.
   out.push("", "## pieces (kit component to use | text)");
   for (const e of within("button, a, .chip, [data-slot=chip], [data-slot=badge]")) {
-    if (!vis(e) || e.closest("nav") || e.closest(".dots, [data-slot=flow-header]")) continue; // step dots belong to FlowHeader // the app breadcrumb stands in for the prototype's crumb/back bar, which live outside #app
+    if (!vis(e) || e.closest("nav") || e.closest(".dots, [data-slot=flow-header]") || e.closest(".crumb")) continue; // step dots belong to FlowHeader // the app breadcrumb stands in for the prototype's crumb/back bar, which live outside #app (F44: a `.crumb` drawn inside #app)
     if (e.closest(".rl, .sc, [data-slot=target-ruler], [data-slot=scenario-bars]") && !e.matches(".chip, [data-slot=chip]")) continue; // ruler dots and scenario rows are part of their piece
     const c = e.classList;
     let piece = null;
@@ -122,6 +122,7 @@ function facts() {
     for (const [is, piece] of V10) if (is(e)) out.push(`${piece(e)} |`);
     if (e.matches(".hero.bad[role=alert]")) continue; // failBox() is ReadFailed, not ResultHero
     if (e.closest(".tray") || e.matches(".sheet:has(.warnp)")) continue; // the ruler tray's meters belong to TargetRuler; a warn sheet is ConfirmSheet
+    if (e.matches("span.new")) continue; // F44 prototype-only 「新增」 tag (a span), not a CopyBlock (a div)
     for (const [cls, piece] of Object.entries(BLOCKS)) if (e.classList.contains(cls)) {
       let v = (VARIANT[cls] || []).find((x) => e.classList.contains(x)) || "";
       if (cls === "todo") v = v ? "done" : "open";
@@ -138,6 +139,8 @@ function facts() {
     for (const c of ["rl", "rl-mini", "rl-mid", "rl-full", "rl-empty", "ax", "fd", "trk", "mk", "be", "r", "zl", "sb", "dt", "bx", "k", "tip", "tl", "tr", "hl", "cx", "dim", "na", "tray", "ti", "watch", "over", "gr",
       "term", "mtag", "waitbox", "spin", "qv", "run", "me", "ab", "abt", "abk", "win", "lose", "vs", "pb", "lrn", "flowto", "mn", "pickrow", "off", "rb", "nr", "setg", "wide", "org",
       "band", "sl", "hatch", "cpm", "hb", "nextup", "tlg", "dot", "sc", "lab", "bw", "amt", "o", "caprow", "capline", "alloc", "confirm", "bb", "warnp", "diff", "w", "capdots", "prog", "chg", "bt", "dev", "lock", "cut", "dn", "s", "b"]) known.add(c);
+    // Parts of SlotGrid / SlotTile (F40 two-half tile; F44 `.slot.blk` = SlotTile blocked: `.why` the reason region, `.ac` its exits, `.th.dim`).
+    for (const c of ["slots", "slot", "im", "cp", "t", "ft", "pl", "blk", "why", "ac"]) known.add(c);
     // Layout and type only — no piece: the worker builds these with tokens (cards, grids, rows, text styles, thumbnails, folds, inputs).
     const LAYOUT = new Set(["hstack", "titlerow", "wrap", "card", "hd", "grow", "mut", "num", "xs", "nm", "th", "stack", "g2", "g3", "lg", "f", "in", "money", "qi", "val", "tabs", "grp", "sw", "adrow",
       "moneyg", "paceh", "left", "bandc", "decg", "dcard", "dr", "skel", "empty", "ct", "hd0", "act", "tgt",

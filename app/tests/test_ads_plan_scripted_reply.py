@@ -58,6 +58,37 @@ class ScriptedDeliveryPlanValidatesTest(unittest.TestCase):
         reply = _scripted("ads_delivery_plan", "部門提示，沒有採用清單")
         self.assertEqual(reply, providers.SCRIPTED_REPLIES["ads_delivery_plan"])
 
+    def test_first_ad_takes_the_first_listed_offer_key(self):
+        """F44-I02: with 【這期可用的優惠】 in the prompt an all-`none` plan is refused, so the
+        scripted reply's first group uses the first listed key; a vocabulary row
+        (`- offer｜…`) or the department file naming the header is not a listed offer."""
+        allocation = providers.SCRIPTED_REPLIES["ads_strategy"]["allocation"]
+        base = (
+            "部門提示：【這期可用的優惠】有列時至少一支廣告要用\n\n## 這次投放已採用的角色分配\n\n"
+            + _adopted_lines(allocation)
+        )
+        vocabulary = "\n\n【座標詞彙】\n- offer｜bundle｜組合優惠\n- offer｜none｜無優惠"
+        offers = (
+            "\n\n" + plan.OFFERS_HEADER
+            + "\n- offer=free_shipping｜滿 NT$999 免運"
+            + "\n- offer=bundle｜三盒組優惠價 NT$999（原價 NT$1,197）"
+        )
+
+        reply = _scripted("ads_delivery_plan", base + offers + vocabulary)
+        used = [group["ads"][0]["coordinates"]["offer"] for group in reply["groups"]]
+        self.assertEqual(used, ["free_shipping", "e2e", "e2e"])
+        roles = {row["role"] for row in allocation}
+        self.assertIsNotNone(plan._validate_reply(reply, roles))
+        # The shared template is not mutated by the per-prompt reply.
+        template_ad = providers.SCRIPTED_REPLIES["ads_delivery_plan"]["groups"][0]["ads"][0]
+        self.assertEqual(template_ad["coordinates"]["offer"], "e2e")
+
+        without = _scripted("ads_delivery_plan", base + vocabulary)
+        self.assertEqual(
+            [group["ads"][0]["coordinates"]["offer"] for group in without["groups"]],
+            ["e2e", "e2e", "e2e"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

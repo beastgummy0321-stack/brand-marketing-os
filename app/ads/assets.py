@@ -14,7 +14,14 @@ workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fi
 from datetime import date
 
 from app import workbench
-from app.ads import calendar_tw, change_control_launch, channels, handoff_assignment, plan
+from app.ads import (
+    calendar_tw,
+    change_control_launch,
+    channels,
+    handoff_assignment,
+    plan,
+    sell_way,
+)
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 
@@ -88,12 +95,12 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
     return {"origin_label": origin_label, "origin_href": origin_href}
 
 
-def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str,
-            fallback_product_id: str | None) -> dict:
+def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str) -> dict:
     # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
     # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
     # 商品各編一次品牌上下文，重複付 N 份品牌層知識的錢（ARCHITECTURE.md §1 第 1 條）。
-    product_id = ad.get("product_id") or fallback_product_id
+    # F44 Contract A: which sell-way that is has one answer, `sell_way.of_ad`.
+    product_id = sell_way.of_ad(ad, campaign)
     format_key = ad.get("format_key")
     request = {
         "copy_length": _copy_length(ad),
@@ -172,8 +179,6 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     brand = bi_repo.get_brand(conn, brand_id)
     brand_name = brand["name"] if brand else brand_id
     context_json = campaign.get("context_json") or {}
-    campaign_product_ids = context_json.get("product_ids") or []
-    fallback_product_id = campaign_product_ids[0] if campaign_product_ids else None
 
     summary: dict = {"情境": campaign["goal_text"]}
     if context_json.get("audience_hint"):
@@ -188,7 +193,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
-            _ad_set(ad, group, campaign, campaign_id, fallback_product_id)
+            _ad_set(ad, group, campaign, campaign_id)
             for group in groups for ad in group["ads"]
         ],
     }

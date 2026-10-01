@@ -77,7 +77,11 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
    covers common trial/discount/gift/guarantee/endorsement expressions; suppressing a warning requires
    exact confirmed brand/product statements or approved claims, plus a fulfilment location for offers.
    Pending, forbidden, high-risk and other-product claims cannot authorize them. Existing outputs
-   are rechecked against current sources. This is bounded expression detection, not a universal
+   are rechecked against current sources. F44: a brief's offer coordinate narrows the offer sources —
+   `claims.sources(…, offer_key)` and the facade `validate_claims(…, *, offer_key=None)`: `None` = every
+   available offer row, `"none"` = none, another key = only that offer's rows; the prompt block then says to
+   write no offer or to carry that one sentence, and the version list warns with the same narrowing.
+   This is bounded expression detection, not a universal
    semantic fact checker; real model wording and unsupported paraphrases remain a validation limit.
    Approving sets the pack to 已完成 and locks its selections. The upstream reads the approval as
    state — `pack_for_source(conn, org_id, brand_id, source_kind, source_ref)` — never as a
