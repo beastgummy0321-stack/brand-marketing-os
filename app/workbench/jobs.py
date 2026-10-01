@@ -222,18 +222,9 @@ def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
 _IMAGE_COORDINATE_DIMS = ("audience", "pain", "angle", "hook", "proof", "offer")
 
 
-def _resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | None:
-    """票面 bug #4：`coordinates_snapshot` 存的值可能是 `key` 也可能是舊資料留下的
-    `label`——兩個都試著比對這個品牌的詞彙表，比對到就回它的 `key`；比對不到（品牌自建的
-    座標、或一個詞彙表裡已經沒有的舊 label）原樣把 `value` 當一個不透明的 key 傳回去，讓
-    呼叫端自己決定：`visual.TASKS`／`OFFER_PERSUASION`／`PROOF_PERSUASION` 對一個不認得的
-    key 都只會回「沒有」，不會意外放寬什麼。"""
-    if not value:
-        return None
-    for row in rows:
-        if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
-            return row.get("key")
-    return value
+# F44: the rule itself moved to `repository.resolve_coordinate` so the version reader resolves
+# a brief's offer coordinate exactly as this job does; the callers here keep this name.
+_resolve_coordinate = repository.resolve_coordinate
 
 
 def _proof_evidenced(rows: list, available: set[str]) -> list:
@@ -708,11 +699,18 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         assert brand_row is not None  # brief 已經查得到，它的 brand_id 不可能是空品牌
         brand_version = brand_row["knowledge_version"]
 
-    claim_sources = claims.sources(conn, brand_id, product_id)
+    # F44 Contract B: the brief's offer coordinate (a snapshot may carry a key or a label)
+    # decides which offer the sources list and what the policy block asks for -- for every part
+    # below. A brief without an offer coordinate passes `None`: every available offer, as before.
+    vocabulary_rows = repository.list_coordinate_vocabulary(conn, org_id, brand_id)
+    offer_key = _resolve_coordinate(
+        vocabulary_rows, "offer", (brief.get("coordinates_snapshot_json") or {}).get("offer"),
+    )
+    claim_sources = claims.sources(conn, brand_id, product_id, offer_key)
     knowledge_item_ids = list(dict.fromkeys([
         *knowledge_item_ids, *[r["id"] for r in claims.prompt_sources(claim_sources)],
     ]))
-    brand_context = claims.policy(claim_sources) + "\n\n" + brand_context
+    brand_context = claims.policy(claim_sources, offer_key) + "\n\n" + brand_context
 
     task_type = f"workbench_{part}"
     department_text = (DEPARTMENTS_DIR / f"{part}.md").read_text(encoding="utf-8")
@@ -736,8 +734,7 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     vocabulary: dict = {}
     if part == "copy":
         coordinate_rows = _proof_evidenced(
-            repository.list_coordinate_vocabulary(conn, org_id, brand_id),
-            bi_repo.available_proof_keys(conn, brand_id),
+            vocabulary_rows, bi_repo.available_proof_keys(conn, brand_id),
         )
         vocabulary = validate.vocabulary_by_dimension(coordinate_rows)
         coordinate_text = prompts.coordinate_vocabulary_text(coordinate_rows)
