@@ -13,6 +13,24 @@ Start here in the next session. A board, not an implementation authorization. Re
 Built as `docs/architecture/ads.md` §6.48 (rulings: the offer coordinate decides the copy; an available offer must be used by at
 least one ad). Next candidates below.
 
+## Next: drill 10 — final battle-readiness drill (user rulings 2026-10-01)
+A full run from scratch (new account, brand and product onboarding, three periods), judging whether marketing OS can be used for
+real. Not only code and runtime: every control on the frontend must work and mean something.
+Nine dimensions, each 0–10:
+- Both sides (A agency vs B system): 1 strategy and plan fit · 2 copy and material quality (fit, no invention, offers right,
+  食安法) · 3 simulated results (ROAS, cost per sale vs cap, three periods) · 4 learning across periods (period 2/3 change with the
+  previous result, reasons match the numbers).
+- System only: 5 completes end to end (signup → three closeouts, no outside help; count detours and stalls) · 6 every control works
+  (a separate agent inventories every clickable control per screen and clicks each once in a seeded state: it reacts, the reaction
+  means something, no error; output = total / passed / each defect with a screenshot — apart from the persona walk) · 7 readable
+  (design-system §1.7 five questions, persona score per station) · 8 numbers can be trusted (same period equal across screens,
+  unknown said as unknown, prefill invents nothing) · 9 failures recover (reason + exit, reload keeps data, no silent background
+  failure; provoke failures on purpose).
+- Defect levels: blocking (flow cannot continue, wrong money, invented fact) / needs a detour / cosmetic.
+- Bar (user chose A): every dimension ≥ 7 and zero blocking defects. An average alone does not pass.
+- Dimension 3 is simulated: it compares two schedules, it does not prove a real campaign earns; the report says so beside the score.
+- "No bugs" is reported as "every control clicked once, defects found: N", never as a proof.
+
 ## Other drill-9 candidates (not planned; report §3)
 - #3/#4 one owner for "period window and whether today counts" (perf page all rows vs overview rolling 14 days vs month incl. today);
   「在投」 counts unclosed platform objects.
