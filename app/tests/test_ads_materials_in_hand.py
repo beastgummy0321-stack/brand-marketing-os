@@ -104,7 +104,7 @@ class MaterialsInHandTest(unittest.TestCase):
         self.assertEqual(offers, [
             {"key": "free_shipping", "label": "免運門檻", "sentence": "滿 NT$999 免運"},
             {"key": "discount", "label": "折扣", "sentence": "新會員首購禮：全館 9 折"},
-            {"key": "bundle", "label": "組合加贈",
+            {"key": "bundle", "label": "組合優惠",
              "sentence": "綜合維他命軟糖 · 三盒組優惠價 NT$1,999（原價 NT$2,640）"},
         ])
 
