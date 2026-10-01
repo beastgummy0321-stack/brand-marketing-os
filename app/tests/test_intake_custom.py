@@ -85,7 +85,7 @@ class CustomRouteTest(unittest.TestCase):
              {"label": "買三送一", "offer_key": "bundle", "sentence": "買 3 送 1"},
              {"block": "policy", "kind": "option",
               "option": {"key": "custom", "label": "買三送一", "offer_key": "bundle",
-                         "offer_label": "組合加贈", "sentence": "買 3 送 1",
+                         "offer_label": "組合優惠", "sentence": "買 3 送 1",
                          "params": {"label": "買三送一", "offer_key": "bundle"}}}),
             ("forbidden", "不要說可以減肥", {"text": "減肥"},
              {"block": "forbidden", "kind": "option", "option": {"text": "減肥"}}),

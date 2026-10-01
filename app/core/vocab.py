@@ -45,7 +45,7 @@ TONES = ["親切", "專業", "直接", "幽默", "溫柔", "熱血"]
 OFFER_LABELS = {
     "free_shipping": "免運",
     "discount": "折扣",
-    "bundle": "組合加贈",
+    "bundle": "組合優惠",
     "trial_sample": "試用",
     "guarantee": "保證",
     "limited_time": "限時",
