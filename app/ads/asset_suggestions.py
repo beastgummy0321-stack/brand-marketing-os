@@ -600,7 +600,8 @@ def _apply_confirmation(
     conn.execute(
         "UPDATE ads_asset_placement SET suggested_copy=%s,purpose=%s,"
         "destination_entity_id=%s,start_date=%s,end_date=%s,status='manual_ready',"
-        "pending_reason='',confirmed_by=%s,confirmed_at=now(),suggestion_batch_id=%s,"
+        "pending_reason='',blocked_reasons='[]'::jsonb,confirmed_by=%s,confirmed_at=now(),"
+        "suggestion_batch_id=%s,"
         "suggestion_input_hash=%s WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND "
         "id=%s AND revision=%s AND confirmed_at IS NULL",
         (
