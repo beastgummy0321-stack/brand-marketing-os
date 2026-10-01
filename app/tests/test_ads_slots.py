@@ -9,6 +9,10 @@ F35 Contract T: each planned slot carries its copy half (`copy`) and `workbench_
 uploaded into a slot carries the ad's selected workbench copy in, fills the purpose with the
 ad's name, confirms and assigns in the same call; a slot with a file but no copy takes one of
 the brand's workbench copy versions through `POST …/slots/{ad}/copy`.
+
+F44-I03: the confirmation judges a slot's copy against the ad's sell-way and offer coordinate
+(real brand rows, the real `validate_claims`), a library placement against the campaign's
+sell-way; a refusal carries Contract C details beside its sentences.
 """
 
 from datetime import timedelta
@@ -19,15 +23,16 @@ from fastapi.testclient import TestClient
 
 from app import workbench
 from app.ads import (
-    assets as legacy_assets,
-)
-from app.ads import (
+    asset_suggestions,
     change_control_data,
     change_control_launch,
     external_repository,
     handoff_assignment,
     material_tasks,
     slots,
+)
+from app.ads import (
+    assets as legacy_assets,
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as user_assets
@@ -975,3 +980,195 @@ def test_slots_route_reads_and_unknown_campaign_is_404(env):
     assert ok.json()["total"] == 3
     missing = client.get(f"/api/ads/brands/{env['brand']}/campaigns/adc_missing/slots")
     assert missing.status_code == 404
+
+
+# -- F44-I03: the copy is judged against the ad's sell-way and offer coordinate -------------------
+
+
+# The sell-way's registered offer sentence: 「晨光軟糖 · 三盒組優惠價 NT$999（原價 NT$1,500）」.
+PRICE_COPY = {
+    "headline": "晨光軟糖三盒組",
+    "body": "三盒組優惠價 NT$999（原價 NT$1,500）",
+    "description": "每天兩顆",
+}
+SHIP_999 = [{"key": "ship_threshold", "params": {"threshold": 999}}]
+
+
+def sell_way_campaign(env, *, qty=3, price=999, list_price=1500, policies=None):
+    """The campaign sells one sell-way of a real brand product: `qty` units at `price`, below
+    `list_price` -- its own offer is `bundle` (several units) or `discount` (one unit)."""
+    conn = env["conn"]
+    if policies:
+        brands.save_brand_policies(conn, env["brand"], policies, actor="test")
+    product = brands.create_product(conn, env["brand"], name="晨光軟糖", actor="test")["id"]
+    way = brands.save_sell_way(
+        conn, env["brand"], name="三盒組", actor="test",
+        components=[{"product_id": product, "qty": qty}],
+        economics={
+            "selling_price": price, "list_price": list_price, "unit_variable_cost": 300,
+            "shipping_cost": 60,
+        },
+    )["id"]
+    campaigns.update_campaign(
+        conn, env["org"], env["brand"], env["campaign"], {"product_ids": [way]}
+    )
+    conn.commit()
+    return way
+
+
+def plan_offer(env, ad, key, label):
+    """The offer coordinate the plan gave this ad, with the label its snapshot kept."""
+    env["conn"].execute(
+        "UPDATE ads_ad SET offer_key=%s,coordinates_snapshot_json=%s WHERE id=%s",
+        (key, db.jsonb({"offer": {"key": key, "label": label}}), ad),
+    )
+    env["conn"].commit()
+
+
+def recheck(env, placement):
+    return asset_suggestions.confirm_manual(
+        env["conn"], env["org"], env["brand"], env["campaign"], placement["id"],
+        placement["revision"], "human",
+    )
+
+
+def refusal(kind, text, terms=()):
+    return {"kind": kind, "text": text, "terms": list(terms)}
+
+
+def test_sell_way_price_copy_confirms_on_the_ad_planned_with_that_offer(env):
+    """Drill-9 red #2: the sell-way's own 「優惠價／原價」 on an `offer=bundle` ad is backed."""
+    ad = env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "bundle", "組合優惠")
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    assert result["placement"]["confirmed_at"]
+    assert result["placement"]["status"] == "manual_ready"
+    assert by_ad(result["slots"])[ad]["state"] == "ready"
+
+
+def test_the_same_copy_on_a_no_offer_ad_is_refused_with_the_mismatch(env):
+    ad = env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "none", "無優惠")
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    assert result["placement"]["confirmed_at"] is None
+    assert by_ad(result["slots"])[ad]["state"] == "in_progress"
+
+    refused = recheck(env, result["placement"])
+    sentence = "這則規劃的是「無優惠」，文案卻寫了「優惠」。"
+    assert (refused["status"], refused["confirmed_at"]) == ("pending", None)
+    assert refused["pending_reasons"] == [sentence]
+    assert refused["pending_details"] == [refusal("copy", sentence, ["優惠"])]
+
+
+def test_a_word_of_another_offer_family_is_a_mismatch_with_the_planned_offer(env):
+    """The sell-way has 加贈's family (`bundle`), the ad was planned with 免運."""
+    ad = env["ads"][0]
+    sell_way_campaign(env, policies=SHIP_999)
+    plan_offer(env, ad, "free_shipping", "免運")
+    copy = {**COPY, "body": "買三盒加贈一盒"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    assert result["placement"]["confirmed_at"] is None
+    sentence = "這則規劃的是「免運」，文案卻寫了「加贈」。"
+    assert recheck(env, result["placement"])["pending_details"] == [
+        refusal("copy", sentence, ["加贈"])
+    ]
+
+
+def test_a_promise_the_sell_way_does_not_have_is_unbacked(env):
+    """One unit below its list price is a `discount`: nothing registered backs 「加贈」, on any
+    offer coordinate -- the unbacked sentence, not a mismatch."""
+    ad = env["ads"][0]
+    sell_way_campaign(env, qty=1, price=800, list_price=1000)
+    plan_offer(env, ad, "discount", "折扣")
+    copy = {**COPY, "body": "現在下單加贈一盒"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    assert result["placement"]["confirmed_at"] is None
+    sentence = "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。"
+    refused = recheck(env, result["placement"])
+    assert refused["pending_reasons"] == [sentence]
+    assert refused["pending_details"] == [refusal("copy", sentence, ["加贈"])]
+
+
+def test_library_placement_is_judged_with_the_campaigns_sell_way(env):
+    conn = env["conn"]
+    placement = user_assets.attach(
+        conn, env["org"], env["brand"], env["campaign"], user_asset(env), PRICE_COPY, "human",
+        purpose="產品介紹",
+    )
+    conn.commit()
+    # No sell-way on the campaign: brand level, where no offer is registered.
+    assert recheck(env, placement)["pending_details"] == [
+        refusal("copy", "文案寫了「優惠」，品牌資料裡沒有登記這個優惠或背書。", ["優惠"])
+    ]
+    sell_way_campaign(env)
+    confirmed = recheck(env, placement)
+    assert (confirmed["status"], confirmed["ad_id"]) == ("manual_ready", None)
+    assert confirmed["confirmed_at"]
+
+
+def test_snapshot_names_what_each_placement_is_judged_against(env):
+    conn = env["conn"]
+    way = sell_way_campaign(env)
+    planned_ad, edited_ad, bare_ad = env["ads"]
+    plan_offer(env, planned_ad, "bundle", "組合優惠")
+    # Planned with `bundle`, edited to `none` afterwards: the snapshot's label is another key's,
+    # so the label is the brand vocabulary's.
+    plan_offer(env, edited_ad, "bundle", "組合優惠")
+    conn.execute("UPDATE ads_ad SET offer_key='none' WHERE id=%s", (edited_ad,))
+    conn.execute(
+        "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+        "VALUES(%s,%s,%s,'offer','none','無優惠')",
+        (db.new_id("crd"), env["org"], env["brand"]),
+    )
+    placed = {
+        ad: user_assets.attach(
+            conn, env["org"], env["brand"], env["campaign"], user_asset(env), COPY, "human",
+            ad_id=ad,
+        )
+        for ad in (planned_ad, edited_ad, bare_ad, None)
+    }
+    conn.commit()
+    data = asset_suggestions.snapshot(
+        conn, env["org"], env["brand"], env["campaign"],
+        [{"id": p["id"], "revision": 1} for p in placed.values()], "",
+    )
+    assert data["campaign"]["sell_way"] == way
+    judged = {
+        p["ad_id"]: (p["sell_way"], p["offer_key"], p["offer_label"]) for p in data["placements"]
+    }
+    assert judged == {
+        planned_ad: (way, "bundle", "組合優惠"),
+        edited_ad: (way, "none", "無優惠"),
+        bare_ad: (way, None, None),
+        None: (way, None, None),  # a library placement: the campaign's sell-way, no offer
+    }
+
+
+def test_refusal_details_name_the_exit_that_fixes_each_reason(env):
+    conn = env["conn"]
+    failed = user_asset(env, status="error", thumbnail=False)
+    conn.execute("UPDATE ads_user_asset SET error='圖片格式讀不出來。' WHERE id=%s", (failed,))
+    waiting = user_asset(env, status="pending", thumbnail=False)
+    cases = (
+        (failed, COPY, "產品介紹", [refusal("file", "圖片格式讀不出來。")]),
+        (waiting, COPY, "產品介紹", [refusal("wait", "原檔預覽尚未完成，請先完成媒體處理。")]),
+        (
+            user_asset(env), {"headline": "標題"}, None,
+            [
+                refusal("copy", "請补齊標題、內文與說明，或補充可用品牌事實。"),
+                refusal("campaign", "請補這件素材的投放用途。"),
+            ],
+        ),
+    )
+    for asset, copy, purpose, details in cases:
+        placement = user_assets.attach(
+            conn, env["org"], env["brand"], env["campaign"], asset, copy, "human",
+            purpose=purpose,
+        )
+        conn.commit()
+        refused = recheck(env, placement)
+        assert refused["confirmed_at"] is None
+        assert refused["pending_details"] == details
+        assert refused["pending_reasons"] == [d["text"] for d in details]
