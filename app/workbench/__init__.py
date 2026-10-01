@@ -137,8 +137,13 @@ def set_action_url(conn, org_id: str, brand_id: str, brief_id: str) -> str | Non
     return f"/app/brands/{brand_id}/workbench/packs/{brief['pack_id']}/sets/{brief_id}"
 
 
-def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, value) -> dict:
+def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, value, *,
+                    offer_key: str | None = None) -> dict:
     """Read-only bounded promise-family check; never a complete semantic fact verifier.
+
+    `offer_key` (F44 Contract B) is the ad's offer coordinate: `None` = every offer available
+    for the sell-way backs its words (as before); `"none"` = no offer does; another key = only
+    that offer's rows do. Non-offer sources are never narrowed.
 
     Public shape (F34-I02, Contract S adds the last two):
         unsupported_promises: list[str]
@@ -155,7 +160,7 @@ def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, va
         raise ValueError("找不到品牌。")
     if product_id is not None and brands.get_product(conn, brand_id, product_id) is None:
         raise ValueError("找不到此品牌商品。")
-    missing = claims.unsupported(value, claims.sources(conn, brand_id, product_id))
+    missing = claims.unsupported(value, claims.sources(conn, brand_id, product_id, offer_key))
     hits = claims.statutory(value, brand.get("regulatory_regime"))
     return {
         "unsupported_promises": missing, "scope": "fulfilment_and_endorsement_families",

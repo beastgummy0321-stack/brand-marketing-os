@@ -37,7 +37,13 @@ def _proof_section(prompt: str) -> str:
     return prompt[start:end if end != -1 else None]
 
 
-class CopyPromptProofMenuTest(unittest.TestCase):
+def _offer_block(prompt: str) -> str:
+    start = prompt.index("## 優惠、背書與已登記的證據來源")
+    end = prompt.find("\n\n", start)
+    return prompt[start:end if end != -1 else None]
+
+
+class _CopyRunBase(unittest.TestCase):
     def setUp(self):
         workbench_module.register_tasks()
         self.org_id = coredb.DEV_ORG_ID
@@ -56,10 +62,12 @@ class CopyPromptProofMenuTest(unittest.TestCase):
     def tearDown(self):
         workbench_jobs.PROVIDER = self._orig_provider
 
-    def _run_copy(self, proof_label: str) -> tuple[str, dict]:
+    def _run_copy(self, proof_label: str, *, product_id: str | None = None,
+                  coordinates: dict | None = None) -> tuple[str, dict]:
         brief_id = workbench_repo.create_brief(web.conn, self.org_id, self.brand_id, {
-            "source_kind": "manual", "source_ref": {}, "product_id": self.product["id"],
-            "coordinates": {}, "visual_tone": None, "visual_concept": None,
+            "source_kind": "manual", "source_ref": {},
+            "product_id": product_id or self.product["id"],
+            "coordinates": coordinates or {}, "visual_tone": None, "visual_concept": None,
             "style_key": "ugc", "request": {"parts": ["copy"], "copy_length": "short"},
         })
         reply = {
@@ -82,6 +90,8 @@ class CopyPromptProofMenuTest(unittest.TestCase):
         assert row is not None
         return fake.calls[0]["messages"][0]["content"], row["body_json"]
 
+
+class CopyPromptProofMenuTest(_CopyRunBase):
     def _coordinates_line(self, body: dict) -> str:
         return next(line for line in body["validation"] if "coordinates" in line)
 
@@ -106,6 +116,57 @@ class CopyPromptProofMenuTest(unittest.TestCase):
         self.assertNotIn("檢驗報告／認證", section)
         self.assertIn("喝了一個月，下午不再昏沉", prompt)  # the evidence text is quoted in
         self.assertTrue(self._coordinates_line(body).startswith("✅"), body["validation"])
+
+
+class CopyPromptOfferCoordinateTest(_CopyRunBase):
+    """F44-I01 (Contract B): the brief's offer coordinate decides which offer the copy prompt
+    lists and what its 優惠 block asks for. The sell-way has its own list-price offer (`bundle`)
+    under a 滿 NT$999 免運 store policy."""
+
+    NONE_LINE = "這則廣告的優惠座標是無優惠：不寫任何優惠、優惠價或原價（售價可以寫）。"
+    CARRY_LINE = "這則廣告要帶下面 [offer:…] 這個優惠：每一組文案都把它的原字句寫進標題或內文。"
+    PRICE = "三盒組優惠價 NT$999（原價 NT$1,197）"
+    SHIPPING = "滿 NT$999 免運"
+
+    def setUp(self):
+        super().setUp()
+        bi_repo.save_brand_policies(
+            web.conn, self.brand_id, [{"key": "ship_threshold", "params": {"threshold": 999}}],
+            actor=ACTOR,
+        )
+        self.three = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="三盒組", actor=ACTOR,
+            components=[{"product_id": self.product["id"], "qty": 3}],
+            economics={"selling_price": 999, "list_price": 1197,
+                       "unit_variable_cost": 300, "shipping_cost": 60},
+        )["id"]
+
+    def _block(self, coordinates: dict) -> tuple[str, str]:
+        prompt, _body = self._run_copy("無證明", product_id=self.three, coordinates=coordinates)
+        return prompt, _offer_block(prompt)
+
+    def test_no_offer_coordinate_by_label_lists_no_offer(self):
+        prompt, block = self._block({"offer": "無優惠"})
+        self.assertIn(self.NONE_LINE, block.split("\n"))
+        self.assertNotIn("- [offer:", block)
+        self.assertNotIn(self.CARRY_LINE, block)
+        # The offer price and list price reach the prompt through this block only.
+        self.assertNotIn("原價 NT$1,197", prompt)
+        self.assertNotIn(self.SHIPPING, prompt)
+
+    def test_offer_coordinate_by_key_lists_only_that_offer(self):
+        _prompt, block = self._block({"offer": "bundle"})
+        self.assertIn(self.CARRY_LINE, block.split("\n"))
+        self.assertNotIn(self.NONE_LINE, block)
+        self.assertIn(f"- [offer:bundle:{self.three}] 測試產品：證據選單 · {self.PRICE}", block)
+        self.assertNotIn(self.SHIPPING, block)
+
+    def test_brief_without_offer_coordinate_is_unchanged(self):
+        _prompt, block = self._block({})
+        self.assertIn(self.PRICE, block)
+        self.assertIn(self.SHIPPING, block)
+        self.assertNotIn(self.NONE_LINE, block)
+        self.assertNotIn(self.CARRY_LINE, block)
 
 
 class BriefTextDeadlineTest(unittest.TestCase):

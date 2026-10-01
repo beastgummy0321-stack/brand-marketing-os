@@ -446,6 +446,21 @@ def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> li
     ]
 
 
+def resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | None:
+    """票面 bug #4：`coordinates_snapshot` 存的值可能是 `key` 也可能是舊資料留下的
+    `label`——兩個都試著比對這個品牌的詞彙表，比對到就回它的 `key`；比對不到（品牌自建的
+    座標、或一個詞彙表裡已經沒有的舊 label）原樣把 `value` 當一個不透明的 key 傳回去，讓
+    呼叫端自己決定：`visual.TASKS`／`OFFER_PERSUASION`／`PROOF_PERSUASION` 對一個不認得的
+    key 都只會回「沒有」，不會意外放寬什麼。F44: lives here (not in `jobs.py`) so the copy
+    job and the version reader resolve a brief's offer coordinate with the same rule."""
+    if not value:
+        return None
+    for row in rows:
+        if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
+            return row.get("key")
+    return value
+
+
 # ---------------------------------------------------------------------------
 # F07-I07（ARCHITECTURE.md §5.7）：the worksheet's pure, DB-free pieces (reference line) plus
 # the two small reads `jobs.py`'s image-prompt path needs on top of what F07-I04/I05/I06
@@ -1296,7 +1311,12 @@ def _validation_warning(body_json, version_index: int) -> dict | None:
 
 
 def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str,
-                    request_json: dict | None = None, product_id: str | None = None) -> list:
+                    request_json: dict | None = None, product_id: str | None = None,
+                    offer_key: str | None = None) -> list:
+    """`offer_key` (F44 Contract B) is the brief's resolved offer coordinate, the same key the
+    generation job narrowed its prompt with: an offer word on an `offer=none` set, or another
+    offer's word on an offer set, shows the `claim_warning`. `None` = a brief without an offer
+    coordinate, every available offer backs its words."""
     rows = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
         " AND part = %s ORDER BY generation_round DESC, version_index ASC",
@@ -1315,7 +1335,7 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
             row["body_json"], version["version_index"],
         )
     if versions:
-        claim_sources = claims.sources(conn, brand_id, product_id)
+        claim_sources = claims.sources(conn, brand_id, product_id, offer_key)
         regime = claims.regime(conn, brand_id)
         for version in versions:
             version["claim_warning"] = claims.warning(version["body"], claim_sources, brand_id)
@@ -1430,12 +1450,13 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         " ORDER BY created_at",
         (org_id, brand_id, brief["pack_id"]),
     ).fetchall()
+    vocabulary = list_coordinate_vocabulary(conn, org_id, brand_id)
     # F41-I02 (drill-8 #11): the sibling subtitle is the angle's label, the key only as fallback.
     angle_labels = {
-        row["key"]: row["label"]
-        for row in list_coordinate_vocabulary(conn, org_id, brand_id)
-        if row["dimension"] == "angle"
+        row["key"]: row["label"] for row in vocabulary if row["dimension"] == "angle"
     }
+    # F44 Contract B: the versions are judged against the offer this set was planned with.
+    offer_key = resolve_coordinate(vocabulary, "offer", coordinates.get("offer"))
     siblings = []
     for r in sibling_rows:
         r = dict(r)
@@ -1452,6 +1473,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     for part in required_parts:
         versions = _part_versions(
             conn, org_id, brand_id, set_id, part, brief["request_json"], brief["product_id"],
+            offer_key,
         )
         copy_all_text = None
         if part == "image_prompt" and versions:
