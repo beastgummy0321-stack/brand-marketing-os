@@ -40,7 +40,10 @@ def ceiling(provider_name, model):
     return amount
 
 
-def source_rows(conn, brand, knowledge_ids):
+def source_rows(conn, brand, knowledge_ids, sell_way=None):
+    """`sell_way` (F44): the approved claims of the sell-way's own knowledge products are sources
+    too, each once -- the copy may cite sell-way-level claims. Brand-wide rows stay bounded by
+    `knowledge_ids`; the caller adds the returned ids to the batch's knowledge ids."""
     facts = brands.list_brand_facts(conn, brand, status="confirmed")
     claims = brands.list_claims_for_brand(conn, brand)
     sources = [{"id": r["id"], "text": str(r["value"])} for r in facts if r["id"] in knowledge_ids]
@@ -49,18 +52,60 @@ def source_rows(conn, brand, knowledge_ids):
         for r in claims
         if r["claim_type"] == "approved" and not r.get("product_id") and r["id"] in knowledge_ids
     ]
+    if sell_way:
+        seen = {s["id"] for s in sources}
+        for knowledge_id in brands.knowledge_product_ids(conn, brand, sell_way):
+            for r in brands.list_claims_for_product(conn, brand, knowledge_id):
+                if r["claim_type"] == "approved" and r.get("product_id") and r["id"] not in seen:
+                    seen.add(r["id"])
+                    sources.append({"id": r["id"], "text": r["claim_text"]})
     forbidden = [r["claim_text"] for r in claims if r["claim_type"] == "forbidden"]
     return sources, forbidden
 
 
-def violations(conn, org, brand, copy, sources, forbidden, *, generated):
-    result = workbench.validate_claims(conn, org, brand, None, copy)
+def detail(kind, text, terms=()):
+    """F44 Contract C: one refusal. `kind` names the exit that fixes it (`copy` | `file` |
+    `campaign`; `wait` = nothing to fix, the original's preview is not made yet); `terms` are the
+    offending words quoted in `text`."""
+    return {"kind": kind, "text": text, "terms": list(terms)}
+
+
+def violations(
+    conn, org, brand, copy, sources, forbidden, *, generated,
+    sell_way=None, offer_key=None, offer_label=None,
+):
+    """Contract C details (kind `copy`) for one copy. The promise words are judged against the
+    sources the copy step used: first the sell-way (every offer it has), then the ad's offer
+    coordinate -- a word the sell-way backs but the coordinate does not is a mismatch with the
+    plan, not a missing registration. `offer_key=None` (a library placement, an ad without that
+    coordinate) skips the second check."""
+    unbacked = workbench.validate_claims(conn, org, brand, sell_way, copy)["unsupported_promises"]
     problems = []
-    if result["unsupported_promises"]:
-        problems.append("含尚未確認的優惠或背書，請先核對品牌來源與完整履約條件。")
+    if unbacked:
+        problems.append(
+            detail(
+                "copy",
+                f"文案寫了「{'、'.join(unbacked)}」，品牌資料裡沒有登記這個優惠或背書。",
+                unbacked,
+            )
+        )
+    if offer_key is not None:
+        narrowed = workbench.validate_claims(
+            conn, org, brand, sell_way, copy, offer_key=offer_key
+        )["unsupported_promises"]
+        mismatched = [term for term in narrowed if term not in unbacked]
+        if mismatched:
+            problems.append(
+                detail(
+                    "copy",
+                    f"這則規劃的是「{offer_label or offer_key}」，"
+                    f"文案卻寫了「{'、'.join(mismatched)}」。",
+                    mismatched,
+                )
+            )
     text = "\n".join(copy.values())
     if any(word and word in text for word in forbidden):
-        problems.append("含品牌禁止宣稱，請修訂此安排的文案。")
+        problems.append(detail("copy", "含品牌禁止宣稱，請修訂此安排的文案。"))
     if generated:
         for value in copy.values():
             rest = value
@@ -70,15 +115,17 @@ def violations(conn, org, brand, copy, sources, forbidden, *, generated):
                 if sentence:
                     rest = rest.replace(sentence, "")
             if re.sub(r"[\s，。！？、；：,.!?;:—\-()（）]", "", rest):
-                problems.append("補齊文案含無法逐字追溯的事實，未採用，請補充品牌來源。")
+                problems.append(
+                    detail("copy", "補齊文案含無法逐字追溯的事實，未採用，請補充品牌來源。")
+                )
                 break
     return problems
 
 
-def statutory_note(conn, org, brand, copy):
+def statutory_note(conn, org, brand, copy, sell_way=None):
     """F34 Contract S note for 補文案 `notes` (plain strings), or None. Never a `problems`
     entry: the reminder is for the human reading the copy (ruling 2B, warn only)."""
-    warning = workbench.validate_claims(conn, org, brand, None, copy)["statutory_warning"]
+    warning = workbench.validate_claims(conn, org, brand, sell_way, copy)["statutory_warning"]
     if warning is None:
         return None
     return "食安法提醒：" + "、".join(t["term"] for t in warning["terms"]) + warning["sentence"]

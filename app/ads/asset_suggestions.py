@@ -6,7 +6,7 @@ import math
 from app import background
 from app.ads import asset_suggestion_policy as policy
 from app.ads import repository as campaigns
-from app.ads import targets
+from app.ads import sell_way, targets
 from app.ads import user_assets_repository as assets
 from app.core import db, settings
 from app.llm import context_compiler, gateway, providers
@@ -52,6 +52,37 @@ def get_batch(conn, org, brand, campaign, batch_id):
     return result
 
 
+def _judged_against(conn, org, brand, campaign, ad_id):
+    """F44: what a placement's copy is judged against -- the sell-way and the offer coordinate
+    of the planned ad it was uploaded for, the same two the copy step wrote it from. A library
+    placement (no ad) has the campaign's sell-way and no offer coordinate."""
+    ad = campaigns.get_ad(conn, org, brand, ad_id) if ad_id else None
+    if ad is None:
+        return {"sell_way": sell_way.of_campaign(campaign), "offer_key": None, "offer_label": None}
+    offer_key = ad.get("offer_key")
+    label = None
+    if offer_key:
+        # The label the plan showed. The snapshot is taken at plan time and the coordinate
+        # stays editable, so a snapshot of another key falls back to the brand's vocabulary.
+        planned = (ad.get("coordinates_snapshot_json") or {}).get("offer")
+        if isinstance(planned, dict) and planned.get("key") == offer_key:
+            label = planned.get("label")
+        if not label:
+            label = next(
+                (
+                    row["label"]
+                    for row in campaigns.coordinate_vocabulary(conn, org, brand)
+                    if row["dimension"] == "offer" and row["key"] == offer_key
+                ),
+                offer_key,
+            )
+    return {
+        "sell_way": sell_way.of_ad(ad, campaign),
+        "offer_key": offer_key,
+        "offer_label": label,
+    }
+
+
 def snapshot(conn, org, brand, campaign_id, requested, summary):
     campaign = campaigns.get_campaign(conn, org, brand, campaign_id)
     if campaign is None or campaign["status"] == "closed":
@@ -80,6 +111,7 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
                     "id",
                     "revision",
                     "asset_id",
+                    "ad_id",
                     "copy_fields",
                     "required",
                     "purpose",
@@ -93,6 +125,7 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
                 "media_error": original["error"],
                 "mime_type": original["mime_type"],
             }
+            | _judged_against(conn, org, brand, campaign, row["ad_id"])
         )
     if len({p["id"] for p in placements}) != len(placements):
         raise ValueError("本批素材不能重複。")
@@ -101,7 +134,10 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
         "budget_total"
     )
     text, knowledge, version, _ = context_compiler.compile(conn, brand, include_personas=False)
-    sources, forbidden = policy.source_rows(conn, brand, knowledge)
+    campaign_sell_way = sell_way.of_campaign(campaign)
+    sources, forbidden = policy.source_rows(conn, brand, knowledge, campaign_sell_way)
+    # The sell-way's own claims are sources the brand-level compile did not list.
+    knowledge = list(dict.fromkeys([*knowledge, *(s["id"] for s in sources)]))
     native = conn.execute(
         "SELECT id,native_kind,native_id,source_account,currency,budget_amount,budget_type,"
         "start_date,end_date,parent_native_id FROM ads_external_entity WHERE org_id=%s AND "
@@ -131,7 +167,8 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
             )
         }
         # F28-I01: the one cap (cost per result), resolved like every other reader.
-        | {"cap": targets.resolve(conn, org, brand, campaign)["value"]},
+        | {"cap": targets.resolve(conn, org, brand, campaign)["value"]}
+        | {"sell_way": campaign_sell_way},
         "native": [dict(n) for n in native],
         "native_overflow": len(native) > 100,
     }
@@ -291,11 +328,14 @@ def _result(conn, org, brand, data, item, answer):
         for k, v in answer["copy_fields"].items()
         if not str(original.get(k) or "").strip() and v.strip()
     }
+    # F44: the copy is judged against the placement's sell-way and offer coordinate (the sources
+    # the copy step used); every problem is a Contract C detail naming the exit that fixes it.
+    judged = {k: item[k] for k in ("sell_way", "offer_key", "offer_label")}
     problems = policy.violations(
-        conn, org, brand, original, data["sources"], data["forbidden"], generated=False
+        conn, org, brand, original, data["sources"], data["forbidden"], generated=False, **judged
     )
     generated_errors = policy.violations(
-        conn, org, brand, additions, data["sources"], data["forbidden"], generated=True
+        conn, org, brand, additions, data["sources"], data["forbidden"], generated=True, **judged
     )
     if generated_errors:
         additions = {}
@@ -303,23 +343,26 @@ def _result(conn, org, brand, data, item, answer):
     effective = {**additions, **{k: v for k, v in original.items() if str(v).strip()}}
     campaign = data["campaign"]
     if not campaign["goal_text"] or not campaign["objective"]:
-        problems.append("請補活動目標，才能確認此批用途。")
+        problems.append(policy.detail("campaign", "請補活動目標，才能確認此批用途。"))
     notes = []
-    statutory = policy.statutory_note(conn, org, brand, effective)
+    statutory = policy.statutory_note(conn, org, brand, effective, item["sell_way"])
     if statutory is not None:
         notes.append(statutory)
     if campaign["cap"] is None:
         notes.append("上限待補，不保證曝光或花費。")
     if item["media_status"] != "ready":
-        problems.append(item["media_error"] or "原檔預覽尚未完成，請先完成媒體處理。")
+        if item["media_error"]:
+            problems.append(policy.detail("file", item["media_error"]))
+        else:
+            problems.append(policy.detail("wait", "原檔預覽尚未完成，請先完成媒體處理。"))
     if any(not str(effective.get(k) or "").strip() for k in policy.FIELDS):
-        problems.append("請补齊標題、內文與說明，或補充可用品牌事實。")
+        problems.append(policy.detail("copy", "請补齊標題、內文與說明，或補充可用品牌事實。"))
     roots = [n for n in data["native"] if n["parent_native_id"] is None]
     root = roots[0] if len(roots) == 1 and not data["native_overflow"] else {}
     start = item["start_date"] or campaign["start_date"] or root.get("start_date")
     end = item["end_date"] or campaign["end_date"] or root.get("end_date")
     if start and end and str(end) < str(start):
-        problems.append("內部安排日期範圍不一致，請核對起訖日期。")
+        problems.append(policy.detail("campaign", "內部安排日期範圍不一致，請核對起訖日期。"))
     if not start or not end:
         notes.append("平台或內部起訖日期不完整，手動上架時請核對。")
     budget = campaign["budget_total"]
@@ -329,7 +372,10 @@ def _result(conn, org, brand, data, item, answer):
         notes.append("預算尚未確認；不混算不同層級／幣別，不保證曝光或花費。")
     elif float(budget) <= 0:
         problems.append(
-            "目前已知預算為零，本件保留必用待安排；請先核對手動上架計畫，不會修改平台預算。"
+            policy.detail(
+                "campaign",
+                "目前已知預算為零，本件保留必用待安排；請先核對手動上架計畫，不會修改平台預算。",
+            )
         )
     destination = item["destination_entity_id"]
     if destination is None:
@@ -350,7 +396,10 @@ def _result(conn, org, brand, data, item, answer):
         if purpose not in allowed_purposes:
             purpose = ""
     if not purpose.strip():
-        problems.append("請補這件素材的投放用途。")
+        problems.append(policy.detail("campaign", "請補這件素材的投放用途。"))
+    details: dict = {}  # one detail per sentence, first seen first
+    for problem in problems:
+        details.setdefault(problem["text"], problem)
     return {
         "id": item["id"],
         "revision": item["revision"],
@@ -364,7 +413,9 @@ def _result(conn, org, brand, data, item, answer):
         "required": item["required"],
         "unknowns": ["media_not_analyzed", "user_summary_unverified"],
         "notes": notes,
-        "pending_reasons": list(dict.fromkeys(problems)),
+        # `pending_reasons` stays the sentences alone (the AI-batch screen reads it).
+        "pending_reasons": list(details),
+        "pending_details": list(details.values()),
         "status": "pending" if problems else "awaiting_confirmation",
     }
 
@@ -499,7 +550,7 @@ def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_i
     if result is None:
         raise ValueError("此版本不在指定建議批次。")
     if result["pending_reasons"]:
-        return {**old, "status": "pending", "pending_reasons": result["pending_reasons"]}
+        return _refused(old, result)
     return _apply_confirmation(
         conn,
         org,
@@ -512,6 +563,17 @@ def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_i
         batch["input_hash"],
         actor,
     )
+
+
+def _refused(old, result):
+    """A refused confirmation: the unconfirmed placement plus why (sentences and Contract C
+    details, same order)."""
+    return {
+        **old,
+        "status": "pending",
+        "pending_reasons": result["pending_reasons"],
+        "pending_details": result["pending_details"],
+    }
 
 
 def _current_snapshot(conn, org, brand, campaign, batch):
@@ -578,7 +640,7 @@ def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, 
         conn, org, brand, data, data["placements"][0], {"copy_fields": {}, "purpose": ""}
     )
     if result["pending_reasons"]:
-        return {**old, "status": "pending", "pending_reasons": result["pending_reasons"]}
+        return _refused(old, result)
     return _apply_confirmation(
         conn,
         org,
