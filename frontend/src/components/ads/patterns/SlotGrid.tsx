@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
  * - `missing` (`.slot.miss`): dashed tile with ＋, 「缺 1 則」 and the caller's actions (上傳, 從素材工作檯).
  * - `reserved` (`.slot.seat`): the in-app image seat — grey, dashed, **not clickable** and without a button
  *   (a reserved seat is not a refusal; its note reads 「接上後開放」).
- * - `blocked` (F44 `.slot.blk`): the two halves of a ready tile with the thumbnail dimmed and a soft danger border, the
+ * - `blocked` (F44 `.slot.blk`): the two halves of a ready tile with the thumbnail dimmed, a soft danger border and no
+ *   ✓ on the copy half (「文案 · <label>」), the
  *   status chip (the caller's 卡住), then the reason region under both halves (`data-slot="slot-reason"`, prototype
  *   `.why`): one sentence with the offending words marked, 「另有 N 個原因」 when there are more, the caller's exits
  *   (`actions`, prototype `.ac`) and the caller's `note` (what the last recheck said).
@@ -68,7 +69,7 @@ export function SlotTile(props: SlotTileProps) {
       <div data-slot="slot-tile" data-variant="blocked" role="listitem" className={cn(BOX, "border-danger/45 bg-card")}>
         <SlotThumb url={props.thumbnailUrl} dim />
         <SlotHead name={props.name} offer={props.offer} />
-        {props.copy && <CopyHalf copy={props.copy} />}
+        {props.copy && <CopyHalf copy={props.copy} tick={false} />}
         {props.status && <div className="self-start">{props.status}</div>}
         <div data-slot="slot-reason" className="flex flex-col gap-2 border-t border-border pt-2">
           <p className="text-[12.5px] leading-normal [overflow-wrap:anywhere]">{markTerms(props.reason.text, props.reason.terms)}</p>
@@ -129,13 +130,14 @@ export function SlotTile(props: SlotTileProps) {
   );
 }
 
-/** The prototype's `.slot .half.txt`: 「✓ 文案 · <label>」 over the copy, clamped to two lines. */
-function CopyHalf({ copy }: { copy: SlotCopyText }) {
+/** The prototype's `.slot .half.txt`: 「✓ 文案 · <label>」 over the copy, clamped to two lines. `tick={false}` (the
+ * blocked tile): no ✓ — a tick beside 「卡住」 would say two things at once. */
+function CopyHalf({ copy, tick = true }: { copy: SlotCopyText; tick?: boolean }) {
   return (
     <div data-slot="slot-copy" data-variant="filled"
       className={cn(HALF, "flex min-h-[58px] flex-col gap-0.5 border border-border bg-muted px-2 py-1.5")}>
       <span className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
-        <i aria-hidden="true" className="not-italic font-bold text-success">✓</i>文案 · {copy.label}
+        {tick && <i aria-hidden="true" className="not-italic font-bold text-success">✓</i>}文案 · {copy.label}
       </span>
       <p className="line-clamp-2 text-xs leading-[1.4] [overflow-wrap:anywhere]">{copy.text}</p>
     </div>

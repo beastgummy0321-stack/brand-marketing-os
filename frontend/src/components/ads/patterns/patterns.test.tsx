@@ -682,6 +682,10 @@ describe("blocked slot（F44-I05，原型 f44-blocked-slot）", () => {
     expect(reason(tiles[0]).textContent).toContain("還是卡住：原因沒有變");
     expect(tiles[0].querySelector("img")?.className).toContain("grayscale");
     expect(tiles[0].querySelector("[data-slot=slot-head]")?.textContent).toBe("備考生・讀到深夜無優惠");
+    // No tick on a blocked slot's copy half; a ready tile keeps it.
+    expect(tiles[0].querySelector("[data-slot=slot-copy] span")?.textContent).toBe("文案 · 待確認");
+    const readyTile = render(<SlotTile variant="ready" name="通勤路上一顆" thumbnailUrl={null} copy={{ label: "已確認", text: "通勤路上，一顆就好" }} />).container;
+    expect(readyTile.querySelector("[data-slot=slot-copy] span")?.textContent).toBe("✓文案 · 已確認");
     // Both quoted items are marked; 「這個優惠或背書」 later in the sentence is not.
     expect(marks(tiles[1])).toEqual(["優惠", "加贈"]);
     expect(reason(tiles[1]).textContent).toContain("另有 2 個原因");
