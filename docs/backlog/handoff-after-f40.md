@@ -2,6 +2,8 @@
 
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-f37.md`'s "next" pointers.
 
+> Superseded by `handoff-after-f43.md` (2026-10-01).
+
 ## State
 - No open feature; queue empty. F39 and F40 closed on `master` (`e985d59d`, **not pushed** — the user pushes manually).
 - F39 (drill-7 red + backend yellows, ads.md §6.43): per-ad coordinate learnings at closeout, program scoreboard into both
