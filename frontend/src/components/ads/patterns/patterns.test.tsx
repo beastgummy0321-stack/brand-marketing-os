@@ -655,3 +655,56 @@ describe("v10 kit（F29-I09）", () => {
     expect(container.querySelector("[data-slot='flow-to']")?.textContent).toContain("多了 5 條原本 14 條→下一個新活動");
   });
 });
+
+describe("blocked slot（F44-I05，原型 f44-blocked-slot）", () => {
+  it("SlotTile blocked：原因只標出引號裡的字，另有 N 個原因、出口與補充說明都在原因區，縮圖變暗", async () => {
+    const { SlotGrid, SlotTile } = await import("./SlotGrid");
+    const { container } = render(
+      <SlotGrid label="新客">
+        <SlotTile variant="blocked" name="備考生・讀到深夜" thumbnailUrl="https://scontent.example/c.jpg"
+          copy={{ label: "待確認", text: "讀到凌晨一點　三盒組優惠價 NT$999 陪你撐完最後一章" }} offer={<span>無優惠</span>} status={<span>卡住</span>}
+          reason={{ text: "這則規劃的是「無優惠」，文案卻寫了「優惠」。", terms: ["優惠"], more: 0 }}
+          actions={<button type="button">換一版文案</button>} note={<p>還是卡住：原因沒有變</p>} />
+        <SlotTile variant="blocked" name="訓練前・一顆就好" thumbnailUrl={null}
+          reason={{ text: "文案寫了「優惠、加贈」，品牌資料裡沒有登記這個優惠或背書。", terms: ["加贈", "優惠"], more: 2 }} />
+        <SlotTile variant="blocked" name="會議前・午休五分鐘" thumbnailUrl={null} reason={{ text: "這個檔案處理失敗：圖片格式讀不出來。", terms: [] }} />
+      </SlotGrid>,
+    );
+    const tiles = [...container.querySelectorAll<HTMLElement>("[data-slot=slot-tile]")];
+    expect(tiles.map((t) => t.dataset.variant)).toEqual(["blocked", "blocked", "blocked"]);
+    const reason = (t: HTMLElement) => t.querySelector("[data-slot=slot-reason]") as HTMLElement;
+    const marks = (t: HTMLElement) => [...reason(t).querySelectorAll("mark")].map((m) => m.textContent);
+    // 「無優惠」 carries the same characters but is the plan's label, not an offending word.
+    expect(reason(tiles[0]).querySelector("p")?.textContent).toBe("這則規劃的是「無優惠」，文案卻寫了「優惠」。");
+    expect(marks(tiles[0])).toEqual(["優惠"]);
+    expect(reason(tiles[0]).textContent).not.toContain("另有");
+    expect(reason(tiles[0]).querySelector("button")?.textContent).toBe("換一版文案");
+    expect(reason(tiles[0]).textContent).toContain("還是卡住：原因沒有變");
+    expect(tiles[0].querySelector("img")?.className).toContain("grayscale");
+    expect(tiles[0].querySelector("[data-slot=slot-head]")?.textContent).toBe("備考生・讀到深夜無優惠");
+    // Both quoted items are marked; 「這個優惠或背書」 later in the sentence is not.
+    expect(marks(tiles[1])).toEqual(["優惠", "加贈"]);
+    expect(reason(tiles[1]).textContent).toContain("另有 2 個原因");
+    expect(marks(tiles[2])).toEqual([]);
+    expect(reason(tiles[2]).textContent).toBe("這個檔案處理失敗：圖片格式讀不出來。");
+  });
+
+  it("SlotTile 的優惠晶片：有給才有 slot-head；沒給時名稱列跟原本一樣", async () => {
+    const { SlotTile } = await import("./SlotGrid");
+    const plain = render(<SlotTile variant="ready" name="晨光隨行杯・日常出發" thumbnailUrl={null} />).container;
+    expect(plain.querySelector("[data-slot=slot-head]")).toBeNull();
+    expect(plain.querySelector("[data-slot=slot-tile]")?.textContent).toBe("晨光隨行杯・日常出發");
+    const withOffer = render(<SlotTile variant="ready" name="通勤族・三盒組優惠價" thumbnailUrl={null} offer={<span>組合優惠</span>} />).container;
+    expect(withOffer.querySelector("[data-slot=slot-head]")?.textContent).toBe("通勤族・三盒組優惠價組合優惠");
+    expect(withOffer.querySelector("img")).toBeNull();
+  });
+
+  it("ProgressSegments：卡住是 danger 色、處理中是淡紫", async () => {
+    const { ProgressSegments } = await import("./ProgressSegments");
+    render(<ProgressSegments label="1／3 格已備妥，1 格卡住" segments={[{ key: "1", state: "ok" }, { key: "2", state: "blocked" }, { key: "3", state: "running" }]} />);
+    const bar = screen.getByRole("img", { name: "1／3 格已備妥，1 格卡住" });
+    expect(bar.querySelector("[data-state=blocked]")?.className).toContain("bg-danger");
+    expect(bar.querySelector("[data-state=running]")?.className).toContain("bg-chart-soft");
+    expect(bar.querySelector("[data-state=ok]")?.className).toContain("bg-success");
+  });
+});
