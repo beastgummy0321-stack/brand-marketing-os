@@ -255,6 +255,67 @@ class UserAssetsTest(unittest.TestCase):
             uploaded["id"],
         )
 
+    def slot(self, campaign, ad):
+        view = slots.read(self.conn, self.org, self.brand, campaign)
+        return next(s for g in view["groups"] for s in g["slots"] if s["ad_id"] == ad)
+
+    def test_preview_done_on_a_copy_the_program_refuses_blocks_the_slot_with_its_reason(self):
+        """F44-I04: the settle after the preview runs the same confirmation; a refusal there is
+        kept on the placement, so the slot stops reading `in_progress` once the wait is over."""
+        partial = {"headline": "標題", "body": "文案"}
+        item = self.original(partial)
+        campaign, ad = self.internal_ad()
+        uploaded = slots.upload(
+            self.conn, self.org, self.brand, campaign, ad,
+            {"asset_id": item["asset_id"], "copy_fields": partial}, "human",
+        )["placement"]
+        waiting = self.slot(campaign, ad)
+        self.assertEqual((waiting["state"], waiting["blocked"]), ("in_progress", None))
+        self.conn.commit()
+
+        self.preview(item["asset_id"])
+
+        placement = repo.placement(self.conn, self.org, self.brand, campaign, uploaded["id"])
+        self.assertIsNone(placement["confirmed_at"])
+        self.assertEqual([d["kind"] for d in placement["blocked_reasons"]], ["copy"])
+        refused = self.slot(campaign, ad)
+        self.assertEqual(refused["state"], "blocked")
+        self.assertEqual(
+            refused["blocked"],
+            {
+                "text": "請补齊標題、內文與說明，或補充可用品牌事實。", "terms": [],
+                "fix": "copy", "more": 0,
+            },
+        )
+
+    def test_a_preview_that_fails_for_good_blocks_the_slot_with_the_file_exit(self):
+        """F44-I04: the failure `process_preview` writes (`error` + its sentence) is the slot's
+        reason; a failure that is still retried keeps the slot `in_progress`."""
+        item = self.original(FULL_COPY)
+        campaign, ad = self.internal_ad()
+        slots.upload(
+            self.conn, self.org, self.brand, campaign, ad,
+            {"asset_id": item["asset_id"], "copy_fields": FULL_COPY}, "human",
+        )
+        self.conn.commit()
+        with patch.object(service.storage, "get", side_effect=RuntimeError("temporary")):
+            service.process_preview(self.org, self.brand, item["asset_id"])
+        asset = repo.get_asset(self.conn, self.org, self.brand, item["asset_id"])
+        self.assertEqual(asset["status"], "retryable")
+        retried = self.slot(campaign, ad)
+        self.assertEqual((retried["state"], retried["blocked"]), ("in_progress", None))
+
+        with patch.object(
+            service.media_probe, "preview", side_effect=service.media_probe.MediaError("損毀")
+        ):
+            service.process_preview(self.org, self.brand, item["asset_id"])
+        failed = self.slot(campaign, ad)
+        self.assertEqual(failed["state"], "blocked")
+        self.assertEqual(
+            failed["blocked"],
+            {"text": "這個檔案處理失敗：損毀", "terms": [], "fix": "file", "more": 0},
+        )
+
     def test_same_ad_different_copy_is_still_a_conflict(self):
         """F40-I02: the current row is keyed by (campaign, asset, ad); the same ad uploading the
         same file with different copy still gets `PlacementConflict` with the current row."""

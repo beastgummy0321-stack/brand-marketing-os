@@ -331,6 +331,23 @@ async def choose_slot_copy(request: Request, brand_id: str, campaign_id: str, ad
         raise _error(exc) from exc
 
 
+@router.post("/brands/{brand_id}/campaigns/{campaign_id}/slots/{ad_id}/recheck")
+def recheck_slot(request: Request, brand_id: str, campaign_id: str, ad_id: str):
+    """F44 Contract D: run a blocked slot's confirmation again; no body."""
+    from app.ads import slots
+
+    actor = web.require_actor(request)
+    try:
+        return slots.recheck(
+            db.current(), actor.org_id, brand_id, campaign_id, ad_id, str(actor.user_id)
+        )
+    except ValueError as exc:
+        mapped = _SLOT_COPY_ERRORS.get(str(exc))
+        if mapped is not None:
+            raise web.ApiError(*mapped) from exc
+        raise _error(exc) from exc
+
+
 @router.patch("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}")
 async def revise(request: Request, brand_id: str, campaign_id: str, placement_id: str):
     actor = web.require_actor(request)
