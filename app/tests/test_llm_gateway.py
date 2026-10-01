@@ -1109,6 +1109,27 @@ class ScriptedProviderTest(unittest.TestCase):
         reply = self._strategy_reply("提示裡沒有可用角色段落")
         self.assertEqual(reply, providers.SCRIPTED_REPLIES["ads_strategy"])
 
+    def test_delivery_plan_reply_uses_the_first_listed_offer(self):
+        # F44-I02: `- offer=<key>｜<sentence>` lines under 【這期可用的優惠】; the first group's ad
+        # takes the first key, the other groups keep the template's.
+        blocks = [{"type": "text", "text": (
+            "部門提示\n\n## 這次投放已採用的角色分配\n\n- new（新客）：60%\n- explore（探索）：40%"
+            "\n\n【這期可用的優惠】\n- offer=bundle｜三盒組優惠價 NT$999（原價 NT$1,197）"
+            "\n\n【座標詞彙】\n- offer｜bundle｜組合優惠"
+        )}]
+        row = gateway.run_task(
+            self.conn, FakeProvider(), brand_id=self.brand["id"], task_type="ads_delivery_plan",
+            prompt_template_id="tpl", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": blocks}],
+            context=self._context(),
+        )
+        self.assertEqual(row["status"], "succeeded")
+        reply = gateway.parse_json_reply(row["rendered_output"])
+        self.assertEqual(
+            [(g["role"], g["ads"][0]["coordinates"]["offer"]) for g in reply["groups"]],
+            [("new", "bundle"), ("explore", "e2e")],
+        )
+
 
 class ParseJsonReplyShapeTest(unittest.TestCase):
     """守 API 契約：parse_json_reply 絕不回傳模型沒送出的形狀（六個呼叫端共用這一支）。
