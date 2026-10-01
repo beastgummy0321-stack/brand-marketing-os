@@ -39,7 +39,7 @@ export { SourceList, SourceRow } from "./SourceList";
 export { DAY_SWATCH, DAY_WORD, DayGrid, type DayGridRow, type DayState } from "./DayGrid";
 export { Legend, type LegendItem } from "./Legend";
 export { CopyField, CopyFields } from "./CopyField";
-export { SlotGrid, SlotTile } from "./SlotGrid";
+export { SlotGrid, SlotTile, type SlotReason } from "./SlotGrid";
 export { TreeRows, type TreeGroup, type TreeLeaf, type TreeNodeInfo } from "./TreeRows";
 export { CHANGE_STATE_LABEL, CHANGE_STATE_TONE, ChangeTimeline, type ChangeRow, type ChangeState } from "./ChangeTimeline";
 export { PickCard, PickGroup } from "./PickCard";

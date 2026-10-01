@@ -1,9 +1,11 @@
 import { cn } from "@/lib/utils";
 
 /** Kit piece for the v9 progress segments (prototype `.prog`): one equal segment per item — launch items on the
- * handoff (`pubProg()`), change-set rows on 變更與核對, slots on 素材. `data-slot="progress-segments"`. */
+ * handoff (`pubProg()`), change-set rows on 變更與核對, slots on 素材. `data-slot="progress-segments"`.
+ * The 素材 slots add two states (F44 prototype `.prog i.run` / `i.bad`): `running` = 處理中, finishing by itself;
+ * `blocked` = 卡住, the danger colour. */
 
-export type SegmentState = "ok" | "built" | "mismatch" | "changed" | "todo";
+export type SegmentState = "ok" | "built" | "mismatch" | "changed" | "todo" | "running" | "blocked";
 
 const FILL: Record<SegmentState, string> = {
   ok: "bg-success",
@@ -11,6 +13,8 @@ const FILL: Record<SegmentState, string> = {
   mismatch: "bg-warning/80",
   changed: "bg-[repeating-linear-gradient(45deg,var(--color-warning)_0_3px,color-mix(in_oklab,var(--color-warning)_30%,white)_3px_6px)]",
   todo: "bg-muted",
+  running: "bg-chart-soft",
+  blocked: "bg-danger",
 };
 
 export function ProgressSegments({ segments, label, className }: {
