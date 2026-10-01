@@ -5,12 +5,13 @@
 Same as `python -m app.worker`, except `app.meta.graph.fetch_page` reads the stand-in state
 and `today_for_org` reads `.scratch/drill/today` (see `clock.py`). Drill only."""
 
-from scripts.drill import clock, fake_meta
+from scripts.drill import clock, fake_meta, site
 
 if __name__ == "__main__":
     fake_meta.install()
     clock.install()
     import app.worker
+    site.install()  # drill 9: AI prefill reads the frozen site copy
     print(f"[drill] 時鐘已掛上 {clock.patch_modules()} 處 date/datetime")
 
     try:

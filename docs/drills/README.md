@@ -182,3 +182,13 @@ real date; the A-vs-B table re-simulates B on A's week. Result: B 1.46 -> 1.06 (
 offers never switched on, video slots with photo-only brands, and the rationale not shown.
 What the drill cost the fixture this time: `export_plan.py` read the first revision of a placement instead of the current
 one (fixed: `is_current`), so the rows loaded into the stand-in were judged on stale copy for revised ads.
+
+## Drill 9 (2026-10-01) — B only, after F41–F43 (new brand / product onboarding)
+
+`docs/drills/drill-9/`: `plan.md` (persona script, measures), `report.md`, `plans/`. Same A, judge, `tw_sim`, stand-in and drill-8
+periods. New: `brand-facts.md` "Onboarding supplement"; the AI prefill reads a frozen copy of beastprime.com.tw
+(`scripts/drill/site.py` + `site/`, installed by `serve.py` and `worker.py`; persona types the real URLs). Result: B 1.06 -> 1.51
+(A 2.25); video slots 0, pains from customer groups; offers still 0 because ads carry no sell-way (planner sees offer keys only,
+asset confirm checks claims with product `None` and silently parks offer copy as 「處理中」).
+What the drill cost the fixture this time: the daily sync cron runs on real time, so after moving the clock past a period end
+run `.harness/scratch/drill9/ops.py sync` before planning, or launch approval waits on 「餘額尚不確定」.

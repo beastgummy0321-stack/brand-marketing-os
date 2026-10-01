@@ -1,0 +1,88 @@
+{
+  "side": "B",
+  "period": 1,
+  "campaign_id": "adc_01M3TXH5Q1WPNN8X5K6D9VW22Z",
+  "name": "Beast Gummy · 超能特惠組・10/03～10/09",
+  "start_date": "2026-10-03",
+  "end_date": "2026-10-09",
+  "objective": "購買",
+  "success_metric": null,
+  "success_target": null,
+  "result_kind": "purchase",
+  "status": "live",
+  "budget_planned": 10500.0,
+  "daily_budget_total": 1500.0,
+  "goal_text": "推「Beast Gummy · 超能特惠組」，想要的結果：購買，期間 2026-10-03 ~ 2026-10-09，這個活動最多花 10500。",
+  "groups": [
+    {
+      "name": "新客｜通勤與訓練前便利",
+      "role": "new",
+      "channel": "meta",
+      "audience_key": "cold_problem_aware",
+      "audience_desc": null,
+      "placement": null,
+      "daily_budget": 675.0,
+      "ads": [
+        {
+          "name": "會議通勤不方便喝飲料",
+          "format_key": "single_image",
+          "hook_key": "pain_question",
+          "pain_key": "experience",
+          "angle_key": "benefit_explainer",
+          "proof_key": "none",
+          "offer_key": "none",
+          "audience_key": "cold_problem_aware",
+          "product": "Beast Gummy · 超能特惠組",
+          "price": 999.0,
+          "headline": "通勤開會，想補充卻沒空喝？",
+          "body": "通勤車廂快到站，下一站又要進會議室，想補充狀態卻沒空找飲料？Beast Gummy · 超能特惠組，一顆含150 mg咖啡因、100 mg牛磺酸及維生素B12，口腔黏膜快速吸收、免配水，放進日程縫隙就能吃。每次一顆，15分鐘後可再一顆，一日不超過兩顆。",
+          "asset_ready_source": null
+        }
+      ]
+    },
+    {
+      "name": "探索｜便利、備考與免配水",
+      "role": "explore",
+      "channel": "meta",
+      "audience_key": "cold_unaware",
+      "audience_desc": null,
+      "placement": null,
+      "daily_budget": 825.0,
+      "ads": [
+        {
+          "name": "通勤中不用頻繁喝飲料",
+          "format_key": "carousel",
+          "hook_key": "outcome_led",
+          "pain_key": "experience",
+          "angle_key": "moment_anchoring",
+          "proof_key": "none",
+          "offer_key": "none",
+          "audience_key": "cold_problem_aware",
+          "product": "Beast Gummy · 超能特惠組",
+          "price": 999.0,
+          "headline": "擠在捷運裡也能完成補給",
+          "body": "早上的捷運擠得連手都難抬，還要在包包裡找飲料？Beast Gummy 超能特惠組，通勤途中每次一顆，口腔黏膜快速吸收，免配水，讓你不用等到進辦公室才補給。每顆含150 mg咖啡因、100 mg牛磺酸及維生素B12，幫助保持清醒與專注。需要時15分鐘後可再一顆，一日不超過兩顆。",
+          "asset_ready_source": null
+        },
+        {
+          "name": "訓練前不用沖泡配水",
+          "format_key": "single_image",
+          "hook_key": "never_again",
+          "pain_key": "effort",
+          "angle_key": "product_explainer",
+          "proof_key": "none",
+          "offer_key": "none",
+          "audience_key": "cold_problem_aware",
+          "product": "Beast Gummy · 超能特惠組",
+          "price": 999.0,
+          "headline": "再也不用把時間花在沖泡",
+          "body": "訓練前，裝備都整理好了，還要找水、撕粉包、等沖泡嗎？Beast Gummy 直接吃，口腔黏膜快速吸收，免配水，把補給步驟縮到最短。每顆含 150 mg 咖啡因、100 mg 牛磺酸與維生素 B12。每次一顆，15 分鐘後可再一顆，一日不超過兩顆。超能特惠組 NT$999，原價 NT$1,500。",
+          "asset_ready_source": null
+        }
+      ]
+    }
+  ],
+  "kpi": {},
+  "hypothesis": null,
+  "notes": "exported from MarketingOS by scripts/drill/export_plan.py drill9: 2 ads without copy (asset slot stuck pending, not on the handoff list) were not built; paused in the stand-in."
+}

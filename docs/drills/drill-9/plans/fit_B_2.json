@@ -1,0 +1,25 @@
+{
+  "ads": {
+    "通勤路上不用頻繁找洗手間": {
+      "fit": 1.2,
+      "tags": ["worker"],
+      "compliance": "review",
+      "proof_present": false,
+      "reason": "留住清醒與專注 claims a feeling-based effect (提神-like) without medical framing, borderline per rubric."
+    },
+    "備考時不靠一罐罐能量飲撐住": {
+      "fit": 1.2,
+      "tags": ["student"],
+      "compliance": "review",
+      "proof_present": false,
+      "reason": "把專注留給下一頁 and 補給也要跟得上你的節奏 claim feeling-based performance effects."
+    },
+    "訓練前不用沖泡配水": {
+      "fit": 1.2,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "免配水 and 成分 are product facts; 想在訓練前補給 is usage suggestion without medical claims."
+    }
+  }
+}

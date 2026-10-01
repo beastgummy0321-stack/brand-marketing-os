@@ -9,7 +9,9 @@ Start here in the next session. A board, not an implementation authorization. Re
 - Dev DB (54322) has every F42/F43 migration applied and registered. New background tasks (`intake_scan` prefill, `intake_product_prefill`):
   restart the worker before any browser check.
 
-## Next: drill 9 — rerun B, but re-plan the onboarding part first
+## Done: drill 9 (2026-10-01) — next pointer moved to `handoff-after-drill-9.md`
+
+## Was: drill 9 — rerun B, but re-plan the onboarding part first
 Drill 6–8's B script walked the old wizard (paste → truth cards, 賣什麼與數字) and picked a product + 受眾方向 per campaign; none of
 that exists now. Keep A (drill-6 rows/fit), the judge rubric, `tw_sim`, the Meta stand-in and the period rules; re-plan only:
 1. **Persona script** (`docs/drills/drill-6/persona-beast.md` + a new `drill-9/plan.md`): brand onboarding 7 steps → product onboarding

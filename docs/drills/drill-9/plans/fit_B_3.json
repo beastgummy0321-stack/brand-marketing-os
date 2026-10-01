@@ -1,0 +1,25 @@
+{
+  "ads": {
+    "會議中直接吃不打斷工作": {
+      "fit": 1.35,
+      "tags": ["worker"],
+      "compliance": "review",
+      "proof_present": true,
+      "reason": "150 mg 咖啡因、100 mg 牛磺酸 and 會議空檔 name concrete situation and mechanism; 把清醒、專注...放回 claims focus effect borderline on medical framing."
+    },
+    "通勤途中不用喝飲料": {
+      "fit": 1.35,
+      "tags": ["worker", "driver"],
+      "compliance": "review",
+      "proof_present": true,
+      "reason": "150 mg 咖啡因、100 mg 牛磺酸 and 捷運車廂、趕著轉車 describe product and situation; 讓清醒與專注跟著你到站 claims focus effect requiring review."
+    },
+    "訓練前直接吃不用配水": {
+      "fit": 1.35,
+      "tags": ["fitness"],
+      "compliance": "review",
+      "proof_present": true,
+      "reason": "150 mg 咖啡因、100 mg 牛磺酸 and 重量訓練區旁 describe product and situation; 把注意力放回 claims attention/focus effect borderline."
+    }
+  }
+}
