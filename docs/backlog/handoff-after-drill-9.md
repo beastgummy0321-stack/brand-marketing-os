@@ -18,12 +18,29 @@ and `workbench_brief.product_id`. Each step looks for offer evidence on its own:
   `app/ads/slots.py:348` drops the pending result → slot shows 「處理中」 forever, no reason, no retry. The 4 stuck slots = the 4 offer ads.
 - `bundle` label 「組合加贈」 is wrong for a multi-unit price (`app/core/vocab.py:48`, `app/schedule/repository.py:168`).
 
-Open for the dig (none decided):
-1. Who owns "which sell-way this ad sells": `ads_ad.product_id` filled at plan time, or the campaign's sell-way read everywhere?
-2. What the planner gets per available offer (sentence + list price) and whether "at least one ad uses a true offer" is a prompt rule or a program gate.
-3. How a refused slot shows its reason and what the user can do (edit copy / drop the word / retry).
-4. Same-class callers to include: `app/ads/user_assets_routes.py:230`, `app/intake/product_onboarding.py:727`; other swallowed `pending_reasons`.
-Proposed acceptance (from the report): rerun drill-9 P1 planning on the same data → ≥1 ad with a true offer, offer slots reach ready.
+Dig 2026-10-01 (re-verified against code; not yet carved):
+- Root cause restated: no single reader for "which sell-way this ad sells". `ad.product_id or campaign product_ids[0]` is
+  re-derived per call site (`app/ads/assets.py:96`, `app/ads/learning.py:67-70`, `app/ads/plan.py:225`,
+  `app/ads/materials_in_hand.py:34`) and skipped in `asset_suggestion_policy.violations`. A NULL `ads_ad.product_id` is a symptom.
+- User rulings:
+  1. The offer coordinate decides the copy: `offer=none` → copy must not write the sell-way's offer price / list price; an
+     offer key → copy writes that offer's registered sentence. (Drill 9: 4 ads had coordinate `none` but offer copy, so the
+     scoreboard would credit `none`.)
+  2. "At least one ad uses an available offer" = prompt rule + program gate that rejects the whole reply (same pattern as the
+     scene rule in `plan._validate_reply`); only when the filtered menu has an offer other than `none`.
+- Agent assumptions (reversible, not user rulings):
+  - The campaign owns the sell-way (wizard Contract D: exactly one, `app/ads/brief.py:242`); one resolver in `app/ads` read by
+    planner, pack dispatch, confirm and learning; `ads_ad.product_id` stays an optional override, not filled at plan time.
+  - Planner prints `bi_repo.offer_sources` sentences (already carry price + list price) beside the offer menu; no new data.
+  - Refused slot: `ads_asset_placement.pending_reason` already exists and the manual upload notice shows it; the auto-confirm
+    path (`slots._confirm_if_ready`, 3 callers) drops it. Store it, add a blocked slot state with the reason and one exit
+    (edit copy / replace file / retry), stop the 3 s poll. UI → prototype before work.
+  - `bundle` label 「組合加贈」 → 「組合優惠」 (`app/core/vocab.py:48`, `app/schedule/repository.py:168`).
+- Same-class check: `user_assets_routes.py:230`, `product_onboarding.py:727`, `asset_suggestion_policy.py:81` pass `None` but
+  read only `statutory_*` (brand regime, product-independent) — not this bug. Real sibling: `asset_suggestion_policy.source_rows`
+  (`:50`) drops product-level approved claims for AI-filled copy.
+Proposed acceptance (from the report): rerun drill-9 P1 planning on the same data → ≥1 ad with a true offer, offer slots reach
+ready; plus: no ad with coordinate `offer=none` carries an offer sentence, and a refused slot shows its reason.
 
 ## Other drill-9 candidates (not planned; report §3)
 - #3/#4 one owner for "period window and whether today counts" (perf page all rows vs overview rolling 14 days vs month incl. today);
