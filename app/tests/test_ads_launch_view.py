@@ -25,7 +25,7 @@ from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
 from app.ads.adapters.external import SourcePage
 from app.brand_intelligence import repository as brands
-from app.core import db, settings
+from app.core import db, settings, vocab
 
 
 class LaunchViewTest(unittest.TestCase):
@@ -244,11 +244,13 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(fields["group"], "新客")
         self.assertEqual(fields["material"], "gift.png・第 1 版")
         self.assertEqual(fields["copy.body"], "文案")
-        # One vocabulary with the readback's mismatch/unreadable keys.
+        # One vocabulary with the readback's mismatch/unreadable keys. F46 Contract F: 「格式」
+        # after 「素材」 -- the uploaded PNG is a single image (the ad has no planned format).
         self.assertEqual(
             list(fields),
-            ["name", "group", "material", "copy.title", "copy.body", "copy.description"],
+            ["name", "group", "material", "format", "copy.title", "copy.body", "copy.description"],
         )
+        self.assertEqual(fields["format"], "single_image")
         group = {f["key"]: f["value"] for f in self.items(view)["新客"]["fields"]}
         # F36-I07 Contract V: the audience hint sits after the date rows; the fixture ads carry
         # no audience key and the brief has no audience text, so the group's role and its fixed
@@ -401,6 +403,104 @@ class LaunchViewTest(unittest.TestCase):
         node = {"id": "g_bare", "name": "無角色", "daily_budget": 100}
         fields = launch_view._fields("group", node, None, {"groups": [node]}, hints)
         self.assertNotIn("audience_hint", [f["key"] for f in fields])
+
+    # -- F46 Contract F: the actual format row; F46 Contract A: the customer group in the hint ----
+
+    def seed_format(self, key, label):
+        self.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'format',%s,%s)",
+            (db.new_id("crd"), self.org, self.brand, key, label),
+        )
+        self.conn.commit()
+
+    def plan_format(self, ad_id, key):
+        self.conn.execute("UPDATE ads_ad SET format_key=%s WHERE id=%s", (key, ad_id))
+        self.conn.commit()
+
+    def format_rows(self, item):
+        return [(f["label"], f["value"]) for f in item["fields"] if f["key"] == "format"]
+
+    def test_the_format_row_says_what_ships_and_what_was_planned_when_they_differ(self):
+        self.seed_format("carousel", "輪播")
+        self.seed_format("single_image", "單圖")
+        self.plan_format(self.ad, "carousel")
+        self.assertEqual(
+            self.format_rows(self.items()["禮盒主圖"]), [("格式", "單圖（規劃是輪播）")]
+        )
+        self.plan_format(self.ad, "single_image")
+        self.assertEqual(self.format_rows(self.items()["禮盒主圖"]), [("格式", "單圖")])
+
+        # View-time only: the approval never freezes it, and changing the plan afterwards does
+        # not make the approved list stale.
+        self.approve()
+        self.plan_format(self.ad, "carousel")
+        view = self.view()
+        self.assertEqual(view["step"], "platform")
+        self.assertEqual(
+            self.format_rows(self.items(view)["禮盒主圖"]), [("格式", "單圖（規劃是輪播）")]
+        )
+        expected = self.conn.execute(
+            "SELECT expected_json FROM ads_handoff_item WHERE campaign_id=%s AND planned_id=%s",
+            (self.campaign, self.ad),
+        ).fetchone()["expected_json"]
+        self.assertNotIn("format", expected)
+        frozen = launch_view.launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        self.assertNotIn("輪播", str(frozen["plan_json"]["launch_snapshot"]))
+
+    def test_an_ad_without_material_shows_its_planned_format(self):
+        self.seed_format("video", "影片")
+        node = {"id": "ad_plan", "name": "影片", "material_assignment": None}
+        rows = launch_view.formats(
+            self.conn, self.org, self.brand, self.campaign,
+            {"groups": [{"ads": [node]}]},
+            {"groups": [{"ads": [{"id": "ad_plan", "format_key": "video"}]}]},
+        )
+        self.assertEqual(rows, {"ad_plan": "影片"})
+        fields = launch_view._fields("ad", node, "新客", {}, None, rows)
+        self.assertEqual(
+            [(f["key"], f["value"]) for f in fields][2:4],
+            [("material", None), ("format", "影片")],
+        )
+
+    def test_the_hint_names_the_customer_group_when_the_groups_ads_share_one(self):
+        product = brands.create_product(self.conn, self.brand, name="禮盒", actor="test")["id"]
+        way = brands.save_sell_way(
+            self.conn, self.brand, name="單盒", actor="test", product_id=product,
+            economics={"selling_price": 500},
+        )["id"]
+        campaigns.update_campaign(
+            self.conn, self.org, self.brand, self.campaign, {"product_ids": [way]}
+        )
+        self.conn.commit()
+        group_row = brands.save_customer_groups(
+            self.conn, self.brand, product,
+            [{"who": "送禮的上班族", "pain_keys": [vocab.PAIN_KEYS[0]]}], actor="test",
+        )[0]
+        self.conn.execute(
+            "UPDATE ads_ad SET customer_group_id=%s WHERE group_id=%s",
+            (group_row["id"], self.group),
+        )
+        self.conn.commit()
+        self.assertEqual(
+            self.hint_rows(self.items()["新客"]),
+            [("受眾提示", "新客・顧客群：送禮的上班族・排除：已購買者")],
+        )
+        # A group whose ads carry two customer groups, or a deleted one, names none.
+        self.conn.execute(
+            "UPDATE ads_ad SET customer_group_id='cgp_gone' WHERE id=%s", (self.waiting,)
+        )
+        self.conn.commit()
+        self.assertEqual(
+            self.hint_rows(self.items()["新客"]), [("受眾提示", "新客・排除：已購買者")]
+        )
+        self.conn.execute(
+            "UPDATE ads_ad SET customer_group_id='cgp_gone' WHERE group_id=%s", (self.group,)
+        )
+        self.conn.commit()
+        self.assertEqual(
+            self.hint_rows(self.items()["新客"]), [("受眾提示", "新客・排除：已購買者")]
+        )
 
     def test_the_manual_checklist_lists_only_the_ads_the_snapshot_carries(self):
         response = self.client.get(self.base.removesuffix("/launch") + "/publish")

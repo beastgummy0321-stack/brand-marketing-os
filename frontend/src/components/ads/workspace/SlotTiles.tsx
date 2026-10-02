@@ -92,6 +92,16 @@ function JobLine({ job }: { job: SlotJob | null }) {
   );
 }
 
+/** F46 Contract F (prototype `f45-slot-states` slot a2, `.slot .note`): the file ships in another format than planned —
+ * a fact under the status chip, never a block (「ⓘ 規劃是輪播，只放了 1 張圖，會以單圖上架」). */
+function FormatNote({ text }: { text: string }) {
+  return (
+    <p data-slot="slot-format-note" className="flex gap-[5px] text-[11.5px] leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">
+      <i aria-hidden="true" className="shrink-0 not-italic">ⓘ</i>{text}
+    </p>
+  );
+}
+
 /** A ready or in-progress slot. `shared`: another slot in the same response shows the same thumbnail (one original
  * backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was 處理中,
  * 等你 or 卡住 in an earlier read of the same screen and became ready (「已確認・剛處理好」). */
@@ -112,6 +122,7 @@ export function ReadySlot({ slot, shared, justDone, busy, onPick }: {
         </span>
       )}
       {chip}
+      {slot.format_note && <FormatNote text={slot.format_note} />}
     </div>
   );
   return (

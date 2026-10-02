@@ -248,6 +248,49 @@ class LiveCreativeTest(unittest.TestCase):
 
         self.assertEqual(coords[ad["id"]]["audience"], "warm")
 
+    def _coords(self, ad_id):
+        detail = campaigns.campaign_detail(self.conn, self.org, self.brand, self.campaign)
+        ads = [a for g in detail["groups"] for a in g["ads"]]
+        return live_creative.learning_coordinates(
+            self.conn, self.org, self.brand, self.campaign, ads
+        )[ad_id]
+
+    def test_f46_the_uploaded_file_decides_the_learned_format(self):
+        """Contract F: a carousel planned ad keeps 「carousel」 until a material is assigned; the
+        one image in its slot makes it `single_image`, a video file `video`."""
+        ad = plan.create_ad(
+            self.conn, self.org, self.brand, self.campaign, self.group, name="輪播規劃",
+            coordinates={**_COORDS, "format": "carousel"},
+        )
+        self.conn.commit()
+        self.assertEqual(self._coords(ad["id"])["format"], "carousel")
+
+        for mime, expected in (("image/png", "single_image"), ("video/mp4", "video")):
+            with self.subTest(mime=mime):
+                asset = db.new_id("aua")
+                self.conn.execute(
+                    "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+                    "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'f',%s,1,'ready')",
+                    (asset, self.org, self.brand, asset, f"{self.org}/{asset}", mime),
+                )
+                placement = assets.attach(
+                    self.conn, self.org, self.brand, self.campaign, asset,
+                    {"headline": "標題", "body": "文案", "description": "說明"}, ACTOR,
+                )
+                self.conn.execute(
+                    "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' "
+                    "WHERE id=%s",
+                    (placement["id"],),
+                )
+                self.conn.commit()
+                handoff_assignment.assign(
+                    self.conn, self.org, self.brand, self.campaign, ad["id"], placement["id"], 1
+                )
+                coords = self._coords(ad["id"])
+                self.assertEqual(coords["format"], expected)
+                # Only the format follows the file; the other coordinates stay the plan's.
+                self.assertEqual(coords["angle"], "a1")
+
 
 class SnapshotKeysTest(unittest.TestCase):
     def test_both_stored_shapes_normalise_to_keys(self):

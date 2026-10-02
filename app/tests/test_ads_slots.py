@@ -286,7 +286,7 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
         "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
-        "blocked": None, "offer_label": None, "waiting": None, "job": None,
+        "blocked": None, "offer_label": None, "waiting": None, "job": None, "format_note": None,
     }
     # Uploaded, its original still pending: not confirmable yet, so not launchable and not
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
@@ -858,6 +858,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
         "format_key": None, "blocked": None, "offer_label": None, "waiting": None, "job": None,
+        "format_note": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -958,7 +959,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
         "copy": None, "workbench_href": None, "format_key": None,
         "blocked": None, "offer_label": None,  # an imported campaign has no offer coordinate
-        "waiting": None, "job": None,
+        "waiting": None, "job": None, "format_note": None,
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
@@ -1118,8 +1119,10 @@ def test_a_word_of_another_offer_family_is_a_mismatch_with_the_planned_offer(env
     result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
     assert result["placement"]["confirmed_at"] is None
     sentence = "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。"
+    # F46-I03 Contract O: planned with 免運, the copy does not write its sentence either.
+    missing = "這則規劃的是「免運」，文案沒有寫這個優惠：「滿 NT$999 免運」。"
     assert recheck(env, result["placement"])["pending_details"] == [
-        refusal("copy", sentence, ["加贈"])
+        refusal("copy", sentence, ["加贈"]), refusal("copy", missing)
     ]
 
 
@@ -1133,9 +1136,13 @@ def test_a_promise_the_sell_way_does_not_have_is_unbacked(env):
     result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
     assert result["placement"]["confirmed_at"] is None
     sentence = "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。"
+    # F46-I03 Contract O: planned with 折扣, the copy does not write its sentence either.
+    missing = "這則規劃的是「折扣」，文案沒有寫這個優惠：「優惠價 NT$800（原價 NT$1,000）」。"
     refused = recheck(env, result["placement"])
-    assert refused["pending_reasons"] == [sentence]
-    assert refused["pending_details"] == [refusal("copy", sentence, ["加贈"])]
+    assert refused["pending_reasons"] == [sentence, missing]
+    assert refused["pending_details"] == [
+        refusal("copy", sentence, ["加贈"]), refusal("copy", missing)
+    ]
 
 
 def test_library_placement_is_judged_with_the_campaigns_sell_way(env):
@@ -1266,7 +1273,7 @@ def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(en
         "replace_task_id": None, "copy": placement_copy("待確認", PRICE_COPY),
         "workbench_href": None, "format_key": None,
         "blocked": blocked(MISMATCH, MISMATCH_TERMS, fix="copy"), "offer_label": "無優惠",
-        "waiting": None, "job": None,
+        "waiting": None, "job": None, "format_note": None,
     }
     # A blocked slot is not ready; the slots nothing was uploaded into carry `blocked: None`.
     assert (view.json()["ready"], view.json()["total"]) == (0, 3)
@@ -1724,3 +1731,95 @@ def test_a_pending_original_is_in_progress_with_its_preview_job(env):
     assert (slot["state"], slot["waiting"], slot["blocked"]) == ("in_progress", None, None)
     assert slot["job"] == {"kind": "preview", "done": None, "of": None}
     assert slot["copy"] == placement_copy("待確認", WORKBENCH_COPY)
+
+
+# -- F46-I03 Contract F: the slot says when the file ships in another format than planned -------
+
+
+def file_asset(env, mime, *, status="ready"):
+    conn, asset = env["conn"], db.new_id("aua")
+    conn.execute(
+        "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+        "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'f',%s,1,%s)",
+        (asset, env["org"], env["brand"], asset, f"{env['org']}/{asset}", mime, status),
+    )
+    conn.commit()
+    return asset
+
+
+def plan_format(env, ad, key):
+    env["conn"].execute("UPDATE ads_ad SET format_key=%s WHERE id=%s", (key, ad))
+    env["conn"].commit()
+
+
+def seed_format_labels(env):
+    for key, label in (("single_image", "單圖"), ("video", "影片"), ("carousel", "輪播")):
+        env["conn"].execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'format',%s,%s)",
+            (db.new_id("crd"), env["org"], env["brand"], key, label),
+        )
+    env["conn"].commit()
+
+
+def test_f46_a_carousel_slot_with_one_assigned_image_says_it_ships_as_a_single_image(env):
+    carousel_ad, same_ad, missing_ad = env["ads"]
+    plan_format(env, carousel_ad, "carousel")
+    plan_format(env, same_ad, "single_image")
+    plan_format(env, missing_ad, "carousel")
+    assign_confirmed(env, carousel_ad, user_asset(env))
+    assign_confirmed(env, same_ad, user_asset(env))
+    slot = by_ad(read(env))
+    assert slot[carousel_ad]["state"] == "ready"
+    assert slot[carousel_ad]["format_note"] == "規劃是輪播，只放了 1 張圖，會以單圖上架"
+    assert slot[same_ad]["format_note"] is None  # planned = actual
+    assert slot[missing_ad]["format_note"] is None  # no file, nothing ships yet
+
+
+def test_f46_a_pending_file_in_the_slot_names_its_format_in_the_brands_words(env):
+    seed_format_labels(env)
+    image_ad, video_ad, bare_ad = env["ads"]
+    plan_format(env, image_ad, "single_image")
+    plan_format(env, video_ad, "video")
+    # A video still being processed in a single-image slot, a photo waiting for confirmation in
+    # a video slot (the frontend refuses that upload; data can still carry it), and a file in an
+    # ad without a planned format.
+    upload(env, image_ad, {"asset_id": file_asset(env, "video/mp4", status="pending")})
+    for ad in (video_ad, bare_ad):
+        placement = user_assets.attach(
+            env["conn"], env["org"], env["brand"], env["campaign"], user_asset(env), COPY,
+            "human", ad_id=ad,
+        )
+        env["conn"].execute(
+            "UPDATE ads_ad SET slot_placement_id=%s WHERE id=%s", (placement["id"], ad)
+        )
+    env["conn"].commit()
+    slot = by_ad(read(env))
+    assert slot[image_ad]["state"] == "in_progress"
+    assert slot[image_ad]["format_note"] == "規劃是單圖，放的是影片，會以影片上架"
+    assert slot[video_ad]["state"] == "waiting"
+    assert slot[video_ad]["format_note"] == "規劃是影片，放的是單圖，會以單圖上架"
+    assert slot[bare_ad]["format_note"] is None  # no planned format: nothing to compare
+
+
+# -- F46-I03 Contract O: an ad planned with an offer must write its sentence ---------------------
+
+
+def test_f46_a_bundle_ad_whose_copy_lacks_the_offer_sentence_is_refused(env):
+    ad = env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "bundle", "組合優惠")
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": COPY})
+    assert result["placement"]["confirmed_at"] is None
+    missing = "這則規劃的是「組合優惠」，文案沒有寫這個優惠：「優惠價 NT$999（原價 NT$1,500）」。"
+    slot = by_ad(result["slots"])[ad]
+    assert slot["state"] == "blocked"
+    assert slot["blocked"] == blocked(missing, fix="copy")
+    assert stored_reasons(env, result["placement"]["id"]) == [refusal("copy", missing)]
+
+    # The copy rewritten with the sentence (whitespace inside it does not matter) confirms.
+    fixed = slots.choose_copy(
+        env["conn"], env["org"], env["brand"], env["campaign"], ad,
+        {"copy_fields": {"body": "三盒組優惠價 NT$999 （原價 NT$1,500）"}}, "human",
+    )
+    assert by_ad(fixed["slots"])[ad]["state"] == "ready"
