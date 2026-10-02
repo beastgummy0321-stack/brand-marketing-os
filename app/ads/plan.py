@@ -30,6 +30,7 @@ from app.ads import repository as ads_repo
 from app.ads import sell_way as sell_way_mod
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
+from app.core import input_rules
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
 
@@ -485,7 +486,19 @@ _GROUP_ACTION_KIND_FIELDS = (
 def _parse_date(value) -> date | None:
     if value is None or isinstance(value, date):
         return value
-    return date.fromisoformat(value)
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError("date_invalid") from None
+
+
+def _check_date_order(start, end) -> None:
+    """End ``>=`` start (`app.core.input_rules.date_order`); refused as `dates_reversed`, which
+    the route maps to its sentence."""
+    try:
+        input_rules.date_order(start, end)
+    except input_rules.InputRuleError:
+        raise ValueError("dates_reversed") from None
 
 
 def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict, *,
@@ -511,6 +524,12 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
     for field in ("start_date", "end_date"):
         if field in updates and updates[field] is not None:
             updates[field] = _parse_date(updates[field])
+    if "start_date" in updates or "end_date" in updates:
+        # F47 Contract A: the stored side counts when only one side is patched.
+        _check_date_order(
+            updates.get("start_date", group.get("start_date")),
+            updates.get("end_date", group.get("end_date")),
+        )
 
     before = {k: group.get(k) for k in updates}
     updated = ads_repo.update_group_fields(conn, org_id, brand_id, group_id, updates)
@@ -537,6 +556,7 @@ def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: st
     if isinstance(daily_budget, bool) or not isinstance(daily_budget, (int, float)) \
             or daily_budget <= 0:
         raise ValueError("daily_budget_invalid")
+    _check_date_order(_parse_date(start_date), _parse_date(end_date))
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")

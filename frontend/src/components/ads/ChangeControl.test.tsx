@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +70,20 @@ describe("ChangeControl 核准與逐項核對", () => {
     await screen.findByRole("button", { name: "核准這份變更清單" });
     expect(vi.mocked(api.createChangeSet).mock.calls[1][2]).toEqual(first);
     expect(sessionStorage.getItem("ads-change-operation:org_test:brand_a:campaign_1")).toBeNull();
+  });
+
+  it("F47-I06：「建立變更清單」打開下方的清單並把游標放進第一格；沒有可改的對象時停用並說原因", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [change()] });
+    const first = render(page()); await openAdvanced();
+    await user.click(await screen.findByRole("button", { name: "建立變更清單" }));
+    const composer = await screen.findByRole("region", { name: "建立變更清單" });
+    await waitFor(() => expect(document.activeElement).toBe(within(composer).getAllByRole("textbox")[0]));
+    first.unmount();
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [change()] });
+    render(page()); await openAdvanced();
+    expect((await screen.findByRole("button", { name: "建立變更清單" })).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("這個活動還沒有可改的平台對象：先帶入既有活動或完成廣告對應")).toBeTruthy();
   });
 
   it("切換品牌中止舊讀取，遲到回應不顯示另一品牌清單", async () => {
@@ -199,18 +213,29 @@ describe("ChangeControl v10 變更紀錄與進階收合", () => {
 });
 
 describe("MonthlyBudgetPanel", () => {
-  it("初次可修正推導幣別，接受零月額且未知花費不冒充零", async () => {
+  it("初次可修正推導幣別；打的數字照送（0、負數、空白都不改值），顯示伺服器的句子，改欄位就清掉紅字；未知花費不冒充零", async () => {
     const user = userEvent.setup();
+    const onSaved = vi.fn();
     vi.mocked(api.getMonthlyBudget).mockResolvedValue({ ...budget, amount: null, revision: 0, known_spend: null });
-    vi.mocked(api.saveMonthlyBudget).mockResolvedValue({ ...budget, amount: 0, revision: 1, currency: "USD", known_spend: null });
-    render(<MemoryRouter><MonthlyBudgetPanel brandId="brand_a" month="2026-09" /></MemoryRouter>);
+    vi.mocked(api.saveMonthlyBudget).mockRejectedValue(new api.ChangeRequestRejected("每月品牌總額要大於 0。"));
+    render(<MemoryRouter><MonthlyBudgetPanel brandId="brand_a" month="2026-09" onSaved={onSaved} /></MemoryRouter>);
     await user.click(await screen.findByRole("button", { name: "設定月總額" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("每月品牌總額"));
     await user.clear(screen.getByLabelText("月預算幣別"));
     await user.type(screen.getByLabelText("月預算幣別"), "USD");
-    await user.type(screen.getByLabelText("每月品牌總額"), "0");
+    await user.type(screen.getByLabelText("每月品牌總額"), "-5000");
+    await user.click(screen.getByRole("button", { name: "確認月總額" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("每月品牌總額要大於 0。");
+    expect(api.saveMonthlyBudget).toHaveBeenLastCalledWith("brand_a", { month: "2026-09", currency: "USD", amount: -5000, expected_revision: 0 }, expect.any(AbortSignal));
+    await user.clear(screen.getByLabelText("每月品牌總額"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "確認月總額" }));
+    expect(api.saveMonthlyBudget).toHaveBeenLastCalledWith("brand_a", { month: "2026-09", currency: "USD", amount: null, expected_revision: 0 }, expect.any(AbortSignal));
+    vi.mocked(api.saveMonthlyBudget).mockResolvedValue({ ...budget, amount: 30000, revision: 1, currency: "USD", known_spend: null });
+    await user.type(screen.getByLabelText("每月品牌總額"), "30000");
     await user.click(screen.getByRole("button", { name: "確認月總額" }));
     expect(await screen.findByText("月總額已保存；不會另外增加可花的錢。")).toBeTruthy();
-    expect(api.saveMonthlyBudget).toHaveBeenCalledWith("brand_a", { month: "2026-09", currency: "USD", amount: 0, expected_revision: 0 }, expect.any(AbortSignal));
+    expect(onSaved).toHaveBeenCalledTimes(1);
     expect(screen.getAllByText("尚待確認")).toHaveLength(3);
   });
   it("餘額未知仍能保存月總額，不把未知填0或宣稱平台已限額", async () => {

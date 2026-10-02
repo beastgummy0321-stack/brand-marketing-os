@@ -205,6 +205,19 @@ def validate_copy(value):
     return value
 
 
+APPLY_COPY_EMPTY = "三欄都是空的，沒有可以套用的內容。"
+
+
+def apply_copy(current, typed):
+    """``current`` copy with every non-blank field of ``typed`` written over it; a blank field
+    keeps the current text. Refused when every typed field is blank."""
+    validate_copy(typed)
+    filled = {key: value for key, value in typed.items() if value.strip()}
+    if not filled:
+        raise ValueError(APPLY_COPY_EMPTY)
+    return {**(current or {}), **filled}
+
+
 def placement(conn, org, brand, campaign_id, placement_id, revision=None):
     row = conn.execute(
         "SELECT * FROM ads_asset_placement WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
@@ -338,6 +351,11 @@ def revise(conn, org, brand, campaign_id, placement_id, expected_revision, updat
     old = placement(conn, org, brand, campaign_id, placement_id)
     if old["revision"] != expected_revision:
         raise ValueError("素材安排已更新，請重新載入再修改。")
+    if "apply_copy" in updates:
+        # F47 Contract A (Q6): 「一份文案套到全部待處理」 -- an empty field keeps this placement's
+        # current text; a field with text replaces it; all empty is refused (never a wipe).
+        updates = {**updates}
+        updates["copy_fields"] = apply_copy(old["copy_fields"], updates.pop("apply_copy"))
     allowed = {
         "copy_fields",
         "required",

@@ -651,6 +651,8 @@ class LaunchViewTest(unittest.TestCase):
         campaign = items["秋季預購"]
         self.assertEqual(campaign["state"], "built")
         self.assertIn("找不到", campaign["reason"])
+        # F47-I06: the stored reason carries when it was read (「M/D HH:MM 讀回時讀不到」).
+        self.assertIsNotNone(campaign["reason_at"])
         self.assertEqual(items["新客"]["state"], "built")
         self.assertIn("上一層還沒讀回", items["新客"]["reason"])
 
@@ -675,6 +677,8 @@ class LaunchViewTest(unittest.TestCase):
         )
         items = self.items(self.readback())
         self.assertEqual(items["秋季預購"]["state"], "verified")
+        # A successful read drops the old reason and its time.
+        self.assertIsNone(items["秋季預購"]["reason_at"])
         self.assertEqual(items["新客"]["state"], "unknown")
 
     def test_unreport_clears_a_report_until_the_item_is_verified(self):

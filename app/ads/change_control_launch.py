@@ -268,9 +268,14 @@ def _refuse_no_ready_ads(frozen):
 
 def _refuse_invalid_settings(conn, org, brand, campaign_id, frozen):
     """409 `launch_settings_invalid` while the frozen launch settings carry an error (Contract I).
-    The pixel check uses the campaign's cached pixel list: approval never waits on a platform."""
-    campaign = campaigns.get_campaign(conn, org, brand, campaign_id) or {}
-    if launch_settings.errors(frozen["launch_settings"], launch_settings.cached_pixels(campaign)):
+    The pixel check uses the campaign's cached pixel list: approval never waits on a platform.
+    F47-I06: the campaign's channel is passed, so with no cached list a hand-typed pixel id is
+    checked by that platform's own format rule here too (the same `errors()` the card shows)."""
+    campaign = campaigns.campaign_detail(conn, org, brand, campaign_id) or {}
+    if launch_settings.errors(
+        frozen["launch_settings"], launch_settings.cached_pixels(campaign),
+        launch_settings.channel(campaign),
+    ):
         raise ValueError("launch_settings_invalid")
 
 

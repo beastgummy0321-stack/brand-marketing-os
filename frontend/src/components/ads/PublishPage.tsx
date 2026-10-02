@@ -12,7 +12,7 @@ import { ReadFailed } from "./patterns";
 import { PublishList } from "./publish/PublishList";
 import { PublishPlatform } from "./publish/PublishPlatform";
 import { PublishVerify } from "./publish/PublishVerify";
-import { allowsStep, campaignPath, launchPlatform, publishPath, urlOfStep } from "./publish/PublishFlow";
+import { PublishCampaignContext, allowsStep, campaignPath, launchLabel, launchPlatform, publishPath, urlOfStep } from "./publish/PublishFlow";
 
 /** F30-I13 publish page (prototype v10 `pubPage()`): 確認上架清單 → 到平台完成 → 讀回核對 at
  * `…/campaigns/:c/publish/{list,platform,verify}`. `GET …/launch` reports the step; a URL the step does not allow yet
@@ -35,7 +35,7 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
 
   const home = `/brands/${encodeURIComponent(brandId)}/ads`;
   const name = campaign?.name ?? view?.items.find((i) => i.kind === "campaign")?.name ?? "活動";
-  const crumb = [{ label: "投放中心", href: home }, { label: name, href: campaignPath(brandId, campaignId) }, { label: "首次上架" }];
+  const crumb = [{ label: "投放中心", href: home }, { label: name, href: campaignPath(brandId, campaignId) }, { label: launchLabel(campaign, view) }];
   const platform = launchPlatform(campaign, channels.data);
 
   // Approval and the batch readback move the page on only once the server answered with the new step.
@@ -47,10 +47,12 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
   }, [brandId, campaignId, navigate]);
 
   const wrap = (body: ReactNode) => (
-    <div className="flex max-w-[1260px] flex-col gap-4">
-      <Breadcrumb items={crumb} />
-      {body}
-    </div>
+    <PublishCampaignContext.Provider value={campaign}>
+      <div className="flex max-w-[1260px] flex-col gap-4">
+        <Breadcrumb items={crumb} />
+        {body}
+      </div>
+    </PublishCampaignContext.Provider>
   );
 
   if (campaign && (campaign.origin === "imported" || campaign.capabilities?.unavailable.publish)) {

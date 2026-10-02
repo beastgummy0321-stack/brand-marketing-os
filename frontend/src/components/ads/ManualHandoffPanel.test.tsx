@@ -59,6 +59,20 @@ describe("manual handoff", () => {
     expect(screen.getByRole("button", { name: "讀回並核對此物件" })).toHaveProperty("disabled", true);
     expect(checkHandoff).not.toHaveBeenCalled();
   });
+  it("F47-I06: greyed-out buttons say why; a stored failed read says when it happened beside 重新讀回核對", async () => {
+    const at = "2026-10-28T14:59:00Z";
+    const stamp = (() => { const d = new Date(at); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; })();
+    vi.mocked(getHandoff).mockResolvedValue(workspace([item({
+      status: "unknown", reported_at: at, evidence_json: { message: "平台無法讀取此資料（代碼 2）。", attempted_at: at } as HandoffItem["evidence_json"],
+    })]));
+    render(view("brand", "campaign", "items"));
+    const row = await screen.findByRole("article", { name: "交接 B2" });
+    expect(within(row).getByRole("button", { name: "已回報人工操作" })).toHaveProperty("disabled", true);
+    expect(within(row).getByText(`${stamp} 已回報；接著讀回核對這一項`)).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "重新讀回核對" })).toHaveProperty("disabled", true);
+    expect(within(row).getByText("還缺物件層級、平台物件識別：選一個平台候選，或在「進階：手填平台識別」填上")).toBeTruthy();
+    expect(within(row).getByText(`${stamp} 讀回時讀不到：平台無法讀取此資料（代碼 2）。`)).toBeTruthy();
+  });
   it("reconsiders a known disabled ad only through the dedicated check and a stated reason", async () => {
     const bound = item({ entity_id: "B2", native_kind: "ad", native_id: "B2", platform: "fixture", source_account: "account", status: "deviated", entity_exists: true });
     vi.mocked(getHandoff).mockResolvedValue(workspace([bound]));

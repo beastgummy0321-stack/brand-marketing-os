@@ -315,7 +315,7 @@ describe("TodayDecisions", () => {
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("關掉色帶裡紅色的 2 則，每天省約 260 元")).toBeTruthy();
     expect(screen.getByText("花 1,480・0 筆")).toBeTruthy();
-    expect(screen.getByText("每筆 617 元")).toBeTruthy();
+    expect(screen.getByText("每筆 618 元")).toBeTruthy(); // F47-I06: 617.5 rounds like the performance page, never floors
     expect(screen.getByText("沒賣出")).toBeTruthy();
     expect(screen.getByText("太貴")).toBeTruthy();
     expect(screen.getByRole("link", { name: "決定要不要關 →" }).getAttribute("data-variant")).toBe("default");
@@ -345,7 +345,7 @@ describe("TodayDecisions", () => {
       current: { ...triage().current, cost_per_result: 505.5 },
     })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("從划算變偏貴")).toBeTruthy();
-    expect(screen.getByText(byPlain("每筆 440 → 505，還在日常商品推廣暫用打平線 520 內"))).toBeTruthy();
+    expect(screen.getByText(byPlain("每筆 440 → 506，還在日常商品推廣暫用打平線 520 內"))).toBeTruthy(); // 505.5 rounds (F47-I06)
     expect(screen.getByText("比前 14 天：沒有可比資料（只當參考）")).toBeTruthy();
   });
 

@@ -185,6 +185,21 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.queryByLabelText("處理階梯（接上後開放）")).toBeNull();
   });
 
+  it("F47-I06：麵包屑用這一列自己的種類；沒有對應的列就寫「檢討」，不是固定的「變貴」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    const first = renderAt(roundPath());
+    expect(await screen.findByText(/^變貴・/)).toBeTruthy();
+    first.unmount();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "stop_loss" })]));
+    const second = renderAt(roundPath());
+    expect(await screen.findByText(/^停損・/)).toBeTruthy();
+    second.unmount();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
+    renderAt(roundPath());
+    expect(await screen.findByText(/^檢討・/)).toBeTruthy();
+    expect(screen.queryByText(/^變貴・/)).toBeNull();
+  });
+
   it("ready：非銷售活動（target.result_kind 不是 purchase）顯示「這條素材的紀錄」，不顯示商城訂單", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
       triage: triage({

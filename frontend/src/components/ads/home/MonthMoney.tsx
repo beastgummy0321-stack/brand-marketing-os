@@ -4,6 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeEarnMissing, HomeOverview } from "@/lib/adsHomeApi";
 import { MonthlyBudgetPanel } from "../MonthlyBudgetPanel";
+import { perSaleAmount } from "../patterns/csv";
 import { MoneyMeter, MoneyTag, PaceChart, Term, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 
@@ -18,9 +19,9 @@ export function currencyPrefix(currency: string | null): string {
   return currency ? `${currency} ` : "";
 }
 
-/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」). */
+/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」), through the one per-sale rule. */
 export function wholeYuan(value: number): string {
-  return `${formatAmount(Math.floor(value))} 元`;
+  return `${perSaleAmount(value) ?? "—"} 元`;
 }
 
 /** `YYYY-MM` → month number; falls back to the local month when absent. */
@@ -104,7 +105,7 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed,
           <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); setLinked(false); onBudgetClosed(); }}>
             ← 收起
           </Button>
-          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} />
+          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} onSaved={onRetry} />
         </div>
       )}
     </>
@@ -188,7 +189,8 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
 function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHref: string | null; onAdjust: () => void }) {
   const pace = home.pace;
   const daily = (pace?.daily ?? []).flatMap((d) => (d.cumulative === null ? [] : [{ day: Number(d.day.slice(8, 10)), cumulative: d.cumulative }]));
-  const budget = pace?.budget_amount ?? null;
+  // F47-I06: a 0 total (stored before Contract A refused it) has no planning meaning: read it as unset.
+  const budget = pace?.budget_amount != null && pace.budget_amount > 0 ? pace.budget_amount : null;
   const projected = pace?.projected_month_end ?? null;
   const available = pace?.available ?? null;
   const pacing = budget !== null && projected !== null ? (projected < budget ? "，照現在速度月底會用不完" : "，照現在速度月底會超出") : "";

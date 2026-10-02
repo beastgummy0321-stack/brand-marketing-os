@@ -92,6 +92,18 @@ def is_auth_error(platform: str | None, code: str | None) -> bool:
     return False
 
 
+def pixel_id_error(platform: str | None, pixel_id: str) -> str | None:
+    """F47-I06 (Contract A ids): the pixel-id format belongs to the platform adapter. The
+    sentence for a typed pixel id this platform could never have issued, else `None`. A platform
+    without a rule accepts any non-empty text (`launch_settings.normalize` refuses an empty one).
+    Same lazy-import dispatch seam as `platform_url` above."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read.pixel_id_error(pixel_id)
+    return None
+
+
 def objective_family(platform: str | None, objective: str | None) -> str:
     """F27-I09 Done #7: this platform's own raw objective string -> `campaign_objective` family
     (`"sales"|"engagement"|"traffic"|"other"`), for an IMPORTED campaign only -- a system-built

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import type { SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { ActionBar, FlowTo, LearnLine, MoneyRule, MoneyTag, OriginTag, ResultHero, formatAmount } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 import { angleOf, learnRows, type AnglePicks } from "./SettleAngles";
 import { FROM_META, campaignOf, isImported, money, rangeText, stampText, yuan } from "./settleCsv";
 
@@ -21,7 +22,7 @@ function Learning({ view, row, angle }: { view: SettleView; row: SettleRow; angl
       title={<>
         「{angle}」對這群受眾{good ? "有效" : "無效"}
         {good && cost !== null && row.cap !== null && (
-          <span className="font-normal text-muted-foreground">（每筆 {formatAmount(Math.floor(cost))}，上限 {formatAmount(row.cap)}）</span>
+          <span className="font-normal text-muted-foreground">（每筆 {perSaleAmount(cost)}，上限 {formatAmount(row.cap)}）</span>
         )}
       </>}
       meta={<span className="inline-flex flex-wrap items-center">

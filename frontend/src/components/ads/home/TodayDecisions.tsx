@@ -6,6 +6,7 @@ import { Chip, Disclosure, GRADE_LABEL, GradeTermChip, MoneyTag, ResultHero, Ter
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
+import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
 import { QueueRow, decisionTitle, homeAction } from "./QueueRow";
 import { SettleCard, SettleRow, settleRange } from "./SettleCard";
@@ -296,7 +297,7 @@ function WorseCard({ brandId, item, recovering }: { brandId: string; item: Queue
       <div className="text-base font-semibold [overflow-wrap:anywhere]">{t.name ?? "未命名廣告"}</div>
       <div>
         <div className="numeric text-base font-semibold [overflow-wrap:anywhere]">
-          每筆 {prev !== null && `${formatAmount(Math.floor(prev))} → `}{cur === null ? "—" : formatAmount(Math.floor(cur))}
+          每筆 {prev !== null && `${perSaleAmount(prev)} → `}{perSaleAmount(cur) ?? "—"}
           {cap !== null && cur !== null && <>，{over ? "超過" : "還在"}{capWord} {formatAmount(cap)}{over ? "" : " 內"}</>}
         </div>
         <MoneyTag cost={cur} breakEven={t.target.break_even} className="block" />

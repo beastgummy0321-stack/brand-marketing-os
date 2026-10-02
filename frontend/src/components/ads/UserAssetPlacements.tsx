@@ -66,7 +66,8 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
     finally { if (alive.current) setBusy(false); }
   }
   /** F36 ruling D: one copy → every current unconfirmed placement, one `revisePlacement` each (own revision history);
-   * purpose／dates untouched; a 409 stops the loop and names the file. Extra original keys (e.g. caption) are kept. */
+   * purpose／dates untouched; a 409 stops the loop and names the file. F47-I06 (Q6): sent as `apply_copy` — the server
+   * keeps a placement's current text for every blank field and refuses three blank fields; extra keys are kept. */
   async function applyAll() {
     const targets = rows.filter(p => p.is_current && !p.confirmed_at);
     if (busy || !targets.length) return;
@@ -75,7 +76,7 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
     let done = 0;
     try {
       for (const p of targets) {
-        try { await revisePlacement(brandId, campaign.id, p.id, { copy_fields: { ...p.copy_fields, ...copy }, expected_revision: p.revision }); done++; }
+        try { await revisePlacement(brandId, campaign.id, p.id, { apply_copy: copy, expected_revision: p.revision }); done++; }
         catch (e) {
           if (e instanceof AssetApiError && e.status === 409) { setError(`${p.filename} 已有新版本，套用停在這件（已套 ${done} 件）；重新讀取安排後再套一次。`); break; }
           throw e;
@@ -86,6 +87,7 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
     } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : String(e)); }
     finally { if (alive.current) setBusy(false); }
   }
+  const applyBlank = COPY_FIELDS.every(f => !(applyDraft[f.key] ?? "").trim());
   const current = rows.filter(p => p.is_current); const required = current.filter(p => p.required);
   const pending = current.filter(p => !p.confirmed_at); const confirmedCount = current.length - pending.length;
   // F36 ruling F: the AI block only fills blanks — count the selected (or all) unconfirmed placements with a blank slot.
@@ -97,7 +99,7 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
       <p className="font-medium">必用 {required.length} 件 · 已確認 {required.filter(p => p.confirmed_at).length} 件 · 待處理 {required.filter(p => !p.confirmed_at).length} 件</p><p className="text-sm text-muted-foreground">這份清單獨立於工作檯素材就位數。每件必用都須確認安排，或保留明確待處理原因；內部確認不代表平台已上架。操作順序：展開「編輯原文與內部安排」→ 填妥標題、內文、說明及用途 → 儲存新版 → 檢查並確認 → 手動交接。</p>
       {loading && <p role="status">讀取安排中…</p>}{error && <p role="alert" className="text-destructive">{error}</p>}
       {!loading && !current.length && <p>尚未加入自帶素材，請從上方品牌上傳紀錄加入此活動。</p>}
-      {current.length > 0 && !readOnly && <div className="flex flex-col gap-2.5 rounded-[10px] border border-primary bg-primary/5 p-3.5"><div><h3 className="font-semibold">一份文案套到全部待處理</h3><p className="text-xs text-muted-foreground">會蓋掉那 {pending.length} 件已填的字；已確認的 {confirmedCount} 件不動。</p></div><CopyEditor prefix="套用" value={applyDraft} disabled={busy} onChange={setApplyDraft} /><div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={busy || !pending.length} onClick={() => void applyAll()}>套用到 {pending.length} 件待處理</Button><span className="text-xs text-muted-foreground">套用後每件各存一版，仍要逐件「檢查並確認」</span></div>{applyStatus && <p role="status" className="text-sm">{applyStatus}</p>}</div>}
+      {current.length > 0 && !readOnly && <div className="flex flex-col gap-2.5 rounded-[10px] border border-primary bg-primary/5 p-3.5"><div><h3 className="font-semibold">一份文案套到全部待處理</h3><p className="text-xs text-muted-foreground">有填的欄位會蓋掉那 {pending.length} 件的原文；已確認的 {confirmedCount} 件不動。</p></div><CopyEditor prefix="套用" value={applyDraft} disabled={busy} onChange={setApplyDraft} /><div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={busy || !pending.length || applyBlank} disabledReason={!busy && pending.length > 0 && applyBlank ? "三欄都是空的，沒有可以套用的內容。" : undefined} onClick={() => void applyAll()}>套用到 {pending.length} 件待處理</Button><span className="text-xs text-muted-foreground">套用後每件各存一版，空白的欄位保留原文；仍要逐件「檢查並確認」</span></div>{applyStatus && <p role="status" className="text-sm">{applyStatus}</p>}</div>}
       {current.length > 0 && !readOnly && <div className="flex flex-col gap-2.5 rounded-lg border border-border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">補空白文案（選用）</h3><Chip>{blankRows.length ? `${blankRows.length} 件有空白欄` : "沒有空白欄"}</Chip></div><p className="text-xs text-muted-foreground">只補空白欄位、只用品牌已確認的事實或中性 CTA；已有原文不改。要換一整份新文案，到素材頁的格子按「選一版文案」。</p><div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={busy || !fillCount} onClick={() => { const ids = blankRows.slice(0, 10).map(p => p.id); setSelected(ids); void generate(ids); }}>{busy ? "送出中…" : `為 ${fillCount} 件補空白文案`}</Button>{!fillCount && <span className="text-sm text-muted-foreground">選取的都填滿了，沒有可補的欄位。</span>}<Button variant="link" size="sm" asChild><Link to="?tab=assets">到素材頁選一版文案 →</Link></Button></div>{blankRows.length > 10 && <p className="text-xs text-muted-foreground">每批最多 10 件；其餘 {blankRows.length - 10} 件仍保留待處理。</p>}<label className="block text-sm">整批素材說明（未核實）<Textarea aria-label="整批素材說明" maxLength={2000} value={summary} onChange={e => { setSummary(e.target.value); requestKey.current = null; }} /></label></div>}
       <details><summary className="cursor-pointer font-medium">先前建議批次 · {batches.length} 筆</summary><div className="max-h-60 overflow-auto">{batches.map(b => <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-border py-2 text-sm"><span>{b.created_at} · {b.status === "succeeded" ? "已取得建議" : ["queued", "pending", "running"].includes(b.status) ? "處理中／待核對" : "未完成"}{b.error ? ` · ${b.error}` : ""}</span><Button variant="outline" size="sm" onClick={() => { void getSuggestionBatch(brandId, campaign.id, b.id).then(v => setBatch(v.batch)).catch(e => setError(String(e))); }}>查看本批</Button></div>)}</div>{batchCursor && <Button variant="outline" onClick={() => void loadBatches(batchCursor).catch(e => setError(String(e)))}>更多建議批次</Button>}</details>
       {batch && <div className="rounded bg-muted p-3 text-sm"><p>目前批次：{batch.id} · {batch.status === "succeeded" ? "建議已備妥，請逐件核對" : batch.error ?? "尚未完成，請稍後查看；可先手動編輯"}</p>{batch.stale && <p className="text-warning">資料或版本已改變，此批建議已過時，不能覆蓋現版。</p>}<p>{batch.usage_notice}</p><p>{batch.retry_notice}</p><p>本批之外仍有 {batch.remaining_count ?? "未知"} 件待處理。</p></div>}
