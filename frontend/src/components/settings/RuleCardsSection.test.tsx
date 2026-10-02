@@ -13,7 +13,7 @@ vi.mock("@/lib/settingsApi", async () => {
   };
 });
 
-import { fetchBrandOptions, fetchRuleCards, resetRuleCard, type RuleCard } from "@/lib/settingsApi";
+import { fetchBrandOptions, fetchRuleCards, resetRuleCard, saveRuleCard, type RuleCard } from "@/lib/settingsApi";
 import { RuleCardsSection } from "./RuleCardsSection";
 
 const mockFetchBrands = vi.mocked(fetchBrandOptions);
@@ -32,6 +32,7 @@ function card(value: number, customized = false): RuleCard {
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("RuleCardsSection 規則卡範圍與重設", () => {
@@ -68,5 +69,32 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("重設整張「花費護欄」"));
     await waitFor(() => expect(mockReset).toHaveBeenCalledWith("a", "spend"));
     expect(screen.getByRole("spinbutton", { name: /最低花費/ })).toHaveProperty("value", "5");
+  });
+
+  /** F47-I02 (drill-10 V2, `a-08-rulecard-0-400.png`): a refused save shows the server's sentence,
+   * not 「規則卡儲存失敗（狀態碼 400）」. Runs the real `saveRuleCard` against a stubbed 400. */
+  it("a refused save shows the server's sentence", async () => {
+    const actual = await vi.importActual<typeof import("@/lib/settingsApi")>("@/lib/settingsApi");
+    vi.mocked(saveRuleCard).mockImplementation(actual.saveRuleCard);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ error: "有欄位沒有填一個大於 0 的數字。", field_errors: { minimum: "請填一個大於 0 的數字。" } }),
+          { status: 400 },
+        ),
+      ),
+    );
+    mockFetchBrands.mockResolvedValue([{ brand_id: "a", brand_name: "甲品牌" }]);
+    mockFetchCards.mockResolvedValue({ brand_id: "a", cards: [card(10)] });
+    render(<RuleCardsSection />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"), "a");
+    const input = await screen.findByRole("spinbutton", { name: /最低花費/ });
+    await userEvent.clear(input);
+    await userEvent.type(input, "0");
+    await userEvent.click(screen.getByRole("button", { name: "儲存這張卡" }));
+    expect(await screen.findByText("有欄位沒有填一個大於 0 的數字。")).toBeTruthy();
+    expect(screen.queryByText(/狀態碼/)).toBeNull();
   });
 });

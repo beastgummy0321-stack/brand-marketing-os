@@ -223,7 +223,8 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
     const view = done.learned.status === "ready" ? done.learned.view : null;
     return (
       <Dialog open onOpenChange={(open) => !open && finish()}>
-        <DialogContent className="max-h-[calc(100dvh-24px)] gap-3.5 overflow-auto bg-card sm:max-w-[560px]" data-step="result">
+        {/* The footer has its own 關閉; a second corner 關閉 would be the same exit twice (F47-I02). */}
+        <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-24px)] gap-3.5 overflow-auto bg-card sm:max-w-[560px]" data-step="result">
           <CloseResult learned={done.learned} campaignId={c.id} />
           <DialogFooter className="mt-1">
             <Button type="button" variant="ghost" onClick={finish}>關閉</Button>

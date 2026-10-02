@@ -15,7 +15,7 @@ vi.mock("./ModelSection", () => ({
 vi.mock("./MetaSection", () => ({ MetaSection: () => <p>廣告連線內容</p> }));
 vi.mock("./RuleCardsSection", () => ({ RuleCardsSection: () => <p>規則內容</p> }));
 
-import { fetchSettings, type SettingsData } from "@/lib/settingsApi";
+import { fetchSettings, saveAiMonthlyCostLimit, type SettingsData } from "@/lib/settingsApi";
 import { SettingsPage } from "./SettingsPage";
 
 const mockFetchSettings = vi.mocked(fetchSettings);
@@ -64,5 +64,23 @@ describe("SettingsPage 一般與進階層級", () => {
     await waitFor(() => expect(screen.getByText("品牌預算內容").closest("div")?.hidden).toBe(false));
     await userEvent.click(screen.getByRole("button", { name: "模型設定" }));
     expect(screen.getByRole("textbox", { name: "模型草稿" })).toHaveProperty("value", "尚未儲存");
+  });
+});
+
+/** F47-I02 (drill-10 V2, `a-06-ai-limit-0-400.png`): every settings save throws the server's sentence. */
+describe("settings saves show the server's sentence", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("AI monthly limit 0 → the server's sentence, not 「儲存失敗（狀態碼 400）」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "AI 月費上限請填大於 0 的數字，例如 200。" }), { status: 400 })),
+    );
+    await expect(saveAiMonthlyCostLimit(0)).rejects.toThrow("AI 月費上限請填大於 0 的數字，例如 200。");
+  });
+
+  it("a body without a sentence falls back to the status-code text", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 })));
+    await expect(saveAiMonthlyCostLimit(200)).rejects.toThrow("儲存失敗（狀態碼 502）");
   });
 });
