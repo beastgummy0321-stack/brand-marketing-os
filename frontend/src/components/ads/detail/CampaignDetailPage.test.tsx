@@ -250,7 +250,10 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe(WS);
 
     const okRow = screen.getByTestId("ad-row-a1");
-    expect(within(okRow).queryByRole("link")).toBeNull();
+    // F45-I06: a row with no decision of its own still has 「暫停」 → the pause page that reads the ad (from=perf).
+    expect(within(okRow).getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")]))
+      .toEqual([["暫停", `${WS}/propose/pause/a1?from=perf`]]);
+    expect(within(wasted).getByRole("link", { name: "暫停" }).getAttribute("href")).toBe(`${WS}/propose/pause/a8?from=perf`);
     await openMenu("a1");
     await userEvent.click(within(okRow).getByRole("button", { name: "看紀錄" }));
     expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=performance&ad=a1`);
@@ -374,7 +377,9 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
 
     expect(await screen.findByText(/^決策進度讀不到（佇列讀取失敗）/)).toBeTruthy();
     expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
-    expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link")).toBeNull();
+    expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link", { name: "在清理提議" })).toBeNull();
+    // 「暫停」 needs no queue: the pause page reads the ad itself (F45-I06).
+    expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "暫停" })).toBeTruthy();
 
     vi.mocked(getQueue).mockResolvedValue(dailyQueue(items));
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
@@ -433,6 +438,10 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(await screen.findByText("暫停 11・已封存 4・不算在上面的在投數量裡")).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
     expect(detailsOf("已關閉的 15 則").open).toBe(false);
+    // F45-I06: a closed row keeps its 已暫停 look — no 「暫停」 button.
+    const closedRow = screen.getByTestId("closed-ad-row-c1");
+    expect(within(closedRow).getByText("已暫停")).toBeTruthy();
+    expect(within(closedRow).queryByRole("link")).toBeNull();
     expect(screen.queryByText("沒有廣告資料，這個活動還沒有可以判斷的內容。")).toBeNull();
     expect(screen.queryByRole("region", { name: "對照上限" })).toBeNull();
   });

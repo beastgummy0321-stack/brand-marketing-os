@@ -281,7 +281,7 @@ describe("PreparePage（F23-I03／F27-I12）存檔", () => {
     await screen.findByDisplayValue("採用建議：保留圖片，測試新文案");
     await user.click(screen.getByRole("button", { name: /停掉這則/ }));
     await user.click(screen.getByRole("button", { name: /建立暫停提議/ }));
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1"));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1?from=review&ref=arv_1"));
     expect(reviewApi.decideReview).not.toHaveBeenCalled();
   });
 
@@ -319,7 +319,7 @@ describe("PreparePage（F23-I03／F27-I12）存檔", () => {
     await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalledWith("brd_1", "cmp_1", "arv_1", {
       decision: "completed", reason: "多次調整仍未改善",
     }));
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1"));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1?from=review&ref=arv_1"));
   });
 
   it("原因清空不給存", async () => {

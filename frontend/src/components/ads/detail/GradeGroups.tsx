@@ -155,9 +155,9 @@ const ROW = "grid grid-cols-[40px_minmax(0,1fr)_110px_100px_auto] items-center g
 /** What the page adds to a row: its 「⋯」 menu, whether a 換掉這一則 request is open, and the last failure of one. */
 export interface RowExtras { menu: ReactNode; requestOpen: boolean; error: string | null }
 
-function AdRow({ item, action, breakEven, extras, highlighted, rowRef }: {
+function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref }: {
   item: TriageItem; action: RowAction; breakEven: number | null; extras: RowExtras | null;
-  highlighted: boolean; rowRef: (el: HTMLDivElement | null) => void;
+  highlighted: boolean; rowRef: (el: HTMLDivElement | null) => void; pauseHref: string | null;
 }) {
   const name = item.name ?? "（未命名廣告）";
   return (
@@ -175,6 +175,7 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef }: {
       <ResultCell item={item} breakEven={breakEven} />
       <div className="flex min-w-[92px] items-center justify-end gap-1.5">
         <DecisionLink action={action} />
+        {pauseHref && <Button asChild variant="outline" size="sm"><Link to={pauseHref}>暫停</Link></Button>}
         {extras?.menu}
       </div>
     </div>
@@ -209,7 +210,7 @@ function Fold({ swatch, title, count, hint, open, onToggle, muted = false, child
   );
 }
 
-export function GradeGroups({ items, cap, breakEven = null, dataReason = null, actions, extras, openGroups, onToggle, highlightId, registerRow }: {
+export function GradeGroups({ items, cap, breakEven = null, dataReason = null, actions, extras, pauseHref, openGroups, onToggle, highlightId, registerRow }: {
   items: TriageItem[];
   /** The campaign's resolved cap value (own or 暫用打平); null = no cap. */
   cap: number | null;
@@ -220,6 +221,8 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
   dataReason?: string | null;
   actions: Map<string, RowAction>;
   extras?: (item: TriageItem) => RowExtras;
+  /** F45-I06 (ads.md §6.49): every active row's 「暫停」 → the pause page that reads the ad itself (`from=perf`). */
+  pauseHref?: (item: TriageItem) => string;
   openGroups: Set<GroupKey>;
   onToggle: (key: GroupKey, open: boolean) => void;
   highlightId: string | null;
@@ -253,6 +256,7 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
                 extras={extras ? extras(item) : null}
                 highlighted={item.entity_id === highlightId}
                 rowRef={(el) => registerRow(item.entity_id, el)}
+                pauseHref={pauseHref ? pauseHref(item) : null}
               />
             ))}
           </Fold>

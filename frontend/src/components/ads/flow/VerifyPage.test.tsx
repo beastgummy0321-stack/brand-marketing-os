@@ -352,7 +352,7 @@ describe("VerifyPage（F22-I04）stale", () => {
     expect(await screen.findByText("這則廣告的設定變了，原本的核准不再適用")).toBeTruthy();
     expect(screen.getByText("廣告已經被刪除")).toBeTruthy();
     const link = screen.getByRole("link", { name: "重新檢討 →" }) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1");
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_1?from=verify&ref=acs_1");
   });
 
   it("budget：重新檢討去活動的變更與核對", async () => {
@@ -474,7 +474,7 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
     });
     renderAt(verifyPath());
     const cta = await screen.findByRole("link", { name: "暫停舊廣告 →" });
-    expect((cta as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_old");
+    expect((cta as HTMLAnchorElement).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/propose/pause/aex_old?from=verify&ref=acs_1");
   });
 
   it("deviated：不套用 copy／pause／budget 的逐行對照表，只顯示訊息", async () => {
