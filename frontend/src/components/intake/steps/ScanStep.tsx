@@ -95,7 +95,7 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
 
       {done ? (
         <>
-          {done.pages_failed.length > 0 && <UnreadPages pages={done.pages_failed} onFixUrls={back?.onClick} />}
+          {(done.pages_failed ?? []).length > 0 && <UnreadPages pages={done.pages_failed ?? []} onFixUrls={back?.onClick} />}
           {readSomething && (
             <>
               <ScanCard scan={done} />
