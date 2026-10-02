@@ -42,10 +42,16 @@ export function priceText(price: number | null, currency: string | null): string
   return !currency || currency === "TWD" ? `NT$${amount}` : `${currency} ${amount}`;
 }
 
+/** F45 (ads §6.49 「Picker」): 「（推算）」 after a break-even built on a derived price or cost, "" otherwise. */
+export function breakEvenDerivedMark(way: Pick<WizardProduct, "derived_fields">): string {
+  return way.derived_fields.some((f) => f === "selling_price" || f === "unit_variable_cost") ? "（推算）" : "";
+}
+
 /** 「打平 669・組合價＋免運」: the sell-way's break-even (「缺成本」 when its cost is not set, 「打平算不出」 when the
- * cost is set but no current price) and its offers (「沒有優惠」 when none). */
+ * cost is set but no current price; 「打平 669（推算）」 when derived) and its offers (「沒有優惠」 when none). */
 export function sellWayNote(way: WizardProduct): string {
-  const be = way.break_even !== null ? `打平 ${formatAmount(way.break_even) ?? "未知"}` : way.has_cost ? "打平算不出" : "缺成本";
+  const be = way.break_even !== null ? `打平 ${formatAmount(way.break_even) ?? "未知"}${breakEvenDerivedMark(way)}`
+    : way.has_cost ? "打平算不出" : "缺成本";
   return `${be}・${way.offer_labels.length ? way.offer_labels.join("＋") : "沒有優惠"}`;
 }
 

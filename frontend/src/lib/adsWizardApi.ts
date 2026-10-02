@@ -48,6 +48,9 @@ export interface WizardProduct {
   has_cost: boolean;
   break_even: number | null;
   cap_per_sale: number | null;
+  /** F45 (ads §6.49 「Picker」): the current economics fields derived from the sell-way's bases (e.g. `selling_price`,
+   * `list_price`, `unit_variable_cost`); empty = all its own numbers. */
+  derived_fields: string[];
   /** 「組合價」「免運」… each once; empty = no offer. */
   offer_labels: string[];
   customer_groups: WizardCustomerGroup[];

@@ -25,10 +25,10 @@ const GROUPS = [{ id: "grp_1", who: "加班提神的上班族" }, { id: "grp_2",
 const options: WizardOptions = {
   products: [
     { id: "prd_1", name: LONG, display_name: LONG, kind: "bundle", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
-      price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false, break_even: null, cap_per_sale: null, offer_labels: ["組合價"],
+      price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false, break_even: null, cap_per_sale: null, derived_fields: [], offer_labels: ["組合價"],
       customer_groups: GROUPS, landing_url: "https://beastgummy.tw/shop" },
     { id: "prd_2", name: "Beast Gummy咖啡因機能軟糖・試用包", display_name: "試用包", kind: "single", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
-      price: 100, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 40, cap_per_sale: 40, offer_labels: [], customer_groups: [], landing_url: null },
+      price: 100, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 40, cap_per_sale: 40, derived_fields: [], offer_labels: [], customer_groups: [], landing_url: null },
   ],
   objectives: [
     { key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} },
