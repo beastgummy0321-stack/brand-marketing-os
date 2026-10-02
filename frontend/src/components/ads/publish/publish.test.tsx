@@ -105,6 +105,36 @@ describe("LaunchSettingsCard（list stage）", () => {
     expect(vi.mocked(saveLaunchSettings).mock.calls.at(-1)?.[2].pixel_id).toBe("1234567890");
   });
 
+  it("F47-I06：核准後像素清單讀不到，那句話說明已鎖定與目前的像素，不叫人手填", async () => {
+    vi.mocked(getLaunchSettings).mockResolvedValue(view({
+      options: { ...view().options, pixels: null, pixels_error: "像素清單暫時讀不到：平台無法讀取此資料（代碼 2）。" },
+    }, { pixel_id: "1234567890" }));
+    renderCard(true);
+    expect(await screen.findByText(/核准後已定下來，目前用的是像素 1234567890；想改，改完再核准一次。/)).toBeTruthy();
+    expect(screen.queryByText(/請手動填在下面/)).toBeNull();
+    expect(screen.queryByPlaceholderText("貼上像素 ID")).toBeNull();
+  });
+
+  it("F47-I06：選了成本上限多一格出價金額，照打的送出，伺服器的句子顯示在欄位下並擋核准", async () => {
+    vi.mocked(getLaunchSettings).mockResolvedValue(view());
+    vi.mocked(saveLaunchSettings).mockImplementation(async (_b, _c, values) => view({
+      edited: ["bid_strategy", "bid_amount"],
+      errors: values.bid_amount ? [] : [{ field: "bid_amount", code: "bid_amount_missing", message: "選了「單次成果成本上限」要填金額" }],
+    }, values));
+    const user = userEvent.setup();
+    const { onBlockerChange } = renderCard();
+    expect(screen.queryByLabelText(/出價金額/)).toBeNull();
+    await user.selectOptions(await screen.findByLabelText(/出價方式/), "cost_cap");
+    expect(await screen.findByText("選了「單次成果成本上限」要填金額")).toBeTruthy();
+    await waitFor(() => expect(lastBlocker(onBlockerChange)).toBe("出價金額還沒填，先在「投放設定」改好"));
+    await user.type(screen.getByLabelText(/出價金額/), "450");
+    await waitFor(() => expect(vi.mocked(saveLaunchSettings).mock.calls.at(-1)?.[2].bid_amount).toBe(450), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByText("選了「單次成果成本上限」要填金額")).toBeNull());
+    await user.selectOptions(screen.getByLabelText(/出價方式/), "lowest_cost");
+    await waitFor(() => expect(vi.mocked(saveLaunchSettings).mock.calls.at(-1)?.[2]).not.toHaveProperty("bid_amount"));
+    expect(screen.queryByLabelText(/出價金額/)).toBeNull();
+  });
+
   it("UTM 有空格：即時顯示格式不對，標題與核准提示都擋下", async () => {
     vi.mocked(getLaunchSettings).mockResolvedValue(view());
     vi.mocked(saveLaunchSettings).mockImplementation(async (_b, _c, values) => view({
@@ -191,6 +221,11 @@ describe("LaunchSettingsCopy（platform stage）", () => {
     for (const name of ["優化事件", "出價方式", "版位", "年齡", "性別", "地區", "像素", "UTM"]) {
       expect(screen.getByRole("button", { name: `複製${name}` })).toBeTruthy();
     }
+  });
+  it("F47-I06：成本上限／出價上限的金額印在出價方式旁", async () => {
+    vi.mocked(getLaunchSettings).mockResolvedValue(view({}, { bid_strategy: "cost_cap", bid_amount: 1450 }));
+    render(<LaunchSettingsCopy brandId="brd_1" campaignId="cmp_fall" />);
+    expect(await screen.findByText("單次成果成本上限 1,450")).toBeTruthy();
   });
   it("讀取失敗顯示重試，不是空的設定", async () => {
     vi.mocked(getLaunchSettings).mockRejectedValueOnce(new Error("逾時"));
