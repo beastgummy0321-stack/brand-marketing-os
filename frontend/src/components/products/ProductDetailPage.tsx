@@ -5,6 +5,8 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { Button } from "@/components/layout/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/layout/ui/dialog";
 import {
   archiveProduct,
   confirmProductEconomics,
@@ -36,6 +38,54 @@ function handoffDoneMessage(addedCount: number): string {
     : "貼回的事實都已經在清單裡，這次沒有新增。";
 }
 
+const errorText = (err: unknown) => (err instanceof Error ? err.message : "沒有完成，請稍後再試。");
+
+/** F47-I05 (drill-10 V9): 封存 asks once and says what happens (same dialog pattern as the workbench's
+ * `ClosePackDialog`); the failure stays in the dialog. */
+function ArchiveProductDialog({ name, open, onCancel, onConfirm }: {
+  name: string;
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  function cancel() {
+    setError(null);
+    onCancel();
+  }
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "沒有封存，請稍後再試。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && !busy && cancel()}>
+      <DialogContent>
+        <DialogTitle>封存產品「{name}」？</DialogTitle>
+        <DialogDescription>
+          封存後它不會出現在商品清單；事實、說法和經濟數字都保留，之後在這一頁按「恢復使用」就回來。封存的產品才可以永久刪除。
+        </DialogDescription>
+        {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={busy} onClick={cancel}>
+            取消
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => void confirm()}>
+            {busy ? "封存中…" : "確定封存"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 type LoadState =
   | { status: "loading" }
   | { status: "not-found" }
@@ -58,6 +108,14 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  /** 封存 ↔ 恢復使用 (the one archive route toggles); a refusal (a same-name product is active) is thrown. */
+  async function toggleArchive() {
+    await archiveProduct(brandId, productId);
+    load();
+  }
 
   function load() {
     setState({ status: "loading" });
@@ -191,19 +249,33 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
               </Badge>
               <span className="text-xs text-muted-foreground">第 {data.knowledge_version} 版</span>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                await archiveProduct(brandId, productId);
-                load();
-              }}
-              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary"
-            >
-              {data.status === "archived" ? "恢復使用" : "封存"}
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setArchiveError(null);
+                  // F47-I05 (drill-10 V9): 封存 asks once and says what happens; 恢復使用 needs no question.
+                  if (data.status === "archived") void toggleArchive().catch((err: unknown) => setArchiveError(errorText(err)));
+                  else setArchiveOpen(true);
+                }}
+                className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary"
+              >
+                {data.status === "archived" ? "恢復使用" : "封存"}
+              </button>
+              {archiveError && <p role="alert" className="text-xs text-danger">{archiveError}</p>}
+            </div>
           </div>
+          <ArchiveProductDialog
+            name={data.name}
+            open={archiveOpen}
+            onCancel={() => setArchiveOpen(false)}
+            onConfirm={async () => {
+              await toggleArchive();
+              setArchiveOpen(false);
+            }}
+          />
 
-          {banner && <p className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">{banner}</p>}
+          {banner &&<p className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">{banner}</p>}
 
           {data.economics_pending && (
             <div className="flex items-center justify-between gap-3 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
