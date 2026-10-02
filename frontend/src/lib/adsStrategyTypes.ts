@@ -3,6 +3,8 @@
  * importers keep using `@/lib/adsApi`. Mirrors `app/ads/strategy.py` (`generate_strategy`'s `basis`) and
  * `app/ads/coordinate_learning.py` (`learning_rows`). */
 
+import type { CoordinateLearnings } from "./adsLearningsApi";
+
 export type StrategyRole = "new" | "retarget" | "explore";
 
 export interface StrategyAllocationItem {
@@ -66,8 +68,11 @@ export interface StrategyBasis {
   brand_facts: StrategyBasisFact[];
   prices: StrategyBasisPrice[];
   learnings: StrategyBasisLearning[];
-  /** F41-I02：上一期各則廣告的座標成績；F41 前產生的策略沒有這個鍵，當空陣列讀。 */
+  /** F41-I02：上一期各則廣告的座標成績；F41 前產生的策略沒有這個鍵，當空陣列讀。F46 起不再寫入（舊策略照讀）。 */
   coordinate_learnings?: StrategyCoordinateLearning[];
+  /** F46-I04 (Contract L): the learnings view the planner was prompted with — the same ranking 品牌智庫「投放學到的」
+   * shows. Absent on strategies made before F46. */
+  ranked_learnings?: CoordinateLearnings;
   estimated_fields: string[];
   /** F05-I12：一個都沒有假設值時這個鍵不存在（後端不落地空字串）。 */
   assumption_note?: string;

@@ -117,12 +117,15 @@ function RankedRow({ row, cap, compact, idPrefix }: { row: LearningRow; cap: num
  * - `compact` — the strategy basis / closeout result variant: no 花費／成交 columns, no totals chip, no campaign link.
  * - `highlight` — the campaign the closeout just pointed at (`?campaign=`): ring + 「剛結案」 chip.
  * - `campaignHref` — app path of the campaign; shows 「到這個活動 →」 (wide only).
+ * - `headless` — the closeout result (prototype `#/close` `.res`): the rows only, no campaign header and no column
+ *   header row; the dialog prints its own title and rule line above.
  * A campaign with `empty_reason` prints that sentence instead of a table. */
-export function LearningsTable({ campaign, compact = false, highlight = false, campaignHref }: {
+export function LearningsTable({ campaign, compact = false, highlight = false, campaignHref, headless = false }: {
   campaign: LearningCampaign;
   compact?: boolean;
   highlight?: boolean;
   campaignHref?: string;
+  headless?: boolean;
 }) {
   const c = campaign;
   const closed = shortDate(c.closed_on);
@@ -138,7 +141,7 @@ export function LearningsTable({ campaign, compact = false, highlight = false, c
         highlight && "border-[#a397e9] shadow-[0_0_0_3px_var(--color-accent)]",
       )}
     >
-      <div className={cn("flex flex-wrap items-start justify-between gap-3", compact ? "p-3" : "px-4 pt-3.5 pb-2.5")}>
+      {!headless && <div className={cn("flex flex-wrap items-start justify-between gap-3", compact ? "p-3" : "px-4 pt-3.5 pb-2.5")}>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <b className="text-[15px]">{c.campaign_name}</b>
@@ -160,10 +163,14 @@ export function LearningsTable({ campaign, compact = false, highlight = false, c
         {!compact && campaignHref && (
           <Link to={campaignHref} className="whitespace-nowrap text-[13px] font-medium text-primary hover:underline">到這個活動 →</Link>
         )}
-      </div>
+      </div>}
       {hasRows ? (
-        <div role="table" aria-label={`${c.campaign_name} 每則廣告排名`} className="flex flex-col">
-          <div
+        <div
+          role="table"
+          aria-label={`${c.campaign_name} 每則廣告排名`}
+          className={cn("flex flex-col", headless && "[&>[role=row]:first-child]:border-t-0")}
+        >
+          {!headless && <div
             role="row"
             className={cn(
               compact ? ROW_COMPACT : ROW_WIDE,
@@ -187,13 +194,13 @@ export function LearningsTable({ campaign, compact = false, highlight = false, c
             )}
             <span role="columnheader">判定</span>
             <span role="columnheader"><span className="sr-only">座標</span></span>
-          </div>
+          </div>}
           {c.rows.map((row) => (
             <RankedRow key={row.ad_id} row={row} cap={c.cap} compact={compact} idPrefix={idPrefix} />
           ))}
         </div>
       ) : (
-        <p data-slot="empty-reason" className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground">
+        <p data-slot="empty-reason" className={cn("border-t border-border px-4 py-3 text-[13px] text-muted-foreground", headless && "border-t-0")}>
           {c.empty_reason ?? "這期沒有記學習"}
         </p>
       )}

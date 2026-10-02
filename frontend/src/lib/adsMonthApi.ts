@@ -25,7 +25,9 @@ export interface MonthOrders {
   this_net: number | null; this_count: number; previous_net: number | null;
   previous_count: number; change_pct: number | null;
 }
-export type SuggestionKind = "refresh" | "cleanup" | "no_target";
+/** `next_plan` (F46-I05): plan the next period from what the closed campaigns taught; its `action_url` is the create
+ * page for that sell-way (`/brands/{b}/ads/new?sell_way=…`). */
+export type SuggestionKind = "refresh" | "cleanup" | "no_target" | "next_plan";
 export interface MonthSuggestion {
   key: string; kind: SuggestionKind; campaign_id: string; campaign_name: string;
   objective: string; campaign_objective?: CampaignObjectiveFamily | null;
