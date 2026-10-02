@@ -68,7 +68,11 @@ export interface AbChangeBlock {
 // cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
 // `declined_ids` (F29-I01 Contract B): only with `source: "cleanup"` -- the proposed ads the user
 // unticked; each is remembered at approval and proposed again only once its grade gets worse.
-export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup"; declined_ids?: string[] }
+/** 拒絕／暫緩 one change set (`POST …/decision`, or `decide` on create). `revisit_at` only with `deferred`. */
+export interface ChangeDecision { decision: "rejected" | "deferred"; reason: string; revisit_at?: string }
+// `decide` (F47-I07, drill-10 Q3): the user's 拒絕／暫緩 on the set this create makes, written in the same
+// transaction -- a refused decision leaves no draft behind. Never part of the set's hashes.
+export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup"; declined_ids?: string[]; decide?: ChangeDecision }
 export interface ChangeControlData { targets: NativeEntity[]; change_sets: ChangeSet[] }
 export interface ChangeControlSummary {
   pending_count: number;
@@ -112,7 +116,7 @@ export async function createChangeSet(brand: string, campaign: string, body: Cha
 export async function approveChangeSet(brand: string, campaign: string, set: ChangeSet, signal?: AbortSignal) {
   return (await json<{ change_set: ChangeSet }>(`${campaignPath(brand, campaign)}/change-sets/${encodeURIComponent(set.id)}/approve`, "POST", { content_hash: set.content_hash }, signal)).change_set;
 }
-export async function decideChangeSet(brand: string, campaign: string, id: string, body: { decision: "rejected" | "deferred"; reason: string; revisit_at?: string }, signal?: AbortSignal) {
+export async function decideChangeSet(brand: string, campaign: string, id: string, body: ChangeDecision, signal?: AbortSignal) {
   return (await json<{ change_set: ChangeSet }>(`${campaignPath(brand, campaign)}/change-sets/${encodeURIComponent(id)}/decision`, "POST", body, signal)).change_set;
 }
 export async function actOnChangeItem(brand: string, campaign: string, id: string, itemId: string, action: "report" | "check", signal?: AbortSignal) {

@@ -5,6 +5,7 @@
  * `flow/changeFlow.ts` for the light flow. */
 import type { QueueItem, QueuePayload, TriageHistoryEntry } from "@/lib/adsTriageApi";
 import type { CommerceEvidence, Recommendation, ReviewPeriod, ReviewResultView } from "@/lib/adsReviewApi";
+import { decisionPosition } from "../home/status";
 
 export type ReviewStepName = "review" | "prepare" | "copy";
 
@@ -41,17 +42,13 @@ export function findReviewTriageItem(queue: QueuePayload | null, entityId: strin
   return queue.items.find((i) => i.triage.entity_id === entityId) ?? null;
 }
 
+/** F47-I07: 「第 N 件／共 M 件」 counts the open home decisions — the same owner as the home and the top bar. */
 export function reviewPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
-  if (!queue || !item) return null;
-  return { pos: queue.items.indexOf(item) + 1, total: queue.items.length };
+  return decisionPosition(queue, item);
 }
 
-/** `revisit_at` is always a timezone-carrying ISO instant (feature Decisions) — printed in the
- * browser's local timezone as `M/D`, matching `home/status.ts::formatRevisitLabel`. */
-export function formatRevisitLabel(revisitAt: string): string {
-  const d = new Date(revisitAt);
-  return `${d.getMonth() + 1}/${d.getDate()} 重看`;
-}
+/** F47-I07: the one 「M/D 再看」 label (`home/status.ts`), re-exported for the review pages. */
+export { formatRevisitLabel } from "../home/status";
 
 /** `M/D` for a plain `YYYY-MM-DD` window date (evidence legend) — no timezone conversion, these
  * are report dates, not instants. */

@@ -14,6 +14,7 @@ from app.ads import (
     ad_status,
     external_sync,
     month_budget,
+    queue_done,
     repository,
     result_kinds,
     review_evidence,
@@ -800,7 +801,9 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
             rows_by_entity, cutoff, capacity,
             scale_owner_id=scale_owner_by_campaign.get(campaign_id), memory=memory,
         )
-        if cleanup is None:
+        # F47-I07 (drill-10 Q1): a cleanup with nothing to close is no decision -- never an open
+        # row offering 「核准清理（關 0 則）」.
+        if cleanup is None or not cleanup["ads"]:
             continue
         candidates.append({
             "kind": "cleanup", "identity_id": campaign_id,
@@ -1280,9 +1283,13 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
             # goes elsewhere (the workbench / the F24 wait page / the settle page) instead.
             proposal = None
         extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
-        open_rows.append({
+        queue_row = {
             **row, "kind_key": kind, "triage": triage_item, **extra, "proposal": proposal,
-        })
+        }
+        # F47 Contract D: the one owner of done-ness (`queue_done.done`), read by the top bar, the
+        # home list and 「下一件」 alike.
+        queue_row["done"] = queue_done.done(queue_row)
+        open_rows.append(queue_row)
     return {
         "items": open_rows, "counts": _trend_counts(items), "total_ads": len(items),
         "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,

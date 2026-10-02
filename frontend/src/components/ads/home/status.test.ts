@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import { bandState, cleanupAction, isQueueItemDone, settleAction } from "./status";
+import { bandState, cleanupAction, decisionPosition, isQueueItemDone, settleAction } from "./status";
+import { nextOpenQueueItem } from "../flow/changeFlow";
 
 // F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
 const settleRow = (overrides: Partial<SettleQueueRow> = {}): SettleQueueRow => ({
@@ -63,19 +64,73 @@ const deferredReview: QueueReviewProposal = {
 const queueItem = (overrides: Partial<QueueItem>): QueueItem => ({
   id: "itr_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "ads_triage_worse",
   kind: null, severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open",
-  created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", triage: triageItem(), proposal: null,
+  created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", triage: triageItem(), proposal: null, done: false,
   ...overrides,
 });
 
+// F47 Contract D: done-ness is the row's own `done` (app/ads/queue_done.py) — the frontend never re-derives it.
 describe("isQueueItemDone", () => {
-  it("a 變貴 row reads its review proposal even when the trend note says flat", () => {
-    expect(isQueueItemDone(queueItem({ proposal: deferredReview }))).toBe(true);
-    expect(isQueueItemDone(queueItem({ proposal: null }))).toBe(false);
+  it("reads the row's own done, whatever its proposal says", () => {
+    expect(isQueueItemDone(queueItem({ proposal: deferredReview, done: true }))).toBe(true);
+    expect(isQueueItemDone(queueItem({ proposal: deferredReview, done: false }))).toBe(false);
+    expect(isQueueItemDone(queueItem({ proposal: null, done: false }))).toBe(false);
+  });
+});
+
+// F47-I07: the flow pages' 「第 N 件／共 M 件」 and the home count share one owner: open home decisions by `done`.
+describe("decisionPosition", () => {
+  const payload = (items: QueueItem[], settle: SettleQueueRow | null = null) => ({
+    items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0,
+    kinds_available: [], kinds_pending: [], settle,
+  });
+  const refresh = queueItem({ id: "r", kind_key: "refresh_creative" });
+  const worse = queueItem({ id: "w" });
+  const handled = queueItem({ id: "h", done: true });
+  const gap = queueItem({ id: "g", kind_key: "insufficient_data" });
+
+  it("counts open home decisions in board order, settle before refresh; skips handled and non-board rows", () => {
+    const q = payload([refresh, handled, gap, worse], settleRow());
+    expect(decisionPosition(q, worse)).toEqual({ pos: 1, total: 3 });
+    expect(decisionPosition(q, refresh)).toEqual({ pos: 3, total: 3 });
   });
 
-  it("a trend class of worse never turns another row kind into a review row", () => {
-    const refresh = queueItem({ kind_key: "refresh_creative", triage: triageItem({ class: "worse" }), proposal: deferredReview });
-    expect(isQueueItemDone(refresh)).toBe(false);
+  it("a handled row or a row the board does not show has no position", () => {
+    const q = payload([worse, handled, gap]);
+    expect(decisionPosition(q, handled)).toBeNull();
+    expect(decisionPosition(q, gap)).toBeNull();
+    expect(decisionPosition(null, worse)).toBeNull();
+  });
+});
+
+describe("nextOpenQueueItem", () => {
+  const set = (id: string, status: "draft" | "deferred") => ({
+    change_set_id: id, campaign_id: "cmp_1", kind: "cleanup" as const, status, verification_state: "pending" as const,
+    reason: null, revisit_at: null, multi: true,
+  });
+  const queue = (items: QueueItem[]) => ({
+    items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0,
+    kinds_available: [], kinds_pending: [],
+  });
+
+  it("skips done rows", () => {
+    const deferred = queueItem({ id: "a", triage: triageItem({ entity_id: "ad_a" }), proposal: deferredReview, done: true });
+    const open = queueItem({ id: "b", triage: triageItem({ entity_id: "ad_b" }) });
+    expect(nextOpenQueueItem(queue([deferred, open]), "ad_x")?.href).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_b");
+    expect(nextOpenQueueItem(queue([deferred]), "ad_x")).toBeNull();
+  });
+
+  it("a 資料不足 row goes to its own page, never to a pause proposal for the campaign's first ad (drill-10 Q1)", () => {
+    const cleanup = queueItem({
+      id: "c", kind_key: "cleanup", proposal: set("acs_1", "draft"), action_url: "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1",
+      cleanup: { campaign_id: "cmp_1", campaign_name: "活動", can_support: 1, active_ads: 3, ads: [], keep: [], short: 0, daily_saving: null, scale_owner_id: null },
+    });
+    const insufficient = queueItem({
+      id: "i", kind_key: "insufficient_data", action_url: "/brands/brd_1/ads/campaigns/cmp_2/wait",
+      insufficient: { campaign_id: "cmp_2", campaign_name: "活動二", missing_days: ["2026-10-03"], sync_state: "ok", coverage: null },
+    });
+    expect(nextOpenQueueItem(queue([cleanup, insufficient]), "cmp_1")).toEqual({
+      label: "去處理", href: "/brands/brd_1/ads/campaigns/cmp_2/wait", done: false,
+    });
   });
 });
 

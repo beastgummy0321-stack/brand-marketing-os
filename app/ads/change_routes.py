@@ -21,6 +21,13 @@ router = APIRouter(
 )
 
 
+class DecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: str
+    reason: str = Field(min_length=1, max_length=2000)
+    revisit_at: str | None = None
+
+
 class CreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_id: str = Field(min_length=1, max_length=128)
@@ -37,18 +44,14 @@ class CreateRequest(BaseModel):
     source: Literal["cleanup"] | None = None
     # F29-I01 Contract B: the proposed cleanup ads the user unticked (only with `source`).
     declined_ids: list[str] | None = None
+    # F47-I07 (drill-10 Q3): the user's 拒絕／暫緩 on the set this call creates, written in the
+    # same transaction (`change_control.create`). Never part of the set's own hashes.
+    decide: DecisionRequest | None = None
 
 
 class ApproveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content_hash: str
-
-
-class DecisionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    decision: str
-    reason: str = Field(min_length=1, max_length=2000)
-    revisit_at: str | None = None
 
 
 def _run(request, brand_id, campaign_id, function, *args):
@@ -71,6 +74,7 @@ def create(request: Request, brand_id: str, campaign_id: str, body: CreateReques
     # when `source`/`declined_ids` are unset, so existing sets' `request_hash`/`content_hash` are
     # unaffected.
     payload = body.model_dump()
+    decision = payload.pop("decide", None)
     for key in ("source", "declined_ids"):
         if payload.get(key) is None:
             payload.pop(key, None)
@@ -82,6 +86,7 @@ def create(request: Request, brand_id: str, campaign_id: str, body: CreateReques
             service.create,
             payload,
             str(web.require_actor(request).user_id),
+            decision,
         )
     }
 

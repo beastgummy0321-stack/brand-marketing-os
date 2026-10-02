@@ -21,6 +21,7 @@ import { cleanupSteps } from "./CleanupProposal";
 import { NewAdHandoffPanel } from "./NewAdHandoffPanel";
 import { PlatformButton } from "./PlatformButton";
 import {
+  AHEAD_LABEL,
   abSteps,
   campaignChangesPath,
   changeStepPath,
@@ -29,7 +30,7 @@ import {
   formatTargetAmount,
   isAbSet,
   isCleanupTriageItem,
-  stepFromChangeSet,
+  stepRoute,
 } from "./changeFlow";
 
 const STEP_PURPOSE = "照清單手動修改";
@@ -79,12 +80,14 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   const abSet = changeSet?.source !== "cleanup" && isAbSet(changeSet);
   const abContext = useAbContext(brandId, campaignId, abSet ? changeSet?.ab : null);
 
-  // feature Decisions「Step from a change set」：這一步只服務 approved + 還沒回報的清單，
-  // 其他狀態（草稿、已拒絕／暫緩、已讀回）都導去正確的步驟，不在這裡重新解讀。
+  // feature Decisions「Step from a change set」：這一步服務 approved + 還沒回報的清單；草稿、已拒絕／暫緩
+  // 導去正確的步驟。F47-I07（drill-10 C3-E）：已經回報、在核對的清單從「回到在平台完成」進來時留在這頁
+  // 唯讀（`ahead`＝它現在的步驟），不再被彈回核對結果頁。
+  const ahead = changeSet ? stepRoute(changeSet, "handoff").ahead : null;
   useEffect(() => {
     if (!changeSet) return;
-    const { step } = stepFromChangeSet(changeSet);
-    if (step !== "handoff") navigate(changeStepPath(brandId, campaignId, changeSet.id, step), { replace: true });
+    const { redirect } = stepRoute(changeSet, "handoff");
+    if (redirect) navigate(changeStepPath(brandId, campaignId, changeSet.id, redirect), { replace: true });
   }, [changeSet, brandId, campaignId, navigate]);
 
   function errorMessage(err: unknown): string {
@@ -204,6 +207,14 @@ export function HandoffPage({ brandId, campaignId, setId }: {
     ? cleanupSteps().map((step) => (step.label === "確認" ? { ...step, to: confirmHref } : step))
     : abSet ? abSteps(confirmHref)
     : [{ label: "確認提議", to: confirmHref }, { label: "到平台完成" }, { label: "核對結果" }];
+  // F47-I07: a set already past this step (opened from 「回到在平台完成」) shows its rows as reported and one link
+  // forward — 「我做完了」 is not offered twice.
+  const reported = new Set(changeSet.items.filter((i) => i.reported_at !== null).map((i) => i.id));
+  const aheadBar = ahead ? (
+    <ActionBar back={{ label: "投放中心", to: homeHref }} hint="這一步已經回報過了">
+      <Button asChild><Link to={changeStepPath(brandId, campaignId, changeSet.id, ahead)}>{AHEAD_LABEL[ahead]} →</Link></Button>
+    </ActionBar>
+  ) : null;
   const headerContext = abSet ? (
     abContext.campaign ? <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} /> : undefined
   ) : triageItem ? (
@@ -228,12 +239,12 @@ export function HandoffPage({ brandId, campaignId, setId }: {
         <NewAdHandoffPanel brandId={brandId} campaignId={campaignId} />
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
-        <ActionBar
+        {aheadBar ?? <ActionBar
           back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
           hint="核對結果由上面的交接面板決定"
         >
           <Button onClick={() => setReloadKey((k) => k + 1)}>看目前核對結果 →</Button>
-        </ActionBar>
+        </ActionBar>}
       </div>
     );
   }
@@ -249,18 +260,19 @@ export function HandoffPage({ brandId, campaignId, setId }: {
         <div className="rounded-xl border border-border bg-card px-6">
           <CleanupHandoffRows
             items={changeSet.items}
-            opened={cleanupOpened}
+            opened={ahead ? new Set([...cleanupOpened, ...reported]) : cleanupOpened}
             onOpen={(id) => setCleanupOpened((prev) => new Set(prev).add(id))}
+            readOnly={ahead !== null}
           />
         </div>
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
-        <ActionBar
+        {aheadBar ?? <ActionBar
           back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
           hint="系統會逐則讀回平台核對"
         >
           <Button disabled={busy} onClick={() => void handleCleanupDone(changeSet.items)}>{busy ? "處理中…" : "我都做完了，開始核對 →"}</Button>
-        </ActionBar>
+        </ActionBar>}
       </div>
     );
   }
@@ -272,13 +284,14 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   // A refused clipboard still ticks the row (as before F47): the button then says 請手動選取複製 and
   // the text sits right there to select by hand.
   const markActed = () => setActed(true);
+  const itemDone = ahead !== null && reported.has(item.id);
   const platformButton = <PlatformButton platformUrl={item.platform_url} target={item.target} onOpen={() => setOpened(true)} />;
 
   let rows: ReactNode;
   if (kind === "copy") {
     rows = (
       <>
-        <TodoRow no={1} done={acted} action={
+        <TodoRow no={1} done={acted || itemDone} action={
           <>
             <CopyIconButton label="複製標題" ariaLabel="複製標題" className={COPY_BUTTON} getText={() => item.after.title ?? ""} onResult={markActed} />
             <CopyIconButton label="複製內文" ariaLabel="複製內文" className={COPY_BUTTON} getText={() => item.after.body ?? ""} onResult={markActed} />
@@ -290,16 +303,16 @@ export function HandoffPage({ brandId, campaignId, setId }: {
             <p className="mt-1 whitespace-pre-wrap">{item.after.body ?? "—"}</p>
           </div>
         </TodoRow>
-        <TodoRow no={2} done={opened} action={platformButton}>在平台編輯這則廣告，貼上</TodoRow>
+        <TodoRow no={2} done={opened || itemDone} action={platformButton}>在平台編輯這則廣告，貼上</TodoRow>
       </>
     );
   } else if (kind === "pause") {
     rows = (
       <>
-        <TodoRow no={1} done={opened} action={platformButton}>
+        <TodoRow no={1} done={opened || itemDone} action={platformButton}>
           {abSet ? `打開平台上的「${item.target.name ?? "較貴的那一則"}」` : "打開平台上的這則廣告"}
         </TodoRow>
-        <TodoRow no={2} done={acted} action={<Button variant="outline" size="sm" onClick={() => setActed(true)}>我關了</Button>}>
+        <TodoRow no={2} done={acted || itemDone} action={<Button variant="outline" size="sm" onClick={() => setActed(true)}>我關了</Button>}>
           把這則廣告的開關關掉
         </TodoRow>
       </>
@@ -307,10 +320,10 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   } else {
     rows = (
       <>
-        <TodoRow no={1} done={opened} action={platformButton}>
+        <TodoRow no={1} done={opened || itemDone} action={platformButton}>
           打開平台上的「{item.target.name ?? "未命名投放組"}」
         </TodoRow>
-        <TodoRow no={2} done={acted} action={
+        <TodoRow no={2} done={acted || itemDone} action={
           <CopyIconButton label="複製金額" ariaLabel="複製金額" className={COPY_BUTTON} getText={() => formatTargetAmount(item.after.daily_amount ?? null)} onResult={markActed} />
         }>
           每日預算改成 <span className="text-lg font-semibold">{formatTargetAmount(item.after.daily_amount ?? null)}</span>
@@ -327,9 +340,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
       <div className="rounded-xl border border-border bg-card px-6">
         {rows}
-        <TodoRow no={3} action={<span aria-hidden="true" className="text-lg text-muted-foreground">↘</span>}>
+        {!ahead && <TodoRow no={3} action={<span aria-hidden="true" className="text-lg text-muted-foreground">↘</span>}>
           回來按「我做完了」
-        </TodoRow>
+        </TodoRow>}
       </div>
 
       {kind === "copy" && (
@@ -344,12 +357,12 @@ export function HandoffPage({ brandId, campaignId, setId }: {
       {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
 
       <div className="flex-1" />
-      <ActionBar
+      {aheadBar ?? <ActionBar
         back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
         hint="系統會讀回平台核對"
       >
         <Button disabled={busy} onClick={() => void handleDone(item)}>{busy ? "處理中…" : "我做完了，開始核對 →"}</Button>
-      </ActionBar>
+      </ActionBar>}
     </div>
   );
 }

@@ -42,7 +42,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "stop_loss",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -233,6 +233,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
       queueItem({
         id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }),
         proposal: { change_set_id: "acs_2", campaign_id: "cmp_2", kind: "pause", status: "approved", verification_state: "confirmed", reason: null, revisit_at: null, multi: false },
+        done: true,
       }),
     ]));
     renderAt(verifyPath());
@@ -527,9 +528,9 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     const labels = screen.getAllByRole("listitem").map((li) => li.textContent?.replace(/^\d/, ""));
     expect(labels).toEqual(["提議", "確認", "到平台完成", "核對結果"]);
     expect(current.textContent).toContain("核對結果");
-    expect(screen.getByRole("link", { name: "回到確認" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
-    expect(screen.getByRole("link", { name: "回到到平台完成" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff");
-    expect(screen.queryByRole("link", { name: "回到提議" })).toBeNull();
+    expect(screen.getByRole("link", { name: "回到「確認」" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+    expect(screen.getByRole("link", { name: "回到「到平台完成」" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff");
+    expect(screen.queryByRole("link", { name: "回到「提議」" })).toBeNull();
   });
 
   it("其中一則已回報但還在核對：摘要 hero 挑第一個不是 confirmed 的狀態（不是嚴重度排序）", async () => {

@@ -99,7 +99,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_worse", kind: null, severity: "rule_warning",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "worse",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
