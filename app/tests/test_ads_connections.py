@@ -385,7 +385,7 @@ class ConnectionsTest(unittest.TestCase):
                                 ("秋季新色", {"selling_price": 520})):
             brands.save_sell_way(
                 self.conn, self.brand, name=name, actor=ACTOR, economics=economics,
-                components=[{"product_id": product["id"], "qty": 1}],
+                product_id=product["id"],
             )
         self.conn.commit()
         source = self._source(self._read(), "product_costs")

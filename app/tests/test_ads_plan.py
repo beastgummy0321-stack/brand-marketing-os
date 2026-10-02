@@ -726,7 +726,7 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         ("offer", "bundle", "組合優惠"), ("offer", "free_shipping", "免運"),
         ("offer", "none", "無優惠"),
     )
-    _BUNDLE_LINE = "- offer=bundle｜綜合維他命軟糖 · 三盒組優惠價 NT$999（原價 NT$1,197）"
+    _BUNDLE_LINE = "- offer=bundle｜優惠價 NT$999（原價 NT$1,197）"
 
     def setUp(self):
         super().setUp()
@@ -742,9 +742,13 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         product_id = bi_repo.create_product(
             web.conn, self.brand_id, name="綜合維他命軟糖", actor=ACTOR,
         )["id"]
+        box_id = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單盒", actor=ACTOR, product_id=product_id,
+            economics={"selling_price": 399},
+        )["id"]
         sell_way_id = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="三盒組", actor=ACTOR,
-            components=[{"product_id": product_id, "qty": 3}],
+            components=[{"sell_way_id": box_id, "qty": 3}],
             economics={"selling_price": 999, "list_price": 1197, "unit_variable_cost": 300,
                        "shipping_cost": 60},
         )["id"]

@@ -38,9 +38,16 @@ class CustomerGroupsSectionTest(unittest.TestCase):
         return product
 
     def _sell_way(self, name: str, *products: dict) -> str:
+        """F45: one product -> a base sell-way; several -> a bundle of each one's base."""
+        if len(products) == 1:
+            return bi_repo.save_sell_way(
+                web.conn, self.brand_id, name=name, economics=dict(_ECONOMICS), actor=ACTOR,
+                product_id=products[0]["id"],
+            )["id"]
+        bases = [self._sell_way("單件", p) for p in products]
         return bi_repo.save_sell_way(
             web.conn, self.brand_id, name=name, economics=dict(_ECONOMICS), actor=ACTOR,
-            components=[{"product_id": p["id"], "qty": 1} for p in products],
+            components=[{"sell_way_id": b, "qty": 1} for b in bases],
         )["id"]
 
     def _section(self, context_json: dict) -> tuple[str, list[str]]:

@@ -133,11 +133,15 @@ class ResolveTargetTest(unittest.TestCase):
         tea = bi_repo.create_product(web.conn, self.brand_id, name="濾掛", actor="測試員")["id"]
         single = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="單盒", actor="測試員",
-            components=[{"product_id": gummy, "qty": 1}], economics={"selling_price": 399},
+            product_id=gummy, economics={"selling_price": 399},
+        )["id"]
+        tea_bag = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單包", actor="測試員",
+            product_id=tea, economics={"selling_price": 200},
         )["id"]
         bundle = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="茶點組", actor="測試員",
-            components=[{"product_id": tea, "qty": 1}, {"product_id": gummy, "qty": 1}],
+            components=[{"sell_way_id": tea_bag, "qty": 1}, {"sell_way_id": single, "qty": 1}],
             economics={"selling_price": 599},
         )["id"]
         for sell_way, knowledge in ((single, gummy), (bundle, tea)):

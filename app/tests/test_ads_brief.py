@@ -447,11 +447,25 @@ class _SellWayBase(_BriefTestBase):
                                        unit_variable_cost=300, shipping_cost=100)
 
     def _sell_way(self, name, components, landing_url=None, **economics):
+        """F45: one product × 1 -> a base sell-way; anything else -> a composed sell-way of each
+        product's base (the existing one, else a new 「單件」 at NT$100)."""
+        if len(components) == 1 and components[0][1] == 1:
+            return bi_repo.save_sell_way(
+                web.conn, self.brand_id, name=name, actor=ACTOR, economics=economics,
+                product_id=components[0][0]["id"], landing_url=landing_url,
+            )
         return bi_repo.save_sell_way(
             web.conn, self.brand_id, name=name, actor=ACTOR, economics=economics,
-            components=[{"product_id": p["id"], "qty": qty} for p, qty in components],
+            components=[{"sell_way_id": self._base(p)["id"], "qty": qty} for p, qty in components],
             landing_url=landing_url,
         )
+
+    def _base(self, product):
+        for way in bi_repo.list_sell_ways(web.conn, self.brand_id, product["id"]):
+            if way["shape"] == "base" and way["status"] == "active":
+                return way
+        return bi_repo.save_sell_way(web.conn, self.brand_id, name="單件", actor=ACTOR,
+                                     product_id=product["id"], economics={"selling_price": 100})
 
     def _picks(self, **overrides):
         picks = {"product_ids": [self.sell_way["id"]], "objective": "名單", "budget": 30000}

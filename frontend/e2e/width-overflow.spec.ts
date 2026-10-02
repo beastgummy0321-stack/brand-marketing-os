@@ -111,7 +111,7 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   const intake = `/api/intake/brands/${brandId}/products`;
   const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: `寬度測試產品 ${stamp}` });
   await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
-    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+    sell_ways: [{ name: "單品", price: 1580 }],
   });
   await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
   const product = { id: onboarded.data.product_id };

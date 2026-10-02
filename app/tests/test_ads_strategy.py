@@ -787,10 +787,13 @@ class ProductsSectionSellWaysTest(StrategyTestBase):
                 web.conn, self.brand_id, product["id"], actor=ACTOR, fact_type="core_info",
                 label="成分", value=value, status="confirmed", confirmed_by=ACTOR,
             )
+        bases = [bi_repo.save_sell_way(web.conn, self.brand_id, name="單件", actor=ACTOR,
+                                       product_id=product["id"],
+                                       economics={"selling_price": 900})["id"]
+                 for product in (self.mother, fish_oil)]
         bundle = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="保養雙入組", actor=ACTOR,
-            components=[{"product_id": self.mother["id"], "qty": 1},
-                        {"product_id": fish_oil["id"], "qty": 1}],
+            components=[{"sell_way_id": base, "qty": 1} for base in bases],
             economics={"selling_price": 1800, "unit_variable_cost": 400, "shipping_cost": 60},
         )
 

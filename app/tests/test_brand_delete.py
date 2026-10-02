@@ -39,9 +39,12 @@ class BrandDeleteTest(unittest.TestCase):
                                      confirmed_by="測試員", actor="測試員")
         # F43-I01: a bundle (product_component rows), a customer group and a product prefill.
         other = repo.create_product(self.conn, bid, name=f"{name}-另一個產品", actor="測試員")["id"]
+        bases = [repo.save_sell_way(self.conn, bid, name="單件", product_id=product,
+                                    economics={"selling_price": 90}, actor="測試員")["id"]
+                 for product in (pid, other)]  # F45: a bundle lists base sell-ways
         repo.save_sell_way(self.conn, bid, name=f"{name}-組合",
-                           components=[{"product_id": pid, "qty": 1},
-                                       {"product_id": other, "qty": 1}],
+                           components=[{"sell_way_id": bases[0], "qty": 1},
+                                       {"sell_way_id": bases[1], "qty": 1}],
                            economics={"selling_price": 180}, actor="測試員")
         repo.save_customer_groups(self.conn, bid, pid, [{"who": "測試客群", "pain_keys": ["cost"]}],
                                   actor="測試員")
@@ -118,7 +121,8 @@ class BrandDeleteTest(unittest.TestCase):
         self.assertIsNotNone(row)
         before = row["before_json"]  # jsonb 欄位，psycopg 已自動解碼成 dict，不必 json.loads
         self.assertEqual(before["name"], "留痕品牌（刪除測試）")
-        self.assertEqual(before["deleted_counts"]["產品"], 3)  # two products + one bundle (F43-I01)
+        # two products + their two base sell-ways + one bundle (F43-I01, F45)
+        self.assertEqual(before["deleted_counts"]["產品"], 5)
         self.assertEqual(before["deleted_counts"]["賣法組成"], 2)
         self.assertEqual(row["actor"], "測試員")
 

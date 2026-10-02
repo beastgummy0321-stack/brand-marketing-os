@@ -4,8 +4,9 @@ wizard can pick.
 `options()` -> `{products: [option], objectives: [objective], default_objective: key|null}`, one
 option per finished sell-way:
 `{id, name, display_name, kind ("single" | "bundle"), knowledge_product_id,
-knowledge_product_name, price|null, currency|null, has_cost, break_even|null, cap_per_sale|null,
-offer_labels, customer_groups [{id, who}], landing_url|null, thumbnail_url|null}`. Pure read, no
+knowledge_product_name, price|null, currency|null, has_cost, break_even|null, derived_fields,
+cap_per_sale|null, offer_labels, customer_groups [{id, who}], landing_url|null,
+thumbnail_url|null}`. Pure read, no
 model call, no write. Sell-ways, their economics, groups, offers and photos come only through the
 `app.brand_intelligence.repository` facade.
 
@@ -23,10 +24,14 @@ Numbers:
   not started or has already ended (`effective_to < today`, the same stale rule `brief.py` uses)
   is not current -> `None`/`False`, never a stale price shown as today's. "Today" is the
   organisation's own date. `break_even` is `budget.breakeven_cpa` (the one formula).
+- `derived_fields` (F45, ads §6.49 「Picker」) = the current economics' `derived_fields` (a
+  composed sell-way's price / list price / cost filled from its bases); `[]` without current
+  economics. A break-even from a derived price or cost prints 「（推算）」 on the page.
 - `cap_per_sale` is effective: the sell-way's own cap, else its break-even (`None` when neither).
 - `offer_labels` = the offers `offer_sources` finds for the sell-way (the rule behind
-  `available_offer_keys`): its own price offer as 「組合價」 (more than one unit) / 「優惠價」, then
-  each brand policy's offer word (「免運」…), each once.
+  `available_offer_keys`): its own offers -- price offer as 「組合價」 (composed) / 「優惠價」
+  (base), its own free shipping as 「免運」 -- then each brand policy's offer word (「免運」…),
+  each once.
 - `landing_url` = the sell-way's effective landing (its own, else the first product's page).
 - `default_objective` (F43-I18) = the brand's `conversion_goal` through
   `objectives.for_conversion_goal` (`None` when unset: no preselection).
@@ -141,6 +146,7 @@ def _product_option(conn, brand_id: str, way: dict, today, thumbnails: dict) -> 
         "currency": current.get("currency") if current else None,
         "has_cost": bool(current) and current.get("unit_variable_cost") is not None,
         "break_even": float(break_even) if break_even is not None else None,
+        "derived_fields": list(current.get("derived_fields") or []) if current else [],
         "cap_per_sale": float(own_cap) if own_cap is not None else (
             float(break_even) if break_even is not None else None),
         "offer_labels": _offer_labels(conn, brand_id, way["id"]),

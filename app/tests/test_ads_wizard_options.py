@@ -41,9 +41,17 @@ class WizardOptionsTest(unittest.TestCase):
             return bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)
 
         def sell_way(name, components, **money):
+            """F45: [(product, 1)] -> a base sell-way of it; else [(base sell-way, qty)] ->
+            a composed sell-way."""
+            first, qty = components[0]
+            if len(components) == 1 and qty == 1 and first["parent_id"] is None:
+                return bi_repo.save_sell_way(
+                    web.conn, self.brand_id, name=name, actor=ACTOR, economics=money,
+                    product_id=first["id"],
+                )
             return bi_repo.save_sell_way(
                 web.conn, self.brand_id, name=name, actor=ACTOR, economics=money,
-                components=[{"product_id": p["id"], "qty": qty} for p, qty in components],
+                components=[{"sell_way_id": w["id"], "qty": qty} for w, qty in components],
             )
 
         def economics(way, **kwargs):
@@ -81,7 +89,8 @@ class WizardOptionsTest(unittest.TestCase):
             [{"who": "懶得洗杯的人", "pain_keys": ["effort"]}], actor=ACTOR,
         )
         # A bundle of both: no cost of its own (Σ 900 + 120), list price Σ 1580 + 390 = 1970.
-        self.duo = sell_way("雙效組", [(self.cup, 1), (self.brush, 1)], selling_price=1799,
+        self.duo = sell_way("雙效組", [(self.cup_single, 1), (self.brush_single, 1)],
+                            selling_price=1799,
                             shipping_cost=60)
         # Archived knowledge product (with its sell-way), and an archived sell-way.
         self.old = product("C 舊款")
@@ -91,8 +100,8 @@ class WizardOptionsTest(unittest.TestCase):
         archive(self.cup_retired)
         # A product being built (建到一半): neither its sell-way nor a bundle with it is offered.
         self.half = product("G 益生菌")
-        sell_way("單盒", [(self.half, 1)], selling_price=459, unit_variable_cost=110)
-        sell_way("半套組", [(self.half, 1), (self.cup, 1)], selling_price=1900)
+        half_box = sell_way("單盒", [(self.half, 1)], selling_price=459, unit_variable_cost=110)
+        sell_way("半套組", [(half_box, 1), (self.cup_single, 1)], selling_price=1900)
         bi_repo.set_product_onboarding_step(web.conn, self.brand_id, self.half["id"], 2,
                                             actor=ACTOR)
         # A knowledge product with no sell-way at all: nothing to sell.
@@ -147,7 +156,7 @@ class WizardOptionsTest(unittest.TestCase):
             "id": self.cup_single["id"], "name": "B 晨光隨行杯 · 單品", "display_name": "單品",
             "kind": "single", "knowledge_product_id": self.cup["id"],
             "knowledge_product_name": "B 晨光隨行杯", "price": 1580.0, "currency": "TWD",
-            "has_cost": True, "break_even": 520.0, "cap_per_sale": 500.0,
+            "has_cost": True, "break_even": 520.0, "derived_fields": [], "cap_per_sale": 500.0,
             "offer_labels": ["免運"],
             "customer_groups": [{"id": g["id"], "who": g["who"]} for g in self.cup_groups],
             "landing_url": "https://shop.example.test/cup",
@@ -165,6 +174,8 @@ class WizardOptionsTest(unittest.TestCase):
         self.assertEqual((duo["knowledge_product_id"], duo["knowledge_product_name"]),
                          (self.cup["id"], "B 晨光隨行杯"))
         self.assertTrue(duo["has_cost"])  # Σ component costs
+        # F45 (ads §6.49 「Picker」): the derived numbers are named.
+        self.assertEqual(duo["derived_fields"], ["list_price", "unit_variable_cost"])
         self.assertEqual(duo["break_even"], 719.0)  # 1799 − (900 + 120) − 60
         self.assertEqual(duo["cap_per_sale"], 719.0)
         self.assertEqual(duo["offer_labels"], ["組合價", "免運"])
@@ -184,9 +195,23 @@ class WizardOptionsTest(unittest.TestCase):
         for name in ("E 過季品 · 單品", "F 預購品 · 單品"):
             row = products[name]
             self.assertEqual(
-                (row["price"], row["currency"], row["has_cost"], row["break_even"]),
-                (None, None, False, None), name,
+                (row["price"], row["currency"], row["has_cost"], row["break_even"],
+                 row["derived_fields"]),
+                (None, None, False, None, []), name,
             )
+
+    def test_a_composed_sell_way_with_an_empty_price_names_its_derived_fields(self):
+        """F45 (ads §6.49 「Picker」): 兩支組 = 單支 × 2 with nothing typed -> price, list price
+        and cost all derived (2 × 390, 2 × 120), named in `derived_fields`."""
+        bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="兩支組", actor=ACTOR, economics={"shipping_cost": 0},
+            components=[{"sell_way_id": self.brush_single["id"], "qty": 2}],
+        )
+        products = self._by_name(wizard_options.options(web.conn, self.org_id, self.brand_id))
+        pair = products["A 杯刷 · 兩支組"]
+        self.assertEqual((pair["price"], pair["break_even"]), (780.0, 540.0))
+        self.assertEqual(pair["derived_fields"],
+                         ["selling_price", "list_price", "unit_variable_cost"])
 
     def test_sell_way_thumbnail_is_the_knowledge_products_newest_photo(self):
         products = self._by_name(wizard_options.options(web.conn, self.org_id, self.brand_id))
