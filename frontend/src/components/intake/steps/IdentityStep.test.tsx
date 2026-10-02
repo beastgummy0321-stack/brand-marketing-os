@@ -242,7 +242,7 @@ describe("IdentityStep", () => {
 
   it("F47-I03: unsaved edits come back when the step mounts again (back, step bar, reload) and go once saved", async () => {
     mockFetch.mockResolvedValue(prefilled());
-    mockSave.mockResolvedValue(undefined);
+    mockSave.mockResolvedValue(prefilled());
     renderStep();
     await userEvent.clear(await screen.findByLabelText("一句話說你的品牌"));
     await userEvent.type(positioningBox(), "我改過的一句話");

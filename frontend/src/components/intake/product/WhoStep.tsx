@@ -63,9 +63,9 @@ function readKept(key: string): KeptGroup[] | null {
     const v: unknown = JSON.parse(sessionStorage.getItem(key) || "null");
     if (!Array.isArray(v)) return null;
     const ok = v.every((g: Record<string, unknown>) =>
-      isContent(g) && isContent(g.base) && (g.id === null || typeof g.id === "string")
+      isContent(g.base) && (g.id === null || typeof g.id === "string")
       && (g.origin === "saved" || g.origin === "ai" || g.origin === "custom") && typeof g.note === "string"
-      && (g.customQuote === null || typeof g.customQuote === "string"));
+      && (g.customQuote === null || typeof g.customQuote === "string") && isContent(g));
     return ok ? (v as KeptGroup[]).slice(0, MAX_GROUPS) : null;
   } catch {
     return null;
