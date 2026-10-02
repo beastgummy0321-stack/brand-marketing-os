@@ -16,3 +16,6 @@ export { CopyPage } from "./review/CopyPage";
 export { MaterialStepPage } from "./review/MaterialStepPage";
 export { ReadinessList } from "./patterns/ReadinessList";
 export { SettlePage, isSettleStep, settlePath } from "./settle/SettlePage";
+export { LearningsTab, learningsCount, useCoordinateLearnings, type LearningsLoad } from "./learnings/LearningsTab";
+export { LearningsTable } from "./learnings/LearningsTable";
+export { GroupSummary } from "./learnings/GroupSummary";
