@@ -96,7 +96,8 @@ function way(id: string | null, name: string, price: number, breakEven: number |
     id, name, price, list_price: price, list_price_derived: true, list_price_note: "", cost: 90, cost_derived: false,
     cost_note: "", shipping: 60, break_even: breakEven, cap_per_sale: breakEven, cap_is_default: true,
     landing_url: WHAT.page_url, landing_is_default: true, offer_labels: offers, offer_notes: [], assumptions: [],
-    components: [{ product_id: P, name: WHAT.name, qty: 1 }], qty: 1, source: id ? "saved" : "ai", note: "",
+    shape: "base", components: [], used_by: [], price_derived: false, price_note: "", cost_estimate: null, cost_missing: [],
+    free_shipping: false, break_even_derived: false, offer_sentences: [], source: id ? "saved" : "ai", note: "",
   };
 }
 
