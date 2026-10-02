@@ -7,7 +7,7 @@ import { createProduct, fetchProductWhat, proposeProductCustom, saveProductWhat 
 import { uploadAsset } from "@/lib/libraryApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { useFormSubmit } from "@/lib/useFormSubmit";
-import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
+import { OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
 import { CustomEscape, CustomMark } from "../shared/CustomEscape";
 
@@ -35,7 +35,7 @@ export function NewProductStep({ brandId, nav, back, onCreated }: {
 }) {
   const [name, setName] = useState("");
   const [pageUrl, setPageUrl] = useState("");
-  const { saving, error, submit } = useFormSubmit(async () => {
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     const trimmed = pageUrl.trim();
     onCreated(await createProduct(brandId, trimmed ? { name: name.trim(), page_url: trimmed } : { name: name.trim() }));
   });
@@ -44,6 +44,7 @@ export function NewProductStep({ brandId, nav, back, onCreated }: {
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (ready) void submit();
@@ -56,9 +57,25 @@ export function NewProductStep({ brandId, nav, back, onCreated }: {
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <OnboardingBar back={back}>
-        <BarNext type="submit" label="下一步" disabled={!ready} />
+        <NextButton disabled={!ready} reason={saving ? null : nextBlocked(name, false)} />
       </OnboardingBar>
     </form>
+  );
+}
+
+/** F47-I03 (drill-10 乙 #4): why 下一步 is off, naming what is missing; `null` = ready. */
+function nextBlocked(name: string, uploading: boolean): string | null {
+  if (!name.trim()) return "先填商品名稱";
+  if (uploading) return "商品照上傳中，傳完才能下一步";
+  return null;
+}
+
+/** The bar's primary button (`BarNext`) with F47-I03's disabled reason. */
+function NextButton({ disabled, reason }: { disabled: boolean; reason: string | null }) {
+  return (
+    <Button type="submit" size="lg" className="font-semibold" disabled={disabled} disabledReason={reason ?? undefined}>
+      下一步 →
+    </Button>
   );
 }
 
@@ -120,7 +137,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
     }
   }
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     const saved = await saveProductWhat(brandId, productId, {
       name: name.trim(),
       page_url: pageUrl.trim(),
@@ -143,6 +160,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (ready) void submit();
@@ -202,7 +220,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <OnboardingBar back={back}>
-        <BarNext type="submit" label="下一步" disabled={!ready} />
+        <NextButton disabled={!ready} reason={saving ? null : nextBlocked(name, uploading)} />
       </OnboardingBar>
     </form>
   );

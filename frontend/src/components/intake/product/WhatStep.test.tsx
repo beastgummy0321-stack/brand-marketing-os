@@ -87,8 +87,12 @@ describe("NewProductStep", () => {
 
     expect(nextButton().disabled).toBe(true);
     expect(screen.getByText("也是廣告預設的落地頁")).toBeTruthy();
-    await userEvent.type(field("商品名稱"), " 益生菌軟糖 ");
+    // F47-I03 (drill-10 乙 #4): a URL alone keeps 下一步 off and says the name is missing.
     await userEvent.type(field("商品頁網址"), "https://beastgummy.tw/shop/probiotic");
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("先填商品名稱")).toBeTruthy();
+    await userEvent.type(field("商品名稱"), " 益生菌軟糖 ");
+    expect(screen.queryByText("先填商品名稱")).toBeNull();
     expect(screen.getByRole("navigation", { name: "建檔位置" }).textContent).toBe("商品›商品建檔›益生菌軟糖");
     await userEvent.click(nextButton());
 
