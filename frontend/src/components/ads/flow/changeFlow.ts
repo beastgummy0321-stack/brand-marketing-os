@@ -67,9 +67,17 @@ export function changeStepPath(brandId: string, campaignId: string, setId: strin
   return `${campaignPath(brandId, campaignId)}/changes/${encodeURIComponent(setId)}/${step}`;
 }
 
-/** `propose/pause/:entityId` — the confirm page for a proposal that has no change set yet. */
-export function proposePausePath(brandId: string, campaignId: string, entityId: string): string {
-  return `${campaignPath(brandId, campaignId)}/propose/pause/${encodeURIComponent(entityId)}`;
+/** F45-I06 (ads.md §6.49): where a pause entry came from, for the pause page's back link — the 成效 tab, a
+ * review round (`ref` = review id) or a set's 核對結果 step (`ref` = set id). No `from` = the home queue. */
+export type PauseFrom = "perf" | "review" | "verify";
+
+/** `propose/pause/:entityId` — the confirm page for a proposal that has no change set yet. F45-I06: an entry
+ * other than the home queue adds `?from=…&ref=…` so the page's back link returns there. */
+export function proposePausePath(brandId: string, campaignId: string, entityId: string, from?: PauseFrom, ref?: string): string {
+  const path = `${campaignPath(brandId, campaignId)}/propose/pause/${encodeURIComponent(entityId)}`;
+  if (!from) return path;
+  const query = new URLSearchParams({ from, ...(ref ? { ref } : {}) });
+  return `${path}?${query.toString()}`;
 }
 
 /** `propose/budget/:entityId` — same idea as `proposePausePath`, `entityId` here is the scale row's

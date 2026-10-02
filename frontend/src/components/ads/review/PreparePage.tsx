@@ -183,7 +183,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
       // F27 Screens「Prepare page」：copy → 改文案頁；retire → F22 停損提議頁；image/existing →
       // I14 的素材頁，帶對應 `mode`（decide completed 一定先跑，跟 copy/retire 同一套順序）。
       if (selected === "copy") navigate(reviewRoundPath(brandId, campaignId, review.id, "copy"));
-      else if (selected === "retire") navigate(proposePausePath(brandId, campaignId, review.entity_id));
+      else if (selected === "retire") navigate(proposePausePath(brandId, campaignId, review.entity_id, "review", review.id));
       else navigate(reviewMaterialPath(brandId, campaignId, review.id, selected === "image" ? "workbench_image" : "existing"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。");

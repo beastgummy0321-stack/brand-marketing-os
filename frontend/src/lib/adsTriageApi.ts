@@ -383,6 +383,19 @@ export function splitQueue(wire: WireQueuePayload): QueuePayload {
   return { ...wire, items, settle };
 }
 
+/** F45-I05 Contract P (ads.md §6.49, `app/ads/triage_pause.py::pause_view`): the pause page's own read
+ * of one ad -- never the home queue. `active` = a platform ad of this campaign not read as closed
+ * (unknown status counts as active); `closed` = closed but not deleted; `gone` = no such ad in this
+ * campaign, or deleted (`triage` is then `null`). `triage` is the `GET …/triage` item computed for
+ * this one ad (closed ads too). `closed_at` = when its status last changed, `last_read_at` = its
+ * last successful read (ISO instants, either may be `null`). `change_set_id` = the open plain pause
+ * set on this ad (draft, or approved and not yet confirmed), else `null`. */
+export type PauseViewState = "active" | "closed" | "gone";
+export interface PauseView {
+  state: PauseViewState; entity_id: string; name: string | null; triage: TriageItem | null;
+  closed_at: string | null; last_read_at: string | null; change_set_id: string | null;
+}
+
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
   /** F29 Contract D: 成本含運 (unit cost incl. shipping) from the same product economics row as
@@ -444,6 +457,12 @@ export async function refreshQueue(brand: string, signal?: AbortSignal) {
 }
 export async function getTriage(brand: string, campaign: string, signal?: AbortSignal) {
   return (await json<{ triage: CampaignTriage }>(`${campaignPath(brand, campaign)}/triage`, "GET", undefined, signal)).triage;
+}
+/** F45-I05 Contract P: 404 only for an unknown campaign; an unknown ad is `state: "gone"`. */
+export async function getPauseView(brand: string, campaign: string, entityId: string, signal?: AbortSignal) {
+  return (await json<{ pause: PauseView }>(
+    `${campaignPath(brand, campaign)}/triage/${encodeURIComponent(entityId)}/pause`, "GET", undefined, signal,
+  )).pause;
 }
 export async function getTarget(brand: string, campaign: string, signal?: AbortSignal) {
   return (await json<{ target: CampaignTarget }>(`${campaignPath(brand, campaign)}/target`, "GET", undefined, signal)).target;

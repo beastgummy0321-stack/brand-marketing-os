@@ -3,14 +3,14 @@
  * 草稿延遲建立的 payload、核准導去到平台完成、暫緩要未來時間、拒絕、保存沒收到回應時沿用
  * 同一個 operation_id 重試、走錯步驟自動導正、多項變更清單連去既有變更與核對；F25-I03 加了
  * 加預算 propose 路由的完整證據卡、budget 草稿 payload、月預算放不下的 409 不重建。 */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as changeApi from "@/lib/adsChangeApi";
 import { ChangeRequestRejected, type ChangeItem, type ChangeSet, type MonthlyBudget } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
-import type { QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
+import type { PauseView, QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import * as anglesApi from "@/lib/adsAnglesApi";
 import { ConfirmPage } from "./ConfirmPage";
 
@@ -22,7 +22,7 @@ vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
 }));
 vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
   ...(await importOriginal<typeof triageApi>()),
-  getQueue: vi.fn(), getTriage: vi.fn(),
+  getQueue: vi.fn(), getTriage: vi.fn(), getPauseView: vi.fn(),
 }));
 // F27-I16 Contract C: 每一頁暫停提議都會打一次 `getAngles`（correction 9）——不 mock 會打到真的
 // `fetch`，預設先給一個 `ready` 三候選，個別測試需要別的狀態再自己覆寫。
@@ -43,6 +43,14 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     previous: { spend: null, result_count: null, cost_per_result: null, result_kind: null, result_label: "成果", derived_zero_days: 0, reason: null },
     change_pct: null,
     sample: { gate: false, spend_multiple: null, days_with_events: 0 },
+    ...overrides,
+  };
+}
+/** F45-I05 Contract P as `app/ads/triage_pause.py::pause_view` returns it for a running ad of this campaign. */
+function pauseView(overrides: Partial<PauseView> = {}): PauseView {
+  return {
+    state: "active", entity_id: "aex_1", name: "1150706 健身情境單圖", triage: triage(),
+    closed_at: null, last_read_at: "2026-09-30T16:05:00+00:00", change_set_id: null,
     ...overrides,
   };
 }
@@ -179,6 +187,7 @@ const confirmPath = (id = "acs_1") => `/brands/brd_1/ads/campaigns/cmp_1/changes
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(triageApi.getQueue).mockResolvedValue(queue());
+  vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView());
   // F28-I11: the cleanup proposal reads the campaign triage for its daily budget only; a failure is tolerated.
   vi.mocked(triageApi.getTriage).mockRejectedValue(new Error("not needed"));
   vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
@@ -287,11 +296,9 @@ describe("ConfirmPage（F22-I02）propose 路由：延遲建立草稿", () => {
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff"));
   });
 
-  it("既有提議時重用 change_set_id，不重新建立草稿", async () => {
+  it("既有提議時重用 change_set_id（F45-I06：來自 Contract P），不重新建立草稿", async () => {
     const user = userEvent.setup();
-    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
-      proposal: { change_set_id: "acs_existing", campaign_id: "cmp_1", kind: "pause", status: "draft", verification_state: "pending", reason: null, revisit_at: null, multi: false },
-    })]));
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ change_set_id: "acs_existing" }));
     const existing = changeSet({ id: "acs_existing" });
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [existing] });
     vi.mocked(changeApi.approveChangeSet).mockResolvedValue({ ...existing, status: "approved" });
@@ -334,7 +341,7 @@ describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
     renderAt(proposePath);
     await screen.findByText("這則主打什麼？");
     expect(screen.queryByRole("button", { name: "日常出發情境" })).toBeNull();
-    const custom = screen.getByRole("button", { name: "＋ 自訂" });
+    const custom = await screen.findByRole("button", { name: "＋ 自訂" });
     await user.click(custom);
     const input = screen.getByLabelText("自訂主打");
     await user.type(input, "夏季限定");
@@ -999,16 +1006,25 @@ describe("ConfirmPage（F29-I14）清理：自己挑要關哪幾則", () => {
 // F29-I10 Contract K: a failed read is its own state (ReadFailed + 重試), never "no proposal" or a silent fallback;
 // the step flow's one exit shows only while the decision is open.
 describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
-  it("propose 路由的佇列讀取失敗：顯示讀取失敗、不說「找不到提議」；重試重讀佇列後照常", async () => {
+  it("暫停提議頁自己的讀取（Contract P）失敗：顯示讀取失敗、不說「找不到」；重試後照常（F45-I06）", async () => {
     const user = userEvent.setup();
-    vi.mocked(triageApi.getQueue).mockReset();
-    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem()]));
+    vi.mocked(triageApi.getPauseView).mockReset();
+    vi.mocked(triageApi.getPauseView).mockRejectedValueOnce(new Error("pause down")).mockResolvedValueOnce(pauseView());
     renderAt(proposePath);
     expect((await screen.findByRole("alert")).textContent).toContain("讀取失敗");
-    expect(screen.queryByText(/找不到這則廣告的停損提議/)).toBeNull();
+    expect(screen.queryByText(/找不到這則廣告/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
-    expect(triageApi.getQueue).toHaveBeenCalledTimes(2);
+    expect(triageApi.getPauseView).toHaveBeenCalledTimes(2);
+  });
+
+  it("暫停提議頁的佇列讀取失敗：頁面照常、只少了「第幾件」，不擋核准（F45-I06）", async () => {
+    vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
+    renderAt(proposePath);
+    expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "核准暫停，接著到平台操作 →" })).toBeTruthy();
+    expect(screen.queryByText(/第 \d+ 件／共/)).toBeNull();
+    expect(screen.queryByText(/待決定清單讀不到/)).toBeNull();
   });
 
   it("清單路由的佇列讀取失敗：只有這一塊說失敗，變更內容與核准照舊；重試重讀", async () => {
@@ -1085,5 +1101,111 @@ describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
     await user.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByText(/還剩 /)).toBeTruthy();
     expect(changeApi.getMonthlyBudget).toHaveBeenCalledTimes(2);
+  });
+});
+
+// F45-I06 (ads.md §6.49): the pause page reads the ad itself (Contract P); every entry lands on a working page.
+describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
+  it("一般提議：這則廣告自己的數字＋量尺＋主打卡；不在佇列裡就沒有「第幾件」；草稿用 Contract P 建立", async () => {
+    const user = userEvent.setup();
+    const draft = changeSet({ status: "approved", items: [changeItem({ verification_state: "pending", reported_at: null })] });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
+    renderAt(`${proposePath}?from=perf`);
+    expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
+    const card = document.querySelector("[data-state=active]") as HTMLElement;
+    expect(seen(card)).toContain("花費NT$ 1,420");
+    expect(seen(card)).toContain("成交0 筆");
+    expect(seen(card)).toContain("每筆成本—");
+    expect(within(card).getByText("沒賣出", { selector: "[data-slot=chip]" }).getAttribute("data-grade")).toBe("wasted");
+    expect(seen(card)).toContain("花到 NT$ 1,350 還一筆都沒賣，就算「沒賣出」（上限 × 3）");
+    expect(screen.getByText("這則廣告自己的數字・08/25～09/21・9 天")).toBeTruthy();
+    expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
+    expect(screen.getByText("這則主打什麼？")).toBeTruthy();
+    expect(screen.queryByText(/第 \d+ 件／共/)).toBeNull();
+    expect(triageApi.getPauseView).toHaveBeenCalledWith("brd_1", "cmp_1", "aex_1", expect.anything());
+    expect(screen.getByRole("link", { name: "← 成效" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=perf");
+    expect(screen.getByRole("link", { name: "✕ 先不要，回投放中心" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /核准暫停，接著到平台操作/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
+    expect(body.title).toBe("暫停「1150706 健身情境單圖」");
+    expect(body.items).toEqual([{ kind: "pause", target_id: "aex_1", after: { status: "PAUSED" }, reason: "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）" }]);
+  });
+
+  it("有成交的廣告：每筆成本對照上限；這則在佇列裡時多「第幾件」", async () => {
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ triage: triage({
+      grade: "over", grade_label: "太貴",
+      current: { spend: 3380, result_count: 5, cost_per_result: 676, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    }) }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ id: "int_0", triage: triage({ entity_id: "aex_0" }) }), queueItem()]));
+    renderAt(proposePath);
+    expect(await screen.findByText("第 2 件／共 2 件")).toBeTruthy();
+    const card = document.querySelector("[data-state=active]") as HTMLElement;
+    expect(seen(card)).toContain("成交5 筆");
+    expect(seen(card)).toContain("每筆成本NT$ 676");
+    expect(seen(card)).toContain("每筆 NT$ 676");
+    expect(seen(card)).toContain("上限 NT$ 450");
+    expect(within(card).getByText("太貴")).toBeTruthy();
+  });
+
+  it("已經停了：「這則已經停了」、已暫停・日期、只有一顆回上一頁（覆盤）；不問主打、不能核准", async () => {
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ state: "closed", closed_at: "2026-10-01T03:12:00+00:00" }));
+    renderAt(`${proposePath}?from=review&ref=arv_1`);
+    expect(await screen.findByRole("heading", { name: "這則已經停了" })).toBeTruthy();
+    expect(screen.getByText("平台上這則廣告已經是關閉狀態，不用再暫停")).toBeTruthy();
+    expect(screen.getByText("已暫停・10/01在平台上關掉")).toBeTruthy();
+    expect(screen.queryByText("✓ 不會新增花費")).toBeNull();
+    expect(screen.queryByText("這則主打什麼？")).toBeNull();
+    expect(screen.queryByRole("button", { name: /核准/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "拒絕／暫緩" })).toBeNull();
+    const links = within(document.querySelector("[data-slot=action-bar]") as HTMLElement).getAllByRole("link");
+    expect(links.map((l) => [l.textContent, l.getAttribute("href")]))
+      .toEqual([["← 回上一頁（覆盤）", "/brands/brd_1/ads/campaigns/cmp_1/reviews/arv_1/prepare"]]);
+    expect(anglesApi.getAngles).not.toHaveBeenCalled();
+  });
+
+  it("已經停了但不知道何時關的：日期省略；從核對結果進來回那份清單的核對結果", async () => {
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ state: "closed", closed_at: null }));
+    renderAt(`${proposePath}?from=verify&ref=acs_9`);
+    expect(await screen.findByText("已暫停・在平台上關掉")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← 回上一頁（核對結果）" }).getAttribute("href"))
+      .toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_9/verify");
+  });
+
+  it("找不到（平台上已刪除）：說為什麼、最後一次讀到的日期、回投放中心", async () => {
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ state: "gone", name: "睡前一顆・直式影片", triage: null }));
+    renderAt(`${proposePath}?from=review&ref=arv_1`);
+    expect(await screen.findByRole("heading", { name: "找不到這則廣告" })).toBeTruthy();
+    expect(screen.getByText("「睡前一顆・直式影片」在平台上已經刪除，系統讀不到它，沒有東西可以暫停。（最後一次讀到是 10/01）")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "回投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.queryByRole("button", { name: /核准/ })).toBeNull();
+    expect(anglesApi.getAngles).not.toHaveBeenCalled();
+  });
+
+  it("找不到、沒有名稱也沒讀過：「這則廣告」，不印日期", async () => {
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ state: "gone", name: null, triage: null, last_read_at: null }));
+    renderAt(proposePath);
+    expect(await screen.findByText("這則廣告在平台上已經刪除，系統讀不到它，沒有東西可以暫停。")).toBeTruthy();
+  });
+
+  it("返回鍵依 from：沒有或不認得的 from、缺 ref 都回投放中心（只剩出口）", async () => {
+    for (const query of ["", "?from=nope", "?from=review"]) {
+      const view = renderAt(`${proposePath}${query}`);
+      expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
+      expect(screen.queryByRole("link", { name: /^← / })).toBeNull();
+      expect(screen.getByRole("link", { name: "✕ 先不要，回投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+      view.unmount();
+    }
+    renderAt(`${proposePath}?from=verify&ref=acs_9`);
+    expect((await screen.findByRole("link", { name: "← 核對結果" })).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_9/verify");
+  });
+
+  it("加預算的 propose 路由不讀 Contract P", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
+    renderAt(proposeBudgetPath);
+    expect(await screen.findByText("提議：加預算")).toBeTruthy();
+    expect(triageApi.getPauseView).not.toHaveBeenCalled();
   });
 });

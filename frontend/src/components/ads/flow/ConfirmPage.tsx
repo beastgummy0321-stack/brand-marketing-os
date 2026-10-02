@@ -30,7 +30,8 @@ import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
 import { AdoptLatestButton } from "./CleanupRebuild";
 import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
-import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseLearnCard } from "./confirmParts";
+import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
+import { closedNote, monthDay, pauseBack, usePauseView, windowText } from "./usePauseView";
 import {
   buildBudgetDraftItem,
   buildPauseDraftItem,
@@ -114,6 +115,12 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     return () => { cancelled = true; };
   }, [brandId, campaignId, setId, reloadKey]);
   const queueFailed = queueRead.status === "error";
+  // F45-I06 (ads.md §6.49): the pause propose route reads the ad itself (Contract P); the queue only adds the
+  // position, and its failure drops the position, never the page. Budget／cleanup proposals still read the queue.
+  const pauseMode = Boolean(entityId) && !setId && proposeKind === "pause";
+  const pauseRead = usePauseView(brandId, campaignId, pauseMode ? entityId ?? null : null);
+  const pauseView = pauseMode ? pauseRead.data : null;
+  const back = pauseBack(brandId, campaignId, searchParams.get("from"), searchParams.get("ref"));
 
   const triageItem: QueueItem | null = useMemo(() => {
     if (!queue) return null;
@@ -166,7 +173,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // `entityId`（propose 網址）或既有草稿的 `item.target_id` 都是同一則廣告的 id；`!closed` 只是
   // 不在已經拒絕／暫緩、不會再送出的清單上浪費呼叫（核准之後這頁本來就會被 `stepFromChangeSet`
   // 導去 handoff／verify，不會停留在這裡）。
-  const pauseEntityId = kind === "pause" ? (entityId ?? item?.target_id ?? triageItem?.triage.entity_id ?? null) : null;
+  const pauseEntityId = kind !== "pause" || (pauseMode && pauseView?.state !== "active") ? null
+    : (entityId ?? item?.target_id ?? triageItem?.triage.entity_id ?? null);
   const [angleChoice, setAngleChoice] = useState("");
   const [angleCustomOpen, setAngleCustomOpen] = useState(false);
   // `item` narrowed to `item?.id`：整個 `item` 物件每次 `getChangeControl` 重新讀取都是新的參照，只有身分（id）
@@ -233,7 +241,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   async function ensureWorkingSet(intent: "approve" | "decide" = "approve"): Promise<ChangeSet> {
     if (changeSet) return changeSet;
     const cleanupPick = proposeKind === "cleanup" && intent === "approve" ? pick.declined : [];
-    const existingId = triageItem?.proposal?.change_set_id;
+    const existingId = pauseMode ? pauseView?.change_set_id : triageItem?.proposal?.change_set_id;
     if (existingId) {
       const data = await getChangeControl(brandId, campaignId);
       const found = data.change_sets.find((s) => s.id === existingId);
@@ -258,14 +266,15 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
       return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, undefined, cleanupPick);
     }
-    if (!triageItem) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
+    // F45-I06: the draft is built from Contract P (the ad's own name and id), never from a queue row.
+    if (!pauseView) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
     // this first write — `undefined` reason keeps `buildPauseDraftItem`'s own default.
     return createChangeSet(brandId, campaignId, {
       operation_id: operationId,
-      title: pauseTitle(triageItem.triage.name),
+      title: pauseTitle(pauseView.name ?? pauseView.triage?.name ?? null),
       month: currentBudgetMonth(timezone),
-      items: [buildPauseDraftItem(triageItem.triage.entity_id, undefined, angleChoice)],
+      items: [buildPauseDraftItem(pauseView.entity_id, undefined, angleChoice)],
     });
   }
 
@@ -392,11 +401,18 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     }
   }
 
-  const proposeRoute = Boolean(entityId || isCleanupPropose);
-  if (loading || draftProposalId || (queueRead.status === "loading" && !queue)) {
+  const proposeRoute = Boolean(entityId || isCleanupPropose) && !pauseMode;
+  const pauseTriage = pauseView?.triage ?? null;
+  const crumb = pauseMode
+    ? [{ label: "投放中心", href: homeHref },
+      ...(pauseTriage ? [{ label: pauseTriage.campaign_name, href: `/brands/${brandId}/ads/campaigns/${campaignId}?tab=perf` }] : []),
+      { label: "暫停" }]
+    : [{ label: "投放中心", href: homeHref }, { label: "確認" }];
+  const readLoading = pauseMode ? pauseRead.status === "loading" : queueRead.status === "loading" && !queue;
+  if (loading || draftProposalId || readLoading) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <Skeleton className="h-10 w-72" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-28 w-full max-w-[560px]" />
@@ -406,15 +422,31 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   if (loadError) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <EmptyState title="讀取失敗" description={loadError} onAction={() => setReloadKey((k) => k + 1)} actionLabel="重新讀取" />
+      </div>
+    );
+  }
+  if (pauseMode && pauseRead.status === "error") {
+    return (
+      <div className="flex flex-col gap-4">
+        <Breadcrumb items={crumb} />
+        <ReadFailed what={`這則廣告的資料讀不到（${pauseRead.error}）；還沒有任何變更被寫入`} onRetry={pauseRead.reload} />
+      </div>
+    );
+  }
+  if (pauseView?.state === "gone") {
+    return (
+      <div className="flex flex-col gap-4">
+        <Breadcrumb items={crumb} />
+        <PauseGone name={pauseView.name} lastRead={monthDay(pauseView.last_read_at, timezone)} homeHref={homeHref} />
       </div>
     );
   }
   if (proposeRoute && queueFailed) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <ReadFailed what={`這件提議的資料讀不到（${queueRead.error}）；還沒有任何變更被寫入`} onRetry={queueRead.reload} />
       </div>
     );
@@ -422,7 +454,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   if (proposeRoute && !triageItem) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <EmptyState
           title={proposeKind === "budget" ? "找不到這個投放組的加預算提議" : isCleanupPropose ? "找不到這個活動的清理提議" : "找不到這則廣告的停損提議"}
           description="可能已經處理過，或資料剛好還沒同步到投放中心。"
@@ -436,7 +468,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   if (setId && !changeSet) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <EmptyState
           title="找不到這份變更清單"
           description="網址可能過期，或這份清單已經被另一份取代。"
@@ -451,7 +483,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   if (blocked && changeSet) {
     return (
       <div className="flex flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+        <Breadcrumb items={crumb} />
         <EmptyState
           title="這份清單有多項變更"
           description="請到活動的「變更與核對」查看完整內容並逐項處理。"
@@ -492,7 +524,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     : budgetRead.data?.amount === null ? `要先設 ${budgetMonthNumber} 月月預算`
     : null;
 
-  const title = kind === "copy" ? "確認變更"
+  // F45-I06: Contract P says the ad is already closed on the platform — nothing to approve, one way back.
+  const adClosed = pauseView?.state === "closed" && !changeSet;
+  const headTriage = pauseMode ? pauseTriage : triageItem?.triage ?? null;
+  const title = adClosed ? "這則已經停了"
+    : kind === "copy" ? "確認變更"
     : kind === "budget" ? "提議：加預算"
     : kind === "new_ad" ? "確認新廣告提議"
     : kind === "cleanup" ? "確認清理"
@@ -521,37 +557,39 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
-      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "確認" }]} />
+      <Breadcrumb items={crumb} />
       <div className={kind === "cleanup" || kind === "ab" ? "flex max-w-[1260px] flex-col gap-4" : "flex flex-col gap-4"}>
         <FlowHeader
           steps={kind === "cleanup" ? cleanupSteps(cleanupBackHref ?? undefined) : kind === "ab" ? abSteps() : STEPS}
           current={kind === "cleanup" ? 1 : 0}
           title={title}
-          purpose={STEP_PURPOSE}
+          purpose={adClosed ? "平台上這則廣告已經是關閉狀態，不用再暫停" : STEP_PURPOSE}
           aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : undefined}
           context={kind === "ab" ? (
             abContext.campaign && <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} />
-          ) : triageItem ? (
+          ) : headTriage ? (
             <>
               {kind === "cleanup" ? (
-                <CampaignChip objective={triageItem.triage.campaign_objective ?? "other"} name={triageItem.triage.campaign_name} />
-              ) : <Badge variant="outline" className="max-w-[14rem] shrink" title={triageItem.triage.campaign_name}>
-                <span className="block w-full min-w-0 truncate">{triageItem.triage.campaign_name}</span>
+                <CampaignChip objective={headTriage.campaign_objective ?? "other"} name={headTriage.campaign_name} />
+              ) : <Badge variant="outline" className="max-w-[14rem] shrink" title={headTriage.campaign_name}>
+                <span className="block w-full min-w-0 truncate">{headTriage.campaign_name}</span>
               </Badge>}
               {position && <span>第 {position.pos} 件／共 {position.total} 件</span>}
             </>
           ) : undefined}
         />
 
-        {queueFailed && (
+        {queueFailed && !pauseMode && (
           <ReadFailed what="待決定清單讀不到：這件的即時數字與「第幾件」暫時看不到；下面的變更內容照舊" onRetry={queueRead.reload} />
         )}
 
         {kind === "pause" && (
           <PauseEvidence
-            triage={triageItem?.triage ?? null}
+            triage={headTriage}
             fallbackName={item?.target.name ?? "（未命名廣告）"}
             fallbackReason={item?.reason ?? ""}
+            closed={adClosed && pauseView ? closedNote(pauseView, timezone) : null}
+            windowLine={headTriage ? windowText(headTriage.window) : null}
           />
         )}
         {kind === "copy" && item && <CopyEvidence item={item} />}
@@ -587,7 +625,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
 
         {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
             暫緩), the angle chosen (or not) is already fixed and nothing more will be recorded. */}
-        {kind === "pause" && !closed && (
+        {kind === "pause" && !closed && !adClosed && (
           <PauseLearnCard
             status={angleData?.status ?? (angleRead.status === "error" ? "failed" : "pending")}
             candidates={angleData?.candidates ?? []}
@@ -605,8 +643,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       </div>
 
       <div className="flex-1" />
-      <ActionBar
-        back={{
+      {adClosed ? (
+        <ActionBar><Button asChild><Link to={back.to}>← 回上一頁（{back.label}）</Link></Button></ActionBar>
+      ) : <ActionBar
+        back={pauseMode && !closed ? back : {
           label: editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : abBackHref ? "成效" : "投放中心",
           to: editCopyHref ?? cleanupBackHref ?? abBackHref ?? homeHref,
         }}
@@ -626,7 +666,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         ) : nextAction ? (
           <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
         ) : null}
-      </ActionBar>
+      </ActionBar>}
 
       {sheetOpen && (
         <DecisionSheet

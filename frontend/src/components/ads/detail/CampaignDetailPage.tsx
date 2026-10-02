@@ -13,6 +13,7 @@ import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import {
   ActionBar, Chip, GradeRules, ReadFailed, TargetRuler, Term, formatAmount, type RulerAd, type RulerCap,
 } from "../patterns";
+import { proposePausePath } from "../flow/changeFlow";
 import { AbBlock } from "./AbBlock";
 import { AdRowMenu, useReplaceRequests } from "./AdRowMenu";
 import {
@@ -337,6 +338,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
               requestOpen: Boolean(requests.requestOf(item.entity_id)),
               error: requests.errorOf(item.entity_id),
             })}
+            pauseHref={(item) => proposePausePath(brandId, campaignId, item.entity_id, "perf")}
             openGroups={openGroups}
             onToggle={(key, open) => setOpenGroups((prev) => {
               const next = new Set(prev);

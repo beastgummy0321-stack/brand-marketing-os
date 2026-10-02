@@ -1,14 +1,14 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { formatCount } from "@/lib/format";
+import { formatCount, formatCurrency } from "@/lib/format";
 import type { ChangeItem, MonthlyBudget, OngoingOwner } from "@/lib/adsChangeApi";
 import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
 import type { ApiRead } from "@/lib/useApiRead";
-import { Chip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
+import { Chip, GradeChip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
 
@@ -16,10 +16,54 @@ import { formatAmount, formatTargetAmount } from "./changeFlow";
  * 800-line cap (`architectureBoundaries.test.ts`). The cards are page-private except `BudgetFitCard`, which the
  * first-launch list (`publish/PublishList.tsx`, F41-I05) reuses so the month-budget card exists once. */
 
-/** 暫停提議的證據卡：有 triage 就是完整量尺版；triage 已經不在佇列裡（entered by :setId 且
- * 廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。 */
-export function PauseEvidence({ triage, fallbackName, fallbackReason }: {
+const nt = (value: number | null) => formatCurrency(value === null ? null : Math.round(value));
+
+/** The stop-loss meter (prototype F45 `evidence()`): with sales, the cost per sale against the cap; without, the
+ * spend against the 「上限 × 3」 line. No cap → captions only (the kit `Meter` draws no guessed bar). */
+function PauseMeter({ triage }: { triage: TriageItem }) {
+  const cap = triage.target.value;
+  const count = triage.current.result_count;
+  const cost = triage.current.cost_per_result;
+  if (count !== null && count > 0) {
+    const max = cap === null || cost === null ? null : Math.max(cost, cap * 1.5) * 1.1;
+    return (
+      <Meter
+        value={cost} max={max} marker={cap} tone="danger"
+        left={<>每筆 <b className="text-foreground">{nt(cost)}</b></>}
+        right={cap === null ? <><Term k="cap">上限</Term>還沒設定</> : <><Term k="cap">上限</Term> {nt(cap)}</>}
+      />
+    );
+  }
+  const line = cap === null ? null : cap * 3;
+  return (
+    <Meter
+      value={triage.current.spend} max={line === null ? null : line * 1.5} marker={line} tone="danger"
+      left={<>已花 <b className="text-foreground">{nt(triage.current.spend)}</b>・{count === null ? "成交累積中" : "還沒有成交"}</>}
+      right={line === null
+        ? <><Term k="cap">上限</Term>還沒設定</>
+        : <>花到 {nt(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」（上限 × 3）</>}
+    />
+  );
+}
+
+function Stat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-[10px] bg-background px-3 py-2.5">
+      <small className="block text-xs text-muted-foreground">{label}</small>
+      <b className="numeric mt-0.5 block text-xl font-semibold tracking-tight">{children}</b>
+    </div>
+  );
+}
+
+/** 暫停提議的證據卡（F45-I06，prototype F45 `evidence()`）：這則廣告自己的花費／成交／每筆成本／評級、量尺與
+ * 「這則廣告自己的數字・〈window〉」。`closed`（已經停了）把右上的「✓ 不會新增花費」換成「已暫停・…」並淡化縮圖。
+ * triage 讀不到（:setId 進來、廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。 */
+export function PauseEvidence({ triage, fallbackName, fallbackReason, closed = null, windowLine = null }: {
   triage: TriageItem | null; fallbackName: string; fallbackReason: string;
+  /** The 已暫停 chip text when the ad is already closed; `null` = still running. */
+  closed?: string | null;
+  /** 「〈MM/DD〉～〈MM/DD〉・N 天」 — the ad's own window. */
+  windowLine?: string | null;
 }) {
   if (!triage) {
     return (
@@ -35,35 +79,41 @@ export function PauseEvidence({ triage, fallbackName, fallbackReason }: {
       </div>
     );
   }
-  const line = triage.target.value === null ? null : triage.target.value * 3;
-  const max = line === null ? null : line * 1.5;
-  const countText = triage.current.result_count === null
-    ? "累積中"
-    : `${formatCount(triage.current.result_count)} 筆${triage.current.result_label}`;
+  const m = triage.current;
+  const purchase = (m.result_kind ?? triage.target.result_kind) === "purchase";
+  const countLabel = purchase ? "成交" : triage.target.result_label;
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center gap-4">
-        <Tile url={triage.thumbnail_url} />
+    <div className="rounded-xl border border-border bg-card px-[22px] py-5" data-state={closed ? "closed" : "active"}>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className={closed ? "opacity-70 grayscale-[.6]" : undefined}><Tile url={triage.thumbnail_url} /></div>
         <div className="min-w-0 flex-1">
           <KindMark kind="stop">停損</KindMark>
-          <p className="mt-1.5 truncate text-[15px] font-semibold" title={triage.name ?? "（未命名廣告）"}>
-            {triage.name ?? "（未命名廣告）"}
-          </p>
+          <p className="mt-1.5 text-[15px] font-semibold [overflow-wrap:anywhere]">{triage.name ?? "（未命名廣告）"}</p>
         </div>
-        <Chip tone="ok">✓ 不會新增花費</Chip>
+        {closed ? <Chip>{closed}</Chip> : <Chip tone="ok">✓ 不會新增花費</Chip>}
       </div>
-      <div className="mt-4 max-w-[560px]">
-        <Meter
-          value={triage.current.spend}
-          max={max}
-          marker={line}
-          tone="danger"
-          left={<>已花 <b className="text-foreground">{formatAmount(triage.current.spend)}</b>・{countText}・{triage.window.days} 天</>}
-          right={line === null
-            ? <><Term k="cap">上限</Term>還沒設定</>
-            : <>花到 {formatTargetAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」（上限 × 3）</>}
-        />
+      <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <Stat label="花費">{nt(m.spend)}</Stat>
+        <Stat label={countLabel}>{m.result_count === null ? "累積中" : `${formatCount(m.result_count)} 筆`}</Stat>
+        <Stat label="每筆成本">{m.result_count ? nt(m.cost_per_result) : "—"}</Stat>
+        <Stat label="評級"><GradeChip grade={triage.grade} label={triage.grade_label} className="px-3 py-[3px] align-middle text-[13px]" /></Stat>
       </div>
+      <div className="mt-3.5 max-w-[560px]"><PauseMeter triage={triage} /></div>
+      {windowLine && <p className="mt-3 text-xs text-muted-foreground">這則廣告自己的數字・{windowLine}</p>}
+    </div>
+  );
+}
+
+/** Contract P `gone` (prototype F45 `pausePage()` not found): why there is nothing to pause, and one exit. */
+export function PauseGone({ name, lastRead, homeHref }: { name: string | null; lastRead: string | null; homeHref: string }) {
+  return (
+    <div data-state="not_found" className="surface flex flex-col items-center gap-2.5 px-6 py-12 text-center">
+      <div aria-hidden="true" className="grid size-[52px] place-items-center rounded-[14px] bg-muted text-[22px] text-muted-foreground">?</div>
+      <h2 className="text-[15px] font-semibold">找不到這則廣告</h2>
+      <p className="max-w-[420px] text-[12.5px] text-muted-foreground">
+        {name ? `「${name}」` : "這則廣告"}在平台上已經刪除，系統讀不到它，沒有東西可以暫停。{lastRead ? `（最後一次讀到是 ${lastRead}）` : ""}
+      </p>
+      <Button asChild><Link to={homeHref}>回投放中心</Link></Button>
     </div>
   );
 }

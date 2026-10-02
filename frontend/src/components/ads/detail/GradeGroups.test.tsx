@@ -72,7 +72,7 @@ const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "in
 
 function renderGroups(items: TriageItem[], opts: {
   cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
-  actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras;
+  actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras; pauseHref?: (item: TriageItem) => string;
 } = {}) {
   const actions = opts.actions ?? adActions("brd_1", "cmp_1", WS, items, []);
   const onToggle = vi.fn();
@@ -80,7 +80,7 @@ function renderGroups(items: TriageItem[], opts: {
     <MemoryRouter>
       <GradeGroups
         items={items} cap={opts.cap === undefined ? 450 : opts.cap} actions={actions}
-        breakEven={opts.breakEven === undefined ? 520 : opts.breakEven} dataReason={opts.dataReason ?? null} extras={opts.extras}
+        breakEven={opts.breakEven === undefined ? 520 : opts.breakEven} dataReason={opts.dataReason ?? null} extras={opts.extras} pauseHref={opts.pauseHref}
         openGroups={new Set(opts.open ?? OPEN_BY_DEFAULT)} onToggle={onToggle} highlightId={null} registerRow={() => {}}
       />
     </MemoryRouter>,
@@ -218,6 +218,22 @@ describe("GradeGroups", () => {
     expect(within(row).getByText("3.46 元")).toBeTruthy();
     // No cap: the group is 未判斷 and carries no hint.
     expect(detailsOf("未判斷").querySelector("summary")!.textContent).toBe("未判斷1 則");
+  });
+
+  it("F45-I06: every active row carries 「暫停」 to the pause page (from=perf), beside its decision and before its menu", () => {
+    const queue = [queueRow({ kind_key: "worse", triage: watch })];
+    renderGroups([watch, ok, wasted], {
+      actions: adActions("brd_1", "cmp_1", WS, [watch, ok, wasted], queue), open: ["wasted", "watch", "on_target"],
+      extras: (i) => ({ menu: <button type="button">⋯ {i.entity_id}</button>, requestOpen: false, error: null }),
+      pauseHref: (i) => `${WS}/propose/pause/${i.entity_id}?from=perf`,
+    });
+    const watchRow = screen.getByTestId("ad-row-a6");
+    expect(within(watchRow).getAllByRole("link").map((l) => l.textContent)).toEqual(["去處理", "暫停"]);
+    for (const id of ["a6", "a2", "a8"]) {
+      const pause = within(screen.getByTestId(`ad-row-${id}`)).getByRole("link", { name: "暫停" });
+      expect(pause.getAttribute("href")).toBe(`${WS}/propose/pause/${id}?from=perf`);
+      expect(pause.getAttribute("data-variant")).toBe("outline");
+    }
   });
 
   it("sorts rows most expensive per result first, unknown cost last", () => {
@@ -406,6 +422,7 @@ describe("queue settle row (F29-I03)", () => {
     const worse = await screen.findByTestId("ad-row-a6");
     expect(await within(worse).findByRole("link", { name: "去處理" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a2")).queryByRole("link")).toBeNull();
+    // F45-I06: no decision of its own — the row's only link is its 「暫停」.
+    expect(within(screen.getByTestId("ad-row-a2")).getAllByRole("link").map((l) => l.textContent)).toEqual(["暫停"]);
   });
 });
