@@ -308,7 +308,7 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(withReasons({ coordinate_learnings: COORD, learnings: [VERDICT] }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       const [good, bad] = screen.getAllByRole("listitem").filter((li) => li.getAttribute("data-slot") === "coordinate-learning");
-      expect(within(good).getByText("划算・每筆 421").getAttribute("data-tone")).toBe("ok");
+      expect(within(good).getByText("划算・每筆 422").getAttribute("data-tone")).toBe("ok"); // F47-I06: 421.6 rounds (one per-sale rule), never floors
       expect(good.textContent).toContain(`「${LONG_AD}」（綜合維他命軟糖・10/03～10/09）`);
       expect(within(good).getByText("受眾：陌生、知道問題")).toBeTruthy();
       expect(within(good).getByText("痛點：太麻煩")).toBeTruthy();
@@ -317,7 +317,7 @@ describe("StrategyTab (F28-I09)", () => {
       // 策略依據 lists what the model read: the coordinate rows, then the surviving verdict line.
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
-      expect(within(panel).getByText("划算・每筆 421")).toBeTruthy();
+      expect(within(panel).getByText("划算・每筆 422")).toBeTruthy();
       expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
       expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
     });

@@ -2,7 +2,8 @@ import { getAbPairs, type AbPair, type AbSide } from "@/lib/adsAbApi";
 import type { AbChangeBlock, AbChangeSide, ChangeItem } from "@/lib/adsChangeApi";
 import { getTriage, type CampaignObjectiveFamily } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb, formatAmount } from "../patterns";
+import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 
 /** F29-I14: the A/B "pause the loser" decision (Contract F, `source: "ab"` change sets; prototype v10 `confirmBody()`
  * for kind `ab`, `stepChk()`'s learning line, hashes `d/ab/ok|plat|chk`). The set itself freezes what is approved
@@ -38,8 +39,8 @@ export function abLearningText(ab: AbChangeBlock): string {
   return `「${ab.dimension_label}」用「${ab.winner.value_label}」比「${ab.loser.value_label}」划算`;
 }
 
-// F47-I06: whole yuan rounded like every per-sale figure (never floored).
-const whole = (v: number | null) => (v === null ? null : formatAmount(Math.round(v)));
+// F47-I06: the one per-sale rule (whole yuan, rounded, never floored).
+const whole = perSaleAmount;
 
 /** 「每筆 45 vs 56」 beside the learning (the learning itself carries no numbers); null when either cost is unknown. */
 function costPair(ab: AbChangeBlock): string | null {

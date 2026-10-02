@@ -4,7 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { confirmAllLaunchFields, confirmLaunchItemField, fetchLaunchView, readbackLaunch, type LaunchItem, type LaunchView } from "@/lib/adsLaunchApi";
 import { confirmLaunchSetting, type SettingsReadbackKey } from "@/lib/adsLaunchSettingsApi";
 import { ActionBar, Chip, DiffRow, ReadbackRow, ReadbackSummary, ResultHero, TodoRow, UnreadChip, type ChipTone } from "../patterns";
-import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, timeText, type LaunchPlatform } from "./PublishFlow";
+import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, readFailedText, timeText, type LaunchPlatform } from "./PublishFlow";
 import { UnreadAllBar } from "./SettingsReadback";
 
 /** F30-I13 step 3 (prototype v10 `pubVerify()`, hash `pub/fall/verify`): one result hero over the items and the launch
@@ -21,6 +21,10 @@ const CHIP: Record<LaunchItem["state"], [ChipTone, string]> = {
   verified: ["ok", "相符"], mismatch: ["warn", "不符"], built: ["neutral", "待讀回"], unknown: ["neutral", "待確認"],
   todo: ["neutral", "還沒建"], changed: ["warn", "有變更"],
 };
+
+/** `reason_at` (F47-I06, `app/ads/launch_view.py::_reason_at`): when the item's stored reason was read. Read here
+ * because `LaunchItem` in `lib/adsLaunchApi.ts` (outside this issue's touch) does not name it yet. */
+const reasonAt = (item: LaunchItem) => (item as LaunchItem & { reason_at?: string | null }).reason_at ?? null;
 
 const UNREAD_SELECTOR = "[data-slot=item-unread][data-variant=unreadable] button, [data-slot=readback-row][data-variant=unreadable] button";
 
@@ -137,7 +141,10 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
                   </>}
                 </div>
               ))}
-              {item.reason && item.state !== "verified" && <p className="mt-1 text-xs text-warning">{item.reason}</p>}
+              {item.reason && item.state !== "verified" && (
+                // F47-I06 (R5): a stored reason says when it was read; 重新讀回 below replaces it with the new read.
+                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(reasonAt(item), item.reason)}</p>
+              )}
             </TodoRow>
           );
         })}

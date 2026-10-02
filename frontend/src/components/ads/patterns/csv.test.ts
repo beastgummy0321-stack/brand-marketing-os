@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { downloadCsv, toCsv } from "./csv";
+import { downloadCsv, perSaleAmount, toCsv } from "./csv";
+import { yuan } from "../settle/settleCsv";
 
 describe("csv（F29-I09 Contract K）", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -21,6 +22,16 @@ describe("csv（F29-I09 Contract K）", () => {
 
   it("F47-I06：數字四捨五入到小數兩位，沒有浮點尾巴，整數不補零", () => {
     expect(toCsv([["花費", 3286.2400000000002, 1440, 48.005, 0.1 + 0.2, -12.345]])).toBe("花費,3286.24,1440,48.01,0.3,-12.34\r\n");
+  });
+
+  it("F47-I06：每筆金額只有一條規則——四捨五入到整數元，不無條件捨去；未知仍是 null", () => {
+    expect(perSaleAmount(2014.6)).toBe("2,015");
+    expect(perSaleAmount(617.5)).toBe("618");
+    expect(perSaleAmount(421.4)).toBe("421");
+    expect(perSaleAmount(null)).toBeNull();
+    expect(perSaleAmount(Number.NaN)).toBeNull();
+    expect(yuan(2014.6)).toBe("2,015 元"); // the settle words use the same rule
+    expect(yuan(null)).toBe("未知");
   });
 
   it("downloadCsv 下載 <name>.csv，內容開頭是 UTF-8 BOM", async () => {

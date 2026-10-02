@@ -322,6 +322,30 @@ describe("到平台完成", () => {
 describe("讀回核對", () => {
   const read = { step: "verify" as const, read_at: "2026-09-23T02:52:00Z" };
 
+  it("F47-I06 (R5): a stored readback reason says when it was read, beside 重新讀回", async () => {
+    const at = "2026-10-28T14:59:00Z";
+    const stamp = (() => { const d = new Date(at); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; })();
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
+      h1: { state: "built", reason: "平台無法讀取此資料（代碼 2）。", reason_at: at } as Partial<LaunchItem>,
+      h2: { state: "built", reason: "上一層還沒讀回，這一項先不比對。" },
+    }, read));
+    renderAt("verify");
+    expect(await screen.findByText(`${stamp} 讀回時讀不到：平台無法讀取此資料（代碼 2）。`)).toBeTruthy();
+    expect(screen.getByText("上一層還沒讀回，這一項先不比對。")).toBeTruthy(); // no stored time: the bare reason
+    expect(screen.getByRole("button", { name: "⟳ 重新讀回" })).toBeTruthy();
+  });
+
+  it("F47-I06: the step chip names the launch with the same rule as the crumb", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, { ...read, version: 2 }));
+    const first = renderAt("verify");
+    expect(await screen.findByText("第 2 版上架・3 項")).toBeTruthy();
+    first.unmount();
+    vi.mocked(getCampaign).mockResolvedValue({ ...CAMPAIGN, context_json: { field_sources: { cap: "copied" } } } as unknown as CampaignDetail);
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, read));
+    renderAt("verify");
+    expect(await screen.findByText("這一期上架・3 項")).toBeTruthy();
+  });
+
   it("all items and settings match: the ok hero with the read time and 回活動總覽", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, read));
     renderAt("verify");

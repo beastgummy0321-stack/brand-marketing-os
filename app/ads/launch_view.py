@@ -273,6 +273,19 @@ def _reason(row, state):
     return None
 
 
+def _reason_at(row, state):
+    """F47-I06: when the stored `reason` was written -- the batch readback's own time for its
+    note, else the failed check's attempt time; `None` when there is no reason (a later successful
+    read replaces the evidence, so the time goes with it)."""
+    if _reason(row, state) is None:
+        return None
+    evidence = row["evidence_json"] or {}
+    readback = evidence.get("readback") or {}
+    if readback.get("reason"):
+        return readback.get("at")
+    return evidence.get("attempted_at")
+
+
 def _item(row, state, snapshot, nodes, hints, formats=None):
     evidence = row["evidence_json"] or {}
     node, parent_name = nodes.get((row["planned_kind"], row["planned_id"]), (None, None))
@@ -298,6 +311,7 @@ def _item(row, state, snapshot, nodes, hints, formats=None):
         if checked
         else [],
         "reason": _reason(row, state),
+        "reason_at": _reason_at(row, state),
     }
 
 

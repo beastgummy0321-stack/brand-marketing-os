@@ -4,6 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeEarnMissing, HomeOverview } from "@/lib/adsHomeApi";
 import { MonthlyBudgetPanel } from "../MonthlyBudgetPanel";
+import { perSaleAmount } from "../patterns/csv";
 import { MoneyMeter, MoneyTag, PaceChart, Term, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +19,9 @@ export function currencyPrefix(currency: string | null): string {
   return currency ? `${currency} ` : "";
 }
 
-/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」). F47-I06: rounded like every other
- * per-sale figure (performance page `PeriodStatusRow`), never floored — 2,014.6 reads 2,015 on both screens. */
+/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」), through the one per-sale rule. */
 export function wholeYuan(value: number): string {
-  return `${formatAmount(Math.round(value))} 元`;
+  return `${perSaleAmount(value) ?? "—"} 元`;
 }
 
 /** `YYYY-MM` → month number; falls back to the local month when absent. */

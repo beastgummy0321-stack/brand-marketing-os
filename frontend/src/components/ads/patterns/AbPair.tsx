@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Chip, formatAmount } from "./Chip";
 import { Thumb } from "./LoopPieces";
 import { MoneyTag } from "./MoneyTag";
+import { perSaleAmount } from "./csv";
 
 /** Kit piece for one automatic A/B pair (Feature F29 Contract F; prototype v10 `abPair()`, `.ab/.abt/.abk/.pb`).
  * Pure presentational: the pair comes from `GET …/ab-pairs` as is; the screen passes the action (關掉輸家 /
@@ -11,7 +12,8 @@ import { MoneyTag } from "./MoneyTag";
  * `data-slot="ab-pair"`, `data-variant` = the pair state. */
 
 const md = (iso: string) => iso.slice(5).replace("-", "/");
-const whole = (v: number | null) => (v === null ? null : formatAmount(Math.floor(v)));
+// F47-I06: the one per-sale rule (whole yuan, rounded, never floored).
+const whole = perSaleAmount;
 
 function Mark({ k }: { k: "A" | "B" }) {
   return <span className="inline-grid size-6 shrink-0 place-items-center rounded-md bg-foreground text-xs font-bold text-white">{k}</span>;

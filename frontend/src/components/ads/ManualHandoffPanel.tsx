@@ -12,6 +12,7 @@ import { useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
 import { SettingsReadback } from "./publish/SettingsReadback";
+import { readFailedText } from "./publish/PublishFlow";
 
 type Props = {
   brandId: string; campaignId: string; mode?: "all" | "items" | "new-ad"; refreshKey?: number;
@@ -183,7 +184,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
   // successful read replaces the evidence, so the sentence goes with it.
   const attemptedAt = (item.evidence_json as { attempted_at?: string }).attempted_at;
   const failedRead = !item.entity_exists && attemptedAt && item.evidence_json.message
-    ? `${formatSyncTime(attemptedAt)} 讀回時讀不到：${item.evidence_json.message}` : null;
+    ? readFailedText(attemptedAt, item.evidence_json.message) : null;
   const missingIdentity = ([["platform", "平台代碼"], ["source_account", "來源帳戶"], ["native_kind", "物件層級"], ["native_id", "平台物件識別"]] as const)
     .filter(([key]) => !identity[key].trim()).map(([, label]) => label);
   const checkBlocked = item.status === "stale" ? "核准後內容變了，先處理上方的變更再核對"
