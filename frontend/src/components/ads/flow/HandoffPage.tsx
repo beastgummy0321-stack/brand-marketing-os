@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import {
@@ -32,6 +33,8 @@ import {
 } from "./changeFlow";
 
 const STEP_PURPOSE = "照清單手動修改";
+/** Same size as the neighbouring `Button size="sm"` actions. */
+const COPY_BUTTON = "h-8 px-3 text-sm";
 
 /** 到平台完成頁（F22-I03，v7 原型 `handoff()`）：三步驟輕流程第二步，只走 `changes/:setId/handoff`
  * 這條正典網址——這一步一定已經有 change set（第一步核准時才建立），不像 `ConfirmPage` 還要
@@ -86,11 +89,6 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
   function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : "發生未知錯誤，請稍後再試。";
-  }
-
-  async function copyText(text: string) {
-    try { await navigator.clipboard.writeText(text); } catch { /* 沒有剪貼簿權限也不擋操作 */ }
-    setActed(true);
   }
 
   async function handleDone(item: ChangeItem) {
@@ -271,6 +269,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   // `new_ad`/`cleanup` both returned their own JSX earlier; this narrows `item` for the type
   // checker without re-deriving that guard's logic a second time.
   if (!item) return null;
+  // A refused clipboard still ticks the row (as before F47): the button then says 請手動選取複製 and
+  // the text sits right there to select by hand.
+  const markActed = () => setActed(true);
   const platformButton = <PlatformButton platformUrl={item.platform_url} target={item.target} onOpen={() => setOpened(true)} />;
 
   let rows: ReactNode;
@@ -279,8 +280,8 @@ export function HandoffPage({ brandId, campaignId, setId }: {
       <>
         <TodoRow no={1} done={acted} action={
           <>
-            <Button variant="outline" size="sm" onClick={() => void copyText(item.after.title ?? "")}>複製標題</Button>
-            <Button variant="outline" size="sm" onClick={() => void copyText(item.after.body ?? "")}>複製內文</Button>
+            <CopyIconButton label="複製標題" ariaLabel="複製標題" className={COPY_BUTTON} getText={() => item.after.title ?? ""} onResult={markActed} />
+            <CopyIconButton label="複製內文" ariaLabel="複製內文" className={COPY_BUTTON} getText={() => item.after.body ?? ""} onResult={markActed} />
           </>
         }>
           <p>複製新文案</p>
@@ -310,7 +311,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
           打開平台上的「{item.target.name ?? "未命名投放組"}」
         </TodoRow>
         <TodoRow no={2} done={acted} action={
-          <Button variant="outline" size="sm" onClick={() => void copyText(formatTargetAmount(item.after.daily_amount ?? null))}>複製金額</Button>
+          <CopyIconButton label="複製金額" ariaLabel="複製金額" className={COPY_BUTTON} getText={() => formatTargetAmount(item.after.daily_amount ?? null)} onResult={markActed} />
         }>
           每日預算改成 <span className="text-lg font-semibold">{formatTargetAmount(item.after.daily_amount ?? null)}</span>
         </TodoRow>

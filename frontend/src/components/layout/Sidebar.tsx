@@ -40,9 +40,13 @@ const BRAND_NAV = [
 export function Sidebar({
   brandId,
   collapsed,
+  overlayOpen = false,
 }: {
   brandId: string | null;
   collapsed: boolean;
+  /** Below `md` (F47-I02): the sidebar is hidden unless the top-bar control opened it as an overlay.
+   * `tokens.css` `.app-sidebar` is unlayered CSS, so the narrow-only overrides are `!` utilities. */
+  overlayOpen?: boolean;
 }) {
   const { brands, scope, identity, brandsLoading, brandsError, refreshBrands } =
     useWorkspace();
@@ -92,7 +96,15 @@ export function Sidebar({
     );
   }
   return (
-    <aside className={cn("app-sidebar", collapsed && "is-collapsed")}>
+    <aside
+      className={cn(
+        "app-sidebar",
+        collapsed && "is-collapsed",
+        overlayOpen
+          ? "max-md:fixed! max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-xl"
+          : "max-md:hidden!",
+      )}
+    >
       <Link to="/" className="mb-6 px-1" aria-label="行銷駕駛艙首頁">
         <Logo compact={collapsed} />
       </Link>

@@ -1,30 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy, TriangleAlert } from "lucide-react";
 import { cn, PRESS_FEEDBACK } from "@/lib/utils";
 
 type CopyState = "idle" | "copying" | "copied" | "failed";
 
-/** 複製按鈕三態（票 17 共用元件之一）：外殼切片（2026-08-28）從
- * `components/workbench/shared/` 搬到 `components/layout/`——素材工作檯整個刪掉了，
- * 但這顆按鈕的最後一個呼叫端（`components/auth/OrgMenu.tsx` 的邀請連結）還在。
- * `getText()` 先把要複製的
- * 內容準備好（逐則複製直接回傳已在記憶體裡的內容；整組複製要先打 API 組內容，見
- * ThemePanel 的用法），拿到內容才呼叫 `navigator.clipboard.writeText()`，await resolve
- * 才顯示 ✓，reject 顯示錯誤態＋「請手動選取複製」提示——不樂觀更新（規範鐵則）。 */
+/** How long 「已複製」 stays on the button after a successful copy (F47 Contract B). */
+export const COPIED_FEEDBACK_MS = 2000;
+
+/** 複製按鈕（票 17 共用元件之一；F47-I02 起與 `ads/patterns/CopyField` 是全站唯二呼叫
+ * `navigator.clipboard` 的地方，`lib/feedbackGuards.test.ts` 擋第三處）。
+ * `getText()` 先把要複製的內容準備好（可以是要打 API 才拿得到的內容），拿到內容才呼叫
+ * `navigator.clipboard.writeText()`；await resolve 後按鈕上的字換成看得見的「已複製」2 秒，
+ * reject 則在按鈕下方留一句「請手動選取複製」——不樂觀更新（規範鐵則），也不在沒有權限時
+ * 假裝成功。`onResult(copied)` 讓呼叫端在嘗試後做自己的事（例如把清單那一項打勾）。 */
 export function CopyIconButton({
   getText,
   label,
   ariaLabel,
   className,
+  disabled,
+  onResult,
 }: {
   getText: () => string | Promise<string>;
   /** 有文字的按鈕（例如「整組複製」）才傳；純圖示按鈕不傳，靠 ariaLabel 讓螢幕閱讀器讀得到。 */
   label?: string;
   ariaLabel: string;
   className?: string;
+  disabled?: boolean;
+  /** Called once per attempt that got its text: `true` after the clipboard accepted it. */
+  onResult?: (copied: boolean) => void;
 }) {
   const [state, setState] = useState<CopyState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (state !== "copied") return;
+    const timer = setTimeout(() => setState("idle"), COPIED_FEEDBACK_MS);
+    return () => clearTimeout(timer);
+  }, [state]);
 
   async function handleClick() {
     setState("copying");
@@ -38,11 +51,14 @@ export function CopyIconButton({
       return;
     }
     try {
+      if (!navigator.clipboard) throw new Error("no clipboard");
       await navigator.clipboard.writeText(text);
       setState("copied");
+      onResult?.(true);
     } catch {
       setState("failed");
       setErrorMessage("請手動選取複製");
+      onResult?.(false);
     }
   }
 
@@ -52,25 +68,27 @@ export function CopyIconButton({
   // text-success 在白底卡片上量出來只有 3.30:1，不到一般文字要求的 4.5:1（票 20 findings）。
   const iconColor =
     state === "copied" ? "text-success" : state === "failed" ? "text-danger" : "text-muted-foreground";
+  const text = state === "copied" ? "已複製" : label;
 
   return (
     <span className="inline-flex flex-col items-start gap-1">
       <button
         type="button"
         onClick={handleClick}
+        disabled={disabled}
         aria-label={ariaLabel}
         title={state === "failed" ? (errorMessage ?? ariaLabel) : ariaLabel}
         className={cn(
-          "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary",
+          "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50",
           PRESS_FEEDBACK,
           className,
         )}
       >
         <Icon className={cn("h-3.5 w-3.5", iconColor)} aria-hidden="true" />
-        {label && <span>{label}</span>}
+        <span aria-live="polite" className="empty:hidden">{text ?? ""}</span>
       </button>
       {state === "failed" && errorMessage && (
-        <span className="text-xs text-danger">{errorMessage}</span>
+        <span role="status" className="text-xs text-danger">{errorMessage}</span>
       )}
     </span>
   );

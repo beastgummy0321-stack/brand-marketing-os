@@ -10,7 +10,15 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 import { getAccessToken, getOrgId, setOrgId, signOut } from "@/lib/auth";
-import { _setRedirectForTest, apiFetch, errorMessageFrom, takePendingPath } from "@/lib/http";
+import {
+  _setRedirectForTest,
+  ApiResponseError,
+  apiFetch,
+  errorMessageFrom,
+  takePendingPath,
+  takeSessionExpired,
+  throwIfFailed,
+} from "@/lib/http";
 
 const mockGetAccessToken = vi.mocked(getAccessToken);
 const mockGetOrgId = vi.mocked(getOrgId);
@@ -133,6 +141,27 @@ describe("apiFetch", () => {
     expect(takePendingPath()).toBeNull(); // 撈第二次應該是空的——只消費一次
   });
 
+  /** F47-I02: `signOut()` broadcasts the auth change and `RequireSession` can navigate to `/login`
+   * before it returns. The page the user was on must already be remembered by then, and the login
+   * page must learn the session expired. */
+  it("401 remembers the page and the expired mark before signOut can move the URL to /login", async () => {
+    mockGetAccessToken.mockResolvedValue("stale-token");
+    mockGetOrgId.mockReturnValue(null);
+    mockSignOut.mockImplementation(async () => {
+      window.history.pushState({}, "", "/app/login");
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    _setRedirectForTest(vi.fn());
+    window.history.pushState({}, "", "/app/brands/b1/ads?tab=assets");
+
+    void apiFetch("/api/x");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(takePendingPath()).toBe("/brands/b1/ads?tab=assets");
+    expect(takeSessionExpired()).toBe(true);
+    expect(takeSessionExpired()).toBe(false); // read once
+  });
+
   /** 記住的路徑只代表「剛剛點開邀請連結」那個當下的意圖。同一個分頁隔了很久之後為了
    * 別的事登入，還被丟回別人的邀請頁，是把一個帳號的入口交給另一次登入。過期的、以及
    * 這版之前存的純字串（跨部署的舊分頁），一律當成沒有並清掉。 */
@@ -186,5 +215,59 @@ describe("errorMessageFrom", () => {
       expect(message).toBe("預設");
       expect(message).not.toContain("[object");
     }
+  });
+});
+
+describe("throwIfFailed (F47-I02, Contract B)", () => {
+  const FALLBACK = "儲存失敗（狀態碼 400）";
+  const json = (body: unknown, status = 400) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  async function messageOf(res: Response): Promise<ApiResponseError> {
+    try {
+      await throwIfFailed(res, FALLBACK);
+    } catch (err) {
+      return err as ApiResponseError;
+    }
+    throw new Error("expected throwIfFailed to throw");
+  }
+
+  it("does nothing for an OK response", async () => {
+    await expect(throwIfFailed(new Response("{}", { status: 200 }), FALLBACK)).resolves.toBeUndefined();
+  });
+
+  it("reads {error: string}", async () => {
+    const err = await messageOf(json({ error: "AI 月費上限請填大於 0 的數字，例如 200。" }));
+    expect(err).toBeInstanceOf(ApiResponseError);
+    expect(err.message).toBe("AI 月費上限請填大於 0 的數字，例如 200。");
+    expect(err.status).toBe(400);
+  });
+
+  it("reads {error: {message}}", async () => {
+    expect((await messageOf(json({ error: { code: "x", message: "請先登入" } }, 403))).message).toBe("請先登入");
+  });
+
+  it("reads {detail}", async () => {
+    expect((await messageOf(json({ detail: "找不到這個品牌" }, 404))).message).toBe("找不到這個品牌");
+  });
+
+  it("reads the rule-card field_errors body: the sentence, plus each field for callers that map them", async () => {
+    const err = await messageOf(
+      json({ error: "有欄位沒有填一個大於 0 的數字。", field_errors: { plan_count_min: "請填一個大於 0 的數字。" } }),
+    );
+    expect(err.message).toBe("有欄位沒有填一個大於 0 的數字。");
+    expect(err.fieldErrors).toEqual({ plan_count_min: "請填一個大於 0 的數字。" });
+    const bare = await messageOf(json({ field_errors: { a: "第一個欄位不對。", b: "第二個欄位不對。" } }));
+    expect(bare.message).toBe("第一個欄位不對。");
+  });
+
+  it("reads the library {errors} dict: every field's message joined", async () => {
+    const err = await messageOf(json({ errors: { name: "請填名稱。", url: "網址格式不對。" } }));
+    expect(err.message).toBe("請填名稱。；網址格式不對。");
+  });
+
+  it("non-JSON or unknown body falls back to the caller's sentence", async () => {
+    expect((await messageOf(new Response("<html>502</html>", { status: 502 }))).message).toBe(FALLBACK);
+    expect((await messageOf(json({ ok: false }, 500))).message).toBe(FALLBACK);
   });
 });

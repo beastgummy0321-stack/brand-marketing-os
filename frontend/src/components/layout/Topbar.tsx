@@ -99,8 +99,8 @@ export function Topbar({
     ? (LABELS[parts[2]] ?? "經營概況")
     : (LABELS[parts[0]] ?? "品牌總覽");
   return (
-    <header className="app-topbar">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="app-topbar max-md:gap-2 max-md:px-3!">
+      <div className="flex min-w-0 items-center gap-3 max-md:gap-1.5">
         <Button
           type="button"
           variant="ghost"
@@ -117,18 +117,18 @@ export function Topbar({
           {brand && (
             <>
               <Link
-                className="max-w-48 truncate text-muted-foreground"
+                className="max-w-48 truncate text-muted-foreground max-md:hidden"
                 to={`/brands/${brand.brand_id}`}
               >
                 {brand.brand_name}
               </Link>
-              <span className="text-border">/</span>
+              <span className="text-border max-md:hidden">/</span>
             </>
           )}
           <span className="truncate font-medium">{label}</span>
         </nav>
       </div>
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3 max-md:gap-1.5">
         {brandId && <SyncStatus brandId={brandId} />}
         <ActiveJobsBell />
         {/* OrgMenu (components/auth, out of this issue's touch) prints the org name uncapped —
