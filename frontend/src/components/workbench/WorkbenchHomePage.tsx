@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronRight, FileText, Image as ImageIcon, ListVideo, MoreHorizontal, Search } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -7,6 +7,13 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Badge } from "@/components/layout/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/layout/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +38,7 @@ const STATUS_PILLS: { value: PackListStatus; label: string }[] = [
   { value: "running", label: "進行中" },
   { value: "awaiting_approval", label: "待核准" },
   { value: "done", label: "已完成" },
+  { value: "closed", label: "已關閉" },
 ];
 
 export const STATUS_LABEL: Record<PackCard["status"], string> = {
@@ -103,10 +111,19 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
   }
 
   useEffect(load, [brandId, status, sort, search]);
+  const listRef = useRef<HTMLDivElement>(null);
 
   async function handleClose(packId: string) {
     await closePack(brandId, packId);
     load();
+  }
+
+  /** 「查看全部 →」 (drill-10 乙 #15): every open pack, as the list, scrolled into view. */
+  function showAll() {
+    setStatus("all");
+    setSearch("");
+    setView("list");
+    listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   const packs = state.status === "ready" ? state.packs : [];
@@ -157,7 +174,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
             key={pack.id}
             pack={pack}
             brandId={brandId}
-            onClose={() => void handleClose(pack.id)}
+            onClose={() => handleClose(pack.id)}
           />
         ))}
       </div>
@@ -190,7 +207,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{pack.source_label}</td>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <Badge className={STATUS_TONE[pack.status]}>{STATUS_LABEL[pack.status]}</Badge>
+                  <PackStatusBadge pack={pack} />
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-foreground">
                   {pack.sets_done} / {pack.sets_total}（{pack.progress_pct}%）
@@ -254,7 +271,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-        <div className="flex flex-col gap-3">
+        <div ref={listRef} className="flex scroll-mt-4 flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-semibold">任務包（{state.status === "ready" ? packs.length : 0}）</h2>
             <div className="flex items-center gap-2">
@@ -296,7 +313,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
           <div className="surface">
             <div className="surface-header">
               <h2>最近使用</h2>
-              <button type="button" onClick={() => setView("list")} className="text-xs text-primary hover:underline">
+              <button type="button" onClick={showAll} className="text-xs text-primary hover:underline">
                 查看全部 →
               </button>
             </div>
@@ -317,9 +334,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
                       {pack.source_label} ・ 更新{updatedLabel(pack.updated_at)}
                     </span>
                   </span>
-                  <Badge className={cn("shrink-0", STATUS_TONE[pack.status])}>
-                    {STATUS_LABEL[pack.status]}
-                  </Badge>
+                  <PackStatusBadge pack={pack} className="shrink-0" />
                 </button>
               ))}
             </div>
@@ -366,27 +381,37 @@ export function PackCardTile({
 }: {
   pack: PackCard;
   brandId: string;
-  onClose: () => void;
+  /** Runs after the user confirmed 「關閉任務包」 (the dialog asks once). */
+  onClose: () => Promise<unknown> | void;
 }) {
   const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
   const goto = () => navigate(`/brands/${brandId}/workbench/packs/${pack.id}`);
+  const next = pack.next_step;
+  // drill-10 乙 #16: 下一步 opens the set and the part that needs it, not the pack overview.
+  const gotoNext = () =>
+    next ? navigate(`/brands/${brandId}/workbench/packs/${pack.id}/sets/${next.set_id}?part=${next.part}`) : goto();
+  const originHref = pack.origin_href;
   return (
     <div className="surface flex flex-col gap-3 p-4">
       <div className="flex items-center justify-between">
         <Badge variant="outline">{pack.source_label}</Badge>
         <div className="flex items-center gap-1">
-          <Badge className={STATUS_TONE[pack.status]}>{STATUS_LABEL[pack.status]}</Badge>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button type="button" aria-label="更多操作" className="rounded-md p-1 hover:bg-accent">
-                <MoreHorizontal className="size-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={goto}>查看來源</DropdownMenuItem>
-              <DropdownMenuItem onSelect={onClose}>關閉任務包</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <PackStatusBadge pack={pack} />
+          {(originHref || !pack.closed) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" aria-label="更多操作" className="rounded-md p-1 hover:bg-accent">
+                  <MoreHorizontal className="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {/* drill-10 乙 #17: the source campaign; no item when the pack has no upstream screen. */}
+                {originHref && <DropdownMenuItem onSelect={() => navigate(originHref)}>查看來源</DropdownMenuItem>}
+                {!pack.closed && <DropdownMenuItem onSelect={() => setConfirming(true)}>關閉任務包</DropdownMenuItem>}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
@@ -411,7 +436,7 @@ export function PackCardTile({
       {pack.next_step && (
         <button
           type="button"
-          onClick={goto}
+          onClick={gotoNext}
           className="flex items-center justify-between gap-2 rounded-md border border-border bg-accent/40 px-3 py-2 text-left text-sm hover:bg-accent"
         >
           <span className="min-w-0">
@@ -446,6 +471,75 @@ export function PackCardTile({
           繼續 →
         </Button>
       </div>
+      <ClosePackDialog
+        name={pack.name}
+        open={confirming}
+        onCancel={() => setConfirming(false)}
+        onConfirm={async () => {
+          await onClose();
+          setConfirming(false);
+        }}
+      />
     </div>
+  );
+}
+
+/** A pack's state chip: 「已關閉」 for a closed pack, the approval gap (「已核准・還缺 N 組」, F47 Q7) for one approved
+ * while sets still miss parts, else its status. */
+export function PackStatusBadge({ pack, className }: { pack: PackCard; className?: string }) {
+  if (pack.closed) return <Badge className={cn("bg-muted text-muted-foreground", className)}>已關閉</Badge>;
+  if (pack.approved_gap) {
+    return <Badge className={cn("bg-warning/10 text-warning", className)}>{pack.approved_gap.label}</Badge>;
+  }
+  return <Badge className={cn(STATUS_TONE[pack.status], className)}>{STATUS_LABEL[pack.status]}</Badge>;
+}
+
+/** drill-10 乙 #21: 「關閉任務包」 asks once and says what happens; a failed close says why and the dialog stays. */
+export function ClosePackDialog({
+  name,
+  open,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  function cancel() {
+    setError(null);
+    onCancel();
+  }
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "沒有關閉，請稍後再試。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && !busy && cancel()}>
+      <DialogContent>
+        <DialogTitle>關閉任務包「{name}」？</DialogTitle>
+        <DialogDescription>
+          關閉後它會從任務包清單移到「已關閉」；裡面的素材組和已選定的版本都會保留，之後在「已關閉」仍打得開。
+        </DialogDescription>
+        {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={busy} onClick={cancel}>
+            取消
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => void confirm()}>
+            {busy ? "關閉中…" : "確定關閉"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

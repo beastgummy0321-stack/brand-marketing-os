@@ -2,9 +2,9 @@
  * rows (area · text · 「✦ 讀到」 with the note) and one row joining the areas not found; a scan that never ran is started once
  * and read until it is done; a failed scan shows the backend's message with 重試 and 「先跳過，自己填」, and the head
  * and bar stay; 「開始確認」 moves on. No server: the API calls are fakes (importActual + override). */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("@/lib/intakeOnboardingApi", async () => {
@@ -12,12 +12,28 @@ vi.mock("@/lib/intakeOnboardingApi", async () => {
   return { ...actual, fetchOnboardingScan: vi.fn(), startOnboardingScan: vi.fn() };
 });
 
+vi.mock("@/lib/jobsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/jobsApi")>("@/lib/jobsApi");
+  return { ...actual, fetchActiveJobs: vi.fn() };
+});
+
 import { fetchOnboardingScan, startOnboardingScan, type OnboardingScan } from "@/lib/intakeOnboardingApi";
+import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { BRAND_STEPS, brandCrumb, type StepNav } from "../OnboardingStepHead";
 import { ScanStep } from "./ScanStep";
 
 const mockFetch = vi.mocked(fetchOnboardingScan);
 const mockStart = vi.mocked(startOnboardingScan);
+const mockJobs = vi.mocked(fetchActiveJobs);
+/** `GET /api/jobs/active` with one queued scan of this org; `stalled` = the worker is stopped (F47 Contract C). */
+const jobs = (stalled: boolean): ActiveJobsSnapshot => ({
+  data: [], total: 1, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-02T02:00:00Z",
+  worker_alive: !stalled, stalled,
+});
+
+beforeEach(() => {
+  mockJobs.mockResolvedValue(jobs(false));
+});
 const nav: StepNav = { crumb: brandCrumb("Beast Gummy"), steps: BRAND_STEPS, current: 2 };
 
 /** The shape F42-I05 returns for the scripted prefill reply. */
@@ -157,6 +173,31 @@ describe("ScanStep", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("處理失敗（狀態碼 500）");
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByText("預填 5 項")).toBeTruthy();
+  });
+
+  it("a running scan with the worker stopped says so; 再檢查一次 with a live worker clears it and reads the scan again", async () => {
+    mockFetch.mockResolvedValue(scan({ status: "running" }));
+    mockJobs.mockResolvedValue(jobs(true));
+    renderStep();
+
+    const notice = await screen.findByText(/背景程式停了/);
+    expect(notice.closest("[data-slot=worker-stopped]")?.textContent).toContain(
+      "背景程式停了：這件工作還排著，已填的資料沒丟。重新啟動行銷系統後會自動接著做。",
+    );
+    expect((screen.getByRole("status")).textContent).toBe("正在讀網站…");
+
+    mockJobs.mockResolvedValue(jobs(false));
+    const reads = mockFetch.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "再檢查一次" }));
+    await waitFor(() => expect(screen.queryByText(/背景程式停了/)).toBeNull());
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it("does not read the worker state once the scan is done", async () => {
+    mockFetch.mockResolvedValue(DONE);
+    renderStep();
+    await screen.findByText("預填 5 項");
+    expect(mockJobs).not.toHaveBeenCalled();
   });
 
   it("no not-found row when the scan found every area", async () => {

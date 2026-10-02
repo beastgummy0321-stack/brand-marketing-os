@@ -89,6 +89,10 @@ def jobs_active(request: Request):
     actor = require_actor(request)
     conn = web.conn
     snapshot = background.queue_snapshot(since=_since(conn, actor.org_id))
+    # F47 Contract C: stalled = no live worker while this org has queued/running work (any of
+    # its jobs, listed below or not — a job without a brand still waits on the same worker).
+    worker_alive = bool(snapshot["worker_alive"])
+    org_waiting = any(job["org_id"] == actor.org_id for job in snapshot["jobs"])
     brands: dict[str, dict | None] = {}
     jobs = []
     for job in snapshot["jobs"]:
@@ -121,5 +125,7 @@ def jobs_active(request: Request):
         "other_count": snapshot["total"] - len(jobs),
         "done_today": snapshot["done_today"].get(actor.org_id, 0),
         "failed_today": snapshot["failed_today"].get(actor.org_id, 0),
+        "worker_alive": worker_alive,
+        "stalled": not worker_alive and org_waiting,
         "generated_at": datetime.now(UTC).isoformat(),
     }

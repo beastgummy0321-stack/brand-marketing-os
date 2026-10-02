@@ -37,6 +37,12 @@ export interface ActiveJobsSnapshot {
   done_today: number;
   failed_today: number;
   generated_at: string;
+  /** F47 Contract C: some worker heartbeat within 60 s (memory-queue mode: always true).
+   * Optional in the type only so fixtures written before F47 still compile; the server always sends it. */
+  worker_alive?: boolean;
+  /** F47 Contract C: no live worker while this org has queued/running work. Only `true` means
+   * stalled — a missing field or a failed read never reads as stopped. */
+  stalled?: boolean;
 }
 
 /** Read after 「正在」 too (the top-bar pill says 「正在同步成效」), so every label is a verb phrase. */

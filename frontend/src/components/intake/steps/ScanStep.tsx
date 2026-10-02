@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import { fetchOnboardingScan, startOnboardingScan, type OnboardingScan } from "@/lib/intakeOnboardingApi";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
@@ -21,7 +23,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "處�
  * what the website/photo scan found, as the rows steps 3/4 will pre-fill, and what it did not find — never a
  * decision. On entry the scan is read (`GET …/onboarding/scan`) and started once if it never ran (`POST`); a
  * running scan is read every second. A failed read shows the backend's message with 重試 and lets the user skip
- * to step 3; the head and the bar stay either way. */
+ * to step 3; the head and the bar stay either way. F47 Contract C: while the scan runs and the background worker is
+ * stopped, the worker-stopped notice sits under the spinner row; 再檢查一次 re-reads the worker and the scan. */
 export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
   const [view, setView] = useState<View>({ kind: "busy" });
   const alive = useRef(true);
@@ -73,6 +76,11 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
+  const worker = useWorkerHealth(view.kind === "running", POLL_MS);
+  async function recheck() {
+    await Promise.all([worker.recheck(), fetchOnboardingScan(brandId).then(apply, fail)]);
+  }
+
   const done = view.kind === "done" ? view.scan : null;
   const title = done ? "我讀完你的網站了" : "AI 讀網站";
   const purpose = done ? purposeLine(done) : undefined;
@@ -91,7 +99,10 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
       ) : view.kind === "failed" ? (
         <IntakeJobRow job={{ status: "failed", error: view.message }} runningLabel="正在讀網站…" actions={[{ label: "重試", onClick: start }]} />
       ) : (
-        <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
+        <>
+          <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
+          {worker.stalled && <WorkerStoppedNotice onRecheck={recheck} />}
+        </>
       )}
 
       <OnboardingBar back={back}>

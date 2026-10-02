@@ -93,6 +93,19 @@ shell `list_jobs`／`list_locks` 指令同一個公開 API，不是繞過它自�
 回什麼狀態碼，仍然是呼叫端的事（`app/schedule/routes.py`／`app/brand_web/routes_products.py`
 ／`app/brand_web/routes_report_api.py` 各自的 409／400），這裡只負責回答問題。
 
+F47 Contract C (worker liveness): `queue_snapshot()` also answers "is any worker alive" —
+`worker_alive` is True when some `procrastinate_workers` row has `last_heartbeat` within
+`WORKER_HEARTBEAT_STALE_SECONDS` (60 s; procrastinate heartbeats about every 10 s), read with one
+query on the same queue connection; memory-queue mode reads True (jobs never run there by
+design, nothing is "stopped"). `GET /api/jobs/active` turns it into `stalled` for one org, and
+every page that waits on a job shows one notice while it is stalled. A stale row left by a
+killed worker is just old — only a fresh heartbeat counts.
+
+Commit before enqueue (F47 Contract C): a caller writes and **commits** the rows a job will read
+before it calls `enqueue()`. `enqueue()` defers on its own connection, so a worker may pick the
+job up the instant it is deferred; rows still uncommitted on the request's connection are
+invisible to it (drill 10 W4: 「找不到工單」 from `app/workbench/repository.py`).
+
 記憶體佇列模式（`BRAND_OS_JOB_QUEUE=memory`，e2e 後端專用，F06-I05）：開發用資料庫的
 `public__queue` 是共用的——使用者自己一直開著的 `python -m app.worker`（真 Codex、舊程式）
 會從那裡撿走 e2e 建出來的 job 去跑，8720 的環境變數碰不到那支獨立行程。這個模式下
@@ -331,6 +344,14 @@ SELECT j.args->>'org_id' AS org_id, e.type::text AS type, count(*) AS n
  WHERE e.type IN ('succeeded', 'failed') AND e.at >= %(since)s
  GROUP BY 1, 2
 """
+#: Contract C: a worker whose last heartbeat is older than this is not alive.
+WORKER_HEARTBEAT_STALE_SECONDS = 60
+_WORKER_ALIVE_SQL = """
+SELECT EXISTS (
+  SELECT 1 FROM procrastinate_workers
+   WHERE last_heartbeat >= now() - make_interval(secs => %(stale)s)
+) AS alive
+"""
 
 
 def _seconds(later: datetime, earlier: datetime | None) -> int | None:
@@ -340,7 +361,7 @@ def _seconds(later: datetime, earlier: datetime | None) -> int | None:
 def queue_snapshot(*, since: datetime | None = None) -> dict:
     """Read-only picture of the whole queue (every tenant — one shared worker).
 
-    Returns `{jobs, total, done_today, failed_today}`:
+    Returns `{jobs, total, done_today, failed_today, worker_alive}`:
     - `jobs`: every `todo`/`doing` job in pick order — running (`doing`) first by start time,
       then waiting jobs the way `procrastinate_fetch_job_v2` picks them (priority DESC, id ASC),
       then jobs scheduled for later by their scheduled time. Each item is
@@ -350,14 +371,19 @@ def queue_snapshot(*, since: datetime | None = None) -> dict:
       `args` are the job's own kwargs: callers must pick what they show, never pass them on.
     - `done_today`/`failed_today`: `{org_id: count}` of `succeeded`/`failed` events since
       `since` (default: 00:00 UTC today); jobs without `org_id` in args are keyed `None`.
-    Memory queue mode (e2e): an empty snapshot."""
+    - `worker_alive`: Contract C (module docstring) — some worker heartbeat within
+      `WORKER_HEARTBEAT_STALE_SECONDS`.
+    Memory queue mode (e2e): an empty snapshot with `worker_alive` True."""
     if since is None:
         since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     if config.settings().brand_os_job_queue == "memory":
-        return {"jobs": [], "total": 0, "done_today": {}, "failed_today": {}}
+        return {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
+                "worker_alive": True}
     connector = _sync_app_for_defer().connector
     rows = connector.execute_query_all(_SNAPSHOT_JOBS_SQL)
     finished = connector.execute_query_all(_SNAPSHOT_FINISHED_SQL, since=since)
+    alive_row = connector.execute_query_one(_WORKER_ALIVE_SQL, stale=WORKER_HEARTBEAT_STALE_SECONDS)
+    worker_alive = bool(alive_row and alive_row["alive"])
 
     far = datetime.max.replace(tzinfo=UTC)
     running = sorted(
@@ -392,4 +418,5 @@ def queue_snapshot(*, since: datetime | None = None) -> dict:
     for r in finished:
         counts[r["type"]][r["org_id"]] = int(r["n"])
     return {"jobs": jobs, "total": len(jobs),
-            "done_today": counts["succeeded"], "failed_today": counts["failed"]}
+            "done_today": counts["succeeded"], "failed_today": counts["failed"],
+            "worker_alive": worker_alive}

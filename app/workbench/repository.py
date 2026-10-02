@@ -27,6 +27,10 @@ _COPY_LENGTHS = frozenset({"short", "medium", "long"})
 # §5.5: one definition, three readers — `routes.py`'s `_RUN_PRODUCT_ERRORS`/`_SELECT_ERRORS`
 # (409 message) and `set_detail()`'s `lock.reason` below all read this same string.
 PACK_APPROVED_MESSAGE = "這個任務包已核准，選定已鎖定。"
+# F47 Q7: an approved pack whose set still misses a part (approved with the manual override).
+PACK_APPROVED_GAP_MESSAGE = (
+    "這個任務包已核准，但這一組還缺東西：缺的部分可以補生成、選定；已選定的維持鎖定。"
+)
 
 
 def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
@@ -91,6 +95,10 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
             pack_id, name, jsonb(required_outputs or {}),
         ),
     )
+    # F47 Contract C (W4): the brief is committed before its jobs are deferred — `enqueue()`
+    # defers on its own connection and a worker may start the job at once; an uncommitted
+    # brief is invisible to it (「找不到工單」).
+    conn.commit()
     for part in parts if enqueue_generation else []:
         if part == "image_prompt":
             # F07-I07：張數不再是使用者輸入，`jobs.py` 自己從 shape 算，這裡一律排 `None`。
@@ -104,7 +112,6 @@ def submit_brief(conn, org_id: str, brand_id: str, brief: dict, *, pack_id: str,
             lock=f"workbench:{brief_id}:{part}",
             brand_id=brand_id, brief_id=brief_id, part=part, count=count,
         )
-    conn.commit()
     return brief_id
 
 
@@ -219,10 +226,13 @@ def get_brief(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str) -> dict
 
 def mark_brief_status(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
                        status: str) -> None:
+    """F47 (W4): a round that ends `done` clears `last_error` — an old failure never outlives
+    the success that replaced it."""
     conn.execute(
-        "UPDATE workbench_brief SET status = %s, updated_at = now()"
+        "UPDATE workbench_brief SET status = %s,"
+        " last_error = CASE WHEN %s = 'done' THEN NULL ELSE last_error END, updated_at = now()"
         " WHERE org_id = %s AND brand_id = %s AND id = %s",
-        (status, org_id, brand_id, brief_id),
+        (status, status, org_id, brand_id, brief_id),
     )
     conn.commit()
 
@@ -324,9 +334,11 @@ def adopt_output(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> 
 def _output_with_brief(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict:
     """`select_version`／`deselect_version` 共用的守門讀取：output 找不到
     `ValueError("output_unknown")`；brief 已關閉 `ValueError("brief_closed")`；brief 所屬的
-    pack 已核准 `ValueError("pack_approved")`（ARCHITECTURE.md §5.5：核准後鎖住選定）。"""
+    pack 已核准 `ValueError("pack_approved")`（ARCHITECTURE.md §5.5：核准後鎖住選定）——
+    F47 Q7: except a part the approved set still misses (`_approved_part_open()`)."""
     row = conn.execute(
-        "SELECT o.*, b.closed_at AS brief_closed_at, b.pack_id AS brief_pack_id"
+        "SELECT o.*, b.closed_at AS brief_closed_at, b.pack_id AS brief_pack_id,"
+        " b.required_outputs_json AS brief_required_outputs"
         " FROM workbench_output o JOIN workbench_brief b ON b.id = o.brief_id"
         " WHERE o.org_id = %s AND o.brand_id = %s AND o.id = %s",
         (org_id, brand_id, output_id),
@@ -342,9 +354,22 @@ def _output_with_brief(conn: _AnyConn, org_id: str, brand_id: str, output_id: st
             "SELECT approved_at FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
             " AND id = %s", (org_id, brand_id, pack_id),
         ).fetchone()
-        if pack is not None and pack["approved_at"] is not None:
+        if pack is not None and pack["approved_at"] is not None and not _approved_part_open(
+            output["brief_required_outputs"] or {},
+            _versions_by_part(conn, org_id, brand_id, output["brief_id"]), output["part"],
+        ):
             raise ValueError("pack_approved")
     return output
+
+
+def _approved_part_open(required_outputs: dict, versions_by_part: dict, part: str) -> bool:
+    """F47 Q7: a pack approved with a manual override keeps `approved_at` (ads read it), but a
+    set that still misses a required part stays open for **that part only** — generate,
+    select, deselect — until it reaches its required selections; a part already selected (or
+    not required) stays locked. Callers ask this only when the pack is approved."""
+    if part not in required_outputs:
+        return False
+    return product_state(required_outputs[part], versions_by_part.get(part) or []) != "已選定"
 
 
 def select_version(conn: _AnyConn, org_id: str, brand_id: str, output_id: str) -> dict:
@@ -458,6 +483,17 @@ def resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | N
     for row in rows:
         if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
             return row.get("key")
+    return value
+
+
+def _coordinate_label(rows: list, dimension: str, value: str | None) -> str | None:
+    """The vocabulary label for a coordinate stored as key or label; `value` as written when
+    the brand's vocabulary does not hold it."""
+    if not value:
+        return None
+    for row in rows:
+        if row["dimension"] == dimension and (row.get("key") == value or row["label"] == value):
+            return row["label"]
     return value
 
 
@@ -769,7 +805,9 @@ _PART_ORDER = ("copy", "image_prompt", "video_script")
 _STATE_TO_STATUS = {
     "待處理": "pending", "進行中": "running", "待核准": "awaiting_approval", "已完成": "done",
 }
-_LIST_STATUS_VALUES = frozenset({"all", "pending", "running", "awaiting_approval", "done"})
+_LIST_STATUS_VALUES = frozenset(
+    {"all", "pending", "running", "awaiting_approval", "done", "closed"},
+)
 _LIST_SORT_VALUES = frozenset({"updated", "created", "progress"})
 _COMPLETION_ITEMS = (
     ("required_outputs_met", "完成所有素材組的必要文案與圖片"),
@@ -791,7 +829,17 @@ def _get_pack_row(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> d
     return dict(row) if row is not None else None
 
 
-def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> list:
+def _set_display_name(name: str | None, pack_name: str, index: int) -> str:
+    """F47 (drill-10 乙 #19): a set without a name (自由創作 sets have none) reads as its source,
+    the pack, with its place — 「〈pack〉・第 N 組」 — never a blank button. Always numbered, also
+    for a one-set pack, so the studio breadcrumb (pack › set) never repeats the same text."""
+    if name and name.strip():
+        return name
+    return f"{pack_name}・第 {index} 組"
+
+
+def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str,
+                    pack_name: str = "") -> list:
     """Every set of a pack with its `required_outputs`／`versions_by_part`／derived `state` —
     the one shared read `_pack_card_and_sets()`／`pack_detail()`／completion／approve all build
     on, so the set-state rule (§5.3) is computed once per call, not re-derived per screen."""
@@ -801,12 +849,14 @@ def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) ->
         (org_id, brand_id, pack_id),
     ).fetchall()
     sets = []
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         row = dict(row)
         required_outputs = row["required_outputs_json"] or {}
         versions_by_part = _versions_by_part(conn, org_id, brand_id, row["id"])
         sets.append({
-            "id": row["id"], "name": row["name"], "required_outputs": required_outputs,
+            "id": row["id"],
+            "name": _set_display_name(row["name"], pack_name, index),
+            "required_outputs": required_outputs,
             "versions_by_part": versions_by_part,
             "state": set_state(required_outputs, versions_by_part),
         })
@@ -853,14 +903,28 @@ def _pack_next_step(sets: list) -> dict | None:
     return None
 
 
+def _approved_gap(approved_at, sets: list) -> dict | None:
+    """F47 Q7: an approved pack whose sets are not all done (approved with the manual
+    override) says so — 「已核准・還缺 N 組」 and the first set still missing a part — instead of
+    a bare 「已完成」 over 0/1. `None` for an unapproved or truly finished pack."""
+    if approved_at is None:
+        return None
+    missing = [s for s in sets if s["state"] != "已完成"]
+    if not missing:
+        return None
+    return {"missing": len(missing), "set_id": missing[0]["id"],
+            "label": f"已核准・還缺 {len(missing)} 組"}
+
+
 def _pack_card_and_sets(conn: _AnyConn, org_id: str, brand_id: str, pack_row: dict) -> tuple:
-    sets = _pack_sets_full(conn, org_id, brand_id, pack_row["id"])
+    sets = _pack_sets_full(conn, org_id, brand_id, pack_row["id"], pack_row["name"])
     set_states = [s["state"] for s in sets]
     state = pack_state(pack_row["approved_at"], set_states)
     sets_total = len(sets)
     sets_done = sum(1 for s in set_states if s == "已完成")
     pct = round(sets_done / sets_total * 100) if sets_total else 0
     summary = pack_row["summary_json"] or {}
+    _origin_label, origin_href = _origin_fields(pack_row["context_json"])
     card = {
         "id": pack_row["id"], "name": pack_row["name"],
         "subtitle": summary.get("情境") or "",
@@ -870,6 +934,11 @@ def _pack_card_and_sets(conn: _AnyConn, org_id: str, brand_id: str, pack_row: di
         "sets_total": sets_total, "sets_done": sets_done, "progress_pct": pct,
         "next_step": _pack_next_step(sets), "counts": _pack_counts(sets),
         "updated_at": pack_row["updated_at"],
+        # F47 (drill-10 乙 #17／#21): 查看來源 opens the upstream screen (absent without one);
+        # a closed pack is still listed under 「已關閉」 and says so.
+        "origin_href": origin_href,
+        "closed": pack_row["closed_at"] is not None,
+        "approved_gap": _approved_gap(pack_row["approved_at"], sets),
     }
     return card, sets
 
@@ -886,16 +955,18 @@ def list_packs(conn: _AnyConn, org_id: str, brand_id: str, *, status: str = "all
         raise ValueError("sort_unknown")
     # planner review, 2026-09-12：關閉的任務包離開入口（`GET /packs` 不列），
     # `GET /packs/{p}` 仍然開得到（`pack_detail()` 不看 `closed_at`）——既有連結不 404。
+    # F47 (drill-10 乙 #21): `status=closed` lists exactly the closed ones, so they stay reachable.
+    closed = status == "closed"
     rows = conn.execute(
         "SELECT * FROM workbench_pack WHERE org_id = %s AND brand_id = %s"
-        " AND closed_at IS NULL",
-        (org_id, brand_id),
+        " AND (closed_at IS NOT NULL) = %s",
+        (org_id, brand_id, closed),
     ).fetchall()
     entries = []
     for row in rows:
         row = dict(row)
         card, sets = _pack_card_and_sets(conn, org_id, brand_id, row)
-        if status != "all" and card["status"] != status:
+        if status not in ("all", "closed") and card["status"] != status:
             continue
         if q:
             q_lower = q.lower()
@@ -1156,11 +1227,16 @@ def run_product(conn: _AnyConn, org_id: str, brand_id: str, set_id: str, part: s
                  count: int | None = None) -> dict:
     """`POST /sets/{s}/products/{part}/run`. Reuses `run_part()`'s errors and adds
     `pack_approved`（409，「這個任務包已核准，選定已鎖定。」）on top — §5.5 locks selections
-    once a pack is approved."""
+    once a pack is approved — F47 Q7: except a part the approved set still misses."""
     brief = get_brief(conn, org_id, brand_id, set_id)
     if brief is not None and brief["pack_id"] is not None:
         pack_row = _get_pack_row(conn, org_id, brand_id, brief["pack_id"])
-        if pack_row is not None and pack_row["approved_at"] is not None:
+        if pack_row is not None and pack_row["approved_at"] is not None and not (
+            _approved_part_open(
+                brief["required_outputs_json"] or {},
+                _versions_by_part(conn, org_id, brand_id, set_id), part,
+            )
+        ):
             raise ValueError("pack_approved")
     run_part(conn, org_id, brand_id, set_id, part, count=count)
     detail = set_detail(conn, org_id, brand_id, set_id)
@@ -1464,16 +1540,25 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     # F44 Contract B: the versions are judged against the offer this set was planned with.
     offer_key = resolve_coordinate(vocabulary, "offer", coordinates.get("offer"))
     siblings = []
-    for r in sibling_rows:
+    own_name = brief["name"]
+    for index, r in enumerate(sibling_rows, start=1):
         r = dict(r)
         sib_versions = _versions_by_part(conn, org_id, brand_id, r["id"])
         angle = (r["coordinates_snapshot_json"] or {}).get("angle")
+        name = _set_display_name(r["name"], pack_row["name"], index)
+        if r["id"] == set_id:
+            own_name = name
         siblings.append({
-            "id": r["id"], "name": r["name"],
+            "id": r["id"], "name": name,
             "angle": angle_labels.get(angle, angle) if isinstance(angle, str) else angle,
             "status": set_state(r["required_outputs_json"] or {}, sib_versions),
         })
     required_parts = [part for part in _PART_ORDER if part in required_outputs]
+    approved = pack_row["approved_at"] is not None
+    open_parts = [
+        part for part in required_parts
+        if approved and _approved_part_open(required_outputs, versions_by_part, part)
+    ]
     products = {}
     image_prompt_bodies: list = []
     for part in required_parts:
@@ -1498,23 +1583,38 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
             "generation_settings": _generation_settings(part, brief["request_json"]),
             "versions": versions,
             "copy_all_text": copy_all_text,
+            # F47 Q7: this part's own lock — an approved pack locks every part except one the
+            # set still misses (`_approved_part_open()`).
+            "locked": approved and part not in open_parts,
         }
+    format_value = coordinates.get("format")
     chips = {
         "platform": pack_row["context_json"].get("platform")
         if pack_row["context_json"] else None,
         "style": None,
-        "size": coordinates.get("format"),
+        # F47 (drill-10 乙 #20): the brand's own format label (「單圖」), never the key; a value
+        # outside the vocabulary (a free-job size such as 1:1) shows as written.
+        "size": _coordinate_label(vocabulary, "format", format_value),
     }
     origin_label, origin_href = _origin_fields(pack_row["context_json"])
+    if not approved:
+        lock_reason = None
+    elif open_parts:
+        lock_reason = PACK_APPROVED_GAP_MESSAGE
+    else:
+        lock_reason = PACK_APPROVED_MESSAGE
     return {
         "id": brief["id"], "pack_id": pack_row["id"], "pack_name": pack_row["name"],
-        "name": brief["name"], "status": set_state(required_outputs, versions_by_part),
+        "name": own_name, "status": set_state(required_outputs, versions_by_part),
         "generation": {"status": brief["status"], "error": brief.get("last_error")},
         "source_kind": pack_row["source_kind"],
         "origin_label": origin_label, "origin_href": origin_href,
+        # `locked`: the whole set (完成此素材組 too); `reason` is shown whenever the pack is
+        # approved — with open parts it says the missing parts can still be finished.
         "lock": {
-            "locked": pack_row["approved_at"] is not None,
-            "reason": PACK_APPROVED_MESSAGE if pack_row["approved_at"] is not None else None,
+            "locked": approved and not open_parts,
+            "reason": lock_reason,
+            "open_parts": open_parts,
         },
         "chips": chips,
         "generation_settings": _generation_settings_rows(

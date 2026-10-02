@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import type { ProductOnboardingStatus, ProductWhat } from "@/lib/intakeProductApi";
 import { fetchProductOnboarding, fetchProductWhat, startProductScan } from "@/lib/intakeProductApi";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import type { BarBack, CrumbItem, StepNav } from "../OnboardingStepHead";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
 import { productOnboardingPath } from "./ProductCard";
@@ -39,7 +41,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "讀�
  * name + 商品頁網址, 下一步 creates the product and opens its step 1. Otherwise `GET …/onboarding` says where the
  * product is: `?step=N` (1–5) opens that step, else a product being built opens its current step and a finished one
  * step 5. While the product-page read runs, step 1 shows 「正在讀商品頁…」 above its form and reads the status
- * again; a failed read shows its message with 重試 / 自己填. The head never blanks. */
+ * again; a failed read shows its message with 重試 / 自己填. The head never blanks. F47 Contract C: while the read runs
+ * and the background worker is stopped, the worker-stopped notice sits under that row; 再檢查一次 re-reads both. */
 export function ProductOnboarding({ brandId, productId }: { brandId: string; productId: string | null }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -95,6 +98,7 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
     }, POLL_MS);
     return () => window.clearTimeout(timer);
   }, [running, state, brandId, productId]);
+  const worker = useWorkerHealth(running, POLL_MS);
 
   const back = (label: string, onClick: () => void): BarBack => ({ label, onClick });
   const toProducts = () => navigate(productsPath(brandId));
@@ -156,7 +160,12 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
 
   let scanRow: ReactNode = null;
   if (onboarding.prefill_status === "running") {
-    scanRow = <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀商品頁…" actions={[]} />;
+    scanRow = (
+      <>
+        <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀商品頁…" actions={[]} />
+        {worker.stalled && <WorkerStoppedNotice onRecheck={() => Promise.all([worker.recheck(), load()])} />}
+      </>
+    );
   } else if (onboarding.prefill_status === "failed" && !scanDismissed) {
     scanRow = (
       <IntakeJobRow

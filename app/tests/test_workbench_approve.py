@@ -126,6 +126,71 @@ class LockedSelectionCannotBeDeselectedTest(_WorkbenchApproveTestBase):
         self.assertEqual(deselect.json()["error"]["code"], "pack_approved")
 
 
+# -- 案例 2b：F47 Q7，覆蓋核准後只開放還缺的那一部分 ----------------------------------------
+
+class OverrideApprovedPackRecoversTest(_WorkbenchApproveTestBase):
+    def _write(self, brief_id: str, part: str, n: int = 2) -> list:
+        return workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief_id,
+            part=part, generation_round=1, body_json=[{"sets": []}] * n,
+            coordinates_json=None, llm_task_id=None,
+        )
+
+    def _set_url(self, brief_id: str) -> str:
+        return f"/api/workbench/brands/{self.brand_id}/sets/{brief_id}"
+
+    def test_missing_part_stays_open_and_selected_part_stays_locked(self):
+        pack_id = self._submit_pack([self._one_set("1", {"copy": 1, "image_prompt": 1})])
+        brief = self._briefs(pack_id)[0]
+        workbench_repo.mark_brief_status(web.conn, self.org_id, self.brand_id, brief["id"], "done")
+        copies = self._write(brief["id"], "copy")
+        images = self._write(brief["id"], "image_prompt")
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, copies[0]["id"])
+        for key in ("required_outputs_met", "brand_rules_checked", "ready_to_report"):
+            self._tick(pack_id, key, True)
+        self.assertEqual(self._approve(pack_id).status_code, 200)
+
+        pack = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}"
+        ).json()["pack"]
+        self.assertEqual(pack["approved_gap"], {
+            "missing": 1, "set_id": brief["id"], "label": "已核准・還缺 1 組",
+        })
+        detail = self.client.get(self._set_url(brief["id"])).json()["set"]
+        self.assertEqual(detail["lock"]["open_parts"], ["image_prompt"])
+        self.assertTrue(detail["products"]["copy"]["locked"])
+        self.assertFalse(detail["products"]["image_prompt"]["locked"])
+
+        # The selected part refuses any change: deselect, another select, a new round.
+        url = self._set_url(brief["id"])
+        refused = [
+            self.client.delete(f"{url}/versions/{copies[0]['id']}/select"),
+            self.client.post(f"{url}/versions/{copies[1]['id']}/select"),
+            self.client.post(f"{url}/products/copy/run", json={}),
+        ]
+        for resp in refused:
+            self.assertEqual(resp.status_code, 409)
+            self.assertEqual(resp.json()["error"]["code"], "pack_approved")
+
+        # The missing part can be generated and selected.
+        run = self.client.post(f"{url}/products/image_prompt/run", json={})
+        self.assertEqual(run.status_code, 200)
+        workbench_repo.mark_brief_status(web.conn, self.org_id, self.brand_id, brief["id"], "done")
+        picked = self.client.post(f"{url}/versions/{images[0]['id']}/select")
+        self.assertEqual(picked.status_code, 200)
+        after = picked.json()["set"]
+        self.assertEqual(after["status"], "已完成")
+        self.assertTrue(after["lock"]["locked"])
+
+        # Once selected it locks like the rest.
+        again = self.client.delete(f"{url}/versions/{images[0]['id']}/select")
+        self.assertEqual(again.status_code, 409)
+        pack = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}"
+        ).json()["pack"]
+        self.assertIsNone(pack["approved_gap"])
+
+
 # -- 案例 3：pack_for_source 讀得到核准；不同 source_ref／不同組織讀不到 ------------------------
 
 class PackForSourceApprovalTest(_WorkbenchApproveTestBase):
@@ -191,11 +256,25 @@ class SetDetailSourceKindAndLockTest(_WorkbenchApproveTestBase):
         self._tick(pack_id, "required_outputs_met", True)
         self.assertEqual(self._approve(pack_id).status_code, 200)
 
+        # F47 Q7: approved with copy still missing -> the set stays open for copy only.
         after = self.client.get(
             f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
         ).json()["set"]
-        self.assertTrue(after["lock"]["locked"])
-        self.assertEqual(after["lock"]["reason"], workbench_repo.PACK_APPROVED_MESSAGE)
+        self.assertFalse(after["lock"]["locked"])
+        self.assertEqual(after["lock"]["open_parts"], ["copy"])
+        self.assertEqual(after["lock"]["reason"], workbench_repo.PACK_APPROVED_GAP_MESSAGE)
+
+        outputs = workbench_repo.write_output(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+            part="copy", generation_round=1, body_json=[{"sets": []}],
+            coordinates_json=None, llm_task_id=None,
+        )
+        workbench_repo.select_version(web.conn, self.org_id, self.brand_id, outputs[0]["id"])
+        done = self.client.get(
+            f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+        ).json()["set"]
+        self.assertTrue(done["lock"]["locked"])
+        self.assertEqual(done["lock"]["reason"], workbench_repo.PACK_APPROVED_MESSAGE)
 
     def test_free_job_set_reports_free_job_source_kind(self):
         pack = self.client.post(

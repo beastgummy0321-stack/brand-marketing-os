@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
 import { getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type ReplaceRequest, type Slot } from "@/lib/adsSlotsApi";
 import { createUploadBatch, putUpload } from "@/lib/adsUserAssetsApi";
 import { useApiRead } from "@/lib/useApiRead";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import { ActionBar, Chip, ProgressSegments, ReadFailed, SlotGrid, SlotTile, Thumb, type SegmentState } from "../patterns";
 import {
   BlockedSlot, CopyEditor, CopyOnlySlot, CopyPicker, flatSlots, ImageOnlySlot, isVideoSlot, MissingSlot, ReadySlot, useShownThumbnail,
@@ -46,7 +48,9 @@ import { isDraftCampaign } from "./WorkspaceHead";
  * 一版文案 → the set; 確認這版文案 → the confirmation again, plus 改文案); a copy reason's exit is 改這句文案 — the in-place
  * editor (`CopyEditor`, 保存後馬上檢查), whose returned slots replace the grid — and 到工作檯換一版 →. The head counts
  * 卡住／等你／處理中, each state has its progress colour, the draft bar says 「〈counts〉：好了才會進上架清單」 and only
- * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`. */
+ * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`.
+ * F47 Contract C: while a slot is 處理中 and the background worker is stopped, the worker-stopped notice sits above the
+ * slots (the slot states stay as the server says); 再檢查一次 re-reads the worker and the slots. */
 
 const POLL_MS = 3000;
 
@@ -201,6 +205,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     const timer = setInterval(reload, POLL_MS);
     return () => clearInterval(timer);
   }, [polling, reload]);
+  const worker = useWorkerHealth(polling, POLL_MS);
   // The ads that became ready on this screen (「已確認・剛處理好」): a poll flipped them from 處理中, the user's next
   // action finished a 等你 slot, or an exit of a blocked slot (another copy, an edit, another file, a recheck) unblocked it.
   const wasInProgress = useRef<Set<string>>(new Set());
@@ -347,6 +352,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
               {note.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
             </div>)}
         <div className="mt-[18px] flex flex-col gap-4">
+          {worker.stalled && <WorkerStoppedNotice onRecheck={() => { reload(); return worker.recheck(); }} />}
           {data.groups.map((g, gi) => {
             const groupReady = g.slots.filter((s) => s.state === "ready").length;
             return (
