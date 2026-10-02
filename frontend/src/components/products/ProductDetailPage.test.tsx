@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiResponseError } from "@/lib/http";
 import {
+  archiveProduct,
   fetchProductDetail,
   fetchProductHandoffPrompt,
   fetchResearchStatus,
@@ -16,6 +17,7 @@ vi.mock("@/lib/productsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/productsApi")>("@/lib/productsApi");
   return {
     ...actual,
+    archiveProduct: vi.fn(),
     fetchProductDetail: vi.fn(),
     fetchResearchStatus: vi.fn(),
     startRescan: vi.fn(),
@@ -55,6 +57,7 @@ beforeEach(() => {
   vi.mocked(startRescan).mockReset();
   vi.mocked(fetchProductHandoffPrompt).mockReset().mockResolvedValue({ prompt_text: "請幫我調研這個商品" });
   vi.mocked(submitProductHandoff).mockReset();
+  vi.mocked(archiveProduct).mockReset().mockResolvedValue(undefined);
 });
 
 function renderPage() {
@@ -103,5 +106,42 @@ describe("ProductDetailPage (F47-I03, drill-10 乙 #6 #7)", () => {
     renderPage();
     const details = (await screen.findByText(/詳細（確認人/)).closest("details")!;
     expect(details.textContent).toContain("確認人：owner@example.com");
+  });
+});
+
+describe("ProductDetailPage 封存 (F47-I05, drill-10 V9)", () => {
+  it("封存 asks once and says what happens; 取消 archives nothing, 確定封存 does", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "封存" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("封存產品「備用商品乙」？");
+    expect(dialog.textContent).toContain("不會出現在商品清單");
+    expect(dialog.textContent).toContain("恢復使用");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(archiveProduct).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "封存" }));
+    fireEvent.click(await screen.findByRole("button", { name: "確定封存" }));
+    await waitFor(() => expect(archiveProduct).toHaveBeenCalledWith("b1", "p1"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a refused archive keeps the dialog open with the reason", async () => {
+    vi.mocked(archiveProduct).mockRejectedValue(new Error("沒有封存（狀態碼 500）"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "封存" }));
+    fireEvent.click(await screen.findByRole("button", { name: "確定封存" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("沒有封存（狀態碼 500）");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("恢復使用 asks nothing and shows a refusal next to the button", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({ ...DETAIL, status: "archived" });
+    vi.mocked(archiveProduct).mockRejectedValue(new Error("已有同名產品"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "恢復使用" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toBe("已有同名產品");
   });
 });

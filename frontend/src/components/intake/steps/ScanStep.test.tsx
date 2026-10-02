@@ -50,10 +50,13 @@ const DONE: OnboardingScan = {
   prefilled: 5,
   pages_read: 1,
   photos_read: 1,
+  urls_read: ["https://beastprime.com.tw/about"],
+  pages_failed: [],
 };
 const scan = (overrides: Partial<OnboardingScan>): OnboardingScan => ({
-  ...DONE, found: [], not_found: [], prefilled: 0, pages_read: 0, photos_read: 0, ...overrides,
+  ...DONE, found: [], not_found: [], prefilled: 0, pages_read: 0, photos_read: 0, urls_read: [], pages_failed: [], ...overrides,
 });
+const BROKEN = { url: "https://beastprime.com.tw/abuot", reason: "打不開這個網址" };
 
 function renderStep() {
   const onNext = vi.fn();
@@ -198,6 +201,46 @@ describe("ScanStep", () => {
     renderStep();
     await screen.findByText("預填 5 項");
     expect(mockJobs).not.toHaveBeenCalled();
+  });
+
+  it("nothing read never says 讀完你的網站了: it lists the unread URL with its reason and both exits (drill-10 R1)", async () => {
+    mockFetch.mockResolvedValue(scan({ status: "done", urls_read: [BROKEN.url], pages_failed: [BROKEN] }));
+    const { onNext, back } = renderStep();
+
+    expect(await screen.findByRole("heading", { level: 1, name: "網站沒有讀到" })).toBeTruthy();
+    expect(screen.queryByText("我讀完你的網站了")).toBeNull();
+    expect(screen.queryByText(/預填 \d+ 項/)).toBeNull();
+    const box = screen.getByText(/個網址讀不到/).closest("[data-slot=unread-pages]") as HTMLElement;
+    expect(within(box).getByText(BROKEN.url)).toBeTruthy();
+    expect(within(box).getByText("打不開這個網址")).toBeTruthy();
+    await userEvent.click(within(box).getByRole("button", { name: "改網址再讀一次" }));
+    expect(back.onClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "開始確認 →" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "跳過，自己填 →" }));
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("some pages read: the found card plus the unread URLs", async () => {
+    mockFetch.mockResolvedValue({ ...DONE, pages_failed: [BROKEN] });
+    renderStep();
+    expect(await screen.findByRole("heading", { level: 1, name: "我讀完你的網站了" })).toBeTruthy();
+    expect(screen.getByText("預填 5 項")).toBeTruthy();
+    expect(screen.getByText(BROKEN.url)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "開始確認 →" })).toBeTruthy();
+  });
+
+  it("photos only: the title does not claim a website was read", async () => {
+    mockFetch.mockResolvedValue({ ...DONE, pages_read: 0, photos_read: 2 });
+    renderStep();
+    expect(await screen.findByRole("heading", { level: 1, name: "我看完你的品牌照片了" })).toBeTruthy();
+  });
+
+  it("a website list changed since the read (the server says none) starts a new read instead of the old result", async () => {
+    mockFetch.mockResolvedValueOnce(scan({ status: "none" })).mockResolvedValue(DONE);
+    mockStart.mockResolvedValue(scan({ status: "running" }));
+    renderStep();
+    expect(await screen.findByText("預填 5 項", {}, { timeout: 4000 })).toBeTruthy();
+    expect(mockStart).toHaveBeenCalledTimes(1);
   });
 
   it("no not-found row when the scan found every area", async () => {

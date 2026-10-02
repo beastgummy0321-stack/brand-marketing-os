@@ -97,6 +97,8 @@ const SCAN: OnboardingScan = {
   prefilled: 3,
   pages_read: 1,
   photos_read: 0,
+  urls_read: ["https://beastgummy.tw/about"],
+  pages_failed: [],
 };
 const IDENTITY: OnboardingIdentity = {
   positioning: { value: "山裡的水果，小鍋慢慢熬", source: "ai", note: "頁面 1" },

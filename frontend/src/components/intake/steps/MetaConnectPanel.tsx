@@ -22,12 +22,16 @@ const BACKFILL_FAILED = "這次沒拉到，之後可以在設定頁重試。";
  * no separate 「指定給這個品牌」 click) → the spend history backfill starts in the background. The Meta client (`frontend/src/lib/metaApi.ts`) is the
  * same one the settings page uses; nothing new is connected here. Binding adds the account to the brand (the
  * existing bind semantics); an account already bound is shown as such. `onBound` lets the step re-read its
- * connector list so the row turns 「已接上」. */
+ * connector list so the row turns 「已接上」. F47 Contract G: a token Meta refused, could not be read with, or that
+ * lists no account is not stored and the token input stays with the server's sentence; a stored token offers
+ * 「換一把權杖」. */
 export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBound: () => void }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [tokenInput, setTokenInput] = useState("");
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  /** 換一把權杖 was pressed while a token is stored: the token input shows again (it stays after a failure). */
+  const [replacing, setReplacing] = useState(false);
   /** The account being assigned right now (its radio shows picked and the row says 指定中…). */
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
@@ -54,6 +58,7 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
     try {
       const meta = await connectMetaToken(token);
       setTokenInput("");
+      setReplacing(false);
       setState({ status: "ready", meta });
     } catch (err) {
       setTokenError(err instanceof Error ? err.message : "連接失敗，請稍後再試。");
@@ -111,10 +116,13 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
 
   const { meta } = state;
   const hasToken = meta.token_tail !== null;
+  // F47 Contract G (drill-10 R3): the token input never disappears after a failure; a stored token that lists no
+  // account (stored before tokens without accounts were refused) shows it at once.
+  const showTokenInput = !hasToken || replacing || meta.accounts.length === 0;
 
   return (
     <div data-slot="meta-connect" className="flex flex-col gap-2.5">
-      {!hasToken && (
+      {showTokenInput && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <input
@@ -133,9 +141,8 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
         </div>
       )}
 
-      {hasToken && (
+      {hasToken && meta.accounts.length > 0 && (
         <div className="flex flex-col gap-2">
-          {meta.accounts.length === 0 && <p className="text-[12.5px] text-muted-foreground">這把權杖沒有列出任何帳戶。</p>}
           {meta.accounts.map((acc) => {
             const bound = acc.bound_brand_ids.includes(brandId);
             const picked = assigningId === acc.id;
@@ -158,8 +165,15 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
             );
           })}
           {assignError && <span role="alert" className="text-xs text-danger">{assignError}</span>}
-          {!meta.accounts.some((acc) => acc.bound_brand_ids.includes(brandId)) && (
+          {meta.accounts.length > 0 && !meta.accounts.some((acc) => acc.bound_brand_ids.includes(brandId)) && (
             <p className="text-xs text-muted-foreground">權杖已存，還沒指定給這個品牌。</p>
+          )}
+          {!showTokenInput && (
+            <div>
+              <Button type="button" variant="link" className="h-auto p-0 text-[12.5px]" onClick={() => setReplacing(true)}>
+                換一把權杖
+              </Button>
+            </div>
           )}
         </div>
       )}

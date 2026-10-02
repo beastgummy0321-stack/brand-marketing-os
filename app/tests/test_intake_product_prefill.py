@@ -85,8 +85,8 @@ class _Base(unittest.TestCase):
         self._envpatch = mock.patch.dict(os.environ, {}, clear=False)
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
-        self._orig = (product_prefill.PROVIDER, product_prefill.fetch_url)
-        product_prefill.fetch_url = lambda url: (True, _PAGE)
+        self._orig = (product_prefill.PROVIDER, product_prefill.read_url)
+        product_prefill.read_url = lambda url: (True, _PAGE, None)
         product_prefill.PROVIDER = FakeProvider(response=_response(_REPLY))
         _SEQ[0] += 1
         resp = self.client.post("/api/intake/brands",
@@ -95,7 +95,7 @@ class _Base(unittest.TestCase):
         self.bid = resp.json()["brand_id"]
 
     def tearDown(self):
-        product_prefill.PROVIDER, product_prefill.fetch_url = self._orig
+        product_prefill.PROVIDER, product_prefill.read_url = self._orig
         self._envpatch.stop()
 
     def _base(self, path: str = "") -> str:
@@ -228,13 +228,40 @@ class ProductPrefillTest(_Base):
                          ("failed", providers.MISSING_KEY_MESSAGE))
 
     def test_nothing_readable_fails_without_a_call(self):
-        product_prefill.fetch_url = lambda url: (False, "")
+        product_prefill.read_url = lambda url: (False, "", "網站 10 秒內沒有回應")
         pid = self._create()
         self._work()
         status = self._status(pid)
-        self.assertEqual((status["prefill_status"], status["prefill_error"]),
-                         ("failed", product_prefill.NOTHING_READ_MESSAGE))
+        self.assertEqual((status["prefill_status"], status["prefill_error"]), (
+            "failed",
+            "讀不到商品頁（網站 10 秒內沒有回應），也沒有商品照；可以改網址再重試，或直接自己填。"))
         self.assertEqual(self._calls(), [])
+
+    def test_retry_with_a_new_page_url_stores_and_reads_the_new_url(self):
+        fixed = "https://shop.example/p/fixed"
+        read = []
+
+        def fetch(url):
+            read.append(url)
+            return (True, _PAGE, None) if url == fixed else (False, "", "網站 10 秒內沒有回應")
+
+        product_prefill.read_url = fetch
+        pid = self._create()  # the broken address
+        self._work()
+        self.assertEqual(self._status(pid)["prefill_status"], "failed")
+        resp = self.client.post(self._step(pid, "/scan"), json={"page_url": fixed})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._work()
+        self.assertEqual(read, [_URL, fixed])
+        self.assertEqual(self._status(pid)["prefill_status"], "done")
+        what = self.client.get(self._step(pid, "/what")).json()["data"]
+        self.assertEqual(what["page_url"], fixed)
+
+    def test_retry_with_a_page_url_that_is_not_one_is_refused(self):
+        pid = self._create(page_url=None)
+        resp = self.client.post(self._step(pid, "/scan"), json={"page_url": "shop.example/p"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("不是有效的網址", resp.json()["error"])
 
     def test_create_without_page_url_does_not_read(self):
         pid = self._create(page_url=None)

@@ -436,24 +436,57 @@ def list_page(conn: Conn, brand_id: str) -> dict:
                 ],
             }
         )
-    taken = {p["name"].strip().casefold() for p in products if p["parent_id"] is None}
     return {
         "products": items,
         "bundles": bundles,
-        "suggestions": _suggestions(conn, brand_id, taken),
+        "suggestions": _suggestions(conn, brand_id, products),
     }
 
 
-def _suggestions(conn: Conn, brand_id: str, taken: set) -> list:
-    row = ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
-    prefill = _ai((row or {}).get("prefill_json"))
+def _suggestion_draft(conn: Conn, brand_id: str) -> dict | None:
+    """The intake draft whose prefill the products page suggests from (open, else the latest
+    completed one); its `prefill_json.dismissed` keeps the names the user said 「不用了」 to."""
+    return ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
+
+
+def _url_key(url) -> str:
+    return str(url or "").strip().rstrip("/").casefold()
+
+
+def _suggestions(conn: Conn, brand_id: str, products: list) -> list:
+    """The brand scan's products not created yet (Q8): hidden when a product has the same name
+    (casefold) or the same page URL, or when the user dismissed the name."""
+    prefill = _ai((_suggestion_draft(conn, brand_id) or {}).get("prefill_json"))
+    roots = [p for p in products if p["parent_id"] is None]
+    taken = {p["name"].strip().casefold() for p in roots}
+    taken |= {str(n).strip().casefold() for n in prefill.get("dismissed") or []}
+    urls = {_url_key(p.get("page_url")) for p in roots} - {""}
     out = []
     for item in _ai_list(prefill, "products"):
         name = str(item.get("name") or "").strip()
-        if name and name.casefold() not in taken:
-            taken.add(name.casefold())
-            out.append({"name": name, "url": str(item.get("url") or "").strip() or None})
+        url = str(item.get("url") or "").strip() or None
+        if not name or name.casefold() in taken or (url and _url_key(url) in urls):
+            continue
+        taken.add(name.casefold())
+        out.append({"name": name, "url": url})
     return out
+
+
+def dismiss_suggestion(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
+    """`POST …/products/suggestions/dismiss` `{name}`: 「不用了」 on a suggestion card; the name is
+    kept in the draft's `prefill_json.dismissed` and never suggested again -> the products page."""
+    del actor  # the intake draft has no per-write actor column
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise ValueError("請指定要略過的商品名稱。")
+    row = _suggestion_draft(conn, brand_id)
+    prefill = _ai((row or {}).get("prefill_json"))
+    if row is not None and prefill:
+        dismissed = [str(n) for n in prefill.get("dismissed") or []]
+        if name.casefold() not in {n.casefold() for n in dismissed}:
+            ir.update_draft(conn, brand_id, row["id"],
+                            prefill_json={**prefill, "dismissed": [*dismissed, name]})
+    return list_page(conn, brand_id)
 
 
 def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
@@ -635,6 +668,15 @@ def _rename(conn: Conn, brand_id: str, product: dict, name: str, *, actor: str) 
                 actor=actor,
                 name=f"{name} · {way['name'][len(old_prefix) :]}",
             )
+
+
+def set_page_url(conn: Conn, brand_id: str, product_id: str, value, *, actor: str) -> None:
+    """Store the product page URL as typed (blank = none); ValueError when it is not a URL.
+    The page read's retry (Contract F) stores the URL it was sent before it reads."""
+    product = knowledge_product(conn, brand_id, product_id)
+    page_url = _check_url(value, "商品頁網址")
+    if (product.get("page_url") or None) != page_url:
+        bi_repo.set_product_page_url(conn, brand_id, product_id, page_url, actor=actor)
 
 
 def put_what(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: str) -> dict:
