@@ -82,7 +82,7 @@ it("earlier steps stay reachable: from 讀回核對 the platform step opens as i
   renderAt(`${base}/platform`);
   expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
   expect(where()).toBe(`${base}/platform`);
-  expect(screen.getByRole("link", { name: "回到確認上架清單" }).getAttribute("href")).toBe(`${base}/list`);
+  expect(screen.getByRole("link", { name: "回到「確認上架清單」" }).getAttribute("href")).toBe(`${base}/list`);
 });
 
 it("a stale launch is decided on the platform step; the decision reads the launch again", async () => {

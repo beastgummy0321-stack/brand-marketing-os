@@ -226,7 +226,7 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
   it("deferred：closed chip、bar 只有先不決定按鈕與提示，沒有選擇處理方向", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "deferred", decision: "deferred", reason: "等資料更完整", revisit_at: "2099-01-07T12:00:00Z" }));
     renderAt(roundPath());
-    expect(await screen.findByText(/1\/7 重看・等資料更完整/)).toBeTruthy();
+    expect(await screen.findByText(/1\/7 再看・等資料更完整/)).toBeTruthy();
     expect(screen.getByText("要改文案請等下一回證據")).toBeTruthy();
     expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /選擇處理方向/ })).toBeNull();

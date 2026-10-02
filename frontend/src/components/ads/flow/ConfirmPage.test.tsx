@@ -828,7 +828,7 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     // The draft's own items are the close list; the proposal step is one link back.
-    expect(screen.getByRole("link", { name: "回到提議" }).getAttribute("href")).toBe(proposeCleanupPath);
+    expect(screen.getByRole("link", { name: "回到「提議」" }).getAttribute("href")).toBe(proposeCleanupPath);
   });
 });
 

@@ -366,8 +366,8 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     expect(labels).toEqual(["提議", "確認", "到平台完成", "核對結果"]);
     expect(current.textContent).toContain("到平台完成");
     expect(screen.queryByText("確認提議")).toBeNull();
-    expect(screen.getByRole("link", { name: "回到確認" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
-    expect(screen.queryByRole("link", { name: "回到提議" })).toBeNull();
+    expect(screen.getByRole("link", { name: "回到「確認」" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+    expect(screen.queryByRole("link", { name: "回到「提議」" })).toBeNull();
   });
 
   it("「我都做完了」依序對每一則呼叫 report／check，成功後導去核對結果", async () => {
