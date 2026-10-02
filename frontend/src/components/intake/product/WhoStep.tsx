@@ -6,7 +6,8 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { clearStepDraft, CustomEscape, CustomMark, productDraftKey, readStepDraft, useStepDraft } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, productDraftKey, readStepDraft, useStepDraft } from "../shared/stepDraft";
 
 /** Prototype `R.p2` head of `.harness/scratch/prototype/f41-onboarding/index.html`. */
 const TITLE = "誰會買、買之前煩什麼";

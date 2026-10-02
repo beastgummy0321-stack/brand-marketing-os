@@ -7,7 +7,8 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { clearStepDraft, CustomEscape, CustomMark, productDraftKey, readStepDraft, useStepDraft } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, productDraftKey, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { Chip, EvidenceCard, INPUT, Item, RemoveButton } from "../steps/PolicyCard";
 
 /** Product proof kinds the prototype always offers as an empty input when nothing of that kind is listed. */

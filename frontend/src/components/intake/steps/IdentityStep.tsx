@@ -8,7 +8,8 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { clearStepDraft, CustomEscape, CustomMark, readStepDraft, useStepDraft } from "../shared/CustomEscape";
+import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 
 /** Prototype `chips(…, 2)`: at most two tones; picking a third drops the oldest. */
 const TONE_MAX = 2;
