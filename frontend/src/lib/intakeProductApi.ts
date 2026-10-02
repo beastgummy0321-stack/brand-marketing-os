@@ -213,13 +213,13 @@ export interface ProductEvidenceInput {
 export interface SellWayMoney {
   price: number | null;
   list_price: number | null;
-  /** true = not typed: Σ component single prices (a one-unit sell-way: its own price). */
+  /** true = not typed: Σ qty × each part's price (a base derives nothing). */
   list_price_derived: boolean;
-  /** 「3 件單價相加」「同售價」; "" when typed. */
+  /** 「推算：單盒 180 × 12」; "" when typed. */
   list_price_note: string;
   cost: number | null;
   cost_derived: boolean;
-  /** 「2 件成本相加」; "" when typed. */
+  /** 「推算：單盒 50 × 12」; "" when typed. */
   cost_note: string;
   shipping: number | null;
   /** Only for lead/booking brands (`show_close_rate`). */
@@ -239,13 +239,46 @@ export interface SellWayMoney {
   assumptions: AssumptionField[];
 }
 
-export interface SellWayRow extends SellWayMoney {
+/** F45 (`docs/architecture/intake.md` 「base and composed sell-ways」): the money fields of a sell-way that is a
+ * base (one product, no quantity) or composed (base sell-way × qty). A composed sell-way's empty price / list price
+ * / cost is derived from its bases on the server and flagged `*_derived` (printed as 推算 everywhere). */
+export interface SellWayNumbers extends SellWayMoney {
+  /** true = a composed sell-way's empty price, Σ qty × each base's price. */
+  price_derived: boolean;
+  /** 「推算：單盒 180 × 5 ＋ 體驗包 100 × 2」; "" when typed. */
+  price_note: string;
+  /** Σ qty × each base's cost when every base cost is known (shown as 「照內容推算是 X」 beside a typed cost). */
+  cost_estimate: number | null;
+  /** Bases without a cost: the composed cost cannot be derived. */
+  cost_missing: { sell_way_id: string; name: string }[];
+  /** 「這個賣法免運」. */
+  free_shipping: boolean;
+  /** The break-even uses a derived price or cost (推算). */
+  break_even_derived: boolean;
+  /** This sell-way's own offer sentences: 「優惠價 NT$1,980（原價 NT$2,160）」, 「免運」 / 「這組免運」. */
+  offer_sentences: string[];
+}
+
+/** One base inside a composed step-4 row, with that base's own effective numbers. */
+export interface SellWayComponent {
+  /** null on an unsaved proposal from the product page (it names its base). */
+  sell_way_id: string | null;
+  name: string;
+  qty: number;
+  price: number | null;
+  cost: number | null;
+}
+
+export interface SellWayRow extends SellWayNumbers {
   /** null = an unsaved proposal from the product page. */
   id: string | null;
   name: string;
-  components: ComponentRef[];
-  /** Units of this product in the sell-way. */
-  qty: number;
+  /** base = the unit itself (no components); composed = base sell-ways × qty. */
+  shape: "base" | "composed";
+  /** [] for a base. */
+  components: SellWayComponent[];
+  /** A base: the names of the active composed sell-ways that use it (it cannot be deleted while used). */
+  used_by: string[];
   source: OnboardingSource;
   note: string;
 }
@@ -283,11 +316,16 @@ export interface MoneyInput {
   assumptions?: AssumptionField[];
 }
 
-export interface SellWayInput extends MoneyInput {
-  /** Omit for a new sell-way. A sell-way left out of the list is archived. */
+/** One step-4 PUT row. No `components` = a base (price required); with `components` = composed (its empty price /
+ * list price / cost are derived). Components name a base row of the same body; a `qty` key on the row is refused. */
+export interface SellWayInput extends Omit<MoneyInput, "price"> {
+  /** Omit for a new sell-way. A sell-way left out of the list is archived (refused while a kept composed one uses it). */
   id?: string | null;
   name: string;
-  qty: number;
+  /** null only on a composed row (= derived). */
+  price: number | null;
+  components?: { base: string; qty: number }[];
+  free_shipping?: boolean;
 }
 
 // ---- bundles (`#/bundle`) ----

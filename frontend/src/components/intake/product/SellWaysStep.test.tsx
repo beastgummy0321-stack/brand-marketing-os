@@ -1,10 +1,12 @@
-/** frontend/src/components/intake/product/SellWaysStep.test.tsx — product onboarding `#/p4` 怎麼賣、賣多少 (F43-I11):
- * one `SellWayTable` row per sell-way (derived 原價／成本 as the server's placeholder with its source line, 打平線 and
- * offers from the server), 成交率 only for lead/booking brands, 「＋新增賣法」, refused prices, 每筆上限 above 打平線
- * marked, the reference-value fold, and 完成商品建檔 = PUT (raw inputs only) → complete → next. The fixture mirrors
- * `app/intake/product_onboarding.py::get_sell_ways()`. No server: the API calls are fakes. */
+/** frontend/src/components/intake/product/SellWaysStep.test.tsx — product onboarding step 4 怎麼賣、賣多少 (F45-I02):
+ * 基本賣法 / 組合賣法 summary rows, one row open inline as the editor, derived numbers labelled 推算, the cost gap with
+ * 「去填單盒的成本 →」 and the way back, the contents (base × qty, Σqty ≥ 2, this product's bases only), the `used_by`
+ * delete guard, the free-shipping sentence and the PUT body (composed rows name their bases, no `qty`). Fixtures are the
+ * prototype's product (`.harness/scratch/prototype/f45-sell-way-components`) shaped like
+ * `app/intake/product_onboarding.py::_sell_way_row()` (see `app/tests/test_intake_product_api.py` `_b1`). No server. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
@@ -21,7 +23,7 @@ const mockFetch = vi.mocked(fetchProductSellWays);
 const mockSave = vi.mocked(saveProductSellWays);
 const mockComplete = vi.mocked(completeProductOnboarding);
 
-const PRODUCT = "綜合維他命軟糖（成人款・60 顆）";
+const PRODUCT = "Beast Gummy 能量軟糖";
 const NAV: StepNav = {
   crumb: [{ label: "商品" }, { label: "商品建檔", strong: true }, { label: PRODUCT }],
   steps: ["商品是什麼", "誰會買", "證據與說法", "賣法與價格", "完成"],
@@ -35,29 +37,52 @@ afterEach(() => {
 
 function way(over: Partial<SellWayRow>): SellWayRow {
   return {
-    id: "sw_1", name: "單盒", components: [{ product_id: "prd_1", name: PRODUCT, qty: 1 }], qty: 1,
-    price: 399, list_price: 399, list_price_derived: true, list_price_note: "同售價",
-    cost: 90, cost_derived: false, cost_note: "", shipping: 60, break_even: 249,
-    cap_per_sale: 249, cap_is_default: true, landing_url: "https://beastgummy.tw/p/multi", landing_is_default: true,
-    offer_labels: [], offer_notes: ["售價未滿 NT$999，不適用滿額免運"], assumptions: [], source: "saved", note: "",
+    id: "sw_x", name: "", shape: "base", components: [],
+    price: null, price_derived: false, price_note: "",
+    list_price: null, list_price_derived: false, list_price_note: "",
+    cost: null, cost_derived: false, cost_note: "", cost_estimate: null, cost_missing: [],
+    shipping: 60, free_shipping: false, break_even: null, break_even_derived: false,
+    cap_per_sale: null, cap_is_default: true, landing_url: "https://beastgummy.tw/shop/energy", landing_is_default: true,
+    offer_sentences: [], offer_labels: [], offer_notes: [], assumptions: [], used_by: [], source: "saved", note: "",
     ...over,
   };
 }
 
-const SINGLE = way({});
-const TRIPLE = way({
-  id: "sw_3", name: "三盒組", components: [{ product_id: "prd_1", name: PRODUCT, qty: 3 }], qty: 3,
-  price: 999, list_price: 1197, list_price_derived: true, list_price_note: "3 件單價相加",
-  cost: 270, cost_derived: true, cost_note: "3 件成本相加", break_even: 669, cap_per_sale: 669,
-  offer_labels: ["組合價 省 198", "滿 NT$999 免運"], offer_notes: [],
+const TRIAL = way({ id: "sw_trial", name: "體驗包（3 顆）", price: 100, cost: 25, shipping: 35, break_even: 40, cap_per_sale: 40, used_by: ["5 盒＋2 包"] });
+const BOX = way({ id: "sw_box", name: "單盒", price: 180, cost: 50, break_even: 70, cap_per_sale: 70, used_by: ["12 盒", "5 盒＋2 包"] });
+const C12 = way({
+  id: "sw_c12", name: "12 盒", shape: "composed",
+  components: [{ sell_way_id: "sw_box", name: "單盒", qty: 12, price: 180, cost: 50 }],
+  price: 1980, list_price: 2160, list_price_derived: true, list_price_note: "推算：單盒 180 × 12",
+  cost: 600, cost_derived: true, cost_note: "推算：單盒 50 × 12", cost_estimate: 600,
+  free_shipping: true, break_even: 1320, break_even_derived: true, cap_per_sale: 1320,
+  offer_sentences: ["優惠價 NT$1,980（原價 NT$2,160）", "這組免運"], offer_labels: ["組合價 省 180", "這組免運"],
+});
+const C52 = way({
+  id: "sw_c52", name: "5 盒＋2 包", shape: "composed",
+  components: [
+    { sell_way_id: "sw_box", name: "單盒", qty: 5, price: 180, cost: 50 },
+    { sell_way_id: "sw_trial", name: "體驗包（3 顆）", qty: 2, price: 100, cost: 25 },
+  ],
+  price: 990, list_price: 1100, list_price_derived: true, list_price_note: "推算：單盒 180 × 5 ＋ 體驗包（3 顆） 100 × 2",
+  cost: 300, cost_derived: true, cost_note: "推算：單盒 50 × 5 ＋ 體驗包（3 顆） 25 × 2", cost_estimate: 300,
+  break_even: 630, break_even_derived: true, cap_per_sale: 630,
+  offer_sentences: ["優惠價 NT$990（原價 NT$1,100）"], offer_labels: ["組合價 省 110"],
 });
 
-function sellWays(over: Partial<ProductSellWays> = {}): ProductSellWays {
+/** 單盒 without a cost: neither composed cost can be derived. */
+const NO_COST = {
+  box: way({ ...BOX, cost: null, break_even: null, cap_per_sale: null }),
+  c12: way({ ...C12, cost: null, cost_derived: false, cost_note: "", cost_estimate: null, cost_missing: [{ sell_way_id: "sw_box", name: "單盒" }], break_even: null, break_even_derived: false, cap_per_sale: null }),
+  c52: way({ ...C52, cost: null, cost_derived: false, cost_note: "", cost_estimate: null, cost_missing: [{ sell_way_id: "sw_box", name: "單盒" }], break_even: null, break_even_derived: false, cap_per_sale: null }),
+};
+
+function sellWays(list: SellWayRow[] = [TRIAL, BOX, C12, C52], over: Partial<ProductSellWays> = {}): ProductSellWays {
   return {
-    sell_ways: [SINGLE, TRIPLE],
+    sell_ways: list,
     show_close_rate: false,
     assumptions: {
-      gross_margin: { value: 0.45, source_text: "毛利率假設 45% · 美國 2025 基準，起點用" },
+      gross_margin: { value: 0.65, source_text: "軟糖類同業毛利約 65%（假設值，之後拿到真成本再改）" },
       shipping_cost: { value: 80, source_text: "運費假設 NT$80 · 台灣宅配均價" },
     },
     ...over,
@@ -65,205 +90,271 @@ function sellWays(over: Partial<ProductSellWays> = {}): ProductSellWays {
 }
 
 function renderStep(onNext = vi.fn()) {
-  render(<SellWaysStep brandId="brd_1" productId="prd_1" nav={NAV} back={{ label: "證據與說法", onClick: vi.fn() }} onNext={onNext} />);
+  render(
+    <MemoryRouter>
+      <SellWaysStep brandId="brd_1" productId="prd_1" nav={NAV} back={{ label: "證據與說法", onClick: vi.fn() }} onNext={onNext} />
+    </MemoryRouter>,
+  );
   return onNext;
 }
 
+const summary = (name: string) => document.querySelector(`[data-sw-row="${name}"]:not([data-state])`) as HTMLElement;
+const editor = () => document.querySelector('[data-state="editing"]') as HTMLElement;
+const field = (label: string) => within(editor()).getByLabelText(label) as HTMLInputElement;
+const edit = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `編輯「${name}」` }));
 const finish = () => screen.getByRole("button", { name: "完成商品建檔 →" });
-const row = (key: string) => document.querySelector(`tr[data-row="${key}"]`) as HTMLElement;
-const input = (name: string) => screen.getByRole("textbox", { name }) as HTMLInputElement;
+const lastBody = () => mockSave.mock.calls[mockSave.mock.calls.length - 1][2];
 
 describe("SellWaysStep", () => {
-  it("每種賣法一列：推算的原價／成本是伺服器的值並寫出來源；打平線與優惠照伺服器", async () => {
+  it("基本賣法／組合賣法兩段摘要：內容、售價、打平（推算）、成本還沒填、優惠句", async () => {
+    mockFetch.mockResolvedValue(sellWays([TRIAL, NO_COST.box, C12, C52]));
+    renderStep();
+
+    await screen.findByRole("button", { name: "編輯「12 盒」" });
+    expect(mockFetch).toHaveBeenCalledWith("brd_1", "prd_1");
+    const base = document.querySelector('[data-section="base"]') as HTMLElement;
+    const composed = document.querySelector('[data-section="composed"]') as HTMLElement;
+    expect([...base.querySelectorAll("[data-sw-row]")].map((e) => e.getAttribute("data-sw-row"))).toEqual(["體驗包（3 顆）", "單盒"]);
+    expect([...composed.querySelectorAll("[data-sw-row]")].map((e) => e.getAttribute("data-sw-row"))).toEqual(["12 盒", "5 盒＋2 包"]);
+    expect(within(summary("單盒")).getByText("一份")).toBeTruthy();
+    expect(within(summary("單盒")).getByText("成本還沒填")).toBeTruthy();
+    expect(within(summary("單盒")).getByText("還算不出來")).toBeTruthy();
+    expect(within(summary("5 盒＋2 包")).getByText("單盒 × 5 ＋ 體驗包（3 顆） × 2")).toBeTruthy();
+    expect(within(summary("12 盒")).getByText("單盒 × 12")).toBeTruthy();
+    expect(within(summary("12 盒")).getByText("1,320")).toBeTruthy();
+    expect(within(summary("12 盒")).getByText("推算").getAttribute("data-tone")).toBe("accent");
+    expect(within(summary("12 盒")).getByText("這組免運").getAttribute("data-tone")).toBe("ok");
+    expect(within(summary("體驗包（3 顆）")).getByText("沒有優惠")).toBeTruthy();
+    expect(within(summary("體驗包（3 顆）")).queryByText("推算")).toBeNull();
+    // 單盒 has no cost and 組合 use it: the bar points at it.
+    expect(screen.getByRole("button", { name: "單盒還沒填成本" })).toBeTruthy();
+  });
+
+  it("組合・成本空著：成本是伺服器推算的 placeholder 並寫出「推算：…」；打平帶推算；免運句子出現", async () => {
     mockFetch.mockResolvedValue(sellWays());
     renderStep();
+    await edit("12 盒");
 
-    const triple = await screen.findByRole("textbox", { name: "三盒組的原價" }) as HTMLInputElement;
-    expect(mockFetch).toHaveBeenCalledWith("brd_1", "prd_1");
-    // A derived value is the placeholder of an empty input, with its source line.
-    expect(triple.value).toBe("");
-    expect(triple.placeholder).toBe("1,197");
-    expect(screen.getByText("3 件單價相加")).toBeTruthy();
-    expect(input("三盒組的成本").placeholder).toBe("270");
-    expect(screen.getByText("3 件成本相加")).toBeTruthy();
-    expect(input("單盒的成本").value).toBe("90");
-    expect(input("單盒的原價").placeholder).toBe("399");
-    // 每筆上限 defaults to the break-even without being typed.
-    expect(input("三盒組的每筆上限").value).toBe("");
-    expect(input("三盒組的每筆上限").placeholder).toBe("669");
-
-    const breakEvens = [...document.querySelectorAll("[data-break-even]")].map((td) => td.textContent);
-    expect(breakEvens).toEqual(["249", "669"]);
-    expect(screen.getByText("組合價 省 198").getAttribute("data-tone")).toBe("ok");
-    expect(screen.getByText("滿 NT$999 免運")).toBeTruthy();
-    expect(screen.getAllByText("沒有優惠")).toHaveLength(1);
-    expect(screen.getAllByText("落地頁：商品頁")).toHaveLength(2);
-    expect(screen.getAllByText(`${PRODUCT} ×3`)).toHaveLength(1);
-    expect(screen.queryByRole("columnheader", { name: "成交率" })).toBeNull();
-    expect(screen.getByText(/打平線＝售價 − 成本 − 運費成本/)).toBeTruthy();
+    expect(within(editor()).getByText("組合賣法")).toBeTruthy();
+    expect(field("成本").value).toBe("");
+    expect(field("成本").placeholder).toBe("600");
+    expect(within(editor()).getByText("推算：單盒 50 × 12")).toBeTruthy();
+    expect(field("原價").placeholder).toBe("2,160");
+    expect(within(editor()).getByText("推算：單盒 180 × 12")).toBeTruthy();
+    expect(field("售價").value).toBe("1980");
+    const result = editor().querySelector('[data-slot="sell-way-result"]') as HTMLElement;
+    expect(within(result).getByText("每筆最多花 NT$1,320")).toBeTruthy();
+    expect(within(result).getByText("推算")).toBeTruthy();
+    expect(within(result).getByText("售價 1,980 − 成本 600（推算） − 運費成本 60")).toBeTruthy();
+    expect(within(result).getByText("「這組免運」")).toBeTruthy();
+    expect(within(result).getByText("「優惠價 NT$1,980（原價 NT$2,160）」")).toBeTruthy();
+    expect((within(editor()).getByRole("checkbox", { name: "這個賣法免運" }) as HTMLInputElement).checked).toBe(true);
+    // Contents: 〈base〉 × qty with the base's own numbers.
+    expect((within(editor()).getByRole("textbox", { name: "單盒的數量" }) as HTMLInputElement).value).toBe("12");
+    expect(within(editor()).getByText(/售價 180・成本/)).toBeTruthy();
   });
 
-  it("名單／預約型品牌才多一欄成交率（百分比）", async () => {
-    mockFetch.mockResolvedValue(sellWays({
-      show_close_rate: true,
-      sell_ways: [way({ close_rate: 0.2, break_even: 49.8, cap_per_sale: 49.8 })],
-    }));
+  it("組合・成本自己填：沒有推算，旁邊寫「照內容推算是 600」", async () => {
+    const typed = way({ ...C12, cost: 560, cost_derived: false, cost_note: "", break_even: 1360, break_even_derived: false, free_shipping: false, offer_sentences: ["優惠價 NT$1,980（原價 NT$2,160）"] });
+    mockFetch.mockResolvedValue(sellWays([TRIAL, BOX, typed, C52]));
     renderStep();
+    await edit("12 盒");
 
-    expect(await screen.findByRole("columnheader", { name: "成交率" })).toBeTruthy();
-    expect(input("單盒的成交率").value).toBe("20");
-    expect(document.querySelector("[data-break-even]")?.textContent).toBe("50");
-    expect(screen.getByText(/打平線＝（售價 − 成本 − 運費成本）× 成交率/)).toBeTruthy();
+    expect(field("成本").value).toBe("560");
+    expect(within(editor()).getByText("照內容推算是 600")).toBeTruthy();
+    expect(within(editor()).queryByText("推算：單盒 50 × 12")).toBeNull();
+    const result = editor().querySelector('[data-slot="sell-way-result"]') as HTMLElement;
+    expect(within(result).getByText("每筆最多花 NT$1,360")).toBeTruthy();
+    expect(within(result).queryByText("推算")).toBeNull();
+    expect(within(result).queryByText("「這組免運」")).toBeNull();
   });
 
-  it("售價空白、0 或負數不送出，並在那一格寫出原因", async () => {
+  it("單盒還沒填成本：組合寫「還算不出來」，「去填單盒的成本 →」打開單盒的成本，填好了回到組合", async () => {
+    mockFetch.mockResolvedValue(sellWays([TRIAL, NO_COST.box, NO_COST.c12, NO_COST.c52]));
+    mockSave.mockResolvedValue(sellWays());
+    renderStep();
+    await edit("5 盒＋2 包");
+
+    expect(field("成本").placeholder).toBe("—");
+    expect(within(editor()).getByText("單盒還沒填成本，推算不出來")).toBeTruthy();
+    expect(within(editor()).getByText("還算不出來：單盒還沒填成本")).toBeTruthy();
+    await userEvent.click(within(editor()).getByRole("button", { name: "去填單盒的成本 →" }));
+
+    expect(editor().getAttribute("data-sw-row")).toBe("單盒");
+    expect(within(editor()).getByText("「5 盒＋2 包」要用單盒的成本才算得出打平")).toBeTruthy();
+    expect(within(editor()).getByText("一份就是一個單位，不用填數量")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(field("成本")));
+    await userEvent.type(field("成本"), "50");
+    await userEvent.click(within(editor()).getByRole("button", { name: "填好了，回到「5 盒＋2 包」" }));
+
+    await waitFor(() => expect(editor().getAttribute("data-sw-row")).toBe("5 盒＋2 包"));
+    expect(lastBody().find((r) => r.name === "單盒")).toMatchObject({ id: "sw_box", cost: 50 });
+    expect(screen.getByRole("status").textContent).toBe("「5 盒＋2 包」的打平算出來了：每筆最多花 NT$630");
+    expect(within(editor()).getByText("每筆最多花 NT$630")).toBeTruthy();
+  });
+
+  it("新增組合：只能挑這個商品的基本賣法、數量要是正整數、只放 1 份不算組合；都放進來了就給「＋新增基本賣法」", async () => {
+    mockFetch.mockResolvedValue(sellWays());
+    renderStep();
+    await userEvent.click(await screen.findByRole("button", { name: "＋組合賣法（例如 6 盒）" }));
+
+    const picker = editor().querySelector('[data-slot="sell-way-picker"]') as HTMLElement;
+    expect(within(picker).getAllByRole("button").map((b) => b.textContent)).toEqual(["體驗包（3 顆）售價 100", "單盒售價 180"]);
+    await userEvent.type(field("名稱"), "6 盒");
+    await userEvent.click(within(picker).getByRole("button", { name: /單盒/ }));
+    const qty = within(editor()).getByRole("textbox", { name: "單盒的數量" });
+    expect(document.activeElement).toBe(qty);
+    await userEvent.type(qty, "0");
+    expect(within(editor()).getByText("數量要是正整數")).toBeTruthy();
+    await userEvent.clear(qty);
+    await userEvent.type(qty, "1");
+    expect(within(editor()).getByText("只放 1 份就跟「單盒」一樣；數量至少 2")).toBeTruthy();
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    expect(mockSave).not.toHaveBeenCalled();
+
+    await userEvent.click(within(editor()).getByRole("button", { name: "＋再放一種賣法" }));
+    await userEvent.click(within(editor()).getByRole("button", { name: /體驗包/ }));
+    await userEvent.click(within(editor()).getByRole("button", { name: "＋再放一種賣法" }));
+    expect(within(editor()).getByText("這個商品的基本賣法都放進來了")).toBeTruthy();
+    expect(within(editor()).getByRole("button", { name: "＋新增基本賣法" })).toBeTruthy();
+  });
+
+  it("新組合存檔：PUT 帶整份清單，組合用名字指基本賣法、沒有 qty；售價空著＝null（推算）", async () => {
+    mockFetch.mockResolvedValue(sellWays());
+    const six = way({ id: "sw_c6", name: "6 盒", shape: "composed", components: [{ sell_way_id: "sw_box", name: "單盒", qty: 6, price: 180, cost: 50 }], price: 1080, price_derived: true, price_note: "推算：單盒 180 × 6", break_even: 720, break_even_derived: true });
+    mockSave.mockResolvedValue(sellWays([TRIAL, BOX, C12, C52, six]));
+    renderStep();
+    await userEvent.click(await screen.findByRole("button", { name: "＋組合賣法（例如 6 盒）" }));
+    await userEvent.type(field("名稱"), "6 盒");
+    await userEvent.click(within(editor()).getByRole("button", { name: /單盒/ }));
+    await userEvent.type(within(editor()).getByRole("textbox", { name: "單盒的數量" }), "6");
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalled());
+    const body = lastBody();
+    expect(body.map((r) => r.name)).toEqual(["體驗包（3 顆）", "單盒", "12 盒", "5 盒＋2 包", "6 盒"]);
+    expect(body[4]).toEqual({
+      id: null, name: "6 盒", price: null, list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null,
+      assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: 6 }],
+    });
+    expect(body[2]).toMatchObject({ id: "sw_c12", price: 1980, list_price: null, cost: null, free_shipping: true, components: [{ base: "單盒", qty: 12 }] });
+    expect(body[1]).toEqual({
+      id: "sw_box", name: "單盒", price: 180, list_price: null, cost: 50, shipping: 60, cap_per_sale: null, landing_url: null,
+      assumptions: [], free_shipping: false,
+    });
+    for (const row of body) expect(row).not.toHaveProperty("qty");
+    await waitFor(() => expect(editor()).toBeNull());
+    expect(screen.getByRole("status").textContent).toBe("已儲存「6 盒」");
+    expect(within(summary("6 盒")).getByText("1,080")).toBeTruthy();
+    expect(within(summary("6 盒")).getAllByText("推算")).toHaveLength(2);
+  });
+
+  it("勾「這個賣法免運」就存，送 free_shipping，伺服器回的免運句子顯示在優惠", async () => {
+    mockFetch.mockResolvedValue(sellWays());
+    mockSave.mockResolvedValue(sellWays([TRIAL, way({ ...BOX, free_shipping: true, offer_sentences: ["免運"] }), C12, C52]));
+    renderStep();
+    await edit("單盒");
+
+    await userEvent.click(within(editor()).getByRole("checkbox", { name: "這個賣法免運" }));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(lastBody()[1]).toMatchObject({ name: "單盒", free_shipping: true });
+    expect(await within(editor()).findByText("「免運」")).toBeTruthy();
+  });
+
+  it("被組合用到的基本賣法不能刪；刪組合被伺服器擋就照原文顯示並留著", async () => {
+    mockFetch.mockResolvedValue(sellWays());
+    mockSave.mockRejectedValue(new Error("「單盒」還在「12 盒」裡，先從組合拿掉。"));
+    renderStep();
+    await edit("單盒");
+
+    expect(within(editor()).getByText("「12 盒」「5 盒＋2 包」用到它，先從組合拿掉才能刪")).toBeTruthy();
+    expect(within(editor()).queryByRole("button", { name: "刪除這個賣法" })).toBeNull();
+
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    await edit("12 盒");
+    await userEvent.click(within(editor()).getByRole("button", { name: "刪除這個賣法" }));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(lastBody().map((r) => r.name)).toEqual(["體驗包（3 顆）", "單盒", "5 盒＋2 包"]);
+    expect(await screen.findByText("「單盒」還在「12 盒」裡，先從組合拿掉。")).toBeTruthy();
+    expect(editor().getAttribute("data-sw-row")).toBe("12 盒");
+  });
+
+  it("基本賣法：售價要填、不能 0；不送出", async () => {
     mockFetch.mockResolvedValue(sellWays());
     const onNext = renderStep();
+    await edit("單盒");
 
-    const price = await screen.findByRole("textbox", { name: "單盒的售價" });
-    await userEvent.clear(price);
-    await userEvent.type(price, "0");
+    await userEvent.clear(field("售價"));
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    expect(within(editor()).getByText("售價要填")).toBeTruthy();
+    await userEvent.type(field("售價"), "0");
+    expect(within(editor()).getByText("售價要大於 0")).toBeTruthy();
     await userEvent.click(finish());
-    expect(await within(row("sw0")).findByText("售價要大於 0")).toBeTruthy();
-
-    await userEvent.clear(price);
-    await userEvent.type(price, "-5");
-    expect(within(row("sw0")).getByText("售價要大於 0")).toBeTruthy();
-    await userEvent.clear(price);
-    await userEvent.click(finish());
-    expect(within(row("sw0")).getByText("售價要大於 0")).toBeTruthy();
-
-    const ship = input("三盒組的運費成本");
-    await userEvent.clear(ship);
-    await userEvent.type(ship, "-1");
-    await userEvent.click(finish());
-    expect(within(row("sw1")).getByText("不能是負數")).toBeTruthy();
     expect(mockSave).not.toHaveBeenCalled();
     expect(mockComplete).not.toHaveBeenCalled();
     expect(onNext).not.toHaveBeenCalled();
   });
 
-  it("每筆上限可以高於打平線，但會標出來", async () => {
-    mockFetch.mockResolvedValue(sellWays());
-    renderStep();
-
-    const cap = await screen.findByRole("textbox", { name: "單盒的每筆上限" });
-    await userEvent.type(cap, "300");
-    expect(within(row("sw0")).getByText("高於打平線")).toBeTruthy();
-    await userEvent.clear(cap);
-    await userEvent.type(cap, "200");
-    expect(within(row("sw0")).queryByText("高於打平線")).toBeNull();
-  });
-
-  it("新增一列（名稱、幾件、數字），離開這列就存；打平線與優惠換成伺服器重算的結果", async () => {
-    mockFetch.mockResolvedValue(sellWays());
-    const six = way({
-      id: "sw_6", name: "六盒組", components: [{ product_id: "prd_1", name: PRODUCT, qty: 6 }], qty: 6,
-      price: 1899, list_price: 2394, list_price_note: "6 件單價相加", cost: 540, cost_derived: true, cost_note: "6 件成本相加",
-      break_even: 1299, cap_per_sale: 1299, offer_labels: ["組合價 省 495", "滿 NT$999 免運"], offer_notes: [],
-    });
-    mockSave.mockResolvedValue(sellWays({ sell_ways: [SINGLE, TRIPLE, six] }));
-    renderStep();
-
-    await userEvent.click(await screen.findByRole("button", { name: "＋新增賣法（例如六盒組）" }));
-    const names = screen.getAllByRole("textbox", { name: "賣法名稱" });
-    await userEvent.type(names[2], "六盒組");
-    const qty = input("六盒組的數量");
-    await userEvent.clear(qty);
-    await userEvent.type(qty, "0");
-    await userEvent.click(document.body);
-    expect(await within(row("sw2")).findByText("數量要是正整數")).toBeTruthy();
-    expect(mockSave).not.toHaveBeenCalled();
-    await userEvent.clear(qty);
-    await userEvent.type(qty, "6");
-    await userEvent.type(input("六盒組的售價"), "1899");
-    expect(row("sw2").querySelector("[data-break-even]")?.textContent).toBe("—");
-    await userEvent.click(document.body);
-
-    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
-    expect(mockSave.mock.calls[0][2][2]).toEqual({
-      id: null, name: "六盒組", qty: 6, price: 1899, list_price: null, cost: null, shipping: null,
-      cap_per_sale: null, landing_url: null, assumptions: [],
-    });
-    await waitFor(() => expect(row("sw2").querySelector("[data-break-even]")?.textContent).toBe("1,299"));
-    expect(within(row("sw2")).getByText("6 件單價相加")).toBeTruthy();
-    expect(screen.getByText("組合價 省 495")).toBeTruthy();
-  });
-
-  it("完成商品建檔：PUT 只帶使用者填的原始值（推算值不當成使用者的值送），再 complete，成功才往下", async () => {
-    mockFetch.mockResolvedValue(sellWays());
-    mockSave.mockResolvedValue(sellWays());
-    mockComplete.mockResolvedValue({ step: 5, completed: true, prefill_status: "done", prefill_error: null });
-    const onNext = renderStep();
-
-    await screen.findByRole("textbox", { name: "三盒組的原價" });
-    await userEvent.click(screen.getByRole("button", { name: "換「三盒組」的落地頁" }));
-    await userEvent.type(input("三盒組的落地頁"), "https://beastgummy.tw/shop/three");
-    await userEvent.click(finish());
-
-    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
-    expect(mockSave).toHaveBeenCalledWith("brd_1", "prd_1", [
-      { id: "sw_1", name: "單盒", qty: 1, price: 399, list_price: null, cost: 90, shipping: 60, cap_per_sale: null, landing_url: null, assumptions: [] },
-      { id: "sw_3", name: "三盒組", qty: 3, price: 999, list_price: null, cost: null, shipping: 60, cap_per_sale: null, landing_url: "https://beastgummy.tw/shop/three", assumptions: [] },
-    ]);
-    expect(mockComplete).toHaveBeenCalledWith("brd_1", "prd_1");
-    expect(mockSave.mock.invocationCallOrder[mockSave.mock.invocationCallOrder.length - 1]).toBeLessThan(mockComplete.mock.invocationCallOrder[0]);
-  });
-
-  it("沒改過任何東西時完成不重送，直接 complete；complete 失敗就留在這步並顯示原因", async () => {
+  it("完成商品建檔：沒改過就不重送，直接 complete；complete 失敗留在這步並顯示原因", async () => {
     mockFetch.mockResolvedValue(sellWays());
     mockComplete.mockRejectedValue(new Error("「證據與說法」還沒存，先存好這一步再完成。"));
     const onNext = renderStep();
 
-    await screen.findByRole("textbox", { name: "三盒組的原價" });
+    await screen.findByRole("button", { name: "編輯「12 盒」" });
     await userEvent.click(finish());
     expect(await screen.findByText("「證據與說法」還沒存，先存好這一步再完成。")).toBeTruthy();
     expect(mockSave).not.toHaveBeenCalled();
     expect(onNext).not.toHaveBeenCalled();
+
+    mockComplete.mockResolvedValue({ step: 5, completed: true, prefill_status: "done", prefill_error: null });
+    await userEvent.click(finish());
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
   });
 
-  it("商品頁讀到的建議列（還沒存）可以拿掉；沒有任何賣法時先給一列空白", async () => {
-    mockFetch.mockResolvedValue(sellWays({
-      sell_ways: [
-        way({ id: null, name: "單盒", source: "ai", list_price: 450, list_price_derived: false, list_price_note: "", cost: null, shipping: null, break_even: null, cap_per_sale: null, offer_labels: [], offer_notes: [] }),
-        way({ id: null, name: "兩盒組", qty: 2, components: [{ product_id: "prd_1", name: PRODUCT, qty: 2 }], source: "ai", price: 760, list_price: null, list_price_derived: false, list_price_note: "", cost: null, shipping: null, break_even: null, cap_per_sale: null, offer_labels: [], offer_notes: [] }),
-      ],
-    }));
-    renderStep();
+  it("商品頁讀到的建議（還沒存）：qty N 的是組合，指向一份的那個基本賣法；第一次存就一起送", async () => {
+    mockFetch.mockResolvedValue(sellWays([
+      way({ id: null, name: "三盒組", shape: "composed", source: "ai", note: "商品頁", price: 499, list_price: 540, shipping: null,
+        components: [{ sell_way_id: null, name: "單盒", qty: 3, price: 180, cost: null }] }),
+      way({ id: null, name: "單盒", source: "ai", note: "商品頁", price: 180, shipping: null }),
+    ]));
+    mockSave.mockResolvedValue(sellWays());
+    const onNext = renderStep();
+    mockComplete.mockResolvedValue({ step: 5, completed: true, prefill_status: "done", prefill_error: null });
 
-    expect((await screen.findByRole("textbox", { name: "單盒的原價" }) as HTMLInputElement).value).toBe("450");
-    expect(input("兩盒組的數量").value).toBe("2");
-    await userEvent.click(screen.getByRole("button", { name: "拿掉「兩盒組」" }));
-    expect(screen.queryByRole("textbox", { name: "兩盒組的售價" })).toBeNull();
-    // The last row has no ×.
-    expect(screen.queryByRole("button", { name: "拿掉「單盒」" })).toBeNull();
-
-    cleanup();
-    mockFetch.mockResolvedValue(sellWays({ sell_ways: [] }));
-    renderStep();
-    const names = await screen.findAllByRole("textbox", { name: "賣法名稱" });
-    expect(names).toHaveLength(1);
-    expect(input("新的賣法的數量").value).toBe("1");
+    await screen.findByRole("button", { name: "編輯「三盒組」" });
+    expect(within(summary("三盒組")).getByText("單盒 × 3")).toBeTruthy();
+    expect(within(summary("單盒")).getByText("成本還沒填")).toBeTruthy();
+    await userEvent.click(finish());
+    await waitFor(() => expect(onNext).toHaveBeenCalled());
+    expect(lastBody()).toEqual([
+      { id: null, name: "三盒組", price: 499, list_price: 540, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: 3 }] },
+      { id: null, name: "單盒", price: 180, list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false },
+    ]);
   });
 
-  it("進階：不知道成本就用同業參考值填空著的格子，標「假設」並送出旗標；改掉就不再是假設", async () => {
-    mockFetch.mockResolvedValue(sellWays({ sell_ways: [way({ cost: null, break_even: null, cap_per_sale: null, shipping: null })] }));
-    mockSave.mockResolvedValue(sellWays({ sell_ways: [way({ cost: 219, shipping: 80, break_even: 100, assumptions: ["cost", "shipping"] })] }));
+  it("沒有任何賣法時先打開一個空白的基本賣法", async () => {
+    mockFetch.mockResolvedValue(sellWays([]));
+    renderStep();
+    expect(await screen.findByText("新的基本賣法")).toBeTruthy();
+    expect(field("名稱").value).toBe("");
+    expect(within(editor()).getByText("一份就是一個單位，不用填數量")).toBeTruthy();
+    expect(screen.getByText("還沒有組合")).toBeTruthy();
+  });
+
+  it("進階：不知道成本就用同業參考值填空著的基本賣法成本，標「假設」並送出旗標", async () => {
+    mockFetch.mockResolvedValue(sellWays([TRIAL, NO_COST.box, NO_COST.c12, NO_COST.c52]));
+    mockSave.mockResolvedValue(sellWays());
     renderStep();
 
     await userEvent.click(await screen.findByText("進階：不知道成本？用同業參考值（會標示是假設）"));
-    expect(screen.getByText("毛利率假設 45% · 美國 2025 基準，起點用")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "空著的成本填參考值" }));
-    await userEvent.click(screen.getByRole("button", { name: "空著的運費成本填參考值" }));
-    expect(input("單盒的成本").value).toBe("219");
-    expect(input("單盒的運費成本").value).toBe("80");
-    expect(within(row("sw0")).getAllByText("假設")).toHaveLength(2);
-
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
-    expect(mockSave.mock.calls[mockSave.mock.calls.length - 1][2][0]).toMatchObject({ cost: 219, shipping: 80, assumptions: ["cost", "shipping"] });
-
-    await userEvent.clear(input("單盒的成本"));
-    await userEvent.type(input("單盒的成本"), "150");
-    expect(within(row("sw0")).getAllByText("假設")).toHaveLength(1);
+    const body = lastBody();
+    expect(body[1]).toMatchObject({ name: "單盒", cost: 63, assumptions: ["cost"] });
+    // A composed cost comes from its bases: not filled.
+    expect(body[2]).toMatchObject({ name: "12 盒", cost: null, assumptions: [] });
+    await edit("單盒");
+    expect(field("成本").value).toBe("63");
+    expect(within(editor()).getByText("假設")).toBeTruthy();
   });
 });
