@@ -12,7 +12,7 @@ import { getWizardOptions } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, ReadFailed, formatAmount } from "./patterns";
-import { UnderstoodField, UnderstoodSkeleton, newCampaignPath, wizardSteps, type UnderstoodKey } from "./wizard/WizardPieces";
+import { SourceTag, UnderstoodField, UnderstoodSkeleton, newCampaignPath, wizardSteps, type SourceTagKind, type UnderstoodKey } from "./wizard/WizardPieces";
 
 interface CampaignConstraints { platform?: unknown; budget?: unknown }
 /** The seven `UnderstoodField`s plus the campaign-level landing URL (F40-I12, its own piece below). */
@@ -47,6 +47,8 @@ const CAP_LABEL = "每賣一筆最多花";
 const ALL_GROUPS = "all";
 /** The landing row's source tag (F43-I15): from the sell-way／product, the user's own, or copied by F40. */
 const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自賣法", user: "你填的", copied: "照上一期" };
+/** F46-I08: the field sources tagged instead of 「猜的，請確認」 (the create filled them by rule, not a guess). */
+const TAGGED_SOURCES: readonly FieldSource[] = ["copied", "break_even", "brand"];
 
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
@@ -54,9 +56,11 @@ const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自
  * field edits it in place and `PATCH`es that one field (no re-parse). 「產生策略」 is the second and last model call
  * of the wizard (ARCHITECTURE.md §6.1 item 11) and lands on the strategy tab.
  *
- * F36-I04 (drill-6 #4, ruling A): a seventh, optional chip 「每賣一筆最多花」 — empty by default with the product's
- * break-even as hint text only, saved through `PUT …/target {basis:"own"}` so the strategy reads the user's cap
- * instead of `targets.resolve` falling back to break-even before the user said anything. Never a guess, no default. */
+ * F36-I04 (drill-6 #4, ruling A): a seventh chip 「每賣一筆最多花」, saved through `PUT …/target {basis:"own"}`. F46-I08
+ * (Contract D): a structured create now stores the cap (沿用上一期, the sell-way's cap, else its break-even), so the
+ * chip shows that stored value; an older campaign without one still reads empty with break-even as a hint. A value
+ * the create filled by rule (`field_sources` `copied`／`break_even`／`brand`) shows its tag instead of 「猜的，請確認」;
+ * `system` keeps 「猜的，請確認」. */
 export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
@@ -98,6 +102,14 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const guessed = (key: keyof CampaignFieldSources) => (sources[key] ?? "system") === "system";
   const productId = context.product_ids?.[0] ?? null;
   const products = options.data?.products ?? [];
+  const previousName = products.find((p) => p.id === productId)?.previous?.campaign_name;
+  /** The tag of a value the create filled by rule; none for the user's own, the sell-way's, or a guess. */
+  const ruleTag = (key: keyof CampaignFieldSources) => {
+    const source = sources[key];
+    return source && TAGGED_SOURCES.includes(source)
+      ? <SourceTag kind={source as SourceTagKind} title={source === "copied" && previousName ? `上一期：${previousName}` : undefined} />
+      : undefined;
+  };
   const objectives = options.data?.objectives ?? [];
   const platform = typeof constraints.platform === "string" ? constraints.platform : null;
   const landingUrl = context.landing_url ?? "";
@@ -198,6 +210,12 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => { if (v === null || v === cap.own_value) cancel(); else void saveCap(v); }} />,
     },
   ];
+  // The target writer does not touch `field_sources.cap`: the cap's tag is shown only while the value is still the
+  // one its source gave (the previous campaign's cap／the whole break-even).
+  const previousCap = products.find((p) => p.id === productId)?.previous?.cap ?? null;
+  const capTagHolds = cap.own_value !== null && (
+    sources.cap === "copied" ? cap.own_value === previousCap
+      : sources.cap === "break_even" ? cap.break_even !== null && cap.own_value === Math.round(cap.break_even) : false);
   const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length;
   const capUnfilled = cap.own_value === null && cap.break_even !== null;
   const barHint = [guesses ? `有 ${guesses} 項是猜的` : null, capUnfilled ? "上限沒填會先用打平" : null].filter(Boolean).join("・") || undefined;
@@ -219,8 +237,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {fields.map((f) => (f.source === null
           ? <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "還沒填（選填）"} empty={!f.value} hint={f.hint} wide
-              guessed={false} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
-          : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)}
+              guessed={false} tag={capTagHolds ? ruleTag("cap") : undefined} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
+          : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)} tag={ruleTag(f.source)}
               editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}
         <LandingUrlField value={landingUrl} source={sources.landing_url} editing={editing === "landing_url"} onEdit={!generating ? edit("landing_url") : undefined}

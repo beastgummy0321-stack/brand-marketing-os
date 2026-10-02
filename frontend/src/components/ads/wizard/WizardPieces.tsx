@@ -55,6 +55,13 @@ export function sellWayNote(way: WizardProduct): string {
   return `${be}・${way.offer_labels.length ? way.offer_labels.join("＋") : "沒有優惠"}`;
 }
 
+/** F46-I08 (prototype f46-learnings `.pk` third line): 「投過 N 期」 = its closed campaigns, 「投過，還沒結案」 when it only
+ * ran without closing, 「還沒投過」 when it never ran. */
+export function ranText(way: Pick<WizardProduct, "previous" | "learned">): string {
+  if (way.learned?.campaigns.length) return `投過 ${way.learned.campaigns.length} 期`;
+  return way.previous ? "投過，還沒結案" : "還沒投過";
+}
+
 /** `#/new` `.pk` (F43-I15): one sell-way as a `PickCard` — 「〈賣法〉 〈price〉」 over 「打平 〈be〉・〈offers〉」. The
  * thumbnail is an authenticated URL, loaded through `useAuthedImage` (a failed or missing photo draws the neutral
  * tile). */
@@ -65,8 +72,28 @@ export function SellWayPickCard({ way }: { way: WizardProduct }) {
       value={way.id}
       title={`${way.display_name} ${priceText(way.price, way.currency)}`}
       thumbnailUrl={src}
-      note={<span className="numeric">{sellWayNote(way)}</span>}
+      note={<><span className="numeric">{sellWayNote(way)}</span><span data-slot="ran-line" className="block">{ranText(way)}</span></>}
     />
+  );
+}
+
+/** F46-I08 (prototype f46-learnings `#/new` `.tag`): where a create default came from. `copied` 沿用上一期 (title =
+ * the previous campaign's name), `break_even` 打平線, `brand` 已接上的帳戶, `sell_way` 來自賣法, `user` 你改的. */
+export type SourceTagKind = "copied" | "break_even" | "brand" | "sell_way" | "user";
+const SOURCE_TAG: Record<SourceTagKind, { label: string; className: string }> = {
+  copied: { label: "沿用上一期", className: "bg-accent text-accent-foreground" },
+  break_even: { label: "打平線", className: "bg-zone-watch text-warning" },
+  brand: { label: "已接上的帳戶", className: "bg-muted text-muted-foreground" },
+  sell_way: { label: "來自賣法", className: "bg-muted text-muted-foreground" },
+  user: { label: "你改的", className: "border border-dashed border-input text-muted-foreground" },
+};
+export function SourceTag({ kind, title }: { kind: SourceTagKind; title?: string }) {
+  const tag = SOURCE_TAG[kind];
+  return (
+    <span data-slot="source-tag" data-source={kind} title={title}
+      className={cn("shrink-0 whitespace-nowrap rounded px-1.5 text-[11px] font-semibold leading-[18px]", tag.className)}>
+      {tag.label}
+    </span>
   );
 }
 
@@ -83,8 +110,9 @@ const ICON_TILE = "grid size-9 shrink-0 place-items-center rounded-[10px] bg-acc
  * the system guessed it, a pen. Pressing it opens `editor` in place (`.uchip` with the primary border).
  * F36 `capChip()` adds three optional states the six fields never set: `empty` (`.uchip.empty`: a neutral dashed
  * border and a muted value — an optional field left blank, not a guess), a `hint` line under the value (`.val`),
- * and `wide` (`.uchip.editing` spans both grid columns while editing). */
-export function UnderstoodField({ field, label, value, guessed, editing, onEdit, editor, empty, hint, wide }: {
+ * and `wide` (`.uchip.editing` spans both grid columns while editing). F46-I08: `tag` (a `SourceTag`) names a value
+ * the create filled by rule (沿用上一期／打平線／已接上的帳戶); it sits where 「猜的，請確認」 would. */
+export function UnderstoodField({ field, label, value, guessed, editing, onEdit, editor, empty, hint, wide, tag }: {
   field: UnderstoodKey;
   label: string;
   value: ReactNode;
@@ -96,6 +124,7 @@ export function UnderstoodField({ field, label, value, guessed, editing, onEdit,
   empty?: boolean;
   hint?: ReactNode;
   wide?: boolean;
+  tag?: ReactNode;
 }) {
   const Icon = FIELD_ICON[field];
   const tile = <span aria-hidden="true" className={ICON_TILE}><Icon className="size-4" strokeWidth={1.75} /></span>;
@@ -115,7 +144,7 @@ export function UnderstoodField({ field, label, value, guessed, editing, onEdit,
       {hint
         ? <span className="flex min-w-0 flex-1 flex-col gap-0.5">{text}<span className="text-xs text-muted-foreground">{hint}</span></span>
         : text}
-      {guessed && <Chip tone="warn">猜的，請確認</Chip>}
+      {guessed ? <Chip tone="warn">猜的，請確認</Chip> : tag}
       {onEdit && <span aria-hidden="true" className="text-muted-foreground">✎</span>}
     </>
   );

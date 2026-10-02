@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 import app.main as main
 import app.shared.web as web
 from app.ads import brief, objectives, wizard_options
+from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
@@ -27,7 +28,7 @@ from app.core import settings as coresettings
 ACTOR = "測試員"
 
 
-class WizardOptionsTest(unittest.TestCase):
+class _OptionsBase(unittest.TestCase):
     def setUp(self):
         self.org_id = coredb.DEV_ORG_ID
         self.brand = bi_repo.create_brand(
@@ -139,6 +140,8 @@ class WizardOptionsTest(unittest.TestCase):
     def _by_name(self, payload):
         return {p["name"]: p for p in payload["products"]}
 
+
+class WizardOptionsTest(_OptionsBase):
     def test_only_finished_sell_ways_singles_by_product_then_bundles(self):
         payload = wizard_options.options(web.conn, self.org_id, self.brand_id)
         self.assertEqual([p["name"] for p in payload["products"]], [
@@ -161,6 +164,7 @@ class WizardOptionsTest(unittest.TestCase):
             "customer_groups": [{"id": g["id"], "who": g["who"]} for g in self.cup_groups],
             "landing_url": "https://shop.example.test/cup",
             "thumbnail_url": f"/brands/{self.brand_id}/assets/file/{self.cup_photo['id']}/cup.jpg",
+            "previous": None, "learned": None,  # F46-I08: never ran
         })
         brush = products["A 杯刷 · 單支"]
         # No own cap -> the break-even; under the 999 threshold -> no 免運; no page -> no landing.
@@ -242,7 +246,8 @@ class WizardOptionsTest(unittest.TestCase):
         res = client.get(f"/api/ads/brands/{self.brand_id}/new-campaign/options")
         self.assertEqual(res.status_code, 200, res.text)
         body = res.json()
-        self.assertEqual(set(body), {"products", "objectives", "default_objective"})
+        self.assertEqual(set(body), {"products", "objectives", "default_objective",
+                                     "default_platform"})
         self.assertEqual(len(body["products"]), 6)
         self.assertEqual(body["objectives"], objectives.catalog())
         self.assertIsNone(body["default_objective"])  # the brand has no conversion goal yet
@@ -276,6 +281,101 @@ class WizardOptionsTest(unittest.TestCase):
         payload = wizard_options.options(web.conn, self.org_id, empty["id"])
         self.assertEqual(payload["products"], [])
         self.assertTrue(payload["objectives"])
+
+
+class PreviousAndLearnedTest(_OptionsBase):
+    """F46-I08 (Contract D): each option's `previous` (the sell-way's newest internal non-draft
+    campaign) and `learned` (Contract L over its closed campaigns), and `default_platform`."""
+
+    def _campaign(self, way, name, status, created_at, *, platform="meta", cap=450,
+                  budget=10000, closed_at=None):
+        campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": name, "goal_text": "x", "objective": "購買", "target_cost": cap,
+            "start_date": "2026-09-05", "end_date": "2026-09-18", "status": status,
+            "context_json": {"product_ids": [way["id"]]},
+            "constraints_json": {k: v for k, v in (("platform", platform), ("budget", budget))
+                                 if v is not None},
+        }, created_by=ACTOR)
+        web.conn.execute(
+            "UPDATE ads_campaign SET created_at = %s, closed_at = %s WHERE id = %s",
+            (created_at, closed_at, campaign["id"]),
+        )
+        return campaign
+
+    def _row(self, campaign, ad_id, *, verdict, rank, of, sales, spend):
+        cpr = round(spend / sales) if sales else "none"
+        bi_repo.record_learning(
+            web.conn, self.brand_id, actor=ACTOR, learning_text=ad_id,
+            applicability_scope=(
+                f"coord；v=2；verdict={verdict}；rank={rank}；of={of}；sales={sales}；"
+                f"spend={spend}；cpr={cpr}；cap=450；few=0；group=none；audience=cold；pain=effort"
+                "；angle=box；hook=h；proof=none；offer=none；format=single_image；cur=TWD"
+            ),
+            confidence="observed", sample_size="高",
+            source_cycle_id=f"{campaign['id']}:{ad_id}", source_track="coordinate",
+        )
+
+    def _option(self, way):
+        return next(p for p in wizard_options.options(web.conn, self.org_id, self.brand_id)
+                    ["products"] if p["id"] == way["id"])
+
+    def test_a_sell_way_that_never_ran_has_no_previous_and_no_learning(self):
+        option = self._option(self.brush_single)
+        self.assertIsNone(option["previous"])
+        self.assertIsNone(option["learned"])
+        self.assertIsNone(wizard_options.previous_campaign(
+            web.conn, self.org_id, self.brand_id, self.brush_single["id"]))
+
+    def test_one_closed_campaign_is_the_previous_with_its_learned_spend(self):
+        closed = self._campaign(self.cup_single, "單品・09/05～09/18", "closed",
+                                "2026-09-01T00:00:00Z", closed_at="2026-09-19T02:00:00Z")
+        self._row(closed, "ad_a", verdict="keep", rank=1, of=2, sales=5, spend=2000)
+        self._row(closed, "ad_b", verdict="replace", rank=2, of=2, sales=0, spend=775)
+
+        option = self._option(self.cup_single)
+
+        self.assertEqual(option["previous"], {
+            "campaign_id": closed["id"], "campaign_name": "單品・09/05～09/18",
+            "platform": "meta", "cap": 450.0, "budget": 10000.0, "spend": 2775,
+        })
+        self.assertEqual(option["learned"], {
+            "campaigns": [{"id": closed["id"], "name": "單品・09/05～09/18"}],
+            "keep": 1, "replace": 1,
+        })
+        # Another sell-way of the same product did not run.
+        self.assertIsNone(self._option(self.cup_fall)["previous"])
+
+    def test_two_campaigns_the_newest_is_previous_drafts_and_other_sell_ways_ignored(self):
+        older = self._campaign(self.cup_single, "第一期", "closed", "2026-08-01T00:00:00Z",
+                               closed_at="2026-08-20T00:00:00Z")
+        self._row(older, "ad_a", verdict="keep", rank=1, of=1, sales=6, spend=1800)
+        newer = self._campaign(self.cup_single, "第二期", "live", "2026-09-01T00:00:00Z",
+                               platform=None, cap=None, budget=None)
+        self._campaign(self.cup_single, "草稿", "draft", "2026-09-20T00:00:00Z",
+                       platform="google_ads", cap=111)
+        self._campaign(self.brush_single, "別的賣法", "live", "2026-09-25T00:00:00Z", cap=222)
+
+        option = self._option(self.cup_single)
+
+        # The newest non-draft campaign, its empty fields stay empty (never the older one's).
+        self.assertEqual(option["previous"], {
+            "campaign_id": newer["id"], "campaign_name": "第二期",
+            "platform": None, "cap": None, "budget": None, "spend": None,
+        })
+        self.assertEqual(option["learned"], {
+            "campaigns": [{"id": older["id"], "name": "第一期"}], "keep": 1, "replace": 0,
+        })
+        self.assertEqual(self._option(self.brush_single)["previous"]["cap"], 222.0)
+        self.assertIsNone(self._option(self.brush_single)["learned"])
+
+    def test_default_platform_is_the_first_connected_channel(self):
+        payload = wizard_options.options(web.conn, self.org_id, self.brand_id)
+        self.assertIsNone(payload["default_platform"])  # nothing connected
+        rows = [{"key": "meta", "label": "Meta", "connected": False, "state_text": "未接上"},
+                {"key": "google_ads", "label": "Google", "connected": True, "state_text": "已接上"}]
+        with patch.object(wizard_options.channels, "list_channels", return_value=rows):
+            payload = wizard_options.options(web.conn, self.org_id, self.brand_id)
+        self.assertEqual(payload["default_platform"], "google_ads")
 
 
 class ObjectiveCatalogTest(unittest.TestCase):

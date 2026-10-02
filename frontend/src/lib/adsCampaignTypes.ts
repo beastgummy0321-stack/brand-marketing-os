@@ -7,8 +7,10 @@
 /** F04-I11：`context_json.field_sources` 的六格——`"user"`＝你說的，`"system"`＝行銷駕駛艙
  * 沒聽到就幫你補的（ARCHITECTURE.md §6.1 第 11 條）。F40-I04：`"copied"`＝建立時沒填、從上一期
  * （最新一個非草稿活動）複製來的（F43-I04 起新活動不再複製，舊活動仍讀得到）。F43-I04：`"sell_way"`＝
-從選的賣法（與它的商品）帶入的（受眾、上限、落地頁）。 */
-export type FieldSource = "user" | "system" | "copied" | "sell_way";
+從選的賣法（與它的商品）帶入的（受眾、上限、落地頁）。F46-I08：`"copied"` 回來了——結構化建立時平台、上限、
+ * 預算從同一個賣法的上一期帶入（`app/ads/brief.py`）；`"brand"`＝品牌已接上的第一個帳戶（平台）；
+ * `"break_even"`＝賣法的打平線，存成這個活動自己的上限。 */
+export type FieldSource = "user" | "system" | "copied" | "sell_way" | "brand" | "break_even";
 
 export interface CampaignFieldSources {
   product: FieldSource;
