@@ -5,6 +5,8 @@ naming the field; nothing is coerced.
 """
 
 import math
+import struct
+import zlib
 from datetime import date
 
 import pytest
@@ -79,12 +81,42 @@ def test_date_order():
         r.date_order("2026-10-02", date(2026, 10, 1))
 
 
+def _png_chunk(ctype: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", zlib.crc32(ctype + data))
+
+
+def _png(width=1, height=1) -> bytes:
+    return (b"\x89PNG\r\n\x1a\n"
+            + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+            + _png_chunk(b"IEND", b""))
+
+
+def _jpeg(width=1, height=1) -> bytes:
+    app0 = b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    sof0 = b"\xff\xc0\x00\x0b\x08" + struct.pack(">HH", height, width) + b"\x01\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof0 + b"\xff\xd9"
+
+
+def _webp(fourcc=b"VP8L", payload=b"\x2f\x00\x00\x00\x00", riff_extra=0) -> bytes:
+    body = b"WEBP" + fourcc + struct.pack("<I", len(payload)) + payload
+    return b"RIFF" + struct.pack("<I", len(body) + riff_extra) + body
+
+
+VP8_1X1 = b"\x00\x00\x00\x9d\x01\x2a\x01\x00\x01\x00"
+
+PNG = _png()
+JPEG = _jpeg()
+
+
 @pytest.mark.parametrize("content,mime", [
-    (b"\x89PNG\r\n\x1a\nxx", "image/png"),
-    (b"\xff\xd8\xff\xe0xx", "image/jpeg"),
-    (b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
-    (b"GIF89a....", "image/gif"),
-    (b"GIF87a....", "image/gif"),
+    (PNG, "image/png"),
+    (PNG + b"trailing image data", "image/png"),
+    (JPEG, "image/jpeg"),
+    (_webp(), "image/webp"),
+    (_webp(b"VP8 ", VP8_1X1), "image/webp"),
+    (_webp(b"VP8X", b"\x00" * 10), "image/webp"),
+    (b"GIF89a\x01\x00\x01\x00", "image/gif"),
+    (b"GIF87a\x01\x00\x01\x00", "image/gif"),
     (b"\x00\x00\x00\x18ftypisom", "video/mp4"),
     (b"\x00\x00\x00\x18ftypqt  ", "video/quicktime"),
     (b"hello", None),
@@ -94,6 +126,26 @@ def test_sniff(content, mime):
     assert r.sniff(content) == mime
 
 
+@pytest.mark.parametrize("content", [
+    b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4,  # signature + junk (the acceptance case)
+    PNG[:20],  # truncated IHDR
+    PNG[:29] + b"\x00\x00\x00\x00" + PNG[33:],  # bad CRC
+    _png(width=0),
+    b"\xff\xd8\xff" + bytes(range(256)) * 4,
+    _jpeg(height=0),
+    JPEG[:-13],  # cut inside the frame header
+    b"\xff\xd8\xff\xda\x00\x02",  # scan data before any frame header
+    _webp(riff_extra=100),  # RIFF size larger than the bytes sent
+    _webp(b"VP8 ", b"\x00" * 10),  # VP8 without its start code
+    _webp(b"VP8L", b"\x00\x00\x00\x00\x00"),  # VP8L without its signature byte
+    _webp(b"JUNK", b"\x00" * 10),
+    b"GIF89a\x00\x00\x01\x00",
+    b"GIF89a\x01",
+])
+def test_sniff_refuses_an_image_whose_header_does_not_decode(content):
+    assert r.sniff(content) is None
+
+
 def test_kinds_text():
     assert r.kinds_text(("image/jpeg",)) == "JPEG"
     assert r.kinds_text(("image/jpeg", "image/png", "image/webp")) == "JPEG、PNG 或 WebP"
@@ -101,11 +153,14 @@ def test_kinds_text():
 
 def test_check_image_upload():
     kinds = ("image/jpeg", "image/png", "image/webp")
-    assert r.check_image_upload("photo.jpg", b"\x89PNG\r\n\x1a\nxx", kinds) == "image/png"
+    assert r.check_image_upload("photo.jpg", PNG, kinds) == "image/png"
+    with pytest.raises(r.InputRuleError,
+                       match="^「broken.png」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。$"):
+        r.check_image_upload("broken.png", b"\x89PNG\r\n\x1a\n" + b"\x07" * 64, kinds)
     with pytest.raises(r.InputRuleError, match="^「empty.jpg」是空的檔案，請換一個。$"):
         r.check_image_upload("empty.jpg", b"", kinds)
     with pytest.raises(r.InputRuleError,
                        match="^「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。$"):
         r.check_image_upload("text.jpg", b"plain text", kinds)
     with pytest.raises(r.InputRuleError, match="不是JPEG、PNG 或 WebP 圖片"):
-        r.check_image_upload("anim.gif", b"GIF89a....", kinds)
+        r.check_image_upload("anim.gif", b"GIF89a\x01\x00\x01\x00", kinds)

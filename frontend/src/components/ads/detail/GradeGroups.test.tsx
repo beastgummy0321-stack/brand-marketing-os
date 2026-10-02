@@ -132,17 +132,17 @@ describe("GradeGroups", () => {
     expect(onToggle).toHaveBeenCalledWith("on_target", true);
   });
 
-  it("rows: long name wraps (never truncated), spend and per-purchase cost with decimals, 沒賣出 prints 購買 0 筆, 剛開始 prints the word", () => {
+  it("rows: long name wraps (never truncated), spend and per-purchase cost in whole yuan, 沒賣出 prints 購買 0 筆, 剛開始 prints the word", () => {
     renderGroups([ok, over, wasted, thin], { open: ["wasted", "over", "on_target", "thin"] });
     const okRow = screen.getByTestId("ad-row-a2");
     const name = within(okRow).getByText(LONG_NAME);
     expect(name.className).not.toMatch(/truncate/);
     expect(within(okRow).getByText("1,407 元")).toBeTruthy();
-    expect(within(okRow).getByText("50.25 元")).toBeTruthy();
+    expect(within(okRow).getByText("50 元")).toBeTruthy();
 
     const overRow = screen.getByTestId("ad-row-a7");
     expect(within(overRow).getByText("每賣一筆")).toBeTruthy();
-    expect(within(overRow).getByText("617.5 元")).toBeTruthy();
+    expect(within(overRow).getByText("618 元")).toBeTruthy();
     expect(within(overRow).getByText("比前 14 天 ▲10%")).toBeTruthy();
 
     const wastedRow = screen.getByTestId("ad-row-a8");
@@ -172,7 +172,7 @@ describe("GradeGroups", () => {
       current: { spend: 34.56, result_count: 10, cost_per_result: 3.456, result_kind: "link_click", result_label: "連結點擊", derived_zero_days: 0, reason: null },
     });
     const { unmount } = renderGroups([ok], { breakEven: null, open: ["on_target"] });
-    expect(screen.getByText("50.25 元")).toBeTruthy();
+    expect(screen.getByText("50 元")).toBeTruthy();
     expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
     unmount();
     renderGroups([clicks], { open: ["on_target"] });
@@ -215,7 +215,7 @@ describe("GradeGroups", () => {
     const row = screen.getByTestId("ad-row-c1");
     expect(within(row).getByText("未知")).toBeTruthy();
     expect(within(row).getByText("每次連結點擊成本")).toBeTruthy();
-    expect(within(row).getByText("3.46 元")).toBeTruthy();
+    expect(within(row).getByText("3 元")).toBeTruthy();
     // No cap: the group is 未判斷 and carries no hint.
     expect(detailsOf("未判斷").querySelector("summary")!.textContent).toBe("未判斷1 則");
   });

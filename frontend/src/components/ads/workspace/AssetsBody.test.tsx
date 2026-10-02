@@ -302,6 +302,29 @@ describe("AssetsBody — uploading into a slot", () => {
     expect(props.onOpenPlacements).toHaveBeenCalledTimes(1);
   });
 
+  it("the stored pending sentence is joined with one 。, and the next-step line goes once the slot reads 已確認", async () => {
+    vi.mocked(createUploadBatch).mockResolvedValue({ batch: { id: "ub_1", uploads: [{ id: "up_1", batch_id: "ub_1", filename: "morning.png", expected_size: 3, status: "complete", error: null, asset_id: "uas_2", copy_fields: {} }] } });
+    const after = slots();
+    after.groups[0].slots[3] = slot({ ad_id: "ad_a4", name: "早晨第一口・單圖", state: "waiting", confirmed: false, thumbnail_url: null });
+    vi.mocked(uploadIntoSlot).mockResolvedValue({ placement: placement({ pending_reason: "尚未確認素材安排。" }), slots: after });
+    const { props, rerender } = renderBody();
+    await screen.findByRole("heading", { name: "3／5 格已備妥" });
+    pick("早晨第一口・單圖");
+    const next = await screen.findByRole("status");
+    expect(next.textContent).toContain("已放進「早晨第一口・單圖」這一格；尚未確認素材安排。去確認安排 →");
+    expect(next.textContent).not.toContain("。。");
+
+    // Confirmed elsewhere (進階): the re-read shows the slot ready, so the line that asked for it is gone.
+    const confirmed = slots();
+    confirmed.groups[0].slots[3] = slot({ ad_id: "ad_a4", name: "早晨第一口・單圖", state: "ready" });
+    confirmed.ready = 4;
+    vi.mocked(getSlots).mockResolvedValue(confirmed);
+    rerender(<MemoryRouter><AssetsBody {...props} refreshKey={1} /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "4／5 格已備妥" });
+    expect(screen.queryByText(/尚未確認素材安排/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "去確認安排 →" })).toBeNull();
+  });
+
   it("a deduplicated upload skips the byte transfer; a confirmed placement needs no next step", async () => {
     vi.mocked(createUploadBatch).mockResolvedValue({ batch: { id: "ub_1", uploads: [{ id: "up_1", batch_id: "ub_1", filename: "morning.png", expected_size: 3, status: "complete", error: null, asset_id: "uas_2", copy_fields: {}, deduplicated: true }] } });
     vi.mocked(uploadIntoSlot).mockResolvedValue({ placement: placement({ confirmed_at: "2026-09-25T02:00:00Z" }), slots: slots() });

@@ -8,7 +8,8 @@ sent empty / ``None`` means unset.
   path, lead decision); channel revenue ``>= 0`` (0 is stored as 0).
 - ranges: each rule-card number field declares its own bounds (a margin is ``0 < x < 1``); a
   (min, max) pair with min > max is refused; dates: end ``>=`` start.
-- uploads: one content sniff (JPEG, PNG, WebP, GIF, MP4, MOV signatures). Each upload path keeps
+- uploads: one content sniff (JPEG, PNG, WebP, GIF, MP4, MOV signatures; images must also have a
+  readable header with dimensions, stdlib only — no image library). Each upload path keeps
   its own allowed kinds and size cap; content wins over the file name (a real PNG named ``.jpg``
   is accepted and stored as PNG).
 
@@ -21,6 +22,8 @@ copies.
 from __future__ import annotations
 
 import math
+import struct
+import zlib
 from datetime import date
 from decimal import Decimal
 
@@ -148,16 +151,89 @@ _MP4_BRANDS = {
 }
 
 
+def _png_header_ok(content: bytes) -> bool:
+    # First chunk must be IHDR: length 13, CRC over type+data, width/height > 0.
+    length, ctype = struct.unpack(">I4s", content[8:16])
+    data, crc = content[16:29], content[29:33]
+    if length != 13 or ctype != b"IHDR" or len(crc) != 4:
+        return False
+    width, height = struct.unpack(">II", data[:8])
+    return (zlib.crc32(ctype + data) == struct.unpack(">I", crc)[0]
+            and width > 0 and height > 0)
+
+
+_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+
+def _jpeg_header_ok(content: bytes) -> bool:
+    # Walk the marker segments up to the first SOFn and read its height/width.
+    i = 2
+    while i + 4 <= len(content):
+        if content[i] != 0xFF:
+            return False
+        marker = content[i + 1]
+        if marker == 0xFF:  # fill byte
+            i += 1
+            continue
+        if marker == 0x01 or 0xD0 <= marker <= 0xD8:  # standalone markers
+            i += 2
+            continue
+        if marker in (0xD9, 0xDA):  # end of image / scan data before any frame header
+            return False
+        (length,) = struct.unpack(">H", content[i + 2:i + 4])
+        if length < 2:
+            return False
+        if marker in _JPEG_SOF:
+            if length < 7 or i + 9 > len(content):
+                return False
+            height, width = struct.unpack(">HH", content[i + 5:i + 9])
+            return height > 0 and width > 0
+        i += 2 + length
+    return False
+
+
+def _webp_header_ok(content: bytes) -> bool:
+    # RIFF size must fit the bytes sent; the first chunk is VP8 / VP8L / VP8X with dimensions.
+    (riff_size,) = struct.unpack("<I", content[4:8])
+    if riff_size < 4 or 8 + riff_size > len(content):
+        return False
+    fourcc, (chunk_size,) = content[12:16], struct.unpack("<I", content[16:20])
+    payload = content[20:20 + chunk_size]
+    if fourcc == b"VP8 ":
+        if len(payload) < 10 or payload[3:6] != b"\x9d\x01\x2a":
+            return False
+        width, height = struct.unpack("<HH", payload[6:10])
+        return width & 0x3FFF > 0 and height & 0x3FFF > 0
+    if fourcc == b"VP8L":  # dimensions are stored minus one, so always > 0
+        return len(payload) >= 5 and payload[0] == 0x2F
+    if fourcc == b"VP8X":  # canvas size stored minus one
+        return len(payload) >= 10
+    return False
+
+
+def _gif_header_ok(content: bytes) -> bool:
+    width, height = struct.unpack("<HH", content[6:10])
+    return width > 0 and height > 0
+
+
+def _header_ok(check, content: bytes) -> bool:
+    try:
+        return check(content)
+    except (struct.error, IndexError):  # truncated header
+        return False
+
+
 def sniff(content: bytes) -> str | None:
-    """The media type the bytes really are (by signature), or ``None``."""
+    """The media type the bytes really are, or ``None``. Images must also carry a readable
+    header (dimensions > 0, PNG IHDR CRC) so a signature followed by junk is not an image."""
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
+        return "image/png" if _header_ok(_png_header_ok, content) else None
     if content.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
+        return "image/jpeg" if _header_ok(_jpeg_header_ok, content) else None
     if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
-        return "image/webp"
+        return "image/webp" if _header_ok(_webp_header_ok, content) else None
     if content[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
+        return "image/gif" if _header_ok(_gif_header_ok, content) else None
     if content[4:8] == b"ftyp":
         brand = content[8:12]
         if brand == b"qt  ":

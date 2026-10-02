@@ -9,6 +9,7 @@ import { getCoordinateLearnings } from "@/lib/adsLearningsApi";
 import { CloseCampaignDialog, LearningExits, coveredRange, shortDay } from "../CloseCampaignDialog";
 import { nativePerformance } from "../nativePerformance";
 import { Chip, GradeTermChip, ReadFailed, formatAmount } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 
 /** F40-I06 (drill-7 #9 #12, prototype `#/perf` `statusCard`): the 「這期狀態列」 on top of the 成效分頁 for a
  * live／ended／closed campaign. Five cells — 期間 (calendar days through today, the window I01 grades), 花費
@@ -96,7 +97,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const dash = perf.status === "loading" ? "…" : "—";
   const spend = totals ? `${formatAmount(totals.spend) ?? "—"} 元` : dash;
   const purchases = totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
-  const cpa = totals ? (totals.cpa === null ? "算不出來" : `${formatAmount(Math.round(totals.cpa))} 元`) : dash;
+  const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} 元`) : dash;
   const roasValue = totals ? (imported ? totals.roas : totals.roas_conservative) : null;
   const roas = totals ? (roasValue === null ? "未追蹤" : roasValue.toFixed(2)) : dash;
 

@@ -18,6 +18,7 @@ import {
   ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
   Term, TodoRow,
 } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 import {
   adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
   formatEntryDate, formatRevisitLabel, formatTargetAmount, formatWindowDate, HISTORY_KIND_LABEL,
@@ -461,6 +462,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               label={`每次${resultLabel}成本`}
               previous={adResultView(evidence.previous)?.cost_per_result ?? null}
               current={adResultView(evidence.current)?.cost_per_result ?? null}
+              format={perSaleAmount}
             />
             {/* v10 `mt(a)`: the cost against break-even, beside the grade's own ruler (the cap). */}
             <div className="numeric text-right">

@@ -52,8 +52,8 @@ def _response(payload, *, in_tok: int = 10, out_tok: int = 10) -> ProviderRespon
                             stop_reason="end_turn")
 
 
-# A JPEG signature: photo uploads are checked by content (F47 Contract A).
-_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+# A JPEG frame header (1x1): photo uploads are checked by content and header (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffc0000b080001000101011100ffd9")
 
 
 class _Base(unittest.TestCase):

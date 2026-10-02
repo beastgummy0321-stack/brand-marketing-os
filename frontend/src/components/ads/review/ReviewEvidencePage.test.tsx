@@ -219,7 +219,7 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.queryByText("商城訂單")).toBeNull();
     expect(screen.getByText("已處理 1 次")).toBeTruthy();
     expect(screen.getByText("9/6 改過文案")).toBeTruthy();
-    expect(screen.getByText("之後 7 天・每次名單成本 2 → 3.1")).toBeTruthy();
+    expect(screen.getByText("之後 7 天・每次名單成本 2 → 3")).toBeTruthy();
     expect(screen.getByText("這個活動看名單，不看商城訂單")).toBeTruthy();
   });
 

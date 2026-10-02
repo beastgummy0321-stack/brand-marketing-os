@@ -583,6 +583,13 @@ describe("PerformanceTab `?ad=` 深連結（F27-I22）", () => {
   });
 });
 
+it("CPA goes through the one per-sale rule: 971.54 prints NT$ 972 like home (F47-I06)", async () => {
+  vi.mocked(getPerformance).mockResolvedValue({ ...performance(), totals: { ...performance().totals, spend: 9715.4, purchases: 10, cpa: 971.54 } });
+  renderTab(campaign({ status: "live" }));
+  expect((await screen.findAllByText("NT$ 972")).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/971\.54/)).toBeNull();
+});
+
 describe("F36-I09 組織時鐘：提前結案說明", () => {
   useKiritimati();
   beforeEach(() => {

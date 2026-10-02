@@ -14,6 +14,7 @@ import {
 import { cleanupAction, isQueueItemDone, proposalAction } from "../home/status";
 import { decisionTitle } from "../home/QueueRow";
 import type { StepTarget } from "../nextStep";
+import { perSaleAmount } from "../patterns/csv";
 
 /** v10 (F30-I07) the workspace overview (prototype `tabOverview()` + `kvNumbers()`), in three states from
  * `GET …/workspace`: a draft's 上架前還差什麼 checklist (上限、預算、素材 x／y、上架 n／N, k／4) with the ruler preview;
@@ -47,6 +48,7 @@ export function rulerAds(structure: CampaignStructure): RulerAd[] {
 }
 
 const yuan = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
+const perSale = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
 const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
 const hm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
@@ -190,7 +192,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
                 {graded && T !== null ? (
                   <Meter value={a.cost_per_result} max={T * 1.6} marker={T}
                     tone={a.grade === "on_target" ? "success" : a.grade === "watch" ? "warning" : "danger"}
-                    left={<>每筆 {yuan(a.cost_per_result)}<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>}
+                    left={<>每筆 {perSale(a.cost_per_result)}<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>}
                     right={<span className="whitespace-nowrap">上限 {formatAmount(T)}</span>} />
                 ) : (
                   <>
@@ -346,7 +348,7 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
       <>
         <TargetRuler ads={ads} cap={cap} size="mini" tray={false} highlight={{ mode: "self", ids: [item.triage.entity_id] }} />
         <div className="numeric mt-1 flex justify-between gap-2 text-[11.5px] text-muted-foreground">
-          <span>每筆 {yuan(item.triage.current.cost_per_result)}<MoneyTag cost={item.triage.current.cost_per_result} breakEven={breakEven} /></span>
+          <span>每筆 {perSale(item.triage.current.cost_per_result)}<MoneyTag cost={item.triage.current.cost_per_result} breakEven={breakEven} /></span>
         </div>
       </>
     );
@@ -378,9 +380,10 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const closed = c.status === "closed";
   // On the platform, nothing spent yet: an unknown money cell is 「還沒開始花」, not 「未知」 (Contract E).
   const notSpent = ws.delivery === "waiting" ? "還沒開始花" : "未知";
-  const money = (v: number | null) => {
-    if (formatAmount(v) === null) return notSpent;
-    return !t?.currency || t.currency === "TWD" ? `${formatAmount(v)} 元` : `${t.currency} ${formatAmount(v)}`;
+  const money = (v: number | null, format: (v: number | null) => string | null = formatAmount) => {
+    const text = format(v);
+    if (text === null) return notSpent;
+    return !t?.currency || t.currency === "TWD" ? `${text} 元` : `${t.currency} ${text}`;
   };
   const cost = t?.cost_per_result ?? null;
   const results = t?.results ?? null;
@@ -406,7 +409,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
         </div>
         <div className={cell}>
           <span className={label}>{labels.conversion === "購買" ? "每賣一筆花多少" : labels.cpa}</span>
-          <b className={big}>{cost === null ? <span className="text-base text-muted-foreground">{unknownCost}</span> : money(cost)}</b>
+          <b className={big}>{cost === null ? <span className="text-base text-muted-foreground">{unknownCost}</span> : money(cost, perSaleAmount)}</b>
           {cost !== null && <MoneyTag cost={cost} breakEven={c.cap.break_even} />}
           {cost !== null && cap && (
             <Meter value={cost} max={cap.value * 1.6} marker={cap.value}

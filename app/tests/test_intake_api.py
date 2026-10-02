@@ -23,8 +23,12 @@ from app.intake import state  # noqa: E402
 _SEQ = [0]
 
 
-# A JPEG signature: photo uploads are checked by content (F47 Contract A).
-_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+# A JPEG frame header (1x1): photo uploads are checked by content and header (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffc0000b080001000101011100ffd9")
+# A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+       b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
 
 
 class _Base(unittest.TestCase):
@@ -167,7 +171,7 @@ class PhotoUploadTest(_Base):
 
     def test_get_photo_returns_bytes_and_unregistered_filename_404s(self):
         import io
-        content = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        content = PNG + b"fake-png-bytes"
         up = self.client.post("/api/intake/photos",
                               files={"photo": ("p.png", io.BytesIO(content), "image/png")})
         self.assertEqual(up.status_code, 200)
@@ -205,7 +209,7 @@ class PhotoUploadTest(_Base):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json(), {"error": "「empty.jpg」是空的檔案，請換一個。"})
 
-        png = b"\x89PNG\r\n\x1a\nreally a png"
+        png = PNG
         resp = self.client.post("/api/intake/photos",
                                 files={"photo": ("photo.jpg", io.BytesIO(png), "image/jpeg")})
         self.assertEqual(resp.status_code, 200, resp.text)

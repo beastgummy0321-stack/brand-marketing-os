@@ -142,7 +142,7 @@ describe("data gap (v10 camp/mid/overview)", () => {
     expect(screen.getByText("門檻：花到 1,350 元（上限 × 3）")).toBeTruthy();
     expect(await screen.findByText("已花 120 元")).toBeTruthy();
     expect(screen.getByText("9%")).toBeTruthy();
-    expect(screen.getByText(/每筆 160.09 元/)).toBeTruthy();
+    expect(screen.getByText(/每筆 160 元/)).toBeTruthy();
     expect(document.querySelectorAll("[data-slot=grade-rules]")).toHaveLength(1);
     expect(await screen.findByText("中秋活動帳戶讀取權限失效")).toBeTruthy();
     const tiles = [...document.querySelectorAll("[data-slot=day-tiles] i")];
@@ -187,7 +187,7 @@ describe("live (v10 camp/daily/overview)", () => {
     expect(within(kv).getByText("15,767 元")).toBeTruthy();
     expect(within(kv).getByText("09/10 – 09/23")).toBeTruthy();
     expect(within(kv).getByText("121 筆")).toBeTruthy();
-    expect(within(kv).getByText("130.31 元")).toBeTruthy();
+    expect(within(kv).getByText("130 元")).toBeTruthy();
     expect(plain(kv.querySelector("[data-slot=money-tag]")!)).toBe("・有賺（打平 520）");
     expect(kv.textContent).toContain("ROAS 參考 12.13");
     expect(within(kv).getByText("8／6 則")).toBeTruthy();

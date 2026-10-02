@@ -48,7 +48,7 @@ function Assignments({ brandId, campaignId, refreshKey = 0, onSaved }: Props) {
         const next = await getPlannedMaterials(brandId, campaignId, active.signal);
         if (active.signal.aborted) return;
         setData(next);
-        setNotice(placed.confirmed_at ? "素材版本已指派，首次上架清單會核對這份對應。" : `已放進「${ad.name}」這一格；${placed.pending_reason || "確認文案與用途後才算備妥"}。`);
+        setNotice(placed.confirmed_at ? "素材版本已指派，首次上架清單會核對這份對應。" : `已放進「${ad.name}」這一格；${(placed.pending_reason || "確認文案與用途後才算備妥").replace(/。+$/, "")}。`);
       }
       setPlacementId("");
       onSaved?.();

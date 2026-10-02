@@ -20,8 +20,12 @@ from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.main import app
 
-CONTENT = b"\x89PNG\r\n\x1a\noriginal-bytes"
-OTHER_CONTENT = b"\x89PNG\r\n\x1a\nanother-original"
+# A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+       b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+CONTENT = PNG + b"original-bytes"
+OTHER_CONTENT = PNG + b"another-original"
 FULL_COPY = {"headline": "標題", "body": "文案", "description": "說明"}
 
 

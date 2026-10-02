@@ -17,7 +17,7 @@ import { perSaleAmount } from "../patterns/csv";
  * 800-line cap (`architectureBoundaries.test.ts`). The cards are page-private except `BudgetFitCard`, which the
  * first-launch list (`publish/PublishList.tsx`, F41-I05) reuses so the month-budget card exists once. */
 
-const nt = (value: number | null) => formatCurrency(value === null ? null : Math.round(value));
+const nt = (value: number | null) => (value === null ? formatCurrency(null) : `NT$ ${perSaleAmount(value)}`);
 
 /** The stop-loss meter (prototype F45 `evidence()`): with sales, the cost per sale against the cap; without, the
  * spend against the 「上限 × 3」 line. No cap → captions only (the kit `Meter` draws no guessed bar). */

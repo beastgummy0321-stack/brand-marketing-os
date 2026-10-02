@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { QueueItem, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
 import { Chip, GRADE_FILL, GRADE_LABEL, MoneyTag, Term, formatAmount, type Grade } from "../patterns";
 import { cleanupAction, proposalAction } from "../home/status";
+import { perSaleAmount } from "../patterns/csv";
 
 /** F28-I10, v10 F29-I13: the campaign detail's grade groups (prototype v10 `tabPerf()` groups + `row` + `menu()`).
  * Every active ad arrives already graded against the campaign's one cap (`TriageItem.grade`/`grade_label`, Feature
@@ -110,6 +111,7 @@ function AdThumb({ url }: { url: string | null }) {
 }
 
 const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
+const perSale = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
 
 const isPurchase = (item: TriageItem) =>
   item.current.result_kind === "purchase" || (item.current.result_kind === null && item.target.result_kind === "purchase");
@@ -127,7 +129,7 @@ function ResultCell({ item, breakEven }: { item: TriageItem; breakEven: number |
     return <NumberCell label={label} value={<span className="text-[13px] font-medium text-muted-foreground">{word}</span>} />;
   }
   return (
-    <NumberCell label={label} value={money(m.cost_per_result)}>
+    <NumberCell label={label} value={perSale(m.cost_per_result)}>
       {purchase && <MoneyTag cost={m.cost_per_result} breakEven={breakEven} className="block" />}
     </NumberCell>
   );

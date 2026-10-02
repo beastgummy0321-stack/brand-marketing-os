@@ -250,7 +250,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(screen.getByTestId("ad-row-a7")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("href")).toBe(`${WS}/review/a6`);
     expect(within(wasted).getByText("0 筆")).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a7")).getByText("617.5 元")).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a7")).getByText("618 元")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看清理提議 →" }).getAttribute("href")).toBe(`${WS}/propose/cleanup/cmp_1`);
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe(WS);
 

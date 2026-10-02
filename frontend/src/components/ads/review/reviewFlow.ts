@@ -6,6 +6,7 @@
 import type { QueueItem, QueuePayload, TriageHistoryEntry } from "@/lib/adsTriageApi";
 import type { CommerceEvidence, Recommendation, ReviewPeriod, ReviewResultView } from "@/lib/adsReviewApi";
 import { decisionPosition } from "../home/status";
+import { perSaleAmount } from "../patterns/csv";
 
 export type ReviewStepName = "review" | "prepare" | "copy";
 
@@ -122,5 +123,5 @@ export function formatEntryDate(iso: string): string {
 /** `cost_before`/`cost_after` printed value — `null` (fewer than 7 known days, contract A) reads
  * as the same 「待確認」 unknown label `EvidenceRow` uses, never a guessed number. */
 export function formatCostLabel(value: number | null): string {
-  return value === null ? "待確認" : value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
+  return perSaleAmount(value) ?? "待確認";
 }

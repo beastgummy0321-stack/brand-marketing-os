@@ -10,8 +10,9 @@ const fmt = (v: number | null) => (v === null ? null : v.toLocaleString("zh-TW",
 /** `.ev`: one evidence line — label, previous/current bars, current value over 「前期 X」, delta.
  * `current === null` draws the hatched 「待確認」 bar and no delta; `previous === null` prints
  * 「前期 未知」. Delta is `▲/▼N%` of current against previous, 「持平」 when rounded 0. */
-export function EvidenceRow({ label, previous, current, unknownLabel = "待確認" }: {
+export function EvidenceRow({ label, previous, current, unknownLabel = "待確認", format = fmt }: {
   label: string; previous: number | null; current: number | null; unknownLabel?: string;
+  format?: (v: number | null) => string | null;
 }) {
   const max = Math.max(previous ?? 0, current ?? 0) || 1;
   const pct = (v: number | null) => (v === null ? 0 : (v / max) * 100);
@@ -31,8 +32,8 @@ export function EvidenceRow({ label, previous, current, unknownLabel = "待確�
           : <div className="my-[3px] h-[7px] rounded bg-primary" style={{ width: `${pct(current)}%` }} />}
       </div>
       <div className="numeric text-right">
-        <b className="block text-base">{current === null ? <span className="font-normal text-muted-foreground">{unknownLabel}</span> : fmt(current)}</b>
-        <small className="text-[11.5px] text-muted-foreground">前期 {previous === null ? "未知" : fmt(previous)}</small>
+        <b className="block text-base">{current === null ? <span className="font-normal text-muted-foreground">{unknownLabel}</span> : format(current)}</b>
+        <small className="text-[11.5px] text-muted-foreground">前期 {previous === null ? "未知" : format(previous)}</small>
       </div>
       <div className="numeric text-right text-xs font-semibold">{delta}</div>
     </div>
