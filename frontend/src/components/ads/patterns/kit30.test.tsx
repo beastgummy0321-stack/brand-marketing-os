@@ -190,7 +190,7 @@ describe("SlotGrid", () => {
     const tiles = within(screen.getByRole("list", { name: "廣告組 B" })).getAllByRole("listitem");
     expect(tiles.map((t) => t.dataset.variant)).toEqual(["ready", "copy-only", "image-only"]);
     expect(within(tiles[0]).getByText(/文案 · 已確認/)).toBeTruthy();
-    expect(within(tiles[0]).getByText(/^通勤路上，一顆就好\s捷運上不用找水。$/).className).toContain("line-clamp-2");
+    expect(within(tiles[0]).getByText(/^通勤路上，一顆就好\s捷運上不用找水。$/).className).toContain("line-clamp-3");
     expect(within(tiles[1]).getByText("缺圖")).toBeTruthy();
     expect(within(tiles[1]).getByRole("button", { name: "上傳" })).toBeTruthy();
     expect(within(tiles[1]).getByText(/文案 · 工作檯第 1 版/)).toBeTruthy();
