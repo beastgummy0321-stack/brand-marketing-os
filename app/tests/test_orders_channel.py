@@ -177,6 +177,19 @@ class ManualChannelEntryDataCorrectnessTest(_BaseChannelTest):
         # 不認得的通路、以及「官網不能手動登錄」，都在 test_orders_api.py 的
         # channel-entry 契約測試裡驗（同一個行為不在兩層各測一次）。
 
+    def test_zero_revenue_is_stored_as_zero_and_negative_is_refused(self):
+        """F47 Contract A (drill-10 V3): 0 is a real amount, not 「未填」; a negative is refused."""
+        orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-02",
+            revenue=0, quantity=None, note="零元", actor=ACTOR)
+        summary = orders_repo.channel_revenue_summary(
+            web.conn, self.bid, since="2026-06-02", until="2026-06-02")
+        self.assertEqual(summary["revenue"], 0)
+        with self.assertRaisesRegex(ValueError, "^營收不能是負數。$"):
+            orders_channel.record_channel_entry(
+                web.conn, self.bid, channel="physical_store", entry_date="2026-06-03",
+                revenue=-5, quantity=None, note=None, actor=ACTOR)
+
 
 class ManualChannelEntryDedupeTest(_BaseChannelTest):
     """票 T7：手動登記本來沒有 external_id，partial unique index 去不了重——按兩次同一張

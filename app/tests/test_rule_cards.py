@@ -176,5 +176,14 @@ class RuleCardValueTest(unittest.TestCase):
             rule_cards.reset_card(self.conn, BID_A, "沒這張卡", actor="測試員", org_id=db.DEV_ORG_ID)
 
 
+class RuleCardCopyTest(unittest.TestCase):
+    def test_card_texts_name_rules_in_chinese(self):
+        """F47: the card texts say 必守規則／參考規則, not the internal hard / soft."""
+        for card in rule_cards.CARDS.values():
+            texts = [card["description"], *(f["help"] for f in card["fields"].values())]
+            for text in texts:
+                self.assertNotRegex(text, r"\b(hard|soft)\b")
+
+
 if __name__ == "__main__":
     unittest.main()

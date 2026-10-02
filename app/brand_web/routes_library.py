@@ -32,7 +32,7 @@ from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
-from app.core import cleanup
+from app.core import cleanup, input_rules
 from app.core import settings as core_settings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
@@ -47,10 +47,7 @@ PROVIDER = providers.AnthropicProvider()
 PARSE_FAIL_MESSAGE = cv_mod.PARSE_FAIL_MESSAGE
 COST_CUSTOMER_VOICE_EXTRACTION = cv_mod.COST_CUSTOMER_VOICE_EXTRACTION
 
-_ASSET_CONTENT_TYPES = {
-    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-    "webp": "image/webp", "gif": "image/gif",
-}
+_ASSET_KINDS = ("image/jpeg", "image/png", "image/webp", "image/gif")
 _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 # 上傳大小上限。50 MiB **不是這裡挑的數字**——它是 `supabase/config.toml` `[storage]` 的
@@ -77,20 +74,22 @@ def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: s
     if product_id and not repo.get_product(web.conn, brand_id, product_id):
         return False, "找不到所選產品。"
     filename = filename or ""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if not filename or not content:
+    if not filename:
         return False, "請選擇一個圖檔上傳。"
     if len(content) > _MAX_ASSET_BYTES:  # 路由已擋一次；這裡是給非 HTTP 呼叫端的第二道
         return False, "這個檔案超過 50 MB，請壓小一點再上傳。"
-    if ext not in _ASSET_CONTENT_TYPES:
-        return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
+    # F47 Contract A: the content decides (not the extension) and is the stored type.
+    try:
+        content_type = input_rules.check_image_upload(filename, content, _ASSET_KINDS)
+    except input_rules.InputRuleError as exc:
+        return False, str(exc)
 
     asset_id = new_id("oas")
     safe_name = _safe_asset_filename(filename)
     key = f"{org_id}/brands/{brand_id}/assets/{asset_id}/{safe_name}"
     try:
         storage.put(org_id=org_id, key=key, filename=safe_name, content=content,
-                    content_type=_ASSET_CONTENT_TYPES[ext])
+                    content_type=content_type)
         repo.create_official_asset(
             web.conn, brand_id, actor=actor, asset_kind=asset_kind, storage_key=key,
             product_id=product_id or None, title=clean(title) or None,

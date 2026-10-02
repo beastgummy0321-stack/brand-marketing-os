@@ -81,3 +81,15 @@ def test_unbounded_metadata_rejected(duration, width):
     ).encode()
     with patch.object(media, "_run", return_value=raw), pytest.raises(media.MediaError):
         media.preview(b"\x00\x00\x00\x18ftypisom")
+
+
+def test_sniff_delegates_to_the_shared_rule_and_keeps_slot_kinds():
+    """F47 Contract A: one content sniff (`app.core.input_rules.sniff`); a slot still accepts
+    only JPEG / PNG / WebP / MP4 / MOV (a GIF is a library-asset kind, not a slot kind)."""
+    assert media.sniff(b"\x89PNG\r\n\x1a\nbody") == "image/png"
+    assert media.sniff(b"\x00\x00\x00\x18ftypqt  ") == "video/quicktime"
+    with pytest.raises(media.MediaError, match="JPEG、PNG、WebP、MP4 或 MOV"):
+        media.sniff(b"GIF89a....")
+    with patch.object(media.input_rules, "sniff", return_value="image/webp") as shared:
+        assert media.sniff(b"anything") == "image/webp"
+    shared.assert_called_once_with(b"anything")

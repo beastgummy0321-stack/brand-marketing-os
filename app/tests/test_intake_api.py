@@ -133,7 +133,7 @@ class PhotoUploadTest(_Base):
     def test_upload_then_reference_token_in_start(self):
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         body = up.json()
         self.assertEqual(set(body.keys()), {"token", "name", "size_mb"})
@@ -154,7 +154,7 @@ class PhotoUploadTest(_Base):
         （proven red once：暫時把斷言換成別的 org 前綴，看它真的失敗，再改回來）。"""
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         token = up.json()["token"]
         storage_key = state.get_pending_photos(token)[0]["storage_key"]
@@ -187,6 +187,27 @@ class PhotoUploadTest(_Base):
         resp = self.client.post("/api/intake/photos",
                                 files={"photo": ("t.exe", io.BytesIO(b"x" * 10), "application/octet-stream")})
         self.assertEqual(resp.status_code, 400)  # COPY trim：精確中文文案不測
+
+    def test_content_decides_not_the_file_name(self):
+        """F47 Contract A: a text file named .jpg and a 0-byte file are refused with the user
+        sentence; a real PNG named .jpg is accepted and stored as PNG."""
+        import io
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("text.jpg", io.BytesIO(b"just text"), "image/jpeg")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"error": "「text.jpg」的內容不是JPEG、PNG 或 WebP圖片，請換一張。"})
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("empty.jpg", io.BytesIO(b""), "image/jpeg")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"error": "「empty.jpg」是空的檔案，請換一個。"})
+
+        png = b"\x89PNG\r\n\x1a\nreally a png"
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("photo.jpg", io.BytesIO(png), "image/jpeg")})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        key = state.get_pending_photos(resp.json()["token"])[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=key)
+        self.assertEqual(storage.get(org_id=DEV_ORG_ID, key=key), (png, "image/png"))
 
 
 # ---------------------------------------------------------------------------

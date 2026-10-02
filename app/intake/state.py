@@ -12,6 +12,7 @@ import os
 import re
 
 from app import storage
+from app.core import input_rules
 from app.core.db import new_id
 from app.intake import repository as ir
 
@@ -209,7 +210,9 @@ def save_photo(token: str, filename: str, content: bytes, *, org_id: str) -> dic
     name = safe_filename(filename)
     key = f"{org_id}/intake/{token}/{name}"
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    content_type = _PHOTO_CONTENT_TYPES.get(ext, "application/octet-stream")
+    # F47 Contract A: the stored type is what the bytes are (a PNG named .jpg is stored as PNG).
+    content_type = (input_rules.sniff(content)
+                    or _PHOTO_CONTENT_TYPES.get(ext, "application/octet-stream"))
     storage.put(org_id=org_id, key=key, filename=name, content=content, content_type=content_type)
     entry = {"name": name, "size_mb": round(len(content) / (1024 * 1024), 1), "storage_key": key}
     PENDING_PHOTOS.setdefault(token, []).append(entry)
@@ -223,15 +226,17 @@ def discard_pending_photos(token: str) -> None:
     PENDING_PHOTOS.pop(token, None)
 
 
-PHOTO_EXTS = ("jpg", "jpeg", "png", "webp")
+PHOTO_KINDS = ("image/jpeg", "image/png", "image/webp")
 
 
 def validate_photo_upload(filename: str, content: bytes) -> str | None:
-    """副檔名／單張大小驗證（S4.6）；回傳人話錯誤，通過回 None。HTML 表單與 JSON
-    `/api/intake/photos` 共用同一支，不各自寫一份。"""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in PHOTO_EXTS:
-        return f"「{filename}」不是支援的圖片格式，請用 .jpg、.png 或 .webp。"
+    """Brand photo check (S4.6): the content (not the extension) must be JPEG / PNG / WebP and
+    not empty (F47 Contract A, `app.core.input_rules`), and one photo is at most 10 MB. Returns
+    the user sentence, or None when it passes. The one check behind `/api/intake/photos`."""
+    try:
+        input_rules.check_image_upload(filename, content, PHOTO_KINDS)
+    except input_rules.InputRuleError as exc:
+        return str(exc)
     if round(len(content) / (1024 * 1024), 1) > 10:
         return f"「{filename}」超過 10 MB，請換一張小一點的照片。"
     return None

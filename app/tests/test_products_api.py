@@ -373,6 +373,26 @@ class EconomicsTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 400)
         self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
 
+    def _save(self, pid: str, **money):
+        body = {"selling_price": 690, "fixed_cost": 0, "unit_variable_cost": 0, "shipping_cost": 0,
+                "currency": "TWD", "effective_from": "", "confirmed_by": "小陳", **money}
+        return self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/economics", json=body)
+
+    def test_store_keeps_what_was_sent_or_refuses_naming_the_field(self):
+        """F47 Contract A (drill-10 V3): price 0 and a negative cost are refused with the field
+        sentence (nothing saved); a negative shipping (a discount) is stored as typed."""
+        pid = self._create_product()
+        resp = self._save(pid, selling_price=0)
+        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "售價要大於 0。"}))
+        resp = self._save(pid, unit_variable_cost=-1)
+        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "單位變動成本不能是負數。"}))
+        resp = self._save(pid, fixed_cost=-1)
+        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "固定成本不能是負數。"}))
+        self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
+
+        self.assertEqual(self._save(pid, shipping_cost=-20).status_code, 204)
+        self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid, raw=True)["shipping_cost"], -20)
+
 
 class HandoffTest(_BaseProductsApiTest):
     def test_prompt_get(self):
