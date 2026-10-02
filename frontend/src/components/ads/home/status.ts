@@ -1,7 +1,7 @@
 import type { CampaignStatus } from "@/lib/adsApi";
 import type { HomeOverview } from "@/lib/adsHomeApi";
 import type {
-  QueueItem, QueuePauseProposal, QueueProposal, QueueReviewProposal, SettleQueueRow,
+  QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, SettleQueueRow,
 } from "@/lib/adsTriageApi";
 
 /** F19-I02：從 `AdsHomePage.tsx` 抽出，讓 `home/CampaignCards.tsx` 跟 `AdsHomePage.tsx` 都能讀，
@@ -204,6 +204,52 @@ export function cleanupAction(
  * home list and 「下一件」 all read that one field; there is no second copy of the rule here. */
 export function isQueueItemDone(item: QueueItem): boolean {
   return item.done;
+}
+
+/** The ad-level kinds the home 「需要你決定」 board shows, in board order (the brand's settle row joins them in
+ * `decisionBoard`). Same set as the backend's `queue_done.DECISION_KINDS`, which the top bar's `open_items` counts. */
+const DECISION_ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];
+
+/** The home board's ad-level rows, open and handled, in board order — split by the row's own `done`. */
+export function decisionRows(queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
+  const rows = queue.items
+    .filter((item) => DECISION_ORDER.includes(item.kind_key))
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => DECISION_ORDER.indexOf(a.item.kind_key) - DECISION_ORDER.indexOf(b.item.kind_key) || a.i - b.i)
+    .map(({ item }) => item);
+  return { open: rows.filter((item) => !isQueueItemDone(item)), done: rows.filter((item) => isQueueItemDone(item)) };
+}
+
+/** One entry of the home board: an ad-level queue row, or the brand's period-settle row. */
+export type HomeDecision = { kind: "item"; item: QueueItem } | { kind: "settle"; row: SettleQueueRow };
+
+/** Board order (prototype): cleanup, worse, settle, refresh_creative. `open.length` is the home's count and the top
+ * bar's `open_items`; the flow pages' 「第 N 件／共 M 件」 is a position in `open` (`decisionPosition`). */
+export function decisionBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[] } {
+  const items = decisionRows(queue);
+  const place = (list: QueueItem[], settle: SettleQueueRow | null): HomeDecision[] => {
+    const entries: HomeDecision[] = list.map((item) => ({ kind: "item", item }));
+    if (!settle) return entries;
+    const at = entries.findIndex((e) => e.kind === "item" && e.item.kind_key === "refresh_creative");
+    entries.splice(at < 0 ? entries.length : at, 0, { kind: "settle", row: settle });
+    return entries;
+  };
+  const settle = queue.settle ?? null;
+  const settleDone = settle ? settleAction(brandId, settle).done : false;
+  return {
+    open: place(items.open, settle && !settleDone ? settle : null),
+    done: place(items.done, settle && settleDone ? settle : null),
+  };
+}
+
+/** F47-I07: 「第 N 件／共 M 件」 on a flow page — the row's place among the open home decisions, counted by the same
+ * owner as the home and the top bar. `null` when the row is not one of them (handled, or a kind the board does not
+ * show): no position is invented for it. */
+export function decisionPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
+  if (!queue || !item || item.brand_id === null) return null;
+  const open = decisionBoard(item.brand_id, queue).open;
+  const at = open.findIndex((d) => d.kind === "item" && d.item.id === item.id);
+  return at < 0 ? null : { pos: at + 1, total: open.length };
 }
 
 /** F29-I11 (Contract E): the brand-level period-settle row's own action. Its link is the row's own

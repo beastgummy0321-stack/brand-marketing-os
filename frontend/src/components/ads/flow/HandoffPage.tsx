@@ -262,6 +262,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
             items={changeSet.items}
             opened={ahead ? new Set([...cleanupOpened, ...reported]) : cleanupOpened}
             onOpen={(id) => setCleanupOpened((prev) => new Set(prev).add(id))}
+            readOnly={ahead !== null}
           />
         </div>
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
@@ -339,9 +340,9 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
       <div className="rounded-xl border border-border bg-card px-6">
         {rows}
-        <TodoRow no={3} action={<span aria-hidden="true" className="text-lg text-muted-foreground">↘</span>}>
+        {!ahead && <TodoRow no={3} action={<span aria-hidden="true" className="text-lg text-muted-foreground">↘</span>}>
           回來按「我做完了」
-        </TodoRow>
+        </TodoRow>}
       </div>
 
       {kind === "copy" && (

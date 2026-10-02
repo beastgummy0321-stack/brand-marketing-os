@@ -47,6 +47,7 @@ import {
   cleanupProposePath,
   cleanupTitle,
   findFlowTriageItem,
+  flowPosition,
   isAbSet,
   isCleanupTriageItem,
   isMonthBudgetRejection,
@@ -150,7 +151,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     }
     return findFlowTriageItem(queue, changeSet);
   }, [queue, entityId, proposeKind, changeSet, setId, campaignId]);
-  const position = queue && triageItem ? { pos: queue.items.indexOf(triageItem) + 1, total: queue.items.length } : null;
+  const position = flowPosition(queue, triageItem);
   // F27-I15 Contract F: a cleanup set names itself (`source: "cleanup"`, F29-I04), so a failed queue read cannot turn
   // it into a "multi-item" set; the queue's own `cleanup` row still recognises a propose-route cleanup.
   const cleanupSet = changeSet?.source === "cleanup" || isCleanupTriageItem(triageItem);

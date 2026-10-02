@@ -6,7 +6,7 @@ import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsCh
 import type { QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 // F25-I03: 「下一件」跨 kind 共用同一顆判斷——home 列表跟這裡的 handoff/verify 頁不能各算各的
 // （feature Decisions「下一件」）。只 import，不改 `home/status.ts`（F25-I02 同時在改那支檔）。
-import { isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
+import { decisionPosition, isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
 
 export type FlowStepName = "confirm" | "handoff" | "verify";
 
@@ -256,9 +256,10 @@ export function findFlowTriageItem(queue: QueuePayload | null, changeSet: Change
   return queue.items.find((i) => i.proposal?.change_set_id === changeSet.id || queueItemEntityId(i) === targetId) ?? null;
 }
 
+/** 「第 N 件／共 M 件」: F47-I07 — counted by the home board's owner (`home/status.ts::decisionPosition`, open home
+ * decisions by the row's own `done`), the same number the home and the top bar show; never every queue row. */
 export function flowPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
-  if (!queue || !item) return null;
-  return { pos: queue.items.indexOf(item) + 1, total: queue.items.length };
+  return decisionPosition(queue, item);
 }
 
 /** F25-I03: the id that identifies "which thing" a queue row is about, for the four `kind_key`s —

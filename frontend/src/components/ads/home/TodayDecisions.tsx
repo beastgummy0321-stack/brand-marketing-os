@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { GradeMove, QueueCleanupAd, QueueItem, QueueKind, QueuePayload, SettleQueueRow } from "@/lib/adsTriageApi";
+import type { GradeMove, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 import { Chip, Disclosure, GRADE_LABEL, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount } from "../patterns";
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
 import { DoneChip, QueueRow, decisionTitle, homeAction } from "./QueueRow";
 import { SettleCard, SettleRow, settleRange } from "./SettleCard";
-import { isQueueItemDone, settleAction } from "./status";
+import { decisionBoard, decisionRows, settleAction, type HomeDecision } from "./status";
 
 /** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open `cleanup`, `worse`, period `settle`
  * and `refresh_creative` rows, in that order; three as cards (the settle card spans the row), the rest behind one
@@ -22,44 +22,19 @@ export type QueueState =
   | { status: "error"; message: string }
   | { status: "ready"; queue: QueuePayload };
 
-const ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];
 const SHOWN = 3;
 
 /** The ad-level home decisions of a queue, split into open and handled, in board order (the settle row is not an ad
- * row; `homeBoard` adds it). Also read by the settle page for its 「第 N 件」 position. */
+ * row; `homeBoard` adds it). Also read by the settle page for its 「第 N 件」 position. F47-I07: the rule lives in
+ * `status.ts::decisionRows`, shared with the flow pages' 「第 N 件／共 M 件」. */
 export function homeDecisions(_brandId: string, queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
-  const rows = queue.items
-    .filter((item) => ORDER.includes(item.kind_key))
-    .map((item, i) => ({ item, i }))
-    .sort((a, b) => ORDER.indexOf(a.item.kind_key) - ORDER.indexOf(b.item.kind_key) || a.i - b.i)
-    .map(({ item }) => item);
-  // F47 Contract D: the row's own `done` (the same field the top bar's count reads), never re-derived here.
-  return {
-    open: rows.filter((item) => !isQueueItemDone(item)),
-    done: rows.filter((item) => isQueueItemDone(item)),
-  };
+  return decisionRows(queue);
 }
 
-/** One entry of the home board: an ad-level queue row, or the brand's period-settle row. */
-export type HomeDecision = { kind: "item"; item: QueueItem } | { kind: "settle"; row: SettleQueueRow };
+export type { HomeDecision };
 
 /** Board order (prototype): cleanup, worse, settle, refresh_creative. The count on 「今天」 is `open.length`. */
-export function homeBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[] } {
-  const items = homeDecisions(brandId, queue);
-  const place = (list: QueueItem[], settle: SettleQueueRow | null): HomeDecision[] => {
-    const entries: HomeDecision[] = list.map((item) => ({ kind: "item", item }));
-    if (!settle) return entries;
-    const at = entries.findIndex((e) => e.kind === "item" && e.item.kind_key === "refresh_creative");
-    entries.splice(at < 0 ? entries.length : at, 0, { kind: "settle", row: settle });
-    return entries;
-  };
-  const settle = queue.settle ?? null;
-  const settleDone = settle ? settleAction(brandId, settle).done : false;
-  return {
-    open: place(items.open, settle && !settleDone ? settle : null),
-    done: place(items.done, settle && settleDone ? settle : null),
-  };
-}
+export const homeBoard = decisionBoard;
 
 const keyOf = (d: HomeDecision) => (d.kind === "settle" ? `settle-${d.row.id}` : d.item.id);
 

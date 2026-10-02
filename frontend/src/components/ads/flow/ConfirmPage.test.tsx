@@ -1083,7 +1083,7 @@ describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
     const user = userEvent.setup();
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet()] });
     vi.mocked(triageApi.getQueue).mockReset();
-    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem()]));
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem({ kind_key: "worse" })]));
     renderAt(confirmPath());
     expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
@@ -1191,7 +1191,8 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
       grade: "over", grade_label: "太貴",
       current: { spend: 3380, result_count: 5, cost_per_result: 676, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     }) }));
-    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ id: "int_0", triage: triage({ entity_id: "aex_0" }) }), queueItem()]));
+    // F47-I07: 「第幾件」 counts the open home decisions (here two 變貴 rows), by the rows' own done.
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ id: "int_0", kind_key: "worse", triage: triage({ entity_id: "aex_0" }) }), queueItem({ kind_key: "worse" })]));
     renderAt(proposePath);
     expect(await screen.findByText("第 2 件／共 2 件")).toBeTruthy();
     const card = document.querySelector("[data-state=active]") as HTMLElement;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import { bandState, cleanupAction, isQueueItemDone, settleAction } from "./status";
+import { bandState, cleanupAction, decisionPosition, isQueueItemDone, settleAction } from "./status";
 import { nextOpenQueueItem } from "../flow/changeFlow";
 
 // F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
@@ -74,6 +74,31 @@ describe("isQueueItemDone", () => {
     expect(isQueueItemDone(queueItem({ proposal: deferredReview, done: true }))).toBe(true);
     expect(isQueueItemDone(queueItem({ proposal: deferredReview, done: false }))).toBe(false);
     expect(isQueueItemDone(queueItem({ proposal: null, done: false }))).toBe(false);
+  });
+});
+
+// F47-I07: the flow pages' 「第 N 件／共 M 件」 and the home count share one owner: open home decisions by `done`.
+describe("decisionPosition", () => {
+  const payload = (items: QueueItem[], settle: SettleQueueRow | null = null) => ({
+    items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0,
+    kinds_available: [], kinds_pending: [], settle,
+  });
+  const refresh = queueItem({ id: "r", kind_key: "refresh_creative" });
+  const worse = queueItem({ id: "w" });
+  const handled = queueItem({ id: "h", done: true });
+  const gap = queueItem({ id: "g", kind_key: "insufficient_data" });
+
+  it("counts open home decisions in board order, settle before refresh; skips handled and non-board rows", () => {
+    const q = payload([refresh, handled, gap, worse], settleRow());
+    expect(decisionPosition(q, worse)).toEqual({ pos: 1, total: 3 });
+    expect(decisionPosition(q, refresh)).toEqual({ pos: 3, total: 3 });
+  });
+
+  it("a handled row or a row the board does not show has no position", () => {
+    const q = payload([worse, handled, gap]);
+    expect(decisionPosition(q, handled)).toBeNull();
+    expect(decisionPosition(q, gap)).toBeNull();
+    expect(decisionPosition(null, worse)).toBeNull();
   });
 });
 
