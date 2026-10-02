@@ -248,7 +248,7 @@ class ProductPrefillTest(_Base):
         self.assertEqual(self.client.post(self._step("prd_missing", "/scan")).status_code, 404)
         done = self._create("益生菌軟糖")
         resp = self.client.put(self._step(done, "/sell-ways"),
-                               json={"sell_ways": [{"name": "單盒", "qty": 1, "price": 399}]})
+                               json={"sell_ways": [{"name": "單盒", "price": 399}]})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual(self.client.post(self._step(done, "/complete")).status_code, 200)
         self.assertEqual(self.client.post(self._step(done, "/scan")).status_code, 400)  # finished
