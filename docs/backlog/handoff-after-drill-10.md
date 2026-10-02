@@ -33,8 +33,9 @@ Start here in the next session. A board, not an implementation authorization. Re
 - Order: dig and fix in a separate session, **then run the drill again** (see "After the fixes").
 
 ## Fixes built: F45, F46, F47 (2026-10-02)
-Built on branch `feature/drill10-recover` (contains all three); not merged to master, human acceptance pending (each feature's
-`human` list in `.work/features/F4{5,6,7}.md`). Rulings and as-built: `docs/architecture/ads.md` §6.49 (F45), §6.49.1 (F46),
+Accepted by the user (「通過」, side-by-side pages `.harness/scratch/prototype/F4{5,6,7}-side-by-side.html`) and merged to master
+2026-10-02 (not pushed). Lead runtime acceptance: `.harness/scratch/acceptance-f45-f47/report.md` (40 checks, the one failure fixed
+after). Drill tools fixed for drill 11 in 420ad723 (`fake_meta reset` before reuse; `tw_sim --audience group` reproduces drill 10). Rulings and as-built: `docs/architecture/ads.md` §6.49 (F45), §6.49.1 (F46),
 §6.49.2 (F47); `docs/architecture/intake.md` 「F45」, 「F47」; `docs/architecture/workbench.md` (F46 offer backing, F47 Q7 and
 commit-before-enqueue); `docs/design-system.md` §6 (F47 feedback pieces). By report §1 root-cause group:
 - Blocking B1 / B2 / B3 — done (F45).
