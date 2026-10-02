@@ -22,10 +22,6 @@ const CHIP: Record<LaunchItem["state"], [ChipTone, string]> = {
   todo: ["neutral", "還沒建"], changed: ["warn", "有變更"],
 };
 
-/** `reason_at` (F47-I06, `app/ads/launch_view.py::_reason_at`): when the item's stored reason was read. Read here
- * because `LaunchItem` in `lib/adsLaunchApi.ts` (outside this issue's touch) does not name it yet. */
-const reasonAt = (item: LaunchItem) => (item as LaunchItem & { reason_at?: string | null }).reason_at ?? null;
-
 const UNREAD_SELECTOR = "[data-slot=item-unread][data-variant=unreadable] button, [data-slot=readback-row][data-variant=unreadable] button";
 
 export function PublishVerify({ brandId, campaignId, name, view, platform, onView }: {
@@ -143,7 +139,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
               ))}
               {item.reason && item.state !== "verified" && (
                 // F47-I06 (R5): a stored reason says when it was read; 重新讀回 below replaces it with the new read.
-                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(reasonAt(item), item.reason)}</p>
+                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(item.reason_at, item.reason)}</p>
               )}
             </TodoRow>
           );

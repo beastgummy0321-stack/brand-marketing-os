@@ -304,7 +304,7 @@ describe("PublishVerify 全部標記（drill-7 #18）", () => {
     return {
       id, kind, name, parent_name: null, fields: keys.map((key) => ({ key, label: key, value: `${name}・${key}` })),
       state: confirmed || keys.length === 0 ? "verified" : "unknown", mismatches: [], unreadable: unread(keys, confirmed),
-      reason: confirmed || keys.length === 0 ? null : REASON,
+      reason: confirmed || keys.length === 0 ? null : REASON, reason_at: null,
     };
   }
   // 27 fields on the prototype: 3 read back as the same, 24 the read could not see (8 settings + 2×5 group + 2×3 ad).

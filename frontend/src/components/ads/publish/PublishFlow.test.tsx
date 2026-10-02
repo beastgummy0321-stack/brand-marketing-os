@@ -37,7 +37,7 @@ vi.mock("./LaunchSettingsCopy", () => ({ LaunchSettingsCopy: () => <p>可複製�
 
 const LONG = "通勤情境單圖・好攜帶，走到哪都適合（最多數量 1150706）";
 function item(o: Partial<LaunchItem> & Pick<LaunchItem, "id" | "kind" | "name">): LaunchItem {
-  return { parent_name: null, fields: [{ key: "name", label: "名稱", value: o.name }], state: "todo", mismatches: [], unreadable: [], reason: null, ...o };
+  return { parent_name: null, fields: [{ key: "name", label: "名稱", value: o.name }], state: "todo", mismatches: [], unreadable: [], reason: null, reason_at: null, ...o };
 }
 const ITEMS: LaunchItem[] = [
   item({ id: "h1", kind: "campaign", name: "秋季新色預購", fields: [
@@ -326,7 +326,7 @@ describe("讀回核對", () => {
     const at = "2026-10-28T14:59:00Z";
     const stamp = (() => { const d = new Date(at); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; })();
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
-      h1: { state: "built", reason: "平台無法讀取此資料（代碼 2）。", reason_at: at } as Partial<LaunchItem>,
+      h1: { state: "built", reason: "平台無法讀取此資料（代碼 2）。", reason_at: at },
       h2: { state: "built", reason: "上一層還沒讀回，這一項先不比對。" },
     }, read));
     renderAt("verify");

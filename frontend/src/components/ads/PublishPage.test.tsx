@@ -34,7 +34,7 @@ function view(step: LaunchStep): LaunchView {
   return {
     step, version: step === "list" ? null : 1, approved_at: step === "list" ? null : "2026-09-20T06:05:00Z",
     summary: { campaigns: 1, groups: 0, ads: 0, daily_total: null, start: null, end: null, cap: null, slots_ready: 0, slots_total: 0 },
-    items: [{ id: "h1", kind: "campaign", name: "秋季新色預購", parent_name: null, fields: [], state: "todo", mismatches: [], unreadable: [], reason: null }],
+    items: [{ id: "h1", kind: "campaign", name: "秋季新色預購", parent_name: null, fields: [], state: "todo", mismatches: [], unreadable: [], reason: null, reason_at: null }],
     deferred_ads: [], read_at: step === "verify" ? "2026-09-23T02:52:00Z" : null, settings_readback: null,
   };
 }
