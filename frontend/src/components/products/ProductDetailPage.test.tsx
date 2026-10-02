@@ -1,0 +1,147 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiResponseError } from "@/lib/http";
+import {
+  archiveProduct,
+  fetchProductDetail,
+  fetchProductHandoffPrompt,
+  fetchResearchStatus,
+  startRescan,
+  submitProductHandoff,
+  type ProductDetailBundle,
+} from "@/lib/productsApi";
+import { ProductDetailPage } from "./ProductDetailPage";
+
+vi.mock("@/lib/productsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/productsApi")>("@/lib/productsApi");
+  return {
+    ...actual,
+    archiveProduct: vi.fn(),
+    fetchProductDetail: vi.fn(),
+    fetchResearchStatus: vi.fn(),
+    startRescan: vi.fn(),
+    fetchProductHandoffPrompt: vi.fn(),
+    submitProductHandoff: vi.fn(),
+  };
+});
+
+const DETAIL: ProductDetailBundle = {
+  id: "p1",
+  brand_id: "b1",
+  name: "備用商品乙",
+  status: "active",
+  knowledge_version: 3,
+  cards: [
+    { key: "facts", title: "產品事實", count: 1, pending: 0 },
+    { key: "economics-view", title: "產品經濟數字", count: 0, pending: 0 },
+    { key: "rules", title: "適用規則", count: 0, pending: 0 },
+    { key: "claims", title: "適用宣稱", count: 0, pending: 0 },
+  ],
+  latest_source_url: null,
+  economics_pending: false,
+  facts: [{
+    id: "f1", fact_type: "core_info", fact_type_label: "核心資訊", label: "核心資訊", value: "咖啡因軟糖",
+    status: "confirmed", confirmed_by: "owner@example.com", confirmed_at: "2026-10-01T08:00:00Z", source_reference: null,
+  }],
+  economics: null,
+  rules: [],
+  claims: [],
+};
+
+beforeEach(() => {
+  vi.mocked(fetchProductDetail).mockReset().mockResolvedValue(DETAIL);
+  vi.mocked(fetchResearchStatus).mockReset().mockResolvedValue({
+    status: "done", stage: "", started_at: "", usual_range_text: "", error: null, added_count: null, price_created: false,
+  });
+  vi.mocked(startRescan).mockReset();
+  vi.mocked(fetchProductHandoffPrompt).mockReset().mockResolvedValue({ prompt_text: "請幫我調研這個商品" });
+  vi.mocked(submitProductHandoff).mockReset();
+  vi.mocked(archiveProduct).mockReset().mockResolvedValue(undefined);
+});
+
+function renderPage() {
+  render(
+    <MemoryRouter>
+      <ProductDetailPage brandId="b1" productId="p1" />
+    </MemoryRouter>,
+  );
+}
+
+describe("ProductDetailPage (F47-I03, drill-10 乙 #6 #7)", () => {
+  it("「AI 再次調研」 with no URL says what is missing instead of doing nothing", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /AI 再次調研/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("先填要調研的商品頁網址");
+    expect(startRescan).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("再次調研網址"), { target: { value: "https://example.com/p" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a pasted reply that yields nothing reads as a failure with the reason and keeps the text", async () => {
+    vi.mocked(submitProductHandoff).mockRejectedValue(
+      new ApiResponseError("這段回覆讀不出任何產品事實：請確認貼上的是外部 AI 照提示詞回覆的完整內容，再送一次。", 400),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "深入調研 →" }));
+    const reply = screen.getByText("貼上外部 AI 的回覆").closest("label")!.querySelector("textarea")!;
+    fireEvent.change(reply, { target: { value: "亂打的一串字" } });
+    fireEvent.click(screen.getByRole("button", { name: "送出，讀進來" }));
+    expect(await screen.findByText(/讀不出任何產品事實/)).toBeTruthy();
+    expect(reply.value).toBe("亂打的一串字");
+    expect(screen.queryByText(/貼回完成/)).toBeNull();
+  });
+
+  it("a reply whose facts are all on the list already does not claim it added any", async () => {
+    vi.mocked(submitProductHandoff).mockResolvedValue({ added_count: 0 });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "深入調研 →" }));
+    const reply = screen.getByText("貼上外部 AI 的回覆").closest("label")!.querySelector("textarea")!;
+    fireEvent.change(reply, { target: { value: "{\"facts\": []}" } });
+    fireEvent.click(screen.getByRole("button", { name: "送出，讀進來" }));
+    await waitFor(() => expect(screen.getByText("貼回的事實都已經在清單裡，這次沒有新增。")).toBeTruthy());
+  });
+
+  it("shows the confirmer the server resolved (an e-mail, never a user id)", async () => {
+    renderPage();
+    const details = (await screen.findByText(/詳細（確認人/)).closest("details")!;
+    expect(details.textContent).toContain("確認人：owner@example.com");
+  });
+});
+
+describe("ProductDetailPage 封存 (F47-I05, drill-10 V9)", () => {
+  it("封存 asks once and says what happens; 取消 archives nothing, 確定封存 does", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "封存" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("封存產品「備用商品乙」？");
+    expect(dialog.textContent).toContain("不會出現在商品清單");
+    expect(dialog.textContent).toContain("恢復使用");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(archiveProduct).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "封存" }));
+    fireEvent.click(await screen.findByRole("button", { name: "確定封存" }));
+    await waitFor(() => expect(archiveProduct).toHaveBeenCalledWith("b1", "p1"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a refused archive keeps the dialog open with the reason", async () => {
+    vi.mocked(archiveProduct).mockRejectedValue(new Error("沒有封存（狀態碼 500）"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "封存" }));
+    fireEvent.click(await screen.findByRole("button", { name: "確定封存" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("沒有封存（狀態碼 500）");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("恢復使用 asks nothing and shows a refusal next to the button", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({ ...DETAIL, status: "archived" });
+    vi.mocked(archiveProduct).mockRejectedValue(new Error("已有同名產品"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "恢復使用" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toBe("已有同名產品");
+  });
+});

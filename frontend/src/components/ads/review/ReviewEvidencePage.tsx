@@ -18,6 +18,7 @@ import {
   ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
   Term, TodoRow,
 } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 import {
   adResultView, adSpend, commerceCoverageWarn, findReviewTriageItem, formatCostLabel,
   formatEntryDate, formatRevisitLabel, formatTargetAmount, formatWindowDate, HISTORY_KIND_LABEL,
@@ -41,6 +42,11 @@ function worsePurpose(campaignName: string | null | undefined): string {
   return short ? `跟${short}的上限比，${STEP_PURPOSE}` : STEP_PURPOSE;
 }
 const POLL_MS = 3000;
+/** F47-I06: the crumb names the queue row this review came from by its own kind (a review opened from the performance
+ * page, or for a row of another kind, was labelled 「變貴」 even on a good ad); no row → 「檢討」. */
+const ROW_KIND_LABEL: Record<string, string> = {
+  stop_loss: "停損", worse: "變貴", scale_budget: "加預算", refresh_creative: "補素材", insufficient_data: "資料不足", cleanup: "清理",
+};
 
 type SheetKind = "deferred" | "unjudgeable";
 
@@ -339,7 +345,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 
   return (
     <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
-      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `變貴・${evidence.target.name ?? "廣告"}` }]} />
+      <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: `${(triageItem && ROW_KIND_LABEL[triageItem.kind_key]) || "檢討"}・${evidence.target.name ?? "廣告"}` }]} />
       <FlowHeader
         steps={STEPS}
         current={0}
@@ -456,6 +462,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               label={`每次${resultLabel}成本`}
               previous={adResultView(evidence.previous)?.cost_per_result ?? null}
               current={adResultView(evidence.current)?.cost_per_result ?? null}
+              format={perSaleAmount}
             />
             {/* v10 `mt(a)`: the cost against break-even, beside the grade's own ruler (the cap). */}
             <div className="numeric text-right">

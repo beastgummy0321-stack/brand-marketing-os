@@ -10,7 +10,7 @@ F42-I14 拆掉。
 失敗列；本檔一律回傳 (ok, 人話錯誤訊息)，路由層據此顯示錯誤與「前往設定頁」引導，
 不當機、不假裝成功（principles 16 誠實狀態）。
 
-測試／煙霧測試把模組層 PROVIDER 換成 FakeProvider、fetch_url 換成假抓取，
+測試／煙霧測試把模組層 PROVIDER 換成 FakeProvider、read_url 換成假抓取（回 (ok, 文字, 原因)），
 不發任何真實網路請求。
 """
 
@@ -29,6 +29,9 @@ _log = logging.getLogger(__name__)
 PROVIDER = providers.AnthropicProvider()
 
 # 綁成本模組的名字，測試才能只換這裡（實作已移到 app/core/net.py，產品調研也要用）
+read_url = net.read_url
+# Not read by the prefill any more (it needs the reason: `read_url`); kept because legacy tests
+# (app/tests/test_intake.py) still swap this name in setUp.
 fetch_url = net.fetch_url
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
@@ -293,13 +296,18 @@ def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[
     return out, dropped
 
 
-def _read_pages(urls: list) -> list:
-    pages = []
+def _read_pages(urls: list) -> tuple[list, list]:
+    """-> (pages read as (url, text), pages not read as {url, reason}); the reason is
+    `read_url`'s short Chinese sentence (HTTP status, timeout, unknown domain, certificate, empty
+    page; Contract F)."""
+    pages, failed = [], []
     for url in urls[:MAX_PREFILL_PAGES]:
-        ok, text = fetch_url(url)
+        ok, text, reason = read_url(url)
         if ok and text and text.strip():
             pages.append((url, text.strip()))
-    return pages
+        else:
+            failed.append({"url": url, "reason": reason or net.REASON_EMPTY})
+    return pages, failed
 
 
 def _brand_photo_blocks(conn, brand_id: str) -> tuple[list, list]:
@@ -321,19 +329,26 @@ def _brand_photo_blocks(conn, brand_id: str) -> tuple[list, list]:
 
 def empty_prefill() -> dict:
     return {"proof": [], "policies": [], "products": [], "not_found": [],
-            "pages_read": 0, "photos_read": 0}
+            "pages_read": 0, "photos_read": 0, "urls_read": [], "pages_failed": []}
 
 
 def run_prefill(conn, draft: dict) -> tuple:
     """Read the draft's website pages (≤5) and brand photos (≤5) and send them in ONE call; store
-    the checked proposal in `intake_draft.prefill_json` with `pages_read`/`photos_read`.
-    (True, None) on success; (False, 人話錯誤) when the call failed or the reply is unreadable.
-    Nothing readable (every page failed, no photo): no call, an empty prefill that read 0/0."""
+    the checked proposal in `intake_draft.prefill_json` with `pages_read`/`photos_read`, the URL
+    list this read was for (`urls_read`) and the pages it could not read (`pages_failed`,
+    Contract F). (True, None) on success; (False, 人話錯誤) when the call failed or the reply is
+    unreadable. Nothing readable (every page failed, no photo): no call, an empty prefill that read
+    0/0. The product suggestions the user dismissed (`dismissed`) survive a new read."""
     brand_id = draft["brand_id"]
-    pages = _read_pages(draft["urls"])
+    urls = list(draft["urls"])[:MAX_PREFILL_PAGES]
+    pages, failed = _read_pages(urls)
     blocks, kinds = _brand_photo_blocks(conn, brand_id)
+    previous = (ir.get_draft(conn, brand_id, draft["id"]) or {}).get("prefill_json")
+    kept: dict = {"urls_read": urls, "pages_failed": failed}
+    if isinstance(previous, dict) and previous.get("dismissed"):
+        kept["dismissed"] = previous["dismissed"]
     if not pages and not blocks:
-        ir.update_draft(conn, brand_id, draft["id"], prefill_json=empty_prefill())
+        ir.update_draft(conn, brand_id, draft["id"], prefill_json={**empty_prefill(), **kept})
         return True, None
     text = {"type": "text", "text": _prefill_prompt(draft["brand_name"], pages, kinds)}
     task = _run(conn, draft, task_type=PREFILL_TASK_TYPE, purpose=PREFILL_PURPOSE,
@@ -347,7 +362,7 @@ def run_prefill(conn, draft: dict) -> tuple:
         return False, PARSE_FAIL_MESSAGE
     if dropped:
         _log.info("intake prefill %s: dropped %d invalid entries", task["id"], dropped)
-    prefill.update(pages_read=len(pages), photos_read=len(blocks))
+    prefill.update(pages_read=len(pages), photos_read=len(blocks), **kept)
     ir.update_draft(conn, brand_id, draft["id"], prefill_json=prefill)
     return True, None
 

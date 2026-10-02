@@ -14,7 +14,8 @@ export function Breadcrumb({ items }: { items: BreadcrumbItem[] }) {
   return (
     <nav aria-label="麵包屑" className="flex items-center gap-1.5 text-sm text-muted-foreground">
       {items.map((item, index) => (
-        <span key={item.label} className="flex items-center gap-1.5">
+        // Keyed by position + label: two crumbs may read the same (a product and its pack named alike).
+        <span key={`${index}:${item.label}`} className="flex items-center gap-1.5">
           {index > 0 && <span aria-hidden="true">/</span>}
           {item.href ? (
             <Link to={item.href} className="text-primary underline-offset-4 hover:underline">

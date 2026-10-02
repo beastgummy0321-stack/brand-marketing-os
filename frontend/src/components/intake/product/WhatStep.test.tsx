@@ -39,6 +39,7 @@ const PHOTO = { id: "oa_1", url: `/brands/${B}/assets/file/oa_1/front.jpg` };
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -87,8 +88,12 @@ describe("NewProductStep", () => {
 
     expect(nextButton().disabled).toBe(true);
     expect(screen.getByText("也是廣告預設的落地頁")).toBeTruthy();
-    await userEvent.type(field("商品名稱"), " 益生菌軟糖 ");
+    // F47-I03 (drill-10 乙 #4): a URL alone keeps 下一步 off and says the name is missing.
     await userEvent.type(field("商品頁網址"), "https://beastgummy.tw/shop/probiotic");
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("先填商品名稱")).toBeTruthy();
+    await userEvent.type(field("商品名稱"), " 益生菌軟糖 ");
+    expect(screen.queryByText("先填商品名稱")).toBeNull();
     expect(screen.getByRole("navigation", { name: "建檔位置" }).textContent).toBe("商品›商品建檔›益生菌軟糖");
     await userEvent.click(nextButton());
 
@@ -224,5 +229,27 @@ describe("WhatStep", () => {
 
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
     expect(mockSave.mock.calls[0][2].difference).toBe("台灣自己的工廠，一批一批驗");
+  });
+});
+
+describe("WhatStep draft (F47-I03, drill-10 乙 #1)", () => {
+  it("an unsaved edit survives 「← 商品」 / reload (remount) and is dropped once 下一步 saved", async () => {
+    mockSave.mockImplementation(async (_b, _p, input) => ({ ...prefilled(), name: input.name }));
+    renderWhat(prefilled());
+    await userEvent.clear(field("一句話介紹"));
+    await userEvent.type(field("一句話介紹"), "改過還沒存的介紹");
+    cleanup();
+
+    const { onSaved } = renderWhat(prefilled());
+    expect(field("一句話介紹").value).toBe("改過還沒存的介紹");
+    expect(field("裡面有什麼、怎麼作用").value).toBe(prefilled().mechanism.value);
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(mockSave).toHaveBeenCalledWith(B, P, expect.objectContaining({ intro: "改過還沒存的介紹" }));
+    expect(sessionStorage.length).toBe(0);
+    cleanup();
+
+    renderWhat(prefilled());
+    expect(field("一句話介紹").value).toBe(prefilled().intro.value);
   });
 });

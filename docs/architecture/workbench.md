@@ -81,9 +81,16 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
    `claims.sources(…, offer_key)` and the facade `validate_claims(…, *, offer_key=None)`: `None` = every
    available offer row, `"none"` = none, another key = only that offer's rows; the prompt block then says to
    write no offer or to carry that one sentence, and the version list warns with the same narrowing.
+   F46 (Contract O): a RISK offer word is backed only when that exact term (whitespace ignored) appears inside one of the
+   narrowed offer sentences (replaces the F42 family-wide backing; 「優惠」 included), and the offer words are widened
+   (半價、特價、限時、原價、加購價、組合價、滿 N 送／折、再送、加送、送 N、回饋、點數、抽獎 …; a bare 「送」 is not one). The facade's
+   `validate_claims` also returns `missing_offer` = the ad's offer sentences when the copy writes none of them (`[]` for no offer);
+   ads asset confirmation refuses on it (ads §6.49.1).
    This is bounded expression detection, not a universal
    semantic fact checker; real model wording and unsupported paraphrases remain a validation limit.
-   Approving sets the pack to 已完成 and locks its selections. The upstream reads the approval as
+   Approving sets the pack to 已完成 and locks its selections — F47 (Q7): a pack approved with the manual override keeps
+   `approved_at`, but a set that still misses a required output stays open for generating / selecting the missing parts only
+   (made selections stay locked); the pack reads 「已核准・還缺 N 組」 and names the first such set. The upstream reads the approval as
    state — `pack_for_source(conn, org_id, brand_id, source_kind, source_ref)` — never as a
    callback, so the dependency stays one-way. 檔期規劃 shows 「素材製作完，可以開始追蹤成效」 when
    the pack is approved, and may still run its own next step without it behind a small skippable
@@ -348,6 +355,8 @@ in git history (retired F02 prototype); where a prototype and an image differ, t
 ### 5.14 生成工作狀態與回程（F10）
 
 素材組 API 的 `generation` 原樣投影 brief 的 status 與 last_error，和「未選定／已完成」等內容選定狀態分開。前端在 queued／running 時停用重複生成，每 3 秒讀取目前素材組直到工作結束；進度讀取失敗保留目前內容並重試。未產出時的 running／failed 不顯示「還沒有生成過」，既有版本保留可讀，failed 可重試。
+
+F47: the brief is committed before its jobs are enqueued (`enqueue()` defers on its own connection and a worker may start at once; an uncommitted brief was the 「找不到工單」 race, `app/workbench/repository.py`). A round that ends `done` clears the old `last_error`; a failed round shows its reason and 重新生成. While the worker is stopped, pages waiting on generation show the shared 「背景程式停了」 notice (`worker_alive`, `app/background/__init__.py`).
 
 全域工作進度使用公開 `workbench.set_action_url` 解析同組織、同品牌的 brief → pack/set 目的地；缺少有效 brief 時回素材工作檯，不再連到已不存在的排程頁。人物誌進度與完成／失敗通知直達智庫 `?tab=customer-voice` 的「人物誌與顧客原話」，沿用既有閱讀、編輯與重試功能。
 

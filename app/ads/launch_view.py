@@ -6,9 +6,18 @@ its expected parent."""
 
 from datetime import datetime
 
+from app.ads import (
+    actual_format,
+    channels,
+    customer_groups,
+    external_sync,
+    handoff_check,
+    handoff_data,
+    manual_settings,
+    targets,
+)
 from app.ads import change_control_data as changes
 from app.ads import change_control_launch as launch
-from app.ads import channels, external_sync, handoff_check, handoff_data, manual_settings, targets
 from app.ads import repository as ads_repo
 
 _STATES = {
@@ -47,6 +56,9 @@ _ROLE_EXCLUSIONS = {
 }
 AUDIENCE_HINT_KEY = "audience_hint"
 AUDIENCE_HINT_LABEL = "受眾提示"
+# F46 Contract F: the ad's format row, after 「素材」.
+FORMAT_KEY = "format"
+FORMAT_LABEL = "格式"
 
 
 def _plain(value):
@@ -68,7 +80,9 @@ def audience_hints(conn, org, brand, detail):
     dimension `audience`; a key without a vocabulary row prints itself), the brief's own
     audience text (`context_json.audience_hint`, skipped when empty) and a fixed per-role
     exclusion sentence (F38: `new`/`explore` -> 「排除：已購買者」, `retarget` ->
-    「只投：互動過或買過的人」; no role, no sentence). Never a platform targeting mapping
+    「只投：互動過或買過的人」; no role, no sentence). F46: 「顧客群：〈who〉」 after the audience
+    labels when the group's ads carry one `customer_group_id` (one ad set = one set of people)
+    that still resolves (`customer_groups.groups_by_id`). Never a platform targeting mapping
     (F36 ruling E: no age/interest inference, no Meta field), never part of the frozen
     snapshot or `expected_json` -- computed at view time only, so readback (`handoff_check`)
     is untouched and an approved launch never goes stale over it."""
@@ -79,6 +93,12 @@ def audience_hints(conn, org, brand, detail):
     }
     brief_hint = (detail.get("context_json") or {}).get("audience_hint")
     brief_hint = brief_hint.strip() if isinstance(brief_hint, str) else ""
+    bound = any(
+        ad.get("customer_group_id")
+        for group in detail.get("groups") or []
+        for ad in group.get("ads") or []
+    )
+    known_groups = customer_groups.groups_by_id(conn, brand, detail) if bound else {}
     hints = {}
     for group in detail.get("groups") or []:
         role = group.get("role")
@@ -87,9 +107,15 @@ def audience_hints(conn, org, brand, detail):
             key = ad.get("audience_key")
             if key and key not in keys:
                 keys.append(key)
+        group_ids = {ad.get("customer_group_id") for ad in group.get("ads") or []} - {None, ""}
+        who = None
+        if len(group_ids) == 1:
+            found = known_groups.get(next(iter(group_ids)))
+            who = str((found or {}).get("who") or "").strip() or None
         parts = [
             _ROLE_LABELS.get(role, role) if role else None,
             "、".join(labels.get(key, key) for key in keys) if keys else None,
+            f"顧客群：{who}" if who else None,
             f"簡報受眾：{brief_hint}" if brief_hint else None,
             _ROLE_EXCLUSIONS.get(role) if role else None,
         ]
@@ -112,7 +138,41 @@ def _nodes(snapshot):
     return found
 
 
-def _fields(kind, node, parent_name, snapshot, hints=None):
+def formats(conn, org, brand, campaign_id, snapshot, detail):
+    """F46 Contract F: planned ad id -> its 「格式」 value -- the actual format of the material
+    the list carries for it (`actual_format`), plus 「（規劃是〈planned〉）」 when the plan says
+    otherwise; no material -> the planned label. The planned key is the plan as it is now
+    (`detail`). View-time only: never in the frozen snapshot, `expected_json` or a hash."""
+    planned = {
+        ad["id"]: ad.get("format_key")
+        for group in detail.get("groups") or []
+        for ad in group.get("ads") or []
+    }
+    names = actual_format.labels(conn, org, brand)
+    found = {}
+    for group in snapshot.get("groups") or []:
+        for node in group.get("ads") or []:
+            material = node.get("material_assignment") or {}
+            actual = actual_format.of_placement(
+                conn, org, brand, campaign_id,
+                material.get("placement_id"), material.get("placement_revision"),
+            )
+            plan = planned.get(node["id"])
+            if actual is None:
+                value = actual_format.label(plan, names) if plan else None
+            elif plan and plan != actual:
+                value = (
+                    f"{actual_format.label(actual, names)}"
+                    f"（規劃是{actual_format.label(plan, names)}）"
+                )
+            else:
+                value = actual_format.label(actual, names)
+            if value:
+                found[node["id"]] = value
+    return found
+
+
+def _fields(kind, node, parent_name, snapshot, hints=None, formats=None):
     if kind == "campaign":
         rows = [
             ("name", "名稱", node.get("name")),
@@ -158,6 +218,11 @@ def _fields(kind, node, parent_name, snapshot, hints=None):
             ("group", "放在", parent_name),
             ("material", "素材", launch._material_label(material or None)),
             *(
+                [(FORMAT_KEY, FORMAT_LABEL, formats[node["id"]])]
+                if formats and node["id"] in formats
+                else []
+            ),
+            *(
                 ("copy." + key, handoff_check._COPY_LABELS[key], copy[source])
                 for key, source in _COPY_FIELDS
                 if copy.get(source)
@@ -166,7 +231,7 @@ def _fields(kind, node, parent_name, snapshot, hints=None):
     return [{"key": key, "label": label, "value": _plain(value)} for key, label, value in rows]
 
 
-def _planned_items(snapshot, hints):
+def _planned_items(snapshot, hints, formats=None):
     """Before approval: the batch the approval would freeze, nothing done yet."""
     return [
         {
@@ -174,7 +239,7 @@ def _planned_items(snapshot, hints):
             "kind": kind,
             "name": node.get("name"),
             "parent_name": parent_name,
-            "fields": _fields(kind, node, parent_name, snapshot, hints),
+            "fields": _fields(kind, node, parent_name, snapshot, hints, formats),
             "state": "todo",
             "mismatches": [],
             "unreadable": [],
@@ -208,11 +273,24 @@ def _reason(row, state):
     return None
 
 
-def _item(row, state, snapshot, nodes, hints):
+def _reason_at(row, state):
+    """F47-I06: when the stored `reason` was written -- the batch readback's own time for its
+    note, else the failed check's attempt time; `None` when there is no reason (a later successful
+    read replaces the evidence, so the time goes with it)."""
+    if _reason(row, state) is None:
+        return None
+    evidence = row["evidence_json"] or {}
+    readback = evidence.get("readback") or {}
+    if readback.get("reason"):
+        return readback.get("at")
+    return evidence.get("attempted_at")
+
+
+def _item(row, state, snapshot, nodes, hints, formats=None):
     evidence = row["evidence_json"] or {}
     node, parent_name = nodes.get((row["planned_kind"], row["planned_id"]), (None, None))
     fields = (
-        _fields(row["planned_kind"], node, parent_name, snapshot, hints)
+        _fields(row["planned_kind"], node, parent_name, snapshot, hints, formats)
         if node is not None
         else [{"key": "name", "label": "名稱", "value": row["name"]}]
     )
@@ -233,6 +311,7 @@ def _item(row, state, snapshot, nodes, hints):
         if checked
         else [],
         "reason": _reason(row, state),
+        "reason_at": _reason_at(row, state),
     }
 
 
@@ -293,9 +372,8 @@ def view(conn, org, brand, campaign_id):
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
     # Contract V: the hint is read from the plan as it is now (the snapshot carries only
     # platform-shaped keys), keyed by group id so a frozen group finds its own.
-    hints = audience_hints(
-        conn, org, brand, ads_repo.campaign_detail(conn, org, brand, campaign_id) or {}
-    )
+    detail = ads_repo.campaign_detail(conn, org, brand, campaign_id) or {}
+    hints = audience_hints(conn, org, brand, detail)
     change_set = launch.launch_set(conn, org, brand, campaign_id)
     if change_set is None:
         return {
@@ -303,13 +381,16 @@ def view(conn, org, brand, campaign_id):
             "version": None,
             "approved_at": None,
             "summary": _summary(current, campaign, current, deferred),
-            "items": _planned_items(current, hints),
+            "items": _planned_items(
+                current, hints, formats(conn, org, brand, campaign_id, current, detail)
+            ),
             "deferred_ads": deferred,
             "read_at": None,
             "settings_readback": None,
             "month_budget": launch.month_fit(conn, org, brand, campaign_id, current),
         }
     frozen = change_set["plan_json"]["launch_snapshot"]
+    format_rows = formats(conn, org, brand, campaign_id, frozen, detail)
     stale = launch.stale(conn, org, brand, campaign_id, current=current)
     changed = {d["item_id"] for d in (stale or {}).get("diff", []) if d.get("item_id")}
     rows = _batch_rows(conn, org, brand, campaign_id, change_set["id"])
@@ -323,6 +404,7 @@ def view(conn, org, brand, campaign_id):
             frozen,
             nodes,
             hints,
+            format_rows,
         )
         for row in rows
     ]

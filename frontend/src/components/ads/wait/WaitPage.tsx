@@ -109,6 +109,17 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
   return rows;
 }
 
+/** F47-I06: the title follows what the data says, not a fixed 「資料不足」 (the drill saw it over seven filled days):
+ * a listed gap keeps 資料不足; no gap and some ad already graded says the numbers are in; never synced or nothing to
+ * grade yet says that instead. */
+function waitHero(sync: CampaignSyncState, rows: Row[], items: TriageItem[]): { tone: "warn" | "ok" | "neutral"; mark: string; title: string; note?: string } {
+  if (rows.length > 0) return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
+  if (sync.state === "never") return { tone: "neutral", mark: "…", title: "還沒同步過，先不判斷", note: "按「重新檢查」讀一次平台的數字" };
+  if (items.some((item) => item.grade !== "insufficient")) return { tone: "ok", mark: "✓", title: "資料齊了，可以回活動看判讀", note: "最近 7 天都有資料" };
+  if (items.length === 0) return { tone: "neutral", mark: "…", title: "還沒有廣告數字，先不判斷", note: "平台開始花錢後，下次同步會出現第一筆數字" };
+  return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
+}
+
 type State =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -232,7 +243,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   if (state.status === "loading") {
     return (
       <div className="flex max-w-[1180px] flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料不足" }]} />
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料狀況" }]} />
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-40 w-full" />
       </div>
@@ -241,7 +252,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   if (state.status === "error") {
     return (
       <div className="flex max-w-[1180px] flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料不足" }]} />
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料狀況" }]} />
         <EmptyState title="讀取失敗" description={state.message} onAction={() => setReloadKey((v) => v + 1)} actionLabel="重新讀取" />
       </div>
     );
@@ -249,7 +260,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   if (state.status === "not_found") {
     return (
       <div className="flex max-w-[1180px] flex-col gap-4">
-        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料不足" }]} />
+        <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "資料狀況" }]} />
         <EmptyState title="讀取失敗" description="找不到這個 Campaign。" onAction={() => setReloadKey((v) => v + 1)} actionLabel="重新讀取" />
       </div>
     );
@@ -260,6 +271,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   const tiles = last7Days(coverage?.end ?? clock.today);
   const missingSet = new Set(missingDays);
   const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatSyncTime(sync.last_success_at)}` : "尚未同步";
+  const hero = waitHero(sync, rows, items);
 
   return (
     <div className="flex max-w-[1180px] flex-col gap-4">
@@ -267,7 +279,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <ResultHero tone="warn" mark="…" title="資料不足，這個活動先不判斷" note={campaignName} />
+          <ResultHero tone={hero.tone} mark={hero.mark} title={hero.title} note={hero.note ? `${campaignName}・${hero.note}` : campaignName} />
         </div>
         <Chip tone="warn" className="shrink-0">平台照常投放，不受影響</Chip>
       </div>

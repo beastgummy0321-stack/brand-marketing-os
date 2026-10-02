@@ -42,22 +42,57 @@ export async function getAccessToken(): Promise<string | null> {
   return data.session?.access_token ?? null;
 }
 
-/** 三種登入方式都回傳「錯誤訊息或 null」，畫面自己決定怎麼顯示——不在這裡丟例外，
- * supabase-js 的 AuthError.message 已經是人看得懂的句子（英文，Supabase 預設流程本來
- * 就沒有中文化，票面「Supabase 預設流程即可，本票不做中文化」）。 */
+/** F47-I02: Supabase Auth answers in English (「Invalid login credentials」), and the drill-10 operator
+ * saw exactly that on the login page. Map the known causes by `code` (supabase-js ≥ 2.6x sets it),
+ * with the English message as a second key for older servers; anything else becomes `fallback`. */
+const AUTH_ERRORS: { codes: string[]; messages: RegExp; text: string }[] = [
+  { codes: ["invalid_credentials"], messages: /invalid login credentials/i, text: "帳號或密碼不對" },
+  {
+    codes: ["email_not_confirmed"],
+    messages: /email not confirmed/i,
+    text: "這個信箱還沒完成驗證：請先到信箱點確認連結，再回來登入。",
+  },
+  {
+    codes: ["over_request_rate_limit", "over_email_send_rate_limit", "over_sms_send_rate_limit"],
+    messages: /rate limit|too many requests/i,
+    text: "嘗試太多次了，請等幾分鐘再試。",
+  },
+  {
+    codes: ["user_already_exists", "email_exists"],
+    messages: /already registered|already exists/i,
+    text: "這個帳號已經註冊過了，請改用登入。",
+  },
+  { codes: ["weak_password"], messages: /password should be/i, text: "密碼太簡單或太短，請換一組至少 6 個字元的密碼。" },
+];
+
+export function authErrorMessage(
+  error: { code?: string; message?: string; status?: number } | null,
+  fallback = "登入失敗，請稍後再試",
+): string | null {
+  if (!error) return null;
+  const known = AUTH_ERRORS.find(
+    (e) => (error.code && e.codes.includes(error.code)) || (error.message && e.messages.test(error.message)),
+  );
+  if (known) return known.text;
+  if (error.status === 429) return "嘗試太多次了，請等幾分鐘再試。";
+  return fallback;
+}
+
+/** 三種登入方式都回傳「錯誤訊息或 null」，畫面自己決定怎麼顯示——不在這裡丟例外。
+ * 訊息一律經 `authErrorMessage` 換成中文（F47-I02）。 */
 export async function signInWithPassword(email: string, password: string): Promise<string | null> {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  return error?.message ?? null;
+  return authErrorMessage(error);
 }
 
 export async function signUpWithPassword(email: string, password: string): Promise<string | null> {
   const { error } = await supabase.auth.signUp({ email, password });
-  return error?.message ?? null;
+  return authErrorMessage(error, "註冊失敗，請稍後再試");
 }
 
 export async function signInWithMagicLink(email: string): Promise<string | null> {
   const { error } = await supabase.auth.signInWithOtp({ email });
-  return error?.message ?? null;
+  return authErrorMessage(error, "登入連結寄送失敗，請稍後再試");
 }
 
 /** 登出：連組織選擇一起清掉，不然下次不同帳號登入會先帶著上一個帳號選的 org id

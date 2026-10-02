@@ -38,9 +38,16 @@ class CustomerGroupsSectionTest(unittest.TestCase):
         return product
 
     def _sell_way(self, name: str, *products: dict) -> str:
+        """F45: one product -> a base sell-way; several -> a bundle of each one's base."""
+        if len(products) == 1:
+            return bi_repo.save_sell_way(
+                web.conn, self.brand_id, name=name, economics=dict(_ECONOMICS), actor=ACTOR,
+                product_id=products[0]["id"],
+            )["id"]
+        bases = [self._sell_way("單件", p) for p in products]
         return bi_repo.save_sell_way(
             web.conn, self.brand_id, name=name, economics=dict(_ECONOMICS), actor=ACTOR,
-            components=[{"product_id": p["id"], "qty": 1} for p in products],
+            components=[{"sell_way_id": b, "qty": 1} for b in bases],
         )["id"]
 
     def _section(self, context_json: dict) -> tuple[str, list[str]]:
@@ -148,6 +155,53 @@ class CustomerGroupsSectionTest(unittest.TestCase):
 
         self.assertEqual(text, "【這個賣法的顧客】（這個 Campaign 沒有指定商品）")
         self.assertEqual(ids, [])
+
+    def test_prompt_groups_returns_the_listed_rows_in_prompt_order(self):
+        """F46-I01 (Contract A): 第 N 群 is `listed[N-1]`, from the same read as the text, so
+        picks, caps and the bundle's component order all hold for the planner's mapping."""
+        first = self._product("薑黃錠", [_group("常應酬的上班族", ["effort"]),
+                                         _group("照顧爸媽的子女", ["cost"])])
+        second = self._product("魚油", [_group("久坐的工程師", ["experience"])])
+        bundle_id = self._sell_way("保養雙入組", first, second)
+        picked = [self._group_ids(second)[0], self._group_ids(first)[1]]
+        context = {"product_ids": [bundle_id], "customer_group_ids": picked}
+
+        text, listed = customer_groups.prompt_groups(
+            web.conn, self.org_id, self.brand_id, {"context_json": context},
+        )
+
+        self.assertEqual([g["who"] for g in listed], ["照顧爸媽的子女", "久坐的工程師"])
+        for n, group in enumerate(listed, start=1):
+            self.assertIn(f"第 {n} 群：{group['who']}｜", text)
+        self.assertEqual(
+            (text, [g["id"] for g in listed]), self._section(context),
+        )
+        _, none_listed = customer_groups.prompt_groups(
+            web.conn, self.org_id, self.brand_id, {"context_json": {}},
+        )
+        self.assertEqual(none_listed, [])
+
+    def test_groups_by_id_resolves_every_group_of_the_campaigns_products(self):
+        product = self._product("薑黃錠", [_group("常應酬的上班族", ["effort"]),
+                                           _group("照顧爸媽的子女", ["cost"])])
+        sell_way_id = self._sell_way("單瓶", product)
+        found = customer_groups.groups_by_id(
+            web.conn, self.brand_id,
+            {"context_json": {"product_ids": [sell_way_id],
+                              "customer_group_ids": [self._group_ids(product)[0]]}},
+        )
+        self.assertEqual(set(found), set(self._group_ids(product)))
+        self.assertEqual(customer_groups.groups_by_id(web.conn, self.brand_id, {}), {})
+
+    def test_brief_text_joins_the_present_parts(self):
+        self.assertEqual(
+            customer_groups.brief_text(_group(
+                "常應酬的上班族", ["effort", "uncertainty"], "每天吃一顆就好嗎", "應酬前一晚",
+            )),
+            "常應酬的上班族｜煩惱：太麻煩、怕買錯｜顧客會說：每天吃一顆就好嗎｜什麼時候用：應酬前一晚",
+        )
+        self.assertEqual(customer_groups.brief_text(_group("照顧爸媽的子女", ["cost"])),
+                         "照顧爸媽的子女｜煩惱：太貴")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,12 @@ sell-way's own confirmed list-price offer (「〈name〉優惠價 NT$x（原價 
 F44 (Contract B): an ad's offer coordinate narrows those offer rows -- `sources(..., offer_key)`
 keeps only the offer the ad was planned with (`"none"` = no offer row), so the prompt and the
 guard both judge the copy against the one offer it may write.
+F46 (Contract O): the family-wide backing above is replaced. A RISK offer word is backed only
+when that exact term (whitespace ignored) occurs inside the text of one of the available offer
+rows -- already narrowed to the ad's offer -- so 「買一送一」 is not backed by a bundle's price
+sentence and 「優惠」 is not backed by a free-shipping sentence. Proof and endorsement words keep
+the exact-sentence rule. `missing_offer` names the registered sentences of the ad's offer when
+the copy writes none of them (「帶了就要寫」).
 """
 import re
 from urllib.parse import quote
@@ -19,24 +25,33 @@ from app.brand_intelligence import repository as bi_repo
 from app.workbench import statutory_tw
 
 # Bounded coverage: these are fulfilment/endorsement families, not all possible factual claims.
+# F46 (Contract O) widens the offer words. A bare 「送」 is not one (送禮、送貨、贈送 are ordinary
+# words); only 送 with a count, 再送／加送, 買 N 送 and 滿 N 送 promise something.
+_N = r"[一二三四五六七八九十百千萬兩\d][一二三四五六七八九十百千萬兩\d,.]*"
 RISK = re.compile(
     r"試飲|試喝|試吃|試用|體驗券|體驗價|免費體驗|折扣|優惠|折價|折抵|折價券|促銷|"
-    r"免運|贈品|加贈|買[一二三四五六七八九十\d]+送|[一二三四五六七八九十\d.]+折|"
+    r"免運|贈品|加贈|買[一二三四五六七八九十\d]+送|"
+    r"第二件半價|半價|特價|特惠|下殺|限時|原價|早鳥價|加購價|組合價|現折|滿額|"
+    rf"滿{_N}送|滿{_N}折|再送|加送|送{_N}|回饋|點數|抽獎|"
+    r"[一二三四五六七八九十\d.]+折|"
     r"退款保證|保證退款|無效退款|專家推薦|專家背書|醫師推薦|顧客好評|顧客評論|"
     r"熱銷[\d萬千百]+|銷售[\d萬千百]+|free trial|free sample|discount|free shipping|testimonial",
     re.IGNORECASE,
 )
-# F42 decision 「copy guard」: RISK offer words -> the `offer` key of the family they promise.
-# `*` (優惠) is backed by any available offer. Proof and endorsement words have no family and
-# keep the exact-sentence rule; so do offer words outside this table (促銷, 體驗券, ...).
+# F42 decision 「copy guard」: RISK offer words -> the `offer` key (`app/core/vocab.py`
+# OFFER_LABELS) of the family they promise; `*` = a word any offer may carry. Only these words
+# can be backed by an offer row (F46: when the exact term is in its text). Proof and endorsement
+# words, and offer words with no key (促銷、體驗券、抽獎, ...), keep the exact-sentence rule.
 _OFFER_FAMILIES = [
     (re.compile(r"免運"), "free_shipping"),
-    (re.compile(r"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|"
-                r"discount", re.IGNORECASE), "discount"),
-    (re.compile(r"贈品|加贈|買[一二三四五六七八九十\d]+送"), "bundle"),
+    (re.compile(rf"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|第二件半價|半價|特惠|下殺|"
+                rf"早鳥價|現折|滿{_N}折|回饋|點數|discount", re.IGNORECASE), "discount"),
+    (re.compile(rf"贈品|加贈|買[一二三四五六七八九十\d]+送|加購價|組合價|滿{_N}送|再送|加送|"
+                rf"送{_N}"), "bundle"),
     (re.compile(r"試用|試吃|試飲|試喝"), "trial_sample"),
     (re.compile(r"退款保證|保證退款"), "guarantee"),
-    (re.compile(r"優惠"), "*"),
+    (re.compile(r"限時"), "limited_time"),
+    (re.compile(r"優惠|特價|原價|滿額"), "*"),
 ]
 _META = {"validation", "warnings", "coordinates", "fingerprint", "round",
          "visual_tone", "visual_concept"}
@@ -151,10 +166,11 @@ def unsupported(value, rows: list[dict]) -> list[str]:
     A bare category never authorizes its paraphrases. Full confirmed statements are
     required, and offer sources also need a URL or explicit fulfilment location.
     Conservative false positives are preferable to silently enlarging a promise.
-    Exception (F42): an offer word whose family is in the rows' `offer_key` set (confirmed
-    structured policies available for the product, see `sources`) is not reported.
+    Exception (F42, narrowed by F46 Contract O): an offer word (`_OFFER_FAMILIES`) is not
+    reported when that exact term occurs in the text of one of the rows' offer rows (the
+    structured offers available for the product and the ad's offer, see `sources`).
     """
-    available = {row["offer_key"] for row in rows if row.get("offer_key")}
+    offer_texts = [_squash(row["text"]) for row in rows if row.get("offer_key")]
     approved = []
     for row in rows:
         text = row["text"].strip()
@@ -176,29 +192,58 @@ def unsupported(value, rows: list[dict]) -> list[str]:
         for statement in sorted(approved, key=len, reverse=True):
             text = text.replace(statement, "")
         missing.extend(m.group(0) for m in RISK.finditer(text)
-                       if not _offer_backed(m.group(0), available))
+                       if not _offer_backed(m.group(0), offer_texts))
     return list(dict.fromkeys(missing))
 
 
-def _offer_backed(term: str, available: set[str]) -> bool:
-    """True when `term` promises an offer family the brand really has for this product."""
-    if not available:
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _offer_backed(term: str, offer_texts: list[str]) -> bool:
+    """True when `term` is an offer word and that exact term is written in one of the
+    available offer sentences (`offer_texts`, whitespace removed)."""
+    if not any(pattern.fullmatch(term) for pattern, _family in _OFFER_FAMILIES):
         return False
-    for pattern, family in _OFFER_FAMILIES:
-        if pattern.fullmatch(term):
-            return family == "*" or family in available
-    return False
+    needle = _squash(term).lower()
+    return any(needle in text.lower() for text in offer_texts)
 
 
-def warning(value, rows: list[dict], brand_id: str) -> dict | None:
+def missing_offer(value, rows: list[dict], offer_key: str | None) -> list[str]:
+    """F46 Contract O: the registered sentences of the ad's offer (`rows` with `offer_key`)
+    when none of them is written in any string of `value` (whitespace removed on both sides);
+    `[]` when one is, or when `offer_key` is `None`, `"none"` or a key with no row."""
+    if offer_key is None or offer_key == "none":
+        return []
+    sentences = list(dict.fromkeys(row["text"] for row in rows
+                                   if row.get("offer_key") == offer_key))
+    if not sentences:
+        return []
+    texts = [_squash(text) for text in _strings(value)]
+    if any(_squash(sentence) in text for sentence in sentences for text in texts):
+        return []
+    return sentences
+
+
+def warning(value, rows: list[dict], brand_id: str,
+            offer_key: str | None = None) -> dict | None:
+    """The advisory on a version. With `offer_key` (F46 Contract O) a copy that leaves out the
+    ad's registered offer sentence is named in the same message; without it, unchanged."""
     terms = unsupported(value, rows)
-    if not terms:
+    absent = missing_offer(value, rows, offer_key)
+    if not terms and not absent:
         return None
-    return {
-        "message": (
+    parts = []
+    if terms:
+        parts.append(
             f"「{'、'.join(terms)}」可能包含未確認的優惠／試用／背書。"
             "請確認品牌能提供文案描述的內容；確認無誤即可選定，不必先新增智庫資料。"
-        ),
+        )
+    if absent:
+        quoted = "或".join(f"「{sentence}」" for sentence in absent)
+        parts.append(f"這組文案沒有寫這則廣告要帶的優惠：{quoted}。")
+    return {
+        "message": "".join(parts),
         "href": f"/brands/{quote(brand_id, safe='')}/library?tab=claims",
     }
 

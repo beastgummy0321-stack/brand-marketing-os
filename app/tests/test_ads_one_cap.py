@@ -127,6 +127,34 @@ class DrillFiveCapTest(_CapTestBase):
         self.assertEqual(campaign["goal_text"], "衝購買")
         self.assertEqual(float(campaign["target_cost"]), 300.0)
 
+    def test_changing_the_cap_makes_its_source_the_users(self):
+        """F47-I06 (F46-I08 finding): the create tags a copied cap 「沿用上一期」; once the user
+        changes it through the target writer the stored source says `user`, so the confirm page
+        reads the tag off `field_sources.cap` instead of comparing values."""
+        campaign_id = self._internal_campaign(target_cost=300, context_json={
+            "field_sources": {"cap": "copied", "audience": "sell_way"},
+        })
+        self.conn.execute(
+            "UPDATE ads_campaign SET target_basis='own' WHERE id=%s", (campaign_id,),
+        )
+        self.conn.commit()
+
+        def sources():
+            campaign = repository.get_campaign(self.conn, self.org, self.brand, campaign_id)
+            return campaign["context_json"]["field_sources"]
+
+        same = self.client.put(self._url(campaign_id, "/target"), json={
+            "basis": "own", "value": 300, "expected_revision": 0,
+        })
+        self.assertEqual(same.status_code, 200, same.text)
+        self.assertEqual(sources()["cap"], "copied")  # the same value is not a change
+
+        changed = self.client.put(self._url(campaign_id, "/target"), json={
+            "basis": "own", "value": 450, "expected_revision": 1,
+        })
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(sources(), {"cap": "user", "audience": "sell_way"})
+
     def test_patch_with_another_unknown_key_is_still_422(self):
         campaign_id = self._internal_campaign()
         response = self.client.patch(self._url(campaign_id), json={"status": "live"})

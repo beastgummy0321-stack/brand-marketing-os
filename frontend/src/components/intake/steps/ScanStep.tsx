@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import { fetchOnboardingScan, startOnboardingScan, type OnboardingScan } from "@/lib/intakeOnboardingApi";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
@@ -21,7 +23,11 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "處�
  * what the website/photo scan found, as the rows steps 3/4 will pre-fill, and what it did not find — never a
  * decision. On entry the scan is read (`GET …/onboarding/scan`) and started once if it never ran (`POST`); a
  * running scan is read every second. A failed read shows the backend's message with 重試 and lets the user skip
- * to step 3; the head and the bar stay either way. */
+ * to step 3; the head and the bar stay either way. F47 Contract C: while the scan runs and the background worker is
+ * stopped, the worker-stopped notice sits under the spinner row; 再檢查一次 re-reads the worker and the scan.
+ * F47 Contract F: pages the read could not open are listed with their reason and 「改網址再讀一次」 (back to step 1);
+ * nothing read = no 「找到的東西」 card and the bar offers 「跳過，自己填」. A website list changed since the read
+ * makes the server report `none`, so returning here starts a new read instead of showing the old one. */
 export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
   const [view, setView] = useState<View>({ kind: "busy" });
   const alive = useRef(true);
@@ -73,8 +79,14 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
+  const worker = useWorkerHealth(view.kind === "running", POLL_MS);
+  async function recheck() {
+    await Promise.all([worker.recheck(), fetchOnboardingScan(brandId).then(apply, fail)]);
+  }
+
   const done = view.kind === "done" ? view.scan : null;
-  const title = done ? "我讀完你的網站了" : "AI 讀網站";
+  const readSomething = !!done && (done.pages_read > 0 || done.photos_read > 0);
+  const title = done ? doneTitle(done) : "AI 讀網站";
   const purpose = done ? purposeLine(done) : undefined;
 
   return (
@@ -83,20 +95,30 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
 
       {done ? (
         <>
-          <ScanCard scan={done} />
-          <p className="text-[11.5px] text-muted-foreground">
-            系統只預填、不替你決定：每一步按「下一步」才算你確認。商品的細節留到「商品建檔」再問。
-          </p>
+          {done.pages_failed.length > 0 && <UnreadPages pages={done.pages_failed} onFixUrls={back?.onClick} />}
+          {readSomething && (
+            <>
+              <ScanCard scan={done} />
+              <p className="text-[11.5px] text-muted-foreground">
+                系統只預填、不替你決定：每一步按「下一步」才算你確認。商品的細節留到「商品建檔」再問。
+              </p>
+            </>
+          )}
         </>
       ) : view.kind === "failed" ? (
         <IntakeJobRow job={{ status: "failed", error: view.message }} runningLabel="正在讀網站…" actions={[{ label: "重試", onClick: start }]} />
       ) : (
-        <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
+        <>
+          <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
+          {worker.stalled && <WorkerStoppedNotice onRecheck={recheck} />}
+        </>
       )}
 
       <OnboardingBar back={back}>
         {view.kind === "failed" ? (
           <BarNext label="先跳過，自己填" onClick={onNext} />
+        ) : done && !readSomething ? (
+          <BarNext label="跳過，自己填" onClick={onNext} />
         ) : (
           <BarNext label="開始確認" disabled={!done} onClick={onNext} />
         )}
@@ -105,13 +127,50 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
   );
 }
 
-/** 「讀了 3 頁網站、2 張品牌照片；…」: a count of zero is left out. */
+/** F47 Contract F (drill-10 R1): 「讀完你的網站了」 only when at least one page was read. */
+function doneTitle(scan: OnboardingScan): string {
+  if (scan.pages_read > 0) return "我讀完你的網站了";
+  if (scan.photos_read > 0) return "我看完你的品牌照片了";
+  return "網站沒有讀到";
+}
+
+/** 「讀了 3 頁網站、2 張品牌照片；…」: a count of zero is left out. Nothing read: what that means for the next steps. */
 function purposeLine(scan: OnboardingScan): string {
+  if (scan.pages_read === 0 && scan.photos_read === 0) return "下面的網址都讀不到，後面每一步沒有預填，要你自己填";
   const read = [
     scan.pages_read > 0 ? `${scan.pages_read} 頁網站` : "",
     scan.photos_read > 0 ? `${scan.photos_read} 張品牌照片` : "",
   ].filter(Boolean);
   return `${read.length ? `讀了 ${read.join("、")}；` : ""}下面是我找到的，後面每一步會先幫你填好，你確認就好`;
+}
+
+/** The pages the read could not open, each with its reason (F47 Contract F), and the exit that fixes it:
+ * 「改網址再讀一次」 goes back to step 1's website list; a changed list makes the read start again on return. */
+function UnreadPages({ pages, onFixUrls }: { pages: { url: string; reason: string }[]; onFixUrls?: () => void }) {
+  return (
+    <section data-slot="unread-pages" className="flex flex-col gap-3 rounded-md border border-danger/40 bg-danger/5 p-3 text-sm">
+      <p role="alert" className="font-medium text-danger">這 {pages.length} 個網址讀不到：</p>
+      <ul className="flex flex-col gap-1.5">
+        {pages.map((page) => (
+          <li key={page.url} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3">
+            <span className="[overflow-wrap:anywhere]">{page.url}</span>
+            <span className="text-danger">{page.reason}</span>
+          </li>
+        ))}
+      </ul>
+      {onFixUrls && (
+        <div>
+          <button
+            type="button"
+            onClick={onFixUrls}
+            className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary"
+          >
+            改網址再讀一次
+          </button>
+        </div>
+      )}
+    </section>
+  );
 }
 
 /** Prototype `.card` 「找到的東西」 with its `.scan` rows: one per found area, then one row joining the areas not

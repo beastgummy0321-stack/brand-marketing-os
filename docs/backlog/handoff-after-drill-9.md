@@ -33,17 +33,22 @@ Nine dimensions, each 0–10:
 - "No bugs" is reported as "every control clicked once, defects found: N", never as a proof.
 
 ## Other drill-9 candidates (not planned; report §3)
-- #3/#4 one owner for "period window and whether today counts" (perf page all rows vs overview rolling 14 days vs month incl. today);
-  「在投」 counts unclosed platform objects.
-- #5 no manual re-read when a day's data failed; launch approval blocks on 「餘額尚不確定」.
-- #6 calendar data gaps (no Oct exam rows, no audience field, no look-ahead past end date); P2 had 國慶 but copy never used it.
+- #3 one owner for "period window and whether today counts" (perf page all rows vs overview rolling 14 days vs month incl. today).
+- ~~#4 「在投」 counts unclosed platform objects~~ — fixed by F47 (ads §6.49.2 Contract E: delivery waiting / live; a closed
+  campaign never says 在投).
+- ~~#5 no manual re-read when a day's data failed~~ — fixed by F47 (connections 「重新讀取」, ads §6.49.2 Contract H). Launch
+  approval blocking on 「餘額尚不確定」 not re-checked here.
+- #6 calendar data gaps: Oct exam rows fixed by F46; still open: no audience field, no look-ahead past end date; P2 had 國慶 but
+  copy never used it.
 - #7/#8 prefill content not checked against the page (refund policy read as 滿意保證; EU caffeine warning as expert_endorsement).
-- #9 per-sell-way free shipping not expressible; #10 platform and per-sale cap re-entered every new campaign.
+- ~~#9 per-sell-way free shipping not expressible~~ — fixed by F45 (intake.md 「F45」 `free_shipping`).
+- ~~#10 platform and per-sale cap re-entered every new campaign~~ — fixed by F46 (ads §6.49.1 Contract D).
+- ~~#12 closeout's learning not findable in 品牌智庫~~ — fixed by F46 (品牌智庫 tab 「投放學到的」, ads §6.49.1 Contract L).
 - Still open from `handoff-after-f43.md` 「Backlog candidates」.
-- Found during F44 acceptance (2026-10-01, pre-existing, not fixed): `app/workbench/repository.py:102-107` enqueues
+- Found during F44 acceptance — fixed by F47 (commit before enqueue, workbench.md §5.14): `app/workbench/repository.py` enqueued
   `workbench_generate` before `conn.commit()`; the worker can read the job first → `RuntimeError: 找不到工單` and that set's copy
   stays 未生成 (1 of 5 sets in the acceptance run, campaign `adc_01M3VG0J8SZR80E7D74RQFXSN1`).
-- F44 known limit: the bare word 「優惠」 is backed by any remaining offer row, so another offer's price sentence under a
+- F44 known limit (removed by F46 Contract O, exact-term backing): the bare word 「優惠」 is backed by any remaining offer row, so another offer's price sentence under a
   different offer key is not caught (`app/workbench/claims.py` `_OFFER_FAMILIES`).
 
 ## Drill tooling (for drill 10)

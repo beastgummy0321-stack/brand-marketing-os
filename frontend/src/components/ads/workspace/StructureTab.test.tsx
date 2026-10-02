@@ -66,7 +66,7 @@ describe("StructureTab (F30-I08)", () => {
     expect(ok.querySelector("img")?.getAttribute("src")).toBe("/t/1.png");
     expect(leaf("辦公室一角").querySelector("[data-slot=money-tag]")?.getAttribute("data-variant")).toBe("even");
     expect(leaf("開箱 15 秒").querySelector("[data-slot=money-tag]")?.getAttribute("data-variant")).toBe("loss");
-    expect(leaf("開箱 15 秒").textContent).toContain("617.5 元");
+    expect(leaf("開箱 15 秒").textContent).toContain("618 元");
 
     const wasted = leaf("秋季新色預告");
     expect(within(wasted).getByText("沒賣出")).toBeTruthy();

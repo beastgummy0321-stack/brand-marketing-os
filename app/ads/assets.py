@@ -18,6 +18,7 @@ from app.ads import (
     calendar_tw,
     change_control_launch,
     channels,
+    customer_groups,
     handoff_assignment,
     plan,
     sell_way,
@@ -95,7 +96,10 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
     return {"origin_label": origin_label, "origin_href": origin_href}
 
 
-def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str) -> dict:
+def _ad_set(
+    ad: dict, group: dict, campaign: dict, campaign_id: str, media: str | None = None,
+    customer_groups_by_id: dict | None = None,
+) -> dict:
     # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
     # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
     # 商品各編一次品牌上下文，重複付 N 份品牌層知識的錢（ARCHITECTURE.md §1 第 1 條）。
@@ -118,6 +122,12 @@ def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str) -> dict:
         # 票面：「anything else」；F07-I03 已經讓那個格式失去「彈性」這個選項）。
         required_outputs = {"copy": 1, "image_prompt": 1}
         request["variant_count"] = _variant_count(group, campaign)
+    if media == "photo" and format_key != "video":
+        # F45 §6.49: a photo-only brand (`brand.media_capability`) brings its own photos, so its
+        # single-image and carousel sets are complete with a copy -- no image prompt is owed.
+        # `variant_count` stays: `workbench.submit_pack` accepts it and only the image-prompt
+        # part reads it.
+        required_outputs = {"copy": 1}
     if ad.get("offer_key") == "limited_time":
         # F38 decision 3: the group's (else the campaign's) end date is the copy's only allowed
         # deadline; with neither, no key -- the workbench then writes the 無優惠 version.
@@ -131,6 +141,11 @@ def _ad_set(ad: dict, group: dict, campaign: dict, campaign_id: str) -> dict:
     # workbench prints them in the brief. Absent scene / empty window -> key omitted.
     if ad.get("scene"):
         request["scene"] = ad["scene"]
+    # F46 Contract A: the customer group the plan bound this ad to, as one line the copy brief
+    # prints after the scene. No group, or a group id that no longer resolves -> key omitted.
+    customer_group = (customer_groups_by_id or {}).get(ad.get("customer_group_id") or "")
+    if customer_group is not None:
+        request["customer_group"] = customer_groups.brief_text(customer_group)
     window = (group.get("start_date"), group.get("end_date"))
     if window[0] is None or window[1] is None:  # same fallback as `_variant_count`
         window = (campaign.get("start_date"), campaign.get("end_date"))
@@ -179,6 +194,10 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     brand = bi_repo.get_brand(conn, brand_id)
     brand_name = brand["name"] if brand else brand_id
     context_json = campaign.get("context_json") or {}
+    groups_by_id = (
+        customer_groups.groups_by_id(conn, brand_id, campaign)
+        if any(ad.get("customer_group_id") for group in groups for ad in group["ads"]) else {}
+    )
 
     summary: dict = {"情境": campaign["goal_text"]}
     if context_json.get("audience_hint"):
@@ -193,7 +212,8 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
-            _ad_set(ad, group, campaign, campaign_id)
+            _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"),
+                    groups_by_id)
             for group in groups for ad in group["ads"]
         ],
     }

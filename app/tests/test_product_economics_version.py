@@ -70,14 +70,16 @@ class ProductEconomicsVersionTest(unittest.TestCase):
         import app.main as main
 
         other = repo.create_product(self.conn, self.bid, name="測試濾掛", actor="測試員")["id"]
-        for product_id, name, price, cost in ((self.pid, "單盒", 300, 90),
-                                              (other, "單包", 200, 50)):
+        bases = [
             repo.save_sell_way(self.conn, self.bid, name=name, actor="測試員",
-                               components=[{"product_id": product_id, "qty": 1}],
-                               economics={"selling_price": price, "unit_variable_cost": cost})
+                               product_id=product_id,
+                               economics={"selling_price": price, "unit_variable_cost": cost})["id"]
+            for product_id, name, price, cost in ((self.pid, "單盒", 300, 90),
+                                                  (other, "單包", 200, 50))
+        ]
         bundle = repo.save_sell_way(self.conn, self.bid, name="茶點組", actor="測試員",
-                                    components=[{"product_id": self.pid, "qty": 1},
-                                                {"product_id": other, "qty": 2}],
+                                    components=[{"sell_way_id": bases[0], "qty": 1},
+                                                {"sell_way_id": bases[1], "qty": 2}],
                                     economics={"selling_price": 599, "shipping_cost": 60})
         self.assertEqual(bundle["economics"]["unit_variable_cost"], 190)  # 90 + 2 × 50
         self.conn.commit()

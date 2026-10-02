@@ -125,7 +125,7 @@ class CopyPromptOfferCoordinateTest(_CopyRunBase):
 
     NONE_LINE = "這則廣告的優惠座標是無優惠：不寫任何優惠、優惠價或原價（售價可以寫）。"
     CARRY_LINE = "這則廣告要帶下面 [offer:…] 這個優惠：每一組文案都把它的原字句寫進標題或內文。"
-    PRICE = "三盒組優惠價 NT$999（原價 NT$1,197）"
+    PRICE = "優惠價 NT$999（原價 NT$1,197）"  # F45: no product name
     SHIPPING = "滿 NT$999 免運"
 
     def setUp(self):
@@ -134,9 +134,13 @@ class CopyPromptOfferCoordinateTest(_CopyRunBase):
             web.conn, self.brand_id, [{"key": "ship_threshold", "params": {"threshold": 999}}],
             actor=ACTOR,
         )
+        box = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單盒", actor=ACTOR, product_id=self.product["id"],
+            economics={"selling_price": 399},
+        )["id"]
         self.three = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="三盒組", actor=ACTOR,
-            components=[{"product_id": self.product["id"], "qty": 3}],
+            components=[{"sell_way_id": box, "qty": 3}],
             economics={"selling_price": 999, "list_price": 1197,
                        "unit_variable_cost": 300, "shipping_cost": 60},
         )["id"]
@@ -158,7 +162,7 @@ class CopyPromptOfferCoordinateTest(_CopyRunBase):
         _prompt, block = self._block({"offer": "bundle"})
         self.assertIn(self.CARRY_LINE, block.split("\n"))
         self.assertNotIn(self.NONE_LINE, block)
-        self.assertIn(f"- [offer:bundle:{self.three}] 測試產品：證據選單 · {self.PRICE}", block)
+        self.assertIn(f"- [offer:bundle:{self.three}] {self.PRICE}", block)
         self.assertNotIn(self.SHIPPING, block)
 
     def test_brief_without_offer_coordinate_is_unchanged(self):

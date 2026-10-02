@@ -166,6 +166,41 @@ class TokenVaultRoundTripTest(_MetaHttpTestBase):
         resp = self.client.post("/api/meta/token", json={"token": TOKEN})
         self.assertEqual(resp.json()["error"]["code"], "meta_token_missing_scope")
 
+    def test_meta_outage_is_not_a_rejected_token_and_stores_nothing(self):
+        """F47 Contract G (drill 10 R4): Meta's temporary code 2 used to read 「Meta 拒絕了這個
+        權杖」; it is an outage, nothing was judged about the token."""
+        graph.fetch_page = lambda url, *, params, headers: {"error": {
+            "message": "An unexpected error has occurred.", "code": 2}}
+        org_id, bearer = self._make_org("outage")
+        resp = self.client.post("/api/meta/token", json={"token": TOKEN},
+                                headers=self._headers(bearer, org_id))
+        self.assertEqual(resp.status_code, 502)
+        error = resp.json()["error"]
+        self.assertEqual(error["code"], "meta_unreachable")
+        self.assertEqual(
+            error["message"], "Meta 暫時讀不到（代碼 2），這把權杖還沒驗證、沒有存。請稍後再試。")
+        self.assertIsNone(meta_repo.get_credential(web.conn, org_id))
+
+    def test_unknown_error_reads_as_not_read_either(self):
+        graph.fetch_page = lambda url, *, params, headers: {"error": {"message": "?", "code": 999}}
+        resp = self.client.post("/api/meta/token", json={"token": TOKEN})
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["error"]["code"], "meta_unreachable")
+
+    def test_token_listing_no_account_is_not_stored(self):
+        """F47 Contract G (drill 10 R3): 「沒有列出任何帳戶。權杖已存」 is gone."""
+        graph.fetch_page = lambda url, *, params, headers: {"data": [], "paging": {}}
+        org_id, bearer = self._make_org("no_accounts")
+        resp = self.client.post("/api/meta/token", json={"token": TOKEN},
+                                headers=self._headers(bearer, org_id))
+        self.assertEqual(resp.status_code, 400)
+        error = resp.json()["error"]
+        self.assertEqual(error["code"], "meta_token_no_accounts")
+        self.assertEqual(
+            error["message"],
+            "這把權杖讀不到任何廣告帳戶：可能填錯，或這個帳號沒有廣告帳戶的權限。")
+        self.assertIsNone(meta_repo.get_credential(web.conn, org_id))
+
 
 # -- 2. 租戶隔離：org B 看不到、綁不到、解不掉 org A 的帳號 --------------------------
 

@@ -787,10 +787,13 @@ class ProductsSectionSellWaysTest(StrategyTestBase):
                 web.conn, self.brand_id, product["id"], actor=ACTOR, fact_type="core_info",
                 label="成分", value=value, status="confirmed", confirmed_by=ACTOR,
             )
+        bases = [bi_repo.save_sell_way(web.conn, self.brand_id, name="單件", actor=ACTOR,
+                                       product_id=product["id"],
+                                       economics={"selling_price": 900})["id"]
+                 for product in (self.mother, fish_oil)]
         bundle = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="保養雙入組", actor=ACTOR,
-            components=[{"product_id": self.mother["id"], "qty": 1},
-                        {"product_id": fish_oil["id"], "qty": 1}],
+            components=[{"sell_way_id": base, "qty": 1} for base in bases],
             economics={"selling_price": 1800, "unit_variable_cost": 400, "shipping_cost": 60},
         )
 
@@ -938,15 +941,16 @@ class CalendarInStrategyPromptTest(StrategyTestBase):
         self.assertIn("2028 年的假日與考季沒有資料，不要假設沒有活動", prompt)
 
 
-_SCOREBOARD_HEADER = "【座標成績表（已結案活動，程式統計；划算＝每筆成本在上限內）】"
-_SCOREBOARD_EMPTY = "【座標成績表】（還沒有結案過的廣告，沒有成績表）"
+_RANKED_HEADER = "【上幾期的排名（程式排的；每筆＝花費÷成交）】"
+_RANKED_EMPTY = "【上幾期的排名】（還沒有結案過的廣告）"
 
 
-class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
-    """F39-I02（outcome 2）：策略 prompt 帶程式統計的【座標成績表】，接在【過去的學習】之後；
-    `basis.coordinate_scoreboard` 列出它用到的學習列 id（查看策略依據要等於模型真的看過的）。
-    空品牌就寫「還沒有成績表」、id 空陣列。成績表列來自 I01 寫的 `source_track='coordinate'`
-    學習列——這裡直接用公開的 `record_learning` 種一列。"""
+class RankedLearningsInStrategyPromptTest(StrategyTestBase):
+    """F46-I04（Contract G／L）：策略 prompt 帶程式排好的【上幾期的排名】（取代【座標成績表】），
+    接在【過去的學習】之後；`basis.coordinate_scoreboard` 列出它用到的學習列 id，
+    `basis.ranked_learnings` 存它 prompt 用的那份 view（查看策略依據＝模型真的看過的），
+    不再寫 `basis.coordinate_learnings`。顧客群用這次的【這個賣法的顧客】編號。排名列是
+    closeout 寫的 `v=2` 列——這裡直接用公開的 `record_learning` 種一列。"""
 
     def _seed_scoreboard(self) -> dict:
         web.conn.execute(
@@ -966,15 +970,26 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
             web.conn, self.org_id, self.brand_id, closed["id"], group["id"], name="上一期-免運",
             coordinates=_coordinates("last"),
         )
-        keys = _coordinates("last")
-        scope = "coord；grade=on_target；" + "；".join(
-            f"{dim}={keys[dim]}"
-            for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+        (self.customer_group,) = bi_repo.save_customer_groups(
+            web.conn, self.brand_id, self.product["id"],
+            [{"who": "下班後夜跑的上班族", "pain_keys": ["effort"]}], actor=ACTOR,
         )
+        keys = _coordinates("last")
+        scope = (
+            "coord；v=2；verdict=keep；rank=1；of=1；sales=6；spend=1200；cpr=200；cap=300；few=0"
+            f"；group={self.customer_group['id']}；"
+            + "；".join(
+                f"{dim}={keys[dim]}"
+                for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format")
+            )
+            + "；cur=TWD"
+        )
+        web.conn.execute("UPDATE ads_campaign SET closed_at = now() WHERE id = %s",
+                         (closed["id"],))
         return bi_repo.record_learning(
             web.conn, self.brand_id, actor=ACTOR,
-            learning_text="「上一期-免運」每筆 200（上限 300）＝划算", applicability_scope=scope,
-            confidence="observed", sample_size="1 則廣告",
+            learning_text="第 1／1 名「上一期-免運」每筆 200", applicability_scope=scope,
+            confidence="observed", sample_size="高",
             source_cycle_id=f"{closed['id']}:{ad['id']}", source_track="coordinate",
         )
 
@@ -989,47 +1004,61 @@ class CoordinateScoreboardInStrategyPromptTest(StrategyTestBase):
         learning = self._seed_scoreboard()
         prompt, detail = self._generate_and_capture()
 
-        self.assertIn(_SCOREBOARD_HEADER, prompt)
+        self.assertIn(_RANKED_HEADER, prompt)
         self.assertIn(
-            "- audience｜aud_last｜陌生・知道問題：划算 1、偏貴 0、太貴 0、沒賣出 0", prompt,
+            "- 顧客群 第 1 群（下班後夜跑的上班族）｜1 則廣告｜賣 6 筆｜花 1,200｜每筆 200"
+            "｜上限 300", prompt,
         )
         self.assertIn(
-            "上一期「上一期 Campaign」划算的：「上一期-免運」"
-            "（陌生・知道問題（audience=aud_last）、",
+            "- 上一期 Campaign第 1／1 名｜留下｜顧客群 1｜「上一期-免運」｜每筆 200｜賣 6 筆"
+            "｜花 1,200｜陌生・知道問題（audience=aud_last）、",
             prompt,
         )
-        # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【座標成績表】，取最後一次。
-        self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_SCOREBOARD_HEADER))
-        self.assertLess(prompt.rindex(_SCOREBOARD_HEADER), prompt.rindex("【程式算好的預算情境"))
+        self.assertNotIn("座標成績表", prompt)
+        # 段落接在【過去的學習】之後、預算情境之前；任務檔前面也提到【上幾期的排名】，取最後一次。
+        self.assertLess(prompt.rindex("【過去的學習】"), prompt.rindex(_RANKED_HEADER))
+        self.assertLess(prompt.rindex(_RANKED_HEADER), prompt.rindex("【程式算好的預算情境"))
         basis = detail["budget_basis_json"]["basis"]
         self.assertEqual(basis["coordinate_scoreboard"], [learning["id"]])
         self.assertIn(learning["id"], basis["knowledge_item_ids"])
-        # 成績表列不是句子學習：`basis.learnings` 仍然只讀 `ads` 軌。
+        # 排名列不是句子學習：`basis.learnings` 仍然只讀 `ads` 軌。
         self.assertEqual(basis["learnings"], [])
-        # F41-I02：「用到的學習」的座標列＝prompt 列出的那幾則，座標用中文名稱。
-        (row,) = basis["coordinate_learnings"]
+        self.assertNotIn("coordinate_learnings", basis)
+        # The stored view is the one the prompt was built from.
+        ranked = basis["ranked_learnings"]
+        (campaign_view,) = ranked["campaigns"]
+        self.assertEqual(campaign_view["campaign_name"], "上一期 Campaign")
+        self.assertEqual(campaign_view["rule_text"], "1 則每筆低於上限 300 → 留下；其餘換掉")
+        (row,) = campaign_view["rows"]
         self.assertEqual(
-            {k: row[k] for k in ("grade", "grade_label", "cost_per_result", "ad_name",
-                                 "campaign_name")},
-            {"grade": "on_target", "grade_label": "划算", "cost_per_result": None,
-             "ad_name": "上一期-免運", "campaign_name": "上一期 Campaign"},
+            {k: row[k] for k in ("rank", "of", "ad_name", "verdict", "verdict_label",
+                                 "cost_per_sale", "sales", "spend", "customer_group")},
+            {"rank": 1, "of": 1, "ad_name": "上一期-免運", "verdict": "keep",
+             "verdict_label": "留下", "cost_per_sale": 200, "sales": 6, "spend": 1200,
+             "customer_group": {"id": self.customer_group["id"], "who": "下班後夜跑的上班族"}},
         )
         self.assertEqual(
             row["coordinates"][0],
-            {"dimension": "audience", "dimension_label": "受眾", "label": "陌生・知道問題"},
+            {"dimension": "audience", "dimension_label": "受眾", "key": "aud_last",
+             "label": "陌生・知道問題"},
         )
-        self.assertIn(
-            {"dimension": "pain", "dimension_label": "痛點", "label": "pain_last"},
-            row["coordinates"],
-        )
+        self.assertEqual(ranked["groups"][0]["who"], "下班後夜跑的上班族")
 
-    def test_empty_brand_says_there_is_no_scoreboard(self):
+    def test_empty_brand_says_there_is_nothing_ranked(self):
         prompt, detail = self._generate_and_capture()
 
-        self.assertIn(_SCOREBOARD_EMPTY, prompt)
-        self.assertNotIn(_SCOREBOARD_HEADER, prompt)
-        self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_scoreboard"], [])
-        self.assertEqual(detail["budget_basis_json"]["basis"]["coordinate_learnings"], [])
+        self.assertIn(_RANKED_EMPTY, prompt)
+        self.assertNotIn(_RANKED_HEADER, prompt)
+        basis = detail["budget_basis_json"]["basis"]
+        self.assertEqual(basis["coordinate_scoreboard"], [])
+        self.assertEqual(basis["ranked_learnings"], {"campaigns": [], "groups": [], "next": None})
+        self.assertNotIn("coordinate_learnings", basis)
+
+    def test_the_department_file_builds_on_kept_ads_by_name(self):
+        text = strategy.DEPARTMENT_PATH.read_text(encoding="utf-8")
+        self.assertIn("`rationale` 要點名這次建立在哪幾則「留下」的廣告上", text)
+        self.assertIn("不再用的「換掉」那一群＋角度", text)
+        self.assertNotIn("座標成績表", text)
 
 
 class OneCurrentLearningPerProductTest(StrategyTestBase):

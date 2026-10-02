@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/layout/ui/dialog";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
-import {
-  chooseSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, isAuthThumbnail, recheckSlot, SlotRecheckError, uploadIntoSlot,
-  type CampaignSlots, type ReplaceRequest, type Slot, type SlotCopy, type SlotCopyOption,
-} from "@/lib/adsSlotsApi";
+import { getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type ReplaceRequest, type Slot } from "@/lib/adsSlotsApi";
 import { createUploadBatch, putUpload } from "@/lib/adsUserAssetsApi";
-import { internalHref } from "@/lib/internalHref";
 import { useApiRead } from "@/lib/useApiRead";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import { ActionBar, Chip, ProgressSegments, ReadFailed, SlotGrid, SlotTile, Thumb, type SegmentState } from "../patterns";
+import {
+  BlockedSlot, CopyEditor, CopyOnlySlot, CopyPicker, flatSlots, ImageOnlySlot, isVideoSlot, MissingSlot, ReadySlot, useShownThumbnail,
+  VIDEO_NEEDED, WaitingSlot, type Checked,
+} from "./SlotTiles";
 import { isDraftCampaign } from "./WorkspaceHead";
 
 /** v10 (F30-I11) the workspace's 素材 tab body (prototype `tabAssets()` / `slotsOf()`), from `GET …/slots`
@@ -41,23 +42,20 @@ import { isDraftCampaign } from "./WorkspaceHead";
  * `fix: "file"` → 換一張 (the slot upload); always 再檢查一次 (`recheckSlot`, whose slots replace the grid). The card
  * head counts the blocked slots, their progress segments are the danger colour and the draft bar says they are not
  * in the launch list. A blocked slot does not poll: nothing changes it by itself. Every planned slot's head carries
- * its ad's offer chip (`offer_label`). */
+ * its ad's offer chip (`offer_label`).
+ * F45-I08 (prototype `f45-slot-states` `#/c1/assets`, Contract W): 處理中 only while a job for the slot runs, and the
+ * tile says which (「預覽製作中」／「文案生成中」, 已寫好 d／n when known); 等你 carries the server's next action (到工作檯選定
+ * 一版文案 → the set; 確認這版文案 → the confirmation again, plus 改文案); a copy reason's exit is 改這句文案 — the in-place
+ * editor (`CopyEditor`, 保存後馬上檢查), whose returned slots replace the grid — and 到工作檯換一版 →. The head counts
+ * 卡住／等你／處理中, each state has its progress colour, the draft bar says 「〈counts〉：好了才會進上架清單」 and only
+ * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`.
+ * F47 Contract C: while a slot is 處理中 and the background worker is stopped, the worker-stopped notice sits above the
+ * slots (the slot states stay as the server says); 再檢查一次 re-reads the worker and the slots. */
 
 const POLL_MS = 3000;
-const VIDEO_NEEDED = "這格要影片腳本，照片不算";
-const SHARED_IMAGE = "同一張圖，文案不同";
-const NO_OFFER = "無優惠";
-const isVideoSlot = (slot: Slot) => slot.format_key === "video";
-const flatSlots = (data: CampaignSlots) => data.groups.flatMap((g) => g.slots);
 
-/** The ad's offer coordinate as the tile head's chip (accent unless it is 無優惠); nothing for an ad without one. */
-function offerChip(slot: Slot): ReactNode {
-  if (!slot.offer_label) return undefined;
-  return <Chip tone={slot.offer_label === NO_OFFER ? "neutral" : "accent"}>{slot.offer_label}</Chip>;
-}
-
-/** The progress segment per slot state (prototype `.prog i.ok` / `.run` / `.bad`); every other state is still to do. */
-const SEGMENT: Partial<Record<Slot["state"], SegmentState>> = { ready: "ok", in_progress: "running", blocked: "blocked" };
+/** The progress segment per slot state (prototype `.prog i.ok` / `.run` / `.wait` / `.bad`); every other state is still to do. */
+const SEGMENT: Partial<Record<Slot["state"], SegmentState>> = { ready: "ok", in_progress: "running", waiting: "waiting", blocked: "blocked" };
 
 const CARD = "surface px-[22px] py-5";
 const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
@@ -70,25 +68,6 @@ function monthDay(iso: string): string {
   if (Number.isNaN(d.getTime())) return "—";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
-}
-
-/** The URL an `<img>` can load: a platform URL as is; an authenticated user-asset path fetched into an object URL
- * (revoked when it changes or unmounts). `null` while loading or when the fetch fails — the neutral tile. */
-function useShownThumbnail(url: string | null): string | null {
-  const [made, setMade] = useState<{ from: string; src: string } | null>(null);
-  useEffect(() => {
-    if (!isAuthThumbnail(url)) return;
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    fetchSlotThumbnail(url, controller.signal).then((blob) => {
-      if (controller.signal.aborted) return;
-      objectUrl = URL.createObjectURL(blob);
-      setMade({ from: url, src: objectUrl });
-    }).catch(() => { /* the neutral tile stands in; a thumbnail never blanks the grid */ });
-    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [url]);
-  if (!isAuthThumbnail(url)) return url;
-  return made?.from === url ? made.src : null;
 }
 
 function RequestRow({ request, busy, error, onCancel }: {
@@ -153,221 +132,20 @@ function RequestsCard({ brandId, campaignId, slots, onChanged }: {
   );
 }
 
-/** The copy half's words: the version label and `headline　body` (a copy with neither shows its description). */
-function copyText(copy: SlotCopy): { label: string; text: string } {
-  const text = [copy.headline, copy.body].filter((t): t is string => !!t && t.trim() !== "").join("　");
-  return { label: copy.label, text: text || copy.description || "" };
+/** The status line under the progress bar: what the last upload, copy choice, edit or confirmation did, and the next
+ * step when one is still needed (a placement that waits in 進階 for the user's confirmation). A next-step line names
+ * its slot and the state it was written for; it goes once the current slots show that slot in another state. */
+type Note = { name: string; error: string } | { name: string; line: string; next: boolean; adId?: string; state?: Slot["state"] };
+
+/** The placement's pending sentence as one sentence (the stored default already ends with 「。」). */
+const pendingSentence = (reason: string) => `${(reason || "確認文案與用途後才算備妥").replace(/。+$/, "")}。`;
+
+/** What a saved edit did, from the slot the server returned (ready only when it says ready). */
+function editedLine(after: Slot | undefined): string {
+  if (after?.state === "ready") return "文案已保存，這一格已確認";
+  if (after?.state === "blocked") return "文案已保存，但卡住了，原因寫在格子裡";
+  return "文案已保存，這一格還沒好，下一步寫在格子裡";
 }
-
-/** A ready or in-progress slot. `shared`: another slot in the same response shows the same thumbnail (one original
- * backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was 處理中 in an
- * earlier read of the same screen and the poll flipped it (「已確認・剛處理好」). */
-function ReadySlot({ slot, shared, justDone, busy, onPick }: {
-  slot: Slot; shared: boolean; justDone: boolean; busy: boolean; onPick: (file: File) => void;
-}) {
-  const thumb = useShownThumbnail(slot.thumbnail_url);
-  const inProgress = slot.state === "in_progress";
-  const chip = inProgress
-    ? <Chip tone="accent"><Spinner />處理中</Chip>
-    : slot.replace_task_id ? <Chip tone="warn">要換掉</Chip> : <Chip tone="ok">{justDone ? "已確認・剛處理好" : "已確認"}</Chip>;
-  const status = (
-    <div className="flex flex-col items-start gap-1">
-      {shared && !inProgress && (
-        <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground" data-slot="slot-shared">
-          {SHARED_IMAGE}
-          {slot.ad_id !== null && <UploadAction slot={slot} busy={busy} onPick={onPick} label="換一張" variant="link" />}
-        </span>
-      )}
-      {chip}
-      {inProgress && <span className="text-[11px] text-muted-foreground" data-slot="slot-polling">處理中・自動更新，不用重整</span>}
-    </div>
-  );
-  return <SlotTile variant="ready" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)} status={status} />;
-}
-
-/** What the last 再檢查一次 of a slot said: still blocked (`line`), or the call failed (`error`). */
-type Checked = { adId: string; line: string; error: boolean };
-
-/** F44: a slot whose confirmation was refused, or whose file failed. The tile says why and offers the exit that fixes
- * that reason — another copy version (the picker; the ad's workbench set when it has one) or another file — and
- * 再檢查一次 for a reason that was fixed somewhere else. A `blocked` state without its reason reads as unknown. */
-function BlockedSlot({ slot, uploading, checking, checked, onPick, onPickCopy, onRecheck }: {
-  slot: Slot; uploading: boolean; checking: boolean; checked: Checked | null;
-  onPick: (file: File) => void; onPickCopy: () => void; onRecheck: () => void;
-}) {
-  const thumb = useShownThumbnail(slot.thumbnail_url);
-  const blocked = slot.blocked ?? { text: "卡住的原因讀不到。", terms: [], fix: null, more: 0 };
-  return (
-    <SlotTile variant="blocked" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
-      status={<Chip tone="bad">卡住</Chip>} reason={{ text: blocked.text, terms: blocked.terms, more: blocked.more }}
-      actions={slot.ad_id !== null && <>
-        {blocked.fix === "copy" && <Button variant="outline" size="sm" aria-label={`換一版文案：${slot.name}`} onClick={onPickCopy}>換一版文案</Button>}
-        {blocked.fix === "copy" && slot.workbench_href && (
-          <Button variant="link" size="xs" className="h-auto px-0" asChild><Link to={internalHref(slot.workbench_href)}>到工作檯改文案 →</Link></Button>
-        )}
-        {blocked.fix === "file" && <UploadAction slot={slot} busy={uploading} onPick={onPick} label="換一張" />}
-        <Button variant="link" size="xs" className="h-auto px-0" disabled={checking} aria-label={`${checking ? "檢查中…" : "再檢查一次"}：${slot.name}`} onClick={onRecheck}>
-          {checking ? "檢查中…" : "再檢查一次"}
-        </Button>
-      </>}
-      note={checked && (checked.error
-        ? <p role="alert" className="text-xs text-danger">沒有檢查成功：{checked.line}</p>
-        : <p role="status" className="text-xs text-muted-foreground">{checked.line}</p>)} />
-  );
-}
-
-/** The small spinner inside the 處理中 chip (the prototype's `.spin`). */
-function Spinner() {
-  return <span aria-hidden="true" className="inline-block size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-chart-soft border-t-primary" />;
-}
-
-/** The hidden file input and its button, shared by the missing tile, the copy-only tile's image half, the video
- * placeholder (上傳影片, `accept="video/*"`) and the shared-image caption (換一張, a link). The input's `accept` is
- * only a hint to the file dialog; `upload()` still refuses a photo on a video slot. */
-function UploadAction({ slot, busy, onPick, label, variant = "outline" }: {
-  slot: Slot; busy: boolean; onPick: (file: File) => void; label?: string; variant?: "outline" | "link";
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  const video = isVideoSlot(slot);
-  const text = label ?? (video ? "上傳影片" : "上傳");
-  return (
-    <>
-      <input ref={input} type="file" accept={video ? "video/*" : "image/*,video/*"} className="hidden" aria-label={`選擇「${slot.name}」的檔案`}
-        onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onPick(file); }} />
-      <Button variant={variant} size={variant === "link" ? "xs" : "sm"} disabled={busy} aria-label={`${text}：${slot.name}`} onClick={() => input.current?.click()}>
-        {busy ? "上傳中…" : text}
-      </Button>
-    </>
-  );
-}
-
-/** The image half of a video-format slot: the dashed placeholder sentence over 上傳影片 (never the photo button). */
-function VideoPlaceholder({ slot, busy, onPick }: { slot: Slot; busy: boolean; onPick: (file: File) => void }) {
-  return (
-    <div className="flex flex-col items-center gap-1.5" data-slot="slot-video">
-      <b className="text-xs font-semibold text-accent-foreground">{VIDEO_NEEDED}</b>
-      {slot.ad_id !== null && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-    </div>
-  );
-}
-
-function MissingSlot({ slot, workbenchHref, busy, onPick }: {
-  slot: Slot; workbenchHref: string; busy: boolean; onPick: (file: File) => void;
-}) {
-  // Only a planned ad takes an upload (an imported campaign's slots are platform ads, always ready).
-  const canUpload = slot.ad_id !== null;
-  const to = internalHref(slot.workbench_href ?? workbenchHref);
-  if (isVideoSlot(slot)) {
-    return (
-      <SlotTile variant="missing" title={VIDEO_NEEDED} status={<Chip tone="warn">缺影片</Chip>} actions={<>
-        {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-        <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
-      </>} />
-    );
-  }
-  return (
-    <SlotTile variant="missing" actions={<>
-      {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-      <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
-    </>} />
-  );
-}
-
-/** The ad's selected workbench copy is known; the image half waits for the upload (which carries the copy in). */
-function CopyOnlySlot({ slot, workbenchHref, busy, onPick }: {
-  slot: Slot; workbenchHref: string; busy: boolean; onPick: (file: File) => void;
-}) {
-  // `copy_only` always carries its copy (Contract T); a row without one is drawn as missing rather than blank.
-  if (!slot.copy) return <MissingSlot slot={slot} workbenchHref={workbenchHref} busy={busy} onPick={onPick} />;
-  const video = isVideoSlot(slot);
-  return (
-    <SlotTile variant="copy-only" name={slot.name} copy={copyText(slot.copy)} offer={offerChip(slot)}
-      imageActions={video ? <VideoPlaceholder slot={slot} busy={busy} onPick={onPick} /> : <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-      extra={slot.workbench_href
-        ? <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>
-        : undefined}
-      status={<Chip tone="warn">{video ? "缺影片" : "有文案，缺圖"}</Chip>} />
-  );
-}
-
-/** A file is in the slot but its placement has no copy: the picker fills the other half. */
-function ImageOnlySlot({ slot, onPickCopy }: { slot: Slot; onPickCopy: () => void }) {
-  const thumb = useShownThumbnail(slot.thumbnail_url);
-  return (
-    <SlotTile variant="image-only" name={slot.name} thumbnailUrl={thumb} offer={offerChip(slot)}
-      copyActions={<Button variant="link" size="xs" aria-label={`選一版文案：${slot.name}`} onClick={onPickCopy}>選一版文案</Button>}
-      status={<Chip tone="warn">有圖，缺文案</Chip>} />
-  );
-}
-
-/** The picker on an image-only slot: one button per workbench copy version; choosing writes it into the slot's
- * pending placement, confirms and assigns it (`chooseSlotCopy`). A 409 (`slot_no_file`) stays inside the dialog.
- * On a blocked slot (F44, 換一版文案) it is the same picker under the prototype's words: the chosen version replaces the
- * refused copy and the confirmation runs again — the slot comes back ready or blocked for the new copy's reason. */
-function CopyPicker({ brandId, campaignId, slot, onClose, onChosen }: {
-  brandId: string; campaignId: string; slot: Slot; onClose: () => void; onChosen: (slots: CampaignSlots) => void;
-}) {
-  const read = useApiRead((signal) => getSlotCopyOptions(brandId, campaignId, signal), [brandId, campaignId]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const swap = slot.state === "blocked";
-  const terms = slot.blocked?.terms ?? [];
-  async function choose(option: SlotCopyOption) {
-    if (!slot.ad_id || busy) return;
-    setBusy(option.version_id);
-    setError(null);
-    try {
-      const result = await chooseSlotCopy(brandId, campaignId, slot.ad_id, { set_id: option.set_id, version_id: option.version_id });
-      onChosen(result.slots);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "文案沒有放進去，請再試一次。");
-    } finally {
-      setBusy(null);
-    }
-  }
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[560px]">
-        <DialogTitle className="text-[17px] [overflow-wrap:anywhere]">{swap ? `「${slot.name}」換一版文案` : `選一版文案放進「${slot.name}」`}</DialogTitle>
-        <DialogDescription>
-          {!swap
-            ? "工作檯已核准的文案版本。放進去後這一格就備妥；之後想改，到工作檯再產一版。"
-            : terms.length > 0
-              ? `選一版沒有寫「${terms.join("、")}」的文案，這一格會馬上再檢查一次。`
-              : "選另一版文案，這一格會馬上再檢查一次。"}
-        </DialogDescription>
-        {read.status === "error"
-          ? <ReadFailed what={`文案版本讀不到：${read.error}`} onRetry={read.reload} />
-          : !read.data
-            ? <Skeleton className="h-24 w-full" />
-            : read.data.options.length === 0
-              ? <p className="text-sm text-muted-foreground">工作檯還沒有文案版本；先到工作檯做一版。</p>
-              : (
-                <div className="flex flex-col gap-2" role="list" aria-label="文案版本">
-                  {read.data.options.map((o, i) => (
-                    <Button key={`${o.set_id}:${o.version_id}`} variant="outline" role="listitem" autoFocus={i === 0}
-                      disabled={busy !== null} onClick={() => void choose(o)}
-                      className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2.5 text-left font-normal">
-                      <span className="text-[11.5px] text-muted-foreground">{o.label}</span>
-                      <span className="text-[13px] [overflow-wrap:anywhere]">
-                        {o.copy_fields.headline && <b>{o.copy_fields.headline}</b>}{o.copy_fields.headline && o.copy_fields.body ? "　" : ""}{o.copy_fields.body}
-                      </span>
-                    </Button>
-                  ))}
-                </div>
-              )}
-        {error && <p role="alert" className="text-sm text-danger">沒有放進去：{error}</p>}
-        <div className="flex justify-end">
-          <Button variant="ghost" disabled={busy !== null} onClick={onClose}>取消</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** The status line under the progress bar: what the last upload or copy choice did, and the next step when one is
- * still needed (a placement that waits in 進階 for the user's confirmation). */
-type Note = { name: string; error: string } | { name: string; line: string; next: boolean };
 
 /** What the picker's choice did, from the slot the server returned: ready only when it says ready (a chosen copy can
  * still be refused, then the tile carries the reason). */
@@ -404,6 +182,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
   const [uploading, setUploading] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const [picking, setPicking] = useState<Slot | null>(null);
+  const [editing, setEditing] = useState<Slot | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [checked, setChecked] = useState<Checked | null>(null);
 
@@ -412,18 +191,27 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
   const draft = isDraftCampaign(c, null);
 
   const slots = data ? flatSlots(data) : [];
-  const blockedCount = slots.filter((s) => s.state === "blocked").length;
-  // Polling: while any slot is 處理中 (a file being confirmed, a revised material, a workbench pack being made) the
+  const count = (state: Slot["state"]) => slots.filter((s) => s.state === state).length;
+  const blockedCount = count("blocked");
+  // 卡住、等你、處理中 in the prototype's order: the head's chips, the bar's label and the draft bar's hint.
+  const pending = [
+    { n: blockedCount, word: "卡住", tone: "bad" as const },
+    { n: count("waiting"), word: "等你", tone: "warn" as const },
+    { n: count("in_progress"), word: "處理中", tone: "accent" as const },
+  ].filter((p) => p.n > 0);
+  const left = pending.map((p) => `${p.n} 格${p.word}`).join("、");
+  // Polling: while any slot is 處理中 (a job for it runs: its original's preview or its workbench set's copy) the
   // slots are re-read every 3 s in place; the interval goes when none is in progress or the body unmounts.
-  // A blocked slot waits for the user, so it never keeps the interval alive.
+  // A blocked or waiting slot waits for the user, so it never keeps the interval alive.
   const polling = slots.some((s) => s.state === "in_progress");
   useEffect(() => {
     if (!polling) return;
     const timer = setInterval(reload, POLL_MS);
     return () => clearInterval(timer);
   }, [polling, reload]);
-  // The ads that became ready on this screen (「已確認・剛處理好」): a poll flipped them from 處理中, or an exit of a
-  // blocked slot (another copy, another file, a recheck) unblocked them.
+  const worker = useWorkerHealth(polling, POLL_MS);
+  // The ads that became ready on this screen (「已確認・剛處理好」): a poll flipped them from 處理中, the user's next
+  // action finished a 等你 slot, or an exit of a blocked slot (another copy, an edit, another file, a recheck) unblocked it.
   const wasInProgress = useRef<Set<string>>(new Set());
   const [justDone, setJustDone] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -432,7 +220,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     const done: string[] = [];
     for (const s of flatSlots(data)) {
       if (!s.ad_id) continue;
-      if (s.state === "in_progress" || s.state === "blocked") now.add(s.ad_id);
+      if (s.state === "in_progress" || s.state === "waiting" || s.state === "blocked") now.add(s.ad_id);
       else if (s.state === "ready" && wasInProgress.current.has(s.ad_id)) done.push(s.ad_id);
     }
     wasInProgress.current = now;
@@ -469,7 +257,8 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
           : returned?.state === "blocked"
             // The refusal and its exit are on the tile; the folded placement list is not the next step.
             ? { name: slot.name, line: `已放進「${slot.name}」這一格，但卡住了，原因寫在格子裡。`, next: false }
-            : { name: slot.name, line: `已放進「${slot.name}」這一格；${result.placement.pending_reason || "確認文案與用途後才算備妥"}。`, next: true });
+            : { name: slot.name, line: `已放進「${slot.name}」這一格；${pendingSentence(result.placement.pending_reason)}`, next: true,
+                adId: slot.ad_id, state: returned?.state });
       onPlacementChanged();
     } catch (err) {
       setNote({ name: slot.name, error: err instanceof Error ? err.message : "上傳沒有完成，請再試一次。" });
@@ -504,6 +293,36 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     }
   }
 
+  /** 等你：確認這版文案 — the same confirmation as 再檢查一次; what it did goes in the status line (the tile turns
+   * ready, or 卡住 with the reason on it). */
+  async function confirm(slot: Slot) {
+    const adId = slot.ad_id;
+    if (!adId || checking) return;
+    setChecking(adId);
+    setChecked(null);
+    setNote(null);
+    try {
+      const result = await recheckSlot(brandId, c.id, adId);
+      setFresh(result.slots);
+      const after = flatSlots(result.slots).find((s) => s.ad_id === adId);
+      setNote({
+        name: slot.name, next: false,
+        line: after?.state === "ready" ? "這一格已確認" : after?.state === "blocked" ? "卡住了，原因寫在格子裡" : "這一格還沒好，下一步寫在格子裡",
+      });
+      onPlacementChanged();
+    } catch (err) {
+      if (err instanceof SlotRecheckError && err.code === "slot_no_file") reload();
+      else setChecked({ adId, line: err instanceof Error ? err.message : "請稍後再試。", error: true });
+    } finally {
+      setChecking(null);
+    }
+  }
+
+  function openEditor(slot: Slot) { setNote(null); setChecked(null); setEditing(slot); }
+
+  // A next-step note written for a slot that has since moved on (now 已確認, 卡住, …) no longer applies.
+  const noteSlot = note && "next" in note && note.next && note.adId ? slots.find((s) => s.ad_id === note.adId) : undefined;
+  const shownNote = noteSlot && noteSlot.state !== (note as { state?: Slot["state"] }).state ? null : note;
   const ready = data?.ready ?? null;
   const total = data?.total ?? null;
   const missing = ready !== null && total !== null ? total - ready : 0;
@@ -528,19 +347,20 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
         <div className={HEAD}>
           <div className="flex flex-wrap items-center gap-2.5">
             <h2 className={H2}>{data.ready}／{data.total} 格已備妥</h2>
-            {blockedCount > 0 && <Chip tone="bad">{blockedCount} 格卡住</Chip>}
+            {pending.map((p) => <Chip key={p.word} tone={p.tone}>{p.n} 格{p.word}</Chip>)}
           </div>
           <Button variant="outline" size="sm" asChild><Link to={workbenchHref}>到素材工作檯</Link></Button>
         </div>
-        <ProgressSegments className="max-w-[520px]" label={`${data.ready}／${data.total} 格已備妥${blockedCount > 0 ? `，${blockedCount} 格卡住` : ""}`}
+        <ProgressSegments className="max-w-[520px]" label={`${data.ready}／${data.total} 格已備妥${left ? `，${left}` : ""}`}
           segments={slots.map((s, i) => ({ key: `${s.ad_id ?? s.entity_id ?? i}`, state: SEGMENT[s.state] ?? "todo", title: s.name }))} />
-        {note && ("error" in note
-          ? <p role="alert" className="mt-3 text-sm text-danger">「{note.name}」沒有上傳成功：{note.error}</p>
+        {shownNote && ("error" in shownNote
+          ? <p role="alert" className="mt-3 text-sm text-danger">「{shownNote.name}」沒有上傳成功：{shownNote.error}</p>
           : <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-muted px-4 py-2.5 text-sm">
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{note.line}</span>
-              {note.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{shownNote.line}</span>
+              {shownNote.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
             </div>)}
         <div className="mt-[18px] flex flex-col gap-4">
+          {worker.stalled && <WorkerStoppedNotice onRecheck={() => { reload(); return worker.recheck(); }} />}
           {data.groups.map((g, gi) => {
             const groupReady = g.slots.filter((s) => s.state === "ready").length;
             return (
@@ -563,7 +383,15 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
                       return (
                         <BlockedSlot key={key} slot={s} uploading={uploading === s.ad_id} checking={checking === s.ad_id}
                           checked={checked && checked.adId === s.ad_id ? checked : null} onPick={(file) => void upload(s, file)}
-                          onPickCopy={() => { setNote(null); setChecked(null); setPicking(s); }} onRecheck={() => void recheck(s)} />
+                          onPickCopy={() => { setNote(null); setChecked(null); setPicking(s); }} onEdit={() => openEditor(s)}
+                          onRecheck={() => void recheck(s)} />
+                      );
+                    }
+                    if (s.state === "waiting") {
+                      return (
+                        <WaitingSlot key={key} slot={s} workbenchHref={workbenchHref} checking={checking === s.ad_id}
+                          checked={checked && checked.adId === s.ad_id ? checked : null}
+                          onConfirm={() => void confirm(s)} onEdit={() => openEditor(s)} />
                       );
                     }
                     return (
@@ -595,9 +423,18 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
             onPlacementChanged();
           }} />
       )}
+      {editing && (
+        <CopyEditor brandId={brandId} campaignId={c.id} slot={editing} onClose={() => setEditing(null)}
+          onSaved={(next) => {
+            setFresh(next);
+            setNote({ name: editing.name, line: editedLine(flatSlots(next).find((s) => s.ad_id === editing.ad_id)), next: false });
+            setEditing(null);
+            onPlacementChanged();
+          }} />
+      )}
       {advanced}
       <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}
-        hint={!draft ? undefined : blockedCount > 0 ? `${blockedCount} 格卡住，處理好才會進上架清單` : missing > 0 ? `缺圖的那 ${missing} 則先不建立，不會花到錢；補上圖後再加上去` : undefined}>
+        hint={!draft ? undefined : left ? `${left}：好了才會進上架清單` : missing > 0 ? `缺圖的那 ${missing} 則先不建立，不會花到錢；補上圖後再加上去` : undefined}>
         {draft && (ready === null
           ? <Button asChild><Link to={publishHref}>確認上架清單 →</Link></Button>
           : ready === 0

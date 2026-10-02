@@ -2,8 +2,8 @@
  *
  * `apiFetch` 跟全域 `fetch` 同簽章，呼叫端原本怎麼用 `fetch(path, init)` 就怎麼用
  * `apiFetch(path, init)`，差別只多做三件事：帶 `Authorization`、帶 `X-Org-Id`、401 時
- * 導去登入頁。其餘（response 怎麼判斷成功、怎麼解析 body、丟什麼錯誤訊息）維持呼叫端
- * 自己的寫法不動——這支檔案不猜每個呼叫端想要什麼樣的錯誤處理。
+ * 導去登入頁。失敗回應怎麼變成一句話由檔尾的 `throwIfFailed`（F47-I02）負責——全站只有
+ * 這一個出口把非 OK 回應轉成 `Error`。
  *
  * 刻意不 monkey-patch 全域 `fetch`：`lib/auth.ts` 用的 supabase-js 用戶端函式庫也用同一個
  * 全域 `fetch` 跟 Supabase Auth 伺服器講話，那些請求不該被硬塞 `X-Org-Id`，401 也不該
@@ -57,10 +57,21 @@ export function takePendingPath(): string | null {
 }
 
 /** 使用者自己按登出時呼叫（`OrgMenu`）：把記住的路徑丟掉。刻意不塞進 `lib/auth.ts` 的
- * `signOut()`——`apiFetch` 的 401 分支是先 `signOut()` 再記路徑，藏在裡面會讓那個順序
- * 變成看不見卻不能動的東西。 */
+ * `signOut()`——`apiFetch` 的 401 分支會先記路徑再 `signOut()`，藏在裡面會把剛記的路徑
+ * 當場清掉。 */
 export function clearPendingPath(): void {
   sessionStorage.removeItem(PENDING_PATH_KEY);
+}
+
+const SESSION_EXPIRED_KEY = "sessionExpired";
+
+/** F47-I02: the login page reads this once on mount. `true` only when `apiFetch` just sent the user
+ * here because the server answered 401 (the session ran out), so the page can say
+ * 「登入已過期，請重新登入」 instead of a bare form. Read-and-clear, like `takePendingPath`. */
+export function takeSessionExpired(): boolean {
+  const expired = sessionStorage.getItem(SESSION_EXPIRED_KEY) === "1";
+  sessionStorage.removeItem(SESSION_EXPIRED_KEY);
+  return expired;
 }
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -74,8 +85,13 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const res = await fetch(input, { ...init, headers });
 
   if (res.status === 401) {
-    await signOut();
+    // F47-I02: remember the page and the "expired" mark BEFORE signing out. `signOut()` fires
+    // supabase-js's auth-state broadcast, and `RequireSession` (App.tsx) can re-render into
+    // `<Navigate to="/login">` before this await returns — after that `window.location` already
+    // reads `/login` and the page the user was on would be lost.
     rememberPendingPath();
+    sessionStorage.setItem(SESSION_EXPIRED_KEY, "1");
+    await signOut();
     redirectToLogin("/app/login");
     // 導頁已經觸發：不把 401 這個 Response 交還給呼叫端，呼叫端多半是
     // `if (!res.ok) throw new Error(...)` 這種寫法，會在畫面短暫閃出一句「讀取失敗」
@@ -143,4 +159,55 @@ export async function errorMessageFromResponse(res: Response, fallback: string):
   } catch {
     return fallback;
   }
+}
+
+/** F47-I02 (feature F47 Contract B): the error every shell API client throws for a non-OK response.
+ * `message` is the server's own sentence when it sent one; `fieldErrors` carries the per-field
+ * messages of the rule-card body (`{"error": "…", "field_errors": {key: "…"}}`) for callers that
+ * want to show each message next to its field. */
+export class ApiResponseError extends Error {
+  readonly status: number;
+  readonly fieldErrors: Record<string, string>;
+  constructor(message: string, status: number, fieldErrors: Record<string, string> = {}) {
+    super(message);
+    this.name = "ApiResponseError";
+    this.status = status;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+function fieldErrorsFrom(body: unknown, key: "field_errors" | "errors"): Record<string, string> {
+  if (!body || typeof body !== "object") return {};
+  const raw = (body as Record<string, unknown>)[key];
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string" && value) out[key] = value;
+  }
+  return out;
+}
+
+/** F47-I02 (Contract B): the one way a shell API client turns a failed response into an `Error`.
+ * Does nothing when `res.ok`; otherwise throws an `ApiResponseError` whose message is, in order:
+ * every `errors` field message joined (library writes), the envelope's sentence (`errorMessageFrom`:
+ * `{error: "…"}`, `{error: {message}}`, `{detail}`), the first `field_errors` message, or `fallback` (also used for a non-JSON body such as a 502
+ * HTML page). A 「…（狀態碼 N）」 text belongs only in `fallback` — `lib/feedbackGuards.test.ts`
+ * fails a `lib/*.ts` file that throws one any other way. */
+export async function throwIfFailed(res: Response, fallback: string): Promise<void> {
+  if (res.ok) return;
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  // Two per-field shapes: the rule-card `field_errors` (its first message stands in when the body has
+  // no sentence of its own) and the library writes' `errors` (always shown whole: every field's
+  // message joined with 「；」, as `libraryApi.postJson` always did).
+  const ruleFields = fieldErrorsFrom(body, "field_errors");
+  const libraryFields = fieldErrorsFrom(body, "errors");
+  const libraryMessages = Object.values(libraryFields);
+  if (libraryMessages.length) throw new ApiResponseError(libraryMessages.join("；"), res.status, libraryFields);
+  const message = errorMessageFrom(body, Object.values(ruleFields)[0] ?? fallback);
+  throw new ApiResponseError(message, res.status, ruleFields);
 }

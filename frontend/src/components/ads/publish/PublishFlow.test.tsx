@@ -26,16 +26,18 @@ vi.mock("@/lib/adsLaunchSettingsApi", () => ({ confirmLaunchSetting: vi.fn() }))
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_1" }));
 vi.mock("./LaunchSettingsCard", async () => {
   const { useEffect } = await vi.importActual<typeof import("react")>("react");
-  return { LaunchSettingsCard: ({ locked, onBlockerChange }: { locked: boolean; onBlockerChange?: (b: string | null) => void }) => {
+  return { LaunchSettingsCard: ({ locked, onBlockerChange, onCampaignSaved, campaign }: {
+    locked: boolean; onBlockerChange?: (b: string | null) => void; onCampaignSaved: (c: unknown) => void; campaign: unknown;
+  }) => {
     useEffect(() => { onBlockerChange?.(null); }, [onBlockerChange]);
-    return <p>投放設定卡{locked ? "・唯讀" : ""}</p>;
+    return <p>投放設定卡{locked ? "・唯讀" : ""}<button type="button" onClick={() => onCampaignSaved(campaign)}>存各廣告組的其他設定</button></p>;
   } };
 });
 vi.mock("./LaunchSettingsCopy", () => ({ LaunchSettingsCopy: () => <p>可複製的投放設定</p> }));
 
 const LONG = "通勤情境單圖・好攜帶，走到哪都適合（最多數量 1150706）";
 function item(o: Partial<LaunchItem> & Pick<LaunchItem, "id" | "kind" | "name">): LaunchItem {
-  return { parent_name: null, fields: [{ key: "name", label: "名稱", value: o.name }], state: "todo", mismatches: [], unreadable: [], reason: null, ...o };
+  return { parent_name: null, fields: [{ key: "name", label: "名稱", value: o.name }], state: "todo", mismatches: [], unreadable: [], reason: null, reason_at: null, ...o };
 }
 const ITEMS: LaunchItem[] = [
   item({ id: "h1", kind: "campaign", name: "秋季新色預購", fields: [
@@ -136,6 +138,36 @@ describe("確認上架清單", () => {
     expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish/list");
   });
 
+  it("F47-I06 (Q5): saving 各廣告組的其他設定 reads the approval content again, so approving right after does not 409", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view());
+    renderAt("list");
+    const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    const reads = vi.mocked(getPublish).mock.calls.length;
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    fireEvent.click(screen.getByRole("button", { name: "存各廣告組的其他設定" }));
+    await waitFor(() => expect(vi.mocked(getPublish).mock.calls.length).toBe(reads + 1));
+    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(approve);
+    await waitFor(() => expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash_2", operation_id: expect.any(String) }));
+  });
+
+  it("F47-I06 (Q5): a 409 because the content moved says the settings just changed and reads it again", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view());
+    vi.mocked(publishCampaign).mockRejectedValueOnce(new Error("計畫、素材或月份已改變，請重新檢視後核准。"));
+    renderAt("list");
+    const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    fireEvent.click(approve);
+    expect((await screen.findByRole("alert")).textContent).toBe("設定剛改過，已重新讀取，請再按一次核准");
+    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(approve);
+    await waitFor(() => expect(publishCampaign).toHaveBeenLastCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash_2", operation_id: expect.any(String) }));
+  });
+
   it("zero ready ads: approval waits and says why", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(view({ summary: { ...view().summary, ads: 0, slots_ready: 0 } }));
     renderAt("list");
@@ -188,7 +220,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(await screen.findByText("⚠ 要先設 10 月月預算")).toBeTruthy();
     const card = monthCard();
     expect(within(card).getByText("還沒設月預算")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
     expect((await approveButton()).disabled).toBe(true);
   });
 
@@ -203,7 +235,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(within(card).queryByText("放得下")).toBeNull();
     expect(within(card).getByText("10 月只剩 932")).toBeTruthy();
     expect(within(card).getByText("不夠 9,068", { exact: false })).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
     expect(within(card).getByRole("link", { name: "改這期總預算" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=strategy");
     expect((await approveButton()).disabled).toBe(true);
   });
@@ -289,6 +321,30 @@ describe("到平台完成", () => {
 
 describe("讀回核對", () => {
   const read = { step: "verify" as const, read_at: "2026-09-23T02:52:00Z" };
+
+  it("F47-I06 (R5): a stored readback reason says when it was read, beside 重新讀回", async () => {
+    const at = "2026-10-28T14:59:00Z";
+    const stamp = (() => { const d = new Date(at); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; })();
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
+      h1: { state: "built", reason: "平台無法讀取此資料（代碼 2）。", reason_at: at },
+      h2: { state: "built", reason: "上一層還沒讀回，這一項先不比對。" },
+    }, read));
+    renderAt("verify");
+    expect(await screen.findByText(`${stamp} 讀回時讀不到：平台無法讀取此資料（代碼 2）。`)).toBeTruthy();
+    expect(screen.getByText("上一層還沒讀回，這一項先不比對。")).toBeTruthy(); // no stored time: the bare reason
+    expect(screen.getByRole("button", { name: "⟳ 重新讀回" })).toBeTruthy();
+  });
+
+  it("F47-I06: the step chip names the launch with the same rule as the crumb", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, { ...read, version: 2 }));
+    const first = renderAt("verify");
+    expect(await screen.findByText("第 2 版上架・3 項")).toBeTruthy();
+    first.unmount();
+    vi.mocked(getCampaign).mockResolvedValue({ ...CAMPAIGN, context_json: { field_sources: { cap: "copied" } } } as unknown as CampaignDetail);
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, read));
+    renderAt("verify");
+    expect(await screen.findByText("這一期上架・3 項")).toBeTruthy();
+  });
 
   it("all items and settings match: the ok hero with the read time and 回活動總覽", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" } }, read));

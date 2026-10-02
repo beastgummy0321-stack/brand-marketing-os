@@ -30,6 +30,7 @@ const LAW = { term: "預防感冒", sentence: "「預防感冒」屬宣稱預防
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -211,5 +212,27 @@ describe("ProductEvidenceStep", () => {
     await userEvent.click(nextButton());
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
     expect(mockSave.mock.calls[0][2].proof).toContainEqual({ id: null, fact_key: "expert_endorsement", text: "營養師在 IG 推薦過（有截圖）" });
+  });
+
+  it("F47-I03 (drill-10 乙 #1, b-04): a removed proof, a picked verdict and a typed slot survive leaving the step and coming back, until saved", async () => {
+    mockFetch.mockResolvedValue(evidence());
+    mockSave.mockResolvedValue(evidence());
+    renderStep();
+    await screen.findByRole("region", { name: "這個商品的證據" });
+    await userEvent.click(within(proofCard()).getByRole("button", { name: /拿掉.*SGS/ }));
+    await userEvent.click(within(verdictGroup("吃了精神變好")).getByRole("radio", { name: "不能講" }));
+    await userEvent.type(within(proofCard()).getByLabelText("專家背書"), "營養師王小明推薦");
+    cleanup();
+
+    const onNext = renderStep();
+    await screen.findByRole("region", { name: "這個商品的證據" });
+    expect(within(proofCard()).queryByText(/SGS/)).toBeNull();
+    expect(within(verdictGroup("吃了精神變好")).getByRole("radio", { name: "不能講" }).getAttribute("aria-checked")).toBe("true");
+    expect((within(proofCard()).getByLabelText("專家背書") as HTMLInputElement).value).toBe("營養師王小明推薦");
+
+    await userEvent.click(within(verdictGroup("不用配水，一天一顆")).getByRole("radio", { name: "可以講" }));
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalled());
+    expect(sessionStorage.length).toBe(0);
   });
 });

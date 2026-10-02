@@ -1,7 +1,7 @@
 """app/tests/test_ads_month_summary.py — F27-I07 Contract G falsifiers: calendar-month spend/
 results (active AND closed ads), currency-mix honesty, verdicts, the like-for-like orders
-comparison (and its own null-on-failure case), `closed_this_month` vs tracking start, the three
-suggestion kinds, and dismissal per month.
+comparison (and its own null-on-failure case), `closed_this_month` vs tracking start, the
+suggestion kinds (F46-I05 adds `next_plan`), and dismissal per month.
 
 Fixture style follows `test_ads_triage_queue.py`: real `ads_external_entity`/`ads_external_daily`
 rows through `external_repository`'s public writers, no adapter/platform patching needed --
@@ -14,7 +14,7 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 
 from app.ads import external_repository as external
-from app.ads import month_summary, repository, triage, triage_scale
+from app.ads import month_summary, plan, repository, triage, triage_scale
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.core import settings as coresettings
@@ -590,6 +590,107 @@ class MonthSummaryRejectedTest(unittest.TestCase):
         next_month = (date.fromisoformat(month + "-01") + timedelta(days=32)).strftime("%Y-%m")
         later = month_summary.get_summary(conn, org, brand, next_month)
         self.assertEqual([c["change_set_id"] for c in later["rejected"]["worse"]], [worse_set])
+
+
+class MonthSummaryNextPlanTest(unittest.TestCase):
+    """F46-I05 `next_plan`: one per sell-way from the newest system-built campaign closed inside
+    the month (org-local date) that has ranked rows; numbers and link from the learnings view."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="每月回顧下一期測試", actor="test", client_name=None,
+        )["id"]
+        self.box = brands.create_product(self.conn, self.brand, name="三盒組", actor="test")["id"]
+        self.single = brands.create_product(self.conn, self.brand, name="單盒", actor="test")["id"]
+        self.conn.commit()
+
+    def _closed(self, name, closed_at, product_id):
+        campaign = repository.create_campaign(self.conn, self.org, self.brand, {
+            "name": name, "goal_text": "x", "objective": "購買", "target_cost": 450,
+            "start_date": "2026-09-01", "end_date": "2026-09-14", "status": "closed",
+        }, created_by="test")
+        if product_id is not None:
+            repository.update_campaign(self.conn, self.org, self.brand, campaign["id"],
+                                       {"product_ids": [product_id]})
+        self.conn.execute("UPDATE ads_campaign SET closed_at=%s WHERE id=%s",
+                          (closed_at, campaign["id"]))
+        self.conn.commit()
+        return campaign["id"]
+
+    def _ranked(self, campaign_id, name, *, verdict, rank, of, sales, spend):
+        group = plan.create_group(self.conn, self.org, self.brand, campaign_id,
+                                  name=f"組 {name}", role="new", daily_budget=500)
+        ad = plan.create_ad(
+            self.conn, self.org, self.brand, campaign_id, group["id"], name=name,
+            coordinates={"audience": "cold", "pain": "effort", "angle": "box", "hook": "h",
+                         "proof": "none", "offer": "none", "format": "single_image"},
+        )
+        cpr = round(spend / sales) if sales else "none"
+        few = 1 if 0 < sales < 5 else 0
+        brands.record_learning(
+            self.conn, self.brand, actor="test", learning_text=name,
+            applicability_scope=(
+                f"coord；v=2；verdict={verdict}；rank={rank}；of={of}；sales={sales}；spend={spend}"
+                f"；cpr={cpr}；cap=450；few={few}；group=none；audience=cold；pain=effort；angle=box"
+                "；hook=h；proof=none；offer=none；format=single_image；cur=TWD"
+            ),
+            confidence="observed", sample_size="高",
+            source_cycle_id=f"{campaign_id}:{ad['id']}", source_track="coordinate",
+        )
+        self.conn.commit()
+
+    def _next_plans(self, month):
+        summary = month_summary.get_summary(self.conn, self.org, self.brand, month)
+        return [s for s in summary["suggestions"] if s["kind"] == "next_plan"]
+
+    def test_newest_closed_with_rows_per_sell_way_in_the_org_local_month(self):
+        older = self._closed("三盒組・第一期", datetime(2026, 9, 5, 2, 0, tzinfo=UTC), self.box)
+        self._ranked(older, "舊的", verdict="keep", rank=1, of=1, sales=6, spend=1200)
+        newer = self._closed("三盒組・第二期", datetime(2026, 9, 20, 2, 0, tzinfo=UTC), self.box)
+        self._ranked(newer, "考前一週・書包一盒", verdict="keep", rank=1, of=3, sales=6,
+                     spend=2400)
+        self._ranked(newer, "第二好", verdict="keep", rank=2, of=3, sales=2, spend=880)
+        self._ranked(newer, "通勤族", verdict="replace", rank=3, of=3, sales=0, spend=700)
+        # Newest of the sell-way but nothing ranked (missing days) -> the one before it wins.
+        self._closed("三盒組・缺天", datetime(2026, 9, 25, 2, 0, tzinfo=UTC), self.box)
+        # No sell-way: nothing to prefill, no suggestion even with rows.
+        orphan = self._closed("沒有賣法", datetime(2026, 9, 21, 2, 0, tzinfo=UTC), None)
+        self._ranked(orphan, "孤兒", verdict="keep", rank=1, of=1, sales=6, spend=600)
+        # 2026-10-01 00:30 in Taipei is 2026-09-30 16:30 UTC: October's, not September's.
+        edge = self._closed("單盒・第一期", datetime(2026, 9, 30, 16, 30, tzinfo=UTC),
+                            self.single)
+        self._ranked(edge, "單盒・早餐", verdict="replace", rank=1, of=2, sales=0, spend=300)
+        self._ranked(edge, "單盒・宵夜", verdict="replace", rank=2, of=2, sales=0, spend=500)
+
+        [september] = self._next_plans("2026-09")
+        self.assertEqual(september, {
+            "key": f"next_plan:{newer}", "kind": "next_plan", "campaign_id": newer,
+            "campaign_name": "三盒組・第二期", "objective": "購買", "campaign_objective": "sales",
+            "title": "用「三盒組・第二期」學到的排下一期",
+            "why": "留下 2 則（最好的「考前一週・書包一盒」每筆 400）、換掉 1 則",
+            "action_url": f"/brands/{self.brand}/ads/new?sell_way={self.box}",
+        })
+
+        [october] = self._next_plans("2026-10")
+        self.assertEqual(october["campaign_id"], edge)
+        self.assertEqual(october["why"], "留下 0 則、換掉 2 則，沒有一則賣出")
+        self.assertEqual(october["action_url"],
+                         f"/brands/{self.brand}/ads/new?sell_way={self.single}")
+        self.assertEqual(self._next_plans("2026-08"), [])
+
+    def test_absent_without_rows_and_dismissal_holds_for_that_month(self):
+        empty = self._closed("三盒組・沒花錢", datetime(2026, 9, 10, 2, 0, tzinfo=UTC), self.box)
+        self.assertEqual(self._next_plans("2026-09"), [])
+
+        self._ranked(empty, "後來有排名", verdict="keep", rank=1, of=1, sales=6, spend=1200)
+        [suggestion] = self._next_plans("2026-09")
+        month_summary.dismiss_suggestion(self.conn, self.org, self.brand, "2026-09",
+                                         suggestion["key"])
+        self.assertEqual(self._next_plans("2026-09"), [])
+        campaign = repository.get_campaign(self.conn, self.org, self.brand, empty)
+        self.assertEqual(campaign["context_json"]["month_dismissed"],
+                         {"2026-09": [f"next_plan:{empty}"]})
 
 
 class MonthSummaryRouteTest(unittest.TestCase):

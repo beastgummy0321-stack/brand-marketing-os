@@ -206,6 +206,10 @@ describe("DeliveryTab（F06-I02）", () => {
     expect(screen.getByRole("button", { name: /^廣告九/ })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "在這一組新增廣告" }));
     expect((screen.getByRole("combobox", { name: /投放組/ }) as HTMLSelectElement).value).toBe("grp_2");
+    // F47-I06 (V7): the greyed-out 新增 names what is still empty.
+    const add = screen.getByRole("button", { name: "新增" });
+    expect(add.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/^還沒選：名稱、/)).toBeTruthy();
   });
 
   it("交棒：dispatchPack 一次，接著 getCampaign，回呼帶著新資料，跳去素材分頁", async () => {

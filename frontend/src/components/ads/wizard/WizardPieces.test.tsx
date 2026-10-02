@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { WizardProduct } from "@/lib/adsWizardApi";
-import { UnderstandingView, UnderstoodField, priceText, sellWayNote, wizardSteps } from "./WizardPieces";
+import { SourceTag, UnderstandingView, UnderstoodField, priceText, ranText, sellWayNote, wizardSteps } from "./WizardPieces";
 
 describe("wizard pieces (F30-I05)", () => {
   it("prints a price with the kit formatter, a foreign currency by code, and 價格未填 for unknown, zero or non-finite prices", () => {
@@ -16,11 +16,20 @@ describe("wizard pieces (F30-I05)", () => {
   });
 
   it("a sell-way note is 打平・offers: 缺成本 without a cost, 打平算不出 with a cost but no price, 沒有優惠 without offers", () => {
-    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, offer_labels: ["組合價", "免運"], ...over }) as WizardProduct;
+    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, derived_fields: [], offer_labels: ["組合價", "免運"], ...over }) as WizardProduct;
     expect(sellWayNote(way({}))).toBe("打平 669・組合價＋免運");
     expect(sellWayNote(way({ break_even: 249.5, offer_labels: [] }))).toBe("打平 249.5・沒有優惠");
     expect(sellWayNote(way({ break_even: null, has_cost: false }))).toBe("缺成本・組合價＋免運");
     expect(sellWayNote(way({ break_even: null, offer_labels: [] }))).toBe("打平算不出・沒有優惠");
+  });
+
+  it("marks a break-even built on a derived price or cost 「（推算）」 (F45, ads §6.49 Picker); a derived list price alone does not", () => {
+    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, derived_fields: [], offer_labels: ["組合價"], ...over }) as WizardProduct;
+    expect(sellWayNote(way({ derived_fields: ["list_price", "unit_variable_cost"] }))).toBe("打平 669（推算）・組合價");
+    expect(sellWayNote(way({ derived_fields: ["selling_price"] }))).toBe("打平 669（推算）・組合價");
+    expect(sellWayNote(way({ derived_fields: ["list_price"] }))).toBe("打平 669・組合價");
+    expect(sellWayNote(way({}))).toBe("打平 669・組合價");
+    expect(sellWayNote(way({ break_even: null, derived_fields: ["unit_variable_cost"] }))).toBe("打平算不出・組合價");
   });
 
   it("links step 1 back only once a campaign exists", () => {
@@ -45,6 +54,25 @@ describe("wizard pieces (F30-I05)", () => {
     render(<UnderstoodField field="platform" label="平台" value="Meta" guessed={false} editing={false} />);
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Meta").closest("[data-field]")?.className).not.toContain("border-dashed");
+  });
+
+  it("F46-I08: a rule-filled field shows its source tag where the guess chip would be; a guess still wins", () => {
+    const { rerender } = render(<UnderstoodField field="platform" label="平台" value="Meta" guessed={false} editing={false} tag={<SourceTag kind="copied" title="上一期：A" />} />);
+    const tag = document.querySelector("[data-slot=source-tag]");
+    expect(tag?.textContent).toBe("沿用上一期");
+    expect(tag?.getAttribute("title")).toBe("上一期：A");
+    rerender(<UnderstoodField field="platform" label="平台" value="Meta" guessed editing={false} tag={<SourceTag kind="copied" />} />);
+    expect(document.querySelector("[data-slot=source-tag]")).toBeNull();
+    expect(screen.getByText("猜的，請確認")).toBeTruthy();
+    rerender(<>{(["break_even", "brand", "sell_way", "user"] as const).map((k) => <SourceTag key={k} kind={k} />)}</>);
+    expect(Array.from(document.querySelectorAll("[data-slot=source-tag]")).map((e) => e.textContent)).toEqual(["打平線", "已接上的帳戶", "來自賣法", "你改的"]);
+  });
+
+  it("F46-I08: a sell-way card says how often it ran (closed campaigns), or that it never did", () => {
+    const prev = { campaign_id: "c", campaign_name: "n", platform: null, cap: null, budget: null, spend: null };
+    expect(ranText({ previous: null, learned: null })).toBe("還沒投過");
+    expect(ranText({ previous: prev, learned: null })).toBe("投過，還沒結案");
+    expect(ranText({ previous: prev, learned: { campaigns: [{ id: "a", name: "a" }, { id: "b", name: "b" }], keep: 1, replace: 1 } })).toBe("投過 2 期");
   });
 
   it("understanding: a running wait line that never claims a queue position; failed: ReadFailed with 重試", async () => {

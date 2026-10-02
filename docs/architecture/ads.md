@@ -1236,8 +1236,8 @@ stored. Decision A (user, 2026-09-22): existing facts only — no per-campaign h
   「資料不足，先不判斷」 when every classified ad is `insufficient` or `missing_days` is non-empty (chip: 缺 N 天資料 /
   尚未同步成效 / by dominant `reason_code`); `no_target`-only campaigns keep the 設定目標 card.
 - Header chip (`AdsHomePage.tsx`): newest `last_success_at` among campaigns with `state === "ok"` only (a failed sync keeps its
-  old timestamp), warn + 「N 個活動讀取異常」 when any is failed/disconnected; 「N 項待處理」 = open queue rows; links to
-  connections.
+  old timestamp), links to connections. (F47, §6.49.2: the warning moved to the top bar as 「N 個資料來源要處理」 = the
+  connections page's own count; 「N 項待處理」 = `status_summary.open_items`, the home board's not-done rows.)
 - Wait page `/brands/:brandId/ads/campaigns/:campaignId/wait` (`components/ads/wait/`): rows only for existing facts —
   disconnected, missing days, orders latest date before `coverage.end` (F21 rule), and one row per insufficient `reason_code`
   (below_sample_gate / no_previous_window / result_unknown_days); `DayTiles` over the 7 days ending at `coverage.end`;
@@ -1657,7 +1657,7 @@ Dig of drill-6 gap #1; prototype `.harness/scratch/prototype/f35-slot-copy/index
 Eight rulings from the dig of report §4 (each claim re-verified in code first; #16 「商品重複」 turned out to be the designed
 parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.html` (`#/cap`, `#/upload`, `#/placements`).
 - **The user states the cap, break-even is a hint** (#4): wizard step 2 gains an optional 「每賣一筆最多花」 chip, empty by
-  default, saved as `target_basis='own'`; the §6.32 provisional break-even still applies when it stays empty. No ROAS input,
+  default (superseded for the structured create by §6.49.1 Contract D), saved as `target_basis='own'`; the §6.32 provisional break-even still applies when it stays empty. No ROAS input,
   no brand-level default.
 - **Account history divides by days that spent** (#15): 「照上一期」 = 30-day spend ÷ days with spend > 0; `sample_days` says so.
   Coupling it to the connections coverage proof waits for the pipeline decision below.
@@ -1739,12 +1739,13 @@ Five program rules, no LLM judgment (dig of `docs/backlog/handoff-after-f37.md` 
 ### 6.43 Drill-7 red items and backend yellows（ruled 2026-09-29；F39）
 Root cause (drill-7 report §3 #1–#2): the coordinate-choosing model (`plan.py`) received no learning at all and the strategy
 model only the campaign sentence; the ledger knew per-ad grades, the planners never read them. Program tallies, model chooses.
-- **Per-ad coordinate learnings.** `closeout.close` writes one `source_track='coordinate'` learning per ad graded by the one
+- **(Superseded by §6.49.1 Contract B: ranked 留下／換掉 rows, `v=2` scope.) Per-ad coordinate learnings.** `closeout.close` writes one `source_track='coordinate'` learning per ad graded by the one
   ruler over the campaign window (`period_grades.grade_period`, same sample gate as the month review); ungraded ads write
   nothing. `applicability_scope` = `coord；grade=<g>；audience=…；pain=…；angle=…；hook=…；proof=…；offer=…；format=…`,
   `source_cycle_id = <campaign>:<ad>`, confidence `observed`; the text carries the numbers. Partial data (skipped gap,
   incomplete simulation) writes none, as the visual track already does.
-- **Coordinate scoreboard in both planners.** `coordinate_learning.scoreboard_section` (per-dimension tallies + the last closed
+- **(Superseded by §6.49.1 Contract G: 【上幾期的排名】 and a program gate; the per-dimension tally is dropped.) Coordinate
+  scoreboard in both planners.** `coordinate_learning.scoreboard_section` (per-dimension tallies + the last closed
   campaign's 划算 and 太貴／沒賣出 ads with coordinates) is inserted into the strategy prompt after the learnings and into the
   delivery-plan prompt before the vocabulary. The department texts require reusing one 划算 combination verbatim, not reusing a
   太貴／沒賣出 one unchanged, and naming the reused ad in `rationale`. No program gate on the reply (drill 8 measures adherence).
@@ -1814,7 +1815,7 @@ rejected: offers, proof and media move to onboarding, F42/F43).
   (`LaunchStalePanel.reassign`) and clearing.
 - **Learnings in Chinese** (#11): coordinate learning text names coordinates by label (`受眾：…、痛點：…`); the scope gains
   `cpr=`/`cap=` (older rows read `None`); prompt lines print `label（dim=key）`; the strategy basis gains `coordinate_learnings`
-  (the last closed campaign's graded ads, labelled). Strategy prompt keeps one period verdict per product (newest); event learnings
+  (the last closed campaign's graded ads, labelled; F46 writes `basis.ranked_learnings` instead, §6.49.1). Strategy prompt keeps one period verdict per product (newest); event learnings
   (`ads;` scope: pause, A/B, month settle) pass through. Department rule: no English coordinate codes in `why`/`rationale`.
 - **Strategy tab** (#3): 「預算怎麼分」 = thin bar (`AllocationBar legend={false}`) + one row per role (pct, amount, rationale);
   coordinate learning rows sit in 「為什麼這樣建議」 (fold stays closed by default, F28). Strategy types live in
@@ -1848,7 +1849,8 @@ Supersedes §6.44 「New campaign copies the previous one」 for platform / audi
 - Only finished sell-ways are pickable (`wizard_options.sellable_products`): options carry kind, knowledge product, price, break-even,
   cap_per_sale, offer labels, customer groups, landing, thumbnail; `options().default_objective` maps the brand conversion goal
   (purchase→購買, lead→名單, booking→名單, awareness→知名度; unset → no preselection).
-- Create defaults from the sell-way, each marked `field_sources = "sell_way"`: `context_json.customer_group_ids` = all groups of its
+- Create defaults from the sell-way, each marked `field_sources = "sell_way"` (platform / cap / budget superseded by §6.49.1
+  Contract D: the same sell-way's previous campaign first, then the sell-way, then break-even): `context_json.customer_group_ids` = all groups of its
   knowledge products, landing = the sell-way's effective landing, cap = `cap_per_sale` stored as the campaign's own cap (NULL →
   break-even, `system`); user overrides in 「進階：這期不一樣」 mark `user`. `PATCH …/campaigns/{c}` accepts `customer_group_ids`
   (validated; a sell-way change resets them). Budget no longer falls back parent → first child; it reads the picked sell-way.
@@ -1866,8 +1868,9 @@ Root cause (drill 9 #1＋#2): every step re-derived 「which sell-way this ad se
   menu and every ad `offer=none` → `delivery_plan_failed`, nothing written. The scripted (e2e) reply takes the first listed key.
 - **The offer coordinate decides the copy** (user ruling): `none` → no offer sentence, no offer price / list price; an offer key →
   that offer's registered sentence. Enforced by the workbench narrowing (`docs/architecture/workbench.md`, `validate_claims(…,
-  offer_key=)`) at generation, on the version list, and at asset confirmation. Known limit: the bare word 「優惠」 is backed by any
-  remaining offer row, so a different offer's price sentence under another offer key is not caught.
+  offer_key=)`) at generation, on the version list, and at asset confirmation; since F46 (§6.49.1 Contract O) asset confirmation
+  also refuses an offer ad whose copy writes none of its offer's sentences, and an offer word is backed only by its exact term
+  inside the narrowed sentences (the F44 limit — 「優惠」 backed by any offer row — is gone).
 - **Asset confirmation** (`asset_suggestion_policy.violations`) judges copy against the placement's sell-way and its ad's offer
   coordinate (a library placement: the campaign's sell-way, no coordinate). Refusals are details `{kind: copy | file | campaign |
   wait, text, terms}`; `pending_reasons` stays their texts. Sentences: 「文案寫了「…」，品牌資料裡沒有登記這個優惠或背書。」 (unbacked),
@@ -1879,10 +1882,12 @@ Root cause (drill 9 #1＋#2): every step re-derived 「which sell-way this ad se
   再檢查一次; blocked slots do not poll and are not in the launch list.
 - The `bundle` offer label is 「組合優惠」 (seed, `OFFER_LABELS`, and a rename migration for rows still carrying the old seed label).
 
+### 6.49 Drill-10 fixes（ruled 2026-10-02；built in F45, F46, F47）
+Three parts: F45 the blocking defects (below), F46 the learning channel (§6.49.1), F47 failures that recover (§6.49.2). The
+sell-way shapes F45 also built are in `docs/architecture/intake.md` 「F45」.
 
-### 6.49 Pause reads the ad, slots say who is waiting（ruled 2026-10-02；F45）
-Root causes (drill 10 §1 #3, #4): the pause page found its ad only through a home-queue row, and 「system busy」 and 「waiting for
-you」 were one slot state while only one confirmation path stored a refusal.
+Pause reads the ad, slots say who is waiting (F45). Root causes (drill 10 §1 #3, #4): the pause page found its ad only through a
+home-queue row, and 「system busy」 and 「waiting for you」 were one slot state while only one confirmation path stored a refusal.
 - **Pause view (Contract P)**: `GET …/campaigns/{c}/triage/{entity_id}/pause` → `{"pause": {state, entity_id, name, triage,
   closed_at, last_read_at, change_set_id}}`. `state`: `active` (a platform ad of this campaign that `ad_status.is_closed` does not
   call closed — unknown status counts as active), `closed` (closed, not `DELETED`), `gone` (no such ad in this campaign, or
@@ -1907,7 +1912,82 @@ you」 were one slot state while only one confirmation path stored a refusal.
   `waiting {action: pick_on_workbench | confirm_copy, text}`: 「等你：到工作檯選定一版文案」 (a set with no selected copy) or
   「等你：確認這版文案」 (an unconfirmed placement with a ready original and no stored refusal; the button runs recheck). `blocked`,
   `copy_only`, `image_only`, `missing`, `ready` keep §6.48 / F35 meanings. The 素材 tab counts 卡住／等你／處理中, polls only while
-  something is `in_progress`, and edits copy in place (保存後馬上檢查). Job staleness (a dead worker) is not handled here.
+  something is `in_progress`, and edits copy in place (保存後馬上檢查). A dead worker is shown by §6.49.2 「Worker liveness」.
 - **Photo-only brands** (`brand.media_capability = "photo"`): single-image and carousel sets require only `{"copy": 1}`.
 - **Picker**: `wizard_options` items carry `derived_fields` (the current economics'); a break-even from a derived price or cost
   prints 「（推算）」.
+- **As built (F45)**: the pause view lives in `app/ads/triage_pause.py`; the 素材 tab's slot tiles follow the prototype frame
+  (picture left, text right, up to 3 columns).
+
+#### 6.49.1 The system learns which kind sells（built in F46）
+Root causes (drill 10 §1 #1, #2, #9, calendar part of #10). Supersedes §6.43's grade rows and scoreboard, §6.45's
+`basis.coordinate_learnings`, §6.47's create defaults for platform / cap / budget, §6.40 #4's 「cap chip empty by default」 on the
+structured create, and §6.48's family-wide offer backing. Prototype `.harness/scratch/prototype/f46-learnings/index.html`.
+- **Ranked learning row (Contract B)**, written at closeout (`coordinate_learning.write_coordinate_learnings`, one rule in
+  `app/ads/learning_rank.py`). Input = `period_grades.grade_period` rows of the campaign window; a row with unknown results or
+  spend is not ranked; partial data (skipped gap, incomplete simulation) writes nothing. Sold rows (≥ 1 sale) by cost per sale asc,
+  then sales desc, then name; 沒賣出 (0 sales, spend > 0) after them, spend asc. Verdict: cost ≤ cap → `keep` 留下; when no sold row
+  is ≤ cap (or no cap), sold rows ≤ best × 1.3 (`NEAR_BEST`) → `keep_relative` 留下 + 「相對最好，仍高於上限」（no cap: 「相對最好」）;
+  the rest incl. 沒賣出 → `replace` 換掉. 樣本少 = 1–4 sales (`SAMPLE_FEW = 5`). Scope
+  `coord；v=2；verdict；rank；of；sales；spend；cpr；cap；few；group；` + the seven coordinate keys + `cur=` (currency); text 「第 r／n 名「〈ad〉」
+  每筆 X（賣 s 筆、花 Y；上限 C）＝留下（樣本少）；顧客群：〈who〉；〈labels〉」. Rows without `v=2` (F39/F41) are not read; no backfill.
+- **Learnings view (Contract L)**: `app/ads/learning_view.py::learnings_view(conn, org, brand, *, campaign_id, sell_way_id, limit=12)`
+  → `{campaigns, groups, next}` (campaign rows with `rule_text` / `empty_reason`, per-customer-group totals, the next-campaign
+  href `/brands/{b}/ads/new?sell_way=<id>`); numbers come from the stored scope, never recomputed. Served at
+  `GET /api/ads/brands/{b}/coordinate-learnings[?campaign_id=][&sell_way_id=]` (`learning_routes.py`). Readers: 品牌智庫 tab
+  「投放學到的」, the closeout dialog's exits 「看學到什麼 →」／「用這些學習排下一期 →」, the month review's `next_plan` suggestion (one per
+  sell-way, from the newest system-built campaign closed in the month; `month_summary.py`), and the strategy basis
+  (`basis.ranked_learnings` = the view it prompted with; `basis.coordinate_learnings` is no longer written and stays readable).
+- **Planners (Contract G)**: `coordinate_learning.ranked_section` prints 【上幾期的排名（程式排的；每筆＝花費÷成交）】 in place of
+  【座標成績表】 in both prompts — per-group lines, then the newest ≤ 3 closed campaigns' rows. Program gate in the delivery plan
+  (`plan._builds_on_learnings`, pairs from `gate_pairs`): an ad's (customer group, angle) may not be a 換掉 pair of the newest
+  closed campaign (minus its own 留下 pairs), and when the listed campaigns kept any pair at least one ad reuses one; else
+  `delivery_plan_failed`. The strategy has no gate.
+- **Customer group coordinate (Contract A)**: `ads_ad.customer_group_id` (migration `20261004000021_ads_ad_customer_group.sql`, no
+  FK). The reply's `"customer_group": N` = 第 N 群 of 【這個賣法的顧客】; with groups listed N must be listed, the ad's `pain` must be
+  one of that group's pain keys (when that set meets the menu), and all ads of one delivery group share one group
+  (`plan._bind_customer_groups`); no groups listed → NULL; hand-made ads NULL. The workbench brief gets `request.customer_group`.
+- **Photo count (F46 Contract P)**: the delivery-plan prompt gets 【手上的素材】「照片 N 張、影片 M 支」; rule: ads ≤ photo count when N ≥ 1.
+- **What shipped wins (Contract F)**: `app/ads/actual_format.py` (a `video/*` original → `video`, any other file → `single_image`)
+  feeds learning coordinates, the handoff list's 「格式」 row (+「（規劃是〈planned〉）」) and every slot's `format_note`
+  (「規劃是輪播，只放了 1 張圖，會以單圖上架」). Open: whether the planner should stop offering carousel while a slot holds one file.
+- **Offer sentence (Contract O)**: asset confirmation refuses a planned ad whose copy writes none of its offer's registered sentences
+  (`asset_suggestion_policy.missing_offer` → workbench `validate_claims(...)["missing_offer"]`), detail `copy`, 「這則規劃的是「〈offer
+  label〉」，文案沒有寫這個優惠：「〈sentence〉」。」. Offer-word backing is exact-term (workbench.md, F46).
+- **Create defaults (Contract D)**: wizard options carry `previous` (newest non-draft internal campaign of that sell-way:
+  platform, cap, budget, spend), `learned` (Contract L counts) and the payload `default_platform`. A structured create, for a value
+  the request does not send: platform = previous (`copied`) else the brand's first connected channel (`brand`); cap = previous
+  `target_cost` (`copied`) else `cap_per_sale` (`sell_way`) else whole break-even (`break_even`, stored); budget `copied` when it
+  equals the previous. Tags 沿用上一期／打平線／已接上的帳戶／你改的; shown = stored (`brief.py`). Platform / cap / budget sit in
+  「期間、預算與平台」; 月預算 links open the monthly-budget form; picking a Meta account assigns it.
+- **Calendar**: October exam rows added (data). Not built: O3 strategy text check, the strategy tab's per-ad provenance card,
+  a monthly-budget default amount, daily budget on create.
+
+#### 6.49.2 Failures say why, offer an exit, keep the data（built in F47）
+Root causes (drill 10 §1 #4 except B2, #6, #7, #8; drill 9 #4, #5). Input rules (Contract A, `app/core/input_rules.py`), worker
+liveness (Contract C, `app/background/__init__.py`) and the Meta classifier (Contract G, `app/meta/graph.py`) are documented in
+those modules' docstrings; the ads-side rules:
+- **Queue done-ness (Contract D)**: `app/ads/queue_done.py` owns the rule (deferred / rejected / confirmed proposals done; a
+  cleanup row done once its set is done; `worse` done when its round is deferred, unjudgeable, or completed with a done copy set;
+  refresh / insufficient / settle never). `triage.get_queue` stamps `done` on every row; `status_summary.open_items` counts
+  not-done rows of the home board's kinds (`DECISION_KINDS`: cleanup, worse, refresh_creative, settle); the frontend reads
+  `item.done` (「第 N 件／共 M 件」 and 「下一件」 skip done rows; 資料不足 opens its own page). A cleanup candidate with zero closable ads
+  is not an open row. 暫緩 creates the set and its decision in one write; the deferred chip links back with 「M/D 再看」.
+- **Campaign delivery (Contract E)**: the workspace read carries `delivery: waiting | live | null` (`workspace_reads._delivery`;
+  null for a draft, a closed campaign or a failed read; `waiting` = on the platform, no synced day with spend > 0). Overview:
+  `waiting` → 「已上架，等平台開始投放」 and money cells 「還沒開始花」; a closed campaign never says 在投 (「已結案」 or 「已結案・平台上還開著 N 則」,
+  counting platform ads not `ad_status.is_closed`). Existing-campaign listing items carry the workspace `campaign_id` they are
+  bound to (「已在工作區」).
+- **Connections (Contract H)**: each `ad_account` source carries `reread {platform, source_account, start, end} | null` (failed,
+  missing days, never read); 「重新讀取」 posts `…/existing-campaigns/refresh`; a failed source's note is reason, then gap. The status
+  summary's `attention {count, note}` replaces `failing_campaigns` and is the connections page's own `attention_count` and first
+  note; the top bar reads 「N 個資料來源要處理」.
+- **Launch settings and money**: `launch_settings.bid_amount` (> 0) is required for `cost_cap` / `bid_cap` (an `errors()` entry,
+  「選了「〈出價方式〉」要填金額」), cleared for other strategies, written in the handoff copy next to 出價方式, not a readback field. A
+  typed pixel id is checked by the platform adapter when the pixel list cannot be read (Meta: digits, 10–20). Monthly budget total
+  > 0 (0 reads as unset on the home card; the pace chart draws nothing without a budget); group dates in order; copy apply keeps
+  blank fields; a cap edited through the target writer marks its source `user`; approval re-reads after other settings save and a
+  409 says the settings just changed. Per-sale figures print through `patterns/csv.ts::perSaleAmount` (whole yuan, rounded, never
+  floored); CSV numbers are rounded to 2 decimals. The crumb and step chip share one launch name (`PublishFlow.tsx::launchLabel`);
+  the verify step shows the readback reason with its time (`LaunchItem.reason_at`).
+- `app/core/db.new_id` is monotonic within a millisecond (rows of one transaction keep creation order).

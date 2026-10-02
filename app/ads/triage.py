@@ -14,6 +14,7 @@ from app.ads import (
     ad_status,
     external_sync,
     month_budget,
+    queue_done,
     repository,
     result_kinds,
     review_evidence,
@@ -81,22 +82,12 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     ).fetchall()
     active_ads = [ad for ad in ads if not ad_status.is_closed(ad["native_status"])]
     closed_ads = [ad for ad in ads if ad_status.is_closed(ad["native_status"])]
-    entity_ids = [ad["id"] for ad in ads]
-    rows_by_entity = defaultdict(list)
-    if entity_ids:
-        # One read for the whole campaign (review fix: was one query per ad per window step) --
-        # every window any ad ever needs (current + its equal-length previous window, up to 28
-        # days each) fits inside `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`. Still reads every ad's
-        # rows, closed ones included -- the `closed` block's own numbers (below) reuse this same
-        # read, never a second query.
-        range_start = cutoff - timedelta(days=_MAX_LOOKBACK_DAYS)
-        rows = conn.execute(
-            "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
-            "AND metric_scope='ad' AND entity_id = ANY(%s) AND day BETWEEN %s AND %s",
-            (org_id, brand_id, campaign_id, entity_ids, range_start, cutoff),
-        ).fetchall()
-        for row in rows:
-            rows_by_entity[row["entity_id"]].append(dict(row))
+    # One read for the whole campaign (review fix: was one query per ad per window step). Still
+    # reads every ad's rows, closed ones included -- the `closed` block's own numbers (below)
+    # reuse this same read, never a second query.
+    rows_by_entity = _lookback_rows_by_entity(
+        conn, org_id, brand_id, campaign_id, [ad["id"] for ad in ads], cutoff,
+    )
     # F27-I09 Done #7: one campaign_objective lookup for the whole campaign (never per ad) --
     # every ACTIVE ad's own triage item carries the same `campaign_objective` its campaign card
     # would (`repository.campaign_objective_family`, the one function that tells a system-built
@@ -108,11 +99,8 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     # ads, joined here by `native_id` -- never per item.
     bound_ad_by_native = _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id)
     items = [
-        {
-            **_classify_ad(dict(ad), campaign["name"], campaign_objective, target, cutoff,
-                            coverage, rows_by_entity.get(ad["id"], [])),
-            "bound_ad_id": bound_ad_by_native.get(ad["native_id"]),
-        }
+        _item(dict(ad), campaign["name"], campaign_objective, target, cutoff, coverage,
+              rows_by_entity, bound_ad_by_native)
         for ad in active_ads
     ]
     # F27-I01 Contract A: ladder/history attaches to ACTIVE items only, never `_closed_block`.
@@ -137,6 +125,55 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         "closed": _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native),
         "data": data,
     }
+
+
+def ad_item(conn, org_id, brand_id, campaign, entity) -> dict:
+    """F45-I05 Contract P (ads.md §6.49): the `GET …/triage` item of ONE ad of `campaign`
+    (`entity` is its `ads_external_entity` row), active or closed -- the same cutoff, coverage,
+    target, per-ad window walk, `bound_ad_id` and ladder `classify()` gives its items, over one
+    read of this ad's own lookback rows. Never a second definition of a grade or a window."""
+    campaign_id = campaign["id"]
+    target = targets.resolve(conn, org_id, brand_id, campaign)
+    coverage = _coverage(campaign)
+    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    rows_by_entity = _lookback_rows_by_entity(
+        conn, org_id, brand_id, campaign_id, [entity["id"]], cutoff,
+    )
+    campaign_objective = repository.campaign_objective_family(conn, org_id, brand_id, campaign)
+    bound_ad_by_native = _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id)
+    item = _item(dict(entity), campaign["name"], campaign_objective, target, cutoff, coverage,
+                 rows_by_entity, bound_ad_by_native)
+    # The item shape is the same for a closed ad (Contract P), so the ladder attaches either way.
+    triage_ladder.attach(conn, org_id, brand_id, campaign_id, [item])
+    return item
+
+
+def _item(entity, campaign_name, campaign_objective, target, cutoff, coverage, rows_by_entity,
+          bound_ad_by_native) -> dict:
+    """One ad's triage item before the ladder -- shared by `classify()` and `ad_item()`."""
+    return {
+        **_classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage,
+                       rows_by_entity.get(entity["id"], [])),
+        "bound_ad_id": bound_ad_by_native.get(entity["native_id"]),
+    }
+
+
+def _lookback_rows_by_entity(conn, org_id, brand_id, campaign_id, entity_ids, cutoff):
+    """The ad-scope daily rows of `entity_ids` over `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`,
+    grouped per entity -- every window any ad ever needs (current + its equal-length previous
+    window, up to 28 days each) fits inside that range. One query, whatever the number of ads."""
+    rows_by_entity = defaultdict(list)
+    if not entity_ids:
+        return rows_by_entity
+    range_start = cutoff - timedelta(days=_MAX_LOOKBACK_DAYS)
+    rows = conn.execute(
+        "SELECT * FROM ads_external_daily WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND metric_scope='ad' AND entity_id = ANY(%s) AND day BETWEEN %s AND %s",
+        (org_id, brand_id, campaign_id, list(entity_ids), range_start, cutoff),
+    ).fetchall()
+    for row in rows:
+        rows_by_entity[row["entity_id"]].append(dict(row))
+    return rows_by_entity
 
 
 def _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id) -> dict:
@@ -764,7 +801,9 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
             rows_by_entity, cutoff, capacity,
             scale_owner_id=scale_owner_by_campaign.get(campaign_id), memory=memory,
         )
-        if cleanup is None:
+        # F47-I07 (drill-10 Q1): a cleanup with nothing to close is no decision -- never an open
+        # row offering 「核准清理（關 0 則）」.
+        if cleanup is None or not cleanup["ads"]:
             continue
         candidates.append({
             "kind": "cleanup", "identity_id": campaign_id,
@@ -1244,9 +1283,13 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
             # goes elsewhere (the workbench / the F24 wait page / the settle page) instead.
             proposal = None
         extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
-        open_rows.append({
+        queue_row = {
             **row, "kind_key": kind, "triage": triage_item, **extra, "proposal": proposal,
-        })
+        }
+        # F47 Contract D: the one owner of done-ness (`queue_done.done`), read by the top bar, the
+        # home list and 「下一件」 alike.
+        queue_row["done"] = queue_done.done(queue_row)
+        open_rows.append(queue_row)
     return {
         "items": open_rows, "counts": _trend_counts(items), "total_ads": len(items),
         "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,

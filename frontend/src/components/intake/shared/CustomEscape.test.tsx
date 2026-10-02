@@ -37,7 +37,10 @@ describe("CustomEscape", () => {
     expect(box().getAttribute("placeholder")).toBe("例如：我們不是保健品");
     expect(screen.getByText("覺得上面列的不對、不像你、或選項太少？直接用一句話描述，AI 幫你整理成選項")).toBeTruthy();
     expect((organise() as HTMLButtonElement).disabled).toBe(true);
+    // F47-I03 (drill-10 乙 #5): the off button says what is missing, until the box has text.
+    expect(screen.getByText("先在上面寫一句話，AI 才有東西整理")).toBeTruthy();
     await user.type(box(), "我們不是保健品，是給懶人的營養零食");
+    expect(screen.queryByText("先在上面寫一句話，AI 才有東西整理")).toBeNull();
     await user.click(organise());
 
     expect(mockPropose).toHaveBeenCalledWith("brd_1", "positioning", "我們不是保健品，是給懶人的營養零食");

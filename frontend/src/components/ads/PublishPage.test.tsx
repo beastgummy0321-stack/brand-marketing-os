@@ -34,7 +34,7 @@ function view(step: LaunchStep): LaunchView {
   return {
     step, version: step === "list" ? null : 1, approved_at: step === "list" ? null : "2026-09-20T06:05:00Z",
     summary: { campaigns: 1, groups: 0, ads: 0, daily_total: null, start: null, end: null, cap: null, slots_ready: 0, slots_total: 0 },
-    items: [{ id: "h1", kind: "campaign", name: "秋季新色預購", parent_name: null, fields: [], state: "todo", mismatches: [], unreadable: [], reason: null }],
+    items: [{ id: "h1", kind: "campaign", name: "秋季新色預購", parent_name: null, fields: [], state: "todo", mismatches: [], unreadable: [], reason: null, reason_at: null }],
     deferred_ads: [], read_at: step === "verify" ? "2026-09-23T02:52:00Z" : null, settings_readback: null,
   };
 }
@@ -82,7 +82,7 @@ it("earlier steps stay reachable: from 讀回核對 the platform step opens as i
   renderAt(`${base}/platform`);
   expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
   expect(where()).toBe(`${base}/platform`);
-  expect(screen.getByRole("link", { name: "回到確認上架清單" }).getAttribute("href")).toBe(`${base}/list`);
+  expect(screen.getByRole("link", { name: "回到「確認上架清單」" }).getAttribute("href")).toBe(`${base}/list`);
 });
 
 it("a stale launch is decided on the platform step; the decision reads the launch again", async () => {
@@ -119,4 +119,18 @@ it("the campaign read fails on its own: the list still shows, the settings block
   expect(await screen.findByText(/活動資料讀不到：活動讀取逾時/)).toBeTruthy();
   expect(screen.getByRole("region", { name: "清單" })).toBeTruthy();
   expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("F47-I06: the crumb says 首次上架 only for a first launch — a later period or a re-approved version is named from the data", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("list"));
+  renderAt(`${base}/list`);
+  expect(await screen.findByText("首次上架", { exact: true })).toBeTruthy();
+  cleanup();
+  vi.mocked(getCampaign).mockResolvedValue({ ...CAMPAIGN, context_json: { field_sources: { cap: "copied", product: "user" } } } as unknown as CampaignDetail);
+  renderAt(`${base}/list`);
+  expect(await screen.findByText("這一期上架", { exact: true })).toBeTruthy();
+  cleanup();
+  vi.mocked(fetchLaunchView).mockResolvedValue({ ...view("platform"), version: 2 });
+  renderAt(`${base}/platform`);
+  expect(await screen.findByText("第 2 版上架", { exact: true })).toBeTruthy();
 });

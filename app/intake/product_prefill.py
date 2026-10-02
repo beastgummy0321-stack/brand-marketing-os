@@ -1,7 +1,7 @@
 """app/intake/product_prefill.py — product onboarding 「✦ AI 從商品頁讀到」 (F43-I06).
 
 The product-page read that pre-fills `#/p1`–`#/p4` of product onboarding: ONE gateway call
-(task type `intake_product_prefill`) with the product page's text (`net.fetch_url`, one page) and
+(task type `intake_product_prefill`) with the product page's text (`net.read_url`, one page) and
 up to three product photos already uploaded (image blocks). No web search. The reply is
 contract-checked entry by entry here (an invalid entry is dropped, the rest kept) and stored in
 `intake_product_prefill` as a proposal — never a confirmed fact: each step's PUT confirms it
@@ -23,7 +23,7 @@ is closed.
 Row states: `running` (queued) → `done` (`prefill_json` = the checked proposal + `pages_read` /
 `photos_read`) or `failed` (`prefill_json = {"error": 〈人話〉}`).
 
-Tests swap `PROVIDER` and `fetch_url` (same pattern as `app/intake/ai.py`).
+Tests swap `PROVIDER` and `read_url` (same pattern as `app/intake/ai.py`).
 """
 
 import logging
@@ -45,7 +45,7 @@ _log = logging.getLogger(__name__)
 
 # Tests swap these (same pattern as app/intake/ai.py).
 PROVIDER = providers.AnthropicProvider()
-fetch_url = net.fetch_url
+read_url = net.read_url
 
 TASK_TYPE = "intake_product_prefill"
 TASK_NAME = "background.intake_product_prefill"
@@ -57,6 +57,14 @@ MAX_SELL_WAYS = 4
 NOTHING_READ_MESSAGE = (
     "讀不到商品頁（網址打不開或沒有文字），也沒有商品照；可以重試，或直接自己填。"
 )
+
+
+def nothing_read_message(reason: str | None) -> str:
+    """The failed read's sentence, naming `read_url`'s reason when a page was tried (Contract F);
+    no page URL at all keeps the generic sentence."""
+    if not reason:
+        return NOTHING_READ_MESSAGE
+    return f"讀不到商品頁（{reason}），也沒有商品照；可以改網址再重試，或直接自己填。"
 
 _KEYS = ("intro", "mechanism", "difference", "groups", "proof", "claims", "sell_ways")
 _TEXT_LIMITS = {key: limit for key, _fact, _label, limit in po.WHAT_FIELDS}
@@ -300,14 +308,16 @@ def run_prefill(conn: Conn, brand_id: str, product_id: str) -> tuple:
     reply is unreadable, or nothing could be read (no call then)."""
     brand = bi_repo.get_brand(conn, brand_id) or {}
     product = po.knowledge_product(conn, brand_id, product_id)
-    page = None
+    page, reason = None, None
     if product.get("page_url"):
-        ok, text = fetch_url(product["page_url"])
+        ok, text, reason = read_url(product["page_url"])
         if ok and text and text.strip():
             page = (product["page_url"], text.strip())
+        else:
+            reason = reason or net.REASON_EMPTY
     blocks = _photo_blocks(conn, brand, product_id)
     if page is None and not blocks:
-        return _fail(conn, brand_id, product_id, NOTHING_READ_MESSAGE)
+        return _fail(conn, brand_id, product_id, nothing_read_message(reason))
     prompt = {"type": "text", "text": _prompt(product["name"], page, len(blocks))}
     task = gateway.run_task(
         conn, PROVIDER, brand_id=brand_id, task_type=TASK_TYPE,
@@ -368,16 +378,22 @@ def start_on_create(conn: Conn, brand_id: str, product_id: str) -> None:
     _queue(conn, brand, product_id)
 
 
-def start_scan(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """`POST …/products/{p}/onboarding/scan`: read the product page again -> the onboarding status.
-    No-op while a read runs. NotFound: not this brand's product; ValueError: the product is
-    finished (proposals are no longer shown) or has neither a page URL nor a photo; ScanRefused:
-    the AI cost cap (checked before anything is queued, so no call is made)."""
+def start_scan(conn: Conn, brand_id: str, product_id: str, *, page_url=None,
+               actor: str = "") -> dict:
+    """`POST …/products/{p}/onboarding/scan` `{page_url?}`: read the product page again -> the
+    onboarding status. A `page_url` sent with the retry is stored on the product first, so the
+    read is of the address the user just typed (Contract F). No-op while a read runs. NotFound:
+    not this brand's product; ValueError: the product is finished (proposals are no longer
+    shown), the URL is not one, or there is neither a page URL nor a photo; ScanRefused: the AI
+    cost cap (checked before anything is queued, so no call is made)."""
     from app.background import is_active
 
     product = po.knowledge_product(conn, brand_id, product_id)
     if product.get("onboarding_step") is None:
         raise ValueError("這個商品已經建檔完成，不需要再讀一次商品頁；要改請直接改各步。")
+    if page_url is not None:
+        po.set_page_url(conn, brand_id, product_id, page_url, actor=actor)
+        product = po.knowledge_product(conn, brand_id, product_id)
     photos = [a for a in po.product_photo_assets(conn, brand_id) if a["product_id"] == product_id]
     if not product.get("page_url") and not photos:
         raise ValueError("還沒有商品頁網址或商品照，AI 沒有東西可以讀；可以直接自己填。")

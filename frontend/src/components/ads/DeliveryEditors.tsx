@@ -148,6 +148,8 @@ export function GroupPanel({
     if (dirty) saveDeliveryDraft(draftKey, { name, role, dailyBudget, startDate, endDate, customDates });
     else clearDeliveryDraft(draftKey);
   }, [customDates, dailyBudget, dirty, draftKey, endDate, name, role, startDate]);
+  // F47-I06: a refusal's red sentence goes as soon as a field changes (it no longer describes what is on screen).
+  useEffect(() => { setError(null); }, [name, role, dailyBudget, startDate, endDate]);
 
   function reset(next: DeliveryGroupRow) {
     setName(next.name);
@@ -321,6 +323,7 @@ export function AdPanel({
     if (dirty) saveDeliveryDraft(draftKey, { name, coords });
     else clearDeliveryDraft(draftKey);
   }, [coords, dirty, draftKey, name]);
+  useEffect(() => { setError(null); }, [name, coords]);
 
   function reset(next: AdRow) {
     setName(next.name);
@@ -457,6 +460,7 @@ export function AddGroupDialog({
   const [dailyBudget, setDailyBudget] = useState("1000");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setError(null); }, [name, role, dailyBudget]);
 
   async function handleCreate() {
     setSaving(true);
@@ -499,7 +503,8 @@ export function AddGroupDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !name.trim()}>
+          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !name.trim()}
+            disabledReason={!saving && !name.trim() ? "名稱還沒填" : undefined}>
             {saving ? "新增中…" : "新增"}
           </Button>
         </DialogFooter>
@@ -540,6 +545,12 @@ export function AddAdDialog({
   const [error, setError] = useState<string | null>(null);
 
   const complete = name.trim() && Object.values(coords).every((v) => v.trim());
+  // F47-I06 (V7): the greyed-out 新增 names what is still empty.
+  const missing = [
+    ...(name.trim() ? [] : ["名稱"]),
+    ...COORDINATE_DIMENSIONS.filter(([dim]) => !coords[dim].trim()).map(([, label]) => label),
+  ];
+  useEffect(() => { setError(null); }, [groupId, name, coords]);
 
   async function handleCreate() {
     setSaving(true);
@@ -591,7 +602,8 @@ export function AddAdDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !complete}>
+          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !complete}
+            disabledReason={!saving && missing.length ? `還沒選：${missing.join("、")}` : undefined}>
             {saving ? "新增中…" : "新增"}
           </Button>
         </DialogFooter>

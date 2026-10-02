@@ -122,6 +122,24 @@ def violations(
     return problems
 
 
+def missing_offer(conn, org, brand, copy, *, sell_way=None, offer_key=None, offer_label=None):
+    """F46 Contract O (「帶了就要寫」): a Contract C detail (kind `copy`) when the ad is planned
+    with a real offer (`offer_key` not None / "none") and `copy` -- the whole copy that will be
+    confirmed, never a part of it -- writes none of that offer's registered sentences
+    (`validate_claims(...)["missing_offer"]`); else None."""
+    if offer_key is None or offer_key == "none":
+        return None
+    absent = workbench.validate_claims(
+        conn, org, brand, sell_way, copy, offer_key=offer_key
+    )["missing_offer"]
+    if not absent:
+        return None
+    return detail(
+        "copy",
+        f"這則規劃的是「{offer_label or offer_key}」，文案沒有寫這個優惠：「{absent[0]}」。",
+    )
+
+
 def statutory_note(conn, org, brand, copy, sell_way=None):
     """F34 Contract S note for 補文案 `notes` (plain strings), or None. Never a `problems`
     entry: the reminder is for the human reading the copy (ruling 2B, warn only)."""

@@ -2,7 +2,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { createProduct, fetchProductsPage, type ProductSuggestion, type ProductsPage as PageData } from "@/lib/intakeProductApi";
+import {
+  createProduct,
+  dismissProductSuggestion,
+  fetchProductsPage,
+  type ProductSuggestion,
+  type ProductsPage as PageData,
+} from "@/lib/intakeProductApi";
 import { ProductCard, SuggestionCard, newBundlePath, newProductPath, productOnboardingPath } from "./ProductCard";
 
 type LoadState =
@@ -59,6 +65,18 @@ export function ProductsPage({ brandId }: { brandId: string }) {
       });
   }
 
+  /** F47 Q8: 「不用了」 — the name is kept as dismissed on the server and the page comes back without it. */
+  function dismissSuggestion(suggestion: ProductSuggestion) {
+    setCreating(suggestion.name);
+    setCreateError(null);
+    dismissProductSuggestion(brandId, suggestion.name)
+      .then((page) => setLoad({ status: "ready", page }))
+      .catch((err: unknown) =>
+        setCreateError({ name: suggestion.name, message: err instanceof Error ? err.message : "沒有略過，請再試一次。" }),
+      )
+      .finally(() => setCreating(null));
+  }
+
   const empty = load.status === "ready"
     && load.page.products.length + load.page.suggestions.length + load.page.bundles.length === 0;
 
@@ -98,6 +116,7 @@ export function ProductsPage({ brandId }: { brandId: string }) {
                 busy={creating !== null}
                 error={createError?.name === suggestion.name ? createError.message : null}
                 onContinue={() => continueSuggestion(suggestion)}
+                onDismiss={() => dismissSuggestion(suggestion)}
               />
             ))}
           </Section>

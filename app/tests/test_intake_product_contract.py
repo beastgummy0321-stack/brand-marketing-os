@@ -39,11 +39,23 @@ class SellWayTest(unittest.TestCase):
         self.b = repo.create_product(self.conn, self.bid, name="魚油", actor=ACTOR)["id"]
 
     def _single(self, product_id, name, price, **more):
+        """A base sell-way of `product_id` (F45)."""
         return repo.save_sell_way(
             self.conn,
             self.bid,
             name=name,
-            components=[{"product_id": product_id, "qty": more.pop("qty", 1)}],
+            product_id=product_id,
+            economics=_econ(price, **more),
+            actor=ACTOR,
+        )
+
+    def _composed(self, name, parts, price=None, **more):
+        """A composed sell-way: `parts` = [(base sell-way, qty)]."""
+        return repo.save_sell_way(
+            self.conn,
+            self.bid,
+            name=name,
+            components=[{"sell_way_id": way["id"], "qty": qty} for way, qty in parts],
             economics=_econ(price, **more),
             actor=ACTOR,
         )
@@ -53,17 +65,20 @@ class SellWayTest(unittest.TestCase):
         self.assertEqual(sw["name"], "薑黃錠 · 單盒")
         self.assertEqual(sw["display_name"], "單盒")
         self.assertEqual(sw["parent_id"], self.a)
-        self.assertEqual(sw["kind"], "single")
-        self.assertEqual(sw["components"], [{"product_id": self.a, "qty": 1, "name": "薑黃錠"}])
+        self.assertEqual((sw["kind"], sw["shape"], sw["free_shipping"]), ("single", "base", False))
+        self.assertEqual(sw["components"], [])
         econ = sw["economics"]
         self.assertEqual(econ["selling_price"], 399)
-        self.assertEqual(econ["list_price"], 399)  # own unit: list price defaults to its own price
-        self.assertEqual(econ["derived_fields"], ["list_price"])
+        self.assertIsNone(econ["list_price"])  # F45: a base derives nothing
+        self.assertEqual(econ["derived_fields"], [])
         self.assertEqual(econ["unit_variable_cost"], 120)
-        self.assertIsNone(
-            repo.get_product_economics(self.conn, self.bid, sw["id"], raw=True)["list_price"]
-        )
         self.assertEqual(repo.knowledge_product_ids(self.conn, self.bid, sw["id"]), [self.a])
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) AS n FROM product_component WHERE brand_id = %s", (self.bid,)
+            ).fetchone()["n"],
+            0,
+        )
 
         page = repo.set_product_page_url(
             self.conn, self.bid, self.a, " https://shop.example/a ", actor=ACTOR
@@ -74,10 +89,12 @@ class SellWayTest(unittest.TestCase):
             self.bid,
             sell_way_id=sw["id"],
             name="單盒",
-            components=[{"product_id": self.a, "qty": 1}],
+            product_id=self.a,
             economics=_econ(379, list_price=399, cap_per_sale=150),
+            free_shipping=True,
             actor=ACTOR,
         )
+        self.assertTrue(again["free_shipping"])
         self.assertEqual(again["id"], sw["id"])
         self.assertEqual(again["name"], "薑黃錠 · 單盒")
         self.assertEqual(again["effective_landing_url"], "https://shop.example/a")
@@ -102,20 +119,30 @@ class SellWayTest(unittest.TestCase):
         self.assertEqual(second["economics"]["selling_price"], 389)
 
     def test_bundle_round_trip_and_effective_money(self):
-        self._single(self.a, "單盒", 399, unit_variable_cost=120)
-        self._single(self.b, "單瓶", 599, unit_variable_cost=200)
+        box = self._single(self.a, "單盒", 399, unit_variable_cost=120)
+        bottle = self._single(self.b, "單瓶", 599, unit_variable_cost=200)
         bundle = repo.save_sell_way(
             self.conn,
             self.bid,
             name="護眼雙效組",
-            components=[{"product_id": self.b, "qty": 1}, {"product_id": self.a, "qty": 2}],
+            components=[{"sell_way_id": bottle["id"], "qty": 1},
+                        {"sell_way_id": box["id"], "qty": 2}],
             economics=_econ(1199, shipping_cost=60),
             landing_url="https://shop.example/set",
             actor=ACTOR,
         )
         self.assertIsNone(bundle["parent_id"])
-        self.assertEqual(bundle["kind"], "bundle")
+        self.assertEqual((bundle["kind"], bundle["shape"]), ("bundle", "composed"))
         self.assertEqual(bundle["name"], "護眼雙效組")
+        self.assertEqual(
+            bundle["components"],
+            [
+                {"sell_way_id": bottle["id"], "qty": 1, "name": "單瓶", "product_id": self.b,
+                 "product_name": "魚油", "price": 599, "cost": 200, "currency": "TWD"},
+                {"sell_way_id": box["id"], "qty": 2, "name": "單盒", "product_id": self.a,
+                 "product_name": "薑黃錠", "price": 399, "cost": 120, "currency": "TWD"},
+            ],
+        )
         self.assertEqual(
             repo.knowledge_product_ids(self.conn, self.bid, bundle["id"]), [self.b, self.a]
         )
@@ -135,62 +162,65 @@ class SellWayTest(unittest.TestCase):
             )
         self.assertEqual(bundle["effective_landing_url"], "https://shop.example/set")
 
-        # Full-list replace: drop 魚油, keep 薑黃錠 (row and order kept) -> the bundle is now a
-        # single-product sell-way under 薑黃錠.
+        # Full-list replace: drop 單瓶, keep 單盒 (row and order kept) -> every base is 薑黃錠's,
+        # so the composed sell-way is now listed under 薑黃錠.
         shrunk = repo.save_sell_way(
             self.conn,
             self.bid,
             sell_way_id=bundle["id"],
             name="兩盒組",
-            components=[{"product_id": self.a, "qty": 2}],
+            components=[{"sell_way_id": box["id"], "qty": 2}],
             economics=_econ(699),
             actor=ACTOR,
         )
         self.assertEqual((shrunk["parent_id"], shrunk["name"]), (self.a, "薑黃錠 · 兩盒組"))
-        self.assertEqual(shrunk["components"], [{"product_id": self.a, "qty": 2, "name": "薑黃錠"}])
+        self.assertEqual(
+            [(c["sell_way_id"], c["qty"]) for c in shrunk["components"]], [(box["id"], 2)]
+        )
 
-    def test_unknown_component_part_leaves_the_field_null(self):
-        self._single(self.a, "單盒", 399, unit_variable_cost=120)
-        bundle = repo.save_sell_way(
-            self.conn,
-            self.bid,
-            name="雙效組",
-            components=[{"product_id": self.a, "qty": 1}, {"product_id": self.b, "qty": 1}],
-            economics=_econ(899),
-            actor=ACTOR,
-        )  # 魚油 has no single sell-way
+    def test_unknown_component_cost_leaves_the_field_null(self):
+        box = self._single(self.a, "單盒", 399, unit_variable_cost=120)
+        bottle = self._single(self.b, "單瓶", 599)  # no cost
+        bundle = self._composed("雙效組", [(box, 1), (bottle, 1)], 899)
         econ = repo.get_product_economics(self.conn, self.bid, bundle["id"])
-        self.assertIsNone(econ["list_price"])
+        self.assertEqual(econ["list_price"], Decimal("998"))
         self.assertIsNone(econ["unit_variable_cost"])
-        self.assertEqual(econ["derived_fields"], [])
-        self.assertNotIn("bundle", repo.available_offer_keys(self.conn, self.bid, bundle["id"]))
+        self.assertEqual(econ["derived_fields"], ["list_price"])
 
-    def test_components_are_this_brands_knowledge_products(self):
+    def test_composed_price_left_empty_is_derived(self):
+        box = self._single(self.a, "單盒", 180, unit_variable_cost=50)
+        twelve = self._composed("12 盒", [(box, 12)])
+        econ = twelve["economics"]
+        self.assertEqual((econ["selling_price"], econ["list_price"], econ["unit_variable_cost"]),
+                         (Decimal("2160"), Decimal("2160"), Decimal("600")))
+        self.assertEqual(econ["derived_fields"],
+                         ["selling_price", "list_price", "unit_variable_cost"])
+        raw = repo.get_product_economics(self.conn, self.bid, twelve["id"], raw=True)
+        self.assertIsNone(raw["selling_price"])
+        version = self.conn.execute(
+            "SELECT selling_price FROM product_economics_version WHERE brand_id = %s "
+            "AND product_id = %s AND effective_to IS NULL", (self.bid, twelve["id"])).fetchone()
+        self.assertIsNone(version["selling_price"])
+        self.assertEqual(repo.available_offer_keys(self.conn, self.bid, twelve["id"]), set())
+
+    def test_components_are_this_brands_active_bases(self):
         other = _brand(self.conn)
-        foreign = repo.create_product(self.conn, other, name="別人的商品", actor=ACTOR)["id"]
-        with self.assertRaises(ValueError):
-            repo.save_sell_way(
-                self.conn,
-                self.bid,
-                name="混組",
-                components=[{"product_id": self.a, "qty": 1}, {"product_id": foreign, "qty": 1}],
-                economics=_econ(500),
-                actor=ACTOR,
-            )
+        foreign_product = repo.create_product(self.conn, other, name="別人的商品", actor=ACTOR)
+        foreign = repo.save_sell_way(self.conn, other, name="單盒",
+                                     product_id=foreign_product["id"],
+                                     economics=_econ(100), actor=ACTOR)
         sw = self._single(self.a, "單盒", 399)
-        with self.assertRaises(ValueError):  # a sell-way is not a component
-            repo.save_sell_way(
-                self.conn,
-                self.bid,
-                name="套娃",
-                components=[{"product_id": sw["id"], "qty": 1}],
-                economics=_econ(500),
-                actor=ACTOR,
-            )
+        pack = self._composed("2 盒", [(sw, 2)], 700)
+        usd = self._single(self.b, "美金瓶", 20, currency="USD")
         for bad in (
+            [{"sell_way_id": sw["id"], "qty": 1}, {"sell_way_id": foreign["id"], "qty": 1}],
+            [{"sell_way_id": self.a, "qty": 2}],  # a knowledge product
+            [{"sell_way_id": pack["id"], "qty": 2}],  # a composed sell-way
+            [{"sell_way_id": usd["id"], "qty": 2}],  # another currency
+            [{"sell_way_id": sw["id"], "qty": 1}],  # Σqty = 1
             [],
-            [{"product_id": self.a, "qty": 0}],
-            [{"product_id": self.a, "qty": 1}, {"product_id": self.a, "qty": 2}],
+            [{"sell_way_id": sw["id"], "qty": 0}],
+            [{"sell_way_id": sw["id"], "qty": 1}, {"sell_way_id": sw["id"], "qty": 2}],
         ):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 repo.save_sell_way(
@@ -201,19 +231,37 @@ class SellWayTest(unittest.TestCase):
                     economics=_econ(500),
                     actor=ACTOR,
                 )
+        with self.assertRaisesRegex(ValueError, "數量至少 2"):
+            self._composed("一盒", [(sw, 1)], 399)
+        with self.assertRaisesRegex(ValueError, "幣別"):
+            self._composed("美金組", [(usd, 2)], 39)
+        with self.assertRaises(ValueError):  # a base binds a knowledge product, not a sell-way
+            self._single(sw["id"], "套娃", 500)
+        with self.assertRaises(ValueError):  # exactly one of product_id / components
+            repo.save_sell_way(self.conn, self.bid, name="兩者", product_id=self.a,
+                               components=[{"sell_way_id": sw["id"], "qty": 2}],
+                               economics=_econ(500), actor=ACTOR)
+        with self.assertRaises(ValueError):
+            repo.save_sell_way(self.conn, self.bid, name="都沒有", economics=_econ(500),
+                               actor=ACTOR)
+        with self.assertRaises(ValueError):  # a base needs a price
+            self._single(self.a, "沒價", None)
         with self.assertRaises(ValueError):
             self._single(self.a, "負價", -1)
         with self.assertRaises(ValueError):
-            repo.save_sell_way(
-                self.conn,
-                self.bid,
-                name="怪欄位",
-                components=[{"product_id": self.a, "qty": 1}],
-                economics=_econ(100, discount=5),
-                actor=ACTOR,
-            )
+            self._single(self.a, "怪欄位", 100, discount=5)
+        with self.assertRaisesRegex(ValueError, "基本賣法和組合"):  # shape change
+            repo.save_sell_way(self.conn, self.bid, sell_way_id=sw["id"], name="單盒",
+                               components=[{"sell_way_id": sw["id"], "qty": 2}],
+                               economics=_econ(500), actor=ACTOR)
+        with self.assertRaisesRegex(ValueError, "不能換幣別"):  # a base in use keeps its currency
+            self._single(self.a, "單盒", 13, currency="USD")
         self.assertEqual(
-            [s["display_name"] for s in repo.list_sell_ways(self.conn, self.bid)], ["單盒"]
+            [s["display_name"] for s in repo.list_sell_ways(self.conn, self.bid)],
+            ["單盒", "2 盒", "美金瓶"],
+        )
+        self.assertEqual(
+            [u["id"] for u in repo.composed_using(self.conn, self.bid, sw["id"])], [pack["id"]]
         )
 
     def test_component_rows_are_checked_by_the_database(self):
@@ -221,9 +269,9 @@ class SellWayTest(unittest.TestCase):
         with self.assertRaises(psycopg.errors.CheckViolation):
             self.conn.execute(
                 "INSERT INTO product_component"
-                " (id, org_id, brand_id, sell_way_id, product_id, qty) "
+                " (id, org_id, brand_id, sell_way_id, base_sell_way_id, qty) "
                 "VALUES (%s, %s, %s, %s, %s, 0)",
-                (new_id("pco"), DEV_ORG_ID, self.bid, sw["id"], self.b),
+                (new_id("pco"), DEV_ORG_ID, self.bid, self.b, sw["id"]),
             )
         self.conn.rollback()
 
@@ -284,25 +332,29 @@ class SellWayOfferTest(unittest.TestCase):
             self.conn,
             self.bid,
             name="單盒",
-            components=[{"product_id": self.a, "qty": 1}],
+            product_id=self.a,
             economics=_econ(399),
             actor=ACTOR,
         )
 
-    def test_three_pack_is_a_bundle_offer(self):
-        pack = repo.save_sell_way(
+    def _pack(self, **more):
+        return repo.save_sell_way(
             self.conn,
             self.bid,
             name="3 入組",
-            components=[{"product_id": self.a, "qty": 3}],
+            components=[{"sell_way_id": self.single["id"], "qty": 3}],
             economics=_econ(999),
             actor=ACTOR,
+            **more,
         )
+
+    def test_three_pack_is_a_bundle_offer(self):
+        pack = self._pack()
         self.assertEqual(pack["economics"]["list_price"], Decimal("1197"))
         self.assertEqual(repo.available_offer_keys(self.conn, self.bid, pack["id"]), {"bundle"})
         self.assertEqual(
             repo.offer_sources(self.conn, self.bid, pack["id"]),
-            [{"offer_key": "bundle", "sentence": "薑黃錠 · 3 入組優惠價 NT$999（原價 NT$1,197）"}],
+            [{"offer_key": "bundle", "sentence": "優惠價 NT$999（原價 NT$1,197）"}],
         )
 
     def test_single_below_list_is_a_discount_and_equal_is_none(self):
@@ -311,14 +363,14 @@ class SellWayOfferTest(unittest.TestCase):
             self.conn,
             self.bid,
             name="限時價",
-            components=[{"product_id": self.a, "qty": 1}],
+            product_id=self.a,
             economics=_econ(359, list_price=399),
             actor=ACTOR,
         )
         self.assertEqual(repo.available_offer_keys(self.conn, self.bid, sale["id"]), {"discount"})
         self.assertEqual(
             repo.offer_sources(self.conn, self.bid, sale["id"])[0]["sentence"],
-            "薑黃錠 · 限時價優惠價 NT$359（原價 NT$399）",
+            "優惠價 NT$359（原價 NT$399）",
         )
         self.assertEqual(repo.available_offer_keys(self.conn, self.bid, None), set())
 
@@ -329,18 +381,36 @@ class SellWayOfferTest(unittest.TestCase):
             [{"key": "ship_threshold", "params": {"threshold": 999}}],
             actor=ACTOR,
         )
-        pack = repo.save_sell_way(
-            self.conn,
-            self.bid,
-            name="3 入組",
-            components=[{"product_id": self.a, "qty": 3}],
-            economics=_econ(999),
-            actor=ACTOR,
-        )
+        pack = self._pack()
         self.assertEqual(
             repo.available_offer_keys(self.conn, self.bid, pack["id"]), {"free_shipping", "bundle"}
         )
         self.assertEqual(repo.available_offer_keys(self.conn, self.bid, self.single["id"]), set())
+
+    def test_own_free_shipping(self):
+        """F45: 「這個賣法免運」 -> its own free_shipping sentence (「免運」 base, 「這組免運」
+        composed); with a store-wide free-shipping policy that also applies, only its own."""
+        free_single = repo.save_sell_way(
+            self.conn, self.bid, sell_way_id=self.single["id"], name="單盒", product_id=self.a,
+            economics=_econ(399), free_shipping=True, actor=ACTOR)
+        self.assertEqual(
+            repo.offer_sources(self.conn, self.bid, free_single["id"]),
+            [{"offer_key": "free_shipping", "sentence": "免運"}],
+        )
+        pack = self._pack(free_shipping=True)
+        self.assertEqual(
+            repo.offer_sources(self.conn, self.bid, pack["id"]),
+            [{"offer_key": "bundle", "sentence": "優惠價 NT$999（原價 NT$1,197）"},
+             {"offer_key": "free_shipping", "sentence": "這組免運"}],
+        )
+        repo.save_brand_policies(
+            self.conn, self.bid, [{"key": "ship_threshold", "params": {"threshold": 999}}],
+            actor=ACTOR)
+        sources = repo.offer_sources(self.conn, self.bid, pack["id"])
+        self.assertEqual([s["sentence"] for s in sources if s["offer_key"] == "free_shipping"],
+                         ["這組免運"])
+        self.assertEqual(repo.available_offer_keys(self.conn, self.bid, pack["id"]),
+                         {"bundle", "free_shipping"})
 
 
 class ProductProofTest(unittest.TestCase):
@@ -352,7 +422,7 @@ class ProductProofTest(unittest.TestCase):
             self.conn,
             self.bid,
             name="單盒",
-            components=[{"product_id": self.a, "qty": 1}],
+            product_id=self.a,
             economics=_econ(399),
             actor=ACTOR,
         )["id"]
@@ -494,7 +564,7 @@ class CustomerGroupTest(unittest.TestCase):
             self.conn,
             self.bid,
             name="單盒",
-            components=[{"product_id": self.a, "qty": 1}],
+            product_id=self.a,
             economics=_econ(399),
             actor=ACTOR,
         )

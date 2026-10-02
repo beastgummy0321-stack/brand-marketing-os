@@ -54,6 +54,7 @@ def _set_status(job_id: int, status: str) -> None:
 class QueueJobsTestCase(unittest.TestCase):
     def setUp(self):
         _in_queue("DELETE FROM procrastinate_jobs")  # events cascade; each test owns the queue
+        _in_queue("DELETE FROM procrastinate_workers")  # no worker heartbeat unless a test adds one
         self.client = TestClient(main.app)
 
 
@@ -196,6 +197,23 @@ class DashboardJobsTenantIsolationTest(QueueJobsTestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["brand_id"], self.brand_b)
         self.assertEqual(jobs[0]["position"], 1)
+
+    def test_stalled_only_for_the_org_whose_work_waits(self):
+        """F47 Contract C: no live worker -> stalled for org B (its job waits), not for org A
+        (nothing of its own queued); a fresh heartbeat clears it."""
+        a, b = self._get(self.a_token), self._get(self.b_token)
+        self.assertEqual((a["worker_alive"], a["stalled"]), (False, False))
+        self.assertEqual((b["worker_alive"], b["stalled"]), (False, True))
+
+        _in_queue("INSERT INTO procrastinate_workers (last_heartbeat) VALUES (now())")
+        b = self._get(self.b_token)
+        self.assertEqual((b["worker_alive"], b["stalled"]), (True, False))
+
+    def test_a_job_without_a_brand_still_stalls_its_org(self):
+        # Not listed (no brand_id), but it waits on the same stopped worker.
+        _defer("background.meta_daily_pull", self.org_a)
+        body = self._get(self.a_token)
+        self.assertEqual((body["data"], body["stalled"]), ([], True))
 
 
 if __name__ == "__main__":

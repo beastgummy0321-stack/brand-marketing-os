@@ -187,7 +187,10 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(mid["state"], "auth_expired")
         self.assertEqual(mid["missing_days"], ["2026-09-17", "2026-09-18"])
         self.assertEqual(mid["affected_campaigns"], [{"id": mid_id, "name": "中秋限定活動"}])
-        self.assertEqual(mid["note"], "09/17、09/18 讀不到・中秋限定活動先不判斷")
+        self.assertEqual(
+            mid["note"],
+            "授權已失效，重新授權後才能讀資料；09/17、09/18 讀不到・中秋限定活動先不判斷",
+        )
         self.assertEqual(mid["action"]["label"], "重新授權")
         self.assertEqual(mid["last_success_at"], datetime(2026, 9, 17, 1, 0, tzinfo=UTC))
 
@@ -293,6 +296,65 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(source["state"], "failed")
         self.assertEqual(source["action"]["label"], "查看連線")
 
+    # --- F47 Contract H: re-read ---------------------------------------------------------------
+
+    def test_reread_is_the_missing_range_or_the_window_and_only_where_it_can_help(self):
+        self._three_accounts()
+        result = self._read()
+        main, mid, new = (self._source(result, f"meta:{a}")
+                          for a in ("act_main", "act_mid", "act_new"))
+        self.assertIsNone(main["reread"])  # ok
+        self.assertIsNone(mid["reread"])  # auth_expired: fixed by 重新授權, not a re-read
+        # never: the page's whole window (the last 28 days reach before the 1st) up to yesterday.
+        self.assertEqual(new["reread"], {"platform": "meta", "source_account": "act_new",
+                                         "start": "2026-08-22", "end": "2026-09-18"})
+        for key in ("orders", "product_costs"):
+            self.assertIsNone(self._source(result, key)["reread"])
+
+    def test_reread_of_missing_days_is_the_gap(self):
+        self._job("act_main", {"monthly:2026-09": {
+            "section": "monthly", "status": "succeeded", "start": "2026-09-05",
+            "end": "2026-09-15", "completed_at": "2026-09-16T01:00:00+00:00"}})
+        source = self._source(self._read(), "meta:act_main")
+        self.assertEqual(source["state"], "missing_days")
+        self.assertEqual(source["reread"], {"platform": "meta", "source_account": "act_main",
+                                            "start": "2026-09-16", "end": "2026-09-18"})
+
+    def test_a_failed_read_says_its_reason_then_its_gap_and_can_be_reread(self):
+        self._job("act_main", {
+            "list": {"section": "list", "status": "failed", "error_code": "source_error",
+                     "errors": ["Meta 暫時讀不到"]},
+            "monthly:2026-09": {"section": "monthly", "status": "succeeded",
+                                "start": "2026-09-01", "end": "2026-09-16",
+                                "completed_at": "2026-09-17T01:00:00+00:00"},
+        })
+        source = self._source(self._read(), "meta:act_main")
+        self.assertEqual(source["state"], "failed")
+        self.assertEqual(source["note"], "Meta 暫時讀不到；09/17、09/18 讀不到")
+        self.assertEqual(source["reread"], {"platform": "meta", "source_account": "act_main",
+                                            "start": "2026-09-17", "end": "2026-09-18"})
+
+    def test_a_failed_read_without_a_gap_rereads_the_window(self):
+        self._job("act_main", {"list": {"section": "list", "status": "failed",
+                                        "error_code": "source_error", "errors": ["來源讀取失敗"]}})
+        source = self._source(self._read(), "meta:act_main")
+        self.assertEqual(source["note"], "來源讀取失敗")
+        self.assertEqual((source["reread"]["start"], source["reread"]["end"]),
+                         ("2026-08-22", "2026-09-18"))
+
+    def test_every_reread_body_is_one_the_refresh_accepts(self):
+        self._three_accounts()
+        reread = self._source(self._read(), "meta:act_new")["reread"]
+        with (
+            patch.object(sync.background, "enqueue"),
+            patch.object(sync.background, "is_active", return_value=False),
+        ):
+            job = sync.request_sync(
+                self.conn, self.org, self.brand, reread["platform"], reread["source_account"],
+                start=date.fromisoformat(reread["start"]), end=date.fromisoformat(reread["end"]),
+            )
+        self.assertEqual(job["source_account"], "act_new")
+
     def test_platform_with_reader_but_no_account_and_unsupported_platforms(self):
         with patch.object(_Reader, "accounts", return_value=[]):
             result = self._read()
@@ -385,7 +447,7 @@ class ConnectionsTest(unittest.TestCase):
                                 ("秋季新色", {"selling_price": 520})):
             brands.save_sell_way(
                 self.conn, self.brand, name=name, actor=ACTOR, economics=economics,
-                components=[{"product_id": product["id"], "qty": 1}],
+                product_id=product["id"],
             )
         self.conn.commit()
         source = self._source(self._read(), "product_costs")

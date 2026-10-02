@@ -20,6 +20,7 @@ import {
 } from "@/lib/workbenchApi";
 import { ImagePart } from "./ImagePart";
 import { PART_LABEL, regenerateLabel } from "./regenerateLabel";
+import { SetGenerationStatus } from "./SetGenerationStatus";
 
 const SET_STATUS_TONE: Record<string, string> = {
   已完成: "bg-success/10 text-success",
@@ -84,9 +85,9 @@ function SetStudio({
    * browser started so the other tabs' buttons can name it; cleared when the round ends. */
   const [startedPart, setStartedPart] = useState<ProductPart | null>(null);
 
-  function load() {
+  function load(): Promise<void> {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
-    getSet(brandId, setId)
+    return getSet(brandId, setId)
       .then((set) => {
         setState({ status: "ready", set });
         setActivePart((prev) =>
@@ -101,7 +102,8 @@ function SetStudio({
       );
   }
 
-  useEffect(load, [brandId, setId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` reads only brandId/setId
+  useEffect(() => void load(), [brandId, setId]);
 
   useEffect(() => {
     const requested = searchParams.get("part") as ProductPart | null;
@@ -156,7 +158,7 @@ function SetStudio({
       <EmptyState
         title="讀取失敗"
         description={state.message}
-        onAction={load}
+        onAction={() => void load()}
         actionLabel="重新載入"
       />
     );
@@ -200,11 +202,10 @@ function SetStudio({
         <div className="flex flex-col gap-4 min-w-0">
           <SetHeader set={set} />
           <MissingPartLinks set={set} onOpen={openPart} />
-          {generating && <p role="status" className="rounded-md bg-muted p-3 text-sm">{set.generation?.status === "queued" ? "素材已排隊，等待生成。" : "素材生成中，完成後會自動更新。"}</p>}
-          {pollError && <p role="alert" className="text-sm text-danger">{pollError}</p>}
-          {set.generation?.status === "failed" && <p role="alert" className="rounded-md bg-danger/10 p-3 text-sm text-danger">這輪生成失敗：{set.generation.error || "請稍後再試。"} 可以按「再生成」重試。</p>}
+          <SetGenerationStatus brandId={brandId} set={set} generating={generating} pollError={pollError}
+            part={activePart} onReload={load} onRunStarted={setStartedPart} onUpdated={applyUpdated} />
 
-          {set.lock.locked && (
+          {set.lock.reason && (
             <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
               {set.lock.reason}
             </div>
@@ -430,7 +431,8 @@ function ProductPanel({
     productState: product.state,
     idleLabel: part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`,
   });
-  const locked = set.lock.locked;
+  // F47 Q7: the part's own lock (an override-approved set keeps its missing parts open).
+  const locked = product.locked ?? set.lock.locked;
   const showOutput = product.versions.length > 0 || (!generating && set.generation?.status !== "failed");
   const missingLabels = set.required_parts
     .filter((requiredPart) => set.products[requiredPart]?.state !== "已選定")
@@ -531,7 +533,7 @@ function ProductPanel({
             尚需選定：{missingLabels.join("、")}
           </span>
         )}
-        <Button disabled={!allDone || locked} onClick={onFinish}>完成此素材組</Button>
+        <Button disabled={!allDone || set.lock.locked} onClick={onFinish}>完成此素材組</Button>
       </div>
     </div>
   );

@@ -204,22 +204,29 @@ def _break_even(economics: dict | None) -> float | None:
     return None if value is None else round(value, 2)
 
 
-def _offers(conn: Conn, brand_id: str, sell_way: dict) -> tuple[list, list]:
-    """(offer_labels, offer_notes) of one sell-way. Labels = `offer_sources` for it: its own price
-    offer first (「組合價 省 198」 for more than one unit, 「優惠價 省 N」 for one), then each brand
-    policy sentence that applies (a threshold policy only at or above its threshold). Notes = the
-    threshold policies this price does not reach (「售價未滿 NT$999，不適用滿額免運」)."""
+def _offers(conn: Conn, brand_id: str, sell_way: dict) -> tuple[list, list, list]:
+    """(offer_labels, offer_notes, offer_sentences) of one sell-way, from `offer_sources` for it.
+    Labels: its own offers first (price offer 「組合價 省 198」 for a composed sell-way, 「優惠價 省
+    N」 for a base; free shipping 「免運」 / 「這組免運」), then each brand policy sentence that
+    applies (a threshold policy only at or above its threshold). Sentences = its own offer
+    sentences (「優惠價 NT$X（原價 NT$Y）」, 「免運」 / 「這組免運」). Notes = the threshold
+    policies this price does not reach (「售價未滿 NT$999，不適用滿額免運」); a free-shipping
+    one is not noted when the sell-way ships free itself."""
     policies = [
         p for p in bi_repo.list_brand_policies(conn, brand_id) if p["status"] == "confirmed"
     ]
     policy_sentences = {p["sentence"] for p in policies}
     econ = sell_way.get("economics") or {}
-    own, brand_wide, applied = [], [], set()
+    own, sentences, brand_wide, applied = [], [], [], set()
     for row in bi_repo.offer_sources(conn, brand_id, sell_way["id"]):
         applied.add(row["sentence"])
         if row["sentence"] in policy_sentences:
             brand_wide.append(row["sentence"])
-        else:  # the sell-way's own offer (list price above price)
+            continue
+        sentences.append(row["sentence"])  # the sell-way's own offer
+        if row["offer_key"] == "free_shipping":
+            own.append(row["sentence"])
+        else:  # list price above price
             saved = float(econ["list_price"]) - float(econ["selling_price"])
             word = "組合價" if row["offer_key"] == "bundle" else "優惠價"
             own.append(f"{word} 省 {_money_text(saved)}")
@@ -231,35 +238,69 @@ def _offers(conn: Conn, brand_id: str, sell_way: dict) -> tuple[list, list]:
             threshold
             and policy["offer_key"] not in (None, "none")
             and policy["sentence"] not in applied
+            and not (policy["offer_key"] == "free_shipping" and sell_way.get("free_shipping"))
         ):
             notes.append(f"售價未滿 NT${_money_text(threshold)}，不適用{policy['label']}")
-    return own + list(dict.fromkeys(brand_wide)), notes
+    return own + list(dict.fromkeys(brand_wide)), notes, sentences
+
+
+def _part_label(way: dict, comp: dict) -> str:
+    """A component's name in a 推算 note: the base's own name; on a cross-product bundle prefixed
+    with its product (「能量軟糖・單盒」)."""
+    if way.get("kind") == "bundle" and comp.get("product_name"):
+        return f"{comp['product_name']}・{comp['name']}"
+    return str(comp.get("name") or "")
+
+
+def _derived_note(way: dict, field: str) -> str:
+    """「推算：單盒 180 × 5 ＋ 體驗包 100 × 2」 (`field` = price or cost of each base)."""
+    parts = [
+        f"{_part_label(way, c)} {_money_text(c[field])} × {c['qty']}"
+        for c in way["components"]
+        if c.get(field) is not None
+    ]
+    return "推算：" + " ＋ ".join(parts)
 
 
 def _money(conn: Conn, brand_id: str, sell_way: dict, show_close_rate: bool) -> dict:
+    """The step-4 money fields of one sell-way (also the bundle page's and the products page's).
+    Derived numbers come from the facade's effective economics (`derived_fields`); this only
+    words them (推算 notes) and adds the cost estimate / missing costs of a composed sell-way."""
     econ = sell_way.get("economics") or {}
     derived = econ.get("derived_fields") or []
-    units = sum(c["qty"] for c in sell_way["components"]) or 1
+    comps = sell_way.get("components") or []
     break_even = _break_even(econ or None)
     cap = econ.get("cap_per_sale")
-    labels, notes = _offers(conn, brand_id, sell_way)
-    list_derived, cost_derived = "list_price" in derived, "unit_variable_cost" in derived
+    labels, notes, sentences = _offers(conn, brand_id, sell_way)
+    price_derived = "selling_price" in derived
+    list_derived = "list_price" in derived
+    cost_derived = "unit_variable_cost" in derived
+    missing = [{"sell_way_id": c["sell_way_id"], "name": c["name"]} for c in comps
+               if c.get("cost") is None]
+    estimate = (
+        float(sum(c["qty"] * c["cost"] for c in comps)) if comps and not missing else None
+    )
     out = {
         "price": _num(econ.get("selling_price")),
+        "price_derived": price_derived,
+        "price_note": _derived_note(sell_way, "price") if price_derived else "",
         "list_price": _num(econ.get("list_price")),
         "list_price_derived": list_derived,
-        "list_price_note": ("同售價" if units == 1 else f"{units} 件單價相加")
-        if list_derived
-        else "",
+        "list_price_note": _derived_note(sell_way, "price") if list_derived else "",
         "cost": _num(econ.get("unit_variable_cost")),
         "cost_derived": cost_derived,
-        "cost_note": f"{units} 件成本相加" if cost_derived else "",
+        "cost_note": _derived_note(sell_way, "cost") if cost_derived else "",
+        "cost_estimate": estimate,
+        "cost_missing": missing,
         "shipping": _num(econ.get("shipping_cost")),
+        "free_shipping": bool(sell_way.get("free_shipping")),
         "break_even": break_even,
+        "break_even_derived": break_even is not None and (price_derived or cost_derived),
         "cap_per_sale": _num(cap) if cap is not None else break_even,
         "cap_is_default": cap is None,
         "landing_url": sell_way.get("effective_landing_url") or "",
         "landing_is_default": sell_way.get("landing_url") is None,
+        "offer_sentences": sentences,
         "offer_labels": labels,
         "offer_notes": notes,
         "assumptions": list(econ.get("assumptions_json") or []),
@@ -292,11 +333,11 @@ def _number(item: dict, key: str, label: str, owner: str) -> float | None:
     return value
 
 
-def _check_money(item: dict, owner: str, show_close_rate: bool) -> dict:
+def _check_money(item: dict, owner: str, show_close_rate: bool, *, composed: bool) -> dict:
     """The raw money inputs of one sell-way / bundle -> `save_sell_way`'s `economics`. Empty list
-    price / cost / cap = derived / break-even."""
+    price / cost / cap = derived / break-even; a composed sell-way's empty price = derived."""
     price = _number(item, "price", "售價", owner)
-    if not price:
+    if price == 0 or (price is None and not composed):
         raise ValueError(f"「{owner}」的售價要大於 0。")
     close_rate = _number(item, "close_rate", "成交率", owner) if show_close_rate else None
     if close_rate is not None and not 0 < close_rate <= 1:
@@ -337,6 +378,7 @@ def _sell_way_brief(conn: Conn, brand_id: str, sell_way: dict) -> dict:
     return {
         "id": sell_way["id"],
         "name": sell_way["display_name"],
+        "shape": sell_way["shape"],
         "price": money["price"],
         "break_even": money["break_even"],
         "offer_labels": money["offer_labels"],
@@ -380,7 +422,7 @@ def list_page(conn: Conn, brand_id: str) -> dict:
         )
     bundles = []
     for bundle in (s for s in active_ways if s["kind"] == "bundle"):
-        ids = [c["product_id"] for c in bundle["components"]]
+        ids = bi_repo.knowledge_product_ids(conn, brand_id, bundle["id"])
         brief = _sell_way_brief(conn, brand_id, bundle)
         ready = all(by_id.get(i, {}).get("onboarding_step") is None for i in ids)
         bundles.append(
@@ -389,28 +431,62 @@ def list_page(conn: Conn, brand_id: str) -> dict:
                 "thumbnails": [thumbs[i] for i in ids if i in thumbs],
                 "state": "ready" if ready else "draft",
                 "components": [
-                    {k: c[k] for k in ("product_id", "name", "qty")} for c in bundle["components"]
+                    {k: c[k] for k in ("sell_way_id", "product_id", "product_name", "name", "qty")}
+                    for c in bundle["components"]
                 ],
             }
         )
-    taken = {p["name"].strip().casefold() for p in products if p["parent_id"] is None}
     return {
         "products": items,
         "bundles": bundles,
-        "suggestions": _suggestions(conn, brand_id, taken),
+        "suggestions": _suggestions(conn, brand_id, products),
     }
 
 
-def _suggestions(conn: Conn, brand_id: str, taken: set) -> list:
-    row = ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
-    prefill = _ai((row or {}).get("prefill_json"))
+def _suggestion_draft(conn: Conn, brand_id: str) -> dict | None:
+    """The intake draft whose prefill the products page suggests from (open, else the latest
+    completed one); its `prefill_json.dismissed` keeps the names the user said 「不用了」 to."""
+    return ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
+
+
+def _url_key(url) -> str:
+    return str(url or "").strip().rstrip("/").casefold()
+
+
+def _suggestions(conn: Conn, brand_id: str, products: list) -> list:
+    """The brand scan's products not created yet (Q8): hidden when a product has the same name
+    (casefold) or the same page URL, or when the user dismissed the name."""
+    prefill = _ai((_suggestion_draft(conn, brand_id) or {}).get("prefill_json"))
+    roots = [p for p in products if p["parent_id"] is None]
+    taken = {p["name"].strip().casefold() for p in roots}
+    taken |= {str(n).strip().casefold() for n in prefill.get("dismissed") or []}
+    urls = {_url_key(p.get("page_url")) for p in roots} - {""}
     out = []
     for item in _ai_list(prefill, "products"):
         name = str(item.get("name") or "").strip()
-        if name and name.casefold() not in taken:
-            taken.add(name.casefold())
-            out.append({"name": name, "url": str(item.get("url") or "").strip() or None})
+        url = str(item.get("url") or "").strip() or None
+        if not name or name.casefold() in taken or (url and _url_key(url) in urls):
+            continue
+        taken.add(name.casefold())
+        out.append({"name": name, "url": url})
     return out
+
+
+def dismiss_suggestion(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
+    """`POST …/products/suggestions/dismiss` `{name}`: 「不用了」 on a suggestion card; the name is
+    kept in the draft's `prefill_json.dismissed` and never suggested again -> the products page."""
+    del actor  # the intake draft has no per-write actor column
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise ValueError("請指定要略過的商品名稱。")
+    row = _suggestion_draft(conn, brand_id)
+    prefill = _ai((row or {}).get("prefill_json"))
+    if row is not None and prefill:
+        dismissed = [str(n) for n in prefill.get("dismissed") or []]
+        if name.casefold() not in {n.casefold() for n in dismissed}:
+            ir.update_draft(conn, brand_id, row["id"],
+                            prefill_json={**prefill, "dismissed": [*dismissed, name]})
+    return list_page(conn, brand_id)
 
 
 def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
@@ -592,6 +668,15 @@ def _rename(conn: Conn, brand_id: str, product: dict, name: str, *, actor: str) 
                 actor=actor,
                 name=f"{name} · {way['name'][len(old_prefix) :]}",
             )
+
+
+def set_page_url(conn: Conn, brand_id: str, product_id: str, value, *, actor: str) -> None:
+    """Store the product page URL as typed (blank = none); ValueError when it is not a URL.
+    The page read's retry (Contract F) stores the URL it was sent before it reads."""
+    product = knowledge_product(conn, brand_id, product_id)
+    page_url = _check_url(value, "商品頁網址")
+    if (product.get("page_url") or None) != page_url:
+        bi_repo.set_product_page_url(conn, brand_id, product_id, page_url, actor=actor)
 
 
 def put_what(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: str) -> dict:
@@ -945,24 +1030,38 @@ def custom_options(conn: Conn, brand_id: str, product_id: str, block: str) -> li
 # ---------------------------------------------------------------------------
 
 
-def _sell_way_row(
-    conn: Conn, brand_id: str, product: dict, way: dict, show_close_rate: bool
-) -> dict:
-    components = [{k: c[k] for k in ("product_id", "name", "qty")} for c in way["components"]]
-    if not components:  # an F05 sell-way written before F43 (no component rows): one unit
-        components = [{"product_id": product["id"], "name": product["name"], "qty": 1}]
+def _sell_way_row(conn: Conn, brand_id: str, way: dict, show_close_rate: bool) -> dict:
+    """One saved step-4 row (F45 「Step 4 API」): a base (no components) or a composed sell-way of
+    this product's bases; `used_by` = the active composed sell-ways that use a base."""
+    used_by = (
+        [u["display_name"] for u in bi_repo.composed_using(conn, brand_id, way["id"])]
+        if way["shape"] == "base"
+        else []
+    )
     return {
         "id": way["id"],
         "name": way["display_name"],
-        "components": components,
-        "qty": components[0]["qty"],
+        "shape": way["shape"],
+        "components": [
+            {
+                "sell_way_id": c["sell_way_id"],
+                "name": c["name"],
+                "qty": c["qty"],
+                "price": _num(c["price"]),
+                "cost": _num(c["cost"]),
+            }
+            for c in way["components"]
+        ],
         **_money(conn, brand_id, way, show_close_rate),
+        "used_by": used_by,
         "source": "saved",
         "note": "",
     }
 
 
-def _ai_sell_way(product: dict, item: dict, show_close_rate: bool) -> dict | None:
+def _ai_proposal(item: dict) -> tuple[str, int, float, float | None, str] | None:
+    """(name, qty, price, list_price, note) of one product-page sell-way proposal, None when it is
+    unusable."""
     name, qty, price = str(item.get("name") or "").strip(), item.get("qty"), item.get("price")
     list_price = item.get("list_price")
     if (
@@ -977,51 +1076,96 @@ def _ai_sell_way(product: dict, item: dict, show_close_rate: bool) -> dict | Non
         return None
     if isinstance(list_price, bool) or not isinstance(list_price, (int, float)) or list_price < 0:
         list_price = None
-    row = {
-        "id": None,
-        "name": name,
-        "components": [{"product_id": product["id"], "name": product["name"], "qty": qty}],
-        "qty": qty,
-        "price": float(price),
-        "list_price": _num(list_price),
-        "list_price_derived": False,
-        "list_price_note": "",
-        "cost": None,
-        "cost_derived": False,
-        "cost_note": "",
-        "shipping": None,
-        "break_even": None,
-        "cap_per_sale": None,
-        "cap_is_default": True,
-        "landing_url": product.get("page_url") or "",
-        "landing_is_default": True,
-        "offer_labels": [],
-        "offer_notes": [],
-        "assumptions": [],
-        "source": "ai",
-        "note": str(item.get("note") or ""),
-    }
-    if show_close_rate:
-        row["close_rate"] = None
-    return row
+    return name, qty, float(price), _num(list_price), str(item.get("note") or "")
+
+
+def _ai_sell_ways(product: dict, items: list, show_close_rate: bool) -> list:
+    """The product-page read's sell-way proposals as unsaved step-4 rows (no numbers derived):
+    qty 1 -> a base; qty N > 1 -> composed of the first qty-1 proposal × N, else a base."""
+    proposals = [p for p in (_ai_proposal(i) for i in items) if p is not None]
+    unit = next((p for p in proposals if p[1] == 1), None)
+    rows = []
+    for name, qty, price, list_price, note in proposals:
+        composed = qty > 1 and unit is not None
+        row = {
+            "id": None,
+            "name": name,
+            "shape": "composed" if composed else "base",
+            "components": (
+                [{"sell_way_id": None, "name": unit[0], "qty": qty, "price": unit[2], "cost": None}]
+                if composed and unit is not None
+                else []
+            ),
+            "price": price,
+            "price_derived": False,
+            "price_note": "",
+            "list_price": list_price,
+            "list_price_derived": False,
+            "list_price_note": "",
+            "cost": None,
+            "cost_derived": False,
+            "cost_note": "",
+            "cost_estimate": None,
+            "cost_missing": [],
+            "shipping": None,
+            "free_shipping": False,
+            "break_even": None,
+            "break_even_derived": False,
+            "cap_per_sale": None,
+            "cap_is_default": True,
+            "landing_url": product.get("page_url") or "",
+            "landing_is_default": True,
+            "offer_sentences": [],
+            "offer_labels": [],
+            "offer_notes": [],
+            "assumptions": [],
+            "used_by": [],
+            "source": "ai",
+            "note": note,
+        }
+        if show_close_rate:
+            row["close_rate"] = None
+        rows.append(row)
+    return rows
 
 
 def get_sell_ways(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """The product's active single sell-ways (creation order); none saved yet -> the page read's
-    proposals (unsaved, no numbers derived)."""
+    """The product's active sell-ways listed under it -- bases and composed ones (creation order);
+    none saved yet -> the page read's proposals (unsaved, no numbers derived)."""
     product = knowledge_product(conn, brand_id, product_id)
     show = _show_close_rate(_brand(conn, brand_id))
     rows = [
-        _sell_way_row(conn, brand_id, product, w, show)
-        for w in _active_singles(conn, brand_id, product_id)
+        _sell_way_row(conn, brand_id, w, show) for w in _active_singles(conn, brand_id, product_id)
     ]
     if not rows:
-        shaped = (
-            _ai_sell_way(product, i, show)
-            for i in _ai_list(_prefill(conn, brand_id, product, STEP_SELL_WAYS), "sell_ways")
+        rows = _ai_sell_ways(
+            product, _ai_list(_prefill(conn, brand_id, product, STEP_SELL_WAYS), "sell_ways"), show
         )
-        rows = [r for r in shaped if r is not None]
     return {"sell_ways": rows, "show_close_rate": show, "assumptions": _benchmarks(show)}
+
+
+def _check_row_components(item: dict, name: str) -> list | None:
+    """A PUT row's `components` -> `[{base: name, qty}]`, None for a base row (no key)."""
+    value = item.get("components")
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"「{name}」的內容至少要放一種賣法。")
+    out, seen = [], set()
+    for comp in value:
+        base = str(comp.get("base") or "").strip() if isinstance(comp, dict) else ""
+        qty = comp.get("qty") if isinstance(comp, dict) else None
+        if not base:
+            raise ValueError(f"「{name}」的內容要選一種賣法。")
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
+            raise ValueError(f"「{name}」裡「{base}」的數量要是正整數。")
+        if base.casefold() in seen:
+            raise ValueError(f"「{name}」裡「{base}」重複了，改數量就好。")
+        seen.add(base.casefold())
+        out.append({"base": base, "qty": qty})
+    if sum(c["qty"] for c in out) < 2:
+        raise ValueError(f"「{name}」只放 1 份就跟「{out[0]['base']}」一樣；數量至少 2。")
+    return out
 
 
 def _check_sell_ways(value, existing: dict, show_close_rate: bool) -> list:
@@ -1036,58 +1180,114 @@ def _check_sell_ways(value, existing: dict, show_close_rate: bool) -> list:
         if name.casefold() in names:
             raise ValueError(f"賣法「{name}」重複了。")
         names.add(name.casefold())
-        qty = item.get("qty", 1)
-        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError(f"「{name}」的數量要是正整數。")
+        if "qty" in item:
+            raise ValueError(
+                f"「{name}」不用填數量：一份就是基本賣法；多份請在「內容」放基本賣法 × 數量。"
+            )
         way_id = item.get("id") or None
         if way_id is not None and way_id not in existing:
             raise ValueError("找不到要修改的賣法，請重新整理後再試。")
+        components = _check_row_components(item, name)
+        free = item.get("free_shipping") or False
+        if not isinstance(free, bool):
+            raise ValueError(f"「{name}」的免運請選是或否。")
         out.append(
             {
                 "id": way_id,
                 "name": name,
-                "qty": qty,
-                "economics": _check_money(item, name, show_close_rate),
+                "components": components,
+                "free_shipping": free,
+                "economics": _check_money(
+                    item, name, show_close_rate, composed=components is not None
+                ),
                 "landing_url": _check_url(item.get("landing_url"), f"「{name}」的落地頁"),
             }
         )
+    bases = {r["name"].casefold() for r in out if r["components"] is None}
+    for row in out:
+        for comp in row["components"] or []:
+            if comp["base"].casefold() in bases:
+                continue
+            if comp["base"].casefold() in by_name:  # a saved base this body leaves out
+                raise ValueError(f"「{comp['base']}」還在「{row['name']}」裡，先從組合拿掉。")
+            raise ValueError(f"「{row['name']}」裡的「{comp['base']}」不是這裡的基本賣法。")
     sent = {c["id"] for c in out if c["id"]}
     for row in out:  # a new row named like an existing sell-way not sent is that sell-way
         match = by_name.get(row["name"].casefold())
         if row["id"] is None and match is not None and match not in sent:
             row["id"] = match
             sent.add(match)
+    for row in out:  # checked before anything is written (the facade refuses it too)
+        before = existing.get(row["id"]) if row["id"] else None
+        composed = row["components"] is not None
+        if before is not None and (before["shape"] == "composed") != composed:
+            raise ValueError(
+                f"「{row['name']}」不能在基本賣法和組合之間改來改去；要換就另外新增一個賣法。"
+            )
     return out
 
 
+def _archive_guard(conn: Conn, brand_id: str, existing: dict, kept: set) -> None:
+    """A base left out of the PUT is archived unless an active composed sell-way that stays (not
+    left out of this body, or another product's bundle) still uses it."""
+    for way_id, way in existing.items():
+        if way_id in kept or way["shape"] != "base":
+            continue
+        users = [
+            u
+            for u in bi_repo.composed_using(conn, brand_id, way_id)
+            if u["id"] in kept or u["id"] not in existing
+        ]
+        if users:
+            raise ValueError(
+                f"「{way['display_name']}」還在「{users[0]['display_name']}」裡，先從組合拿掉。"
+            )
+
+
 def put_sell_ways(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: str) -> dict:
-    """`{sell_ways: [{id?, name, qty, price, list_price?, cost?, shipping?, close_rate?,
-    cap_per_sale?, landing_url?, assumptions?}]}` — the full list of this product's single
-    sell-ways, raw inputs only (empty list price / cost / cap = derived / break-even; empty landing
-    = the product page). A sell-way left out is archived (campaigns may still point at it)."""
+    """`{sell_ways: [{id?, name, components?: [{base: "<name of a base row in this body>", qty}],
+    price?, list_price?, cost?, shipping?, free_shipping?, close_rate?, cap_per_sale?,
+    landing_url?, assumptions?}]}` — the full list of this product's sell-ways, raw inputs only:
+    no `components` = a base (price required), else composed (empty price / list price / cost =
+    derived from its bases); a `qty` key is refused; empty cap = break-even; empty landing = the
+    product page. A sell-way left out is archived (campaigns may still point at it) unless an
+    active composed sell-way that stays uses it."""
     product = knowledge_product(conn, brand_id, product_id)
     show = _show_close_rate(_brand(conn, brand_id))
     existing = {w["id"]: w for w in _active_singles(conn, brand_id, product_id)}
     rows = _check_sell_ways(body.get("sell_ways"), existing, show)
     kept = {r["id"] for r in rows if r["id"]}
+    _archive_guard(conn, brand_id, existing, kept)
     for way_id, way in existing.items():
         if way_id not in kept:
             bi_repo.update_product(
                 conn, brand_id, way_id, name=way["name"], status="archived", actor=actor
             )
-    # Existing rows first: a renamed one frees its old name before a new row may take it (a new
-    # row named like an active sell-way would otherwise be that sell-way, Contract W).
-    for row in sorted(rows, key=lambda r: r["id"] is None):
-        bi_repo.save_sell_way(
+    # Bases before composed rows (a composed row names bases of this body); inside each, existing
+    # rows first: a renamed one frees its old name before a new row may take it (a new row named
+    # like an active sell-way would otherwise be that sell-way, Contract W).
+    base_ids: dict[str, str] = {}
+    for row in sorted(rows, key=lambda r: (r["components"] is not None, r["id"] is None)):
+        components = None
+        if row["components"] is not None:
+            components = [
+                {"sell_way_id": base_ids[c["base"].casefold()], "qty": c["qty"]}
+                for c in row["components"]
+            ]
+        saved = bi_repo.save_sell_way(
             conn,
             brand_id,
             sell_way_id=row["id"],
             name=row["name"],
-            components=[{"product_id": product_id, "qty": row["qty"]}],
+            product_id=product_id if components is None else None,
+            components=components,
             economics=row["economics"],
             landing_url=row["landing_url"],
+            free_shipping=row["free_shipping"],
             actor=actor,
         )
+        if components is None:
+            base_ids[row["name"].casefold()] = saved["id"]
     _advance(conn, brand_id, product, STEP_SELL_WAYS, actor=actor)
     return get_sell_ways(conn, brand_id, product_id)
 
@@ -1111,37 +1311,27 @@ def _require_bundle(conn: Conn, brand_id: str, bundle_id: str) -> dict:
     return way
 
 
-def _unit_numbers(conn: Conn, brand_id: str, product_id: str) -> tuple:
-    """(price, cost) of the product's one-unit sell-way with confirmed numbers (earliest)."""
-    for way in _active_singles(conn, brand_id, product_id):
-        econ = way.get("economics")
-        if (
-            [(c["product_id"], c["qty"]) for c in way["components"]] == [(product_id, 1)]
-            and econ
-            and econ["status"] == "confirmed"
-        ):
-            return _num(econ["selling_price"]), _num(econ["unit_variable_cost"])
-    return None, None
-
-
-def _reused(conn: Conn, brand_id: str, components: list) -> dict:
-    """「廣告會用到的」: the components' customer groups and proof (reused, not copied)."""
+def _reused(conn: Conn, brand_id: str, way_id: str) -> dict:
+    """「廣告會用到的」: the customer groups and proof of the bundle's knowledge products
+    (`knowledge_product_ids`, each once; reused, not copied)."""
     groups, proof = [], []
-    for comp in components:
-        for g in bi_repo.list_customer_groups(conn, brand_id, comp["product_id"]):
+    for product_id in bi_repo.knowledge_product_ids(conn, brand_id, way_id):
+        product = bi_repo.get_product(conn, brand_id, product_id)
+        name = product["name"] if product else None
+        for g in bi_repo.list_customer_groups(conn, brand_id, product_id):
             groups.append(
                 {
-                    "product_id": comp["product_id"],
-                    "product_name": comp["name"],
+                    "product_id": product_id,
+                    "product_name": name,
                     "who": g["who"],
                     "pain_labels": [vocab.pain_label(k) for k in g["pain_keys"]],
                 }
             )
-        for f in _confirmed_facts(conn, brand_id, comp["product_id"], "proof"):
+        for f in _confirmed_facts(conn, brand_id, product_id, "proof"):
             proof.append(
                 {
-                    "product_id": comp["product_id"],
-                    "product_name": comp["name"],
+                    "product_id": product_id,
+                    "product_name": name,
                     "fact_key": f["fact_key"],
                     "label": _PROOF_LABELS.get(f["fact_key"], ""),
                     "text": f["value"],
@@ -1154,19 +1344,19 @@ def get_bundle(conn: Conn, brand_id: str, bundle_id: str) -> dict:
     way = _require_bundle(conn, brand_id, bundle_id)
     show = _show_close_rate(_brand(conn, brand_id))
     thumbs = _thumbnails(conn, brand_id)
-    components = []
-    for comp in way["components"]:
-        price, cost = _unit_numbers(conn, brand_id, comp["product_id"])
-        components.append(
-            {
-                "product_id": comp["product_id"],
-                "name": comp["name"],
-                "qty": comp["qty"],
-                "thumbnail_url": thumbs.get(comp["product_id"]),
-                "unit_price": price,
-                "unit_cost": cost,
-            }
-        )
+    components = [
+        {
+            "sell_way_id": comp["sell_way_id"],
+            "name": comp["name"],
+            "product_id": comp["product_id"],
+            "product_name": comp["product_name"],
+            "qty": comp["qty"],
+            "thumbnail_url": thumbs.get(comp["product_id"]),
+            "unit_price": _num(comp["price"]),
+            "unit_cost": _num(comp["cost"]),
+        }
+        for comp in way["components"]
+    ]
     return {
         "id": way["id"],
         "name": way["name"],
@@ -1175,46 +1365,63 @@ def get_bundle(conn: Conn, brand_id: str, bundle_id: str) -> dict:
         **_money(conn, brand_id, way, show),
         "show_close_rate": show,
         "benchmarks": _benchmarks(show),
-        "reused": _reused(conn, brand_id, components),
+        "reused": _reused(conn, brand_id, way["id"]),
     }
 
 
 def _check_components(conn: Conn, brand_id: str, value) -> list:
+    """A bundle's `[{sell_way_id, qty}]`: active base sell-ways of finished products of this
+    brand, each once, from at least two different products (one product's combinations live on
+    its 賣法 step)."""
     if not isinstance(value, list):
-        raise ValueError("組合裡的商品格式不對。")
-    out, seen = [], set()
+        raise ValueError("組合裡的賣法格式不對。")
+    bases = {
+        w["id"]: w
+        for w in bi_repo.list_sell_ways(conn, brand_id)
+        if w["shape"] == "base" and w["status"] == "active"
+    }
+    out, seen, products = [], set(), set()
     for item in value:
-        product_id = item.get("product_id") if isinstance(item, dict) else None
-        product = (
-            bi_repo.get_product(conn, brand_id, product_id) if isinstance(product_id, str) else None
-        )
-        if product is None or not _is_knowledge(conn, brand_id, product):
-            raise ValueError("組合裡有找不到的商品，請重新整理後再試。")
-        if product.get("onboarding_step") is not None:
-            raise ValueError(f"「{product['name']}」還沒建完，建完才能放進組合。")
+        way_id = item.get("sell_way_id") if isinstance(item, dict) else None
+        way = bases.get(way_id) if isinstance(way_id, str) else None
+        if way is None:
+            raise ValueError("組合裡有找不到的賣法，請重新整理後再試。")
+        product = bi_repo.get_product(conn, brand_id, way["parent_id"]) or {}
+        label = f"{product.get('name', '')}・{way['display_name']}"
+        if product.get("status") != "active" or product.get("onboarding_step") is not None:
+            raise ValueError(f"「{product.get('name', '')}」還沒建完，建完才能放進組合。")
         qty = item.get("qty", 1)
         if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError(f"「{product['name']}」的數量要是正整數。")
-        if product_id in seen:
-            raise ValueError(f"「{product['name']}」在組合裡重複了，改數量就好。")
-        seen.add(product_id)
-        out.append({"product_id": product_id, "qty": qty})
-    if len(out) < 2:
-        raise ValueError("組合至少要放兩個不同的商品；同一個商品多件，請到那個商品的賣法新增。")
+            raise ValueError(f"「{label}」的數量要是正整數。")
+        if way_id in seen:
+            raise ValueError(f"「{label}」在組合裡重複了，改數量就好。")
+        seen.add(way_id)
+        products.add(way["parent_id"])
+        out.append({"sell_way_id": way_id, "qty": qty})
+    if len(products) < 2:
+        raise ValueError(
+            "組合至少要放兩個不同商品的賣法；同一個商品的組合，請到那個商品的賣法新增。"
+        )
     return out
 
 
 def save_bundle(
     conn: Conn, brand_id: str, bundle_id: str | None, body: dict, *, actor: str
 ) -> dict:
-    """`POST …/bundles` (bundle_id None) / `PUT …/bundles/{id}`: `{name, components: [{product_id,
-    qty}], price, list_price?, cost?, shipping?, close_rate?, cap_per_sale?, landing_url?,
-    assumptions?}` — raw inputs; empty list price / cost = the components' sums."""
+    """`POST …/bundles` (bundle_id None) / `PUT …/bundles/{id}`: `{name, components:
+    [{sell_way_id, qty}], price?, list_price?, cost?, shipping?, free_shipping?, close_rate?,
+    cap_per_sale?, landing_url?, assumptions?}` — raw inputs; `components` = base sell-ways of
+    finished products (at least two products); empty price / list price / cost = the bases' sums."""
     if bundle_id is not None:
         _require_bundle(conn, brand_id, bundle_id)
     name = _check_name(body.get("name"), "組合名稱")
     components = _check_components(conn, brand_id, body.get("components"))
-    economics = _check_money(body, name, _show_close_rate(_brand(conn, brand_id)))
+    economics = _check_money(
+        body, name, _show_close_rate(_brand(conn, brand_id)), composed=True
+    )
+    free = body.get("free_shipping") or False
+    if not isinstance(free, bool):
+        raise ValueError("免運請選是或否。")
     landing_url = _check_url(body.get("landing_url"), "落地頁")
     if bundle_id is None and any(
         p["status"] == "active"
@@ -1231,6 +1438,7 @@ def save_bundle(
         components=components,
         economics=economics,
         landing_url=landing_url,
+        free_shipping=free,
         actor=actor,
     )
     return get_bundle(conn, brand_id, saved["id"])

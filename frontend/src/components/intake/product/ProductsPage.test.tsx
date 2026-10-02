@@ -10,18 +10,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeProductApi")>("@/lib/intakeProductApi");
-  return { ...actual, fetchProductsPage: vi.fn(), createProduct: vi.fn() };
+  return { ...actual, fetchProductsPage: vi.fn(), createProduct: vi.fn(), dismissProductSuggestion: vi.fn() };
 });
 vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
 
-import { createProduct, fetchProductsPage, type ProductsPage as PageData } from "@/lib/intakeProductApi";
+import { createProduct, dismissProductSuggestion, fetchProductsPage, type ProductsPage as PageData } from "@/lib/intakeProductApi";
 import { ProductCard } from "./ProductCard";
 import { ProductsPage } from "./ProductsPage";
 
 const mockFetch = vi.mocked(fetchProductsPage);
 const mockCreate = vi.mocked(createProduct);
+const mockDismiss = vi.mocked(dismissProductSuggestion);
 const B = "brd_1";
 
 const fixture: PageData = {
@@ -34,8 +35,8 @@ const fixture: PageData = {
       step: null,
       summary: "2 群顧客・證據 2・說法 3",
       sell_ways: [
-        { id: "sw_one", name: "單盒", price: 399, break_even: 249, offer_labels: [] },
-        { id: "sw_three", name: "三盒組", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198", "滿 NT$999 免運"] },
+        { id: "sw_one", name: "單盒", shape: "base", price: 399, break_even: 249, offer_labels: [] },
+        { id: "sw_three", name: "三盒組", shape: "composed", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198", "滿 NT$999 免運"] },
       ],
     },
     {
@@ -45,7 +46,7 @@ const fixture: PageData = {
       state: "draft",
       step: 2,
       summary: "建到一半：還沒確認顧客",
-      sell_ways: [{ id: "sw_pro", name: "單盒", price: 459, break_even: null, offer_labels: [] }],
+      sell_ways: [{ id: "sw_pro", name: "單盒", shape: "base", price: 459, break_even: null, offer_labels: [] }],
     },
   ],
   bundles: [
@@ -57,9 +58,10 @@ const fixture: PageData = {
       offer_labels: ["組合價 省 59"],
       thumbnails: [`/api/library/brands/${B}/assets/file/ast_1`],
       state: "draft",
+      // F45: base sell-way × qty, named by the base (「單盒」) with its product.
       components: [
-        { product_id: "prd_vit", name: "綜合維他命軟糖", qty: 1 },
-        { product_id: "prd_pro", name: "益生菌軟糖", qty: 1 },
+        { sell_way_id: "sw_one", product_id: "prd_vit", product_name: "綜合維他命軟糖", name: "單盒", qty: 1 },
+        { sell_way_id: "sw_pro", product_id: "prd_pro", product_name: "益生菌軟糖", name: "單盒", qty: 1 },
       ],
     },
   ],
@@ -156,6 +158,30 @@ describe("ProductsPage", () => {
     expect((await within(suggestion).findByRole("alert")).textContent).toContain("商品名稱太長了");
     expect(within(suggestion).getByRole("button", { name: "繼續建檔 →" }).hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("where")).toBeNull();
+  });
+
+  it("「不用了」 on a suggestion dismisses it on the server and the card goes away (drill-10 Q8)", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    mockDismiss.mockResolvedValue({ ...fixture, suggestions: [] });
+    renderPage();
+
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=product-card]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
+
+    expect(mockDismiss).toHaveBeenCalledWith(B, "膠原蛋白軟糖");
+    await waitFor(() => expect(screen.queryByText("膠原蛋白軟糖")).toBeNull());
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("a failed 「不用了」 keeps the card and shows why on it", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    mockDismiss.mockRejectedValue(new Error("沒有略過（狀態碼 500）"));
+    renderPage();
+
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=product-card]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
+    expect((await within(card).findByRole("alert")).textContent).toContain("沒有略過");
+    expect(within(card).getByRole("button", { name: "不用了" }).hasAttribute("disabled")).toBe(false);
   });
 
   it("an empty brand gets one empty state with 「＋新增商品」", async () => {

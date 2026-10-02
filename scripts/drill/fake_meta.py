@@ -62,6 +62,7 @@ import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 STATE_PATH = Path(os.environ.get(
     "DRILL_META_STATE",
@@ -122,6 +123,74 @@ def _upsert_account(state: dict, token: str, account_id: str, currency: str) -> 
         "account_id": account_id, "name": f"演練匯入帳戶 {account_id}", "currency": currency,
         "timezone_name": "Asia/Taipei", "token": token,
     })
+
+
+def drill_pixel_id(account_id: str) -> str:
+    return "7" + account_id
+
+
+# Launch settings (app/ads/launch_settings.py vocabulary) -> the Meta fields
+# `app/ads/adapters/meta_read.py::launch_settings_observed(_ad)` reads back. The inverse of that
+# reader's `_EVENT`/`_BID`/`_POSITIONS` tables; kept here because the stand-in plays the human who
+# types the approved settings into Ads Manager.
+_META_EVENT = {"purchase": "PURCHASE", "add_to_cart": "ADD_TO_CART",
+               "initiate_checkout": "INITIATE_CHECKOUT", "view_content": "CONTENT_VIEW"}
+_META_BID = {"lowest_cost": "LOWEST_COST_WITHOUT_CAP", "cost_cap": "COST_CAP",
+             "bid_cap": "LOWEST_COST_WITH_BID_CAP"}
+_META_POSITIONS = {
+    "facebook_feed": [("facebook", "feed")],
+    "instagram_feed": [("instagram", "stream")],
+    "stories": [("facebook", "story"), ("instagram", "story")],
+    "reels": [("facebook", "facebook_reels"), ("instagram", "reels")],
+    "messenger": [("messenger", "messenger_home")],
+}
+_META_GENDERS = {"male": [1], "female": [2]}
+
+
+def meta_adset_settings(values: dict | None) -> dict:
+    """The approved ad-set launch settings as Meta's own ad set fields; {} when none were frozen."""
+    if not values:
+        return {}
+    audience = values.get("audience") or {}
+    targeting: dict = {"age_min": audience.get("age_min"), "age_max": audience.get("age_max"),
+                       "geo_locations": {"countries": list(audience.get("countries") or [])}}
+    if audience.get("gender") in _META_GENDERS:
+        targeting["genders"] = _META_GENDERS[audience["gender"]]
+    placement = values.get("placement") or {}
+    if placement.get("mode") == "manual":
+        chosen: dict = {}
+        for position in placement.get("positions") or []:
+            for platform, meta_position in _META_POSITIONS.get(position, []):
+                chosen.setdefault(platform, []).append(meta_position)
+        targeting["publisher_platforms"] = list(chosen)
+        for platform, positions in chosen.items():
+            targeting[f"{platform}_positions"] = positions
+    promoted: dict = {"custom_event_type": _META_EVENT.get(values.get("optimization_event"),
+                                                           "PURCHASE")}
+    if values.get("pixel_id"):
+        promoted["pixel_id"] = values["pixel_id"]
+    out = {"optimization_goal": "OFFSITE_CONVERSIONS", "promoted_object": promoted,
+           "targeting": targeting}
+    if values.get("bid_strategy") in _META_BID:
+        out["bid_strategy"] = _META_BID[values["bid_strategy"]]
+    if values.get("bid_amount") is not None:
+        out["bid_amount"] = values["bid_amount"]
+    return out
+
+
+def meta_creative(ad_id: str, expected: dict | None) -> dict | None:
+    """The approved copy and UTM as the ad's creative; None when nothing was frozen."""
+    if not expected:
+        return None
+    copy = expected.get("copy") or {}
+    creative = {"id": ad_id + "1", "image_url": "https://example.invalid/drill.jpg",
+                "title": copy.get("title"), "body": copy.get("body") or expected.get("copy_text")}
+    if copy.get("description"):
+        creative["object_story_spec"] = {"link_data": {"description": copy["description"]}}
+    utm = (expected.get("launch_settings") or {}).get("utm")
+    if utm:
+        creative["url_tags"] = utm
+    return {k: v for k, v in creative.items() if v is not None}
 
 
 def _fmt_amount(value) -> str:
@@ -240,7 +309,14 @@ def fake_fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     start = int(str((params or {}).get("after") or "o0").removeprefix("o"))
     page: dict = {"data": data[start:start + limit]}
     if start + limit < len(data):
-        page["paging"] = {"next": url, "cursors": {"after": f"o{start + limit}"}}
+        # Like Graph: `next` is the same request with the new cursor in its query. A bare `url`
+        # (drill 10) has no cursor, so `read_policy.next_read_page` refused it and the
+        # `meta_backfill` job failed.
+        after = f"o{start + limit}"
+        query = {k: v for k, v in (params or {}).items()
+                 if k not in ("after", "before", "__paging_token")}
+        page["paging"] = {"next": f"{url}?{urlencode({**query, 'after': after})}",
+                          "cursors": {"after": after}}
     return page
 
 
@@ -263,6 +339,13 @@ def _answer(url: str, *, params: dict | None, headers: dict) -> dict:
         bearer = (headers or {}).get("Authorization", "").removeprefix("Bearer ").strip()
         mine = [a for a in state["accounts"] if a.get("token") == bearer]
         return {"data": mine or [a for a in state["accounts"] if not a.get("token")]}
+
+    if edge == "adspixels":
+        # One invented pixel per account (16 digits: `meta_read.pixel_id_error` wants 10-20).
+        # Without this edge the pixel list answered 「代碼 100」 (drill 10).
+        account_id = node.removeprefix("act_")
+        return {"data": [{"id": drill_pixel_id(a["account_id"]), "name": f"{a['name']} 像素"}
+                         for a in state["accounts"] if a["account_id"] == account_id]}
 
     if edge == "campaigns":
         account_id = node.removeprefix("act_")
@@ -360,6 +443,15 @@ def _tree_nodes(brand_id: str) -> tuple[str, list]:
         if campaigns:
             nodes = []
             for campaign in campaigns:
+                # What the launch approval froze per ad set / ad (`ads_handoff_item`, latest set
+                # wins): the readback compares exactly these, so the mirror types them in.
+                expected = {r["planned_id"]: r["expected_json"] for r in conn.execute(
+                    "SELECT planned_id, expected_json FROM ads_handoff_item"
+                    " WHERE campaign_id = %s AND planned_kind IN ('group', 'ad')"
+                    " ORDER BY created_at", (campaign["id"],)).fetchall()}
+                if not expected:
+                    print(f"  注意：{campaign['name']} 還沒有核准的交接清單，"
+                          "鏡射不帶投放設定與素材")
                 groups = conn.execute(
                     "SELECT id, name, daily_budget FROM ads_delivery_group"
                     " WHERE campaign_id = %s"
@@ -367,11 +459,14 @@ def _tree_nodes(brand_id: str) -> tuple[str, list]:
                 children = []
                 for group in groups:
                     ads = conn.execute(
-                        "SELECT name FROM ads_ad WHERE group_id = %s ORDER BY created_at",
+                        "SELECT id, name FROM ads_ad WHERE group_id = %s ORDER BY created_at",
                         (group["id"],)).fetchall()
                     children.append({"name": group["name"],
                                      "daily_budget": group["daily_budget"],
-                                     "children": [{"name": a["name"], "children": []}
+                                     "launch_settings": (expected.get(group["id"]) or {})
+                                     .get("launch_settings"),
+                                     "children": [{"name": a["name"], "children": [],
+                                                   "expected": expected.get(a["id"])}
                                                   for a in ads]})
                 # Platform fields the readback compares (objective, dates, budget): a mirrored
                 # node without them reads back "unknown", never "confirmed" (drill 5).
@@ -456,11 +551,18 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
                            **({"daily_budget": str(int(float(child["daily_budget"])))}
                               if child.get("daily_budget") is not None else {}),
                            **({"start_time": f"{start}T00:00:00+0800"} if start else {}),
-                           **({"end_time": f"{stop}T23:59:59+0800"} if stop else {})})
+                           **({"end_time": f"{stop}T23:59:59+0800"} if stop else {}),
+                           **meta_adset_settings(child.get("launch_settings"))})
             for grandchild in child["children"]:
-                ads.append({"id": new_id("340"), "adset_id": sid, "campaign_id": cid,
+                aid = new_id("340")
+                creative = meta_creative(aid, grandchild.get("expected"))
+                ads.append({"id": aid, "adset_id": sid, "campaign_id": cid,
                             "account_id": account_id, "brand_id": brand_id,
-                            "name": grandchild["name"], "effective_status": "PAUSED"})
+                            "name": grandchild["name"], "effective_status": "PAUSED",
+                            **({"creative": creative} if creative else {})})
+    # Built closed; the first `load-rows`/`spend` that delivers them turns them on, once.
+    for entity in [*campaigns, *adsets, *ads]:
+        entity["_launch_pending"] = True
 
     # Replace only this brand's entities. Every persona shares one invented account, so a
     # wholesale overwrite would delete the previous persona's platform out from under them.
@@ -590,16 +692,24 @@ def cmd_spend(brand_id: str, round_no: int, days: int, daily_total: float = 1000
                          if r.get("ad_id") not in own
                          and not (r["level"] != "ad"
                                   and r["campaign_id"] in {a["campaign_id"] for a in ads})] + rows
-    # Money is being spent, so this brand's entities are no longer paused.
-    for bucket in ("campaigns", "adsets", "ads"):
-        for entity in state[bucket]:
-            if entity.get("brand_id") == brand_id:
-                entity["effective_status"] = "ACTIVE"
+    _turn_on(state, ads)
     save(state)
     print(f"第 {round_no} 輪花費已寫入替身：{len(rows)} 列，{days} 天，"
           f"贏家 {len(winners)} 則 / 共 {len(ads)} 則")
     for ad in ads:
         print(f"  {'贏' if ad['id'] in winners else '賠'}  {ad['name']}")
+
+
+def _turn_on(state: dict, ads: list) -> None:
+    """The human switches on what they just built: each of `ads` and its ad set / campaign that is
+    still as the mirror left it (`_launch_pending`). Never touches anything already launched, so an
+    ad the persona closed stays closed (drill 10: setting every entity ACTIVE reopened them and
+    the month review counted 「關掉 0 則」)."""
+    ids = {a["id"] for a in ads} | {a["adset_id"] for a in ads} | {a["campaign_id"] for a in ads}
+    for bucket in ("campaigns", "adsets", "ads"):
+        for entity in state[bucket]:
+            if entity["id"] in ids and entity.pop("_launch_pending", False):
+                entity["effective_status"] = "ACTIVE"
 
 
 def _sim_row(level, day, campaign_id, account_id, currency, spend, imp, clicks, buys, rev,
@@ -628,6 +738,13 @@ def cmd_load_rows(brand_id: str, path: str) -> None:
     missing = sorted({r["ad_name"] for r in rows} - set(ads))
     if missing:
         raise SystemExit("這些廣告名稱在替身裡找不到（鏡射後名稱要完全一樣）：" + "、".join(missing))
+    _turn_on(state, [ads[name] for name in {r["ad_name"] for r in rows}])
+    # A closed ad delivers nothing on the real platform; its simulated rows are dropped.
+    closed = sorted({r["ad_name"] for r in rows
+                     if ads[r["ad_name"]]["effective_status"] != "ACTIVE"})
+    if closed:
+        print("這些廣告在替身上是關閉的，不灌數字：" + "、".join(closed))
+        rows = [r for r in rows if r["ad_name"] not in closed]
     account_id = _bound_account_id(brand_id)
     currency = "TWD"
     touched = {(ads[r["ad_name"]]["id"], r["date"]) for r in rows}
@@ -662,10 +779,6 @@ def cmd_load_rows(brand_id: str, path: str) -> None:
                                               adset_id=sid, adset_name=name_of.get(sid, sid)))
         state["insights"].append(_sim_row("campaign", day, cid, account_id, currency, *tot,
                                           campaign_name=cname_of.get(cid, cid)))
-    for bucket in ("campaigns", "adsets", "ads"):
-        for entity in state[bucket]:
-            if entity.get("brand_id") == brand_id:
-                entity["effective_status"] = "ACTIVE"
     save(state)
     days = {d for _, d in touched}
     print(f"已載入 {len(rows)} 列（{len(days)} 天、{len({r['ad_name'] for r in rows})} 則廣告）")
@@ -712,6 +825,48 @@ def cmd_selfcheck() -> None:
                               params={"level": "ad",
                                       "time_range": '{"since":"2026-08-01","until":"2026-08-31"}'})
         assert old["data"] == [], old
+
+        # drill 10 gaps, read through the product's own readers:
+        from app.ads import launch_settings
+        from app.ads.adapters import meta_read
+        from app.meta import graph
+        install()
+        # paging.next carries a cursor the read policy accepts (the failed meta_backfill)
+        many = [{"level": "ad", "date_start": "2026-09-03", "campaign_id": "c1",
+                 "ad_id": f"a{i}", "spend": "1.00"} for i in range(250)]
+        load = lambda: {"accounts": list(DRILL_ACCOUNTS), "campaigns": [  # noqa: E731
+            {"id": "c1", "account_id": "900000000000001", "name": "甲",
+             "effective_status": "ACTIVE"}], "adsets": [], "ads": [], "insights": many}
+        got = graph._fetch_all_pages(f"{graph.GRAPH_BASE_URL}/act_900000000000001/insights",
+                                     {**params, "limit": 100},
+                                     {"Authorization": "Bearer EAAG-drill-token-vivian"})
+        assert len(got) == 250, len(got)
+        # the adspixels edge (pixel list answered 「代碼 100」)
+        pixels = fake_fetch_page("https://x/act_900000000000001/adspixels", params={}, headers={})
+        assert pixels["data"][0]["id"] == drill_pixel_id("900000000000001")
+        assert meta_read.pixel_id_error(pixels["data"][0]["id"]) is None
+        # mirrored ad set / ad read back as the approved settings (「26／34 項讀不到」)
+        values = {"optimization_event": "add_to_cart", "bid_strategy": "cost_cap",
+                  "bid_amount": 300,
+                  "placement": {"mode": "manual", "positions": [
+                      "facebook_feed", "instagram_feed", "stories", "reels"]},
+                  "audience": {"age_min": 21, "age_max": 55, "gender": "female",
+                               "countries": ["JP"]},
+                  "pixel_id": "123456789012345", "utm": "utm_source=meta&utm_medium=paid"}
+        for v in (values, {**values, "placement": {"mode": "auto", "positions": []},
+                           "audience": {**values["audience"], "gender": "all"}, "pixel_id": None,
+                           "bid_strategy": "lowest_cost"}):
+            observed = meta_read.launch_settings_observed(meta_adset_settings(v))
+            compared = launch_settings.compare_item(launch_settings.group_subset(v), observed)
+            assert all(c["state"] == "match" for c in compared.values()), compared
+        expected_ad = {"copy": {"title": "標", "body": "文", "description": "說"},
+                       "launch_settings": {"utm": values["utm"]}}
+        ad = {"creative": meta_creative("340", expected_ad)}
+        compared = launch_settings.compare_item(launch_settings.ad_subset(values),
+                                                meta_read.launch_settings_observed_ad(ad))
+        assert compared["utm"]["state"] == "match", compared
+        summary = meta_read.creative_summary(ad["creative"])
+        assert summary["kind"] == "image" and summary["fields"]["title"] == "標", summary
     finally:
         load = original
     print("selfcheck ok")

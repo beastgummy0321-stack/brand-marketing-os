@@ -3,14 +3,14 @@
  * own, today's decisions are the open cleanup／worse／refresh rows (three cards, the rest in one fold), the 調整 entry
  * opens the existing monthly-budget editor, and the F27-I17 recovery banner still works. Block details are in
  * `home/HomeBoard.test.tsx`. */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type SettleQueueRow, type TriageItem } from "@/lib/adsTriageApi";
-import { getMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
+import { getMonthlyBudget, saveMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
 
@@ -24,7 +24,7 @@ vi.mock("@/lib/adsTriageApi", async () => {
 });
 vi.mock("@/lib/adsChangeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsChangeApi")>("@/lib/adsChangeApi");
-  return { ...actual, getMonthlyBudget: vi.fn() };
+  return { ...actual, getMonthlyBudget: vi.fn(), saveMonthlyBudget: vi.fn() };
 });
 vi.mock("@/lib/adsStatusApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsStatusApi")>("@/lib/adsStatusApi");
@@ -77,7 +77,7 @@ function item(id: string, kind_key: QueueKind, extra: Partial<QueueItem> = {}, t
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`, category: "ads", kind: null,
     severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open", created_at: "2026-09-23T00:00:00Z",
-    resolved_at: null, kind_key, triage: triage({ entity_id: `ad_${id}`, ...t }), proposal: null, ...extra,
+    resolved_at: null, kind_key, triage: triage({ entity_id: `ad_${id}`, ...t }), proposal: null, done: false, ...extra,
   };
 }
 
@@ -116,6 +116,18 @@ const budget: MonthlyBudget = {
 
 function renderPage() {
   return render(<MemoryRouter><AdsHomePage brandId="brd_1" /></MemoryRouter>);
+}
+
+function Search() {
+  return <output aria-label="search">{useLocation().search}</output>;
+}
+/** F46-I09: the page as a 「設定／提高 N 月月預算」 link opens it. */
+function renderAt(url: string) {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <Routes><Route path="/brands/:b/ads" element={<><AdsHomePage brandId="brd_1" /><Search /></>} /></Routes>
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -171,7 +183,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
 
   it("a handled decision leaves the cards and the count, and sits in the 今天處理過 fold", async () => {
     const rejected: QueueProposal = { kind: "cleanup", change_set_id: "cs_1", campaign_id: "cmp_daily", status: "rejected", verification_state: "pending", reason: null, revisit_at: null, multi: true };
-    vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected }, item("w1", "worse")]));
+    vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected, done: true }, item("w1", "worse")]));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     expect(await within(section).findAllByRole("article")).toHaveLength(1);
@@ -277,6 +289,51 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(await screen.findByRole("heading", { name: "本月廣告預算" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
     expect(vi.mocked(getHomeOverview)).toHaveBeenCalledTimes(2);
+  });
+
+  it("?budget=edit (the 月預算 links) opens the editor with the saved amount and scrolls it into view; closing drops the param", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    renderAt("/brands/brd_1/ads?budget=edit");
+    expect(await screen.findByRole("heading", { name: "本月廣告預算" })).toBeTruthy();
+    expect(((await screen.findByRole("spinbutton", { name: "每月品牌總額" })) as HTMLInputElement).value).toBe("60000");
+    expect(screen.getByRole("button", { name: "確認月總額" })).toBeTruthy();
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status", { name: "search" }).textContent).toBe("?budget=edit");
+    await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+    expect(screen.queryByRole("heading", { name: "本月廣告預算" })).toBeNull();
+    expect(screen.getByRole("status", { name: "search" }).textContent).toBe("");
+    // A later 調整 opens the panel as before, not straight into the form.
+    await userEvent.click(screen.getByRole("button", { name: "調整" }));
+    expect(await screen.findByRole("button", { name: "調整月總額" })).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: "每月品牌總額" })).toBeNull();
+  });
+
+  it("?budget=edit with no budget saved yet opens the form empty (no invented default)", async () => {
+    vi.mocked(getMonthlyBudget).mockResolvedValue({ ...budget, amount: null, revision: 0, currency: null, available: null, can_increase: false });
+    renderAt("/brands/brd_1/ads?budget=edit");
+    expect(((await screen.findByRole("spinbutton", { name: "每月品牌總額" })) as HTMLInputElement).value).toBe("");
+  });
+
+  it("F47-I06 (W3): a saved monthly total reads the money card again at once (no reload needed)", async () => {
+    vi.mocked(saveMonthlyBudget).mockResolvedValue({ ...budget, amount: 45000, revision: 2 });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "調整" }));
+    await userEvent.click(await screen.findByRole("button", { name: "調整月總額" }));
+    const reads = vi.mocked(getHomeOverview).mock.calls.length;
+    const amount = screen.getByRole("spinbutton", { name: "每月品牌總額" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "45000");
+    await userEvent.click(screen.getByRole("button", { name: "確認月總額" }));
+    await waitFor(() => expect(vi.mocked(getHomeOverview).mock.calls.length).toBe(reads + 1));
+    expect(saveMonthlyBudget).toHaveBeenCalledWith("brd_1", expect.objectContaining({ amount: 45000 }), expect.any(AbortSignal));
+  });
+
+  it("without the param the home opens with the editor closed", async () => {
+    renderAt("/brands/brd_1/ads");
+    expect(await screen.findByRole("button", { name: "調整" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "本月廣告預算" })).toBeNull();
+    expect(getMonthlyBudget).not.toHaveBeenCalled();
   });
 
   it("zero campaigns and nothing spent: one empty card whose primary action is 建立活動; no board that could only print zeros", async () => {

@@ -484,7 +484,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     hero = <ResultHero tone="bad" title="這則廣告的設定變了，原本的核准不再適用" note={staleNote} />;
     // An A/B pair is proposed again from its performance card, never as a plain stop-loss.
     const restartHref = abSet ? campaignDetailPath(brandId, campaignId)
-      : kind === "pause" ? proposePausePath(brandId, campaignId, item.target_id)
+      : kind === "pause" ? proposePausePath(brandId, campaignId, item.target_id, "verify", changeSet.id)
       : campaignChangesPath(brandId, campaignId);
     bar = (
       <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}>
@@ -523,7 +523,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       {changeSet.follow_up && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">新廣告已經確認在平台上，接著可以暫停原本那則廣告。</p>
-          <Button asChild><Link to={proposePausePath(brandId, campaignId, changeSet.follow_up.entity_id)}>暫停舊廣告 →</Link></Button>
+          <Button asChild><Link to={proposePausePath(brandId, campaignId, changeSet.follow_up.entity_id, "verify", changeSet.id)}>暫停舊廣告 →</Link></Button>
         </div>
       )}
 

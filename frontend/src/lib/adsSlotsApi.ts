@@ -11,8 +11,17 @@ import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./
  * `image_only` = a file is in the slot but its placement has no headline and no body (the picker,
  * `chooseSlotCopy`, fills the other half). Copy never makes a slot ready on its own.
  * F44 Contract D: `blocked` = the slot's automatic confirmation was refused (or its file failed); the slot says why
- * (`Slot.blocked`) and is not ready. Nothing changes it by itself, so it is not `in_progress`. */
-export type SlotState = "ready" | "missing" | "in_progress" | "copy_only" | "image_only" | "blocked";
+ * (`Slot.blocked`) and is not ready. Nothing changes it by itself, so it is not `in_progress`.
+ * F45 Contract W (ads.md §6.49): `in_progress` only while a background job for the slot runs (`Slot.job`); nothing
+ * running, nothing refused and not ready → `waiting` with the user's next action (`Slot.waiting`). */
+export type SlotState = "ready" | "missing" | "in_progress" | "waiting" | "copy_only" | "image_only" | "blocked";
+/** F45 Contract W: the user's next action on a `waiting` slot — `pick_on_workbench` (the ad's set has no selected copy;
+ * the slot's `workbench_href` goes there) or `confirm_copy` (an unconfirmed placement; the button runs `recheckSlot`).
+ * `text` is the server's sentence (「等你：…」). */
+export interface SlotWaiting { action: "pick_on_workbench" | "confirm_copy"; text: string }
+/** F45 Contract W: the job a slot is `in_progress` for — its original's preview or its workbench set's copy
+ * generation; `done`/`of` are `null` unless the workbench read gives them. */
+export interface SlotJob { kind: "preview" | "copy"; done: number | null; of: number | null }
 /** F44 Contract D: why a slot is blocked — the first reason as one sentence, the offending words it quotes (`terms`),
  * the exit that fixes it (`copy` = another copy version, `file` = another file, `null` = nothing on the slot itself)
  * and how many other reasons there are (`more`). */
@@ -42,6 +51,14 @@ export interface Slot {
   /** F44 Contract D: the planned ad's offer coordinate label (「無優惠」, 「組合優惠」…); `null` for an ad without one
    * and on an imported campaign. Optional only for older fixtures. */
   offer_label?: string | null;
+  /** F45 Contract W: set exactly when `state === "waiting"`. */
+  waiting: SlotWaiting | null;
+  /** F45 Contract W: set exactly when `state === "in_progress"`. */
+  job: SlotJob | null;
+  /** F46 Contract F: the file in the slot ships in another format than planned — the server's sentence (「規劃是輪播，
+   * 只放了 1 張圖，會以單圖上架」); `null` when they agree, with no file and on an imported campaign. A fact, never a
+   * block. Optional only for older fixtures. */
+  format_note?: string | null;
 }
 /** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
 export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
@@ -77,6 +94,12 @@ export const getSlotCopyOptions = (brand: string, campaign: string, signal?: Abo
  * name as purpose, is confirmed and assigned. 409 `slot_no_file` when the slot has no pending placement. */
 export const chooseSlotCopy = (brand: string, campaign: string, adId: string, body: { set_id: string; version_id: string }, signal?: AbortSignal) =>
   assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+
+/** F45: save the copy typed in the slot editor (`{copy_fields}`; a field not sent keeps its value) into the slot's
+ * unconfirmed placement; the confirmation runs at once and the slots come back ready or blocked with the reason.
+ * 409 `slot_no_file` when the slot has no unconfirmed placement; 400 `slot_copy_invalid` for an empty or unknown field. */
+export const editSlotCopy = (brand: string, campaign: string, adId: string, copyFields: CopyFields, signal?: AbortSignal) =>
+  assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ copy_fields: copyFields }), signal });
 
 /** A refused recheck. `code` tells `slot_no_file` (the slot has nothing to check any more — re-read the slots) from
  * the errors whose `message` is for the user (`user_asset_unavailable`, `campaign_unknown`). */

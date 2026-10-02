@@ -25,7 +25,7 @@ import io
 import json
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import vocab
+from app.core import input_rules, vocab
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
 from app.shared import csv_columns
@@ -200,6 +200,8 @@ def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date: str,
         raise ValueError("日期為必填")
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
+    # F47 Contract A: revenue is unset (None) or >= 0 and kept as sent (0 stays 0).
+    revenue = input_rules.non_negative(revenue, "營收", optional=True)
     ts = now_utc()
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
     entry_date = entry_date.strip()

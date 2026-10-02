@@ -71,6 +71,29 @@ class GraphError(Exception):
         super().__init__(message)
 
 
+# F47 Contract G: the one Meta error classifier. Token connect (`routes._token_rejection`) and
+# the read-only external reads (`repository.read_external_page`) both read it, so "the token is
+# bad", "the token lacks a grant" and "Meta is down right now" are told apart the same way
+# everywhere. `auth` = 190 (an invalid / expired token, with any subcode); `scope` = 100 / 10 /
+# 200-299 (Graph's permission codes; a token without `ads_read` gets 100 on `me/adaccounts`);
+# `transient` = a transport failure (`retryable`) or Graph's throttling / temporary codes;
+# `other` = anything else.
+ERROR_AUTH, ERROR_SCOPE, ERROR_TRANSIENT, ERROR_OTHER = "auth", "scope", "transient", "other"
+_TRANSIENT_CODES = frozenset({1, 2, 4, 17, 32, 341, 613, *range(80000, 80015)})
+
+
+def classify_error(exc: GraphError) -> str:
+    """`GraphError` -> `auth` | `scope` | `transient` | `other` (Contract G)."""
+    code = exc.code
+    if code == 190:
+        return ERROR_AUTH
+    if code in (100, 10) or (isinstance(code, int) and 200 <= code <= 299):
+        return ERROR_SCOPE
+    if exc.retryable or code in _TRANSIENT_CODES:
+        return ERROR_TRANSIENT
+    return ERROR_OTHER
+
+
 def fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     """一頁的真正網路呼叫；不呼叫 raise_for_status()——Graph API 的錯誤形狀
     （{"error": {...}}）本來就會用一般 HTTP 狀態碼回來，直接回傳解析好的 JSON 讓

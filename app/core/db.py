@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -80,13 +81,27 @@ def jsonb(value):
     return Jsonb(value, dumps=lambda v: json.dumps(v, ensure_ascii=False, default=_json_default))
 
 
+_id_lock = threading.Lock()
+_last_id_value = 0
+
+
 def new_id(prefix: str) -> str:
     """帶類型前綴的 ULID 風格 id（03 §1）：48-bit 毫秒時間戳 + 80-bit 亂數，Crockford Base32。
 
     不追求嚴格符合 ULID 規格（例如首字元溢位處理），只要求可排序、可辨識實體類型、
     不洩漏筆數／順序——「一個小產生器足矣，非重型設計」（03 §1）。
+
+    Monotonic within the process (drill-10 fix): two ids in the same millisecond used to sort by
+    their random part, so rows written in one transaction (same `created_at`) came back from
+    `ORDER BY created_at, id` in random order. A same-millisecond id now takes the previous
+    value + 1 (standard monotonic ULID); a new millisecond draws fresh randomness.
     """
-    value = ((time.time_ns() // 1_000_000) << 80) | int.from_bytes(os.urandom(10), "big")
+    global _last_id_value
+    with _id_lock:
+        value = ((time.time_ns() // 1_000_000) << 80) | int.from_bytes(os.urandom(10), "big")
+        if value >> 80 <= _last_id_value >> 80:
+            value = _last_id_value + 1
+        _last_id_value = value
     chars = []
     for _ in range(26):
         chars.append(_CROCKFORD32[value & 0x1F])

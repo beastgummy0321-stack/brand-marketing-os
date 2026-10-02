@@ -37,26 +37,46 @@ const buttonVariants = cva(
   },
 );
 
+/** F47-I02 (feature F47 Contract B): `disabledReason` — while the button is disabled and a reason is
+ * set, one muted sentence renders right after the button and is wired as its accessible description
+ * (`aria-describedby`), so a greyed-out control always says why. Ignored while enabled. */
 function Button({
   className,
   variant = "default",
   size = "default",
   asChild = false,
+  disabledReason,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
+    disabledReason?: string;
   }) {
   const Comp = asChild ? Slot.Root : "button";
+  const reasonId = React.useId();
+  const showReason = Boolean(props.disabled && disabledReason);
+  const describedBy = showReason
+    ? [props["aria-describedby"], reasonId].filter(Boolean).join(" ")
+    : props["aria-describedby"];
 
-  return (
+  const button = (
     <Comp
       data-slot="button"
       data-variant={variant}
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      aria-describedby={describedBy}
     />
+  );
+  if (!showReason) return button;
+  return (
+    <>
+      {button}
+      <span id={reasonId} data-slot="button-disabled-reason" className="text-xs text-muted-foreground">
+        {disabledReason}
+      </span>
+    </>
   );
 }
 

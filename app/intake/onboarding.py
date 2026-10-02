@@ -54,13 +54,30 @@ def _draft_row(conn: Conn, brand_id: str) -> dict | None:
     return ir.get_active_draft(conn, brand_id) or ir.get_latest_completed_draft(conn, brand_id)
 
 
+def _is_stale(row: dict, prefill: dict) -> bool:
+    """Contract F: a read made for another website list than the one saved now no longer
+    describes the input. A prefill from before `urls_read` existed is taken as current."""
+    urls_read = prefill.get("urls_read")
+    if not isinstance(urls_read, list):
+        return False
+    saved = list(row.get("research_urls_json") or [])[:MAX_URLS]
+    return [str(u) for u in urls_read] != [str(u) for u in saved]
+
+
+def _current_prefill(row: dict | None) -> dict | None:
+    """The draft's prefill when it describes the saved input; None = no read, or a stale one."""
+    value = (row or {}).get("prefill_json")
+    if not isinstance(value, dict) or _is_stale(row or {}, value):
+        return None
+    return value
+
+
 def _prefill(conn: Conn, brand_id: str, step: int) -> dict:
     """The scan's proposal for `step`: only on an open draft whose step is not confirmed yet."""
     row = _open_draft(conn, brand_id)
     if row is None or row["current_step"] > step:
         return {}
-    value = row.get("prefill_json")
-    return value if isinstance(value, dict) else {}
+    return _current_prefill(row) or {}
 
 
 def advance(conn: Conn, brand_id: str, step: int) -> None:
@@ -72,12 +89,15 @@ def advance(conn: Conn, brand_id: str, step: int) -> None:
 
 def _prefill_status(conn: Conn, row: dict | None, brand_id: str,
                     is_open: bool) -> tuple[str, str | None]:
-    """done = the draft holds a prefill; running/failed = the prefill job (F42-I05, lock
-    `ai.prefill_lock`); a job that ended without a prefill is failed too (its handler raises)."""
-    if row is not None and row.get("prefill_json") is not None:
-        return "done", None
-    if not is_open or row is None:
-        return "none", None
+    """running = the prefill job (F42-I05, lock `ai.prefill_lock`) is queued or running (checked
+    first: a new read replaces the draft's old one only when it ends); done = the draft holds a
+    prefill for the saved website list; a stale one (Contract F) reads none so the scan starts
+    again, unless the last job failed; a job that ended without a prefill is failed too (its
+    handler raises)."""
+    current = _current_prefill(row)
+    stale = current is None and (row or {}).get("prefill_json") is not None
+    if row is None or not is_open:
+        return ("done", None) if current is not None else ("none", None)
     from app.background import is_active, job_outcome
     from app.intake import ai
 
@@ -85,7 +105,9 @@ def _prefill_status(conn: Conn, row: dict | None, brand_id: str,
     outcome = job_outcome(lock)
     if outcome == "active" or (outcome is None and is_active(lock)):
         return "running", None
-    if outcome in ("failed", "succeeded"):
+    if current is not None:
+        return "done", None
+    if outcome == "failed" or (outcome == "succeeded" and not stale):
         return "failed", ai.prefill_failure_message(conn, row)
     return "none", None
 
@@ -169,8 +191,7 @@ def scan_status(conn: Conn, brand_id: str) -> dict:
     open_row = _open_draft(conn, brand_id)
     row = open_row or ir.get_latest_completed_draft(conn, brand_id)
     status_, error = _prefill_status(conn, row, brand_id, open_row is not None)
-    value = (row or {}).get("prefill_json")
-    prefill = value if isinstance(value, dict) else {}
+    prefill = (_current_prefill(row) or {}) if status_ == "done" else {}
     return {
         "status": status_,
         "error": error,
@@ -179,12 +200,18 @@ def scan_status(conn: Conn, brand_id: str) -> dict:
         "prefilled": _prefilled_count(prefill),
         "pages_read": int(prefill.get("pages_read") or 0),
         "photos_read": int(prefill.get("photos_read") or 0),
+        "urls_read": [str(u) for u in prefill.get("urls_read") or []],
+        "pages_failed": [
+            {"url": str(p.get("url") or ""), "reason": str(p.get("reason") or "")}
+            for p in prefill.get("pages_failed") or [] if isinstance(p, dict)
+        ],
     }
 
 
 def start_scan(conn: Conn, brand_id: str, *, org_id: str) -> dict:
     """`POST …/onboarding/scan`: queue the prefill job once. No-op while it runs or once it has
-    read something; a scan that read nothing (0 pages, 0 photos) or failed can be started again.
+    read something for the saved website list; a scan that read nothing (0 pages, 0 photos),
+    failed, or was made for another website list (stale, Contract F) can be started again.
     ValueError: no open draft / nothing to read. ScanRefused: the draft cost cap (checked before
     anything is queued, so no call is made)."""
     from app.background import enqueue, is_active
@@ -204,8 +231,8 @@ def start_scan(conn: Conn, brand_id: str, *, org_id: str) -> dict:
             f"這次建檔的 AI 用量已到上限（US$ {draft['cost_spent']:.2f}／"
             f"US$ {draft['budget_limit']:.2f}），AI 先不讀網站；可以直接往下自己填。")
     lock = ai.prefill_lock(brand_id)
-    if current["status"] == "done":  # read nothing last time: clear it so the status reads running
-        ir.update_draft(conn, brand_id, draft["id"], prefill_json=None)
+    # The old read stays until the new one ends (it carries the dismissed suggestions over); the
+    # status reads running first while the job is queued.
     if not is_active(lock):
         enqueue("background.intake_scan", org_id=org_id, lock=lock, brand_id=brand_id, prefill=True)
     return scan_status(conn, brand_id)

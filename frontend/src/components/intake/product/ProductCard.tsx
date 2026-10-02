@@ -161,11 +161,13 @@ export function ProductCard(props: ProductCardProps) {
 }
 
 /** A product the brand scan read that is not created yet: 「繼續建檔 →」 creates it (the page owns the call). */
-export function SuggestionCard({ suggestion, busy, error, onContinue }: {
+/** F47 Q8: `onDismiss` = 「不用了」 next to 「繼續建檔 →」 (the name is never suggested again). */
+export function SuggestionCard({ suggestion, busy, error, onContinue, onDismiss }: {
   suggestion: ProductSuggestion;
   busy: boolean;
   error: string | null;
   onContinue: () => void;
+  onDismiss: () => void;
 }) {
   return (
     <div data-slot="product-card" data-state="suggestion" className={CARD}>
@@ -176,9 +178,14 @@ export function SuggestionCard({ suggestion, busy, error, onContinue }: {
           <div className="text-[11.5px] text-muted-foreground">AI 讀到了，還沒確認</div>
         </div>
       </div>
-      <Button type="button" variant="outline" size="sm" className="self-start font-medium" disabled={busy} onClick={onContinue}>
-        繼續建檔 →
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="outline" size="sm" className="font-medium" disabled={busy} onClick={onContinue}>
+          繼續建檔 →
+        </Button>
+        <Button type="button" variant="ghost" size="sm" className="font-medium text-muted-foreground" disabled={busy} onClick={onDismiss}>
+          不用了
+        </Button>
+      </div>
       {error && <p role="alert" className="text-xs text-danger">{error}</p>}
     </div>
   );

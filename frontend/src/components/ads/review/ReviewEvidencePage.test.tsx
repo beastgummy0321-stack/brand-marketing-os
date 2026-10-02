@@ -102,7 +102,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_worse", kind: null, severity: "rule_warning",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "worse",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -185,6 +185,21 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.queryByLabelText("處理階梯（接上後開放）")).toBeNull();
   });
 
+  it("F47-I06：麵包屑用這一列自己的種類；沒有對應的列就寫「檢討」，不是固定的「變貴」", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    const first = renderAt(roundPath());
+    expect(await screen.findByText(/^變貴・/)).toBeTruthy();
+    first.unmount();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "stop_loss" })]));
+    const second = renderAt(roundPath());
+    expect(await screen.findByText(/^停損・/)).toBeTruthy();
+    second.unmount();
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
+    renderAt(roundPath());
+    expect(await screen.findByText(/^檢討・/)).toBeTruthy();
+    expect(screen.queryByText(/^變貴・/)).toBeNull();
+  });
+
   it("ready：非銷售活動（target.result_kind 不是 purchase）顯示「這條素材的紀錄」，不顯示商城訂單", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({
       triage: triage({
@@ -204,14 +219,14 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.queryByText("商城訂單")).toBeNull();
     expect(screen.getByText("已處理 1 次")).toBeTruthy();
     expect(screen.getByText("9/6 改過文案")).toBeTruthy();
-    expect(screen.getByText("之後 7 天・每次名單成本 2 → 3.1")).toBeTruthy();
+    expect(screen.getByText("之後 7 天・每次名單成本 2 → 3")).toBeTruthy();
     expect(screen.getByText("這個活動看名單，不看商城訂單")).toBeTruthy();
   });
 
   it("deferred：closed chip、bar 只有先不決定按鈕與提示，沒有選擇處理方向", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review({ status: "deferred", decision: "deferred", reason: "等資料更完整", revisit_at: "2099-01-07T12:00:00Z" }));
     renderAt(roundPath());
-    expect(await screen.findByText(/1\/7 重看・等資料更完整/)).toBeTruthy();
+    expect(await screen.findByText(/1\/7 再看・等資料更完整/)).toBeTruthy();
     expect(screen.getByText("要改文案請等下一回證據")).toBeTruthy();
     expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /選擇處理方向/ })).toBeNull();

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { LaunchField, LaunchItem, LaunchItemKind, LaunchItemState, LaunchStep, LaunchView } from "@/lib/adsLaunchApi";
 import type { Channel } from "@/lib/adsLaunchApi";
@@ -72,15 +72,35 @@ export function launchPlatform(campaign: CampaignDetail | null, channels: Channe
   return { label, href: key ? MANAGER_URL[key] ?? null : null };
 }
 
-/** `pubHead()`: step dots (earlier steps link back), the campaign chip with 首次上架・N 項（・第 V 版）, title, purpose. */
+/** F47-I06: the one name of a launch, used by the page crumb and the step chip alike — a re-approved launch is
+ * 「第 N 版上架」, a campaign the create filled from the previous period (any `field_sources` value `copied`) is
+ * 「這一期上架」, and only a campaign with neither reads 「首次上架」 (the second period used to be called 首次上架 too).
+ * Without the campaign read it says 「上架」 rather than guess. */
+export function launchLabel(campaign: CampaignDetail | null, view: LaunchView | null): string {
+  if (view?.version && view.version > 1) return `第 ${view.version} 版上架`;
+  const sources = Object.values(campaign?.context_json?.field_sources ?? {});
+  if (sources.includes("copied")) return "這一期上架";
+  return campaign ? "首次上架" : "上架";
+}
+/** The campaign the publish page read, for `PublishHead` (provided once by `PublishPage`, so the step bodies need not
+ * pass it through). */
+export const PublishCampaignContext = createContext<CampaignDetail | null>(null);
+
+/** F47-I06: a stored failed read as one sentence with its time — 「MM/DD HH:MM 讀回時讀不到：原因」; the bare reason
+ * when no time was stored. The publish verify step and the manual handoff panel both print it. */
+export function readFailedText(at: string | null | undefined, reason: string): string {
+  return at ? `${formatSyncTime(at)} 讀回時讀不到：${reason}` : reason;
+}
+
+/** `pubHead()`: step dots (earlier steps link back), the campaign chip with 〈launchLabel〉・N 項, title, purpose. */
 export function PublishHead({ brandId, campaignId, current, name, view, title, purpose, aside }: {
   brandId: string; campaignId: string; current: number; name: string; view: LaunchView; title: string; purpose: string; aside?: ReactNode;
 }) {
+  const campaign = useContext(PublishCampaignContext);
   const steps: FlowStep[] = URL_STEPS.map((s, i) => ({ label: s.label, to: i < current ? publishPath(brandId, campaignId, s.key) : undefined }));
-  const version = view.version && view.version > 1 ? `・第 ${view.version} 版` : "";
   return (
     <FlowHeader steps={steps} current={current} title={title} purpose={purpose} aside={aside}
-      context={<><CampaignChip objective="other" name={name} /><span>首次上架・{view.items.length} 項{version}</span></>} />
+      context={<><CampaignChip objective="other" name={name} /><span>{launchLabel(campaign, view)}・{view.items.length} 項</span></>} />
   );
 }
 

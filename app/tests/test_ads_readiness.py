@@ -82,7 +82,7 @@ class ReadinessTestBase(unittest.TestCase):
         if economics:
             bi_repo.save_sell_way(
                 web.conn, self.brand_id, name="單品", actor=ACTOR, economics=economics,
-                components=[{"product_id": product_id, "qty": 1}],
+                product_id=product_id,
             )
         web.conn.commit()
         return product_id

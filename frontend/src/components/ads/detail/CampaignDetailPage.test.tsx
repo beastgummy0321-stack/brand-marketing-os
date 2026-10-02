@@ -14,6 +14,7 @@ import type { AbPair, AbPairsView, AbSide } from "@/lib/adsAbApi";
 import { getAbPairs, pauseAbLoser } from "@/lib/adsAbApi";
 import type { AdRow, CampaignCard as CampaignCardData, CampaignDetail, CampaignPerformance } from "@/lib/adsApi";
 import { closeCampaign, getPerformance, listCampaigns } from "@/lib/adsApi";
+import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 import type { MaterialTask } from "@/lib/adsMaterialApi";
 import { MaterialRequestError, cancelMaterialTask, createReplaceRequest, listMaterialTasks } from "@/lib/adsMaterialApi";
@@ -41,6 +42,10 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
   return { ...actual, getTriage: vi.fn(), getQueue: vi.fn() };
+});
+vi.mock("@/lib/adsLearningsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsLearningsApi")>("@/lib/adsLearningsApi");
+  return { ...actual, getCoordinateLearnings: vi.fn() };
 });
 vi.mock("@/lib/adsAbApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsAbApi")>("@/lib/adsAbApi");
@@ -113,7 +118,7 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
   return {
     id: "q", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "triage", kind: "worse",
     severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open",
-    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, ...o,
+    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, done: false, ...o,
   };
 }
 function cleanup(ids: string[]): QueueCleanup {
@@ -245,12 +250,15 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(screen.getByTestId("ad-row-a7")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("href")).toBe(`${WS}/review/a6`);
     expect(within(wasted).getByText("0 筆")).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a7")).getByText("617.5 元")).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a7")).getByText("618 元")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看清理提議 →" }).getAttribute("href")).toBe(`${WS}/propose/cleanup/cmp_1`);
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe(WS);
 
     const okRow = screen.getByTestId("ad-row-a1");
-    expect(within(okRow).queryByRole("link")).toBeNull();
+    // F45-I06: a row with no decision of its own still has 「暫停」 → the pause page that reads the ad (from=perf).
+    expect(within(okRow).getAllByRole("link").map((l) => [l.textContent, l.getAttribute("href")]))
+      .toEqual([["暫停", `${WS}/propose/pause/a1?from=perf`]]);
+    expect(within(wasted).getByRole("link", { name: "暫停" }).getAttribute("href")).toBe(`${WS}/propose/pause/a8?from=perf`);
     await openMenu("a1");
     await userEvent.click(within(okRow).getByRole("button", { name: "看紀錄" }));
     expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=performance&ad=a1`);
@@ -374,7 +382,9 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
 
     expect(await screen.findByText(/^決策進度讀不到（佇列讀取失敗）/)).toBeTruthy();
     expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
-    expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link")).toBeNull();
+    expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link", { name: "在清理提議" })).toBeNull();
+    // 「暫停」 needs no queue: the pause page reads the ad itself (F45-I06).
+    expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "暫停" })).toBeTruthy();
 
     vi.mocked(getQueue).mockResolvedValue(dailyQueue(items));
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
@@ -433,6 +443,10 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(await screen.findByText("暫停 11・已封存 4・不算在上面的在投數量裡")).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
     expect(detailsOf("已關閉的 15 則").open).toBe(false);
+    // F45-I06: a closed row keeps its 已暫停 look — no 「暫停」 button.
+    const closedRow = screen.getByTestId("closed-ad-row-c1");
+    expect(within(closedRow).getByText("已暫停")).toBeTruthy();
+    expect(within(closedRow).queryByRole("link")).toBeNull();
     expect(screen.queryByText("沒有廣告資料，這個活動還沒有可以判斷的內容。")).toBeNull();
     expect(screen.queryByRole("region", { name: "對照上限" })).toBeNull();
   });
@@ -683,6 +697,24 @@ function campaignDetail(o: Partial<CampaignDetail> = {}, ads?: AdRow[]): Campaig
     ...o,
   } as unknown as CampaignDetail;
 }
+/** F46 Contract L for `?campaign_id=cmp_1` as served after the close: cap 450, one ad under it, one never sold. */
+const LEARNED: CoordinateLearnings = {
+  campaigns: [{
+    campaign_id: "cmp_1", campaign_name: "10 月第一期・讀書與運動", sell_way_id: "prd_box",
+    start_date: "2026-09-26", end_date: "2026-10-02", closed_on: "2026-10-03", cap: 450, currency: "TWD",
+    spend: 4720, sales: 9, cost_per_sale: 524.4, counts: { keep: 1, replace: 1 },
+    rule_text: "1 則每筆低於上限 450 → 留下；其餘換掉", empty_reason: null,
+    rows: [
+      { rank: 1, of: 2, ad_id: "l1", ad_name: "運動後與忙碌日常", customer_group: { id: "pcg_gym", who: "下班運動族" }, coordinates: [],
+        spend: 3120, sales: 9, cost_per_sale: 346.7, verdict: "keep", verdict_label: "留下", flags: [], learning_id: "lrn_1" },
+      { rank: 2, of: 2, ad_id: "l4", ad_name: "上班日午休", customer_group: null, coordinates: [],
+        spend: 1600, sales: 0, cost_per_sale: null, verdict: "replace", verdict_label: "換掉", flags: [], learning_id: "lrn_2" },
+    ],
+  }],
+  groups: [{ customer_group_id: "pcg_gym", who: "下班運動族", ads: 1, spend: 3120, sales: 9, cap: 450, cost_per_sale: 346.7 }],
+  next: { sell_way_id: "prd_box", new_campaign_href: "/brands/brd_1/ads/new?sell_way=prd_box" },
+};
+
 type BodyProps = Partial<Parameters<typeof CampaignPerfBody>[0]>;
 function renderBody(c: CampaignDetail, extra: BodyProps = {}) {
   const onCampaignChange = vi.fn();
@@ -780,28 +812,48 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(getPerformance).toHaveBeenCalledTimes(2);
   });
 
-  it("結案這一期 opens the shared close dialog; 確認結案 closes through closeCampaign and hands the campaign back", async () => {
+  it("結案這一期 opens the shared close dialog; 確認結案 closes through closeCampaign, shows the result, and hands the campaign back on 關閉", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const closed = campaignDetail({ status: "closed", verdict: "達成" });
     vi.mocked(closeCampaign).mockResolvedValue(closed);
+    vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     const { onCampaignChange } = renderBody(campaignDetail());
     await within(row()).findByText("10,081 元");
     await user.click(within(row()).getByRole("button", { name: "結案這一期 →" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/結案後會對照成功條件寫下判定/)).toBeTruthy();
+    // The six planned ads of the fixture's one group.
+    expect(dialog.textContent).toContain("結案後會把這期 6 則廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。");
     expect(within(dialog).getByText(/提前結案會用到目前為止的成效判定/)).toBeTruthy(); // live: the early-close sentence
     await user.click(within(dialog).getByRole("button", { name: "確認結案" }));
     expect(closeCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
+    const result = await screen.findByRole("dialog", { name: "已結案：留下 1 則、換掉 1 則" });
+    expect(within(result).getByText("1 則每筆低於上限 450 → 留下；其餘換掉")).toBeTruthy();
+    expect(onCampaignChange).not.toHaveBeenCalled();
+    await user.click(within(result).getByRole("button", { name: "關閉" }));
     expect(onCampaignChange).toHaveBeenCalledWith(closed);
   });
 
-  it("closed: the numbers stay, the buttons are gone, the chip says 已結案", async () => {
+  it("closed: the numbers stay, 重新讀取／結案 are gone; 已結案 with the two exits where 結案這一期 was", async () => {
+    vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
     expect(await within(row()).findByText("10,081 元")).toBeTruthy();
     expect(within(row()).getByText("已結案")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).queryByRole("button", { name: "重新讀取平台" })).toBeNull();
     expect(within(row()).queryByText(/結案後這期成績/)).toBeNull();
+    expect(within(row()).getByRole("link", { name: "看學到什麼 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/library?tab=ads-learnings&campaign=cmp_1");
+    expect(getCoordinateLearnings).toHaveBeenCalledWith("brd_1", { campaignId: "cmp_1" }, expect.any(AbortSignal));
+    await vi.waitFor(() => expect(within(row()).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/ads/new?sell_way=prd_box"));
+  });
+
+  it("closed, learnings unreadable: both exits stay, the next period opens the plain create page", async () => {
+    vi.mocked(getCoordinateLearnings).mockRejectedValue(new Error("讀取投放學到的失敗。"));
+    renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(within(row()).getByRole("link", { name: "看學到什麼 →" })).toBeTruthy();
+    expect(within(row()).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new");
   });
 
   it("imported: no close button, the capability's own sentence; totals come from the native view, never getPerformance", async () => {

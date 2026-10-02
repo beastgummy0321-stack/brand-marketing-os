@@ -12,7 +12,7 @@ vi.mock("@/lib/adsApi", () => ({ patchCampaign: vi.fn() }));
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function entity(id: string): NativeEntity { return { id, platform: "meta", source_account: "101", native_kind: "campaign", native_id: id, native_label: "活動", name: id, parent_native_id: null, native_status: "PAUSED", start_date: null, end_date: null, budget_amount: null, budget_type: "lifetime", budget_raw: { values: { lifetime_budget: "4000" } }, currency: "TWD", last_success_at: null, sync_error: null, creative: {} }; }
-function page(account = "101", names = ["甲活動"], cursor: string | null = null): ExistingPage { return { items: names.map(id => ({ id, native_id: id, native_kind: "campaign", snapshot: entity(id) })), sources: [{ platform: "meta", label: "Meta", account_id: "101", name: "甲帳號" }, { platform: "meta", label: "Meta", account_id: "202", name: "乙帳號" }], platform: "meta", source_account: account, next_cursor: cursor, job: null }; }
+function page(account = "101", names = ["甲活動"], cursor: string | null = null): ExistingPage { return { items: names.map(id => ({ id, native_id: id, native_kind: "campaign", snapshot: entity(id), campaign_id: null })), sources: [{ platform: "meta", label: "Meta", account_id: "101", name: "甲帳號" }, { platform: "meta", label: "Meta", account_id: "202", name: "乙帳號" }], platform: "meta", source_account: account, next_cursor: cursor, job: null }; }
 function view(overrides: Partial<ExternalView> = {}): ExternalView { return { entities: [entity("活動根")], observations: [], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-18" }, connections: [{ platform: "meta", source_account: "101", state: "connected" }], sync: {}, coverage: {}, ...overrides }; }
 function campaign(id = "cmp_1"): CampaignDetail { return { id, name: id, origin: "imported", goal_text: "增加來店", objective: "增加來店", cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 }, start_date: null, end_date: null, status: "ready", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null, context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-09-18", groups: [], actions: [], outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { ready_count: 0, total: 0, pack_id: null }, external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null }; }
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
@@ -42,6 +42,25 @@ describe("既有活動來源與原始資料", () => {
     await screen.findByText("乙活動"); expect(oldSignal.aborted).toBe(true);
     await act(async () => old.resolve(page("101", ["過期甲活動"])));
     expect(screen.queryByText("過期甲活動")).toBeNull(); expect(screen.queryByText("乙活動")).not.toBeNull();
+  });
+
+  it("F47-I08：平台狀態說中文、日期與最近成功不印 ISO、已在工作區的活動標出來並改成打開", async () => {
+    const listed = page("101", ["已納入活動", "新活動"]);
+    listed.items[0] = { ...listed.items[0], campaign_id: "cmp_in", snapshot: { ...entity("已納入活動"), native_status: "ACTIVE", start_date: "2026-10-03", end_date: "2026-10-09" } };
+    listed.items[1] = { ...listed.items[1], snapshot: { ...entity("新活動"), native_status: "WITH_ISSUES" } };
+    listed.job = { id: "job_1", status: "succeeded", last_success_at: "2026-10-01T15:10:33.055275+00:00" };
+    vi.mocked(existingCampaigns).mockResolvedValue(listed);
+    openDialog(); await screen.findByText("已納入活動");
+    expect(screen.getByText("開啟中 · 10/03 – 10/09")).not.toBeNull();
+    expect(screen.getByText("平台狀態不明 · 開始日未知 – 結束日未知")).not.toBeNull();
+    expect(screen.queryByText(/ACTIVE|WITH_ISSUES|2026-10-01T/)).toBeNull();
+    const d = new Date("2026-10-01T15:10:33.055275+00:00"); const pad = (n: number) => String(n).padStart(2, "0");
+    expect(screen.getByText(new RegExp(`最近成功：${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`))).not.toBeNull();
+    expect(screen.getByText("已在工作區")).not.toBeNull();
+    expect(screen.getAllByRole("button", { name: "納入並開啟" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "打開" }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/brands/brand_1/ads/campaigns/cmp_in"));
+    expect(importExisting).not.toHaveBeenCalled();
   });
 
   it("refresh 期間凍結帳號，離開後舊 refresh 不再啟動清單讀取", async () => {

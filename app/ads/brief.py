@@ -22,10 +22,19 @@ customer group of its knowledge products (`field_sources.audience = "sell_way"`)
 effective landing (`"sell_way"`), cap = its `cap_per_sale` when set, stored as the campaign's own
 cap (`field_sources.cap = "sell_way"`; unset -> break-even, resolved by `targets`), objective = the
 request's (the page preselects the brand's goal), platform = the plan default. Request values win
-(`"user"`). F40-I04's copy from the previous campaign is gone (superseded by user decision);
-`audience_hint` stays readable on old campaigns and is still accepted from the request, but the
-model's audience guess is no longer stored on a structured create (the audience is the groups).
-The sentence path gets no sell-way defaults.
+(`"user"`). `audience_hint` stays readable on old campaigns and is still accepted from the
+request, but the model's audience guess is no longer stored on a structured create (the audience
+is the groups). The sentence path gets no sell-way defaults.
+
+F46-I08 (feature F46 Contract D, user ruling 2026-10-02, supersedes ads §6.47 for these three
+fields): a structured create starts from the same sell-way's previous campaign
+(`wizard_options.previous_campaign`: newest internal non-draft campaign of that sell-way), for a
+value the request does not send -- platform = previous (`"copied"`) else the brand's first
+connected channel (`"brand"`) else none (`"system"`); cap = previous `target_cost` (`"copied"`)
+else the sell-way's `cap_per_sale` (`"sell_way"`) else its whole break-even (`"break_even"`,
+stored as the campaign's own cap) else none (`"system"`); budget is `"copied"` when the sent
+budget equals the previous one. A previous field that is empty falls through for that field
+alone. These are the values `wizard_options.options()` hands the form, so shown = stored.
 """
 
 import calendar
@@ -306,19 +315,27 @@ def _check_extras(picks: dict) -> dict:
     }
 
 
-def _sell_way_defaults(checked: dict | None) -> dict:
+def _sell_way_defaults(conn, org_id: str, brand_id: str, checked: dict | None) -> dict:
     """F43-I04: what the picked sell-way supplies when the request does not -- `{group_ids,
-    customer_group_ids (the request's override or None), landing_url, cap}`; all empty on the
-    sentence path (no sell-way picked)."""
+    customer_group_ids (the request's override or None), landing_url, cap}`; F46-I08 adds
+    `previous` (`wizard_options.previous_values` of the sell-way's previous campaign, or None),
+    `break_even` (the whole break-even of its current economics) and `platform` (the brand's
+    first connected channel). All empty on the sentence path (no sell-way picked)."""
     if checked is None:
-        return {"group_ids": [], "customer_group_ids": None, "landing_url": None, "cap": None}
+        return {"group_ids": [], "customer_group_ids": None, "landing_url": None, "cap": None,
+                "previous": None, "break_even": None, "platform": None}
     way = checked["products"][0]
-    cap = (way.get("economics") or {}).get("cap_per_sale")
+    today = coresettings.today_for_org(conn, org_id=org_id)
+    cap = (wizard_options.current_economics(way, today) or {}).get("cap_per_sale")
     return {
         "group_ids": checked["group_ids"],
         "customer_group_ids": checked["customer_group_ids"],
         "landing_url": way.get("effective_landing_url") or None,
         "cap": float(cap) if cap is not None else None,
+        "previous": wizard_options.previous_values(
+            wizard_options.previous_campaign(conn, org_id, brand_id, way["id"])),
+        "break_even": wizard_options.whole_break_even(way, today),
+        "platform": wizard_options.default_platform(conn, org_id, brand_id),
     }
 
 
@@ -418,7 +435,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
 
     F40-I04：`picks` 另外可帶 `platform`／`audience_hint`／`cap`／`landing_url`（一句話路徑
     也收）。F43-I04：結構化路徑另收 `customer_group_ids`（這個賣法的顧客群）；沒帶的從賣法
-    帶入（`_sell_way_defaults`），不再從上一期複製。"""
+    帶入（`_sell_way_defaults`）。F46-I08：平台、上限、預算先看同一個賣法的上一期（模組說明）。"""
     picks = dict(picks or {})
     structured = any(picks.get(key) is not None for key in _STRUCTURED_KEYS)
     if not structured and (not isinstance(goal_text, str) or not goal_text.strip()):
@@ -433,7 +450,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     checked = _check_picks(conn, brand_id, picks) if structured else None
     if checked is None and picks.get("customer_group_ids") not in (None, []):
         raise ValueError("customer_group_unknown")  # groups belong to a picked sell-way
-    defaults = _sell_way_defaults(checked)
+    defaults = _sell_way_defaults(conn, org_id, brand_id, checked)
     goal_composed = False
     dates_source = "user"
     if checked is not None:
@@ -545,8 +562,27 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         # read as `cap` is dropped.
         target_cost = None if goal_composed else fields["cap"]
     cap_source = "user" if target_cost is not None else "system"
+    # F46-I08 (Contract D): the same sell-way's previous campaign first, then the sell-way's
+    # own cap, then its break-even -- each stored as the campaign's own cap, so the cap the
+    # form showed is the cap saved. A previous campaign without a cap falls through.
+    previous = defaults["previous"] or {}
+    platform_source = "user" if constraints.get("platform") is not None else "system"
+    if checked is not None:
+        if target_cost is None and previous.get("cap") is not None:
+            target_cost, cap_source = previous["cap"], "copied"
+        if constraints.get("platform") is None:
+            if previous.get("platform") is not None:
+                constraints["platform"], platform_source = previous["platform"], "copied"
+            elif defaults["platform"] is not None:
+                constraints["platform"], platform_source = defaults["platform"], "brand"
     if target_cost is None and defaults["cap"] is not None:
         target_cost, cap_source = defaults["cap"], "sell_way"
+    if target_cost is None and defaults["break_even"] is not None:
+        target_cost, cap_source = defaults["break_even"], "break_even"
+    budget_source = "user" if constraints.get("budget") is not None else "system"
+    if checked is not None and previous.get("budget") is not None \
+            and float(checked["budget"]) == previous["budget"]:
+        budget_source = "copied"
     landing_url = extras["landing_url"]
     landing_source = "user" if landing_url else "system"
     if landing_url is None and defaults["landing_url"] is not None:
@@ -563,8 +599,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     field_sources = {
         "product": "user" if product_ids else "system",
         "objective": "user" if parsed_ok or checked is not None else "system",
-        "platform": "user" if constraints.get("platform") is not None else "system",
-        "budget": "user" if constraints.get("budget") is not None else "system",
+        "platform": platform_source,
+        "budget": budget_source,
         "dates": dates_source,
         "audience": audience_source,
         "cap": cap_source,

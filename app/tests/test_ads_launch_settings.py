@@ -260,10 +260,10 @@ class LaunchSettingsTest(unittest.TestCase):
     def test_two_pixels_preselect_none_and_an_unknown_pixel_is_an_error(self):
         self.pixels = [{"id": "px1", "name": "官網像素"}, {"id": "px2", "name": "舊官網像素"}]
         self.assertIsNone(self.view()["recommended"]["pixel_id"])
-        saved = self.put(pixel_id="px9", bid_strategy="cost_cap")
+        saved = self.put(pixel_id="px9", bid_strategy="cost_cap", bid_amount=450)
         self.assertEqual(saved.status_code, 200, saved.text)
         body = saved.json()
-        self.assertEqual(body["edited"], ["bid_strategy", "pixel_id"])
+        self.assertEqual(body["edited"], ["bid_strategy", "bid_amount", "pixel_id"])
         self.assertEqual([e["code"] for e in body["errors"]], ["pixel_unknown"])
 
     def test_pixel_permission_denied_is_a_reason_never_an_empty_list(self):
@@ -272,9 +272,52 @@ class LaunchSettingsTest(unittest.TestCase):
         self.assertIsNone(view["options"]["pixels"])
         self.assertIn("權限", view["options"]["pixels_error"])
         self.assertIsNone(view["values"]["pixel_id"])
-        # Unreadable list: a typed pixel cannot be checked, so it is not an error.
-        body = self.put(pixel_id="px7").json()
-        self.assertEqual(body["errors"], [])
+        # Unreadable list: a typed pixel is checked by the platform adapter's own format rule
+        # (F47-I06, drill-10 V5: 「abc」 was saved as a pixel), never against a guessed list.
+        body = self.put(pixel_id="abc").json()
+        self.assertEqual(body["values"]["pixel_id"], "abc")  # kept as typed, flagged
+        self.assertEqual(
+            body["errors"],
+            [{"field": "pixel_id", "code": "pixel_format",
+              "message": "Meta 的像素 ID 是 10～20 位數字，請到事件管理工具複製。"}],
+        )
+        self.assertEqual(self.put(pixel_id="1234567890123").json()["errors"], [])
+
+    def test_capped_bid_needs_an_amount_and_other_strategies_clear_it(self):
+        """F47-I06 (Contract A bid, drill-10 V6): 成本上限／出價上限 carry one amount > 0;
+        it blocks approval while missing and is dropped for 最低成本."""
+        for strategy in ("cost_cap", "bid_cap"):
+            with self.subTest(strategy=strategy):
+                body = self.put(bid_strategy=strategy, bid_amount=None).json()
+                self.assertEqual([e["code"] for e in body["errors"]], ["bid_amount_missing"])
+                self.assertEqual(
+                    self.put(bid_strategy=strategy, bid_amount=-5).json()["errors"][0]["message"],
+                    "出價金額要大於 0",
+                )
+                saved = self.put(bid_strategy=strategy, bid_amount=450.5).json()
+                self.assertEqual(saved["errors"], [])
+                self.assertEqual(saved["values"]["bid_amount"], 450.5)
+        cleared = self.put(bid_strategy="lowest_cost", bid_amount=450).json()
+        self.assertNotIn("bid_amount", cleared["values"])
+        self.assertEqual(self.put(bid_amount="450").status_code, 400)  # not a number at all
+        self.assertEqual(launch_settings.value_label("bid_amount", {"bid_amount": 1500}), "1,500")
+        self.assertEqual(launch_settings.value_label("bid_amount", {"bid_amount": 12.5}), "12.50")
+        self.assertNotIn("bid_amount", dict(launch_settings.READBACK_FIELDS))
+
+    def test_approval_refuses_a_capped_bid_without_an_amount(self):
+        self.assertEqual(self.put(bid_strategy="cost_cap").status_code, 200)
+        with self.assertRaisesRegex(ValueError, "launch_settings_invalid"):
+            self.launch()
+
+    def test_approval_checks_a_hand_typed_pixel_with_the_platform_rule(self):
+        """F47-I06: with no cached pixel list the approval gate applies the campaign channel's
+        own pixel-id format (the same rule the card shows), so 「abc」 cannot be approved."""
+        self.pixel_error = "permission_denied"  # the list was never read: nothing cached
+        self.assertEqual(self.put(pixel_id="abc").status_code, 200)
+        with self.assertRaisesRegex(ValueError, "launch_settings_invalid"):
+            self.launch()
+        self.assertEqual(self.put(pixel_id="1234567890123").status_code, 200)
+        self.assertIsNotNone(self.launch())  # a well-formed id passes the same gate
 
     def test_utm_with_a_space_and_other_semantic_errors_are_saved_and_listed(self):
         response = self.put(

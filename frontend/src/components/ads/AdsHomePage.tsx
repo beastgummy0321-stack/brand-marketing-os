@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApiRead } from "@/lib/useApiRead";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
@@ -8,6 +8,7 @@ import { refreshQueue } from "@/lib/adsTriageApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { getOrgId } from "@/lib/auth";
 import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
+import { BUDGET_EDIT_PARAM } from "./MonthlyBudgetPanel";
 import { Chip, RecoverSteps } from "./patterns";
 import { CampaignRows } from "./home/CampaignRows";
 import { MonthMoney, monthNumber } from "./home/MonthMoney";
@@ -96,6 +97,14 @@ function AdsHome({ brandId }: { brandId: string }) {
     target?.focus({ preventScroll: true });
   }, []);
   const retryHome = homeRead.reload;
+  // F46-I09: 「設定／提高 N 月月預算」 links land here with `?budget=edit`; closing the area drops the param (replace),
+  // so back／reload do not reopen it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [openBudget] = useState(() => searchParams.get(BUDGET_EDIT_PARAM) === "edit");
+  const closeBudget = useCallback(() => {
+    retryHome();
+    setSearchParams((params) => { params.delete(BUDGET_EDIT_PARAM); return params; }, { replace: true });
+  }, [retryHome, setSearchParams]);
   const monthNo = monthNumber(home?.month);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
@@ -122,7 +131,7 @@ function AdsHome({ brandId }: { brandId: string }) {
       {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
       {empty ? <EmptyBoard brandId={brandId} /> : <>
         <NextDates home={home} note={note} onJump={jump} />
-        <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={retryHome} />
+        <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={closeBudget} openBudget={openBudget} />
         <QualityBand state={homeState} onRetry={retryHome} />
         <TodayDecisions
           brandId={brandId}

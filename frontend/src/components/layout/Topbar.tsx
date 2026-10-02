@@ -41,9 +41,12 @@ function SyncStatus({ brandId }: { brandId: string }) {
 
   if (state.status !== "ready") return null;
   const { summary } = state;
-  const failing = summary.failing_campaigns > 0;
+  // F47 Contract H (drill-10 Q4): the warning is the connections page's own count — the page this link opens —
+  // and its first note says which source and why (the title), never a separate per-campaign recount.
+  const failing = summary.attention.count > 0;
   const syncedText = summary.last_success_at ? `最近同步 ${formatSyncedAt(summary.last_success_at)}` : "尚未同步";
-  const fullText = `${syncedText}${failing ? `・${summary.failing_campaigns} 個活動讀取異常` : ""}`;
+  const fullText = `${syncedText}${failing ? `・${summary.attention.count} 個資料來源要處理` : ""}`;
+  const title = failing && summary.attention.note ? summary.attention.note : fullText;
 
   // Merge smoke red (1024, ADR 0051 rule 4): the right group has to shrink, not this link — so
   // this can only give up its OWN width first. `min-w-0` (no `shrink-0`) lets the flex algorithm
@@ -53,7 +56,7 @@ function SyncStatus({ brandId }: { brandId: string }) {
   return (
     <Link
       to={`/brands/${brandId}/ads/connections`}
-      title={fullText}
+      title={title}
       className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       <span
@@ -99,8 +102,8 @@ export function Topbar({
     ? (LABELS[parts[2]] ?? "經營概況")
     : (LABELS[parts[0]] ?? "品牌總覽");
   return (
-    <header className="app-topbar">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="app-topbar max-md:gap-2 max-md:px-3!">
+      <div className="flex min-w-0 items-center gap-3 max-md:gap-1.5">
         <Button
           type="button"
           variant="ghost"
@@ -117,18 +120,18 @@ export function Topbar({
           {brand && (
             <>
               <Link
-                className="max-w-48 truncate text-muted-foreground"
+                className="max-w-48 truncate text-muted-foreground max-md:hidden"
                 to={`/brands/${brand.brand_id}`}
               >
                 {brand.brand_name}
               </Link>
-              <span className="text-border">/</span>
+              <span className="text-border max-md:hidden">/</span>
             </>
           )}
           <span className="truncate font-medium">{label}</span>
         </nav>
       </div>
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3 max-md:gap-1.5">
         {brandId && <SyncStatus brandId={brandId} />}
         <ActiveJobsBell />
         {/* OrgMenu (components/auth, out of this issue's touch) prints the org name uncapped —
@@ -137,7 +140,8 @@ export function Topbar({
          * lever this file has on it: `min-w-0` lets it take the shrink instead of forcing the row
          * wider, `overflow-hidden` contains whatever doesn't fit instead of letting it push
          * `#root`'s scrollWidth past the viewport (the merge-smoke gate). */}
-        <div className="min-w-0 overflow-hidden">
+        {/* Below md the org menu lives in the sidebar drawer instead (F47-I02). */}
+        <div className="min-w-0 overflow-hidden max-md:hidden">
           <OrgMenu
             identity={identity}
             onIdentityChanged={() => {

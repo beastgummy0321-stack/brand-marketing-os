@@ -6,22 +6,23 @@ import { Chip, KindMark } from "../patterns";
 import { shortName } from "./NextDates";
 
 /** One home decision's action (feature F28 "Decisions on home": `cleanup`, `worse`, `refresh_creative`).
- * `cleanup`／`worse` follow their proposal through `home/status.ts` (same helpers the detail page and the flows use);
- * with no proposal yet they use the prototype's own first-step words. `refresh_creative` never counts as done. */
+ * `cleanup`／`worse` follow their proposal through `home/status.ts` (same helpers the detail page and the flows use)
+ * for the label and the link; with no proposal yet they use the prototype's own first-step words. Whether the row is
+ * done is the row's own `done` (F47 Contract D), never re-derived here. */
 export interface HomeAction { label: string; href: string | null; done: boolean }
 
 export function homeAction(brandId: string, item: QueueItem): HomeAction {
   const campaignId = item.triage.campaign_id;
   if (item.kind_key === "cleanup") {
     const action = cleanupAction(brandId, item.cleanup?.campaign_id ?? campaignId, item.proposal, item.action_url);
-    if (!action) return { label: "決定要不要關", href: null, done: false };
-    return item.proposal === null ? { ...action, label: "決定要不要關" } : action;
+    if (!action) return { label: "決定要不要關", href: null, done: item.done };
+    return item.proposal === null ? { ...action, label: "決定要不要關", done: item.done } : { ...action, done: item.done };
   }
   if (item.kind_key === "worse") {
     const action = proposalAction(brandId, campaignId, item.triage.entity_id, item.proposal, "review");
-    return item.proposal === null ? { ...action, label: "查原因" } : action;
+    return item.proposal === null ? { ...action, label: "查原因", done: item.done } : { ...action, done: item.done };
   }
-  return { label: "準備新素材", href: item.action_url, done: false };
+  return { label: "準備新素材", href: item.action_url, done: item.done };
 }
 
 /** The decision's own title, as the cards print it. */
@@ -32,6 +33,18 @@ export function decisionTitle(item: QueueItem): string {
   }
   if (item.kind_key === "refresh_creative") return `能判讀的素材只剩 ${item.refresh?.readable_count ?? 0} 則`;
   return item.triage.name ?? "未命名廣告";
+}
+
+/** A handled decision's chip (已拒絕／M/D 再看／已核對…). It links to its change set or review round, so a deferred
+ * decision always has a way back (drill-10 Q2); a row with nowhere to go stays a plain chip. */
+export function DoneChip({ action }: { action: HomeAction }) {
+  const chip = <Chip tone={action.label.startsWith("✓") || action.label === "已核對" ? "ok" : "neutral"}>{action.label}</Chip>;
+  if (!action.href) return chip;
+  return (
+    <Link to={action.href} className="rounded-full hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring">
+      {chip}
+    </Link>
+  );
 }
 
 const MARK = {
@@ -54,7 +67,7 @@ export function QueueRow({ brandId, item, recovering }: { brandId: string; item:
       {recovering ? (
         <Chip>補完資料後更新</Chip>
       ) : action.done ? (
-        <Chip tone={action.label === "已核對" ? "ok" : "neutral"}>{action.label}</Chip>
+        <DoneChip action={action} />
       ) : action.href ? (
         <Button asChild size="sm" variant="outline"><Link to={action.href}>{action.label} →</Link></Button>
       ) : null}

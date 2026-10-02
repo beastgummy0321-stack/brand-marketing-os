@@ -3,7 +3,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeCap, HomeHandoff, HomeOverview } from "@/lib/adsHomeApi";
 import type { CampaignDataState } from "@/lib/adsTriageApi";
-import { Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
+import { CAMPAIGN_WORD, Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
 import { monthDay } from "./NextDates";
@@ -157,7 +157,7 @@ function DraftRow({ brandId, c }: { brandId: string; c: HomeCampaign }) {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <NameLink brandId={brandId} c={c} />
-          <Chip>草稿</Chip>
+          <Chip>{CAMPAIGN_WORD.draft}</Chip>
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
         </div>
         <div className="text-sm text-muted-foreground">{start}{todo.length ? `・還要${todo.join("、")}` : "・可以上架了"}</div>

@@ -35,7 +35,7 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     list_channels,
     update_channel,
 )
-from app.core import cleanup, vocab
+from app.core import cleanup, input_rules, vocab
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
@@ -403,16 +403,20 @@ def list_products(conn: Conn, brand_id: str) -> list:
 
 def knowledge_product_ids(conn: Conn | ConnProxy, brand_id: str, product_id: str) -> list[str]:
     """F43 「one resolver each」: the knowledge products whose facts, claims, photos, proof and
-    customer groups a product row stands for. A sell-way written by `save_sell_way` -> its
-    components' products in creation order (a bundle has several); a row without components (a
-    knowledge product, or an F05 sell-way from before F43) -> `[COALESCE(parent_id, id)]`; an
-    unknown id -> `[product_id]` (the caller decides what 「not found」 means).
+    customer groups a product row stands for. F45: a composed sell-way -> each base's knowledge
+    product in component order, each once (a cross-product bundle has several); a row without
+    components (a knowledge product, or a base sell-way incl. F05 rows) ->
+    `[COALESCE(parent_id, id)]`; an unknown id -> `[product_id]` (the caller decides what 「not
+    found」 means).
     Readers: `knowledge_product_id` (until F43-I02/I03 move its four callers here), the copy
     guard, the context compiler, the strategy / delivery-plan prompt builders,
-    `available_proof_keys`, `list_sell_ways`."""
-    ids = [r["product_id"] for r in _components(conn, brand_id, product_id)]
-    if ids:
-        return ids
+    `available_proof_keys`, `list_sell_ways`, product onboarding (bundle page 「廣告會用到的」)."""
+    bases = _rows(conn.execute(
+        "SELECT b.id, b.parent_id FROM product_component c JOIN product b ON b.id = c.base_sell_way_id "
+        "WHERE c.brand_id = %s AND c.sell_way_id = %s ORDER BY c.created_at, c.id",
+        (brand_id, product_id)))
+    if bases:
+        return list(dict.fromkeys(b["parent_id"] or b["id"] for b in bases))
     product = _row(conn.execute(
         "SELECT parent_id FROM product WHERE id = %s AND brand_id = %s", (product_id, brand_id)
     ).fetchone())
@@ -513,9 +517,10 @@ PRODUCT_CHILD_TABLES = (
     ("learning_ledger", "品牌學習紀錄"),
 )
 
-# F43-I01: a component row belongs to both products it joins -- the sell-way (sell_way_id) and the
-# knowledge product it sells (product_id); deleting either removes it. Every other table: product_id.
-_PRODUCT_SCOPE = {"product_component": "%s IN (product_id, sell_way_id)"}
+# F43-I01 / F45: a component row belongs to both sell-ways it joins -- the composed sell-way
+# (sell_way_id) and the base it lists (base_sell_way_id); deleting either removes it. Every other
+# table: product_id.
+_PRODUCT_SCOPE = {"product_component": "%s IN (base_sell_way_id, sell_way_id)"}
 
 
 def count_product_data(conn: Conn, brand_id: str, product_id: str) -> list:
@@ -826,33 +831,43 @@ def _money_text(value) -> str:
     return f"{int(number):,}" if number == int(number) else f"{number:,.2f}"
 
 
-def _sell_way_offer(conn: Conn | ConnProxy, brand_id: str, product_id: str, econ: dict | None):
-    """(offer_key, sentence) of a sell-way's own offer (F43 outcome 3), or None: its confirmed NT$
-    effective list price above its price -> `bundle` when it sells more than one unit (Σqty > 1
-    or several components), else `discount`."""
-    if not econ or econ["status"] != "confirmed" or econ["currency"] != "TWD":
-        return None
-    price, list_price = econ["selling_price"], econ.get("list_price")
-    if price is None or list_price is None or list_price <= price:
-        return None
-    comps = _components(conn, brand_id, product_id)
-    offer_key = "bundle" if len(comps) > 1 or sum(c["qty"] for c in comps) > 1 else "discount"
+def _sell_way_offers(conn: Conn | ConnProxy, brand_id: str, product_id: str,
+                     econ: dict | None) -> list:
+    """[(offer_key, sentence)] of a sell-way's own offers (F45 「Own offers」): its confirmed NT$
+    effective list price above its effective price -> `discount` (base) / `bundle` (composed),
+    「優惠價 NT$X（原價 NT$Y）」 (no product name); its `free_shipping` flag -> `free_shipping`,
+    「免運」 (base) / 「這組免運」 (composed)."""
     product = get_product(conn, brand_id, product_id)
-    name = product["name"] if product else product_id
-    return offer_key, f"{name}優惠價 NT${_money_text(price)}（原價 NT${_money_text(list_price)}）"
+    if product is None:
+        return []
+    composed = bool(_components(conn, brand_id, product_id))
+    out = []
+    if econ and econ["status"] == "confirmed" and econ["currency"] == "TWD":
+        price, list_price = econ["selling_price"], econ.get("list_price")
+        if price is not None and list_price is not None and list_price > price:
+            out.append(("bundle" if composed else "discount",
+                        f"優惠價 NT${_money_text(price)}（原價 NT${_money_text(list_price)}）"))
+    if product.get("free_shipping"):
+        out.append(("free_shipping", "這組免運" if composed else "免運"))
+    return out
 
 
 def _offer_policy_rows(conn: Conn | ConnProxy, brand_id: str, product_id: str | None) -> list:
     """(offer_key, sentence) of every confirmed policy fact that makes an offer available, then
-    (F43) the sell-way's own discount/bundle -- the one rule behind `available_offer_keys` and
-    `offer_sources`."""
+    (F43/F45) the sell-way's own offers -- the one rule behind `available_offer_keys` and
+    `offer_sources`. A sell-way whose own free-shipping flag is ticked carries one free_shipping
+    sentence, its own: a store-wide free-shipping policy that also applies is left out."""
     price = None
     econ = None
+    own: list = []
     if product_id is not None:
         econ = get_product_economics(conn, brand_id, product_id)
         # Only a confirmed NT$ price is a fact the NT$ thresholds can be compared with.
-        if econ and econ["status"] == "confirmed" and econ["currency"] == "TWD":
+        if (econ and econ["status"] == "confirmed" and econ["currency"] == "TWD"
+                and econ["selling_price"] is not None):
             price = float(econ["selling_price"])
+        own = _sell_way_offers(conn, brand_id, product_id, econ)
+    own_keys = {key for key, _ in own}
     out = []
     for row in conn.execute(
         "SELECT fact_key, value, params_json FROM brand_fact WHERE brand_id = %s "
@@ -866,12 +881,10 @@ def _offer_policy_rows(conn: Conn | ConnProxy, brand_id: str, product_id: str | 
         threshold = params.get(spec["threshold"]) if spec and spec["threshold"] else None
         if threshold and product_id is not None and (price is None or price < threshold):
             continue
+        if offer_key == "free_shipping" and "free_shipping" in own_keys:
+            continue
         out.append((offer_key, row["value"]))
-    if product_id is not None:
-        own = _sell_way_offer(conn, brand_id, product_id, econ)
-        if own is not None:
-            out.append(own)
-    return out
+    return out + own
 
 
 def available_offer_keys(conn: Conn | ConnProxy, brand_id: str, product_id: str | None = None) -> set[str]:
@@ -880,9 +893,10 @@ def available_offer_keys(conn: Conn | ConnProxy, brand_id: str, product_id: str 
     facts, except `none`; custom policies contribute their own `offer_key`. A threshold policy
     (滿額免運, 超商免運, 滿額折, 滿額贈) counts only when `product_id is None` or the product's
     current confirmed NT$ price ≥ the threshold; an unknown price does not count (a 超商免運 with
-    no threshold always counts). F43: with a sell-way whose confirmed NT$ effective `list_price`
-    (`get_product_economics`) is above its price, also `bundle` (Σqty > 1 or several components)
-    or `discount` (one unit). The coordinate toggle stays a brand veto on top (enabled ∩
+    no threshold always counts). F43/F45: with a sell-way whose confirmed NT$ effective
+    `list_price` (`get_product_economics`) is above its effective price, also `bundle` (a composed
+    sell-way) or `discount` (a base); with its `free_shipping` flag, `free_shipping` (its own
+    sentence replaces an applying store-wide one). The coordinate toggle stays a brand veto on top (enabled ∩
     available). Readers: planner, copy guard, product onboarding (offer labels)."""
     return {offer_key for offer_key, _ in _offer_policy_rows(conn, brand_id, product_id)}
 
@@ -1166,26 +1180,16 @@ def _raw_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: st
     ).fetchone())
 
 
-def _single_unit_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str,
-                           exclude_id: str) -> dict | None:
-    """Raw confirmed economics of `product_id`'s qty-1 sell-way (components exactly
-    [(product_id, 1)]): the earliest active one other than `exclude_id`; None when there is none."""
-    for row in conn.execute(
-        "SELECT s.id FROM product s JOIN product_component c ON c.sell_way_id = s.id "
-        "WHERE s.brand_id = %s AND c.brand_id = %s AND c.product_id = %s AND c.qty = 1 "
-        "AND s.status = 'active' AND s.id <> %s AND NOT EXISTS (SELECT 1 FROM product_component o "
-        "WHERE o.brand_id = %s AND o.sell_way_id = s.id AND o.product_id <> c.product_id) "
-        "ORDER BY s.created_at, s.id",
-        (brand_id, brand_id, product_id, exclude_id, brand_id),
-    ).fetchall():
-        econ = _raw_product_economics(conn, brand_id, row["id"])
-        if econ is not None and econ["status"] == "confirmed":
-            return econ
-    return None
+# (effective field of a composed sell-way, the base field it is summed from)
+_DERIVED_ECONOMICS = (("selling_price", "selling_price"), ("list_price", "selling_price"),
+                      ("unit_variable_cost", "unit_variable_cost"))
 
 
-# (effective field, the qty-1 sell-way field it is summed from)
-_DERIVED_ECONOMICS = (("list_price", "selling_price"), ("unit_variable_cost", "unit_variable_cost"))
+def _base_part(econ: dict | None, field: str, currency: str):
+    """A base's confirmed `field` in `currency`, else None (unknown -> not derivable)."""
+    if econ is None or econ["status"] != "confirmed" or econ["currency"] != currency:
+        return None
+    return econ[field]
 
 
 def get_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str, *,
@@ -1193,13 +1197,11 @@ def get_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str
     """The product's (sell-way's) current economics row -- F43 「one resolver each」: effective
     values, so budget, targets, learning, the wizard and the offers read one number.
 
-    A sell-way with components (`save_sell_way`) whose `list_price` is NULL gets Σ(qty × each
-    component's qty-1 sell-way price); whose `unit_variable_cost` is NULL gets Σ(qty × that
-    sell-way's cost). A component's qty-1 sell-way is the sell-way itself when it sells exactly one
-    unit of one product (so its list price defaults to its own price), else the earliest active
-    one with confirmed economics; a part that is unknown or in another currency leaves the field
-    NULL. `derived_fields` names what was filled (always present; [] for a row without components,
-    so every row written before F43 reads as before). `cap_per_sale` stays raw (NULL = break-even,
+    F45: a base sell-way (or any row without components) derives nothing. A composed sell-way's
+    empty `selling_price` / `list_price` = Σ qty × each base's confirmed selling price; its empty
+    `unit_variable_cost` = Σ qty × each base's confirmed cost. A part that is unknown, unconfirmed
+    or in another currency leaves the field NULL (not derived). `derived_fields` names what was
+    filled (always present; [] when nothing was). `cap_per_sale` stays raw (NULL = break-even,
     computed by its readers). `raw=True` returns the stored row as is (no `derived_fields`): the
     writers' audit and any editor that saves the row back read that.
     Readers: ads budget / targets / learning / brief / readiness / strategy / wizard options /
@@ -1210,18 +1212,13 @@ def get_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str
     derived: list[str] = []
     comps = _components(conn, brand_id, product_id)
     if comps:
-        own_unit = len(comps) == 1 and comps[0]["qty"] == 1
-        singles = [(c["qty"], row if own_unit else
-                    _single_unit_economics(conn, brand_id, c["product_id"], product_id))
-                   for c in comps]
+        bases = [(c["qty"], _raw_product_economics(conn, brand_id, c["base_id"])) for c in comps]
         for field, source in _DERIVED_ECONOMICS:
             if row[field] is not None:
                 continue
-            parts = [qty * econ[source] for qty, econ in singles
-                     if econ is not None and econ["currency"] == row["currency"]
-                     and econ[source] is not None]
-            if len(parts) == len(singles):
-                row[field] = sum(parts)
+            parts = [_base_part(econ, source, row["currency"]) for _qty, econ in bases]
+            if all(p is not None for p in parts):
+                row[field] = sum(qty * part for (qty, _econ), part in zip(bases, parts, strict=True))
                 derived.append(field)
     row["derived_fields"] = derived
     return row
@@ -1262,19 +1259,32 @@ def save_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor:
 
 
 def _write_product_economics(conn: Conn, brand_id: str, product_id: str, *, actor: str,
-                             selling_price: float, currency: str, confirmed_by: str,
+                             selling_price: float | None, currency: str, confirmed_by: str,
                              fixed_cost: float | None, unit_variable_cost: float | None,
                              shipping_cost: float | None, effective_from: str | None,
                              effective_to: str | None, close_rate: float | None,
                              assumptions: list[str] | None, list_price: float | None | _Keep,
-                             cap_per_sale: float | None | _Keep) -> dict:
+                             cap_per_sale: float | None | _Keep,
+                             allow_empty_price: bool = False) -> dict:
     """`save_product_economics` without the commit (`save_sell_way` runs it inside its own one
-    transaction)."""
+    transaction). `allow_empty_price` (F45): only `save_sell_way` passes it, for a composed
+    sell-way whose price is derived from its checked bases."""
     _require(currency, "product_economics.currency 為必填")
     _require(confirmed_by, "confirmed_by 為必填")
     _require(actor, "actor 為必填")
-    if selling_price is None:
+    if selling_price is None and not allow_empty_price:
         raise ValueError("product_economics.selling_price 為必填")
+    # F47 Contract A (`app.core.input_rules`): keep exactly what was sent or refuse naming the
+    # field -- never coerce. Shipping is >= 0 on every path (lead decision, F47 Contract A;
+    # same as the sell-way pre-check).
+    input_rules.positive(selling_price, "售價", optional=allow_empty_price)
+    input_rules.non_negative(fixed_cost, "固定成本", optional=True)
+    input_rules.non_negative(unit_variable_cost, "單位變動成本", optional=True)
+    input_rules.non_negative(shipping_cost, "運費", optional=True)
+    if not isinstance(list_price, _Keep):
+        input_rules.positive(list_price, "原價", optional=True)
+    if not isinstance(cap_per_sale, _Keep):
+        input_rules.positive(cap_per_sale, "每筆上限", optional=True)
     if close_rate is not None and not (0 < close_rate <= 1):
         raise ValueError("product_economics.close_rate 必須介於 0（不含）到 1（含）之間")
     if assumptions is not None and not set(assumptions) <= _ASSUMPTION_FIELDS:
@@ -1443,19 +1453,36 @@ def confirm_product_economics(conn: Conn, brand_id: str, product_id: str, *,
 
 
 # ---------------------------------------------------------------------------
-# Sell-ways (F43-I01): a sell-way is a `product` row a campaign sells; `product_component` lists the
-# knowledge products it sells (one -> 單品 sell-way under that product, several -> a bundle).
+# Sell-ways (F43-I01, re-cut by F45): a sell-way is a `product` row a campaign sells. A *base*
+# sell-way binds one knowledge product (`parent_id`) and has no component rows -- it is the unit
+# (單盒, 體驗包). A *composed* sell-way lists base sell-ways × qty in `product_component`
+# (12 盒 = 單盒 × 12; 5 盒＋2 包 = 單盒 × 5 + 體驗包 × 2; a cross-product bundle has bases of
+# several products and `parent_id` NULL).
 # ---------------------------------------------------------------------------
 
 def _components(conn: Conn | ConnProxy, brand_id: str, sell_way_id: str) -> list:
-    """`[{product_id, qty}]` of a sell-way in creation order ([] for a row without components)."""
+    """`[{base_id, qty}]` of a composed sell-way in creation order ([] for a base sell-way or a
+    knowledge product)."""
     return _rows(conn.execute(
-        "SELECT product_id, qty FROM product_component WHERE brand_id = %s AND sell_way_id = %s "
-        "ORDER BY created_at, id", (brand_id, sell_way_id)))
+        "SELECT base_sell_way_id AS base_id, qty FROM product_component "
+        "WHERE brand_id = %s AND sell_way_id = %s ORDER BY created_at, id", (brand_id, sell_way_id)))
 
 
 def _is_sell_way(conn: Conn | ConnProxy, brand_id: str, product: dict) -> bool:
     return product["parent_id"] is not None or bool(_components(conn, brand_id, product["id"]))
+
+
+def _is_base(conn: Conn | ConnProxy, brand_id: str, product: dict) -> bool:
+    return product["parent_id"] is not None and not _components(conn, brand_id, product["id"])
+
+
+def _display_name(conn: Conn | ConnProxy, brand_id: str, product: dict) -> str:
+    """The sell-way part of a stored 「〈商品〉 · 〈賣法〉」 name (the whole name without a parent)."""
+    display = product["name"]
+    parent = get_product(conn, brand_id, product["parent_id"]) if product["parent_id"] else None
+    if parent and display.startswith(f"{parent['name']} · "):
+        display = display[len(parent["name"]) + 3:]
+    return display
 
 
 _SELL_WAY_MONEY = ("selling_price", "list_price", "unit_variable_cost", "shipping_cost",
@@ -1463,32 +1490,55 @@ _SELL_WAY_MONEY = ("selling_price", "list_price", "unit_variable_cost", "shippin
 _SELL_WAY_ECONOMICS = frozenset({*_SELL_WAY_MONEY, "close_rate", "currency", "assumptions"})
 
 
-def _check_components(conn: Conn, brand_id: str, components, sell_way_id: str | None) -> list:
-    """Validate `save_sell_way`'s components -> `[{product_id, qty, name}]`. Each must be a
-    knowledge product of this brand (not a sell-way, not the sell-way itself), listed once."""
+def _check_base_product(conn: Conn, brand_id: str, product_id) -> dict:
+    """A base sell-way's knowledge product: a product of this brand that is not a sell-way."""
+    product = get_product(conn, brand_id, product_id) if isinstance(product_id, str) else None
+    if product is None:
+        raise ValueError(f"找不到這個品牌的商品：{product_id}")
+    if _is_sell_way(conn, brand_id, product):
+        raise ValueError("基本賣法要綁一個商品本身，不能綁另一個賣法或組合")
+    return product
+
+
+def _check_components(conn: Conn, brand_id: str, components, sell_way_id: str | None,
+                      currency: str) -> list:
+    """Validate a composed sell-way's `[{sell_way_id, qty}]` -> `[{base, qty}]`. Each must be an
+    active base sell-way of this brand (not a composed one, not a knowledge product, not the
+    sell-way itself) with a confirmed price in `currency`, listed once; Σqty ≥ 2."""
     if not isinstance(components, list) or not components:
-        raise ValueError("賣法至少要有一個商品")
+        raise ValueError("組合賣法至少要放一個基本賣法")
     out, seen = [], set()
     for item in components:
-        product_id = item.get("product_id") if isinstance(item, dict) else None
+        base_id = item.get("sell_way_id") if isinstance(item, dict) else None
         qty = item.get("qty") if isinstance(item, dict) else None
-        if not isinstance(product_id, str) or not product_id:
-            raise ValueError("賣法裡的每個商品都要有 product_id")
+        if not isinstance(base_id, str) or not base_id:
+            raise ValueError("組合裡的每一項都要指定一個基本賣法（sell_way_id）")
         if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError("賣法裡的商品數量要是正整數")
-        if product_id in seen:
-            raise ValueError("同一個商品在賣法裡只能列一次")
-        seen.add(product_id)
-        product = get_product(conn, brand_id, product_id)
-        if product is None:
-            raise ValueError(f"找不到這個品牌的商品：{product_id}")
-        if product_id == sell_way_id or _is_sell_way(conn, brand_id, product):
-            raise ValueError("賣法只能放商品本身，不能放另一個賣法或組合")
-        out.append({"product_id": product_id, "qty": qty, "name": product["name"]})
+            raise ValueError("組合裡的數量要是正整數")
+        if base_id in seen:
+            raise ValueError("同一個基本賣法在組合裡只能列一次，改數量就好")
+        seen.add(base_id)
+        base = get_product(conn, brand_id, base_id)
+        if base is None:
+            raise ValueError(f"找不到這個品牌的賣法：{base_id}")
+        name = _display_name(conn, brand_id, base)
+        if base_id == sell_way_id or not _is_base(conn, brand_id, base):
+            raise ValueError(f"「{name}」不是基本賣法：組合只能放基本賣法，不能放商品本身或另一個組合")
+        if base["status"] != "active":
+            raise ValueError(f"「{name}」已經封存，不能放進組合")
+        econ = _raw_product_economics(conn, brand_id, base_id)
+        if econ is None or econ["status"] != "confirmed" or econ["selling_price"] is None:
+            raise ValueError(f"「{name}」還沒有確認過的售價，不能放進組合")
+        if econ["currency"] != currency:
+            raise ValueError(f"「{name}」的幣別是 {econ['currency']}，跟這個組合的 {currency} 不同")
+        out.append({"base": base, "qty": qty})
+    if sum(c["qty"] for c in out) < 2:
+        raise ValueError(f"只放 1 份就跟「{_display_name(conn, brand_id, out[0]['base'])}」一樣；"
+                         "組合的數量至少 2")
     return out
 
 
-def _check_sell_way_economics(economics) -> dict:
+def _check_sell_way_economics(economics, *, composed: bool) -> dict:
     if not isinstance(economics, dict):
         raise ValueError("economics 必須是物件")
     unknown = set(economics) - _SELL_WAY_ECONOMICS
@@ -1500,74 +1550,106 @@ def _check_sell_way_economics(economics) -> dict:
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)) or value < 0:
             raise ValueError(f"{field} 要是 0 以上的數字")
-    if economics.get("selling_price") is None or economics["selling_price"] <= 0:
+    price = economics.get("selling_price")
+    if (price is None and not composed) or (price is not None and price <= 0):
         raise ValueError("售價要大於 0")
     return economics
 
 
 def _write_components(conn: Conn, org_id: str, brand_id: str, sell_way_id: str, components: list,
                       *, actor: str) -> None:
-    """Replace the sell-way's component rows with `components` (full list). Kept products keep
-    their row (and creation order); new ones are inserted in list order. Audited when changed."""
+    """Replace the composed sell-way's component rows with `components` (full list). Kept bases
+    keep their row (and creation order); new ones are inserted in list order. Audited when
+    changed."""
     before = _rows(conn.execute(
-        "SELECT id, product_id, qty FROM product_component WHERE brand_id = %s AND sell_way_id = %s "
-        "ORDER BY created_at, id", (brand_id, sell_way_id)))
-    existing = {r["product_id"]: r for r in before}
-    wanted = {c["product_id"]: c["qty"] for c in components}
+        "SELECT id, base_sell_way_id, qty FROM product_component WHERE brand_id = %s "
+        "AND sell_way_id = %s ORDER BY created_at, id", (brand_id, sell_way_id)))
+    existing = {r["base_sell_way_id"]: r for r in before}
+    wanted = {c["base"]["id"]: c["qty"] for c in components}
     changed = False
-    for product_id, row in existing.items():
-        if product_id not in wanted:
+    for base_id, row in existing.items():
+        if base_id not in wanted:
             conn.execute("DELETE FROM product_component WHERE id = %s AND brand_id = %s", (row["id"], brand_id))
             changed = True
-        elif wanted[product_id] != row["qty"]:
+        elif wanted[base_id] != row["qty"]:
             conn.execute("UPDATE product_component SET qty = %s WHERE id = %s AND brand_id = %s",
-                         (wanted[product_id], row["id"], brand_id))
+                         (wanted[base_id], row["id"], brand_id))
             changed = True
     ts = now_utc()
-    for i, c in enumerate(c for c in components if c["product_id"] not in existing):
+    for i, c in enumerate(c for c in components if c["base"]["id"] not in existing):
         conn.execute(
-            "INSERT INTO product_component (id, org_id, brand_id, sell_way_id, product_id, qty, created_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (new_id("pco"), org_id, brand_id, sell_way_id, c["product_id"], c["qty"],
+            "INSERT INTO product_component (id, org_id, brand_id, sell_way_id, base_sell_way_id, qty, "
+            "created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (new_id("pco"), org_id, brand_id, sell_way_id, c["base"]["id"], c["qty"],
              ts + timedelta(microseconds=i)))
         changed = True
     if changed:
         write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product_component",
                     entity_id=sell_way_id, action="update", actor=actor,
-                    before={"components": [{"product_id": r["product_id"], "qty": r["qty"]} for r in before]},
-                    after={"components": [{"product_id": c["product_id"], "qty": c["qty"]} for c in components]})
+                    before={"components": [{"sell_way_id": r["base_sell_way_id"], "qty": r["qty"]}
+                                           for r in before]},
+                    after={"components": [{"sell_way_id": c["base"]["id"], "qty": c["qty"]}
+                                          for c in components]})
+
+
+def _component_view(conn: Conn | ConnProxy, brand_id: str, comp: dict) -> dict:
+    """One component of a composed sell-way: the base's display name, its knowledge product and
+    its own confirmed effective price / cost (None when unknown)."""
+    base = get_product(conn, brand_id, comp["base_id"])
+    product = get_product(conn, brand_id, base["parent_id"]) if base and base["parent_id"] else None
+    econ = get_product_economics(conn, brand_id, comp["base_id"])
+    confirmed = econ if econ is not None and econ["status"] == "confirmed" else None
+    return {
+        "sell_way_id": comp["base_id"],
+        "qty": comp["qty"],
+        "name": _display_name(conn, brand_id, base) if base else None,
+        "product_id": product["id"] if product else None,
+        "product_name": product["name"] if product else None,
+        "price": confirmed["selling_price"] if confirmed else None,
+        "cost": confirmed["unit_variable_cost"] if confirmed else None,
+        "currency": econ["currency"] if econ else None,
+    }
 
 
 def _sell_way_view(conn: Conn | ConnProxy, brand_id: str, product: dict) -> dict:
     comps = _components(conn, brand_id, product["id"])
-    names = {p["id"]: p for p in (get_product(conn, brand_id, c["product_id"]) for c in comps) if p}
-    display = product["name"]
-    parent = get_product(conn, brand_id, product["parent_id"]) if product["parent_id"] else None
-    if parent and display.startswith(f"{parent['name']} · "):
-        display = display[len(parent["name"]) + 3:]
     landing = product["landing_url"]
-    if landing is None and comps:
-        first = names.get(comps[0]["product_id"])
+    if landing is None:
+        first = get_product(conn, brand_id, knowledge_product_ids(conn, brand_id, product["id"])[0])
         landing = first["page_url"] if first else None
     return {
         **product,
+        "shape": "composed" if comps else "base",
         "kind": "bundle" if product["parent_id"] is None else "single",
-        "display_name": display,
-        "components": [{"product_id": c["product_id"], "qty": c["qty"],
-                        "name": names[c["product_id"]]["name"] if c["product_id"] in names else None}
-                       for c in comps],
+        "display_name": _display_name(conn, brand_id, product),
+        "components": [_component_view(conn, brand_id, c) for c in comps],
         "effective_landing_url": landing,
         "economics": get_product_economics(conn, brand_id, product["id"]),
     }
 
 
+def composed_using(conn: Conn | ConnProxy, brand_id: str, base_id: str) -> list:
+    """The active composed sell-ways that list base sell-way `base_id` (creation order): product
+    rows plus `display_name`. Readers: the archive guard of product onboarding's 賣法 step (a base
+    still in a composed sell-way is not archived), its `used_by`, `save_sell_way`."""
+    rows = _rows(conn.execute(
+        "SELECT * FROM product p WHERE p.brand_id = %s AND p.status = 'active' AND EXISTS ("
+        " SELECT 1 FROM product_component c WHERE c.brand_id = %s AND c.sell_way_id = p.id"
+        " AND c.base_sell_way_id = %s) ORDER BY p.created_at, p.id", (brand_id, brand_id, base_id)))
+    return [{**r, "display_name": _display_name(conn, brand_id, r)} for r in rows]
+
+
 def list_sell_ways(conn: Conn | ConnProxy, brand_id: str, product_id: str | None = None) -> list:
-    """The brand's sell-ways in creation order (`product` rows with components, or an F05 sell-way
-    with a parent and none); with `product_id`, only those selling that knowledge product. Each is
-    the product row plus `kind` ('single' | 'bundle'), `display_name` (the sell-way part of 「〈商品〉
-    · 〈賣法〉」), `components` [{product_id, qty, name}], `effective_landing_url` (landing_url, else
-    the first component's page_url) and effective `economics` (`get_product_economics`). Archived
-    and 建到一半 rows are included; `status` / `onboarding_step` tell the caller.
+    """The brand's sell-ways in creation order (a base: a `product` with a parent and no
+    components; a composed one: a `product` with components); with `product_id`, only those
+    selling that knowledge product (`knowledge_product_ids`). Each is the product row (incl.
+    `free_shipping`) plus `shape` ('base' | 'composed'), `kind` ('single' = listed under a product
+    | 'bundle' = cross-product), `display_name` (the sell-way part of 「〈商品〉 · 〈賣法〉」),
+    `components` [{sell_way_id, qty, name, product_id, product_name, price, cost, currency}] (each
+    base's display name, knowledge product and own confirmed effective price / cost; [] for a
+    base), `effective_landing_url` (landing_url, else the first knowledge product's page_url) and
+    effective `economics` (`get_product_economics`). Archived and 建到一半 rows are included;
+    `status` / `onboarding_step` tell the caller.
     Readers: product onboarding (賣法 step, products page, bundles), the new-campaign picker."""
     rows = _rows(conn.execute(
         "SELECT * FROM product p WHERE p.brand_id = %s AND ("
@@ -1578,38 +1660,63 @@ def list_sell_ways(conn: Conn | ConnProxy, brand_id: str, product_id: str | None
     return [_sell_way_view(conn, brand_id, r) for r in rows]
 
 
-def save_sell_way(conn: Conn, brand_id: str, *, sell_way_id: str | None = None, name: str,
-                  components: list, economics: dict, landing_url: str | None = None,
-                  actor: str) -> dict:
-    """Create or update one sell-way in one transaction (F43 storage decision): the `product` row,
-    its component rows (full list) and its economics (through `save_product_economics`'s writer).
+def _check_same_shape(conn: Conn, brand_id: str, before: dict, composed: bool) -> None:
+    if bool(_components(conn, brand_id, before["id"])) != composed:
+        raise ValueError(f"「{_display_name(conn, brand_id, before)}」不能在基本賣法和組合之間"
+                         "改來改去；要換就另外新增一個賣法")
 
-    One component -> a single-product sell-way: `parent_id` = that product, stored name 「〈商品〉 ·
-    〈name〉」 (F05). Several -> a bundle: `parent_id` NULL, stored name = `name`. Components must be
-    knowledge products of this brand (`[{product_id, qty}]`, qty ≥ 1). `economics` =
-    `{selling_price, list_price, unit_variable_cost, shipping_cost, close_rate, cap_per_sale}`
-    (+ optional `currency` (default: stored, else TWD), `fixed_cost` (default: stored),
-    `assumptions`); NULL list price / cost / cap = derived / break-even. `landing_url` NULL = the
-    first component's page. A new sell-way whose name matches an active sell-way in the same scope
-    is that sell-way (Contract W, as `create_product`). ValueError = nothing saved.
+
+def save_sell_way(conn: Conn, brand_id: str, *, sell_way_id: str | None = None, name: str,
+                  product_id: str | None = None, components: list | None = None,
+                  economics: dict, landing_url: str | None = None, free_shipping: bool = False,
+                  actor: str) -> dict:
+    """Create or update one sell-way in one transaction (F45 「base and composed sell-ways」): the
+    `product` row, its component rows (full list) and its economics (through
+    `save_product_economics`'s writer).
+
+    Exactly one of `product_id` (a *base* sell-way of that knowledge product: `parent_id` = it, no
+    component rows, price > 0) or `components` `[{sell_way_id, qty}]` (a *composed* sell-way of
+    active base sell-ways of this brand, each once, each with a confirmed price in the sell-way's
+    currency, Σqty ≥ 2; its price may be empty = derived). A composed sell-way whose bases all
+    belong to one product is listed under it (`parent_id`), else it is a cross-product bundle
+    (`parent_id` NULL). A sell-way under a product is stored 「〈商品〉 · 〈name〉」 (F05). Changing
+    a sell-way's shape (or a base's product) is refused, and so is a currency change of a base
+    that an active composed sell-way uses. `economics` = `{selling_price, list_price,
+    unit_variable_cost, shipping_cost, close_rate, cap_per_sale}` (+ optional `currency`
+    (default: stored, else TWD), `fixed_cost` (default: stored), `assumptions`); NULL list price /
+    cost / cap = derived / break-even. `landing_url` NULL = the first knowledge product's page.
+    `free_shipping` = 「這個賣法免運」. A new sell-way whose name matches an active sell-way in the
+    same scope is that sell-way (Contract W, as `create_product`). ValueError = nothing saved.
     Returns the `list_sell_ways` item. Readers: product onboarding (賣法 step, 新增組合)."""
     _require(name, "賣法名稱為必填")
     _require(actor, "actor 為必填")
     name = name.strip()
     if get_brand(conn, brand_id) is None:
         raise ValueError(f"找不到品牌：{brand_id}")
-    comps = _check_components(conn, brand_id, components, sell_way_id)
-    econ = _check_sell_way_economics(economics)
-    parent_id = comps[0]["product_id"] if len(comps) == 1 else None
-    prefix = f"{comps[0]['name']} · "
-    full_name = (name if name.startswith(prefix) else prefix + name) if parent_id else name
-    landing = (landing_url or "").strip() or None
+    if (product_id is None) == (components is None):
+        raise ValueError("賣法要嘛綁一個商品（基本賣法），要嘛由基本賣法組成（組合賣法），只能擇一")
+    composed = components is not None
+    econ = _check_sell_way_economics(economics, composed=composed)
     before = None
     if sell_way_id is not None:
         before = get_product(conn, brand_id, sell_way_id)
         if before is None or not _is_sell_way(conn, brand_id, before):
             raise ValueError(f"找不到賣法：{sell_way_id}")
+        _check_same_shape(conn, brand_id, before, composed)
+    stored = _raw_product_economics(conn, brand_id, before["id"]) if before else None
+    currency = econ.get("currency") or (stored["currency"] if stored else "TWD")
+    if composed:
+        comps = _check_components(conn, brand_id, components, sell_way_id, currency)
+        owners = list(dict.fromkeys(c["base"]["parent_id"] for c in comps))
+        parent = get_product(conn, brand_id, owners[0]) if len(owners) == 1 else None
     else:
+        comps = []
+        parent = _check_base_product(conn, brand_id, product_id)
+    parent_id = parent["id"] if parent else None
+    prefix = f"{parent['name']} · " if parent else ""
+    full_name = name if not parent or name.startswith(prefix) else prefix + name
+    landing = (landing_url or "").strip() or None
+    if before is None:
         same = _row(conn.execute(
             "SELECT * FROM product WHERE brand_id = %s AND parent_id IS NOT DISTINCT FROM %s"
             " AND status = 'active' AND lower(btrim(name)) = lower(%s)",
@@ -1618,36 +1725,47 @@ def save_sell_way(conn: Conn, brand_id: str, *, sell_way_id: str | None = None, 
             if not _is_sell_way(conn, brand_id, same):
                 raise ValueError("已有同名產品")
             before = same
+            stored = _raw_product_economics(conn, brand_id, before["id"])
+            currency = econ.get("currency") or (stored["currency"] if stored else "TWD")
+    if before is not None:
+        _check_same_shape(conn, brand_id, before, composed)
+        if not composed and before["parent_id"] != parent_id:
+            raise ValueError("基本賣法不能換到別的商品底下")
+        users = [] if composed else composed_using(conn, brand_id, before["id"])
+        if stored is not None and stored["currency"] != currency and users:
+            names = "、".join(f"「{u['display_name']}」" for u in users)
+            raise ValueError(f"「{_display_name(conn, brand_id, before)}」還在{names}裡，不能換幣別")
     org_id = _org_id_for_brand(conn, brand_id)
     ts = now_utc()
+    free = bool(free_shipping)
     try:
         if before is None:
             sell_way_id = new_id("prd")
             conn.execute(
                 "INSERT INTO product (id, org_id, brand_id, name, status, knowledge_version, created_at, "
-                "updated_at, parent_id, landing_url) VALUES (%s, %s, %s, %s, 'active', 1, %s, %s, %s, %s)",
-                (sell_way_id, org_id, brand_id, full_name, ts, ts, parent_id, landing))
+                "updated_at, parent_id, landing_url, free_shipping) "
+                "VALUES (%s, %s, %s, %s, 'active', 1, %s, %s, %s, %s, %s)",
+                (sell_way_id, org_id, brand_id, full_name, ts, ts, parent_id, landing, free))
             write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=sell_way_id,
                         action="create", actor=actor, before=None, after=get_product(conn, brand_id, sell_way_id))
         else:
             sell_way_id = before["id"]
             conn.execute(
-                "UPDATE product SET name = %s, parent_id = %s, landing_url = %s, updated_at = %s "
-                "WHERE id = %s AND brand_id = %s",
-                (full_name, parent_id, landing, ts, sell_way_id, brand_id))
+                "UPDATE product SET name = %s, parent_id = %s, landing_url = %s, free_shipping = %s, "
+                "updated_at = %s WHERE id = %s AND brand_id = %s",
+                (full_name, parent_id, landing, free, ts, sell_way_id, brand_id))
             write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="product", entity_id=sell_way_id,
                         action="update", actor=actor, before=before, after=get_product(conn, brand_id, sell_way_id))
-        _write_components(conn, org_id, brand_id, sell_way_id, comps, actor=actor)
-        stored = _raw_product_economics(conn, brand_id, sell_way_id)
+        if composed:
+            _write_components(conn, org_id, brand_id, sell_way_id, comps, actor=actor)
         _write_product_economics(
             conn, brand_id, sell_way_id, actor=actor, confirmed_by=actor,
-            selling_price=econ["selling_price"],
-            currency=econ.get("currency") or (stored["currency"] if stored else "TWD"),
+            selling_price=econ.get("selling_price"), currency=currency,
             fixed_cost=econ["fixed_cost"] if "fixed_cost" in econ else (stored["fixed_cost"] if stored else None),
             unit_variable_cost=econ.get("unit_variable_cost"), shipping_cost=econ.get("shipping_cost"),
             effective_from=None, effective_to=None, close_rate=econ.get("close_rate"),
             assumptions=econ.get("assumptions"), list_price=econ.get("list_price"),
-            cap_per_sale=econ.get("cap_per_sale"))
+            cap_per_sale=econ.get("cap_per_sale"), allow_empty_price=composed)
         conn.commit()
     except psycopg.errors.UniqueViolation:
         conn.rollback()

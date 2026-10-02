@@ -560,6 +560,47 @@ class FormatKeyDrivesRequiredOutputsTest(AssetsTestBase):
         self.assertIsNotNone(pack_id)
 
 
+# -- F45 §6.49: a photo-only brand's sets need no image prompt -----------------------------------
+
+class PhotoOnlyBrandSetsRequireOnlyCopyTest(AssetsTestBase):
+    def _set_for(self, media: str | None, format_key: str | None) -> dict:
+        if media is not None:
+            bi_repo.set_media_capability(web.conn, self.brand_id, media, actor=ACTOR)
+            web.conn.commit()
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key=format_key,
+        )
+        return self._dispatched_set(campaign_row["id"])
+
+    def test_photo_only_single_image_and_carousel_sets_require_only_copy(self):
+        for format_key in ("single_image", "carousel", None):
+            with self.subTest(format_key=format_key):
+                target_set = self._set_for("photo", format_key)
+                self.assertEqual(target_set["required_outputs"], {"copy": 1})
+
+    def test_photo_only_set_is_accepted_by_the_workbench(self):
+        bi_repo.set_media_capability(web.conn, self.brand_id, "photo", actor=ACTOR)
+        web.conn.commit()
+        campaign_row, _group, ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="single_image",
+        )
+        assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_row["id"])
+        briefs = workbench.briefs_for_source(
+            web.conn, self.org_id, self.brand_id, assets.PACK_SOURCE_KIND,
+            {"ads_campaign_id": campaign_row["id"], "ads_ad_id": ad["id"]},
+        )
+        self.assertEqual(len(briefs), 1)
+        self.assertEqual(briefs[0]["request_json"]["parts"], ["copy"])
+
+    def test_photo_video_and_unasked_brands_still_require_the_image_prompt(self):
+        for media in (None, "photo_video"):  # never asked first: the brand starts unasked
+            with self.subTest(media=media):
+                target_set = self._set_for(media, "single_image")
+                self.assertEqual(
+                    target_set["required_outputs"], {"copy": 1, "image_prompt": 1}
+                )
+
+
 # -- F38 decision 3：限時限量的截止日＝投放組（否則 Campaign）的結束日 ----------------------
 
 class OfferDeadlineTest(AssetsTestBase):
@@ -623,7 +664,8 @@ class SceneAndCalendarNoteTest(AssetsTestBase):
 
     def test_campaign_inside_a_calendar_row_gets_that_line(self):
         campaign_row, _group, _ad = self._direct_campaign(
-            campaign_start="2026-10-08", campaign_end="2026-10-12",
+            # Ends 10-11: from 10-12 the 國高中第一次段考週 row (F46) overlaps too.
+            campaign_start="2026-10-08", campaign_end="2026-10-11",
         )
         request = self._dispatched_set(campaign_row["id"])["request"]
         self.assertEqual(request["calendar_note"], self._NATIONAL_DAY_LINE)
@@ -636,6 +678,46 @@ class SceneAndCalendarNoteTest(AssetsTestBase):
         )
         request = self._dispatched_set(campaign_row["id"])["request"]
         self.assertEqual(request["calendar_note"], self._DOUBLE_11_LINE)
+
+    def test_bound_customer_group_rides_the_request_and_a_gone_group_is_omitted(self):
+        """F46-I01 (Contract A): an ad bound to a customer group hands
+        「〈who〉｜煩惱：〈labels〉｜顧客會說：〈quote〉｜什麼時候用：〈when〉」
+        (missing parts omitted); no group, or an id that no longer resolves, leaves the key
+        out."""
+        product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        groups = bi_repo.save_customer_groups(web.conn, self.brand_id, product["id"], [
+            {"who": "下班後夜跑的上班族", "pain_keys": ["uncertainty"],
+             "quote": "晚上跑步車子看不到我", "when_used": "下班後在河濱夜跑"},
+            {"who": "帶小孩散步的爸媽", "pain_keys": ["effort"]},
+        ], actor=ACTOR)
+        campaign_row, group, ad = self._direct_campaign(
+            campaign_start="2026-07-20", campaign_end="2026-07-25",
+        )
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign_row["id"],
+                                 {"product_ids": [product["id"]]})
+        coordinates = {"format": "single_image"}
+        for name, group_id in (("全的", groups[0]["id"]), ("缺的", groups[1]["id"]),
+                               ("刪掉的", "pcg_gone")):
+            ads_repo.create_ad(
+                web.conn, self.org_id, self.brand_id, campaign_row["id"], group["id"],
+                name=name, coordinates=coordinates, coordinates_snapshot={},
+                customer_group_id=group_id,
+            )
+        web.conn.commit()
+
+        sets = self._sets_by_name(campaign_row["id"])
+
+        self.assertEqual(
+            sets["全的"]["request"]["customer_group"],
+            "下班後夜跑的上班族｜煩惱：怕買錯｜顧客會說：晚上跑步車子看不到我"
+            "｜什麼時候用：下班後在河濱夜跑",
+        )
+        missing = sets["缺的"]["request"]["customer_group"]
+        self.assertTrue(missing.startswith("帶小孩散步的爸媽｜煩惱："), missing)
+        self.assertNotIn("顧客會說", missing)
+        self.assertNotIn("什麼時候用", missing)
+        self.assertNotIn("customer_group", sets["刪掉的"]["request"])
+        self.assertNotIn("customer_group", sets[ad["name"]]["request"])  # hand-made, no group
 
     def test_quiet_window_or_no_dates_omits_the_note(self):
         for start, end in (("2026-07-20", "2026-07-25"), (None, None)):

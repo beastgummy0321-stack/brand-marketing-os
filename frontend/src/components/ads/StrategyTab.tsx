@@ -1,11 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { SidePanel } from "@/components/layout/SidePanel";
-import { formatCurrency } from "@/lib/format";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
+import { resolveOrgTimezone } from "@/lib/orgClock";
 import {
   adoptStrategy,
   generateStrategy,
@@ -20,10 +23,13 @@ import { cn } from "@/lib/utils";
 import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount } from "./patterns";
 // `patterns/index.ts` does not re-export the part fills; same feature folder, so the direct path is allowed.
 import { allocationFills } from "./patterns/ScenarioBars";
+import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
 import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
 import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
+import { GroupSummary } from "./learnings/GroupSummary";
+import { LearningsTable } from "./learnings/LearningsTable";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
@@ -36,7 +42,7 @@ function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }
       {rows.map((row, i) => (
         <li key={`${row.ad_name}-${i}`} data-slot="coordinate-learning" className="border-t border-border py-2.5 text-[13px] first:border-t-0">
           <div className="flex flex-wrap items-center gap-2">
-            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : formatAmount(Math.floor(row.cost_per_result))}`} />
+            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : perSaleAmount(row.cost_per_result)}`} />
             <span className="min-w-0 [overflow-wrap:anywhere]">「{row.ad_name}」（{row.campaign_name}）</span>
           </div>
           {row.coordinates.length > 0 && (
@@ -50,7 +56,49 @@ function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }
   );
 }
 
-const MEDIA_LABEL = { photo: "只排照片（單圖、輪播）", photo_video: "照片和影片" } as const;
+/** F46 (prototype f46-learnings `#/strategy`): what the planner was prompted with. A strategy made since F46 carries
+ * `ranked_learnings` (Contract L) — the same ranking as 品牌智庫「投放學到的」: the per-group summary, then each closed
+ * campaign's rows (compact) and a link to the full table. Older strategies keep their `coordinate_learnings` rows. */
+function UsedLearnings({ brandId, ranked, rows }: {
+  brandId: string;
+  ranked: CoordinateLearnings | undefined;
+  rows: StrategyCoordinateLearning[];
+}) {
+  if (!ranked) return <CoordinateLearningRows rows={rows} />;
+  return (
+    <div data-slot="ranked-learnings">
+      <p className="mb-2.5 text-xs text-muted-foreground">和品牌智庫「投放學到的」同一份排名</p>
+      {ranked.groups.length > 0 && <div className="mb-3.5"><GroupSummary groups={ranked.groups} /></div>}
+      <div className="flex flex-col gap-2.5">
+        {ranked.campaigns.map((campaign) => <LearningsTable key={campaign.campaign_id} campaign={campaign} compact />)}
+      </div>
+      <Link
+        to={`/brands/${encodeURIComponent(brandId)}/library?tab=ads-learnings`}
+        className="mt-2.5 inline-block text-[13px] font-medium text-primary hover:underline"
+      >
+        到品牌智庫看完整表 →
+      </Link>
+    </div>
+  );
+}
+
+const hasUsedLearnings = (ranked: CoordinateLearnings | undefined, rows: StrategyCoordinateLearning[]) =>
+  ranked ? ranked.campaigns.length > 0 : rows.length > 0;
+
+/** `MM/DD` of a basis date: a plain `YYYY-MM-DD` as is, a timestamp on the organisation's calendar; never the raw
+ * ISO string. Unreadable → null. */
+function basisDay(value: string | null | undefined, timezone: string): string | null {
+  if (!value) return null;
+  const plain = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (plain) return `${plain[2]}/${plain[3]}`;
+  const at = new Date(value.replace(" ", "T").replace(/(\.\d{3})\d+/, "$1"));
+  if (Number.isNaN(at.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, month: "2-digit", day: "2-digit" }).formatToParts(at);
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("month")}/${part("day")}`;
+}
+
+const MEDIA_LABEL ={ photo: "只排照片（單圖、輪播）", photo_video: "照片和影片" } as const;
 
 /** Prototype F41 ② `used` (F42-I13): what the plan may say — one chip per registered offer 「label：sentence」, per
  * proof its label (the proof text in the chip's title and accessible name), and the media the brand makes. Nothing
@@ -110,6 +158,7 @@ export function StrategyTab({
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
+  const timezone = resolveOrgTimezone(useWorkspace().identity?.org?.timezone);
 
   const strategy = imported ? undefined : c.budget_basis_json.strategy;
   const basis = c.budget_basis_json.basis;
@@ -202,6 +251,8 @@ export function StrategyTab({
     pickedRow?.total != null ? Math.round((pickedRow.total * pct) / 100) : c.budget_planned !== null ? amount : null;
   const fills = strategy ? allocationFills(strategy.allocation.map((item) => ({ key: item.role, pct: item.pct }))) : {};
   const coordinateLearnings = basis?.coordinate_learnings ?? [];
+  const rankedLearnings = basis?.ranked_learnings;
+  const usedLearnings = hasUsedLearnings(rankedLearnings, coordinateLearnings);
   const missingHandoff = c.manual_handoff?.groups.filter((group) => group.missing.length > 0) ?? [];
   const beforeAdoption = step.id === "strategy_adopt";
 
@@ -324,11 +375,11 @@ export function StrategyTab({
               {strategy.why.length === 0 && strategy.unknowns.length === 0 && (strategy.learning_goals ?? []).length === 0 && (
                 <p className="text-muted-foreground">這一輪沒有列出原因</p>
               )}
-              {coordinateLearnings.length > 0 && (
-                // Prototype F41 ② `.lrn`: the last closed period's ads the planner read, by grade and coordinate label.
+              {usedLearnings && (
+                // F46: the ranking the planner read (older strategies: F41's per-ad grade rows).
                 <section aria-labelledby="coordinate-learnings-title">
                   <h3 id="coordinate-learnings-title" className="mb-1 text-[12.5px] font-semibold">用到的學習</h3>
-                  <CoordinateLearningRows rows={coordinateLearnings} />
+                  <UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} />
                 </section>
               )}
               {basis && (
@@ -377,50 +428,17 @@ export function StrategyTab({
       </ActionBar>
 
       {basisOpen && basis && (
-        <SidePanel ariaLabel="策略依據" onClose={() => setBasisOpen(false)}>
+        // Prototype f46-learnings `#/strategy` `.sp`: 用到的學習 first, then the brand facts and prices it used.
+        <SidePanel ariaLabel="策略依據" onClose={() => setBasisOpen(false)} widthClassName="w-[600px]">
           <div className="flex flex-col gap-5">
             <h3 className="text-lg font-semibold">策略依據</h3>
             <section>
-              <h4 className="mb-2 text-sm font-medium">品牌事實</h4>
-              {basis.brand_facts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">沒有用到品牌事實。</p>
-              ) : (
-                <ul className="space-y-1 text-sm">
-                  {basis.brand_facts.map((f) => (
-                    <li key={f.id} className="flex justify-between gap-3">
-                      <span>{f.label}</span>
-                      <span className="text-xs text-muted-foreground">更新於 {f.updated_at}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-            <section>
-              <h4 className="mb-2 text-sm font-medium">商品價格</h4>
-              {basis.prices.length === 0 ? (
-                <p className="text-sm text-muted-foreground">沒有用到商品價格。</p>
-              ) : (
-                <ul className="space-y-1 text-sm">
-                  {basis.prices.map((p) => (
-                    <li key={p.product_id} className="flex justify-between gap-3">
-                      <span>
-                        {p.price !== null ? formatCurrency(p.price) : "尚未設定"}
-                        {p.stale && <span className="ml-1 text-warning">價格可能過期</span>}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{p.effective_from ?? "－"}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {basis.assumption_note && <p className="mt-2 text-sm text-warning">{basis.assumption_note}</p>}
-            </section>
-            <section>
-              <h4 className="mb-2 text-sm font-medium">用到的學習</h4>
-              {coordinateLearnings.length > 0 && <CoordinateLearningRows rows={coordinateLearnings} />}
+              <h4 className="mb-2 text-sm font-semibold">用到的學習</h4>
+              {usedLearnings && <UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} />}
               {basis.learnings.length === 0 ? (
-                coordinateLearnings.length === 0 && <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
+                !usedLearnings && <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
               ) : (
-                <ul className={cn("space-y-2 text-sm", coordinateLearnings.length > 0 && "mt-2 border-t border-border pt-2.5")}>
+                <ul className={cn("space-y-2 text-sm", usedLearnings && "mt-2 border-t border-border pt-2.5")}>
                   {basis.learnings.map((l) => (
                     <li key={l.id}>
                       <p>{l.text}</p>
@@ -429,6 +447,46 @@ export function StrategyTab({
                   ))}
                 </ul>
               )}
+            </section>
+            <section>
+              <h4 className="mb-2 text-sm font-semibold">品牌事實</h4>
+              {basis.brand_facts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">沒有用到品牌事實。</p>
+              ) : (
+                <ul className="text-[13.5px]">
+                  {basis.brand_facts.map((f) => {
+                    const day = basisDay(f.updated_at, timezone);
+                    return (
+                      <li key={f.id} data-slot="basis-fact" className="flex justify-between gap-3 border-t border-border py-[5px] first:border-t-0">
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{f.label}</span>
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">{day ? `${day} 更新` : "更新日不明"}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+            <section>
+              <h4 className="mb-2 text-sm font-semibold">商品價格</h4>
+              {basis.prices.length === 0 ? (
+                <p className="text-sm text-muted-foreground">沒有用到商品價格。</p>
+              ) : (
+                <ul className="text-[13.5px]">
+                  {basis.prices.map((p) => {
+                    const day = basisDay(p.effective_from, timezone);
+                    return (
+                      <li key={p.product_id} data-slot="basis-price" className="flex justify-between gap-3 border-t border-border py-[5px] first:border-t-0">
+                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                          {p.sell_way_name} {p.price !== null ? `NT$${formatAmount(p.price)}` : "價格尚未設定"}
+                          {p.stale && <span className="ml-1 text-warning">價格可能過期</span>}
+                        </span>
+                        <span className="whitespace-nowrap text-xs text-muted-foreground">{day ? `${day} 起` : "起始日不明"}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {basis.assumption_note && <p className="mt-2 text-sm text-warning">{basis.assumption_note}</p>}
             </section>
           </div>
         </SidePanel>

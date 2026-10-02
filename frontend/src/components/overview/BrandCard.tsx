@@ -54,8 +54,14 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
         <Link to={internalHref(card.next_step.action_url)} className="border-t border-border pt-4 text-sm text-primary hover:underline">
           {card.next_step.title} →
         </Link>
+      ) : card.health === "green" ? (
+        <p className="text-sm text-muted-foreground">目前沒有要處理的下一步。</p>
       ) : (
-        <p className="text-sm text-muted-foreground">一切正常</p>
+        // F47-I03 (drill-10 甲 總覽 #5): with no guide-card step, the line under the status comes from the
+        // same `health` the dot shows -- never 「一切正常」 under 「有警示待處理」.
+        <Link to="/inbox" className="border-t border-border pt-4 text-sm text-primary hover:underline">
+          {HEALTH_LABEL[card.health]}：到收件匣查看 →
+        </Link>
       )}
       <Link className="flex items-center justify-between text-xs text-muted-foreground hover:text-primary" to={`/brands/${encodeURIComponent(card.brand_id)}`}>進入品牌工作區<ArrowUpRight size={15}/></Link>
     </article>

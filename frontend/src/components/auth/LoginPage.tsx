@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Logo } from "@/components/layout/Logo";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -7,6 +7,7 @@ import {
   signInWithPassword,
   signUpWithPassword,
 } from "@/lib/auth";
+import { takeSessionExpired } from "@/lib/http";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 type Mode = "signin" | "signup" | "magiclink";
@@ -19,9 +20,16 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [magicLinkSent, setMagicLinkSent] = useState(false);
+  // F47-I02: `apiFetch` marks a 401 redirect; read-and-clear once in an effect (StrictMode runs it
+  // twice in dev, and the second read is already false — so only ever set it to true here).
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    if (takeSessionExpired()) setExpired(true);
+  }, []);
 
   const form = useFormSubmit(async () => {
     setMagicLinkSent(false);
+    setExpired(false);
     let errorMessage: string | null;
     if (mode === "signin") {
       errorMessage = await signInWithPassword(email, password);
@@ -35,6 +43,14 @@ export function LoginPage() {
     // 成功後不用自己導頁：`App.tsx` 的 `useSession()` 會收到 supabase-js 的
     // `onAuthStateChange` 廣播，`/login` 那條路由看到 session 存在自動轉去首頁。
   });
+
+  /** The error belongs to the mode it was raised in (drill-10: a wrong-password sentence stayed after
+   * switching to 註冊). */
+  function switchMode(next: Mode) {
+    setMode(next);
+    setMagicLinkSent(false);
+    form.clearError();
+  }
 
   return (
     <div className="auth-layout">
@@ -81,8 +97,15 @@ export function LoginPage() {
                 : "登入"}
           </p>
 
+          {expired && (
+            <p role="status" className="mt-4 rounded-md bg-warning/10 px-3 py-2 text-sm text-warning">
+              登入已過期，請重新登入
+            </p>
+          )}
+
           <form
             className="mt-6 flex flex-col gap-4"
+            {...form.formProps}
             onSubmit={(e) => {
               e.preventDefault();
               void form.submit();
@@ -119,7 +142,7 @@ export function LoginPage() {
               </label>
             )}
 
-            {form.error && <p className="text-sm text-danger">{form.error}</p>}
+            {form.error && <p role="alert" className="text-sm text-danger">{form.error}</p>}
             {magicLinkSent && (
               <p className="text-sm text-success">
                 連結已經寄出，去信箱收信點連結登入。
@@ -146,7 +169,7 @@ export function LoginPage() {
               <Button
                 variant="link"
                 type="button"
-                onClick={() => setMode("signin")}
+                onClick={() => switchMode("signin")}
                 className="text-left text-primary hover:underline"
               >
                 改用 Email／密碼登入
@@ -156,7 +179,7 @@ export function LoginPage() {
               <Button
                 variant="link"
                 type="button"
-                onClick={() => setMode("signup")}
+                onClick={() => switchMode("signup")}
                 className="text-left text-primary hover:underline"
               >
                 還沒有帳號？註冊新帳號
@@ -166,7 +189,7 @@ export function LoginPage() {
               <Button
                 variant="link"
                 type="button"
-                onClick={() => setMode("magiclink")}
+                onClick={() => switchMode("magiclink")}
                 className="text-left text-primary hover:underline"
               >
                 改用郵件連結登入（不用密碼）

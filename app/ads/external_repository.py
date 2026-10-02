@@ -300,9 +300,16 @@ def cache_listing(conn, org_id, brand_id, platform, account, item):
 
 def listing(conn, org_id, brand_id, platform, account, *, after=None, limit=100):
     limit = min(max(int(limit), 1), 100)
+    # F47-I08: `campaign_id` is the workspace campaign this platform object is already bound to
+    # (its `ads_external_entity` row), null when it is not in any workspace yet -- so the join
+    # dialog never offers to add the same platform campaign twice.
     rows = conn.execute(
-        "SELECT * FROM ads_external_listing WHERE org_id=%s AND brand_id=%s AND platform=%s "
-        "AND source_account=%s AND (%s::text IS NULL OR id>%s) ORDER BY id LIMIT %s",
+        "SELECT l.*, e.campaign_id FROM ads_external_listing l "
+        "LEFT JOIN ads_external_entity e ON e.org_id=l.org_id AND e.brand_id=l.brand_id "
+        "AND e.platform=l.platform AND e.source_account=l.source_account "
+        "AND e.native_kind=l.native_kind AND e.native_id=l.native_id "
+        "WHERE l.org_id=%s AND l.brand_id=%s AND l.platform=%s "
+        "AND l.source_account=%s AND (%s::text IS NULL OR l.id>%s) ORDER BY l.id LIMIT %s",
         (org_id, brand_id, platform, account, after, after, limit + 1),
     ).fetchall()
     return {

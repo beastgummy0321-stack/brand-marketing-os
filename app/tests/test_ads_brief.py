@@ -447,11 +447,25 @@ class _SellWayBase(_BriefTestBase):
                                        unit_variable_cost=300, shipping_cost=100)
 
     def _sell_way(self, name, components, landing_url=None, **economics):
+        """F45: one product × 1 -> a base sell-way; anything else -> a composed sell-way of each
+        product's base (the existing one, else a new 「單件」 at NT$100)."""
+        if len(components) == 1 and components[0][1] == 1:
+            return bi_repo.save_sell_way(
+                web.conn, self.brand_id, name=name, actor=ACTOR, economics=economics,
+                product_id=components[0][0]["id"], landing_url=landing_url,
+            )
         return bi_repo.save_sell_way(
             web.conn, self.brand_id, name=name, actor=ACTOR, economics=economics,
-            components=[{"product_id": p["id"], "qty": qty} for p, qty in components],
+            components=[{"sell_way_id": self._base(p)["id"], "qty": qty} for p, qty in components],
             landing_url=landing_url,
         )
+
+    def _base(self, product):
+        for way in bi_repo.list_sell_ways(web.conn, self.brand_id, product["id"]):
+            if way["shape"] == "base" and way["status"] == "active":
+                return way
+        return bi_repo.save_sell_way(web.conn, self.brand_id, name="單件", actor=ACTOR,
+                                     product_id=product["id"], economics={"selling_price": 100})
 
     def _picks(self, **overrides):
         picks = {"product_ids": [self.sell_way["id"]], "objective": "名單", "budget": 30000}
@@ -589,12 +603,13 @@ class StructuredCreateTest(_SellWayBase):
         brief.PROVIDER = _fake(json.dumps({"objective": "名單", "cap": 30000, "product_ids": []}))
         detail = self._create_picks()
         self.assertTrue(detail["parsed"])
-        self.assertIsNone(detail["cap"]["own_value"])
+        # F46-I08: the cap is the sell-way's break-even (1000 − 300 − 100), never the model's.
+        self.assertEqual(detail["cap"]["own_value"], 600)
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "break_even")
         row = web.conn.execute(
             "SELECT target_cost, target_basis FROM ads_campaign WHERE id=%s", (detail["id"],),
         ).fetchone()
-        self.assertIsNone(row["target_cost"])
-        self.assertIsNone(row["target_basis"])
+        self.assertEqual((float(row["target_cost"]), row["target_basis"]), (600.0, "own"))
 
     def test_only_a_finished_sell_way_is_pickable(self):
         # F43-I04: the list the wizard shows is the only thing a create accepts -- never a
@@ -900,10 +915,11 @@ class SellWayDefaultsTest(_SellWayBase):
     def test_no_cap_per_sale_is_break_even_and_no_landing_is_the_product_page(self):
         detail = self._create_picks()  # 「單件」: no cap, no landing of its own
 
-        self.assertIsNone(detail["cap"]["own_value"])
-        self.assertEqual((detail["cap"]["value"], detail["cap"]["basis"]), (600, "break_even"))
+        # F46-I08: the break-even is stored as the campaign's own cap (shown = stored).
+        self.assertEqual(detail["cap"]["own_value"], 600)
+        self.assertEqual((detail["cap"]["value"], detail["cap"]["basis"]), (600, "own"))
         context = detail["context_json"]
-        self.assertEqual(context["field_sources"]["cap"], "system")
+        self.assertEqual(context["field_sources"]["cap"], "break_even")
         self.assertEqual(context["landing_url"], "https://shop.example.test/vest")
         self.assertEqual(context["field_sources"]["landing_url"], "sell_way")
 
@@ -964,27 +980,124 @@ class SellWayDefaultsTest(_SellWayBase):
         self.assertEqual(detail["context_json"]["field_sources"]["audience"], "sell_way")
 
 
-class NoCopyFromPreviousTest(_SellWayBase):
-    """F43-I04: a previous campaign's platform / audience / cap / landing are never copied."""
+class PreviousCampaignDefaultsTest(_SellWayBase):
+    """F46-I08 (Contract D): platform / cap / budget start from the same sell-way's previous
+    campaign (newest internal non-draft), field by field; then the brand's connected channel and
+    the sell-way's cap / break-even. Audience and landing still come from the sell-way."""
 
-    def test_a_live_previous_campaign_is_not_copied(self):
-        brief.PROVIDER = _fake(json.dumps({"objective": "購買", "cap": None, "product_ids": []}))
-        previous = self._create(picks={
-            "platform": "meta", "audience_hint": "夜跑愛好者", "cap": 450,
-            "landing_url": "https://shop.example.test/old",
-        })
-        web.conn.execute("UPDATE ads_campaign SET status = 'live' WHERE id = %s",
-                         (previous["id"],))
+    _EMPTY = json.dumps({"objective": "購買", "cap": None, "product_ids": []})
+
+    def setUp(self):
+        super().setUp()
+        brief.PROVIDER = _fake(self._EMPTY)
+
+    def _ran(self, detail, status="live", created_at=None):
+        web.conn.execute(
+            "UPDATE ads_campaign SET status = %s, created_at = COALESCE(%s, created_at)"
+            " WHERE id = %s", (status, created_at, detail["id"]),
+        )
+        return detail
+
+    def _connected(self, *keys):
+        rows = [{"key": k, "label": k, "connected": True, "state_text": "已接上"} for k in keys]
+        return patch.object(brief.channels, "list_channels", return_value=rows)
+
+    def test_platform_cap_and_budget_copy_from_the_previous_campaign_of_the_sell_way(self):
+        previous = self._ran(self._create_picks(picks=self._picks(platform="google_ads", cap=450)))
+
+        with self._connected("meta"):
+            detail = self._create_picks()
+
+        self.assertEqual(detail["constraints_json"]["platform"], "google_ads")
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        self.assertEqual(detail["constraints_json"]["budget"], 30000)
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((sources["platform"], sources["cap"], sources["budget"]),
+                         ("copied", "copied", "copied"))
+        self.assertEqual(sources["audience"], "system")  # the sell-way has no groups
+        self.assertNotEqual(detail["id"], previous["id"])
+
+    def test_a_different_budget_is_the_users_and_request_values_win(self):
+        self._ran(self._create_picks(picks=self._picks(platform="google_ads", cap=450)))
+
+        detail = self._create_picks(picks=self._picks(budget=12000, platform="meta", cap=380))
+
+        self.assertEqual(detail["constraints_json"]["platform"], "meta")
+        self.assertEqual(detail["cap"]["own_value"], 380)
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((sources["platform"], sources["cap"], sources["budget"]),
+                         ("user", "user", "user"))
+
+    def test_an_empty_previous_field_falls_through_for_that_field_only(self):
+        previous = self._ran(self._create_picks(picks=self._picks(cap=450)))
+        web.conn.execute(
+            "UPDATE ads_campaign SET constraints_json = constraints_json - 'platform'"
+            " WHERE id = %s", (previous["id"],),
+        )
+
+        with self._connected("meta", "google_ads"):
+            detail = self._create_picks()
+
+        self.assertEqual(detail["constraints_json"]["platform"], "meta")  # first connected
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((sources["platform"], sources["cap"]), ("brand", "copied"))
+
+        web.conn.execute("UPDATE ads_campaign SET target_cost = NULL, target_basis = NULL"
+                         " WHERE id = %s", (previous["id"],))
+        detail = self._create_picks()  # nothing connected
+        self.assertNotIn("platform", detail["constraints_json"])
+        self.assertEqual(detail["cap"]["own_value"], 600)  # 1000 − 300 − 100
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((sources["platform"], sources["cap"]), ("system", "break_even"))
+
+    def test_the_newest_campaign_of_the_sell_way_wins_and_drafts_and_others_never_count(self):
+        old = self._ran(self._create_picks(picks=self._picks(platform="meta", cap=300)),
+                        status="closed", created_at="2026-08-01T00:00:00Z")
+        self._ran(self._create_picks(picks=self._picks(platform="google_ads", cap=420)),
+                  status="ended", created_at="2026-09-01T00:00:00Z")
+        # A newer draft of the sell-way, a newer campaign of another sell-way and a sentence
+        # campaign never count.
+        self._create_picks(picks=self._picks(platform="meta", cap=111))
+        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other_way = self._sell_way("單條", [(other, 1)], selling_price=199)
+        self._ran(self._create_picks(picks=self._picks(product_ids=[other_way["id"]],
+                                                       platform="meta", cap=222)))
+        self._ran(self._create(picks={"platform": "meta", "cap": 333}))
 
         detail = self._create_picks()
 
-        context = detail["context_json"]
-        self.assertNotIn("copied_from", context)
-        self.assertNotIn("platform", detail["constraints_json"])
-        self.assertIsNone(context["audience_hint"])
+        self.assertEqual(detail["constraints_json"]["platform"], "google_ads")
+        self.assertEqual(detail["cap"]["own_value"], 420)
+        self.assertNotEqual(old["id"], detail["id"])
+
+    def test_a_sell_way_cap_comes_before_break_even_without_a_previous_campaign(self):
+        capped = self._sell_way("兩件組", [(self.product, 2)], selling_price=1800,
+                                unit_variable_cost=600, shipping_cost=100, cap_per_sale=450)
+        detail = self._create_picks(picks=self._picks(product_ids=[capped["id"]]))
+        self.assertEqual(detail["cap"]["own_value"], 450)
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "sell_way")
+
+    def test_no_break_even_leaves_the_cap_unset(self):
+        bare = bi_repo.create_product(web.conn, self.brand_id, name="鞋帶燈", actor=ACTOR)
+        way = self._sell_way("一組", [(bare, 1)], selling_price=99)  # no cost
+        detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
         self.assertIsNone(detail["cap"]["own_value"])
-        self.assertIsNone(context["landing_url"])  # the sell-way's product has no page
-        self.assertNotIn("copied", set(context["field_sources"].values()))
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
+
+    def test_a_fractional_break_even_is_stored_whole(self):
+        odd = bi_repo.create_product(web.conn, self.brand_id, name="髮帶", actor=ACTOR)
+        way = self._sell_way("一條", [(odd, 1)], selling_price=399.5, unit_variable_cost=120,
+                             shipping_cost=0)
+        detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
+        self.assertEqual(detail["cap"]["own_value"], 280)  # 279.5 half up
+
+    def test_the_sentence_path_copies_nothing(self):
+        self._ran(self._create_picks(picks=self._picks(platform="meta", cap=450)))
+        detail = self._create()
+        self.assertNotIn("platform", detail["constraints_json"])
+        self.assertIsNone(detail["cap"]["own_value"])
+        self.assertNotIn("copied", set(detail["context_json"]["field_sources"].values()))
 
 
 class PatchLandingUrlTest(_BriefTestBase):
