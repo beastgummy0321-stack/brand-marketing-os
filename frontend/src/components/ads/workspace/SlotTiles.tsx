@@ -24,7 +24,7 @@ const NO_OFFER = "無優惠";
 export const isVideoSlot = (slot: Slot) => slot.format_key === "video";
 export const flatSlots = (data: CampaignSlots) => data.groups.flatMap((g) => g.slots);
 /** The prototype's `.btn.s.go`: the slot's one next step, primary-bordered; long server sentences wrap. */
-const GO = "h-auto min-h-8 whitespace-normal border-primary py-1 text-left font-semibold text-primary hover:text-primary";
+const GO = "h-auto min-h-8 max-w-full shrink whitespace-normal border-primary py-1 text-left font-semibold text-primary hover:text-primary";
 
 /** The ad's offer coordinate as the tile head's chip (accent unless it is 無優惠); nothing for an ad without one. */
 function offerChip(slot: Slot): ReactNode {
