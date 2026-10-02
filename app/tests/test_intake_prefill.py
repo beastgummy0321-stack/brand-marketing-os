@@ -207,7 +207,8 @@ class PrefillScanTest(_Base):
         good, bad, empty = ("https://example.com/about", "https://broken.example/x",
                             "https://example.com/blank")
         bid = self._create(photos=0, urls=(good, bad, empty))
-        intake_ai.fetch_url = lambda url: {good: (True, _PAGE), empty: (True, "  ")}.get(url, (False, ""))
+        pages = {good: (True, _PAGE), empty: (True, "  ")}
+        intake_ai.fetch_url = lambda url: pages.get(url, (False, ""))
         status = self._scan(bid)
         self.assertEqual(status["status"], "done", status)
         self.assertEqual(status["pages_read"], 1)

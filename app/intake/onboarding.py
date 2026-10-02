@@ -94,9 +94,10 @@ def _prefill_status(conn: Conn, row: dict | None, brand_id: str,
     prefill for the saved website list; a stale one (Contract F) reads none so the scan starts
     again, unless the last job failed; a job that ended without a prefill is failed too (its
     handler raises)."""
-    stale = row is not None and row.get("prefill_json") is not None and _current_prefill(row) is None
+    current = _current_prefill(row)
+    stale = current is None and (row or {}).get("prefill_json") is not None
     if row is None or not is_open:
-        return ("done", None) if _current_prefill(row) is not None else ("none", None)
+        return ("done", None) if current is not None else ("none", None)
     from app.background import is_active, job_outcome
     from app.intake import ai
 
@@ -104,7 +105,7 @@ def _prefill_status(conn: Conn, row: dict | None, brand_id: str,
     outcome = job_outcome(lock)
     if outcome == "active" or (outcome is None and is_active(lock)):
         return "running", None
-    if _current_prefill(row) is not None:
+    if current is not None:
         return "done", None
     if outcome == "failed" or (outcome == "succeeded" and not stale):
         return "failed", ai.prefill_failure_message(conn, row)

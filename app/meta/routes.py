@@ -64,17 +64,25 @@ _MISSING_SCOPE_MESSAGE = (
 )
 
 
+_NO_ACCOUNTS_MESSAGE = (
+    "這把權杖讀不到任何廣告帳戶：可能填錯，或這個帳號沒有廣告帳戶的權限。"
+)
+
+
 def _token_rejection(exc: graph.GraphError) -> web.ApiError:
-    code = exc.code
-    if code == 100 or code == 10 or (isinstance(code, int) and 200 <= code <= 299):
+    """F47 Contract G: only `auth` says Meta rejected the token; a Meta outage or an unknown
+    error says Meta could not be read and nothing was stored."""
+    kind = graph.classify_error(exc)
+    shown = f"（代碼 {exc.code}）" if exc.code is not None else ""
+    if kind == graph.ERROR_SCOPE:
         return web.ApiError(400, "meta_token_missing_scope", _MISSING_SCOPE_MESSAGE)
-    if exc.retryable:
-        # Transport failure: nothing was judged about the token.
-        return web.ApiError(502, "meta_unreachable", "連不上 Meta，這把權杖還沒驗證。請稍後再試。")
-    shown = f"（代碼 {code}）" if code is not None else ""
+    if kind == graph.ERROR_AUTH:
+        return web.ApiError(
+            400, "meta_token_rejected",
+            f"Meta 拒絕了這個權杖{shown}。請確認權杖沒有過期、是從正確的帳號產生的。",
+        )
     return web.ApiError(
-        400, "meta_token_rejected",
-        f"Meta 拒絕了這個權杖{shown}。請確認權杖沒有過期、是從正確的帳號產生的。",
+        502, "meta_unreachable", f"Meta 暫時讀不到{shown}，這把權杖還沒驗證、沒有存。請稍後再試。"
     )
 
 
@@ -89,6 +97,8 @@ def connect_token(request: Request, body: TokenRequest):
         accounts = graph.list_ad_accounts(token)
     except graph.GraphError as exc:
         raise _token_rejection(exc) from exc
+    if not accounts:  # F47 Contract G: a token that lists no account is not stored
+        raise web.ApiError(400, "meta_token_no_accounts", _NO_ACCOUNTS_MESSAGE)
     repo.save_token(web.conn, actor.org_id, token)
     repo.upsert_accounts(web.conn, actor.org_id, accounts)
     web.conn.commit()
