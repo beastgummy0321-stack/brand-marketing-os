@@ -11,6 +11,7 @@ import type { ApiRead } from "@/lib/useApiRead";
 import { Chip, GradeChip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
+import { perSaleAmount } from "../patterns/csv";
 
 /** The evidence and learn cards of the confirm step (`ConfirmPage`), split out so the page stays under the
  * 800-line cap (`architectureBoundaries.test.ts`). The cards are page-private except `BudgetFitCard`, which the
@@ -409,7 +410,7 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
               max={meterMax}
               marker={targetValue}
               tone="success"
-              left={<>{scale.target.result_label}成本 {formatAmount(scale.cost_per_result)}</>}
+              left={<>{scale.target.result_label}成本 {perSaleAmount(scale.cost_per_result) ?? "累積中"}</>}
               right={<>上限 {formatTargetAmount(targetValue)}</>}
             />
             <div className="flex items-center gap-2">

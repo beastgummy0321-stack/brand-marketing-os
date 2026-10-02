@@ -2,6 +2,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { getCampaignStructure, type StructureAd, type StructureGroup } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
+import { perSaleAmount } from "../patterns/csv";
 import {
   Chip, GradeRules, GradeTermChip, MoneyTag, ReadFailed, Term, TreeRows, formatAmount, type TreeGroup, type TreeLeaf,
 } from "../patterns";
@@ -27,7 +28,7 @@ function leafValue(a: StructureAd, breakEven: number | null) {
     // Beside the chip that already says it: wraps onto two short lines so the ad name keeps its width at 1024.
     return <span className="inline-block max-w-[5.5rem] font-normal leading-snug text-muted-foreground">{label === "剛開始、數字還不夠" ? <Term k="thin">{label}</Term> : label}</span>;
   }
-  const cost = formatAmount(a.cost_per_result);
+  const cost = perSaleAmount(a.cost_per_result);
   return cost === null ? "—" : <>{cost} 元<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>;
 }
 

@@ -75,11 +75,6 @@ def non_negative(value, label: str, *, optional: bool = False) -> float | None:
     return result
 
 
-def signed(value, label: str, *, optional: bool = False) -> float | None:
-    """Any finite number, stored as typed (for a field whose negative has a meaning)."""
-    return number(value, label, optional=optional)
-
-
 class Bounds:
     """A number field's declared range. ``low_open`` / ``high_open`` exclude the end itself;
     ``None`` = no bound on that side. ``hint`` is appended to the refusal (an example)."""

@@ -26,7 +26,6 @@ def test_optional_empty_is_unset(value):
     assert r.number(value, "售價", optional=True) is None
     assert r.positive(value, "售價", optional=True) is None
     assert r.non_negative(value, "成本", optional=True) is None
-    assert r.signed(value, "運費", optional=True) is None
 
 
 @pytest.mark.parametrize("value", [None, "", "abc", True, float("nan"), math.inf, [1]])
@@ -46,10 +45,6 @@ def test_non_negative_keeps_zero():
     assert r.non_negative(0, "營收") == 0.0
     with pytest.raises(r.InputRuleError, match="^營收不能是負數。$"):
         r.non_negative(-5, "營收")
-
-
-def test_signed_keeps_negative_as_typed():
-    assert r.signed(-20, "運費") == -20.0
 
 
 def test_bounds_open_interval():
