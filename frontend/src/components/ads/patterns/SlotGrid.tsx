@@ -17,6 +17,11 @@ import { cn } from "@/lib/utils";
  *   status chip (the caller's 卡住), then the reason region under both halves (`data-slot="slot-reason"`, prototype
  *   `.why`): one sentence with the offending words marked, 「另有 N 個原因」 when there are more, the caller's exits
  *   (`actions`, prototype `.ac`) and the caller's `note` (what the last recheck said).
+ * - F45 (prototype `f45-slot-states`): `ready` takes `job` — what is running on a 處理中 slot, drawn in the region under
+ *   both halves (`data-slot="slot-job"`, prototype `.why .job`); `waiting` (`.slot.wait`): the two halves with a soft
+ *   warning border, the caller's 等你 chip, then the next-action region (`data-slot="slot-next"`: the caller's `actions`
+ *   and `note`). `emptyCopy` (ready / waiting): a copy half with no copy yet says so in muted words
+ *   (「文案還在寫」／「還沒選文案」, `data-variant="none"`) instead of leaving the half out.
  * The copy half (`data-slot="slot-copy"`) is 「✓ 文案 · <label>」 over a two-line clamp of the text; long names and
  * copy wrap (`overflow-wrap: anywhere`), never a control.
  * `offer` (F44): the ad's offer chip beside the name (`data-slot="slot-head"`); a name too long to share the line
@@ -39,7 +44,10 @@ export interface SlotCopyText { label: string; text: string }
 export interface SlotReason { text: string; terms: string[]; more?: number }
 
 type SlotTileProps =
-  | { variant: "ready"; name: string; thumbnailUrl: string | null; copy?: SlotCopyText | null; offer?: ReactNode; status?: ReactNode }
+  | { variant: "ready"; name: string; thumbnailUrl: string | null; copy?: SlotCopyText | null; emptyCopy?: string; offer?: ReactNode; status?: ReactNode;
+      job?: ReactNode }
+  | { variant: "waiting"; name: string; thumbnailUrl: string | null; copy?: SlotCopyText | null; emptyCopy?: string; offer?: ReactNode;
+      status?: ReactNode; actions?: ReactNode; note?: ReactNode }
   | { variant: "copy-only"; name: string; copy: SlotCopyText; offer?: ReactNode; imageActions?: ReactNode; extra?: ReactNode; status?: ReactNode }
   | { variant: "image-only"; name: string; thumbnailUrl: string | null; offer?: ReactNode; copyActions?: ReactNode; status?: ReactNode }
   | { variant: "blocked"; name: string; thumbnailUrl: string | null; copy?: SlotCopyText | null; offer?: ReactNode; status?: ReactNode;
@@ -51,6 +59,7 @@ const BOX = "flex min-h-[212px] flex-col gap-1.5 rounded-[10px] border p-2";
 const NAME = "text-[11.5px] font-medium [overflow-wrap:anywhere]";
 const DASHED = "border-[1.5px] border-dashed border-grade-thin bg-background/50 text-center";
 const HALF = "min-w-0 rounded-[7px]";
+const UNDER = "flex flex-col gap-2 border-t border-border pt-2";
 
 export function SlotTile(props: SlotTileProps) {
   if (props.variant === "ready") {
@@ -58,8 +67,23 @@ export function SlotTile(props: SlotTileProps) {
       <div data-slot="slot-tile" data-variant="ready" role="listitem" className={cn(BOX, "border-border bg-card")}>
         <SlotThumb url={props.thumbnailUrl} />
         <SlotHead name={props.name} offer={props.offer} />
-        {props.copy && <CopyHalf copy={props.copy} />}
-        {props.status && <div className="mt-auto self-start">{props.status}</div>}
+        {props.copy ? <CopyHalf copy={props.copy} /> : props.emptyCopy && <NoCopyHalf text={props.emptyCopy} />}
+        {props.status && <div className={cn("self-start", !props.job && "mt-auto")}>{props.status}</div>}
+        {props.job && <div data-slot="slot-job" className={cn(UNDER, "mt-auto")}>{props.job}</div>}
+      </div>
+    );
+  }
+  if (props.variant === "waiting") {
+    return (
+      <div data-slot="slot-tile" data-variant="waiting" role="listitem" className={cn(BOX, "border-warning/45 bg-card")}>
+        <SlotThumb url={props.thumbnailUrl} />
+        <SlotHead name={props.name} offer={props.offer} />
+        {props.copy ? <CopyHalf copy={props.copy} tick={false} /> : props.emptyCopy && <NoCopyHalf text={props.emptyCopy} />}
+        {props.status && <div className="self-start">{props.status}</div>}
+        <div data-slot="slot-next" className={cn(UNDER, "mt-auto")}>
+          {props.actions && <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">{props.actions}</div>}
+          {props.note}
+        </div>
       </div>
     );
   }
@@ -71,7 +95,7 @@ export function SlotTile(props: SlotTileProps) {
         <SlotHead name={props.name} offer={props.offer} />
         {props.copy && <CopyHalf copy={props.copy} tick={false} />}
         {props.status && <div className="self-start">{props.status}</div>}
-        <div data-slot="slot-reason" className="flex flex-col gap-2 border-t border-border pt-2">
+        <div data-slot="slot-reason" className={UNDER}>
           <p className="text-[12.5px] leading-normal [overflow-wrap:anywhere]">{markTerms(props.reason.text, props.reason.terms)}</p>
           {more > 0 && <span className="text-[11.5px] text-muted-foreground">另有 {more} 個原因</span>}
           {props.actions && <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">{props.actions}</div>}
@@ -140,6 +164,15 @@ function CopyHalf({ copy, tick = true }: { copy: SlotCopyText; tick?: boolean })
         {tick && <i aria-hidden="true" className="not-italic font-bold text-success">✓</i>}文案 · {copy.label}
       </span>
       <p className="line-clamp-2 text-xs leading-[1.4] [overflow-wrap:anywhere]">{copy.text}</p>
+    </div>
+  );
+}
+
+/** A copy half with no copy yet (prototype `.cp .t.none`): the muted sentence in the copy half's box. */
+function NoCopyHalf({ text }: { text: string }) {
+  return (
+    <div data-slot="slot-copy" data-variant="none" className={cn(HALF, "flex min-h-[58px] items-center border border-border bg-muted px-2 py-1.5")}>
+      <p className="text-xs leading-[1.4] text-muted-foreground">{text}</p>
     </div>
   );
 }

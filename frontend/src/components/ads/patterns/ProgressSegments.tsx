@@ -3,9 +3,10 @@ import { cn } from "@/lib/utils";
 /** Kit piece for the v9 progress segments (prototype `.prog`): one equal segment per item — launch items on the
  * handoff (`pubProg()`), change-set rows on 變更與核對, slots on 素材. `data-slot="progress-segments"`.
  * The 素材 slots add two states (F44 prototype `.prog i.run` / `i.bad`): `running` = 處理中, finishing by itself;
- * `blocked` = 卡住, the danger colour. */
+ * `blocked` = 卡住, the danger colour. F45 (prototype `f45-slot-states` `.prog i.wait`): `waiting` = 等你, the user's
+ * next action — a soft amber of its own, never the 處理中 colour. */
 
-export type SegmentState = "ok" | "built" | "mismatch" | "changed" | "todo" | "running" | "blocked";
+export type SegmentState = "ok" | "built" | "mismatch" | "changed" | "todo" | "running" | "waiting" | "blocked";
 
 const FILL: Record<SegmentState, string> = {
   ok: "bg-success",
@@ -14,6 +15,7 @@ const FILL: Record<SegmentState, string> = {
   changed: "bg-[repeating-linear-gradient(45deg,var(--color-warning)_0_3px,color-mix(in_oklab,var(--color-warning)_30%,white)_3px_6px)]",
   todo: "bg-muted",
   running: "bg-chart-soft",
+  waiting: "bg-warning/55",
   blocked: "bg-danger",
 };
 

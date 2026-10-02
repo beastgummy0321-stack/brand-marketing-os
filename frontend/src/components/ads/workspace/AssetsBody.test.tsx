@@ -4,7 +4,7 @@
  * F40-I09 (prototype `#/assets`): the tab polls while a slot is 處理中 and stops when none is, a video-format slot asks
  * for a video and refuses a photo, and a thumbnail two slots share prints 「同一張圖，文案不同」 with 換一張.
  * F44-I05 (prototype `f44-blocked-slot`, Contract D): a blocked slot says why (the quoted words marked, 「另有 N 個原因」),
- * offers the exit of its reason (換一版文案 / 到工作檯改文案 / 換一張) and 再檢查一次, is counted in the head, the progress bar
+ * offers the exit of its reason (F45: 改這句文案 / 到工作檯換一版 → or 換一版文案 / 換一張) and 再檢查一次, is counted in the head, the progress bar
  * and the draft bar, never keeps the poll alive, and every planned slot's head carries its offer chip. */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -12,14 +12,14 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
-import { chooseSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
+import { chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
 import { AssetApiError, createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
 import { AssetsBody } from "./AssetsBody";
 
 vi.mock("@/lib/adsSlotsApi", async (original) => ({
   ...await original<typeof import("@/lib/adsSlotsApi")>(),
   getSlots: vi.fn(), uploadIntoSlot: vi.fn(), fetchSlotThumbnail: vi.fn(), getSlotCopyOptions: vi.fn(), chooseSlotCopy: vi.fn(),
-  recheckSlot: vi.fn(),
+  recheckSlot: vi.fn(), editSlotCopy: vi.fn(),
 }));
 vi.mock("@/lib/adsMaterialApi", async (original) => ({ ...await original<typeof import("@/lib/adsMaterialApi")>(), cancelMaterialTask: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async (original) => ({
@@ -30,7 +30,7 @@ const IMG = "https://scontent.example/creative/2.jpg";
 const AUTH = "/api/ads/brands/brd_1/user-assets/uas_1/thumbnail";
 
 function slot(overrides: Partial<Slot>): Slot {
-  return { ad_id: "ad_x", entity_id: null, name: "廣告", state: "ready", thumbnail_url: IMG, confirmed: true, replace_task_id: null, copy: null, workbench_href: null, ...overrides };
+  return { ad_id: "ad_x", entity_id: null, name: "廣告", state: "ready", thumbnail_url: IMG, confirmed: true, replace_task_id: null, copy: null, workbench_href: null, waiting: null, job: null, ...overrides };
 }
 
 function slots(overrides: Partial<CampaignSlots> = {}): CampaignSlots {
@@ -38,7 +38,7 @@ function slots(overrides: Partial<CampaignSlots> = {}): CampaignSlots {
     { group_id: "adg_a", name: "A・廣泛受眾", slots: [
       slot({ ad_id: "ad_a1", name: "晨光隨行杯・日常出發（秋季新色）" }),
       slot({ ad_id: "ad_a2", name: "通勤情境單圖・好攜帶，走到哪都適合（最多數量 1150706）" }),
-      slot({ ad_id: "ad_a3", name: "辦公室一角・質感桌面", state: "in_progress", confirmed: false, thumbnail_url: null }),
+      slot({ ad_id: "ad_a3", name: "辦公室一角・質感桌面", state: "in_progress", confirmed: false, thumbnail_url: null, job: { kind: "preview", done: null, of: null } }),
       slot({ ad_id: "ad_a4", name: "早晨第一口・單圖", state: "missing", confirmed: false, thumbnail_url: null }),
     ] },
     { group_id: "adg_b", name: "B・再行銷 30 天", slots: [slot({ ad_id: "ad_b1", name: "再行銷・兩入組 NT$1,680 免運" })] },
@@ -88,7 +88,7 @@ describe("AssetsBody — the slots card", () => {
   it("draft: x／y 格已備妥, per-group counts, a chip per slot state, the reserved seat per group", async () => {
     renderBody();
     expect(await screen.findByRole("heading", { name: "3／5 格已備妥" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "3／5 格已備妥" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "3／5 格已備妥，1 格處理中" })).toBeTruthy();
     const a = screen.getByRole("list", { name: "A・廣泛受眾" });
     expect(within(a).getAllByText("已確認")).toHaveLength(2);
     expect(within(a).getByText("處理中")).toBeTruthy();
@@ -102,11 +102,12 @@ describe("AssetsBody — the slots card", () => {
     expect(within(a).getByRole("link", { name: "從素材工作檯" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9");
   });
 
-  it("draft bar: 確認上架清單 counts ready slots only, goes to …/publish, and says the missing ones are not built", async () => {
+  it("draft bar: 確認上架清單 counts ready slots only, goes to …/publish, and says what is not in it yet", async () => {
     renderBody();
     const go = await screen.findByRole("link", { name: "確認上架清單（3 則） →" });
     expect(go.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish");
-    expect(screen.getByText("缺圖的那 2 則先不建立，不會花到錢；補上圖後再加上去")).toBeTruthy();
+    // F45: a 處理中 slot is named in the hint; with nothing pending the 缺圖 hint stands (see the F44 block).
+    expect(screen.getByText("1 格處理中：好了才會進上架清單")).toBeTruthy();
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
   });
 
@@ -488,7 +489,8 @@ describe("AssetsBody — F40-I09: the tab updates itself and says what each slot
   /** The prototype's four tiles: one 處理中, one sharing its photo with the first, one video-format, one ready. */
   const fourTiles = (first: Slot["state"] = "in_progress") => slots({ groups: [
     { group_id: "g_new", name: "新客", slots: [
-      slot({ ad_id: "a1", name: "運動後與忙碌日常", state: first, confirmed: first === "ready", thumbnail_url: P1, copy: copyA, format_key: "single_image" }),
+      slot({ ad_id: "a1", name: "運動後與忙碌日常", state: first, confirmed: first === "ready", thumbnail_url: P1, copy: copyA, format_key: "single_image",
+        job: first === "in_progress" ? { kind: "preview", done: null, of: null } : null }),
       slot({ ad_id: "a2", name: "早晨通勤", state: "ready", thumbnail_url: P1, copy: copyB, format_key: "single_image" }),
       slot({ ad_id: "a3", name: "深夜讀書", state: "copy_only", confirmed: false, thumbnail_url: null, copy: copyC, format_key: "video" }),
       slot({ ad_id: "a4", name: "上班日午休", state: "ready", thumbnail_url: P2, copy: copyB, format_key: "single_image" }),
@@ -507,21 +509,21 @@ describe("AssetsBody — F40-I09: the tab updates itself and says what each slot
     expect(screen.getByRole("heading", { name: "2／4 格已備妥" })).toBeTruthy();
     const running = tile("運動後與忙碌日常");
     expect(within(running).getByText("處理中")).toBeTruthy();
-    expect(within(running).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+    expect(within(running).getByText("自動更新，不用重整")).toBeTruthy();
     // No caption on the tile still being processed, even though it shares its photo.
     expect(within(running).queryByText("同一張圖，文案不同")).toBeNull();
     expect(getSlots).toHaveBeenCalledTimes(1);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(getSlots).toHaveBeenCalledTimes(2);
-    expect(within(tile("運動後與忙碌日常")).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+    expect(within(tile("運動後與忙碌日常")).getByText("自動更新，不用重整")).toBeTruthy();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(getSlots).toHaveBeenCalledTimes(3);
     expect(screen.getByRole("heading", { name: "3／4 格已備妥" })).toBeTruthy();
     const done = tile("運動後與忙碌日常");
     expect(within(done).getByText("已確認・剛處理好")).toBeTruthy();
-    expect(within(done).queryByText("處理中・自動更新，不用重整")).toBeNull();
+    expect(within(done).queryByText("自動更新，不用重整")).toBeNull();
 
     // Nothing is in progress any more: the interval is gone.
     await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
@@ -628,7 +630,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
   const failedFile = slot({ ad_id: "ada_4", name: NAME_FILE, state: "blocked", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET_HREF,
     copy: null, blocked: { text: "這個檔案處理失敗：圖片格式讀不出來。", terms: [], fix: "file", more: 1 } });
   const running = slot({ ad_id: "ada_5", name: NAME_RUNNING, state: "in_progress", confirmed: false, thumbnail_url: null, blocked: null, offer_label: "無優惠", workbench_href: SET_HREF,
-    copy: waiting("下午三點的會議前", "先補一顆") });
+    copy: waiting("下午三點的會議前", "先補一顆"), job: { kind: "preview", done: null, of: null } });
   /** The prototype's grid: one ready, three blocked (coordinate mismatch, unbacked promise, failed file), one 處理中. */
   const grid = (list: Slot[] = [ready, mismatch, unbacked, failedFile, running]) => slots({ groups: [{ group_id: "adg_new", name: "新客", slots: list }] });
   const tile = (name: string) => screen.getByText(name).closest("[data-slot=slot-tile]") as HTMLElement;
@@ -644,19 +646,25 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     expect(await screen.findByRole("heading", { name: "1／5 格已備妥" })).toBeTruthy();
     const count = screen.getByText("3 格卡住");
     expect(count.dataset.tone).toBe("bad");
-    const bar = screen.getByRole("img", { name: "1／5 格已備妥，3 格卡住" });
+    const bar = screen.getByRole("img", { name: "1／5 格已備妥，3 格卡住、1 格處理中" });
     expect([...bar.querySelectorAll("[data-state]")].map((i) => (i as HTMLElement).dataset.state)).toEqual(["ok", "blocked", "blocked", "blocked", "running"]);
     expect(bar.querySelector("[data-state=blocked]")?.className).toContain("bg-danger");
-    expect(screen.getByText("3 格卡住，處理好才會進上架清單")).toBeTruthy();
+    expect(screen.getByText("3 格卡住、1 格處理中：好了才會進上架清單")).toBeTruthy();
     expect(screen.queryByText(/缺圖的那/)).toBeNull();
     // A blocked slot is not ready: the launch list counts the one ready slot.
     expect(screen.getByRole("link", { name: "確認上架清單（1 則） →" })).toBeTruthy();
     expect(screen.getByText("1／5", { selector: "[data-slot=chip]" })).toBeTruthy();
   });
 
-  it("no blocked slot: no 卡住 chip, and the bar keeps the 缺圖 hint", async () => {
+  it("nothing blocked, waiting or running: no count chip, and the bar keeps the 缺圖 hint", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "g", name: "A", slots: [
+      slot({ ad_id: "ad_1" }),
+      slot({ ad_id: "ad_2", name: "早晨第一口", state: "missing", confirmed: false, thumbnail_url: null }),
+      slot({ ad_id: "ad_3", name: "午後一顆", state: "missing", confirmed: false, thumbnail_url: null }),
+    ] }] }));
     renderBody();
-    await screen.findByRole("heading", { name: "3／5 格已備妥" });
+    await screen.findByRole("heading", { name: "1／3 格已備妥" });
+    expect(screen.queryByText(/格等你|格處理中/)).toBeNull();
     expect(screen.queryByText(/格卡住/)).toBeNull();
     expect(screen.getByText("缺圖的那 2 則先不建立，不會花到錢；補上圖後再加上去")).toBeTruthy();
   });
@@ -690,7 +698,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     expect(within(third).getByText("另有 1 個原因")).toBeTruthy();
     // The slot still being processed is not blocked.
     expect(tile(NAME_RUNNING).dataset.variant).toBe("ready");
-    expect(within(tile(NAME_RUNNING)).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+    expect(within(tile(NAME_RUNNING)).getByText("自動更新，不用重整")).toBeTruthy();
   });
 
   it("every planned slot's head carries its offer chip — accent unless 無優惠; a slot without the label has none", async () => {
@@ -712,33 +720,37 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     expect(offer("UGC_開箱_v3_1080x1350")).toBeNull();
   });
 
-  it("fix: copy → 換一版文案 opens the picker; the chosen version goes through chooseSlotCopy and the returned slots replace the grid", async () => {
+  it("fix: copy → 改這句文案 and 到工作檯換一版 →; without a set 換一版文案 opens the picker; the chosen version goes through chooseSlotCopy and the returned slots replace the grid", async () => {
     const user = userEvent.setup();
     vi.mocked(getSlots).mockResolvedValue(grid());
     vi.mocked(getSlotCopyOptions).mockResolvedValue(options());
-    const fixed = slot({ ...mismatch, state: "ready", confirmed: true, blocked: null,
+    const fixed = slot({ ...unbacked, state: "ready", confirmed: true, blocked: null,
       copy: { source: "placement", label: "已確認", headline: "讀到凌晨一點", body: "讓軟糖陪你撐完最後一章", description: null } });
-    vi.mocked(chooseSlotCopy).mockResolvedValue({ placement: placement({ confirmed_at: "2026-10-01T02:00:00Z" }), slots: grid([ready, fixed, unbacked, failedFile, running]) });
+    vi.mocked(chooseSlotCopy).mockResolvedValue({ placement: placement({ confirmed_at: "2026-10-01T02:00:00Z" }), slots: grid([ready, mismatch, fixed, failedFile, running]) });
     const { props } = renderBody();
     await screen.findByRole("heading", { name: "1／5 格已備妥" });
     const first = tile(NAME_MISMATCH);
-    // The ad has a workbench set: the second exit goes there (the /app prefix stripped for the router).
-    expect(within(first).getByRole("link", { name: "到工作檯改文案 →" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1");
+    // F45: the ad has a workbench set — 改這句文案 (the editor) and 到工作檯換一版 → (the /app prefix stripped for the
+    // router); no picker on the tile.
+    expect(within(first).getByRole("button", { name: `改這句文案：${NAME_MISMATCH}` })).toBeTruthy();
+    expect(within(first).getByRole("link", { name: "到工作檯換一版 →" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1");
+    expect(within(first).queryByRole("button", { name: /換一版文案/ })).toBeNull();
     expect(within(first).queryByRole("button", { name: /換一張/ })).toBeNull();
-    // An ad without a set offers the picker only.
-    expect(within(tile(NAME_UNBACKED)).getByRole("button", { name: `換一版文案：${NAME_UNBACKED}` })).toBeTruthy();
-    expect(within(tile(NAME_UNBACKED)).queryByRole("link", { name: "到工作檯改文案 →" })).toBeNull();
+    // An ad without a set offers the editor and the picker.
+    const second = tile(NAME_UNBACKED);
+    expect(within(second).getByRole("button", { name: `改這句文案：${NAME_UNBACKED}` })).toBeTruthy();
+    expect(within(second).queryByRole("link", { name: "到工作檯換一版 →" })).toBeNull();
 
-    await user.click(within(first).getByRole("button", { name: `換一版文案：${NAME_MISMATCH}` }));
-    const dialog = await screen.findByRole("dialog", { name: `「${NAME_MISMATCH}」換一版文案` });
-    expect(within(dialog).getByText("選一版沒有寫「優惠」的文案，這一格會馬上再檢查一次。")).toBeTruthy();
+    await user.click(within(second).getByRole("button", { name: `換一版文案：${NAME_UNBACKED}` }));
+    const dialog = await screen.findByRole("dialog", { name: `「${NAME_UNBACKED}」換一版文案` });
+    expect(within(dialog).getByText("選一版沒有寫「加贈、免運」的文案，這一格會馬上再檢查一次。")).toBeTruthy();
     await user.click((await within(dialog).findAllByRole("listitem"))[0]);
-    expect(chooseSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_2", { set_id: "wb_set_1", version_id: "wo_2" });
+    expect(chooseSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_3", { set_id: "wb_set_1", version_id: "wo_2" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await screen.findByRole("heading", { name: "2／5 格已備妥" })).toBeTruthy();
     expect(screen.getByText("2 格卡住")).toBeTruthy();
-    expect(tile(NAME_MISMATCH).dataset.variant).toBe("ready");
-    expect(await within(tile(NAME_MISMATCH)).findByText("已確認・剛處理好")).toBeTruthy();
+    expect(tile(NAME_UNBACKED).dataset.variant).toBe("ready");
+    expect(await within(tile(NAME_UNBACKED)).findByText("已確認・剛處理好")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("文案換好了，這一格已確認");
     expect(props.onPlacementChanged).toHaveBeenCalledTimes(1);
   });
@@ -747,17 +759,17 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     const user = userEvent.setup();
     vi.mocked(getSlots).mockResolvedValue(grid());
     vi.mocked(getSlotCopyOptions).mockResolvedValue(options());
-    const again = slot({ ...mismatch, copy: waiting("讀到凌晨一點", "現在下單加贈一盒"),
+    const again = slot({ ...unbacked, copy: waiting("讀到凌晨一點", "現在下單加贈一盒"),
       blocked: { text: "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。", terms: ["加贈"], fix: "copy", more: 0 } });
-    vi.mocked(chooseSlotCopy).mockResolvedValue({ placement: placement(), slots: grid([ready, again, unbacked, failedFile, running]) });
+    vi.mocked(chooseSlotCopy).mockResolvedValue({ placement: placement(), slots: grid([ready, mismatch, again, failedFile, running]) });
     renderBody();
     await screen.findByRole("heading", { name: "1／5 格已備妥" });
-    await user.click(within(tile(NAME_MISMATCH)).getByRole("button", { name: `換一版文案：${NAME_MISMATCH}` }));
+    await user.click(within(tile(NAME_UNBACKED)).getByRole("button", { name: `換一版文案：${NAME_UNBACKED}` }));
     await user.click((await within(await screen.findByRole("dialog")).findAllByRole("listitem"))[0]);
     expect((await screen.findByRole("status")).textContent).toBe("文案換好了，這一格還是卡住，原因寫在格子裡。");
     expect(screen.getByRole("heading", { name: "1／5 格已備妥" })).toBeTruthy();
-    expect(tile(NAME_MISMATCH).dataset.variant).toBe("blocked");
-    expect(tile(NAME_MISMATCH).querySelector("[data-slot=slot-reason] p")?.textContent).toBe("文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。");
+    expect(tile(NAME_UNBACKED).dataset.variant).toBe("blocked");
+    expect(tile(NAME_UNBACKED).querySelector("[data-slot=slot-reason] p")?.textContent).toBe("文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。");
     expect(screen.queryByText(/備妥。$/)).toBeNull();
   });
 
@@ -772,7 +784,8 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     const failed = tile(NAME_FILE);
     expect(within(failed).getByRole("button", { name: `換一張：${NAME_FILE}` })).toBeTruthy();
     expect(within(failed).queryByRole("button", { name: /換一版文案/ })).toBeNull();
-    expect(within(failed).queryByRole("link", { name: "到工作檯改文案 →" })).toBeNull();
+    expect(within(failed).queryByRole("button", { name: /改這句文案/ })).toBeNull();
+    expect(within(failed).queryByRole("link", { name: "到工作檯換一版 →" })).toBeNull();
     expect(within(failed).getByRole("button", { name: `再檢查一次：${NAME_FILE}` })).toBeTruthy();
     fireEvent.change(within(failed).getByLabelText(`選擇「${NAME_FILE}」的檔案`), { target: { files: [new File(["png"], "noon.png", { type: "image/png" })] } });
     await waitFor(() => expect(uploadIntoSlot).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_4", { upload_id: "up_1" }));
@@ -887,11 +900,11 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
 
   it("a 處理中 slot that the poll finds refused becomes 卡住 and the poll stops", async () => {
     vi.useFakeTimers();
-    const before = slot({ ...mismatch, state: "in_progress", blocked: null });
+    const before = slot({ ...mismatch, state: "in_progress", blocked: null, job: { kind: "preview", done: null, of: null } });
     vi.mocked(getSlots).mockResolvedValueOnce(grid([ready, before])).mockResolvedValue(grid([ready, mismatch]));
     const view = renderBody();
     await act(async () => {});
-    expect(within(tile(NAME_MISMATCH)).getByText("處理中・自動更新，不用重整")).toBeTruthy();
+    expect(within(tile(NAME_MISMATCH)).getByText("自動更新，不用重整")).toBeTruthy();
     expect(screen.queryByText(/格卡住/)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(getSlots).toHaveBeenCalledTimes(2);
@@ -900,5 +913,227 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
     expect(getSlots).toHaveBeenCalledTimes(2);
     view.unmount();
+  });
+});
+
+describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (prototype f45-slot-states #/c1/assets, Contract W)", () => {
+  const SET = (n: number) => `/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_${n}`;
+  const thumbOf = (id: string) => `https://scontent.example/creative/${id}.jpg`;
+  const placed = (label: string, body: string, headline: string | null = null) => ({ source: "placement" as const, label, headline, body, description: null });
+  const NAMES = {
+    a1: "通勤族・三盒組優惠價", a2: "健身後・三種口味一次看", a3: "上班日・下午三點", a4: "備考生・讀到深夜",
+    a5: "會議前・午休五分鐘", a6: "睡前・隔天精神好", a7: "週末出遊・隨身一盒",
+  };
+  // The prototype's seven slots in the GET …/slots shape (app/tests/test_ads_slots.py payloads).
+  const a1 = slot({ ad_id: "ada_1", name: NAMES.a1, state: "ready", thumbnail_url: thumbOf("1"), offer_label: "組合優惠", workbench_href: SET(1),
+    copy: placed("已確認", "三盒組優惠價 NT$999（原價 NT$1,500），通勤包裡放一盒剛好") });
+  const a2 = slot({ ad_id: "ada_2", name: NAMES.a2, state: "ready", thumbnail_url: thumbOf("2"), offer_label: "無優惠", workbench_href: SET(2),
+    copy: placed("已確認", "練完一顆，三種口味輪著吃") });
+  const a3 = slot({ ad_id: "ada_3", name: NAMES.a3, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET(3),
+    copy: placed("待確認", "下午三點的會議前，先補一顆"), job: { kind: "preview", done: null, of: null } });
+  const a4 = slot({ ad_id: "ada_4", name: NAMES.a4, state: "waiting", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET(4),
+    copy: null, waiting: { action: "pick_on_workbench", text: "等你：到工作檯選定一版文案" } });
+  const a5 = slot({ ad_id: "ada_5", name: NAMES.a5, state: "waiting", confirmed: false, thumbnail_url: thumbOf("5"), offer_label: "無優惠", workbench_href: SET(5),
+    copy: placed("待確認", "午休 5 分鐘，一顆就好"), waiting: { action: "confirm_copy", text: "等你：確認這版文案" } });
+  const a6 = slot({ ad_id: "ada_6", name: NAMES.a6, state: "blocked", confirmed: false, thumbnail_url: thumbOf("6"), offer_label: "無優惠", workbench_href: SET(6),
+    copy: placed("待確認", "醫師推薦！睡前一顆，隔天精神好"),
+    blocked: { text: "文案寫了「醫師推薦」，品牌資料裡沒有登記這個背書。", terms: ["醫師推薦"], fix: "copy", more: 0 } });
+  const a7 = slot({ ad_id: "ada_7", name: NAMES.a7, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "組合優惠", workbench_href: SET(7),
+    copy: null, job: { kind: "copy", done: 1, of: 3 } });
+  const grid = (list: Slot[] = [a1, a2, a3, a4, a5, a6, a7]) => slots({ groups: [{ group_id: "adg_new", name: "新客", slots: list }] });
+  const tile = (name: string) => screen.getByText(name).closest("[data-slot=slot-tile]") as HTMLElement;
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("the head counts 卡住／等你／處理中, each state has its segment colour and the draft bar names them", async () => {
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    renderBody();
+    expect(await screen.findByRole("heading", { name: "2／7 格已備妥" })).toBeTruthy();
+    const head = screen.getByRole("heading", { name: "2／7 格已備妥" }).parentElement as HTMLElement;
+    expect([...head.querySelectorAll("[data-slot=chip]")].map((c) => [c.textContent, (c as HTMLElement).dataset.tone]))
+      .toEqual([["1 格卡住", "bad"], ["2 格等你", "warn"], ["2 格處理中", "accent"]]);
+    const bar = screen.getByRole("img", { name: "2／7 格已備妥，1 格卡住、2 格等你、2 格處理中" });
+    expect([...bar.querySelectorAll("[data-state]")].map((i) => (i as HTMLElement).dataset.state))
+      .toEqual(["ok", "ok", "running", "waiting", "waiting", "blocked", "running"]);
+    // 等你 has its own colour: never the 處理中 one.
+    const waitFill = bar.querySelector("[data-state=waiting]")?.className ?? "";
+    expect(waitFill).toContain("bg-warning");
+    expect(waitFill).not.toBe(bar.querySelector("[data-state=running]")?.className);
+    expect(screen.getByText("1 格卡住、2 格等你、2 格處理中：好了才會進上架清單")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "確認上架清單（2 則） →" })).toBeTruthy();
+    expect(screen.queryByText(/缺圖的那/)).toBeNull();
+  });
+
+  it("處理中 says what runs: the preview job, and the copy job with 已寫好 d／n and its bar", async () => {
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    const preview = tile(NAMES.a3);
+    expect(within(preview).getByText("處理中", { selector: "[data-slot=chip]" }).dataset.tone).toBe("accent");
+    const previewJob = preview.querySelector("[data-slot=slot-job]") as HTMLElement;
+    expect(previewJob.textContent).toBe("預覽製作中：把這張圖和文案合成預覽自動更新，不用重整");
+    expect(previewJob.querySelector("[data-slot=slot-job-steps]")).toBeNull();
+    expect(within(preview).getByText(/文案 · 待確認/)).toBeTruthy();
+
+    const copy = tile(NAMES.a7);
+    const copyJob = copy.querySelector("[data-slot=slot-job]") as HTMLElement;
+    expect(copyJob.textContent).toBe("文案生成中：工作檯正在寫 3 版文案，已寫好 1／3自動更新，不用重整");
+    const steps = [...(copyJob.querySelector("[data-slot=slot-job-steps]")?.children ?? [])].map((i) => i.className.includes("bg-primary"));
+    expect(steps).toEqual([true, false, false]);
+    expect(within(copy).getByText("文案還在寫")).toBeTruthy();
+    // No action on a slot the system is working on.
+    expect(within(copy).queryByRole("button")).toBeNull();
+  });
+
+  it("a copy job without counts has no 已寫好 and no bar", async () => {
+    vi.mocked(getSlots).mockResolvedValue(grid([a1, slot({ ...a7, job: { kind: "copy", done: null, of: null } })]));
+    renderBody();
+    await screen.findByRole("heading", { name: "1／2 格已備妥" });
+    const job = tile(NAMES.a7).querySelector("[data-slot=slot-job]") as HTMLElement;
+    expect(job.textContent).toBe("文案生成中：工作檯正在寫文案自動更新，不用重整");
+    expect(job.querySelector("[data-slot=slot-job-steps]")).toBeNull();
+  });
+
+  it("等你：到工作檯選定一版文案 → links to the slot's workbench set; the copy half says none is chosen", async () => {
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    const pick = tile(NAMES.a4);
+    expect(pick.dataset.variant).toBe("waiting");
+    expect(within(pick).getByText("等你", { selector: "[data-slot=chip]" }).dataset.tone).toBe("warn");
+    expect(within(pick).getByRole("link", { name: "等你：到工作檯選定一版文案 →" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_4");
+    expect(within(pick).getByText("還沒選文案")).toBeTruthy();
+    expect(within(pick).queryByRole("button")).toBeNull();
+  });
+
+  it("等你：確認這版文案 runs the confirmation (檢查中… while it runs); ready says so and the tile turns 已確認・剛處理好", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    let finish: (value: { slots: CampaignSlots }) => void = () => {};
+    vi.mocked(recheckSlot).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { props } = renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    const confirm = tile(NAMES.a5);
+    expect(within(confirm).getByText(/文案 · 待確認/)).toBeTruthy();
+    expect(within(confirm).getByRole("button", { name: `改文案：${NAMES.a5}` })).toBeTruthy();
+    await user.click(within(confirm).getByRole("button", { name: "等你：確認這版文案" }));
+    expect(recheckSlot).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_5");
+    expect(within(tile(NAMES.a5)).getByRole("button", { name: "檢查中…" })).toHaveProperty("disabled", true);
+
+    const done = slot({ ...a5, state: "ready", confirmed: true, waiting: null, copy: placed("已確認", "午休 5 分鐘，一顆就好") });
+    await act(async () => { finish({ slots: grid([a1, a2, a3, a4, done, a6, a7]) }); });
+    expect(await screen.findByRole("heading", { name: "3／7 格已備妥" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("這一格已確認");
+    expect(await within(tile(NAMES.a5)).findByText("已確認・剛處理好")).toBeTruthy();
+    expect(screen.getByText("1 格等你")).toBeTruthy();
+    expect(props.onPlacementChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused confirmation turns the tile 卡住 with the reason, never ready", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    const refused = slot({ ...a5, state: "blocked", waiting: null,
+      blocked: { text: "這則規劃的是「無優惠」，文案卻寫了「優惠」。", terms: ["優惠"], fix: "copy", more: 0 } });
+    vi.mocked(recheckSlot).mockResolvedValue({ slots: grid([a1, a2, a3, a4, refused, a6, a7]) });
+    renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    await user.click(within(tile(NAMES.a5)).getByRole("button", { name: "等你：確認這版文案" }));
+    expect((await screen.findByRole("status")).textContent).toBe("卡住了，原因寫在格子裡");
+    expect(tile(NAMES.a5).dataset.variant).toBe("blocked");
+    expect(screen.getByText("2 格卡住")).toBeTruthy();
+  });
+
+  it("改文案 edits in place: the single 內文 textarea, 保存後馬上檢查, empty refused here; a refused save turns 卡住", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    const refused = slot({ ...a5, state: "blocked", waiting: null, copy: placed("待確認", "午休優惠，一顆就好"),
+      blocked: { text: "這則規劃的是「無優惠」，文案卻寫了「優惠」。", terms: ["優惠"], fix: "copy", more: 0 } });
+    vi.mocked(editSlotCopy).mockResolvedValue({ placement: placement(), slots: grid([a1, a2, a3, a4, refused, a6, a7]) });
+    const { props } = renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    await user.click(within(tile(NAMES.a5)).getByRole("button", { name: `改文案：${NAMES.a5}` }));
+    const dialog = await screen.findByRole("dialog", { name: `改「${NAMES.a5}」的文案` });
+    expect(within(dialog).getAllByRole("textbox")).toHaveLength(1);
+    const field = within(dialog).getByRole("textbox", { name: "文案" });
+    expect((field as HTMLTextAreaElement).value).toBe("午休 5 分鐘，一顆就好");
+    expect(within(dialog).getByText("保存後馬上檢查")).toBeTruthy();
+
+    await user.clear(field);
+    await user.type(field, "   ");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect(within(dialog).getByRole("alert").textContent).toBe("文案不能是空的");
+    expect(editSlotCopy).not.toHaveBeenCalled();
+
+    await user.clear(field);
+    await user.type(field, "午休優惠，一顆就好");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect(editSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_5", { body: "午休優惠，一顆就好" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("status").textContent).toBe("文案已保存，但卡住了，原因寫在格子裡");
+    expect(tile(NAMES.a5).dataset.variant).toBe("blocked");
+    expect(tile(NAMES.a5).querySelector("[data-slot=slot-reason] p")?.textContent).toBe("這則規劃的是「無優惠」，文案卻寫了「優惠」。");
+    expect(props.onPlacementChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("卡住 on a copy reason: 改這句文案 saves the fix and the slot comes back 已確認", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSlots).mockResolvedValue(grid());
+    const fixed = slot({ ...a6, state: "ready", confirmed: true, blocked: null, copy: placed("已確認", "睡前一顆，隔天開會不打呵欠") });
+    vi.mocked(editSlotCopy).mockResolvedValue({ placement: placement({ confirmed_at: "2026-10-02T02:00:00Z" }), slots: grid([a1, a2, a3, a4, a5, fixed, a7]) });
+    renderBody();
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
+    const blocked = tile(NAMES.a6);
+    expect(blocked.dataset.variant).toBe("blocked");
+    expect([...blocked.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["醫師推薦"]);
+    expect(within(blocked).getByRole("link", { name: "到工作檯換一版 →" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9/sets/wb_set_6");
+    expect(within(blocked).getByRole("button", { name: `再檢查一次：${NAMES.a6}` })).toBeTruthy();
+    await user.click(within(blocked).getByRole("button", { name: `改這句文案：${NAMES.a6}` }));
+    const field = within(await screen.findByRole("dialog")).getByRole("textbox", { name: "文案" });
+    expect((field as HTMLTextAreaElement).value).toBe("醫師推薦！睡前一顆，隔天精神好");
+    await user.clear(field);
+    await user.type(field, "睡前一顆，隔天開會不打呵欠");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(editSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_6", { body: "睡前一顆，隔天開會不打呵欠" });
+    expect((await screen.findByRole("status")).textContent).toBe("文案已保存，這一格已確認");
+    expect(await screen.findByRole("heading", { name: "3／7 格已備妥" })).toBeTruthy();
+    expect(await within(tile(NAMES.a6)).findByText("已確認・剛處理好")).toBeTruthy();
+    expect(screen.queryByText(/格卡住/)).toBeNull();
+  });
+
+  it("a copy with a headline and a body edits both, each labelled; a refused save stays in the dialog", async () => {
+    const user = userEvent.setup();
+    const both = slot({ ...a5, copy: placed("待確認", "一顆就好", "午休 5 分鐘") });
+    vi.mocked(getSlots).mockResolvedValue(grid([a1, both]));
+    vi.mocked(editSlotCopy).mockRejectedValue(new AssetApiError("這一格還沒有圖，先上傳圖再選文案。", 409));
+    renderBody();
+    await screen.findByRole("heading", { name: "1／2 格已備妥" });
+    await user.click(within(tile(NAMES.a5)).getByRole("button", { name: `改文案：${NAMES.a5}` }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByRole("textbox").map((t) => t.getAttribute("aria-label"))).toEqual(["標題", "內文"]);
+    await user.type(within(dialog).getByRole("textbox", { name: "內文" }), "，不用配水");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect(editSlotCopy).toHaveBeenCalledWith("brd_1", "cmp_1", "ada_5", { headline: "午休 5 分鐘", body: "一顆就好，不用配水" });
+    expect((await within(dialog).findByRole("alert")).textContent).toBe("這一格還沒有圖，先上傳圖再選文案。");
+    expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
+  });
+
+  it("no polling with only 等你 and 卡住 slots; an in_progress slot polls", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSlots).mockResolvedValue(grid([a1, a4, a5, a6]));
+    const quiet = renderBody();
+    await act(async () => {});
+    expect(screen.getByRole("heading", { name: "1／4 格已備妥" })).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+    expect(getSlots).toHaveBeenCalledTimes(1);
+    quiet.unmount();
+
+    vi.mocked(getSlots).mockClear().mockResolvedValue(grid([a1, a4, a7]));
+    const busy = renderBody();
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(getSlots).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(getSlots).toHaveBeenCalledTimes(3);
+    busy.unmount();
   });
 });

@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  ChangeTimeline, CopyField, CopyFields, DAY_SWATCH, DayGrid, Legend, MoneyInput, PickCard, PickGroup, SlotGrid, SlotTile,
+  ChangeTimeline, CopyField, CopyFields, DAY_SWATCH, DayGrid, Legend, MoneyInput, PickCard, PickGroup, ProgressSegments, SlotGrid, SlotTile,
   SourceList, SourceRow, StageRail, TodoRow, TreeRows, type DayGridRow,
 } from ".";
 
@@ -200,6 +200,45 @@ describe("SlotGrid", () => {
     expect(within(tiles[2]).getByRole("button", { name: "選一版文案" })).toBeTruthy();
     expect(tiles[2].querySelector('img[src="https://scontent.example/c.jpg"]')).toBeTruthy();
     expect(within(tiles[2]).queryByText(/文案 · /)).toBeNull();
+  });
+
+  it("F45: a ready tile's job region, the waiting variant's next-action region, and the empty copy half", () => {
+    render(
+      <SlotGrid label="廣告組 C">
+        <SlotTile variant="ready" name="週末出遊・隨身一盒" thumbnailUrl={null} emptyCopy="文案還在寫" status={<span>處理中</span>}
+          job={<p>文案生成中：工作檯正在寫 3 版文案</p>} />
+        <SlotTile variant="waiting" name="備考生・讀到深夜" thumbnailUrl={null} emptyCopy="還沒選文案" status={<span>等你</span>}
+          actions={<a href="/workbench">等你：到工作檯選定一版文案 →</a>} />
+        <SlotTile variant="waiting" name="會議前・午休五分鐘" thumbnailUrl={null} copy={{ label: "待確認", text: "午休 5 分鐘，一顆就好" }}
+          status={<span>等你</span>} actions={<button type="button">等你：確認這版文案</button>} note={<p>沒有檢查成功</p>} />
+        <SlotTile variant="ready" name="通勤路上一顆" thumbnailUrl={null} status={<span>已確認</span>} />
+      </SlotGrid>,
+    );
+    const tiles = within(screen.getByRole("list", { name: "廣告組 C" })).getAllByRole("listitem");
+    expect(tiles.map((t) => t.dataset.variant)).toEqual(["ready", "waiting", "waiting", "ready"]);
+    expect(tiles[0].querySelector("[data-slot=slot-job]")?.textContent).toBe("文案生成中：工作檯正在寫 3 版文案");
+    expect(tiles[0].querySelector("[data-slot=slot-copy]")?.getAttribute("data-variant")).toBe("none");
+    expect(within(tiles[0]).getByText("文案還在寫")).toBeTruthy();
+    expect(tiles[1].className).toContain("border-warning");
+    expect(within(tiles[1].querySelector("[data-slot=slot-next]") as HTMLElement).getByRole("link", { name: "等你：到工作檯選定一版文案 →" })).toBeTruthy();
+    expect(within(tiles[1]).getByText("還沒選文案")).toBeTruthy();
+    // A waiting copy is not confirmed: no ✓ beside 待確認.
+    expect(within(tiles[2]).getByText(/文案 · 待確認/).textContent).not.toContain("✓");
+    expect(within(tiles[2].querySelector("[data-slot=slot-next]") as HTMLElement).getByText("沒有檢查成功")).toBeTruthy();
+    // Without a job or an empty-copy sentence a ready tile is unchanged.
+    expect(tiles[3].querySelector("[data-slot=slot-job]")).toBeNull();
+    expect(tiles[3].querySelector("[data-slot=slot-copy]")).toBeNull();
+  });
+});
+
+describe("ProgressSegments (F45)", () => {
+  it("waiting has its own colour, apart from running and blocked", () => {
+    render(<ProgressSegments label="2／5 格已備妥" segments={[
+      { key: "1", state: "ok" }, { key: "2", state: "running" }, { key: "3", state: "waiting" }, { key: "4", state: "blocked" }, { key: "5", state: "todo" },
+    ]} />);
+    const fills = [...screen.getByRole("img", { name: "2／5 格已備妥" }).querySelectorAll("[data-state]")].map((i) => i.className);
+    expect(new Set(fills).size).toBe(5);
+    expect(fills[2]).toContain("bg-warning");
   });
 });
 
