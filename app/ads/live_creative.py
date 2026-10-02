@@ -13,7 +13,8 @@ Two facts, one place:
 - **Coordinates.** An ad's learning coordinates are the `coordinates_snapshot_json` of the set
   its creative came from (the dispatched set; the ruling for item 6: coordinates stay editable
   after dispatch, learning reads the snapshot taken at dispatch), normalised to keys. An ad with
-  no dispatched set uses its current coordinates.
+  no dispatched set uses its current coordinates. F46 Contract F: the `format` of an ad with an
+  assigned material is the file's actual format (`actual_format`), not the planned one.
 
 Workbench data only through the `app.workbench` facade (`briefs_for_source` /
 `adopted_output`). Private to app/ads.
@@ -142,12 +143,29 @@ def snapshot_keys(snapshot) -> dict | None:
     return keys
 
 
+def _materials(conn, org, brand, campaign_id) -> dict:
+    """`ad_id -> {material_placement_id, material_placement_revision}` of this campaign's ads."""
+    return {
+        row["id"]: dict(row)
+        for row in conn.execute(
+            "SELECT id, material_placement_id, material_placement_revision FROM ads_ad "
+            "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+            (org, brand, campaign_id),
+        ).fetchall()
+    }
+
+
 def learning_coordinates(conn, org, brand, campaign_id, ads) -> dict:
     """`ad_id -> {dimension: key | None}` for `ads` (rows with `id` and `*_key`): the snapshot
     of the set the ad's creative came from (the launched set, else the ad's dispatched set),
-    else the ad's current coordinates."""
+    else the ad's current coordinates. F46 Contract F: an ad with an assigned material takes
+    that file's actual format (`actual_format.of_ad`) over the planned `format` -- what shipped
+    is what is learned."""
+    from app.ads import actual_format
+
     by_ad, by_id = _sets(conn, org, brand, campaign_id)
     launched = launched_outputs(conn, org, brand, campaign_id)
+    materials = _materials(conn, org, brand, campaign_id)
     result = {}
     for ad in ads:
         record = launched.get(ad["id"]) or {}
@@ -155,6 +173,11 @@ def learning_coordinates(conn, org, brand, campaign_id, ads) -> dict:
         keys = snapshot_keys((brief or {}).get("coordinates_snapshot_json"))
         if keys is None:
             keys = {d: ad.get(f"{d}_key") for d in COORDINATE_DIMENSIONS}
+        actual = actual_format.of_ad(
+            conn, org, brand, campaign_id, materials.get(ad["id"]) or {}
+        )
+        if actual is not None:
+            keys = {**keys, "format": actual}
         result[ad["id"]] = keys
     return result
 

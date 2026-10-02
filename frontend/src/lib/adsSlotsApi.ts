@@ -55,6 +55,10 @@ export interface Slot {
   waiting: SlotWaiting | null;
   /** F45 Contract W: set exactly when `state === "in_progress"`. */
   job: SlotJob | null;
+  /** F46 Contract F: the file in the slot ships in another format than planned — the server's sentence (「規劃是輪播，
+   * 只放了 1 張圖，會以單圖上架」); `null` when they agree, with no file and on an imported campaign. A fact, never a
+   * block. Optional only for older fixtures. */
+  format_note?: string | null;
 }
 /** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
 export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
