@@ -7,12 +7,22 @@ F39-I03: every planned ad also carries one `scene` (6–60 chars, the moment its
 in) and ads for different audiences must carry different scenes, or the plan is rejected.
 F44-I02: the prompt lists the registered sentence of every offer the menu kept, and a plan in
 which no ad uses one of them is rejected.
+F46-I01 (Contracts A and P): every planned ad binds one listed customer group (`customer_group`
+= 第 N 群, all ads of one delivery group share it, `pain` within that group's pains), and the
+prompt says how many photos and videos the brand has in hand.
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
 from datetime import date
 
-from app.ads import budget, calendar_tw, channels, coordinate_learning, customer_groups
+from app.ads import (
+    budget,
+    calendar_tw,
+    channels,
+    coordinate_learning,
+    customer_groups,
+    user_assets_repository,
+)
 from app.ads import repository as ads_repo
 from app.ads import sell_way as sell_way_mod
 from app.brand_intelligence import repository as bi_repo
@@ -218,7 +228,12 @@ def _validate_reply(data, roles: set) -> list | None:
             if scene is None:
                 return None
             seen_ad_names.add(ad_name)
-            validated_ads.append({"name": ad_name, "coordinates": coords, "scene": scene})
+            # F46 Contract A: the raw 第 N 群 number; `_bind_customer_groups` judges it against
+            # the groups this prompt listed (it is ignored when none were listed).
+            validated_ads.append({
+                "name": ad_name, "coordinates": coords, "scene": scene,
+                "customer_group": ad.get("customer_group"),
+            })
         validated_groups.append({"role": role, "name": name.strip(), "ads": validated_ads})
 
     if seen_roles != roles:  # 角色不能少也不能多（department file 的規則）
@@ -226,6 +241,82 @@ def _validate_reply(data, roles: set) -> list | None:
     if not _scenes_differ_across_audiences(validated_groups):
         return None
     return validated_groups
+
+
+def _bind_customer_groups(groups: list, listed: list, menu_pain_keys: set) -> bool:
+    """F46 Contract A. `listed` = the 【這個賣法的顧客】 groups in prompt order (第 N 群 =
+    `listed[N-1]`). No group listed -> every ad's `customer_group` becomes `None` (the key is
+    ignored). Otherwise each ad needs an integer 1..N; its `pain` must be one of that group's
+    `pain_keys` when that set meets the filtered menu's pain keys (else no pain check); and all
+    ads of one delivery group carry the same group (one ad set = one set of people). On success
+    each ad's `customer_group` is replaced by the group row; `False` = refuse the whole reply."""
+    for group in groups:
+        if not listed:
+            for ad in group["ads"]:
+                ad["customer_group"] = None
+            continue
+        bound_ids = set()
+        for ad in group["ads"]:
+            number = ad.get("customer_group")
+            if isinstance(number, bool) or not isinstance(number, int):
+                return False
+            if not 1 <= number <= len(listed):
+                return False
+            customer_group = listed[number - 1]
+            pains = set(customer_group.get("pain_keys") or [])
+            if pains & menu_pain_keys and ad["coordinates"]["pain"] not in pains:
+                return False
+            bound_ids.add(customer_group["id"])
+            ad["customer_group"] = customer_group
+        if len(bound_ids) > 1:
+            return False
+    return True
+
+
+MATERIALS_HEADER = "【手上的素材】"
+_USER_ASSET_PAGE_GUARD = 100  # pages of 100 rows; a brand with >10 000 originals is not real
+
+
+def _ready_user_asset_mimes(conn, org_id: str, brand_id: str) -> list[str]:
+    """`mime_type` of the brand's ready ads user assets, read page by page through the
+    user-asset repository (its own cursor); an empty mime comes back as ''."""
+    mimes: list[str] = []
+    after = None
+    for _ in range(_USER_ASSET_PAGE_GUARD):
+        page = user_assets_repository.list_assets(conn, org_id, brand_id, after=after)
+        mimes.extend(
+            str(row.get("mime_type") or "") for row in page["assets"]
+            if row.get("status") == "ready"
+        )
+        after = page["next_cursor"]
+        if after is None:
+            break
+    return mimes
+
+
+def _materials_text(conn, org_id: str, brand_id: str) -> str:
+    """F46 Contract P: 「照片 N 張、影片 M 支」. Photos = the brand's active official assets other
+    than `logo` plus its ready user assets whose mime is set and not `video/*`; videos = ready
+    user assets with a `video/*` mime. An unready asset or one with no mime is not counted."""
+    official = [
+        row for row in bi_repo.list_official_assets(conn, brand_id)
+        if row.get("status") == "active" and row.get("asset_kind") != "logo"
+    ]
+    mimes = _ready_user_asset_mimes(conn, org_id, brand_id)
+    videos = sum(1 for mime in mimes if mime.startswith("video/"))
+    photos = len(official) + sum(1 for mime in mimes if mime and not mime.startswith("video/"))
+    return f"{MATERIALS_HEADER}照片 {photos} 張、影片 {videos} 支"
+
+
+def _snapshot(ad: dict, vocab_lookup: dict) -> dict:
+    """The seven vocabulary rows, plus `customer_group: {id, who}` when the ad is bound (F46)."""
+    snapshot = {
+        dim: vocab_lookup.get((dim, key), {"key": key}) for dim, key in ad["coordinates"].items()
+    }
+    customer_group = ad.get("customer_group")
+    if customer_group is not None:
+        snapshot["customer_group"] = {"id": customer_group["id"], "who": customer_group["who"]}
+    return snapshot
 
 
 def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
@@ -278,17 +369,20 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     board_text, board_ids = coordinate_learning.scoreboard_section(conn, org_id, brand_id)
     # F43-I02：這個賣法的顧客群（每支廣告的 pain 從列出的群挑、scene 合那群的使用時機），
     # 接在成績表之後、詞彙表之前。
-    customers_text, customer_group_ids = customer_groups.prompt_section(
+    customers_text, listed_groups = customer_groups.prompt_groups(
         conn, org_id, brand_id, campaign,
     )
+    customer_group_ids = [group["id"] for group in listed_groups]
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
     # F44：【這期可用的優惠】接在顧客群之後、詞彙表之前；沒有可用優惠就整段不出現。
+    # F46 Contract P：【手上的素材】接在顧客群之後、優惠之前。
     prompt = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
         + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
         + "\n\n" + board_text
         + "\n\n" + customers_text
+        + "\n\n" + _materials_text(conn, org_id, brand_id)
         + ("\n\n" + offers_text if offers_text else "")
         + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
@@ -315,6 +409,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     # refused, like the scene rule; nothing is written.
     if _menu_offer_keys(vocabulary_rows) and not _uses_an_offer(validated_groups):
         raise ValueError("delivery_plan_failed")
+    menu_pain_keys = {row["key"] for row in vocabulary_rows if row["dimension"] == "pain"}
+    if not _bind_customer_groups(validated_groups, listed_groups, menu_pain_keys):
+        raise ValueError("delivery_plan_failed")
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。
@@ -336,14 +433,12 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
             name=plan_group["name"], role=role, daily_budget=amount_by_role[role],
         )
         for ad in plan_group["ads"]:
-            snapshot = {
-                dim: vocab_lookup.get((dim, key), {"key": key})
-                for dim, key in ad["coordinates"].items()
-            }
+            customer_group = ad.get("customer_group")
             ads_repo.create_ad(
                 conn, org_id, brand_id, campaign_id, group_row["id"], name=ad["name"],
-                coordinates=ad["coordinates"], coordinates_snapshot=snapshot,
+                coordinates=ad["coordinates"], coordinates_snapshot=_snapshot(ad, vocab_lookup),
                 scene=ad["scene"],
+                customer_group_id=customer_group["id"] if customer_group else None,
             )
 
     ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "ready")

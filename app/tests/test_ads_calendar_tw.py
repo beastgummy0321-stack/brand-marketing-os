@@ -25,6 +25,23 @@ class EventsBetweenTest(unittest.TestCase):
             self.assertEqual(set(row), {"start", "end", "name", "kind", "note"})
             self.assertNotIn("source", row)
 
+    def test_october_window_lists_the_first_exam_week(self):
+        """F46 (O2, drill 10): a 10/03–10/14 window meets the 國高中第一次段考週 convention row."""
+        rows = calendar_tw.events_between(date(2026, 10, 3), date(2026, 10, 14))
+        exam = [row for row in rows if row["name"] == "國高中第一次段考週"]
+        self.assertEqual(len(exam), 1)
+        self.assertEqual((exam[0]["start"], exam[0]["end"], exam[0]["kind"]),
+                         (date(2026, 10, 12), date(2026, 10, 23), "exam"))
+        self.assertIn(
+            "- 10/12～10/23 國高中第一次段考週（考季）：概略檔期，各校／各平台不同",
+            calendar_tw.note_lines(date(2026, 10, 3), date(2026, 10, 14)),
+        )
+        rows_2027 = calendar_tw.events_between(date(2027, 10, 3), date(2027, 10, 14))
+        self.assertIn(
+            (date(2027, 10, 11), date(2027, 10, 22)),
+            [(r["start"], r["end"]) for r in rows_2027 if r["name"] == "國高中第一次段考週"],
+        )
+
     def test_single_day_range_on_a_holiday_finds_it(self):
         rows = calendar_tw.events_between(date(2026, 10, 9), date(2026, 10, 9))
         self.assertEqual([row["name"] for row in rows], ["國慶日"])

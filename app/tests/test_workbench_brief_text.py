@@ -79,6 +79,37 @@ class BriefTextCalendarTest(unittest.TestCase):
         self.assertLess(text.index("投放期間的行事曆"), text.index("visual_tone："))
 
 
+CUSTOMER_GROUP = (
+    "下班後夜跑的上班族｜煩惱：怕買錯｜顧客會說：晚上跑步車子看不到我｜什麼時候用：下班後在河濱夜跑"
+)
+CUSTOMER_GROUP_LINE = (
+    f"顧客群：{CUSTOMER_GROUP}（五組文案都寫給這一群人，情境是他們的時刻）"
+)
+
+
+class BriefTextCustomerGroupTest(unittest.TestCase):
+    """F46-I01 (Contract A): `request_json.customer_group` prints one line right after the
+    scene line, only when present."""
+
+    def test_line_follows_the_scene_when_handed_over(self):
+        text = prompts.brief_text(_brief(scene=SCENE, customer_group=CUSTOMER_GROUP), "測試產品")
+        self.assertIn(SCENE_LINE + "\n" + CUSTOMER_GROUP_LINE + "\n限時截止日：", text)
+
+    def test_line_without_a_scene_still_sits_before_the_deadline(self):
+        text = prompts.brief_text(_brief(customer_group=CUSTOMER_GROUP), "測試產品")
+        self.assertEqual(
+            text, BASELINE.replace("限時截止日：", CUSTOMER_GROUP_LINE + "\n限時截止日：", 1),
+        )
+
+    def test_no_line_without_a_group(self):
+        for request in ({}, {"customer_group": None}, {"customer_group": ""},
+                        {"customer_group": "  "}):
+            with self.subTest(request=request):
+                text = prompts.brief_text(_brief(**request), "測試產品")
+                self.assertNotIn("顧客群：", text)
+                self.assertEqual(text, BASELINE)
+
+
 class BriefTextUnchangedPathTest(unittest.TestCase):
     def test_both_absent_is_the_exact_pre_f39_text(self):
         self.assertEqual(prompts.brief_text(_brief(), "測試產品"), BASELINE)

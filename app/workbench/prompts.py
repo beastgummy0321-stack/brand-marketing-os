@@ -39,7 +39,8 @@ def brief_text(brief: dict, product_name: str | None) -> str:
     風格庫退休，這裡不再帶「風格：」那一行——看圖片提示詞怎麼決定視覺是 §5.9 的事，這支只服務
     copy／video_script。F39-I04（outcomes 3–4）：`request_json.scene`（這則廣告的情境，一句）
     與 `request_json.calendar_note`（投放期間的行事曆，ads 側用程式算好的行）由交件方帶進
-    `request_json`，有值才各印一段——順序：座標 → 情境 → 截止日 → 行事曆 → visual_tone。"""
+    `request_json`，有值才各印一段——順序：座標 → 情境 → 顧客群（F46 `request_json.customer_group`）
+    → 截止日 → 行事曆 → visual_tone。"""
     coordinates = brief.get("coordinates_snapshot_json") or {}
     request = brief.get("request_json") or {}
     lines = ["## 這張工單", f"產品：{product_name or '（無）'}"]
@@ -56,6 +57,13 @@ def brief_text(brief: dict, product_name: str | None) -> str:
         lines.append(
             f"情境：{scene.strip()}（五組文案的畫面都發生在這個情境裡，不得換成別的情境；"
             "標題與內文要看得出這個情境）"
+        )
+    # F46 (Contract A): the customer group the delivery plan bound this ad to, one line from the
+    # ads side; printed right after the scene, only when present.
+    customer_group = request.get("customer_group")
+    if isinstance(customer_group, str) and customer_group.strip():
+        lines.append(
+            f"顧客群：{customer_group.strip()}（五組文案都寫給這一群人，情境是他們的時刻）"
         )
     deadline = request.get("offer_deadline")
     if deadline:
