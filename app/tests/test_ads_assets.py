@@ -560,6 +560,47 @@ class FormatKeyDrivesRequiredOutputsTest(AssetsTestBase):
         self.assertIsNotNone(pack_id)
 
 
+# -- F45 §6.49: a photo-only brand's sets need no image prompt -----------------------------------
+
+class PhotoOnlyBrandSetsRequireOnlyCopyTest(AssetsTestBase):
+    def _set_for(self, media: str | None, format_key: str | None) -> dict:
+        if media is not None:
+            bi_repo.set_media_capability(web.conn, self.brand_id, media, actor=ACTOR)
+            web.conn.commit()
+        campaign_row, _group, _ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key=format_key,
+        )
+        return self._dispatched_set(campaign_row["id"])
+
+    def test_photo_only_single_image_and_carousel_sets_require_only_copy(self):
+        for format_key in ("single_image", "carousel", None):
+            with self.subTest(format_key=format_key):
+                target_set = self._set_for("photo", format_key)
+                self.assertEqual(target_set["required_outputs"], {"copy": 1})
+
+    def test_photo_only_set_is_accepted_by_the_workbench(self):
+        bi_repo.set_media_capability(web.conn, self.brand_id, "photo", actor=ACTOR)
+        web.conn.commit()
+        campaign_row, _group, ad = self._direct_campaign(
+            campaign_start="2026-10-01", campaign_end="2026-10-07", format_key="single_image",
+        )
+        assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign_row["id"])
+        briefs = workbench.briefs_for_source(
+            web.conn, self.org_id, self.brand_id, assets.PACK_SOURCE_KIND,
+            {"ads_campaign_id": campaign_row["id"], "ads_ad_id": ad["id"]},
+        )
+        self.assertEqual(len(briefs), 1)
+        self.assertEqual(briefs[0]["request_json"]["parts"], ["copy"])
+
+    def test_photo_video_and_unasked_brands_still_require_the_image_prompt(self):
+        for media in (None, "photo_video"):  # never asked first: the brand starts unasked
+            with self.subTest(media=media):
+                target_set = self._set_for(media, "single_image")
+                self.assertEqual(
+                    target_set["required_outputs"], {"copy": 1, "image_prompt": 1}
+                )
+
+
 # -- F38 decision 3：限時限量的截止日＝投放組（否則 Campaign）的結束日 ----------------------
 
 class OfferDeadlineTest(AssetsTestBase):

@@ -315,7 +315,8 @@ _SLOT_COPY_ERRORS = {
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/slots/{ad_id}/copy")
 async def choose_slot_copy(request: Request, brand_id: str, campaign_id: str, ad_id: str):
-    """F35 Contract T: put one workbench copy version into a slot that already has a file."""
+    """F35 Contract T: put one workbench copy version (`{set_id, version_id}`) or the copy typed
+    in the slot editor (`{copy_fields}`, F45) into a slot that already has a file."""
     from app.ads import slots
 
     actor = web.require_actor(request)
@@ -350,20 +351,31 @@ def recheck_slot(request: Request, brand_id: str, campaign_id: str, ad_id: str):
 
 @router.patch("/brands/{brand_id}/campaigns/{campaign_id}/placements/{placement_id}")
 async def revise(request: Request, brand_id: str, campaign_id: str, placement_id: str):
+    from app.ads import slots
+
     actor = web.require_actor(request)
     body = await _json(request)
     expected = body.pop("expected_revision", None)
+    conn = db.current()
     try:
+        revised = repo.revise(
+            conn,
+            actor.org_id,
+            brand_id,
+            campaign_id,
+            placement_id,
+            expected,
+            body,
+            str(actor.user_id),
+        )
+        conn.commit()
+        # §6.49: a revision behind a planned ad's slot is checked at once.
+        slots.follow_revision(
+            conn, actor.org_id, brand_id, campaign_id, revised, str(actor.user_id)
+        )
         return {
-            "placement": repo.revise(
-                db.current(),
-                actor.org_id,
-                brand_id,
-                campaign_id,
-                placement_id,
-                expected,
-                body,
-                str(actor.user_id),
+            "placement": repo.placement(
+                conn, actor.org_id, brand_id, campaign_id, revised["id"], revised["revision"]
             )
         }
     except ValueError as exc:

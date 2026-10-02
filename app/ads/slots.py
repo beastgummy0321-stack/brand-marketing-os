@@ -21,6 +21,12 @@ F44 Contract D: a confirmation the program refused keeps why on the placement's 
 (`blocked_reasons`, Contract C details) and the slot reads `blocked` with the first reason and
 the exit that fixes it; `recheck` runs the confirmation again. Every slot names its ad's offer
 coordinate (`offer_label`).
+
+F45 Contract W (§6.49): `in_progress` only while a job for the slot runs (its original's
+preview, or its workbench set's generation), with `job`; otherwise a slot that is not ready,
+blocked or half-filled reads `waiting` with the user's next action. A new revision of the
+placement behind a slot (placement edit, copy pick, typed copy edit) is confirmed at once
+(`follow_revision`); every refusal is stored by `asset_suggestions.store_refusal`.
 """
 
 from app import workbench
@@ -30,7 +36,6 @@ from app.ads import assets as legacy_readiness
 from app.ads import change_control_launch as launch
 from app.ads import repository as ads_repo
 from app.ads import user_assets_repository as user_assets
-from app.core import db
 
 
 def _asset_thumbnail(conn, org, brand, asset_id) -> str | None:
@@ -129,13 +134,15 @@ def _has_copy(fields) -> bool:
 
 def _slot(
     ad_id, entity_id, name, state, thumbnail_url, replace_task_id=None, *, copy=None,
-    workbench_href=None, format_key=None, blocked=None, offer_label=None,
+    workbench_href=None, format_key=None, blocked=None, offer_label=None, waiting=None,
+    job=None,
 ) -> dict:
     """One slot. F40-I01: `format_key` is the planned ad's own `ads_ad.format_key` (`None` for an
     ad without one, and for an imported campaign's platform ad) so the assets tab can say a
     video-format slot needs a script. F44 Contract D: `blocked` is set on a `blocked` slot only;
     `offer_label` is the planned ad's offer coordinate label (`None` for an ad without one, and
-    for an imported campaign's platform ad)."""
+    for an imported campaign's platform ad). F45 Contract W: `waiting` is set on a `waiting`
+    slot only (`{action, text}`), `job` on an `in_progress` slot only (`{kind, done, of}`)."""
     return {
         "ad_id": ad_id,
         "entity_id": entity_id,
@@ -149,22 +156,42 @@ def _slot(
         "format_key": format_key,
         "blocked": blocked,
         "offer_label": offer_label,
+        "waiting": waiting,
+        "job": job,
     }
+
+
+# F45 Contract W: who the slot is waiting for. `in_progress` only while a job for it runs.
+WAITING = {
+    "pick_on_workbench": "等你：到工作檯選定一版文案",
+    "confirm_copy": "等你：確認這版文案",
+}
+RUNNING_BRIEF = ("queued", "running")  # the workbench set's generation is queued or running
+
+
+def _waiting(action) -> dict:
+    return {"action": action, "text": WAITING[action]}
+
+
+def _job(kind, brief=None) -> dict:
+    """`done` / `of` only when the workbench read carries them; the brief read does not today."""
+    brief = brief or {}
+    done, of = brief.get("done"), brief.get("of")
+    if not isinstance(done, int) or not isinstance(of, int):
+        done = of = None
+    return {"kind": kind, "done": done, "of": of}
 
 
 FAILED_ORIGINAL = "error"  # the status `user_assets.process_preview` leaves on a failed original
 
 
-def _blocked(conn, org, brand, pending) -> dict | None:
-    """Contract D `blocked` for a slot's pending placement, or None when nothing blocks it: the
-    first reason plus how many others. A failed original comes first (no copy fixes a file that
-    cannot be processed), then the details the last refused confirmation stored. `wait` details
-    are never stored, so every reason here has something to fix."""
+def _blocked(asset, pending) -> dict | None:
+    """Contract D `blocked` for a slot's pending placement (`asset` = its original, None when it
+    cannot be read), or None when nothing blocks it: the first reason plus how many others. A
+    failed original comes first (no copy fixes a file that cannot be processed), then the details
+    the last refused confirmation stored. `wait` details are never stored, so every reason here
+    has something to fix."""
     details = []
-    try:
-        asset = user_assets.get_asset(conn, org, brand, pending["asset_id"])
-    except ValueError:
-        asset = None
     if asset is not None and asset["status"] == FAILED_ORIGINAL:
         reason = f"：{asset['error']}" if asset["error"] else "。"
         details.append({"kind": "file", "text": f"這個檔案處理失敗{reason}", "terms": []})
@@ -181,11 +208,27 @@ def _blocked(conn, org, brand, pending) -> dict | None:
     }
 
 
+def _backing(conn, org, brand, campaign, ad, material=None) -> dict | None:
+    """The current revision of the placement behind a slot that is not ready: the one uploaded
+    into it (`slot_placement_id`), else its assigned material's placement once that assignment is
+    no longer launchable (revised, or its original not ready). None for a ready or empty slot."""
+    pending = _pending(conn, org, brand, campaign, ad)
+    if pending is not None or ad.get("material_placement_id") is None:
+        return pending
+    if material is None:
+        material = _material(conn, org, brand, campaign, ad)
+    if material is None or launch.ready_material(material):
+        return None
+    try:
+        return user_assets.placement(conn, org, brand, campaign, ad["material_placement_id"])
+    except ValueError:
+        return None
+
+
 def _planned_slot(
-    conn, org, brand, campaign, ad, entity, readiness, replace_by_entity, brief, offer_label
+    conn, org, brand, campaign, ad, entity, replace_by_entity, brief, offer_label
 ) -> dict:
     material = _material(conn, org, brand, campaign, ad)
-    pending = _pending(conn, org, brand, campaign, ad)
     material_thumb = (
         _asset_thumbnail(conn, org, brand, material["asset_id"]) if material else None
     )
@@ -193,11 +236,14 @@ def _planned_slot(
     # `material_snapshot.copy_fields` is `bindings.effective_copy` of the assigned revision.
     material_copy = _copy_half("placement", "已確認", material["copy_fields"]) if material else None
 
-    def slot(state, thumbnail, copy, entity_id=None, replace_task_id=None, blocked=None):
+    def slot(
+        state, thumbnail, copy, entity_id=None, replace_task_id=None, blocked=None,
+        waiting=None, job=None,
+    ):
         return _slot(
             ad["id"], entity_id, ad["name"], state, thumbnail, replace_task_id, copy=copy,
             workbench_href=href, format_key=ad.get("format_key"), blocked=blocked,
-            offer_label=offer_label,
+            offer_label=offer_label, waiting=waiting, job=job,
         )
 
     if entity is not None:
@@ -213,32 +259,42 @@ def _planned_slot(
         )
     if launch.ready_material(material):
         return slot("ready", material_thumb, material_copy)
+    pending = _backing(conn, org, brand, campaign, ad, material)
     if pending is not None:
+        # Contract W, in this order: a failed original, its preview running, no copy, a stored
+        # refusal, else the user's confirmation is what the slot waits for.
         pending_copy = bindings.effective_copy(pending)
         pending_thumb = _asset_thumbnail(conn, org, brand, pending["asset_id"])
-        blocked = _blocked(conn, org, brand, pending)
-        if not _has_copy(pending_copy):
-            if blocked is not None and blocked["fix"] == "file":
-                # The file itself failed: picking a copy would not unblock the slot.
-                return slot("blocked", pending_thumb, None, blocked=blocked)
+        copy_half = (
+            _copy_half("placement", "待確認", pending_copy) if _has_copy(pending_copy) else None
+        )
+        try:
+            original = user_assets.get_asset(conn, org, brand, pending["asset_id"])
+        except ValueError:
+            original = None
+        blocked = _blocked(original, pending)
+        if original is not None and original["status"] == FAILED_ORIGINAL:
+            # The file itself failed: no copy unblocks the slot.
+            return slot("blocked", pending_thumb, copy_half, blocked=blocked)
+        if original is not None and original["status"] != "ready":
+            # Its preview is being made (pending / processing / retryable).
+            return slot("in_progress", pending_thumb, copy_half, job=_job("preview"))
+        if copy_half is None:
             # A file with no copy: the picker (`choose_copy`) fills the other half.
             return slot("image_only", pending_thumb, None)
-        waiting_copy = _copy_half("placement", "待確認", pending_copy)
         if blocked is not None:
-            # F44: the refusal is told, with its exit, instead of an endless `in_progress`.
-            return slot("blocked", pending_thumb, waiting_copy, blocked=blocked)
-        return slot("in_progress", pending_thumb, waiting_copy)
-    if material is not None:
-        # Assigned, but the version was revised or its original is not ready: not launchable.
-        stale_copy = _copy_half("placement", "待確認", material["copy_fields"])
-        return slot("in_progress", material_thumb, stale_copy)
+            # F44: the refusal is told, with its exit.
+            return slot("blocked", pending_thumb, copy_half, blocked=blocked)
+        return slot("waiting", pending_thumb, copy_half, waiting=_waiting("confirm_copy"))
     selected = _workbench_copy(conn, org, brand, brief)
     if selected is not None:
-        # The copy half is known before any file: the user picked it on the workbench. That
-        # selection outranks "pack being worked" (the pack lock is a separate fact).
+        # The copy half is known before any file: the user picked it on the workbench.
         return slot("copy_only", None, {"source": "workbench", **selected})
-    if readiness.get(ad["id"]) == "in_progress":
-        return slot("in_progress", None, None)
+    if brief is not None:
+        if brief.get("status") in RUNNING_BRIEF:
+            return slot("in_progress", None, None, job=_job("copy", brief))
+        # Generated (or stopped) with nothing selected: the user picks on the workbench.
+        return slot("waiting", None, None, waiting=_waiting("pick_on_workbench"))
     return slot("missing", None, None)
 
 
@@ -249,10 +305,6 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
 
     campaign = campaign_row["id"]
     ads = ads_repo.list_ads_for_campaign(conn, org, brand, campaign)
-    readiness = {
-        row["ad_id"]: row["state"]
-        for row in legacy_readiness.readiness(conn, org, brand, campaign)
-    }
     entities = _planned_entities(conn, org, brand, campaign)
     sets = _ad_sets(conn, org, brand, campaign)
     return [
@@ -261,7 +313,7 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
             "name": group["name"],
             "slots": [
                 _planned_slot(
-                    conn, org, brand, campaign, ad, entities.get(ad["id"]), readiness,
+                    conn, org, brand, campaign, ad, entities.get(ad["id"]),
                     replace_by_entity, sets.get(ad["id"]),
                     asset_suggestions._judged_against(
                         conn, org, brand, campaign_row, ad["id"]
@@ -388,9 +440,9 @@ FROZEN_MESSAGE = "首次投放清單已核准，不能改寫原交接素材；�
 def _confirm_if_ready(conn, org, brand, campaign_id, placement, actor) -> None:
     """The no-AI confirmation of a slot's placement once its original is ready. A result that
     still carries `pending_reasons` (zero budget, copy missing a field) is not an error and
-    nothing is forced: the refusal's Contract C details are kept on this revision
-    (`blocked_reasons`) so the slot reads `blocked` and says why. `wait` details (the preview is
-    not made yet) are not kept; a refusal with only those leaves the slot `in_progress`."""
+    nothing is forced: `asset_suggestions.confirm_manual` itself keeps the refusal's Contract C
+    details on this revision (`blocked_reasons`) so the slot reads `blocked` and says why. A
+    refusal raised as `ValueError` is kept through the same writer."""
     if placement["confirmed_at"]:
         return
     try:
@@ -404,23 +456,57 @@ def _confirm_if_ready(conn, org, brand, campaign_id, placement, actor) -> None:
     from app.ads import asset_suggestions
 
     try:
-        result = asset_suggestions.confirm_manual(
+        asset_suggestions.confirm_manual(
             conn, org, brand, campaign_id, placement["id"], placement["revision"], actor
         )
     except ValueError as exc:
         # E.g. the campaign's sell-way was deleted (`validate_claims`): the placement is
         # already stored, so the slot says it instead of the upload failing.
-        details = [asset_suggestions.policy.detail("campaign", str(exc))]
-    else:
-        details = [d for d in result.get("pending_details") or [] if d["kind"] != "wait"]
-    if not details:
+        asset_suggestions.store_refusal(
+            conn, org, brand, campaign_id, placement["id"], placement["revision"],
+            [asset_suggestions.policy.detail("campaign", str(exc))],
+        )
+
+
+def follow_revision(conn, org, brand, campaign_id, placement, actor) -> None:
+    """§6.49: a new revision of a placement that backs a planned ad's slot (the ad's
+    `slot_placement_id`, or -- with none -- its assigned material's placement) is pointed at by
+    that ad's `slot_placement_id`, confirmed and settled at once, so an edit is checked when it
+    is saved. A launched or frozen ad is skipped (no error); a library placement no slot uses
+    and an already confirmed revision are left alone."""
+    if placement["confirmed_at"]:
         return
-    conn.execute(
-        "UPDATE ads_asset_placement SET blocked_reasons=%s WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND id=%s AND revision=%s AND confirmed_at IS NULL",
-        (db.jsonb(details), org, brand, campaign_id, placement["id"], placement["revision"]),
-    )
+    rows = conn.execute(
+        "SELECT id,slot_placement_id FROM ads_ad WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND (slot_placement_id=%s OR (slot_placement_id IS NULL "
+        "AND material_placement_id=%s)) ORDER BY created_at,id",
+        (org, brand, campaign_id, placement["id"], placement["id"]),
+    ).fetchall()
+    if not rows:
+        return
+    launched = _planned_entities(conn, org, brand, campaign_id)
+    backed = False
+    for row in rows:
+        if row["id"] in launched or launch.material_frozen(
+            conn, org, brand, campaign_id, row["id"]
+        ):
+            continue
+        backed = True
+        if row["slot_placement_id"] != placement["id"]:
+            _point(conn, org, brand, campaign_id, row["id"], placement["id"])
+    if not backed:
+        return
     conn.commit()
+    _confirm_if_ready(conn, org, brand, campaign_id, placement, actor)
+    settle(conn, org, brand, campaign_id, placement["id"])
+
+
+def _point(conn, org, brand, campaign_id, ad_id, placement_id) -> None:
+    conn.execute(
+        "UPDATE ads_ad SET slot_placement_id=%s,updated_at=now() WHERE org_id=%s "
+        "AND brand_id=%s AND campaign_id=%s AND id=%s",
+        (placement_id, org, brand, campaign_id, ad_id),
+    )
 
 
 PREVIEW_ACTOR = "system:preview"
@@ -525,11 +611,7 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
     placement = user_assets.attach_selected(
         conn, org, brand, campaign_id, body, actor, purpose=ad["name"], ad_id=ad["id"]
     )
-    conn.execute(
-        "UPDATE ads_ad SET slot_placement_id=%s,updated_at=now() WHERE org_id=%s "
-        "AND brand_id=%s AND campaign_id=%s AND id=%s",
-        (placement["id"], org, brand, campaign_id, ad_id),
-    )
+    _point(conn, org, brand, campaign_id, ad_id, placement["id"])
     conn.commit()
     _confirm_if_ready(conn, org, brand, campaign_id, placement, actor)
     settle(conn, org, brand, campaign_id, placement["id"])
@@ -546,30 +628,53 @@ def copy_options(conn, org, brand, campaign_id) -> dict:
     return {"options": workbench.material_options(conn, org, brand, part="copy")}
 
 
-def choose_copy(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
-    """`POST …/campaigns/{c}/slots/{ad_id}/copy` `{set_id, version_id}`: write that workbench
-    version into the slot's pending placement (a new revision), confirm it and settle. A slot
-    with no file has no picker: `ValueError("slot_no_file")`."""
+def _copy_body(body) -> tuple[str, dict]:
+    """The two bodies of `POST …/slots/{ad}/copy`: `{set_id, version_id}` (a workbench version)
+    or `{copy_fields: {headline?, body?, description?}}` (the copy typed in the slot editor)."""
+    if isinstance(body, dict) and set(body) == {"copy_fields"}:
+        fields = body["copy_fields"]
+        try:
+            user_assets.validate_copy(fields)
+        except ValueError:
+            raise ValueError("文案選項無效。") from None
+        if not fields or set(fields) - set(COPY_FIELDS):
+            raise ValueError("文案選項無效。")
+        return "typed", fields
     if (
         not isinstance(body, dict)
         or set(body) != {"set_id", "version_id"}
         or not all(isinstance(body[k], str) and body[k] for k in ("set_id", "version_id"))
     ):
         raise ValueError("文案選項無效。")
+    return "workbench", body
+
+
+def choose_copy(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
+    """`POST …/campaigns/{c}/slots/{ad_id}/copy`: `{set_id, version_id}` writes that workbench
+    version, `{copy_fields}` the copy typed in the slot editor (over the placement's own fields;
+    a field not sent keeps its value), into the placement behind the slot (a new revision), which
+    is then pointed at, confirmed and settled (`follow_revision`). A slot with no unconfirmed
+    placement behind it has no picker: `ValueError("slot_no_file")`."""
+    kind, value = _copy_body(body)
     ad = _slot_ad_for_write(conn, org, brand, campaign_id, ad_id)
-    current = _pending(conn, org, brand, campaign_id, ad)
+    current = _backing(conn, org, brand, campaign_id, ad)
     if current is None or current["confirmed_at"]:
         raise ValueError("slot_no_file")
-    try:
-        source = workbench.material_source(conn, org, brand, body["set_id"], body["version_id"])
-    except ValueError:
-        source = None
-    if source is None or source.get("part") != "copy":
-        raise ValueError("找不到這個文案版本。")
-    fields = {
-        k: v for k, v in (source.get("copy_fields") or {}).items()
-        if k in COPY_FIELDS and isinstance(v, str)
-    }
+    if kind == "typed":
+        fields = {**(current["copy_fields"] or {}), **value}
+    else:
+        try:
+            source = workbench.material_source(
+                conn, org, brand, value["set_id"], value["version_id"]
+            )
+        except ValueError:
+            source = None
+        if source is None or source.get("part") != "copy":
+            raise ValueError("找不到這個文案版本。")
+        fields = {
+            k: v for k, v in (source.get("copy_fields") or {}).items()
+            if k in COPY_FIELDS and isinstance(v, str)
+        }
     revised = user_assets.revise(
         conn,
         org,
@@ -581,8 +686,7 @@ def choose_copy(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
         actor,
     )
     conn.commit()
-    _confirm_if_ready(conn, org, brand, campaign_id, revised, actor)
-    settle(conn, org, brand, campaign_id, revised["id"])
+    follow_revision(conn, org, brand, campaign_id, revised, actor)
     return {
         "placement": user_assets.placement(conn, org, brand, campaign_id, revised["id"]),
         "slots": read(conn, org, brand, campaign_id),
@@ -591,13 +695,17 @@ def choose_copy(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
 
 def recheck(conn, org, brand, campaign_id, ad_id, actor) -> dict:
     """`POST …/campaigns/{c}/slots/{ad_id}/recheck` (F44 Contract D): run the confirmation of the
-    slot's pending placement again -- after the user fixed what blocked it somewhere else -- and
-    settle. Still refused: the stored reasons are the new refusal's. A slot with no unconfirmed
-    placement has nothing to check: `ValueError("slot_no_file")`."""
+    placement behind the slot again -- after the user fixed what blocked it somewhere else -- and
+    settle. A revised assigned material is pointed at first (§6.49), so it is checked like an
+    upload. Still refused: the stored reasons are the new refusal's. A slot with no unconfirmed
+    placement behind it has nothing to check: `ValueError("slot_no_file")`."""
     ad = _slot_ad_for_write(conn, org, brand, campaign_id, ad_id)
-    current = _pending(conn, org, brand, campaign_id, ad)
+    current = _backing(conn, org, brand, campaign_id, ad)
     if current is None or current["confirmed_at"]:
         raise ValueError("slot_no_file")
+    if ad.get("slot_placement_id") != current["id"]:
+        _point(conn, org, brand, campaign_id, ad_id, current["id"])
+        conn.commit()
     _confirm_if_ready(conn, org, brand, campaign_id, current, actor)
     settle(conn, org, brand, campaign_id, current["id"])
     return {"slots": read(conn, org, brand, campaign_id)}
