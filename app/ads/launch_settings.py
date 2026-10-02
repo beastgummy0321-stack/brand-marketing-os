@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from app.ads import channels, targets
 from app.ads.adapters.external import SourceReadError
 from app.brand_intelligence import repository as bi_repo
-from app.core import db
+from app.core import db, input_rules
 
 # -- vocabulary (one-line plain notes from prototype v10 `SET_NOTE` and its field notes) ---------
 # `{platform}` in a note is filled at read time with the channel's display label from
@@ -82,11 +82,15 @@ FIELD_NOTES = {
     "pixel_id": "官網上記錄誰買了東西的追蹤碼；選錯就看不到成效",
     "utm": "加在網址後面，讓官網後台分得出是哪個廣告帶來的",
 }
-# Top-level keys, in screen order; `edited` and the stale diff name these.
-KEYS = ("optimization_event", "bid_strategy", "placement", "audience", "pixel_id", "utm")
+# Top-level keys, in screen order; `edited` and the stale diff name these. `bid_amount` (F47-I06,
+# Contract A bid) exists only while `bid_strategy` is a capped one; it is not a readback field.
+KEYS = (
+    "optimization_event", "bid_strategy", "bid_amount", "placement", "audience", "pixel_id", "utm",
+)
 KEY_LABELS = {
     "optimization_event": "優化事件",
     "bid_strategy": "出價方式",
+    "bid_amount": "出價金額",
     "placement": "版位",
     "audience": "受眾",
     "pixel_id": "像素",
@@ -122,6 +126,10 @@ def _label(kind: str, value) -> str:
 
 # The shared result kind -> the event a system-built campaign optimises for.
 _EVENT_FOR_RESULT = {"purchase": "purchase", "link_click": "view_content"}
+
+
+# The strategies whose platform setting carries one amount (cost per result / bid ceiling).
+CAPPED_BIDS = frozenset({"cost_cap", "bid_cap"})
 
 
 class LaunchSettingsMalformed(ValueError):
@@ -217,6 +225,15 @@ def normalize(body) -> dict:
         }
     except (KeyError, TypeError, AttributeError):
         raise LaunchSettingsMalformed("launch_settings_malformed") from None
+    bid_amount = body.get("bid_amount")
+    if bid_amount is not None and (
+        isinstance(bid_amount, bool) or not isinstance(bid_amount, (int, float))
+    ):
+        raise LaunchSettingsMalformed("launch_settings_malformed")
+    if values["bid_strategy"] in CAPPED_BIDS:
+        # Kept exactly as sent (an unset or non-positive amount is an `errors()` entry); cleared
+        # for every other strategy.
+        values["bid_amount"] = bid_amount
     audience = values["audience"]
     if (
         set(body) - set(KEYS)
@@ -242,8 +259,9 @@ def normalize(body) -> dict:
     return values
 
 
-def errors(values: dict, pixels: list[dict] | None) -> list[dict]:
-    """What blocks approval (409 `launch_settings_invalid`); empty when the launch may go."""
+def errors(values: dict, pixels: list[dict] | None, platform: str | None = None) -> list[dict]:
+    """What blocks approval (409 `launch_settings_invalid`); empty when the launch may go.
+    `platform` (the campaign's channel) applies that platform's own pixel-id format."""
     found = []
 
     def add(field, code, message):
@@ -262,10 +280,30 @@ def errors(values: dict, pixels: list[dict] | None) -> list[dict]:
     placement = values.get("placement") or {}
     if placement.get("mode") == "manual" and not placement.get("positions"):
         add("placement.positions", "positions_empty", "手動版位至少選一個")
+    if values.get("bid_strategy") in CAPPED_BIDS:
+        label = _label("bid_strategy", values["bid_strategy"])
+        try:
+            if input_rules.positive(values.get("bid_amount"), "出價金額", optional=True) is None:
+                add("bid_amount", "bid_amount_missing", f"選了「{label}」要填金額")
+        except input_rules.InputRuleError as exc:
+            add("bid_amount", "bid_amount_invalid", str(exc).rstrip("。"))
     pixel = values.get("pixel_id")
-    if pixel is not None and pixels is not None and pixel not in {p["id"] for p in pixels}:
-        add("pixel_id", "pixel_unknown", "這個像素不在廣告帳號的像素清單裡")
+    if pixel is not None and pixels is not None:
+        if pixel not in {p["id"] for p in pixels}:
+            add("pixel_id", "pixel_unknown", "這個像素不在廣告帳號的像素清單裡")
+    elif pixel is not None:
+        # The list could not be read: a typed id is checked by the platform's own format rule.
+        format_error = _pixel_format_error(platform, pixel)
+        if format_error:
+            add("pixel_id", "pixel_format", format_error)
     return found
+
+
+def _pixel_format_error(platform: str | None, pixel_id: str) -> str | None:
+    # Lazy: the adapter registry imports the manual adapter, which imports the launch module.
+    from app.ads import adapters
+
+    return adapters.pixel_id_error(platform, pixel_id)
 
 
 def edited(values: dict, recommended_values: dict) -> list[str]:
@@ -361,7 +399,7 @@ def view(conn, org_id: str, brand_id: str, campaign_id: str, *, read: bool = Tru
             "field_notes": FIELD_NOTES,
         },
         "edited": edited(values, suggested),
-        "errors": errors(values, pixels),
+        "errors": errors(values, pixels, _channel(campaign)),
     }
 
 
@@ -442,7 +480,17 @@ def value_label(key: str, values: dict | None, pixels=None) -> str | None:
         )
     if key == "pixel_id":
         return _pixel_label(value, pixels)
+    if key == "bid_amount":
+        return amount_label(value)
     return value or "沒有設定"
+
+
+def amount_label(value) -> str:
+    """A bid amount as the handoff copy prints it (thousands separated, cents only when set)."""
+    if value is None:
+        return "沒有設定"
+    number = float(value)
+    return f"{number:,.0f}" if number.is_integer() else f"{number:,.2f}"
 
 
 def _expected(key: str, values: dict):

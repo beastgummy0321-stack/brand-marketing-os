@@ -45,7 +45,8 @@ _TOTAL_CEILING = Decimal("9999999999999999.99")
 
 def total(value):
     """The monthly total as typed (F47 Contract A): ``> 0``, never coerced. Unset stays ``null``
-    (no row); 0 has no planning meaning (the home pace chart divides by it), a negative is refused."""
+    (no row); 0 has no planning meaning (the home pace chart divides by it); a negative is
+    refused."""
     number = input_rules.positive(value, "每月品牌總額")
     result = Decimal(str(number))
     if result > _TOTAL_CEILING:
