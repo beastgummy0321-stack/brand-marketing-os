@@ -7,6 +7,7 @@ import { fetchProductOnboarding, fetchProductWhat, startProductScan } from "@/li
 import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import type { BarBack, CrumbItem, StepNav } from "../OnboardingStepHead";
 import { IntakeJobRow } from "../shared/IntakeJobRow";
+import { productDraftKey, readStepDraft } from "../shared/stepDraft";
 import { productOnboardingPath } from "./ProductCard";
 import { ProductDoneStep } from "./ProductDoneStep";
 import { ProductEvidenceStep } from "./ProductEvidenceStep";
@@ -147,10 +148,15 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
     onSelect: goTo,
   };
 
+  /** F47 Contract F (drill-10 R2): 重試 reads the address in the 商品頁網址 field now, not the one saved before.
+   * Step 1 keeps its unsaved fields in the step draft (`shared/stepDraft`), so the field's value is read there;
+   * no draft = the field still holds the saved URL. */
   function retryScan() {
+    const draft = readStepDraft(productDraftKey(brandId, pid, "what"), hasPageUrl);
+    const pageUrl = (draft?.pageUrl ?? what.page_url).trim();
     setScanDismissed(false);
     setState((s) => (s.status === "ready" ? { ...s, onboarding: { ...s.onboarding, prefill_status: "running", prefill_error: null } } : s));
-    startProductScan(brandId, pid).then(
+    startProductScan(brandId, pid, pageUrl).then(
       (fresh) => alive.current && setState((s) => (s.status === "ready" ? { ...s, onboarding: fresh } : s)),
       (err: unknown) =>
         alive.current &&
@@ -218,6 +224,9 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
 function Page({ children }: { children: ReactNode }) {
   return <div className="flex max-w-[1180px] flex-col gap-4">{children}</div>;
 }
+
+const hasPageUrl = (value: unknown): value is { pageUrl: string } =>
+  typeof value === "object" && value !== null && typeof (value as { pageUrl?: unknown }).pageUrl === "string";
 
 /** `?step=N`: anything but an integer 1..5 reads as not given (a broken parameter opens where the product is). */
 function parseStepParam(raw: string | null): number | null {

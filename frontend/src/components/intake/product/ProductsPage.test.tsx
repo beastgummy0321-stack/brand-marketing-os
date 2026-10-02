@@ -10,18 +10,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeProductApi")>("@/lib/intakeProductApi");
-  return { ...actual, fetchProductsPage: vi.fn(), createProduct: vi.fn() };
+  return { ...actual, fetchProductsPage: vi.fn(), createProduct: vi.fn(), dismissProductSuggestion: vi.fn() };
 });
 vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
 
-import { createProduct, fetchProductsPage, type ProductsPage as PageData } from "@/lib/intakeProductApi";
+import { createProduct, dismissProductSuggestion, fetchProductsPage, type ProductsPage as PageData } from "@/lib/intakeProductApi";
 import { ProductCard } from "./ProductCard";
 import { ProductsPage } from "./ProductsPage";
 
 const mockFetch = vi.mocked(fetchProductsPage);
 const mockCreate = vi.mocked(createProduct);
+const mockDismiss = vi.mocked(dismissProductSuggestion);
 const B = "brd_1";
 
 const fixture: PageData = {
@@ -157,6 +158,30 @@ describe("ProductsPage", () => {
     expect((await within(suggestion).findByRole("alert")).textContent).toContain("商品名稱太長了");
     expect(within(suggestion).getByRole("button", { name: "繼續建檔 →" }).hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("where")).toBeNull();
+  });
+
+  it("「不用了」 on a suggestion dismisses it on the server and the card goes away (drill-10 Q8)", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    mockDismiss.mockResolvedValue({ ...fixture, suggestions: [] });
+    renderPage();
+
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=suggestion]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
+
+    expect(mockDismiss).toHaveBeenCalledWith(B, "膠原蛋白軟糖");
+    await waitFor(() => expect(screen.queryByText("膠原蛋白軟糖")).toBeNull());
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("a failed 「不用了」 keeps the card and shows why on it", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    mockDismiss.mockRejectedValue(new Error("沒有略過（狀態碼 500）"));
+    renderPage();
+
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=suggestion]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
+    expect((await within(card).findByRole("alert")).textContent).toContain("沒有略過");
+    expect(within(card).getByRole("button", { name: "不用了" }).hasAttribute("disabled")).toBe(false);
   });
 
   it("an empty brand gets one empty state with 「＋新增商品」", async () => {

@@ -2,7 +2,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { createProduct, fetchProductsPage, type ProductSuggestion, type ProductsPage as PageData } from "@/lib/intakeProductApi";
+import {
+  createProduct,
+  dismissProductSuggestion,
+  fetchProductsPage,
+  type ProductSuggestion,
+  type ProductsPage as PageData,
+} from "@/lib/intakeProductApi";
 import { ProductCard, SuggestionCard, newBundlePath, newProductPath, productOnboardingPath } from "./ProductCard";
 
 type LoadState =
@@ -59,6 +65,18 @@ export function ProductsPage({ brandId }: { brandId: string }) {
       });
   }
 
+  /** F47 Q8: 「不用了」 — the name is kept as dismissed on the server and the page comes back without it. */
+  function dismissSuggestion(suggestion: ProductSuggestion) {
+    setCreating(suggestion.name);
+    setCreateError(null);
+    dismissProductSuggestion(brandId, suggestion.name)
+      .then((page) => setLoad({ status: "ready", page }))
+      .catch((err: unknown) =>
+        setCreateError({ name: suggestion.name, message: err instanceof Error ? err.message : "沒有略過，請再試一次。" }),
+      )
+      .finally(() => setCreating(null));
+  }
+
   const empty = load.status === "ready"
     && load.page.products.length + load.page.suggestions.length + load.page.bundles.length === 0;
 
@@ -92,13 +110,25 @@ export function ProductsPage({ brandId }: { brandId: string }) {
           <Section title="商品">
             {products.map((product) => <ProductCard key={product.id} brandId={brandId} product={product} />)}
             {suggestions.map((suggestion) => (
-              <SuggestionCard
-                key={suggestion.name}
-                suggestion={suggestion}
-                busy={creating !== null}
-                error={createError?.name === suggestion.name ? createError.message : null}
-                onContinue={() => continueSuggestion(suggestion)}
-              />
+              // 「不用了」 sits in the card's bottom-right corner, inside its padding (the card still fills the grid row).
+              <div key={suggestion.name} data-slot="suggestion" className="relative grid">
+                <SuggestionCard
+                  suggestion={suggestion}
+                  busy={creating !== null}
+                  error={createError?.name === suggestion.name ? createError.message : null}
+                  onContinue={() => continueSuggestion(suggestion)}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-3.5 bottom-3.5 font-medium text-muted-foreground"
+                  disabled={creating !== null}
+                  onClick={() => dismissSuggestion(suggestion)}
+                >
+                  不用了
+                </Button>
+              </div>
             ))}
           </Section>
         )}

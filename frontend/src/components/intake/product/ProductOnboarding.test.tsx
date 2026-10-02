@@ -193,8 +193,23 @@ describe("ProductOnboarding", () => {
     expect(screen.getByLabelText("商品名稱")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
-    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit");
+    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit", "https://beastgummy.tw/shop/multivitamin");
     expect(await screen.findByText("正在讀商品頁…")).toBeTruthy();
+  });
+
+  it("改了商品頁網址再按重試：讀的是欄位裡的新網址，不是舊的（drill-10 R2）", async () => {
+    sessionStorage.clear();
+    mockStatus.mockResolvedValue(status({ prefill_status: "failed", prefill_error: "讀不到商品頁（網址打不開或沒有文字），也沒有商品照；可以重試，或直接自己填。" }));
+    mockWhat.mockResolvedValue(blankWhat());
+    mockScan.mockResolvedValue(status({ prefill_status: "running" }));
+    renderAt(`/brands/${B}/products/prd_vit/onboarding`);
+
+    const field = (await screen.findByLabelText("商品頁網址")) as HTMLInputElement;
+    await userEvent.clear(field);
+    await userEvent.type(field, "https://beastgummy.tw/shop/multivitamin-fixed ");
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit", "https://beastgummy.tw/shop/multivitamin-fixed");
+    sessionStorage.clear();
   });
 
   it("「自己填」收起失敗列，只留表單", async () => {
