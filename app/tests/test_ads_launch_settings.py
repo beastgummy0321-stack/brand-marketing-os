@@ -309,6 +309,16 @@ class LaunchSettingsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "launch_settings_invalid"):
             self.launch()
 
+    def test_approval_checks_a_hand_typed_pixel_with_the_platform_rule(self):
+        """F47-I06: with no cached pixel list the approval gate applies the campaign channel's
+        own pixel-id format (the same rule the card shows), so 「abc」 cannot be approved."""
+        self.pixel_error = "permission_denied"  # the list was never read: nothing cached
+        self.assertEqual(self.put(pixel_id="abc").status_code, 200)
+        with self.assertRaisesRegex(ValueError, "launch_settings_invalid"):
+            self.launch()
+        self.assertEqual(self.put(pixel_id="1234567890123").status_code, 200)
+        self.assertIsNotNone(self.launch())  # a well-formed id passes the same gate
+
     def test_utm_with_a_space_and_other_semantic_errors_are_saved_and_listed(self):
         response = self.put(
             utm="utm_source=meta&utm_campaign=秋季 預購",

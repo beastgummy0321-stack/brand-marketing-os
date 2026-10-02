@@ -297,19 +297,23 @@ class MonthlyPersistenceTest(unittest.TestCase):
         with patch.object(budget, "_inventory", return_value=([], [], [])):
             self.assertIsNone(budget.view(self.conn, self.org, self.brand, self.month)["amount"])
 
-    def test_route_answers_the_store_sentence_for_zero(self):
+    def test_route_answers_the_store_sentence_for_zero_negative_and_empty(self):
         from fastapi.testclient import TestClient
 
         from app import main
 
         client = TestClient(main.app)
         self.conn.commit()
-        response = client.put(
-            f"/api/ads/brands/{self.brand}/monthly-budget",
-            json={"month": self.month, "currency": "TWD", "amount": 0, "expected_revision": 0},
-        )
-        self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["error"]["message"], "每月品牌總額要大於 0。")
+        for amount, sentence in ((0, "每月品牌總額要大於 0。"), (-5000, "每月品牌總額要大於 0。"),
+                                 (None, "每月品牌總額請填數字。")):
+            with self.subTest(amount=amount):
+                response = client.put(
+                    f"/api/ads/brands/{self.brand}/monthly-budget",
+                    json={"month": self.month, "currency": "TWD", "amount": amount,
+                          "expected_revision": 0},
+                )
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["error"]["message"], sentence)
 
     def test_other_org_cannot_confirm_budget(self):
         with self.assertRaisesRegex(ValueError, "找不到"):

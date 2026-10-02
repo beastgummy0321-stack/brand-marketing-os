@@ -149,6 +149,11 @@ def cached_pixels(campaign: dict) -> list[dict] | None:
     return cached.get("items") if isinstance(cached, dict) else None
 
 
+def channel(campaign: dict) -> str | None:
+    """The campaign's platform channel (its groups' channel key), the key the adapters use."""
+    return _channel(campaign)
+
+
 def _channel(campaign: dict) -> str | None:
     for group in campaign.get("groups") or []:
         if group.get("channel_key"):
