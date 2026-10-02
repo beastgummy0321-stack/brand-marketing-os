@@ -5,7 +5,7 @@
  * `home/HomeBoard.test.tsx`. */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
@@ -116,6 +116,18 @@ const budget: MonthlyBudget = {
 
 function renderPage() {
   return render(<MemoryRouter><AdsHomePage brandId="brd_1" /></MemoryRouter>);
+}
+
+function Search() {
+  return <output aria-label="search">{useLocation().search}</output>;
+}
+/** F46-I09: the page as a 「設定／提高 N 月月預算」 link opens it. */
+function renderAt(url: string) {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <Routes><Route path="/brands/:b/ads" element={<><AdsHomePage brandId="brd_1" /><Search /></>} /></Routes>
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -277,6 +289,37 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(await screen.findByRole("heading", { name: "本月廣告預算" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
     expect(vi.mocked(getHomeOverview)).toHaveBeenCalledTimes(2);
+  });
+
+  it("?budget=edit (the 月預算 links) opens the editor with the saved amount and scrolls it into view; closing drops the param", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    renderAt("/brands/brd_1/ads?budget=edit");
+    expect(await screen.findByRole("heading", { name: "本月廣告預算" })).toBeTruthy();
+    expect(((await screen.findByRole("spinbutton", { name: "每月品牌總額" })) as HTMLInputElement).value).toBe("60000");
+    expect(screen.getByRole("button", { name: "確認月總額" })).toBeTruthy();
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status", { name: "search" }).textContent).toBe("?budget=edit");
+    await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+    expect(screen.queryByRole("heading", { name: "本月廣告預算" })).toBeNull();
+    expect(screen.getByRole("status", { name: "search" }).textContent).toBe("");
+    // A later 調整 opens the panel as before, not straight into the form.
+    await userEvent.click(screen.getByRole("button", { name: "調整" }));
+    expect(await screen.findByRole("button", { name: "調整月總額" })).toBeTruthy();
+    expect(screen.queryByRole("spinbutton", { name: "每月品牌總額" })).toBeNull();
+  });
+
+  it("?budget=edit with no budget saved yet opens the form empty (no invented default)", async () => {
+    vi.mocked(getMonthlyBudget).mockResolvedValue({ ...budget, amount: null, revision: 0, currency: null, available: null, can_increase: false });
+    renderAt("/brands/brd_1/ads?budget=edit");
+    expect(((await screen.findByRole("spinbutton", { name: "每月品牌總額" })) as HTMLInputElement).value).toBe("");
+  });
+
+  it("without the param the home opens with the editor closed", async () => {
+    renderAt("/brands/brd_1/ads");
+    expect(await screen.findByRole("button", { name: "調整" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "本月廣告預算" })).toBeNull();
+    expect(getMonthlyBudget).not.toHaveBeenCalled();
   });
 
   it("zero campaigns and nothing spent: one empty card whose primary action is 建立活動; no board that could only print zeros", async () => {

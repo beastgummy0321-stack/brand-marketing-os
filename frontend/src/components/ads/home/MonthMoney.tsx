@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -59,11 +59,23 @@ type Props = {
   scaleHref: string | null;
   /** After the budget editor closes the overview is read again (the pace uses the saved total). */
   onBudgetClosed: () => void;
+  /** F46-I09: arrived through a 「設定／提高 N 月月預算」 link — the adjust area opens on load, scrolls into view and
+   * the monthly-budget form starts in edit mode. */
+  openBudget?: boolean;
 };
 
-export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed }: Props) {
-  const [adjusting, setAdjusting] = useState(false);
+export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed, openBudget = false }: Props) {
+  const [adjusting, setAdjusting] = useState(openBudget);
+  // Only the first opening came from the link; a later 調整 opens the panel as before.
+  const [linked, setLinked] = useState(openBudget);
   const month = state.status === "ready" ? state.home.month : null;
+  const adjustRef = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(false);
+  useEffect(() => {
+    if (!linked || scrolled.current || !adjusting || !month) return;
+    scrolled.current = true;
+    adjustRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [linked, adjusting, month]);
 
   return (
     <>
@@ -88,11 +100,11 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed 
         )}
       </section>
       {adjusting && month && (
-        <div className="flex flex-col gap-2">
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); onBudgetClosed(); }}>
+        <div ref={adjustRef} className="flex scroll-mt-4 flex-col gap-2">
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); setLinked(false); onBudgetClosed(); }}>
             ← 收起
           </Button>
-          <MonthlyBudgetPanel brandId={brandId} month={month} compact />
+          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} />
         </div>
       )}
     </>

@@ -11,11 +11,16 @@ import { Disclosure } from "./patterns/Disclosure";
 /** F36-I09 (ruling G): the budget month is the org's today (YYYY-MM), not the browser's. Pass
  * `useOrgClock().timezone`; callers without a workspace fall back to the org default. */
 export const currentBudgetMonth = (timezone: string = DEFAULT_ORG_TIMEZONE) => orgToday(timezone).slice(0, 7);
+/** F46-I09: the one link every 「設定／提高 N 月月預算」 exit uses — the ads home opens the monthly-budget form on it. */
+export const BUDGET_EDIT_PARAM = "budget";
+export const monthlyBudgetHref = (brandId: string) => `/brands/${encodeURIComponent(brandId)}/ads?${BUDGET_EDIT_PARAM}=edit`;
 export function budgetMoney(value: number | null, currency: string | null) {
   return value === null ? "尚待確認" : `${currency ?? "幣別待確認"} ${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
 }
 
-function BudgetPanel({ brandId, month, refresh = 0, compact = false }: { brandId: string; month: string; refresh?: number; compact?: boolean }) {
+/** `startEditing` (F46-I09) opens the edit form once the budget is read, prefilled with the saved amount (empty when
+ * unset — no invented default). */
+function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditing = false }: { brandId: string; month: string; refresh?: number; compact?: boolean; startEditing?: boolean }) {
   const [budget, setBudget] = useState<MonthlyBudget | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,6 +39,14 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false }: { brandId
     }).catch(() => { if (!controller.signal.aborted) setError("月預算暫時讀取不到。請重新讀取，已保存的總額不會消失。"); });
     return () => controller.abort();
   }, [brandId, month, refresh, reload]);
+
+  const autoEdited = useRef(false);
+  useEffect(() => {
+    if (!startEditing || !budget || autoEdited.current) return;
+    autoEdited.current = true;
+    edit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startEditing, budget]);
 
   function edit() {
     setAmount(budget?.amount?.toString() ?? ""); setCurrency(budget?.currency ?? "");

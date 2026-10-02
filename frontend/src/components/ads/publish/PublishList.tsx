@@ -8,6 +8,7 @@ import { getOrgId } from "@/lib/auth";
 import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { BudgetFitCard } from "../flow/confirmParts";
+import { monthlyBudgetHref } from "../MonthlyBudgetPanel";
 import { ActionBar, CopyField, CopyFields, ReadFailed, TodoRow, formatAmount } from "../patterns";
 import { LaunchSettingsCard } from "./LaunchSettingsCard";
 import { ItemTitle, PublishHead, campaignPath, fieldText, periodText, publishPath, summaryFields } from "./PublishFlow";
@@ -121,7 +122,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
 
       {month && (
         <BudgetFitCard read={monthRead(month)} month={month.month} extra={month.extra} premiseChanged={false} busy={false}
-          onRecheck={() => {}} budgetHref={`/brands/${encodeURIComponent(brandId)}/ads`}
+          onRecheck={() => {}} budgetHref={monthlyBudgetHref(brandId)}
           launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy` }} />
       )}
 
