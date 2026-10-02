@@ -70,6 +70,8 @@ function renderCard(locked = false) {
     onCampaignSaved={vi.fn()} onBlockerChange={onBlockerChange} />);
   return { onSaved, onBlockerChange };
 }
+// The card reports its blocker from a passive effect, one tick after the DOM it describes: under a loaded full run a
+// synchronous read right after `findBy…` saw the previous blocker (F47-I06 flake), so every read waits for it.
 const lastBlocker = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1)?.[0];
 const fieldOf = (label: string) => screen.getByText(label, { selector: "label" }).closest("[data-slot=setting-field]") as HTMLElement;
 
@@ -149,7 +151,7 @@ describe("LaunchSettingsCard（list stage）", () => {
     expect(screen.getByText(/格式不對：要像 utm_source=來源/)).toBeTruthy();
     expect(screen.getByText("UTM 格式不對", { selector: "span" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /進階設定・UTM 格式不對/ })).toBeTruthy();
-    expect(lastBlocker(onBlockerChange)).toBe("UTM 格式不對，先在「投放設定」改好");
+    await waitFor(() => expect(lastBlocker(onBlockerChange)).toBe("UTM 格式不對，先在「投放設定」改好"));
     expect(within(fieldOf("UTM 追蹤參數")).getByText("你改的")).toBeTruthy();
   });
 
@@ -181,7 +183,7 @@ describe("LaunchSettingsCard（list stage）", () => {
     expect(bid.value).toBe("cost_cap");
     expect(within(fieldOf("出價方式")).getByText("你改的")).toBeTruthy();
     expect(screen.getByText("你改了 1 項・每個廣告組都用這組")).toBeTruthy();
-    expect(lastBlocker(onBlockerChange)).toBe("投放設定還沒存好，先按重試");
+    await waitFor(() => expect(lastBlocker(onBlockerChange)).toBe("投放設定還沒存好，先按重試"));
 
     vi.mocked(saveLaunchSettings).mockImplementation(async (_b, _c, values) => view({ edited: ["bid_strategy"] }, values));
     await user.click(screen.getByRole("button", { name: "重試" }));
@@ -205,7 +207,7 @@ describe("LaunchSettingsCard（list stage）", () => {
     const { onBlockerChange } = renderCard();
     expect(await screen.findByText("讀取失敗")).toBeTruthy();
     expect(screen.getByText(/伺服器沒有回應/)).toBeTruthy();
-    expect(lastBlocker(onBlockerChange)).toBe("投放設定讀不到，先按重試");
+    await waitFor(() => expect(lastBlocker(onBlockerChange)).toBe("投放設定讀不到，先按重試"));
     vi.mocked(getLaunchSettings).mockResolvedValue(view());
     await userEvent.setup().click(screen.getByRole("button", { name: "重試" }));
     expect(await screen.findByText("每個廣告組都用這組・都是建議值")).toBeTruthy();
