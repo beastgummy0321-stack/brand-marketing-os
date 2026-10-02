@@ -9,8 +9,9 @@ import { formatAmount } from "./Chip";
 const X0 = 40, X1 = 540, Y0 = 190, Y1 = 20;
 
 /** `.paceh` + the budget pace SVG: cumulative spend by day against the straight 「平均花完的速度」 line to the month
- * budget, today's marker and a dotted projection to month end. `budget === null` keeps the actual line on an
- * axis scaled to the data and drops the pace line (there is nothing to pace against) — never a 0 budget. */
+ * budget, today's marker and a dotted projection to month end. F47-I06: without a month budget above 0 (unset, or a
+ * 0 stored before Contract A) there is no scale to draw on — the card says 「還沒設月預算」 and draws nothing (a 0
+ * total used to divide by zero and paint NaN coordinates). */
 export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily, projected, title = "預算用了多少" }: {
   /** Month number printed on the axis (9 → 9/1 … 9/30). */
   month: number;
@@ -23,31 +24,39 @@ export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily
   projected: number | null;
   title?: string;
 }) {
-  const top = budget ?? Math.max(1, spent ?? 0, projected ?? 0, ...daily.map((d) => d.cumulative)) * 1.1;
+  if (budget === null || !(budget > 0)) {
+    return (
+      <div data-slot="pace-chart" className="min-w-0">
+        <div className="mb-2"><b className="text-[15px] font-semibold">{title}</b></div>
+        <p role="status" className="rounded-[10px] border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+          還沒設月預算{spent !== null ? `・這個月已花 ${formatAmount(spent)}` : ""}
+        </p>
+      </div>
+    );
+  }
+  const top = budget;
   const x = (day: number) => X0 + (Math.min(day, daysInMonth) / daysInMonth) * (X1 - X0);
   const y = (v: number) => Math.round(Y0 - ((Y0 - Y1) * Math.min(Math.max(v, 0), top)) / top);
   const points = [{ day: 0, cumulative: 0 }, ...daily.filter((d) => d.day <= dayOfMonth)].map((d) => `${x(d.day)},${y(d.cumulative)}`);
   const todayX = x(dayOfMonth);
   const todayY = spent === null ? null : y(spent);
-  const pace = budget === null ? null : Math.round((budget * dayOfMonth) / daysInMonth);
-  const label = budget === null
-    ? `沒設月預算，已花 ${formatAmount(spent) ?? "未知"}`
-    : `預算 ${formatAmount(budget)}，已花 ${formatAmount(spent) ?? "未知"}，照預算今天應花到 ${formatAmount(pace)}`;
+  const pace = Math.round((budget * dayOfMonth) / daysInMonth);
+  const label = `預算 ${formatAmount(budget)}，已花 ${formatAmount(spent) ?? "未知"}，照預算今天應花到 ${formatAmount(pace)}`;
   return (
     <div data-slot="pace-chart" className="min-w-0">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <b className="text-[15px] font-semibold">{title}</b>
         <span className="flex gap-4 text-xs text-muted-foreground">
           <span><span className="mr-1.5 inline-block h-[3px] w-3.5 bg-primary align-middle" />實際累計</span>
-          {budget !== null && <span><span className="mr-1.5 inline-block w-3.5 border-t-2 border-dashed border-chart-rest align-middle" />平均花完的速度</span>}
+          <span><span className="mr-1.5 inline-block w-3.5 border-t-2 border-dashed border-chart-rest align-middle" />平均花完的速度</span>
         </span>
       </div>
       <svg width="100%" viewBox="0 0 580 220" role="img" aria-label={label} className="block">
         <line x1={X0} y1={Y0} x2={560} y2={Y0} className="stroke-border" />
         <line x1={X0} y1={Y1} x2={560} y2={Y1} className="stroke-muted" />
-        <text x={44} y={14} fontSize={11} className="fill-muted-foreground">{budget === null ? "沒設月預算" : `預算 ${formatAmount(budget)}`}</text>
+        <text x={44} y={14} fontSize={11} className="fill-muted-foreground">預算 {formatAmount(budget)}</text>
         <text x={30} y={194} textAnchor="end" fontSize={11} className="fill-muted-foreground">0</text>
-        {budget !== null && <line x1={X0} y1={Y0} x2={X1} y2={Y1} strokeWidth={2} strokeDasharray="5 5" className="stroke-chart-rest" data-part="pace-line" />}
+        <line x1={X0} y1={Y0} x2={X1} y2={Y1} strokeWidth={2} strokeDasharray="5 5" className="stroke-chart-rest" data-part="pace-line" />
         {points.length > 1 && (
           <>
             <polygon points={`${points.join(" ")} ${x(daily.filter((d) => d.day <= dayOfMonth).at(-1)?.day ?? 0)},${Y0}`} fillOpacity={0.08} className="fill-primary" />

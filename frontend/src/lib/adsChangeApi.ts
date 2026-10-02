@@ -96,7 +96,8 @@ async function json<T>(path: string, method: string, body?: unknown, signal?: Ab
 export async function getMonthlyBudget(brand: string, month: string, signal?: AbortSignal) {
   return (await json<{ budget: MonthlyBudget }>(`${brandPath(brand)}/monthly-budget?month=${encodeURIComponent(month)}`, "GET", undefined, signal)).budget;
 }
-export async function saveMonthlyBudget(brand: string, body: { month: string; currency: string; amount: number; expected_revision: number }, signal?: AbortSignal) {
+/** `amount` is sent as typed (F47 Contract A): `null` = left empty; the server refuses a total that is not above 0. */
+export async function saveMonthlyBudget(brand: string, body: { month: string; currency: string; amount: number | null; expected_revision: number }, signal?: AbortSignal) {
   return (await json<{ budget: MonthlyBudget }>(`${brandPath(brand)}/monthly-budget`, "PUT", body, signal)).budget;
 }
 export function getChangeControl(brand: string, campaign: string, signal?: AbortSignal) {

@@ -104,7 +104,7 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed,
           <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); setLinked(false); onBudgetClosed(); }}>
             ← 收起
           </Button>
-          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} />
+          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} onSaved={onRetry} />
         </div>
       )}
     </>

@@ -18,9 +18,14 @@ export function budgetMoney(value: number | null, currency: string | null) {
   return value === null ? "尚待確認" : `${currency ?? "幣別待確認"} ${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
 }
 
+/** A typed amount as sent (F47 Contract A): empty = unset (`null`), anything else the number typed — never clamped,
+ * floored or turned into 0; the server refuses what it cannot keep, with its own sentence. */
+const typedAmount = (text: string) => (text.trim() === "" ? null : Number(text));
+
 /** `startEditing` (F46-I09) opens the edit form once the budget is read, prefilled with the saved amount (empty when
- * unset — no invented default). */
-function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditing = false }: { brandId: string; month: string; refresh?: number; compact?: boolean; startEditing?: boolean }) {
+ * unset — no invented default). `onSaved` (F47-I06, W3) runs after a save lands, so a host showing the same month
+ * (the home money card) reads it again. */
+function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditing = false, onSaved }: { brandId: string; month: string; refresh?: number; compact?: boolean; startEditing?: boolean; onSaved?: () => void }) {
   const [budget, setBudget] = useState<MonthlyBudget | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,6 +36,17 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditin
   const [saved, setSaved] = useState(false);
   const lifetime = useRef(new AbortController());
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
+  const onSavedRef = useRef(onSaved);
+  onSavedRef.current = onSaved;
+  // F47-I06: 「調整月總額」 brings the form into view with the amount field focused (it renders below the summary).
+  const amountRef = useRef<HTMLInputElement>(null);
+  const reveal = useRef(false);
+  useEffect(() => {
+    if (!editing || !reveal.current) return;
+    reveal.current = false;
+    amountRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    amountRef.current?.focus({ preventScroll: true });
+  }, [editing]);
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -53,22 +69,21 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditin
     setEditing(true); setSaved(false); setError("");
   }
   async function save() {
-    if (!budget || busy || !amount.trim() || !Number.isFinite(Number(amount)) || Number(amount) < 0 || !/^[A-Z]{3}$/.test(currency)) return;
+    if (!budget || busy || !/^[A-Z]{3}$/.test(currency)) return;
     setBusy(true); setError("");
     const signal = lifetime.current.signal;
     try {
-      const value = await saveMonthlyBudget(brandId, { month, currency, amount: Number(amount), expected_revision: budget.revision }, signal);
-      if (!signal.aborted) { setBudget(value); setEditing(false); setSaved(true); }
+      const value = await saveMonthlyBudget(brandId, { month, currency, amount: typedAmount(amount), expected_revision: budget.revision }, signal);
+      if (!signal.aborted) { setBudget(value); setEditing(false); setSaved(true); onSavedRef.current?.(); }
     } catch (err) {
       if (!signal.aborted) setError(err instanceof Error ? err.message : "總額尚未確認保存，請重新讀取後再試。");
     } finally { if (!signal.aborted) setBusy(false); }
   }
-  const validAmount = amount.trim() && Number.isFinite(Number(amount)) && Number(amount) >= 0;
   const blockedReason = budget?.amount === null ? "請先設定月總額，再確認需要花費的變更。" : budget?.available !== null && budget?.available !== undefined ? "本月額度已用完或不足，暫不核准新增花費。" : "可用額度尚未確認，暫不核准新增花費。";
   return <section className="surface" aria-label="每月品牌廣告預算">
     <div className="surface-header flex-wrap gap-3">
       <div className="flex items-center gap-2"><Wallet className="size-5 text-primary" /><div><h2>本月廣告預算</h2><p className="text-xs text-muted-foreground">{month} · 節慶額度包含在總額內</p></div></div>
-      {budget && !editing && <Button size="sm" variant="outline" onClick={edit}>{budget.amount === null ? "設定月總額" : "調整月總額"}</Button>}
+      {budget && !editing && <Button size="sm" variant="outline" onClick={() => { reveal.current = true; edit(); }}>{budget.amount === null ? "設定月總額" : "調整月總額"}</Button>}
     </div>
     <div className={compact ? "surface-body space-y-2" : "surface-body space-y-4"}>
       {!budget && !error && <p role="status" className="text-sm text-muted-foreground">正在整理月預算…</p>}
@@ -92,13 +107,13 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditin
             </div>
           </div>
         </Disclosure>
-        {editing && <form className="rounded-lg border border-border bg-background p-4 space-y-3" onSubmit={event => { event.preventDefault(); void save(); }}>
+        {editing && <form className="rounded-lg border border-border bg-background p-4 space-y-3" onChange={() => setError("")} onSubmit={event => { event.preventDefault(); void save(); }}>
           <p className="font-medium text-sm">只需確認本月總額，其他計算交給系統。</p>
           <div className="grid gap-3 grid-cols-[120px_minmax(0,1fr)]">
             <label className="text-sm">幣別<Input aria-label="月預算幣別" value={currency} maxLength={3} placeholder="例如 TWD" onChange={e => setCurrency(e.target.value.toUpperCase())} disabled={busy || budget.revision > 0} /></label>
-            <label className="text-sm">每月品牌總額<Input aria-label="每月品牌總額" type="number" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} disabled={busy} /></label>
+            <label className="text-sm">每月品牌總額<Input ref={amountRef} aria-label="每月品牌總額" type="number" step="any" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} disabled={busy} /></label>
           </div>
-          <div className="flex flex-wrap gap-2"><Button type="submit" disabled={busy || !validAmount || !/^[A-Z]{3}$/.test(currency)}>{busy ? "保存中…" : "確認月總額"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setEditing(false)}>取消修改</Button></div>
+          <div className="flex flex-wrap gap-2"><Button type="submit" disabled={busy || !/^[A-Z]{3}$/.test(currency)} disabledReason={!busy && !/^[A-Z]{3}$/.test(currency) ? "幣別請填三個英文字母，例如 TWD" : undefined}>{busy ? "保存中…" : "確認月總額"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setEditing(false)}>取消修改</Button></div>
         </form>}
       </>}
       {error && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error}</p><Button size="sm" variant="outline" onClick={() => setReload(value => value + 1)}>重新讀取月預算</Button></div>}
