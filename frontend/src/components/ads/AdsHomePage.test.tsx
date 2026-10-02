@@ -77,7 +77,7 @@ function item(id: string, kind_key: QueueKind, extra: Partial<QueueItem> = {}, t
   return {
     id, org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: `k_${id}`, category: "ads", kind: null,
     severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open", created_at: "2026-09-23T00:00:00Z",
-    resolved_at: null, kind_key, triage: triage({ entity_id: `ad_${id}`, ...t }), proposal: null, ...extra,
+    resolved_at: null, kind_key, triage: triage({ entity_id: `ad_${id}`, ...t }), proposal: null, done: false, ...extra,
   };
 }
 
@@ -183,7 +183,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
 
   it("a handled decision leaves the cards and the count, and sits in the 今天處理過 fold", async () => {
     const rejected: QueueProposal = { kind: "cleanup", change_set_id: "cs_1", campaign_id: "cmp_daily", status: "rejected", verification_state: "pending", reason: null, revisit_at: null, multi: true };
-    vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected }, item("w1", "worse")]));
+    vi.mocked(refreshQueue).mockResolvedValue(queue([{ ...cleanupItem("c1"), proposal: rejected, done: true }, item("w1", "worse")]));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     expect(await within(section).findAllByRole("article")).toHaveLength(1);

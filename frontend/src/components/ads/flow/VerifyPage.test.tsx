@@ -42,7 +42,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "stop_loss",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -233,6 +233,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
       queueItem({
         id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }),
         proposal: { change_set_id: "acs_2", campaign_id: "cmp_2", kind: "pause", status: "approved", verification_state: "confirmed", reason: null, revisit_at: null, multi: false },
+        done: true,
       }),
     ]));
     renderAt(verifyPath());

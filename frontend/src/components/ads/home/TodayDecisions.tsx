@@ -8,9 +8,9 @@ import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
 import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
-import { QueueRow, decisionTitle, homeAction } from "./QueueRow";
+import { DoneChip, QueueRow, decisionTitle, homeAction } from "./QueueRow";
 import { SettleCard, SettleRow, settleRange } from "./SettleCard";
-import { settleAction } from "./status";
+import { isQueueItemDone, settleAction } from "./status";
 
 /** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open `cleanup`, `worse`, period `settle`
  * and `refresh_creative` rows, in that order; three as cards (the settle card spans the row), the rest behind one
@@ -27,15 +27,16 @@ const SHOWN = 3;
 
 /** The ad-level home decisions of a queue, split into open and handled, in board order (the settle row is not an ad
  * row; `homeBoard` adds it). Also read by the settle page for its 「第 N 件」 position. */
-export function homeDecisions(brandId: string, queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
+export function homeDecisions(_brandId: string, queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
   const rows = queue.items
     .filter((item) => ORDER.includes(item.kind_key))
     .map((item, i) => ({ item, i }))
     .sort((a, b) => ORDER.indexOf(a.item.kind_key) - ORDER.indexOf(b.item.kind_key) || a.i - b.i)
     .map(({ item }) => item);
+  // F47 Contract D: the row's own `done` (the same field the top bar's count reads), never re-derived here.
   return {
-    open: rows.filter((item) => !homeAction(brandId, item).done),
-    done: rows.filter((item) => homeAction(brandId, item).done),
+    open: rows.filter((item) => !isQueueItemDone(item)),
+    done: rows.filter((item) => isQueueItemDone(item)),
   };
 }
 
@@ -184,11 +185,11 @@ function HandledFold({ brandId, done, recovering }: { brandId: string; done: Hom
     <Disclosure label={`今天處理過 ${done.length} 件`}>
       {done.map((d) => {
         const action = d.kind === "settle" ? settleAction(brandId, d.row) : homeAction(brandId, d.item);
+        // drill-10 Q2: the chip opens the decision (a deferred one shows 「M/D 再看」 and leads back to its change set).
         return (
           <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">
             <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d)}</span>
-            {recovering ? <Chip>補完資料後更新</Chip>
-              : <Chip tone={action.label.startsWith("✓") || action.label === "已核對" ? "ok" : "neutral"}>{action.label}</Chip>}
+            {recovering ? <Chip>補完資料後更新</Chip> : <DoneChip action={action} />}
           </div>
         );
       })}

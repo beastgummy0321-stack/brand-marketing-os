@@ -54,10 +54,11 @@ const reviewRoundPath = (brandId: string, campaignId: string, reviewId: string, 
   `/brands/${brandId}/ads/campaigns/${campaignId}/reviews/${reviewId}${step ? `/${step}` : ""}`;
 
 // `revisit_at` 是「always a timezone-carrying ISO instant」（feature Decisions）——瀏覽器本地
-// 時區印「M/D」，不補零、不印年份（跟這頁其餘日期格式一致地簡短）。
-function formatRevisitLabel(revisitAt: string): string {
+// 時區印「M/D」，不補零、不印年份（跟這頁其餘日期格式一致地簡短）。F47-I07（drill-10 Q2）：
+// 「M/D 再看」，暫緩的列與確認頁都用這一顆。
+export function formatRevisitLabel(revisitAt: string): string {
   const d = new Date(revisitAt);
-  return `${d.getMonth() + 1}/${d.getDate()} 重看`;
+  return `${d.getMonth() + 1}/${d.getDate()} 再看`;
 }
 
 /** F23-I01: `proposal.status === "completed"` with a copy change set already exists — the row's
@@ -198,37 +199,11 @@ export function cleanupAction(
   return proposalAction(brandId, campaignId, campaignId, proposal);
 }
 
-/** F22-I05/F23-I01/F25-I02/F26-I02/F27-I17: whether a queue row still counts as "open" for the
- * home header count (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
- * `proposalAction(...).done` is true — same rule the row's own button already renders, kept in
- * one place so the header and the button can't disagree. `scale_budget` rows follow the same rule
- * through the `"budget"` branch, keyed to the budget owner's id rather than the triage ad's own
- * `entity_id` (feature Decisions "Home rows"). `cleanup` rows follow `cleanupAction` above — not
- * done while there's no proposal yet, or its change set's `.done` once there is. `refresh_creative`
- * and `insufficient_data` rows never count as done (feature Decisions: "refresh rows never count
- * as done" /「never done」for the insufficient-data row) — neither has a proposal flow, so both
- * fall through to the final `return false` the same way any unhandled kind always has. */
+/** F47-I07 (Contract D): whether a queue row still waits on the user is the backend's own
+ * `item.done` (`app/ads/queue_done.py`, stamped on every row of the queue read) — the top bar, the
+ * home list and 「下一件」 all read that one field; there is no second copy of the rule here. */
 export function isQueueItemDone(item: QueueItem): boolean {
-  if (item.brand_id === null) return false;
-  // F29-I01（ads.md §6.33 一把尺）：看列的種類 `kind_key`，不看 triage 的趨勢 class——加預算列的
-  // 那則廣告趨勢也可能是 worse，卻不是一張「變貴」決定。
-  if (item.kind_key === "stop_loss") {
-    return proposalAction(item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal).done;
-  }
-  if (item.kind_key === "worse") {
-    return proposalAction(
-      item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal, "review",
-    ).done;
-  }
-  if (item.kind_key === "scale_budget" && item.scale) {
-    return proposalAction(
-      item.brand_id, item.triage.campaign_id, item.scale.owner.id, item.proposal, "budget",
-    ).done;
-  }
-  if (item.kind_key === "cleanup") {
-    return cleanupAction(item.brand_id, item.triage.campaign_id, item.proposal, item.action_url)?.done ?? false;
-  }
-  return false;
+  return item.done;
 }
 
 /** F29-I11 (Contract E): the brand-level period-settle row's own action. Its link is the row's own

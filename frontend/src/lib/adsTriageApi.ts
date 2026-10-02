@@ -336,6 +336,9 @@ export interface QueueItem {
   status: string; created_at: string; resolved_at: string | null;
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
+  /** F47 Contract D (`app/ads/queue_done.py`): the row no longer waits on the user (decided,
+   * deferred, or its change confirmed). The only done rule — read it, never recompute it. */
+  done: boolean;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
   cleanup?: QueueCleanup;
 }

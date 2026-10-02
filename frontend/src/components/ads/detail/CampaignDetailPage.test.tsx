@@ -118,7 +118,7 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
   return {
     id: "q", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "triage", kind: "worse",
     severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open",
-    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, ...o,
+    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, done: false, ...o,
   };
 }
 function cleanup(ids: string[]): QueueCleanup {

@@ -297,7 +297,7 @@ function row(id: string, kind: QueueItem["kind_key"], extra: Partial<QueueItem> 
   return {
     id, org_id: "o", brand_id: "b", campaign_period_id: null, dedupe_key: id, category: "ads", kind: null, severity: "rule_warning", message: "",
     action_url: null, visible_from: null, status: "open", created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: kind,
-    triage: triage(t), proposal: null, ...extra,
+    triage: triage(t), proposal: null, done: false, ...extra,
   };
 }
 const payload = (items: QueueItem[]) => ({ status: "ready" as const, queue: { items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0, kinds_available: [], kinds_pending: [] } });
@@ -394,6 +394,29 @@ describe("TodayDecisions", () => {
     fireEvent.click(screen.getByRole("button", { name: "今天處理過 1 件" }));
     expect(screen.getByText("結算上一期 08/01–08/31")).toBeTruthy();
     expect(screen.getByText("✓ 已寫進筆記本").getAttribute("data-tone")).toBe("ok");
+  });
+
+  // F47-I07 (drill-10 Q2): a deferred decision is done by the row's own `done`, shows 「M/D 再看」 and links back to its set.
+  it("a deferred cleanup sits in 今天處理過 with 「M/D 再看」 linking to its change set; the count ignores it", () => {
+    const deferred = row("c1", "cleanup", {
+      action_url: "/brands/b/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily", done: true,
+      proposal: { kind: "cleanup", change_set_id: "acs_9", campaign_id: "cmp_daily", status: "deferred", verification_state: "pending", reason: "想再觀察幾天", revisit_at: "2026-11-05T12:00:00Z", multi: true },
+      cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
+        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "wasted", cost_per_result: null, spend: 2470, result_count: 0, daily_spend: null, rejected_before: null }] },
+    });
+    wrap(<TodayDecisions brandId="b" state={payload([deferred, row("w1", "worse")])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("1 件")).toBeTruthy();
+    expect(screen.queryByRole("article", { name: "關 1 則、留 0 則" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "今天處理過 1 件" }));
+    const back = screen.getByRole("link", { name: "11/5 再看" });
+    expect(back.getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_daily/changes/acs_9/confirm");
+  });
+
+  it("a row the backend marks open stays open even if its proposal looks decided (one owner of done-ness)", () => {
+    const stale = row("w1", "worse", { done: false, proposal: { kind: "review", review_id: "r1", status: "deferred", decision: "deferred", reason: null, revisit_at: null, recommendation_id: null, change_set_id: null, change_set_status: null, verification_state: null, multi: false } });
+    wrap(<TodayDecisions brandId="b" state={payload([stale])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("1 件")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /今天處理過/ })).toBeNull();
   });
 
   it("read failure: hero with the last successful sync time and a retry", () => {

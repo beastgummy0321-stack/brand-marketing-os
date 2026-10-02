@@ -57,7 +57,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "stop_loss",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -221,12 +221,26 @@ describe("HandoffPage（F22-I03）步驟導正與例外", () => {
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm"));
   });
 
-  it("已經回報過，導去核對結果頁", async () => {
+  // F47-I07 (drill-10 C3-E): 「回到在平台完成」 from the verify page lands here and stays — read-only, one link forward.
+  it("已經回報過：留在這頁唯讀，步驟打勾，連到核對結果，不再給「我做完了」", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({ verification_state: "confirmed", reported_at: "2026-09-21T01:00:00Z" })] })],
     });
     renderAt(handoffPath());
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+    const forward = await screen.findByRole("link", { name: "看核對結果 →" });
+    expect(forward.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify");
+    expect(screen.queryByTestId("probe-path")).toBeNull();
+    expect(screen.queryByRole("button", { name: /我做完了/ })).toBeNull();
+    expect(screen.getAllByLabelText("已完成").length).toBeGreaterThanOrEqual(2);
+    expect(changeApi.actOnChangeItem).not.toHaveBeenCalled();
+  });
+
+  it("還是草稿的清單打開到平台完成：導回確認", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ status: "draft", approved_at: null })],
+    });
+    renderAt(handoffPath());
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm"));
   });
 
   it("多項變更的清單連去既有變更與核對", async () => {
