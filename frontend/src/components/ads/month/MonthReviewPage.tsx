@@ -113,16 +113,18 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
         setError(err instanceof Error ? err.message : "先不要沒有存到，請稍後再試。");
       });
   };
+  // F46: a next_plan card opens the create page for the next period; every other kind opens its proposal.
+  const actionLabel = suggestion.kind === "next_plan" ? "用這些學習排下一期 →" : "看提議（核准或拒絕）→";
   return (
-    <section aria-label={suggestion.title} className="surface flex flex-col px-[22px] py-5">
+    <section aria-label={suggestion.title} data-kind={suggestion.kind} className="surface flex flex-col px-[22px] py-5">
       <CampaignChip objective={suggestion.campaign_objective ?? "other"} name={suggestion.campaign_name} suffix={suggestion.objective} />
       <b className="mt-2.5 mb-0.5 block text-[15px] font-semibold [overflow-wrap:anywhere]">{suggestion.title}</b>
       <div className="mb-3.5 text-[13px] text-muted-foreground">{suggestion.why}</div>
       {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
         {suggestion.action_url
-          ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>看提議（核准或拒絕）→</Link></Button>
-          : <Button size="sm" variant="outline" disabled>看提議（核准或拒絕）→</Button>}
+          ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>{actionLabel}</Link></Button>
+          : <Button size="sm" variant="outline" disabled>{actionLabel}</Button>}
         <Button size="sm" variant="ghost" disabled={busy} onClick={skip}>先不要</Button>
       </div>
     </section>

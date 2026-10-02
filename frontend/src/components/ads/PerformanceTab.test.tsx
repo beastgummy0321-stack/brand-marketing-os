@@ -3,13 +3,14 @@
  * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。
  * F40-I06: the dialog itself now lives in `CloseCampaignDialog.tsx` (shared with the 成效分頁's 這期狀態列); the
  * 立即結案 cases below prove the folded old panel still opens it, and the F37 cases prove its behaviour is unchanged. */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
 import { closeCampaign, CoverageMissingError, getPerformance } from "@/lib/adsApi";
+import { getCoordinateLearnings, type CoordinateLearnings, type LearningCampaign } from "@/lib/adsLearningsApi";
 import { readComparison } from "@/lib/adsExperimentApi";
 import { readSimulation } from "@/lib/adsSimulationApi";
 import { PerformanceTab } from "./PerformanceTab";
@@ -57,6 +58,45 @@ vi.mock("@/lib/adsApi", async () => {
     getPerformance: vi.fn(),
     closeCampaign: vi.fn(),
   };
+});
+
+vi.mock("@/lib/adsLearningsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/adsLearningsApi")>("@/lib/adsLearningsApi");
+  return { ...actual, getCoordinateLearnings: vi.fn() };
+});
+
+/** F46 Contract L for `?campaign_id=cmp_1` in its served shape (drill-10 numbers): cap 450, two ads under it → 留下,
+ * the third over it → 換掉; rows in the served rank order. */
+const LEARNED_CAMPAIGN: LearningCampaign = {
+  campaign_id: "cmp_1", campaign_name: "三盒組・09/19～10/01", sell_way_id: "prd_box",
+  start_date: "2026-09-19", end_date: "2026-10-01", closed_on: "2026-10-02", cap: 450, currency: "TWD",
+  spend: 4806, sales: 13, cost_per_sale: 369.7, counts: { keep: 2, replace: 1 },
+  rule_text: "2 則每筆低於上限 450 → 留下；其餘換掉", empty_reason: null,
+  rows: [
+    {
+      rank: 1, of: 3, ad_id: "ada_1", ad_name: "備考生・讀到深夜", customer_group: { id: "pcg_study", who: "學生備考" },
+      coordinates: [{ dimension: "angle", dimension_label: "角度", key: "late", label: "陪你撐完最後一章" }],
+      spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], learning_id: "lrn_1",
+    },
+    {
+      rank: 2, of: 3, ad_id: "ada_2", ad_name: "考前一週・書包一盒", customer_group: { id: "pcg_study", who: "學生備考" },
+      coordinates: [{ dimension: "angle", dimension_label: "角度", key: "box", label: "書包裡放一盒就好" }],
+      spend: 2226, sales: 7, cost_per_sale: 318, verdict: "keep", verdict_label: "留下", flags: [], learning_id: "lrn_2",
+    },
+    {
+      rank: 3, of: 3, ad_id: "ada_3", ad_name: "會議前・午休五分鐘", customer_group: null,
+      coordinates: [], spend: 1420, sales: 2, cost_per_sale: 710, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], learning_id: "lrn_3",
+    },
+  ],
+};
+const LEARNED: CoordinateLearnings = {
+  campaigns: [LEARNED_CAMPAIGN],
+  groups: [{ customer_group_id: "pcg_study", who: "學生備考", ads: 2, spend: 3386, sales: 11, cap: 450, cost_per_sale: 307.8 }],
+  next: { sell_way_id: "prd_box", new_campaign_href: "/brands/brd_1/ads/new?sell_way=prd_box" },
+};
+
+beforeEach(() => {
+  vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
 });
 
 function performance(): CampaignPerformance {
@@ -216,6 +256,10 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     await user.click(screen.getByRole("button", { name: "確認結案" }));
 
     expect(closeCampaign).toHaveBeenCalledWith("brd_1", c.id);
+    // F46: the dialog stays on the result; the closed campaign is handed back when it is dismissed.
+    await screen.findByText("已結案：留下 2 則、換掉 1 則");
+    expect(onCampaignChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "關閉" }));
     expect(onCampaignChange).toHaveBeenCalledWith(updated);
   });
 
@@ -429,6 +473,7 @@ describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", 
 
     await user.click(screen.getByRole("button", { name: "仍讀不到，跳過缺日結案" }));
     expect(closeCampaign).toHaveBeenLastCalledWith("brd_1", c.id, { skip_missing: true });
+    await user.click(await screen.findByRole("button", { name: "關閉" }));
     await waitFor(() => expect(onCampaignChange).toHaveBeenCalledWith(closed));
   });
 
@@ -583,5 +628,97 @@ describe("closeCampaign 409 coverage_missing", () => {
     const err = await realClose("brd_1", "cmp_1").catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(CoverageMissingError);
     expect((err as Error).message).toBe("已鎖定");
+  });
+});
+
+// F46-I07 (prototype f46-learnings `#/close`): confirm → 結案中… → result with the two exits. The result reads Contract
+// L for this campaign after the close; the parent only hears about the closed campaign when the dialog is dismissed.
+const EARLY_CLOSE_TEXT = "提前結案會用到目前為止的成效判定，判定後這個 Campaign 不再更新成效";
+
+describe("F46 結案對話框：結果與兩個出口", () => {
+  const planned = () => [group({ ads: [ad({ id: "ada_1", name: "備考生・讀到深夜" }), ad({ id: "ada_2", name: "考前一週・書包一盒" })] }),
+    group({ id: "grp_2", ads: [ad({ id: "ada_3", group_id: "grp_2", name: "會議前・午休五分鐘" })] })];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPerformance).mockResolvedValue(performance());
+    vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
+  });
+
+  async function openAndConfirm(c: CampaignDetail) {
+    const user = userEvent.setup();
+    const closed = { ...c, status: "closed" as const };
+    vi.mocked(closeCampaign).mockResolvedValue(closed);
+    const utils = renderTab(c);
+    await user.click(await screen.findByRole("button", { name: "立即結案" }));
+    return { user, closed, ...utils };
+  }
+
+  it("confirm names the planned ad count; 結案中… holds until the learnings are read; result = counts, rule, ranked rows, exits", async () => {
+    let release: (v: CoordinateLearnings) => void = () => {};
+    vi.mocked(getCoordinateLearnings).mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    const { user, closed, onCampaignChange } = await openAndConfirm(campaign({ status: "ended", groups: planned() }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("結案後會把這期 3 則廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。");
+    expect(dialog.textContent).not.toContain(EARLY_CLOSE_TEXT); // ended: no early-close sentence
+
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+    expect(await screen.findByRole("button", { name: "結案中…" })).toBeTruthy();
+    expect(getCoordinateLearnings).toHaveBeenCalledWith("brd_1", { campaignId: "cmp_1" });
+    release(LEARNED);
+
+    const result = await screen.findByRole("dialog", { name: "已結案：留下 2 則、換掉 1 則" });
+    expect(within(result).getByText("2 則每筆低於上限 450 → 留下；其餘換掉")).toBeTruthy();
+    const rows = within(result).getAllByRole("row");
+    expect(rows.map((r) => r.getAttribute("data-ad"))).toEqual(["ada_1", "ada_2", "ada_3"]);
+    expect(within(rows[0]).getByText("290")).toBeTruthy();
+    expect(within(rows[0]).getByText("樣本少")).toBeTruthy();
+    expect(within(rows[2]).getByText("換掉")).toBeTruthy();
+    expect(within(rows[2]).getByText("未指定")).toBeTruthy();
+    expect(within(result).queryByRole("columnheader")).toBeNull(); // headless: no column header row
+    expect(within(result).getByRole("link", { name: "看學到什麼 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/library?tab=ads-learnings&campaign=cmp_1");
+    expect(within(result).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/ads/new?sell_way=prd_box");
+
+    expect(onCampaignChange).not.toHaveBeenCalled();
+    await user.click(within(result).getByRole("button", { name: "關閉" }));
+    expect(onCampaignChange).toHaveBeenCalledWith(closed);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("live: the early-close sentence stays after the new confirm sentence", async () => {
+    await openAndConfirm(campaign({ status: "live", groups: planned() }));
+    expect(screen.getByRole("dialog").textContent).toContain(`活動之後鎖定，不能再改。 ${EARLY_CLOSE_TEXT}`);
+  });
+
+  it("a failed learnings read after a successful close: says so, both exits stay (next = the plain create page)", async () => {
+    vi.mocked(getCoordinateLearnings).mockRejectedValue(new Error("讀取投放學到的失敗。"));
+    const { user, closed, onCampaignChange } = await openAndConfirm(campaign({ status: "ended", groups: planned() }));
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+    const result = await screen.findByRole("dialog", { name: "已結案，學到的暫時讀不到" });
+    expect(within(result).queryByRole("table")).toBeNull();
+    expect(within(result).getByRole("link", { name: "看學到什麼 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/library?tab=ads-learnings&campaign=cmp_1");
+    const next = within(result).getByRole("link", { name: "用這些學習排下一期 →" });
+    expect(next.getAttribute("href")).toBe("/brands/brd_1/ads/new");
+    // Leaving through an exit also hands the closed campaign back.
+    await user.click(next);
+    expect(onCampaignChange).toHaveBeenCalledWith(closed);
+  });
+
+  it("an empty view (no ranked rows) prints its empty_reason and still offers both exits", async () => {
+    vi.mocked(getCoordinateLearnings).mockResolvedValue({
+      ...LEARNED,
+      campaigns: [{ ...LEARNED_CAMPAIGN, rows: [], counts: { keep: 0, replace: 0 }, spend: null, sales: null, cost_per_sale: null,
+        rule_text: "", empty_reason: "資料缺天，這期沒有記學習" }],
+      groups: [],
+    });
+    const { user } = await openAndConfirm(campaign({ status: "ended", groups: planned() }));
+    await user.click(screen.getByRole("button", { name: "確認結案" }));
+    const result = await screen.findByRole("dialog", { name: "已結案" });
+    expect(within(result).getByText("資料缺天，這期沒有記學習")).toBeTruthy();
+    expect(within(result).queryByRole("table")).toBeNull();
+    expect(within(result).getByRole("link", { name: "看學到什麼 →" })).toBeTruthy();
+    expect(within(result).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?sell_way=prd_box");
   });
 });

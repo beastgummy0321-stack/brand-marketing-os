@@ -5,7 +5,8 @@ import { getPerformance, type CampaignDetail, type PeriodGrade } from "@/lib/ads
 import { formatSyncTime } from "@/lib/format";
 import { useOrgClock } from "@/lib/orgClock";
 import { useApiRead } from "@/lib/useApiRead";
-import { CloseCampaignDialog, coveredRange, shortDay } from "../CloseCampaignDialog";
+import { getCoordinateLearnings } from "@/lib/adsLearningsApi";
+import { CloseCampaignDialog, LearningExits, coveredRange, shortDay } from "../CloseCampaignDialog";
 import { nativePerformance } from "../nativePerformance";
 import { Chip, GradeTermChip, ReadFailed, formatAmount } from "../patterns";
 
@@ -67,6 +68,12 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const closed = c.status === "closed";
   const perf = useApiRead(() => (imported ? Promise.resolve(null) : getPerformance(brandId, c.id)), [brandId, c.id, imported]);
   const [closeOpen, setCloseOpen] = useState(false);
+  // F46: a closed internal campaign's row links to what it taught and to the next period; the next-period href is
+  // the view's own (`next.new_campaign_href`), the plain create page while unread or when the read fails.
+  const learned = useApiRead(
+    (signal) => (closed && !imported ? getCoordinateLearnings(brandId, { campaignId: c.id }, signal) : Promise.resolve(null)),
+    [brandId, c.id, closed, imported],
+  );
 
   // The workspace's platform read ended (syncing true → false): the row re-reads its numbers.
   const wasSyncing = useRef(syncing);
@@ -122,7 +129,10 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
           <Cell label="ROAS" value={roas} sub="營收 ÷ 花費" />
         </div>
         {closed ? (
-          <Chip data-state="closed">已結案</Chip>
+          <div className="flex flex-wrap items-center justify-end gap-2" data-testid="period-closed-exits">
+            <Chip data-state="closed">已結案</Chip>
+            {!imported && <LearningExits brandId={brandId} campaignId={c.id} view={learned.data} />}
+          </div>
         ) : (
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
