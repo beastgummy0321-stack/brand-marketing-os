@@ -1137,3 +1137,24 @@ describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (proto
     busy.unmount();
   });
 });
+
+describe("AssetsBody — F46 format note (prototype f45-slot-states slot a2)", () => {
+  it("a slot whose file ships in another format than planned says so under its chip; null says nothing", async () => {
+    const note = "規劃是輪播，只放了 1 張圖，會以單圖上架";
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "adg_a", name: "新客", slots: [
+      slot({ ad_id: "ad_a2", name: "健身後・三種口味一次看", format_key: "carousel", format_note: note }),
+      slot({ ad_id: "ad_a1", name: "通勤情境單圖", format_note: null }),
+    ] }] }));
+    renderBody();
+    const noted = (await screen.findByText(note)).closest("[data-slot=slot-format-note]");
+    expect(noted?.textContent).toBe(`ⓘ${note}`);
+    const tiles = within(screen.getByRole("list", { name: "新客" })).getAllByRole("listitem");
+    const first = tiles.find((el) => within(el).queryByText("健身後・三種口味一次看"))!;
+    const plain = tiles.find((el) => within(el).queryByText("通勤情境單圖"))!;
+    // A fact, never a block: the noted slot still reads 已確認 and counts as ready.
+    expect(within(first).getByText("已確認")).toBeTruthy();
+    expect(first.contains(noted!)).toBe(true);
+    expect(plain.querySelector("[data-slot=slot-format-note]")).toBeNull();
+    expect(screen.getByRole("heading", { name: "2／2 格已備妥" })).toBeTruthy();
+  });
+});
