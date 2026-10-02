@@ -7,7 +7,7 @@ outcome: backend only, no LLM, no platform write). Same auth shape as
 from fastapi import APIRouter, Request
 
 import app.shared.web as web
-from app.ads import triage
+from app.ads import triage, triage_pause
 
 router = APIRouter()
 
@@ -23,6 +23,18 @@ def get_campaign_triage(request: Request, brand_id: str, campaign_id: str):
     except ValueError as exc:
         raise web.ApiError(404, str(exc), CAMPAIGN_UNKNOWN_MESSAGE) from exc
     return {"triage": result}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/triage/{entity_id}/pause")
+def get_ad_pause_view(request: Request, brand_id: str, campaign_id: str, entity_id: str):
+    """F45-I05 Contract P (ads.md §6.49): the pause page's own read of one ad."""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    try:
+        result = triage_pause.pause_view(web.conn, actor.org_id, brand_id, campaign_id, entity_id)
+    except ValueError as exc:
+        raise web.ApiError(404, str(exc), CAMPAIGN_UNKNOWN_MESSAGE) from exc
+    return {"pause": result}
 
 
 @router.post("/brands/{brand_id}/queue/refresh")
