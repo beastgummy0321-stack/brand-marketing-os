@@ -1879,3 +1879,35 @@ Root cause (drill 9 #1＋#2): every step re-derived 「which sell-way this ad se
   再檢查一次; blocked slots do not poll and are not in the launch list.
 - The `bundle` offer label is 「組合優惠」 (seed, `OFFER_LABELS`, and a rename migration for rows still carrying the old seed label).
 
+
+### 6.49 Pause reads the ad, slots say who is waiting（ruled 2026-10-02；F45）
+Root causes (drill 10 §1 #3, #4): the pause page found its ad only through a home-queue row, and 「system busy」 and 「waiting for
+you」 were one slot state while only one confirmation path stored a refusal.
+- **Pause view (Contract P)**: `GET …/campaigns/{c}/triage/{entity_id}/pause` → `{"pause": {state, entity_id, name, triage,
+  closed_at, last_read_at, change_set_id}}`. `state`: `active` (a platform ad of this campaign that `ad_status.is_closed` does not
+  call closed — unknown status counts as active), `closed` (closed, not `DELETED`), `gone` (no such ad in this campaign, or
+  `DELETED`). `triage` = the `GET …/triage` item shape computed for this one ad over the campaign's own cutoff, coverage and cap
+  (closed ads too; `null` when gone). `closed_at` = `status_changed_at`; `last_read_at` = `last_success_at`. `change_set_id` = the
+  newest non-superseded plain set (no `source`) of this campaign with a `pause` item on this ad, status `draft`, or `approved` with
+  that item not `confirmed`; else `null`. 404 only for an unknown campaign. The home queue is not read for any of this.
+- **Pause page** (`propose/pause/:entityId`): built from Contract P; the queue only adds 「第 n 件／共 N 件」 when the ad has a row
+  (a failed queue read drops the position, never the page). `active` → the proposal with this ad's own numbers (花費、成交、每筆成本、
+  評級, meter against the cap, 「這則廣告自己的數字・〈window〉」) and the angle card; `closed` → 「這則已經停了」 with the same card
+  and one back button; `gone` → 「找不到這則廣告」, why, 回投放中心. Entries carry `?from=perf|review|verify&ref=<review id | set id>`
+  for the back link: 覆盤「停掉這則」, 讀回頁「暫停舊廣告」／「重新檢討」, and a 「暫停」 button on every active ad row of the 成效 tab.
+  The pause set does not carry `review_id` (`proposal_reference` stays copy-only; the round is already decided).
+- **Refusals are stored by the confirmation itself**: `asset_suggestions` writes a refused confirmation's non-`wait` details to that
+  revision's `blocked_reasons` (manual and batch confirm, upload, copy pick, recheck — one writer). A new revision of a placement that
+  backs a planned ad's slot (`PATCH …/placements/{id}`, slot copy edit, copy pick) points the ad's `slot_placement_id` at it and is
+  confirmed and settled at once (skipped for a launched or frozen ad). `POST …/slots/{ad_id}/copy` also takes `{copy_fields}`
+  (a typed edit) besides `{set_id, version_id}`.
+- **Slot states (Contract W)**: `in_progress` only while a background job for that slot runs — its original's preview (asset
+  `pending`) or its workbench set's generation (`queued` / `running`); the slot carries `job {kind: preview | copy, done, of}`
+  (`done`/`of` null unless the workbench read gives them). Nothing running, nothing refused, not ready → `waiting` with
+  `waiting {action: pick_on_workbench | confirm_copy, text}`: 「等你：到工作檯選定一版文案」 (a set with no selected copy) or
+  「等你：確認這版文案」 (an unconfirmed placement with a ready original and no stored refusal; the button runs recheck). `blocked`,
+  `copy_only`, `image_only`, `missing`, `ready` keep §6.48 / F35 meanings. The 素材 tab counts 卡住／等你／處理中, polls only while
+  something is `in_progress`, and edits copy in place (保存後馬上檢查). Job staleness (a dead worker) is not handled here.
+- **Photo-only brands** (`brand.media_capability = "photo"`): single-image and carousel sets require only `{"copy": 1}`.
+- **Picker**: `wizard_options` items carry `derived_fields` (the current economics'); a break-even from a derived price or cost
+  prints 「（推算）」.

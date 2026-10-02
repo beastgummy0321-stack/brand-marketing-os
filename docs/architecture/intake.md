@@ -165,3 +165,52 @@ Supersedes rule 1's 「one level only」 / 「not built: bundle auto-arithmetic�
   call on the product page text + ≤3 product photos, per-entry contract checks, a customer quote must appear in the page text; stored
   in `intake_product_prefill` (intake-owned) as a proposal. Cost cap = the brand's shared cap (products are usually built after the
   brand draft is closed). Product 自訂 blocks: difference, group, pain, product_proof, claim (`CustomEscape` takes a `propose`).
+
+### F45 (ruled 2026-10-02): base and composed sell-ways
+Supersedes F43's 「sell-way = product × qty」 storage and its 「earliest qty-1 sell-way of the product」 derivation (drill 10 B1/M1/O1,
+drill 9 #9: quantity had no unit, so a ×N sell-way priced its cost from whichever one-unit sell-way came first).
+- **Two shapes.** A *base* sell-way binds exactly one knowledge product and has no quantity — it is the unit (單盒, 體驗包): a
+  `product` row with `parent_id` = that product and no `product_component` rows (F05 child rows read as base). A *composed* sell-way
+  is a list of base sell-way × qty (12 盒 = 單盒 × 12; 5 盒＋2 包 = 單盒 × 5 + 體驗包 × 2): `product_component.base_sell_way_id`
+  (renamed from `product_id`) → an active base sell-way of the same brand, `qty` > 0, each base once, Σqty ≥ 2. Its `parent_id` is
+  the knowledge product when every base belongs to one product (listed and named under it, 「〈商品〉 · 〈名稱〉」), else NULL (a
+  cross-product bundle). A component is never a composed sell-way or a knowledge product. Changing a sell-way's shape is refused.
+  `product.free_shipping` (bool, default false) = 「這個賣法免運」.
+- **Facade** (`app/brand_intelligence/repository.py`): `save_sell_way(…, product_id=None, components=None, economics, landing_url,
+  free_shipping, actor)` — exactly one of `product_id` (base) or `components` `[{sell_way_id, qty}]` (composed). Base needs a price
+  > 0; a composed price may be empty. Refused: a component that is not an active base of this brand, has no confirmed price, or
+  is in another currency than the sell-way; a currency change of a base that an active composed sell-way uses.
+  `composed_using(conn, brand_id, base_id)` = the active composed sell-ways that list a base (archive guard). `list_sell_ways`
+  items add `shape` (`base` | `composed`), `free_shipping`, and components `{sell_way_id, qty, name, product_id, product_name, price,
+  cost, currency}` (the base's display name, its knowledge product, its own effective price / cost); `kind` (`single` | `bundle`)
+  keeps meaning 「listed under a product」 vs 「cross-product」.
+- **Derived numbers, on read** (`get_product_economics`): a base derives nothing. A composed sell-way's empty `selling_price` /
+  `list_price` = Σ qty × each base's confirmed effective selling price; empty `unit_variable_cost` = Σ qty × each base's cost. A part
+  that is unknown or in another currency leaves the field empty (not derived). `derived_fields` names what was filled; every screen
+  that prints a derived number or a break-even computed from one labels it 推算. `product_economics(.version).selling_price` is
+  nullable for composed rows only.
+- **Knowledge** (`knowledge_product_ids`): a composed sell-way → each base's product in component order, each once; a base → its
+  product. Customer groups, proof, claims, photos and the bundle page's 「廣告會用到的」 read through it.
+- **Own offers**: effective list price above effective price → `discount` for a base, `bundle` for a composed sell-way, sentence
+  「優惠價 NT$X（原價 NT$Y）」 (no product name). `free_shipping` → `free_shipping`, sentence 「免運」 (base) / 「這組免運」 (composed).
+  Both join `offer_sources` / `available_offer_keys` after the brand policies. When the flag is ticked and a store-wide
+  free-shipping policy also applies to the sell-way, the list carries one `free_shipping` sentence — the sell-way's own.
+- **Step 4 API** (`GET|PUT …/products/{p}/onboarding/sell-ways`): rows `{id, name, shape, components [{sell_way_id, name, qty, price,
+  cost}], price, price_derived, price_note, list_price, list_price_derived, list_price_note, cost, cost_derived, cost_note,
+  cost_estimate, cost_missing [{sell_way_id, name}], shipping, free_shipping, break_even, break_even_derived, cap_per_sale,
+  cap_is_default, landing_url, landing_is_default, offer_sentences, offer_labels, offer_notes, assumptions, used_by, source, note
+  (+close_rate)}`. Notes read 「推算：單盒 180 × 5 ＋ 體驗包 100 × 2」 (prices for price / list price, costs for cost);
+  `cost_estimate` = the Σ when every base cost is known (shown as 「照內容推算是 X」 beside a typed cost); `cost_missing` = bases
+  without a cost; `offer_sentences` = this sell-way's own offer sentences; `used_by` = names of active composed sell-ways using a
+  base. PUT rows `{id?, name, components?: [{base: "<name of a base row in this body>", qty}], price?, list_price?, cost?, shipping?,
+  free_shipping?, close_rate?, cap_per_sale?, landing_url?, assumptions?}`: no `components` = base; a `qty` key is refused; a row left
+  out is archived unless an active composed sell-way not left out uses it (「「〈base〉」還在「〈組合〉」裡，先從組合拿掉。」). AI
+  proposals: qty 1 → base; qty N > 1 → composed of the first qty-1 proposal × N, else a base.
+- **Bundles** (`…/bundles`, preview): components `[{sell_way_id, qty}]` = base sell-ways of finished products, at least two different
+  knowledge products (one product's combinations live on its step 4); GET components `{sell_way_id, name, product_id, product_name,
+  qty, thumbnail_url, unit_price, unit_cost}` (that base's own effective numbers); money fields as step 4. Products page sell-way
+  briefs add `shape`; bundle card components add `sell_way_id`, `product_name`.
+- Migration (`20261004000010_brand_intelligence_sell_way_base.sql`): rename, the flag, nullable price. Existing rows: a single
+  qty-1 component row is dropped (that sell-way is a base); every other sell-way with component rows is archived and its rows
+  deleted. No backfill: test data is rebuilt (CLAUDE.md 資料狀態).
+- The new-campaign picker's options carry `derived_fields` (ads §6.49).
