@@ -1316,7 +1316,8 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
     """`offer_key` (F44 Contract B) is the brief's resolved offer coordinate, the same key the
     generation job narrowed its prompt with: an offer word on an `offer=none` set, or another
     offer's word on an offer set, shows the `claim_warning`. `None` = a brief without an offer
-    coordinate, every available offer backs its words."""
+    coordinate, every available offer backs its words. F46 Contract O: a copy version of an
+    offer set that writes none of the offer's registered sentences also warns."""
     rows = conn.execute(
         "SELECT * FROM workbench_output WHERE org_id = %s AND brand_id = %s AND brief_id = %s"
         " AND part = %s ORDER BY generation_round DESC, version_index ASC",
@@ -1338,7 +1339,12 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
         claim_sources = claims.sources(conn, brand_id, product_id, offer_key)
         regime = claims.regime(conn, brand_id)
         for version in versions:
-            version["claim_warning"] = claims.warning(version["body"], claim_sources, brand_id)
+            # F46 Contract O: a copy version that leaves out the set's offer sentence says so
+            # in the same warning (other parts never carry the offer sentence).
+            version["claim_warning"] = claims.warning(
+                version["body"], claim_sources, brand_id,
+                offer_key if part == "copy" else None,
+            )
             # F34-I02 Contract S: same advisory shape beside claim_warning, never a block.
             version["statutory_warning"] = claims.statutory_warning(
                 claims.statutory(version["body"], regime),
