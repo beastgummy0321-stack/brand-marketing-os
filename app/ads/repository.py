@@ -403,6 +403,18 @@ def save_campaign_target(
         # label only records "the user asked for break-even" versus "nothing chosen yet".
         set_clauses += ["target_basis = %s", "target_cost = NULL"]
         params += [basis]
+    new_cost = value if basis == "own" else None
+    if basis is not None and (
+        basis != campaign.get("target_basis")
+        or (None if campaign.get("target_cost") is None else float(campaign["target_cost"]))
+        != (None if new_cost is None else float(new_cost))
+    ):
+        # F47-I06: a cap this writer changes is the user's -- `field_sources.cap` stops naming the
+        # create's rule (沿用上一期／打平), so the confirm page reads the stored source as is.
+        set_clauses.append(
+            "context_json = jsonb_set(COALESCE(context_json, '{}'::jsonb), '{field_sources}', "
+            "COALESCE(context_json->'field_sources', '{}'::jsonb) || '{\"cap\": \"user\"}'::jsonb)"
+        )
     params += [org_id, brand_id, campaign_id]
     conn.execute(
         f"UPDATE ads_campaign SET {', '.join(set_clauses)} "
