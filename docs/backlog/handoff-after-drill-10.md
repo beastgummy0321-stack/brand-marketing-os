@@ -2,6 +2,28 @@
 
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-drill-9.md`'s "next" pointer.
 
+## Resume here (handoff 2026-10-03)
+- Done: F45 / F46 / F47 (all drill-10 fixes) accepted by the user and merged to master (HEAD e19eaa2d, **not pushed**; push is
+  manual). No open feature, no queue, no worker or backend running from that session. Main tree on `master`, clean.
+- **Next = drill 11. The user has NOT said 「開跑」.** First message of the new session: show the plan below (short, Chinese,
+  plain words) and wait for the go-ahead. Do not start any drill process before that.
+- Plan already shown to the user once (unchanged): same question, nine dimensions, anchors and bar as `docs/drills/drill-10/plan.md`;
+  new account + new org, three periods, three closeouts, A vs B. Drill-specific changes:
+  1. `python -m scripts.drill.fake_meta reset` first (state files mirrored before 420ad723 lack the launch-pending mark).
+  2. Dimension 3: `tw_sim` default = per-ad audience; also run `--audience group` and report both (drill-10-comparable).
+  3. Control audit: each auditor gets its own account and spare objects (drill 10 left 159 controls unchecked; auditors collided).
+  4. Provoked failures: same 20, separate fault account.
+  5. Agents pick 「自訂」 dates (frontend "today" = browser clock, drill clock is ahead).
+  Estimate 5–5.5 h (drill 10 measured ≈ 5 h). Output `docs/drills/drill-11/report.md` with drill-10 scores side by side and each
+  drill-10 defect marked gone / still there / new.
+- Leftover test data in the dev DB from acceptance (safe to keep or delete; test data): org `org_01M3Y1BN12NV2ZZTC95A1P79X7`
+  (`acc.f45f47@example.com`), F47 worker brands `brd_01M3XYVV3Z07GH1RND84S2BFCA`, `brd_01M3XZS54S7WW9PDEF522H95JM`; brd_bughunt
+  Oct budget set to 45,000. `.scratch/drill/meta_state.json` has an extra stand-in account `900000000004547` (backup
+  `.harness/scratch/acceptance-f45-f47/meta_state.before.json`) — `fake_meta reset` clears it.
+- Known accepted limits (not drill-11 blockers): readback keeps the timestamped old error until 重新讀回 after an outage; per-sale
+  amounts show whole yuan everywhere (also small per-lead costs); O3 strategy text check, carousel-in-planning, calendar audience
+  field not done (see "Fixes built" below).
+
 ## State
 - Drill 10 (final battle-readiness drill, nine dimensions) ran 2026-10-01. **Bar not met** (bar = every dimension ≥ 7 and zero
   blocking defects): B scored 5 / 5 / 2 / 3 / 6 / 4 / 6 / 4 / 3, A scored 8 / 7 / 8 / 9 on the four shared dimensions; 3 blocking defects.
