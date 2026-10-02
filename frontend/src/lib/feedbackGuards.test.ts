@@ -20,18 +20,6 @@ const SRC_DIR = join(LIB_DIR, "..");
  * are file-local wrappers (intakeApi / metaApi) that forward to `errorMessageFromResponse`. */
 const ROUTED = /\b(throwIfFailed|errorMessageFromResponse|errorMessageFrom|extractError|readOrThrow)\(/;
 
-/** Direct status-code throws that predate this guard and live in files outside F47-I02's touch
- * (scheduleApi is do_not_touch). Each is a read helper's `getJson` turning any non-404 failure into
- * 「讀取失敗（狀態碼 N）」. Shrink-only: fix the file, then delete its entry — the test below fails
- * when an entry no longer matches anything, so a fixed file cannot stay listed. */
-const KNOWN_DIRECT_THROWS: Record<string, number> = {
-  "intakeApi.ts": 1,
-  "intakeT2Api.ts": 1,
-  "ordersApi.ts": 1,
-  "productsApi.ts": 1,
-  "scheduleApi.ts": 1,
-};
-
 function listFiles(dir: string, recurse: boolean): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -80,7 +68,7 @@ describe("feedback guards (F47 Contract B)", () => {
       const count = directStatusThrows(readFileSync(full, "utf-8"));
       if (count) found[relative(LIB_DIR, full).split("\\").join("/")] = count;
     }
-    expect(found).toEqual(KNOWN_DIRECT_THROWS);
+    expect(found).toEqual({});
   });
 
   it("navigator.clipboard is only called inside CopyIconButton and CopyField", () => {
