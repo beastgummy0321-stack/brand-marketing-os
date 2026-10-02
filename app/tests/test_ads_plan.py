@@ -343,8 +343,10 @@ class CustomerGroupsInDeliveryPlanPromptTest(PlanTestBase):
     """F43-I02: 【這個賣法的顧客】 sits after the scoreboard and before the vocabulary (the
     vocabulary stays last); its group ids reach the task's `knowledge_item_ids`."""
 
-    def _adopt_capturing(self, campaign_id: str) -> tuple[str, list]:
-        provider = _fake(_VALID_PLAN_REPLY)
+    def _adopt_capturing(
+        self, campaign_id: str, reply: str = _VALID_PLAN_REPLY,
+    ) -> tuple[str, list]:
+        provider = _fake(reply)
         plan.PROVIDER = provider
         with mock.patch.object(plan.gateway, "run_task", wraps=plan.gateway.run_task) as spy:
             self._adopt(campaign_id)
@@ -362,7 +364,10 @@ class CustomerGroupsInDeliveryPlanPromptTest(PlanTestBase):
         ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
                                  {"product_ids": [product["id"]]})
 
-        prompt, knowledge_item_ids = self._adopt_capturing(campaign["id"])
+        # F46 Contract A: with groups listed every ad names one (第 1 群 here).
+        prompt, knowledge_item_ids = self._adopt_capturing(
+            campaign["id"], _group_reply({"new": [1], "retarget": [1], "explore": [1]}),
+        )
 
         self.assertIn(
             "第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）"
@@ -386,8 +391,191 @@ class CustomerGroupsInDeliveryPlanPromptTest(PlanTestBase):
 
     def test_the_department_file_takes_pain_and_scene_from_a_listed_group(self):
         text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
-        self.assertIn("每支廣告的 `pain` 要從列出的某一群的煩惱", text)
-        self.assertIn("`scene` 要合那一群的「什麼時候用」", text)
+        self.assertIn("每支廣告要填 `customer_group`＝它寫給的那一群的編號", text)
+        self.assertIn("`pain` 要從那一群的煩惱", text)
+        self.assertIn("`scene` 是那一群", text)
+        self.assertIn("同一個投放組的廣告都寫給同一群", text)
+        self.assertIn("廣告總數不要超過照片張數", text)
+        self.assertIn('"customer_group": 1', text)
+
+
+def _group_reply(bindings: dict, pains: dict | None = None) -> str:
+    """Three roles; `bindings` maps role -> one `customer_group` value per ad (a role's list
+    length = its ad count; `...` leaves the key out). `pains` maps (role, ad index) -> pain key
+    (default `pain_<role><n>`). Each ad gets its own audience and scene."""
+    groups = []
+    for role in ("new", "retarget", "explore"):
+        ads = []
+        for n, number in enumerate(bindings.get(role, [...]), start=1):
+            coords = _coordinates(f"{role}{n}")
+            if pains and (role, n) in pains:
+                coords["pain"] = pains[(role, n)]
+            ad = {"name": f"{role}-廣告{n}", "coordinates": coords,
+                  "scene": f"{role} 第 {n} 支廣告的受眾晚上在家滑手機"}
+            if number is not ...:
+                ad["customer_group"] = number
+            ads.append(ad)
+        groups.append({"role": role, "name": f"{role} 組", "ads": ads})
+    return json.dumps({"groups": groups}, ensure_ascii=False)
+
+
+class CustomerGroupBindingTest(PlanTestBase):
+    """F46-I01 (Contract A): with customer groups listed, every ad names 第 N 群 (1..N), its pain
+    is one of that group's pains when that set meets the menu's pain keys, and one delivery group
+    speaks to one customer group; any failure refuses the whole plan with nothing written. No
+    group listed -> the key is ignored and `customer_group_id` is NULL."""
+
+    def setUp(self):
+        super().setUp()
+        product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        self.groups = bi_repo.save_customer_groups(web.conn, self.brand_id, product["id"], [
+            {"who": "下班後夜跑的上班族", "pain_keys": ["uncertainty"],
+             "quote": "晚上跑步車子看不到我", "when_used": "下班後在河濱夜跑"},
+            {"who": "帶小孩散步的爸媽", "pain_keys": ["effort"]},
+        ], actor=ACTOR)
+        self.campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"],
+                                 {"product_ids": [product["id"]]})
+
+    def _add_pain_vocabulary(self, *keys: str) -> None:
+        for key in keys:
+            web.conn.execute(
+                "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+                "VALUES(%s,%s,%s,'pain',%s,%s)",
+                (coredb.new_id("crd"), self.org_id, self.brand_id, key, f"痛點 {key}"),
+            )
+        web.conn.commit()
+
+    def _adopt_reply(self, reply: str, campaign_id: str | None = None) -> dict:
+        plan.PROVIDER = _fake(reply)
+        return self._adopt(campaign_id or self.campaign["id"])
+
+    def _assert_refused(self, reply: str) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._adopt_reply(reply)
+        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        reloaded = ads_repo.campaign_detail(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        self.assertEqual(reloaded["status"], "draft")  # nothing was written
+        self.assertEqual(reloaded["groups"], [])
+
+    def test_valid_group_numbers_store_the_id_and_the_snapshot(self):
+        self._add_pain_vocabulary("uncertainty", "effort")
+        detail = self._adopt_reply(_group_reply(
+            {"new": [1, 1], "retarget": [2], "explore": [1]},
+            pains={("new", 1): "uncertainty", ("new", 2): "uncertainty",
+                   ("retarget", 1): "effort", ("explore", 1): "uncertainty"},
+        ))
+        by_name = {ad["name"]: ad for g in detail["groups"] for ad in g["ads"]}
+        first, second = self.groups[0], self.groups[1]
+        self.assertEqual(by_name["new-廣告1"]["customer_group_id"], first["id"])
+        self.assertEqual(by_name["new-廣告2"]["customer_group_id"], first["id"])
+        self.assertEqual(by_name["retarget-廣告1"]["customer_group_id"], second["id"])
+        stored = ads_repo.get_ad(
+            web.conn, self.org_id, self.brand_id, by_name["retarget-廣告1"]["id"])
+        assert stored is not None
+        self.assertEqual(stored["customer_group_id"], second["id"])
+        snapshot = stored["coordinates_snapshot_json"]
+        self.assertEqual(
+            snapshot["customer_group"], {"id": second["id"], "who": "帶小孩散步的爸媽"},
+        )
+        self.assertEqual(snapshot["pain"]["key"], "effort")
+        self.assertEqual(stored["pain_key"], "effort")
+
+    def test_missing_or_out_of_range_or_non_integer_number_is_refused(self):
+        for bad in (..., 0, 3, -1, "1", 1.0, True, None):
+            with self.subTest(bad=bad):
+                self._assert_refused(_group_reply({"new": [bad], "retarget": [2], "explore": [1]}))
+
+    def test_pain_outside_the_groups_pains_is_refused(self):
+        self._add_pain_vocabulary("uncertainty", "effort")
+        self._assert_refused(_group_reply(
+            {"new": [1], "retarget": [2], "explore": [1]},
+            pains={("new", 1): "effort", ("retarget", 1): "effort",
+                   ("explore", 1): "uncertainty"},
+        ))
+
+    def test_pain_is_not_checked_when_the_groups_pains_are_not_on_the_menu(self):
+        # This brand's menu has no pain rows at all: the group's pains cannot be met, so the
+        # reply's own pain keys stand.
+        detail = self._adopt_reply(_group_reply({"new": [1], "retarget": [2], "explore": [1]}))
+        pains = {g["role"]: g["ads"][0]["pain_key"] for g in detail["groups"]}
+        self.assertEqual(pains["new"], "pain_new1")
+
+    def test_two_customer_groups_inside_one_delivery_group_are_refused(self):
+        self._assert_refused(_group_reply({"new": [1, 2], "retarget": [2], "explore": [1]}))
+
+    def test_no_group_listed_ignores_the_key_and_stores_null(self):
+        campaign = self._create_adopted_campaign()  # no product -> no 【這個賣法的顧客】 groups
+        detail = self._adopt_reply(
+            _group_reply({"new": [7], "retarget": ["x"], "explore": [...]}), campaign["id"],
+        )
+        for group in detail["groups"]:
+            for ad in group["ads"]:
+                self.assertIsNone(ad["customer_group_id"])
+                self.assertNotIn("customer_group", ad["coordinates_snapshot_json"])
+
+    def test_bind_helper_skips_the_pain_check_for_an_empty_menu(self):
+        listed = [{"id": "pcg_1", "who": "甲", "pain_keys": ["effort"]}]
+        groups = [{"role": "new", "ads": [
+            {"coordinates": {"pain": "cost"}, "customer_group": 1},
+        ]}]
+        self.assertTrue(plan._bind_customer_groups(groups, listed, set()))
+        self.assertEqual(groups[0]["ads"][0]["customer_group"]["id"], "pcg_1")
+        groups[0]["ads"][0]["customer_group"] = 1
+        self.assertFalse(plan._bind_customer_groups(groups, listed, {"effort", "cost"}))
+
+
+class MaterialsInDeliveryPlanPromptTest(PlanTestBase):
+    """F46-I01 (Contract P): 【手上的素材】「照片 N 張、影片 M 支」 sits after the customers and
+    before the offers／vocabulary. Photos = active non-logo official assets + ready user assets
+    with a non-video mime; videos = ready `video/*` user assets; unready or mime-less ones are
+    not counted."""
+
+    def _prompt(self) -> str:
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+        self._adopt(self._create_adopted_campaign()["id"])
+        return provider.calls[0]["messages"][0]["content"]
+
+    def _user_asset(self, mime: str, status: str) -> None:
+        asset = coredb.new_id("aua")
+        web.conn.execute(
+            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+            "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'a.bin',%s,1,%s)",
+            (asset, self.org_id, self.brand_id, asset, f"{self.org_id}/{asset}", mime, status),
+        )
+        web.conn.commit()
+
+    def test_brand_without_assets_prints_zero_and_zero_in_place(self):
+        prompt = self._prompt()
+        self.assertIn(f"\n\n{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n【座標詞彙", prompt)
+        materials_at = prompt.rindex(plan.MATERIALS_HEADER)
+        self.assertLess(prompt.rindex("【這個賣法的顧客】"), materials_at)
+
+    def test_counts_photos_and_videos_by_kind_status_and_mime(self):
+        for kind in ("product_photo", "lifestyle", "logo"):
+            bi_repo.create_official_asset(
+                web.conn, self.brand_id, actor=ACTOR, asset_kind=kind,
+                storage_key=f"{self.brand_id}/{kind}.png",
+            )
+        archived = bi_repo.create_official_asset(
+            web.conn, self.brand_id, actor=ACTOR, asset_kind="product_photo",
+            storage_key=f"{self.brand_id}/old.png",
+        )
+        web.conn.execute("UPDATE official_asset SET status='archived' WHERE id=%s",
+                         (archived["id"],))
+        web.conn.commit()
+        self._user_asset("image/jpeg", "ready")
+        self._user_asset("video/mp4", "ready")
+        self._user_asset("video/quicktime", "ready")
+        self._user_asset("image/png", "pending")
+        self._user_asset("", "ready")
+
+        prompt = self._prompt()
+
+        # 2 official (logo and archived left out) + 1 ready image = 3; 2 ready videos.
+        self.assertIn(f"{plan.MATERIALS_HEADER}照片 3 張、影片 2 支", prompt)
 
 
 def _plan_reply(proof: str, offer: str = "none") -> str:
@@ -774,6 +962,10 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         self.assertLess(prompt.rindex("【這個賣法的顧客】"), offers_at)
         self.assertLess(offers_at, prompt.rindex("【座標詞彙"))
         self.assertIn("offer｜bundle｜組合優惠", prompt)
+        # F46 Contract P: 【手上的素材】 sits right before the offers.
+        self.assertIn(
+            f"{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n{plan.OFFERS_HEADER}", prompt,
+        )
 
     def test_section_lists_only_the_offers_the_menu_kept_each_once(self):
         # 首購禮 maps to `discount`, which this brand's vocabulary does not have: its sentence

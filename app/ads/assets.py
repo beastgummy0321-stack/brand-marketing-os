@@ -18,6 +18,7 @@ from app.ads import (
     calendar_tw,
     change_control_launch,
     channels,
+    customer_groups,
     handoff_assignment,
     plan,
     sell_way,
@@ -96,7 +97,8 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
 
 
 def _ad_set(
-    ad: dict, group: dict, campaign: dict, campaign_id: str, media: str | None = None
+    ad: dict, group: dict, campaign: dict, campaign_id: str, media: str | None = None,
+    customer_groups_by_id: dict | None = None,
 ) -> dict:
     # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
     # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
@@ -139,6 +141,11 @@ def _ad_set(
     # workbench prints them in the brief. Absent scene / empty window -> key omitted.
     if ad.get("scene"):
         request["scene"] = ad["scene"]
+    # F46 Contract A: the customer group the plan bound this ad to, as one line the copy brief
+    # prints after the scene. No group, or a group id that no longer resolves -> key omitted.
+    customer_group = (customer_groups_by_id or {}).get(ad.get("customer_group_id") or "")
+    if customer_group is not None:
+        request["customer_group"] = customer_groups.brief_text(customer_group)
     window = (group.get("start_date"), group.get("end_date"))
     if window[0] is None or window[1] is None:  # same fallback as `_variant_count`
         window = (campaign.get("start_date"), campaign.get("end_date"))
@@ -187,6 +194,10 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
     brand = bi_repo.get_brand(conn, brand_id)
     brand_name = brand["name"] if brand else brand_id
     context_json = campaign.get("context_json") or {}
+    groups_by_id = (
+        customer_groups.groups_by_id(conn, brand_id, campaign)
+        if any(ad.get("customer_group_id") for group in groups for ad in group["ads"]) else {}
+    )
 
     summary: dict = {"情境": campaign["goal_text"]}
     if context_json.get("audience_hint"):
@@ -201,7 +212,8 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
-            _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"))
+            _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"),
+                    groups_by_id)
             for group in groups for ad in group["ads"]
         ],
     }

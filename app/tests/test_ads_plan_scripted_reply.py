@@ -89,6 +89,44 @@ class ScriptedDeliveryPlanValidatesTest(unittest.TestCase):
             ["e2e", "e2e", "e2e"],
         )
 
+    def test_listed_customer_groups_bind_every_ad_to_the_first_group(self):
+        """F46-I01 (Contract A): with 【這個賣法的顧客】 groups listed every ad takes
+        `customer_group: 1` and 第 1 群's first pain key, so the plan's binding check passes;
+        the 「還沒有建顧客群」 one-liner or no section leaves the reply without the key."""
+        allocation = providers.SCRIPTED_REPLIES["ads_strategy"]["allocation"]
+        base = "部門提示：【這個賣法的顧客】有列時每支廣告要填 customer_group\n\n" \
+            "## 這次投放已採用的角色分配\n\n" + _adopted_lines(allocation)
+        customers = (
+            "\n\n【這個賣法的顧客】"
+            "\n第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）、怕麻煩（pain=effort）"
+            "｜顧客會說：（沒寫）｜什麼時候用：（沒寫）"
+            "\n第 2 群：帶小孩散步的爸媽｜煩惱：怕麻煩（pain=effort）｜顧客會說：（沒寫）"
+            "｜什麼時候用：（沒寫）"
+        )
+
+        reply = _scripted("ads_delivery_plan", base + customers)
+        ads = [ad for group in reply["groups"] for ad in group["ads"]]
+        self.assertEqual({ad["customer_group"] for ad in ads}, {1})
+        self.assertEqual({ad["coordinates"]["pain"] for ad in ads}, {"uncertainty"})
+        roles = {row["role"] for row in allocation}
+        groups = plan._validate_reply(reply, roles)
+        assert groups is not None
+        listed = [
+            {"id": "pcg_1", "who": "下班後夜跑的上班族", "pain_keys": ["uncertainty", "effort"]},
+            {"id": "pcg_2", "who": "帶小孩散步的爸媽", "pain_keys": ["effort"]},
+        ]
+        self.assertTrue(plan._bind_customer_groups(groups, listed, {"uncertainty", "effort"}))
+        template_ad = providers.SCRIPTED_REPLIES["ads_delivery_plan"]["groups"][0]["ads"][0]
+        self.assertNotIn("customer_group", template_ad)
+        self.assertEqual(template_ad["coordinates"]["pain"], "e2e")
+
+        for tail in ("\n\n【這個賣法的顧客】（這個商品還沒有建顧客群）", ""):
+            without = _scripted("ads_delivery_plan", base + tail)
+            for group in without["groups"]:
+                for ad in group["ads"]:
+                    self.assertNotIn("customer_group", ad)
+                    self.assertEqual(ad["coordinates"]["pain"], "e2e")
+
 
 if __name__ == "__main__":
     unittest.main()

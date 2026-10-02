@@ -1138,20 +1138,22 @@ _AD_COORDINATE_COLUMNS = {
 
 def create_ad(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, group_id: str, *,
               name: str, coordinates: dict, coordinates_snapshot: dict,
-              scene: str | None = None) -> dict:
+              scene: str | None = None, customer_group_id: str | None = None) -> dict:
     """`scene` (F39-I03): the one sentence the delivery-plan model chose for this ad's copy to
-    happen in; `None` for hand-made ads. `campaign_detail` selects `*`, so it flows out as-is."""
+    happen in; `None` for hand-made ads. `customer_group_id` (F46 Contract A): the 8th coordinate,
+    the listed customer group the plan bound this ad to; `None` for hand-made ads or a plan with
+    no group listed. `campaign_detail` selects `*`, so both flow out as-is."""
     require_internal_campaign(conn, org_id, brand_id, campaign_id)
     ad_id = new_id("ada")
     conn.execute(
         "INSERT INTO ads_ad (id, org_id, brand_id, campaign_id, group_id, name, audience_key,"
         " pain_key, angle_key, hook_key, proof_key, offer_key, format_key,"
-        " coordinates_snapshot_json, scene)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " coordinates_snapshot_json, scene, customer_group_id)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (ad_id, org_id, brand_id, campaign_id, group_id, name,
          coordinates.get("audience"), coordinates.get("pain"), coordinates.get("angle"),
          coordinates.get("hook"), coordinates.get("proof"), coordinates.get("offer"),
-         coordinates.get("format"), jsonb(coordinates_snapshot), scene),
+         coordinates.get("format"), jsonb(coordinates_snapshot), scene, customer_group_id),
     )
     row = get_ad(conn, org_id, brand_id, ad_id)
     assert row is not None

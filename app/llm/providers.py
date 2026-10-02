@@ -842,6 +842,11 @@ class ScriptedProvider:
     _ADOPTED_LINE = re.compile(r"^- (\w+)（[^）]*）：\d+(?:\.\d+)?%")
     # Delivery-plan prompt's 【這期可用的優惠】 line: `- offer=<key>｜<sentence>` (plan.py, F44).
     _OFFER_LINE = re.compile(r"^- offer=([^｜]+)｜")
+    # Delivery-plan prompt's 【這個賣法的顧客】 header line and its first group line
+    # (`app/ads/customer_groups.py`, F46 Contract A): `第 1 群：<who>｜煩惱：<label>（pain=<key>）…`.
+    _CUSTOMERS_HEADER = "【這個賣法的顧客】"
+    _FIRST_GROUP_LINE = re.compile(r"^第 1 群：")
+    _PAIN_KEY = re.compile(r"（pain=([^）]+)）")
 
     def __init__(self, reply: dict):
         self._reply = reply
@@ -869,7 +874,8 @@ class ScriptedProvider:
     def _reply_for(self, messages: list) -> dict:
         """Prompt-aware selection (F33-I00): the strategy template follows the roles the prompt
         offers under `【可用角色】`; the delivery-plan template follows the adopted-allocation lines
-        and, when the prompt lists 【這期可用的優惠】 lines, uses the first listed offer key (F44).
+        and, when the prompt lists 【這期可用的優惠】 lines, uses the first listed offer key (F44);
+        when it lists 【這個賣法的顧客】 groups, every ad binds 第 1 群 with that group's pain (F46).
         Any other template, or a prompt without those sections, returns the template unchanged."""
         prompt = self._last_user_text(messages)
         if "allocation" in self._reply:
@@ -904,6 +910,16 @@ class ScriptedProvider:
             offer_key = self._first_offer_key(prompt)
             if offer_key is not None:
                 groups[0]["ads"][0]["coordinates"]["offer"] = offer_key
+            # F46 Contract A: with customer groups listed every ad must name one; all take
+            # 第 1 群, and their `pain` becomes that group's first pain key so the pain check
+            # (pain within the bound group's pains) passes.
+            first_group = self._first_customer_group(prompt)
+            if first_group is not None:
+                for group in groups:
+                    for ad in group["ads"]:
+                        ad["customer_group"] = 1
+                        if first_group:
+                            ad["coordinates"]["pain"] = first_group[0]
             return {**self._reply, "groups": groups}
         return self._reply
 
@@ -943,6 +959,18 @@ class ScriptedProvider:
             if match and match.group(1) not in roles:
                 roles.append(match.group(1))
         return roles
+
+    @classmethod
+    def _first_customer_group(cls, prompt: str) -> list | None:
+        """The pain keys of 第 1 群 when the prompt's 【這個賣法的顧客】 section lists groups,
+        else `None` (no section, or its 「還沒有建顧客群」／「沒有指定商品」 one-liner)."""
+        lines = prompt.splitlines()
+        for index, line in enumerate(lines[:-1]):
+            if line.strip() == cls._CUSTOMERS_HEADER:
+                first = lines[index + 1].strip()
+                if cls._FIRST_GROUP_LINE.match(first):
+                    return cls._PAIN_KEY.findall(first)
+        return None
 
     @classmethod
     def _first_offer_key(cls, prompt: str) -> str | None:
