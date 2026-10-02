@@ -21,6 +21,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
@@ -37,6 +38,7 @@ from app.core import settings as core_settings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id
+from app.identity import repository as identity_repo
 from app.llm import gateway, providers
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
@@ -148,14 +150,41 @@ def _source_ref_text(brand_id: str, source_reference_id: str | None) -> str | No
     return row["title"] if row else None
 
 
-def _fact_shape(brand_id: str, fact: dict) -> dict:
+FORMER_MEMBER_LABEL = "已不在這個組織的成員"
+
+
+def confirmer_label(org_id: str, confirmed_by: str | None) -> str | None:
+    """F47-I03 (drill-10 外觀 #11): 「確認人」 never shows a user id. A stored user id (written by the
+    confirm routes as `actor.user_id`) reads as that member's e-mail through the identity facade;
+    an id that is no longer a member of this org reads as `FORMER_MEMBER_LABEL`; anything else is
+    a name somebody typed and shows as typed. Shared by the library and product read shapes
+    (`routes_products`)."""
+    if not confirmed_by:
+        return confirmed_by
+    try:
+        user_id = UUID(confirmed_by)
+    except ValueError:
+        return confirmed_by
+    if identity_repo.get_membership(web.conn, org_id, user_id) is None:
+        return FORMER_MEMBER_LABEL
+    user = identity_repo.get_user(web.conn, user_id)
+    return user["email"] if user else FORMER_MEMBER_LABEL
+
+
+def _fact_shape(brand_id: str, fact: dict, org_id: str | None = None) -> dict:
+    """`org_id` = the brand's org when the caller already holds it (the bundle read); the single-fact
+    write responses leave it out and it is read from the brand."""
+    if org_id is None:
+        brand = repo.get_brand(web.conn, brand_id)
+        org_id = brand["org_id"] if brand else ""
     return {
         "id": fact["id"], "fact_type": fact["fact_type"],
         "fact_type_label": md.brand_fact_type_label(fact["fact_type"]),
         "fact_key": fact.get("fact_key"),
         "fact_key_label": md.proof_kind_label(fact["fact_key"]) if fact.get("fact_key") else None,
         "label": fact["label"], "value": fact["value"], "status": fact["status"],
-        "confirmed_by": fact.get("confirmed_by"), "confirmed_at": fact.get("confirmed_at"),
+        "confirmed_by": confirmer_label(org_id, fact.get("confirmed_by")),
+        "confirmed_at": fact.get("confirmed_at"),
         "stale_label": web.fact_staleness(fact),
         "source_reference": _source_ref_text(brand_id, fact.get("source_reference_id")),
     }
@@ -232,7 +261,7 @@ def library_bundle(request: Request, brand_id: str):
     data = {
         "brand": _brand_profile_shape(brand_id, brand),
         "products": [{"id": p["id"], "name": p["name"]} for p in web.list_products(brand_id)],
-        "facts": [_fact_shape(brand_id, f) for f in facts],
+        "facts": [_fact_shape(brand_id, f, brand["org_id"]) for f in facts],
         "rules": [_rule_shape(brand_id, r) for r in repo.list_rules_for_brand(web.conn, brand_id)],
         "claims": [_claim_shape(brand_id, c) for c in repo.list_claims_for_brand(web.conn, brand_id)],
         "assets": [_asset_shape(brand_id, a) for a in repo.list_official_assets(web.conn, brand_id)],

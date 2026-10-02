@@ -41,7 +41,8 @@ from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls
 from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers
-from app.core import cleanup
+from app.brand_web.routes_library import confirmer_label
+from app.core import cleanup, input_rules
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id
@@ -79,14 +80,6 @@ def _str_field(body: dict, key: str) -> str:
     return v if isinstance(v, str) else ""
 
 
-def _num_field(body: dict, key: str):
-    """回傳 (value, ok)：JSON 數字型別才算合法，字串／布林／缺漏一律回 (None, False)。"""
-    v = body.get(key)
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return None, False
-    return float(v), True
-
-
 # ---------------------------------------------------------------------------
 # 產品事實／經濟數字／規則／宣稱的 JSON 顯示形狀（比照 routes_library.py 的 _fact_shape
 # 等寫法，欄位集合各自對照 productsApi.ts 的型別，跟品牌智庫那份欄位不完全相同、不共用）。
@@ -99,23 +92,24 @@ def _source_ref_text(brand_id: str, source_reference_id: str | None) -> str | No
     return row["title"] if row else None
 
 
-def _fact_shape(brand_id: str, fact: dict) -> dict:
+def _fact_shape(brand: dict, fact: dict) -> dict:
     return {
         "id": fact["id"], "fact_type": fact["fact_type"],
         "fact_type_label": md.product_fact_type_label(fact["fact_type"]),
         "label": fact["label"], "value": fact["value"], "status": fact["status"],
-        "confirmed_by": fact.get("confirmed_by"), "confirmed_at": fact.get("confirmed_at"),
-        "source_reference": _source_ref_text(brand_id, fact.get("source_reference_id")),
+        "confirmed_by": confirmer_label(brand["org_id"], fact.get("confirmed_by")),
+        "confirmed_at": fact.get("confirmed_at"),
+        "source_reference": _source_ref_text(brand["id"], fact.get("source_reference_id")),
     }
 
 
-def _economics_shape(economics: dict) -> dict:
+def _economics_shape(brand: dict, economics: dict) -> dict:
     return {
         "selling_price": economics["selling_price"], "fixed_cost": economics["fixed_cost"],
         "unit_variable_cost": economics["unit_variable_cost"], "shipping_cost": economics["shipping_cost"],
         "currency": economics["currency"],
         "effective_from": economics["effective_from"], "status": economics["status"],
-        "confirmed_by": economics["confirmed_by"],
+        "confirmed_by": confirmer_label(brand["org_id"], economics["confirmed_by"]),
         "close_rate": economics["close_rate"],
         "assumptions": economics.get("assumptions_json") or [],
     }
@@ -361,8 +355,8 @@ def product_detail(request: Request, brand_id: str, product_id: str):
     facts = repo.list_product_facts(web.conn, brand_id, product_id)
     facts_pending = sum(1 for f in facts if f["status"] == "pending")
     # F43-I01: effective values on purpose. This payload prefills the old economics editor, which
-    # cannot express "derived" (it turns an empty cost into 0 and this route's save refuses null),
-    # so a stored NULL here would be re-saved as 0; the effective number is the lesser harm.
+    # cannot express "derived"; since F47-I03 an empty cost there is saved as NULL (unset), but a
+    # derived number shown as empty would read as "unknown", so the effective number stays.
     economics = repo.get_product_economics(web.conn, brand_id, product_id)
     rules = repo.list_rules_for_product(web.conn, brand_id, product_id)
     claims = repo.list_claims_for_product(web.conn, brand_id, product_id)
@@ -380,8 +374,8 @@ def product_detail(request: Request, brand_id: str, product_id: str):
         "cards": cards,
         "latest_source_url": repo.get_latest_product_source_url(web.conn, brand_id, product_id),
         "economics_pending": bool(economics and economics["status"] == "pending"),
-        "facts": [_fact_shape(brand_id, f) for f in facts],
-        "economics": _economics_shape(economics) if economics else None,
+        "facts": [_fact_shape(brand, f) for f in facts],
+        "economics": _economics_shape(brand, economics) if economics else None,
         "rules": [_rule_shape(r) for r in rules],
         "claims": [_claim_shape(brand_id, c) for c in claims],
     }
@@ -489,24 +483,41 @@ def product_fact_delete(request: Request, brand_id: str, product_id: str, fact_i
 # 產品經濟數字（S6.32–S6.35）
 # ---------------------------------------------------------------------------
 
+# F47 Contract A / F47-I03: the economics form sends what was typed (an empty cost = `null` =
+# unset, never 0) and shows each refusal under its own field, so the route names the field the
+# same `input_rules` check the store runs refuses. Selling price is required and `> 0`; the three
+# costs are optional and `>= 0` (shipping included: one rule on every path, lead 2026-10-02).
+_ECONOMICS_NUMBERS = (
+    ("selling_price", "售價", input_rules.positive, False),
+    ("fixed_cost", "固定成本", input_rules.non_negative, True),
+    ("unit_variable_cost", "單位變動成本", input_rules.non_negative, True),
+    ("shipping_cost", "運費", input_rules.non_negative, True),
+)
+
+
+def _economics_numbers(body: dict) -> tuple[dict, dict]:
+    numbers, field_errors = {}, {}
+    for key, label, rule, optional in _ECONOMICS_NUMBERS:
+        try:
+            numbers[key] = rule(body.get(key), label, optional=optional)
+        except input_rules.InputRuleError as exc:
+            field_errors[key] = str(exc)
+    return numbers, field_errors
+
+
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/economics")
 async def economics_save(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
     require_product(brand, product_id)
     body = await _json_body(request)
-    price_val, price_ok = _num_field(body, "selling_price")
-    if not price_ok:
-        return _error(400, "售價請填數字，例如 1280。")
-    fixed_val, fixed_ok = _num_field(body, "fixed_cost")
-    if not fixed_ok:
-        return _error(400, "固定成本請填數字，例如 0。")
-    unit_val, unit_ok = _num_field(body, "unit_variable_cost")
-    if not unit_ok:
-        return _error(400, "單位變動成本請填數字，例如 430。")
-    ship_val, ship_ok = _num_field(body, "shipping_cost")
-    if not ship_ok:
-        return _error(400, "運費請填數字，例如 60。")
+    numbers, field_errors = _economics_numbers(body)
+    if field_errors:
+        return JSONResponse({"error": next(iter(field_errors.values())), "field_errors": field_errors},
+                            status_code=400)
+    price_val = numbers["selling_price"]
+    fixed_val, unit_val, ship_val = (numbers["fixed_cost"], numbers["unit_variable_cost"],
+                                     numbers["shipping_cost"])
     currency = clean(_str_field(body, "currency"))
     if not currency:
         return _error(400, "請選擇幣別。")
@@ -557,6 +568,10 @@ def economics_confirm(request: Request, brand_id: str, product_id: str):
 # product_ai 的解析／修復邏輯，不重寫第二份。
 # ---------------------------------------------------------------------------
 
+HANDOFF_NOTHING_READ_MESSAGE = (
+    "這段回覆讀不出任何產品事實：請確認貼上的是外部 AI 照提示詞回覆的完整內容，再送一次。")
+
+
 @router.get("/api/products/brands/{brand_id}/products/{product_id}/handoff")
 def handoff_prompt(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
@@ -586,6 +601,10 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
         if not ok:
             return _error(400, fixed)
         result = fixed
+    if not result.get("facts") and not result.get("price"):
+        # F47-I03 (drill-10 乙 #6): a reply that yields nothing is a failure with its reason, not a
+        # green 「貼回完成，新增了 0 條」; nothing is written and the panel keeps the pasted text.
+        return _error(400, HANDOFF_NOTHING_READ_MESSAGE)
 
     src_label = f"外部深研交接包・{datetime.now(UTC).date().isoformat()}"
     src_id = legacy_routes._create_source_ref(brand_id, str(actor.user_id), src_label)

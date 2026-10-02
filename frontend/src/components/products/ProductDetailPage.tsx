@@ -25,6 +25,16 @@ import { ProductDeletePanel } from "./panels/ProductDeletePanel";
 
 type TabKey = "facts" | "economics-view" | "rules" | "claims";
 const NOT_FOUND_MESSAGE = "找不到這筆資料。";
+const RESCAN_URL_MISSING = "先填要調研的商品頁網址（從 https:// 開始），AI 才知道要讀哪一頁。";
+
+/** F47-I03 (drill-10 乙 #6): the green line after a pasted-back reply. A reply that yields nothing is
+ * refused by the server (the panel stays open with the reason and the pasted text), so 0 here means
+ * every fact it carried is already on the list. */
+function handoffDoneMessage(addedCount: number): string {
+  return addedCount > 0
+    ? `深研交接包貼回完成，新增了 ${addedCount} 條待確認事實。`
+    : "貼回的事實都已經在清單裡，這次沒有新增。";
+}
 
 type LoadState =
   | { status: "loading" }
@@ -115,6 +125,11 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
 
   async function submitRescan() {
     const trimmed = rescanUrl.trim();
+    if (!trimmed) {
+      // F47-I03 (drill-10 乙 #7): an empty URL used to do nothing visible; say what is missing.
+      setRescanError(RESCAN_URL_MISSING);
+      return;
+    }
     if (!/^https:\/\//.test(trimmed)) {
       setRescanError("這個網址看起來不完整，記得從 https:// 開始，例如「https://example.com/products/xxx」。");
       return;
@@ -212,7 +227,10 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
               <input
                 type="text"
                 value={rescanUrl}
-                onChange={(e) => setRescanUrl(e.target.value)}
+                onChange={(e) => {
+                  setRescanUrl(e.target.value);
+                  setRescanError(null);
+                }}
                 aria-label="再次調研網址"
                 placeholder="https://example.com/products/xxx"
                 className="min-w-[16rem] flex-1 rounded-md border border-border px-3 py-1.5 text-sm text-foreground"
@@ -235,7 +253,7 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
                 深入調研 →
               </button>
             </div>
-            {rescanError && <p className="text-sm text-danger">{rescanError}</p>}
+            {rescanError && <p role="alert" className="text-sm text-danger">{rescanError}</p>}
           </details>
         </div>
 
@@ -280,7 +298,7 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
             onClose={() => setHandoffOpen(false)}
             onSaved={(addedCount) => {
               setHandoffOpen(false);
-              setBanner(`深研交接包貼回完成，新增了 ${addedCount} 條待確認事實。`);
+              setBanner(handoffDoneMessage(addedCount));
               load();
             }}
           />

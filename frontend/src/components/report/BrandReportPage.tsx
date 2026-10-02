@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -36,14 +36,23 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
   function setChapter(index: number) { setParams(previous => {const next = new URLSearchParams(previous);next.set("chapter",String(index+1));return next;}); }
 
   const [creating, setCreating] = useState(false);
+  /** F47-I03 (drill-10 甲 報告 #4): a failed (re)generate or a failed re-read once the page has data.
+   * Shown inline above the report with 「稍後再試」; the report on screen stays. */
+  const [actionError, setActionError] = useState<string | null>(null);
+  const hasData = useRef(false);
 
   const load = useCallback(() => {
     fetchBrandReport(brandId)
       .then((data) => {
+        hasData.current = true;
         setState({ status: "ready", data });
         setCreating(data.job.status === "running");
       })
-      .catch((err: unknown) => setState({ status: "error", message: errorMessage(err) }));
+      .catch((err: unknown) => {
+        // The whole-page 「讀取失敗」 is only for a first load that has nothing to show.
+        if (hasData.current) setActionError(errorMessage(err));
+        else setState({ status: "error", message: errorMessage(err) });
+      });
   }, [brandId]);
 
   useEffect(() => {
@@ -60,11 +69,13 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
 
   function startGeneration() {
     setCreating(true);
+    setActionError(null);
     generateBrandReport(brandId)
       .then(load)
       .catch((err: unknown) => {
+        // A refused regenerate (the two-minute limit included) keeps the report on screen.
         setCreating(false);
-        setState({ status: "error", message: errorMessage(err) });
+        setActionError(errorMessage(err));
       });
   }
 
@@ -106,6 +117,19 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
         {state.status === "loading" && <EmptyState title="讀取中…" description="正在讀取顧問分析報告。" />}
         {state.status === "error" && (
           <EmptyState title="讀取失敗" description={state.message} actionLabel="重新載入" onAction={load} />
+        )}
+        {actionError && (
+          <div role="alert" className="report-print-hidden flex flex-wrap items-center justify-between gap-3 rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
+            <span>{actionError}</span>
+            <button
+              type="button"
+              onClick={startGeneration}
+              disabled={disabled}
+              className="shrink-0 rounded-md border border-danger/40 bg-card px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              稍後再試
+            </button>
+          </div>
         )}
         {failure && <p className="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{failure}</p>}
         {state.status === "ready" && !report && (

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
 import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, productDraftKey, readStepDraft, useStepDraft } from "../shared/stepDraft";
 
 /** Prototype `R.p2` head of `.harness/scratch/prototype/f41-onboarding/index.html`. */
 const TITLE = "誰會買、買之前煩什麼";
@@ -44,6 +45,24 @@ function blockedReason(groups: Draft[]): string | null {
   return null;
 }
 
+/** This step's draft (F47-I03, `useStepDraft`): every group but its render key. */
+type KeptGroup = Omit<Draft, "key">;
+
+const kept = (groups: Draft[]): KeptGroup[] => groups.map(({ key: _key, ...rest }) => rest);
+
+const isContent = (v: unknown): v is Content => {
+  const c = v as Record<string, unknown> | null;
+  return !!c && typeof c.who === "string" && typeof c.quote === "string" && typeof c.when_used === "string"
+    && Array.isArray(c.pain_keys) && c.pain_keys.every((k) => typeof k === "string");
+};
+
+function isKeptGroups(v: unknown): v is KeptGroup[] {
+  return Array.isArray(v) && v.length <= MAX_GROUPS && v.every((g: Record<string, unknown>) =>
+    isContent(g.base) && (g.id === null || typeof g.id === "string")
+    && (g.origin === "saved" || g.origin === "ai" || g.origin === "custom") && typeof g.note === "string"
+    && (g.customQuote === null || typeof g.customQuote === "string") && isContent(g));
+}
+
 function toInput(g: Draft): CustomerGroupInput {
   const unchanged = sameContent(g, g.base);
   return {
@@ -69,9 +88,12 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   back: BarBack;
   onNext: () => void;
 }) {
+  const draftKey = productDraftKey(brandId, productId, "who");
   const [loaded, setLoaded] = useState<ProductWho | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groups, setGroups] = useState<Draft[]>([]);
+  /** The groups as loaded (before any edit): the draft is kept only while `groups` differ from it. */
+  const [loadedGroups, setLoadedGroups] = useState<KeptGroup[]>([]);
   const nextKey = useRef(0);
 
   const draft = (content: Content, extra: { id: string | null; origin: Origin; note: string }): Draft => ({
@@ -87,15 +109,18 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
     fetchProductWho(brandId, productId)
       .then((who) => {
         if (cancelled) return;
-        setLoaded(who);
-        setGroups(
-          who.groups.slice(0, MAX_GROUPS).map((g) =>
-            draft(
-              { who: g.who, pain_keys: g.pain_keys.slice(0, MAX_PAINS), quote: g.quote, when_used: g.when_used },
-              { id: g.id, origin: g.source === "ai" ? "ai" : "saved", note: g.note },
-            ),
+        const fromServer = who.groups.slice(0, MAX_GROUPS).map((g) =>
+          draft(
+            { who: g.who, pain_keys: g.pain_keys.slice(0, MAX_PAINS), quote: g.quote, when_used: g.when_used },
+            { id: g.id, origin: g.source === "ai" ? "ai" : "saved", note: g.note },
           ),
         );
+        // F47-I03 (drill-10 乙 #1, faults F7): unsaved groups (an AI-organised 自訂 group included) come
+        // back when the step mounts again -- back, step bar or reload -- until 下一步 saved them.
+        const restored = readStepDraft(draftKey, isKeptGroups);
+        setLoadedGroups(kept(fromServer));
+        setLoaded(who);
+        setGroups(restored ? restored.map((g) => ({ ...g, key: nextKey.current++ })) : fromServer);
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -106,8 +131,11 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, productId]);
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  useStepDraft(draftKey, loaded !== null, kept(groups), loadedGroups);
+
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     await saveProductWho(brandId, productId, groups.map(toInput));
+    clearStepDraft(draftKey);
     onNext();
   });
 
@@ -136,6 +164,7 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (loaded && !reason && !saving) void submit();

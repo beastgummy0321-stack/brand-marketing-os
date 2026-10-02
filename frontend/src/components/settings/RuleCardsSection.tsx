@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { BrandOption, RuleCard } from "@/lib/settingsApi";
 import { fetchBrandOptions, fetchRuleCards, resetRuleCard, saveRuleCard } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
+import { ApiResponseError } from "@/lib/http";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 type BrandsState =
@@ -163,18 +164,39 @@ function RuleCardItem({
     Object.fromEntries(card.fields.map((f) => [f.key, String(f.value)])),
   );
 
+  /** The server's refusal of each field (its `field_errors`), shown under that field. */
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  // F47-I03 (drill-10 V3 front): send what was typed. A field left empty is not sent (the server
+  // reads a missing field as empty and refuses it with that field's sentence) -- never Number("") = 0.
   const saveForm = useFormSubmit(async () => {
-    const parsed: Record<string, number> = {};
-    for (const [key, raw] of Object.entries(values)) parsed[key] = Number(raw);
-    const updated = await saveRuleCard(brandId, card.key, parsed);
-    onUpdated(updated);
+    setFieldErrors({});
+    const typed: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(values)) if (raw.trim() !== "") typed[key] = Number(raw);
+    try {
+      onUpdated(await saveRuleCard(brandId, card.key, typed));
+    } catch (err) {
+      if (err instanceof ApiResponseError) setFieldErrors(err.fieldErrors);
+      throw err;
+    }
   });
 
   const resetForm = useFormSubmit(async () => {
     const updated = await resetRuleCard(brandId, card.key);
+    setFieldErrors({});
+    saveForm.clearError();
     setValues(Object.fromEntries(updated.fields.map((f) => [f.key, String(f.value)])));
     onUpdated(updated);
   });
+
+  function fieldChanged(event: FormEvent<HTMLFormElement>) {
+    saveForm.formProps.onChange(event);
+    resetForm.clearError();
+    setFieldErrors({});
+  }
+  // A form-level line only when it says something the fields do not (the server's `error` is
+  // normally the first field's sentence, already shown under that field).
+  const formError = saveForm.error && !Object.values(fieldErrors).includes(saveForm.error) ? saveForm.error : null;
 
   function handleReset() {
     if (window.confirm(`確定要重設整張「${card.title}」？這會把這張卡的所有欄位重設回系統預設值。`)) {
@@ -190,6 +212,7 @@ function RuleCardItem({
       </div>
       <form
         className="flex flex-col gap-3"
+        onChange={fieldChanged}
         onSubmit={(e) => {
           e.preventDefault();
           void saveForm.submit();
@@ -210,15 +233,17 @@ function RuleCardItem({
                 type="number"
                 step="any"
                 value={values[f.key]}
+                aria-invalid={fieldErrors[f.key] ? true : undefined}
                 onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
                 className="w-full rounded-md border border-border px-2 py-1.5 text-sm text-foreground"
               />
               <span className="shrink-0 text-muted-foreground">{f.unit}</span>
             </div>
             <span className="text-muted-foreground">{f.help}</span>
+            {fieldErrors[f.key] && <span role="alert" className="text-danger">{fieldErrors[f.key]}</span>}
           </label>
         ))}
-        {saveForm.error && <p className="text-xs text-danger">{saveForm.error}</p>}
+        {formError && <p role="alert" className="text-xs text-danger">{formError}</p>}
         {resetForm.error && <p className="text-xs text-danger">{resetForm.error}</p>}
         <div className="flex items-center gap-2">
           <SaveButton saving={saveForm.saving} label="儲存這張卡" />

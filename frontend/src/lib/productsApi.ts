@@ -12,7 +12,7 @@
  * 其餘寫入端點沿用契約「改回 JSON」的決定，用 JSON body（跟 S5 沿用舊版 FormData 端點不同，
  * 因為 S6 這些端點契約本來就標記為新端點）。 */
 
-import { apiFetch, errorMessageFrom, throwIfFailed } from "./http";
+import { apiFetch, throwIfFailed } from "./http";
 
 export interface ProductListItem {
   id: string;
@@ -178,16 +178,9 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
-  if (!res.ok) {
-    let message = `處理失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: string };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
+  // F47-I03: the one failure path (Contract B) — its `ApiResponseError` also carries the economics
+  // route's per-field sentences (`fieldErrors`), which the economics panel shows under each field.
+  await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -288,11 +281,13 @@ export function deleteProductFact(brandId: string, productId: string, factId: st
 export function saveProductEconomics(
   brandId: string,
   productId: string,
+  /** A field left empty is sent as `null` (F47 Contract A: unset, never 0); the server refuses an
+   * empty selling price and any negative cost with the field's own sentence. */
   fields: {
-    selling_price: number;
-    fixed_cost: number;
-    unit_variable_cost: number;
-    shipping_cost: number;
+    selling_price: number | null;
+    fixed_cost: number | null;
+    unit_variable_cost: number | null;
+    shipping_cost: number | null;
     currency: string;
     effective_from: string;
     confirmed_by: string;
