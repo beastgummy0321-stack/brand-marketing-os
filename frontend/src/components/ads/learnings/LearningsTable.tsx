@@ -138,7 +138,7 @@ export function LearningsTable({ campaign, compact = false, highlight = false, c
       data-highlight={highlight || undefined}
       className={cn(
         "overflow-hidden rounded-xl border border-border bg-card transition-shadow duration-300",
-        highlight && "border-[#a397e9] shadow-[0_0_0_3px_var(--color-accent)]",
+        highlight && "border-primary shadow-[0_0_0_3px_var(--color-accent)]",
       )}
     >
       {!headless && <div className={cn("flex flex-wrap items-start justify-between gap-3", compact ? "p-3" : "px-4 pt-3.5 pb-2.5")}>

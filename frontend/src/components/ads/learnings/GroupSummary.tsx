@@ -30,7 +30,7 @@ export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
             <div aria-hidden="true" className="relative h-[22px] rounded-md bg-muted max-[900px]:mt-3.5 max-[900px]:[grid-area:tr]">
               {per !== null && (
                 <div
-                  className={cn("absolute inset-y-0 left-0 rounded-md", !judged ? "bg-[#c9cede]" : ok ? "bg-[#9fd6c4]" : "bg-[#ecb3b9]")}
+                  className={cn("absolute inset-y-0 left-0 rounded-md", !judged ? "bg-grade-thin" : ok ? "bg-zone-ok" : "bg-zone-over")}
                   style={{ width: `${(per / scale) * 100}%` }}
                 />
               )}
