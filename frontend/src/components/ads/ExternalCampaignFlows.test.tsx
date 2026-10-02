@@ -44,6 +44,25 @@ describe("既有活動來源與原始資料", () => {
     expect(screen.queryByText("過期甲活動")).toBeNull(); expect(screen.queryByText("乙活動")).not.toBeNull();
   });
 
+  it("F47-I08：平台狀態說中文、日期與最近成功不印 ISO、已在工作區的活動標出來並改成打開", async () => {
+    const listed = page("101", ["已納入活動", "新活動"]);
+    listed.items[0] = { ...listed.items[0], campaign_id: "cmp_in", snapshot: { ...entity("已納入活動"), native_status: "ACTIVE", start_date: "2026-10-03", end_date: "2026-10-09" } };
+    listed.items[1] = { ...listed.items[1], snapshot: { ...entity("新活動"), native_status: "WITH_ISSUES" } };
+    listed.job = { id: "job_1", status: "succeeded", last_success_at: "2026-10-01T15:10:33.055275+00:00" };
+    vi.mocked(existingCampaigns).mockResolvedValue(listed);
+    openDialog(); await screen.findByText("已納入活動");
+    expect(screen.getByText("開啟中 · 10/03 – 10/09")).not.toBeNull();
+    expect(screen.getByText("平台狀態不明 · 開始日未知 – 結束日未知")).not.toBeNull();
+    expect(screen.queryByText(/ACTIVE|WITH_ISSUES|2026-10-01T/)).toBeNull();
+    const d = new Date("2026-10-01T15:10:33.055275+00:00"); const pad = (n: number) => String(n).padStart(2, "0");
+    expect(screen.getByText(new RegExp(`最近成功：${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`))).not.toBeNull();
+    expect(screen.getByText("已在工作區")).not.toBeNull();
+    expect(screen.getAllByRole("button", { name: "納入並開啟" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "打開" }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/brands/brand_1/ads/campaigns/cmp_in"));
+    expect(importExisting).not.toHaveBeenCalled();
+  });
+
   it("refresh 期間凍結帳號，離開後舊 refresh 不再啟動清單讀取", async () => {
     const refresh = deferred<Awaited<ReturnType<typeof refreshExisting>>>();
     vi.mocked(refreshExisting).mockReturnValue(refresh.promise);

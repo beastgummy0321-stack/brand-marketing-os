@@ -3,6 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/layout/ui/dialog";
 import { existingCampaigns, importExisting, refreshExisting, syncJob, type ExistingPage } from "@/lib/adsExternalApi";
+import { formatSyncTime } from "@/lib/format";
+import { Chip, nativeStatusWord } from "./patterns";
+
+/** `YYYY-MM-DD` → `MM/DD` (string slicing: a platform date has no time zone to shift). */
+const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
+/** F47-I08 (drill-10 §4.3): a platform campaign's own status in Chinese and its dates as `MM/DD`, never the raw code
+ * or ISO text. */
+function existingRowMeta(snapshot: { native_status: string | null; start_date: string | null; end_date: string | null }): string {
+  return `${nativeStatusWord(snapshot.native_status)} · ${snapshot.start_date ? md(snapshot.start_date) : "開始日未知"} – ${snapshot.end_date ? md(snapshot.end_date) : "結束日未知"}`;
+}
 
 export function ExistingCampaignDialog({ brandId }: { brandId: string }) {
   const [open, setOpen] = useState(false);
@@ -73,11 +83,15 @@ function ExistingList({ brandId }: { brandId: string }) {
       <Button variant="outline" disabled={busy || mutating || !page?.sources.length} onClick={() => void refresh()}>更新清單</Button></div>
     {busy && <p role="status">讀取中…已快取的活動仍可查看。</p>}
     {error && <p role="alert" className="text-destructive">{error} <Button variant="outline" disabled={mutating} onClick={() => void load()}>重試讀取</Button></p>}
-    {page?.job && <p className="text-sm text-muted-foreground">{["pending", "running"].includes(page.job.status) ? "平台資料同步中" : page.job.status === "succeeded" ? "清單已同步" : "同步有缺漏，可重試"} · 最近成功：{page.job.last_success_at ?? "尚未成功讀回"}</p>}
+    {page?.job && <p className="text-sm text-muted-foreground">{["pending", "running"].includes(page.job.status) ? "平台資料同步中" : page.job.status === "succeeded" ? "清單已同步" : "同步有缺漏，可重試"} · 最近成功：{page.job.last_success_at ? formatSyncTime(page.job.last_success_at) : "尚未成功讀回"}</p>}
     {!busy && page && !page.items.length && <p>{page.sources.length ? "此帳號尚無已讀回活動；可更新清單，暫停或沒有花費的活動也會保留。" : "尚無可讀取的綁定帳號，請先至品牌連線設定核對。"}</p>}
     <div className="max-h-96 overflow-auto divide-y divide-border">{page?.items.map(item => <div key={item.id} className="flex items-center justify-between gap-3 py-3">
-      <div><p className="font-medium">{item.snapshot.name || item.native_id}</p><p className="text-sm text-muted-foreground">{item.snapshot.native_status ?? "平台狀態未知"} · {item.snapshot.start_date ?? "開始日未知"} — {item.snapshot.end_date ?? "結束日未知"}</p></div>
-      <Button disabled={busy || mutating} onClick={() => void include(item)}>納入並開啟</Button></div>)}</div>
+      <div><p className="font-medium">{item.snapshot.name || item.native_id}</p><p className="text-sm text-muted-foreground">{existingRowMeta(item.snapshot)}</p></div>
+      {item.campaign_id
+        // Already in a workspace: say so and open it — never offer to add the same platform campaign twice.
+        ? <div className="flex shrink-0 items-center gap-2"><Chip>已在工作區</Chip>
+            <Button variant="outline" disabled={mutating} onClick={() => navigate(`/brands/${brandId}/ads/campaigns/${item.campaign_id}`)}>打開</Button></div>
+        : <Button disabled={busy || mutating} onClick={() => void include(item)}>納入並開啟</Button>}</div>)}</div>
     {page?.next_cursor && <Button variant="outline" disabled={busy || mutating} onClick={() => void load(page.next_cursor!)}>載入更多活動</Button>}
   </div>;
 }

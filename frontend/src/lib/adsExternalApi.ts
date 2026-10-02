@@ -28,7 +28,9 @@ export interface NativeObservation {
 }
 export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null }
 export interface ExistingPage {
-  items: { id: string; native_kind: string; native_id: string; snapshot: NativeEntity }[];
+  /** `campaign_id` (optional until the listing read carries it): the workspace campaign this platform campaign is
+   * already in, so the join dialog marks it 「已在工作區」 instead of offering to add it again. */
+  items: { id: string; native_kind: string; native_id: string; snapshot: NativeEntity; campaign_id?: string | null }[];
   sources: SourceAccount[]; platform?: string; source_account?: string;
   next_cursor: string | null; job: SyncJob | null;
 }
@@ -52,8 +54,9 @@ export async function existingCampaigns(brand: string, values: Record<string, st
 export async function importExisting(brand: string, source: { platform: string; source_account: string; native_kind: string; native_id: string }): Promise<{ campaign: { id: string } }> {
   return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/imports`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(source) }), "納入活動失敗。");
 }
-export async function refreshExisting(brand: string, platform: string, source_account: string): Promise<{ job: SyncJob }> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/existing-campaigns/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, source_account }) }), "更新清單失敗。");
+/** `range` (F47 Contract H, the connections page's `reread`): read these days again instead of the default window. */
+export async function refreshExisting(brand: string, platform: string, source_account: string, range?: { start: string; end: string }): Promise<{ job: SyncJob }> {
+  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/existing-campaigns/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, source_account, ...range }) }), "更新清單失敗。");
 }
 export async function externalView(brand: string, campaign: string, values: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<ExternalView> {
   return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/external?${query(values)}`, { signal }), "讀取原始資料失敗。");

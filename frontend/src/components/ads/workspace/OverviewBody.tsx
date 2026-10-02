@@ -8,7 +8,8 @@ import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, t
 import { useApiRead } from "@/lib/useApiRead";
 import {
   ActionBar, Chip, DAY_SWATCH, DayTiles, Disclosure, GRADE_LABEL, GradeRules, GradeTermChip, KindMark, Legend, Meter,
-  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, formatAmount, type RulerAd, type RulerCap,
+  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, closedWord, formatAmount, type RulerAd,
+  type RulerCap,
 } from "../patterns";
 import { cleanupAction, isQueueItemDone, proposalAction } from "../home/status";
 import { decisionTitle } from "../home/QueueRow";
@@ -20,7 +21,11 @@ import type { StepTarget } from "../nextStep";
  * days; otherwise the next open decision of this campaign (or 「這個活動沒有要決定的事」), the four numbers of the last
  * 14 complete days (`totals`) and the in-flight ruler. Each extra read (structure, queue, the data-status reason) fails
  * on its own with `ReadFailed`; an unknown number prints as unknown, never 0. What the old overview showed and the
- * prototype does not lives in the caller's `advanced` fold. */
+ * prototype does not lives in the caller's `advanced` fold.
+ *
+ * F47-I08 (Contract E, drill-10 S3): a campaign on the platform that has not spent yet (`delivery === "waiting"`) says
+ * so in the ✓ next-step card (「已上架，等平台開始投放」 + when its first number can show up) and its money cells read
+ * 「還沒開始花」, never 「未知」. A closed campaign never says 在投: 「已結案」 or 「已結案・平台上還開著 N 則」. */
 
 const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
 const CARD = "surface px-[22px] py-5";
@@ -264,6 +269,9 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
   const cap = capOf(c);
   const ads = structure.status === "ready" ? rulerAds(structure.data) : null;
   const perfHref = `/brands/${brandId}/ads/campaigns/${c.id}?tab=perf`;
+  const closed = c.status === "closed";
+  const waiting = ws.delivery === "waiting";
+  const rulerTitle = closed ? "廣告對照上限" : ads ? `在投 ${ads.length} 則對照上限` : "在投廣告對照上限";
 
   return (
     <div className="flex flex-col gap-4">
@@ -281,15 +289,17 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
           <section className={`${CARD} flex items-center gap-4`} aria-label="下一步">
             <div className="grid size-[52px] shrink-0 place-items-center rounded-full bg-success text-2xl text-white" aria-hidden="true">✓</div>
             <div className="min-w-0 flex-1">
-              <b className="text-[17px]">這個活動沒有要決定的事</b>
-              <div className="text-sm text-muted-foreground">{ws.next_sync_at ? `下次同步 ${hm(ws.next_sync_at)} 後重新判讀` : "下次同步後重新判讀"}</div>
+              <b className="text-[17px]">{waiting ? "已上架，等平台開始投放" : "這個活動沒有要決定的事"}</b>
+              <div className="text-sm text-muted-foreground">{waiting
+                ? `平台開始花錢後，下次同步${ws.next_sync_at ? `（${hm(ws.next_sync_at)}）` : ""}會出現第一筆數字。`
+                : ws.next_sync_at ? `下次同步 ${hm(ws.next_sync_at)} 後重新判讀` : "下次同步後重新判讀"}</div>
             </div>
           </section>
         )}
       <KvNumbers campaign={c} workspace={ws} />
       <section className={CARD} aria-labelledby="ov-ruler">
         <div className={HEAD}>
-          <h2 id="ov-ruler" className={H2}>{ads ? `在投 ${ads.length} 則對照上限` : "在投廣告對照上限"}</h2>
+          <h2 id="ov-ruler" className={H2}>{rulerTitle}</h2>
           <Button asChild variant="link" size="sm" className="h-auto px-0"><Link to={perfHref}>看成效 →</Link></Button>
         </div>
         {structure.status === "loading" && <Skeleton className="h-24 w-full" />}
@@ -365,8 +375,11 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const t = ws.totals;
   const cap = capOf(c);
   const who = c.name.split("・")[0] || c.name;
+  const closed = c.status === "closed";
+  // On the platform, nothing spent yet: an unknown money cell is 「還沒開始花」, not 「未知」 (Contract E).
+  const notSpent = ws.delivery === "waiting" ? "還沒開始花" : "未知";
   const money = (v: number | null) => {
-    if (formatAmount(v) === null) return "未知";
+    if (formatAmount(v) === null) return notSpent;
     return !t?.currency || t.currency === "TWD" ? `${formatAmount(v)} 元` : `${t.currency} ${formatAmount(v)}`;
   };
   const cost = t?.cost_per_result ?? null;
@@ -374,7 +387,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const spend = t?.spend ?? null;
   const roas = c.cap.price !== null && results !== null && spend !== null && spend > 0
     ? Math.round(((c.cap.price * results) / spend) * 100) / 100 : null;
-  const unknownCost = spend === null || results === null ? "未知" : results === 0 ? "還沒有成交" : "未知";
+  const unknownCost = spend === null || results === null ? notSpent : results === 0 ? "還沒有成交" : notSpent;
   const cell = "min-w-0 border-l border-border px-5 first:border-l-0 first:pl-0";
   const label = "block text-xs text-muted-foreground";
   const big = "my-0.5 block text-[22px] font-semibold tracking-tight";
@@ -404,11 +417,18 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
             {roas !== null && `・ROAS 參考 ${formatAmount(roas)}`}
           </span>
         </div>
-        <div className={cell}>
-          <span className={label}>{ws.can_support !== null ? "在投／撐得起" : "在投"}</span>
-          <b className={big}>{ws.can_support !== null ? `${ws.active_ads}／${ws.can_support} 則` : `${ws.active_ads} 則`}</b>
-          <span className={label}>{ws.daily_budget !== null ? `每日 ${formatAmount(ws.daily_budget)}` : "每日預算未知"}</span>
-        </div>
+        {closed ? (
+          <div className={cell}>
+            <span className={label}>狀態</span>
+            <b className="my-0.5 block text-[17px] font-semibold tracking-tight">{closedWord(ws.active_ads)}</b>
+          </div>
+        ) : (
+          <div className={cell}>
+            <span className={label}>{ws.can_support !== null ? "在投／撐得起" : "在投"}</span>
+            <b className={big}>{ws.can_support !== null ? `${ws.active_ads}／${ws.can_support} 則` : `${ws.active_ads} 則`}</b>
+            <span className={label}>{ws.daily_budget !== null ? `每日 ${formatAmount(ws.daily_budget)}` : "每日預算未知"}</span>
+          </div>
+        )}
       </div>
     </section>
   );

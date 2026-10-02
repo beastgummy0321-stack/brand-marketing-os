@@ -139,7 +139,7 @@ function ordersSource(overrides: Partial<ConnectionSource> = {}): ConnectionSour
     key: "orders", kind: "orders", platform: null, name: "商城訂單報表", state: "missing_days",
     note: "最新到 09/14，缺 09/15 之後", last_success_at: null,
     missing_days: ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"],
-    affected_campaigns: [], action: { label: "補報表", href: "/brands/brd_1/orders" },
+    affected_campaigns: [], action: { label: "補報表", href: "/brands/brd_1/orders" }, reread: null,
     ...overrides,
   };
 }
