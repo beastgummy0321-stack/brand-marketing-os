@@ -39,6 +39,7 @@ const PHOTO = { id: "oa_1", url: `/brands/${B}/assets/file/oa_1/front.jpg` };
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -228,5 +229,27 @@ describe("WhatStep", () => {
 
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
     expect(mockSave.mock.calls[0][2].difference).toBe("台灣自己的工廠，一批一批驗");
+  });
+});
+
+describe("WhatStep draft (F47-I03, drill-10 乙 #1)", () => {
+  it("an unsaved edit survives 「← 商品」 / reload (remount) and is dropped once 下一步 saved", async () => {
+    mockSave.mockImplementation(async (_b, _p, input) => ({ ...prefilled(), name: input.name }));
+    renderWhat(prefilled());
+    await userEvent.clear(field("一句話介紹"));
+    await userEvent.type(field("一句話介紹"), "改過還沒存的介紹");
+    cleanup();
+
+    const { onSaved } = renderWhat(prefilled());
+    expect(field("一句話介紹").value).toBe("改過還沒存的介紹");
+    expect(field("裡面有什麼、怎麼作用").value).toBe(prefilled().mechanism.value);
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(mockSave).toHaveBeenCalledWith(B, P, expect.objectContaining({ intro: "改過還沒存的介紹" }));
+    expect(sessionStorage.length).toBe(0);
+    cleanup();
+
+    renderWhat(prefilled());
+    expect(field("一句話介紹").value).toBe(prefilled().intro.value);
   });
 });

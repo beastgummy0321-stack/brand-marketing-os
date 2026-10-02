@@ -8,7 +8,7 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, CustomEscape, CustomMark, readStepDraft, useStepDraft } from "../shared/CustomEscape";
 
 /** Prototype `chips(…, 2)`: at most two tones; picking a third drops the oldest. */
 const TONE_MAX = 2;
@@ -40,7 +40,7 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
         if (cancelled) return;
         // F47-I03: unsaved edits of this step (left with 「← 上一步」, a step-bar jump or a reload) come
         // back over the loaded values; the draft is dropped once 下一步 saved.
-        const draft = readDraft(draftKey);
+        const draft = readStepDraft(draftKey, isIdentityDraft);
         const text = draft ?? baseline(identity);
         setLoaded(identity);
         setPositioning(text.positioning);
@@ -60,16 +60,12 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    const current: IdentityDraft = { positioning, tones, toneOptions, visual, customPositioning, customVisual, customTones };
-    if (JSON.stringify(current) === JSON.stringify(baseline(loaded))) clearDraft(draftKey);
-    else writeDraft(draftKey, current);
-  }, [loaded, draftKey, positioning, tones, toneOptions, visual, customPositioning, customVisual, customTones]);
+  const current: IdentityDraft = { positioning, tones, toneOptions, visual, customPositioning, customVisual, customTones };
+  useStepDraft(draftKey, loaded !== null, current, loaded ? baseline(loaded) : null);
 
   const { saving, error, submit, formProps } = useFormSubmit(async () => {
     await saveOnboardingIdentity(brandId, { positioning: positioning.trim(), tone: tones, visual: visual.trim() });
-    clearDraft(draftKey);
+    clearStepDraft(draftKey);
     onNext();
   });
 
@@ -238,32 +234,10 @@ function baseline(identity: OnboardingIdentity): IdentityDraft {
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const isTextOrNull = (v: unknown) => v === null || typeof v === "string";
 
-function readDraft(key: string): IdentityDraft | null {
-  try {
-    const v = JSON.parse(sessionStorage.getItem(key) || "null") as Record<string, unknown> | null;
-    if (!v || typeof v !== "object") return null;
-    const ok = typeof v.positioning === "string" && typeof v.visual === "string" && isStrings(v.tones)
-      && isStrings(v.toneOptions) && isStrings(v.customTones) && isTextOrNull(v.customPositioning) && isTextOrNull(v.customVisual);
-    return ok ? (v as unknown as IdentityDraft) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeDraft(key: string, draft: IdentityDraft): void {
-  try {
-    sessionStorage.setItem(key, JSON.stringify(draft));
-  } catch {
-    /* Storage unavailable: nothing is kept. */
-  }
-}
-
-function clearDraft(key: string): void {
-  try {
-    sessionStorage.removeItem(key);
-  } catch {
-    /* Storage unavailable. */
-  }
+function isIdentityDraft(value: unknown): value is IdentityDraft {
+  const v = value as Record<string, unknown>;
+  return typeof v === "object" && typeof v.positioning === "string" && typeof v.visual === "string" && isStrings(v.tones)
+    && isStrings(v.toneOptions) && isStrings(v.customTones) && isTextOrNull(v.customPositioning) && isTextOrNull(v.customVisual);
 }
 
 /** The step's option list plus any pre-filled tone the list does not carry (an AI tone outside the vocabulary). */

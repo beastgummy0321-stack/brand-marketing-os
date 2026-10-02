@@ -9,7 +9,7 @@ import { useAuthedImage } from "@/lib/useAuthedImage";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, CustomEscape, CustomMark, productDraftKey, readStepDraft, useStepDraft } from "../shared/CustomEscape";
 
 /** Prototype `R.p1` head of `.harness/scratch/prototype/f41-onboarding/index.html`. */
 const TITLE = "這個商品是什麼";
@@ -97,15 +97,19 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
   above?: ReactNode;
   onSaved: (saved: ProductWhat) => void | Promise<void>;
 }) {
-  const [name, setName] = useState(what.name);
-  const [pageUrl, setPageUrl] = useState(what.page_url);
-  const [texts, setTexts] = useState<Texts>(() => textsOf(what));
+  // F47-I03 (drill-10 乙 #1): unsaved edits come back when the step mounts again (「← 商品」, the step bar, a
+  // reload) until 下一步 saved them. Photos are not part of it: an upload is saved at once.
+  const draftKey = productDraftKey(brandId, productId, "what");
+  const [restored] = useState(() => readStepDraft(draftKey, isWhatDraft));
+  const [name, setName] = useState(restored?.name ?? what.name);
+  const [pageUrl, setPageUrl] = useState(restored?.pageUrl ?? what.page_url);
+  const [texts, setTexts] = useState<Texts>(() => restored?.texts ?? textsOf(what));
   const [photos, setPhotos] = useState<ProductPhoto[]>(what.photos);
   const [uploading, setUploading] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   /** The value 「自訂」 filled 跟別人不一樣的地方 with: marked 你自訂 while the field still holds it. */
-  const [customDifference, setCustomDifference] = useState<string | null>(null);
+  const [customDifference, setCustomDifference] = useState<string | null>(restored?.customDifference ?? null);
   /** The `what` the fields were last filled from. */
   const base = useRef(what);
 
@@ -137,6 +141,9 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
     }
   }
 
+  useStepDraft(draftKey, true, { name, pageUrl, texts, customDifference },
+    { name: what.name, pageUrl: what.page_url, texts: textsOf(what), customDifference: null });
+
   const { saving, error, submit, formProps } = useFormSubmit(async () => {
     const saved = await saveProductWhat(brandId, productId, {
       name: name.trim(),
@@ -145,6 +152,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
       mechanism: texts.mechanism.trim(),
       difference: texts.difference.trim(),
     });
+    clearStepDraft(draftKey);
     await onSaved(saved);
   });
   const ready = !!name.trim() && !saving && !uploading;
@@ -224,6 +232,22 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
       </OnboardingBar>
     </form>
   );
+}
+
+/** This step's draft (F47-I03, `useStepDraft`): the typed fields and the 自訂 value. */
+interface WhatDraft {
+  name: string;
+  pageUrl: string;
+  texts: Texts;
+  customDifference: string | null;
+}
+
+function isWhatDraft(value: unknown): value is WhatDraft {
+  const v = value as Record<string, unknown>;
+  const t = v?.texts as Record<string, unknown> | undefined;
+  return typeof v === "object" && typeof v.name === "string" && typeof v.pageUrl === "string"
+    && (v.customDifference === null || typeof v.customDifference === "string")
+    && !!t && TEXT_KEYS.every((key) => typeof t[key] === "string");
 }
 
 /** The crumb of a product not created yet: its typed name, if any, after 「商品建檔」. */

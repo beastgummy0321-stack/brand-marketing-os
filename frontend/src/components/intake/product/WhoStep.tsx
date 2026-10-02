@@ -6,7 +6,7 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
-import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, CustomEscape, CustomMark, productDraftKey, readStepDraft, useStepDraft } from "../shared/CustomEscape";
 
 /** Prototype `R.p2` head of `.harness/scratch/prototype/f41-onboarding/index.html`. */
 const TITLE = "誰會買、買之前煩什麼";
@@ -44,13 +44,10 @@ function blockedReason(groups: Draft[]): string | null {
   return null;
 }
 
-/** This step's unsaved groups, kept per product in `sessionStorage` (F47-I03): everything of a
- * group but its render key. Cleared once 下一步 saved, or when the groups match what was loaded again. */
+/** This step's draft (F47-I03, `useStepDraft`): every group but its render key. */
 type KeptGroup = Omit<Draft, "key">;
 
-function keptText(groups: Draft[]): string {
-  return JSON.stringify(groups.map(({ key: _key, ...rest }) => rest));
-}
+const kept = (groups: Draft[]): KeptGroup[] => groups.map(({ key: _key, ...rest }) => rest);
 
 const isContent = (v: unknown): v is Content => {
   const c = v as Record<string, unknown> | null;
@@ -58,34 +55,11 @@ const isContent = (v: unknown): v is Content => {
     && Array.isArray(c.pain_keys) && c.pain_keys.every((k) => typeof k === "string");
 };
 
-function readKept(key: string): KeptGroup[] | null {
-  try {
-    const v: unknown = JSON.parse(sessionStorage.getItem(key) || "null");
-    if (!Array.isArray(v)) return null;
-    const ok = v.every((g: Record<string, unknown>) =>
-      isContent(g.base) && (g.id === null || typeof g.id === "string")
-      && (g.origin === "saved" || g.origin === "ai" || g.origin === "custom") && typeof g.note === "string"
-      && (g.customQuote === null || typeof g.customQuote === "string") && isContent(g));
-    return ok ? (v as KeptGroup[]).slice(0, MAX_GROUPS) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeKept(key: string, text: string): void {
-  try {
-    sessionStorage.setItem(key, text);
-  } catch {
-    /* Storage unavailable: nothing is kept. */
-  }
-}
-
-function clearKept(key: string): void {
-  try {
-    sessionStorage.removeItem(key);
-  } catch {
-    /* Storage unavailable. */
-  }
+function isKeptGroups(v: unknown): v is KeptGroup[] {
+  return Array.isArray(v) && v.length <= MAX_GROUPS && v.every((g: Record<string, unknown>) =>
+    isContent(g.base) && (g.id === null || typeof g.id === "string")
+    && (g.origin === "saved" || g.origin === "ai" || g.origin === "custom") && typeof g.note === "string"
+    && (g.customQuote === null || typeof g.customQuote === "string") && isContent(g));
 }
 
 function toInput(g: Draft): CustomerGroupInput {
@@ -113,13 +87,12 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   back: BarBack;
   onNext: () => void;
 }) {
-  // Product ids are unique across brands and orgs, and sessionStorage is per tab.
-  const keptKey = `intake-draft:${brandId}:${productId}:who`;
+  const draftKey = productDraftKey(brandId, productId, "who");
   const [loaded, setLoaded] = useState<ProductWho | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groups, setGroups] = useState<Draft[]>([]);
-  /** The groups as loaded (before any edit), to tell an unsaved edit from the loaded state. */
-  const loadedGroups = useRef<string>("");
+  /** The groups as loaded (before any edit): the draft is kept only while `groups` differ from it. */
+  const [loadedGroups, setLoadedGroups] = useState<KeptGroup[]>([]);
   const nextKey = useRef(0);
 
   const draft = (content: Content, extra: { id: string | null; origin: Origin; note: string }): Draft => ({
@@ -141,12 +114,12 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
             { id: g.id, origin: g.source === "ai" ? "ai" : "saved", note: g.note },
           ),
         );
-        loadedGroups.current = keptText(fromServer);
         // F47-I03 (drill-10 乙 #1, faults F7): unsaved groups (an AI-organised 自訂 group included) come
         // back when the step mounts again -- back, step bar or reload -- until 下一步 saved them.
-        const kept = readKept(keptKey);
+        const restored = readStepDraft(draftKey, isKeptGroups);
+        setLoadedGroups(kept(fromServer));
         setLoaded(who);
-        setGroups(kept ? kept.map((g) => ({ ...g, key: nextKey.current++ })) : fromServer);
+        setGroups(restored ? restored.map((g) => ({ ...g, key: nextKey.current++ })) : fromServer);
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -157,16 +130,11 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, productId]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    const text = keptText(groups);
-    if (text === loadedGroups.current) clearKept(keptKey);
-    else writeKept(keptKey, text);
-  }, [loaded, groups, keptKey]);
+  useStepDraft(draftKey, loaded !== null, kept(groups), loadedGroups);
 
   const { saving, error, submit, formProps } = useFormSubmit(async () => {
     await saveProductWho(brandId, productId, groups.map(toInput));
-    clearKept(keptKey);
+    clearStepDraft(draftKey);
     onNext();
   });
 
