@@ -8,6 +8,7 @@ import json
 import os
 import time
 import unittest
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,7 @@ from app.brand_web import product_ai_calls as product_ai
 from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
 from app.core.db import DEV_ORG_ID  # noqa: E402
+from app.identity import repository as identity_repo
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 OPERATOR = "本人"  # 票 03-1：production 端已刪除，測試沿用舊字串值當 actor 名稱
@@ -178,6 +180,30 @@ class ProductDetailTest(_BaseProductsApiTest):
         )
         # AI 快掃寫入的中文詞不在六個內建鍵裡，fallback 原樣顯示（S6.22）
         self.assertEqual(fact["fact_type_label"], "價格帶")
+        # F47-I03: a typed confirmer name shows as typed.
+        self.assertEqual(fact["confirmed_by"], ACTOR)
+
+    def test_confirmer_user_id_reads_as_the_members_email(self):
+        """F47-I03 (drill-10 外觀 #11): 「確認人」 never shows a user id -- a stored member id reads as
+        that member's e-mail (facts and economics); an id that is not a member of this org reads as a
+        former member, never the raw id."""
+        member = uuid4()
+        email = f"confirmer-{member.hex[:8]}@example.com"
+        identity_repo.create_user(web.conn, member, email)
+        identity_repo.create_membership(web.conn, DEV_ORG_ID, member, "member")
+        stranger = str(uuid4())
+        pid = self._create_product()
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
+                                  label="成員確認", value="v", status="confirmed", confirmed_by=str(member))
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
+                                  label="外人確認", value="v", status="confirmed", confirmed_by=stranger)
+        repo.save_product_economics(web.conn, self.bid, pid, actor=ACTOR, selling_price=690,
+                                    currency="TWD", confirmed_by=str(member))
+        data = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}").json()["data"]
+        by_label = {f["label"]: f["confirmed_by"] for f in data["facts"]}
+        self.assertEqual(by_label["成員確認"], email)
+        self.assertEqual(by_label["外人確認"], "已不在這個組織的成員")
+        self.assertEqual(data["economics"]["confirmed_by"], email)
 
 
 class ArchiveTest(_BaseProductsApiTest):
@@ -382,18 +408,31 @@ class EconomicsTest(_BaseProductsApiTest):
         """F47 Contract A (drill-10 V3): price 0 and a negative cost are refused with the field
         sentence (nothing saved); shipping is >= 0 on every path (lead decision) and 0 is kept."""
         pid = self._create_product()
-        resp = self._save(pid, selling_price=0)
-        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "售價要大於 0。"}))
-        resp = self._save(pid, unit_variable_cost=-1)
-        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "單位變動成本不能是負數。"}))
-        resp = self._save(pid, fixed_cost=-1)
-        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "固定成本不能是負數。"}))
-        resp = self._save(pid, shipping_cost=-20)
-        self.assertEqual((resp.status_code, resp.json()), (400, {"error": "運費不能是負數。"}))
+        for field, value, sentence in (("selling_price", 0, "售價要大於 0。"),
+                                       ("unit_variable_cost", -1, "單位變動成本不能是負數。"),
+                                       ("fixed_cost", -1, "固定成本不能是負數。"),
+                                       ("shipping_cost", -20, "運費不能是負數。")):
+            resp = self._save(pid, **{field: value})
+            # F47-I03: the sentence also comes keyed by its field, so the form shows it under that field.
+            self.assertEqual((resp.status_code, resp.json()),
+                             (400, {"error": sentence, "field_errors": {field: sentence}}))
         self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
 
         self.assertEqual(self._save(pid, shipping_cost=0).status_code, 204)
         self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid, raw=True)["shipping_cost"], 0)
+
+    def test_empty_cost_is_unset_and_empty_price_is_refused(self):
+        """F47-I03: the form sends an empty field as null -- a cost left empty is stored unset (never
+        0); the selling price is required."""
+        pid = self._create_product()
+        resp = self._save(pid, selling_price=None)
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["field_errors"], {"selling_price": "售價請填數字。"})
+        resp = self._save(pid, fixed_cost=None, unit_variable_cost=None, shipping_cost=None)
+        self.assertEqual(resp.status_code, 204)
+        raw = repo.get_product_economics(web.conn, self.bid, pid, raw=True)
+        self.assertEqual((raw["fixed_cost"], raw["unit_variable_cost"], raw["shipping_cost"]),
+                         (None, None, None))
 
 
 class HandoffTest(_BaseProductsApiTest):
@@ -419,6 +458,18 @@ class HandoffTest(_BaseProductsApiTest):
             f"/api/products/brands/{self.bid}/products/{pid}/handoff", json={"reply_text": "  "},
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_reply_that_yields_nothing_is_refused_with_the_reason(self):
+        """F47-I03 (drill-10 乙 #6): pasted text whose (repaired) reply carries no fact and no price is
+        a 400 with the reason -- not a green 「新增了 0 條」 -- and writes nothing."""
+        pid = self._create_product()
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(json.dumps({"facts": []})))
+        resp = self.client.post(
+            f"/api/products/brands/{self.bid}/products/{pid}/handoff", json={"reply_text": "亂打的一串字"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("讀不出任何產品事實", resp.json()["error"])
+        self.assertEqual(repo.list_product_facts(web.conn, self.bid, pid), [])
 
     def test_unparseable_reply_falls_back_to_ai_fix(self):
         pid = self._create_product()

@@ -10,6 +10,7 @@ import os
 import time
 import unittest
 from unittest import mock
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -23,6 +24,7 @@ from app.core import db as coredb
 from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
 from app.core.db import new_id, now_iso
+from app.identity import repository as identity_repo
 from app.llm import providers
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake-library-api-test")
@@ -105,6 +107,22 @@ class LibraryBundleTest(unittest.TestCase):
         self.assertIsNone(fact["fact_key"])  # F38-I01: only proof facts carry a kind
         self.assertIsNone(fact["fact_key_label"])
         self.assertIsInstance(fact["confirmed_at"], str)  # ISO 字串，不是 datetime 物件
+
+    def test_fact_confirmer_user_id_reads_as_the_members_email(self):
+        """F47-I03 (drill-10 外觀 #11): 「確認人」 in the bundle and in a write response is the member's
+        e-mail, never the stored user id; a typed name stays as typed."""
+        member = uuid4()
+        email = f"lib-confirmer-{member.hex[:8]}@example.com"
+        identity_repo.create_user(web.conn, member, email)
+        identity_repo.create_membership(web.conn, coredb.DEV_ORG_ID, member, "member")
+        repo.create_brand_fact(web.conn, self.bid, actor=ACTOR, fact_type="positioning", label="成員確認",
+                               value="v", status="confirmed", confirmed_by=str(member))
+        repo.create_brand_fact(web.conn, self.bid, actor=ACTOR, fact_type="positioning", label="打字確認",
+                               value="v", status="confirmed", confirmed_by="小陳")
+        facts = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]["facts"]
+        self.assertEqual({f["label"]: f["confirmed_by"] for f in facts}, {"成員確認": email, "打字確認": "小陳"})
+        row = next(f for f in repo.list_brand_facts(web.conn, self.bid) if f["label"] == "成員確認")
+        self.assertEqual(customer_voice._fact_shape(self.bid, row)["confirmed_by"], email)
 
     def test_policy_fact_in_bundle(self):
         """F42-I01: a store policy saved by onboarding shows in the library's facts with its
