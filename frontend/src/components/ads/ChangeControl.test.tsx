@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +70,20 @@ describe("ChangeControl 核准與逐項核對", () => {
     await screen.findByRole("button", { name: "核准這份變更清單" });
     expect(vi.mocked(api.createChangeSet).mock.calls[1][2]).toEqual(first);
     expect(sessionStorage.getItem("ads-change-operation:org_test:brand_a:campaign_1")).toBeNull();
+  });
+
+  it("F47-I06：「建立變更清單」打開下方的清單並把游標放進第一格；沒有可改的對象時停用並說原因", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [change()] });
+    const first = render(page()); await openAdvanced();
+    await user.click(await screen.findByRole("button", { name: "建立變更清單" }));
+    const composer = await screen.findByRole("region", { name: "建立變更清單" });
+    await waitFor(() => expect(document.activeElement).toBe(within(composer).getAllByRole("textbox")[0]));
+    first.unmount();
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [change()] });
+    render(page()); await openAdvanced();
+    expect((await screen.findByRole("button", { name: "建立變更清單" })).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("這個活動還沒有可改的平台對象：先帶入既有活動或完成廣告對應")).toBeTruthy();
   });
 
   it("切換品牌中止舊讀取，遲到回應不顯示另一品牌清單", async () => {

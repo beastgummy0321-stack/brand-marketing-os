@@ -105,3 +105,15 @@ it("a failed request list read is ReadFailed with 重試, and a new refreshKey r
   view.rerender(<MemoryRouter initialEntries={["/"]}><MaterialTasksPanel brandId="brand_a" campaignId="campaign_a" refreshKey={1} /></MemoryRouter>);
   await waitFor(() => expect(api.listMaterialTasks).toHaveBeenCalledTimes(3));
 });
+
+it("F47-I06: 「新增素材需求」 shows only while an editor is open, and brings the request cards back with focus on the first", async () => {
+  const user = userEvent.setup();
+  render(page());
+  await screen.findByRole("button", { name: /使用已有成品/ });
+  expect(screen.queryByRole("button", { name: "新增素材需求" })).toBeNull(); // the cards are already all there is
+  await user.click(screen.getByRole("button", { name: /使用已有成品/ }));
+  await user.click(screen.getByRole("button", { name: "新增素材需求" }));
+  const cards = screen.getByRole("group", { name: "選擇素材來源" });
+  await waitFor(() => expect(cards.contains(document.activeElement)).toBe(true));
+  expect(screen.queryByRole("button", { name: "新增素材需求" })).toBeNull();
+});

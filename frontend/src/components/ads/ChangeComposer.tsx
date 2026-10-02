@@ -41,7 +41,7 @@ export function ChangeComposer({ targets, month, pending, initial, initialDraft,
     }
     setValidation(""); onSave({ title: title.trim(), month, items: items.map(item => item.kind === "copy" ? { ...item, after: Object.fromEntries(Object.entries(item.after).filter(([, value]) => typeof value === "string" && value.trim())) } : item) });
   }
-  return <section className="surface" aria-label="建立變更清單">
+  return <section className="surface scroll-mt-4" aria-label="建立變更清單" data-slot="change-composer">
     <div className="surface-header"><div><h2>這次要調整什麼</h2><p className="text-xs text-muted-foreground">先整理清單，保存後再核准。此處不會修改平台。</p></div></div>
     <div className="surface-body space-y-4">
       {pending && <p role="status" className="rounded-md bg-warning/10 p-3 text-sm">上次保存的回應尚未確認。重試會沿用同一次操作，不會另外建立一份清單。</p>}
