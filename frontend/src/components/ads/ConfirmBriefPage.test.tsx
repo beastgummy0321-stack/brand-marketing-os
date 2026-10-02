@@ -26,10 +26,14 @@ const options: WizardOptions = {
   products: [
     { id: "prd_1", name: LONG, display_name: LONG, kind: "bundle", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
       price: 3000, currency: "TWD", thumbnail_url: null, has_cost: false, break_even: null, cap_per_sale: null, derived_fields: [], offer_labels: ["組合價"],
-      customer_groups: GROUPS, landing_url: "https://beastgummy.tw/shop" },
+      customer_groups: GROUPS, landing_url: "https://beastgummy.tw/shop",
+      previous: { campaign_id: "cmp_0", campaign_name: "組合包・09/19～10/01", platform: "meta", cap: 450, budget: 30000, spend: 9781 },
+      learned: { campaigns: [{ id: "cmp_0", name: "組合包・09/19～10/01" }], keep: 2, replace: 1 } },
     { id: "prd_2", name: "Beast Gummy咖啡因機能軟糖・試用包", display_name: "試用包", kind: "single", knowledge_product_id: "kp_1", knowledge_product_name: "咖啡因機能軟糖",
-      price: 100, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 40, cap_per_sale: 40, derived_fields: [], offer_labels: [], customer_groups: [], landing_url: null },
+      price: 100, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 40, cap_per_sale: 40, derived_fields: [], offer_labels: [], customer_groups: [], landing_url: null,
+      previous: null, learned: null },
   ],
+  default_platform: "meta",
   objectives: [
     { key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} },
     { key: "名單", label: "名單", description: "看每筆名單成本", available: true, platforms: {} },
@@ -104,6 +108,28 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     expect(within(field("audience")).getByText("未設定")).toBeTruthy();
     expect(within(field("product")).queryByText("猜的，請確認")).toBeNull();
     expect(screen.getByText("有 2 項是猜的")).toBeTruthy();
+  });
+
+  it("F46-I08: a value the create filled by rule shows its tag instead of 「猜的，請確認」; system keeps the guess", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({
+      context_json: { product_ids: ["prd_1"], audience_hint: null, field_sources: sources({ platform: "copied", budget: "copied", dates: "system" }) },
+    }));
+    const view = renderPage();
+    await screen.findByText(LONG);
+    const tag = (key: string) => field(key).querySelector("[data-slot=source-tag]");
+    expect(tag("platform")?.textContent).toBe("沿用上一期");
+    expect(tag("platform")?.getAttribute("title")).toBe("上一期：組合包・09/19～10/01");
+    expect(tag("budget")?.textContent).toBe("沿用上一期");
+    expect(within(field("platform")).queryByText("猜的，請確認")).toBeNull();
+    expect(within(field("dates")).getByText("猜的，請確認")).toBeTruthy();
+    expect(tag("dates")).toBeNull();
+    expect(tag("product")).toBeNull(); // the user's own pick carries no tag
+    expect(screen.getByText("有 2 項是猜的")).toBeTruthy(); // dates + audience
+    view.unmount();
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_2"], audience_hint: "a", field_sources: sources({ platform: "brand" }) } }));
+    renderPage();
+    await screen.findByText("Beast Gummy咖啡因機能軟糖・試用包");
+    expect(tag("platform")?.textContent).toBe("已接上的帳戶");
   });
 
   it("prints the cap as a number or unset, never NaN", async () => {
@@ -249,6 +275,29 @@ describe("ConfirmBriefPage (F30-I05)", () => {
 });
 
 describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () => {
+  it("F46-I08: a stored cap from the previous campaign or the break-even shows the value with its tag, while it still holds", async () => {
+    const capSources = (cap: "copied" | "break_even") => ({ product_ids: ["prd_1"], audience_hint: "a", field_sources: { ...sources(), cap } });
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 450, basis: "own", own_value: 450 }), context_json: capSources("copied") }));
+    const first = renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("cap")).getByText("NT$450")).toBeTruthy();
+    expect(field("cap").querySelector("[data-slot=source-tag]")?.textContent).toBe("沿用上一期");
+    expect(within(field("cap")).queryByText("猜的，請確認")).toBeNull();
+    expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
+    first.unmount();
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 559, basis: "own", own_value: 559 }), context_json: capSources("break_even") }));
+    const second = renderPage();
+    await screen.findByText(LONG);
+    expect(field("cap").querySelector("[data-slot=source-tag]")?.textContent).toBe("打平線");
+    second.unmount();
+    // Changed afterwards through the target writer (its source is not rewritten): no tag.
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600 }), context_json: capSources("break_even") }));
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("cap")).getByText("NT$600")).toBeTruthy();
+    expect(field("cap").querySelector("[data-slot=source-tag]")).toBeNull();
+  });
+
   it("is empty by default with break-even as a hint only, not marked as a guess; the bar says the cap falls back to break-even", async () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView() }));
     renderPage();
