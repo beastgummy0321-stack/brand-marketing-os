@@ -26,9 +26,11 @@ vi.mock("@/lib/adsLaunchSettingsApi", () => ({ confirmLaunchSetting: vi.fn() }))
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_1" }));
 vi.mock("./LaunchSettingsCard", async () => {
   const { useEffect } = await vi.importActual<typeof import("react")>("react");
-  return { LaunchSettingsCard: ({ locked, onBlockerChange }: { locked: boolean; onBlockerChange?: (b: string | null) => void }) => {
+  return { LaunchSettingsCard: ({ locked, onBlockerChange, onCampaignSaved, campaign }: {
+    locked: boolean; onBlockerChange?: (b: string | null) => void; onCampaignSaved: (c: unknown) => void; campaign: unknown;
+  }) => {
     useEffect(() => { onBlockerChange?.(null); }, [onBlockerChange]);
-    return <p>投放設定卡{locked ? "・唯讀" : ""}</p>;
+    return <p>投放設定卡{locked ? "・唯讀" : ""}<button type="button" onClick={() => onCampaignSaved(campaign)}>存各廣告組的其他設定</button></p>;
   } };
 });
 vi.mock("./LaunchSettingsCopy", () => ({ LaunchSettingsCopy: () => <p>可複製的投放設定</p> }));
@@ -134,6 +136,36 @@ describe("確認上架清單", () => {
     fireEvent.click(approve);
     expect((await screen.findByRole("alert")).textContent).toContain("至少一則素材確認後才能核准上架");
     expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish/list");
+  });
+
+  it("F47-I06 (Q5): saving 各廣告組的其他設定 reads the approval content again, so approving right after does not 409", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view());
+    renderAt("list");
+    const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    const reads = vi.mocked(getPublish).mock.calls.length;
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    fireEvent.click(screen.getByRole("button", { name: "存各廣告組的其他設定" }));
+    await waitFor(() => expect(vi.mocked(getPublish).mock.calls.length).toBe(reads + 1));
+    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(approve);
+    await waitFor(() => expect(publishCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash_2", operation_id: expect.any(String) }));
+  });
+
+  it("F47-I06 (Q5): a 409 because the content moved says the settings just changed and reads it again", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view());
+    vi.mocked(publishCampaign).mockRejectedValueOnce(new Error("計畫、素材或月份已改變，請重新檢視後核准。"));
+    renderAt("list");
+    const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    fireEvent.click(approve);
+    expect((await screen.findByRole("alert")).textContent).toBe("設定剛改過，已重新讀取，請再按一次核准");
+    vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(approve);
+    await waitFor(() => expect(publishCampaign).toHaveBeenLastCalledWith("brd_1", "cmp_1", "manual", { content_hash: "hash_2", operation_id: expect.any(String) }));
   });
 
   it("zero ready ads: approval waits and says why", async () => {
