@@ -1100,21 +1100,24 @@ def test_the_same_copy_on_a_no_offer_ad_is_refused_with_the_mismatch(env):
     assert by_ad(result["slots"])[ad]["state"] == "blocked"
 
     refused = recheck(env, result["placement"])
-    sentence = "這則規劃的是「無優惠」，文案卻寫了「優惠」。"
+    # F46-I02 Contract O: 原價 is an offer word too.
+    sentence = "這則規劃的是「無優惠」，文案卻寫了「優惠、原價」。"
     assert (refused["status"], refused["confirmed_at"]) == ("pending", None)
     assert refused["pending_reasons"] == [sentence]
-    assert refused["pending_details"] == [refusal("copy", sentence, ["優惠"])]
+    assert refused["pending_details"] == [refusal("copy", sentence, ["優惠", "原價"])]
 
 
 def test_a_word_of_another_offer_family_is_a_mismatch_with_the_planned_offer(env):
-    """The sell-way has 加贈's family (`bundle`), the ad was planned with 免運."""
+    """The sell-way's offer is `bundle`, the ad was planned with 免運. F46-I02 Contract O: an
+    offer word is backed only by its exact term in a registered sentence -- the bundle's
+    「優惠價…（原價…）」 does not write 加贈, so it is unbacked, not a family mismatch."""
     ad = env["ads"][0]
     sell_way_campaign(env, policies=SHIP_999)
     plan_offer(env, ad, "free_shipping", "免運")
     copy = {**COPY, "body": "買三盒加贈一盒"}
     result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
     assert result["placement"]["confirmed_at"] is None
-    sentence = "這則規劃的是「免運」，文案卻寫了「加贈」。"
+    sentence = "文案寫了「加贈」，品牌資料裡沒有登記這個優惠或背書。"
     assert recheck(env, result["placement"])["pending_details"] == [
         refusal("copy", sentence, ["加贈"])
     ]
@@ -1144,7 +1147,8 @@ def test_library_placement_is_judged_with_the_campaigns_sell_way(env):
     conn.commit()
     # No sell-way on the campaign: brand level, where no offer is registered.
     assert recheck(env, placement)["pending_details"] == [
-        refusal("copy", "文案寫了「優惠」，品牌資料裡沒有登記這個優惠或背書。", ["優惠"])
+        refusal("copy", "文案寫了「優惠、原價」，品牌資料裡沒有登記這個優惠或背書。",
+                ["優惠", "原價"])
     ]
     sell_way_campaign(env)
     confirmed = recheck(env, placement)
@@ -1221,7 +1225,8 @@ def test_refusal_details_name_the_exit_that_fixes_each_reason(env):
 # -- F44-I04 Contract D: a refused slot keeps its reason; the slots read says it ------------------
 
 
-MISMATCH = "這則規劃的是「無優惠」，文案卻寫了「優惠」。"
+MISMATCH = "這則規劃的是「無優惠」，文案卻寫了「優惠、原價」。"  # F46-I02: 原價 too
+MISMATCH_TERMS = ["優惠", "原價"]
 CLEAN_COPY = {"headline": "晨光軟糖三盒組", "body": "讀到深夜也有它陪", "description": "每天兩顆"}
 
 
@@ -1247,7 +1252,7 @@ def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(en
     ad, other_ad = env["ads"][0], env["ads"][1]
     result = refused_slot(env, ad)
     assert stored_reasons(env, result["placement"]["id"]) == [
-        refusal("copy", MISMATCH, ["優惠"])
+        refusal("copy", MISMATCH, MISMATCH_TERMS)
     ]
     env["conn"].commit()  # the route reads on its own connection
 
@@ -1260,7 +1265,7 @@ def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(en
         "thumbnail_url": thumb(env, result["placement"]["asset_id"]), "confirmed": False,
         "replace_task_id": None, "copy": placement_copy("待確認", PRICE_COPY),
         "workbench_href": None, "format_key": None,
-        "blocked": blocked(MISMATCH, ["優惠"], fix="copy"), "offer_label": "無優惠",
+        "blocked": blocked(MISMATCH, MISMATCH_TERMS, fix="copy"), "offer_label": "無優惠",
         "waiting": None, "job": None,
     }
     # A blocked slot is not ready; the slots nothing was uploaded into carry `blocked: None`.
@@ -1291,7 +1296,7 @@ def test_choosing_a_clean_copy_version_clears_the_reason_and_the_slot_is_ready(e
     refused = user_assets.placement(
         env["conn"], env["org"], env["brand"], env["campaign"], placement["id"], 1
     )
-    assert refused["blocked_reasons"] == [refusal("copy", MISMATCH, ["優惠"])]
+    assert refused["blocked_reasons"] == [refusal("copy", MISMATCH, MISMATCH_TERMS)]
 
 
 def test_recheck_returns_the_same_reason_until_its_cause_is_removed(env):
@@ -1304,7 +1309,7 @@ def test_recheck_returns_the_same_reason_until_its_cause_is_removed(env):
     assert set(again.json()) == {"slots"}
     slot = by_ad(again.json()["slots"])[ad]
     assert (slot["state"], slot["blocked"]) == (
-        "blocked", blocked(MISMATCH, ["優惠"], fix="copy"),
+        "blocked", blocked(MISMATCH, MISMATCH_TERMS, fix="copy"),
     )
 
     # The cause removed: the ad's offer coordinate now matches what the copy says.
