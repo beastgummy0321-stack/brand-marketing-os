@@ -32,9 +32,16 @@ type LoadState =
 export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { refreshBrands, brands } = useWorkspace();
+  const { refreshBrands, brands, scope } = useWorkspace();
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "notfound" });
-  const [viewStep, setViewStep] = useState<number | null>(null);
+  // F47-I03 (faults F3): the step being viewed survives a reload, so a reload on step 3 lands on step 3
+  // (where its unsaved draft comes back) instead of falling back to the last confirmed step.
+  const viewKey = brandId ? `intake-view:${scope ?? ""}:${brandId}` : null;
+  const [viewStep, setViewStepState] = useState<number | null>(() => readViewStep(viewKey));
+  function setViewStep(step: number | null) {
+    setViewStepState(step);
+    writeViewStep(viewKey, step);
+  }
   const [flowError, setFlowError] = useState<string | null>(null);
 
   async function refresh(): Promise<OnboardingStatus | null> {
@@ -115,6 +122,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     if (onboarding.completed) return goTo(LAST_STEP);
     try {
       await completeOnboarding(brandId as string);
+      writeViewStep(viewKey, null);
       await refresh();
       navigate(intakePath);
     } catch (err) {
@@ -166,6 +174,27 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
 /** Prototype `.wrap`: the flow's content is at most 1180px wide. */
 function Page({ children }: { children: ReactNode }) {
   return <div className="flex max-w-[1180px] flex-col gap-4">{children}</div>;
+}
+
+/** The viewed step of an open draft, kept in `sessionStorage` per user scope and brand; anything but an
+ * integer 1..7 reads as none. */
+function readViewStep(key: string | null): number | null {
+  if (!key) return null;
+  try {
+    return parseStepParam(sessionStorage.getItem(key));
+  } catch {
+    return null;
+  }
+}
+
+function writeViewStep(key: string | null, step: number | null): void {
+  if (!key) return;
+  try {
+    if (step === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, String(step));
+  } catch {
+    /* Storage unavailable: a reload falls back to the confirmed step. */
+  }
 }
 
 /** `?step=N` of a completed brand: anything but an integer 1..7 reads as not given (F05-I14:

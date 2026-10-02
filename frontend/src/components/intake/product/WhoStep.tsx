@@ -44,6 +44,50 @@ function blockedReason(groups: Draft[]): string | null {
   return null;
 }
 
+/** This step's unsaved groups, kept per product in `sessionStorage` (F47-I03): everything of a
+ * group but its render key. Cleared once 下一步 saved, or when the groups match what was loaded again. */
+type KeptGroup = Omit<Draft, "key">;
+
+function keptText(groups: Draft[]): string {
+  return JSON.stringify(groups.map(({ key: _key, ...rest }) => rest));
+}
+
+const isContent = (v: unknown): v is Content => {
+  const c = v as Record<string, unknown> | null;
+  return !!c && typeof c.who === "string" && typeof c.quote === "string" && typeof c.when_used === "string"
+    && Array.isArray(c.pain_keys) && c.pain_keys.every((k) => typeof k === "string");
+};
+
+function readKept(key: string): KeptGroup[] | null {
+  try {
+    const v: unknown = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (!Array.isArray(v)) return null;
+    const ok = v.every((g: Record<string, unknown>) =>
+      isContent(g) && isContent(g.base) && (g.id === null || typeof g.id === "string")
+      && (g.origin === "saved" || g.origin === "ai" || g.origin === "custom") && typeof g.note === "string"
+      && (g.customQuote === null || typeof g.customQuote === "string"));
+    return ok ? (v as KeptGroup[]).slice(0, MAX_GROUPS) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeKept(key: string, text: string): void {
+  try {
+    sessionStorage.setItem(key, text);
+  } catch {
+    /* Storage unavailable: nothing is kept. */
+  }
+}
+
+function clearKept(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* Storage unavailable. */
+  }
+}
+
 function toInput(g: Draft): CustomerGroupInput {
   const unchanged = sameContent(g, g.base);
   return {
@@ -69,9 +113,13 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   back: BarBack;
   onNext: () => void;
 }) {
+  // Product ids are unique across brands and orgs, and sessionStorage is per tab.
+  const keptKey = `intake-draft:${brandId}:${productId}:who`;
   const [loaded, setLoaded] = useState<ProductWho | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groups, setGroups] = useState<Draft[]>([]);
+  /** The groups as loaded (before any edit), to tell an unsaved edit from the loaded state. */
+  const loadedGroups = useRef<string>("");
   const nextKey = useRef(0);
 
   const draft = (content: Content, extra: { id: string | null; origin: Origin; note: string }): Draft => ({
@@ -87,15 +135,18 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
     fetchProductWho(brandId, productId)
       .then((who) => {
         if (cancelled) return;
-        setLoaded(who);
-        setGroups(
-          who.groups.slice(0, MAX_GROUPS).map((g) =>
-            draft(
-              { who: g.who, pain_keys: g.pain_keys.slice(0, MAX_PAINS), quote: g.quote, when_used: g.when_used },
-              { id: g.id, origin: g.source === "ai" ? "ai" : "saved", note: g.note },
-            ),
+        const fromServer = who.groups.slice(0, MAX_GROUPS).map((g) =>
+          draft(
+            { who: g.who, pain_keys: g.pain_keys.slice(0, MAX_PAINS), quote: g.quote, when_used: g.when_used },
+            { id: g.id, origin: g.source === "ai" ? "ai" : "saved", note: g.note },
           ),
         );
+        loadedGroups.current = keptText(fromServer);
+        // F47-I03 (drill-10 乙 #1, faults F7): unsaved groups (an AI-organised 自訂 group included) come
+        // back when the step mounts again -- back, step bar or reload -- until 下一步 saved them.
+        const kept = readKept(keptKey);
+        setLoaded(who);
+        setGroups(kept ? kept.map((g) => ({ ...g, key: nextKey.current++ })) : fromServer);
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -106,8 +157,16 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, productId]);
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  useEffect(() => {
+    if (!loaded) return;
+    const text = keptText(groups);
+    if (text === loadedGroups.current) clearKept(keptKey);
+    else writeKept(keptKey, text);
+  }, [loaded, groups, keptKey]);
+
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     await saveProductWho(brandId, productId, groups.map(toInput));
+    clearKept(keptKey);
     onNext();
   });
 
@@ -136,6 +195,7 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (loaded && !reason && !saving) void submit();

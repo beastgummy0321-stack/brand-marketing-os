@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { OnboardingIdentity } from "@/lib/intakeOnboardingApi";
 import { fetchOnboardingIdentity, saveOnboardingIdentity } from "@/lib/intakeOnboardingApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
@@ -19,6 +20,8 @@ const TONE_MAX = 2;
  * `PUT …/onboarding/identity` and moves on only after the server confirmed; an error keeps the user here. */
 export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
   const { brandId = "" } = useParams<{ brandId: string }>();
+  const { scope } = useWorkspace();
+  const draftKey = `intake-draft:${scope ?? ""}:${brandId}:identity`;
   const [loaded, setLoaded] = useState<OnboardingIdentity | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [positioning, setPositioning] = useState("");
@@ -35,11 +38,18 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
     fetchOnboardingIdentity(brandId)
       .then((identity) => {
         if (cancelled) return;
+        // F47-I03: unsaved edits of this step (left with 「← 上一步」, a step-bar jump or a reload) come
+        // back over the loaded values; the draft is dropped once 下一步 saved.
+        const draft = readDraft(draftKey);
+        const text = draft ?? baseline(identity);
         setLoaded(identity);
-        setPositioning(identity.positioning.value);
-        setTones(identity.tone.values.slice(0, TONE_MAX));
-        setToneOptions(withTones(identity.tone.options, identity.tone.values));
-        setVisual(identity.visual.value);
+        setPositioning(text.positioning);
+        setTones(text.tones);
+        setToneOptions(text.toneOptions);
+        setVisual(text.visual);
+        setCustomPositioning(text.customPositioning);
+        setCustomVisual(text.customVisual);
+        setCustomTones(text.customTones);
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -47,10 +57,19 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  useEffect(() => {
+    if (!loaded) return;
+    const current: IdentityDraft = { positioning, tones, toneOptions, visual, customPositioning, customVisual, customTones };
+    if (JSON.stringify(current) === JSON.stringify(baseline(loaded))) clearDraft(draftKey);
+    else writeDraft(draftKey, current);
+  }, [loaded, draftKey, positioning, tones, toneOptions, visual, customPositioning, customVisual, customTones]);
+
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     await saveOnboardingIdentity(brandId, { positioning: positioning.trim(), tone: tones, visual: visual.trim() });
+    clearDraft(draftKey);
     onNext();
   });
 
@@ -82,6 +101,7 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (loaded && !saving) void submit();
@@ -188,6 +208,62 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       </OnboardingBar>
     </form>
   );
+}
+
+/** This step's unsaved edits, kept per user scope and brand in `sessionStorage` (F47-I03, drill-10 甲 建檔 #5,
+ * faults F3): restored when the step mounts again (back, step bar, reload), cleared once 下一步 saved or when
+ * the fields hold the loaded values again. */
+interface IdentityDraft {
+  positioning: string;
+  tones: string[];
+  toneOptions: string[];
+  visual: string;
+  customPositioning: string | null;
+  customVisual: string | null;
+  customTones: string[];
+}
+
+function baseline(identity: OnboardingIdentity): IdentityDraft {
+  return {
+    positioning: identity.positioning.value,
+    tones: identity.tone.values.slice(0, TONE_MAX),
+    toneOptions: withTones(identity.tone.options, identity.tone.values),
+    visual: identity.visual.value,
+    customPositioning: null,
+    customVisual: null,
+    customTones: [],
+  };
+}
+
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
+const isTextOrNull = (v: unknown) => v === null || typeof v === "string";
+
+function readDraft(key: string): IdentityDraft | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(key) || "null") as Record<string, unknown> | null;
+    if (!v || typeof v !== "object") return null;
+    const ok = typeof v.positioning === "string" && typeof v.visual === "string" && isStrings(v.tones)
+      && isStrings(v.toneOptions) && isStrings(v.customTones) && isTextOrNull(v.customPositioning) && isTextOrNull(v.customVisual);
+    return ok ? (v as unknown as IdentityDraft) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(key: string, draft: IdentityDraft): void {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(draft));
+  } catch {
+    /* Storage unavailable: nothing is kept. */
+  }
+}
+
+function clearDraft(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* Storage unavailable. */
+  }
 }
 
 /** The step's option list plus any pre-filled tone the list does not carry (an AI tone outside the vocabulary). */

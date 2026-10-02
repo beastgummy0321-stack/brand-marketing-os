@@ -11,6 +11,7 @@ vi.mock("@/lib/intakeOnboardingApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeOnboardingApi")>("@/lib/intakeOnboardingApi");
   return { ...actual, fetchOnboardingIdentity: vi.fn(), saveOnboardingIdentity: vi.fn(), proposeCustom: vi.fn() };
 });
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "usr_1:org_1" }) }));
 vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
@@ -29,6 +30,7 @@ const TONES = ["親切", "專業", "直接", "幽默", "溫柔", "熱血"];
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -236,5 +238,27 @@ describe("IdentityStep", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("找不到這筆資料。");
     expect(screen.queryByRole("button", { name: "下一步 →" })).toBeNull();
     expect(screen.getByRole("button", { name: "← AI 讀網站" })).toBeTruthy();
+  });
+
+  it("F47-I03: unsaved edits come back when the step mounts again (back, step bar, reload) and go once saved", async () => {
+    mockFetch.mockResolvedValue(prefilled());
+    mockSave.mockResolvedValue(undefined);
+    renderStep();
+    await userEvent.clear(await screen.findByLabelText("一句話說你的品牌"));
+    await userEvent.type(positioningBox(), "我改過的一句話");
+    await userEvent.click(toneButton("熱血"));
+    cleanup();
+
+    const onNext = renderStep();
+    await waitFor(() => expect(positioningBox().value).toBe("我改過的一句話"));
+    expect(picked()).toEqual(["直接", "熱血"]);
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalled());
+    expect(mockSave).toHaveBeenCalledWith("brd_1", expect.objectContaining({ positioning: "我改過的一句話", tone: ["直接", "熱血"] }));
+    expect(sessionStorage.length).toBe(0);
+    cleanup();
+
+    renderStep();
+    await waitFor(() => expect(positioningBox().value).toBe("給忙到沒空好好吃飯的人：一顆軟糖，把今天的維他命補齊"));
   });
 });
