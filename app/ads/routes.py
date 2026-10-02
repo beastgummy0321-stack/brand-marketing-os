@@ -502,6 +502,8 @@ _GROUP_EDIT_ERRORS = {
     "name_unknown": (400, "名稱不能是空白。"),
     "role_unknown": (400, "角色只能是新客／再行銷／探索。"),
     "daily_budget_invalid": (400, "日預算必須大於 0。"),
+    "dates_reversed": (400, "結束日不能早於開始日。"),
+    "date_invalid": (400, "日期格式不對，請用日曆選一天。"),
     "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
     "group_bound": (400, "這個投放組已經綁定平台，不能直接刪除。"),
     "last_group": (409, "至少要留一個投放組；想換掉請先新增再刪。"),

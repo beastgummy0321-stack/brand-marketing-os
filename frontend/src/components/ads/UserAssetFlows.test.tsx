@@ -174,21 +174,26 @@ describe("placement and evidence UI", () => {
     vi.mocked(listPlacements).mockResolvedValue({ placements: [confirmed, placement("p2"), placement("p3")] });
     vi.mocked(revisePlacement).mockImplementation(async (_b, _c, id) => ({ placement: placement(id, 2) }));
     viewPlacements(); const user = userEvent.setup();
-    expect(await screen.findByText("會蓋掉那 2 件已填的字；已確認的 1 件不動。")).toBeTruthy();
+    expect(await screen.findByText("有填的欄位會蓋掉那 2 件的原文；已確認的 1 件不動。")).toBeTruthy();
+    // F47-I06 (Q6): three blank fields cannot be applied, and the button says why.
+    expect(screen.getByRole("button", { name: "套用到 2 件待處理" })).toHaveProperty("disabled", true);
+    expect(screen.getByText("三欄都是空的，沒有可以套用的內容。")).toBeTruthy();
     await user.type(screen.getByLabelText("套用標題"), "統一標題");
     await user.click(screen.getByRole("button", { name: "套用到 2 件待處理" }));
     expect(await screen.findByText("已套到 2 件待處理，各存了一版；逐件檢查並確認。")).toBeTruthy();
     expect(revisePlacement).toHaveBeenCalledTimes(2);
     expect(vi.mocked(revisePlacement).mock.calls.map(c => c[2])).toEqual(["p2", "p3"]);
-    // Only copy_fields + expected_revision: purpose／dates stay untouched; extra original keys survive; blank slots overwrite.
-    expect(vi.mocked(revisePlacement).mock.calls[0][3]).toEqual({ copy_fields: { headline: "統一標題", body: "", description: "", caption: "額外原文" }, expected_revision: 1 });
+    // Only apply_copy + expected_revision: purpose／dates stay untouched; the server keeps the current text of every
+    // blank field (F47-I06, Q6) and every extra original key.
+    expect(vi.mocked(revisePlacement).mock.calls[0][3]).toEqual({ apply_copy: { headline: "統一標題", body: "", description: "" }, expected_revision: 1 });
     expect(screen.queryByText(/伺服器已是第 2 版/)).toBeNull(); // the reloaded revision is adopted, not flagged as a conflict
   });
   it("stops apply-to-all at a 409 and names the conflicting file", async () => {
     vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p2"), placement("p3")] });
     vi.mocked(revisePlacement).mockRejectedValueOnce(new AssetApiError("素材版本已更新", 409));
     viewPlacements(); const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "套用到 2 件待處理" }));
+    await user.type(await screen.findByLabelText("套用標題"), "統一標題");
+    await user.click(screen.getByRole("button", { name: "套用到 2 件待處理" }));
     expect(await screen.findByText(/p2.png 已有新版本，套用停在這件（已套 0 件）/)).toBeTruthy();
     expect(revisePlacement).toHaveBeenCalledTimes(1); expect(screen.queryByText(/已套到/)).toBeNull();
   });

@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from app.ads import ad_status, channels
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
-from app.core import db, settings
+from app.core import db, input_rules, settings
 from app.core.audit import write_audit
 from app.core.db import now_utc
 
@@ -38,6 +38,19 @@ def money(value):
         return result.quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError):
         raise ValueError("請輸入有效且非負的金額。") from None
+
+
+_TOTAL_CEILING = Decimal("9999999999999999.99")
+
+
+def total(value):
+    """The monthly total as typed (F47 Contract A): ``> 0``, never coerced. Unset stays ``null``
+    (no row); 0 has no planning meaning (the home pace chart divides by it), a negative is refused."""
+    number = input_rules.positive(value, "每月品牌總額")
+    result = Decimal(str(number))
+    if result > _TOTAL_CEILING:
+        raise input_rules.InputRuleError("每月品牌總額太大了，請確認金額。")
+    return result.quantize(Decimal("0.01"))
 
 
 def lock(conn, org, brand):
@@ -432,7 +445,7 @@ def save(conn, org, brand, *, month, currency, amount, expected_revision, actor)
     start = month_start(month)
     if not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency):
         raise ValueError("請選擇三碼預算幣別。")
-    value = money(amount)
+    value = total(amount)
     lock(conn, org, brand)
     row = conn.execute(
         "SELECT * FROM ads_month_budget WHERE org_id=%s AND brand_id=%s AND month=%s FOR UPDATE",

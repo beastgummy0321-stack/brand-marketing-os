@@ -224,6 +224,51 @@ class GroupEditActionTraceTest(PlanTestBase):
         self.assertEqual(len(unbound_actions), 0)
 
 
+class GroupDateOrderTest(PlanTestBase):
+    """F47-I06 (Contract A, drill-10 V5): a group's end never lands before its start; when only
+    one side is patched the stored other side counts. Nothing is written on a refusal."""
+
+    def test_patching_only_the_end_checks_it_against_the_stored_start(self):
+        campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        group = self._adopt(campaign["id"])["groups"][0]
+        plan.update_group(web.conn, self.org_id, self.brand_id, group["id"],
+                          {"start_date": "2026-10-05"}, actor=ACTOR)
+
+        with self.assertRaises(ValueError) as ctx:
+            plan.update_group(web.conn, self.org_id, self.brand_id, group["id"],
+                              {"end_date": "2026-10-04"}, actor=ACTOR)
+        self.assertEqual(str(ctx.exception), "dates_reversed")
+        stored = ads_repo.get_group(web.conn, self.org_id, self.brand_id, group["id"])
+        self.assertIsNone(stored["end_date"])
+
+        plan.update_group(web.conn, self.org_id, self.brand_id, group["id"],
+                          {"end_date": "2026-10-05"}, actor=ACTOR)  # same day is fine
+
+    def test_create_refuses_a_reversed_pair_and_the_route_says_why(self):
+        campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        self._adopt(campaign["id"])
+        with self.assertRaises(ValueError) as ctx:
+            plan.create_group(web.conn, self.org_id, self.brand_id, campaign["id"], name="新組",
+                              role="new", daily_budget=100, start_date="2026-10-10",
+                              end_date="2026-10-01")
+        self.assertEqual(str(ctx.exception), "dates_reversed")
+        web.conn.commit()
+
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        response = TestClient(main.app).post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/groups",
+            json={"name": "新組", "role": "new", "daily_budget": 100,
+                  "start_date": "2026-10-10", "end_date": "2026-10-01"},
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["error"]["message"], "結束日不能早於開始日。")
+
+
 class BudgetCeilingTest(PlanTestBase):
     def test_a_raise_above_the_approved_ceiling_is_refused(self):
         campaign = self._create_adopted_campaign()  # daily_total 2144 > 核准上限 100
