@@ -226,6 +226,12 @@ def fake_fetch_page(url: str, *, params: dict | None, headers: dict) -> dict:
     """Drop-in for `app.meta.graph.fetch_page`. Pages list answers like Graph does: `limit` rows
     per page (the client refuses a page over 100 — drill 5 hit that with 560 ad-level insight
     rows), `paging.next` + `cursors.after` while rows remain; `after` is an opaque offset."""
+    # drill 10 fault switch: `.scratch/drill/meta_fail` holds a URL substring ("insights", "*");
+    # matching calls answer like Graph does on an outage. Delete the file to recover.
+    fail = STATE_PATH.with_name("meta_fail")
+    needle = fail.read_text(encoding="utf-8").strip() if fail.exists() else ""
+    if needle and (needle == "*" or needle in url):
+        return {"error": {"message": "演練替身：平台暫時讀不到（刻意製造的失敗）", "type": "DrillOutage", "code": 2}}
     body = _answer(url, params=params, headers=headers)
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, list):

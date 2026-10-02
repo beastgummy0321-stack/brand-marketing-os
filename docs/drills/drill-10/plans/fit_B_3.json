@@ -1,0 +1,46 @@
+{
+  "ads": {
+    "備考讀書｜桌邊隨手補給": {
+      "fit": 1.05,
+      "tags": ["student"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "直接咀嚼，不必配水 explains mechanism; situation matches exam-week studying but repeats P2 study creative under new name."
+    },
+    "訓練前｜不用配水也能準備": {
+      "fit": 1.05,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "放進訓練包，直接咀嚼 names training moment and benefit but same pre-training/no-water creative as P2."
+    },
+    "通勤開會｜不用沖泡的提神軟糖": {
+      "fit": 1.15,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "通勤車廂快到了 hooks concrete moment; 優惠價 NT$999 shows 3-box offer matching warm funnel; message repeats P2 commute creative."
+    },
+    "備考族｜讀到關鍵時刻的隨手補給": {
+      "fit": 1.15,
+      "tags": ["student", "night"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "深夜整理筆記，下一章還沒開始 names timely exam-week moment; 優惠價 NT$999 shows offer; same study creative as P2 under new name."
+    },
+    "運動族｜訓練前快速進入狀態": {
+      "fit": 1.05,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "換好鞋，不必找水再補充 names training moment; 直接咀嚼，不必配水 explains mechanism; same training scenario as P2."
+    },
+    "通勤族｜忙到沒空喝飲料也能補給": {
+      "fit": 1.20,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "會議前才發現資料還沒整理完，現在沒空…沖一杯咖啡 names work moment; 直接咀嚼，不必配水 explains mechanism."
+    }
+  }
+}

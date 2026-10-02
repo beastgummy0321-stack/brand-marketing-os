@@ -1,0 +1,133 @@
+{
+ "side": "B",
+ "period": 2,
+ "campaign_id": "adc_01M3VQ82SSHYBT6JSAFRZ0DVC0",
+ "name": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組・10/10～10/16",
+ "start_date": "2026-10-10",
+ "end_date": "2026-10-16",
+ "objective": "購買",
+ "success_metric": null,
+ "success_target": null,
+ "result_kind": null,
+ "status": "ready",
+ "budget_planned": 10500.0,
+ "daily_budget_total": 1500.0,
+ "goal_text": "推「Beast Gummy 咖啡因機能軟糖 · 超能特惠組」，想要的結果：購買，期間 2026-10-10 ~ 2026-10-16，這個活動最多花 10500。",
+ "groups": [
+  {
+   "name": "探索三群補給情境",
+   "role": "explore",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 525.0,
+   "ads": [
+    {
+     "name": "通勤族一顆即食組合優惠",
+     "format_key": "carousel",
+     "hook_key": "outcome_led",
+     "pain_key": "effort",
+     "angle_key": "price_reversal",
+     "proof_key": "none",
+     "offer_key": "bundle",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "連續會議前，不必找水",
+     "body": "連續會議一場接一場，桌上沒時間沖咖啡，也不想一直找水。Beast Gummy 不必配水，咀嚼即可補充，每顆含 150mg 咖啡因與 100mg 牛磺酸，方便放在辦公桌或包包裡。Beast Gummy 咖啡因機能軟糖 · 超能特惠組優惠價 NT$999（原價 NT$1,500）。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "備考時刻不打斷讀書",
+     "format_key": "single_image",
+     "hook_key": "pain_question",
+     "pain_key": "effort",
+     "angle_key": "user_case_story",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "還在為離座找水打斷讀書？",
+     "body": "自習室裡講義攤滿桌，讀到一半卻得離座找水、泡飲料，思緒也跟著被切開。Beast Gummy 咖啡因機能軟糖，不必配水，拿出來直接咀嚼；單顆含 150mg 咖啡因與 100mg 牛磺酸，方便攜帶、定量補充。還在為補充咖啡因得中斷讀書？把補給留在手邊，回到題目裡。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "運動前快速入口補給",
+     "format_key": "carousel",
+     "hook_key": "contrast_flip",
+     "pain_key": "effort",
+     "angle_key": "hardcore_review",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "水壺沒帶，也能補充咖啡因",
+     "body": "你以為球場旁補充咖啡因，一定要帶水壺、找水、等沖泡？熱身準備開練時，Beast Gummy 咖啡因機能軟糖直接用咀嚼方式補充，每顆含 150mg 咖啡因與 100mg 牛磺酸，不必配水，放進訓練包就能帶著走。一天不建議超過兩顆，把固定劑量帶到場邊，少一個準備步驟。",
+     "asset_ready_source": null
+    }
+   ]
+  },
+  {
+   "name": "新客三群免沖泡補給",
+   "role": "new",
+   "channel": "meta",
+   "audience_key": "cold_problem_aware",
+   "audience_desc": null,
+   "placement": null,
+   "daily_budget": 975.0,
+   "ads": [
+    {
+     "name": "通勤開會免配水補給組合",
+     "format_key": "single_image",
+     "hook_key": "never_again",
+     "pain_key": "effort",
+     "angle_key": "product_explainer",
+     "proof_key": "none",
+     "offer_key": "bundle",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "再也不用在電車上找水",
+     "body": "電車快到站，手上沒空間拿飲料，還要找水才能補充？Beast Gummy 用咀嚼方式補充咖啡因，不必配水，適合進公司前的通勤空檔。每顆含150mg咖啡因與100mg牛磺酸，一日不建議超過兩顆，進站前即可按顆補充，方便放進通勤包。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "備考讀書隨手補給",
+     "format_key": "carousel",
+     "hook_key": "proof_led",
+     "pain_key": "effort",
+     "angle_key": "how_to_tutorial",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_unaware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "圖書館複習，不必離座沖泡",
+     "body": "圖書館讀到一半，不想離開座位沖泡？Beast Gummy 咖啡因機能軟糖，單顆含 150mg 咖啡因與 100mg 牛磺酸，直接咀嚼補充，不必配水。放進筆袋，複習中途少一個準備步驟。一天不建議超過兩顆，照自己的讀書節奏安排補給。",
+     "asset_ready_source": null
+    },
+    {
+     "name": "訓練前即食補給",
+     "format_key": "single_image",
+     "hook_key": "never_again",
+     "pain_key": "effort",
+     "angle_key": "pairing_recommendation",
+     "proof_key": "none",
+     "offer_key": "none",
+     "audience_key": "cold_problem_aware",
+     "product": "Beast Gummy 咖啡因機能軟糖 · 超能特惠組",
+     "price": 999.0,
+     "headline": "再也不用為提神補給找水",
+     "body": "進入重量訓練區前，裝備都整理好了，別再為了沖泡咖啡或配水多停一輪。Beast Gummy 咖啡因機能軟糖，單顆含 150mg 咖啡因與 100mg 牛磺酸，拿出來直接咀嚼，不必配水。固定劑量、方便攜帶，讓訓練前的補給跟著裝備一起到位。一天不建議超過兩顆。",
+     "asset_ready_source": null
+    }
+   ]
+  }
+ ],
+ "kpi": {},
+ "hypothesis": null,
+ "notes": "exported from MarketingOS by scripts/drill/export_plan.py"
+}

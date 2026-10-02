@@ -1,0 +1,32 @@
+{
+  "ads": {
+    "高強度生活清醒補給": {
+      "fit": 1.30,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "「會議空檔，不必配水」names concrete situation and explains the no-water mechanism"
+    },
+    "訓練前免沖泡補給": {
+      "fit": 1.30,
+      "tags": ["fitness"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "「訓練前免沖泡」names concrete situation; explains no-water benefit vs traditional powder"
+    },
+    "備考讀書方便補充": {
+      "fit": 1.30,
+      "tags": ["student", "night"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "「備考進度、圖書館座位」names concrete situation; directly addresses effort barrier"
+    },
+    "通勤開會免配水補給": {
+      "fit": 1.30,
+      "tags": ["worker"],
+      "compliance": "ok",
+      "proof_present": false,
+      "reason": "「進會議室前」names concrete situation; offer explicitly tied with price to pain point"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 # Handoff after drill 9 (2026-10-01)
 
-Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-f43.md`'s "next" pointer.
+Superseded as the entry point by `handoff-after-drill-10.md` (drill 10 ran 2026-10-01). Kept for the open drill-9 candidates below.
+A board, not an implementation authorization. Replaces `handoff-after-f43.md`'s "next" pointer.
 
 ## State
 - F44 (ads carry the sell-way) closed 2026-10-01 (user 「通過」), merged to master, not pushed. Next: drill 10 — rerun B against A
