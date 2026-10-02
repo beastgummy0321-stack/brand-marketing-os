@@ -2,52 +2,44 @@ import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "re
 import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { formatCount } from "@/lib/format";
-import type { Bundle, BundleInput, BundlePreview, ProductCardData } from "@/lib/intakeProductApi";
+import type { Bundle, BundleInput, BundlePreview, ProductCardData, SellWayNumbers } from "@/lib/intakeProductApi";
 import { createBundle, fetchBundle, fetchProductsPage, previewBundle, saveBundle } from "@/lib/intakeProductApi";
-import { useAuthedImage } from "@/lib/useAuthedImage";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar } from "../OnboardingStepHead";
-import { Chip, EvidenceCard, INPUT, Item, RemoveButton } from "../steps/PolicyCard";
-import { draftFromMoney, emptyDraft, moneyErrors, moneyInput, SellWayTable, type MoneyDraft } from "./SellWayTable";
+import { EvidenceCard, INPUT } from "../steps/PolicyCard";
+import { qtyOf, SellWayContents, type BaseOption } from "./SellWayContents";
+import { draftFromMoney, emptyDraft, moneyErrors, PriceBlock, stepMoneyInput, type MoneyDraft } from "./SellWayTable";
 
-/** 新增組合 / edit a bundle, prototype `#/bundle` of `.harness/scratch/prototype/f41-onboarding/index.html`: 組合名稱, 裡面有什麼
- * (finished products × qty, 「＋加一個商品」), 價格 (the shared `SellWayTable` in single-row mode + the server's offers and
- * notes), 落地頁 (required here, optional server-side), and 「廣告會用到的」 (customer groups and proof reused from the
- * component products, as `GET …/bundles/{id}` lists them).
+/** 新增組合 / 編輯組合 (F45), prototype `.harness/scratch/prototype/f45-sell-way-components/variant-bundle.html`: 組合名稱,
+ * 裡面有什麼 (base sell-ways of any finished product × qty, each row with that base's own 售價・成本; the picker groups
+ * every finished product's bases by product, 「＋再放一種賣法」), 價格 (step 4's `PriceBlock`: an empty 售價 / 原價 / 成本
+ * is derived from the bases and labelled 推算, 「這個賣法免運」, 打平 and the offer sentences), 落地頁 (required here,
+ * optional server-side), and 「廣告會用到的」 (customer groups and proof reused from the bases' products).
  *
- * Nothing is computed on the page: 原價 / 成本 (the components' sums), 打平線, the default 每筆上限, the offers, 成交率's
- * column and each component's 單件 price / cost are the server's view. An existing bundle saves (PUT, raw inputs only)
- * whenever focus leaves a field or a product is added / removed and the form is valid, and shows the recomputed numbers.
- * A new bundle asks `POST …/bundles/preview` (nothing written) at the same moments once the server would accept the
- * form (the landing page is not needed for the numbers) and shows its view the same way; 「建立組合」 posts it. */
+ * Nothing is computed on the page: every number (each base's 售價・成本, the derived ones with their 「推算：…」 notes,
+ * 打平, the default 每筆上限, the offer sentences) is the server's view. An existing bundle saves (PUT, raw inputs only)
+ * whenever focus leaves a field or the contents change and the form is valid, and shows the recomputed numbers; a new
+ * bundle asks `POST …/bundles/preview` (nothing written) at the same moments; 「建立組合」 posts it. The server's
+ * refusals (fewer than two products, a taken name …) are shown as it words them. */
 
 interface Comp {
-  product_id: string;
-  name: string;
-  thumbnail_url: string | null;
+  sell_way_id: string;
   /** As typed. */
   qty: string;
 }
 
 const productsPath = (brandId: string) => `/brands/${encodeURIComponent(brandId)}/products`;
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
-const qtyOf = (raw: string): number | null => (/^\d+$/.test(raw.trim()) && Number(raw) > 0 ? Number(raw) : null);
-const amount = (value: number) => formatCount(Math.round(value));
 
-/** Why the form cannot be saved (the server refuses the same, plus the landing page the UI requires). */
+/** Why the form cannot be sent (the server checks the rest — the product count — and says why). */
 function formErrors(name: string, comps: Comp[], draft: MoneyDraft, showCloseRate: boolean) {
   return {
     name: name.trim() ? null : "請填組合名稱",
-    comps: comps.length < 2 ? "至少放兩個不同的商品" : null,
+    comps: comps.length === 0,
     qty: comps.some((c) => qtyOf(c.qty) === null),
-    money: Object.keys(moneyErrors(draft, showCloseRate)).length > 0,
+    money: Object.keys(moneyErrors(draft, showCloseRate, "composed")).length > 0,
     landing: draft.landing_url.trim() ? null : "落地頁要填",
   };
-}
-
-function isValid(errors: ReturnType<typeof formErrors>): boolean {
-  return canPreview(errors) && !errors.landing;
 }
 
 /** What the server needs to compute the numbers (everything but the landing page the UI requires). */
@@ -55,12 +47,26 @@ function canPreview(errors: ReturnType<typeof formErrors>): boolean {
   return !errors.name && !errors.comps && !errors.qty && !errors.money;
 }
 
-function toInput(name: string, comps: Comp[], draft: MoneyDraft, showCloseRate: boolean): BundleInput {
+function isValid(errors: ReturnType<typeof formErrors>): boolean {
+  return canPreview(errors) && !errors.landing;
+}
+
+function toInput(name: string, comps: Comp[], draft: MoneyDraft, free: boolean, showCloseRate: boolean): BundleInput {
   return {
     name: name.trim(),
-    components: comps.map((c) => ({ product_id: c.product_id, qty: qtyOf(c.qty) ?? 1 })),
-    ...moneyInput(draft, showCloseRate),
+    components: comps.map((c) => ({ sell_way_id: c.sell_way_id, qty: qtyOf(c.qty) ?? 1 })),
+    ...stepMoneyInput(draft, showCloseRate),
+    free_shipping: free,
   };
+}
+
+/** A base the page knows: from the products page (picker) and, once the server has seen it, its own numbers. */
+interface KnownBase {
+  name: string;
+  product: { id: string; name: string; thumbnail_url: string | null };
+  price: number | null;
+  /** undefined = only the products page knows it (no cost there). */
+  cost: number | null | undefined;
 }
 
 export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: string | null }) {
@@ -72,17 +78,21 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   const [loaded, setLoaded] = useState(!editing);
   const [products, setProducts] = useState<ProductCardData[] | null>(null);
   const [productsError, setProductsError] = useState<string | null>(null);
+  /** Every base seen so far, by sell-way id; a component's numbers survive a refused preview. */
+  const [known, setKnown] = useState<Map<string, KnownBase>>(new Map());
   const [name, setName] = useState("");
   const [comps, setComps] = useState<Comp[]>([]);
   const [draft, setDraft] = useState<MoneyDraft>(emptyDraft);
+  const [free, setFree] = useState(false);
   const [picking, setPicking] = useState(!editing);
+  const [focus, setFocus] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   /** Why the last preview failed (kept apart from `saveError`: a late preview must not hide a failed create). */
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const state = useRef({ name, comps, draft });
-  state.current = { name, comps, draft };
+  const state = useRef({ name, comps, draft, free });
+  state.current = { name, comps, draft, free };
   /** The last body the server confirmed: an unchanged form is not sent again. */
   const savedSig = useRef<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -90,10 +100,41 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
 
   const show = server?.show_close_rate ?? false;
 
+  /** The server's view becomes the page's: its components' own numbers join the known bases. */
+  function adopt(view: Bundle | BundlePreview) {
+    setServer(view);
+    setKnown((prev) => {
+      const next = new Map(prev);
+      for (const c of view.components) {
+        next.set(c.sell_way_id, {
+          name: c.name,
+          product: { id: c.product_id, name: c.product_name, thumbnail_url: c.thumbnail_url },
+          price: c.unit_price,
+          cost: c.unit_cost,
+        });
+      }
+      return next;
+    });
+  }
+
   function loadProducts() {
     setProductsError(null);
     fetchProductsPage(brandId)
-      .then((page) => alive.current && setProducts(page.products.filter((p) => p.state === "ready")))
+      .then((page) => {
+        if (!alive.current) return;
+        const ready = page.products.filter((p) => p.state === "ready");
+        setProducts(ready);
+        setKnown((prev) => {
+          const next = new Map(prev);
+          for (const p of ready) {
+            for (const w of p.sell_ways) {
+              if (w.shape !== "base" || next.has(w.id)) continue;
+              next.set(w.id, { name: w.name, product: { id: p.id, name: p.name, thumbnail_url: p.thumbnail_url }, price: w.price, cost: undefined });
+            }
+          }
+          return next;
+        });
+      })
       .catch((err: unknown) => alive.current && setProductsError(errorText(err, "讀取商品失敗。")));
   }
 
@@ -104,14 +145,15 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
       fetchBundle(brandId, bundleId)
         .then((bundle) => {
           if (!alive.current) return;
-          const comps = bundle.components.map((c) => ({ product_id: c.product_id, name: c.name, thumbnail_url: c.thumbnail_url, qty: String(c.qty) }));
+          const comps = bundle.components.map((c) => ({ sell_way_id: c.sell_way_id, qty: String(c.qty) }));
           // The UI asks for a landing page: a bundle still on its default one shows that page as its value.
           const money = { ...draftFromMoney(bundle), landing_url: bundle.landing_url };
-          setServer(bundle);
+          adopt(bundle);
           setName(bundle.name);
           setComps(comps);
           setDraft(money);
-          savedSig.current = JSON.stringify(toInput(bundle.name, comps, money, bundle.show_close_rate));
+          setFree(bundle.free_shipping);
+          savedSig.current = JSON.stringify(toInput(bundle.name, comps, money, bundle.free_shipping, bundle.show_close_rate));
           setLoaded(true);
         })
         .catch((err: unknown) => alive.current && setLoadError(errorText(err, "讀取組合失敗，請稍後再試。")));
@@ -122,20 +164,26 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, bundleId]);
 
+  useEffect(() => {
+    if (!focus) return;
+    document.getElementById(focus)?.focus();
+    setFocus(null);
+  }, [focus]);
+
   /** Edit only: saves the form when it is valid and changed; resolves true once the server holds it. */
   function persist(): Promise<boolean> {
     const run = queue.current.then(async () => {
       if (bundleId === null) return false;
-      const { name: n, comps: c, draft: d } = state.current;
+      const { name: n, comps: c, draft: d, free: f } = state.current;
       if (!isValid(formErrors(n, c, d, show))) return false;
-      const body = toInput(n, c, d, show);
+      const body = toInput(n, c, d, f, show);
       const signature = JSON.stringify(body);
       if (signature === savedSig.current) return true;
       try {
         const res = await saveBundle(brandId, bundleId, body);
         savedSig.current = signature;
         if (alive.current) {
-          setServer(res);
+          adopt(res);
           setSaveError(null);
         }
         return true;
@@ -149,20 +197,20 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   }
 
   /** New only: asks the server for the numbers of the form as it is (nothing written); a no-op while unchanged or not
-   * computable. A refusal (e.g. a taken name) clears the numbers and says why. */
+   * computable. A refusal (e.g. one product only, a taken name) clears the numbers and says why. */
   function preview(): Promise<void> {
     const run = queue.current.then(async () => {
       if (bundleId !== null) return;
-      const { name: n, comps: c, draft: d } = state.current;
+      const { name: n, comps: c, draft: d, free: f } = state.current;
       if (!canPreview(formErrors(n, c, d, show))) return;
-      const body = toInput(n, c, d, show);
+      const body = toInput(n, c, d, f, show);
       const signature = JSON.stringify(body);
       if (signature === savedSig.current) return;
       try {
         const res = await previewBundle(brandId, body);
         savedSig.current = signature;
         if (alive.current) {
-          setServer(res);
+          adopt(res);
           setPreviewError(null);
         }
       } catch (err) {
@@ -184,19 +232,20 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
 
   /** Focus left a field: save an existing bundle / preview a new one (a no-op while unchanged or invalid). */
   function onFieldBlur(e: FocusEvent) {
-    if ((e.target as HTMLElement).tagName !== "INPUT") return;
+    const target = e.target as HTMLInputElement;
+    if (target.tagName !== "INPUT" || target.type === "checkbox") return;
     if (editing) setTouched(true);
     refresh();
   }
 
   async function submit() {
     setTouched(true);
-    const { name: n, comps: c, draft: d } = state.current;
+    const { name: n, comps: c, draft: d, free: f } = state.current;
     if (!isValid(formErrors(n, c, d, show))) return;
     setBusy(true);
     try {
       if (bundleId === null) {
-        await createBundle(brandId, toInput(n, c, d, show));
+        await createBundle(brandId, toInput(n, c, d, f, show));
       } else if (!(await persist())) {
         return;
       }
@@ -206,17 +255,6 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     } finally {
       if (alive.current) setBusy(false);
     }
-  }
-
-  function addComp(product: ProductCardData) {
-    setComps((prev) => [...prev, { product_id: product.id, name: product.name, thumbnail_url: product.thumbnail_url, qty: "1" }]);
-    setPicking(false);
-    refresh();
-  }
-
-  function removeComp(productId: string) {
-    setComps((prev) => prev.filter((c) => c.product_id !== productId));
-    refresh();
   }
 
   const title = editing ? "編輯組合" : "新增組合";
@@ -259,9 +297,26 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   }
 
   const errors = formErrors(name, comps, draft, show);
-  const unit = new Map((server?.components ?? []).map((c) => [c.product_id, c]));
-  const remaining = (products ?? []).filter((p) => !comps.some((c) => c.product_id === p.id));
-  const label = name.trim() || "這個組合";
+  /** The picker: every finished product's bases, then the bases already in (they may belong to a product not listed). */
+  const options: BaseOption[] = [
+    ...(products ?? []).flatMap((p) => p.sell_ways.filter((w) => w.shape === "base").map((w) => w.id)),
+    ...comps.map((c) => c.sell_way_id),
+  ]
+    .filter((id, i, all) => all.indexOf(id) === i && known.has(id))
+    .map((id) => ({ key: id, ...known.get(id)! }));
+  const partLabel = (id: string, fallback: string) => {
+    const base = known.get(id);
+    return base ? `${base.product.name}・${base.name}` : fallback;
+  };
+  /** The server's numbers, with a missing cost named by product too (「能量軟糖・單盒」, as the 推算 notes name parts). */
+  const numbers: SellWayNumbers | null = server && {
+    ...server,
+    cost_missing: server.cost_missing.map((m) => ({ ...m, name: partLabel(m.sell_way_id, m.name) })),
+  };
+  let pending: string | null = null;
+  if (comps.length === 0) pending = "先放進賣法";
+  else if (errors.qty) pending = "先填數量";
+  else if (!server) pending = errors.name ? "先填組合名稱" : previewError ? "先改好下面的紅字" : "填好名稱和內容就算";
 
   return (
     <Page>
@@ -273,68 +328,50 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
         </Row>
 
         <Row label="裡面有什麼">
-          <ul aria-label="組合裡的商品" className="flex flex-col">
-            {comps.map((c) => {
-              const u = unit.get(c.product_id);
-              const bad = touched && qtyOf(c.qty) === null;
-              return (
-                <li key={c.product_id} className="mt-2 first:mt-0">
-                  <Item className="mt-0">
-                    <Thumb url={c.thumbnail_url} size={32} />
-                    <div className="min-w-0 flex-1">
-                      <b className="block font-semibold [overflow-wrap:anywhere]">{c.name}</b>
-                      {u && <div className="text-xs text-muted-foreground">{unitLine(u.unit_price, u.unit_cost)}</div>}
-                    </div>
-                    <span className={cn("inline-flex w-[100px] items-center rounded-lg border bg-card px-3 focus-within:border-primary focus-within:ring-[3px] focus-within:ring-accent", bad ? "border-danger" : "border-input")}>
-                      <span aria-hidden="true" className="text-muted-foreground">×</span>
-                      <input
-                        aria-label={`${c.name}的數量`}
-                        aria-invalid={bad ? true : undefined}
-                        inputMode="numeric"
-                        className="w-full bg-transparent px-2 py-[9px] text-base font-semibold tabular-nums outline-none"
-                        value={c.qty}
-                        onChange={(e) => setComps((prev) => prev.map((p) => (p.product_id === c.product_id ? { ...p, qty: e.target.value } : p)))}
-                      />
-                    </span>
-                    <RemoveButton label={c.name} onClick={() => removeComp(c.product_id)} />
-                  </Item>
-                  {bad && <FieldError>數量要是正整數</FieldError>}
-                </li>
-              );
-            })}
-          </ul>
-          {touched && errors.comps && <FieldError>{errors.comps}</FieldError>}
-          {picking ? (
-            <Picker
-              brandId={brandId}
-              products={products}
-              remaining={remaining}
-              error={productsError}
-              onRetry={loadProducts}
-              onPick={addComp}
-              onClose={comps.length > 0 ? () => setPicking(false) : undefined}
-            />
-          ) : (
-            <Button type="button" variant="link" className="mt-2 h-auto p-0 text-[13px]" onClick={() => setPicking(true)}>
-              ＋加一個商品
-            </Button>
-          )}
+          <SellWayContents
+            idPrefix="bundle"
+            cross
+            items={comps.map((c) => ({ base: c.sell_way_id, qty: c.qty }))}
+            bases={options}
+            picking={picking}
+            showErrors={touched}
+            empty={<PickerEmpty brandId={brandId} products={products} error={productsError} onRetry={loadProducts} />}
+            onQty={(i, qty) => setComps((prev) => prev.map((c, j) => (j === i ? { ...c, qty } : c)))}
+            onRemove={(i) => {
+              setComps((prev) => prev.filter((_, j) => j !== i));
+              if (comps.length === 1) setPicking(true);
+              refresh();
+            }}
+            onAdd={(id) => {
+              setComps((prev) => [...prev, { sell_way_id: id, qty: "" }]);
+              setPicking(false);
+              setFocus(`bundle-q${comps.length}`);
+            }}
+            onPicking={setPicking}
+          />
         </Row>
 
         <Row label="價格">
-          <SellWayTable
-            rows={[{ key: "bundle", draft, money: server, name: label, showErrors: touched }]}
+          <PriceBlock
+            idPrefix="bundle"
+            shape="composed"
+            draft={draft}
+            numbers={numbers}
+            free={free}
             showCloseRate={show}
-            nameColumns={false}
-            footer={false}
-            onDraft={(_key, patch) => setDraft((prev) => ({ ...prev, ...patch }))}
+            showErrors={touched}
+            pending={pending}
+            onDraft={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
+            onFree={(on) => {
+              setFree(on);
+              if (editing) setTouched(true);
+              refresh();
+            }}
+            fillCostWhere={(part) => {
+              const product = known.get(part.sell_way_id)?.product.name;
+              return product ? `到「${product}」的賣法填` : "到那個商品的賣法填";
+            }}
           />
-          {server && (server.offer_labels.length > 0 || server.offer_notes.length > 0) && (
-            <div data-slot="offers" className="mt-2 flex flex-wrap items-center gap-1.5">
-              {server.offer_labels.map((o) => <Chip key={o} tone="ok">{o}</Chip>)}
-              {server.offer_notes.map((n) => <span key={n} className="text-xs text-muted-foreground">{n}</span>)}
-            </div>
-          )}
         </Row>
 
         <Row label={<label htmlFor="bundle-landing">落地頁</label>}>
@@ -350,7 +387,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
           {touched && errors.landing && <FieldError>{errors.landing}</FieldError>}
         </Row>
         {previewError && <p role="alert" className="mt-2 text-sm text-danger">{previewError}</p>}
-        {saveError && <p role="alert" className="mt-2 text-sm text-danger">{saveError}</p>}
+        {saveError && saveError !== previewError && <p role="alert" className="mt-2 text-sm text-danger">{saveError}</p>}
       </section>
 
       {server && <ReusedCard bundle={server} />}
@@ -363,11 +400,11 @@ function Page({ children }: { children: ReactNode }) {
   return <div className="flex max-w-[1180px] flex-col gap-4">{children}</div>;
 }
 
-/** Prototype `.q`: label column and the field. */
+/** Prototype `.bundle .q`: label column and the field. */
 function Row({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[170px_minmax(0,1fr)] items-start gap-x-5 gap-y-2.5 border-t border-border py-3.5 first:border-t-0 first:pt-0 last:pb-0 max-[760px]:grid-cols-1">
-      <b className="block text-sm font-semibold">{label}</b>
+    <div className="grid grid-cols-[170px_minmax(0,1fr)] items-start gap-x-5 gap-y-2 border-t border-border py-3.5 first:border-t-0 first:pt-0 last:pb-0 max-[760px]:grid-cols-1">
+      <b className="block pt-2 text-sm font-semibold max-[760px]:pt-0">{label}</b>
       <div className="min-w-0">{children}</div>
     </div>
   );
@@ -377,80 +414,33 @@ function FieldError({ children }: { children: ReactNode }) {
   return <p role="alert" className="mt-1 text-[11.5px] text-danger">{children}</p>;
 }
 
-/** 「單件 399・成本 90」 from the component product's one-unit sell-way (as the server reads it). */
-function unitLine(price: number | null, cost: number | null): string {
-  return `單件 ${price === null ? "未定價" : amount(price)}・成本 ${cost === null ? "未知" : amount(cost)}`;
-}
-
-/** Prototype `.th`: a product photo, or an empty tile. */
-function Thumb({ url, size }: { url: string | null; size: number }) {
-  const { src } = useAuthedImage(url ?? undefined);
-  const box = { width: size, height: size };
-  return src
-    ? <img src={src} alt="" style={box} className="shrink-0 rounded-lg object-cover" />
-    : <span aria-hidden="true" style={box} className="inline-block shrink-0 rounded-lg bg-muted" />;
-}
-
-/** 「＋加一個商品」: the brand's finished products not in the bundle yet. */
-function Picker({ brandId, products, remaining, error, onRetry, onPick, onClose }: {
+/** The picker with nothing to offer: the products are loading / failed, none is finished, or every base is in. */
+function PickerEmpty({ brandId, products, error, onRetry }: {
   brandId: string;
   products: ProductCardData[] | null;
-  remaining: ProductCardData[];
   error: string | null;
   onRetry: () => void;
-  onPick: (product: ProductCardData) => void;
-  onClose?: () => void;
 }) {
-  let body: ReactNode;
   if (error) {
-    body = (
+    return (
       <div className="flex flex-wrap items-center gap-2">
         <p role="alert" className="text-sm text-danger">{error}</p>
         <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={onRetry}>重新載入</Button>
       </div>
     );
-  } else if (products === null) {
-    body = <Skeleton className="h-10 rounded-lg" />;
-  } else if (remaining.length === 0) {
-    body = (
-      <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-        <span>{products.length === 0 ? "還沒有建好的商品" : "建好的商品都放進來了"}</span>
-        <Button asChild variant="link" className="h-auto p-0 text-[13px]">
-          <Link to={`/brands/${encodeURIComponent(brandId)}/products/new`}>＋新增商品</Link>
-        </Button>
-      </div>
-    );
-  } else {
-    body = (
-      <ul className="flex flex-wrap gap-2">
-        {remaining.map((p) => (
-          <li key={p.id}>
-            <button
-              type="button"
-              aria-label={`放進「${p.name}」`}
-              className="flex max-w-[320px] items-center gap-2 rounded-[10px] border border-dashed border-input bg-card px-3 py-2 text-left text-[13px] hover:border-primary"
-              onClick={() => onPick(p)}
-            >
-              <Thumb url={p.thumbnail_url} size={24} />
-              <span className="[overflow-wrap:anywhere]">{p.name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    );
   }
+  if (products === null) return <Skeleton className="h-10 rounded-lg" />;
   return (
-    <div data-slot="product-picker" className="mt-2 rounded-[10px] bg-muted/50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-muted-foreground">選一個建好的商品</span>
-        {onClose && <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={onClose}>收起</Button>}
-      </div>
-      {body}
+    <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
+      <span>{products.length === 0 ? "還沒有建好的商品" : "建好的商品的基本賣法都放進來了"}</span>
+      <Button asChild variant="link" className="h-auto p-0 text-[13px]">
+        <Link to={`/brands/${encodeURIComponent(brandId)}/products/new`}>＋新增商品</Link>
+      </Button>
     </div>
   );
 }
 
-/** 「廣告會用到的」: the components' customer groups and proof, reused (not copied). */
+/** 「廣告會用到的」: the bases' products' customer groups and proof, reused (not copied). */
 function ReusedCard({ bundle }: { bundle: Bundle | BundlePreview }) {
   const { groups, proof } = bundle.reused;
   const productCount = new Set(bundle.components.map((c) => c.product_id)).size;

@@ -34,8 +34,8 @@ const fixture: PageData = {
       step: null,
       summary: "2 群顧客・證據 2・說法 3",
       sell_ways: [
-        { id: "sw_one", name: "單盒", price: 399, break_even: 249, offer_labels: [] },
-        { id: "sw_three", name: "三盒組", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198", "滿 NT$999 免運"] },
+        { id: "sw_one", name: "單盒", shape: "base", price: 399, break_even: 249, offer_labels: [] },
+        { id: "sw_three", name: "三盒組", shape: "composed", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198", "滿 NT$999 免運"] },
       ],
     },
     {
@@ -45,7 +45,7 @@ const fixture: PageData = {
       state: "draft",
       step: 2,
       summary: "建到一半：還沒確認顧客",
-      sell_ways: [{ id: "sw_pro", name: "單盒", price: 459, break_even: null, offer_labels: [] }],
+      sell_ways: [{ id: "sw_pro", name: "單盒", shape: "base", price: 459, break_even: null, offer_labels: [] }],
     },
   ],
   bundles: [
@@ -57,9 +57,10 @@ const fixture: PageData = {
       offer_labels: ["組合價 省 59"],
       thumbnails: [`/api/library/brands/${B}/assets/file/ast_1`],
       state: "draft",
+      // F45: base sell-way × qty, named by the base (「單盒」) with its product.
       components: [
-        { product_id: "prd_vit", name: "綜合維他命軟糖", qty: 1 },
-        { product_id: "prd_pro", name: "益生菌軟糖", qty: 1 },
+        { sell_way_id: "sw_one", product_id: "prd_vit", product_name: "綜合維他命軟糖", name: "單盒", qty: 1 },
+        { sell_way_id: "sw_pro", product_id: "prd_pro", product_name: "益生菌軟糖", name: "單盒", qty: 1 },
       ],
     },
   ],

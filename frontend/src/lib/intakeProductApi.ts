@@ -26,6 +26,9 @@ export interface SellWayBrief {
   id: string;
   /** The sell-way part of 「〈商品〉 · 〈賣法〉」, e.g. 「三盒組」. */
   name: string;
+  /** F45: base = one product's unit (a bundle may hold it), composed = base sell-ways × qty. Always sent by the
+   * server; optional only so fixtures written before F45 still type-check. */
+  shape?: "base" | "composed";
   price: number | null;
   /** null = cost unknown. */
   break_even: number | null;
@@ -45,8 +48,14 @@ export interface ProductCardData {
   sell_ways: SellWayBrief[];
 }
 
+/** A bundle card's component: a base sell-way × qty (F45). `sell_way_id` / `product_name` are always sent by the
+ * server; optional only so fixtures written before F45 still type-check. */
 export interface ComponentRef {
+  sell_way_id?: string;
+  /** The base sell-way's knowledge product. */
   product_id: string;
+  product_name?: string;
+  /** The base sell-way's own name (「單盒」). */
   name: string;
   qty: number;
 }
@@ -330,14 +339,19 @@ export interface SellWayInput extends Omit<MoneyInput, "price"> {
 
 // ---- bundles (`#/bundle`) ----
 
+/** One base sell-way × qty of a bundle, with that base's own effective numbers (「售價 180・成本 50」). */
 export interface BundleComponent extends ComponentRef {
+  sell_way_id: string;
+  product_name: string;
   thumbnail_url: string | null;
-  /** The product's one-unit sell-way numbers (「單盒 399・成本 90」); null when unknown. */
+  /** null when unknown. */
   unit_price: number | null;
   unit_cost: number | null;
 }
 
-export interface Bundle extends SellWayMoney {
+/** A cross-product bundle: a composed sell-way whose bases belong to at least two products. Money fields as step 4
+ * (`SellWayNumbers`: an empty price / list price / cost is derived from the bases, 推算). */
+export interface Bundle extends SellWayNumbers {
   id: string;
   name: string;
   status: "active" | "archived";
@@ -354,10 +368,13 @@ export interface Bundle extends SellWayMoney {
 /** `POST …/bundles/preview`: a bundle not created yet, as `GET …/bundles/{id}` would show it. */
 export type BundlePreview = Omit<Bundle, "id"> & { id: null };
 
-export interface BundleInput extends MoneyInput {
+export interface BundleInput extends Omit<MoneyInput, "price"> {
   name: string;
-  /** ≥2 different finished products. */
-  components: { product_id: string; qty: number }[];
+  /** Base sell-ways of finished products, from ≥2 different products (the server refuses fewer, 400). */
+  components: { sell_way_id: string; qty: number }[];
+  /** null = derived from the bases. */
+  price: number | null;
+  free_shipping: boolean;
 }
 
 // ---- transport ----
