@@ -293,13 +293,23 @@ def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[
     return out, dropped
 
 
-def _read_pages(urls: list) -> list:
-    pages = []
+# Why a page was not read (Contract F `pages_failed[].reason`). `fetch_url` reports only ok / not
+# ok (app/core/net.py keeps no status code or exception text), so the reason states what was
+# observed and nothing more: the address did not open, or it opened with no readable text.
+PAGE_UNREADABLE = "打不開這個網址"
+PAGE_EMPTY = "打得開，但這一頁沒有可以讀的文字"
+
+
+def _read_pages(urls: list) -> tuple[list, list]:
+    """-> (pages read as (url, text), pages not read as {url, reason})."""
+    pages, failed = [], []
     for url in urls[:MAX_PREFILL_PAGES]:
         ok, text = fetch_url(url)
         if ok and text and text.strip():
             pages.append((url, text.strip()))
-    return pages
+        else:
+            failed.append({"url": url, "reason": PAGE_EMPTY if ok else PAGE_UNREADABLE})
+    return pages, failed
 
 
 def _brand_photo_blocks(conn, brand_id: str) -> tuple[list, list]:
@@ -321,19 +331,26 @@ def _brand_photo_blocks(conn, brand_id: str) -> tuple[list, list]:
 
 def empty_prefill() -> dict:
     return {"proof": [], "policies": [], "products": [], "not_found": [],
-            "pages_read": 0, "photos_read": 0}
+            "pages_read": 0, "photos_read": 0, "urls_read": [], "pages_failed": []}
 
 
 def run_prefill(conn, draft: dict) -> tuple:
     """Read the draft's website pages (≤5) and brand photos (≤5) and send them in ONE call; store
-    the checked proposal in `intake_draft.prefill_json` with `pages_read`/`photos_read`.
-    (True, None) on success; (False, 人話錯誤) when the call failed or the reply is unreadable.
-    Nothing readable (every page failed, no photo): no call, an empty prefill that read 0/0."""
+    the checked proposal in `intake_draft.prefill_json` with `pages_read`/`photos_read`, the URL
+    list this read was for (`urls_read`) and the pages it could not read (`pages_failed`,
+    Contract F). (True, None) on success; (False, 人話錯誤) when the call failed or the reply is
+    unreadable. Nothing readable (every page failed, no photo): no call, an empty prefill that read
+    0/0. The product suggestions the user dismissed (`dismissed`) survive a new read."""
     brand_id = draft["brand_id"]
-    pages = _read_pages(draft["urls"])
+    urls = list(draft["urls"])[:MAX_PREFILL_PAGES]
+    pages, failed = _read_pages(urls)
     blocks, kinds = _brand_photo_blocks(conn, brand_id)
+    previous = (ir.get_draft(conn, brand_id, draft["id"]) or {}).get("prefill_json")
+    kept: dict = {"urls_read": urls, "pages_failed": failed}
+    if isinstance(previous, dict) and previous.get("dismissed"):
+        kept["dismissed"] = previous["dismissed"]
     if not pages and not blocks:
-        ir.update_draft(conn, brand_id, draft["id"], prefill_json=empty_prefill())
+        ir.update_draft(conn, brand_id, draft["id"], prefill_json={**empty_prefill(), **kept})
         return True, None
     text = {"type": "text", "text": _prefill_prompt(draft["brand_name"], pages, kinds)}
     task = _run(conn, draft, task_type=PREFILL_TASK_TYPE, purpose=PREFILL_PURPOSE,
@@ -347,7 +364,7 @@ def run_prefill(conn, draft: dict) -> tuple:
         return False, PARSE_FAIL_MESSAGE
     if dropped:
         _log.info("intake prefill %s: dropped %d invalid entries", task["id"], dropped)
-    prefill.update(pages_read=len(pages), photos_read=len(blocks))
+    prefill.update(pages_read=len(pages), photos_read=len(blocks), **kept)
     ir.update_draft(conn, brand_id, draft["id"], prefill_json=prefill)
     return True, None
 

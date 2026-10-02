@@ -368,16 +368,22 @@ def start_on_create(conn: Conn, brand_id: str, product_id: str) -> None:
     _queue(conn, brand, product_id)
 
 
-def start_scan(conn: Conn, brand_id: str, product_id: str) -> dict:
-    """`POST …/products/{p}/onboarding/scan`: read the product page again -> the onboarding status.
-    No-op while a read runs. NotFound: not this brand's product; ValueError: the product is
-    finished (proposals are no longer shown) or has neither a page URL nor a photo; ScanRefused:
-    the AI cost cap (checked before anything is queued, so no call is made)."""
+def start_scan(conn: Conn, brand_id: str, product_id: str, *, page_url=None,
+               actor: str = "") -> dict:
+    """`POST …/products/{p}/onboarding/scan` `{page_url?}`: read the product page again -> the
+    onboarding status. A `page_url` sent with the retry is stored on the product first, so the
+    read is of the address the user just typed (Contract F). No-op while a read runs. NotFound:
+    not this brand's product; ValueError: the product is finished (proposals are no longer
+    shown), the URL is not one, or there is neither a page URL nor a photo; ScanRefused: the AI
+    cost cap (checked before anything is queued, so no call is made)."""
     from app.background import is_active
 
     product = po.knowledge_product(conn, brand_id, product_id)
     if product.get("onboarding_step") is None:
         raise ValueError("這個商品已經建檔完成，不需要再讀一次商品頁；要改請直接改各步。")
+    if page_url is not None:
+        po.set_page_url(conn, brand_id, product_id, page_url, actor=actor)
+        product = po.knowledge_product(conn, brand_id, product_id)
     photos = [a for a in po.product_photo_assets(conn, brand_id) if a["product_id"] == product_id]
     if not product.get("page_url") and not photos:
         raise ValueError("還沒有商品頁網址或商品照，AI 沒有東西可以讀；可以直接自己填。")

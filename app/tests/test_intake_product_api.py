@@ -218,6 +218,30 @@ class ProductsPageTest(_Base):
             data["suggestions"], [{"name": "膠原蛋白飲", "url": "https://shop.example/c"}]
         )
 
+    def test_suggestion_hidden_by_a_product_with_its_page_url(self):
+        bid = self._brand({"products": [
+            {"name": "聯名 T-shirt Beast Prime", "url": "https://shop.example/tee"},
+            {"name": "膠原蛋白飲", "url": "https://shop.example/c"},
+        ]})
+        self._new_product(bid, "聯名 T-shirt", page_url="https://shop.example/tee/")
+        self.assertEqual(self._get(bid, "/products")["suggestions"],
+                         [{"name": "膠原蛋白飲", "url": "https://shop.example/c"}])
+
+    def test_dismissed_suggestion_never_comes_back(self):
+        bid = self._brand({"products": [
+            {"name": "膠原蛋白飲", "url": None}, {"name": "魚油膠囊", "url": None}]})
+        resp = self.client.post(self._url(bid, "/products/suggestions/dismiss"),
+                                json={"name": "膠原蛋白飲"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["data"]["suggestions"], [{"name": "魚油膠囊", "url": None}])
+        draft = ir.get_active_draft(web.conn, bid)
+        assert draft is not None
+        self.assertEqual(draft["prefill_json"]["dismissed"], ["膠原蛋白飲"])
+        self.assertEqual(self._get(bid, "/products")["suggestions"],
+                         [{"name": "魚油膠囊", "url": None}])
+        resp = self.client.post(self._url(bid, "/products/suggestions/dismiss"), json={})
+        self.assertEqual(resp.status_code, 400)
+
     def test_create_sets_step_one_and_page_url_and_is_get_or_create(self):
         bid = self._brand()
         pid = self._new_product(bid, "綜合維他命軟糖", page_url="https://shop.example/vit")

@@ -203,6 +203,53 @@ class PrefillScanTest(_Base):
         self.assertEqual(self._scan(bid)["pages_read"], 1)
         self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
 
+    def test_an_unreadable_page_is_kept_with_its_reason(self):
+        good, bad, empty = ("https://example.com/about", "https://broken.example/x",
+                            "https://example.com/blank")
+        bid = self._create(photos=0, urls=(good, bad, empty))
+        intake_ai.fetch_url = lambda url: {good: (True, _PAGE), empty: (True, "  ")}.get(url, (False, ""))
+        status = self._scan(bid)
+        self.assertEqual(status["status"], "done", status)
+        self.assertEqual(status["pages_read"], 1)
+        self.assertEqual(status["urls_read"], [good, bad, empty])
+        self.assertEqual(status["pages_failed"], [
+            {"url": bad, "reason": intake_ai.PAGE_UNREADABLE},
+            {"url": empty, "reason": intake_ai.PAGE_EMPTY},
+        ])
+
+    def test_every_page_unreadable_reads_nothing_and_says_why(self):
+        bid = self._create(photos=0, urls=("https://broken.example/x",))
+        intake_ai.fetch_url = lambda url: (False, "")
+        status = self._scan(bid)
+        self.assertEqual((status["status"], status["pages_read"]), ("done", 0))
+        self.assertEqual(status["pages_failed"],
+                         [{"url": "https://broken.example/x", "reason": intake_ai.PAGE_UNREADABLE}])
+
+    def test_a_changed_website_list_makes_the_old_read_stale_and_reads_again(self):
+        bid = self._create(photos=0, urls=("https://broken.example/x",))
+        intake_ai.fetch_url = lambda url: (False, "") if "broken" in url else (True, _PAGE)
+        self.assertEqual(self._scan(bid)["pages_read"], 0)
+        resp = self.client.put(f"/api/intake/brands/{bid}/onboarding/basics", json={
+            "name": "改過網址的品牌", "urls": ["https://example.com/fixed"]})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        stale = self._status(bid)
+        self.assertEqual((stale["status"], stale["found"], stale["pages_failed"]), ("none", [], []))
+        status = self._scan(bid)
+        self.assertEqual(status["status"], "done", status)
+        self.assertEqual((status["pages_read"], status["urls_read"], status["pages_failed"]),
+                         (1, ["https://example.com/fixed"], []))
+        self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
+
+    def test_a_stale_read_is_not_offered_to_the_later_steps(self):
+        bid = self._create(photos=0)
+        self._scan(bid)
+        draft = ir.get_active_draft(web.conn, bid)
+        ir.update_draft(web.conn, bid, draft["id"], research_urls_json=["https://example.com/new"])
+        identity = self.client.get(f"/api/intake/brands/{bid}/onboarding/identity").json()["data"]
+        self.assertNotEqual(identity["positioning"].get("source"), "ai")
+        onboarding = self.client.get(f"/api/intake/brands/{bid}/onboarding").json()["data"]
+        self.assertEqual(onboarding["prefill_status"], "none")
+
     def test_second_start_after_a_read_is_a_noop(self):
         bid = self._create()
         self._scan(bid)

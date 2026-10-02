@@ -236,6 +236,32 @@ class ProductPrefillTest(_Base):
                          ("failed", product_prefill.NOTHING_READ_MESSAGE))
         self.assertEqual(self._calls(), [])
 
+    def test_retry_with_a_new_page_url_stores_and_reads_the_new_url(self):
+        fixed = "https://shop.example/p/fixed"
+        read = []
+
+        def fetch(url):
+            read.append(url)
+            return (True, _PAGE) if url == fixed else (False, "")
+
+        product_prefill.fetch_url = fetch
+        pid = self._create()  # the broken address
+        self._work()
+        self.assertEqual(self._status(pid)["prefill_status"], "failed")
+        resp = self.client.post(self._step(pid, "/scan"), json={"page_url": fixed})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._work()
+        self.assertEqual(read, [_URL, fixed])
+        self.assertEqual(self._status(pid)["prefill_status"], "done")
+        what = self.client.get(self._step(pid, "/what")).json()["data"]
+        self.assertEqual(what["page_url"], fixed)
+
+    def test_retry_with_a_page_url_that_is_not_one_is_refused(self):
+        pid = self._create(page_url=None)
+        resp = self.client.post(self._step(pid, "/scan"), json={"page_url": "shop.example/p"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("不是有效的網址", resp.json()["error"])
+
     def test_create_without_page_url_does_not_read(self):
         pid = self._create(page_url=None)
         self._work()
