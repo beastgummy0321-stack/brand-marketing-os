@@ -145,7 +145,7 @@ class OfficialAssetTest(unittest.TestCase):
                             content_type="image/jpeg")
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"],
-                         "「text.jpg」的內容不是JPEG、PNG、WebP 或 GIF圖片，請換一張。")
+                         "「text.jpg」的內容不是JPEG、PNG、WebP 或 GIF 圖片，請換一張。")
         resp = self._upload(brand_id, filename="empty.png", content=b"", content_type="image/png")
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"], "「empty.png」是空的檔案，請換一個。")

@@ -1275,11 +1275,12 @@ def _write_product_economics(conn: Conn, brand_id: str, product_id: str, *, acto
     if selling_price is None and not allow_empty_price:
         raise ValueError("product_economics.selling_price 為必填")
     # F47 Contract A (`app.core.input_rules`): keep exactly what was sent or refuse naming the
-    # field -- never coerce. Shipping is signed (negative = a discount) and stored as typed.
+    # field -- never coerce. Shipping is >= 0 on every path (lead decision, F47 Contract A;
+    # same as the sell-way pre-check).
     input_rules.positive(selling_price, "售價", optional=allow_empty_price)
     input_rules.non_negative(fixed_cost, "固定成本", optional=True)
     input_rules.non_negative(unit_variable_cost, "單位變動成本", optional=True)
-    input_rules.signed(shipping_cost, "運費", optional=True)
+    input_rules.non_negative(shipping_cost, "運費", optional=True)
     if not isinstance(list_price, _Keep):
         input_rules.positive(list_price, "原價", optional=True)
     if not isinstance(cap_per_sale, _Keep):

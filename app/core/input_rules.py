@@ -4,8 +4,8 @@ Contract A: a store either keeps exactly what was sent or refuses with one Chine
 names the field. It never coerces: no negative -> 0, no 0 -> unset, no clamp. An optional number
 sent empty / ``None`` means unset.
 
-- money: finite; a selling price ``> 0``; cost fields ``>= 0``; shipping may be negative (a
-  discount) and is stored as typed; channel revenue ``>= 0`` (0 is stored as 0).
+- money: finite; a selling price ``> 0``; cost fields and shipping ``>= 0`` (shipping on every
+  path, lead decision); channel revenue ``>= 0`` (0 is stored as 0).
 - ranges: each rule-card number field declares its own bounds (a margin is ``0 < x < 1``); a
   (min, max) pair with min > max is refused; dates: end ``>=`` start.
 - uploads: one content sniff (JPEG, PNG, WebP, GIF, MP4, MOV signatures). Each upload path keeps
@@ -76,7 +76,7 @@ def non_negative(value, label: str, *, optional: bool = False) -> float | None:
 
 
 def signed(value, label: str, *, optional: bool = False) -> float | None:
-    """Any finite number, stored as typed (shipping: negative = a discount)."""
+    """Any finite number, stored as typed (for a field whose negative has a meaning)."""
     return number(value, label, optional=optional)
 
 
@@ -186,5 +186,5 @@ def check_image_upload(filename: str, content: bytes, allowed) -> str:
         raise InputRuleError(f"「{name}」是空的檔案，請換一個。")
     mime = sniff(content)
     if mime not in allowed:
-        raise InputRuleError(f"「{name}」的內容不是{kinds_text(allowed)}圖片，請換一張。")
+        raise InputRuleError(f"「{name}」的內容不是{kinds_text(allowed)} 圖片，請換一張。")
     return mime

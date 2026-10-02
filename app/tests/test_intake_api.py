@@ -195,7 +195,7 @@ class PhotoUploadTest(_Base):
         resp = self.client.post("/api/intake/photos",
                                 files={"photo": ("text.jpg", io.BytesIO(b"just text"), "image/jpeg")})
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.json(), {"error": "「text.jpg」的內容不是JPEG、PNG 或 WebP圖片，請換一張。"})
+        self.assertEqual(resp.json(), {"error": "「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。"})
         resp = self.client.post("/api/intake/photos",
                                 files={"photo": ("empty.jpg", io.BytesIO(b""), "image/jpeg")})
         self.assertEqual(resp.status_code, 400)

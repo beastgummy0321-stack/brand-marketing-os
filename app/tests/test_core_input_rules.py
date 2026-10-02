@@ -108,7 +108,7 @@ def test_check_image_upload():
     assert r.check_image_upload("photo.jpg", b"\x89PNG\r\n\x1a\nxx", kinds) == "image/png"
     with pytest.raises(r.InputRuleError, match="^「empty.jpg」是空的檔案，請換一個。$"):
         r.check_image_upload("empty.jpg", b"", kinds)
-    with pytest.raises(r.InputRuleError, match="^「text.jpg」的內容不是JPEG、PNG 或 WebP圖片，請換一張。$"):
+    with pytest.raises(r.InputRuleError, match="^「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。$"):
         r.check_image_upload("text.jpg", b"plain text", kinds)
-    with pytest.raises(r.InputRuleError, match="不是JPEG、PNG 或 WebP圖片"):
+    with pytest.raises(r.InputRuleError, match="不是JPEG、PNG 或 WebP 圖片"):
         r.check_image_upload("anim.gif", b"GIF89a....", kinds)
