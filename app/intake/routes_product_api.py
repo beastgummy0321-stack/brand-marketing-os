@@ -9,6 +9,7 @@ the usual `{data, generated_at}` envelope; PUTs return the step's fresh GET shap
 
 Routes (all under `/api/intake/brands/{brand_id}`):
     GET|POST /products                                  products page / new product (step 1)
+    POST     /products/suggestions/dismiss              「不用了」 on an AI suggestion (F47 Q8)
     GET      /products/{p}/onboarding                   step, completed, prefill status
     POST     /products/{p}/onboarding/complete          完成 (step 5 -> done)
     POST     /products/{p}/onboarding/scan              re-read the product page (F43-I06)
@@ -93,6 +94,12 @@ async def products_post(request: Request, brand_id: str):
     return await _write(request, brand_id, po.create)
 
 
+@router.post(_BRAND + "/products/suggestions/dismiss")
+async def suggestion_dismiss(request: Request, brand_id: str):
+    """「不用了」 on an AI product suggestion `{name}` -> the products page (F47 Q8)."""
+    return await _write(request, brand_id, po.dismiss_suggestion)
+
+
 # ---- onboarding status / 完成 ----
 
 
@@ -109,12 +116,17 @@ def onboarding_complete(request: Request, brand_id: str, product_id: str):
 
 
 @router.post(_STEP + "/scan")
-def onboarding_scan(request: Request, brand_id: str, product_id: str):
-    """Read the product page again (F43-I06) -> the status. 400: finished product / nothing to
-    read; 409: the AI cost cap refused before anything was queued."""
-    require_brand(brand_id, require_actor(request))
+async def onboarding_scan(request: Request, brand_id: str, product_id: str):
+    """Read the product page again (F43-I06) -> the status. Optional `{page_url}`: stored on the
+    product, then read (F47 Contract F). 400: finished product / not a URL / nothing to read;
+    409: the AI cost cap refused before anything was queued."""
+    actor = require_actor(request)
+    require_brand(brand_id, actor)
+    body = await _json_body(request)
+    page_url = body.get("page_url")
     try:
-        return _run(lambda: product_prefill.start_scan(_conn(), brand_id, product_id))
+        return _run(lambda: product_prefill.start_scan(
+            _conn(), brand_id, product_id, page_url=page_url, actor=str(actor.user_id)))
     except product_prefill.ScanRefused as exc:
         return _error(409, str(exc))
 

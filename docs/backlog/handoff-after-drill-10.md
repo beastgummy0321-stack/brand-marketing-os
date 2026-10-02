@@ -32,20 +32,30 @@ Start here in the next session. A board, not an implementation authorization. Re
   blocking. Blocking count is final at 3.
 - Order: dig and fix in a separate session, **then run the drill again** (see "After the fixes").
 
-## Next: dig and fix (report §9; the fixes themselves are not ruled yet)
-1. Three blocking defects (report §4.1):
-   - B1 break-even of a ×N sell-way / bundle uses the qty-1 sell-way's cost (wrong money) — root cause 5, quantity has no unit.
-   - B2 review 「停掉這則」 creates no proposal and dead-ends — root cause 4, queue / proposal / review joined by URL only.
-   - B3 a refused manual copy edit leaves the slot 「處理中」 forever — root cause 3, "waiting for you" and "system busy" are one state
-     and only one path stores the refusal.
-2. The learning channel (root cause 1) — the largest A-vs-B gap and the third time this class appears (drill 7 red, drill 9, drill 10
-   dimension 4 = 3): one ruler for grades, bad-ad lines carry no cost, ads under the spend threshold never enter learning, no
-   "keep the least-bad" rule, theme is not a coordinate, learnings have no owner-visible page, closeout offers no next step.
-3. Planned coordinates vs what shipped (root cause 2); failure messages and background-job staleness (root causes 6–8);
-   defaults shown but not stored (root cause 9); offer sentence / free shipping / calendar data (root cause 10).
-4. Still open from drill 9: #4 「在投」 semantics, #5 no manual re-read, #6 calendar data, #9 per-sell-way free shipping,
-   #10 cap and platform re-entered per campaign, #12 learnings not in 品牌智庫.
-Fix root causes, not the individual symptoms in §4: each group in report §1 lists the defects that disappear together.
+## Fixes built: F45, F46, F47 (2026-10-02)
+Built on branch `feature/drill10-recover` (contains all three); not merged to master, human acceptance pending (each feature's
+`human` list in `.work/features/F4{5,6,7}.md`). Rulings and as-built: `docs/architecture/ads.md` §6.49 (F45), §6.49.1 (F46),
+§6.49.2 (F47); `docs/architecture/intake.md` 「F45」, 「F47」; `docs/architecture/workbench.md` (F46 offer backing, F47 Q7 and
+commit-before-enqueue); `docs/design-system.md` §6 (F47 feedback pieces). By report §1 root-cause group:
+- Blocking B1 / B2 / B3 — done (F45).
+- 1 learning channel — done (F46: ranked 留下／換掉 rows, planners build on them with a program gate, 品牌智庫 「投放學到的」,
+  closeout exits, month review next step, strategy basis). The theme gap is covered by the customer group (8th coordinate) and the (group, angle) gate.
+- 2 planned vs shipped — done (F46: actual format, offer sentence refused when missing, photo count, one customer group per ad
+  set). Open: should the planner stop offering carousel while a slot holds one file.
+- 3 waiting vs busy — done (F45 B3, S1, S2; F47 S3 delivery 「已上架，等平台開始投放」).
+- 4 queue / proposal / review — done (F45 B2; F47 Q1–Q8: one done-ness owner, 暫緩 re-entry, top bar = connections count).
+- 5 quantity without a unit — done (F45 base / composed sell-ways).
+- 6 checks on one path only — done (F47 store-time input rules, one failure sentence, copy feedback, disabled reasons).
+- 7 background staleness — done (F47 worker liveness notice; workbench commit-before-enqueue).
+- 8 unreadable reported as read — done (F47 read reasons, one Meta classifier, connections 重新讀取).
+- 9 defaults shown, not stored — done (F46 create defaults 沿用上一期 / 打平線, shown = stored).
+- 10 offer and calendar data — done for O1 (F45 nameless offer sentence, per-sell-way free shipping) and October exam rows (F46);
+  **open**: O3 (strategy text content check).
+- Drill 9: #4, #5 done (F47); #6 October exam rows done (F46; audience field and look-ahead past the end date still open);
+  #9 done (F45); #10, #12 done (F46).
+- Left out on purpose (F47 Evidence): delete / edit entries for channel revenue, 口徑紀錄, bundles and saved sell-ways; C3-A days
+  before campaign start counted as missing (likely drill clock); home 「月底會超出」 formula (needs a wording decision). Not built
+  from F46: the strategy tab's per-ad provenance card, a monthly-budget default amount, daily budget on create.
 
 ## After the fixes: run the drill again (drill 11)
 Same question (can it be used for real), same nine dimensions, same anchors and bar as `docs/drills/drill-10/plan.md`, so the two runs

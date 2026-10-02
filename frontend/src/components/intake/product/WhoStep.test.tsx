@@ -29,6 +29,7 @@ const P = "prd_vit";
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -265,5 +266,35 @@ describe("WhoStep", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("找不到這個商品。");
     expect(screen.getByRole("button", { name: "← 商品是什麼" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "下一步 →" })).toBeNull();
+  });
+
+  it("F47-I03 (faults F7): an AI-organised group and an edit come back after a reload, as they were, until saved", async () => {
+    mockCustom.mockResolvedValue({
+      block: "group",
+      kind: "option",
+      option: { who: "上班族與通勤族", pain_keys: ["effort"], quote: "「早上來不及吃早餐」", when_used: "通勤路上" },
+    });
+    mockSave.mockResolvedValue(prefilled());
+    renderWho(prefilled());
+    await screen.findByRole("group", { name: "第 2 群" });
+    await userEvent.click(customButtons().at(-1)!);
+    await userEvent.type(customBox(), "上班族與通勤族");
+    await userEvent.click(screen.getByRole("button", { name: "讓 AI 整理" }));
+    await screen.findByRole("group", { name: "第 3 群" });
+    await userEvent.clear(input(3, "什麼時候用"));
+    await userEvent.type(input(3, "什麼時候用"), "捷運上");
+    cleanup();
+
+    const { onNext } = renderWho(prefilled());
+    expect(await screen.findByRole("group", { name: "第 3 群" })).toBeTruthy();
+    expect(input(3, "是誰").value).toBe("上班族與通勤族");
+    expect(input(3, "什麼時候用").value).toBe("捷運上");
+    expect(input(1, "是誰").value).toBe("上班族、常加班的 25–40 歲");
+    expect(screen.getAllByText("✦ 從評論與商品頁推測")).toHaveLength(2);
+
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalled());
+    expect(mockSave.mock.calls[0][2][2]).toMatchObject({ who: "上班族與通勤族", when_used: "捷運上", source: "user" });
+    expect(sessionStorage.length).toBe(0);
   });
 });

@@ -113,6 +113,8 @@ export interface LaunchItem {
   unreadable: LaunchUnreadable[];
   /** Why a readback left the item `built` (not found, ambiguous name) or `unknown`. */
   reason: string | null;
+  /** F47-I06: when that reason was read (`app/ads/launch_view.py::_reason_at`); null without a reason. */
+  reason_at: string | null;
 }
 
 /** F41-I03 (`change_control_launch.py::month_fit`): the list step's month-budget block. The money fields are the

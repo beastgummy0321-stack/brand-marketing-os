@@ -398,6 +398,17 @@ def is_auth_error(code) -> bool:
     return code == "permission_denied"
 
 
+# F47-I06 (Contract A ids): a Meta pixel (dataset) id is digits only, 10-20 long.
+_PIXEL_ID = re.compile(r"^\d{10,20}$")
+
+
+def pixel_id_error(pixel_id: str) -> str | None:
+    """The sentence for a pixel id Meta could never have issued, or `None` when it fits."""
+    if _PIXEL_ID.match(pixel_id):
+        return None
+    return "Meta 的像素 ID 是 10～20 位數字，請到事件管理工具複製。"
+
+
 # F22-I01: this adapter's own read-time deep link into Meta Ads Manager, one object kind per
 # entry point Ads Manager can select directly by id (campaign/adset/ad) -- an object kind absent
 # from this table (or, in practice, none today) has no defined link and stays unmapped, never a

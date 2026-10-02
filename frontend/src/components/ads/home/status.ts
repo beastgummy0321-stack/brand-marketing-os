@@ -1,7 +1,7 @@
 import type { CampaignStatus } from "@/lib/adsApi";
 import type { HomeOverview } from "@/lib/adsHomeApi";
 import type {
-  QueueItem, QueuePauseProposal, QueueProposal, QueueReviewProposal, SettleQueueRow,
+  QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, SettleQueueRow,
 } from "@/lib/adsTriageApi";
 
 /** F19-I02：從 `AdsHomePage.tsx` 抽出，讓 `home/CampaignCards.tsx` 跟 `AdsHomePage.tsx` 都能讀，
@@ -54,10 +54,11 @@ const reviewRoundPath = (brandId: string, campaignId: string, reviewId: string, 
   `/brands/${brandId}/ads/campaigns/${campaignId}/reviews/${reviewId}${step ? `/${step}` : ""}`;
 
 // `revisit_at` 是「always a timezone-carrying ISO instant」（feature Decisions）——瀏覽器本地
-// 時區印「M/D」，不補零、不印年份（跟這頁其餘日期格式一致地簡短）。
-function formatRevisitLabel(revisitAt: string): string {
+// 時區印「M/D」，不補零、不印年份（跟這頁其餘日期格式一致地簡短）。F47-I07（drill-10 Q2）：
+// 「M/D 再看」，暫緩的列與確認頁都用這一顆。
+export function formatRevisitLabel(revisitAt: string): string {
   const d = new Date(revisitAt);
-  return `${d.getMonth() + 1}/${d.getDate()} 重看`;
+  return `${d.getMonth() + 1}/${d.getDate()} 再看`;
 }
 
 /** F23-I01: `proposal.status === "completed"` with a copy change set already exists — the row's
@@ -198,37 +199,57 @@ export function cleanupAction(
   return proposalAction(brandId, campaignId, campaignId, proposal);
 }
 
-/** F22-I05/F23-I01/F25-I02/F26-I02/F27-I17: whether a queue row still counts as "open" for the
- * home header count (`AdsHomePage.tsx`). A `stop_loss` or `worse` row is done exactly when
- * `proposalAction(...).done` is true — same rule the row's own button already renders, kept in
- * one place so the header and the button can't disagree. `scale_budget` rows follow the same rule
- * through the `"budget"` branch, keyed to the budget owner's id rather than the triage ad's own
- * `entity_id` (feature Decisions "Home rows"). `cleanup` rows follow `cleanupAction` above — not
- * done while there's no proposal yet, or its change set's `.done` once there is. `refresh_creative`
- * and `insufficient_data` rows never count as done (feature Decisions: "refresh rows never count
- * as done" /「never done」for the insufficient-data row) — neither has a proposal flow, so both
- * fall through to the final `return false` the same way any unhandled kind always has. */
+/** F47-I07 (Contract D): whether a queue row still waits on the user is the backend's own
+ * `item.done` (`app/ads/queue_done.py`, stamped on every row of the queue read) — the top bar, the
+ * home list and 「下一件」 all read that one field; there is no second copy of the rule here. */
 export function isQueueItemDone(item: QueueItem): boolean {
-  if (item.brand_id === null) return false;
-  // F29-I01（ads.md §6.33 一把尺）：看列的種類 `kind_key`，不看 triage 的趨勢 class——加預算列的
-  // 那則廣告趨勢也可能是 worse，卻不是一張「變貴」決定。
-  if (item.kind_key === "stop_loss") {
-    return proposalAction(item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal).done;
-  }
-  if (item.kind_key === "worse") {
-    return proposalAction(
-      item.brand_id, item.triage.campaign_id, item.triage.entity_id, item.proposal, "review",
-    ).done;
-  }
-  if (item.kind_key === "scale_budget" && item.scale) {
-    return proposalAction(
-      item.brand_id, item.triage.campaign_id, item.scale.owner.id, item.proposal, "budget",
-    ).done;
-  }
-  if (item.kind_key === "cleanup") {
-    return cleanupAction(item.brand_id, item.triage.campaign_id, item.proposal, item.action_url)?.done ?? false;
-  }
-  return false;
+  return item.done;
+}
+
+/** The ad-level kinds the home 「需要你決定」 board shows, in board order (the brand's settle row joins them in
+ * `decisionBoard`). Same set as the backend's `queue_done.DECISION_KINDS`, which the top bar's `open_items` counts. */
+const DECISION_ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];
+
+/** The home board's ad-level rows, open and handled, in board order — split by the row's own `done`. */
+export function decisionRows(queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
+  const rows = queue.items
+    .filter((item) => DECISION_ORDER.includes(item.kind_key))
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => DECISION_ORDER.indexOf(a.item.kind_key) - DECISION_ORDER.indexOf(b.item.kind_key) || a.i - b.i)
+    .map(({ item }) => item);
+  return { open: rows.filter((item) => !isQueueItemDone(item)), done: rows.filter((item) => isQueueItemDone(item)) };
+}
+
+/** One entry of the home board: an ad-level queue row, or the brand's period-settle row. */
+export type HomeDecision = { kind: "item"; item: QueueItem } | { kind: "settle"; row: SettleQueueRow };
+
+/** Board order (prototype): cleanup, worse, settle, refresh_creative. `open.length` is the home's count and the top
+ * bar's `open_items`; the flow pages' 「第 N 件／共 M 件」 is a position in `open` (`decisionPosition`). */
+export function decisionBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[] } {
+  const items = decisionRows(queue);
+  const place = (list: QueueItem[], settle: SettleQueueRow | null): HomeDecision[] => {
+    const entries: HomeDecision[] = list.map((item) => ({ kind: "item", item }));
+    if (!settle) return entries;
+    const at = entries.findIndex((e) => e.kind === "item" && e.item.kind_key === "refresh_creative");
+    entries.splice(at < 0 ? entries.length : at, 0, { kind: "settle", row: settle });
+    return entries;
+  };
+  const settle = queue.settle ?? null;
+  const settleDone = settle ? settleAction(brandId, settle).done : false;
+  return {
+    open: place(items.open, settle && !settleDone ? settle : null),
+    done: place(items.done, settle && settleDone ? settle : null),
+  };
+}
+
+/** F47-I07: 「第 N 件／共 M 件」 on a flow page — the row's place among the open home decisions, counted by the same
+ * owner as the home and the top bar. `null` when the row is not one of them (handled, or a kind the board does not
+ * show): no position is invented for it. */
+export function decisionPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
+  if (!queue || !item || item.brand_id === null) return null;
+  const open = decisionBoard(item.brand_id, queue).open;
+  const at = open.findIndex((d) => d.kind === "item" && d.item.id === item.id);
+  return at < 0 ? null : { pos: at + 1, total: open.length };
 }
 
 /** F29-I11 (Contract E): the brand-level period-settle row's own action. Its link is the row's own

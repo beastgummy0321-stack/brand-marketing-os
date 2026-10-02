@@ -413,6 +413,19 @@ class QueueSnapshotTest(unittest.TestCase):
 
     def setUp(self):
         self._queue("DELETE FROM procrastinate_jobs")
+        self._queue("DELETE FROM procrastinate_workers")
+
+    def test_worker_alive_needs_a_fresh_heartbeat(self):
+        """F47 Contract C: no worker row, or only a stale one (a killed worker leaves it), is
+        not alive; a heartbeat within 60 s is."""
+        self.assertFalse(background_module.queue_snapshot()["worker_alive"], "no worker row")
+        self._queue("INSERT INTO procrastinate_workers (last_heartbeat)"
+                    " VALUES (now() - interval '2 minutes')")
+        self.assertFalse(background_module.queue_snapshot()["worker_alive"],
+                         "a heartbeat older than 60 s is a stopped worker")
+        self._queue("INSERT INTO procrastinate_workers (last_heartbeat)"
+                    " VALUES (now() - interval '5 seconds')")
+        self.assertTrue(background_module.queue_snapshot()["worker_alive"])
 
     def test_pick_order_positions_and_waits(self):
         a = background_module.app()
@@ -460,7 +473,8 @@ class QueueSnapshotTest(unittest.TestCase):
                 mock.patch.object(background_module, "_sync_app_for_defer") as queue:
             snap = background_module.queue_snapshot()
         queue.assert_not_called()
-        self.assertEqual(snap, {"jobs": [], "total": 0, "done_today": {}, "failed_today": {}})
+        self.assertEqual(snap, {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
+                                "worker_alive": True})
 
 
 class WorkerConcurrencyTest(unittest.TestCase):

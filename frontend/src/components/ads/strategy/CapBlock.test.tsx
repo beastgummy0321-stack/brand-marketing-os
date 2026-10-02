@@ -68,6 +68,20 @@ describe("CapBlock", () => {
     expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
   });
 
+  it("the chip reads the stored cap source: copied → 沿用上一期, break_even → 打平線, user → 自己填", async () => {
+    const withSource = (source: string) =>
+      campaign(OWN, { context_json: { field_sources: { cap: source } } } as unknown as Partial<CampaignDetail>);
+    const { unmount } = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={withSource("copied")} onCampaignChange={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText("沿用上一期")).toBeTruthy();
+    expect(screen.queryByText("自己填")).toBeNull();
+    unmount();
+    const be = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={withSource("break_even")} onCampaignChange={vi.fn()} /></MemoryRouter>);
+    expect(await screen.findByText("打平線")).toBeTruthy();
+    be.unmount();
+    renderBlock(withSource("user"));
+    expect(await screen.findByText("自己填")).toBeTruthy();
+  });
+
   it("an own cap equal to break-even reads 打平值", async () => {
     renderBlock(campaign(cap({ value: 520, basis: "own", own_value: 520, break_even: 520, price: 1580 })));
     expect(await screen.findByText("打平值")).toBeTruthy();

@@ -3,6 +3,7 @@
 import json
 import re
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 from app.meta import graph
@@ -152,3 +153,46 @@ class ExternalGraphTest(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["params"]["fields"], "id,name")
         self.assertNotIn("effective_status", fetch.call_args.kwargs["params"])
         self.assertEqual(page["data"], payload["data"])
+
+
+class ErrorClassifierTest(unittest.TestCase):
+    """F47 Contract G: the one Meta error classifier."""
+
+    def test_classifier_table(self):
+        cases = [
+            (graph.GraphError("x", 190), graph.ERROR_AUTH),
+            (graph.GraphError("x", 100), graph.ERROR_SCOPE),
+            (graph.GraphError("x", 10), graph.ERROR_SCOPE),
+            (graph.GraphError("x", 200), graph.ERROR_SCOPE),
+            (graph.GraphError("x", 299), graph.ERROR_SCOPE),
+            (graph.GraphError("x", 2), graph.ERROR_TRANSIENT),
+            (graph.GraphError("x", 613), graph.ERROR_TRANSIENT),
+            (graph.GraphError("x", 80014), graph.ERROR_TRANSIENT),
+            (graph.GraphError("x", retryable=True), graph.ERROR_TRANSIENT),
+            (graph.GraphError("x", 999), graph.ERROR_OTHER),
+            (graph.GraphError("x"), graph.ERROR_OTHER),
+        ]
+        for exc, kind in cases:
+            with self.subTest(code=exc.code, retryable=exc.retryable):
+                self.assertEqual(graph.classify_error(exc), kind)
+
+    def test_external_reads_store_the_codes_app_ads_reads(self):
+        """`read_external_page` keeps the stored codes (`permission_denied` is the ads adapter's
+        auth error) and takes them from the classifier: 100 now reads as a missing grant like the
+        token connect does (they used to disagree)."""
+        from app.meta import repository as repo
+
+        cases = [(190, "permission_denied"), (100, "permission_denied"), (200, "permission_denied"),
+                 (2, "source_error"), (341, "source_error"), (999, "invalid_source_page")]
+        for code, stored in cases:
+            with (
+                self.subTest(code=code),
+                patch.object(repo, "external_bound_accounts", return_value=[{"account_id": "1"}]),
+                patch.object(repo, "get_token", return_value="secret"),
+                patch.object(graph, "fetch_page",
+                             return_value={"error": {"message": "x", "code": code}}),
+            ):
+                conn = unittest.mock.MagicMock()
+                with self.assertRaises(repo.ExternalReadError) as caught:
+                    repo.read_external_page(conn, "org", "brd", "1", "campaigns")
+                self.assertEqual(caught.exception.code, stored)

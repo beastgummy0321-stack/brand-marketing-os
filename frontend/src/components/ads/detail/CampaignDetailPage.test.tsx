@@ -118,7 +118,7 @@ function queueRow(o: Partial<QueueItem> & { triage: TriageItem }): QueueItem {
   return {
     id: "q", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "triage", kind: "worse",
     severity: "rule_warning", message: "", action_url: null, visible_from: null, status: "open",
-    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, ...o,
+    created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "worse", proposal: null, done: false, ...o,
   };
 }
 function cleanup(ids: string[]): QueueCleanup {
@@ -250,7 +250,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(screen.getByTestId("ad-row-a7")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("href")).toBe(`${WS}/review/a6`);
     expect(within(wasted).getByText("0 筆")).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a7")).getByText("617.5 元")).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a7")).getByText("618 元")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看清理提議 →" }).getAttribute("href")).toBe(`${WS}/propose/cleanup/cmp_1`);
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe(WS);
 

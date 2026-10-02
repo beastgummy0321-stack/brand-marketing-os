@@ -202,7 +202,8 @@ test("一般流程保留必要操作；受控 loading/error、empty、深連結�
     body: JSON.stringify({ error: { message: "受控錯誤" } }),
   }), { times: 1 });
   await page.goto("/app/settings");
-  await expect(page.getByRole("alert")).toContainText("設定讀取失敗");
+  // F47-I02: the server sentence wins over the status-code fallback.
+  await expect(page.getByRole("alert")).toContainText("受控錯誤");
   await page.getByRole("button", { name: "重新載入" }).click();
   await expect(page.getByText("整個組織本月 AI 費用")).toBeVisible();
 

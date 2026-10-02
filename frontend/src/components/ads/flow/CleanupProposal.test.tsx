@@ -71,7 +71,7 @@ function row(c: QueueCleanup): QueueItem & { cleanup: QueueCleanup } {
     id: "int_1", org_id: "org_1", brand_id: "brd_1", campaign_period_id: null, dedupe_key: "k", category: "ads_triage_cleanup",
     kind: null, severity: "money_loss", message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-23T00:00:00Z", resolved_at: null, kind_key: "cleanup",
-    triage: { ...t, target: { ...t.target, break_even: 520 } }, proposal: null, cleanup: c,
+    triage: { ...t, target: { ...t.target, break_even: 520 } }, proposal: null, done: false, cleanup: c,
   };
 }
 
@@ -118,11 +118,11 @@ describe("CleanupProposal（F28-I11）", () => {
     // Every cost carries its money tag against break-even 520 (v10 `mt(a)`), within 2 % is 剛好打平.
     expect(rows.map(seen)).toEqual([
       `1${LONG}沒賣出0 筆關`,
-      "21150803 圖文簡潔・中秋滿 3000 送月餅禮盒（輪播 5 張・再行銷 30 天）太貴722.63 元・在虧（打平 520）關",
-      "3撞車1150724・直式 9:16 短影音 - 複本偏貴522.22 元・剛好打平（打平 520）關",
-      "4健身情境・保冷 12 小時划算431.25 元・有賺（打平 520）留",
-      "5開箱 15 秒・單手開蓋划算55.01 元・有賺（打平 520）留",
-      "6辦公室一角・質感桌面划算52.02 元・有賺（打平 520）留",
+      "21150803 圖文簡潔・中秋滿 3000 送月餅禮盒（輪播 5 張・再行銷 30 天）太貴723 元・在虧（打平 520）關",
+      "3撞車1150724・直式 9:16 短影音 - 複本偏貴522 元・剛好打平（打平 520）關",
+      "4健身情境・保冷 12 小時划算431 元・有賺（打平 520）留",
+      "5開箱 15 秒・單手開蓋划算55 元・有賺（打平 520）留",
+      "6辦公室一角・質感桌面划算52 元・有賺（打平 520）留",
       "7晨光隨行杯・日常出發划算48 元・有賺（打平 520）留",
     ]);
     // The advanced fold is closed by default and lists only the proposed ads, all ticked.
@@ -207,7 +207,7 @@ describe("CleanupProposal（F28-I11）", () => {
     expect(screen.getByRole("heading", { name: "關 2 則、留 5 則" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "留 5 則、關 2 則" })).toBeTruthy();
     expect(screen.getByText("你留下了 1 則")).toBeTruthy();
-    expect(seen(orderRows()[2])).toBe("3撞車1150724・直式 9:16 短影音 - 複本偏貴522.22 元・剛好打平（打平 520）留・你改的");
+    expect(seen(orderRows()[2])).toBe("3撞車1150724・直式 9:16 短影音 - 複本偏貴522 元・剛好打平（打平 520）留・你改的");
     expect(screen.getAllByText("關", { selector: "em" })).toHaveLength(2);
     // Keeping it leaves 5 ads on a budget that carries 4: said on the page, not blocked.
     expect(screen.getByText("留 5 則，每日 1,100 只撐得起 4 則")).toBeTruthy();

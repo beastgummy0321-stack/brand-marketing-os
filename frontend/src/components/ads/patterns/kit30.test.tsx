@@ -140,7 +140,7 @@ describe("DayGrid + Legend", () => {
 describe("CopyField", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("copies the value and says 已複製; a refused clipboard says 請手動複製", async () => {
+  it("copies the value and says 已複製; a refused clipboard says 請手動選取複製", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     render(<CopyFields><CopyField label="每日預算" value="NT$400" /><CopyField label="名稱" value="晨光・A" copy={false} /></CopyFields>);
@@ -155,7 +155,7 @@ describe("CopyField", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true });
     render(<CopyField label="網址" value="https://example.com" />);
     await user.click(screen.getByRole("button", { name: "複製網址" }));
-    expect(await screen.findByText("請手動複製")).toBeTruthy();
+    expect(await screen.findByText("請手動選取複製")).toBeTruthy();
   });
 });
 

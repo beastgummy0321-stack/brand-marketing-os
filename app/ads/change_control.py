@@ -27,10 +27,28 @@ def workspace(conn, org, brand, campaign):
     }
 
 
-def create(conn, org, brand, campaign, payload, actor):
+def create(conn, org, brand, campaign, payload, actor, decision=None):
     """The public create path (`POST …/change-sets`): `source` may only be "cleanup" -- an `ab`
-    set is created only through `create_ab` (F29-I04 Contract F)."""
-    return _create(conn, org, brand, campaign, payload, actor)
+    set is created only through `create_ab` (F29-I04 Contract F).
+
+    F47-I07 (drill-10 Q3): `decision` (`{decision, reason, revisit_at?}`) records the user's
+    拒絕／暫緩 on the new set in the same transaction -- one decision is one write. A refused
+    decision rolls the new set back, so no draft is left behind to show up as 「等你核准」."""
+    if decision is None:
+        return _create(conn, org, brand, campaign, payload, actor)
+    if not isinstance(decision, dict):
+        raise ValueError("請選擇拒絕或暫緩，並填寫原因。")
+    choice, reason, revisit = _decision_input(
+        decision.get("decision"), decision.get("reason"), decision.get("revisit_at"),
+    )
+    try:
+        created = _create(conn, org, brand, campaign, payload, actor, commit=False)
+        _apply_decision(conn, org, brand, campaign, created["id"], choice, reason, revisit, actor)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return data.get(conn, org, brand, campaign, created["id"])
 
 
 def create_ab(conn, org, brand, campaign, payload, ab, actor):
@@ -57,7 +75,9 @@ def open_ab_set(conn, org, brand, campaign, pair_id):
     return data.get(conn, org, brand, campaign, row["id"]) if row else None
 
 
-def _create(conn, org, brand, campaign, payload, actor, ab=None):
+def _create(conn, org, brand, campaign, payload, actor, ab=None, commit=True):
+    """`commit=False` leaves the transaction open for the caller (`create` with a decision); a
+    failure still rolls back here."""
     c = data.campaign(conn, org, brand, campaign)
     required = {"operation_id", "title", "items", "month"}
     if (
@@ -100,7 +120,8 @@ def _create(conn, org, brand, campaign, payload, actor, ab=None):
         if ab is not None:
             existing = open_ab_set(conn, org, brand, campaign, ab["pair_id"])
             if existing is not None:
-                conn.commit()
+                if commit:
+                    conn.commit()
                 return existing
         prior = conn.execute(
             "SELECT id,campaign_id,request_hash FROM ads_change_set WHERE "
@@ -111,7 +132,8 @@ def _create(conn, org, brand, campaign, payload, actor, ab=None):
             if prior["request_hash"] != request_hash or prior["campaign_id"] != campaign:
                 raise ValueError("同一次操作的內容已改變，請重新建立清單。")
             result = data.get(conn, org, brand, campaign, prior["id"])
-            conn.commit()
+            if commit:
+                conn.commit()
             return result
         items = [data.build_item(conn, org, brand, campaign, item, c) for item in payload["items"]]
         if source == "cleanup" and any(i["kind"] != "pause" for i in items):
@@ -221,7 +243,8 @@ def _create(conn, org, brand, campaign, payload, actor, ab=None):
                 "AND brand_id=%s AND campaign_id=%s AND id=%s AND status<>'approved'",
                 (org, brand, campaign, supersedes),
             )
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         conn.rollback()
         raise
@@ -394,7 +417,8 @@ def approve(conn, org, brand, campaign, set_id, expected_hash, actor):
     return data.get(conn, org, brand, campaign, set_id)
 
 
-def decide(conn, org, brand, campaign, set_id, decision, reason, revisit_at, actor):
+def _decision_input(decision, reason, revisit_at):
+    """The checked 拒絕／暫緩 input -- refused before anything is written."""
     if (
         decision not in {"rejected", "deferred"}
         or not isinstance(reason, str)
@@ -409,33 +433,43 @@ def decide(conn, org, brand, campaign, set_id, decision, reason, revisit_at, act
                 raise ValueError
         except ValueError:
             raise ValueError("暫緩請選擇未來的重看時間。") from None
+    return decision, reason, revisit
+
+
+def _apply_decision(conn, org, brand, campaign, set_id, decision, reason, revisit, actor):
+    """Writes the decision inside the caller's transaction (no commit, no rollback here)."""
+    data.lock(conn, org, brand)
+    current = data.get(conn, org, brand, campaign, set_id)
+    if current["status"] not in {"draft", "deferred"}:
+        raise ValueError("已核准清單請逐項處理，不可用暫緩掩蓋尚未完成的操作。")
+    conn.execute(
+        "UPDATE ads_change_set SET status=%s,decision_reason=%s,revisit_at=%s "
+        "WHERE id=%s AND org_id=%s AND brand_id=%s",
+        (decision, reason.strip(), revisit, set_id, org, brand),
+    )
+    if decision == "rejected" and current["plan_json"].get("source") == "cleanup":
+        # F29-I01 Contract B: remember each proposed ad's grade at this "no".
+        _write_decision_grades(
+            conn, org, brand, campaign, set_id,
+            [i["target_id"] for i in current["items"] if i["kind"] == "pause"],
+        )
+    write_audit(
+        conn,
+        org_id=org,
+        brand_id=brand,
+        entity_type="ads_change_set",
+        entity_id=set_id,
+        action=decision,
+        actor=actor,
+        reason=reason,
+        after={"revisit_at": str(revisit) if revisit else None},
+    )
+
+
+def decide(conn, org, brand, campaign, set_id, decision, reason, revisit_at, actor):
+    decision, reason, revisit = _decision_input(decision, reason, revisit_at)
     try:
-        data.lock(conn, org, brand)
-        current = data.get(conn, org, brand, campaign, set_id)
-        if current["status"] not in {"draft", "deferred"}:
-            raise ValueError("已核准清單請逐項處理，不可用暫緩掩蓋尚未完成的操作。")
-        conn.execute(
-            "UPDATE ads_change_set SET status=%s,decision_reason=%s,revisit_at=%s "
-            "WHERE id=%s AND org_id=%s AND brand_id=%s",
-            (decision, reason.strip(), revisit, set_id, org, brand),
-        )
-        if decision == "rejected" and current["plan_json"].get("source") == "cleanup":
-            # F29-I01 Contract B: remember each proposed ad's grade at this "no".
-            _write_decision_grades(
-                conn, org, brand, campaign, set_id,
-                [i["target_id"] for i in current["items"] if i["kind"] == "pause"],
-            )
-        write_audit(
-            conn,
-            org_id=org,
-            brand_id=brand,
-            entity_type="ads_change_set",
-            entity_id=set_id,
-            action=decision,
-            actor=actor,
-            reason=reason,
-            after={"revisit_at": str(revisit) if revisit else None},
-        )
+        _apply_decision(conn, org, brand, campaign, set_id, decision, reason, revisit, actor)
         conn.commit()
     except Exception:
         conn.rollback()

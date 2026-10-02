@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount } from "./patterns";
 // `patterns/index.ts` does not re-export the part fills; same feature folder, so the direct path is allowed.
 import { allocationFills } from "./patterns/ScenarioBars";
+import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
 import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
@@ -41,7 +42,7 @@ function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }
       {rows.map((row, i) => (
         <li key={`${row.ad_name}-${i}`} data-slot="coordinate-learning" className="border-t border-border py-2.5 text-[13px] first:border-t-0">
           <div className="flex flex-wrap items-center gap-2">
-            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : formatAmount(Math.floor(row.cost_per_result))}`} />
+            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : perSaleAmount(row.cost_per_result)}`} />
             <span className="min-w-0 [overflow-wrap:anywhere]">「{row.ad_name}」（{row.campaign_name}）</span>
           </div>
           {row.coordinates.length > 0 && (

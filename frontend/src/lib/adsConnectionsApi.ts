@@ -14,7 +14,7 @@
  *   is `missing`.
  * - `auth_expired` / `failed` win over gaps; `missing_days` lists the unread complete days (up to
  *   yesterday) of this month or of the last 28 days, whichever starts earlier.
- * - `note` is server-written text, shown as is. `action` is `null` when there is nothing for the
+ * - `note` is server-written text, shown as is; a failed account's note is its reason, then its gap. `action` is `null` when there is nothing for the
  *   user to do on another page.
  * - `attention_count` counts every source whose state is not `ok` or `unsupported`.
  * - Calendar dates are the organisation's own; `calendar.today` is today. Orders are `none` before
@@ -54,7 +54,13 @@ export interface ConnectionSource {
   /** Accounts only: open campaigns with unread days or a failing read. */
   affected_campaigns: { id: string; name: string }[];
   action: ConnectionAction | null;
+  /** F47 Contract H: on an `ad_account` row in state `failed` / `missing_days` / `never`, the body of
+   * `POST …/existing-campaigns/refresh` that reads the account again (the missing range, else the page's window up
+   * to yesterday); null on every other row. */
+  reread: ConnectionReread | null;
 }
+
+export interface ConnectionReread { platform: string; source_account: string; start: string; end: string }
 
 export type CalendarDayState = "ok" | "missing" | "none" | "future";
 

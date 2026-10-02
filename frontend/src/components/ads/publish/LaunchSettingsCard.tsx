@@ -10,6 +10,7 @@ import {
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ManualSettings } from "../ManualSettings";
+import { isCappedBid } from "./LaunchSettingsCopy";
 import { Disclosure, ReadFailed, Segmented, SettingField, SettingsGrid } from "../patterns";
 
 /** F29-I16 list stage (prototype v10 `setCard()` inside `pubList()`, hash `pub/fall/list`): the launch settings every
@@ -30,7 +31,11 @@ const utmValid = (v: string) => UTM.test(v.trim()) && /(^|&)utm_source=/.test(v.
 const SHORT: Record<LaunchSettingsError["code"], string> = {
   utm_format: "UTM 格式不對", utm_source_missing: "UTM 格式不對", age_range: "年齡範圍不對",
   countries_empty: "地區至少選一個", positions_empty: "手動版位至少選一個", pixel_unknown: "像素不在帳號的清單裡",
+  pixel_format: "像素 ID 格式不對", bid_amount_missing: "出價金額還沒填", bid_amount_invalid: "出價金額不對",
 };
+
+/** A typed amount as sent: empty = unset, anything else the number typed (never clamped or rounded). */
+const typedAmount = (text: string) => (text.trim() === "" ? null : Number(text));
 
 export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampaignSaved, onBlockerChange }: {
   brandId: string;
@@ -130,6 +135,7 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   const audience = (patch: Partial<Values["audience"]>) => change({ ...draft, audience: { ...draft.audience, ...patch } });
   const positionsError = serverErrors.find((e) => e.field === "placement.positions");
   const pixelError = serverErrors.find((e) => e.field === "pixel_id");
+  const bidError = serverErrors.find((e) => e.field === "bid_amount");
   const pending_count = campaign.manual_handoff?.pending_count ?? 0;
   const foldLabel = `進階設定${utmBad ? "・UTM 格式不對" : ""}${pending_count ? `・${pending_count} 組設定待補` : ""}`;
 
@@ -148,9 +154,17 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
           <SettingField label="出價方式" htmlFor="set-bid_strategy" tag={tag(draft.bid_strategy, r.bid_strategy)}
             note={o.bid_strategy.find((x) => x.value === draft.bid_strategy)?.note}>
             <select id="set-bid_strategy" className={SELECT} value={draft.bid_strategy}
-              onChange={(e) => change({ ...draft, bid_strategy: e.target.value as Values["bid_strategy"] })}>
+              onChange={(e) => {
+                const bid_strategy = e.target.value as Values["bid_strategy"];
+                const { bid_amount, ...rest } = draft;
+                change(isCappedBid(bid_strategy) ? { ...rest, bid_strategy, bid_amount: bid_amount ?? null } : { ...rest, bid_strategy });
+              }}>
               {o.bid_strategy.map((x) => <option key={x.value} value={x.value}>{x.label}{rec(x.value === r.bid_strategy)}</option>)}
             </select>
+            {isCappedBid(draft.bid_strategy) && (
+              <BidAmountField key={draft.bid_strategy} value={draft.bid_amount ?? null} error={bidError?.message}
+                onType={(bid_amount) => change({ ...draft, bid_amount }, 700)} />
+            )}
           </SettingField>
           <SettingField label="版位" tag={tag(draft.placement, r.placement)} note={o.placement_modes.find((x) => x.value === draft.placement.mode)?.note}>
             <Segmented label="版位" value={draft.placement.mode}
@@ -196,7 +210,7 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
             </div>
             {serverErrors.filter((e) => e.field.startsWith("audience.")).map((e) => <p key={e.code} className="mt-1 text-xs text-danger">{e.message}</p>)}
           </SettingField>
-          <PixelField view={view} draft={draft} tagValue={tag(draft.pixel_id, r.pixel_id)} error={pixelError?.message}
+          <PixelField view={view} draft={draft} locked={locked} tagValue={tag(draft.pixel_id, r.pixel_id)} error={pixelError?.message}
             onPick={(pixel_id) => change({ ...draft, pixel_id })} onType={(pixel_id) => change({ ...draft, pixel_id }, 700)} />
         </SettingsGrid>
       </fieldset>
@@ -225,13 +239,39 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   );
 }
 
+/** 出價金額 (F47-I06, Contract A bid): the one amount a capped strategy needs, typed as is; the server's sentence
+ * shows under it while it is missing or not above 0. */
+function BidAmountField({ value, error, onType }: { value: number | null; error?: string; onType: (amount: number | null) => void }) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  return (
+    <div className="mt-2">
+      <label htmlFor="set-bid_amount" className="mb-1 block text-xs text-muted-foreground">出價金額（每筆／每次最多出多少）</label>
+      <Input id="set-bid_amount" type="number" inputMode="decimal" step="any" placeholder="例如 450" value={text}
+        aria-invalid={error ? true : undefined}
+        onChange={(e) => { setText(e.target.value); onType(typedAmount(e.target.value)); }} />
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+    </div>
+  );
+}
+
 /** 像素: the account's pixels as choices; when the list could not be read, its reason and a typed pixel ID (nothing
- * preselected or guessed). */
-function PixelField({ view, draft, tagValue, error, onPick, onType }: {
-  view: LaunchSettingsView; draft: Values; tagValue: "recommended" | "edited"; error?: string;
+ * preselected or guessed). F47-I06 (R5): once the launch is approved the field is read only, so the sentence names the
+ * lock and the pixel in use instead of asking for a typed ID. */
+function PixelField({ view, draft, locked, tagValue, error, onPick, onType }: {
+  view: LaunchSettingsView; draft: Values; locked: boolean; tagValue: "recommended" | "edited"; error?: string;
   onPick: (id: string | null) => void; onType: (id: string | null) => void;
 }) {
   const { pixels, pixels_error, field_notes } = view.options;
+  if (pixels === null && locked) {
+    return (
+      <SettingField label="像素" htmlFor="set-pixel_id" tag={draft.pixel_id === null ? null : tagValue} note={field_notes.pixel_id}>
+        <p className="mb-1.5 text-xs text-warning">
+          {pixels_error ?? "像素清單讀不到。"}核准後已定下來，目前用的是{draft.pixel_id === null ? "「沒有選像素」" : `像素 ${draft.pixel_id}`}；想改，改完再核准一次。
+        </p>
+        <Input id="set-pixel_id" value={draft.pixel_id ?? "沒有選像素"} readOnly disabled />
+      </SettingField>
+    );
+  }
   if (pixels === null) {
     return (
       <SettingField label="像素" htmlFor="set-pixel_id" tag={draft.pixel_id === null ? null : tagValue} note={field_notes.pixel_id}>

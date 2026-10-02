@@ -3,6 +3,7 @@
  * decisions: no endpoint). Unknown numbers stay empty cells / 「未知」, never 0. */
 import type { SettleCampaign, SettleFate, SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { downloadCsv, formatAmount, type CsvCell } from "../patterns";
+import { perSaleAmount } from "../patterns/csv";
 
 /** The origin tag of a campaign read from the platform instead of built here (prototype `FROM_META`). */
 export const FROM_META = "從 Meta 帶進來";
@@ -19,9 +20,10 @@ export function money(value: number | null | undefined): string {
   return text === null ? "未知" : `${text} 元`;
 }
 
-/** A cost per result as whole yuan (prototype `yuan()`: floored), or 「未知」. */
+/** A cost per result as whole yuan through the one per-sale rule (rounded, F47-I06), or 「未知」. */
 export function yuan(value: number | null | undefined): string {
-  return value === null || value === undefined || !Number.isFinite(value) ? "未知" : money(Math.floor(value));
+  const text = perSaleAmount(value);
+  return text === null ? "未知" : `${text} 元`;
 }
 
 /** 「日常商品推廣」 from 「日常商品推廣・轉換」 (prototype `name.split("・")[0]`), capped so a long real name stays a label. */

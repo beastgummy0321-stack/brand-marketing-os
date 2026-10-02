@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
+import { ApiResponseError } from "@/lib/http";
 import {
   CURRENCIES,
   saveProductEconomics,
@@ -10,7 +11,16 @@ import {
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { PanelSaveButton } from "../shared/PanelSaveButton";
 
-/** 新增／更新產品經濟數字側板（契約 S6.33）：售價必填，其餘數字欄位預設 0。 */
+type NumberField = "selling_price" | "fixed_cost" | "unit_variable_cost" | "shipping_cost";
+
+/** What was typed, as sent (F47 Contract A): empty = `null` (unset), never 0 and never clamped. */
+function typed(raw: string): number | null {
+  return raw.trim() === "" ? null : Number(raw);
+}
+
+/** 新增／更新產品經濟數字側板（契約 S6.33）：售價必填，三個成本留空＝未填（送 null，不補 0）。
+ * F47-I03: a refused number shows the server's sentence under its own field (the route's
+ * `field_errors`); every message clears as soon as any field changes. */
 export function EconomicsPanel({
   brandId,
   productId,
@@ -26,12 +36,13 @@ export function EconomicsPanel({
 }) {
   const editing = economics !== null;
   const [sellingPrice, setSellingPrice] = useState(String(economics?.selling_price ?? ""));
-  const [fixedCost, setFixedCost] = useState(String(economics?.fixed_cost ?? 0));
-  const [unitVariableCost, setUnitVariableCost] = useState(String(economics?.unit_variable_cost ?? 0));
-  const [shippingCost, setShippingCost] = useState(String(economics?.shipping_cost ?? 0));
+  const [fixedCost, setFixedCost] = useState(String(economics?.fixed_cost ?? ""));
+  const [unitVariableCost, setUnitVariableCost] = useState(String(economics?.unit_variable_cost ?? ""));
+  const [shippingCost, setShippingCost] = useState(String(economics?.shipping_cost ?? ""));
   const [currency, setCurrency] = useState(economics?.currency ?? CURRENCIES[0][0]);
   const [confirmedBy, setConfirmedBy] = useState(economics?.confirmed_by ?? "");
   const [closeRate, setCloseRate] = useState(economics?.close_rate == null ? "" : String(economics.close_rate));
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<NumberField, string>>>({});
   // 使用者手改一個欄位時，那一欄不再是假設值（decision 17）——編輯任何欄位都會把它從
   // assumptions 移掉，不分是不是「假設值」原本掛的那個欄位，因為使用者已經看過並確認過整組數字。
   const [assumptions, setAssumptions] = useState<AssumptionField[]>(economics?.assumptions ?? []);
@@ -39,20 +50,32 @@ export function EconomicsPanel({
     setAssumptions((prev) => prev.filter((f) => f !== field));
 
   const form = useFormSubmit(async () => {
-    await saveProductEconomics(brandId, productId, {
-      selling_price: Number(sellingPrice) || 0,
-      fixed_cost: Number(fixedCost) || 0,
-      unit_variable_cost: Number(unitVariableCost) || 0,
-      shipping_cost: Number(shippingCost) || 0,
-      currency,
-      // ADR 0053 §5：生效日一律是今天，這裡不再收使用者輸入，固定送空字串（後端視為未填）。
-      effective_from: "",
-      confirmed_by: confirmedBy,
-      close_rate: closeRate.trim() === "" ? null : Number(closeRate),
-      assumptions,
-    });
+    setFieldErrors({});
+    try {
+      await saveProductEconomics(brandId, productId, {
+        selling_price: typed(sellingPrice),
+        fixed_cost: typed(fixedCost),
+        unit_variable_cost: typed(unitVariableCost),
+        shipping_cost: typed(shippingCost),
+        currency,
+        // ADR 0053 §5：生效日一律是今天，這裡不再收使用者輸入，固定送空字串（後端視為未填）。
+        effective_from: "",
+        confirmed_by: confirmedBy,
+        close_rate: typed(closeRate),
+        assumptions,
+      });
+    } catch (err) {
+      if (err instanceof ApiResponseError) setFieldErrors(err.fieldErrors);
+      throw err;
+    }
     onSaved();
   });
+  const shownUnderField = Object.values(fieldErrors).some(Boolean);
+
+  function fieldChanged(event: FormEvent<HTMLFormElement>) {
+    form.formProps.onChange(event);
+    setFieldErrors({});
+  }
 
   return (
     <SidePanel ariaLabel={editing ? "更新產品經濟數字" : "填寫產品經濟數字"} onClose={onClose}>
@@ -69,6 +92,7 @@ export function EconomicsPanel({
       </div>
       <form
         className="flex flex-col gap-4"
+        onChange={fieldChanged}
         onSubmit={(e) => {
           e.preventDefault();
           void form.submit();
@@ -82,8 +106,10 @@ export function EconomicsPanel({
             value={sellingPrice}
             onChange={(e) => setSellingPrice(e.target.value)}
             required
+            aria-invalid={fieldErrors.selling_price ? true : undefined}
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
+          <FieldError message={fieldErrors.selling_price} />
         </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1 text-sm">
@@ -93,9 +119,11 @@ export function EconomicsPanel({
               step="0.01"
               value={fixedCost}
               onChange={(e) => setFixedCost(e.target.value)}
+              aria-invalid={fieldErrors.fixed_cost ? true : undefined}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
             <span className="text-xs text-muted-foreground">每月不管賣幾件都要付的錢。</span>
+            <FieldError message={fieldErrors.fixed_cost} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium text-foreground">單位變動成本</span>
@@ -107,13 +135,15 @@ export function EconomicsPanel({
                 setUnitVariableCost(e.target.value);
                 dropAssumption("cost");
               }}
+              aria-invalid={fieldErrors.unit_variable_cost ? true : undefined}
               className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
             />
             <span className="text-xs text-muted-foreground">每賣一件多花的錢。</span>
+            <FieldError message={fieldErrors.unit_variable_cost} />
           </label>
         </div>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-foreground">運費（可填負數表示折抵）</span>
+          <span className="font-medium text-foreground">運費</span>
           <input
             type="number"
             step="0.01"
@@ -122,8 +152,10 @@ export function EconomicsPanel({
               setShippingCost(e.target.value);
               dropAssumption("shipping");
             }}
+            aria-invalid={fieldErrors.shipping_cost ? true : undefined}
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
+          <FieldError message={fieldErrors.shipping_cost} />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">成交率（選填）</span>
@@ -168,11 +200,15 @@ export function EconomicsPanel({
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
         </label>
-        {form.error && <p className="text-sm text-danger">{form.error}</p>}
+        {form.error && !shownUnderField && <p role="alert" className="text-sm text-danger">{form.error}</p>}
         <div>
           <PanelSaveButton saving={form.saving} label={editing ? "儲存修改" : "儲存這筆經濟數字"} />
         </div>
       </form>
     </SidePanel>
   );
+}
+
+function FieldError({ message }: { message: string | undefined }) {
+  return message ? <span role="alert" className="text-xs text-danger">{message}</span> : null;
 }

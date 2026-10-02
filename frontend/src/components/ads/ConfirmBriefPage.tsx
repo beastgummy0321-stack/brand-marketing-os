@@ -210,12 +210,9 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => { if (v === null || v === cap.own_value) cancel(); else void saveCap(v); }} />,
     },
   ];
-  // The target writer does not touch `field_sources.cap`: the cap's tag is shown only while the value is still the
-  // one its source gave (the previous campaign's cap／the whole break-even).
-  const previousCap = products.find((p) => p.id === productId)?.previous?.cap ?? null;
-  const capTagHolds = cap.own_value !== null && (
-    sources.cap === "copied" ? cap.own_value === previousCap
-      : sources.cap === "break_even" ? cap.break_even !== null && cap.own_value === Math.round(cap.break_even) : false);
+  // F47-I06: the target writer sets `field_sources.cap` to `user` when it changes the cap, so the stored source is
+  // the cap's tag as is (沿用上一期／打平 only while the create's value still stands).
+  const capTagHolds = cap.own_value !== null;
   const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length;
   const capUnfilled = cap.own_value === null && cap.break_even !== null;
   const barHint = [guesses ? `有 ${guesses} 項是猜的` : null, capUnfilled ? "上限沒填會先用打平" : null].filter(Boolean).join("・") || undefined;
@@ -264,8 +261,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
 const onEscape = (cancel: () => void) => (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } };
 const SELECT = "h-9 min-w-0 flex-1 rounded-md border border-input bg-card px-3 text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
-function DoneButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
-  return <Button size="sm" variant="outline" disabled={disabled} onClick={onClick}>完成</Button>;
+function DoneButton({ disabled, disabledReason, onClick }: { disabled?: boolean; disabledReason?: string; onClick: () => void }) {
+  return <Button size="sm" variant="outline" disabled={disabled} disabledReason={disabledReason} onClick={onClick}>完成</Button>;
 }
 
 function SelectEditor({ label, options, initial, busy, onDone, onCancel }: {
@@ -291,7 +288,8 @@ function DatesEditor({ start, end, busy, onDone, onCancel }: {
     <>
       <Input aria-label="開始日期" type="date" value={s} onChange={(ev) => setS(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
       <Input aria-label="結束日期" type="date" value={e} onChange={(ev) => setE(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
-      <DoneButton disabled={busy || !s || !e || e < s} onClick={() => onDone(s, e)} />
+      <DoneButton disabled={busy || !s || !e || e < s} onClick={() => onDone(s, e)}
+        disabledReason={!s ? "開始日期還沒填" : !e ? "結束日期還沒填" : e < s ? "結束日不能早於開始日" : undefined} />
     </>
   );
 }

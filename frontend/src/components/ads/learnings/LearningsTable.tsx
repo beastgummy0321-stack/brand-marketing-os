@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { LearningCampaign, LearningRow } from "@/lib/adsLearningsApi";
 import { cn } from "@/lib/utils";
-import { Chip, formatAmount } from "../patterns/Chip";
+import { Chip } from "../patterns/Chip";
+import { perSaleAmount } from "../patterns/csv";
 
 /** Money as the prototype prints it (`fmt`): whole units, thousands separators. */
 export function learnMoney(value: number | null | undefined): string {
-  return formatAmount(value === null || value === undefined ? null : Math.round(value)) ?? "—";
+  return perSaleAmount(value) ?? "—";
 }
 
 /** `YYYY-MM-DD` → `MM/DD`; anything else prints nothing (never a raw ISO string). */

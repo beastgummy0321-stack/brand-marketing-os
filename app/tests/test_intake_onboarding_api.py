@@ -45,6 +45,10 @@ _PREFILL = {
 }
 
 
+# A JPEG frame header (1x1): photo uploads are checked by content and header (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffc0000b080001000101011100ffd9")
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -85,7 +89,7 @@ class _Base(unittest.TestCase):
 
     def _upload(self, name: str = "t.jpg") -> str:
         resp = self.client.post("/api/intake/photos",
-                                files={"photo": (name, io.BytesIO(b"x" * 100), "image/jpeg")})
+                                files={"photo": (name, io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(resp.status_code, 200, resp.text)
         token = resp.json()["token"]
         key = state.get_pending_photos(token)[0]["storage_key"]

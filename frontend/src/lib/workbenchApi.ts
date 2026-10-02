@@ -5,7 +5,8 @@
 import { apiFetch, errorMessageFrom } from "./http";
 
 export type PackStatus = "pending" | "running" | "awaiting_approval" | "done";
-export type PackListStatus = "all" | PackStatus;
+/** `closed` lists only the closed packs (F47, drill-10 乙 #21); every other value lists open ones. */
+export type PackListStatus = "all" | PackStatus | "closed";
 export type PackSort = "updated" | "created" | "progress";
 export type ProductPart = "copy" | "image_prompt" | "video_script";
 
@@ -38,6 +39,12 @@ export interface PackCard {
   next_step: PackNextStep | null;
   counts: PackCount[];
   updated_at: string;
+  /** F47 (drill-10 乙 #17): the upstream screen (a campaign) 查看來源 opens; `null` without one. */
+  origin_href?: string | null;
+  /** F47 (drill-10 乙 #21): the pack was closed (listed under 「已關閉」 only). */
+  closed?: boolean;
+  /** F47 Q7: approved while sets still miss parts — 「已核准・還缺 N 組」 and the first such set. */
+  approved_gap?: { missing: number; set_id: string; label: string } | null;
 }
 
 export interface PackCompletionItem {
@@ -69,7 +76,6 @@ export interface PackDetail extends PackCard {
   /** F03-I07: upstream-supplied, rendered verbatim — absent when the pack has no upstream
    * origin (自由創作), in which case `source_label` is used instead. */
   origin_label?: string | null;
-  origin_href?: string | null;
   meta: { platform: string | null; goal: string | null; sets_required: number };
   summary: Partial<{
     situation: string;
@@ -135,6 +141,8 @@ export interface SetProduct {
   versions: ProductVersion[];
   /** F07-I08：`image_prompt` 的「複製全部」文字，其餘產物固定 `null`。 */
   copy_all_text?: string | null;
+  /** F47 Q7: this part's own lock — an approved pack locks every part except one the set still misses. */
+  locked?: boolean;
 }
 
 export interface SetSibling {
@@ -164,7 +172,14 @@ export interface SetDetail {
   origin_href?: string | null;
   /** F02-I17: 任務包核准後鎖住選定，跟 `image_generation.reason` 同一條規則——文字由後端
    * 產生一次，前端只原樣顯示，不重講規則。 */
-  lock: { locked: boolean; reason: string | null };
+  lock: {
+    /** The whole set is locked (no part open; 完成此素材組 too). */
+    locked: boolean;
+    /** Set whenever the pack is approved; with open parts it says the missing parts can still be finished. */
+    reason: string | null;
+    /** F47 Q7: the parts an override-approved set may still generate / select. */
+    open_parts?: ProductPart[];
+  };
   chips: { platform: string | null; style: string | null; size: string | null };
   siblings: SetSibling[];
   required_parts: ProductPart[];

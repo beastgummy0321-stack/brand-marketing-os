@@ -2,7 +2,7 @@
  * (prototype `connections()`), fed by the one `GET …/connections` read (Feature F30 Contract H). The fixture has
  * the real shape the server writes: an ok account, an auth-expired account with a two-day gap, a never-read
  * account, orders missing after a date, a product without cost, and the four platforms without a reader. */
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,19 +10,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdsConnections, CalendarDayState, ConnectionSource } from "@/lib/adsConnectionsApi";
 import { getConnections } from "@/lib/adsConnectionsApi";
 import { formatSyncTime } from "@/lib/format";
+import { refreshExisting, syncJob } from "@/lib/adsExternalApi";
 import { DataConnectionsPage, sourceChip, sourceNote } from "./DataConnectionsPage";
 
 vi.mock("@/lib/adsConnectionsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsConnectionsApi")>("@/lib/adsConnectionsApi");
   return { ...actual, getConnections: vi.fn() };
 });
+vi.mock("@/lib/adsExternalApi", () => ({ refreshExisting: vi.fn(), syncJob: vi.fn() }));
 
 const iso = (d: number) => `2026-09-${String(d).padStart(2, "0")}`;
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => iso(from + i));
 const TODAY = 23;
 
 function source(overrides: Partial<ConnectionSource> & Pick<ConnectionSource, "key" | "kind" | "name" | "state" | "note">): ConnectionSource {
-  return { platform: null, last_success_at: null, missing_days: [], affected_campaigns: [], action: null, ...overrides };
+  return { platform: null, last_success_at: null, missing_days: [], affected_campaigns: [], action: null, reread: null, ...overrides };
 }
 
 function days(state: (d: number) => CalendarDayState) {
@@ -38,10 +40,11 @@ function fixture(): AdsConnections {
       source({ key: "meta:act_1", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・示例品牌主帳戶", state: "ok",
         note: "每天的資料都有讀到", last_success_at: "2026-09-23T00:40:00Z" }),
       source({ key: "meta:act_2", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・中秋活動帳戶", state: "auth_expired",
-        note: "09/17、09/18 讀不到・中秋限定活動先不判斷", last_success_at: "2026-09-16T01:00:00Z", missing_days: [iso(17), iso(18)],
+        note: "授權已失效，重新授權後才能讀資料；09/17、09/18 讀不到・中秋限定活動先不判斷", last_success_at: "2026-09-16T01:00:00Z", missing_days: [iso(17), iso(18)],
         affected_campaigns: [{ id: "cmp_mid", name: "中秋限定活動" }], action: { label: "重新授權", href: "/settings?tab=meta" } }),
       source({ key: "meta:act_3", kind: "ad_account", platform: "meta", name: "Meta 廣告帳戶・新品測試帳戶", state: "never",
-        note: "還沒讀取過", missing_days: ["2026-08-26", ...range(1, 22)] }),
+        note: "還沒讀取過", missing_days: ["2026-08-26", ...range(1, 22)],
+        reread: { platform: "meta", source_account: "act_3", start: "2026-08-26", end: "2026-09-22" } }),
       source({ key: "orders", kind: "orders", name: "商城訂單報表", state: "missing_days", note: "最新到 09/12，缺 09/13 之後",
         missing_days: range(13, 22), action: { label: "補報表", href: "/brands/brd_1/orders" } }),
       source({ key: "product_costs", kind: "product_costs", name: "商品成本", state: "missing_cost", note: "3 個商品，2 個有成本；秋季新色缺成本",
@@ -100,9 +103,67 @@ describe("sourceChip / sourceNote (state → chip words; the server note shown a
 
   it("an ok account adds its last read time; every other row prints the server note unchanged", () => {
     expect(sourceNote(ok)).toBe(`每天的資料都有讀到・最近讀取 ${formatSyncTime("2026-09-23T00:40:00Z")}`);
-    expect(sourceNote(expired)).toBe("09/17、09/18 讀不到・中秋限定活動先不判斷");
+    expect(sourceNote(expired)).toBe("授權已失效，重新授權後才能讀資料；09/17、09/18 讀不到・中秋限定活動先不判斷");
     expect(sourceNote({ ...ok, last_success_at: null })).toBe("每天的資料都有讀到");
     expect(sourceNote(orders)).toBe("最新到 09/12，缺 09/13 之後");
+  });
+});
+
+describe("重新讀取 (F47-I08, Contract H, drill-10 R6)", () => {
+  const button = (name: string) => within(row(name)).queryByRole("button", { name: /重新讀取|讀取中/ });
+
+  it("only rows the server marks `reread` get 重新讀取 — never ok or auth-expired (重新授權 fixes those)", async () => {
+    renderPage();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    expect(button("Meta 廣告帳戶・新品測試帳戶")).toBeTruthy();
+    expect(button("Meta 廣告帳戶・示例品牌主帳戶")).toBeNull();
+    expect(button("Meta 廣告帳戶・中秋活動帳戶")).toBeNull();
+    expect(button("商城訂單報表")).toBeNull();
+  });
+
+  it("a failed row keeps its 查看連線 link next to 重新讀取, and its note says the reason before the gap", async () => {
+    const data = fixture();
+    data.sources[1] = { ...data.sources[1], state: "failed", note: "Meta 暫時讀不到（代碼 2）；09/17、09/18 讀不到",
+      action: { label: "查看連線", href: "/settings?tab=meta" },
+      reread: { platform: "meta", source_account: "act_2", start: "2026-09-17", end: "2026-09-18" } };
+    vi.mocked(getConnections).mockResolvedValue(data);
+    renderPage();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    const failed = row("Meta 廣告帳戶・中秋活動帳戶");
+    expect(within(failed).getByRole("button", { name: "重新讀取" })).toBeTruthy();
+    expect(within(failed).getByRole("link", { name: "查看連線 →" })).toBeTruthy();
+    expect(within(failed).getByText("Meta 暫時讀不到（代碼 2）；09/17、09/18 讀不到")).toBeTruthy();
+  });
+
+  it("posts the refresh with the server's range, waits on the job, then reads the page again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(refreshExisting).mockResolvedValue({ job: { id: "aes_1", status: "pending", last_success_at: null } });
+      vi.mocked(syncJob).mockResolvedValueOnce({ job: { id: "aes_1", status: "running", last_success_at: null }, connected: true })
+        .mockResolvedValueOnce({ job: { id: "aes_1", status: "succeeded", last_success_at: "2026-09-23T02:00:00Z" }, connected: true });
+      renderPage();
+      await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+      await userEvent.click(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" }));
+      expect(refreshExisting).toHaveBeenCalledWith("brd_1", "meta", "act_3", { start: "2026-08-26", end: "2026-09-22" });
+      expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "讀取中…" }).hasAttribute("disabled")).toBe(true);
+      expect(getConnections).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(getConnections).toHaveBeenCalledTimes(2));
+      expect(syncJob).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a refused refresh shows the server's sentence on the row and the button comes back", async () => {
+    vi.mocked(refreshExisting).mockRejectedValue(new Error("每次同步請選擇最多31日且不含未來的範圍。"));
+    renderPage();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    await userEvent.click(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" }));
+    expect((await within(row("Meta 廣告帳戶・新品測試帳戶")).findByRole("alert")).textContent).toBe("每次同步請選擇最多31日且不含未來的範圍。");
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" })).toBeTruthy();
+    expect(getConnections).toHaveBeenCalledTimes(1);
   });
 });
 

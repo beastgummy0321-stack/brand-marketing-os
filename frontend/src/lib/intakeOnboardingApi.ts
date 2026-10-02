@@ -80,6 +80,16 @@ export interface OnboardingScan {
   prefilled: number;
   pages_read: number;
   photos_read: number;
+  /** The website list this read was for (F47 Contract F); a saved list that differs makes the read stale
+   * (the status then reads `none` and the scan starts again). */
+  urls_read: string[];
+  /** Pages that could not be read, each with the reason in Chinese (HTTP status, timeout, unknown domain, …). */
+  pages_failed: ScanPageFailed[];
+}
+
+export interface ScanPageFailed {
+  url: string;
+  reason: string;
 }
 
 // ---- 自訂 (F42-I05): a proposal only; the step's PUT saves it ----

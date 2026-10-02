@@ -405,6 +405,10 @@ const stepBase = (brandId: string, productId: string) =>
 export const fetchProductsPage = (brandId: string): Promise<ProductsPage> =>
   send(`${brandBase(brandId)}/products`);
 
+/** 「不用了」 on an AI product suggestion (F47 Q8): the name is never suggested again -> the products page. */
+export const dismissProductSuggestion = (brandId: string, name: string): Promise<ProductsPage> =>
+  send(`${brandBase(brandId)}/products/suggestions/dismiss`, json("POST", { name }));
+
 /** A new product at step 1 (with `page_url`, the product-page read can start). */
 export const createProduct = (brandId: string, input: { name: string; page_url?: string }): Promise<CreatedProduct> =>
   send(`${brandBase(brandId)}/products`, json("POST", input));
@@ -412,10 +416,11 @@ export const createProduct = (brandId: string, input: { name: string; page_url?:
 export const fetchProductOnboarding = (brandId: string, productId: string): Promise<ProductOnboardingStatus> =>
   send(stepBase(brandId, productId));
 
-/** Re-read the product page (no-op while a read runs) -> the status. 400: the product is finished
- * or has neither a page URL nor a photo; 409: the AI cost cap refused before any call. */
-export const startProductScan = (brandId: string, productId: string): Promise<ProductOnboardingStatus> =>
-  send(`${stepBase(brandId, productId)}/scan`, json("POST", {}));
+/** Re-read the product page (no-op while a read runs) -> the status. `pageUrl` (the address in the field now) is
+ * stored on the product first and is what gets read (F47 Contract F). 400: the product is finished, the URL is not
+ * one, or there is neither a page URL nor a photo; 409: the AI cost cap refused before any call. */
+export const startProductScan = (brandId: string, productId: string, pageUrl?: string): Promise<ProductOnboardingStatus> =>
+  send(`${stepBase(brandId, productId)}/scan`, json("POST", pageUrl === undefined ? {} : { page_url: pageUrl }));
 
 /** 「自訂」: one sentence -> one proposal (nothing saved). 409 = AI cost cap, 422 = 「AI 整理不出來，
  * 換個說法再試一次」, 502 = the AI call failed. */

@@ -209,6 +209,21 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
   });
 
+  it("F47-I06: 改期間 完成 greyed out says which field is wrong", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(LONG);
+    await user.click(screen.getByRole("button", { name: "改期間" }));
+    const end = within(field("dates")).getByLabelText("結束日期");
+    await user.clear(end);
+    await user.type(end, "2026-09-01");
+    const done = within(field("dates")).getByRole("button", { name: "完成" });
+    expect((done as HTMLButtonElement).disabled).toBe(true);
+    expect(within(field("dates")).getByText("結束日不能早於開始日")).toBeTruthy();
+    await user.clear(end);
+    expect(within(field("dates")).getByText("結束日期還沒填")).toBeTruthy();
+  });
+
   it("a sell-way with fewer than two customer groups has no audience choice", async () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign({ context_json: { product_ids: ["prd_2"], customer_group_ids: [], field_sources: sources({ audience: "system" }) } }));
     renderPage();
@@ -268,15 +283,15 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     renderPage();
     await screen.findByText(LONG);
     expect(screen.getByRole("link", { name: "← 上一步" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
-    expect(screen.getByRole("link", { name: "回到建立活動" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
+    expect(screen.getByRole("link", { name: "回到「建立活動」" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?created=cmp_1");
     await user.click(screen.getByRole("button", { name: "進階" }));
     expect(screen.getByRole("link", { name: "先處理自帶素材與手動交接" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
   });
 });
 
 describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () => {
-  it("F46-I08: a stored cap from the previous campaign or the break-even shows the value with its tag, while it still holds", async () => {
-    const capSources = (cap: "copied" | "break_even") => ({ product_ids: ["prd_1"], audience_hint: "a", field_sources: { ...sources(), cap } });
+  it("F46-I08／F47-I06: the cap's tag is its stored source — 沿用上一期／打平線 from the create, none once the user changed it", async () => {
+    const capSources = (cap: "copied" | "break_even" | "user") => ({ product_ids: ["prd_1"], audience_hint: "a", field_sources: { ...sources(), cap } });
     vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 450, basis: "own", own_value: 450 }), context_json: capSources("copied") }));
     const first = renderPage();
     await screen.findByText(LONG);
@@ -290,8 +305,8 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await screen.findByText(LONG);
     expect(field("cap").querySelector("[data-slot=source-tag]")?.textContent).toBe("打平線");
     second.unmount();
-    // Changed afterwards through the target writer (its source is not rewritten): no tag.
-    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600 }), context_json: capSources("break_even") }));
+    // Changed afterwards through the target writer: the writer stores `field_sources.cap = "user"`, so no tag.
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600 }), context_json: capSources("user") }));
     renderPage();
     await screen.findByText(LONG);
     expect(within(field("cap")).getByText("NT$600")).toBeTruthy();

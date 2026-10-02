@@ -1262,6 +1262,46 @@ class CleanupQueueTest(unittest.TestCase):
         self.assertEqual(proposal["verification_state"], "pending")
         self.assertTrue(proposal["multi"])
 
+    def _cleanup_set(self, status, *, revisit_at=None):
+        pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": self.ad1,
+                      "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,revisit_at,plan_json,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (set_id, self.org, self.brand, self.campaign, set_id, set_id, set_id, "測試清單",
+             "2026-01", status, revisit_at,
+             db.jsonb({"source": "cleanup", "items": [pause_item]}), "test"),
+        )
+        self.conn.commit()
+        return set_id
+
+    def test_every_row_carries_done_from_the_one_rule(self):
+        """F47 Contract D: `done` rides on the row -- no proposal / a draft is open, a deferred
+        set (revisit still ahead) is done and keeps its `revisit_at` for the home chip."""
+        row = self._cleanup_row(self._refresh())
+        self.assertIs(row["done"], False)
+        self._cleanup_set("draft")
+        self.assertIs(self._cleanup_row(self._refresh())["done"], False)
+        revisit = db.now_utc() + timedelta(days=3)
+        set_id = self._cleanup_set("deferred", revisit_at=revisit)
+        row = self._cleanup_row(self._refresh())
+        self.assertEqual(row["proposal"]["change_set_id"], set_id)
+        self.assertIs(row["done"], True)
+        self.assertEqual(row["proposal"]["revisit_at"], revisit)
+        self.assertTrue(all(isinstance(r["done"], bool) for r in self._refresh()["items"]))
+
+    def test_a_cleanup_with_nothing_to_close_raises_no_row(self):
+        """drill-10 Q1: a cleanup whose close list is empty (every ad left is data-insufficient)
+        is no decision -- never an open row offering 「核准清理（關 0 則）」."""
+        empty = {"campaign_id": self.campaign, "campaign_name": "活動一", "can_support": 1,
+                 "active_ads": 2, "ads": [], "keep": [], "short": 0, "daily_saving": 0,
+                 "scale_owner_id": None}
+        with patch.object(triage.triage_capacity, "cleanup_candidates", return_value=empty):
+            result = self._refresh()
+        self.assertIsNone(self._cleanup_row(result))
+
     def _cleanup_set_with_action(self, target_id, *, verification_state):
         pause_item = {"id": db.new_id("adx"), "kind": "pause", "target_id": target_id,
                       "before": {}, "after": {"status": "PAUSED"}, "reason": "x"}

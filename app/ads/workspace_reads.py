@@ -9,7 +9,8 @@ Every number and state here comes from a function that already owns it, never a 
 - grades: `triage.classify` (the one cap ruler), never the trend `class`;
 - `daily_budget`／`can_support`／`active_ads`: see `_capacity`;
 - `next_sync_at`: `home_overview._sync_block` (the home's `sync.next_at`);
-- timeline states: the home row `_handoff` rule plus `change_control_launch.is_stale`.
+- timeline states: the home row `_handoff` rule plus `change_control_launch.is_stale`;
+- `delivery` (F47 Contract E): `_delivery`, from the sync table's spend rows of this campaign.
 
 Unknown is null, never zero: each sub-read runs through `home_overview._guarded`, so a failed read
 nulls only its own field (and rolls the read transaction back for the next one).
@@ -118,6 +119,33 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
         "results": home_overview._count_out(results),
         "cost_per_result": None if cost_per_result is None else round(cost_per_result, 2),
     }
+
+
+def _has_spent(conn, org_id, brand_id, campaign_id) -> bool:
+    """F47 Contract E: whether the sync table (the one performance source, F37) holds any day of
+    this campaign with spend > 0 -- any day, any scope. No row at all, or only zero／unknown-spend
+    rows, is "not spending yet"."""
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM ads_external_daily WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND spend > 0) AS spent",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    return bool(row["spent"])
+
+
+def _delivery(conn, org_id, brand_id, campaign_id, *, draft, closed) -> str | None:
+    """F47 Contract E: `waiting` (on the platform, the sync table has no day with spend > 0) or
+    `live`; null for a draft, a closed campaign, or when the spend read failed -- unknown is never
+    promoted to either."""
+    if draft or closed:
+        return None
+    spent = home_overview._guarded(
+        conn, "workspace.delivery",
+        lambda: _has_spent(conn, org_id, brand_id, campaign_id),
+    )
+    if spent is None:
+        return None
+    return "live" if spent else "waiting"
 
 
 def _launch_counts(conn, org_id, brand_id, change_set_ids) -> dict:
@@ -229,6 +257,7 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
             cap_set=cap["value"] is not None, data_ready=data_ready, open_items=pending,
         ),
         "pending_count": pending,
+        "delivery": _delivery(conn, org_id, brand_id, campaign_id, draft=draft, closed=closed),
         **_capacity(conn, org_id, brand_id, campaign, draft, triaged),
         "active_ads": active_ads,
         "next_sync_at": sync["next_at"] if sync is not None else None,

@@ -9,7 +9,7 @@ import { MARKET_REGIONS, setAdvertisingHistory } from "@/lib/libraryApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { cn } from "@/lib/utils";
-import { BarNext, brandCrumb, OnboardingBar, OnboardingStepHead, type StepNav } from "../OnboardingStepHead";
+import { brandCrumb, OnboardingBar, OnboardingStepHead, type StepNav } from "../OnboardingStepHead";
 
 const MAX_URLS = 5;
 const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp";
@@ -195,8 +195,9 @@ export function StartStep({
   const newKinds = PHOTO_SLOTS.map(([kind]) => kind).filter((kind) => uploads[kind]);
   const hasScanInput = filledUrls(urls).length > 0 || existing.length > 0 || newKinds.length > 0;
   const ready = !!brandName.trim() && !!pastAds && loaded && uploadingKind === null;
+  const blocked = blockedReason({ loaded, uploading: uploadingKind !== null, brandName, pastAds });
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     if (!brandName.trim()) throw new Error("請填寫品牌名稱。");
     if (!pastAds) throw new Error("請選擇是否曾經投放過網路廣告。");
     const photo_tokens = newKinds.map((kind) => uploads[kind]!.token);
@@ -252,6 +253,7 @@ export function StartStep({
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (ready && !saving) void submit();
@@ -355,13 +357,29 @@ export function StartStep({
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
 
       <OnboardingBar hint={hasScanInput ? "下一步系統讀網站，約 1 分鐘" : undefined}>
-        <BarNext type="submit" label={saving ? "處理中…" : hasScanInput ? "讓系統讀網站" : "下一步"} disabled={!ready || saving} />
+        {/* The bar's primary button (`BarNext`) plus F47-I03's disabled reason (drill-10 甲 建檔 #9). */}
+        <Button type="submit" size="lg" className="font-semibold" disabled={!ready || saving} disabledReason={saving ? undefined : blocked ?? undefined}>
+          {saving ? "處理中…" : hasScanInput ? "讓系統讀網站" : "下一步"} →
+        </Button>
       </OnboardingBar>
     </form>
   );
 }
 
 const IN = "h-auto w-full rounded-lg bg-card px-3 py-[9px] text-sm shadow-none";
+
+/** F47-I03 (drill-10 甲 建檔 #9): why the main button is off, naming what is missing; `null` = ready. */
+function blockedReason({ loaded, uploading, brandName, pastAds }: {
+  loaded: boolean;
+  uploading: boolean;
+  brandName: string;
+  pastAds: AdvertisingHistory | null;
+}): string | null {
+  if (!loaded) return "讀取中…";
+  if (uploading) return "照片上傳中，傳完才能下一步";
+  const missing = [!brandName.trim() && "填品牌名稱", !pastAds && "選「投過網路廣告嗎」"].filter(Boolean);
+  return missing.length ? `先${missing.join("、")}` : null;
+}
 
 /** Prototype `.q`: label column (bold + one small note) and the field. */
 function Row({ label, note, children }: { label: ReactNode; note?: string; children: ReactNode }) {

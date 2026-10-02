@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
 import { CustomEscape, CustomMark } from "../shared/CustomEscape";
+import { clearStepDraft, productDraftKey, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { Chip, EvidenceCard, INPUT, Item, RemoveButton } from "../steps/PolicyCard";
 
 /** Product proof kinds the prototype always offers as an empty input when nothing of that kind is listed. */
@@ -57,22 +58,35 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
   const [proof, setProof] = useState<ProofRow[]>([]);
   const [slots, setSlots] = useState<Partial<Record<ProofKind, string>>>({});
   const [claims, setClaims] = useState<ClaimRow[]>([]);
+  /** What the step loaded: the draft is kept only while the lists differ from it (F47-I03). */
+  const [loadedDraft, setLoadedDraft] = useState<EvidenceDraft | null>(null);
   const uid = useRef(0);
+  const draftKey = productDraftKey(brandId, productId, "evidence");
 
   useEffect(() => {
     let cancelled = false;
     fetchProductEvidence(brandId, productId)
       .then((evidence) => {
         if (cancelled) return;
+        const fromServer: EvidenceDraft = {
+          proof: evidence.proof.map((p) => ({
+            id: p.id, fact_key: p.fact_key, text: p.text, loadedText: p.text,
+            origin: p.source === "ai" ? "ai" : "saved", note: p.note, editing: false,
+          })),
+          slots: {},
+          claims: evidence.claims.map((c) => ({
+            id: c.id, text: c.text, fromNote: c.from_note,
+            verdict: c.statutory ? "no" : c.verdict, statutory: c.statutory, custom: false, added: false,
+          })),
+        };
+        // F47-I03 (drill-10 乙 #1, b-04): unsaved edits come back when the step mounts again (back, step bar,
+        // reload) until 下一步 saved them.
+        const shown = readStepDraft(draftKey, isEvidenceDraft) ?? fromServer;
+        setLoadedDraft(fromServer);
         setLoaded(evidence);
-        setProof(evidence.proof.map((p) => ({
-          uid: uid.current++, id: p.id, fact_key: p.fact_key, text: p.text, loadedText: p.text,
-          origin: p.source === "ai" ? "ai" : "saved", note: p.note, editing: false,
-        })));
-        setClaims(evidence.claims.map((c) => ({
-          uid: uid.current++, id: c.id, text: c.text, fromNote: c.from_note,
-          verdict: c.statutory ? "no" : c.verdict, statutory: c.statutory, custom: false, added: false,
-        })));
+        setProof(shown.proof.map((p) => ({ ...p, uid: uid.current++ })));
+        setSlots(shown.slots);
+        setClaims(shown.claims.map((c) => ({ ...c, uid: uid.current++ })));
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -80,13 +94,18 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
     return () => {
       cancelled = true;
     };
-  }, [brandId, productId]);
+  }, [brandId, productId, draftKey]);
 
   const kindLabel = useMemo(() => new Map((loaded?.proof_kinds ?? []).map((k) => [k.key, k.label])), [loaded]);
   const openSlots = PROOF_SLOTS.filter((s) => !proof.some((p) => p.fact_key === s.kind));
   const unset = claims.filter((c) => c.verdict === null).length;
+  useStepDraft(draftKey, loaded !== null, {
+    proof: proof.map(({ uid: _uid, ...row }) => row),
+    slots,
+    claims: claims.map(({ uid: _uid, ...row }) => row),
+  }, loadedDraft);
 
-  const { saving, error, submit } = useFormSubmit(async () => {
+  const { saving, error, submit, formProps } = useFormSubmit(async () => {
     const input: ProductEvidenceInput = {
       proof: [
         ...proof.map((p) => ({ id: p.id, fact_key: p.fact_key, text: p.text.trim() })).filter((p) => p.text),
@@ -95,6 +114,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
       claims: claims.map((c) => ({ id: c.id, text: c.text, verdict: c.statutory ? "no" : c.verdict })),
     };
     await saveProductEvidence(brandId, productId, input);
+    clearStepDraft(draftKey);
     onNext();
   });
 
@@ -130,6 +150,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
   return (
     <form
       className="flex flex-col gap-4"
+      {...formProps}
       onSubmit={(e) => {
         e.preventDefault();
         if (loaded && !saving && unset === 0) void submit();
@@ -235,6 +256,22 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
       </OnboardingBar>
     </form>
   );
+}
+
+/** This step's draft (F47-I03, `useStepDraft`): both lists and the open slots, without render keys. */
+interface EvidenceDraft {
+  proof: Omit<ProofRow, "uid">[];
+  slots: Partial<Record<ProofKind, string>>;
+  claims: Omit<ClaimRow, "uid">[];
+}
+
+function isEvidenceDraft(value: unknown): value is EvidenceDraft {
+  const v = value as Record<string, unknown>;
+  const rows = (list: unknown, ok: (row: Record<string, unknown>) => boolean) =>
+    Array.isArray(list) && list.every((row) => !!row && typeof row === "object" && ok(row as Record<string, unknown>));
+  return typeof v === "object" && !!v.slots && typeof v.slots === "object"
+    && rows(v.proof, (r) => typeof r.text === "string" && typeof r.fact_key === "string" && typeof r.loadedText === "string")
+    && rows(v.claims, (r) => typeof r.text === "string" && (r.verdict === null || r.verdict === "ok" || r.verdict === "no"));
 }
 
 /** Prototype `.it` of the claims card: text, 「來自〈from_note〉」; a 食安法 hit is red with its law line and a locked

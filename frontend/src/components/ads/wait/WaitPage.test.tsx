@@ -139,7 +139,7 @@ function ordersSource(overrides: Partial<ConnectionSource> = {}): ConnectionSour
     key: "orders", kind: "orders", platform: null, name: "商城訂單報表", state: "missing_days",
     note: "最新到 09/14，缺 09/15 之後", last_success_at: null,
     missing_days: ["2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"],
-    affected_campaigns: [], action: { label: "補報表", href: "/brands/brd_1/orders" },
+    affected_campaigns: [], action: { label: "補報表", href: "/brands/brd_1/orders" }, reread: null,
     ...overrides,
   };
 }
@@ -257,6 +257,14 @@ describe("WaitPage（F24-I03）事實列", () => {
     expect(screen.queryByText("樣本還不夠")).toBeNull();
   });
 
+  it("F47-I06：七天都有資料、沒有缺口、已有廣告分級時，標題不再寫「資料不足」", async () => {
+    mockGetConnections.mockResolvedValue(connections(ordersSource({ state: "ok", note: "最新匯入 09/20", missing_days: [], action: null })));
+    mockGetTriage.mockResolvedValue(triage({ items: [triageItem({ class: "flat", grade: "on_target", grade_label: "划算" })] }));
+    renderPage();
+    expect(await screen.findByText("資料齊了，可以回活動看判讀")).toBeTruthy();
+    expect(screen.queryByText("資料不足，這個活動先不判斷")).toBeNull();
+  });
+
   it("F29-I01 一把尺：趨勢 class 是資料不足、但已對上限分級的廣告不算在等（不列 reason_code）", async () => {
     mockGetTriage.mockResolvedValue(triage({
       items: [
@@ -329,7 +337,7 @@ describe("WaitPage（F24-I03）事實列", () => {
   it("`data` 缺漏時視為從沒同步過、沒有覆蓋範圍", async () => {
     mockGetTriage.mockResolvedValue({ window_days: 28, items: [], closed: EMPTY_CLOSED });
     renderPage();
-    await screen.findByText("資料不足，這個活動先不判斷");
+    await screen.findByText("還沒同步過，先不判斷"); // F47-I06: the title follows the data state
     expect(screen.getByText("尚未同步")).toBeTruthy();
     expect(screen.queryByText("廣告帳戶未連接")).toBeNull();
   });
@@ -403,7 +411,7 @@ describe("F36-I09 組織時鐘：沒有覆蓋範圍時的七天格", () => {
   it("格子結束在組織的今天（UTC+14 已是 3/1），不是瀏覽器的 2/28", async () => {
     mockGetTriage.mockResolvedValue({ window_days: 28, items: [], closed: EMPTY_CLOSED });
     renderPage();
-    await screen.findByText("資料不足，這個活動先不判斷");
+    await screen.findByText("還沒同步過，先不判斷");
     const tiles = screen.getByLabelText("每日資料");
     expect(within(tiles).getByLabelText("2026-03-01")).toBeTruthy();
     expect(within(tiles).getByLabelText("2026-02-23")).toBeTruthy();

@@ -91,6 +91,22 @@ describe("AllCampaignsPage（F04-I10）", () => {
     expect(screen.queryByText("0%")).toBeNull();
   });
 
+  it("F47-I08：狀態欄每個活動一個字（跟工作區、首頁同一套）：待發布也叫草稿，匯入的不寫「平台狀態見原始資料」", async () => {
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaignCard({ id: "d1", name: "草稿活動", status: "draft" }),
+      campaignCard({ id: "r1", name: "待發布活動", status: "ready" }),
+      campaignCard({ id: "l1", name: "投放中活動", status: "live" }),
+      campaignCard({ id: "i1", name: "匯入活動", status: "draft", origin: "imported" }),
+      campaignCard({ id: "c1", name: "結案活動", status: "closed" }),
+    ]);
+    renderPage();
+    await screen.findByText("草稿活動");
+    const words = [...document.querySelectorAll("tbody tr")].map((tr) => tr.querySelectorAll("td")[1].textContent);
+    expect(words).toEqual(["草稿", "草稿", "投放中", "投放中", "已結案"]);
+    expect(screen.queryByText("待發布")).toBeNull();
+    expect(screen.queryByText("平台狀態見原始資料")).toBeNull();
+  });
+
   it("不印建立者 uuid（F04-I22）", async () => {
     vi.mocked(listCampaigns).mockResolvedValue([
       campaignCard({

@@ -359,14 +359,18 @@ change (ADR 0060: `layout/` is the shared kit) and needs the shadcn generator, n
 | Pill / status | `ui/badge` | `secondary` for 示意資料 and counts; status dot + text for connection state; `destructive` for failed |
 | Tabs (in-card) | `ui/tabs` | inside a surface; page-level switching uses `PageTabs` |
 | Write / edit | `SidePanel` (`ui/sheet`) | **writes happen in the right-hand panel**, default 28rem, wider when the content needs it; ESC closes, focus trapped; no modal forms. A few fields may be edited in place; a full flow uses the main workspace (§5.1) |
-| Confirm | `ui/dialog` | only to confirm an irreversible or money-moving action; copy states the consequence |
+| Confirm | `ui/dialog` | only to confirm an irreversible or money-moving action; copy states the consequence; the close label is 「關閉」 |
 | Explanation | `ui/tooltip` on a `?` affordance | one per genuinely complex thing; says what it *is*, not how to think |
 | Menu | `ui/dropdown-menu` | org menu, widget `…`, row overflow |
 | Inputs | `ui/input`, `ui/textarea`, native `select` | native `<input type=date>` for dates |
 | Loading | `Skeleton` | shaped like the content it replaces |
 | Empty / error | `EmptyState` | title · why · one next-step button (`actionHref` or `onAction` 重新載入) |
+| Failed request → sentence | `lib/http.ts` (`throwIfFailed`, `errorMessageFromResponse`) | the only place a non-OK response becomes an `Error`; it shows the server's sentence, and a 「…（狀態碼 N）」 text exists only as the fallback passed to it (guard: `lib/feedbackGuards.test.ts`). A 401 redirect says 「登入已過期，請重新登入」 on the login page; sign-in errors are Chinese |
+| Disabled control | `Button disabledReason` | while disabled, one muted sentence says why; never a silent grey button |
+| Form error | `useFormSubmit` | the error clears as soon as a field value changes; field errors show the server's sentence |
+| Worker stopped | `WorkerStoppedNotice` + `lib/useWorkerHealth` | shown by the jobs bell and every page waiting on a job while `GET /api/jobs/active` says `stalled`: 「背景程式停了…」 + 「再檢查一次」 |
 | Paging | `Pager` | client-side slices, default page size in `usePagination.ts` |
-| Copy value | `CopyIconButton` | any id / key the user might paste elsewhere |
+| Copy value | `CopyIconButton`, `ads/patterns/CopyField` | any id / key / text the user might paste elsewhere; shows 「已複製」 for 2 s, 「請手動選取複製」 when the browser refuses. The only places that call `navigator.clipboard` (guard: `lib/feedbackGuards.test.ts`) |
 | Header / tabs | `PageHeader`, `PageTabs` | §4 |
 
 Retired (deleted 2026-09-07, old look, zero importers): `FluidCard`, `StatBig`, `ProgressRing`,

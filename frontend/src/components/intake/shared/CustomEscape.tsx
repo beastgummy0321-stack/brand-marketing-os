@@ -27,6 +27,8 @@ export type CustomOption<B extends AnyCustomBlock> = Extract<OptionProposal, { b
 
 const HINT = "覺得上面列的不對、不像你、或選項太少？直接用一句話描述，AI 幫你整理成選項";
 const MAX_CHARS = 200;
+/** F47-I03 (drill-10 乙 #5): why 「讓 AI 整理」 is off while the box is empty. */
+const EMPTY_REASON = "先在上面寫一句話，AI 才有東西整理";
 
 export function CustomEscape<B extends AnyCustomBlock>({ brandId, block, placeholder, propose, onValue, onOption }: {
   brandId: string;
@@ -93,7 +95,15 @@ export function CustomEscape<B extends AnyCustomBlock>({ brandId, block, placeho
           />
           {error && <p role="alert" className="mt-1.5 text-xs text-danger">{error}</p>}
           <div className="mt-2 flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={!text.trim() || busy} aria-busy={busy} onClick={() => void organise()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!text.trim() || busy}
+              disabledReason={!text.trim() && !busy ? EMPTY_REASON : undefined}
+              aria-busy={busy}
+              onClick={() => void organise()}
+            >
               {busy && <span aria-hidden="true" className="size-3.5 animate-spin rounded-full border-2 border-chart-soft border-t-primary" />}
               讓 AI 整理
             </Button>
@@ -126,3 +136,4 @@ export function CustomMark({ children = "你自訂" }: { children?: ReactNode })
     </span>
   );
 }
+

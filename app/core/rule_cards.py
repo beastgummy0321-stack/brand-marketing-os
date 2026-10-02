@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import psycopg
 
-from app.core import cleanup
+from app.core import cleanup, input_rules
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, now_utc
 
@@ -35,14 +35,15 @@ CARDS = {
     "rule_prompt_cap": {
         "title": "品牌智庫規則上限",
         "description": (
-            "AI 產出內容時，會帶上這個品牌全部生效中的 hard 規則；soft 規則依最近確認的時間"
+            "AI 產出內容時，會帶上這個品牌全部生效中的必守規則；參考規則依最近確認的時間"
             "排序，只帶排在前面的幾條，避免規則越積越多、AI 抓不到重點。"
             "這次沒帶上的規則不會消失，仍留在系統裡，只是這次產出用不到。"
         ),
         "fields": {
             "max_active_rules": {
                 "label": "進生成提示詞的規則上限", "unit": "條", "default": 20.0,
-                "help": "hard 規則不受這個數字限制、全部保留；soft 規則超過這個數字後，"
+                "bounds": input_rules.Bounds(0, low_open=True),
+                "help": "必守規則不受這個數字限制、全部保留；參考規則超過這個數字後，"
                         "排比較後面的那些這次不會進生成提示詞（不會被刪除，之後重新確認過"
                         "或排到前面就會恢復生效）。",
             },
@@ -61,11 +62,13 @@ CARDS = {
         "fields": {
             "daily_budget": {
                 "label": "檔期日預算", "unit": "NT$", "default": 0.0,
+                "bounds": input_rules.Bounds(0, low_open=True),
                 "help": "這期檔期每天要花多少預算。留 0 代表還沒設定，排程頁會先擋下來，"
                         "請先到這裡填一個數字再回去排程。",
             },
             "step_rate": {
                 "label": "每期調幅", "unit": "%", "default": 20.0,
+                "bounds": input_rules.Bounds(0, low_open=True),
                 "help": "系統建議下一期日預算時，往上或往下調的幅度。Meta 沒有公布官方數字"
                         "（它只說「看幅度大小」）；20% 是業界慣例，可以改。",
             },
@@ -82,6 +85,8 @@ CARDS = {
         "fields": {
             "gross_margin_rate": {
                 "label": "毛利率", "unit": "%", "default": 0.70,
+                "bounds": input_rules.Bounds(0, 1, low_open=True, high_open=True,
+                                             hint="例如 0.7 代表毛利 70%"),
                 "help": "這個品牌大概的毛利率，登記 SKU 成本之前系統用這個值頂著。"
                         "例如填 0.7 代表毛利 70%。",
             },
@@ -98,13 +103,17 @@ CARDS = {
         "fields": {
             "plan_count_min": {
                 "label": "方案數量下限", "unit": "個", "default": 1.0,
+                "bounds": input_rules.Bounds(0, low_open=True),
                 "help": "一次最少出幾個方案。",
             },
             "plan_count_max": {
                 "label": "方案數量上限", "unit": "個", "default": 5.0,
+                "bounds": input_rules.Bounds(0, low_open=True),
                 "help": "一次最多出幾個方案。方案數愈多，AI 要寫的內容愈多，AI 費用也愈高。",
             },
         },
+        # (min, max) field pairs of this card; min > max is refused (F47 Contract A).
+        "pairs": [("plan_count_min", "plan_count_max")],
     },
 }
 
@@ -142,7 +151,8 @@ def get_card(conn: Conn | ConnProxy, brand_id: str, card_key: str) -> dict:
         raise ValueError(f"沒有這張規則卡：{card_key}")
     defn = CARDS[card_key]
     fields = [
-        {"key": field_key, "value": get_value(conn, brand_id, card_key, field_key), **meta}
+        {"key": field_key, "value": get_value(conn, brand_id, card_key, field_key),
+         **{k: v for k, v in meta.items() if k != "bounds"}}
         for field_key, meta in defn["fields"].items()
     ]
     return {"key": card_key, "title": defn["title"], "description": defn["description"], "fields": fields}

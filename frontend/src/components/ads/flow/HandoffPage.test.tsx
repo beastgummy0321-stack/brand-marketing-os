@@ -57,7 +57,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "stop_loss",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -111,6 +111,7 @@ beforeEach(() => {
 
 describe("HandoffPage（F22-I03）三種 kind", () => {
   it("pause：打開平台＋我關了兩個手動步驟", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "worse" })]));
     renderAt(handoffPath());
     expect(await screen.findByText("打開平台上的這則廣告")).toBeTruthy();
     expect(screen.getByText("把這則廣告的開關關掉")).toBeTruthy();
@@ -221,12 +222,27 @@ describe("HandoffPage（F22-I03）步驟導正與例外", () => {
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm"));
   });
 
-  it("已經回報過，導去核對結果頁", async () => {
+  // F47-I07 (drill-10 C3-E): 「回到在平台完成」 from the verify page lands here and stays — read-only, one link forward.
+  it("已經回報過：留在這頁唯讀，步驟打勾，連到核對結果，不再給「我做完了」", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({ verification_state: "confirmed", reported_at: "2026-09-21T01:00:00Z" })] })],
     });
     renderAt(handoffPath());
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+    const forward = await screen.findByRole("link", { name: "看核對結果 →" });
+    expect(forward.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify");
+    expect(screen.queryByTestId("probe-path")).toBeNull();
+    expect(screen.queryByRole("button", { name: /我做完了/ })).toBeNull();
+    expect(screen.getAllByLabelText("已完成").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("回來按「我做完了」")).toBeNull();
+    expect(changeApi.actOnChangeItem).not.toHaveBeenCalled();
+  });
+
+  it("還是草稿的清單打開到平台完成：導回確認", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ status: "draft", approved_at: null })],
+    });
+    renderAt(handoffPath());
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm"));
   });
 
   it("多項變更的清單連去既有變更與核對", async () => {
@@ -270,6 +286,26 @@ describe("HandoffPage（F27-I15）new_ad kind：嵌入既有的 ManualHandoffPan
   });
 });
 
+// F47-I07: 「第 N 件／共 M 件」 counts the open home decisions (the top bar's owner), never every queue row.
+describe("HandoffPage 「第幾件」", () => {
+  it("counts only open home decisions: a handled row and a 資料不足 row are not counted", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem({ id: "w_done", kind_key: "worse", done: true, triage: triage({ entity_id: "aex_9" }) }),
+      queueItem({ id: "gap", kind_key: "insufficient_data", triage: triage({ entity_id: "aex_8" }), insufficient: { campaign_id: "cmp_2", campaign_name: "x", missing_days: [], sync_state: "failed", coverage: null } }),
+      queueItem({ kind_key: "worse" }),
+    ]));
+    renderAt(handoffPath());
+    expect(await screen.findByText("第 1 件／共 1 件")).toBeTruthy();
+  });
+
+  it("a row the board does not show (handled) gets no invented position", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "worse", done: true }), queueItem({ id: "w2", kind_key: "worse", triage: triage({ entity_id: "aex_2" }) })]));
+    renderAt(handoffPath());
+    await screen.findByText("打開平台上的這則廣告");
+    expect(screen.queryByText(/第 \d+ 件／共/)).toBeNull();
+  });
+});
+
 describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
   function cleanupChangeSet(): ChangeSet {
     return changeSet({
@@ -300,6 +336,27 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     expect(screen.getByText("native_low2")).toBeTruthy();
   });
 
+  it("still to report: the closing 回來按「我都做完了」 instruction is there with its button", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanupChangeSet()] });
+    renderAt(handoffPath());
+    expect(await screen.findByText("每一則都關掉後，回來按「我都做完了」")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "我都做完了，開始核對 →" })).toBeTruthy();
+  });
+
+  // F47-I07: opened from 回到在平台完成 after every ad was reported — no instruction to press a button that is not there.
+  it("already reported (read-only): rows ticked, no 回來按「我都做完了」 instruction, one link to 核對結果", async () => {
+    const reported = cleanupChangeSet();
+    reported.items = reported.items.map((i) => ({ ...i, reported_at: "2026-09-21T01:00:00Z", verification_state: "unknown" as const }));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [{ ...reported, source: "cleanup" }] });
+    renderAt(handoffPath());
+    expect(await screen.findByRole("link", { name: "看核對結果 →" })).toBeTruthy();
+    expect(screen.queryByText(/回來按「我都做完了」/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /我都做完了/ })).toBeNull();
+    expect(screen.getAllByLabelText("已完成")).toHaveLength(2);
+  });
+
   it("F28-I14：四步驟 提議／確認／到平台完成／核對結果，目前在第三步，確認可回去", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanupChangeSet()] });
@@ -309,8 +366,8 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     expect(labels).toEqual(["提議", "確認", "到平台完成", "核對結果"]);
     expect(current.textContent).toContain("到平台完成");
     expect(screen.queryByText("確認提議")).toBeNull();
-    expect(screen.getByRole("link", { name: "回到確認" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
-    expect(screen.queryByRole("link", { name: "回到提議" })).toBeNull();
+    expect(screen.getByRole("link", { name: "回到「確認」" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+    expect(screen.queryByRole("link", { name: "回到「提議」" })).toBeNull();
   });
 
   it("「我都做完了」依序對每一則呼叫 report／check，成功後導去核對結果", async () => {
@@ -343,7 +400,7 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
 describe("HandoffPage（F29-I10）佇列讀取失敗", () => {
   it("單項清單：步驟照舊，只多一塊讀取失敗；重試重讀佇列後補回「第幾件」", async () => {
     vi.mocked(triageApi.getQueue).mockReset();
-    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem()]));
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem({ kind_key: "worse" })]));
     renderAt(handoffPath());
     expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
     expect(screen.getByText("打開平台上的這則廣告")).toBeTruthy();

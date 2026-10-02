@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
 import {
   COST_PRODUCT_HANDOFF_FIX,
@@ -25,7 +26,6 @@ export function HandoffPanel({
 }) {
   const [promptText, setPromptText] = useState<string | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [replyText, setReplyText] = useState("");
 
   useEffect(() => {
@@ -71,22 +71,19 @@ export function HandoffPanel({
           />
         )}
         <div>
-          <button
-            type="button"
+          <CopyIconButton
+            label="整段複製"
+            ariaLabel="整段複製提示詞"
             disabled={!promptText}
-            onClick={async () => {
-              await navigator.clipboard.writeText(promptText ?? "");
-              setCopied(true);
-            }}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {copied ? "已複製" : "整段複製"}
-          </button>
+            getText={() => promptText ?? ""}
+            className="px-3 py-1.5 text-foreground"
+          />
         </div>
       </div>
 
       <form
         className="flex flex-col gap-4"
+        {...form.formProps}
         onSubmit={(e) => {
           e.preventDefault();
           void form.submit();

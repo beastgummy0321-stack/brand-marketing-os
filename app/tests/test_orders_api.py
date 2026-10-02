@@ -144,6 +144,23 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         self.assertIn("unknown", invalid.json()["detail"])
 
+    def test_channel_entry_revenue_zero_kept_negative_refused(self):
+        """F47 Contract A: revenue 0 is stored as 0, JSON null = left empty, -5 is refused with
+        the field sentence and nothing lands."""
+        url = f"/api/brands/{self.brand_id}/orders/channel-entry"
+        zero = self.client.post(url, json={"channel": "physical_store", "entry_date": "2026-08-19",
+                                           "revenue": 0, "quantity": None, "note": ""})
+        self.assertEqual(zero.status_code, 200, zero.text)
+        unset = self.client.post(url, json={"channel": "physical_store", "entry_date": "2026-08-20",
+                                            "revenue": None, "quantity": None, "note": ""})
+        self.assertEqual(unset.status_code, 200, unset.text)
+        negative = self.client.post(url, json={"channel": "physical_store", "entry_date": "2026-08-21",
+                                               "revenue": -5, "quantity": None, "note": ""})
+        self.assertEqual((negative.status_code, negative.json()), (400, {"detail": "營收不能是負數。"}))
+        entries = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["channel_entries"]
+        by_date = {e["entry_date"]: e["revenue"] for e in entries}
+        self.assertEqual(by_date, {"2026-08-19": 0, "2026-08-20": None})
+
     def test_channel_entry_returns_exact_messages_and_gets_list(self):
         """票 12：通用通路營收登記取代藥局專屬表單，POST 落地後 GET 從
         channel_entries 讀得回來（channel_label 來自 vocab，不是內部值）。"""

@@ -20,8 +20,12 @@ from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.main import app
 
-CONTENT = b"\x89PNG\r\n\x1a\noriginal-bytes"
-OTHER_CONTENT = b"\x89PNG\r\n\x1a\nanother-original"
+# A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+       b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+CONTENT = PNG + b"original-bytes"
+OTHER_CONTENT = PNG + b"another-original"
 FULL_COPY = {"headline": "標題", "body": "文案", "description": "說明"}
 
 
@@ -389,6 +393,35 @@ class UserAssetsTest(unittest.TestCase):
                 {"body": "第二則文案"}, "test", ad_id=second_ad,
             )
         self.assertEqual(caught.exception.current["revision"], 2)
+
+    def test_apply_copy_keeps_current_text_for_blank_fields_and_refuses_all_blank(self):
+        """F47-I06 (Contract A, drill-10 Q6): 「套用到全部待處理」 with blank fields never wipes the
+        current copy; three blank fields are refused with one sentence and nothing is written."""
+        item = self.original()
+        placed = repo.attach(
+            self.conn, self.org, self.brand, self.campaign, item["asset_id"],
+            {"headline": "原標題", "body": "原內文", "description": "原說明", "caption": "留著"},
+            "test",
+        )
+        self.conn.commit()
+        with self.assertRaises(ValueError) as caught:
+            repo.revise(
+                self.conn, self.org, self.brand, self.campaign, placed["id"], 1,
+                {"apply_copy": {"headline": "", "body": "  ", "description": ""}}, "test",
+            )
+        self.assertEqual(str(caught.exception), "三欄都是空的，沒有可以套用的內容。")
+        self.conn.rollback()
+        current = repo.placement(self.conn, self.org, self.brand, self.campaign, placed["id"])
+        self.assertEqual(current["revision"], 1)
+
+        revised = repo.revise(
+            self.conn, self.org, self.brand, self.campaign, placed["id"], 1,
+            {"apply_copy": {"headline": "", "body": "新內文", "description": ""}}, "test",
+        )
+        self.assertEqual(revised["revision"], 2)
+        self.assertEqual(revised["copy_fields"], {
+            "headline": "原標題", "body": "新內文", "description": "原說明", "caption": "留著",
+        })
 
     def test_revision_conflict_preserves_current_and_confirmation_history(self):
         item = self.original()

@@ -2,7 +2,7 @@
  * `intakeOnboardingApi.ts`。F42-I14 拆掉了舊階段（初掃印象、AI 問答、交接包、貼回、待處理清單、
  * 花費側欄、賣什麼與數字）的呼叫與型別。 */
 
-import { apiFetch, errorMessageFromResponse } from "./http";
+import { apiFetch, errorMessageFromResponse, throwIfFailed } from "./http";
 
 export interface IntakePhoto {
   token: string;
@@ -32,9 +32,8 @@ interface Envelope<T> {
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (!res.ok) {
-    throw new Error(res.status === 404 ? "找不到這筆資料。" : `讀取失敗（狀態碼 ${res.status}）`);
-  }
+  if (res.status === 404) throw new Error("找不到這筆資料。");
+  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
   const body: Envelope<T> = await res.json();
   return body.data;
 }

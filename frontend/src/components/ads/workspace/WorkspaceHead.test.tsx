@@ -15,7 +15,7 @@ function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
     start_date: "2026-09-08", end_date: "2026-10-08", groups: [], ...o } as unknown as CampaignDetail;
 }
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
-  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, daily_budget: 1200, active_ads: 8,
+  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8,
     can_support: 6, next_sync_at: null, missing_days: [], totals: null, draft: null, ...o };
 }
 const ready = (data: CampaignWorkspace): ApiRead<CampaignWorkspace> => ({ status: "ready", data, error: null, reload: vi.fn() });
@@ -52,6 +52,18 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     expect(chips()).toEqual(["草稿", "每日 800", "09/08 – 10/08", "沒設上限"]);
     expect(screen.getByRole("link", { current: "step" }).textContent).toContain("計畫");
     expect(screen.getByRole("button", { name: /^總覽/ }).textContent).toBe("總覽");
+  });
+
+  it("F47-I08: a closed campaign never says 在投 — 已結案・平台上還開著 N 則, or 已結案 once every platform ad is closed", () => {
+    const closed = detail({ status: "closed" });
+    const stage = { key: "review" as const, done: ["plan", "assets", "launch", "read", "decide"] as never };
+    const { unmount } = render(<MemoryRouter><WorkspaceHead brandId="brd_1" campaign={closed}
+      workspace={ready(ws({ stage, delivery: null, pending_count: 0, active_ads: 6 }))} tab="overview" onTab={vi.fn()} /></MemoryRouter>);
+    expect(chips()[0]).toBe("購買・已結案・平台上還開著 6 則");
+    unmount();
+    renderHead(closed, ready(ws({ stage, delivery: null, pending_count: 0, active_ads: 0 })));
+    expect(chips()[0]).toBe("購買・已結案");
+    expect(document.body.textContent).not.toContain("在投");
   });
 
   it("a break-even cap reads 暫用打平線 in warn; an unknown daily budget and pending count print nothing", () => {

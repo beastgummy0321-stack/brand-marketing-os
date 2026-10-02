@@ -60,7 +60,7 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     dedupe_key: "k1", category: "ads_triage_stop_loss", kind: null, severity: "money_loss",
     message: "m", action_url: null, visible_from: null, status: "open",
     created_at: "2026-09-22T00:00:00Z", resolved_at: null, kind_key: "stop_loss",
-    triage: triage(), proposal: null,
+    triage: triage(), proposal: null, done: false,
     ...overrides,
   };
 }
@@ -394,15 +394,47 @@ describe("ConfirmPage（F22-I02）拒絕／暫緩 sheet", () => {
     expect(await screen.findByText("請選一個之後的時間。")).toBeTruthy();
     expect(changeApi.decideChangeSet).not.toHaveBeenCalled();
 
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+
     await user.clear(dateInput);
     await user.type(dateInput, "2099-01-01");
-    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet());
-    vi.mocked(changeApi.decideChangeSet).mockResolvedValue(changeSet({ status: "deferred", reason: "想再觀察幾天", revisit_at: "2099-01-01T00:00:00Z" }));
+    const deferred = changeSet({ status: "deferred", reason: "想再觀察幾天", revisit_at: "2099-01-01T12:00:00Z" });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(deferred);
+    // The page then moves to the set's own confirm URL, which reads the set back.
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferred] });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    // F47-I07 (drill-10 Q3): no set yet → the draft and the decision are one write.
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1));
+    const decide = vi.mocked(changeApi.createChangeSet).mock.calls[0][2].decide;
+    expect(decide?.decision).toBe("deferred");
+    expect(decide?.revisit_at?.startsWith("2099-01-01")).toBe(true);
+    expect(changeApi.decideChangeSet).not.toHaveBeenCalled();
+    // drill-10 C3-D: the closed page names the revisit date.
+    expect(await screen.findByText("已暫緩・想再觀察幾天・1/1 再看")).toBeTruthy();
+  });
+
+  it("暫緩被拒（例如時間已過）：顯示原因，不留下草稿、也不另外送決定", async () => {
+    const user = userEvent.setup();
+    await openSheet(user);
+    vi.mocked(changeApi.createChangeSet).mockRejectedValue(new changeApi.ChangeRequestRejected("暫緩請選擇未來的重看時間。"));
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("暫緩請選擇未來的重看時間。")).toBeTruthy();
+    expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
+    expect(changeApi.decideChangeSet).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
+  });
+
+  it("已經有清單（草稿）時沿用它，用既有的決定 API", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({ change_set_id: "acs_existing" }));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ id: "acs_existing" })] });
+    vi.mocked(changeApi.decideChangeSet).mockResolvedValue(changeSet({ id: "acs_existing", status: "rejected", reason: "想再觀察幾天" }));
+    await openSheet(user);
+    await user.click(screen.getByRole("button", { name: "拒絕" }));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(changeApi.decideChangeSet).toHaveBeenCalled());
-    const call = vi.mocked(changeApi.decideChangeSet).mock.calls[0][3];
-    expect(call.decision).toBe("deferred");
-    expect(call.revisit_at?.startsWith("2099-01-01")).toBe(true);
+    expect(vi.mocked(changeApi.decideChangeSet).mock.calls[0][2]).toBe("acs_existing");
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
   });
 
   it("拒絕不需要重看時間，保存後不帶 revisit_at", async () => {
@@ -410,12 +442,10 @@ describe("ConfirmPage（F22-I02）拒絕／暫緩 sheet", () => {
     await openSheet(user);
     await user.click(screen.getByRole("button", { name: "拒絕" }));
     expect(screen.queryByLabelText("重看日期")).toBeNull();
-    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet());
-    vi.mocked(changeApi.decideChangeSet).mockResolvedValue(changeSet({ status: "rejected", reason: "想再觀察幾天" }));
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet({ status: "rejected", reason: "想再觀察幾天" }));
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(changeApi.decideChangeSet).toHaveBeenCalled());
-    const call = vi.mocked(changeApi.decideChangeSet).mock.calls[0][3];
-    expect(call).toEqual({ decision: "rejected", reason: "想再觀察幾天" });
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    expect(vi.mocked(changeApi.createChangeSet).mock.calls[0][2].decide).toEqual({ decision: "rejected", reason: "想再觀察幾天" });
   });
 });
 
@@ -440,20 +470,38 @@ describe("ConfirmPage（F22-I02）沒收到伺服器回應", () => {
 });
 
 describe("ConfirmPage（F22-I02）步驟導正", () => {
-  it("已核准且還沒回報，導去到平台完成", async () => {
+  // F47-I07 (drill-10 C3-E): 「回到確認」 on a later step lands here and stays — read-only, one link forward.
+  it("已核准且還沒回報：從確認網址打開就留在確認頁，唯讀，連到到平台完成", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ status: "approved", approved_at: "2026-09-21T00:00:00Z", items: [changeItem({ verification_state: "pending", reported_at: null })] })],
     });
     renderAt(confirmPath());
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff"));
+    expect(await screen.findByText("已核准")).toBeTruthy();
+    expect(screen.queryByTestId("probe-path")).toBeNull();
+    expect(screen.getByRole("link", { name: "接著到平台完成 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff");
+    expect(screen.queryByRole("button", { name: "拒絕／暫緩" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /核准暫停/ })).toBeNull();
+    expect(screen.queryByText("這則主打什麼？")).toBeNull();
+    expect(anglesApi.getAngles).not.toHaveBeenCalled();
   });
 
-  it("已核准且已讀回，導去核對結果", async () => {
+  it("已核准且已讀回：留在確認頁，連到核對結果", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ status: "approved", approved_at: "2026-09-21T00:00:00Z", items: [changeItem({ verification_state: "confirmed", reported_at: "2026-09-21T01:00:00Z" })] })],
     });
     renderAt(confirmPath());
-    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify"));
+    expect(await screen.findByRole("link", { name: "看核對結果 →" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "看核對結果 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/verify");
+    expect(screen.queryByTestId("probe-path")).toBeNull();
+  });
+
+  it("草稿在確認頁核准後照舊往前到到平台完成", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet()] });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(changeSet({ status: "approved", approved_at: "2026-09-21T00:00:00Z" }));
+    renderAt(confirmPath());
+    await user.click(await screen.findByRole("button", { name: /核准暫停，接著到平台操作/ }));
+    await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff"));
   });
 
   it("已拒絕的清單留在確認頁，顯示關閉狀態", async () => {
@@ -780,7 +828,7 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     // The draft's own items are the close list; the proposal step is one link back.
-    expect(screen.getByRole("link", { name: "回到提議" }).getAttribute("href")).toBe(proposeCleanupPath);
+    expect(screen.getByRole("link", { name: "回到「提議」" }).getAttribute("href")).toBe(proposeCleanupPath);
   });
 });
 
@@ -908,6 +956,7 @@ describe("ConfirmPage（F29-I14）清理：自己挑要關哪幾則", () => {
   });
   const bodyOf = (call = 0) => vi.mocked(changeApi.createChangeSet).mock.calls[call][2] as unknown as {
     items: { target_id: string }[]; declined_ids?: string[]; source?: string; supersedes_id?: string;
+    decide?: { decision: string; reason: string; revisit_at?: string };
   };
 
   it("全部取消勾選：確認頁說一則都沒勾，核准不能按，拒絕還在", async () => {
@@ -945,15 +994,18 @@ describe("ConfirmPage（F29-I14）清理：自己挑要關哪幾則", () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
     const draft = changeSet({ items: [changeItem({ id: "i1", target_id: "aex_low1" }), changeItem({ id: "i2", target_id: "aex_low2" })] });
-    vi.mocked(changeApi.createChangeSet).mockResolvedValue(draft);
-    vi.mocked(changeApi.decideChangeSet).mockResolvedValue({ ...draft, status: "rejected", reason: "還在檔期" });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "rejected", reason: "還在檔期" });
     renderAt(`${proposeCleanupPath}?step=confirm&keep=aex_low1,aex_low2`);
     await user.click(await screen.findByRole("button", { name: "拒絕／暫緩" }));
     await user.click(screen.getByRole("button", { name: "拒絕" }));
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(changeApi.decideChangeSet).toHaveBeenCalled());
+    // F47-I07: the cleanup draft and its rejection are one write.
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
     expect(bodyOf().items.map((i) => i.target_id)).toEqual(["aex_low1", "aex_low2"]);
     expect(bodyOf().declined_ids).toBeUndefined();
+    expect(bodyOf().source).toBe("cleanup");
+    expect(bodyOf().decide?.decision).toBe("rejected");
+    expect(changeApi.decideChangeSet).not.toHaveBeenCalled();
   });
 
   it("F28-I15 仍成立：使用者自己挑的子集（declined_ids）不算過期草稿，照常可以核准", async () => {
@@ -1031,7 +1083,7 @@ describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
     const user = userEvent.setup();
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet()] });
     vi.mocked(triageApi.getQueue).mockReset();
-    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem()]));
+    vi.mocked(triageApi.getQueue).mockRejectedValueOnce(new Error("queue down")).mockResolvedValueOnce(queue([queueItem({ kind_key: "worse" })]));
     renderAt(confirmPath());
     expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
@@ -1139,7 +1191,8 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
       grade: "over", grade_label: "太貴",
       current: { spend: 3380, result_count: 5, cost_per_result: 676, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     }) }));
-    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ id: "int_0", triage: triage({ entity_id: "aex_0" }) }), queueItem()]));
+    // F47-I07: 「第幾件」 counts the open home decisions (here two 變貴 rows), by the rows' own done.
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ id: "int_0", kind_key: "worse", triage: triage({ entity_id: "aex_0" }) }), queueItem({ kind_key: "worse" })]));
     renderAt(proposePath);
     expect(await screen.findByText("第 2 件／共 2 件")).toBeTruthy();
     const card = document.querySelector("[data-state=active]") as HTMLElement;

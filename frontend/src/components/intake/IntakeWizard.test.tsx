@@ -97,6 +97,8 @@ const SCAN: OnboardingScan = {
   prefilled: 3,
   pages_read: 1,
   photos_read: 0,
+  urls_read: ["https://beastgummy.tw/about"],
+  pages_failed: [],
 };
 const IDENTITY: OnboardingIdentity = {
   positioning: { value: "山裡的水果，小鍋慢慢熬", source: "ai", note: "頁面 1" },
@@ -152,6 +154,7 @@ afterEach(() => {
   // still be pending when the last assertion passes; unmounting inside act flushes them while the
   // defaults above are still in place. Resetting first left those calls returning undefined.
   cleanup();
+  sessionStorage.clear();
   vi.resetAllMocks();
 });
 
@@ -253,6 +256,29 @@ describe("IntakeWizard", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "品牌建好了" })).toBeTruthy();
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith("brd_x"));
+  });
+
+  it("F47-I03: a reload on step 3 lands on step 3 again (with its unsaved edits), not back on step 2", async () => {
+    mockStatus.mockResolvedValue(status({ step: 2, skipped_scan: false }));
+    mockDraft.mockResolvedValue({ scan_done: true } as unknown as IntakeDraft);
+
+    renderWizard();
+    await userEvent.click(await screen.findByRole("button", { name: "開始確認 →" }));
+    const box = (await screen.findByLabelText("一句話說你的品牌")) as HTMLTextAreaElement;
+    await userEvent.clear(box);
+    await userEvent.type(box, "我改過還沒存的一句話");
+    cleanup();
+
+    renderWizard();
+    expect(await screen.findByRole("heading", { level: 1, name: "品牌是誰" })).toBeTruthy();
+    await waitFor(() =>
+      expect((screen.getByLabelText("一句話說你的品牌") as HTMLTextAreaElement).value).toBe("我改過還沒存的一句話"));
+
+    // 「← AI 讀網站」 and back again keeps the edit too (drill-10 甲 建檔 #5).
+    await userEvent.click(screen.getByRole("button", { name: "← AI 讀網站" }));
+    await userEvent.click(await screen.findByRole("button", { name: "開始確認 →" }));
+    await waitFor(() =>
+      expect((screen.getByLabelText("一句話說你的品牌") as HTMLTextAreaElement).value).toBe("我改過還沒存的一句話"));
   });
 
   it("品牌不存在時顯示找不到，而不是一片空白", async () => {

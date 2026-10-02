@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { setOrgId, signOut } from "@/lib/auth";
-import { apiFetch, clearPendingPath } from "@/lib/http";
+import { apiFetch, clearPendingPath, throwIfFailed } from "@/lib/http";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 interface OrgOut {
@@ -78,7 +78,7 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: companyName.trim() }),
     });
-    if (!res.ok) throw new Error(`改名失敗（狀態碼 ${res.status}）`);
+    await throwIfFailed(res, `改名失敗（狀態碼 ${res.status}）`);
     const org = (await res.json()) as OrgOut;
     setMe((prev) => (prev === "loading" || prev === "error" ? prev : { ...prev, org, orgs: prev.orgs.map((o) => (o.id === org.id ? org : o)) }));
     onIdentityChanged?.();
@@ -91,7 +91,7 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: inviteEmail.trim(), role: "member" }),
     });
-    if (!res.ok) throw new Error(`邀請失敗（狀態碼 ${res.status}）`);
+    await throwIfFailed(res, `邀請失敗（狀態碼 ${res.status}）`);
     setInviteResult((await res.json()) as CreateInviteResponse);
     setInviteEmail("");
   });
