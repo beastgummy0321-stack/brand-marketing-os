@@ -16,11 +16,20 @@ describe("wizard pieces (F30-I05)", () => {
   });
 
   it("a sell-way note is 打平・offers: 缺成本 without a cost, 打平算不出 with a cost but no price, 沒有優惠 without offers", () => {
-    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, offer_labels: ["組合價", "免運"], ...over }) as WizardProduct;
+    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, derived_fields: [], offer_labels: ["組合價", "免運"], ...over }) as WizardProduct;
     expect(sellWayNote(way({}))).toBe("打平 669・組合價＋免運");
     expect(sellWayNote(way({ break_even: 249.5, offer_labels: [] }))).toBe("打平 249.5・沒有優惠");
     expect(sellWayNote(way({ break_even: null, has_cost: false }))).toBe("缺成本・組合價＋免運");
     expect(sellWayNote(way({ break_even: null, offer_labels: [] }))).toBe("打平算不出・沒有優惠");
+  });
+
+  it("marks a break-even built on a derived price or cost 「（推算）」 (F45, ads §6.49 Picker); a derived list price alone does not", () => {
+    const way = (over: Partial<WizardProduct>) => ({ break_even: 669, has_cost: true, derived_fields: [], offer_labels: ["組合價"], ...over }) as WizardProduct;
+    expect(sellWayNote(way({ derived_fields: ["list_price", "unit_variable_cost"] }))).toBe("打平 669（推算）・組合價");
+    expect(sellWayNote(way({ derived_fields: ["selling_price"] }))).toBe("打平 669（推算）・組合價");
+    expect(sellWayNote(way({ derived_fields: ["list_price"] }))).toBe("打平 669・組合價");
+    expect(sellWayNote(way({}))).toBe("打平 669・組合價");
+    expect(sellWayNote(way({ break_even: null, derived_fields: ["unit_variable_cost"] }))).toBe("打平算不出・組合價");
   });
 
   it("links step 1 back only once a campaign exists", () => {

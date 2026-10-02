@@ -16,7 +16,7 @@ import { useApiRead } from "@/lib/useApiRead";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
 import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
 import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount } from "./patterns";
-import { SellWayPickCard, UnderstandingView, wizardSteps } from "./wizard/WizardPieces";
+import { SellWayPickCard, UnderstandingView, breakEvenDerivedMark, wizardSteps } from "./wizard/WizardPieces";
 
 /** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
 const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
@@ -203,11 +203,12 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const landingShown = landing ?? way?.landing_url ?? "";
   const landingChanged = landing !== undefined && !!landing.trim() && landing.trim() !== (way?.landing_url ?? "");
   const breakEven = way?.break_even ?? null;
+  const beText = breakEven === null || !way ? "" : `打平 ${fmt(breakEven)}${breakEvenDerivedMark(way)}`;
   const capHint = capShown === null
     ? (way && way.cap_per_sale === null ? "這個賣法還算不出打平；可以自己填" : "")
     : breakEven === null ? ""
-      : capShown === breakEven ? `等於打平 ${fmt(breakEven)}`
-      : capShown > breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(capShown - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - capShown)}`;
+      : capShown === breakEven ? `等於${beText}`
+      : capShown > breakEven ? `比${beText} 高 ${fmt(capShown - breakEven)}` : `比${beText} 低 ${fmt(breakEven - capShown)}`;
   /** Only the changed fold values go out; the server takes the rest from the brand and the sell-way (F43-I04). */
   const extras: CampaignCreateExtras & Pick<CampaignPicks, "customer_group_ids"> = {
     ...(platformChanged && platform ? { platform } : {}),

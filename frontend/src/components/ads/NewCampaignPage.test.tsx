@@ -24,14 +24,15 @@ const GROUPS = [{ id: "grp_new", who: "新客為主" }, { id: "grp_try", who: "�
 type Way = WizardOptions["products"][number];
 const sellWay = (over: Partial<Way> & Pick<Way, "id" | "name" | "display_name">): Way => ({
   kind: "single", knowledge_product_id: "kp_vit", knowledge_product_name: "綜合維他命軟糖", price: 399, currency: "TWD",
-  thumbnail_url: null, has_cost: true, break_even: 249, cap_per_sale: 249, offer_labels: [], customer_groups: GROUPS, landing_url: VITAMIN_URL, ...over,
+  thumbnail_url: null, has_cost: true, break_even: 249, cap_per_sale: 249, derived_fields: [], offer_labels: [], customer_groups: GROUPS, landing_url: VITAMIN_URL, ...over,
 });
 /** The prototype's shelf: two sell-ways of one product, one of another (no price, no cost, one group, no page URL),
  * then a bundle with a long name — in the server's order (single sell-ways grouped by knowledge product, then bundles). */
 const options = (over: Partial<WizardOptions> = {}): WizardOptions => ({
   products: [
     sellWay({ id: "sw_one", name: "綜合維他命軟糖 · 單盒", display_name: "單盒", thumbnail_url: "/brands/b/assets/file/a1/one.png" }),
-    sellWay({ id: "sw_three", name: "綜合維他命軟糖 · 三盒組", display_name: "三盒組", price: 999, break_even: 669, cap_per_sale: 669, offer_labels: ["組合價", "免運"] }),
+    sellWay({ id: "sw_three", name: "綜合維他命軟糖 · 三盒組", display_name: "三盒組", price: 999, break_even: 669, cap_per_sale: 669,
+      derived_fields: ["list_price", "unit_variable_cost"], offer_labels: ["組合價", "免運"] }),
     sellWay({ id: "sw_pro", name: "益生菌軟糖 · 單盒", display_name: "單盒", knowledge_product_id: "kp_pro", knowledge_product_name: "益生菌軟糖",
       price: null, currency: null, has_cost: false, break_even: null, cap_per_sale: null, customer_groups: [{ id: "grp_gut", who: "腸胃敏感的上班族" }], landing_url: null }),
     sellWay({ id: "sw_duo", name: LONG, display_name: "雙效組", kind: "bundle", price: 799, break_even: 539, cap_per_sale: 500, offer_labels: ["組合價"],
@@ -96,7 +97,7 @@ describe("new-campaign step 1, slimmed (F43-I15, prototype f41-onboarding #/new)
       .map((e) => (e.getAttribute("role") === "radio" ? e.getAttribute("data-value") : e.textContent));
     expect(order).toEqual(["綜合維他命軟糖", "sw_one", "sw_three", "益生菌軟糖", "sw_pro", "組合", "sw_duo"]);
     expect(within(radio("sw_three")).getByText("三盒組 NT$999")).toBeTruthy();
-    expect(within(radio("sw_three")).getByText("打平 669・組合價＋免運")).toBeTruthy();
+    expect(within(radio("sw_three")).getByText("打平 669（推算）・組合價＋免運")).toBeTruthy();
     expect(within(radio("sw_one")).getByText("單盒 NT$399")).toBeTruthy();
     expect(within(radio("sw_one")).getByText("打平 249・沒有優惠")).toBeTruthy();
     expect(within(radio("sw_pro")).getByText("單盒 價格未填")).toBeTruthy();
@@ -226,9 +227,21 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     expect(source("受眾")).toBe("來自商品：2 群顧客");
     expect(value("每筆上限")).toBe("669");
     expect(source("每筆上限")).toBe("來自賣法「三盒組」");
-    expect(screen.getByText("等於打平 669")).toBeTruthy();
+    expect(screen.getByText("等於打平 669（推算）")).toBeTruthy();
     expect(value("落地頁")).toBe(VITAMIN_URL);
     expect(source("落地頁")).toBe("來自賣法「三盒組」");
+  });
+
+  it("labels a derived break-even 「（推算）」 and a base sell-way's own break-even not (F45, ads §6.49 Picker)", async () => {
+    const user = userEvent.setup();
+    view();
+    await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
+    await openFold(user);
+    expect(screen.getByText("等於打平 669（推算）")).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: /單盒 NT\$399/ }));
+    expect(screen.getByText("等於打平 249")).toBeTruthy();
+    expect(screen.queryByText(/推算）$/)).toBeNull();
+    expect(within(radio("sw_one")).getByText("打平 249・沒有優惠")).toBeTruthy();
   });
 
   it("sends only the changed values and names them 你改的; a value typed back to the default is not sent", async () => {
@@ -240,7 +253,7 @@ describe("「進階：這期不一樣」 (F43-I15)", () => {
     await user.selectOptions(screen.getByLabelText("受眾"), "grp_try");
     await user.clear(screen.getByLabelText("每筆上限"));
     await user.type(screen.getByLabelText("每筆上限"), "600");
-    expect(screen.getByText("比打平 669 低 69")).toBeTruthy();
+    expect(screen.getByText("比打平 669（推算） 低 69")).toBeTruthy();
     await user.selectOptions(screen.getByLabelText("平台"), "google_ads");
     await user.clear(screen.getByLabelText("落地頁"));
     await user.type(screen.getByLabelText("落地頁"), VITAMIN_URL);
