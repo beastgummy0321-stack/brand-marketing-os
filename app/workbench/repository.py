@@ -829,12 +829,13 @@ def _get_pack_row(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> d
     return dict(row) if row is not None else None
 
 
-def _set_display_name(name: str | None, pack_name: str, index: int, total: int) -> str:
+def _set_display_name(name: str | None, pack_name: str, index: int) -> str:
     """F47 (drill-10 乙 #19): a set without a name (自由創作 sets have none) reads as its source,
-    the pack — 「〈pack〉・第 N 組」 when the pack holds more than one — never a blank button."""
+    the pack, with its place — 「〈pack〉・第 N 組」 — never a blank button. Always numbered, also
+    for a one-set pack, so the studio breadcrumb (pack › set) never repeats the same text."""
     if name and name.strip():
         return name
-    return pack_name if total <= 1 else f"{pack_name}・第 {index} 組"
+    return f"{pack_name}・第 {index} 組"
 
 
 def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str,
@@ -854,7 +855,7 @@ def _pack_sets_full(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str,
         versions_by_part = _versions_by_part(conn, org_id, brand_id, row["id"])
         sets.append({
             "id": row["id"],
-            "name": _set_display_name(row["name"], pack_name, index, len(rows)),
+            "name": _set_display_name(row["name"], pack_name, index),
             "required_outputs": required_outputs,
             "versions_by_part": versions_by_part,
             "state": set_state(required_outputs, versions_by_part),
@@ -1544,7 +1545,7 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
         r = dict(r)
         sib_versions = _versions_by_part(conn, org_id, brand_id, r["id"])
         angle = (r["coordinates_snapshot_json"] or {}).get("angle")
-        name = _set_display_name(r["name"], pack_row["name"], index, len(sibling_rows))
+        name = _set_display_name(r["name"], pack_row["name"], index)
         if r["id"] == set_id:
             own_name = name
         siblings.append({
