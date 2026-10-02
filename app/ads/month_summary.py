@@ -6,7 +6,9 @@ Scope: `campaigns` only ever lists `origin='imported'` campaigns -- Contract G's
 grain is `ads_external_daily` (`metric_scope='ad'`). Since F37 a system-built (internal)
 campaign reads the same grain too (`repository.performance_rows`), but it is judged through
 `repository.list_campaigns` / closeout; listing it here as well would be a divergent second
-"judgment" for the same campaign.
+"judgment" for the same campaign. The one exception is F46's `next_plan` suggestion: a system-built
+campaign closed inside the month suggests planning the next one from its ranked learnings
+(`learning_view.learnings_view`, the same read 品牌智庫 shows).
 
 Correction 6: month sums read only `metric_scope='ad'` rows -- the monthly-budget account rollup
 rows (`external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY`) are always written under
@@ -35,10 +37,13 @@ from datetime import date, datetime, time, timedelta
 from app import orders
 from app.ads import (
     ad_status,
+    learning_rank,
+    learning_view,
     period_grades,
     repository,
     result_kinds,
     review_evidence,
+    sell_way,
     targets,
     triage,
     triage_capacity,
@@ -53,7 +58,7 @@ _MONTH_RE = re.compile(r"\d{4}-\d{2}")
 # a brand that has never recorded a single status transition yet (never `None`, `closed_this_month`
 # still has to know when "before tracking started" begins).
 _TRACKING_FALLBACK = date(2026, 9, 22)
-_SUGGESTION_KINDS = frozenset({"refresh", "cleanup", "no_target"})
+_SUGGESTION_KINDS = frozenset({"refresh", "cleanup", "no_target", "next_plan"})
 
 
 def _require_month(month: str | None) -> str:
@@ -298,6 +303,59 @@ def _no_target_suggestions(conn, org_id, brand_id, campaigns_rows, target_by_cam
     return out
 
 
+def _next_plan_why(campaign: dict) -> str:
+    keep, replace = campaign["counts"]["keep"], campaign["counts"]["replace"]
+    best = next(
+        (row for row in campaign["rows"]
+         if learning_rank.is_keep(row["verdict"]) and row["cost_per_sale"] is not None),
+        None,
+    )
+    if best is None:
+        return f"留下 {keep} 則、換掉 {replace} 則，沒有一則賣出"
+    return (
+        f"留下 {keep} 則（最好的「{best['ad_name']}」每筆 "
+        f"{learning_rank.whole(best['cost_per_sale'])}）、換掉 {replace} 則"
+    )
+
+
+def _next_plan_suggestions(conn, org_id, brand_id, start, end, month) -> list:
+    """F46 `next_plan`: one per sell-way, from the newest system-built campaign closed inside the
+    month (the closed time's org-local date) that has ranked learning rows. Counts, the best kept
+    ad and the link come from the one learnings view (`learning_view.learnings_view`), never
+    recomputed here. A campaign without a sell-way has nothing to prefill and raises none."""
+    zone = coresettings.org_timezone(conn, org_id=org_id)
+    rows = conn.execute(
+        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND origin='internal' "
+        "AND status='closed' AND closed_at >= %s AND closed_at < %s "
+        "ORDER BY closed_at DESC, id",
+        (org_id, brand_id, datetime.combine(start, time.min, tzinfo=zone),
+         datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone)),
+    ).fetchall()
+    out, seen = [], set()
+    for row in (dict(r) for r in rows):
+        sell_way_id = sell_way.of_campaign(row)
+        if sell_way_id is None or sell_way_id in seen:
+            continue
+        view = learning_view.learnings_view(conn, org_id, brand_id, campaign_id=row["id"])
+        if not view["campaigns"] or not view["campaigns"][0]["rows"] or view["next"] is None:
+            continue  # no ranked rows: an older closed campaign of this sell-way may still win
+        seen.add(sell_way_id)
+        key = f"next_plan:{row['id']}"
+        if key in _dismissed_keys(row, month):
+            continue
+        out.append({
+            "key": key, "kind": "next_plan", "campaign_id": row["id"],
+            "campaign_name": row["name"], "objective": row["objective"],
+            "campaign_objective": repository.campaign_objective_family(
+                conn, org_id, brand_id, row,
+            ),
+            "title": f"用「{row['name']}」學到的排下一期",
+            "why": _next_plan_why(view["campaigns"][0]),
+            "action_url": view["next"]["new_campaign_href"],
+        })
+    return out
+
+
 def _grades_view(conn, org_id, brand_id, start, end) -> dict:
     """Contract C `grades`: every ad that spent this month graded by the one ruler
     (`period_grades.grade_period`, the same rows a settle of this month reads) -- 有效 is the
@@ -404,6 +462,7 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         *_refresh_suggestions(campaigns_by_id, queue_items, month),
         *_cleanup_suggestions(campaigns_by_id, queue_items, month),
         *_no_target_suggestions(conn, org_id, brand_id, campaigns_rows, target_by_campaign, month),
+        *_next_plan_suggestions(conn, org_id, brand_id, start, end, month),
     ]
 
     return {
