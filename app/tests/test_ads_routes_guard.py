@@ -203,6 +203,26 @@ class AdsRoutesValidationStillFiresTest(unittest.TestCase):
         self.assertEqual(unknown_campaign.status_code, 404, unknown_campaign.text)
         self.assertEqual(unknown_campaign.json()["error"]["code"], "campaign_unknown")
 
+    def test_pause_view_is_in_the_walked_table_and_reads_unknown_ads_as_gone(self):
+        # F45-I05 Contract P: the two walks above reach the pause read; past the tenant boundary
+        # an unknown campaign is the only 404 and an unknown ad is a `gone` answer, not an error.
+        template = "/api/ads/brands/{brand_id}/campaigns/{campaign_id}/triage/{entity_id}/pause"
+        self.assertEqual(
+            [sorted(r.methods - {"HEAD", "OPTIONS"}) for r in _ads_routes() if r.path == template],
+            [["GET"]],
+        )
+        prefix = f"/api/ads/brands/{self.brand_id}/campaigns"
+        unknown_ad = self.client.get(
+            f"{prefix}/{self.campaign_id}/triage/some-ad-id/pause", headers=self.headers,
+        )
+        self.assertEqual(unknown_ad.status_code, 200, unknown_ad.text)
+        self.assertEqual(unknown_ad.json()["pause"]["state"], "gone")
+        unknown_campaign = self.client.get(
+            f"{prefix}/adc_missing/triage/some-ad-id/pause", headers=self.headers,
+        )
+        self.assertEqual(unknown_campaign.status_code, 404, unknown_campaign.text)
+        self.assertEqual(unknown_campaign.json()["error"]["code"], "campaign_unknown")
+
 
 class NameMatchBindRemovedTest(unittest.TestCase):
     """F31-I08 (item 11): the ads-center name-match bind had no screen calling it and launch
