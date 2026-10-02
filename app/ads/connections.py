@@ -36,6 +36,10 @@ at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to yes
 month or of the last `LOOKBACK_DAYS` days, whichever starts earlier -- so a gap just before the
 1st still shows on the 1st. The calendar covers this month only; today and later days that are
 not read yet are `future`.
+
+F47 Contract H: a failed account's note is its reason, then its gap. Every source carries
+`reread` -- on an `ad_account` row in state `failed` / `missing_days` / `never` it is the body of
+`POST …/existing-campaigns/refresh` (`_reread`), else null.
 """
 
 import calendar
@@ -50,6 +54,7 @@ LOOKBACK_DAYS = 28
 _ORDER_PAGE = 1000
 _FAILING = {"failed", "auth_expired"}
 _ATTENTION_FREE = {"ok", "unsupported"}
+_REREADABLE = {"failed", "missing_days", "never"}
 
 
 def _md(day: date) -> str:
@@ -122,8 +127,21 @@ def _source(key, kind, platform, name, state, note, *, last_success_at=None, mis
     return {
         "key": key, "kind": kind, "platform": platform, "name": name, "state": state,
         "note": note, "last_success_at": last_success_at, "missing_days": list(missing_days),
-        "affected_campaigns": list(affected), "action": action,
+        "affected_campaigns": list(affected), "action": action, "reread": None,
     }
+
+
+def _reread(platform, account_id, state, missing_days, window_start, yesterday) -> dict | None:
+    """F47 Contract H: the body of `POST …/existing-campaigns/refresh` that reads this account
+    again -- the missing range (first to last unread day), else the page's window up to yesterday.
+    Only for a read the user can repeat from here (`failed`, `missing_days`, `never`); an expired
+    authorisation is fixed on the settings page instead, an `ok` account needs nothing."""
+    if state not in _REREADABLE:
+        return None
+    start, end = (missing_days[0], missing_days[-1]) if missing_days else (
+        window_start.isoformat(), yesterday.isoformat(),
+    )
+    return {"platform": platform, "source_account": account_id, "start": start, "end": end}
 
 
 def _account_campaigns(conn, org_id, brand_id, platform, account_id) -> list[dict]:
@@ -206,7 +224,9 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     if failures:
         state = "auth_expired" if auth else "failed"
         text = next((error for _, error in failures if error), None)
-        note = gap or ("授權已失效，重新授權後才能讀資料" if auth else text or "上次讀取失敗")
+        reason = "授權已失效，重新授權後才能讀資料" if auth else text or "上次讀取失敗"
+        # F47 Contract H: the reason first, then the gap -- a gap never hides why the read failed.
+        note = f"{reason}；{gap}" if gap else reason
     elif not ranges:
         state, note = "never", "還沒讀取過"
     elif missing_days:
@@ -228,6 +248,7 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
         last_success_at=max(moments) if moments else None, missing_days=missing_days,
         affected=affected, action=action,
     )
+    source["reread"] = _reread(platform, account_id, state, missing_days, window_start, yesterday)
 
     def day_state(day: date) -> str:
         if day > today:
