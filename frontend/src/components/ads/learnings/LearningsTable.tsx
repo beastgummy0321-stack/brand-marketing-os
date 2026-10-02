@@ -21,8 +21,8 @@ const isKeep = (row: LearningRow) => row.verdict !== "replace";
 export function VerdictChips({ row }: { row: LearningRow }) {
   return (
     <>
-      <Chip tone={isKeep(row) ? "ok" : "bad"} data-verdict={row.verdict}>{row.verdict_label}</Chip>
-      {row.flags.map((flag) => <Chip key={flag} tone="warn">{flag}</Chip>)}
+      <Chip tone={isKeep(row) ? "ok" : "bad"} data-verdict={row.verdict} className="whitespace-nowrap">{row.verdict_label}</Chip>
+      {row.flags.map((flag) => <Chip key={flag} tone="warn" className="whitespace-nowrap">{flag}</Chip>)}
     </>
   );
 }
@@ -96,7 +96,7 @@ function RankedRow({ row, cap, compact, idPrefix }: { row: LearningRow; cap: num
       {open && (
         <div
           id={panelId}
-          className="col-span-full mt-2.5 mb-0.5 grid grid-cols-3 gap-x-[18px] gap-y-2 rounded-lg bg-background px-3.5 py-2.5 max-[900px]:grid-cols-2 max-[900px]:px-3 max-[900px]:[grid-area:auto]"
+          className="col-span-full mt-2.5 mb-0.5 grid grid-cols-3 gap-x-[18px] gap-y-2 rounded-lg bg-background px-3.5 py-2.5 max-[900px]:grid-cols-2 max-[900px]:px-3 max-[900px]:[grid-column:1/-1]"
         >
           {row.coordinates.length === 0 && <p className="col-span-full text-[13px] text-muted-foreground">這則廣告沒有記到座標。</p>}
           {row.coordinates.map((c) => (
