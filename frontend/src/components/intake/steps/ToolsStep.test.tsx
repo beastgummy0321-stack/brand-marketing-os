@@ -159,6 +159,47 @@ it("picking an account shows 指定中… on that row while the assign runs; a f
   expect(screen.getByText("權杖已存，還沒指定給這個品牌。")).toBeTruthy();
 });
 
+it("a token that lists no account or hits a Meta outage keeps the token input with the server's sentence (drill-10 R3/R4)", async () => {
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({ token_tail: null, accounts: [] });
+  vi.mocked(connectMetaToken)
+    .mockRejectedValueOnce(new Error("這把權杖讀不到任何廣告帳戶：可能填錯，或這個帳號沒有廣告帳戶的權限。"))
+    .mockRejectedValueOnce(new Error("Meta 暫時讀不到（代碼 2），這把權杖還沒驗證、沒有存。請稍後再試。"));
+  renderStep();
+
+  await userEvent.click(await screen.findByRole("button", { name: "接上" }));
+  const input = await screen.findByPlaceholderText("貼上 Meta 存取權杖");
+  await userEvent.type(input, "EAAB-wrong");
+  await userEvent.click(screen.getByRole("button", { name: "讀取帳戶" }));
+  expect(await screen.findByText("這把權杖讀不到任何廣告帳戶：可能填錯，或這個帳號沒有廣告帳戶的權限。")).toBeTruthy();
+  expect(screen.getByPlaceholderText("貼上 Meta 存取權杖")).toHaveProperty("value", "EAAB-wrong");
+  expect(screen.queryByText(/權杖已存/)).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "讀取帳戶" }));
+  expect(await screen.findByText(/Meta 暫時讀不到（代碼 2）/)).toBeTruthy();
+  expect(screen.getByPlaceholderText("貼上 Meta 存取權杖")).toBeTruthy();
+});
+
+it("a stored token offers 換一把權杖, and one that lists no account shows the token input at once", async () => {
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({
+    token_tail: "abcd",
+    accounts: [{ id: "act_2", account_id: "1002", name: "副帳戶", currency: "TWD", connected_at: "", bound_brand_ids: [] }],
+  });
+  renderStep();
+  await userEvent.click(await screen.findByRole("button", { name: "接上" }));
+  expect(screen.queryByPlaceholderText("貼上 Meta 存取權杖")).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: "換一把權杖" }));
+  expect(screen.getByPlaceholderText("貼上 Meta 存取權杖")).toBeTruthy();
+});
+
+it("a stored token with no account (stored before F47) shows the token input, not 權杖已存", async () => {
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({ token_tail: "abcd", accounts: [] });
+  renderStep();
+  await userEvent.click(await screen.findByRole("button", { name: "接上" }));
+  expect(await screen.findByPlaceholderText("貼上 Meta 存取權杖")).toBeTruthy();
+  expect(screen.queryByText(/權杖已存/)).toBeNull();
+  expect(screen.queryByText("這把權杖沒有列出任何帳戶。")).toBeNull();
+});
+
 it("saves the conversion goal on change", async () => {
   renderStep();
 
