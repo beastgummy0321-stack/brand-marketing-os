@@ -449,18 +449,18 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     facts_text, facts_basis = _brand_facts_section(conn, brand_id)
     products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
     # F43-I02：這個賣法的顧客群（程式挑好、有上限），接在商品之後；分配的 rationale 點名打哪一群。
-    customers_text, customer_group_ids = customer_groups.prompt_section(
+    customers_text, listed_groups = customer_groups.prompt_groups(
         conn, org_id, brand_id, campaign,
     )
+    customer_group_ids = [group["id"] for group in listed_groups]
     learnings_text, learnings_basis = _learnings_section(conn, brand_id)
-    # F39-I02：程式統計的【座標成績表】接在學習句子之後——上一期哪則廣告划算、哪則太貴，
-    # 讓分配的 `rationale` 點得出名字；空表就寫「還沒有成績表」，規則不生效。
-    # F41-I02：同一份成績表同時產生 prompt 文字與「用到的學習」的座標列（basis 就是模型看過的）。
-    board = coordinate_learning.scoreboard(conn, org_id, brand_id)
-    board_text, board_ids = coordinate_learning.scoreboard_section(
-        conn, org_id, brand_id, board=board,
+    # F46 Contract G：程式排好的【上幾期的排名】接在學習句子之後（取代 F39 的【座標成績表】）——
+    # 上幾期每則廣告的每筆成本與留下／換掉，讓 `rationale` 點得出要沿用哪則、避開哪一群＋角度。
+    # 同一份 view 存進 basis.ranked_learnings（查看策略依據＝模型真的看過的）。
+    ranked_view = coordinate_learning.prompt_view(conn, org_id, brand_id)
+    board_text, board_ids = coordinate_learning.ranked_section(
+        conn, org_id, brand_id, campaign, view=ranked_view, listed=listed_groups,
     )
-    coordinate_rows = coordinate_learning.learning_rows(conn, org_id, brand_id, board)
 
     brand = bi_repo.get_brand(conn, brand_id)
     assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
@@ -543,7 +543,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         "knowledge_item_ids": knowledge_item_ids, "llm_task_id": task_row["id"],
         "input_context_hash": task_row["input_context_hash"],
         "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
-        "coordinate_scoreboard": board_ids, "coordinate_learnings": coordinate_rows,
+        "coordinate_scoreboard": board_ids, "ranked_learnings": ranked_view,
         "estimated_fields": estimated_fields,
     }
     assumption_note = _assumption_note(prices_basis)

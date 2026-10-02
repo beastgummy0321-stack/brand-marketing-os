@@ -10,6 +10,9 @@ which no ad uses one of them is rejected.
 F46-I01 (Contracts A and P): every planned ad binds one listed customer group (`customer_group`
 = 第 N 群, all ads of one delivery group share it, `pain` within that group's pains), and the
 prompt says how many photos and videos the brand has in hand.
+F46-I04 (Contract G): the prompt carries 【上幾期的排名】 (`coordinate_learning.ranked_section`) and
+a plan that re-runs a 換掉 (customer group, angle) of the newest closed campaign, or reuses none of
+the listed campaigns' 留下 pairs, is refused.
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
@@ -273,6 +276,20 @@ def _bind_customer_groups(groups: list, listed: list, menu_pain_keys: set) -> bo
     return True
 
 
+def _builds_on_learnings(groups: list, keep_pairs: set, replace_pairs: set) -> bool:
+    """F46 Contract G, after `_bind_customer_groups`: an ad's (customer group, angle) pair may not
+    be a 換掉 pair of the newest closed campaign, and when the listed campaigns kept any pair at
+    least one ad must reuse one (its other coordinates may change). Ads without a group never
+    match; `False` = refuse the whole reply."""
+    pairs = {
+        (ad["customer_group"]["id"], ad["coordinates"]["angle"])
+        for group in groups for ad in group["ads"] if ad.get("customer_group") is not None
+    }
+    if pairs & replace_pairs:
+        return False
+    return not keep_pairs or bool(pairs & keep_pairs)
+
+
 MATERIALS_HEADER = "【手上的素材】"
 _USER_ASSET_PAGE_GUARD = 100  # pages of 100 rows; a brand with >10 000 originals is not real
 
@@ -364,15 +381,18 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         for row in allocation
     )
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
-    # F39-I02：程式統計的【座標成績表】——上一期哪個組合划算、哪個太貴／沒賣出——接在行事曆
-    # 之後、詞彙表之前：詞彙表永遠最後，模型答題前最後讀到的是可用的 key。
-    board_text, board_ids = coordinate_learning.scoreboard_section(conn, org_id, brand_id)
     # F43-I02：這個賣法的顧客群（每支廣告的 pain 從列出的群挑、scene 合那群的使用時機），
-    # 接在成績表之後、詞彙表之前。
+    # 接在排名之後、詞彙表之前。
     customers_text, listed_groups = customer_groups.prompt_groups(
         conn, org_id, brand_id, campaign,
     )
     customer_group_ids = [group["id"] for group in listed_groups]
+    # F46 Contract G：程式排好的【上幾期的排名】（取代 F39 的【座標成績表】）接在行事曆之後、
+    # 詞彙表之前：詞彙表永遠最後，模型答題前最後讀到的是可用的 key。群編號照上面這份顧客群清單。
+    ranked_view = coordinate_learning.prompt_view(conn, org_id, brand_id)
+    board_text, board_ids = coordinate_learning.ranked_section(
+        conn, org_id, brand_id, campaign, view=ranked_view, listed=listed_groups,
+    )
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
     # F44：【這期可用的優惠】接在顧客群之後、詞彙表之前；沒有可用優惠就整段不出現。
     # F46 Contract P：【手上的素材】接在顧客群之後、優惠之前。
@@ -411,6 +431,12 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         raise ValueError("delivery_plan_failed")
     menu_pain_keys = {row["key"] for row in vocabulary_rows if row["dimension"] == "pain"}
     if not _bind_customer_groups(validated_groups, listed_groups, menu_pain_keys):
+        raise ValueError("delivery_plan_failed")
+    # F46 Contract G: build on 留下, never re-run a 換掉 customer group + angle unchanged.
+    keep_pairs, replace_pairs = coordinate_learning.gate_pairs(
+        ranked_view, set(customer_group_ids),
+    )
+    if not _builds_on_learnings(validated_groups, keep_pairs, replace_pairs):
         raise ValueError("delivery_plan_failed")
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
