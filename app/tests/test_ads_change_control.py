@@ -254,6 +254,80 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(original["content_hash"], first["content_hash"])
         self.assertEqual(revised["plan_json"]["supersedes_id"], first["id"])
 
+    def _create_deciding(self, decision, **overrides):
+        payload = {
+            "operation_id": db.new_id("op"),
+            "month": self.month,
+            "title": "暫停這則",
+            "items": [{"kind": "pause", "target_id": self.ad["id"], "after": {"status": "PAUSED"},
+                       "reason": "花到上限 3 倍"}],
+            **overrides,
+        }
+        return service.create(
+            self.conn, self.org, self.brand, self.campaign, payload, "test", decision,
+        )
+
+    def test_create_with_decision_is_one_write(self):
+        """F47-I07 (drill-10 Q3): a 暫緩 on a proposal with no set yet creates the set already
+        deferred -- one transaction, never a draft first."""
+        revisit = (db.now_utc() + timedelta(days=3)).isoformat()
+        created = self._create_deciding(
+            {"decision": "deferred", "reason": "想再觀察幾天", "revisit_at": revisit},
+        )
+        self.assertEqual(created["status"], "deferred")
+        self.assertEqual(created["reason"], "想再觀察幾天")
+        self.assertIsNotNone(created["revisit_at"])
+        self.assertEqual(self.count("ads_change_set"), 1)
+
+    def test_create_with_a_past_revisit_leaves_no_draft(self):
+        audits = self.count("audit_log")
+        with self.assertRaisesRegex(ValueError, "未來的重看時間"):
+            self._create_deciding({
+                "decision": "deferred", "reason": "想再觀察幾天",
+                "revisit_at": (db.now_utc() - timedelta(days=1)).isoformat(),
+            })
+        self.assertEqual(self.count("ads_change_set"), 0)
+        self.assertEqual(self.count("audit_log"), audits)
+
+    def test_create_rolls_the_new_set_back_when_the_decision_is_refused(self):
+        with patch.object(service, "_apply_decision", side_effect=ValueError("injected refusal")):
+            with self.assertRaisesRegex(ValueError, "injected refusal"):
+                self._create_deciding({"decision": "rejected", "reason": "不要"})
+        self.assertEqual(self.count("ads_change_set"), 0)
+
+    def test_create_with_decision_on_an_approved_replay_is_refused_and_changes_nothing(self):
+        approved = self.approve(self._create_deciding(None, operation_id="replay-key"))
+        with self.assertRaisesRegex(ValueError, "已核准清單"):
+            self._create_deciding({"decision": "rejected", "reason": "不要"},
+                                  operation_id="replay-key")
+        again = data.get(self.conn, self.org, self.brand, self.campaign, approved["id"])
+        self.assertEqual(again["status"], "approved")
+        self.assertEqual(self.count("ads_change_set"), 1)
+
+    def test_http_create_with_decide_and_a_past_revisit_is_a_409_with_no_set(self):
+        from app.main import app
+
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        body = {
+            "operation_id": "http-decide",
+            "title": "暫停這則",
+            "month": self.month,
+            "items": [{"kind": "pause", "target_id": self.ad["id"], "after": {"status": "PAUSED"},
+                       "reason": "花到上限 3 倍"}],
+        }
+        client = TestClient(app)
+        refused = client.post(base + "/change-sets", json={**body, "decide": {
+            "decision": "deferred", "reason": "再看看",
+            "revisit_at": (db.now_utc() - timedelta(hours=1)).isoformat(),
+        }})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(self.count("ads_change_set"), 0)
+        accepted = client.post(base + "/change-sets", json={**body, "decide": {
+            "decision": "rejected", "reason": "這則還想留著",
+        }})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(accepted.json()["change_set"]["status"], "rejected")
+
     def _readback(self, current, body="新文案", fail=False, wrong_account=False):
         ad = copy.deepcopy(self.ad)
         ad["creative"]["fields"]["body"] = body

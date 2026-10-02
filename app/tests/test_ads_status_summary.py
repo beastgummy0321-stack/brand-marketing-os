@@ -8,7 +8,7 @@ enrichments).
 import unittest
 from unittest.mock import patch
 
-from app.ads import channels, repository, status_summary
+from app.ads import channels, repository, status_summary, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db, interrupts
@@ -110,20 +110,35 @@ class StatusSummaryTest(unittest.TestCase):
             self.summary(), {"last_success_at": None, "failing_campaigns": 0, "open_items": 0},
         )
 
-    def test_open_items_counts_only_ads_triage_categories(self):
+    def test_open_interrupt_without_a_live_queue_row_is_not_counted(self):
+        """F47 Contract D: `open_items` reads the brand queue, not open interrupts on their own -- a
+        stale open row (no live candidate) and a non-queue category never count."""
         self.conn.commit()
         interrupts.enqueue(
             self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_stop_loss",
             dedupe_key="status-summary-test:stop_loss:1", message="廣告「測試」停損，待決定",
         )
-        # A non-`ads_triage_*` category must never inflate `open_items` -- this summary is scoped
-        # to the brand decision queue, not every interrupt category this brand could ever raise.
         interrupts.enqueue(
             self.conn, org_id=self.org, brand_id=self.brand, category="ads_review_ready",
             dedupe_key="status-summary-test:review_ready:1", message="廣告檢討已備妥",
         )
         self.conn.commit()
-        self.assertEqual(self.summary()["open_items"], 1)
+        self.assertEqual(self.summary()["open_items"], 0)
+
+    def test_open_items_ignores_done_rows_and_counts_what_the_home_board_counts(self):
+        """drill-10 Q2: a deferred row is done, so the top bar no longer says 「1 項待處理」 while
+        the home says 「今天沒有要決定的事」. Only the home board's kinds count."""
+        rows = [
+            {"kind_key": "cleanup", "done": True},
+            {"kind_key": "cleanup", "done": False},
+            {"kind_key": "worse", "done": False},
+            {"kind_key": "refresh_creative", "done": False},
+            {"kind_key": "settle", "done": False},
+            {"kind_key": "scale_budget", "done": False},
+            {"kind_key": "insufficient_data", "done": False},
+        ]
+        with patch.object(triage, "get_queue", return_value={"items": rows}):
+            self.assertEqual(self.summary()["open_items"], 4)
 
 
 class CampaignObjectiveFamilyCardTest(unittest.TestCase):
