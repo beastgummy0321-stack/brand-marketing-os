@@ -165,7 +165,7 @@ describe("ProductsPage", () => {
     mockDismiss.mockResolvedValue({ ...fixture, suggestions: [] });
     renderPage();
 
-    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=suggestion]") as HTMLElement;
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=product-card]") as HTMLElement;
     await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
 
     expect(mockDismiss).toHaveBeenCalledWith(B, "膠原蛋白軟糖");
@@ -178,7 +178,7 @@ describe("ProductsPage", () => {
     mockDismiss.mockRejectedValue(new Error("沒有略過（狀態碼 500）"));
     renderPage();
 
-    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=suggestion]") as HTMLElement;
+    const card = (await screen.findByText("膠原蛋白軟糖")).closest("[data-slot=product-card]") as HTMLElement;
     await userEvent.click(within(card).getByRole("button", { name: "不用了" }));
     expect((await within(card).findByRole("alert")).textContent).toContain("沒有略過");
     expect(within(card).getByRole("button", { name: "不用了" }).hasAttribute("disabled")).toBe(false);

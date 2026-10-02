@@ -110,25 +110,14 @@ export function ProductsPage({ brandId }: { brandId: string }) {
           <Section title="商品">
             {products.map((product) => <ProductCard key={product.id} brandId={brandId} product={product} />)}
             {suggestions.map((suggestion) => (
-              // 「不用了」 sits in the card's bottom-right corner, inside its padding (the card still fills the grid row).
-              <div key={suggestion.name} data-slot="suggestion" className="relative grid">
-                <SuggestionCard
-                  suggestion={suggestion}
-                  busy={creating !== null}
-                  error={createError?.name === suggestion.name ? createError.message : null}
-                  onContinue={() => continueSuggestion(suggestion)}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-3.5 bottom-3.5 font-medium text-muted-foreground"
-                  disabled={creating !== null}
-                  onClick={() => dismissSuggestion(suggestion)}
-                >
-                  不用了
-                </Button>
-              </div>
+              <SuggestionCard
+                key={suggestion.name}
+                suggestion={suggestion}
+                busy={creating !== null}
+                error={createError?.name === suggestion.name ? createError.message : null}
+                onContinue={() => continueSuggestion(suggestion)}
+                onDismiss={() => dismissSuggestion(suggestion)}
+              />
             ))}
           </Section>
         )}

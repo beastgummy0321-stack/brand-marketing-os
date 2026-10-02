@@ -81,11 +81,10 @@ export interface OnboardingScan {
   pages_read: number;
   photos_read: number;
   /** The website list this read was for (F47 Contract F); a saved list that differs makes the read stale
-   * (the status then reads `none` and the scan starts again). Always sent; optional here only so fixtures
-   * written before F47 still type-check (absent = none). */
-  urls_read?: string[];
-  /** Pages that could not be read, each with the reason in Chinese (absent = none). */
-  pages_failed?: ScanPageFailed[];
+   * (the status then reads `none` and the scan starts again). */
+  urls_read: string[];
+  /** Pages that could not be read, each with the reason in Chinese (HTTP status, timeout, unknown domain, …). */
+  pages_failed: ScanPageFailed[];
 }
 
 export interface ScanPageFailed {

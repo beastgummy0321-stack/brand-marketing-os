@@ -4,8 +4,8 @@
 
 `build` turns raw HTML (fetched 2026-10-01) into the plain text `app.core.net.fetch_url` would
 extract, minus what the 2026-09-26 records cannot back (docs/drills/drill-9/plan.md §1), and
-writes `scripts/drill/site/<page>.txt`. `install()` points every module-level `fetch_url` the
-prefill uses at those files: https://beastprime.com.tw/<path> → the matching page, any other
+writes `scripts/drill/site/<page>.txt`. `install()` points every module-level reader
+(`read_url` / `fetch_url`) the prefill uses at those files: https://beastprime.com.tw/<path> → the matching page, any other
 URL → unreadable. The persona types and the product stores the real URLs. Drill only.
 """
 
@@ -61,13 +61,20 @@ def fetch_url(url: str) -> tuple:
     return True, page.read_text(encoding="utf-8")[: net.URL_EXCERPT_CHARS]
 
 
+def read_url(url: str) -> tuple:
+    """`app.core.net.read_url`'s shape: a page outside the copy reads as a 404 would."""
+    ok, text = fetch_url(url)
+    return (True, text, None) if ok else (False, "", "網站說這一頁不存在（404）")
+
+
 def install() -> None:
     import app.brand_web.product_ai_calls
     import app.intake.ai
     import app.intake.product_prefill
 
-    for mod in (app.intake.ai, app.intake.product_prefill, app.brand_web.product_ai_calls):
-        mod.fetch_url = fetch_url
+    for mod in (app.intake.ai, app.intake.product_prefill):
+        mod.read_url = read_url
+    app.brand_web.product_ai_calls.fetch_url = fetch_url
 
 
 def build(raw_dir: str) -> None:

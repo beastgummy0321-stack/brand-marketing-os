@@ -10,7 +10,7 @@ F42-I14 拆掉。
 失敗列；本檔一律回傳 (ok, 人話錯誤訊息)，路由層據此顯示錯誤與「前往設定頁」引導，
 不當機、不假裝成功（principles 16 誠實狀態）。
 
-測試／煙霧測試把模組層 PROVIDER 換成 FakeProvider、fetch_url 換成假抓取，
+測試／煙霧測試把模組層 PROVIDER 換成 FakeProvider、read_url 換成假抓取（回 (ok, 文字, 原因)），
 不發任何真實網路請求。
 """
 
@@ -29,6 +29,9 @@ _log = logging.getLogger(__name__)
 PROVIDER = providers.AnthropicProvider()
 
 # 綁成本模組的名字，測試才能只換這裡（實作已移到 app/core/net.py，產品調研也要用）
+read_url = net.read_url
+# Not read by the prefill any more (it needs the reason: `read_url`); kept because legacy tests
+# (app/tests/test_intake.py) still swap this name in setUp.
 fetch_url = net.fetch_url
 
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
@@ -293,22 +296,17 @@ def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[
     return out, dropped
 
 
-# Why a page was not read (Contract F `pages_failed[].reason`). `fetch_url` reports only ok / not
-# ok (app/core/net.py keeps no status code or exception text), so the reason states what was
-# observed and nothing more: the address did not open, or it opened with no readable text.
-PAGE_UNREADABLE = "打不開這個網址"
-PAGE_EMPTY = "打得開，但這一頁沒有可以讀的文字"
-
-
 def _read_pages(urls: list) -> tuple[list, list]:
-    """-> (pages read as (url, text), pages not read as {url, reason})."""
+    """-> (pages read as (url, text), pages not read as {url, reason}); the reason is
+    `read_url`'s short Chinese sentence (HTTP status, timeout, unknown domain, certificate, empty
+    page; Contract F)."""
     pages, failed = [], []
     for url in urls[:MAX_PREFILL_PAGES]:
-        ok, text = fetch_url(url)
+        ok, text, reason = read_url(url)
         if ok and text and text.strip():
             pages.append((url, text.strip()))
         else:
-            failed.append({"url": url, "reason": PAGE_EMPTY if ok else PAGE_UNREADABLE})
+            failed.append({"url": url, "reason": reason or net.REASON_EMPTY})
     return pages, failed
 
 

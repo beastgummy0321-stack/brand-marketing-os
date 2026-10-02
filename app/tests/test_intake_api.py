@@ -38,12 +38,12 @@ class _Base(unittest.TestCase):
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         self._orig_provider = intake_ai.PROVIDER
-        self._orig_fetch = intake_ai.fetch_url
-        intake_ai.fetch_url = lambda url: (False, "")
+        self._orig_fetch = intake_ai.read_url
+        intake_ai.read_url = lambda url: (False, "", "網站 10 秒內沒有回應")
 
     def tearDown(self):
         intake_ai.PROVIDER = self._orig_provider
-        intake_ai.fetch_url = self._orig_fetch
+        intake_ai.read_url = self._orig_fetch
         self._envpatch.stop()
 
     def _brand_name(self) -> str:

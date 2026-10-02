@@ -19,6 +19,7 @@ import app.main as main
 import app.shared.web as web
 from app import storage
 from app.core import db as coredb
+from app.core import net
 from app.intake import ai as intake_ai
 from app.intake import repository as ir
 from app.intake import state
@@ -65,13 +66,13 @@ class _Base(unittest.TestCase):
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         self._orig_provider = intake_ai.PROVIDER
-        self._orig_fetch = intake_ai.fetch_url
-        intake_ai.fetch_url = lambda url: (True, _PAGE)
+        self._orig_fetch = intake_ai.read_url
+        intake_ai.read_url = lambda url: (True, _PAGE, None)
         intake_ai.PROVIDER = FakeProvider(response=_response(_REPLY))
 
     def tearDown(self):
         intake_ai.PROVIDER = self._orig_provider
-        intake_ai.fetch_url = self._orig_fetch
+        intake_ai.read_url = self._orig_fetch
         self._envpatch.stop()
 
     def _url(self, bid: str) -> str:
@@ -194,12 +195,12 @@ class PrefillScanTest(_Base):
 
     def test_nothing_readable_makes_no_call_and_can_be_started_again(self):
         bid = self._create(photos=0)
-        intake_ai.fetch_url = lambda url: (False, "")
+        intake_ai.read_url = lambda url: (False, "", "網站 10 秒內沒有回應")
         status = self._scan(bid)
         self.assertEqual(status["status"], "done")
         self.assertEqual((status["pages_read"], status["photos_read"], status["found"]), (0, 0, []))
         self.assertEqual(intake_ai.PROVIDER.calls, [])
-        intake_ai.fetch_url = lambda url: (True, _PAGE)
+        intake_ai.read_url = lambda url: (True, _PAGE, None)
         self.assertEqual(self._scan(bid)["pages_read"], 1)
         self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
 
@@ -207,28 +208,29 @@ class PrefillScanTest(_Base):
         good, bad, empty = ("https://example.com/about", "https://broken.example/x",
                             "https://example.com/blank")
         bid = self._create(photos=0, urls=(good, bad, empty))
-        pages = {good: (True, _PAGE), empty: (True, "  ")}
-        intake_ai.fetch_url = lambda url: pages.get(url, (False, ""))
+        pages = {good: (True, _PAGE, None), empty: (True, "  ", None)}
+        intake_ai.read_url = lambda url: pages.get(url, (False, "", "網站說這一頁不存在（404）"))
         status = self._scan(bid)
         self.assertEqual(status["status"], "done", status)
         self.assertEqual(status["pages_read"], 1)
         self.assertEqual(status["urls_read"], [good, bad, empty])
         self.assertEqual(status["pages_failed"], [
-            {"url": bad, "reason": intake_ai.PAGE_UNREADABLE},
-            {"url": empty, "reason": intake_ai.PAGE_EMPTY},
+            {"url": bad, "reason": "網站說這一頁不存在（404）"},  # read_url's own reason, kept
+            {"url": empty, "reason": net.REASON_EMPTY},
         ])
 
     def test_every_page_unreadable_reads_nothing_and_says_why(self):
         bid = self._create(photos=0, urls=("https://broken.example/x",))
-        intake_ai.fetch_url = lambda url: (False, "")
+        intake_ai.read_url = lambda url: (False, "", "網站 10 秒內沒有回應")
         status = self._scan(bid)
         self.assertEqual((status["status"], status["pages_read"]), ("done", 0))
         self.assertEqual(status["pages_failed"],
-                         [{"url": "https://broken.example/x", "reason": intake_ai.PAGE_UNREADABLE}])
+                         [{"url": "https://broken.example/x", "reason": "網站 10 秒內沒有回應"}])
 
     def test_a_changed_website_list_makes_the_old_read_stale_and_reads_again(self):
         bid = self._create(photos=0, urls=("https://broken.example/x",))
-        intake_ai.fetch_url = lambda url: (False, "") if "broken" in url else (True, _PAGE)
+        intake_ai.read_url = lambda url: (
+            (False, "", "網站 10 秒內沒有回應") if "broken" in url else (True, _PAGE, None))
         self.assertEqual(self._scan(bid)["pages_read"], 0)
         resp = self.client.put(f"/api/intake/brands/{bid}/onboarding/basics", json={
             "name": "改過網址的品牌", "urls": ["https://example.com/fixed"]})
