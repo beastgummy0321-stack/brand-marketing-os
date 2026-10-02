@@ -15,12 +15,14 @@ vi.mock("@/lib/workbenchApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/workbenchApi")>("@/lib/workbenchApi");
   return { ...actual, getSet: vi.fn(), runProduct: vi.fn(), selectVersion: vi.fn() };
 });
+vi.mock("@/lib/jobsApi", async (original) => ({ ...await original<typeof import("@/lib/jobsApi")>(), fetchActiveJobs: vi.fn() }));
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
 }));
 
 import type { SetDetail } from "@/lib/workbenchApi";
 import { getSet, runProduct, selectVersion } from "@/lib/workbenchApi";
+import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { SetStudioPage } from "./SetStudioPage";
 
 const mockGetSet = vi.mocked(getSet);
@@ -28,8 +30,15 @@ const mockRunProduct = vi.mocked(runProduct);
 const mockSelectVersion = vi.mocked(selectVersion);
 const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
+/** `GET /api/jobs/active` with this set's job queued; `stalled` = the worker is stopped (F47 Contract C). */
+const jobs = (stalled: boolean): ActiveJobsSnapshot => ({
+  data: [], total: 1, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-02T02:00:00Z",
+  worker_alive: !stalled, stalled,
+});
+
 beforeEach(() => {
   Object.assign(navigator, { clipboard: { writeText: mockWriteText } });
+  vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(false));
 });
 
 afterEach(() => {
@@ -767,5 +776,68 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
     const other = await screen.findByRole("button", { name: "正在生成另一個部分，完成後才能再生成" });
     expect((other as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "生成中…" })).toBeNull();
+  });
+});
+
+describe("F47-I04 worker stopped, failed round, override approval", () => {
+  const empty = { state: "未生成", selected: 0, required: 1, generation_settings: {}, versions: [] };
+
+  it("a queued round with the worker stopped shows the notice; 再檢查一次 with a live worker re-reads the set and clears it", async () => {
+    mockGetSet.mockResolvedValue(setDetail({ generation: { status: "queued", error: null }, products: { image_prompt: empty } }));
+    vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(true));
+    renderStudio();
+
+    const notice = (await screen.findByText(/背景程式停了/)).closest("[data-slot=worker-stopped]") as HTMLElement;
+    expect(notice.textContent).toContain("背景程式停了：這件工作還排著，已填的資料沒丟。重新啟動行銷系統後會自動接著做。");
+    expect(screen.getByText("素材已排隊，等待生成。")).toBeTruthy();
+
+    vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(false));
+    const reads = mockGetSet.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "再檢查一次" }));
+    await waitFor(() => expect(screen.queryByText(/背景程式停了/)).toBeNull());
+    expect(mockGetSet.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it("a failed round shows the server's error with 重新生成, which runs the open part again", async () => {
+    const failed = setDetail({
+      required_parts: ["copy"],
+      generation: { status: "failed", error: "找不到工單：wbb_01" },
+      products: { copy: { ...empty, generation_settings: { count: 3 } } },
+    });
+    mockGetSet.mockResolvedValue(failed);
+    mockRunProduct.mockResolvedValue({ ...failed, generation: { status: "queued", error: "找不到工單：wbb_01" } });
+    renderStudio();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("這輪生成失敗：找不到工單：wbb_01");
+    await userEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 3);
+    expect(await screen.findByText("素材已排隊，等待生成。")).toBeTruthy();
+    expect(screen.queryByText(/這輪生成失敗/)).toBeNull();
+  });
+
+  it("override-approved set: the missing part stays usable, the selected part is locked, the reason says which", async () => {
+    const reason = "這個任務包已核准，但這一組還缺東西：缺的部分可以補生成、選定；已選定的維持鎖定。";
+    const image = setDetail().products.image_prompt!;
+    mockGetSet.mockResolvedValue(setDetail({
+      required_parts: ["copy", "image_prompt"],
+      lock: { locked: false, reason, open_parts: ["image_prompt"] },
+      products: {
+        copy: {
+          ...copySetDetail().products.copy!, state: "已選定", selected: 1, locked: true,
+          versions: [{ ...copySetDetail().products.copy!.versions[0], selected_at: "2026-10-01T00:00:00Z" }],
+        },
+        image_prompt: { ...image, state: "待選定", locked: false },
+      },
+    }));
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=image_prompt");
+
+    expect(await screen.findByText(reason)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "再生成一輪（10 張）" }) as HTMLButtonElement).disabled).toBe(false);
+
+    await userEvent.click(screen.getByRole("tab", { name: "文案" }));
+    expect((await screen.findByRole("button", { name: /再生成 \d+ 張/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "✓ 已選定" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

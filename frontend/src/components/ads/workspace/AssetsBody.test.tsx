@@ -14,6 +14,7 @@ import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
 import { chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
 import { AssetApiError, createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
+import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { AssetsBody } from "./AssetsBody";
 
 vi.mock("@/lib/adsSlotsApi", async (original) => ({
@@ -21,6 +22,7 @@ vi.mock("@/lib/adsSlotsApi", async (original) => ({
   getSlots: vi.fn(), uploadIntoSlot: vi.fn(), fetchSlotThumbnail: vi.fn(), getSlotCopyOptions: vi.fn(), chooseSlotCopy: vi.fn(),
   recheckSlot: vi.fn(), editSlotCopy: vi.fn(),
 }));
+vi.mock("@/lib/jobsApi", async (original) => ({ ...await original<typeof import("@/lib/jobsApi")>(), fetchActiveJobs: vi.fn() }));
 vi.mock("@/lib/adsMaterialApi", async (original) => ({ ...await original<typeof import("@/lib/adsMaterialApi")>(), cancelMaterialTask: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async (original) => ({
   ...await original<typeof import("@/lib/adsUserAssetsApi")>(), createUploadBatch: vi.fn(), putUpload: vi.fn(),
@@ -79,9 +81,16 @@ function renderBody(c = campaign(), extra: Partial<Parameters<typeof AssetsBody>
   return { ...view, props };
 }
 
+/** `GET /api/jobs/active` with this org's copy job queued; `stalled` = the worker is stopped (F47 Contract C). */
+const jobs = (stalled: boolean): ActiveJobsSnapshot => ({
+  data: [], total: 1, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-02T02:00:00Z",
+  worker_alive: !stalled, stalled,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSlots).mockResolvedValue(slots());
+  vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(false));
 });
 
 describe("AssetsBody — the slots card", () => {
@@ -100,6 +109,29 @@ describe("AssetsBody — the slots card", () => {
     expect(screen.queryByRole("button", { name: /站內出圖/ })).toBeNull();
     expect(screen.getByRole("link", { name: "到素材工作檯" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9");
     expect(within(a).getByRole("link", { name: "從素材工作檯" }).getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pk_9");
+  });
+
+  it("a 處理中 slot with the worker stopped: the notice sits above the slots, the slot states stay; 再檢查一次 re-reads both", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(true));
+    renderBody();
+    const notice = (await screen.findByText(/背景程式停了/)).closest("[data-slot=worker-stopped]") as HTMLElement;
+    expect(notice.textContent).toContain("背景程式停了：這件工作還排著，已填的資料沒丟。重新啟動行銷系統後會自動接著做。");
+    const a = screen.getByRole("list", { name: "A・廣泛受眾" });
+    expect(notice.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(a).getByText("處理中")).toBeTruthy();
+
+    vi.mocked(fetchActiveJobs).mockResolvedValue(jobs(false));
+    const reads = vi.mocked(getSlots).mock.calls.length;
+    await userEvent.click(within(notice).getByRole("button", { name: "再檢查一次" }));
+    await waitFor(() => expect(screen.queryByText(/背景程式停了/)).toBeNull());
+    expect(vi.mocked(getSlots).mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it("nothing 處理中: the worker state is never read", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "g", name: "A", slots: [slot({})] }] }));
+    renderBody();
+    await screen.findByRole("heading", { name: "1／1 格已備妥" });
+    expect(fetchActiveJobs).not.toHaveBeenCalled();
   });
 
   it("draft bar: 確認上架清單 counts ready slots only, goes to …/publish, and says what is not in it yet", async () => {
