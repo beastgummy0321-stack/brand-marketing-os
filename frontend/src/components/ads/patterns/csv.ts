@@ -3,9 +3,15 @@
  * `null`/`undefined` is an empty cell — an unknown number is never written as 0. */
 export type CsvCell = string | number | null | undefined;
 
+/** F47-I06: a number is written rounded to 2 decimals, without float tails (3286.2400000000002 → 3286.24) and without
+ * padding (1440 stays 1440). */
+function numberText(value: number): string {
+  return Number.isFinite(value) ? String(Math.round(value * 100) / 100) : "";
+}
+
 function cell(value: CsvCell): string {
   if (value === null || value === undefined) return "";
-  const text = typeof value === "number" ? (Number.isFinite(value) ? String(value) : "") : value;
+  const text = typeof value === "number" ? numberText(value) : value;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

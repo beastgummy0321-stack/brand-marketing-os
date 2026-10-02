@@ -296,7 +296,7 @@ function WorseCard({ brandId, item, recovering }: { brandId: string; item: Queue
       <div className="text-base font-semibold [overflow-wrap:anywhere]">{t.name ?? "未命名廣告"}</div>
       <div>
         <div className="numeric text-base font-semibold [overflow-wrap:anywhere]">
-          每筆 {prev !== null && `${formatAmount(Math.floor(prev))} → `}{cur === null ? "—" : formatAmount(Math.floor(cur))}
+          每筆 {prev !== null && `${formatAmount(Math.round(prev))} → `}{cur === null ? "—" : formatAmount(Math.round(cur))}
           {cap !== null && cur !== null && <>，{over ? "超過" : "還在"}{capWord} {formatAmount(cap)}{over ? "" : " 內"}</>}
         </div>
         <MoneyTag cost={cur} breakEven={t.target.break_even} className="block" />

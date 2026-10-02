@@ -18,9 +18,10 @@ export function currencyPrefix(currency: string | null): string {
   return currency ? `${currency} ` : "";
 }
 
-/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」). */
+/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」). F47-I06: rounded like every other
+ * per-sale figure (performance page `PeriodStatusRow`), never floored — 2,014.6 reads 2,015 on both screens. */
 export function wholeYuan(value: number): string {
-  return `${formatAmount(Math.floor(value))} 元`;
+  return `${formatAmount(Math.round(value))} 元`;
 }
 
 /** `YYYY-MM` → month number; falls back to the local month when absent. */

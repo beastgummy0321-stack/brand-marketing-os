@@ -38,7 +38,8 @@ export function abLearningText(ab: AbChangeBlock): string {
   return `「${ab.dimension_label}」用「${ab.winner.value_label}」比「${ab.loser.value_label}」划算`;
 }
 
-const whole = (v: number | null) => (v === null ? null : formatAmount(Math.floor(v)));
+// F47-I06: whole yuan rounded like every per-sale figure (never floored).
+const whole = (v: number | null) => (v === null ? null : formatAmount(Math.round(v)));
 
 /** 「每筆 45 vs 56」 beside the learning (the learning itself carries no numbers); null when either cost is unknown. */
 function costPair(ab: AbChangeBlock): string | null {

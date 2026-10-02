@@ -120,3 +120,17 @@ it("the campaign read fails on its own: the list still shows, the settings block
   expect(screen.getByRole("region", { name: "清單" })).toBeTruthy();
   expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+it("F47-I06: the crumb says 首次上架 only for a first launch — a later period or a re-approved version is named from the data", async () => {
+  vi.mocked(fetchLaunchView).mockResolvedValue(view("list"));
+  renderAt(`${base}/list`);
+  expect(await screen.findByText("首次上架", { exact: true })).toBeTruthy();
+  cleanup();
+  vi.mocked(getCampaign).mockResolvedValue({ ...CAMPAIGN, context_json: { field_sources: { cap: "copied", product: "user" } } } as unknown as CampaignDetail);
+  renderAt(`${base}/list`);
+  expect(await screen.findByText("這一期上架", { exact: true })).toBeTruthy();
+  cleanup();
+  vi.mocked(fetchLaunchView).mockResolvedValue({ ...view("platform"), version: 2 });
+  renderAt(`${base}/platform`);
+  expect(await screen.findByText("第 2 版上架", { exact: true })).toBeTruthy();
+});

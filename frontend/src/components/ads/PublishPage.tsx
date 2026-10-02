@@ -19,6 +19,16 @@ import { allowsStep, campaignPath, launchPlatform, publishPath, urlOfStep } from
  * (or no step) redirects to it, and a stale launch is decided on the platform step with F28's `LaunchStalePanel`.
  * The campaign, the launch view and the channel list are separate reads that fail on their own. Nothing on this page
  * writes to a platform. */
+/** F47-I06: the crumb names this launch from the data the page already has — a re-approved launch is 「第 N 版上架」,
+ * a campaign the create filled from the previous period (any `field_sources` value `copied`) is 「這一期上架」, and only
+ * a campaign with neither reads 「首次上架」 (the second period used to be called 首次上架 too). */
+function launchLabel(campaign: CampaignDetail | null, view: LaunchView | null): string {
+  if (view?.version && view.version > 1) return `第 ${view.version} 版上架`;
+  const sources = Object.values(campaign?.context_json?.field_sources ?? {});
+  if (sources.includes("copied")) return "這一期上架";
+  return campaign ? "首次上架" : "上架";
+}
+
 export function PublishPage({ brandId, campaignId, step }: { brandId: string; campaignId: string; step?: string }) {
   const navigate = useNavigate();
   const campaignRead = useApiRead(() => getCampaign(brandId, campaignId), [brandId, campaignId]);
@@ -35,7 +45,7 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
 
   const home = `/brands/${encodeURIComponent(brandId)}/ads`;
   const name = campaign?.name ?? view?.items.find((i) => i.kind === "campaign")?.name ?? "活動";
-  const crumb = [{ label: "投放中心", href: home }, { label: name, href: campaignPath(brandId, campaignId) }, { label: "首次上架" }];
+  const crumb = [{ label: "投放中心", href: home }, { label: name, href: campaignPath(brandId, campaignId) }, { label: launchLabel(campaign, view) }];
   const platform = launchPlatform(campaign, channels.data);
 
   // Approval and the batch readback move the page on only once the server answered with the new step.

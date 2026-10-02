@@ -19,6 +19,10 @@ describe("csv（F29-I09 Contract K）", () => {
     );
   });
 
+  it("F47-I06：數字四捨五入到小數兩位，沒有浮點尾巴，整數不補零", () => {
+    expect(toCsv([["花費", 3286.2400000000002, 1440, 48.005, 0.1 + 0.2, -12.345]])).toBe("花費,3286.24,1440,48.01,0.3,-12.34\r\n");
+  });
+
   it("downloadCsv 下載 <name>.csv，內容開頭是 UTF-8 BOM", async () => {
     let blob: Blob | null = null;
     const create = vi.fn((b: Blob) => { blob = b; return "blob:csv"; });
