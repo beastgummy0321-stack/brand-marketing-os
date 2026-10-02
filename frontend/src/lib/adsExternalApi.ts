@@ -28,9 +28,9 @@ export interface NativeObservation {
 }
 export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null }
 export interface ExistingPage {
-  /** `campaign_id` (optional until the listing read carries it): the workspace campaign this platform campaign is
+  /** `campaign_id`: the workspace campaign this platform campaign is
    * already in, so the join dialog marks it 「已在工作區」 instead of offering to add it again. */
-  items: { id: string; native_kind: string; native_id: string; snapshot: NativeEntity; campaign_id?: string | null }[];
+  items: { id: string; native_kind: string; native_id: string; snapshot: NativeEntity; campaign_id: string | null }[];
   sources: SourceAccount[]; platform?: string; source_account?: string;
   next_cursor: string | null; job: SyncJob | null;
 }
