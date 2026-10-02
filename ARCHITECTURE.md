@@ -349,6 +349,7 @@
     "app/core/interrupts.py",
     "app/core/cleanup.py",
     "app/core/vocab.py",
+    "app/core/input_rules.py",
     "app/identity/__init__.py",
     "app/identity/repository.py",
     "app/llm/__init__.py",

@@ -45,6 +45,10 @@ _PREFILL = {
 }
 
 
+# A JPEG signature: photo uploads are checked by content (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -85,7 +89,7 @@ class _Base(unittest.TestCase):
 
     def _upload(self, name: str = "t.jpg") -> str:
         resp = self.client.post("/api/intake/photos",
-                                files={"photo": (name, io.BytesIO(b"x" * 100), "image/jpeg")})
+                                files={"photo": (name, io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(resp.status_code, 200, resp.text)
         token = resp.json()["token"]
         key = state.get_pending_photos(token)[0]["storage_key"]

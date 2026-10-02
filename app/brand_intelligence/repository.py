@@ -35,7 +35,7 @@ from app.brand_intelligence.repository_channels import (  # noqa: F401
     list_channels,
     update_channel,
 )
-from app.core import cleanup, vocab
+from app.core import cleanup, input_rules, vocab
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, ConnProxy, jsonb, new_id, now_utc
@@ -1274,6 +1274,17 @@ def _write_product_economics(conn: Conn, brand_id: str, product_id: str, *, acto
     _require(actor, "actor 為必填")
     if selling_price is None and not allow_empty_price:
         raise ValueError("product_economics.selling_price 為必填")
+    # F47 Contract A (`app.core.input_rules`): keep exactly what was sent or refuse naming the
+    # field -- never coerce. Shipping is >= 0 on every path (lead decision, F47 Contract A;
+    # same as the sell-way pre-check).
+    input_rules.positive(selling_price, "售價", optional=allow_empty_price)
+    input_rules.non_negative(fixed_cost, "固定成本", optional=True)
+    input_rules.non_negative(unit_variable_cost, "單位變動成本", optional=True)
+    input_rules.non_negative(shipping_cost, "運費", optional=True)
+    if not isinstance(list_price, _Keep):
+        input_rules.positive(list_price, "原價", optional=True)
+    if not isinstance(cap_per_sale, _Keep):
+        input_rules.positive(cap_per_sale, "每筆上限", optional=True)
     if close_rate is not None and not (0 < close_rate <= 1):
         raise ValueError("product_economics.close_rate 必須介於 0（不含）到 1（含）之間")
     if assumptions is not None and not set(assumptions) <= _ASSUMPTION_FIELDS:

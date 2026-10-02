@@ -220,7 +220,7 @@ EFFORT_SUPPORTED_MODELS = {"claude-opus-5", "claude-sonnet-5", "claude-fable-5"}
 TASK_TYPE_LABELS = {
     "ads_user_asset_suggestions": "自帶素材：補文案與安排",
     "schedule_plan": "檔期規劃（出方案）",
-    "schedule_tree": "檔期規劃（展開活動樹，票 09）",
+    "schedule_tree": "檔期規劃（展開活動樹）",
     "workbench_copy": "素材工作檯：文案",
     "workbench_image_prompt": "素材工作檯：圖片提示詞",
     "workbench_video_script": "素材工作檯：影片腳本",

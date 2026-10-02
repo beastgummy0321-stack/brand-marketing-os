@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.core import input_rules
+
 MAX_BYTES = 50 * 1024 * 1024
 MAX_PIXELS = 64_000_000
 
@@ -15,31 +17,16 @@ class MediaError(ValueError):
     pass
 
 
+SLOT_KINDS = frozenset({"image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime"})
+
+
 def sniff(content: bytes) -> str:
-    if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if content.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
-        return "image/webp"
-    if content[4:8] == b"ftyp":
-        brand = content[8:12]
-        if brand == b"qt  ":
-            return "video/quicktime"
-        if brand in {
-            b"isom",
-            b"iso2",
-            b"iso5",
-            b"iso6",
-            b"mp41",
-            b"mp42",
-            b"avc1",
-            b"M4V ",
-            b"MSNV",
-            b"dash",
-        }:
-            return "video/mp4"
-    raise MediaError("檔案內容不是支援的 JPEG、PNG、WebP、MP4 或 MOV。")
+    """Campaign slot media: the shared content sniff (`app.core.input_rules`, F47 Contract A),
+    limited to the kinds a slot accepts (no GIF)."""
+    mime = input_rules.sniff(content)
+    if mime not in SLOT_KINDS:
+        raise MediaError("檔案內容不是支援的 JPEG、PNG、WebP、MP4 或 MOV。")
+    return mime
 
 
 def _run(args, timeout):
