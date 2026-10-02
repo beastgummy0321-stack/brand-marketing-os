@@ -24,6 +24,10 @@ from app.intake import script, state
 _BRAND_SEQ = [0]
 
 
+# A JPEG signature: photo uploads are checked by content (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+
+
 class IntakeWizardTest(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -50,7 +54,7 @@ class IntakeWizardTest(unittest.TestCase):
         _BRAND_SEQ[0] += 1
         name = f"精靈測試品牌{_BRAND_SEQ[0]}"
         photo = self.client.post(
-            "/api/intake/photos", files={"photo": ("t.jpg", io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
+            "/api/intake/photos", files={"photo": ("t.jpg", io.BytesIO(_JPEG), "image/jpeg")})
         assert photo.status_code == 200
         token = photo.json()["token"]
         storage_key = state.get_pending_photos(token)[0]["storage_key"]

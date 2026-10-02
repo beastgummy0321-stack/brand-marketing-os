@@ -23,6 +23,10 @@ from app.intake import state  # noqa: E402
 _SEQ = [0]
 
 
+# A JPEG signature: photo uploads are checked by content (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -133,7 +137,7 @@ class PhotoUploadTest(_Base):
     def test_upload_then_reference_token_in_start(self):
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         body = up.json()
         self.assertEqual(set(body.keys()), {"token", "name", "size_mb"})
@@ -154,7 +158,7 @@ class PhotoUploadTest(_Base):
         （proven red once：暫時把斷言換成別的 org 前綴，看它真的失敗，再改回來）。"""
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         token = up.json()["token"]
         storage_key = state.get_pending_photos(token)[0]["storage_key"]

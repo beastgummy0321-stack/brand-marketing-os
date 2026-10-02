@@ -185,6 +185,6 @@ def check_image_upload(filename: str, content: bytes, allowed) -> str:
     if not content:
         raise InputRuleError(f"「{name}」是空的檔案，請換一個。")
     mime = sniff(content)
-    if mime not in allowed:
+    if mime is None or mime not in allowed:
         raise InputRuleError(f"「{name}」的內容不是{kinds_text(allowed)} 圖片，請換一張。")
     return mime

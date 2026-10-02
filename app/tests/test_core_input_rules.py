@@ -56,7 +56,8 @@ def test_bounds_open_interval():
     margin = r.Bounds(0, 1, low_open=True, high_open=True, hint="例如 0.7 代表毛利 70%")
     assert r.within(0.7, "毛利率", margin) == 0.7
     for bad in (0, 1, 7, -0.1, "x", None):
-        with pytest.raises(r.InputRuleError, match=r"^毛利率要大於 0、小於 1（例如 0.7 代表毛利 70%）。$"):
+        with pytest.raises(r.InputRuleError,
+                           match=r"^毛利率要大於 0、小於 1（例如 0.7 代表毛利 70%）。$"):
             r.within(bad, "毛利率", margin)
     assert r.within(None, "毛利率", margin, optional=True) is None
 
@@ -108,7 +109,8 @@ def test_check_image_upload():
     assert r.check_image_upload("photo.jpg", b"\x89PNG\r\n\x1a\nxx", kinds) == "image/png"
     with pytest.raises(r.InputRuleError, match="^「empty.jpg」是空的檔案，請換一個。$"):
         r.check_image_upload("empty.jpg", b"", kinds)
-    with pytest.raises(r.InputRuleError, match="^「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。$"):
+    with pytest.raises(r.InputRuleError,
+                       match="^「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。$"):
         r.check_image_upload("text.jpg", b"plain text", kinds)
     with pytest.raises(r.InputRuleError, match="不是JPEG、PNG 或 WebP 圖片"):
         r.check_image_upload("anim.gif", b"GIF89a....", kinds)

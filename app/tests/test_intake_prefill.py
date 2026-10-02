@@ -51,6 +51,10 @@ def _response(payload, *, in_tok: int = 10, out_tok: int = 10) -> ProviderRespon
                             stop_reason="end_turn")
 
 
+# A JPEG signature: photo uploads are checked by content (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ff") + b"x" * 97
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -75,7 +79,7 @@ class _Base(unittest.TestCase):
 
     def _upload(self, name: str) -> str:
         resp = self.client.post("/api/intake/photos",
-                                files={"photo": (name, io.BytesIO(bytes.fromhex("ffd8ff") + b"x" * 97), "image/jpeg")})
+                                files={"photo": (name, io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(resp.status_code, 200, resp.text)
         token = resp.json()["token"]
         key = state.get_pending_photos(token)[0]["storage_key"]
