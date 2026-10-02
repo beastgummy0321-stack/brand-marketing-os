@@ -550,7 +550,7 @@ def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_i
     if result is None:
         raise ValueError("此版本不在指定建議批次。")
     if result["pending_reasons"]:
-        return _refused(old, result)
+        return _refused(conn, org, brand, campaign, old, result)
     return _apply_confirmation(
         conn,
         org,
@@ -565,11 +565,32 @@ def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_i
     )
 
 
-def _refused(old, result):
-    """A refused confirmation: the unconfirmed placement plus why (sentences and Contract C
-    details, same order)."""
+def store_refusal(conn, org, brand, campaign, placement_id, revision, details) -> list:
+    """§6.49: the one writer of a refusal. A refused confirmation keeps its non-`wait` Contract C
+    details on that revision (`blocked_reasons`) -- every path that confirms (manual, batch,
+    slot upload, copy pick, copy edit, recheck) ends here, so a refusal is never only a response.
+    `wait` details (the preview is not made yet) are not a refusal of the copy and are dropped;
+    the stored list replaces the previous one (the newest refusal is the fact). A confirmed
+    revision is never touched; `_apply_confirmation` clears the list."""
+    kept = [d for d in details if d["kind"] != "wait"]
+    conn.execute(
+        "UPDATE ads_asset_placement SET blocked_reasons=%s WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND id=%s AND revision=%s AND confirmed_at IS NULL",
+        (db.jsonb(kept), org, brand, campaign, placement_id, revision),
+    )
+    conn.commit()
+    return kept
+
+
+def _refused(conn, org, brand, campaign, old, result):
+    """A refused confirmation: stored on the revision (`store_refusal`), then returned as the
+    unconfirmed placement plus why (sentences and Contract C details, same order)."""
+    kept = store_refusal(
+        conn, org, brand, campaign, old["id"], old["revision"], result["pending_details"]
+    )
     return {
         **old,
+        "blocked_reasons": kept,
         "status": "pending",
         "pending_reasons": result["pending_reasons"],
         "pending_details": result["pending_details"],
@@ -641,7 +662,7 @@ def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, 
         conn, org, brand, data, data["placements"][0], {"copy_fields": {}, "purpose": ""}
     )
     if result["pending_reasons"]:
-        return _refused(old, result)
+        return _refused(conn, org, brand, campaign, old, result)
     return _apply_confirmation(
         conn,
         org,
