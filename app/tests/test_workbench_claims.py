@@ -171,6 +171,8 @@ def test_cooling_off_exemption_is_not_a_copy_source():
 # -- F43-I03: a sell-way reads every knowledge product; its own price sentence is a source ------
 
 _THREE_PACK = "三盒組優惠價 NT$999（原價 NT$1,197）"
+# F45: the sell-way's own registered sentence carries no product name.
+_OWN_PRICE = "優惠價 NT$999（原價 NT$1,197）"
 
 
 def _knowledge_product(brand_id: str, name: str, fact: str, claim: str) -> str:
@@ -184,11 +186,20 @@ def _knowledge_product(brand_id: str, name: str, fact: str, claim: str) -> str:
 
 def _sell_way(brand_id: str, name: str, components: list, price: float,
               list_price: float | None) -> str:
+    """F45: one product × 1 -> a base sell-way of it; else a composed sell-way of each
+    product's 單盒 base."""
+    economics = {"selling_price": price, "list_price": list_price,
+                 "unit_variable_cost": 300, "shipping_cost": 60}
+    if len(components) == 1 and components[0][1] == 1:
+        return bi_repo.save_sell_way(web.conn, brand_id, name=name, actor=ACTOR,
+                                     product_id=components[0][0], economics=economics)["id"]
+    bases = [bi_repo.save_sell_way(web.conn, brand_id, name="單盒", actor=ACTOR, product_id=p,
+                                   economics={"selling_price": 399})["id"]
+             for p, _qty in components]
     return bi_repo.save_sell_way(
-        web.conn, brand_id, name=name, actor=ACTOR,
-        components=[{"product_id": p, "qty": q} for p, q in components],
-        economics={"selling_price": price, "list_price": list_price,
-                   "unit_variable_cost": 300, "shipping_cost": 60},
+        web.conn, brand_id, name=name, actor=ACTOR, economics=economics,
+        components=[{"sell_way_id": b, "qty": q}
+                    for b, (_p, q) in zip(bases, components, strict=True)],
     )["id"]
 
 
@@ -220,7 +231,7 @@ def test_bundle_sources_read_every_knowledge_product():
         {"id": product_claims["晨光軟糖一天兩顆"], "text": "晨光軟糖一天兩顆", "proof": False},
         {"id": brand_claim["id"], "text": "台灣製造", "proof": False},
         {"id": product_claims["午後花茶冷泡也好喝"], "text": "午後花茶冷泡也好喝", "proof": False},
-        {"id": f"offer:bundle:{bundle}", "text": "早午組合優惠價 NT$999（原價 NT$1,300）",
+        {"id": f"offer:bundle:{bundle}", "text": "優惠價 NT$999（原價 NT$1,300）",
          "proof": False, "offer_key": "bundle"},
     ]
     assert not [r for r in rows if "別的商品" in r["text"]]
@@ -232,10 +243,10 @@ def test_sell_way_price_sentence_backs_its_offer_words():
     three = _sell_way(brand_id, "三盒組", [(gummy, 3)], 999, 1197)
     rows = claims.sources(web.conn, brand_id, three)
     offers = [r for r in rows if r.get("offer_key")]
-    assert offers == [{"id": f"offer:bundle:{three}", "text": f"測試軟糖 · {_THREE_PACK}",
+    assert offers == [{"id": f"offer:bundle:{three}", "text": _OWN_PRICE,
                        "proof": False, "offer_key": "bundle"}]
     assert claims.unsupported({"headline": _THREE_PACK}, rows) == []
-    assert f"- [offer:bundle:{three}] 測試軟糖 · {_THREE_PACK}" in claims.policy(rows)
+    assert f"- [offer:bundle:{three}] {_OWN_PRICE}" in claims.policy(rows)
     # The family is the sell-way's (bundle), not every offer word.
     assert claims.unsupported({"headline": "三盒組免運"}, rows) == ["免運"]
 
@@ -258,7 +269,7 @@ def test_policy_and_sell_way_sharing_an_offer_key_get_their_own_rows():
         {"id": f"offer:discount:{_policy_id(brand_id, 'first_order')}",
          "text": "新會員首購禮：首購 9 折", "proof": False, "offer_key": "discount"},
         {"id": f"offer:discount:{single}",
-         "text": "測試軟糖 · 單盒特價優惠價 NT$800（原價 NT$1,000）",
+         "text": "優惠價 NT$800（原價 NT$1,000）",
          "proof": False, "offer_key": "discount"},
     ]
 
@@ -285,7 +296,7 @@ def test_offer_coordinate_narrows_only_the_offer_rows():
     plain = [r for r in every if not r.get("offer_key")]
     ship = {"id": f"offer:free_shipping:{_policy_id(brand_id, 'ship_threshold')}",
             "text": "滿 NT$999 免運", "proof": False, "offer_key": "free_shipping"}
-    bundle = {"id": f"offer:bundle:{three}", "text": f"測試軟糖 · {_THREE_PACK}",
+    bundle = {"id": f"offer:bundle:{three}", "text": _OWN_PRICE,
               "proof": False, "offer_key": "bundle"}
     assert [r["text"] for r in plain] == ["每包 20 公克", "測試軟糖好吃"]
     assert every == [*plain, ship, bundle]  # no offer_key = today's rows
@@ -312,7 +323,7 @@ def test_policy_says_what_the_offer_coordinate_asks_for():
     assert "（沒有已確認的優惠或背書來源）" in none
 
     bundle = block("bundle")
-    row = f"- [offer:bundle:{three}] 測試軟糖 · {_THREE_PACK}"
+    row = f"- [offer:bundle:{three}] {_OWN_PRICE}"
     assert _OFFER_CARRY_LINE in bundle.split("\n")
     assert _OFFER_NONE_LINE not in bundle
     assert bundle.index(_OFFER_CARRY_LINE) < bundle.index(row)  # 「下面」: the line sits above

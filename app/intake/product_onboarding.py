@@ -1164,8 +1164,11 @@ def _check_sell_ways(value, existing: dict, show_close_rate: bool) -> list:
     bases = {r["name"].casefold() for r in out if r["components"] is None}
     for row in out:
         for comp in row["components"] or []:
-            if comp["base"].casefold() not in bases:
-                raise ValueError(f"「{row['name']}」裡的「{comp['base']}」不是這裡的基本賣法。")
+            if comp["base"].casefold() in bases:
+                continue
+            if comp["base"].casefold() in by_name:  # a saved base this body leaves out
+                raise ValueError(f"「{comp['base']}」還在「{row['name']}」裡，先從組合拿掉。")
+            raise ValueError(f"「{row['name']}」裡的「{comp['base']}」不是這裡的基本賣法。")
     sent = {c["id"] for c in out if c["id"]}
     for row in out:  # a new row named like an existing sell-way not sent is that sell-way
         match = by_name.get(row["name"].casefold())

@@ -46,7 +46,7 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: "晨光隨行杯 500ml 通勤款" });
   const productId = onboarded.data.product_id;
   const sellWays = await api<{ data: { sell_ways: { id: string }[] } }>(page, headers, "PUT", `${intake}/${productId}/onboarding/sell-ways`, {
-    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+    sell_ways: [{ name: "單品", price: 1580 }],
   });
   await api(page, headers, "POST", `${intake}/${productId}/onboarding/complete`);
   const product = { id: sellWays.data.sell_ways[0].id };

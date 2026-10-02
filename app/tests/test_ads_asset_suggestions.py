@@ -229,9 +229,13 @@ class SuggestionsTest(unittest.TestCase):
             self.conn, self.brand, actor="test", claim_text="別的商品的說法",
             claim_type="approved", product_id=other,
         )
+        box = brands.save_sell_way(
+            self.conn, self.brand, name="單盒", actor="test", product_id=product,
+            economics={"selling_price": 500},
+        )["id"]
         way = brands.save_sell_way(
             self.conn, self.brand, name="三盒組", actor="test",
-            components=[{"product_id": product, "qty": 3}],
+            components=[{"sell_way_id": box, "qty": 3}],
             economics={
                 "selling_price": 999, "list_price": 1500, "unit_variable_cost": 300,
                 "shipping_cost": 60,

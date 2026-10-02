@@ -104,7 +104,7 @@ async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: stri
   const intake = `/api/intake/brands/${brandId}/products`;
   const onboarded = await api<{ data: { product_id: string } }>(page, headers, "POST", intake, { name: productName });
   await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
-    sell_ways: [{ name: "單品", qty: 1, price: 1580 }],
+    sell_ways: [{ name: "單品", price: 1580 }],
   });
   await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
   await page.goto(`/app/brands/${brandId}/ads/new`);

@@ -1010,7 +1010,8 @@ def test_slots_route_reads_and_unknown_campaign_is_404(env):
 # -- F44-I03: the copy is judged against the ad's sell-way and offer coordinate -------------------
 
 
-# The sell-way's registered offer sentence: 「晨光軟糖 · 三盒組優惠價 NT$999（原價 NT$1,500）」.
+# The sell-way's registered offer sentence (F45, no product name):
+# 「優惠價 NT$999（原價 NT$1,500）」.
 PRICE_COPY = {
     "headline": "晨光軟糖三盒組",
     "body": "三盒組優惠價 NT$999（原價 NT$1,500）",
@@ -1026,9 +1027,14 @@ def sell_way_campaign(env, *, qty=3, price=999, list_price=1500, policies=None):
     if policies:
         brands.save_brand_policies(conn, env["brand"], policies, actor="test")
     product = brands.create_product(conn, env["brand"], name="晨光軟糖", actor="test")["id"]
+    # F45: one unit is a base sell-way; several units are a composed one of the 單盒 base.
+    shape = {"product_id": product}
+    if qty > 1:
+        box = brands.save_sell_way(conn, env["brand"], name="單盒", actor="test",
+                                   product_id=product, economics={"selling_price": 500})["id"]
+        shape = {"components": [{"sell_way_id": box, "qty": qty}]}
     way = brands.save_sell_way(
-        conn, env["brand"], name="三盒組", actor="test",
-        components=[{"product_id": product, "qty": qty}],
+        conn, env["brand"], name="三盒組", actor="test", **shape,
         economics={
             "selling_price": price, "list_price": list_price, "unit_variable_cost": 300,
             "shipping_cost": 60,

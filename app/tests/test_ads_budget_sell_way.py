@@ -26,23 +26,29 @@ class SellWayEconomicsTest(unittest.TestCase):
         self.tea = bi_repo.create_product(
             web.conn, self.brand_id, name="濾掛茶", actor="測試員")["id"]
 
-    def _sell_way(self, name: str, components: list, **economics) -> str:
+    def _base(self, name: str, product_id: str, **economics) -> str:
         return bi_repo.save_sell_way(
             web.conn, self.brand_id, name=name, actor="測試員", economics=economics,
-            components=[{"product_id": p, "qty": q} for p, q in components],
+            product_id=product_id,
+        )["id"]
+
+    def _composed(self, name: str, components: list, **economics) -> str:
+        return bi_repo.save_sell_way(
+            web.conn, self.brand_id, name=name, actor="測試員", economics=economics,
+            components=[{"sell_way_id": s, "qty": q} for s, q in components],
         )["id"]
 
     def test_a_knowledge_product_id_no_longer_falls_back_to_its_first_sell_way(self):
-        self._sell_way("單品", [(self.gummy, 1)], selling_price=600, unit_variable_cost=100)
+        self._base("單品", self.gummy, selling_price=600, unit_variable_cost=100)
 
         self.assertEqual(budget.economics_for(web.conn, self.brand_id, [self.gummy]), (None, None))
 
     def test_a_bundle_uses_its_derived_cost(self):
-        self._sell_way("單品", [(self.gummy, 1)], selling_price=600, unit_variable_cost=100,
-                       shipping_cost=0)
-        self._sell_way("單包", [(self.tea, 1)], selling_price=200, unit_variable_cost=50,
-                       shipping_cost=0)
-        bundle = self._sell_way("茶點組", [(self.gummy, 1), (self.tea, 2)], selling_price=899,
+        single = self._base("單品", self.gummy, selling_price=600, unit_variable_cost=100,
+                            shipping_cost=0)
+        pack = self._base("單包", self.tea, selling_price=200, unit_variable_cost=50,
+                          shipping_cost=0)
+        bundle = self._composed("茶點組", [(single, 1), (pack, 2)], selling_price=899,
                                 shipping_cost=60)
 
         economics, product_id = budget.economics_for(web.conn, self.brand_id, [bundle])

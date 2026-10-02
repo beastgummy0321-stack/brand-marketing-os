@@ -206,7 +206,8 @@ class SellWayTest(unittest.TestCase):
     def test_components_are_this_brands_active_bases(self):
         other = _brand(self.conn)
         foreign_product = repo.create_product(self.conn, other, name="別人的商品", actor=ACTOR)
-        foreign = repo.save_sell_way(self.conn, other, name="單盒", product_id=foreign_product["id"],
+        foreign = repo.save_sell_way(self.conn, other, name="單盒",
+                                     product_id=foreign_product["id"],
                                      economics=_econ(100), actor=ACTOR)
         sw = self._single(self.a, "單盒", 399)
         pack = self._composed("2 盒", [(sw, 2)], 700)
