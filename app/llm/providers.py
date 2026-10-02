@@ -847,6 +847,10 @@ class ScriptedProvider:
     _CUSTOMERS_HEADER = "【這個賣法的顧客】"
     _FIRST_GROUP_LINE = re.compile(r"^第 1 群：")
     _PAIN_KEY = re.compile(r"（pain=([^）]+)）")
+    # Delivery-plan prompt's 【上幾期的排名】 row of a 留下 ad whose customer group is listed this
+    # time (`coordinate_learning.ranked_section`, F46 Contract G):
+    # `- <campaign>第 r／n 名｜留下…｜顧客群 <N>｜「<ad>」｜…（angle=<key>）…`.
+    _KEPT_ROW = re.compile(r"^- .*第 \d+／\d+ 名｜留下[^｜]*｜顧客群 (\d+)｜.*（angle=([^）]+)）")
 
     def __init__(self, reply: dict):
         self._reply = reply
@@ -875,7 +879,9 @@ class ScriptedProvider:
         """Prompt-aware selection (F33-I00): the strategy template follows the roles the prompt
         offers under `【可用角色】`; the delivery-plan template follows the adopted-allocation lines
         and, when the prompt lists 【這期可用的優惠】 lines, uses the first listed offer key (F44);
-        when it lists 【這個賣法的顧客】 groups, every ad binds 第 1 群 with that group's pain (F46).
+        when it lists 【這個賣法的顧客】 groups, every ad binds 第 1 群 with that group's pain (F46);
+        when 【上幾期的排名】 lists a 留下 row of a listed group, the first group's ads take that
+        group and the first ad its angle (F46 Contract G).
         Any other template, or a prompt without those sections, returns the template unchanged."""
         prompt = self._last_user_text(messages)
         if "allocation" in self._reply:
@@ -920,6 +926,17 @@ class ScriptedProvider:
                         ad["customer_group"] = 1
                         if first_group:
                             ad["coordinates"]["pain"] = first_group[0]
+            # F46 Contract G: the plan must reuse a 留下 (customer group, angle) when the
+            # ranking lists one for a group listed this time -- the first group's ads take it.
+            kept = self._kept_pair(prompt)
+            if kept is not None:
+                number, angle = kept
+                pains = self._customer_group_pains(prompt, number)
+                for ad in groups[0]["ads"]:
+                    ad["customer_group"] = number
+                    if pains:
+                        ad["coordinates"]["pain"] = pains[0]
+                groups[0]["ads"][0]["coordinates"]["angle"] = angle
             return {**self._reply, "groups": groups}
         return self._reply
 
@@ -971,6 +988,24 @@ class ScriptedProvider:
                 if cls._FIRST_GROUP_LINE.match(first):
                     return cls._PAIN_KEY.findall(first)
         return None
+
+    @classmethod
+    def _kept_pair(cls, prompt: str) -> tuple[int, str] | None:
+        """(第 N 群, angle key) of the first 留下 ranking row whose group is listed, else None."""
+        for line in prompt.splitlines():
+            match = cls._KEPT_ROW.match(line.strip())
+            if match:
+                return int(match.group(1)), match.group(2)
+        return None
+
+    @classmethod
+    def _customer_group_pains(cls, prompt: str, number: int) -> list:
+        """The pain keys of 第 `number` 群 in 【這個賣法的顧客】 (empty when not listed)."""
+        head = f"第 {number} 群："
+        for line in prompt.splitlines():
+            if line.strip().startswith(head):
+                return cls._PAIN_KEY.findall(line)
+        return []
 
     @classmethod
     def _first_offer_key(cls, prompt: str) -> str | None:

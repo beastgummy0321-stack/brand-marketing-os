@@ -10,10 +10,10 @@ _outcome_totals"). 看不出 is a real verdict, not a rounding of an unknown int
 — it is what gets written whenever no cap resolves, the sample bucket is 低,
 or the metric being judged is itself untracked; it never falls back to 未達成.
 
-F39-I01: after the visual track, `coordinate_learning.write_coordinate_learnings` writes one
-`source_track='coordinate'` learning per ad the one ruler grades over the campaign window (grade +
-seven coordinate keys in `applicability_scope`); partial data (skipped gap, incomplete recovery)
-writes none of them, and their ids join `verdict_json["learning_ids"]`.
+F39-I01 / F46-I04: after the visual track, `coordinate_learning.write_coordinate_learnings` writes
+one `source_track='coordinate'` learning per ad the ranking rule enters (`learning_rank`: 留下／換掉
+by cost per sale, Contract B); partial data (skipped gap, incomplete recovery) writes none of
+them, and their ids join `verdict_json["learning_ids"]`.
 
 Duplicate guard: `ads_campaign.status = 'closed'` on the row itself — a second `close()` call is
 a no-op that returns the already-closed row unchanged, no second learning (§0 "the duplicate
