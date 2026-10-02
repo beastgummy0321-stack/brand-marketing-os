@@ -20,7 +20,7 @@ import {
 import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { currentBudgetMonth, monthlyBudgetHref } from "../MonthlyBudgetPanel";
 import { useOrgClock } from "@/lib/orgClock";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
@@ -598,7 +598,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             item={item}
             scale={triageItem?.scale ?? null}
             bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
-            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: homeHref }}
+            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: monthlyBudgetHref(brandId) }}
           />
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}

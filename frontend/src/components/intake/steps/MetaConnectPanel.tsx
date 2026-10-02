@@ -18,8 +18,8 @@ type LoadState =
 const BACKFILL_FAILED = "這次沒拉到，之後可以在設定頁重試。";
 
 /** Meta's 接上／再接一個帳戶 panel under its row in brand onboarding #/b6 (F42-I11). The interaction is the one the old
- * tools step had, lifted out unchanged: paste a token → pick one of the token's ad accounts → 「指定給這個品牌」 →
- * the spend history backfill starts in the background. The Meta client (`frontend/src/lib/metaApi.ts`) is the
+ * tools step had: paste a token → pick one of the token's ad accounts, which assigns it to the brand at once (F46-I09;
+ * no separate 「指定給這個品牌」 click) → the spend history backfill starts in the background. The Meta client (`frontend/src/lib/metaApi.ts`) is the
  * same one the settings page uses; nothing new is connected here. Binding adds the account to the brand (the
  * existing bind semantics); an account already bound is shown as such. `onBound` lets the step re-read its
  * connector list so the row turns 「已接上」. */
@@ -28,8 +28,8 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
   const [tokenInput, setTokenInput] = useState("");
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const [assigning, setAssigning] = useState(false);
+  /** The account being assigned right now (its radio shows picked and the row says 指定中…). */
+  const [assigningId, setAssigningId] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillNote, setBackfillNote] = useState<string | null>(null);
@@ -74,12 +74,12 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
       });
   }
 
-  async function handleAssign() {
-    if (!selectedAccountId) return;
-    setAssigning(true);
+  async function handleAssign(accountId: string) {
+    if (assigningId) return;
+    setAssigningId(accountId);
     setAssignError(null);
     try {
-      await bindMetaAccount(brandId, selectedAccountId);
+      await bindMetaAccount(brandId, accountId);
       setBackfilling(true);
       startMetaBackfill(brandId)
         .then(() => pollBackfill())
@@ -87,13 +87,13 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
           setBackfilling(false);
           setBackfillNote(BACKFILL_FAILED);
         });
-      setSelectedAccountId(null);
       fetchMetaAccounts().then((meta) => setState({ status: "ready", meta })).catch(() => undefined);
       onBound();
     } catch (err) {
       setAssignError(err instanceof Error ? err.message : "指定失敗，請稍後再試。");
     } finally {
-      setAssigning(false);
+      // A failure leaves the radio unpicked; a success re-reads the list, where the account reads as bound.
+      setAssigningId(null);
     }
   }
 
@@ -138,7 +138,7 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
           {meta.accounts.length === 0 && <p className="text-[12.5px] text-muted-foreground">這把權杖沒有列出任何帳戶。</p>}
           {meta.accounts.map((acc) => {
             const bound = acc.bound_brand_ids.includes(brandId);
-            const picked = selectedAccountId === acc.id;
+            const picked = assigningId === acc.id;
             return (
               <label
                 key={acc.id}
@@ -148,19 +148,16 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
                   picked ? "border-primary bg-accent/50" : !bound && "border-border",
                 )}
               >
-                <input type="radio" name="meta-account" checked={picked} disabled={bound} onChange={() => setSelectedAccountId(acc.id)} />
+                <input type="radio" name="meta-account" checked={picked} disabled={bound || assigningId !== null}
+                  onChange={() => void handleAssign(acc.id)} />
                 <span className="font-medium text-foreground">{acc.name}</span>
                 <span className="numeric text-xs text-muted-foreground">{acc.account_id}</span>
                 {bound && <span className="ml-auto text-xs text-success">已指定給這個品牌</span>}
+                {picked && <span role="status" className="ml-auto text-xs text-muted-foreground">指定中…</span>}
               </label>
             );
           })}
           {assignError && <span role="alert" className="text-xs text-danger">{assignError}</span>}
-          {meta.accounts.some((acc) => !acc.bound_brand_ids.includes(brandId)) && (
-            <Button type="button" size="sm" className="self-start" disabled={!selectedAccountId || assigning} onClick={() => void handleAssign()}>
-              {assigning ? "指定中…" : "指定給這個品牌"}
-            </Button>
-          )}
           {!meta.accounts.some((acc) => acc.bound_brand_ids.includes(brandId)) && (
             <p className="text-xs text-muted-foreground">權杖已存，還沒指定給這個品牌。</p>
           )}

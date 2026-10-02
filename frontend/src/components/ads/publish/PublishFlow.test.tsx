@@ -188,7 +188,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(await screen.findByText("⚠ 要先設 10 月月預算")).toBeTruthy();
     const card = monthCard();
     expect(within(card).getByText("還沒設月預算")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
     expect((await approveButton()).disabled).toBe(true);
   });
 
@@ -203,7 +203,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(within(card).queryByText("放得下")).toBeNull();
     expect(within(card).getByText("10 月只剩 932")).toBeTruthy();
     expect(within(card).getByText("不夠 9,068", { exact: false })).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
     expect(within(card).getByRole("link", { name: "改這期總預算" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=strategy");
     expect((await approveButton()).disabled).toBe(true);
   });

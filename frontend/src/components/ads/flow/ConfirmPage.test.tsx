@@ -598,7 +598,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     expect(await screen.findByText("預留＝最大 還有 5 天沒跑完，每天 1,500；第二 還有 4 天沒跑完，每天 800；第三 還有 3 天沒跑完，每天 300等 4 項 先留著；跑完就還回來。")).toBeTruthy();
   });
 
-  it("(ii) 還沒設月預算：標題、「設定 N 月月預算 →」連去投放中心，核准灰掉、旁邊寫原因", async () => {
+  it("(ii) 還沒設月預算：標題、「設定 N 月月預算 →」連去投放中心的月預算表單，核准灰掉、旁邊寫原因", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
     vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget({
       amount: null, known_spend: null, ongoing_estimate: null, available: null, can_increase: false, ongoing_owners: [],
@@ -611,7 +611,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     expect(text).toContain("，算不出放不放得下");
     expect(text).toContain("尚未設定 2026-09 的月總額。");
     expect(text).not.toContain("還能花");
-    expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
     expect(screen.getByText("⚠ 要先設 9 月月預算")).toBeTruthy();
     expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
     expect(changeApi.createChangeSet).not.toHaveBeenCalled();
