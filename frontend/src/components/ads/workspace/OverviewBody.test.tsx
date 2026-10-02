@@ -27,7 +27,7 @@ function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
 }
 const DRAFT = { cap_set: false, budget_set: false, slots_ready: 7, slots_total: 8, launch_checked: 0, launch_total: 0 };
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
-  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, daily_budget: 1200, active_ads: 8, can_support: 6,
+  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8, can_support: 6,
     next_sync_at: "2026-09-23T04:40:00Z", missing_days: [],
     totals: { start: "2026-09-10", end: "2026-09-23", currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31 }, draft: null, ...o };
 }
@@ -236,5 +236,54 @@ describe("live (v10 camp/daily/overview)", () => {
     expect(fold.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(fold);
     expect(screen.getByText("舊總覽內容")).toBeTruthy();
+  });
+});
+
+describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
+  const unread = { start: "2026-09-19", end: "2026-10-02", currency: null, spend: null, results: null, cost_per_result: null };
+
+  it("waiting (just launched, nothing spent): the ✓ card says 已上架，等平台開始投放 with the next sync, money cells 還沒開始花", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [] });
+    renderBody(detail(), ws({ delivery: "waiting", pending_count: 0, active_ads: 0, can_support: null, daily_budget: null,
+      stage: { key: "read", done: ["plan", "assets", "launch"] }, totals: unread }));
+    expect(await screen.findByText("已上架，等平台開始投放")).toBeTruthy();
+    expect(screen.getByText(/^平台開始花錢後，下次同步（\d\d:\d\d）會出現第一筆數字。$/)).toBeTruthy();
+    expect(screen.queryByText("這個活動沒有要決定的事")).toBeNull();
+    const kv = screen.getByRole("region", { name: "近 14 天數字" });
+    expect(within(kv).getAllByText("還沒開始花")).toHaveLength(2);
+    expect(within(kv).queryAllByText("未知")).toHaveLength(1); // 購買 is a count, not money
+  });
+
+  it("waiting without a known next sync drops the time, never prints a placeholder", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    renderBody(detail(), ws({ delivery: "waiting", pending_count: 0, next_sync_at: null, totals: unread }));
+    expect(await screen.findByText("平台開始花錢後，下次同步會出現第一筆數字。")).toBeTruthy();
+  });
+
+  it("live and unknown (null) keep today's sentences: 沒有要決定的事 and 未知", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    for (const delivery of ["live", null] as const) {
+      const { unmount } = renderBody(detail(), ws({ delivery, pending_count: 0, totals: unread }));
+      expect(await screen.findByText("這個活動沒有要決定的事")).toBeTruthy();
+      expect(within(screen.getByRole("region", { name: "近 14 天數字" })).getAllByText("未知")).toHaveLength(3);
+      expect(screen.queryByText(/還沒開始花|等平台開始投放/)).toBeNull();
+      unmount();
+    }
+  });
+
+  it("a closed campaign never says 在投: 已結案・平台上還開著 N 則, and the ruler heading drops 在投 (drill-10 c1-ov)", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    renderBody(detail({ status: "closed" }), ws({ delivery: null, pending_count: 0, active_ads: 6, can_support: 1,
+      stage: { key: "review", done: ["plan", "assets", "launch", "read", "decide"] } }));
+    const kv = screen.getByRole("region", { name: "近 14 天數字" });
+    expect(within(kv).getByText("已結案・平台上還開著 6 則")).toBeTruthy();
+    expect(await screen.findByText("廣告對照上限")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/在投/);
+  });
+
+  it("a closed campaign with every platform ad closed reads 已結案", () => {
+    renderBody(detail({ status: "closed" }), ws({ delivery: null, pending_count: 0, active_ads: 0 }));
+    expect(within(screen.getByRole("region", { name: "近 14 天數字" })).getByText("已結案")).toBeTruthy();
   });
 });

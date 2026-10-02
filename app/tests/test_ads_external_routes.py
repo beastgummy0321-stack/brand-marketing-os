@@ -45,6 +45,29 @@ class ExternalRoutesTest(unittest.TestCase):
             409,
         )
 
+    def test_listing_items_carry_the_workspace_campaign_they_are_bound_to(self):
+        """F47-I08 (drill-10 c4-08): a listed platform campaign already in a workspace carries
+        that campaign's id; one not imported yet carries null."""
+        from app.ads import external_repository as external
+
+        for native_id in ("bound", "free"):
+            external.cache_listing(self.conn, self.org, self.brand, "other", "account", {
+                "platform": "other", "source_account": "account", "native_kind": "campaign",
+                "native_id": native_id, "name": native_id,
+            })
+        campaign = external.create_imported_campaign(self.conn, self.org, self.brand, name="已納入")
+        external.upsert_entity(self.conn, self.org, self.brand, campaign["id"], {
+            "platform": "other", "source_account": "account", "native_kind": "campaign",
+            "native_id": "bound",
+        })
+        self.conn.commit()
+        response = self.client.get(
+            self.url + "/existing-campaigns?platform=other&source_account=account"
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        bound = {i["native_id"]: i["campaign_id"] for i in response.json()["items"]}
+        self.assertEqual(bound, {"bound": campaign["id"], "free": None})
+
     def test_unread_or_wrong_account_import_is_refused(self):
         for account in ("account", "foreign"):
             response = self.client.post(

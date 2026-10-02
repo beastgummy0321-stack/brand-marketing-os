@@ -61,7 +61,7 @@ function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
     start_date: "2026-09-08", end_date: "2026-10-08", capabilities: { allowed: [], unavailable: {} }, ...o } as unknown as CampaignDetail;
 }
 function ws(o: Partial<WorkspaceRead> = {}): WorkspaceRead {
-  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, daily_budget: 1200, active_ads: 8, can_support: 6,
+  return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8, can_support: 6,
     next_sync_at: null, missing_days: [], totals: null, draft: null, ...o };
 }
 function Where() { const l = useLocation(); return <p data-testid="where">{l.search}</p>; }

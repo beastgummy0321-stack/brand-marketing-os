@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -6,13 +6,62 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { getOrgId } from "@/lib/auth";
 import { formatSyncTime } from "@/lib/format";
-import { getConnections, type AdsConnections, type ConnectionSource } from "@/lib/adsConnectionsApi";
+import { getConnections, type AdsConnections, type ConnectionReread, type ConnectionSource } from "@/lib/adsConnectionsApi";
+import { refreshExisting, syncJob } from "@/lib/adsExternalApi";
 import { ActionBar, Chip, DAY_SWATCH, DayGrid, Legend, ReadFailed, SourceList, SourceRow, type ChipTone } from "../patterns";
 
 /** v10 `connections()` (Feature F30 Contract H, issue F30-I15): one read of `GET …/connections` feeds the
  * header count, one card of source rows (server order: accounts, orders, product costs, then every platform
  * without a reader, greyed) and the month's day grid. The server owns every state and note; this file only
- * maps a state to its chip words and picks a row glyph. */
+ * maps a state to its chip words and picks a row glyph.
+ *
+ * F47-I08 (Contract H, drill-10 R6): an account row the server marks `reread` (failed / missing days / never read)
+ * gets 「重新讀取」 in its action slot: it posts the existing `…/existing-campaigns/refresh` with that body, waits on
+ * the returned sync job, then reads this page again; a refused refresh shows the server's sentence on the row. */
+
+const POLL_MS = 3000;
+const RUNNING = new Set(["pending", "running"]);
+
+type RereadState = { status: "idle" } | { status: "running" } | { status: "error"; message: string };
+
+/** 「重新讀取」 for one account: post the refresh, poll its job until it is no longer pending／running, then `onDone`. */
+function RereadButton({ brandId, reread, onDone }: { brandId: string; reread: ConnectionReread; onDone: () => void }) {
+  const [state, setState] = useState<RereadState>({ status: "idle" });
+  const alive = useRef(new AbortController());
+  useEffect(() => {
+    alive.current = new AbortController();
+    return () => alive.current.abort();
+  }, []);
+
+  async function run() {
+    const signal = alive.current.signal;
+    setState({ status: "running" });
+    try {
+      let { job } = await refreshExisting(brandId, reread.platform, reread.source_account, { start: reread.start, end: reread.end });
+      while (RUNNING.has(job.status)) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        if (signal.aborted) return;
+        job = (await syncJob(brandId, job.id, signal)).job;
+      }
+      if (signal.aborted) return;
+      setState({ status: "idle" });
+      onDone();
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      setState({ status: "error", message: err instanceof Error ? err.message : "重新讀取沒有成功，請稍後再試。" });
+    }
+  }
+
+  const running = state.status === "running";
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button variant="outline" size="sm" disabled={running} onClick={() => void run()}>
+        {running ? "讀取中…" : "重新讀取"}
+      </Button>
+      {state.status === "error" && <p role="alert" className="max-w-[18rem] text-right text-xs text-destructive">{state.message}</p>}
+    </div>
+  );
+}
 
 type LoadState =
   | { status: "loading" }
@@ -73,7 +122,7 @@ const LEGEND = [
   { label: "今天", swatch: DAY_SWATCH.today },
 ];
 
-function Sources({ sources }: { sources: ConnectionSource[] }) {
+function Sources({ brandId, sources, onReread }: { brandId: string; sources: ConnectionSource[]; onReread: () => void }) {
   return (
     <section aria-label="資料來源" className="surface px-[22px] py-5">
       <SourceList>
@@ -81,11 +130,15 @@ function Sources({ sources }: { sources: ConnectionSource[] }) {
           const chip = sourceChip(source);
           const unsupported = source.state === "unsupported";
           // Actions only on rows that need the user (the server leaves `action` null on ok rows).
-          const action = source.action && source.state !== "ok" && !unsupported ? (
+          const link = source.action && source.state !== "ok" && !unsupported ? (
             <Button variant="outline" size="sm" asChild>
               <Link to={source.action.href}>{source.action.label} →</Link>
             </Button>
-          ) : undefined;
+          ) : null;
+          const reread = source.reread ? <RereadButton brandId={brandId} reread={source.reread} onDone={onReread} /> : null;
+          const action = link && reread
+            ? <div className="flex items-start gap-2">{reread}{link}</div>
+            : reread ?? link ?? undefined;
           return (
             <SourceRow key={source.key} icon={sourceIcon(source)} name={source.name} tone={chip.tone} status={chip.label}
               note={sourceNote(source)} action={action} dimmed={unsupported} />
@@ -162,7 +215,7 @@ function DataConnections({ brandId }: { brandId: string }) {
         )}
         {state.status === "ready" && (
           <>
-            <Sources sources={state.data.sources} />
+            <Sources brandId={brandId} sources={state.data.sources} onReread={() => setReloadKey((key) => key + 1)} />
             <Calendar calendar={state.data.calendar} />
           </>
         )}
