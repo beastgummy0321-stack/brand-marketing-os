@@ -68,7 +68,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           collapsed={narrow ? !overlayOpen : collapsed}
           onToggleSidebar={() => (narrow ? setOverlayOpen(!overlayOpen) : setCollapsed(!collapsed))}
         />
-        <main id="main-content" className="app-main max-md:p-3!">
+        <main id="main-content" className="app-main">
           {/* Page state must not survive brand/product changes, but tab queries keep it. */}
           <div key={`${scope}:${location.pathname}`}>{children}</div>
         </main>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
@@ -15,6 +16,7 @@ import {
   Users,
   Wand2,
 } from "lucide-react";
+import { OrgMenu } from "@/components/auth";
 import { useWorkspace } from "./WorkspaceContext";
 import { Logo } from "./Logo";
 import { brandDestination } from "./brandNavigation";
@@ -51,6 +53,7 @@ export function Sidebar({
   const { brands, scope, identity, brandsLoading, brandsError, refreshBrands } =
     useWorkspace();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { pathname, search } = useLocation();
   const [lastBrand, setLastBrand] = useState<string | null>(() => {
     try {
@@ -210,6 +213,17 @@ export function Sidebar({
           </span>
         )}
       </div>
+      {/* Below md the top bar has no room for the org menu (F47-I02, 375px); it moves into the drawer. */}
+      {overlayOpen && (
+        <div className="mt-3 px-2 md:hidden [&>div]:flex-wrap">
+          <OrgMenu
+            identity={identity}
+            onIdentityChanged={() => {
+              void queryClient.invalidateQueries({ queryKey: ["identity"] });
+            }}
+          />
+        </div>
+      )}
     </aside>
   );
 }

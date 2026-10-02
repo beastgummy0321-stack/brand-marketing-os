@@ -137,7 +137,8 @@ export function Topbar({
          * lever this file has on it: `min-w-0` lets it take the shrink instead of forcing the row
          * wider, `overflow-hidden` contains whatever doesn't fit instead of letting it push
          * `#root`'s scrollWidth past the viewport (the merge-smoke gate). */}
-        <div className="min-w-0 overflow-hidden">
+        {/* Below md the org menu lives in the sidebar drawer instead (F47-I02). */}
+        <div className="min-w-0 overflow-hidden max-md:hidden">
           <OrgMenu
             identity={identity}
             onIdentityChanged={() => {
