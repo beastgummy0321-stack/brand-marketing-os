@@ -13,7 +13,8 @@ vi.mock("@/lib/settingsApi", async () => {
   };
 });
 
-import { fetchBrandOptions, fetchRuleCards, resetRuleCard, type RuleCard } from "@/lib/settingsApi";
+import { ApiResponseError } from "@/lib/http";
+import { fetchBrandOptions, fetchRuleCards, resetRuleCard, saveRuleCard, type RuleCard } from "@/lib/settingsApi";
 import { RuleCardsSection } from "./RuleCardsSection";
 
 const mockFetchBrands = vi.mocked(fetchBrandOptions);
@@ -32,6 +33,7 @@ function card(value: number, customized = false): RuleCard {
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("RuleCardsSection 規則卡範圍與重設", () => {
@@ -68,5 +70,77 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("重設整張「花費護欄」"));
     await waitFor(() => expect(mockReset).toHaveBeenCalledWith("a", "spend"));
     expect(screen.getByRole("spinbutton", { name: /最低花費/ })).toHaveProperty("value", "5");
+  });
+
+  /** F47-I02 (drill-10 V2, `a-08-rulecard-0-400.png`): a refused save shows the server's sentence,
+   * not 「規則卡儲存失敗（狀態碼 400）」. Runs the real `saveRuleCard` against a stubbed 400. */
+  it("a refused save shows the server's sentence", async () => {
+    const actual = await vi.importActual<typeof import("@/lib/settingsApi")>("@/lib/settingsApi");
+    vi.mocked(saveRuleCard).mockImplementation(actual.saveRuleCard);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ error: "有欄位沒有填一個大於 0 的數字。", field_errors: { minimum: "請填一個大於 0 的數字。" } }),
+          { status: 400 },
+        ),
+      ),
+    );
+    mockFetchBrands.mockResolvedValue([{ brand_id: "a", brand_name: "甲品牌" }]);
+    mockFetchCards.mockResolvedValue({ brand_id: "a", cards: [card(10)] });
+    render(<RuleCardsSection />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"), "a");
+    const input = await screen.findByRole("spinbutton", { name: /最低花費/ });
+    await userEvent.clear(input);
+    await userEvent.type(input, "0");
+    await userEvent.click(screen.getByRole("button", { name: "儲存這張卡" }));
+    expect(await screen.findByText("有欄位沒有填一個大於 0 的數字。")).toBeTruthy();
+    expect(screen.queryByText(/狀態碼/)).toBeNull();
+  });
+
+  /** F47-I03 (drill-10 甲 設定 #24–#32, `a-09-margin-7-accepted.png`): each field shows its own
+   * `field_errors` sentence under it (a pair error under both), the typed value stays, an empty field
+   * is not sent as 0, and the sentences clear once a field changes. */
+  it("shows each refused field's own sentence under it and clears it on edit", async () => {
+    const pair: RuleCard = {
+      key: "plan_count",
+      title: "檔期方案數量上下限",
+      description: "",
+      fields: [
+        { key: "min", label: "下限", unit: "個", help: "", value: 1, customized: false },
+        { key: "max", label: "上限", unit: "個", help: "", value: 5, customized: false },
+        { key: "margin", label: "毛利率", unit: "", help: "", value: 0.7, customized: false },
+      ],
+    };
+    const sentence = "下限（6）不能大於上限（3）。";
+    vi.mocked(saveRuleCard).mockRejectedValue(
+      new ApiResponseError(sentence, 400, { min: sentence, max: sentence, margin: "毛利率要大於 0、小於 1。" }),
+    );
+    mockFetchBrands.mockResolvedValue([{ brand_id: "a", brand_name: "甲品牌" }]);
+    mockFetchCards.mockResolvedValue({ brand_id: "a", cards: [pair] });
+    render(<RuleCardsSection />);
+
+    await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"), "a");
+    const min = await screen.findByRole("spinbutton", { name: /下限/ });
+    await userEvent.clear(min);
+    await userEvent.type(min, "6");
+    const max = screen.getByRole("spinbutton", { name: /上限/ });
+    await userEvent.clear(max);
+    await userEvent.type(max, "3");
+    const margin = screen.getByRole("spinbutton", { name: /毛利率/ });
+    await userEvent.clear(margin);
+    await userEvent.click(screen.getByRole("button", { name: "儲存這張卡" }));
+
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(3));
+    expect(min.closest("label")?.textContent).toContain(sentence);
+    expect(max.closest("label")?.textContent).toContain(sentence);
+    expect(margin.closest("label")?.textContent).toContain("毛利率要大於 0、小於 1。");
+    // What was typed is sent as typed; the emptied margin is left out (never 0).
+    expect(vi.mocked(saveRuleCard)).toHaveBeenCalledWith("a", "plan_count", { min: 6, max: 3 });
+    expect(min).toHaveProperty("value", "6");
+
+    await userEvent.type(margin, "0.6");
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 });

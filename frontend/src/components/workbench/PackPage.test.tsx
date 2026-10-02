@@ -1,20 +1,21 @@
 /** frontend/src/components/workbench/PackPage.test.tsx — F07-I12（F07 Decision 29）：探索風格
  * 佔比過低的提醒逐字渲染在核准整包按鈕旁，永遠不影響 `can_approve`／`blocking_text` 算出來的
  * 按鈕停用狀態。 */
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/workbenchApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/workbenchApi")>("@/lib/workbenchApi");
-  return { ...actual, getPack: vi.fn() };
+  return { ...actual, getPack: vi.fn(), closePack: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
 }));
 
 import type { PackDetail } from "@/lib/workbenchApi";
-import { getPack } from "@/lib/workbenchApi";
+import { closePack, getPack } from "@/lib/workbenchApi";
 import { PackPage } from "./PackPage";
 
 const mockGetPack = vi.mocked(getPack);
@@ -187,5 +188,58 @@ describe("F40-I05 核准整包灰掉時的原因列（drill-7 #14）", () => {
     expect((approveButton as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("note", { name: "核准整包停用原因" })).toBeNull();
     expect(screen.queryByText(/⚠/)).toBeNull();
+  });
+});
+
+function Where() {
+  const loc = useLocation();
+  return <div data-testid="where">{loc.pathname}</div>;
+}
+
+describe("PackPage F47-I04（Q7 覆蓋核准、關閉確認）", () => {
+  function renderRouted() {
+    return render(
+      <MemoryRouter initialEntries={["/brands/brd_1/workbench/packs/pack_1"]}>
+        <Routes>
+          <Route path="/brands/brd_1/workbench/packs/pack_1" element={<PackPage brandId="brd_1" packId="pack_1" />} />
+          <Route path="*" element={<p>別頁</p>} />
+        </Routes>
+        <Where />
+      </MemoryRouter>,
+    );
+  }
+
+  it("核准時還缺素材組：讀「已核准・還缺 N 組」而不是「已完成」，並連到第一個沒做完的素材組", async () => {
+    mockGetPack.mockResolvedValue(packDetail({
+      status: "done", sets_done: 0, sets_total: 1,
+      approved_gap: { missing: 1, set_id: "set_9", label: "已核准・還缺 1 組" },
+    }));
+    renderRouted();
+
+    const link = await screen.findByRole("link", { name: /已核准・還缺 1 組/ });
+    expect(link.getAttribute("href")).toBe("/brands/brd_1/workbench/packs/pack_1/sets/set_9");
+    expect(screen.queryByText("已完成", { selector: "[data-slot=badge]" })).toBeNull();
+  });
+
+  it("關閉任務包先問一次、說明會怎樣；確定後關閉並回工作檯", async () => {
+    mockGetPack.mockResolvedValue(packDetail());
+    vi.mocked(closePack).mockResolvedValue(packDetail({ closed: true }));
+    renderRouted();
+
+    await userEvent.click(await screen.findByRole("button", { name: "更多操作" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "關閉任務包" }));
+    expect(closePack).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "關閉任務包「任務包 A」？" });
+    expect(dialog.textContent).toContain("已選定的版本都會保留");
+    await userEvent.click(within(dialog).getByRole("button", { name: "確定關閉" }));
+    expect(closePack).toHaveBeenCalledWith("brd_1", "pack_1");
+    await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/workbench"));
+  });
+
+  it("已關閉的任務包：標「已關閉」，沒有再關一次的選單", async () => {
+    mockGetPack.mockResolvedValue(packDetail({ closed: true }));
+    renderRouted();
+    expect(await screen.findByText("已關閉", { selector: "[data-slot=badge]" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
   });
 });

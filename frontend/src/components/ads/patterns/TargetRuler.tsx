@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { GRADE_FILL, GRADE_LABEL, formatAmount, type Grade } from "./Chip";
+import { perSaleAmount } from "./csv";
 
 /** Kit piece for the v9 target ruler (prototype `ruler()`, the signature visual of F28). Pure presentational:
  * every ad arrives already graded by the API (Feature F28 "Grades"); the ruler only places it.
@@ -53,6 +54,7 @@ export function rulerScale(cap: number, costs: number[]) {
 }
 
 const text = (v: number | null | undefined) => formatAmount(v) ?? "未知";
+const perSale = (v: number | null | undefined) => perSaleAmount(v) ?? "未知";
 
 export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlight, tray = true, onAdClick, emptyText = "沒設上限，先不分等級" }: {
   ads: RulerAd[];
@@ -120,8 +122,8 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
     const tipSide = p === null || p > 70 ? "right-[-4px]" : p < 22 ? "left-[-4px]" : "left-1/2 -translate-x-1/2";
     const facts = a.grade === "wasted"
       ? `花 ${text(a.spend)} 元・0 筆購買（花到 ${formatAmount(3 * T)} 還沒賣）`
-      : `每筆 ${text(a.costPerResult)} 元・${label}`;
-    const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${text(a.spend)} 元・0 筆購買` : `每筆 ${text(a.costPerResult)} 元`}｜${label}`;
+      : `每筆 ${perSale(a.costPerResult)} 元・${label}`;
+    const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${text(a.spend)} 元・0 筆購買` : `每筆 ${perSale(a.costPerResult)} 元`}｜${label}`;
     return (
       <button key={a.id} type="button" className={cn(common, "group")} style={style} aria-label={aria} data-grade={a.grade} onClick={onAdClick ? () => onAdClick(a.id) : undefined}>
         {body}

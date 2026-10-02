@@ -44,7 +44,9 @@ class BudgetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     month: str = Field(pattern=r"^\d{4}-\d{2}$")
     currency: str = Field(pattern=r"^[A-Z]{3}$")
-    amount: float = Field(ge=0, le=9999999999999999)
+    # F47 Contract A: the value is passed as sent; `month_budget.total` alone owns the rule (> 0,
+    # unset/None refused with its sentence), so a negative gets the store sentence, not a 422.
+    amount: float | None = None
     expected_revision: int = Field(ge=0, strict=True)
 
 

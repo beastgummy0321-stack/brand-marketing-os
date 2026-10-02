@@ -89,6 +89,84 @@ class ScriptedDeliveryPlanValidatesTest(unittest.TestCase):
             ["e2e", "e2e", "e2e"],
         )
 
+    def test_listed_customer_groups_bind_every_ad_to_the_first_group(self):
+        """F46-I01 (Contract A): with 【這個賣法的顧客】 groups listed every ad takes
+        `customer_group: 1` and 第 1 群's first pain key, so the plan's binding check passes;
+        the 「還沒有建顧客群」 one-liner or no section leaves the reply without the key."""
+        allocation = providers.SCRIPTED_REPLIES["ads_strategy"]["allocation"]
+        base = "部門提示：【這個賣法的顧客】有列時每支廣告要填 customer_group\n\n" \
+            "## 這次投放已採用的角色分配\n\n" + _adopted_lines(allocation)
+        customers = (
+            "\n\n【這個賣法的顧客】"
+            "\n第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）、怕麻煩（pain=effort）"
+            "｜顧客會說：（沒寫）｜什麼時候用：（沒寫）"
+            "\n第 2 群：帶小孩散步的爸媽｜煩惱：怕麻煩（pain=effort）｜顧客會說：（沒寫）"
+            "｜什麼時候用：（沒寫）"
+        )
+
+        reply = _scripted("ads_delivery_plan", base + customers)
+        ads = [ad for group in reply["groups"] for ad in group["ads"]]
+        self.assertEqual({ad["customer_group"] for ad in ads}, {1})
+        self.assertEqual({ad["coordinates"]["pain"] for ad in ads}, {"uncertainty"})
+        roles = {row["role"] for row in allocation}
+        groups = plan._validate_reply(reply, roles)
+        assert groups is not None
+        listed = [
+            {"id": "pcg_1", "who": "下班後夜跑的上班族", "pain_keys": ["uncertainty", "effort"]},
+            {"id": "pcg_2", "who": "帶小孩散步的爸媽", "pain_keys": ["effort"]},
+        ]
+        self.assertTrue(plan._bind_customer_groups(groups, listed, {"uncertainty", "effort"}))
+        template_ad = providers.SCRIPTED_REPLIES["ads_delivery_plan"]["groups"][0]["ads"][0]
+        self.assertNotIn("customer_group", template_ad)
+        self.assertEqual(template_ad["coordinates"]["pain"], "e2e")
+
+        for tail in ("\n\n【這個賣法的顧客】（這個商品還沒有建顧客群）", ""):
+            without = _scripted("ads_delivery_plan", base + tail)
+            for group in without["groups"]:
+                for ad in group["ads"]:
+                    self.assertNotIn("customer_group", ad)
+                    self.assertEqual(ad["coordinates"]["pain"], "e2e")
+
+    def test_a_kept_ranking_row_of_a_listed_group_is_reused_by_the_first_ad(self):
+        """F46-I04 (Contract G): the plan is refused unless one ad reuses a 留下 (group, angle),
+        so the first group's ads take the kept row's group number (with that group's first pain)
+        and the first ad its angle key; 換掉 rows and 「這期沒列」 rows are not reused."""
+        allocation = providers.SCRIPTED_REPLIES["ads_strategy"]["allocation"]
+        base = "部門提示：【上幾期的排名】有列時要沿用一個留下\n\n" \
+            "## 這次投放已採用的角色分配\n\n" + _adopted_lines(allocation)
+        ranking = (
+            "\n\n【上幾期的排名（程式排的；每筆＝花費÷成交）】"
+            "\n- 三盒組第 1／3 名｜留下・相對最好，仍高於上限｜顧客群 這期沒列：舊的一群｜「甲」"
+            "｜每筆 555｜賣 5 筆｜花 2,775｜a（angle=old_angle）"
+            "\n- 三盒組第 2／3 名｜換掉｜顧客群 1｜「乙」｜每筆 1,643｜賣 2 筆｜花 3,286"
+            "｜b（angle=cut_angle）"
+            "\n- 三盒組第 3／3 名｜留下・樣本少｜顧客群 2｜「丙」｜每筆 290｜賣 4 筆｜花 1,160"
+            "｜未設定（audience=none）、陪你撐完（angle=late_night）"
+        )
+        customers = (
+            "\n\n【這個賣法的顧客】"
+            "\n第 1 群：通勤上班族｜煩惱：怕麻煩（pain=effort）｜顧客會說：（沒寫）"
+            "｜什麼時候用：（沒寫）"
+            "\n第 2 群：學生備考｜煩惱：熬夜（pain=late）、怕貴（pain=cost）｜顧客會說：（沒寫）"
+            "｜什麼時候用：（沒寫）"
+        )
+
+        reply = _scripted("ads_delivery_plan", base + ranking + customers)
+
+        first = reply["groups"][0]["ads"][0]
+        self.assertEqual(first["customer_group"], 2)
+        self.assertEqual(first["coordinates"]["angle"], "late_night")
+        self.assertEqual(first["coordinates"]["pain"], "late")
+        self.assertEqual(
+            [group["ads"][0]["customer_group"] for group in reply["groups"][1:]], [1, 1],
+        )
+        roles = {row["role"] for row in allocation}
+        self.assertIsNotNone(plan._validate_reply(reply, roles))
+
+        without = _scripted("ads_delivery_plan", base + customers)
+        self.assertEqual(without["groups"][0]["ads"][0]["customer_group"], 1)
+        self.assertEqual(without["groups"][0]["ads"][0]["coordinates"]["angle"], "e2e")
+
 
 if __name__ == "__main__":
     unittest.main()

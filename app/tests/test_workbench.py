@@ -8,6 +8,7 @@ isolation are the other two of the全域 CLAUDE.md test four categories this fil
 import json
 import re
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import app.background as background_module
@@ -276,6 +277,41 @@ class ProseWrappedReplyTest(_WorkbenchTestBase):
         self.assertEqual(brief["status"], "failed")
         self.assertEqual(brief["last_error"], "代理沒有回傳純 JSON，請重新產出一次。")
         self.assertEqual(self._outputs(brief_id, "copy"), [])
+
+
+# -- F47 W4：工單先 commit 再排工作；成功的一輪清掉舊的 last_error ---------------------------
+
+class CommitBeforeEnqueueTest(_WorkbenchTestBase):
+    def test_a_job_started_by_the_enqueue_finds_the_brief(self):
+        """The worker reads on its own connection the instant a job is deferred: the brief
+        must already be committed when `enqueue()` runs (drill 10 「找不到工單」)."""
+        seen: list = []
+
+        def enqueue_and_look(task_name, *, org_id, lock, brief_id, **kwargs):
+            with coredb.connection() as other:
+                row = other.execute(
+                    "SELECT id FROM workbench_brief WHERE id = %s", (brief_id,),
+                ).fetchone()
+            seen.append(row is not None)
+            return True
+
+        with unittest.mock.patch.object(background_module, "enqueue", enqueue_and_look):
+            self._submit()
+        self.assertEqual(seen, [True])
+
+    def test_a_successful_round_clears_the_old_error(self):
+        brief_id = self._submit()
+        workbench_jobs.PROVIDER = _fake("不是 JSON")
+        self._run_worker()
+        failed = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(failed["last_error"])
+
+        workbench_repo.run_part(web.conn, self.org_id, self.brand_id, brief_id, "copy")
+        workbench_jobs.PROVIDER = _fake(json.dumps(self._copy_reply(), ensure_ascii=False))
+        self._run_worker()
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, brief_id)
+        self.assertEqual((brief["status"], brief["last_error"]), ("done", None))
 
 
 # -- 案例 3／4（F07-I07 重寫）：一輪寫 10 列；第二輪 identity 讀快取不再問模型；採用其中

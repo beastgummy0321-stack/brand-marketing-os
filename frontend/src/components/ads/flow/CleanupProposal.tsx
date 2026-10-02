@@ -10,6 +10,7 @@ import {
 import { proposeBudgetPath } from "./changeFlow";
 import type { CleanupPick } from "./cleanupDraft";
 import { Tile } from "./Tile";
+import { perSaleAmount } from "../patterns/csv";
 
 /** F28-I11: the cleanup proposal step (prototype v10 `stepProp()` for kind `clean`, hash `d/clean/prop`). The light
  * flow is 提議 → 確認 → 到平台完成 → 核對結果; this step only shows the queue row's `cleanup` payload (F28-I02) —
@@ -32,7 +33,8 @@ export function rankCleanupAds(ads: QueueCleanupAd[]): QueueCleanupAd[] {
     || desc(y.spend) - desc(x.spend));
 }
 
-const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
+// F47-I06: a cost per sale prints through the one per-sale rule (whole yuan).
+const money = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
 
 /** The number cell of a row: 沒賣出 prints its result count, 剛開始 is not a cost yet, the rest print cost per result
  * with its money tag against break-even (v10 `mt(a)`; hidden when either number is unknown). */

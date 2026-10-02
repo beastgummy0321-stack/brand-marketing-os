@@ -938,10 +938,13 @@ def read_external_page(conn, org_id, brand_id, account_id, section, **kwargs):
     try:
         return graph.external_page(token, account_id, section, **kwargs)
     except graph.GraphError as exc:
-        code = ("permission_denied" if exc.code in {10, 190, 200} else
-                "source_error" if exc.retryable or exc.code in {1, 2, 4, 17, 32, 613} else
+        # F47 Contract G: the stored codes stay what `app/ads` reads (`permission_denied` is the
+        # adapter's auth error); the Graph numbers are classified once, in graph.py.
+        kind = graph.classify_error(exc)
+        code = ("permission_denied" if kind in (graph.ERROR_AUTH, graph.ERROR_SCOPE) else
+                "source_error" if kind == graph.ERROR_TRANSIENT else
                 "invalid_source_page")
-        raise ExternalReadError(str(exc),code) from None
+        raise ExternalReadError(str(exc), code) from None
 
 
 

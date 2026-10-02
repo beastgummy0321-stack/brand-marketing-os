@@ -21,6 +21,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
@@ -32,11 +33,12 @@ from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
-from app.core import cleanup
+from app.core import cleanup, input_rules
 from app.core import settings as core_settings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id
+from app.identity import repository as identity_repo
 from app.llm import gateway, providers
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
@@ -47,10 +49,7 @@ PROVIDER = providers.AnthropicProvider()
 PARSE_FAIL_MESSAGE = cv_mod.PARSE_FAIL_MESSAGE
 COST_CUSTOMER_VOICE_EXTRACTION = cv_mod.COST_CUSTOMER_VOICE_EXTRACTION
 
-_ASSET_CONTENT_TYPES = {
-    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-    "webp": "image/webp", "gif": "image/gif",
-}
+_ASSET_KINDS = ("image/jpeg", "image/png", "image/webp", "image/gif")
 _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 # 上傳大小上限。50 MiB **不是這裡挑的數字**——它是 `supabase/config.toml` `[storage]` 的
@@ -77,20 +76,22 @@ def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: s
     if product_id and not repo.get_product(web.conn, brand_id, product_id):
         return False, "找不到所選產品。"
     filename = filename or ""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if not filename or not content:
+    if not filename:
         return False, "請選擇一個圖檔上傳。"
     if len(content) > _MAX_ASSET_BYTES:  # 路由已擋一次；這裡是給非 HTTP 呼叫端的第二道
         return False, "這個檔案超過 50 MB，請壓小一點再上傳。"
-    if ext not in _ASSET_CONTENT_TYPES:
-        return False, f"「{filename}」不是支援的圖片格式，請用 png、jpg、jpeg、webp 或 gif。"
+    # F47 Contract A: the content decides (not the extension) and is the stored type.
+    try:
+        content_type = input_rules.check_image_upload(filename, content, _ASSET_KINDS)
+    except input_rules.InputRuleError as exc:
+        return False, str(exc)
 
     asset_id = new_id("oas")
     safe_name = _safe_asset_filename(filename)
     key = f"{org_id}/brands/{brand_id}/assets/{asset_id}/{safe_name}"
     try:
         storage.put(org_id=org_id, key=key, filename=safe_name, content=content,
-                    content_type=_ASSET_CONTENT_TYPES[ext])
+                    content_type=content_type)
         repo.create_official_asset(
             web.conn, brand_id, actor=actor, asset_kind=asset_kind, storage_key=key,
             product_id=product_id or None, title=clean(title) or None,
@@ -149,14 +150,41 @@ def _source_ref_text(brand_id: str, source_reference_id: str | None) -> str | No
     return row["title"] if row else None
 
 
-def _fact_shape(brand_id: str, fact: dict) -> dict:
+FORMER_MEMBER_LABEL = "已不在這個組織的成員"
+
+
+def confirmer_label(org_id: str, confirmed_by: str | None) -> str | None:
+    """F47-I03 (drill-10 外觀 #11): 「確認人」 never shows a user id. A stored user id (written by the
+    confirm routes as `actor.user_id`) reads as that member's e-mail through the identity facade;
+    an id that is no longer a member of this org reads as `FORMER_MEMBER_LABEL`; anything else is
+    a name somebody typed and shows as typed. Shared by the library and product read shapes
+    (`routes_products`)."""
+    if not confirmed_by:
+        return confirmed_by
+    try:
+        user_id = UUID(confirmed_by)
+    except ValueError:
+        return confirmed_by
+    if identity_repo.get_membership(web.conn, org_id, user_id) is None:
+        return FORMER_MEMBER_LABEL
+    user = identity_repo.get_user(web.conn, user_id)
+    return user["email"] if user else FORMER_MEMBER_LABEL
+
+
+def _fact_shape(brand_id: str, fact: dict, org_id: str | None = None) -> dict:
+    """`org_id` = the brand's org when the caller already holds it (the bundle read); the single-fact
+    write responses leave it out and it is read from the brand."""
+    if org_id is None:
+        brand = repo.get_brand(web.conn, brand_id)
+        org_id = brand["org_id"] if brand else ""
     return {
         "id": fact["id"], "fact_type": fact["fact_type"],
         "fact_type_label": md.brand_fact_type_label(fact["fact_type"]),
         "fact_key": fact.get("fact_key"),
         "fact_key_label": md.proof_kind_label(fact["fact_key"]) if fact.get("fact_key") else None,
         "label": fact["label"], "value": fact["value"], "status": fact["status"],
-        "confirmed_by": fact.get("confirmed_by"), "confirmed_at": fact.get("confirmed_at"),
+        "confirmed_by": confirmer_label(org_id, fact.get("confirmed_by")),
+        "confirmed_at": fact.get("confirmed_at"),
         "stale_label": web.fact_staleness(fact),
         "source_reference": _source_ref_text(brand_id, fact.get("source_reference_id")),
     }
@@ -233,7 +261,7 @@ def library_bundle(request: Request, brand_id: str):
     data = {
         "brand": _brand_profile_shape(brand_id, brand),
         "products": [{"id": p["id"], "name": p["name"]} for p in web.list_products(brand_id)],
-        "facts": [_fact_shape(brand_id, f) for f in facts],
+        "facts": [_fact_shape(brand_id, f, brand["org_id"]) for f in facts],
         "rules": [_rule_shape(brand_id, r) for r in repo.list_rules_for_brand(web.conn, brand_id)],
         "claims": [_claim_shape(brand_id, c) for c in repo.list_claims_for_brand(web.conn, brand_id)],
         "assets": [_asset_shape(brand_id, a) for a in repo.list_official_assets(web.conn, brand_id)],

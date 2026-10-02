@@ -29,7 +29,7 @@ export function FlowHeader({ steps, current, context, title, purpose, aside }: {
               <li key={step.label} className="flex items-center" aria-current={i === current ? "step" : undefined}>
                 {i > 0 && <span className="mr-2.5 h-px w-[22px] bg-border" aria-hidden="true" />}
                 {done && step.to
-                  ? <Link to={step.to} className={dot} aria-label={`回到${step.label}`}><Check size={13} /></Link>
+                  ? <Link to={step.to} className={dot} aria-label={`回到「${step.label}」`}><Check size={13} /></Link>
                   : <span className={dot}>{done ? <Check size={13} /> : i + 1}</span>}
                 <span className={cn("mr-2.5 ml-1.5 text-xs", i === current ? "font-semibold text-foreground" : "text-muted-foreground")}>{step.label}</span>
               </li>

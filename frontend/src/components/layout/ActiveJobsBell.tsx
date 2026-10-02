@@ -7,6 +7,7 @@ import {
 } from "@/lib/jobsApi";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
+import { WorkerStoppedNotice } from "./WorkerStoppedNotice";
 
 const POLL_MS = 8000;
 
@@ -69,6 +70,11 @@ function pillText(state: ReadState): Pill {
   if (state.status === "loading") return { parts: [{ text: "讀取背景工作…" }], mark: "idle" };
   if (state.status === "error") {
     return { parts: [{ text: "背景工作讀取失敗" }, { text: "・點開重試", wide: true }], mark: "bad" };
+  }
+  // F47 Contract C: with the worker stopped nothing runs and nothing moves up — say that, not
+  // 「排隊中・前面還有 0 件」.
+  if (state.snapshot.stalled === true) {
+    return { parts: [{ text: "背景程式停了" }, { text: "・工作還排著", wide: true }], mark: "bad" };
   }
   const jobs = state.snapshot.data;
   const running = jobs.find((j) => j.status === "running");
@@ -159,16 +165,22 @@ export function ActiveJobsBell() {
   const panelId = useId();
   const alive = useRef(true);
 
-  const load = useCallback(() => {
-    fetchActiveJobs()
-      .then((snapshot) => alive.current && setState({ status: "ready", snapshot }))
-      .catch(() => alive.current && setState({ status: "error" }));
-  }, []);
+  const load = useCallback(
+    () =>
+      fetchActiveJobs()
+        .then((snapshot) => {
+          if (alive.current) setState({ status: "ready", snapshot });
+        })
+        .catch(() => {
+          if (alive.current) setState({ status: "error" });
+        }),
+    [],
+  );
 
   useEffect(() => {
     alive.current = true;
-    load();
-    const timer = setInterval(load, POLL_MS);
+    void load();
+    const timer = setInterval(() => void load(), POLL_MS);
     return () => {
       alive.current = false;
       clearInterval(timer);
@@ -237,11 +249,16 @@ export function ActiveJobsBell() {
             </Button>
           </div>
           {state.status === "error" ? (
-            <ReadFailedBox onRetry={load} />
+            <ReadFailedBox onRetry={() => void load()} />
           ) : state.status === "loading" ? (
             <p className="py-3 text-[13px] text-muted-foreground">讀取中…</p>
           ) : (
             <>
+              {state.snapshot.stalled === true && (
+                <div className="my-2">
+                  <WorkerStoppedNotice onRecheck={load} />
+                </div>
+              )}
               <p className="mb-1.5 mt-0.5 text-[11.5px] text-muted-foreground">
                 排隊 {state.snapshot.total} 件・讀取於 {readAt(state.snapshot.generated_at)}
                 {state.snapshot.other_count > 0 && `（其中 ${state.snapshot.other_count} 件是系統或其他帳號的工作）`}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiFetch } from "./http";
+import { apiFetch, throwIfFailed } from "./http";
 
 /** 帶著登入權杖去拿一張需要登入才看得到的圖，換成瀏覽器畫得出來的暫時網址。
  *
@@ -35,7 +35,7 @@ export function useAuthedImage(url: string | undefined): { src: string | null; f
     void (async () => {
       try {
         const res = await apiFetch(url);
-        if (!res.ok) throw new Error(`圖片讀取失敗（狀態碼 ${res.status}）`);
+        await throwIfFailed(res, `圖片讀取失敗（狀態碼 ${res.status}）`);
         const blob = await res.blob();
         const created = URL.createObjectURL(blob);
         // 元件在抓圖途中被卸載時，這個網址沒有人會再用它，當場收掉——留著就是漏記憶體，

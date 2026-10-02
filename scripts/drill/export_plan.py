@@ -25,9 +25,13 @@ def export(brand_id: str, period: int, campaign_id: str | None) -> dict:
             raise SystemExit(f"品牌 {brand_id} 沒有 campaign")
         prices = {r["product_id"]: float(r["selling_price"]) for r in conn.execute(
             "SELECT product_id, selling_price FROM product_economics WHERE brand_id = %s"
-            " ORDER BY effective_from", (brand_id,)).fetchall()}
+            " AND selling_price IS NOT NULL ORDER BY effective_from", (brand_id,)).fetchall()}
         names = {r["id"]: r["name"] for r in conn.execute(
             "SELECT id, name FROM product WHERE brand_id = %s", (brand_id,)).fetchall()}
+        # F45: each ad names its own customer group (who); the judge reads it per ad.
+        who = {r["id"]: r["who"] for r in conn.execute(
+            "SELECT id, who FROM product_customer_group WHERE brand_id = %s",
+            (brand_id,)).fetchall()}
         ctx = campaign["context_json"] or {}
         campaign_product = (ctx.get("product_ids") or [None])[0]
         groups = []
@@ -35,6 +39,8 @@ def export(brand_id: str, period: int, campaign_id: str | None) -> dict:
                 "SELECT * FROM ads_delivery_group WHERE campaign_id = %s ORDER BY created_at",
                 (campaign["id"],)).fetchall():
             ads = []
+            # Group key = first ad's: only `tw_sim --audience group` reads it (drills 7-10's
+            # figures); the default simulates every ad under its own `audience_key` below.
             audience_key = None
             for a in conn.execute("SELECT * FROM ads_ad WHERE group_id = %s ORDER BY created_at",
                                   (g["id"],)).fetchall():
@@ -50,6 +56,7 @@ def export(brand_id: str, period: int, campaign_id: str | None) -> dict:
                     "pain_key": a["pain_key"], "angle_key": a["angle_key"],
                     "proof_key": a["proof_key"], "offer_key": a["offer_key"],
                     "audience_key": a["audience_key"],
+                    "customer_group": who.get(a["customer_group_id"]),
                     # ads_ad.product_id was NULL for every ad in drill 6; fall back to the
                     # campaign's own product so the simulator prices purchases at the SKU sold
                     "product": names.get(a["product_id"] or campaign_product),

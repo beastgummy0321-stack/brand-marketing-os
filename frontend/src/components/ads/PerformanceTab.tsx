@@ -22,6 +22,7 @@ import { ExperimentPlan } from "./ExperimentPlan";
 import { SimulationRecovery } from "./SimulationRecovery";
 import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 import { Disclosure } from "./patterns";
+import { perSaleAmount } from "./patterns/csv";
 import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./nativePerformance";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
@@ -45,7 +46,7 @@ function fmtPurchases(v: number | null): string {
   return v === null ? "未追蹤" : formatCount(v);
 }
 function fmtCpa(v: number | null): string {
-  return v === null ? "算不出來" : formatCurrency(v);
+  return v === null ? "算不出來" : `NT$ ${perSaleAmount(v)}`;
 }
 function fmtMetricValue(metric: VerdictMetric, v: number | null): string {
   if (metric === "cpa") return fmtCpa(v);
@@ -330,7 +331,9 @@ function PerformanceReady({
   const t = data.totals;
   const money = (value: number | null) => native ? nativeMoney(value, currency) : formatCurrency(value);
   const count = (value: number | null) => native && value === null ? "未知" : fmtPurchases(value);
-  const cpa = (value: number | null) => native ? money(value) : fmtCpa(value);
+  const cpa = (value: number | null) => native
+    ? value === null ? "未知" : `${perSaleAmount(value)} ${currency ?? "幣別未知"}`
+    : fmtCpa(value);
   const percent = (value: number | null) => native && value === null ? "未知" : formatPercent(value);
   const roas = (value: number | null) => native && value === null ? "未知" : formatMetaRoas(value);
   const source = simulated ? "模擬回收" : "平台回報";

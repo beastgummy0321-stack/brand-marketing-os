@@ -321,16 +321,20 @@ describe("v9 pieces（F28-I07）", () => {
     expect(container.querySelector("i")).toBeNull();
   });
 
-  it("PaceChart 沒月預算不畫速度線；已花未知不印已花", async () => {
+  it("PaceChart 沒月預算（未設或 0）什麼都不畫、說「還沒設月預算」，不會出現 NaN；已花未知不印已花", async () => {
     const { PaceChart } = await import("./PaceChart");
     const days = [{ day: 10, cumulative: 8000 }, { day: 23, cumulative: 22000 }];
     const { container, rerender } = render(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={60000} spent={22000} daily={days} projected={28696} />);
     expect(screen.getByRole("img", { name: "預算 60,000，已花 22,000，照預算今天應花到 46,000" })).toBeTruthy();
     expect(container.querySelector('[data-part="pace-line"]')).toBeTruthy();
     rerender(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={null} spent={null} daily={[]} projected={null} />);
-    expect(container.querySelector('[data-part="pace-line"]')).toBeNull();
-    expect(screen.getByText("沒設月預算")).toBeTruthy();
-    expect(screen.queryByText(/^已花/)).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
+    expect(screen.getByText("還沒設月預算")).toBeTruthy();
+    expect(screen.queryByText(/已花/)).toBeNull();
+    rerender(<PaceChart month={10} dayOfMonth={24} daysInMonth={31} budget={0} spent={30287.66} daily={days} projected={39121} />);
+    expect(container.querySelector("svg")).toBeNull();
+    expect(container.innerHTML).not.toContain("NaN");
+    expect(screen.getByText("還沒設月預算・這個月已花 30,287.66")).toBeTruthy();
   });
 
   it("ScenarioBars 超出預算上限的列畫斜紋段與超出金額；算不出的列不能選", async () => {
@@ -710,5 +714,32 @@ describe("blocked slot（F44-I05，原型 f44-blocked-slot）", () => {
     expect(bar.querySelector("[data-state=blocked]")?.className).toContain("bg-danger");
     expect(bar.querySelector("[data-state=running]")?.className).toContain("bg-chart-soft");
     expect(bar.querySelector("[data-state=ok]")?.className).toContain("bg-success");
+  });
+});
+
+describe("campaign words（F47-I08，drill-10 §4.3）", () => {
+  it("一個活動一個字：草稿（含待發布）／投放中（含匯入）／已結束／已結案；工作區自己的答案優先", async () => {
+    const { campaignWord } = await import("./campaignWords");
+    expect(campaignWord({ status: "draft" })).toBe("草稿");
+    expect(campaignWord({ status: "ready" })).toBe("草稿");
+    expect(campaignWord({ status: "live" })).toBe("投放中");
+    expect(campaignWord({ status: "draft", origin: "imported" })).toBe("投放中");
+    expect(campaignWord({ status: "ended" })).toBe("已結束");
+    expect(campaignWord({ status: "closed", origin: "imported" })).toBe("已結案");
+    expect(campaignWord({ status: "ready" }, { onPlatform: true })).toBe("投放中");
+    expect(campaignWord({ status: "live" }, { onPlatform: false })).toBe("草稿");
+  });
+
+  it("已結案不說在投：平台上還開著 N 則才寫出來", async () => {
+    const { closedWord } = await import("./campaignWords");
+    expect(closedWord(6)).toBe("已結案・平台上還開著 6 則");
+    expect(closedWord(0)).toBe("已結案");
+  });
+
+  it("平台狀態說中文，不認得的或沒有的寫「平台狀態不明」，絕不印英文代碼", async () => {
+    const { nativeStatusWord } = await import("./campaignWords");
+    expect(["ACTIVE", "PAUSED", "DELETED", "ARCHIVED"].map(nativeStatusWord)).toEqual(["開啟中", "已暫停", "已刪除", "已封存"]);
+    expect(nativeStatusWord("paused")).toBe("已暫停");
+    for (const odd of ["WITH_ISSUES", "CAMPAIGN_PAUSED", "", null, undefined]) expect(nativeStatusWord(odd)).toBe("平台狀態不明");
   });
 });

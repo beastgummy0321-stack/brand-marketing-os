@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { LearningsTab, learningsCount, useCoordinateLearnings } from "@/components/ads";
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
 import { BrandProfilePanel } from "./panels/BrandProfilePanel";
 import { AssetsTab } from "./tabs/AssetsTab";
@@ -22,7 +23,8 @@ type TabKey =
   | "assets"
   | "channels"
   | "customer-voice"
-  | "coordinates";
+  | "coordinates"
+  | "ads-learnings";
 
 const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number }[] = [
   { key: "facts", label: "品牌事實", count: (d) => d.facts.length },
@@ -35,6 +37,8 @@ const TABS: { key: TabKey; label: string; count?: (data: LibraryData) => number 
 ];
 
 const ADVANCED_TAB_KEYS: TabKey[] = ["coordinates"];
+/** F46-I06: the 「投放成果」 group of the sub-nav; its data is the ads module's Contract L read, not the library read. */
+const LEARNINGS_TAB: TabKey = "ads-learnings";
 
 type LoadState =
   | { status: "loading" }
@@ -49,6 +53,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileOpen, setProfileOpen] = useState(false);
+  const learnings = useCoordinateLearnings(brandId);
 
   function load() {
     setState({ status: "loading" });
@@ -65,7 +70,12 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   useEffect(load, [brandId]);
 
   const requestedTab = searchParams.get("tab");
-  const activeTab: TabKey = TABS.some((t) => t.key === requestedTab) ? (requestedTab as TabKey) : "facts";
+  // The closeout's 「看學到什麼 →」 lands with `?campaign=<id>`; without a tab it means the learnings tab.
+  const highlightCampaign = searchParams.get("campaign");
+  const activeTab: TabKey =
+    requestedTab === LEARNINGS_TAB || (requestedTab === null && highlightCampaign)
+      ? LEARNINGS_TAB
+      : TABS.some((t) => t.key === requestedTab) ? (requestedTab as TabKey) : "facts";
   const [advancedOpen, setAdvancedOpen] = useState(() => ADVANCED_TAB_KEYS.includes(activeTab));
 
   useEffect(() => {
@@ -100,8 +110,11 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   } else {
     const { data } = state;
     content = (
-      <div className="workspace-split">
-        <nav className="workspace-subnav" aria-label="智庫分類">
+      <div className="workspace-split max-[900px]:!grid-cols-1">
+        <nav
+          className="workspace-subnav max-[900px]:!static max-[900px]:!flex-row max-[900px]:overflow-x-auto max-[900px]:whitespace-nowrap max-[900px]:[&>p]:hidden max-[900px]:[&_button]:shrink-0"
+          aria-label="智庫分類"
+        >
             <p className="px-3 pb-2 pt-3 text-xs text-muted-foreground">品牌資料</p>
             {TABS.filter((tab) => !ADVANCED_TAB_KEYS.includes(tab.key)).map((t) => (
               <button
@@ -123,6 +136,20 @@ export function LibraryPage({ brandId }: { brandId: string }) {
                 )}
               </button>
             ))}
+            <p className="mt-2 border-t border-border px-3 pb-2 pt-3 text-xs text-muted-foreground">投放成果</p>
+            <button type="button" onClick={() => setTab(LEARNINGS_TAB)} aria-pressed={activeTab === LEARNINGS_TAB}>
+              投放學到的
+              {learnings.state.status === "ready" && (
+                <span
+                  className={
+                    "rounded-full px-1.5 text-xs " +
+                    (activeTab === LEARNINGS_TAB ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground")
+                  }
+                >
+                  {learningsCount(learnings.state.data)}
+                </span>
+              )}
+            </button>
             <details
               className="mt-2 border-t border-border pt-2"
               open={advancedOpen}
@@ -157,6 +184,14 @@ export function LibraryPage({ brandId }: { brandId: string }) {
           <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
         )}
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
+        {activeTab === LEARNINGS_TAB && (
+          <LearningsTab
+            brandId={brandId}
+            state={learnings.state}
+            onRetry={learnings.reload}
+            highlightCampaignId={highlightCampaign}
+          />
+        )}
 
         </div>
         {profileOpen && (

@@ -158,10 +158,12 @@ def record_channel_entry(request: Request, brand_id: str, payload: dict):
     # 通路合不合法只在 orders_channel.record_channel_entry() 判一次（含「官網不能手動
     # 登錄」），這裡不抄第二份——不合法就是它丟 ValueError，下面統一轉成 400。
     channel = str(payload.get("channel", ""))
-    revenue, revenue_ok = main_mod.parse_number(str(payload.get("revenue", "")))
+    # JSON null = left empty (unset), never the text "None".
+    revenue_raw, quantity_raw = payload.get("revenue"), payload.get("quantity")
+    revenue, revenue_ok = main_mod.parse_number("" if revenue_raw is None else str(revenue_raw))
     if not revenue_ok:
         return _bad_request("營收請填數字，或留空。")
-    quantity, quantity_ok = main_mod.parse_number(str(payload.get("quantity", "")))
+    quantity, quantity_ok = main_mod.parse_number("" if quantity_raw is None else str(quantity_raw))
     if not quantity_ok:
         return _bad_request("數量請填數字，或留空。")
     try:

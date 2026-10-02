@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 
 import app.shared.web as main_mod
-from app.core import rule_cards
+from app.core import input_rules, rule_cards
 from app.shared.web import JSONResponse
 
 router = APIRouter()
@@ -24,18 +24,28 @@ router = APIRouter()
 
 
 def _validate_card_fields(card_key: str, raw_values: dict) -> tuple:
-    """驗證整卡送出的欄位：每個欄位都要填、且要大於 0（缺欄位視為空字串，同「整卡一起
-    送出」的既有規則）。回傳 (parsed 有效值, field_errors)。"""
+    """驗證整卡送出的欄位：每個欄位都要填、且落在該欄位在 `rule_cards.CARDS` 宣告的範圍內
+    （F47 Contract A，`app.core.input_rules`；缺欄位視為空字串，同「整卡一起送出」的既有規則）；
+    卡上宣告的 (下限, 上限) 欄位對，下限大於上限整卡擋下，兩欄都掛同一句話。
+    回傳 (parsed 有效值, field_errors)。"""
+    card = rule_cards.CARDS[card_key]
     field_errors = {}
     parsed = {}
-    for field_key in rule_cards.CARDS[card_key]["fields"]:
+    for field_key, meta in card["fields"].items():
         raw = raw_values.get(field_key, "")
-        raw_str = "" if raw is None else str(raw)
-        value, ok = main_mod.parse_number(raw_str)
-        if not ok or value is None or value <= 0:
-            field_errors[field_key] = "請填一個大於 0 的數字。"
-            continue
-        parsed[field_key] = value
+        try:
+            parsed[field_key] = input_rules.within(
+                "" if raw is None else raw, meta["label"], meta["bounds"])
+        except input_rules.InputRuleError as exc:
+            field_errors[field_key] = str(exc)
+    for low_key, high_key in card.get("pairs", ()):
+        if low_key in parsed and high_key in parsed:
+            try:
+                input_rules.ordered_pair(parsed[low_key], parsed[high_key],
+                                         card["fields"][low_key]["label"],
+                                         card["fields"][high_key]["label"])
+            except input_rules.InputRuleError as exc:
+                field_errors[low_key] = field_errors[high_key] = str(exc)
     return parsed, field_errors
 
 
@@ -83,7 +93,7 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
     parsed, field_errors = _validate_card_fields(card_key, body)
     if field_errors:
         return JSONResponse(
-            {"error": "有欄位沒有填一個大於 0 的數字。", "field_errors": field_errors},
+            {"error": next(iter(field_errors.values())), "field_errors": field_errors},
             status_code=400)
     for field_key, value in parsed.items():
         rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value,

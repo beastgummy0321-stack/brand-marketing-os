@@ -11,6 +11,9 @@
  *   `landing_url` is effective (the sell-way's own, else the first product's page).
  * - `default_objective` (F43-I18) = the brand's conversion goal as an objective key; null = no
  *   preselection.
+ * - F46-I08 (Contract D): a create that does not send platform／cap stores, in order, the
+ *   sell-way's `previous` value (「沿用上一期」), else `default_platform`／the sell-way's own cap, else
+ *   the break-even rounded to a whole amount — the page shows the same values, so shown = stored.
  * - `thumbnail_url` is an authenticated same-origin file route (like the library's `file_url`):
  *   load it with `useAuthedImage`, not a bare `<img src>`. null = no product photo.
  * - `objectives` is one merged cross-platform list in display order. Only `available` ones can
@@ -55,6 +58,30 @@ export interface WizardProduct {
   offer_labels: string[];
   customer_groups: WizardCustomerGroup[];
   landing_url: string | null;
+  /** F46-I08: this sell-way's newest non-draft campaign (null = never ran) — what the create copies when not sent. */
+  previous: WizardPrevious | null;
+  /** F46-I08: what this sell-way's closed campaigns taught (Contract L); null = never closed. */
+  learned: WizardLearned | null;
+}
+
+/** F46-I08 (`wizard_options.previous_values`): a null field is one that campaign does not hold; the create then
+ * falls through to the next rule for that field alone. */
+export interface WizardPrevious {
+  campaign_id: string;
+  campaign_name: string;
+  /** A channel key, or null. */
+  platform: string | null;
+  cap: number | null;
+  budget: number | null;
+  /** The closed campaign's learned spend (sum of its ranked rows); null when not closed or unknown. */
+  spend: number | null;
+}
+
+export interface WizardLearned {
+  /** Closed campaigns of the sell-way, newest closed first. */
+  campaigns: { id: string; name: string }[];
+  keep: number;
+  replace: number;
 }
 
 /** Platform key (a channel key, e.g. `meta`, `google_ads`) -> that platform's own objective
@@ -75,6 +102,8 @@ export interface WizardOptions {
   objectives: WizardObjective[];
   /** The brand's conversion goal as an objective key (purchase→購買, lead／booking→名單, awareness→知名度); null = unset. */
   default_objective: string | null;
+  /** F46-I08: the brand's first connected channel key (the form's order); null = none connected. */
+  default_platform: string | null;
 }
 
 /** F43-I04: the 「進階：這期不一樣」 overrides ride along (`CampaignCreateExtras`); a missing one comes from the brand

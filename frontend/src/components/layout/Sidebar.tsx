@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   BarChart3,
@@ -15,6 +16,7 @@ import {
   Users,
   Wand2,
 } from "lucide-react";
+import { OrgMenu } from "@/components/auth";
 import { useWorkspace } from "./WorkspaceContext";
 import { Logo } from "./Logo";
 import { brandDestination } from "./brandNavigation";
@@ -40,13 +42,18 @@ const BRAND_NAV = [
 export function Sidebar({
   brandId,
   collapsed,
+  overlayOpen = false,
 }: {
   brandId: string | null;
   collapsed: boolean;
+  /** Below `md` (F47-I02): the sidebar is hidden unless the top-bar control opened it as an overlay.
+   * `tokens.css` `.app-sidebar` is unlayered CSS, so the narrow-only overrides are `!` utilities. */
+  overlayOpen?: boolean;
 }) {
   const { brands, scope, identity, brandsLoading, brandsError, refreshBrands } =
     useWorkspace();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { pathname, search } = useLocation();
   const [lastBrand, setLastBrand] = useState<string | null>(() => {
     try {
@@ -92,7 +99,15 @@ export function Sidebar({
     );
   }
   return (
-    <aside className={cn("app-sidebar", collapsed && "is-collapsed")}>
+    <aside
+      className={cn(
+        "app-sidebar",
+        collapsed && "is-collapsed",
+        overlayOpen
+          ? "max-md:fixed! max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-xl"
+          : "max-md:hidden!",
+      )}
+    >
       <Link to="/" className="mb-6 px-1" aria-label="行銷駕駛艙首頁">
         <Logo compact={collapsed} />
       </Link>
@@ -198,6 +213,17 @@ export function Sidebar({
           </span>
         )}
       </div>
+      {/* Below md the top bar has no room for the org menu (F47-I02, 375px); it moves into the drawer. */}
+      {overlayOpen && (
+        <div className="mt-3 px-2 md:hidden [&>div]:flex-wrap">
+          <OrgMenu
+            identity={identity}
+            onIdentityChanged={() => {
+              void queryClient.invalidateQueries({ queryKey: ["identity"] });
+            }}
+          />
+        </div>
+      )}
     </aside>
   );
 }

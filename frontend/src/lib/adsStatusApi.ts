@@ -8,13 +8,13 @@ import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 
 /** `last_success_at`: the newest moment among this brand's own non-closed campaigns that are
- * currently syncing cleanly (`state === "ok"`), `null` when none are. `failing_campaigns`: how
- * many of those campaigns are NOT in that clean state right now (never/disconnected/auth_expired/
- * failed/syncing all count). `open_items`: how many open `ads_triage_*` queue rows (the six kinds
- * `app/ads/triage.py::QUEUE_CATEGORY` registers) are waiting on a decision. */
+ * currently syncing cleanly (`state === "ok"`), `null` when none are. `attention` (F47 Contract H):
+ * the connections page's own `attention_count` and the note of the first source it counts (in the
+ * page's order; `null` when none) — the top bar links to that page, so the two never disagree.
+ * `open_items`: the home board's open decision rows (F47 Contract D, rows with `done = false`). */
 export interface AdsStatusSummary {
   last_success_at: string | null;
-  failing_campaigns: number;
+  attention: { count: number; note: string | null };
   open_items: number;
 }
 

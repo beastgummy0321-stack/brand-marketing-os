@@ -90,6 +90,36 @@ class RuleCardsApiTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+    def test_each_field_keeps_its_declared_bounds(self):
+        """F47 Contract A (drill-10 V4): margin 7 (700%) and plan count min 6 > max 3 are refused
+        with one sentence naming the field(s); nothing is stored."""
+        before = rule_cards.get_value(web.conn, self.bid, "gross_margin", "gross_margin_rate")
+        resp = self.client.post(
+            f"/api/settings/rule-cards/brands/{self.bid}/gross_margin", json={"gross_margin_rate": 7})
+        self.assertEqual(resp.status_code, 400)
+        sentence = "毛利率要大於 0、小於 1（例如 0.7 代表毛利 70%）。"
+        self.assertEqual(resp.json(), {"error": sentence, "field_errors": {"gross_margin_rate": sentence}})
+        self.assertEqual(
+            rule_cards.get_value(web.conn, self.bid, "gross_margin", "gross_margin_rate"), before)
+        ok = self.client.post(
+            f"/api/settings/rule-cards/brands/{self.bid}/gross_margin", json={"gross_margin_rate": 0.45})
+        self.assertEqual(ok.status_code, 200)
+
+        resp = self.client.post(
+            f"/api/settings/rule-cards/brands/{self.bid}/schedule_plan_count",
+            json={"plan_count_min": 6, "plan_count_max": 3})
+        self.assertEqual(resp.status_code, 400)
+        both = "方案數量下限（6）不能大於方案數量上限（3）。"
+        self.assertEqual(resp.json()["field_errors"], {"plan_count_min": both, "plan_count_max": both})
+        self.assertNotEqual(
+            rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_min"), 6.0)
+
+    def test_every_card_field_declares_bounds(self):
+        for card in rule_cards.CARDS.values():
+            for meta in card["fields"].values():
+                self.assertIn("bounds", meta)
+                self.assertTrue(meta["bounds"].contains(meta["default"]) or meta["default"] == 0.0)
+
     def test_save_unknown_card_key_404s(self):
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/沒這張卡", json={"x": 1})

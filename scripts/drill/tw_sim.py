@@ -8,6 +8,7 @@ multiplier and tags. Same rules for both sides, seeded by (side, period, ad name
 gives the same rows.
 
     python -m scripts.drill.tw_sim run plan.json --judge fit.json --out rows.json [--prior prior_rows.json ...]
+        [--audience group]   # drills 7-10 figure (group under its first ad's audience)
     python -m scripts.drill.tw_sim report rows.json            # markdown summary
 
 These numbers say nothing about what real Meta would do. They rank two plans under one set of
@@ -74,7 +75,12 @@ def _pixel_factor(prior_purchases: int) -> float:
     return 0.90  # learning phase
 
 
-def simulate(plan: dict, judge: dict | None = None, prior_rows: list | None = None) -> list:
+def simulate(plan: dict, judge: dict | None = None, prior_rows: list | None = None,
+             audience: str = "ad") -> list:
+    """`audience="ad"` (default since drill 11): every ad is simulated under its own
+    `audience_key` (falling back to its group's). `audience="group"` reproduces drills 7–10, where
+    the whole group ran under the group key — which `export_plan` set to the FIRST ad's key — so
+    drill 10's figures can be recomputed beside the per-ad ones."""
     judge = judge or {}
     prior_rows = prior_rows or []
     side, period = plan["side"], plan["period"]
@@ -97,10 +103,18 @@ def simulate(plan: dict, judge: dict | None = None, prior_rows: list | None = No
         ads = group.get("ads") or []
         if not ads:
             continue
-        a_cpm, a_ctr, a_cvr, cap = AUDIENCE.get(group.get("audience_key") or "cold_problem_aware",
-                                                AUDIENCE["cold_problem_aware"])
+        def key_of(ad, group=group):
+            if audience == "group":
+                return group.get("audience_key")
+            return ad.get("audience_key") or group.get("audience_key")
+
         group_budget = float(group.get("daily_budget") or 0)
         for ad in ads:
+            aud = key_of(ad)
+            a_cpm, a_ctr, a_cvr, cap = AUDIENCE.get(aud or "cold_problem_aware",
+                                                    AUDIENCE["cold_problem_aware"])
+            # The pool is shared by the group's ads that target it (group mode: all of them).
+            sharing = sum(1 for other in ads if key_of(other) == aud)
             j = judge.get(ad["name"], {})
             fit = min(1.4, max(0.6, float(j.get("fit", 1.0))))
             tags = set(j.get("tags") or [])
@@ -112,7 +126,7 @@ def simulate(plan: dict, judge: dict | None = None, prior_rows: list | None = No
                 price = 100.0  # a trial offer sells the trial SKU, whatever the ad row says
             budget = float(ad.get("daily_budget") or group_budget / len(ads))
             if cap is not None:
-                budget = min(budget, pool_cap.get(group.get("audience_key"), cap) / len(ads))
+                budget = min(budget, pool_cap.get(aud, cap) / sharing)
             rng = _rng(side, period, ad["name"])
             fatigue_start = prior_days_by_ad.get(ad["name"], 0)
             for k, day in enumerate(days):
@@ -198,6 +212,9 @@ if __name__ == "__main__":
     p_run.add_argument("--prior", nargs="*", default=[])
     p_run.add_argument("--start", help="override plan start_date (period window)")
     p_run.add_argument("--end", help="override plan end_date (period window)")
+    p_run.add_argument("--audience", choices=("ad", "group"), default="ad",
+                       help="ad: each ad under its own audience_key; group: drills 7-10 "
+                            "(whole group under the group key = first ad's), for comparison")
     p_rep = sub.add_parser("report")
     p_rep.add_argument("rows")
     args = ap.parse_args()
@@ -216,10 +233,11 @@ if __name__ == "__main__":
             plan["start_date"] = args.start
         if args.end:
             plan["end_date"] = args.end
-        rows = simulate(plan, judge, prior)
+        rows = simulate(plan, judge, prior, args.audience)
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=1)
-        print(f"{plan['side']} 第 {plan['period']} 期：{len(rows)} 列")
+        mode = "每則自己的" if args.audience == "ad" else "整組（演練 7–10 算法）"
+        print(f"{plan['side']} 第 {plan['period']} 期：{len(rows)} 列（受眾＝{mode}）")
         print(report(rows))
     else:
         with open(args.rows, encoding="utf-8") as f:

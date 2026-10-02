@@ -139,7 +139,7 @@ class SettingsAdsPageTest(unittest.TestCase):
             json={"plan_count_min": "不是數字", "plan_count_max": "8"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("請填一個大於 0 的數字", resp.json()["field_errors"]["plan_count_min"])
+        self.assertEqual("方案數量下限要大於 0。", resp.json()["field_errors"]["plan_count_min"])
         self.assertEqual(
             rule_cards.get_value(web.conn, self.bid, "schedule_plan_count", "plan_count_max"), before)
 

@@ -40,6 +40,17 @@ function Panel({ brandId, campaignId, onSaved, refreshKey = 0, draft = false }: 
     return () => request.abort();
   }, [brandId, campaignId, reload, linkedTask, refreshKey]);
   const task = tasks?.find(row => row.id === selected);
+  // F47-I06 (V8): 「新增素材需求」 leaves the open editor for the request cards and moves focus onto the first card; while
+  // the cards are already all there is, the button is not drawn (it had nothing to do).
+  const editorOpen = Boolean(task || mode);
+  const cardsRef = useRef<HTMLDivElement>(null);
+  const revealCards = useRef(false);
+  useEffect(() => {
+    if (editorOpen || !revealCards.current) return;
+    revealCards.current = false;
+    cardsRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    cardsRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+  }, [editorOpen]);
   async function perform(operation: MaterialOperation) {
     if (busy) return;
     const signal = controller.current.signal; setBusy(true); setError("");
@@ -61,14 +72,14 @@ function Panel({ brandId, campaignId, onSaved, refreshKey = 0, draft = false }: 
     await perform({ path: `${materialPath(brandId, campaignId)}${suffix}`, method, body: { ...body, operation_id: crypto.randomUUID() } });
   }
   return <div className="space-y-4">
-    <div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-xl font-semibold">準備這次需要的素材</h2><p className="mt-1 text-sm text-muted-foreground">已有成品直接使用；只改文案可以獨立處理。每份需求保留版本與來源。</p></div><Button variant="outline" disabled={busy || dirty} onClick={() => { setSelected(null); setMode(null); }}><Plus className="mr-2 size-4" />新增素材需求</Button></div>
+    <div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-xl font-semibold">準備這次需要的素材</h2><p className="mt-1 text-sm text-muted-foreground">已有成品直接使用；只改文案可以獨立處理。每份需求保留版本與來源。</p></div>{editorOpen && <div className="flex flex-col items-end gap-1"><Button variant="outline" disabled={busy || dirty} disabledReason={dirty && !busy ? "先保存或取消目前的修改" : undefined} onClick={() => { revealCards.current = true; setSelected(null); setMode(null); }}><Plus className="mr-2 size-4" />新增素材需求</Button></div>}</div>
     {error && <p role="alert" className="rounded-md bg-destructive/5 p-3 text-sm">{error}</p>}
     {pending && <div className="rounded-md bg-warning/10 p-3 space-y-2"><p className="text-sm">有一筆操作的結果尚未確認。原內容與操作識別已保留，重試不會另建一份。</p><Button disabled={busy} variant="outline" onClick={() => void perform(pending)}>核對同一次保存</Button></div>}
     {truncated && <p className="text-sm text-muted-foreground">目前顯示最近 100 份需求；較早的版本仍保留，可由原任務連結讀取。</p>}
     {readError && <ReadFailed what={readError} onRetry={() => setReload(value => value + 1)} />}
     {tasks === null ? (readError ? null : <p role="status">正在讀取素材任務…</p>) : task || mode ? <MaterialTaskEditor key={task ? `${task.id}:${task.revision}:${reload}` : `new:${mode}`} brandId={brandId} campaignId={campaignId} task={task} mode={task?.mode ?? mode!} busy={busy || Boolean(pending)} onDirtyChange={setDirty} save={save} onCancel={() => { setSelected(null); setMode(null); }} reviewId={params.get("review") ?? undefined} recommendationId={params.get("recommendation") ?? undefined} /> : <>
       {params.get("material_new") && <p className="rounded-md bg-accent p-3 text-sm">從上次檢討交棒的新需求：請選擇素材來源，保存時會連回原建議。</p>}
-      <div className={`grid gap-3 ${draft ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>{sourceModes(draft).map(([value, item]) => <button key={value} disabled={busy || Boolean(pending)} className="surface p-4 text-left transition-colors hover:border-primary focus-visible:outline-primary" onClick={() => setMode(value)}><h3 className="font-semibold">{item.title}</h3><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></button>)}</div>
+      <div ref={cardsRef} aria-label="選擇素材來源" role="group" className={`grid gap-3 ${draft ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>{sourceModes(draft).map(([value, item]) => <button key={value} disabled={busy || Boolean(pending)} className="surface p-4 text-left transition-colors hover:border-primary focus-visible:outline-primary" onClick={() => setMode(value)}><h3 className="font-semibold">{item.title}</h3><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></button>)}</div>
       {tasks.length > 0 && <section className="surface"><div className="surface-header"><h3 className="font-semibold">已保存的需求</h3></div><div className="divide-y divide-border">{tasks.map(row => <button className="flex w-full items-center justify-between gap-4 p-4 text-left hover:bg-muted" key={row.id} disabled={busy} onClick={() => { setSelected(row.id); setMode(null); }}><div><p className="font-medium">{row.title}</p><p className="mt-1 text-xs text-muted-foreground">{materialModes[row.mode].title} · 版本 {row.revision}{row.review_id ? " · 承接檢討" : ""}</p></div><Badge variant="outline">{row.placement_id ? "成品已採用" : row.pack_id ? "工作台已交接" : row.candidates.length ? "待挑選成品" : "待準備"}</Badge></button>)}</div></section>}
     </>}
     <Button variant="ghost" size="sm" disabled={busy || dirty} onClick={() => setReload(value => value + 1)}><RefreshCw className="mr-2 size-4" />重新讀取素材任務</Button>

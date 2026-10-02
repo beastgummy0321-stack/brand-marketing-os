@@ -2,7 +2,7 @@
  * 型別逐欄對照 `app/dashboard/routes_jobs_api.py`：資料來源是 procrastinate 佇列本身，每件
  * 工作都有它在整條佇列裡的位置（進行中排最前面）；其他組織的工作只算進 `other_count`。 */
 
-import { apiFetch } from "./http";
+import { apiFetch, throwIfFailed } from "./http";
 
 export type ActiveJobKind =
   | "scan" | "persona" | "product_scan" | "product_research" | "library_convert"
@@ -37,6 +37,12 @@ export interface ActiveJobsSnapshot {
   done_today: number;
   failed_today: number;
   generated_at: string;
+  /** F47 Contract C: some worker heartbeat within 60 s (memory-queue mode: always true).
+   * Optional in the type only so fixtures written before F47 still compile; the server always sends it. */
+  worker_alive?: boolean;
+  /** F47 Contract C: no live worker while this org has queued/running work. Only `true` means
+   * stalled — a missing field or a failed read never reads as stopped. */
+  stalled?: boolean;
 }
 
 /** Read after 「正在」 too (the top-bar pill says 「正在同步成效」), so every label is a verb phrase. */
@@ -64,6 +70,6 @@ export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
 
 export async function fetchActiveJobs(): Promise<ActiveJobsSnapshot> {
   const res = await apiFetch("/api/jobs/active");
-  if (!res.ok) throw new Error(`讀取失敗（狀態碼 ${res.status}）`);
+  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
   return (await res.json()) as ActiveJobsSnapshot;
 }

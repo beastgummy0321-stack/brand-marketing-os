@@ -6,7 +6,7 @@ import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsCh
 import type { QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 // F25-I03: 「下一件」跨 kind 共用同一顆判斷——home 列表跟這裡的 handoff/verify 頁不能各算各的
 // （feature Decisions「下一件」）。只 import，不改 `home/status.ts`（F25-I02 同時在改那支檔）。
-import { isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
+import { decisionPosition, isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
 
 export type FlowStepName = "confirm" | "handoff" | "verify";
 
@@ -36,6 +36,22 @@ export function stepFromChangeSet(set: ChangeSet): FlowStep {
   const stillHandoff = set.items.some((i) => i.verification_state === "pending" && i.reported_at === null);
   return { step: stillHandoff ? "handoff" : "verify", closed: false };
 }
+
+const STEP_ORDER: Record<FlowStepName, number> = { confirm: 0, handoff: 1, verify: 2 };
+
+/** F47-I07 (drill-10 C3-E): what a step page does with the set it opened. The set's own step renders as usual; an
+ * earlier step of an approved set (the user followed 「回到確認」／「回到在平台完成」) renders read-only with `ahead`
+ * = where the set really is now, instead of bouncing back; a step the set has not reached yet, or any step but
+ * confirm for a draft／closed set, redirects to the set's own step. */
+export function stepRoute(set: ChangeSet, page: FlowStepName): { redirect: FlowStepName | null; ahead: FlowStepName | null } {
+  const { step } = stepFromChangeSet(set);
+  if (step === page) return { redirect: null, ahead: null };
+  if (set.status === "approved" && STEP_ORDER[page] < STEP_ORDER[step]) return { redirect: null, ahead: step };
+  return { redirect: step, ahead: null };
+}
+
+/** The forward link on a read-only earlier step (`stepRoute(...).ahead`). */
+export const AHEAD_LABEL: Record<FlowStepName, string> = { confirm: "回到確認", handoff: "接著到平台完成", verify: "看核對結果" };
 
 /** F27-I15 Contract F: `QueueKind`/`QueueItem.kind_key`'s own TypeScript type in `adsTriageApi.ts`
  * (out of this issue's touch) is deliberately one value narrower than what real responses carry —
@@ -235,12 +251,15 @@ export function formatTargetAmount(value: number | null): string {
 export function findFlowTriageItem(queue: QueuePayload | null, changeSet: ChangeSet | null): QueueItem | null {
   if (!queue || !changeSet) return null;
   const targetId = changeSet.items[0]?.target_id;
-  return queue.items.find((i) => i.proposal?.change_set_id === changeSet.id || i.triage.entity_id === targetId) ?? null;
+  // F47-I07 (drill-10 Q1): a row is matched by its own identity (`queueItemEntityId`), never by the `triage` ad it
+  // carries for display — a cleanup or 資料不足 row carries the campaign's first ad there.
+  return queue.items.find((i) => i.proposal?.change_set_id === changeSet.id || queueItemEntityId(i) === targetId) ?? null;
 }
 
+/** 「第 N 件／共 M 件」: F47-I07 — counted by the home board's owner (`home/status.ts::decisionPosition`, open home
+ * decisions by the row's own `done`), the same number the home and the top bar show; never every queue row. */
 export function flowPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
-  if (!queue || !item) return null;
-  return { pos: queue.items.indexOf(item) + 1, total: queue.items.length };
+  return decisionPosition(queue, item);
 }
 
 /** F25-I03: the id that identifies "which thing" a queue row is about, for the four `kind_key`s —
@@ -254,18 +273,21 @@ export function queueItemEntityId(item: QueueItem): string {
   // (`app/ads/triage.py::_cleanup_candidates`'s `identity_id`) — same reasoning as the two kinds
   // above.
   if (isCleanupKind(item.kind_key) && item.cleanup) return item.cleanup.campaign_id;
+  // F47-I07 (drill-10 Q1): a 資料不足 row is about the campaign too; its `triage` is only the campaign's first ad.
+  if (item.kind_key === "insufficient_data" && item.insufficient) return item.insufficient.campaign_id;
   return item.triage.entity_id;
 }
 
 /** 「下一件」（F25-I03，feature Decisions）：佇列順序中第一個還沒完成
- * (`home/status.ts::isQueueItemDone`) 且識別碼跟目前這件不同的項目，同原型 `nextOf` 的做法
+ * （列自己的 `done`，F47 Contract D，`home/status.ts::isQueueItemDone`）且識別碼跟目前這件不同的項目，同原型 `nextOf` 的做法
  * （`open().find(q=>q.id!==id)`——從頭找第一個「開著、不是自己」的，不是「陣列位置上的下一個」）。
  * `stop_loss`／`worse`／已有提議的 `scale_budget` 都直接交給 `proposalAction`（跟首頁同一份規則，
  * feature Decisions「budget 分支＝pause 分支」）；`scale_budget` 還沒建草稿時的正確連結是
  * `propose/budget/:ownerId`（`proposalAction` 的 null-proposal 分支目前寫死 `propose/pause`，
  * 那個分支的既有行為是給 `stop_loss` 用的，不在這裡動 `home/status.ts` 去改它），`refresh_creative`
  * 從來沒有 change-set 流程可走，兩種都在這裡直接組——不硬套一個 `proposalAction` 目前接不住的
- * kind 字串。 */
+ * kind 字串。F47-I07（drill-10 Q1）：`資料不足` 列一樣沒有提議流程，走它自己的 `action_url`（等資料頁），
+ * 不再被當成暫停提議組出 `propose/pause/<活動第一則廣告>`。 */
 export function nextOpenQueueItem(queue: QueuePayload | null, currentEntityId: string | undefined): ProposalAction | null {
   if (!queue) return null;
   const next = queue.items.find((item) => !isQueueItemDone(item) && queueItemEntityId(item) !== currentEntityId);
@@ -273,16 +295,16 @@ export function nextOpenQueueItem(queue: QueuePayload | null, currentEntityId: s
   if (next.kind_key === "refresh_creative") {
     return { label: "準備新素材", href: materialWorkbenchPath(next.brand_id, next.triage.campaign_id), done: false };
   }
+  if (next.kind_key === "insufficient_data") {
+    return next.action_url ? { label: "去處理", href: next.action_url, done: false } : null;
+  }
   if (next.kind_key === "scale_budget" && next.proposal === null) {
     return { label: "看提議", href: proposeBudgetPath(next.brand_id, next.triage.campaign_id, queueItemEntityId(next)), done: false };
   }
   // F27-I15 Contract F: same "null-proposal owns its own link" shape as `scale_budget` above —
   // `proposalAction`'s null-proposal branch is hard-coded to `propose/pause` (that branch's
-  // existing behaviour belongs to `stop_loss`, not touched here). Once a cleanup set exists,
-  // `isQueueItemDone` still never marks a `cleanup` row done (`home/status.ts`, out of this
-  // issue's touch), so it would otherwise loop back here forever with a `pause`-shaped
-  // `proposalAction` call; fall through to that generic call for its label/step only when the row
-  // already has a proposal, same as every other kind.
+  // existing behaviour belongs to `stop_loss`, not touched here). Once a cleanup set exists, fall
+  // through to that generic call for its label/step, same as every other kind.
   if (isCleanupKind(next.kind_key) && next.proposal === null) {
     return { label: "看提議", href: cleanupProposePath(next.brand_id, next.triage.campaign_id), done: false };
   }

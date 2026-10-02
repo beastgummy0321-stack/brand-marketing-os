@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
 import { getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type ReplaceRequest, type Slot } from "@/lib/adsSlotsApi";
 import { createUploadBatch, putUpload } from "@/lib/adsUserAssetsApi";
 import { useApiRead } from "@/lib/useApiRead";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 import { ActionBar, Chip, ProgressSegments, ReadFailed, SlotGrid, SlotTile, Thumb, type SegmentState } from "../patterns";
 import {
   BlockedSlot, CopyEditor, CopyOnlySlot, CopyPicker, flatSlots, ImageOnlySlot, isVideoSlot, MissingSlot, ReadySlot, useShownThumbnail,
@@ -46,7 +48,9 @@ import { isDraftCampaign } from "./WorkspaceHead";
  * 一版文案 → the set; 確認這版文案 → the confirmation again, plus 改文案); a copy reason's exit is 改這句文案 — the in-place
  * editor (`CopyEditor`, 保存後馬上檢查), whose returned slots replace the grid — and 到工作檯換一版 →. The head counts
  * 卡住／等你／處理中, each state has its progress colour, the draft bar says 「〈counts〉：好了才會進上架清單」 and only
- * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`. */
+ * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`.
+ * F47 Contract C: while a slot is 處理中 and the background worker is stopped, the worker-stopped notice sits above the
+ * slots (the slot states stay as the server says); 再檢查一次 re-reads the worker and the slots. */
 
 const POLL_MS = 3000;
 
@@ -129,8 +133,12 @@ function RequestsCard({ brandId, campaignId, slots, onChanged }: {
 }
 
 /** The status line under the progress bar: what the last upload, copy choice, edit or confirmation did, and the next
- * step when one is still needed (a placement that waits in 進階 for the user's confirmation). */
-type Note = { name: string; error: string } | { name: string; line: string; next: boolean };
+ * step when one is still needed (a placement that waits in 進階 for the user's confirmation). A next-step line names
+ * its slot and the state it was written for; it goes once the current slots show that slot in another state. */
+type Note = { name: string; error: string } | { name: string; line: string; next: boolean; adId?: string; state?: Slot["state"] };
+
+/** The placement's pending sentence as one sentence (the stored default already ends with 「。」). */
+const pendingSentence = (reason: string) => `${(reason || "確認文案與用途後才算備妥").replace(/。+$/, "")}。`;
 
 /** What a saved edit did, from the slot the server returned (ready only when it says ready). */
 function editedLine(after: Slot | undefined): string {
@@ -201,6 +209,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     const timer = setInterval(reload, POLL_MS);
     return () => clearInterval(timer);
   }, [polling, reload]);
+  const worker = useWorkerHealth(polling, POLL_MS);
   // The ads that became ready on this screen (「已確認・剛處理好」): a poll flipped them from 處理中, the user's next
   // action finished a 等你 slot, or an exit of a blocked slot (another copy, an edit, another file, a recheck) unblocked it.
   const wasInProgress = useRef<Set<string>>(new Set());
@@ -248,7 +257,8 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
           : returned?.state === "blocked"
             // The refusal and its exit are on the tile; the folded placement list is not the next step.
             ? { name: slot.name, line: `已放進「${slot.name}」這一格，但卡住了，原因寫在格子裡。`, next: false }
-            : { name: slot.name, line: `已放進「${slot.name}」這一格；${result.placement.pending_reason || "確認文案與用途後才算備妥"}。`, next: true });
+            : { name: slot.name, line: `已放進「${slot.name}」這一格；${pendingSentence(result.placement.pending_reason)}`, next: true,
+                adId: slot.ad_id, state: returned?.state });
       onPlacementChanged();
     } catch (err) {
       setNote({ name: slot.name, error: err instanceof Error ? err.message : "上傳沒有完成，請再試一次。" });
@@ -310,6 +320,9 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
 
   function openEditor(slot: Slot) { setNote(null); setChecked(null); setEditing(slot); }
 
+  // A next-step note written for a slot that has since moved on (now 已確認, 卡住, …) no longer applies.
+  const noteSlot = note && "next" in note && note.next && note.adId ? slots.find((s) => s.ad_id === note.adId) : undefined;
+  const shownNote = noteSlot && noteSlot.state !== (note as { state?: Slot["state"] }).state ? null : note;
   const ready = data?.ready ?? null;
   const total = data?.total ?? null;
   const missing = ready !== null && total !== null ? total - ready : 0;
@@ -340,13 +353,14 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
         </div>
         <ProgressSegments className="max-w-[520px]" label={`${data.ready}／${data.total} 格已備妥${left ? `，${left}` : ""}`}
           segments={slots.map((s, i) => ({ key: `${s.ad_id ?? s.entity_id ?? i}`, state: SEGMENT[s.state] ?? "todo", title: s.name }))} />
-        {note && ("error" in note
-          ? <p role="alert" className="mt-3 text-sm text-danger">「{note.name}」沒有上傳成功：{note.error}</p>
+        {shownNote && ("error" in shownNote
+          ? <p role="alert" className="mt-3 text-sm text-danger">「{shownNote.name}」沒有上傳成功：{shownNote.error}</p>
           : <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-muted px-4 py-2.5 text-sm">
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{note.line}</span>
-              {note.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{shownNote.line}</span>
+              {shownNote.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
             </div>)}
         <div className="mt-[18px] flex flex-col gap-4">
+          {worker.stalled && <WorkerStoppedNotice onRecheck={() => { reload(); return worker.recheck(); }} />}
           {data.groups.map((g, gi) => {
             const groupReady = g.slots.filter((s) => s.state === "ready").length;
             return (

@@ -166,7 +166,7 @@ Supersedes rule 1's 「one level only」 / 「not built: bundle auto-arithmetic�
   in `intake_product_prefill` (intake-owned) as a proposal. Cost cap = the brand's shared cap (products are usually built after the
   brand draft is closed). Product 自訂 blocks: difference, group, pain, product_proof, claim (`CustomEscape` takes a `propose`).
 
-### F45 (ruled 2026-10-02): base and composed sell-ways
+### F45 (ruled 2026-10-02; built in F45): base and composed sell-ways
 Supersedes F43's 「sell-way = product × qty」 storage and its 「earliest qty-1 sell-way of the product」 derivation (drill 10 B1/M1/O1,
 drill 9 #9: quantity had no unit, so a ×N sell-way priced its cost from whichever one-unit sell-way came first).
 - **Two shapes.** A *base* sell-way binds exactly one knowledge product and has no quantity — it is the unit (單盒, 體驗包): a
@@ -214,3 +214,21 @@ drill 9 #9: quantity had no unit, so a ×N sell-way priced its cost from whichev
   qty-1 component row is dropped (that sell-way is a base); every other sell-way with component rows is archived and its rows
   deleted. No backfill: test data is rebuilt (CLAUDE.md 資料狀態).
 - The new-campaign picker's options carry `derived_fields` (ads §6.49).
+
+### F47 (built 2026-10-02): reads keep their input and failures; inputs checked where stored
+- **Store-time input rules** (`app/core/input_rules.py`, docstring = the rule list): every intake / brand-intelligence store keeps
+  exactly what was sent or refuses with one sentence naming the field — selling price > 0, cost and shipping ≥ 0 on every path
+  (the economics form's negative-shipping hint is gone), channel revenue ≥ 0 (0 stored as 0), rule-card number bounds, min ≤ max.
+  Uploads are sniffed by content (a real PNG named `.jpg` is stored as PNG). The frontend sends what was typed and shows the
+  server's sentence per field.
+- **A read keeps what it read and what failed (Contract F).** The brand prefill stores `urls_read` and
+  `pages_failed [{url, reason}]` (reasons from `app/core/net.read_url`: status code, timeout, unknown domain, certificate, empty
+  page); `GET …/onboarding/scan` returns them; a saved URL list that differs from `urls_read` makes the old result stale and the
+  scan startable again. 「讀完你的網站了」 only when ≥ 1 page was read; the scan step lists unread URLs with reasons and an exit.
+  The product page read uses the URL sent with the retry (`product_prefill.start_scan(page_url=…)`, stored, then read).
+- **Product suggestion cards (Q8)**: hidden when a product has the same name (casefold) or page URL; 「不用了」
+  (`POST …/products/suggestions/dismiss`) adds the name to `prefill_json.dismissed`, which survives a new read. No migration.
+- **Meta token connect** reads the one classifier (`app/meta/graph.py`): an outage is 502 「Meta 暫時讀不到…」, not a rejected token; a
+  token that lists no ad account is not stored (400) and the input stays on screen; a stored token offers 「換一把權杖」.
+- **Unsaved step edits** survive 上一步, the step bar and a reload: one helper `frontend/src/components/intake/shared/stepDraft.ts`
+  (sessionStorage per brand / product and step, dropped once 下一步 saves); brand step 3 and product steps 1–3 use it.

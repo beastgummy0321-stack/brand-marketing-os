@@ -137,9 +137,11 @@ def test_proof_words_keep_the_exact_sentence_rule_beside_an_offer():
 
 def test_first_order_discount_policy():
     first = [{"key": "first_order", "params": {"content": "首購 9 折"}}]
-    for copy in ("首購 9 折", "首購9折，優惠只到結帳"):
+    for copy in ("首購 9 折", "首購9折，只到結帳"):
         _, missing = _guard(first, 999, {"headline": copy})
         assert missing == [], copy
+    # F46 Contract O: 「優惠」 is backed only when the offer sentence itself says 優惠.
+    assert _guard(first, 999, {"headline": "首購9折，優惠只到結帳"})[1] == ["優惠"]
     # Without the policy the same words are flagged as today.
     assert _guard([], 999, {"headline": "首購9折"})[1] == ["9折"]
 
@@ -148,7 +150,8 @@ def test_available_family_does_not_cover_other_offer_families():
     rows = [{"id": "offer:free_shipping", "text": "滿 NT$999 免運", "proof": False,
              "offer_key": "free_shipping"}]
     assert claims.unsupported("免運又加贈試吃包，退款保證", rows) == ["加贈", "試吃", "退款保證"]
-    assert claims.unsupported("免運優惠", rows) == []  # 優惠 counts when any offer is present
+    # F46 Contract O: 優惠 is backed only by an offer sentence that writes 優惠.
+    assert claims.unsupported("免運優惠", rows) == ["優惠"]
     assert claims.unsupported("優惠", []) == ["優惠"]
 
 
@@ -257,7 +260,8 @@ def test_sell_way_without_a_lower_price_does_not_back_youhui():
     same = _sell_way(brand_id, "三盒組", [(gummy, 3)], 999, 999)
     rows = claims.sources(web.conn, brand_id, same)
     assert not [r for r in rows if r.get("offer_key")]
-    assert claims.unsupported({"headline": _THREE_PACK}, rows) == ["優惠"]
+    # F46 Contract O widened RISK with 原價.
+    assert claims.unsupported({"headline": _THREE_PACK}, rows) == ["優惠", "原價"]
 
 
 def test_policy_and_sell_way_sharing_an_offer_key_get_their_own_rows():
@@ -344,8 +348,88 @@ def test_validate_claims_judges_against_the_offer_coordinate():
         )["unsupported_promises"]
 
     assert missing() == []  # existing positional callers: every available offer backs it
-    assert missing(offer_key="none") == ["優惠"]
+    assert missing(offer_key="none") == ["優惠", "原價"]  # F46: 原價 is a RISK word
     assert missing(offer_key="bundle") == []
+
+
+# -- F46-I02 (Contract O): 「帶了就要寫」 and narrower offer-word backing -------------------------
+
+_BUNDLE_SENTENCE = "三盒組優惠價 NT$999（原價 NT$1,500）"
+_BUNDLE_ROWS = [{"id": "offer:bundle:sw", "text": _BUNDLE_SENTENCE, "proof": False,
+                 "offer_key": "bundle"}]
+_SHIP_ROWS = [{"id": "offer:free_shipping:p", "text": "滿 NT$999 免運", "proof": False,
+               "offer_key": "free_shipping"}]
+
+
+def test_missing_offer_names_the_sentence_only_when_absent():
+    present = {"headline": f"{_BUNDLE_SENTENCE}，一次帶走", "body": "每天兩顆"}
+    assert claims.missing_offer(present, _BUNDLE_ROWS, "bundle") == []
+    assert claims.missing_offer({"headline": "一次帶走三盒"}, _BUNDLE_ROWS, "bundle") == [
+        _BUNDLE_SENTENCE]
+    # Whitespace differs on either side and still matches.
+    spaced = {"body": "三盒組 優惠價NT$999 （原價NT$1,500）"}
+    assert claims.missing_offer(spaced, _BUNDLE_ROWS, "bundle") == []
+    # Metadata never counts as copy.
+    assert claims.missing_offer({"coordinates": {"offer": _BUNDLE_SENTENCE}},
+                                _BUNDLE_ROWS, "bundle") == [_BUNDLE_SENTENCE]
+
+
+@pytest.mark.parametrize("offer_key", [None, "none", "discount"])
+def test_missing_offer_is_empty_without_an_offer_row(offer_key):
+    assert claims.missing_offer({"headline": "一次帶走三盒"}, _BUNDLE_ROWS, offer_key) == []
+
+
+def test_offer_word_backed_only_by_its_exact_term_in_an_offer_sentence():
+    # 「買一送一」 on a bundle ad: the bundle's price sentence does not say it.
+    assert claims.unsupported({"headline": "三盒組買一送一"}, _BUNDLE_ROWS) == ["買一送"]
+    # The words the bundle sentence does write are backed.
+    assert claims.unsupported({"headline": "優惠價 NT$999，原價 NT$1,500"}, _BUNDLE_ROWS) == []
+    # 「免運」 with a policy sentence that writes 免運 is backed.
+    assert claims.unsupported({"headline": "三盒免運"}, _SHIP_ROWS) == []
+    # 「優惠」 with only a free-shipping sentence is not.
+    assert claims.unsupported({"headline": "免運優惠"}, _SHIP_ROWS) == ["優惠"]
+    # Proof words keep the exact-sentence rule even when an offer sentence writes them.
+    rows = [{**_BUNDLE_ROWS[0], "text": "專家推薦三盒組優惠價 NT$999"}]
+    assert claims.unsupported({"body": "專家推薦"}, rows) == ["專家推薦"]
+
+
+@pytest.mark.parametrize(("text", "term"), [
+    ("第二件半價", "第二件半價"), ("今天半價", "半價"), ("週末特價", "特價"), ("會員特惠", "特惠"),
+    ("全面下殺", "下殺"), ("限時三天", "限時"), ("原價一千", "原價"), ("早鳥價開跑", "早鳥價"),
+    ("加購價199", "加購價"), ("組合價更划算", "組合價"), ("結帳現折", "現折"),
+    ("滿額再出發", "滿額"), ("滿千送百", "滿千送"), ("滿1000折100", "滿1000折"),
+    ("再送一包", "再送"), ("加送一包", "加送"),
+    ("送2包", "送2"), ("會員回饋", "回饋"), ("點數加倍", "點數"), ("留言抽獎", "抽獎"),
+])
+def test_widened_risk_words_are_detected_once(text, term):
+    assert claims.unsupported({"body": text}, []) == [term]
+
+
+@pytest.mark.parametrize("text", ["中秋送禮首選", "送貨到府", "贈送小卡", "優惠價"])
+def test_bare_song_is_not_a_risk_word(text):
+    found = claims.unsupported({"body": text}, [])
+    assert found == (["優惠"] if text == "優惠價" else []), text
+
+
+def test_validate_claims_reports_missing_offer():
+    brand_id, three = _three_pack_with_free_shipping()
+    copy = {"headline": "三盒一次帶走", "body": "每天兩顆，通勤也方便"}
+
+    def check(**kwargs):
+        return workbench_module.validate_claims(
+            web.conn, coredb.DEV_ORG_ID, brand_id, three, copy, **kwargs)
+
+    result = check(offer_key="bundle")
+    assert result == {
+        "unsupported_promises": [], "scope": "fulfilment_and_endorsement_families",
+        "statutory_hits": [], "statutory_warning": None, "missing_offer": [_OWN_PRICE],
+    }
+    assert check(offer_key="none")["missing_offer"] == []
+    assert check()["missing_offer"] == []
+    with_sentence = {**copy, "headline": f"三盒一次帶走｜{_OWN_PRICE}"}
+    assert workbench_module.validate_claims(
+        web.conn, coredb.DEV_ORG_ID, brand_id, three, with_sentence, offer_key="bundle",
+    )["missing_offer"] == []
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):
@@ -421,6 +505,35 @@ class TestAdoptionWarning(_WorkbenchPackApiTestBase):
             assert "優惠" in warnings[f"單元 {name}"]["message"], name
         assert warnings["單元 bundle"] is None
         assert warnings["單元 unset"] is None
+
+    def test_offer_set_copy_without_its_sentence_warns(self):
+        """F46-I02: a copy version on an offer set that writes none of the offer's registered
+        sentences warns; with another unsupported word both land in one message."""
+        _, three = _three_pack_with_free_shipping(self.brand_id)
+        pack = self._submit_pack([self._one_set("1", {"copy": 1}, product_id=three,
+                                                coordinates={"offer": "bundle"})])
+        brief = self._briefs(pack)[0]
+        missing_line = f"這組文案沒有寫這則廣告要帶的優惠：「{_OWN_PRICE}」。"
+
+        def warning_for(round_no, sets):
+            repository.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="copy", generation_round=round_no, body_json=[{"sets": sets}],
+                coordinates_json=None, llm_task_id=None,
+            )
+            detail = self.client.get(
+                f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}"
+            ).json()["set"]
+            return detail["products"]["copy"]["versions"][0]["claim_warning"]
+
+        alone = warning_for(1, [{"headline": "三盒一次帶走", "body": "通勤補給"}])
+        assert alone == {"message": missing_line,
+                         "href": f"/brands/{self.brand_id}/library?tab=claims"}
+        merged = warning_for(2, [{"headline": "三盒買一送一", "body": "通勤補給"}])
+        assert merged is not None
+        assert merged["message"].startswith("「買一送」可能包含未確認的優惠")
+        assert merged["message"].endswith(missing_line)
+        assert merged["href"] == f"/brands/{self.brand_id}/library?tab=claims"
 
 
 # -- F34-I02 (Contract S): 食安法 §28 wording reminder ------------------------------------------

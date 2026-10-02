@@ -48,10 +48,16 @@ export interface WorkspaceDraft {
   launch_total: number;
 }
 
+/** F47 Contract E: `waiting` = on the platform and the sync table has no day with spend > 0 for it (never synced
+ * since launch included); `live` = some day spent; `null` for a draft, a closed campaign, or a failed read — unknown
+ * is never promoted to either. */
+export type WorkspaceDelivery = "waiting" | "live";
+
 export interface CampaignWorkspace {
   stage: WorkspaceStage;
   /** This campaign's open decision-queue rows; 0 on a draft or a closed campaign. */
   pending_count: number | null;
+  delivery: WorkspaceDelivery | null;
   daily_budget: number | null;
   /** Live (not closed) platform ads. */
   active_ads: number;

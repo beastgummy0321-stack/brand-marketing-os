@@ -206,6 +206,25 @@ describe("MonthReviewPage — current month", () => {
     await waitFor(() => expect(screen.queryByRole("region", { name: "補 2 則新素材" })).toBeNull());
   });
 
+  it("F46 next_plan: the card's button reads 用這些學習排下一期 → to the create page; other kinds keep 看提議; 先不要 works the same", async () => {
+    const user = userEvent.setup();
+    const next = suggestion({
+      key: "next_plan:adc_B", kind: "next_plan", campaign_id: "adc_B", campaign_name: "三盒組・09/19～10/01",
+      objective: "購買", title: "用「三盒組・09/19～10/01」學到的排下一期",
+      why: "留下 2 則（最好的「考前一週・書包一盒」每筆 555）、換掉 1 則", action_url: "/brands/brd_bughunt/ads/new?sell_way=prd_box",
+    });
+    mockSummary.mockResolvedValue(summary({ suggestions: [suggestion(), next] }));
+    renderPage();
+    const card = await screen.findByRole("region", { name: "用「三盒組・09/19～10/01」學到的排下一期" });
+    expect(within(card).getByText("留下 2 則（最好的「考前一週・書包一盒」每筆 555）、換掉 1 則")).toBeTruthy();
+    expect(within(card).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_bughunt/ads/new?sell_way=prd_box");
+    expect(within(card).queryByText("看提議（核准或拒絕）→")).toBeNull();
+    expect(within(screen.getByRole("region", { name: "補 2 則新素材" })).getByRole("link", { name: "看提議（核准或拒絕）→" })).toBeTruthy();
+    await user.click(within(card).getByRole("button", { name: "先不要" }));
+    expect(mockDismiss).toHaveBeenCalledWith("brd_bughunt", THIS, "next_plan:adc_B");
+    await waitFor(() => expect(screen.queryByRole("region", { name: "用「三盒組・09/19～10/01」學到的排下一期" })).toBeNull());
+  });
+
   it("brings a rejected cleanup back only when it got worse, and counts the rest in the footnote", async () => {
     const user = userEvent.setup();
     renderPage();

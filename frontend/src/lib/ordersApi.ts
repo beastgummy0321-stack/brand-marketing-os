@@ -1,6 +1,6 @@
 /** 訂單總覽 API（票 01-orders-page-read／02-orders-page-actions）。 */
 
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, errorMessageFrom, throwIfFailed } from "./http";
 
 export interface SkuMargin {
   sku: string;
@@ -80,9 +80,8 @@ export interface OrdersPageData {
 
 export async function fetchOrders(brandId: string, page = 1): Promise<OrdersPageData> {
   const res = await apiFetch(`/api/brands/${encodeURIComponent(brandId)}/orders?page=${page}`);
-  if (!res.ok) {
-    throw new Error(res.status === 404 ? "找不到這個品牌。" : `讀取失敗（狀態碼 ${res.status}）`);
-  }
+  if (res.status === 404) throw new Error("找不到這個品牌。");
+  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
   return (await res.json()) as OrdersPageData;
 }
 

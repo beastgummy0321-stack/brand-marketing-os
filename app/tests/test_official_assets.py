@@ -19,6 +19,11 @@ import app.storage as storage
 from app.brand_intelligence import repository as repo
 from app.core.db import DEV_ORG_ID, new_id  # noqa: E402
 
+# A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+       b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+
 _SEQ = [0]
 
 
@@ -32,7 +37,7 @@ class OfficialAssetTest(unittest.TestCase):
         return repo.create_brand(web.conn, name=name, client_name=None, actor="測試員",
             org_id=DEV_ORG_ID)["id"]
 
-    def _upload(self, brand_id: str, *, filename="logo.png", content=b"\x89PNG fake bytes",
+    def _upload(self, brand_id: str, *, filename="logo.png", content=PNG + b"fake bytes",
                 content_type="image/png", asset_kind="logo", title="測試素材"):
         return self.client.post(
             f"/api/brands/{brand_id}/assets",
@@ -51,7 +56,7 @@ class OfficialAssetTest(unittest.TestCase):
         self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
         self.assertTrue(asset["storage_key"].startswith(f"{DEV_ORG_ID}/"))
         content, content_type = storage.get(org_id=DEV_ORG_ID, key=asset["storage_key"])
-        self.assertEqual(content, b"\x89PNG fake bytes")
+        self.assertEqual(content, PNG + b"fake bytes")
         self.assertEqual(content_type, "image/png")
 
         bundle = self.client.get(f"/api/library/brands/{brand_id}").json()["data"]
@@ -122,7 +127,7 @@ class OfficialAssetTest(unittest.TestCase):
 
     def test_file_route_returns_bytes_and_content_type_mismatched_filename_404s(self):
         brand_id = self._new_brand("檔案服務品牌")
-        self._upload(brand_id, filename="logo.png", content=b"\x89PNG round trip bytes",
+        self._upload(brand_id, filename="logo.png", content=PNG + b"round trip bytes",
                      content_type="image/png")
         asset = repo.list_official_assets(web.conn, brand_id)[0]
         self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
@@ -130,12 +135,34 @@ class OfficialAssetTest(unittest.TestCase):
 
         resp = self.client.get(f"/brands/{brand_id}/assets/file/{asset['id']}/{filename}")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.content, b"\x89PNG round trip bytes")
+        self.assertEqual(resp.content, PNG + b"round trip bytes")
         self.assertEqual(resp.headers["content-type"], "image/png")
 
         resp_wrong_name = self.client.get(
             f"/brands/{brand_id}/assets/file/{asset['id']}/不是這個檔名.png")
         self.assertEqual(resp_wrong_name.status_code, 404)
+
+    def test_content_decides_not_the_file_name(self):
+        """F47 Contract A: a text file named .jpg and a 0-byte file are refused with the field
+        sentence and leave no row; a real PNG named .jpg is accepted and stored as PNG."""
+        brand_id = self._new_brand("內容判斷品牌")
+        resp = self._upload(brand_id, filename="text.jpg", content=b"just some text",
+                            content_type="image/jpeg")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"],
+                         "「text.jpg」的內容不是JPEG、PNG、WebP 或 GIF 圖片，請換一張。")
+        resp = self._upload(brand_id, filename="empty.png", content=b"", content_type="image/png")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"], "「empty.png」是空的檔案，請換一個。")
+        self.assertEqual(repo.list_official_assets(web.conn, brand_id), [])
+
+        png = PNG
+        resp = self._upload(brand_id, filename="photo.jpg", content=png, content_type="image/jpeg")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        asset = repo.list_official_assets(web.conn, brand_id)[0]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=asset["storage_key"])
+        content, content_type = storage.get(org_id=DEV_ORG_ID, key=asset["storage_key"])
+        self.assertEqual((content, content_type), (png, "image/png"))
 
 
 class OfficialAssetBodyColumnsTest(unittest.TestCase):

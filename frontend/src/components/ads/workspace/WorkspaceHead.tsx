@@ -4,14 +4,16 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { CampaignWorkspace } from "@/lib/adsWorkspaceApi";
 import type { ApiRead } from "@/lib/useApiRead";
-import { Chip, ReadFailed, StageRail, Term, formatAmount, type StageStation } from "../patterns";
+import { Chip, ReadFailed, StageRail, Term, campaignWord, closedWord, formatAmount, type StageStation } from "../patterns";
 import type { WorkspaceTab } from "../nextStep";
 
 /** v10 (F30-I07) campaign workspace head (prototype `wsHead()`): breadcrumb, the campaign name, one chip row
  * (草稿 or 目標・在投 N 則, 每日, period, the campaign's one cap), the stage rail from `GET …/workspace` `stage`, and
  * the six tabs with the open-decision count on 總覽. Unknown values print nothing rather than a guess: an unknown
  * pending count shows no number (never 0), an unknown daily budget no chip. The daily budget shown is the
- * workspace's own `daily_budget` only — never next to another daily figure. */
+ * workspace's own `daily_budget` only — never next to another daily figure.
+ * F47-I08: the campaign's word is the one `campaignWord` (草稿 here as on the home and the list); a closed campaign never
+ * says 在投 (「已結案」 / 「已結案・平台上還開著 N 則」). */
 
 export const WORKSPACE_TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "overview", label: "總覽" },
@@ -88,11 +90,13 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
         <div className="mt-4 min-w-0">
           <h1 className="text-[26px] leading-tight font-semibold tracking-tight [overflow-wrap:anywhere]">{c.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {draft ? <Chip>草稿</Chip> : (
+            {draft ? <Chip>{campaignWord(c, { onPlatform: false })}</Chip> : (
               // An imported objective can be a whole sentence: only it truncates, 「・在投 N 則」 always shows.
-              <Chip className="max-w-[18rem] gap-0">
+              <Chip className="max-w-[22rem] gap-0">
                 <span className="min-w-0 truncate" title={c.objective || undefined}>{c.objective || "目標待確認"}</span>
-                {ws && <span className="shrink-0">・在投 {ws.active_ads} 則</span>}
+                {c.status === "closed"
+                  ? <span className="shrink-0">・{closedWord(ws?.active_ads ?? 0)}</span>
+                  : ws && <span className="shrink-0">・在投 {ws.active_ads} 則</span>}
               </Chip>
             )}
             {ws && ws.daily_budget !== null && ws.daily_budget > 0 && <Chip>每日 {formatAmount(ws.daily_budget)}</Chip>}

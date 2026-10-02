@@ -8,6 +8,7 @@ import { getOrgId } from "@/lib/auth";
 import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { BudgetFitCard } from "../flow/confirmParts";
+import { monthlyBudgetHref } from "../MonthlyBudgetPanel";
 import { ActionBar, CopyField, CopyFields, ReadFailed, TodoRow, formatAmount } from "../patterns";
 import { LaunchSettingsCard } from "./LaunchSettingsCard";
 import { ItemTitle, PublishHead, campaignPath, fieldText, periodText, publishPath, summaryFields } from "./PublishFlow";
@@ -66,8 +67,8 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
 }) {
   const approved = view.step !== "list";
   const { summary: s } = view;
-  // The approval hash is read with the list, and again after every settings save, so the approval freezes what is
-  // on screen (a save changes the launch content).
+  // The approval hash is read with the list, and again after every settings save — the launch settings and 「各廣告組
+  // 的其他設定」 alike (F47-I06, Q5) — so the approval freezes what is on screen (a save changes the launch content).
   const [hashSeq, setHashSeq] = useState(0);
   const hashRead = useApiRead(
     () => (approved ? Promise.resolve(null) : getPublish(brandId, campaignId, "manual").then((r) => r.describe.content_hash ?? null)),
@@ -99,7 +100,10 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       await publishCampaign(brandId, campaignId, "manual", { content_hash: hash, operation_id: operation });
       onApproved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "核准失敗，請稍後再試。");
+      // F47-I06 (Q5): when the content moved under the click (a setting saved a moment ago), the approval hash is
+      // read again and the sentence says so; any other refusal keeps the server's own sentence.
+      const fresh = await getPublish(brandId, campaignId, "manual").then((r) => r.describe.content_hash ?? null).catch(() => null);
+      setError(fresh && fresh !== hash ? "設定剛改過，已重新讀取，請再按一次核准" : err instanceof Error ? err.message : "核准失敗，請稍後再試。");
       setHashSeq((n) => n + 1);
     } finally { setBusy(false); }
   }
@@ -121,13 +125,14 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
 
       {month && (
         <BudgetFitCard read={monthRead(month)} month={month.month} extra={month.extra} premiseChanged={false} busy={false}
-          onRecheck={() => {}} budgetHref={`/brands/${encodeURIComponent(brandId)}/ads`}
+          onRecheck={() => {}} budgetHref={monthlyBudgetHref(brandId)}
           launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy` }} />
       )}
 
       {campaign ? (
         <LaunchSettingsCard brandId={brandId} campaign={campaign} locked={approved}
-          onSaved={() => setHashSeq((n) => n + 1)} onCampaignSaved={onCampaignSaved} onBlockerChange={setSettingsBlocker} />
+          onSaved={() => setHashSeq((n) => n + 1)} onBlockerChange={setSettingsBlocker}
+          onCampaignSaved={(saved) => { onCampaignSaved(saved); setHashSeq((n) => n + 1); }} />
       ) : campaignFailed ? (
         <section aria-label="投放設定" className="surface px-[22px] py-5">
           <h2 className="mb-3.5 text-base font-semibold">投放設定</h2>

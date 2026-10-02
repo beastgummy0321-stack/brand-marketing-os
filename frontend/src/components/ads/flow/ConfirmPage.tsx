@@ -13,6 +13,7 @@ import {
   getChangeControl,
   getMonthlyBudget,
   ChangeRequestRejected,
+  type ChangeDecision,
   type ChangeDraft,
   type ChangeSet,
   type MonthlyBudget,
@@ -20,7 +21,7 @@ import {
 import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { currentBudgetMonth } from "../MonthlyBudgetPanel";
+import { currentBudgetMonth, monthlyBudgetHref } from "../MonthlyBudgetPanel";
 import { useOrgClock } from "@/lib/orgClock";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
@@ -32,8 +33,11 @@ import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRe
 import { NewAdEvidence } from "./NewAdEvidence";
 import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
 import { closedNote, monthDay, pauseBack, usePauseView, windowText } from "./usePauseView";
+import { formatRevisitLabel } from "../home/status";
 import {
+  AHEAD_LABEL,
   buildBudgetDraftItem,
+  buildCleanupDraftItems,
   buildPauseDraftItem,
   budgetTitle,
   abSteps,
@@ -41,6 +45,9 @@ import {
   campaignDetailPath,
   changeStepPath,
   cleanupProposePath,
+  cleanupTitle,
+  findFlowTriageItem,
+  flowPosition,
   isAbSet,
   isCleanupTriageItem,
   isMonthBudgetRejection,
@@ -49,6 +56,7 @@ import {
   pauseTitle,
   queueItemEntityId,
   stepFromChangeSet,
+  stepRoute,
   toChangeInput,
 } from "./changeFlow";
 
@@ -131,7 +139,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       if (proposeKind === "budget") {
         return queue.items.find((i) => i.kind_key === "scale_budget" && i.scale?.owner.id === entityId) ?? null;
       }
-      return queue.items.find((i) => i.triage.entity_id === entityId) ?? null;
+      // F47-I07 (drill-10 Q1): matched by the row's own identity — a cleanup／資料不足 row carries the campaign's
+      // first ad as `triage`, and matching on that turned a pause page into 「核准清理（關 0 則）」.
+      return queue.items.find((i) => queueItemEntityId(i) === entityId) ?? null;
     }
     // F27-I15 Contract F: the cleanup propose route has no `entityId` — its own identity is the
     // campaign, matched through the queue's `cleanup` row directly (`item.cleanup.campaign_id`,
@@ -139,12 +149,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     if (!setId && proposeKind === "cleanup") {
       return queue.items.find((i) => isCleanupTriageItem(i) && i.cleanup?.campaign_id === campaignId) ?? null;
     }
-    const targetId = changeSet?.items[0]?.target_id;
-    return queue.items.find((i) =>
-      (changeSet && i.proposal?.change_set_id === changeSet.id) || i.triage.entity_id === targetId || i.scale?.owner.id === targetId,
-    ) ?? null;
+    return findFlowTriageItem(queue, changeSet);
   }, [queue, entityId, proposeKind, changeSet, setId, campaignId]);
-  const position = queue && triageItem ? { pos: queue.items.indexOf(triageItem) + 1, total: queue.items.length } : null;
+  const position = flowPosition(queue, triageItem);
   // F27-I15 Contract F: a cleanup set names itself (`source: "cleanup"`, F29-I04), so a failed queue read cannot turn
   // it into a "multi-item" set; the queue's own `cleanup` row still recognises a propose-route cleanup.
   const cleanupSet = changeSet?.source === "cleanup" || isCleanupTriageItem(triageItem);
@@ -160,6 +167,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // ending up after a conditional `return` (React's hook-order rule; `useEffect` can't move below
   // the guards instead).
   const { closed } = changeSet ? stepFromChangeSet(changeSet) : { closed: false };
+  // F47-I07 (drill-10 C3-E): an approved set opened on its own confirm URL (「回到確認」) stays here, read-only, with a
+  // link forward to where it is now — until this page itself approves it (`advanced`), which moves on as before.
+  const [advanced, setAdvanced] = useState(false);
+  const ahead = setId && changeSet && !advanced ? stepRoute(changeSet, "confirm").ahead : null;
+  const settled = closed || ahead !== null;
   const item = changeSet && changeSet.items.length === 1 ? changeSet.items[0] : undefined;
   // `item` 在 propose 模式、change set 還沒建立前是 `undefined`（草稿延遲建立），這時 kind 由
   // 路由本身的 `proposeKind` 決定，不能沿用舊的「沒有 item 就當 pause」（F25-I03 之前唯一的
@@ -181,15 +193,15 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // 真的換了才需要重置選取狀態或重打一次 `getAngles`。A failed request stays a failed read (Contract K), shown
   // with 重試 — it is not the backend's own `failed` judgement.
   const angleRead = useApiRead<AnglesResponse | null>(
-    () => (kind === "pause" && !closed && pauseEntityId ? getAngles(brandId, campaignId, pauseEntityId) : Promise.resolve(null)),
-    [kind, closed, pauseEntityId, brandId, campaignId, item?.id],
+    () => (kind === "pause" && !settled && pauseEntityId ? getAngles(brandId, campaignId, pauseEntityId) : Promise.resolve(null)),
+    [kind, settled, pauseEntityId, brandId, campaignId, item?.id],
   );
   const angleData = angleRead.data;
   useEffect(() => {
     setAngleChoice(itemAngle(item) ?? "");
     setAngleCustomOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- same identity list as the angle read above.
-  }, [kind, closed, pauseEntityId, brandId, campaignId, item?.id]);
+  }, [kind, settled, pauseEntityId, brandId, campaignId, item?.id]);
 
   // F40-I08: the month budget is read here (not inside `BudgetEvidence`) because it also decides whether 核准 can be
   // pressed — state (ii) of the 本月預算放得下 card (no month budget yet) greys the button with its reason beside it.
@@ -211,13 +223,13 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // changes/:setId 網址的 propose 頁，都在這裡收斂——I03/I04 加了 handoff/verify 頁之後這裡
   // 才會真的把人送到那兩頁；這批只加了 propose 與 confirm 兩條路由。
   useEffect(() => {
-    if (!changeSet || busy) return;
+    if (!changeSet || busy || ahead) return;
     const { step } = stepFromChangeSet(changeSet);
     const canonical = changeStepPath(brandId, campaignId, changeSet.id, step);
     if (canonical !== location.pathname) {
       navigate(canonical, { replace: true, state: actionError || rechecked ? { actionError, rechecked } : undefined });
     }
-  }, [changeSet, busy, actionError, rechecked, brandId, campaignId, location.pathname, navigate]);
+  }, [changeSet, busy, ahead, actionError, rechecked, brandId, campaignId, location.pathname, navigate]);
 
   // F28-I15: an outdated cleanup draft offers only 「改用最新提議」 (see `cleanupDraft.ts::useCleanupRebuild`).
   const { drift, draftProposalId, adopt } = useCleanupRebuild({
@@ -238,44 +250,65 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
    * `kind_key==="scale_budget"` 的列，見上面 `triageItem` 的 `useMemo`），沒有就是資料還沒讀到。
    * F29-I14: a cleanup is approved as the user ticked it (unticked ads → `declined_ids`); 拒絕／暫緩 answer the whole
    * proposal, so they carry every proposed ad. An existing draft with another pick is superseded, not reused. */
-  async function ensureWorkingSet(intent: "approve" | "decide" = "approve"): Promise<ChangeSet> {
-    if (changeSet) return changeSet;
-    const cleanupPick = proposeKind === "cleanup" && intent === "approve" ? pick.declined : [];
-    const existingId = pauseMode ? pauseView?.change_set_id : triageItem?.proposal?.change_set_id;
-    if (existingId) {
-      const data = await getChangeControl(brandId, campaignId);
-      const found = data.change_sets.find((s) => s.id === existingId);
+  async function ensureWorkingSet(): Promise<ChangeSet> {
+    const existing = await existingWorkingSet("approve");
+    if (existing) return existing;
+    if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
-      if (found && proposeKind === "cleanup" && cleanup && found.status === "draft" && intent === "approve" && !samePick(found, pick.ticked)) {
-        return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, found.id, cleanupPick);
-      }
-      if (found) return found;
+      if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
+      return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, undefined, pick.declined);
     }
+    return createChangeSet(brandId, campaignId, newDraft());
+  }
+
+  /** The set this proposal already has (`changeSet`, or the queue row's／ad's own `change_set_id`), else `null`. */
+  async function existingWorkingSet(intent: "approve" | "decide"): Promise<ChangeSet | null> {
+    if (changeSet) return changeSet;
+    const existingId = pauseMode ? pauseView?.change_set_id : triageItem?.proposal?.change_set_id;
+    if (!existingId) return null;
+    const data = await getChangeControl(brandId, campaignId);
+    const found = data.change_sets.find((s) => s.id === existingId);
+    const cleanup = triageItem?.cleanup;
+    if (found && proposeKind === "cleanup" && cleanup && found.status === "draft" && intent === "approve" && !samePick(found, pick.ticked)) {
+      return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, found.id, pick.declined);
+    }
+    return found ?? null;
+  }
+
+  /** The draft this proposal creates on its first write. 拒絕／暫緩 answer the whole proposal, so a cleanup draft here
+   * carries every proposed ad (the 核准 path keeps the user's ticks through `createCleanupSet`). */
+  function newDraft(): ChangeDraft {
     if (proposeKind === "budget") {
       const scale = triageItem?.scale;
       if (!scale) throw new Error("這個投放組的資料還沒讀到，請重新整理後再試。");
-      return createChangeSet(brandId, campaignId, {
+      return {
         operation_id: operationId,
         title: budgetTitle(scale.owner.name),
         month: currentBudgetMonth(timezone),
         items: [buildBudgetDraftItem(scale.owner.id, scale.to)],
-      });
+      };
     }
     if (proposeKind === "cleanup") {
       const cleanup = triageItem?.cleanup;
       if (!cleanup) throw new Error("這個活動的清理資料還沒讀到，請重新整理後再試。");
-      return createCleanupSet(brandId, campaignId, cleanup, operationId, timezone, undefined, cleanupPick);
+      return {
+        operation_id: operationId,
+        title: cleanupTitle(cleanup.campaign_name),
+        month: currentBudgetMonth(timezone),
+        items: buildCleanupDraftItems(cleanup.ads),
+        source: "cleanup",
+      };
     }
     // F45-I06: the draft is built from Contract P (the ad's own name and id), never from a queue row.
     if (!pauseView) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
     // this first write — `undefined` reason keeps `buildPauseDraftItem`'s own default.
-    return createChangeSet(brandId, campaignId, {
+    return {
       operation_id: operationId,
       title: pauseTitle(pauseView.name ?? pauseView.triage?.name ?? null),
       month: currentBudgetMonth(timezone),
       items: [buildPauseDraftItem(pauseView.entity_id, undefined, angleChoice)],
-    });
+    };
   }
 
   /** The one-shot rebuild after 「premise changed」: the same items under a NEW operation_id with
@@ -328,7 +361,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     try {
       const target = await ensureWorkingSet();
       const updated = await approveWithRebuild(target, false);
-      if (updated) setChangeSet(updated);
+      if (updated) { setAdvanced(true); setChangeSet(updated); }
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -386,12 +419,17 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     setSheetError(null);
     setActionError(null);
     try {
-      const target = await ensureWorkingSet("decide");
-      const updated = await decideChangeSet(brandId, campaignId, target.id, {
+      const decision: ChangeDecision = {
         decision: decisionKind,
         reason: trimmedReason,
         ...(decisionKind === "deferred" ? { revisit_at: revisit!.toISOString() } : {}),
-      });
+      };
+      // F47-I07 (drill-10 Q3): one decision is one write — with no set yet the draft is created together with the
+      // decision, so a refused 暫緩 leaves nothing behind (never a draft that turns the home row into 「等你核准」).
+      const existing = await existingWorkingSet("decide");
+      const updated = existing
+        ? await decideChangeSet(brandId, campaignId, existing.id, decision)
+        : await createChangeSet(brandId, campaignId, { ...newDraft(), decide: decision });
       setChangeSet(updated);
       setSheetOpen(false);
     } catch (err) {
@@ -506,11 +544,11 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     );
   }
   // The proposal step keeps the user's ticks when the confirm step goes back to it (F29-I14).
-  const cleanupBackHref = kind === "cleanup" && !closed
+  const cleanupBackHref = kind === "cleanup" && !settled
     ? `${cleanupProposePath(brandId, campaignId)}${isCleanupPropose ? pick.href() : ""}`
     : null;
   // F29-I14 Contract F: an A/B set starts on the performance card of the campaign detail page — back goes there.
-  const abBackHref = kind === "ab" && !closed ? campaignDetailPath(brandId, campaignId) : null;
+  const abBackHref = kind === "ab" && !settled ? campaignDetailPath(brandId, campaignId) : null;
   const ab = abSet ? changeSet?.ab ?? null : null;
   // Before the cleanup set exists the close list is the user's pick; none ticked leaves nothing to approve.
   const cleanupCloseCount = kind === "cleanup" ? (changeSet ? changeSet.items.length : pick.ticked.length) : 0;
@@ -541,7 +579,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     : kind === "ab" && ab ? abApproveLabel(ab, abContext.pair)
     : "核准暫停，接著到平台操作";
   const closedLabel = changeSet
-    ? (changeSet.status === "superseded" ? "已由新清單取代" : `${changeSet.status === "rejected" ? "已拒絕" : "已暫緩"}・${changeSet.reason ?? ""}`)
+    ? (changeSet.status === "superseded" ? "已由新清單取代"
+      : changeSet.status === "rejected" ? `已拒絕・${changeSet.reason ?? ""}`
+      // drill-10 C3-D: a deferred set names its revisit date, the same 「M/D 再看」 the home row shows.
+      : `已暫緩・${changeSet.reason ?? ""}${changeSet.revisit_at ? `・${formatRevisitLabel(changeSet.revisit_at)}` : ""}`)
     : "";
   // 「下一件」（F25-I03）：跟 VerifyPage 共用同一顆判斷，不各自算各自的（feature Decisions
   // 「下一件」）。目前這件的識別碼：propose 網址就是 `entityId` 本身；`setId` 網址（含已關閉的
@@ -551,7 +592,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // 改文案清單、還沒關閉（草稿）、承接自某一輪檢討：返回鍵改成「修改內容」回那一輪的改文案頁
   // （v7 原型 `confirmPage()` 的 `back:i.kind==="copy"?["修改內容",...]`）；已關閉或核准之後的清單
   // （`stepFromChangeSet` 這裡不會再回傳 confirm 步驟）都留原本的「投放中心」（issue Done 3）。
-  const editCopyHref = !closed && kind === "copy" && changeSet?.review_id
+  const editCopyHref = !settled && kind === "copy" && changeSet?.review_id
     ? reviewRoundPath(brandId, campaignId, changeSet.review_id, "copy")
     : null;
 
@@ -564,7 +605,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           current={kind === "cleanup" ? 1 : 0}
           title={title}
           purpose={adClosed ? "平台上這則廣告已經是關閉狀態，不用再暫停" : STEP_PURPOSE}
-          aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : undefined}
+          aside={closed ? <Chip tone="neutral">{closedLabel}</Chip> : ahead ? <Chip tone="ok">已核准</Chip> : undefined}
           context={kind === "ab" ? (
             abContext.campaign && <CampaignChip objective={abContext.campaign.objective} name={abContext.campaign.name} />
           ) : headTriage ? (
@@ -598,7 +639,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             item={item}
             scale={triageItem?.scale ?? null}
             bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
-            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: homeHref }}
+            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: monthlyBudgetHref(brandId) }}
           />
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
@@ -625,7 +666,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
 
         {/* Contract C/D: only while there's still a decision to make — once closed (rejected／
             暫緩), the angle chosen (or not) is already fixed and nothing more will be recorded. */}
-        {kind === "pause" && !closed && !adClosed && (
+        {kind === "pause" && !settled && !adClosed && (
           <PauseLearnCard
             status={angleData?.status ?? (angleRead.status === "error" ? "failed" : "pending")}
             candidates={angleData?.candidates ?? []}
@@ -646,19 +687,21 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       {adClosed ? (
         <ActionBar><Button asChild><Link to={back.to}>← 回上一頁（{back.label}）</Link></Button></ActionBar>
       ) : <ActionBar
-        back={pauseMode && !closed ? back : {
+        back={pauseMode && !settled ? back : {
           label: editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : abBackHref ? "成效" : "投放中心",
           to: editCopyHref ?? cleanupBackHref ?? abBackHref ?? homeHref,
         }}
-        exit={closed ? undefined : { label: "先不要，回投放中心", to: homeHref }}
-        hint={closed || drift ? undefined : nothingPicked ? "一則都沒勾，沒有可核准的" : "核准不會改動平台"}
+        exit={settled ? undefined : { label: "先不要，回投放中心", to: homeHref }}
+        hint={settled || drift ? undefined : nothingPicked ? "一則都沒勾，沒有可核准的" : "核准不會改動平台"}
       >
-        {!closed && (
+        {!settled && (
           <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
         )}
-        {drift ? (
+        {ahead && changeSet ? (
+          <Button asChild><Link to={changeStepPath(brandId, campaignId, changeSet.id, ahead)}>{AHEAD_LABEL[ahead]} →</Link></Button>
+        ) : drift ? (
           <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
-        ) : !closed ? (
+        ) : !settled ? (
           <>
             {approveBlock && <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {approveBlock}</span>}
             <Button disabled={busy || nothingPicked || approveBlock !== null} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>

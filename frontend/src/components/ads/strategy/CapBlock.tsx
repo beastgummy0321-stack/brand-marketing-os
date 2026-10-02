@@ -160,10 +160,14 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     );
   } else {
     const v = cap.value as number;
+    // The stored source wins (as on ConfirmBriefPage): the target writer resets it to `user` when the cap changes.
+    const source = c.context_json?.field_sources?.cap;
+    const ownWord = source === "copied" ? "沿用上一期" : source === "break_even" ? "打平線"
+      : breakEven !== null && cap.own_value === breakEven ? "打平值" : "自己填";
     left = (
       <div>
         <div className="text-sm text-muted-foreground">上限・每賣一筆最多花</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip>{breakEven !== null && cap.own_value === breakEven ? "打平值" : "自己填"}</Chip></div>
+        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip>{ownWord}</Chip></div>
         {(price !== null || breakEven !== null) && (
           <div className="numeric mt-1 text-xs text-muted-foreground">
             {[price !== null && `ROAS 參考 ${roas(price, v)}`, breakEven !== null && `打平 ${fmt(breakEven)}`].filter(Boolean).join("・")}

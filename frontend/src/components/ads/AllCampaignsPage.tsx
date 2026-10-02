@@ -8,8 +8,8 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Badge } from "@/components/layout/ui/badge";
-import { KpiStrip } from "./patterns";
-import { STATUS_LABEL, STATUS_TONE } from "./AdsHomePage";
+import { KpiStrip, campaignWord } from "./patterns";
+import { STATUS_TONE } from "./AdsHomePage";
 import { formatCurrency } from "@/lib/format";
 import { listCampaigns, type CampaignCard, type CampaignStatus } from "@/lib/adsApi";
 
@@ -201,7 +201,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                     <tr key={c.id} className="border-t border-border align-top">
                       <td className="px-3 py-2 font-medium">{c.name}{c.origin === "imported" && <span className="mt-1 block text-xs text-muted-foreground">既有平台活動</span>}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={STATUS_TONE[c.status]}>{c.origin === "imported" ? "平台狀態見原始資料" : STATUS_LABEL[c.status]}</Badge>
+                        <Badge variant={STATUS_TONE[c.status]}>{campaignWord(c)}</Badge>
                       </td>
                       <td className="px-3 py-2">{c.objective}</td>
                       <td className="px-3 py-2">

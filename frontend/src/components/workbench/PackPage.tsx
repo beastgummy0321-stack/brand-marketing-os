@@ -31,7 +31,7 @@ import {
   type PackDetail,
   type PackSetRow,
 } from "@/lib/workbenchApi";
-import { STATUS_LABEL, STATUS_TONE, updatedLabel } from "./WorkbenchHomePage";
+import { ClosePackDialog, PackStatusBadge, updatedLabel } from "./WorkbenchHomePage";
 
 const SUMMARY_FIELDS: { key: keyof PackDetail["summary"]; label: string }[] = [
   { key: "situation", label: "情境" },
@@ -64,6 +64,7 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [overrideKey, setOverrideKey] = useState<string | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
   function load() {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
@@ -145,25 +146,38 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
                 ) : (
                   <Badge variant="outline" className="w-fit">{pack.source_label}</Badge>
                 )}
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <h1 className="text-xl font-semibold text-foreground">{pack.name}</h1>
-                  <Badge className={STATUS_TONE[pack.status]}>{STATUS_LABEL[pack.status]}</Badge>
+                  {/* F47 Q7: approved with sets still missing parts — the chip links to the first such set. */}
+                  {pack.approved_gap && !pack.closed ? (
+                    <Link
+                      to={`/brands/${brandId}/workbench/packs/${pack.id}/sets/${pack.approved_gap.set_id}`}
+                      className="rounded-full hover:opacity-80"
+                    >
+                      <PackStatusBadge pack={pack} />
+                      <span className="ml-1 text-xs text-primary hover:underline">去補上 →</span>
+                    </Link>
+                  ) : (
+                    <PackStatusBadge pack={pack} />
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground">
                   建立於 {formatSyncTime(pack.created_at)} ｜ 最後更新 {updatedLabel(pack.updated_at)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button type="button" aria-label="更多操作" className="rounded-md p-2 hover:bg-accent">
-                      <MoreHorizontal className="size-4" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => void handleClose()}>關閉任務包</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {!pack.closed && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button type="button" aria-label="更多操作" className="rounded-md p-2 hover:bg-accent">
+                        <MoreHorizontal className="size-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => setConfirmingClose(true)}>關閉任務包</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
                 <div className="flex flex-col items-end gap-1">
                   {/* F40-I05（drill-7 #14）：按鈕灰掉時，原因與按鈕同一行（參考原型 #/assets 底列
                    * 的「⚠ …」）；文字整段來自後端 `blocking_text`，這裡不重算。 */}
@@ -246,6 +260,12 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ClosePackDialog
+        name={pack.name}
+        open={confirmingClose}
+        onCancel={() => setConfirmingClose(false)}
+        onConfirm={handleClose}
+      />
     </div>
   );
 }

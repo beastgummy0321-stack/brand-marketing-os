@@ -23,6 +23,14 @@ from app.intake import state  # noqa: E402
 _SEQ = [0]
 
 
+# A JPEG frame header (1x1): photo uploads are checked by content and header (F47 Contract A).
+_JPEG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffc0000b080001000101011100ffd9")
+# A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+       b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -34,12 +42,12 @@ class _Base(unittest.TestCase):
         self._envpatch.start()
         os.environ.pop("ANTHROPIC_API_KEY", None)
         self._orig_provider = intake_ai.PROVIDER
-        self._orig_fetch = intake_ai.fetch_url
-        intake_ai.fetch_url = lambda url: (False, "")
+        self._orig_fetch = intake_ai.read_url
+        intake_ai.read_url = lambda url: (False, "", "網站 10 秒內沒有回應")
 
     def tearDown(self):
         intake_ai.PROVIDER = self._orig_provider
-        intake_ai.fetch_url = self._orig_fetch
+        intake_ai.read_url = self._orig_fetch
         self._envpatch.stop()
 
     def _brand_name(self) -> str:
@@ -133,7 +141,7 @@ class PhotoUploadTest(_Base):
     def test_upload_then_reference_token_in_start(self):
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         body = up.json()
         self.assertEqual(set(body.keys()), {"token", "name", "size_mb"})
@@ -154,7 +162,7 @@ class PhotoUploadTest(_Base):
         （proven red once：暫時把斷言換成別的 org 前綴，看它真的失敗，再改回來）。"""
         import io
         up = self.client.post("/api/intake/photos",
-                              files={"photo": ("t.jpg", io.BytesIO(b"x" * 100), "image/jpeg")})
+                              files={"photo": ("t.jpg", io.BytesIO(_JPEG), "image/jpeg")})
         self.assertEqual(up.status_code, 200)
         token = up.json()["token"]
         storage_key = state.get_pending_photos(token)[0]["storage_key"]
@@ -163,7 +171,7 @@ class PhotoUploadTest(_Base):
 
     def test_get_photo_returns_bytes_and_unregistered_filename_404s(self):
         import io
-        content = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+        content = PNG + b"fake-png-bytes"
         up = self.client.post("/api/intake/photos",
                               files={"photo": ("p.png", io.BytesIO(content), "image/png")})
         self.assertEqual(up.status_code, 200)
@@ -187,6 +195,27 @@ class PhotoUploadTest(_Base):
         resp = self.client.post("/api/intake/photos",
                                 files={"photo": ("t.exe", io.BytesIO(b"x" * 10), "application/octet-stream")})
         self.assertEqual(resp.status_code, 400)  # COPY trim：精確中文文案不測
+
+    def test_content_decides_not_the_file_name(self):
+        """F47 Contract A: a text file named .jpg and a 0-byte file are refused with the user
+        sentence; a real PNG named .jpg is accepted and stored as PNG."""
+        import io
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("text.jpg", io.BytesIO(b"just text"), "image/jpeg")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"error": "「text.jpg」的內容不是JPEG、PNG 或 WebP 圖片，請換一張。"})
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("empty.jpg", io.BytesIO(b""), "image/jpeg")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"error": "「empty.jpg」是空的檔案，請換一個。"})
+
+        png = PNG
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("photo.jpg", io.BytesIO(png), "image/jpeg")})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        key = state.get_pending_photos(resp.json()["token"])[0]["storage_key"]
+        self.addCleanup(storage.delete, org_id=DEV_ORG_ID, key=key)
+        self.assertEqual(storage.get(org_id=DEV_ORG_ID, key=key), (png, "image/png"))
 
 
 # ---------------------------------------------------------------------------

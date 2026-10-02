@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeEarnMissing, HomeOverview } from "@/lib/adsHomeApi";
 import { MonthlyBudgetPanel } from "../MonthlyBudgetPanel";
+import { perSaleAmount } from "../patterns/csv";
 import { MoneyMeter, MoneyTag, PaceChart, Term, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 
@@ -18,9 +19,9 @@ export function currencyPrefix(currency: string | null): string {
   return currency ? `${currency} ` : "";
 }
 
-/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」). */
+/** The prototype's `yuan()`: a cost per purchase as whole yuan (「139 元」), through the one per-sale rule. */
 export function wholeYuan(value: number): string {
-  return `${formatAmount(Math.floor(value))} 元`;
+  return `${perSaleAmount(value) ?? "—"} 元`;
 }
 
 /** `YYYY-MM` → month number; falls back to the local month when absent. */
@@ -59,11 +60,23 @@ type Props = {
   scaleHref: string | null;
   /** After the budget editor closes the overview is read again (the pace uses the saved total). */
   onBudgetClosed: () => void;
+  /** F46-I09: arrived through a 「設定／提高 N 月月預算」 link — the adjust area opens on load, scrolls into view and
+   * the monthly-budget form starts in edit mode. */
+  openBudget?: boolean;
 };
 
-export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed }: Props) {
-  const [adjusting, setAdjusting] = useState(false);
+export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed, openBudget = false }: Props) {
+  const [adjusting, setAdjusting] = useState(openBudget);
+  // Only the first opening came from the link; a later 調整 opens the panel as before.
+  const [linked, setLinked] = useState(openBudget);
   const month = state.status === "ready" ? state.home.month : null;
+  const adjustRef = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(false);
+  useEffect(() => {
+    if (!linked || scrolled.current || !adjusting || !month) return;
+    scrolled.current = true;
+    adjustRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [linked, adjusting, month]);
 
   return (
     <>
@@ -88,11 +101,11 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed 
         )}
       </section>
       {adjusting && month && (
-        <div className="flex flex-col gap-2">
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); onBudgetClosed(); }}>
+        <div ref={adjustRef} className="flex scroll-mt-4 flex-col gap-2">
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); setLinked(false); onBudgetClosed(); }}>
             ← 收起
           </Button>
-          <MonthlyBudgetPanel brandId={brandId} month={month} compact />
+          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} onSaved={onRetry} />
         </div>
       )}
     </>
@@ -176,7 +189,8 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
 function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHref: string | null; onAdjust: () => void }) {
   const pace = home.pace;
   const daily = (pace?.daily ?? []).flatMap((d) => (d.cumulative === null ? [] : [{ day: Number(d.day.slice(8, 10)), cumulative: d.cumulative }]));
-  const budget = pace?.budget_amount ?? null;
+  // F47-I06: a 0 total (stored before Contract A refused it) has no planning meaning: read it as unset.
+  const budget = pace?.budget_amount != null && pace.budget_amount > 0 ? pace.budget_amount : null;
   const projected = pace?.projected_month_end ?? null;
   const available = pace?.available ?? null;
   const pacing = budget !== null && projected !== null ? (projected < budget ? "，照現在速度月底會用不完" : "，照現在速度月底會超出") : "";

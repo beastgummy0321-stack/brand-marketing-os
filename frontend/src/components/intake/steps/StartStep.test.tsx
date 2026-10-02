@@ -80,10 +80,14 @@ describe("StartStep", () => {
   it("品牌名稱和「投過網路廣告嗎」都選了才能往下", async () => {
     renderNew();
     expect((submitButton() as HTMLButtonElement).disabled).toBe(true);
+    // F47-I03 (drill-10 甲 建檔 #9): the off button names what is missing.
+    expect(screen.getByText("先填品牌名稱、選「投過網路廣告嗎」")).toBeTruthy();
     await userEvent.type(nameBox(), "虛構品牌");
     expect((submitButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("先選「投過網路廣告嗎」")).toBeTruthy();
     await userEvent.click(screen.getByRole("radio", { name: "完全沒投過" }));
     expect((submitButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("先選「投過網路廣告嗎」")).toBeNull();
     expect(screen.getByRole("radio", { name: "完全沒投過" }).getAttribute("aria-checked")).toBe("true");
   });
 

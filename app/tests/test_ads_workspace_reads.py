@@ -498,6 +498,68 @@ class TotalsWindowTest(_WithReader):
         self.assertEqual(totals["currency"], "TWD")
 
 
+class DeliveryTest(_WithReader):
+    """F47 Contract E (drill-10 S3): `delivery` tells "on the platform, not spending yet" from
+    "spending"; a draft, a closed campaign or a failed read is null (never promoted)."""
+
+    def setUp(self):
+        super().setUp()
+        self.brand = _brand(self.conn, self.org, "工作區：投放狀態")
+        self.campaign = _imported(self.conn, self.org, self.brand, "剛上架", "c_dlv", cap=100)
+        self.ad = _ad(self.conn, self.org, self.brand, self.campaign, "a_dlv",
+                      ("campaign", "c_dlv"))
+
+    def delivery(self, campaign_id=None):
+        return self.workspace(self.brand, campaign_id or self.campaign)["delivery"]
+
+    def test_a_draft_is_null(self):
+        self.assertIsNone(self.delivery(_draft(self.conn, self.org, self.brand)))
+
+    def test_never_synced_since_launch_is_waiting(self):
+        self.assertEqual(self.delivery(), "waiting")
+
+    def test_only_zero_spend_rows_is_waiting(self):
+        _synced(self.conn, self.org, self.brand, self.campaign,
+                self.cutoff - timedelta(days=3), self.cutoff)
+        for back in range(3):
+            _obs(self.conn, self.org, self.brand, self.campaign, self.ad,
+                 self.cutoff - timedelta(days=back), spend=0)
+        self.assertEqual(self.delivery(), "waiting")
+
+    def test_any_day_with_spend_is_live_even_outside_the_totals_window(self):
+        _obs(self.conn, self.org, self.brand, self.campaign, self.ad,
+             self.cutoff - timedelta(days=60), spend=12)
+        self.assertEqual(self.delivery(), "live")
+
+    def test_another_campaigns_spend_never_counts(self):
+        other = _imported(self.conn, self.org, self.brand, "別的", "c_dlv2", cap=100)
+        other_ad = _ad(self.conn, self.org, self.brand, other, "a_dlv2", ("campaign", "c_dlv2"))
+        _obs(self.conn, self.org, self.brand, other, other_ad, self.cutoff, spend=500)
+        self.assertEqual(self.delivery(), "waiting")
+        self.assertEqual(self.delivery(other), "live")
+
+    def test_an_internal_campaign_on_the_platform_reads_its_own_rows(self):
+        internal = _draft(self.conn, self.org, self.brand, name="自建活動")
+        _entity(self.conn, self.org, self.brand, internal, "campaign", "c_int")
+        ad = _ad(self.conn, self.org, self.brand, internal, "a_int", ("campaign", "c_int"))
+        self.assertEqual(self.delivery(internal), "waiting")
+        _obs(self.conn, self.org, self.brand, internal, ad, self.cutoff, spend=30)
+        self.assertEqual(self.delivery(internal), "live")
+
+    def test_closed_is_null(self):
+        _obs(self.conn, self.org, self.brand, self.campaign, self.ad, self.cutoff, spend=30)
+        self.conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s",
+                          (self.campaign,))
+        self.conn.commit()
+        self.assertIsNone(self.delivery())
+
+    def test_a_failed_spend_read_is_null(self):
+        with mock.patch.object(workspace_reads, "_has_spent", side_effect=RuntimeError("boom")):
+            ws = self.workspace(self.brand, self.campaign)
+        self.assertIsNone(ws["delivery"])
+        self.assertEqual(ws["active_ads"], 1)  # the other reads still answer
+
+
 # ---------------------------------------------------------------------------
 # structure
 # ---------------------------------------------------------------------------
@@ -769,7 +831,7 @@ class RouteTest(_WithReader):
         ws = client.get(f"{base}/{draft}/workspace")
         self.assertEqual(ws.status_code, 200, ws.text)
         self.assertEqual(set(ws.json()), {
-            "stage", "pending_count", "daily_budget", "active_ads", "can_support",
+            "stage", "pending_count", "delivery", "daily_budget", "active_ads", "can_support",
             "next_sync_at", "missing_days", "totals", "draft",
         })
         structure = client.get(f"{base}/{draft}/structure")

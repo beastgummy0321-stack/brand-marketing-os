@@ -12,7 +12,7 @@
  * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
  * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, throwIfFailed } from "./http";
 
 export interface LibraryBrandFact {
   id: string;
@@ -230,11 +230,8 @@ interface Envelope<T> {
 
 export async function fetchLibrary(brandId: string): Promise<LibraryData> {
   const res = await apiFetch(`/api/library/brands/${encodeURIComponent(brandId)}`);
-  if (!res.ok) {
-    throw new Error(
-      res.status === 404 ? "找不到這個品牌。" : `品牌智庫讀取失敗（狀態碼 ${res.status}）`,
-    );
-  }
+  if (res.status === 404) throw new Error("找不到這個品牌。");
+  await throwIfFailed(res, `品牌智庫讀取失敗（狀態碼 ${res.status}）`);
   const body: Envelope<LibraryData> = await res.json();
   return body.data;
 }
@@ -252,18 +249,8 @@ async function postJson<T>(path: string, body: unknown = {}, method: string = "P
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    let message = `處理失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: string; errors?: Record<string, string>; detail?: string };
-      // 欄位錯誤表是這支獨有的形狀；其餘兩種外殼交給共用的 errorMessageFrom
-      if (data.errors) message = Object.values(data.errors).join("；");
-      else message = errorMessageFrom(data, message);
-    } catch {
-      // Response body isn't JSON, use the default message.
-    }
-    throw new Error(message);
-  }
+  // `{errors}` (per-field dict) is read by `throwIfFailed` too: every field's message, joined with 「；」.
+  await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
   return (await res.json()) as T;
 }
 
@@ -367,9 +354,7 @@ export async function uploadAsset(
   body.append("title", fields.title);
   body.append("file", fields.file);
   const res = await apiFetch(`/api/brands/${encodeURIComponent(brandId)}/assets`, { method: "POST", body });
-  if (!res.ok) {
-    throw new Error(`上傳失敗（狀態碼 ${res.status}）`);
-  }
+  await throwIfFailed(res, `上傳失敗（狀態碼 ${res.status}）`);
 }
 
 export async function deleteAsset(brandId: string, assetId: string): Promise<void> {
@@ -417,9 +402,7 @@ export async function submitCustomerVoice(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(fields),
   });
-  if (!res.ok) {
-    throw new Error(`送出失敗（狀態碼 ${res.status}）`);
-  }
+  await throwIfFailed(res, `送出失敗（狀態碼 ${res.status}）`);
   return res.json();
 }
 
@@ -432,9 +415,7 @@ export async function fetchCustomerVoiceJob(
   const res = await apiFetch(
     `/api/library/brands/${encodeURIComponent(brandId)}/customer-voice/jobs/${encodeURIComponent(jobKey)}`,
   );
-  if (!res.ok) {
-    throw new Error(`查詢失敗（狀態碼 ${res.status}）`);
-  }
+  await throwIfFailed(res, `查詢失敗（狀態碼 ${res.status}）`);
   return res.json();
 }
 

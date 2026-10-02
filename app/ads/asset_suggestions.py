@@ -341,6 +341,11 @@ def _result(conn, org, brand, data, item, answer):
         additions = {}
         problems += generated_errors
     effective = {**additions, **{k: v for k, v in original.items() if str(v).strip()}}
+    # F46 Contract O: judged on the whole copy that would be confirmed (the original plus any
+    # accepted addition), so an offer sentence written in either half counts.
+    offer_missing = policy.missing_offer(conn, org, brand, effective, **judged)
+    if offer_missing is not None:
+        problems.append(offer_missing)
     campaign = data["campaign"]
     if not campaign["goal_text"] or not campaign["objective"]:
         problems.append(policy.detail("campaign", "請補活動目標，才能確認此批用途。"))

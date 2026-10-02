@@ -7,7 +7,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeProductApi")>("@/lib/intakeProductApi");
@@ -20,12 +20,17 @@ vi.mock("@/lib/intakeProductApi", async () => {
     startProductScan: vi.fn(),
   };
 });
+vi.mock("@/lib/jobsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/jobsApi")>("@/lib/jobsApi");
+  return { ...actual, fetchActiveJobs: vi.fn() };
+});
 vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
 
 import type { ProductOnboardingStatus, ProductWhat } from "@/lib/intakeProductApi";
 import { createProduct, fetchProductOnboarding, fetchProductWhat, saveProductWhat, startProductScan } from "@/lib/intakeProductApi";
+import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { ProductOnboarding } from "./ProductOnboarding";
 
 const mockCreate = vi.mocked(createProduct);
@@ -33,7 +38,17 @@ const mockStatus = vi.mocked(fetchProductOnboarding);
 const mockWhat = vi.mocked(fetchProductWhat);
 const mockSave = vi.mocked(saveProductWhat);
 const mockScan = vi.mocked(startProductScan);
+const mockJobs = vi.mocked(fetchActiveJobs);
 const B = "brd_1";
+/** `GET /api/jobs/active` with this org's product read queued; `stalled` = the worker is stopped (F47 Contract C). */
+const jobs = (stalled: boolean): ActiveJobsSnapshot => ({
+  data: [], total: 1, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-02T02:00:00Z",
+  worker_alive: !stalled, stalled,
+});
+
+beforeEach(() => {
+  mockJobs.mockResolvedValue(jobs(false));
+});
 
 afterEach(() => {
   cleanup();
@@ -178,8 +193,23 @@ describe("ProductOnboarding", () => {
     expect(screen.getByLabelText("商品名稱")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
-    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit");
+    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit", "https://beastgummy.tw/shop/multivitamin");
     expect(await screen.findByText("正在讀商品頁…")).toBeTruthy();
+  });
+
+  it("改了商品頁網址再按重試：讀的是欄位裡的新網址，不是舊的（drill-10 R2）", async () => {
+    sessionStorage.clear();
+    mockStatus.mockResolvedValue(status({ prefill_status: "failed", prefill_error: "讀不到商品頁（網址打不開或沒有文字），也沒有商品照；可以重試，或直接自己填。" }));
+    mockWhat.mockResolvedValue(blankWhat());
+    mockScan.mockResolvedValue(status({ prefill_status: "running" }));
+    renderAt(`/brands/${B}/products/prd_vit/onboarding`);
+
+    const field = (await screen.findByLabelText("商品頁網址")) as HTMLInputElement;
+    await userEvent.clear(field);
+    await userEvent.type(field, "https://beastgummy.tw/shop/multivitamin-fixed ");
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(mockScan).toHaveBeenCalledWith(B, "prd_vit", "https://beastgummy.tw/shop/multivitamin-fixed");
+    sessionStorage.clear();
   });
 
   it("「自己填」收起失敗列，只留表單", async () => {
@@ -203,6 +233,24 @@ describe("ProductOnboarding", () => {
     await waitFor(() => expect(where()).toBe(`/brands/${B}/products/prd_vit/onboarding?step=2`));
     expect(heading()).toBe("誰會買、買之前煩什麼");
     expect(mockStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("讀取中而背景程式停了：說原因、資料沒丟；再檢查一次（背景程式已起來）後提示消失、狀態重讀", async () => {
+    mockStatus.mockResolvedValue(status({ prefill_status: "running" }));
+    mockWhat.mockResolvedValue(blankWhat());
+    mockJobs.mockResolvedValue(jobs(true));
+    renderAt(`/brands/${B}/products/prd_vit/onboarding`);
+
+    const notice = (await screen.findByText(/背景程式停了/)).closest("[data-slot=worker-stopped]");
+    expect(notice?.textContent).toContain("背景程式停了：這件工作還排著，已填的資料沒丟。重新啟動行銷系統後會自動接著做。");
+    expect(screen.getByText("正在讀商品頁…")).toBeTruthy();
+    expect(screen.getByLabelText("商品名稱")).toBeTruthy();
+
+    mockJobs.mockResolvedValue(jobs(false));
+    const reads = mockWhat.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "再檢查一次" }));
+    await waitFor(() => expect(screen.queryByText(/背景程式停了/)).toBeNull());
+    expect(mockWhat.mock.calls.length).toBeGreaterThan(reads);
   });
 
   it("找不到的商品顯示空狀態", async () => {

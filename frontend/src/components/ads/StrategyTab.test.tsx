@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { AdsBudgetBasisJson, BudgetScenarioRow, CampaignDetail, DeliveryGroupRow, StrategyBasis } from "@/lib/adsApi";
 import { adoptStrategy, patchCampaign, selectScenario } from "@/lib/adsApi";
 import { getTriage, type CapView } from "@/lib/adsTriageApi";
+import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
 import { StrategyTab } from "./StrategyTab";
 
@@ -307,7 +308,7 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(withReasons({ coordinate_learnings: COORD, learnings: [VERDICT] }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       const [good, bad] = screen.getAllByRole("listitem").filter((li) => li.getAttribute("data-slot") === "coordinate-learning");
-      expect(within(good).getByText("划算・每筆 421").getAttribute("data-tone")).toBe("ok");
+      expect(within(good).getByText("划算・每筆 422").getAttribute("data-tone")).toBe("ok"); // F47-I06: 421.6 rounds (one per-sale rule), never floors
       expect(good.textContent).toContain(`「${LONG_AD}」（綜合維他命軟糖・10/03～10/09）`);
       expect(within(good).getByText("受眾：陌生、知道問題")).toBeTruthy();
       expect(within(good).getByText("痛點：太麻煩")).toBeTruthy();
@@ -316,7 +317,7 @@ describe("StrategyTab (F28-I09)", () => {
       // 策略依據 lists what the model read: the coordinate rows, then the surviving verdict line.
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
-      expect(within(panel).getByText("划算・每筆 421")).toBeTruthy();
+      expect(within(panel).getByText("划算・每筆 422")).toBeTruthy();
       expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
       expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
     });
@@ -338,6 +339,105 @@ describe("StrategyTab (F28-I09)", () => {
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("沒有可用的學習紀錄。")).toBeTruthy();
+    });
+
+    // F46-I07 (prototype f46-learnings `#/strategy`): a strategy made since F46 stores the Contract L view it was
+    // prompted with as `basis.ranked_learnings`; the panel and the why fold show that ranking, not the F41 rows.
+    const RANKED: CoordinateLearnings = {
+      campaigns: [{
+        campaign_id: "adc_B", campaign_name: "三盒組・09/19～10/01", sell_way_id: "prd_box",
+        start_date: "2026-09-19", end_date: "2026-10-01", closed_on: "2026-10-02", cap: 450, currency: "TWD",
+        spend: 9781, sales: 13, cost_per_sale: 752.4, counts: { keep: 2, replace: 1 },
+        rule_text: "沒有一則低於上限 450 → 留下最好的 555 和 721 以內的；其餘換掉", empty_reason: null,
+        rows: [
+          { rank: 1, of: 3, ad_id: "ada_b1", ad_name: "考前一週・書包一盒", customer_group: { id: "pcg_study", who: "學生備考" },
+            coordinates: [{ dimension: "angle", dimension_label: "角度", key: "box", label: "書包裡放一盒就好" }],
+            spend: 2775, sales: 5, cost_per_sale: 555, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], learning_id: "lrn_b1" },
+          { rank: 2, of: 3, ad_id: "ada_b2", ad_name: "通勤族・地鐵十分鐘", customer_group: { id: "pcg_commute", who: "通勤上班族" },
+            coordinates: [], spend: 3720, sales: 6, cost_per_sale: 620, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], learning_id: "lrn_b2" },
+          { rank: 3, of: 3, ad_id: "ada_b3", ad_name: "通勤族・下班後加班", customer_group: { id: "pcg_commute", who: "通勤上班族" },
+            coordinates: [], spend: 3286, sales: 2, cost_per_sale: 1643, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], learning_id: "lrn_b3" },
+        ],
+      }, {
+        campaign_id: "adc_A", campaign_name: "三盒組・09/05～09/18", sell_way_id: "prd_box",
+        start_date: "2026-09-05", end_date: "2026-09-18", closed_on: "2026-09-19", cap: 450, currency: "TWD",
+        spend: 1160, sales: 4, cost_per_sale: 290, counts: { keep: 1, replace: 0 },
+        rule_text: "1 則每筆低於上限 450 → 留下；其餘換掉", empty_reason: null,
+        rows: [
+          { rank: 1, of: 1, ad_id: "ada_a1", ad_name: "備考生・讀到深夜", customer_group: { id: "pcg_study", who: "學生備考" },
+            coordinates: [], spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], learning_id: "lrn_a1" },
+        ],
+      }],
+      groups: [
+        { customer_group_id: "pcg_study", who: "學生備考", ads: 2, spend: 3935, sales: 9, cap: 450, cost_per_sale: 437.2 },
+        { customer_group_id: "pcg_commute", who: "通勤上班族", ads: 2, spend: 7006, sales: 8, cap: 450, cost_per_sale: 875.75 },
+      ],
+      next: { sell_way_id: "prd_box", new_campaign_href: "/brands/brd_1/ads/new?sell_way=prd_box" },
+    };
+
+    it("ranked_learnings: the panel says it is the library's ranking, then group summary, compact tables per campaign and the full-table link", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({ ranked_learnings: RANKED, learnings: [] }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      const panel = screen.getByRole("dialog", { name: "策略依據" });
+      // Prototype order: 用到的學習 first, then 品牌事實, 商品價格.
+      expect(within(panel).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["用到的學習", "品牌事實", "商品價格"]);
+      expect(within(panel).getByText("和品牌智庫「投放學到的」同一份排名")).toBeTruthy();
+      const groups = within(panel).getByRole("list", { name: "各顧客群每筆成本" });
+      expect(within(groups).getAllByRole("listitem").map((li) => li.getAttribute("data-group"))).toEqual(["pcg_study", "pcg_commute"]);
+      const b = within(panel).getByRole("table", { name: "三盒組・09/19～10/01 每則廣告排名" });
+      expect(within(b).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["#", "廣告｜顧客群", "每筆", "判定", "座標"]);
+      const rowsB = within(b).getAllByRole("row").slice(1);
+      expect(rowsB.map((r) => r.getAttribute("data-ad"))).toEqual(["ada_b1", "ada_b2", "ada_b3"]);
+      expect(within(rowsB[2]).getByText("1,643")).toBeTruthy();
+      expect(within(rowsB[2]).getByText("換掉")).toBeTruthy();
+      expect(within(panel).getByRole("table", { name: "三盒組・09/05～09/18 每則廣告排名" })).toBeTruthy();
+      expect(within(panel).getByRole("link", { name: "到品牌智庫看完整表 →" }).getAttribute("href")).toBe("/brands/brd_1/library?tab=ads-learnings");
+      expect(panel.querySelector("[data-slot=coordinate-learning]")).toBeNull();
+      expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
+    });
+
+    it("the why fold follows the same rule: ranked_learnings → the same ranking; it wins over old coordinate_learnings", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({ ranked_learnings: RANKED, coordinate_learnings: COORD }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      const section = screen.getByRole("heading", { name: "用到的學習" }).closest("section") as HTMLElement;
+      expect(within(section).getByText("和品牌智庫「投放學到的」同一份排名")).toBeTruthy();
+      expect(within(section).getByRole("table", { name: "三盒組・09/19～10/01 每則廣告排名" })).toBeTruthy();
+      expect(section.querySelector("[data-slot=coordinate-learning]")).toBeNull();
+    });
+
+    it("an empty ranked view (nothing closed yet) shows no learnings section and the panel's empty line", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({ ranked_learnings: { campaigns: [], groups: [], next: null } }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      expect(screen.queryByRole("heading", { name: "用到的學習" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("沒有可用的學習紀錄。")).toBeTruthy();
+    });
+
+    it("brand facts print 「MM/DD 更新」 on the org calendar and prices 〈sell way〉 〈price〉・〈MM/DD〉 起 — never a raw ISO string", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons({
+        brand_facts: [
+          // 17:30 UTC on 09/11 is already 09/12 in Taipei (the org default).
+          { id: "bfa_1", label: "每顆含 50mg 咖啡因", updated_at: "2026-09-11T17:30:00.123456+00:00" },
+          { id: "bfa_2", label: "顧客原話「比排咖啡快」", updated_at: "2026-09-20T03:00:00+00:00" },
+        ],
+        prices: [
+          { product_id: "prd_box", price: 999, effective_from: "2026-09-01", stale: false, assumptions: [], sell_way_name: "三盒組" },
+          { product_id: "prd_one", price: null, effective_from: null, stale: false, assumptions: [], sell_way_name: "單盒" },
+        ],
+      }));
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
+      const panel = screen.getByRole("dialog", { name: "策略依據" });
+      const facts = Array.from(panel.querySelectorAll("[data-slot=basis-fact]")).map((li) => li.textContent);
+      expect(facts).toEqual(["每顆含 50mg 咖啡因09/12 更新", "顧客原話「比排咖啡快」09/20 更新"]);
+      const prices = Array.from(panel.querySelectorAll("[data-slot=basis-price]")).map((li) => li.textContent);
+      expect(prices).toEqual(["三盒組 NT$99909/01 起", "單盒 價格尚未設定起始日不明"]);
+      expect(panel.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     });
   });
 

@@ -128,3 +128,12 @@ describe("全店政策（F42-I01）", () => {
     expect(options).not.toContain("全店政策");
   });
 });
+
+describe("確認人 (F47-I03, drill-10 甲 品牌智庫 #5)", () => {
+  it("shows the confirmer the server resolved (a member's e-mail), never a user id", () => {
+    render(<FactsTab brandId="brd_1" facts={[fact({ confirmed_by: "owner@example.com" })]} onChanged={() => {}} />);
+    const details = screen.getByText(/詳細（確認人/).closest("details")!;
+    expect(details.textContent).toContain("確認人：owner@example.com");
+    expect(details.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+});

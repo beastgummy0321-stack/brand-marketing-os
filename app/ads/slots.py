@@ -27,10 +27,14 @@ preview, or its workbench set's generation), with `job`; otherwise a slot that i
 blocked or half-filled reads `waiting` with the user's next action. A new revision of the
 placement behind a slot (placement edit, copy pick, typed copy edit) is confirmed at once
 (`follow_revision`); every refusal is stored by `asset_suggestions.store_refusal`.
+
+F46 Contract F: every slot carries `format_note` -- the sentence when the file the slot shows
+(its material, else the placement behind it) ships in another format than the ad's planned
+`format_key` (`actual_format`); `None` otherwise and on an imported campaign.
 """
 
 from app import workbench
-from app.ads import ad_status, handoff_assignment, material_tasks
+from app.ads import actual_format, ad_status, handoff_assignment, material_tasks
 from app.ads import asset_binding_repository as bindings
 from app.ads import assets as legacy_readiness
 from app.ads import change_control_launch as launch
@@ -69,6 +73,13 @@ def _planned_entities(conn, org, brand, campaign) -> dict:
 def _material(conn, org, brand, campaign, ad) -> dict | None:
     try:
         return handoff_assignment.material_snapshot(conn, org, brand, campaign, ad)
+    except ValueError:
+        return None
+
+
+def _readable_asset(conn, org, brand, asset_id) -> dict | None:
+    try:
+        return user_assets.get_asset(conn, org, brand, asset_id)
     except ValueError:
         return None
 
@@ -135,14 +146,16 @@ def _has_copy(fields) -> bool:
 def _slot(
     ad_id, entity_id, name, state, thumbnail_url, replace_task_id=None, *, copy=None,
     workbench_href=None, format_key=None, blocked=None, offer_label=None, waiting=None,
-    job=None,
+    job=None, format_note=None,
 ) -> dict:
     """One slot. F40-I01: `format_key` is the planned ad's own `ads_ad.format_key` (`None` for an
     ad without one, and for an imported campaign's platform ad) so the assets tab can say a
     video-format slot needs a script. F44 Contract D: `blocked` is set on a `blocked` slot only;
     `offer_label` is the planned ad's offer coordinate label (`None` for an ad without one, and
     for an imported campaign's platform ad). F45 Contract W: `waiting` is set on a `waiting`
-    slot only (`{action, text}`), `job` on an `in_progress` slot only (`{kind, done, of}`)."""
+    slot only (`{action, text}`), `job` on an `in_progress` slot only (`{kind, done, of}`).
+    F46 Contract F: `format_note` says when the file in the slot ships in another format than
+    planned (`actual_format.note`); `None` when they agree, with no file, and when imported."""
     return {
         "ad_id": ad_id,
         "entity_id": entity_id,
@@ -158,6 +171,7 @@ def _slot(
         "offer_label": offer_label,
         "waiting": waiting,
         "job": job,
+        "format_note": format_note,
     }
 
 
@@ -226,7 +240,8 @@ def _backing(conn, org, brand, campaign, ad, material=None) -> dict | None:
 
 
 def _planned_slot(
-    conn, org, brand, campaign, ad, entity, replace_by_entity, brief, offer_label
+    conn, org, brand, campaign, ad, entity, replace_by_entity, brief, offer_label,
+    format_names=None,
 ) -> dict:
     material = _material(conn, org, brand, campaign, ad)
     material_thumb = (
@@ -238,13 +253,19 @@ def _planned_slot(
 
     def slot(
         state, thumbnail, copy, entity_id=None, replace_task_id=None, blocked=None,
-        waiting=None, job=None,
+        waiting=None, job=None, asset=None,
     ):
+        # F46 Contract F: the file the tile shows decides the format that ships.
+        note = actual_format.note(
+            ad.get("format_key"), actual_format.of_asset(asset), format_names or {}
+        )
         return _slot(
             ad["id"], entity_id, ad["name"], state, thumbnail, replace_task_id, copy=copy,
             workbench_href=href, format_key=ad.get("format_key"), blocked=blocked,
-            offer_label=offer_label, waiting=waiting, job=job,
+            offer_label=offer_label, waiting=waiting, job=job, format_note=note,
         )
+
+    material_asset = _readable_asset(conn, org, brand, material["asset_id"]) if material else None
 
     if entity is not None:
         # Launched: the platform ad is the fact; a replace request reaches it through its id.
@@ -256,9 +277,10 @@ def _planned_slot(
             material_copy,
             entity["id"],
             replace_by_entity.get(entity["id"]),
+            asset=material_asset,
         )
     if launch.ready_material(material):
-        return slot("ready", material_thumb, material_copy)
+        return slot("ready", material_thumb, material_copy, asset=material_asset)
     pending = _backing(conn, org, brand, campaign, ad, material)
     if pending is not None:
         # Contract W, in this order: a failed original, its preview running, no copy, a stored
@@ -275,17 +297,21 @@ def _planned_slot(
         blocked = _blocked(original, pending)
         if original is not None and original["status"] == FAILED_ORIGINAL:
             # The file itself failed: no copy unblocks the slot.
-            return slot("blocked", pending_thumb, copy_half, blocked=blocked)
+            return slot("blocked", pending_thumb, copy_half, blocked=blocked, asset=original)
         if original is not None and original["status"] != "ready":
             # Its preview is being made (pending / processing / retryable).
-            return slot("in_progress", pending_thumb, copy_half, job=_job("preview"))
+            return slot(
+                "in_progress", pending_thumb, copy_half, job=_job("preview"), asset=original
+            )
         if copy_half is None:
             # A file with no copy: the picker (`choose_copy`) fills the other half.
-            return slot("image_only", pending_thumb, None)
+            return slot("image_only", pending_thumb, None, asset=original)
         if blocked is not None:
             # F44: the refusal is told, with its exit.
-            return slot("blocked", pending_thumb, copy_half, blocked=blocked)
-        return slot("waiting", pending_thumb, copy_half, waiting=_waiting("confirm_copy"))
+            return slot("blocked", pending_thumb, copy_half, blocked=blocked, asset=original)
+        return slot(
+            "waiting", pending_thumb, copy_half, waiting=_waiting("confirm_copy"), asset=original
+        )
     selected = _workbench_copy(conn, org, brand, brief)
     if selected is not None:
         # The copy half is known before any file: the user picked it on the workbench.
@@ -307,6 +333,7 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
     ads = ads_repo.list_ads_for_campaign(conn, org, brand, campaign)
     entities = _planned_entities(conn, org, brand, campaign)
     sets = _ad_sets(conn, org, brand, campaign)
+    format_names = actual_format.labels(conn, org, brand)
     return [
         {
             "group_id": group["id"],
@@ -318,6 +345,7 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
                     asset_suggestions._judged_against(
                         conn, org, brand, campaign_row, ad["id"]
                     )["offer_label"],
+                    format_names,
                 )
                 for ad in ads
                 if ad["group_id"] == group["id"]

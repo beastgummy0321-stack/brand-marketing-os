@@ -409,6 +409,66 @@ class ClosePackLeavesEntranceTest(_WorkbenchPackApiTestBase):
         self.assertEqual(detail_resp.status_code, 200)
         self.assertEqual(detail_resp.json()["pack"]["id"], pack_id)
 
+        # F47 (drill-10 乙 #21): a closed pack stays reachable under 「已關閉」.
+        closed = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs?status=closed")
+        self.assertEqual(closed.status_code, 200)
+        cards = closed.json()["packs"]
+        self.assertEqual([p["id"] for p in cards], [pack_id])
+        self.assertTrue(cards[0]["closed"])
+
+
+# -- F47 (drill-10 乙 #17／#19／#20)：查看來源、沒名字的素材組、格式名稱 ------------------------
+
+class CardOriginNamesAndFormatLabelTest(_WorkbenchPackApiTestBase):
+    def test_card_carries_origin_href_or_none(self):
+        href = f"/brands/{self.brand_id}/ads/campaigns/adc_x"
+        with_origin = self._submit_pack(
+            [self._one_set("1", {"copy": 1})],
+            context={"origin_label": "活動 X", "origin_href": href},
+        )
+        without = self._submit_pack([self._one_set("2", {"copy": 1})])
+        cards = {
+            p["id"]: p for p in
+            self.client.get(f"/api/workbench/brands/{self.brand_id}/packs").json()["packs"]
+        }
+        self.assertEqual(cards[with_origin]["origin_href"], href)
+        self.assertIsNone(cards[without]["origin_href"])
+        self.assertFalse(cards[without]["closed"])
+
+    def test_unnamed_sets_read_as_their_pack(self):
+        pack_id = self._submit_pack(
+            [self._one_set("1", {"copy": 1}, name=None), self._one_set("2", {"copy": 1}, name="")],
+            name="自由工作 #3",
+        )
+        pack = self.client.get(f"/api/workbench/brands/{self.brand_id}/packs/{pack_id}").json()
+        self.assertEqual([s["name"] for s in pack["pack"]["sets"]],
+                         ["自由工作 #3・第 1 組", "自由工作 #3・第 2 組"])
+        brief_id = self._briefs(pack_id)[1]["id"]
+        detail = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{brief_id}").json()
+        self.assertEqual(detail["set"]["name"], "自由工作 #3・第 2 組")
+        self.assertEqual([s["name"] for s in detail["set"]["siblings"]],
+                         ["自由工作 #3・第 1 組", "自由工作 #3・第 2 組"])
+
+    def test_header_shows_the_format_label_not_the_key(self):
+        # The vocabulary is seeded through the brand-library door (schedule owns the table).
+        listed = self.client.get(f"/api/schedule/brands/{self.brand_id}/coordinates")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        rows = listed.json()["coordinates"]
+        label = next(r["label"] for r in rows
+                     if r["dimension"] == "format" and r["key"] == "single_image")
+        pack_id = self._submit_pack([
+            self._one_set("1", {"copy": 1}, coordinates={"format": "single_image"}),
+            self._one_set("2", {"copy": 1}, coordinates={"format": "1:1"}),
+        ])
+        briefs = self._briefs(pack_id)
+        sizes = [
+            self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{b['id']}")
+            .json()["set"]["chips"]["size"]
+            for b in briefs
+        ]
+        self.assertEqual(sizes, [label, "1:1"])
+        self.assertNotEqual(label, "single_image")
+
 
 # -- 案例 9：select 一個不屬於這個 set 的 version_id -> 404，且不寫入 ---------------------------
 

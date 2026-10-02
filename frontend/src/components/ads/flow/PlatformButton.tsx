@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { Button } from "@/components/layout/ui/button";
+import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import type { ChangeItem } from "@/lib/adsChangeApi";
 
 /** 「↗ 打開平台」：有 `platform_url` 就在新分頁開啟；沒有（今天還沒有這個能力，或缺識別欄位）
@@ -10,7 +10,6 @@ import type { ChangeItem } from "@/lib/adsChangeApi";
 export function PlatformButton({ platformUrl, target, onOpen }: {
   platformUrl: string | null; target: ChangeItem["target"]; onOpen: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
   if (platformUrl) {
     return (
       <Button variant="outline" asChild>
@@ -18,16 +17,12 @@ export function PlatformButton({ platformUrl, target, onOpen }: {
       </Button>
     );
   }
-  async function copyId() {
-    try { await navigator.clipboard.writeText(target.native_id); } catch { /* 沒有剪貼簿權限也不擋操作 */ }
-    setCopied(true);
-    onOpen();
-  }
   return (
     <div className="flex flex-col items-end gap-1 text-right text-xs text-muted-foreground">
       <span className="max-w-[10rem] truncate" title={target.name ?? undefined}>{target.name ?? "（未命名）"}</span>
       <span className="numeric">{target.native_id}</span>
-      <Button variant="outline" size="sm" onClick={() => void copyId()}>{copied ? "已複製" : "複製編號"}</Button>
+      {/* A refused clipboard still counts as 打開平台 (as before F47): the id is shown right above. */}
+      <CopyIconButton label="複製編號" ariaLabel="複製編號" className="h-8 px-3 text-sm" getText={() => target.native_id} onResult={() => onOpen()} />
     </div>
   );
 }

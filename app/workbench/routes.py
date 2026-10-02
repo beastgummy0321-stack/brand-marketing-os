@@ -49,7 +49,9 @@ def get_visual_spec(request: Request, brand_id: str):
 # -- 任務包（PackCard／PackDetail） -----------------------------------------------------
 
 _LIST_PACKS_ERRORS = {
-    "status_unknown": (400, "status 參數只能是 all／pending／running／awaiting_approval／done。"),
+    "status_unknown": (
+        400, "status 參數只能是 all／pending／running／awaiting_approval／done／closed。",
+    ),
     "sort_unknown": (400, "sort 參數只能是 updated／created／progress。"),
 }
 
