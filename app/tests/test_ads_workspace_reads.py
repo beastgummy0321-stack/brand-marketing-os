@@ -565,10 +565,18 @@ class DeliveryTest(_WithReader):
 # ---------------------------------------------------------------------------
 
 
+def _fake_sample(results):
+    """A triage item's shown sample (F48 Contract R) for `results` sales."""
+    return {"sales": results, "few": results is not None and 1 <= results < 5,
+            "too_new": False, "spend_multiple": None, "days_with_events": 0}
+
+
 def _fake_classify(grades):
     def classify(conn, org_id, brand_id, campaign_id):
         items = [
             {"entity_id": entity_id, "grade": grade, "grade_label": label,
+             "reason_code": "too_new" if label == "剛開始、數字還不夠" else None,
+             "sample": _fake_sample(results),
              "current": {"cost_per_result": cost, "result_count": results, "spend": spend}}
             for entity_id, (grade, label, cost, results, spend) in grades.items()
         ]
@@ -617,6 +625,7 @@ class ImportedStructureTest(_WithReader):
         self.assertEqual(a_ads[1], {
             "ad_id": None, "entity_id": self.a1, "name": "甲", "thumbnail_url": None,
             "spend": 400.0, "grade": "on_target", "grade_label": "划算", "cost_per_result": 80.0,
+            "reason_code": None, "sample": _fake_sample(5),
             "results": 5, "closing": False, "missing_material": False,
         })
         self.assertTrue(a_ads[0]["closing"])  # approved pause, readback not confirmed yet
@@ -624,6 +633,8 @@ class ImportedStructureTest(_WithReader):
         self.assertEqual(a_ads[0]["spend"], 350)  # 沒賣出: spend known, results a known 0
         self.assertEqual([a["entity_id"] for a in groups[1]["ads"]], [self.b1])  # 丁 is paused
         self.assertIsNone(groups[1]["ads"][0]["spend"])  # unknown stays null, never 0
+        # F48: 剛開始 travels as its code, so the screen branches on `reason_code`, not the label.
+        self.assertEqual(groups[1]["ads"][0]["reason_code"], "too_new")
 
     def test_a_confirmed_pause_is_not_closing(self):
         _set_id, (pause,) = _set(self.conn, self.org, self.brand, self.campaign,
@@ -657,6 +668,8 @@ class ImportedStructureTest(_WithReader):
             self.assertEqual(ad["grade"], items[entity_id]["grade"])
             self.assertEqual(ad["grade_label"], items[entity_id]["grade_label"])
             self.assertEqual(ad["spend"], items[entity_id]["current"]["spend"])
+            self.assertEqual(ad["reason_code"], items[entity_id]["reason_code"])
+            self.assertEqual(ad["sample"], items[entity_id]["sample"])
 
 
 class AppBuiltStructureTest(_WithReader):

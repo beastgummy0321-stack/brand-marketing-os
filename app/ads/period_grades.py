@@ -4,9 +4,10 @@ cap. Shared by the month review (Contract C) and the period settle (Contract E),
 settle equals the month review of that month. Pure reads: no LLM call, no platform write.
 
 The window's numbers are cut the same way triage cuts its own windows (`triage._ad_window`: the
-ad's own NULL-aware spend, one result view, two currencies = unknown), and graded with the same
-sample gate (spend >= 3 × cap, or >= 10 results over >= 7 days). Unknown stays unknown: a window
-whose spend or result can't be known reads 資料不足 with `spend`/`results` null, never 0.
+ad's own NULL-aware spend, one result view, two currencies = unknown), graded by the same ruler,
+and carry the same shown `sample` (F48 Contract R: sample size is a flag, never a gate). Unknown
+stays unknown: a window whose spend or result can't be known reads 資料不足 with
+`spend`/`results` null, never 0.
 """
 
 from collections import defaultdict
@@ -28,19 +29,20 @@ def _currency(rows):
 
 
 def _grade(view, spend, target, days):
+    """`(grade, grade_label, reason_code)` -- the triage item's own three fields."""
     # Same "no result kind anywhere" rule triage applies on its first window -- never judged.
     if target["value"] is not None and target["result_kind"] is None \
             and (view is None or view["result_kind"] is None):
-        return "no_target", triage.GRADE_LABELS["no_target"]
-    grade, label, _reason = triage.grade_window(view, spend, target["value"], days)
-    return grade, label
+        return "no_target", triage.GRADE_LABELS["no_target"], "result_kind_unknown"
+    return triage.grade_window(view, spend, target["value"], days)
 
 
 def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
     """One row per ad with spend in `[start, end]` (active or closed, any campaign of this brand):
     `{campaign_id, campaign_name, origin, entity_id, name, group_name, thumbnail_url, spend,
-    results, cost_per_result, cap, break_even, grade, grade_label, currency}`. `currency` is the
-    ad's own single currency in the window (null across two). Ordered by campaign name, then ad
+    results, cost_per_result, cap, break_even, grade, grade_label, reason_code, sample, currency}`.
+    `reason_code`/`sample` have the triage item's shapes (F48). `currency` is the ad's own single
+    currency in the window (null across two). Ordered by campaign name, then ad
     name. Three reads for the whole brand plus one cap resolve per campaign -- never per ad."""
     rows_by_entity = defaultdict(list)
     for row in conn.execute(
@@ -91,7 +93,7 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
         target = target_by_campaign[campaign["id"]]
         entity_rows = rows_by_entity[entity_id]
         view, spend = triage._ad_window(entity_rows, start, end)
-        grade, label = _grade(view, spend, target, days)
+        grade, label, reason_code = _grade(view, spend, target, days)
         group_name = (
             group_names.get((campaign["id"], entity.get("parent_native_id")))
             if entity.get("parent_native_kind") == "adset" else None
@@ -104,7 +106,9 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             "results": view["result_count"] if view is not None else None,
             "cost_per_result": view["cost_per_result"] if view is not None else None,
             "cap": target["value"], "break_even": target.get("break_even"),
-            "grade": grade, "grade_label": label, "currency": _currency(entity_rows),
+            "grade": grade, "grade_label": label, "reason_code": reason_code,
+            "sample": triage._sample_view(spend, view, target["value"], days),
+            "currency": _currency(entity_rows),
         })
     out.sort(key=lambda row: (row["campaign_name"] or "", row["name"] or "", row["entity_id"]))
     return out

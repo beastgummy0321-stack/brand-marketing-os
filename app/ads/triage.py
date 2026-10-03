@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.ads import (
     ad_status,
     external_sync,
+    learning_rank,
     month_budget,
     queue_done,
     repository,
@@ -47,12 +48,15 @@ LABELS = {
     "no_target": "尚未設定目標",
 }
 
-# F28-I02 (ads.md §6.32), F29-I01 (§6.33 v10 words): every active ad is graded against the
-# campaign's one cap T -- 划算 <= T, 偏貴 <= 1.2T, 太貴 > 1.2T, 沒賣出 = spend >= 3T with a known
-# zero result, below the sample gate = 剛開始、數字還不夠. `grade_window` below is the one ruler
-# (triage and `period_grades.grade_period` both call it); `class` above stays the trend note
-# against the previous window and no decision reads it (§6.33 "One ruler").
+# F28-I02 (ads.md §6.32), F29-I01 (§6.33 v10 words), F48 Contract R: every active ad is graded
+# against the campaign's one cap T -- any known cost: 划算 <= T, 偏貴 <= 1.2T, 太貴 > 1.2T;
+# 沒賣出 = spend >= 3T with a known zero result; a known zero under 3T = 剛開始、數字還不夠
+# (`too_new`). Sample size is a shown flag (`sample`), never a gate. `grade_window` below is the
+# one ruler (triage and `period_grades.grade_period` both call it); `class` above stays the trend
+# note against the previous window and no decision reads it (§6.33 "One ruler").
 WATCH_BAND = 1.2
+# The money tag's 剛好打平 band: a cost within ±2 % of break-even (served by `rules()`).
+BREAK_EVEN_BAND = 0.02
 GRADE_LABELS = {
     "on_target": "划算", "watch": "偏貴", "over": "太貴", "wasted": "沒賣出", "no_target": "未判斷",
 }
@@ -372,7 +376,7 @@ def _ad_window(entity_rows, start, end):
     # More than one currency in the window has no single unambiguous view (same defensive shape
     # `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick. F29-I01: it is
     # reported as its own `mixed_currency` reason so `grade_window` reads it as 資料不足, never as
-    # a thin (剛開始) window or a 0.
+    # 剛開始 (`too_new`) or a 0.
     if len(ad_views) > 1:
         return _MIXED_CURRENCY_VIEW, _ad_spend(aggregated)
     view = ad_views[0] if ad_views else None
@@ -401,38 +405,44 @@ def _metrics_view(view, spend):
     }
 
 
-def _sample_gate(spend, view, target_value, days):
-    if spend is not None and target_value is not None \
-            and spend >= STOP_LOSS_SPEND_MULTIPLE * target_value:
-        return True
-    result_count = view["result_count"] if view else None
-    return days >= WINDOW_STEPS[0] and result_count is not None \
-        and result_count >= MIN_RESULT_EVENTS
+def _known_zero(view, spend):
+    """A KNOWN zero result only -- an unknown/mixed window (`view["reason"] is not None`) or
+    unknown spend never reads as 沒賣出 or 剛開始 (design caution, review-arbitrated)."""
+    return spend is not None and view is not None and view["reason"] is None \
+        and view["result_count"] == 0
 
 
-def _stop_loss_hit(view, spend, target_value):
-    # A KNOWN zero only -- an unknown/mixed window (`view["reason"] is not None`) or unknown
-    # spend must never read as a stop-loss (design caution, review-arbitrated).
-    if spend is None or target_value is None or view is None or view["reason"] is not None:
-        return False
-    return spend >= STOP_LOSS_SPEND_MULTIPLE * target_value and view["result_count"] == 0
+def _sales(view):
+    """The window's known result count as a whole number, else `None` (unknown, never 0)."""
+    if view is None or view["reason"] is not None or view["result_count"] is None:
+        return None
+    return int(view["result_count"])
 
 
-def _sample_view(spend, view, target_value, days, gate):
+def _sample_view(spend, view, target_value, days):
+    """F48 Contract R: the shown sample size of one graded window -- never a gate. `few` = 1 to
+    `SAMPLE_FEW - 1` sales (「樣本少」); `too_new` = the ad has data on fewer than `WINDOW_STEPS[0]`
+    days of this window and fewer than `MIN_RESULT_EVENTS` sales (「還太新」). `days` is the
+    window's length; the ad's own days are the days it has rows inside it (`days_present`), so a
+    7-day triage window over a 3-day-old ad still reads 還太新."""
+    sales = _sales(view)
+    ad_days = min(days, view["days_present"]) if view is not None else 0
     spend_multiple = spend / target_value if spend is not None and target_value else None
     days_with_events = (view["days_known"] - view["derived_zero_days"]) if view else 0
-    return {"gate": gate, "spend_multiple": spend_multiple, "days_with_events": days_with_events}
+    return {
+        "sales": sales,
+        "few": sales is not None and 1 <= sales < learning_rank.SAMPLE_FEW,
+        "too_new": ad_days < WINDOW_STEPS[0] and (sales or 0) < MIN_RESULT_EVENTS,
+        "spend_multiple": spend_multiple, "days_with_events": days_with_events,
+    }
 
 
 def _compare(current_cost, previous_cost):
     """The guarded current-vs-previous comparison (review fix): a falsy current
-    `cost_per_result` (0 or, in practice, `None`) is `insufficient`/`below_sample_gate`, never a
-    division -- unreachable through `_classify_ad` today only because `STOP_LOSS_SPEND_MULTIPLE`
-    and the sample gate's spend clause share the same constant (a known-zero result that passed
-    the gate via spend would already have fired stop-loss first, see `_stop_loss_hit`), so this
-    guard is kept explicit rather than relying on that coincidence never changing."""
+    `cost_per_result` (0 -- a sale with no spend -- or `None`) is `insufficient`/`too_new`, never
+    a division; kept explicit rather than relying on `_classify_ad` never passing one."""
     if not current_cost:
-        return "insufficient", "below_sample_gate", None
+        return "insufficient", "too_new", None
     change_pct = (current_cost - previous_cost) / previous_cost
     if change_pct > FLAT_BAND:
         return "worse", "cost_per_result_up", change_pct
@@ -441,12 +451,13 @@ def _compare(current_cost, previous_cost):
     return "flat", "cost_per_result_flat", change_pct
 
 
-def _cost_grade(cost, target_value):
-    """The grade of a gate-passing, fully known window: 划算 <= T, 偏貴 <= 1.2T, else 太貴. An
-    unknown cost (never reached through `_classify_ad` today, kept explicit like `_compare`) is
-    資料不足, never a guess."""
+def cost_grade(cost, target_value):
+    """`(grade, grade_label)` of one known cost against the cap: 划算 <= T, 偏貴 <= 1.2T, else
+    太貴. An unknown cost (or no cap) is 資料不足／未判斷, never a guess."""
     if cost is None:
         return _NO_DATA
+    if target_value is None:
+        return _NOT_JUDGED
     if cost <= target_value:
         grade = "on_target"
     elif cost <= target_value * WATCH_BAND:
@@ -460,27 +471,89 @@ def _cost_grade(cost, target_value):
 GRADED = ("on_target", "watch", "over", "wasted")
 
 
+def _figure(value) -> str:
+    """A ruler number as words print it (`2`, `1.3`) -- never `2.0` or float noise."""
+    return f"{round(value, 6):g}"
+
+
+def rules() -> dict:
+    """F48 Contract R-API: every threshold, label and glossary sentence the screens print, read
+    from this module and `learning_rank` (the two ruler modules) and `experiments.DEFAULT_RULES`
+    (the A/B rules) -- the frontend keeps no copy. Brand-independent today; served per brand so a
+    per-brand rule can land without moving the endpoint."""
+    from app.ads import experiments  # lazy: experiments -> outcome -> triage
+
+    watch_tenths = _figure((WATCH_BAND - 1) * 10)
+    band_pct = _figure(BREAK_EVEN_BAND * 100)
+    unsold = _figure(STOP_LOSS_SPEND_MULTIPLE)
+    return {
+        "grade": {
+            "watch_band": WATCH_BAND, "unsold_spend_multiple": STOP_LOSS_SPEND_MULTIPLE,
+            "min_results": MIN_RESULT_EVENTS, "min_days": WINDOW_STEPS[0],
+            "sample_few": learning_rank.SAMPLE_FEW, "near_best": learning_rank.NEAR_BEST,
+            "break_even_band": BREAK_EVEN_BAND,
+        },
+        "ab": {
+            key: experiments.DEFAULT_RULES[key]
+            for key in ("min_days", "min_conversions_each", "relative_difference")
+        },
+        "labels": {
+            "grade": {
+                **{key: GRADE_LABELS[key] for key in ("on_target", "watch", "over", "wasted")},
+                "too_new": TOO_NEW_LABEL, "no_data": NO_DATA_LABEL,
+                "no_target": GRADE_LABELS["no_target"],
+            },
+            "verdict": dict(learning_rank.VERDICT_LABELS),
+            "flags": {
+                "few": learning_rank.FLAG_FEW, "relative": learning_rank.FLAG_RELATIVE,
+                "relative_no_cap": learning_rank.FLAG_RELATIVE_NO_CAP,
+            },
+        },
+        "glossary": {
+            "cap": "你願意為一筆訂單付的廣告費，每個活動自己設",
+            "on_target": "每筆廣告費沒超過這個活動的上限",
+            "watch": f"每筆廣告費超過上限，但超過不到 {watch_tenths} 成",
+            "over": f"每筆廣告費超過上限 {watch_tenths} 成以上，賣越多虧越多",
+            "wasted": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "thin": (
+                f"賣出的廣告都有分數；還沒賣出且花不到上限 {unsold} 倍的先標「剛開始」；"
+                f"成交少於 {_figure(learning_rank.SAMPLE_FEW)} 筆標「{learning_rank.FLAG_FEW}」"
+            ),
+            "money": (
+                "拿每筆廣告費跟打平線比：比它低是有賺，比它高是在虧，"
+                f"差不到 {band_pct}% 算剛好打平"
+            ),
+            "notebook": "系統記住哪些主打有效；下次開新活動，AI 會先讀這些，避開沒效的主打",
+            # The value part 「（這裡是 X）」 is the frontend's: it knows the campaign's number.
+            "break_even": "賣一筆扣掉商品成本和運費後剩下的錢；每筆廣告費超過它，就是在虧",
+        },
+    }
+
+
 def grade_window(view, spend, target_value, days):
     """F29-I01 (ads.md §6.33 "One ruler"): the one cap grade of one window, `(grade, grade_label,
     reason_code)`. Triage (`_classify_ad`, current and previous window) and
     `period_grades.grade_period` both call this -- never a second copy. `reason_code` is `None`
-    for a graded cost, `"spend_over_target_no_result"` for 沒賣出, `"below_sample_gate"` for
-    剛開始, else the unknown window's own reason (資料不足). No cap is 未判斷.
+    for a graded cost, `"spend_over_target_no_result"` for 沒賣出, `"too_new"` for 剛開始, else
+    the unknown window's own reason (資料不足). No cap is 未判斷.
 
-    Order is the F28 rule: a known zero past 3 × cap first, then the sample gate (spend >= 3 × cap,
-    or >= 10 results over >= 7 days), then an unknown window. A window across two currencies has
-    no single number to gate on, so it reads 資料不足 before the gate."""
+    F48 Contract R order: no cap; two currencies (資料不足); a known zero at >= 3 × cap (沒賣出);
+    any other known zero (剛開始 -- no cost exists yet); an unknown window (資料不足); else the
+    known cost is graded, whatever the sample size (`_sample_view` shows it). `days` is kept in
+    the signature for its callers; no grade depends on it any more."""
+    del days  # F48: the sample (days, results) is a shown flag, never a gate.
     if target_value is None:
         return (*_NOT_JUDGED, "target_unresolved")
     if view is not None and view["reason"] == "mixed_currency":
         return (*_NO_DATA, "mixed_currency")
-    if _stop_loss_hit(view, spend, target_value):
-        return "wasted", GRADE_LABELS["wasted"], "spend_over_target_no_result"
-    if not _sample_gate(spend, view, target_value, days):
-        return (*_TOO_NEW, "below_sample_gate")
-    if view is None or view["reason"] is not None:
-        return (*_NO_DATA, view["reason"] if view is not None else "result_unknown_days")
-    return (*_cost_grade(view["cost_per_result"], target_value), None)
+    if _known_zero(view, spend):
+        if spend >= STOP_LOSS_SPEND_MULTIPLE * target_value:
+            return "wasted", GRADE_LABELS["wasted"], "spend_over_target_no_result"
+        return (*_TOO_NEW, "too_new")
+    if view is None or view["reason"] is not None or spend is None:
+        reason = view["reason"] if view is not None else None
+        return (*_NO_DATA, reason or "result_unknown_days")
+    return (*cost_grade(view["cost_per_result"], target_value), None)
 
 
 def _grade_move(previous_grade, grade):
@@ -513,9 +586,8 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
         if previous is None:
             previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
-        gate = _sample_gate(spend, view, target["value"], days)
         # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
-        # when it isn't fully synced, below the gate or unknown, or when this ad isn't judged.
+        # when it isn't fully synced, not graded (剛開始／資料不足), or when this ad isn't judged.
         previous_grade = None
         if grade[0] != "no_target" and _window_covered(coverage, previous_start, previous_end):
             prev_grade = grade_window(prev_view, prev_spend, target["value"], days)[0]
@@ -528,7 +600,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
             "change_pct": change_pct,
-            "sample": _sample_view(spend, view, target["value"], days, gate),
+            "sample": _sample_view(spend, view, target["value"], days),
         }
 
     if target["value"] is None:
@@ -562,7 +634,9 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
         if graded[0] == "wasted":
             return finish("stop_loss", graded[2], graded[:2], start, end, days, extended_from,
                           view, spend)
-        if graded[2] != "below_sample_gate" or step_idx == len(WINDOW_STEPS) - 1:
+        # F48: extend only while nothing is graded yet (剛開始／資料不足) -- a sold ad with a known
+        # cost stops at the first covered window, whatever its sample size.
+        if graded[0] != "insufficient" or step_idx == len(WINDOW_STEPS) - 1:
             break
         extended_from = days
 

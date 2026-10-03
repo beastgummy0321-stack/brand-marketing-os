@@ -49,7 +49,8 @@ class SettleFixture(unittest.TestCase):
         self.daily = self.campaign("日常商品推廣・轉換", "c_daily", cap=450, internal=True)
         self.imp = self.campaign("夏季清倉・舊帳戶", "c_imp", cap=480)
         self.ads = {}
-        # campaign daily (cap 450): 划算 353.8, 偏貴 508.3, 太貴 614.3, 沒賣出, 剛開始
+        # campaign daily (cap 450): 划算 353.8, 偏貴 508.3, 太貴 614.3, 沒賣出, 剛開始 (F48: a known
+        # zero under 3 x cap -- a sold ad is always graded now, whatever its sample size)
         self.add("p1", self.daily, "晨光隨行杯・日常出發", days=20, spend=9200, results=26,
                  copy="早上七點半倒好咖啡出門，到公司還是熱的。")
         self.add("p2", self.daily, "辦公室一角・質感桌面", days=20, spend=6100, results=12,
@@ -58,7 +59,7 @@ class SettleFixture(unittest.TestCase):
                  copy="練完喝一口，12 小時還是冰的。")
         self.add("p4", self.daily, "秋季新色預告", days=8, spend=1600, results=0,
                  copy="秋天的顏色，先讓你看。")
-        self.add("p5", self.daily, "開箱 15 秒・單手開蓋", days=7, spend=700, results=1,
+        self.add("p5", self.daily, "開箱 15 秒・單手開蓋", days=7, spend=700, results=0,
                  copy="單手就能開。")
         # imported campaign (cap 480): 划算 360, 太貴 780, 沒賣出 with no copy at all
         self.add("i1", self.imp, "夏日冰飲・保冷一整天", days=14, spend=5040, results=14,
@@ -166,6 +167,7 @@ class SettleViewTest(SettleFixture):
             expected,
         )
         self.assertEqual(rows[self.ads["p5"]]["grade_label"], "剛開始、數字還不夠")
+        self.assertEqual(rows[self.ads["p5"]]["reason_code"], "too_new")
         self.assertEqual(rows[self.ads["p1"]]["cap"], 450.0)
         self.assertEqual(rows[self.ads["i1"]]["cap"], 480.0)
         self.assertEqual(rows[self.ads["p1"]]["copy_text"],
@@ -191,8 +193,8 @@ class SettleViewTest(SettleFixture):
         self.assertEqual(result["currency"], "TWD")
         self.assertAlmostEqual(result["spent"], spent)
         self.assertEqual(result["budget"], 33000.0)
-        self.assertEqual(result["results"], 65.0)
-        self.assertAlmostEqual(result["cost_per_result"], spent / 65)
+        self.assertEqual(result["results"], 64.0)
+        self.assertAlmostEqual(result["cost_per_result"], spent / 64)
         self.assertEqual(result["on_target_results"], 40.0)
         self.assertAlmostEqual(result["on_target_spend_share"], (9200 + 5040) / spent)
         buckets = {b["grade"]: b for b in result["buckets"]}

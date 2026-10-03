@@ -182,6 +182,9 @@ class OneSpentTest(_Pinned):
         self.assertEqual(buckets["ungraded"]["count"], 2)
         self.assertEqual([a["entity_id"] for a in buckets["ungraded"]["ads"]],
                          [self.a3, self.o1])
+        # F48: a graded ad carries its triage item's shown sample; an ungraded one has none.
+        self.assertIn("sample", buckets["over"]["ads"][0])
+        self.assertIsNone(buckets["ungraded"]["ads"][0]["sample"])
 
     def test_pace_daily_ends_at_spent(self):
         pace = self.overview(self.brand)["pace"]

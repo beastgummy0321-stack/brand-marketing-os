@@ -323,6 +323,9 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
         "thumbnail_url": triage._thumbnail_url(entity),
         "grade": item["grade"] if item else None,
         "grade_label": item["grade_label"] if item else None,
+        # F48 Contract R: the triage item's own code (`too_new` = 剛開始) and shown sample flags.
+        "reason_code": item.get("reason_code") if item else None,
+        "sample": item.get("sample") if item else None,
         # The ad's own spend over the window its grade was judged on (triage `current.spend`),
         # null when unknown -- never 0.
         "spend": None if current.get("spend") is None else round(float(current["spend"]), 2),
@@ -374,7 +377,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                     out_ads.append({
                         "ad_id": ad["id"], "entity_id": None, "name": ad["name"],
                         "thumbnail_url": None, "spend": None, "grade": None,
-                        "grade_label": None,
+                        "grade_label": None, "reason_code": None, "sample": None,
                         "cost_per_result": None, "results": None, "closing": False,
                         "missing_material": _missing_material(
                             conn, org_id, brand_id, campaign_id, ad
