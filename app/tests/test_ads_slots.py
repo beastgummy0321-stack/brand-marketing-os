@@ -287,6 +287,7 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
         "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
         "blocked": None, "offer_label": None, "waiting": None, "job": None, "format_note": None,
+        "offer_key": None, "statutory": None,
     }
     # Uploaded, its original still pending: not confirmable yet, so not launchable and not
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
@@ -858,7 +859,7 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
         "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
         "format_key": None, "blocked": None, "offer_label": None, "waiting": None, "job": None,
-        "format_note": None,
+        "format_note": None, "offer_key": None, "statutory": None,
     }
     assert slot[draft_ad]["replace_task_id"] is None
     assert slot[draft_ad]["entity_id"] is None
@@ -959,7 +960,7 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
         "copy": None, "workbench_href": None, "format_key": None,
         "blocked": None, "offer_label": None,  # an imported campaign has no offer coordinate
-        "waiting": None, "job": None, "format_note": None,
+        "waiting": None, "job": None, "format_note": None, "offer_key": None, "statutory": None,
     }
     assert view["groups"][1]["slots"][1]["replace_task_id"] == task["id"]
     assert [r["task_id"] for r in view["requests"]] == [task["id"]]
@@ -1273,7 +1274,8 @@ def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(en
         "replace_task_id": None, "copy": placement_copy("待確認", PRICE_COPY),
         "workbench_href": None, "format_key": None,
         "blocked": blocked(MISMATCH, MISMATCH_TERMS, fix="copy"), "offer_label": "無優惠",
-        "waiting": None, "job": None, "format_note": None,
+        "waiting": None, "job": None, "format_note": None, "offer_key": "none",
+        "statutory": None,
     }
     # A blocked slot is not ready; the slots nothing was uploaded into carry `blocked: None`.
     assert (view.json()["ready"], view.json()["total"]) == (0, 3)
@@ -1823,3 +1825,98 @@ def test_f46_a_bundle_ad_whose_copy_lacks_the_offer_sentence_is_refused(env):
         {"copy_fields": {"body": "三盒組優惠價 NT$999 （原價 NT$1,500）"}}, "human",
     )
     assert by_ad(fixed["slots"])[ad]["state"] == "ready"
+
+
+# -- F48-I04 Contract G: one claims guard -- the slot blocks on the workbench's list ------------
+
+
+def guarded_campaign(env):
+    """The campaign sells product A's sell-way 「超能特惠組」 (no lower list price: no offer). The
+    brand forbids 「頻尿」 (a `forbidden_word` rule), A forbids 「治療」 and product B 「最便宜」
+    (product-level forbidden claims)."""
+    conn, brand = env["conn"], env["brand"]
+    a = brands.create_product(conn, brand, name="晨光軟糖", actor="test")["id"]
+    b = brands.create_product(conn, brand, name="午後花茶", actor="test")["id"]
+    way = brands.save_sell_way(conn, brand, name="超能特惠組", actor="test", product_id=a,
+                               economics={"selling_price": 399})["id"]
+    brands.save_sell_way(conn, brand, name="單盒", actor="test", product_id=b,
+                         economics={"selling_price": 299})
+    brands.create_rule(conn, brand, actor="test", rule_type="forbidden_word", content="頻尿",
+                       severity="hard")
+    brands.create_claim(conn, brand, actor="test", claim_text="治療", claim_type="forbidden",
+                        product_id=a)
+    brands.create_claim(conn, brand, actor="test", claim_text="最便宜", claim_type="forbidden",
+                        product_id=b)
+    campaigns.update_campaign(conn, env["org"], brand, env["campaign"], {"product_ids": [way]})
+    conn.commit()
+    return way
+
+
+FORBIDDEN_COPY = {"headline": "超能特惠組", "body": "不再頻尿，治療疲勞", "description": "每天兩顆"}
+
+
+def test_f48_the_slot_blocks_on_the_workbenchs_forbidden_list(env):
+    """A `forbidden_word` rule and a product-level forbidden claim each block the slot, with the
+    same term list the workbench warns with (`validate_claims(...)["forbidden_terms"]`)."""
+    ad = env["ads"][0]
+    way = guarded_campaign(env)
+    workbench_terms = workbench.validate_claims(
+        env["conn"], env["org"], env["brand"], way, FORBIDDEN_COPY
+    )["forbidden_terms"]
+    assert workbench_terms == ["治療", "頻尿"]
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": FORBIDDEN_COPY})
+    assert result["placement"]["confirmed_at"] is None
+    sentence = "文案寫了「治療、頻尿」，這是你標了不能講的話。"
+    assert stored_reasons(env, result["placement"]["id"]) == [
+        refusal("copy", sentence, workbench_terms)
+    ]
+    slot = by_ad(result["slots"])[ad]
+    assert (slot["state"], slot["blocked"]) == (
+        "blocked", blocked(sentence, workbench_terms, fix="copy"),
+    )
+
+
+def test_f48_another_products_forbidden_claim_and_the_sell_way_name_pass(env):
+    """Product B's 「最便宜」 does not block product A's copy, and the registered sell-way name
+    「超能特惠組」 is a name, not a 特惠 promise."""
+    ad = env["ads"][0]
+    guarded_campaign(env)
+    copy = {"headline": "超能特惠組", "body": "全台最便宜的晨光軟糖", "description": "每天兩顆"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    assert result["placement"]["confirmed_at"], result["placement"]["blocked_reasons"]
+    assert by_ad(result["slots"])[ad]["state"] == "ready"
+
+
+def test_f48_every_planned_slot_carries_its_statutory_reminder(env):
+    ad, bare_ad = env["ads"][0], env["ads"][1]
+    brands.set_regulatory_regime(env["conn"], env["brand"], "food_tw", actor="test")
+    env["conn"].commit()
+    copy = {**COPY, "body": "早上吃還能改善便秘"}
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": copy})
+    slot = by_ad(result["slots"])
+    # A reminder, never a block: the slot is ready and carries it.
+    assert slot[ad]["state"] == "ready"
+    assert slot[ad]["statutory"] == workbench.statutory_reminder(copy, "food_tw")
+    assert [t["term"] for t in slot[ad]["statutory"]["terms"]] == ["改善便秘"]
+    assert slot[bare_ad]["statutory"] is None  # no copy, nothing to remind about
+    brands.set_regulatory_regime(env["conn"], env["brand"], None, actor="test")
+    env["conn"].commit()
+    assert by_ad(read(env))[ad]["statutory"] is None  # no regime
+
+
+def test_f48_the_slot_judges_against_the_offer_the_copy_was_written_for(env):
+    """Coordinates stay editable after dispatch (§6.35): the ad planned with 組合優惠 is edited to
+    無優惠 after its set was dispatched. The slot and the confirmation both read the dispatched
+    snapshot's offer, so the bundle's price copy confirms and the slot names `bundle`."""
+    conn, ad = env["conn"], env["ads"][0]
+    sell_way_campaign(env)
+    plan_offer(env, ad, "bundle", "組合優惠")
+    workbench_copy(env, ad)  # dispatches the pack: the set's snapshot holds offer=bundle
+    conn.execute("UPDATE ads_ad SET offer_key='none' WHERE id=%s", (ad,))
+    conn.commit()
+    result = upload(env, ad, {"asset_id": user_asset(env), "copy_fields": PRICE_COPY})
+    slot = by_ad(result["slots"])[ad]
+    assert (slot["state"], slot["offer_key"], slot["offer_label"]) == (
+        "ready", "bundle", "組合優惠",
+    )
+    assert result["placement"]["blocked_reasons"] == []

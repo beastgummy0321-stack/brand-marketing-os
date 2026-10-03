@@ -17,6 +17,15 @@ rows -- already narrowed to the ad's offer -- so 「買一送一」 is not backe
 sentence and 「優惠」 is not backed by a free-shipping sentence. Proof and endorsement words keep
 the exact-sentence rule. `missing_offer` names the registered sentences of the ad's offer when
 the copy writes none of them (「帶了就要寫」).
+F48 Contract G (one claims guard; supersedes F46 Contract O for the discount family only,
+decision 7): a word of the discount family (`_OFFER_FAMILIES` `discount`, which now also holds
+優惠／原價／特價) is backed when any of the rows is a `discount` offer row; every other family keeps
+the exact-term rule above (滿額 too). Registered product and sell-way names
+(`registered_names`) are stripped before any scan, so 「超能特惠組」 is a name, not a promise.
+Approved product claims are taken as the user typed them (the length / negation / fulfilment
+filters are for brand facts only). `forbidden_terms` is the one list of 「不能講」 -- forbidden
+claims and `forbidden_word` rules, scoped to the sell-way -- that the workbench warns on and the
+slot blocks on (`forbidden_hits`). A 食安法 hit is a reminder (`statutory`), never forbidden.
 """
 import re
 from urllib.parse import quote
@@ -44,14 +53,16 @@ RISK = re.compile(
 # words, and offer words with no key (促銷、體驗券、抽獎, ...), keep the exact-sentence rule.
 _OFFER_FAMILIES = [
     (re.compile(r"免運"), "free_shipping"),
-    (re.compile(rf"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|第二件半價|半價|特惠|下殺|"
-                rf"早鳥價|現折|滿{_N}折|回饋|點數|discount", re.IGNORECASE), "discount"),
+    # F48 decision 7: 優惠／原價／特價 belong to the discount family (a registered discount
+    # sentence backs them); the family is backed by any `discount` offer row.
+    (re.compile(rf"折扣|折價|折抵|[一二三四五六七八九十\d.]+折|第二件半價|半價|特惠|特價|下殺|"
+                rf"早鳥價|現折|滿{_N}折|回饋|點數|優惠|原價|discount", re.IGNORECASE), "discount"),
     (re.compile(rf"贈品|加贈|買[一二三四五六七八九十\d]+送|加購價|組合價|滿{_N}送|再送|加送|"
                 rf"送{_N}"), "bundle"),
     (re.compile(r"試用|試吃|試飲|試喝"), "trial_sample"),
     (re.compile(r"退款保證|保證退款"), "guarantee"),
     (re.compile(r"限時"), "limited_time"),
-    (re.compile(r"優惠|特價|原價|滿額"), "*"),
+    (re.compile(r"滿額"), "*"),
 ]
 _META = {"validation", "warnings", "coordinates", "fingerprint", "round",
          "visual_tone", "visual_concept"}
@@ -87,7 +98,10 @@ def sources(conn, brand_id: str, product_id: str | None,
     else:
         claims = [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
                   if not r.get("product_id")]
-    result += [{"id": r["id"], "text": r["claim_text"], "proof": False} for r in claims
+    # F48 Contract G: an approved claim of the product is a statement the user typed and
+    # approved; `as_typed` exempts it from the brand-fact filters in `unsupported`.
+    result += [{"id": r["id"], "text": r["claim_text"], "proof": False,
+                **({"as_typed": True} if r.get("product_id") else {})} for r in claims
                if r["claim_type"] == "approved"]
     # F42/F43: the offer families available for this product -- the brand's confirmed policies
     # (threshold policies against its price) and the sell-way's own list-price offer -- each with
@@ -160,20 +174,18 @@ def _strings(value):
             yield from _strings(item)
 
 
-def unsupported(value, rows: list[dict]) -> list[str]:
-    """Remove exact confirmed sentences before detecting remaining promises.
-
-    A bare category never authorizes its paraphrases. Full confirmed statements are
-    required, and offer sources also need a URL or explicit fulfilment location.
-    Conservative false positives are preferable to silently enlarging a promise.
-    Exception (F42, narrowed by F46 Contract O): an offer word (`_OFFER_FAMILIES`) is not
-    reported when that exact term occurs in the text of one of the rows' offer rows (the
-    structured offers available for the product and the ad's offer, see `sources`).
-    """
-    offer_texts = [_squash(row["text"]) for row in rows if row.get("offer_key")]
+def _approved(rows: list[dict]) -> list[str]:
+    """The statements `unsupported` removes before scanning. An approved product claim
+    (`as_typed`) enters as the user typed it; a brand fact needs a full statement (≥ 10 chars,
+    not a negation) and an offer fact also its fulfilment place."""
     approved = []
     for row in rows:
         text = row["text"].strip()
+        if not text:
+            continue
+        if row.get("as_typed"):
+            approved.append(text)
+            continue
         if not RISK.search(text):
             continue
         # A title like '試飲' is not a full statement or a fulfilment contract.
@@ -187,12 +199,37 @@ def unsupported(value, rows: list[dict]) -> list[str]:
         if offer and not re.search(r"https?://|門市|櫃台|結帳|客服|現場", text):
             continue
         approved.append(text)
+    return approved
+
+
+def _strip(text: str, statements) -> str:
+    for statement in sorted(statements, key=len, reverse=True):
+        if statement:
+            text = text.replace(statement, "")
+    return text
+
+
+def unsupported(value, rows: list[dict], *, names=()) -> list[str]:
+    """Remove registered names (`names`, F48) and exact confirmed sentences before detecting
+    remaining promises.
+
+    A bare category never authorizes its paraphrases. Full confirmed statements are
+    required, and offer sources also need a URL or explicit fulfilment location.
+    Conservative false positives are preferable to silently enlarging a promise.
+    Exception (F42, narrowed by F46 Contract O, widened for one family by F48 decision 7): an
+    offer word (`_OFFER_FAMILIES`) is not reported when that exact term occurs in the text of
+    one of the rows' offer rows (the structured offers available for the product and the ad's
+    offer, see `sources`); a discount-family word also when one of them is a `discount` row.
+    """
+    offer_rows = [row for row in rows if row.get("offer_key")]
+    offer_texts = [_squash(row["text"]) for row in offer_rows]
+    has_discount = any(row["offer_key"] == "discount" for row in offer_rows)
+    approved = _approved(rows)
     missing = []
     for text in _strings(value):
-        for statement in sorted(approved, key=len, reverse=True):
-            text = text.replace(statement, "")
+        text = _strip(_strip(text, names), approved)
         missing.extend(m.group(0) for m in RISK.finditer(text)
-                       if not _offer_backed(m.group(0), offer_texts))
+                       if not _offer_backed(m.group(0), offer_texts, has_discount))
     return list(dict.fromkeys(missing))
 
 
@@ -200,13 +237,68 @@ def _squash(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def _offer_backed(term: str, offer_texts: list[str]) -> bool:
+def _offer_backed(term: str, offer_texts: list[str], has_discount: bool = False) -> bool:
     """True when `term` is an offer word and that exact term is written in one of the
-    available offer sentences (`offer_texts`, whitespace removed)."""
-    if not any(pattern.fullmatch(term) for pattern, _family in _OFFER_FAMILIES):
+    available offer sentences (`offer_texts`, whitespace removed); a discount-family word
+    (F48 decision 7) also when a `discount` offer row is available (`has_discount`)."""
+    families = [family for pattern, family in _OFFER_FAMILIES if pattern.fullmatch(term)]
+    if not families:
         return False
+    if has_discount and "discount" in families:
+        return True
     needle = _squash(term).lower()
     return any(needle in text.lower() for text in offer_texts)
+
+
+# -- F48 Contract G: one list of 「不能講」 and the registered names ------------------------------
+
+
+def forbidden_terms(conn, brand_id: str, product_id: str | None) -> list[str]:
+    """Every 「不能講」 entry for copy of this sell-way, whitespace squashed, each once: the
+    forbidden claims and `forbidden_word` rules of the sell-way's knowledge products
+    (`bi_repo.knowledge_product_ids`) plus the brand-level ones (no product); without a
+    sell-way, the brand-level ones only. Another product's entries never apply. A 食安法 hit is
+    never one of these (F34: reminder only)."""
+    knowledge_ids = bi_repo.knowledge_product_ids(conn, brand_id, product_id) if product_id else []
+    if knowledge_ids:
+        claim_rows = [r for k in knowledge_ids
+                      for r in bi_repo.list_claims_for_product(conn, brand_id, k)]
+        rule_rows = [r for k in knowledge_ids
+                     for r in bi_repo.list_rules_for_product(conn, brand_id, k)]
+    else:
+        claim_rows = [r for r in bi_repo.list_claims_for_brand(conn, brand_id)
+                      if not r.get("product_id")]
+        rule_rows = [r for r in bi_repo.list_rules_for_brand(conn, brand_id)
+                     if not r.get("product_id")]
+    texts = [r["claim_text"] for r in claim_rows if r["claim_type"] == "forbidden"]
+    texts += [r["content"] for r in rule_rows if r["rule_type"] == "forbidden_word"]
+    return list(dict.fromkeys(t for t in (_squash(str(x or "")) for x in texts) if t))
+
+
+def registered_names(conn, brand_id: str) -> list[str]:
+    """The active product and sell-way names of the brand (both are `product` rows), longest
+    first, so a name holding an offer word (「超能特惠組」) is stripped before any scan. A sell-way
+    under a product is stored 「〈商品〉 · 〈賣法〉」; both that and its sell-way part count."""
+    rows = bi_repo.list_products(conn, brand_id)
+    by_id = {r["id"]: r for r in rows}
+    names: set[str] = set()
+    for row in rows:
+        if row.get("status") != "active":
+            continue
+        name = str(row.get("name") or "").strip()
+        names.add(name)
+        parent = by_id.get(row.get("parent_id"))
+        prefix = f"{parent['name']} · " if parent else None
+        if prefix and name.startswith(prefix):
+            names.add(name[len(prefix):].strip())
+    return sorted((n for n in names if n), key=lambda n: (-len(n), n))
+
+
+def forbidden_hits(value, terms: list[str], *, names=()) -> list[str]:
+    """The entries of `terms` (squashed) written in any string of `value` once the registered
+    `names` are removed, compared whitespace-free and case-blind; in `terms` order."""
+    texts = [_squash(_strip(text, names)).lower() for text in _strings(value)]
+    return [term for term in terms if any(term.lower() in text for text in texts)]
 
 
 def missing_offer(value, rows: list[dict], offer_key: str | None) -> list[str]:
@@ -226,14 +318,20 @@ def missing_offer(value, rows: list[dict], offer_key: str | None) -> list[str]:
 
 
 def warning(value, rows: list[dict], brand_id: str,
-            offer_key: str | None = None) -> dict | None:
+            offer_key: str | None = None, *, names=(), forbidden=()) -> dict | None:
     """The advisory on a version. With `offer_key` (F46 Contract O) a copy that leaves out the
-    ad's registered offer sentence is named in the same message; without it, unchanged."""
-    terms = unsupported(value, rows)
+    ad's registered offer sentence is named in the same message; without it, unchanged.
+    F48 Contract G: `names` (`registered_names`) are stripped like in `unsupported`, and the
+    entries of `forbidden` (`forbidden_terms`) the copy writes are named first -- the same list
+    the slot blocks on."""
+    banned = forbidden_hits(value, list(forbidden), names=names)
+    terms = unsupported(value, rows, names=names)
     absent = missing_offer(value, rows, offer_key)
-    if not terms and not absent:
+    if not banned and not terms and not absent:
         return None
     parts = []
+    if banned:
+        parts.append(f"「{'、'.join(banned)}」是你標了不能講的話。")
     if terms:
         parts.append(
             f"「{'、'.join(terms)}」可能包含未確認的優惠／試用／背書。"

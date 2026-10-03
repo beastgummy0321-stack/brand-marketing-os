@@ -14,7 +14,8 @@ in the user's sentence: the AI may reword, never add a number.
 Product blocks (F43-I06, `product_id` given): difference → value; group → `{who, pain_keys, quote,
 when_used}`; pain → `{pain_key, label, quote}` (a worry mapped to one of the six); product_proof →
 `{fact_key, label, text}`; claim → `{text, verdict: ok|no, statutory}` — a 食安法 hit (brand
-regime, `product_onboarding.statutory_flag`) forces `no` whatever the model said. The cost cap of a
+regime, `product_onboarding.statutory_flag`) is attached as `statutory`, a reminder only; the
+verdict is never rewritten (F48 decision 13). The cost cap of a
 product block is the brand's shared AI spend cap (as the product-page read, `product_prefill`).
 
 Entry point: `propose`, called by `app/intake/routes_onboarding_api.py` (brand blocks) and
@@ -332,8 +333,8 @@ def propose(conn: Conn, brand_id: str, block: str, text: str, context: dict | No
         raise CustomRefused(502, task["error"] or UNREADABLE_MESSAGE)
     result = check_reply(block, gateway.parse_json_reply(task["rendered_output"]), text)
     if block == "claim":
+        # F48 decision 13: the 食安法 hit rides along as a flag; the verdict is the model's
+        # reading of the user's sentence and is never rewritten.
         option = result["option"]
         option["statutory"] = po.statutory_flag(conn, brand, option["text"])
-        if option["statutory"] is not None:
-            option["verdict"] = "no"
     return result

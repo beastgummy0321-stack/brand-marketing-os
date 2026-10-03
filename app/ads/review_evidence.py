@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app import orders
+from app import orders, workbench
 from app.ads import asset_binding_repository as bindings
 from app.ads import asset_suggestion_policy as policy
 from app.ads import change_control_data as changes
@@ -310,7 +310,7 @@ def snapshot(
         }
         prior["evidence"] = {key: value["evidence_json"][key] for key in ("current", "conditions")}
     text, knowledge, version, _ = context_compiler.compile(conn, brand, include_personas=False)
-    sources, forbidden = policy.source_rows(conn, brand, knowledge)
+    sources = policy.source_rows(conn, brand, knowledge)
     product_ids = (campaign.get("context_json") or {}).get("product_ids") or []
     if len(product_ids) > 3:
         raise ValueError("活動商品超過單回判讀上限，請先縮小此次檢討的商品背景。")
@@ -324,6 +324,13 @@ def snapshot(
         )
         products.append({"id": product_id, "name": product["name"], "context": product_text})
         knowledge = list(dict.fromkeys([*knowledge, *product_knowledge]))
+    # F48 Contract G: the one 「不能講」 list, scoped to the campaign's products (each sell-way's
+    # own plus the brand-level entries); brand level only when the campaign names none.
+    forbidden = list(dict.fromkeys(
+        term
+        for product_id in (product_ids or [None])
+        for term in workbench.forbidden_terms(conn, org, brand, product_id)
+    ))
     ancestors = []
     node = entity
     while node.get("parent_native_id"):

@@ -395,7 +395,8 @@ class StepsTest(_Base):
         self.assertEqual(
             (plain["verdict"], plain["statutory"], plain["from_note"]), (None, None, "商品頁")
         )
-        self.assertEqual(law["verdict"], "no")
+        # F48 decision 13: a 食安法 hit is a reminder on the row, never a pre-set 不能講.
+        self.assertIsNone(law["verdict"])
         self.assertTrue(law["statutory"]["term"])
         self.assertIn(law["statutory"]["term"], law["statutory"]["sentence"])
 
@@ -411,7 +412,7 @@ class StepsTest(_Base):
             },
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("還有 1 句沒選", resp.json()["error"])
+        self.assertIn("還有 2 句沒選", resp.json()["error"])
 
         saved = self._ok_put(
             self.bid,
@@ -426,19 +427,21 @@ class StepsTest(_Base):
                     {"text": law["text"], "verdict": "ok"},
                 ],
             },
-        )  # the statutory one stays 不能講
+        )  # F48 decision 13: 「可以講」 survives the statutory hit
         self.assertEqual(
             [(p["fact_key"], p["source"]) for p in saved["proof"]], [("lab_report", "saved")]
         )
         self.assertEqual(
             [(c["verdict"], c["source"]) for c in saved["claims"]],
-            [("ok", "saved"), ("no", "saved")],
+            [("ok", "saved"), ("ok", "saved")],
         )
+        # The reminder still rides on the saved row.
+        self.assertEqual(saved["claims"][1]["statutory"], law["statutory"])
         types = {
             c["claim_text"]: c["claim_type"]
             for c in bi_repo.list_claims_for_product(web.conn, self.bid, self.pid)
         }
-        self.assertEqual(types, {plain["text"]: "approved", law["text"]: "forbidden"})
+        self.assertEqual(types, {plain["text"]: "approved", law["text"]: "approved"})
         resp = self._put(
             self.bid,
             self._step(self.pid, "/evidence"),

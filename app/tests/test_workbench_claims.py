@@ -140,8 +140,10 @@ def test_first_order_discount_policy():
     for copy in ("首購 9 折", "首購9折，只到結帳"):
         _, missing = _guard(first, 999, {"headline": copy})
         assert missing == [], copy
-    # F46 Contract O: 「優惠」 is backed only when the offer sentence itself says 優惠.
-    assert _guard(first, 999, {"headline": "首購9折，優惠只到結帳"})[1] == ["優惠"]
+    # F48 decision 7 (supersedes F46 Contract O for the discount family): a registered discount
+    # sentence backs 優惠 too, but never 限時 or 買一送一.
+    assert _guard(first, 999, {"headline": "首購9折，優惠只到結帳"})[1] == []
+    assert _guard(first, 999, {"headline": "首購9折，限時買一送一"})[1] == ["限時", "買一送"]
     # Without the policy the same words are flagged as today.
     assert _guard([], 999, {"headline": "首購9折"})[1] == ["9折"]
 
@@ -227,13 +229,16 @@ def test_bundle_sources_read_every_knowledge_product():
              for f in bi_repo.list_product_facts(web.conn, brand_id, p)}
     product_claims = {c["claim_text"]: c["id"] for p in (gummy, tea)
                       for c in bi_repo.list_claims_for_product(web.conn, brand_id, p)}
-    # The sources rows of a two-product bundle (evidence for the issue's Verify).
+    # The sources rows of a two-product bundle (evidence for the issue's Verify). F48: an
+    # approved product claim is `as_typed`; the brand-level claim is not.
     assert rows == [
         {"id": facts["每顆含維生素C 60mg"], "text": "每顆含維生素C 60mg", "proof": False},
         {"id": facts["洛神花與玫瑰花瓣"], "text": "洛神花與玫瑰花瓣", "proof": False},
-        {"id": product_claims["晨光軟糖一天兩顆"], "text": "晨光軟糖一天兩顆", "proof": False},
+        {"id": product_claims["晨光軟糖一天兩顆"], "text": "晨光軟糖一天兩顆", "proof": False,
+         "as_typed": True},
         {"id": brand_claim["id"], "text": "台灣製造", "proof": False},
-        {"id": product_claims["午後花茶冷泡也好喝"], "text": "午後花茶冷泡也好喝", "proof": False},
+        {"id": product_claims["午後花茶冷泡也好喝"], "text": "午後花茶冷泡也好喝", "proof": False,
+         "as_typed": True},
         {"id": f"offer:bundle:{bundle}", "text": "優惠價 NT$999（原價 NT$1,300）",
          "proof": False, "offer_key": "bundle"},
     ]
@@ -423,6 +428,7 @@ def test_validate_claims_reports_missing_offer():
     assert result == {
         "unsupported_promises": [], "scope": "fulfilment_and_endorsement_families",
         "statutory_hits": [], "statutory_warning": None, "missing_offer": [_OWN_PRICE],
+        "forbidden_terms": [],
     }
     assert check(offer_key="none")["missing_offer"] == []
     assert check()["missing_offer"] == []
@@ -430,6 +436,98 @@ def test_validate_claims_reports_missing_offer():
     assert workbench_module.validate_claims(
         web.conn, coredb.DEV_ORG_ID, brand_id, three, with_sentence, offer_key="bundle",
     )["missing_offer"] == []
+
+
+# -- F48-I04 (Contract G): one claims guard ----------------------------------------------------
+
+
+def test_approved_product_claim_enters_as_typed_brand_fact_keeps_the_filters():
+    """`test_exact_confirmed_terms_and_fulfilment_only` flipped for product claims: an approved
+    product claim 「全館免運」 backs its words as typed; the same text as a brand fact does not."""
+    claim = [{"id": "c", "text": "全館免運", "proof": False, "as_typed": True}]
+    fact = [{"id": "f", "text": "全館免運", "proof": False}]
+    assert claims.unsupported({"headline": "全館免運，今天下單"}, claim) == []
+    assert claims.unsupported({"headline": "全館免運，今天下單"}, fact) == ["免運"]
+    # Only the typed statement is approved, not the bare word elsewhere.
+    assert claims.unsupported({"headline": "免運到府"}, claim) == ["免運"]
+
+
+def test_registered_names_are_stripped_before_the_scan():
+    names = ["超能特惠組"]
+    assert claims.unsupported({"headline": "超能特惠組一次帶走"}, [], names=names) == []
+    assert claims.unsupported({"headline": "超能特惠組特惠中"}, [], names=names) == ["特惠"]
+    assert claims.forbidden_hits({"body": "超能特惠組"}, ["特惠"], names=names) == []
+
+
+_DISCOUNT_ROWS = [{"id": "offer:discount:p", "text": "新會員首購禮：首購 9 折", "proof": False,
+                   "offer_key": "discount"}]
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("首購享折扣", []), ("週末特價", []), ("會員優惠", []), ("原價一千", []),
+    ("限時三天", ["限時"]), ("買一送一", ["買一送"]), ("滿額再出發", ["滿額"]),
+])
+def test_a_discount_row_backs_the_discount_family_only(text, expected):
+    assert claims.unsupported({"body": text}, _DISCOUNT_ROWS) == expected
+
+
+def _guarded_brand() -> dict:
+    """Two products, each with a sell-way: a brand-level `forbidden_word` rule 「頻尿」, a
+    product-level forbidden claim 「治療」 on A, 「最便宜」 on B; A's sell-way is 「超能特惠組」."""
+    brand_id = _brand()
+    a = bi_repo.create_product(web.conn, brand_id, name="晨光軟糖", actor=ACTOR)["id"]
+    b = bi_repo.create_product(web.conn, brand_id, name="午後花茶", actor=ACTOR)["id"]
+    way_a = bi_repo.save_sell_way(web.conn, brand_id, name="超能特惠組", actor=ACTOR,
+                                  product_id=a, economics={"selling_price": 399})["id"]
+    way_b = bi_repo.save_sell_way(web.conn, brand_id, name="單盒", actor=ACTOR,
+                                  product_id=b, economics={"selling_price": 299})["id"]
+    bi_repo.create_rule(web.conn, brand_id, actor=ACTOR, rule_type="forbidden_word",
+                        content="頻 尿", severity="hard")
+    bi_repo.create_claim(web.conn, brand_id, actor=ACTOR, claim_text="治療",
+                         claim_type="forbidden", product_id=a)
+    bi_repo.create_claim(web.conn, brand_id, actor=ACTOR, claim_text="最便宜",
+                         claim_type="forbidden", product_id=b)
+    web.conn.commit()
+    return {"brand": brand_id, "a": way_a, "b": way_b}
+
+
+def test_forbidden_terms_are_scoped_to_the_sell_way():
+    g = _guarded_brand()
+    assert claims.forbidden_terms(web.conn, g["brand"], g["a"]) == ["治療", "頻尿"]
+    assert claims.forbidden_terms(web.conn, g["brand"], g["b"]) == ["最便宜", "頻尿"]
+    assert claims.forbidden_terms(web.conn, g["brand"], None) == ["頻尿"]
+    assert workbench_module.forbidden_terms(
+        web.conn, coredb.DEV_ORG_ID, g["brand"], g["a"]) == ["治療", "頻尿"]
+    with pytest.raises(ValueError):
+        workbench_module.forbidden_terms(web.conn, "other-org", g["brand"], None)
+    # A sell-way under a product is stored 「〈商品〉 · 〈賣法〉」: both forms count, longest first.
+    assert claims.registered_names(web.conn, g["brand"]) == [
+        "晨光軟糖 · 超能特惠組", "午後花茶 · 單盒", "超能特惠組", "午後花茶", "晨光軟糖", "單盒",
+    ]
+
+
+def test_workbench_warning_and_validate_claims_name_one_forbidden_list():
+    g = _guarded_brand()
+    copy = {"headline": "超能特惠組", "body": "不再頻尿，治療疲勞，全台最便宜"}
+    result = workbench_module.validate_claims(web.conn, coredb.DEV_ORG_ID, g["brand"], g["a"],
+                                              copy)
+    # B's 「最便宜」 does not apply to A's copy; the sell-way's name is not a 特惠 promise.
+    assert result["forbidden_terms"] == ["治療", "頻尿"]
+    assert result["unsupported_promises"] == []
+    rows = claims.sources(web.conn, g["brand"], g["a"])
+    warning = claims.warning(
+        copy, rows, g["brand"], names=claims.registered_names(web.conn, g["brand"]),
+        forbidden=claims.forbidden_terms(web.conn, g["brand"], g["a"]),
+    )
+    assert warning is not None
+    assert warning["message"] == "「治療、頻尿」是你標了不能講的話。"
+
+
+def test_statutory_reminder_facade_is_the_statutory_warning_shape():
+    assert workbench_module.statutory_reminder({"body": "改善便秘"}, "food_tw") == \
+        claims.statutory_warning(claims.statutory({"body": "改善便秘"}, "food_tw"))
+    assert workbench_module.statutory_reminder({"body": "改善便秘"}, None) is None
+    assert workbench_module.statutory_reminder({"body": "好吃"}, "food_tw") is None
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):

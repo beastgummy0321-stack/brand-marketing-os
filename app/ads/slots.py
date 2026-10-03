@@ -31,6 +31,11 @@ placement behind a slot (placement edit, copy pick, typed copy edit) is confirme
 F46 Contract F: every slot carries `format_note` -- the sentence when the file the slot shows
 (its material, else the placement behind it) ships in another format than the ad's planned
 `format_key` (`actual_format`); `None` otherwise and on an imported campaign.
+
+F48 Contract G: every slot carries `offer_key` beside `offer_label` (the offer the ad's copy was
+written for, `live_creative.offer_for`, the one the confirmation judges against) and `statutory`
+-- the 食安法 reminder over its copy half (`workbench.statutory_reminder`, brand regime read once
+per read), computed at read and never stored.
 """
 
 from app import workbench
@@ -40,6 +45,7 @@ from app.ads import assets as legacy_readiness
 from app.ads import change_control_launch as launch
 from app.ads import repository as ads_repo
 from app.ads import user_assets_repository as user_assets
+from app.brand_intelligence import repository as brands
 
 
 def _asset_thumbnail(conn, org, brand, asset_id) -> str | None:
@@ -146,7 +152,7 @@ def _has_copy(fields) -> bool:
 def _slot(
     ad_id, entity_id, name, state, thumbnail_url, replace_task_id=None, *, copy=None,
     workbench_href=None, format_key=None, blocked=None, offer_label=None, waiting=None,
-    job=None, format_note=None,
+    job=None, format_note=None, offer_key=None, statutory=None,
 ) -> dict:
     """One slot. F40-I01: `format_key` is the planned ad's own `ads_ad.format_key` (`None` for an
     ad without one, and for an imported campaign's platform ad) so the assets tab can say a
@@ -155,7 +161,11 @@ def _slot(
     for an imported campaign's platform ad). F45 Contract W: `waiting` is set on a `waiting`
     slot only (`{action, text}`), `job` on an `in_progress` slot only (`{kind, done, of}`).
     F46 Contract F: `format_note` says when the file in the slot ships in another format than
-    planned (`actual_format.note`); `None` when they agree, with no file, and when imported."""
+    planned (`actual_format.note`); `None` when they agree, with no file, and when imported.
+    F48 Contract G: `offer_key` beside `offer_label` (the same resolver, `live_creative.
+    offer_for`); `statutory` = the 食安法 reminder over the slot's copy
+    (`workbench.statutory_reminder`, computed at read), `None` without a hit, a regime, a copy,
+    and on an imported campaign."""
     return {
         "ad_id": ad_id,
         "entity_id": entity_id,
@@ -169,9 +179,11 @@ def _slot(
         "format_key": format_key,
         "blocked": blocked,
         "offer_label": offer_label,
+        "offer_key": offer_key,
         "waiting": waiting,
         "job": job,
         "format_note": format_note,
+        "statutory": statutory,
     }
 
 
@@ -239,10 +251,18 @@ def _backing(conn, org, brand, campaign, ad, material=None) -> dict | None:
         return None
 
 
+def _statutory(copy, regime) -> dict | None:
+    """The 食安法 reminder over a slot's copy half (its three copy fields), else None."""
+    if not copy:
+        return None
+    return workbench.statutory_reminder({k: copy.get(k) or "" for k in COPY_FIELDS}, regime)
+
+
 def _planned_slot(
-    conn, org, brand, campaign, ad, entity, replace_by_entity, brief, offer_label,
-    format_names=None,
+    conn, org, brand, campaign, ad, entity, replace_by_entity, brief, judged,
+    format_names=None, regime=None,
 ) -> dict:
+    """`judged` = `asset_suggestions._judged_against` of the ad (its offer key and label)."""
     material = _material(conn, org, brand, campaign, ad)
     material_thumb = (
         _asset_thumbnail(conn, org, brand, material["asset_id"]) if material else None
@@ -262,7 +282,8 @@ def _planned_slot(
         return _slot(
             ad["id"], entity_id, ad["name"], state, thumbnail, replace_task_id, copy=copy,
             workbench_href=href, format_key=ad.get("format_key"), blocked=blocked,
-            offer_label=offer_label, waiting=waiting, job=job, format_note=note,
+            offer_label=judged["offer_label"], waiting=waiting, job=job, format_note=note,
+            offer_key=judged["offer_key"], statutory=_statutory(copy, regime),
         )
 
     material_asset = _readable_asset(conn, org, brand, material["asset_id"]) if material else None
@@ -325,7 +346,7 @@ def _planned_slot(
 
 
 def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
-    # Lazy, as in `_confirm_if_ready`. The offer label has one resolver: the one the
+    # Lazy, as in `_confirm_if_ready`. The offer key and label have one resolver: the one the
     # confirmation judges the copy against.
     from app.ads import asset_suggestions
 
@@ -334,6 +355,8 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
     entities = _planned_entities(conn, org, brand, campaign)
     sets = _ad_sets(conn, org, brand, campaign)
     format_names = actual_format.labels(conn, org, brand)
+    # F48 Contract G: the brand's regime, read once per slots read.
+    regime = (brands.get_brand(conn, brand) or {}).get("regulatory_regime")
     return [
         {
             "group_id": group["id"],
@@ -344,8 +367,9 @@ def _planned_groups(conn, org, brand, campaign_row, replace_by_entity) -> list:
                     replace_by_entity, sets.get(ad["id"]),
                     asset_suggestions._judged_against(
                         conn, org, brand, campaign_row, ad["id"]
-                    )["offer_label"],
+                    ),
                     format_names,
+                    regime,
                 )
                 for ad in ads
                 if ad["group_id"] == group["id"]

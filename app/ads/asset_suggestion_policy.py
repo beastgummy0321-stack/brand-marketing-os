@@ -43,7 +43,9 @@ def ceiling(provider_name, model):
 def source_rows(conn, brand, knowledge_ids, sell_way=None):
     """`sell_way` (F44): the approved claims of the sell-way's own knowledge products are sources
     too, each once -- the copy may cite sell-way-level claims. Brand-wide rows stay bounded by
-    `knowledge_ids`; the caller adds the returned ids to the batch's knowledge ids."""
+    `knowledge_ids`; the caller adds the returned ids to the batch's knowledge ids.
+    F48 Contract G: sources only -- the 「不能講」 list is the workbench's one list
+    (`workbench.forbidden_terms`), never a brand-wide scan here."""
     facts = brands.list_brand_facts(conn, brand, status="confirmed")
     claims = brands.list_claims_for_brand(conn, brand)
     sources = [{"id": r["id"], "text": str(r["value"])} for r in facts if r["id"] in knowledge_ids]
@@ -59,8 +61,7 @@ def source_rows(conn, brand, knowledge_ids, sell_way=None):
                 if r["claim_type"] == "approved" and r.get("product_id") and r["id"] not in seen:
                     seen.add(r["id"])
                     sources.append({"id": r["id"], "text": r["claim_text"]})
-    forbidden = [r["claim_text"] for r in claims if r["claim_type"] == "forbidden"]
-    return sources, forbidden
+    return sources
 
 
 def detail(kind, text, terms=()):
@@ -71,16 +72,24 @@ def detail(kind, text, terms=()):
 
 
 def violations(
-    conn, org, brand, copy, sources, forbidden, *, generated,
+    conn, org, brand, copy, sources, *, generated,
     sell_way=None, offer_key=None, offer_label=None,
 ):
     """Contract C details (kind `copy`) for one copy. The promise words are judged against the
     sources the copy step used: first the sell-way (every offer it has), then the ad's offer
     coordinate -- a word the sell-way backs but the coordinate does not is a mismatch with the
     plan, not a missing registration. `offer_key=None` (a library placement, an ad without that
-    coordinate) skips the second check."""
-    unbacked = workbench.validate_claims(conn, org, brand, sell_way, copy)["unsupported_promises"]
+    coordinate) skips the second check.
+    F48 Contract G: the 「不能講」 words are the workbench's verdict for the same copy and
+    sell-way (`validate_claims(...)["forbidden_terms"]`) -- the workbench warns, this blocks."""
+    judged = workbench.validate_claims(conn, org, brand, sell_way, copy)
+    unbacked = judged["unsupported_promises"]
     problems = []
+    if judged["forbidden_terms"]:
+        terms = judged["forbidden_terms"]
+        problems.append(
+            detail("copy", f"文案寫了「{'、'.join(terms)}」，這是你標了不能講的話。", terms)
+        )
     if unbacked:
         problems.append(
             detail(
@@ -103,9 +112,6 @@ def violations(
                     mismatched,
                 )
             )
-    text = "\n".join(copy.values())
-    if any(word and word in text for word in forbidden):
-        problems.append(detail("copy", "含品牌禁止宣稱，請修訂此安排的文案。"))
     if generated:
         for value in copy.values():
             rest = value

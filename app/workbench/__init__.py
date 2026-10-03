@@ -9,6 +9,9 @@ Shapes other modules may use:
     pack_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> dict | None
     briefs_for_source(conn, org_id, brand_id, source_kind: str, source_ref: dict) -> list[dict]
     adopted_output(conn, org_id, brand_id, brief_id: str, part: str) -> dict | None
+    validate_claims(conn, org_id, brand_id, product_id, value, *, offer_key=None) -> dict
+    forbidden_terms(conn, org_id, brand_id, product_id) -> list[str]     # F48 Contract G
+    statutory_reminder(value, regime) -> dict | None                     # F48 Contract G, pure
 
 Everything else in this package (`repository.py`, `jobs.py`, `prompts.py`, `validate.py`,
 `routes.py`) is private — nothing outside this package imports them. F02-I02 (ARCHITECTURE.md
@@ -152,11 +155,16 @@ def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, va
         statutory_hits: list[{"term", "tier": "medical"|"function"|"health_food", "basis"}]
         statutory_warning: {"terms": [{"term", "tier_label"}], "sentence", "href"} | None
         missing_offer: list[str]
+        forbidden_terms: list[str]
+    F48 Contract G: registered product and sell-way names are stripped before every scan;
+    `forbidden_terms` = the entries of `forbidden_terms(...)` (this sell-way's 「不能講」) the
+    copy writes -- the workbench warns on them, the ads slot blocks on the same list.
     `statutory_*` are `[]`／`None` unless the brand's `regulatory_regime` is `food_tw`; they
     are reminders for the human reading the copy, never a block (F34 ruling 2B).
     `missing_offer` = the registered sentences of `offer_key`'s offer when the copy writes none
     of them (whitespace ignored); `[]` for `None`, `"none"` or a key with no offer row. An offer
-    word is backed only when that exact term is in one of the narrowed offer sentences."""
+    word is backed only when that exact term is in one of the narrowed offer sentences; a
+    discount-family word also when a `discount` offer row is among them (F48 decision 7)."""
     from app.brand_intelligence import repository as brands
     from app.workbench import claims
 
@@ -166,10 +174,44 @@ def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, va
     if product_id is not None and brands.get_product(conn, brand_id, product_id) is None:
         raise ValueError("找不到此品牌商品。")
     rows = claims.sources(conn, brand_id, product_id, offer_key)
-    missing = claims.unsupported(value, rows)
+    names = claims.registered_names(conn, brand_id)
+    missing = claims.unsupported(value, rows, names=names)
     hits = claims.statutory(value, brand.get("regulatory_regime"))
     return {
         "unsupported_promises": missing, "scope": "fulfilment_and_endorsement_families",
         "statutory_hits": hits, "statutory_warning": claims.statutory_warning(hits),
         "missing_offer": claims.missing_offer(value, rows, offer_key),
+        "forbidden_terms": claims.forbidden_hits(
+            value, claims.forbidden_terms(conn, brand_id, product_id), names=names,
+        ),
     }
+
+
+def _checked_brand(conn, org_id: str, brand_id: str, product_id: str | None) -> None:
+    from app.brand_intelligence import repository as brands
+
+    brand = brands.get_brand(conn, brand_id)
+    if brand is None or brand["org_id"] != org_id:
+        raise ValueError("找不到品牌。")
+    if product_id is not None and brands.get_product(conn, brand_id, product_id) is None:
+        raise ValueError("找不到此品牌商品。")
+
+
+def forbidden_terms(conn, org_id: str, brand_id: str, product_id: str | None) -> list[str]:
+    """F48 Contract G: the one 「不能講」 list for copy of this sell-way (`product_id`; `None` =
+    brand level) -- forbidden claims and `forbidden_word` rules of its knowledge products plus
+    the brand-level ones, whitespace squashed, each once. The list `validate_claims`'s
+    `forbidden_terms` is matched against; planners print it (F48-I05). Never a 食安法 hit."""
+    from app.workbench import claims
+
+    _checked_brand(conn, org_id, brand_id, product_id)
+    return claims.forbidden_terms(conn, brand_id, product_id)
+
+
+def statutory_reminder(value, regime: str | None) -> dict | None:
+    """F48 Contract G (pure): the 食安法 reminder for the strings of `value` under `regime` --
+    the `statutory_warning` shape `{"terms": [{"term", "tier_label"}], "sentence", "href"}`, or
+    `None` (no hit, or no regime). A reminder for the human, never a block (F34 ruling 2B)."""
+    from app.workbench import claims
+
+    return claims.statutory_warning(claims.statutory(value, regime))
