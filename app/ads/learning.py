@@ -3,14 +3,15 @@
 
 No model call in F03 (§0 "one sentence built by the program from the campaign's own facts") —
 the sentence is assembled from `verdict`/`verdict_json`, which `closeout._judge` already built
-from real numbers. Persisted through `app.brand_intelligence.repository.record_learning` (the
-ledger API reviewed for F03-I02, §0) with `source_cycle_id = campaign_id`; never a `brand_fact`
+from real numbers. Persisted through `ads_learnings.write` (F48 Contract W, over the ledger API
+reviewed for F03-I02, §0) with `source_cycle_id = campaign_id` and `product_id` = the campaign's
+sell-way; never a `brand_fact`
 or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a rule).
 """
 
 from typing import cast
 
-from app.ads import live_creative, sell_way, targets, triage
+from app.ads import ads_learnings, live_creative, sell_way, targets, triage
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -136,9 +137,11 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     confidence = _confidence(conn, org_id, brand_id, detail, verdict, verdict_json)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
 
-    return bi_repo.record_learning(
-        cast(Conn, conn), brand_id, actor=actor, learning_text=text,
-        applicability_scope=_applicability_scope(detail), confidence=confidence,
+    # F48 Contract W: the verdict belongs to the campaign's sell-way, so the strategy's one
+    # verdict per product (`strategy._newest_per_product`) sees every sell-way.
+    return ads_learnings.write(
+        conn, org_id, brand_id, actor=actor, product_id=sell_way.of_campaign(detail),
+        text=text, scope=_applicability_scope(detail), confidence=confidence,
         sample_size=str(_bucket(verdict_json)), source_cycle_id=campaign_id,
-        needs_revalidation=needs_revalidation,
+        source_track="ads", needs_revalidation=needs_revalidation,
     )

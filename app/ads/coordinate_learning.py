@@ -10,7 +10,8 @@ No model call:
   (`learning_rank.scope`: verdict, rank, sales, spend, cost per sale, cap, 樣本少, customer
   group, the seven coordinate keys -- format through `live_creative`'s learning coordinates).
   The owner-facing text names coordinates by label. `source_cycle_id = <campaign_id>:<ad_id>`
-  keeps it idempotent per ad.
+  keeps it idempotent per ad; the row's `product_id` is the ad's sell-way (`sell_way.of_ad`,
+  written through `ads_learnings.write`, F48 Contract W).
 - `ranked_section` prints 【上幾期的排名】 for the strategy and delivery-plan prompts from
   `learning_view.learnings_view` (the same view the owner sees); `gate_pairs` gives the delivery
   plan's program gate its (customer group, angle) pairs.
@@ -21,7 +22,15 @@ import this. Ledger access goes through `app.brand_intelligence.repository`'s pu
 
 from typing import cast
 
-from app.ads import customer_groups, learning_rank, learning_view, live_creative, period_grades
+from app.ads import (
+    ads_learnings,
+    customer_groups,
+    learning_rank,
+    learning_view,
+    live_creative,
+    period_grades,
+    sell_way,
+)
 from app.ads import learning as ads_learning
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
@@ -141,10 +150,11 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
             who = _UNASSIGNED_GROUP
         else:
             who = (groups.get(group_id) or {}).get("who") or learning_view.DELETED_GROUP
-        written.append(bi_repo.record_learning(
-            cast(Conn, conn), brand_id, actor=actor,
-            learning_text=_text(row["name"], row, who, keys, labels),
-            applicability_scope=learning_rank.scope(row, keys, group_id),
+        written.append(ads_learnings.write(
+            conn, org_id, brand_id, actor=actor,
+            product_id=sell_way.of_ad(ad, detail),
+            text=_text(row["name"], row, who, keys, labels),
+            scope=learning_rank.scope(row, keys, group_id),
             confidence="observed",
             sample_size="低" if row["few"] or row["cost_per_sale"] is None else "高",
             source_cycle_id=cycle_id, source_track=SOURCE_TRACK,

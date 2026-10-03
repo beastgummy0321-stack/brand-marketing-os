@@ -12,7 +12,8 @@ numbers could be the gap, so nothing is written from it). The written scope name
 and the ad's customer group (`ads;campaign=<id>;group=<customer_group_id|none>`).
 Step 2 reuses `angles.get` (F27 Contract C: one enqueue per ad per copy hash) for
 every row that will be written. Step 3 (`write`) writes one brand-notebook learning per non-skip
-row through `bi_repo.record_learning`, idempotent by `source_cycle_id = settle:<month>:<entity>`.
+row through `ads_learnings.write` (F48 Contract W: `product_id` = the ad's campaign's sell-way,
+`None` for an imported campaign), idempotent by `source_cycle_id = settle:<month>:<entity>`.
 
 The learning text carries no numbers, so the same conclusion reached twice promotes confidence
 (F27 Contract D, same counting rule as `ads_learnings`). Program-only reads and one user-confirmed
@@ -25,7 +26,16 @@ import re
 from datetime import date, timedelta
 from typing import cast
 
-from app.ads import ads_learnings, angles, learning_rank, period_grades, repository, targets, triage
+from app.ads import (
+    ads_learnings,
+    angles,
+    learning_rank,
+    period_grades,
+    repository,
+    sell_way,
+    targets,
+    triage,
+)
 from app.ads import change_control_data as changes
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts
@@ -422,15 +432,21 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
     chosen = _picked_angles(rows, written, picks)
     groups = _customer_groups(conn, org_id, brand_id, list(chosen))
     texts = [row["learning_text"] for row in learnings]
+    # F48 Contract W: entity -> its campaign -> that campaign's sell-way (`None` for an imported
+    # campaign, which has none).
+    sell_ways: dict = {}
     for row in rows:
         angle = chosen.get(row["entity_id"])
         if angle is None:
             continue
+        campaign_id = row["campaign_id"]
+        if campaign_id not in sell_ways:
+            sell_ways[campaign_id] = sell_way.of_campaign_id(conn, org_id, brand_id, campaign_id)
         text = learning_text(row["fate"], angle)
         prior = texts.count(text)
-        bi_repo.record_learning(
-            cast(Conn, conn), brand_id, actor=actor, learning_text=text,
-            applicability_scope=_scope(row, groups.get(row["entity_id"])),
+        ads_learnings.write(
+            conn, org_id, brand_id, actor=actor, product_id=sell_ways[campaign_id], text=text,
+            scope=_scope(row, groups.get(row["entity_id"])),
             confidence=ads_learnings._confidence_for_count(prior),
             sample_size=_sample_size(row["results"]),
             source_cycle_id=_cycle_id(month, row["entity_id"]), source_track="ads",
