@@ -260,16 +260,16 @@ class TriageTest(unittest.TestCase):
         # F28-I02: an uncovered previous window never blocks the grade (cost 5 > 1.2 x 1).
         self.assertEqual((item["grade"], item["grade_label"]), ("over", "太貴"))
 
-    # -- insufficient: below_sample_gate ---------------------------------------------------------
+    # -- insufficient: too_new (剛開始) -----------------------------------------------------------
 
-    def test_below_sample_gate_extends_to_28_days_then_gives_up(self):
+    def test_too_new_extends_to_28_days_then_gives_up(self):
         self.set_target(1000, result_kind="purchase")  # 3x = 3000, never reached
         for offset in range(28):
             self.obs(self.cutoff - timedelta(days=offset), spend=1, result_count=0,
                       attribution_key=f"small{offset}")
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
-        self.assertEqual(item["reason_code"], "below_sample_gate")
+        self.assertEqual(item["reason_code"], "too_new")
         self.assertEqual(item["window"]["days"], 28)
         self.assertEqual(item["window"]["extended_from"], 14)
         # Known zero results but below 3 x cap: 剛開始, never 沒賣出.
@@ -463,10 +463,10 @@ class TriageTest(unittest.TestCase):
 
     def test_compare_guards_a_falsy_current_cost_per_result(self):
         self.assertEqual(
-            triage._compare(0, 10), ("insufficient", "below_sample_gate", None),
+            triage._compare(0, 10), ("insufficient", "too_new", None),
         )
         self.assertEqual(
-            triage._compare(None, 10), ("insufficient", "below_sample_gate", None),
+            triage._compare(None, 10), ("insufficient", "too_new", None),
         )
         self.assertEqual(triage._compare(10, 10), ("flat", "cost_per_result_flat", 0.0))
 
@@ -909,7 +909,7 @@ class CampaignObjectiveFamilyClassifyTest(TriageTest):
 
 class TriageGradeTest(TriageTest):
     """F28-I02 (ads.md §6.32): every active ad is graded against the one cap T -- 划算 <= T,
-    偏貴 <= 1.2T, 太貴 > 1.2T, 沒賣出 = a known zero over 3T, below the gate 剛開始. Reuses
+    偏貴 <= 1.2T, 太貴 > 1.2T, 沒賣出 = a known zero over 3T, a known zero under it 剛開始. Reuses
     `TriageTest`'s fixture (one campaign, one ad, broad coverage, account timezone)."""
 
     def extra_ad(self, native_id):
@@ -1046,9 +1046,18 @@ class TriageGradeTest(TriageTest):
         self.assertEqual(item["previous_grade"], "on_target")
         self.assertIsNone(item["grade_move"])
 
-    def test_previous_window_below_the_gate_has_no_grade_and_no_move(self):
+    def test_previous_window_with_few_sales_is_graded_too(self):
+        # F48 Contract R: 140 spent for 7 sales is a known cost -- graded, no sample gate.
         self.set_target(100, result_kind="purchase")
-        self.two_weeks(previous_spend=20, current_spend=150)  # previous: 140 spent, 7 results
+        self.two_weeks(previous_spend=20, current_spend=150)
+        item = self.classify_one()
+        self.assertEqual((item["previous_grade"], item["grade"]), ("on_target", "over"))
+        self.assertEqual(item["grade_move"], {"from": "on_target", "to": "over"})
+
+    def test_previous_window_too_new_has_no_grade_and_no_move(self):
+        # Previous: 140 spent, a known zero under 3 x cap = 剛開始 -- not graded, so no move.
+        self.set_target(100, result_kind="purchase")
+        self.two_weeks(previous_spend=20, current_spend=150, previous_results=0)
         item = self.classify_one()
         self.assertEqual(item["grade"], "over")
         self.assertIsNone(item["previous_grade"])
@@ -1063,7 +1072,9 @@ class TriageGradeTest(TriageTest):
         self.assertIsNone(item["previous_grade"])
         self.assertIsNone(item["grade_move"])
 
-    def test_thin_ad_has_no_grade_and_no_move(self):
+    def test_thin_sold_ad_is_graded_with_its_sample_shown(self):
+        # F48 Contract R: 3 sales over 3 days is a known cost -- graded on the first window,
+        # with 「樣本少」 and 「還太新」 shown beside it, never a hidden gate.
         self.set_target(100, result_kind="purchase")
         # A well-graded month before the 28-day window, then almost nothing inside it.
         for offset in range(7):
@@ -1073,10 +1084,42 @@ class TriageGradeTest(TriageTest):
             self.obs(self.cutoff - timedelta(days=offset), spend=10, result_count=1,
                      attribution_key=f"thin{offset}")
         item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]), ("on_target", "划算"))
+        self.assertEqual(item["window"]["days"], 7)
+        self.assertIsNone(item["window"]["extended_from"])
+        self.assertEqual(
+            {k: item["sample"][k] for k in ("sales", "few", "too_new")},
+            {"sales": 3, "few": True, "too_new": True},
+        )
+        self.assertIsNone(item["previous_grade"])
+        self.assertIsNone(item["grade_move"])
+
+    # -- F48 Contract R: the four ruler cases ------------------------------------------------------
+
+    def test_one_sale_under_cap_is_on_target_and_few(self):
+        self.set_target(100, result_kind="purchase")
+        self.obs(self.cutoff, spend=60, result_count=1, attribution_key="one")
+        item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]), ("on_target", "划算"))
+        self.assertEqual(item["sample"]["sales"], 1)
+        self.assertTrue(item["sample"]["few"])
+
+    def test_zero_sales_at_two_caps_is_too_new(self):
+        self.set_target(100, result_kind="purchase")
+        self.week(self.ad["id"], spend=29, result_count=0, tag="z")  # 203, about 2 x cap
+        item = self.classify_one()
         self.assertEqual((item["grade"], item["grade_label"]),
                          ("insufficient", "剛開始、數字還不夠"))
-        self.assertEqual(item["window"]["days"], 28)
-        self.assertIsNone(item["grade_move"])
+        self.assertEqual(item["reason_code"], "too_new")
+        self.assertEqual(item["sample"]["sales"], 0)
+        self.assertFalse(item["sample"]["few"])
+
+    def test_zero_sales_at_three_caps_is_wasted(self):
+        self.set_target(100, result_kind="purchase")
+        self.week(self.ad["id"], spend=43, result_count=0, tag="w")  # 301 >= 3 x cap
+        item = self.classify_one()
+        self.assertEqual((item["grade"], item["grade_label"]), ("wasted", "沒賣出"))
+        self.assertEqual(item["reason_code"], "spend_over_target_no_result")
 
     def test_a_move_out_of_wasted_is_reported_with_its_own_from(self):
         self.set_target(100, result_kind="purchase")

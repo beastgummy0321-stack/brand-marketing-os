@@ -37,6 +37,16 @@ def get_ad_pause_view(request: Request, brand_id: str, campaign_id: str, entity_
     return {"pause": result}
 
 
+@router.get("/brands/{brand_id}/rules")
+def get_brand_rules(request: Request, brand_id: str):
+    """F48 Contract R-API: the ruler's thresholds, labels and glossary sentences (`triage.rules`)
+    -- the one source every screen reads them from. The body is the Contract R-API shape itself
+    (`{grade, ab, labels, glossary}`), not wrapped."""
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
+    return triage.rules()
+
+
 @router.post("/brands/{brand_id}/queue/refresh")
 def refresh_brand_queue(request: Request, brand_id: str):
     actor = web.require_actor(request)

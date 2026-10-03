@@ -162,7 +162,7 @@ class ScaleCandidatesTest(_CandidateFixture):
         ad2 = self.ad_entity(native_id="ad2")["id"]
         items = [
             self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=ad2, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=ad2, cls="insufficient", reason_code="too_new",
                       grade="insufficient", cost=None, previous=None, campaign_id=self.campaign),
         ]
         candidates = self.candidates(items)
@@ -172,7 +172,7 @@ class ScaleCandidatesTest(_CandidateFixture):
     def test_only_too_new_ads_never_qualify(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)
         ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="insufficient", reason_code="below_sample_gate",
+        items = [self.item(entity_id=ad1, cls="insufficient", reason_code="too_new",
                            grade="insufficient", cost=None, previous=None,
                            campaign_id=self.campaign)]
         self.assertEqual(self.candidates(items), [])
@@ -358,7 +358,7 @@ class RefreshCandidatesTest(_CandidateFixture):
             self.item(entity_id=a, cls="worse", campaign_id=self.campaign,
                      thumbnail_url="https://x/1.jpg"),
             self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=c, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=c, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
         ]
         candidates = self.candidates(items)
@@ -410,7 +410,7 @@ class RefreshCandidatesTest(_CandidateFixture):
         items = [
             self.item(entity_id=a, cls="worse", campaign_id=self.campaign),
             self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=c, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=c, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
             self.item(entity_id=d, cls="worse", campaign_id=self.campaign),
         ]
@@ -429,7 +429,7 @@ class RefreshCandidatesTest(_CandidateFixture):
         items = [
             self.item(entity_id=a, cls="worse", campaign_id=self.campaign),
             self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=c, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=c, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
             self.item(entity_id=d, cls="worse", campaign_id=self.campaign),
         ]
@@ -441,11 +441,11 @@ class RefreshCandidatesTest(_CandidateFixture):
     def test_all_insufficient_still_raises_with_first_classified_as_triage(self):
         a, b, c = self._ad("a1"), self._ad("a2"), self._ad("a3")
         items = [
-            self.item(entity_id=a, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=a, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
-            self.item(entity_id=b, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=b, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
-            self.item(entity_id=c, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=c, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
         ]
         candidates = self.candidates(items)
@@ -471,7 +471,7 @@ class RefreshCandidatesTest(_CandidateFixture):
     def test_thumbnails_capped_at_four(self):
         ids = [self._ad(f"a{i}") for i in range(5)]
         items = [
-            self.item(entity_id=eid, cls="insufficient", reason_code="below_sample_gate",
+            self.item(entity_id=eid, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign, thumbnail_url=f"https://x/{i}.jpg")
             for i, eid in enumerate(ids)
         ]

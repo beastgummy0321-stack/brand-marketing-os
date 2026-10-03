@@ -364,6 +364,8 @@ def _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities) -> 
             "thumbnail_url": (
                 item["thumbnail_url"] if item is not None else triage._thumbnail_url(entity)
             ),
+            # F48 Contract R: the triage item's shown sample flags, passed through (never a gate).
+            "sample": item.get("sample") if item is not None else None,
             "spend": amount,
         })
     buckets = []

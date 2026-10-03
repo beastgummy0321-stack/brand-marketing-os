@@ -121,12 +121,42 @@ class GradePeriodTest(unittest.TestCase):
             period_grades.grade_period(self.conn, self.org, self.brand, START, END)
         self.assertEqual(spy.call_count, 2)
 
-    def test_thin_ad_is_just_started_never_graded(self):
-        thin = self.ad("a1", name="剛開始")
+    def test_thin_sold_ad_is_graded_with_its_sample_shown(self):
+        # F48 Contract R: a known cost is always graded; the sample size is a shown flag.
+        thin = self.ad("a1", name="賣得少")
         self.days(thin, 2, spend=50, result_count=1)            # 100 spent, 2 results
-        row = self.rows()["剛開始"]
-        self.assertEqual((row["grade"], row["grade_label"]), ("insufficient", "剛開始、數字還不夠"))
+        row = self.rows()["賣得少"]
+        self.assertEqual((row["grade"], row["grade_label"], row["reason_code"]),
+                         ("on_target", "划算", None))
         self.assertEqual(row["spend"], 100.0)
+        self.assertEqual({k: row["sample"][k] for k in ("sales", "few", "too_new")},
+                         {"sales": 2, "few": True, "too_new": True})
+
+    def test_the_four_ruler_cases(self):
+        one_sale = self.ad("a1", name="一筆")
+        too_new = self.ad("a2", name="剛開始")
+        wasted = self.ad("a3", name="沒賣出")
+        mixed = self.ad("a4", name="兩種幣")
+        self.days(one_sale, 1, spend=60, result_count=1)        # 60 <= 100, 1 sale
+        self.days(too_new, 4, spend=50, result_count=0)         # 200 = 2 x cap, 0 sold
+        self.days(wasted, 6, spend=50, result_count=0)          # 300 = 3 x cap, 0 sold
+        self.days(mixed, 2, spend=50, result_count=1)
+        self.days(mixed, 2, spend=5, result_count=1, first=START + timedelta(days=5),
+                  currency="USD")
+        rows = self.rows()
+
+        def seen(name):
+            row = rows[name]
+            return row["grade"], row["grade_label"], row["reason_code"]
+
+        self.assertEqual(seen("一筆"), ("on_target", "划算", None))
+        self.assertTrue(rows["一筆"]["sample"]["few"])
+        self.assertEqual(seen("剛開始"), ("insufficient", "剛開始、數字還不夠", "too_new"))
+        self.assertEqual(rows["剛開始"]["sample"]["sales"], 0)
+        self.assertFalse(rows["剛開始"]["sample"]["few"])
+        self.assertEqual(seen("沒賣出"), ("wasted", "沒賣出", "spend_over_target_no_result"))
+        self.assertEqual(seen("兩種幣"), ("insufficient", "資料不足", "mixed_currency"))
+        self.assertIsNone(rows["兩種幣"]["sample"]["sales"])
 
     def test_unknown_results_read_no_data_never_zero(self):
         unknown = self.ad("a1", name="不知道")

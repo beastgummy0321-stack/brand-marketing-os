@@ -31,9 +31,10 @@ def _is_active(item, native_status_by_entity):
 
 
 def _too_new(item):
-    """剛開始、數字還不夠 (F28-I02, F29-I01 words): below the sample gate -- the one ungraded
-    state that never blocks a scale-up. Any other ungraded ad (資料不足／未判斷) does."""
-    return item.get("grade") == "insufficient" and item["reason_code"] == "below_sample_gate"
+    """剛開始、數字還不夠 (F28-I02, F29-I01 words; F48 `too_new`): a known zero result under the
+    沒賣出 line -- the one ungraded state that never blocks a scale-up. Any other ungraded ad
+    (資料不足／未判斷) does."""
+    return item.get("grade") == "insufficient" and item["reason_code"] == "too_new"
 
 
 def _cheapest_on_target(active):
