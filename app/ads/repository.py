@@ -835,6 +835,16 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         }
         for a in detail["actions"]
     ]
+    # F48 Contract S: the facts under the strategy are recomputed on every read, so after
+    # adoption they name the ads' bound groups and count ads per offer.
+    budget_basis_json = detail.get("budget_basis_json") or {}
+    if campaign["origin"] != "imported" and budget_basis_json.get("strategy"):
+        from app.ads import strategy  # lazy: strategy imports this module
+
+        facts = strategy.current_facts(conn, org_id, brand_id, campaign, groups=groups)
+        detail["budget_basis_json"] = {
+            **budget_basis_json, "strategy": {**budget_basis_json["strategy"], "facts": facts},
+        }
     return detail
 
 

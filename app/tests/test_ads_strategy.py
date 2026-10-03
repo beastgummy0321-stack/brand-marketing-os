@@ -579,9 +579,10 @@ class ProviderFailureTest(StrategyTestBase):
 
 
 class PromptCapsTest(StrategyTestBase):
-    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、12 個商品各一條學習只送前
-    10 條；`basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。F41-I02 之後每個
-    商品只留最新一條，所以上限要靠 12 個不同商品的學習來驗。"""
+    """F04-I03: prompt 別傾印——45 條事實只送前 20 條（新到舊）、12 條學習只送前 10 條；
+    `basis` 只收真的進 prompt 的那些筆數；prompt 裡不再帶「更新於」。F41-I02 之後每個商品只留
+    最新一條期別判決；F48 Contract P 之後只讀這個賣法（與品牌層）的學習——所以上限用這個賣法
+    的 12 條事件學習（`ads;` scope，各自獨立）來驗。"""
 
     def test_facts_and_learnings_are_capped_and_basis_matches_the_prompt(self):
         for i in range(45):
@@ -590,11 +591,10 @@ class PromptCapsTest(StrategyTestBase):
                 label=f"事實{i}", value=f"值{i}", status="confirmed", confirmed_by=ACTOR,
             )
         for i in range(12):
-            product = bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i}", actor=ACTOR)
             bi_repo.record_learning(
                 web.conn, self.brand_id, actor=ACTOR, learning_text=f"學習{i}",
-                applicability_scope="brand", confidence="likely", sample_size="1 個活動",
-                product_id=product["id"],
+                applicability_scope=f"ads;event={i}", confidence="likely",
+                sample_size="1 個活動", product_id=self.product["id"],
             )
         self.campaign = self._create_campaign()
         provider = _fake(_VALID_REPLY)
@@ -809,7 +809,7 @@ class ProductsSectionSellWaysTest(StrategyTestBase):
 
 
 class CustomerGroupsInStrategyPromptTest(StrategyTestBase):
-    """F43-I02: 【這個賣法的顧客】 sits right after 【商品】 and its group ids reach
+    """F43-I02: 【這個賣法的顧客】 sits after 【這個賣法】 (F48) and its group ids reach
     `basis.knowledge_item_ids`; a product without groups says so."""
 
     def _prompt(self) -> tuple[str, dict]:
@@ -837,7 +837,7 @@ class CustomerGroupsInStrategyPromptTest(StrategyTestBase):
             "｜顧客會說：反光條一洗就掉｜什麼時候用：晚餐後推車散步",
             prompt,
         )
-        products_at = prompt.rindex("【商品】")
+        products_at = prompt.rindex("【這個賣法】")
         customers_at = prompt.rindex("【這個賣法的顧客】")
         learnings_at = prompt.rindex("【過去的學習】")
         self.assertLess(products_at, customers_at)
@@ -871,6 +871,14 @@ class ScriptedReplyValidatesTest(StrategyTestBase):
         detail = self._generate()
         allocation = detail["budget_basis_json"]["strategy"]["allocation"]
         self.assertEqual([item["role"] for item in allocation], ["new", "retarget", "explore"])
+
+    def test_scripted_prose_carries_no_number(self):
+        """F48 Contract S: no digit, `%` or `NT$` in any prose of the scripted reply."""
+        reply = providers.SCRIPTED_REPLIES["ads_strategy"]
+        prose = [row["rationale"] for row in reply["allocation"]]
+        for key in ("why", "unknowns", "alternatives", "learning_goals"):
+            prose += reply[key]
+        self.assertFalse(strategy._has_number(prose), prose)
 
 
 if __name__ == "__main__":
@@ -1068,7 +1076,8 @@ class OneCurrentLearningPerProductTest(StrategyTestBase):
     brand-level row. Event learnings (`ads;` scope: pause／A/B／month settle) are separate
     findings and all stay. F48-I03 (Contract W): every row here is written by the production
     writers (`learning.write_learning`, `ads_learnings.record_for_ab_item`), which store the
-    campaign's sell-way themselves -- so two sell-ways keep two verdicts."""
+    campaign's sell-way themselves -- so two sell-ways keep two verdicts, and F48 Contract P
+    prints only this campaign's sell-way's (plus brand-level ones) to its planner."""
 
     @staticmethod
     def _verdict_json(actual: float) -> dict:
@@ -1121,14 +1130,15 @@ class OneCurrentLearningPerProductTest(StrategyTestBase):
         detail = self._generate()
 
         sent_prompt = provider.calls[0]["messages"][0]["content"]
-        for kept in ("only_b", "new_a", "imported_new", "event_a"):
+        for kept in ("new_a", "imported_new", "event_a"):
             self.assertIn(rows[kept]["learning_text"], sent_prompt)
-        for dropped in ("old_a", "imported_old"):
+        # F48 Contract P: another sell-way's verdict never reaches this sell-way's planner.
+        for dropped in ("old_a", "imported_old", "only_b"):
             self.assertNotIn(rows[dropped]["learning_text"], sent_prompt)
         texts = [row["text"] for row in detail["budget_basis_json"]["basis"]["learnings"]]
         self.assertEqual(texts, [
-            rows["only_b"]["learning_text"], rows["new_a"]["learning_text"],
-            rows["imported_new"]["learning_text"], rows["event_a"]["learning_text"],
+            rows["new_a"]["learning_text"], rows["imported_new"]["learning_text"],
+            rows["event_a"]["learning_text"],
         ])
 
 
