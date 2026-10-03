@@ -15,9 +15,13 @@ cost／cap／target／purchase／days anywhere else in `app/ads` fails, naming f
 F48-I02: a dict literal keyed by two or more grade words (a grade -> decision table like the old
 `settle._FATE`) outside those two files fails too; derived judgements read `learning_rank.rank`
 or `triage` instead.
+
+F48-I03 (Contract W): `record_learning` is called in `app/ads` only inside `ads_learnings.write`,
+whose `product_id` is a required keyword; any other call fails, naming file, function and line.
 """
 
 import ast
+import inspect
 import re
 import unittest
 from pathlib import Path
@@ -26,7 +30,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, experiments, learning_rank, month_summary, triage
+from app.ads import ab_pairs, ads_learnings, experiments, learning_rank, month_summary, triage
 from app.brand_intelligence import repository as brands
 from app.core import db
 
@@ -261,6 +265,69 @@ class RulerLiteralTest(unittest.TestCase):
             "    return head, more, width, spend + 1\n"
         )
         self.assertEqual(list(_ruler_literals(tree)), [])
+
+
+# -- F48 Contract W: one learning writer ----------------------------------------------------------
+
+# (file relative to app/ads, enclosing function) -- the only place a ledger row is written.
+LEARNING_WRITER = ("ads_learnings.py", "write")
+
+
+def _record_learning_calls(tree):
+    """Yield `(function_name, lineno)` for every `x.record_learning(...)` / `record_learning(...)`
+    call and every `from … import record_learning` (an alias would hide the call)."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else \
+                func.id if isinstance(func, ast.Name) else None
+            if name == "record_learning":
+                yield _enclosing(parents, node), node.lineno
+        elif isinstance(node, ast.ImportFrom) \
+                and any(alias.name == "record_learning" for alias in node.names):
+            yield _enclosing(parents, node), node.lineno
+
+
+class OneLearningWriterTest(unittest.TestCase):
+    """F48 Contract W: every `learning_ledger` row from `app/ads` goes through
+    `ads_learnings.write` (which requires the sell-way `product_id`)."""
+
+    def test_record_learning_is_called_only_in_ads_learnings_write(self):
+        offenders, writers = [], []
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for function, line in _record_learning_calls(tree):
+                if (relative, function) == LEARNING_WRITER:
+                    writers.append(line)
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} in {function}()")
+        self.assertEqual(
+            offenders, [],
+            "a learning written around ads_learnings.write -- call it instead (F48 W)",
+        )
+        # The one writer still exists and is the one call (moving it moves this entry).
+        self.assertEqual(len(writers), 1)
+
+    def test_the_scan_sees_a_planted_offender(self):
+        tree = ast.parse(
+            "from app.brand_intelligence.repository import record_learning\n"
+            "def close(conn, brand):\n"
+            "    bi_repo.record_learning(conn, brand, actor='x')\n"
+            "    record_learning(conn, brand)\n"
+            "def fine(rows):\n"
+            "    return rows.list_learnings()\n"
+        )
+        self.assertEqual(
+            sorted(_record_learning_calls(tree)),
+            [("<module>", 1), ("close", 3), ("close", 4)],
+        )
+
+    def test_product_id_is_a_required_keyword(self):
+        product_id = inspect.signature(ads_learnings.write).parameters["product_id"]
+        self.assertIs(product_id.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(product_id.default, inspect.Parameter.empty)
 
 
 class RulesEndpointTest(unittest.TestCase):

@@ -1,4 +1,8 @@
-"""app/ads/ads_learnings.py — Contract D (F27): the ads-track learning a confirmed `pause` item
+"""app/ads/ads_learnings.py — F48 Contract W: `write` is the one door every `learning_ledger` row
+from `app/ads` goes through (`bi_repo.record_learning` is called nowhere else in this module tree,
+`test_ads_one_ruler.py` enforces it), always with the sell-way it belongs to.
+
+Contract D (F27): the ads-track learning a confirmed `pause` item
 carrying an `angle` (Contract C) writes to the brand's learning ledger
 (`app.brand_intelligence.repository`, public functions only -- this module never touches
 `learning_ledger` directly).
@@ -19,6 +23,7 @@ precedent as `app/ads/visual_learning.py`'s own promotion scan.
 from typing import cast
 
 from app.ads import repository as ads_repo
+from app.ads import sell_way
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -28,6 +33,23 @@ _AnyConn = Conn | ConnProxy
 # `visual_learning.py`'s `limit=500`; this module's own list endpoint stays at the contract's
 # `<=50` (see `list_for_brand`).
 _SCAN_LIMIT = 500
+
+
+def write(conn: _AnyConn, org_id: str, brand_id: str, *, product_id: str | None, text: str,
+          scope: str, confidence: str, sample_size: str, source_cycle_id: str | None,
+          source_track: str, needs_revalidation: bool = False, platform: str | None = None,
+          actor: str = "system") -> dict:
+    """F48 Contract W: write one learning-ledger row and return it. `product_id` is required: the
+    sell-way the learning belongs to (`sell_way.of_campaign`／`of_ad`／`of_campaign_id`); pass
+    `None` explicitly only for a campaign that has no sell-way (an imported campaign) -- that row
+    is read as brand level. `org_id` names the caller's tenant; the ledger derives the org from
+    the brand itself."""
+    return bi_repo.record_learning(
+        cast(Conn, conn), brand_id, actor=actor, learning_text=text,
+        applicability_scope=scope, confidence=confidence, sample_size=sample_size,
+        source_cycle_id=source_cycle_id, product_id=product_id, platform=platform,
+        needs_revalidation=needs_revalidation, source_track=source_track,
+    )
 
 
 def _text(angle: str) -> str:
@@ -78,9 +100,9 @@ def record_for_item(conn: _AnyConn, org: str, brand: str, campaign: str, set_id:
         return None
     text = _text(angle)
     prior = sum(1 for row in rows if row["learning_text"] == text)
-    return bi_repo.record_learning(
-        cast(Conn, conn), brand, actor="system", learning_text=text,
-        applicability_scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+    return write(
+        conn, org, brand, product_id=sell_way.of_campaign_id(conn, org, brand, campaign),
+        text=text, scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
         sample_size="1", source_cycle_id=item_id, source_track="ads",
     )
 
@@ -109,9 +131,9 @@ def record_for_ab_item(conn: _AnyConn, org: str, brand: str, campaign: str, chan
         return None
     text = ab_text(ab)
     prior = sum(1 for row in rows if row["learning_text"] == text)
-    return bi_repo.record_learning(
-        cast(Conn, conn), brand, actor="system", learning_text=text,
-        applicability_scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+    return write(
+        conn, org, brand, product_id=sell_way.of_campaign_id(conn, org, brand, campaign),
+        text=text, scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
         sample_size="1", source_cycle_id=item_id, source_track="ads",
     )
 

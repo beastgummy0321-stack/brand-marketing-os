@@ -12,8 +12,8 @@ Never delete or overwrite anything under `data/`.
 
 from typing import cast
 
+from app.ads import ads_learnings, live_creative, outcome, sell_way
 from app.ads import learning as ads_learning
-from app.ads import live_creative, outcome
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
@@ -126,6 +126,7 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
 
     audience_labels = _label_lookup(conn, org_id, brand_id, "audience")
     needs_revalidation = ads_learning._needs_revalidation(conn, brand_id, detail)  # noqa: SLF001
+    product_id = sell_way.of_campaign(detail)  # F48 Contract W: the campaign's sell-way
 
     written: list[dict] = []
     for audience_key, stratum_ads in strata.items():
@@ -220,9 +221,9 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                             cast(Conn, conn), brand_id, newest["id"], actor=actor,
                         )
 
-            written.append(bi_repo.record_learning(
-                cast(Conn, conn), brand_id, actor=actor, learning_text=sentence,
-                applicability_scope=scope, confidence=confidence, sample_size=sample_size,
+            written.append(ads_learnings.write(
+                conn, org_id, brand_id, actor=actor, product_id=product_id, text=sentence,
+                scope=scope, confidence=confidence, sample_size=sample_size,
                 source_cycle_id=campaign_id, needs_revalidation=needs_revalidation,
                 source_track="visual",
             ))

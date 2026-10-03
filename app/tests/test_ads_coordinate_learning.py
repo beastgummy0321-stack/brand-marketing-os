@@ -178,6 +178,26 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
             {r["id"] for r in rows.values()},
         )
 
+    def test_every_closeout_row_carries_the_sell_way(self):
+        """F48 Contract W: the coordinate rows carry each ad's sell-way (`sell_way.of_ad`: its own
+        override, else the campaign's) and the period verdict carries the campaign's."""
+        campaign, ads = self._drill_ten()
+        other = bi_repo.create_product(self.conn, self.brand_id, name="單盒", actor=ACTOR)["id"]
+        self.conn.execute("UPDATE ads_ad SET product_id = %s WHERE id = %s",
+                          (other, ads["nap"]["id"]))
+        self.conn.commit()
+
+        self._close(campaign)
+
+        by_cycle = {row["source_cycle_id"]: row["product_id"] for row in self._coordinate_rows()}
+        expected = {f"{campaign['id']}:{ad['id']}": self.product_id for ad in ads.values()}
+        expected[f"{campaign['id']}:{ads['nap']['id']}"] = other
+        self.assertEqual(by_cycle, expected)
+        verdicts = [row for row in bi_repo.list_learnings(self.conn, self.brand_id,
+                                                          source_track="ads")
+                    if row["source_cycle_id"] == campaign["id"]]
+        self.assertEqual([row["product_id"] for row in verdicts], [self.product_id])
+
     def test_an_ad_the_old_sample_gate_skipped_now_enters_kept_and_flagged_few(self):
         campaign = self._campaign()
         group = self._group(campaign["id"])

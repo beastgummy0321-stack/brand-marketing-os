@@ -205,7 +205,9 @@ def _newest_per_product(rows: list[dict]) -> list[dict]:
     first (`learned_at DESC`), so the first verdict of each product wins; a NULL product is one
     brand-level row. An older period's verdict that contradicts the newer one never reaches the
     model. Event learnings (`ads;` scope: each one its own finding, never a period verdict) pass
-    through untouched; the order stays newest first."""
+    through untouched; the order stays newest first. F48 Contract W: every writer stores the
+    campaign's sell-way (`ads_learnings.write`), so this keeps one verdict per sell-way; only an
+    imported campaign's verdict is brand level."""
     seen: set = set()
     kept = []
     for row in rows:

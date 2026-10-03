@@ -5,6 +5,7 @@ automatic runtime re-check (`app/ads/runtime.py`, which calls `check` again on a
 already `confirmed`) never duplicates it."""
 
 import copy
+import json
 import unittest
 from unittest.mock import patch
 
@@ -152,6 +153,8 @@ class AdsLearningFlowTest(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(r["learning_text"] == "「沒興趣的舊客」對這群受眾無效" for r in rows))
         self.assertEqual([r["confidence"] for r in rows], ["observed", "likely", "validated"])
+        # F48 Contract W: an imported campaign has no sell-way, so its rows are brand level.
+        self.assertEqual({r["product_id"] for r in rows}, {None})
 
     def test_automatic_recheck_does_not_duplicate(self):
         ad = self.ad()
@@ -167,6 +170,37 @@ class AdsLearningFlowTest(unittest.TestCase):
         self.assertEqual(
             again["items"][0]["learning"], {"recorded": True, "confidence": "observed", "count": 1}
         )
+
+    def sell(self) -> str:
+        """Give the campaign a sell-way (`context_json.product_ids`, `sell_way.of_campaign`)."""
+        product = brands.create_product(self.conn, self.brand, name="保溫瓶單入", actor="test")
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json || %s::jsonb WHERE id = %s",
+            (json.dumps({"product_ids": [product["id"]]}), self.campaign),
+        )
+        self.conn.commit()
+        return product["id"]
+
+    def test_pause_learning_carries_the_campaigns_sell_way(self):
+        """F48 Contract W: the confirmed pause's learning is stored with the campaign's sell-way."""
+        product_id = self.sell()
+        ad = self.ad()
+        self.confirm(self.create_pause(ad["id"], angle="早鳥族"), ad)
+        rows = self.learnings()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["product_id"], product_id)
+
+    def test_ab_learning_carries_the_campaigns_sell_way(self):
+        product_id = self.sell()
+        ab = {"dimension_label": "開場", "winner": {"value_label": "甲"},
+              "loser": {"value_label": "乙"}}
+        row = ads_learnings.record_for_ab_item(
+            self.conn, self.org, self.brand, self.campaign,
+            {"plan_json": {"source": "ab", "ab": ab}}, {"id": "adx-ab", "kind": "pause"},
+        )
+        assert row is not None
+        self.assertEqual(row["product_id"], product_id)
+        self.assertEqual([r["product_id"] for r in self.learnings()], [product_id])
 
     def test_record_for_item_is_a_noop_off_pause_or_without_angle(self):
         self.assertIsNone(
