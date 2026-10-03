@@ -217,6 +217,30 @@ class StrategyPromptAndFactsTest(_Fixture):
         assert stored is not None
         self.assertEqual(stored["budget_basis_json"], {})
 
+    def test_a_name_from_the_context_may_be_quoted_but_no_other_digit(self):
+        """Lead review: a registered name with a digit (「咖啡因 150mg」) is stripped before the
+        number check; 「每筆 392」 and a digit in a name the context never gave still refuse."""
+        coffee = bi_repo.create_product(web.conn, self.brand_id, name="咖啡因 150mg", actor=ACTOR)
+        way = bi_repo.save_sell_way(web.conn, self.brand_id, name="單盒", actor=ACTOR,
+                                    product_id=coffee["id"], economics={"selling_price": 500})
+        context = {"product_ids": [way["id"]]}
+        ctx = planner_context.planner_context(web.conn, self.org_id, self.brand_id, way["id"])
+        self.assertIn("咖啡因 150mg", planner_context.quoted_names(ctx))
+
+        quoted = _reply()
+        quoted["allocation"][0]["rationale"] = "先推咖啡因 150mg 給加班的上班族"
+        quoted["why"] = ["「咖啡因 150mg」是這個賣法唯一的商品"]
+        detail, _ = self._generate(self._campaign(context_json=context), quoted)
+        self.assertEqual(detail["budget_basis_json"]["strategy"]["allocation"][0]["rationale"],
+                         "先推咖啡因 150mg 給加班的上班族")
+
+        for rationale in ("咖啡因 150mg 每筆 392 最便宜", "改推維他命 C 1000mg"):
+            with self.subTest(rationale=rationale):
+                reply = _reply()
+                reply["allocation"][0]["rationale"] = rationale
+                with self.assertRaisesRegex(ValueError, "strategy_failed"):
+                    self._generate(self._campaign(context_json=context), reply)
+
     def test_facts_are_the_programs_before_and_after_adoption(self):
         campaign = self._campaign()
         detail, _ = self._generate(campaign, _reply())

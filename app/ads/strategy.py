@@ -144,20 +144,30 @@ def _pct_sum_valid(allocation: list[dict]) -> bool:
 _NUMBER_IN_PROSE = re.compile(r"[0-9０-９%％]|NT\$")
 
 
-def _has_number(texts) -> bool:
-    return any(isinstance(t, str) and _NUMBER_IN_PROSE.search(t) for t in texts)
+def _has_number(texts, names=()) -> bool:
+    """A digit, `%` or `NT$` left in any string once every name the model was given (`names`,
+    longest first -- `planner_context.quoted_names`) is removed: quoting 「咖啡因 150mg」 is a
+    name, not a number the model wrote."""
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        for name in names:
+            text = text.replace(name, "")
+        if _NUMBER_IN_PROSE.search(text):
+            return True
+    return False
 
 
-def _validate_reply(data, available: frozenset[str]) -> dict | None:
+def _validate_reply(data, available: frozenset[str], names=()) -> dict | None:
     """`available` 是程式列給模型的【可用角色】（Contract P）：回覆點名一個不在裡面的角色
     （例如沒有再行銷來源的品牌被分了 `retarget`）就整包退回 `None`——`plan.py` 會把每個
     分配到的角色展開成投放組，一個交接時拿不到受眾的再行銷組不能活到那一步。
-    F48 Contract S：`rationale`／`why`／`unknowns`／`learning_goals` 帶阿拉伯數字、`%` 或
-    `NT$` 就退回；`alternatives` 有給就必須是字串陣列。"""
+    F48 Contract S：`rationale`／`why`／`unknowns`／`learning_goals` 去掉程式給過的名稱
+    （`names`）後還帶阿拉伯數字、`%` 或 `NT$` 就退回；`alternatives` 有給就必須是字串陣列。"""
     if not isinstance(data, dict):
         return None
     prose = [data.get(key) for key in ("why", "unknowns", "learning_goals")]
-    if _has_number([t for value in prose if isinstance(value, list) for t in value]):
+    if _has_number([t for value in prose if isinstance(value, list) for t in value], names):
         return None
     alternatives = data.get("alternatives", [])
     if not isinstance(alternatives, list) or not all(isinstance(a, str) for a in alternatives):
@@ -176,7 +186,7 @@ def _validate_reply(data, available: frozenset[str]) -> dict | None:
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
             return None
         rationale = item.get("rationale")
-        if _has_number([rationale]):
+        if _has_number([rationale], names):
             return None
         # `label` 由程式對照 `_ROLE_LABELS` 填，不再要求模型回——那是花錢買一個我們已經知道
         # 的答案（F04-I03）。模型舊行為回了 `label` 也不理會，一律以程式的對照表為準。
@@ -411,7 +421,8 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         raise ValueError("strategy_failed")
     data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
     strategy_payload = (
-        _validate_reply(data, frozenset(available_roles)) if data is not None else None
+        _validate_reply(data, frozenset(available_roles), planner_context.quoted_names(ctx))
+        if data is not None else None
     )
     if strategy_payload is None:
         raise ValueError("strategy_failed")

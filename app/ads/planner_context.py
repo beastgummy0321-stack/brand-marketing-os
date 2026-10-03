@@ -381,6 +381,30 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     }
 
 
+def quoted_names(ctx: dict) -> list[str]:
+    """Every name the context hands the model -- sell-way and knowledge product names, offer
+    labels and sentences, customer groups' 「who」, the previous campaign and its best ad, the
+    ranking's campaign and ad names -- longest first, so a reply quoting one (「咖啡因 150mg」)
+    can be stripped before its prose is checked for a number (F48 Contract S)."""
+    names: list = []
+    for block in ctx["product_blocks"]:
+        names += [k["name"] for k in block["knowledge"]]
+        names += [n for way in block["sell_ways"] for n in (way["name"], way["display"])]
+    names += [n for offer in ctx["offers"] for n in (offer["label"], offer["sentence"])]
+    names += [group.get("who") for group in ctx["customer_groups"]]
+    previous = ctx["previous"]
+    if previous is not None:
+        names += [previous["name"], (previous["best"] or {}).get("ad_name")]
+    ranked = ctx["learnings"]["ranked"]
+    names += [group.get("who") for group in ranked["groups"]]
+    for campaign in ranked["campaigns"]:
+        names.append(campaign["campaign_name"])
+        names += [row["ad_name"] for row in campaign["rows"]]
+        names += [(row["customer_group"] or {}).get("who") for row in campaign["rows"]]
+    unique = {str(n).strip() for n in names if n and str(n).strip()}
+    return sorted(unique, key=lambda n: (-len(n), n))
+
+
 def section_text(ctx: dict, which: str) -> str:
     """One prompt block of `ctx`: product／forbidden／offers／customers／learnings／ranked／
     previous／capacity."""
