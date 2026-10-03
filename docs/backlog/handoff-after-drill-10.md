@@ -2,6 +2,8 @@
 
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-drill-9.md`'s "next" pointer.
 
+> **Superseded 2026-10-03:** drill 11 ran; start from `handoff-after-drill-11.md` and `../drills/drill-11/report.md`.
+
 ## Resume here (handoff 2026-10-03)
 - Done: F45 / F46 / F47 (all drill-10 fixes) accepted by the user and merged to master (HEAD e19eaa2d, **not pushed**; push is
   manual). No open feature, no queue, no worker or backend running from that session. Main tree on `master`, clean.

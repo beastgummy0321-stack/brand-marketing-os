@@ -1,0 +1,8 @@
+{"ads": {
+"考前專注時刻的150mg咖啡因補充": {"fit": 1.2, "tags": ["student"], "compliance": "ok", "proof_present": false, "reason": "Names the self-study room situation (\"自修室坐下，考試資料才翻開\") and explains mechanism (\"咀嚼就能補充提神物質，不必配水\"), but no offer for a cold audience and no proof."},
+"備考讀到深夜不用一罐罐能量飲": {"fit": 1.2, "tags": ["student", "night"], "compliance": "ok", "proof_present": false, "reason": "Concrete late-night study moment (\"讀到深夜，還要起身開一罐能量飲\") plus mechanism (\"咀嚼就能補充\"); discount \"優惠價 NT$999（原價 NT$1,500）\" matches the page but is not a cold entry offer."},
+"讀書時不配水也能補充咖啡因": {"fit": 1.3, "tags": ["student"], "compliance": "ok", "proof_present": false, "reason": "Library situation (\"圖書館裡整理筆記\"), mechanism (\"咀嚼補充，不必配水\") and a cold-fit offer (\"三盒組免運\") with correct dosing; no proof."},
+"會議中不用離席的咖啡因小錠": {"fit": 1.2, "tags": ["worker"], "compliance": "ok", "proof_present": false, "reason": "Concrete meeting moment (\"會議才剛開始，精神卻往下掉\") and mechanism (\"不必配水，咀嚼就能補充每顆 150mg 咖啡因\"); \"三盒組優惠價 NT$999\" is a discount, not a cold-stage entry offer; ad name says 小錠 for a gummy."},
+"通勤途中不怕頻尿的提神選擇": {"fit": 1.3, "tags": ["worker"], "compliance": "review", "proof_present": false, "reason": "Strong commute situation (\"擠在通勤車廂裡，手上沒飲料\") with mechanism and cold-fit \"現在下單免運\", but \"帶著清醒上班\" frames an alertness effect, borderline."},
+"忙碌工作隨手補充150mg咖啡因": {"fit": 1.2, "tags": ["worker"], "compliance": "review", "proof_present": false, "reason": "Meeting situation (\"會議中不方便拿起飲料\") and mechanism, but \"提神物質可經由口腔微血管吸收\" and \"提神\" headline lean on an effect claim; no offer shown."}
+}}

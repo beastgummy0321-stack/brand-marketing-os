@@ -1,0 +1,7 @@
+{"ads": {
+"隨身帶著訓練前補充": {"fit": 1.1, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "Explains mechanism \"每顆含 150mg 咖啡因與 100mg 牛磺酸，直接咀嚼，不必配水\" for pre-training; no calendar hook, no proof."},
+"訓練前不用配水的咖啡因軟糖": {"fit": 1.1, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "\"找水、撕粉包、等飲品沖好\" is a concrete situation plus mechanism \"不必配水，直接咀嚼\"; hook_key says proof_led but no proof appears."},
+"訓練前免沖泡優惠價": {"fit": 1.2, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "Mechanism \"直接咀嚼即可\" and cold-stage offer \"三盒組優惠價 NT$999（原價 NT$1,500）\" match the funnel."},
+"段考前一次備妥優惠價": {"fit": 1.3, "tags": ["student"], "compliance": "ok", "proof_present": false, "reason": "Midterm week hook \"段考週前整理書桌\" plus mechanism \"咀嚼補充，每顆含 150mg\" and cold offer \"優惠價 NT$999（原價 NT$1,500）\"."},
+"考前專注時刻150mg咖啡因補充": {"fit": 1.05, "tags": ["student"], "compliance": "ok", "proof_present": false, "reason": "Good midterm hook \"段考讀到一半\" and mechanism, but near-identical name/hook/angle to period 1 \"考前專注時刻的150mg咖啡因補充\" (fatigue laundering -0.15)."}
+}}

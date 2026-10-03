@@ -1,0 +1,7 @@
+{"ads": {
+"訓練前不用配水的補充方式": {"fit": 1.1, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "\"把每顆 150mg 咖啡因與 100mg 牛磺酸做進軟糖裡，直接咀嚼，不必配水\" explains mechanism for a training-before audience; proof_key claims none and copy shows none."},
+"訓練前隨手攜帶免沖泡": {"fit": 1.05, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "Mechanism and gym-bag situation (\"進健身房前，從運動包拿出一顆\") earn +0.2, but headline \"訓練前補充，不必配水\" is identical to period 2's headline, -0.15 fatigue laundering."},
+"運動包裡隨時可帶的咖啡因軟糖": {"fit": 1.1, "tags": ["fitness"], "compliance": "ok", "proof_present": false, "reason": "\"更衣室裡，訓練前才發現不想沖泡、也不想再配水\" is concrete, with 150mg/1.6g 寡糖 facts and no offer for a cold audience."},
+"段考前一次備妥優惠價": {"fit": 1.15, "tags": ["student"], "compliance": "review", "proof_present": false, "reason": "Same ad name, angle and discount as period 2 with rewritten copy (-0.15), offset by exam situation, mechanism and 三盒 offer; \"咀嚼就能補充提神物質\" and 段考 (secondary-school, minors) need review."},
+"讀書備考不靠能量飲的輕鬆補充": {"fit": 1.2, "tags": ["student"], "compliance": "review", "proof_present": false, "reason": "\"段考前的晚自習，不想在書桌旁放一罐罐能量飲料\" names a concrete situation with 150mg/100mg mechanism; 段考 implies possibly minor audience so review."}
+}}

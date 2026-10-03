@@ -58,10 +58,18 @@ def patch_modules(prefix: str = "app.") -> int:
     real = getattr(db, "_drill_real_now_utc", None) or db.now_utc
     db._drill_real_now_utc = real
 
+    from datetime import timedelta, timezone
+
+    local = timezone(timedelta(hours=8))  # drill orgs are Asia/Taipei
+
     def now_utc():
+        # Swap the date in local time: on UTC, before 08:00 local the drill day ran one day ahead
+        # (drill 11 — triage cutoff past the synced window, every ad 資料不足).
         value = real()
         o = override()
-        return value.replace(year=o.year, month=o.month, day=o.day) if o else value
+        if not o:
+            return value
+        return value.astimezone(local).replace(year=o.year, month=o.month, day=o.day).astimezone(value.tzinfo)
 
     n = 0
     for name, mod in list(sys.modules.items()):
