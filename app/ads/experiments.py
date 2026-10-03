@@ -6,7 +6,7 @@ import math
 from datetime import date, timedelta
 from itertools import combinations
 
-from app.ads import live_creative, outcome, repository, simulation_mode
+from app.ads import live_creative, outcome, repository, simulation_mode, triage
 from app.core import settings
 from app.core.db import jsonb, now_utc
 
@@ -18,7 +18,12 @@ DIMENSIONS = {
     "offer": "方案",
     "format": "形式",
 }
-DEFAULT_RULES = {"min_days": 7, "min_conversions_each": 10, "relative_difference": 0.10}
+# F48 Contract R: the A/B sample thresholds are the ruler's own (`triage`), never a copy;
+# `relative_difference` stays the A/B band.
+DEFAULT_RULES = {
+    "min_days": triage.WINDOW_STEPS[0], "min_conversions_each": triage.MIN_RESULT_EVENTS,
+    "relative_difference": 0.10,
+}
 LIMITATION = "觀察性比較；同組不代表隨機分流或平均花費，不宣稱統計顯著或因果。"
 SETTING_KEYS = frozenset((*DEFAULT_RULES, "window"))
 

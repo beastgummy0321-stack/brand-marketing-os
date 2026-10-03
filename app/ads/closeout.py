@@ -7,8 +7,9 @@ leaves one sentence the next campaign can read (§0 the "verdict -> learning -> 
 deriver's `0` for a Meta-sourced campaign is a missing purchase count wearing a number, not a
 real zero (§0 "F03-I12's 結案 verdict reads outcome.summary()'s totals, never
 _outcome_totals"). 看不出 is a real verdict, not a rounding of an unknown into a pass or a fail
-— it is what gets written whenever no cap resolves, the sample bucket is 低,
-or the metric being judged is itself untracked; it never falls back to 未達成.
+— it is what gets written whenever no cap resolves or the metric being judged is itself
+untracked; it never falls back to 未達成. F48-I02 (Contract R): a small sample is shown
+(`verdict_json.sample`), never turned into 看不出.
 
 F39-I01 / F46-I04: after the visual track, `coordinate_learning.write_coordinate_learnings` writes
 one `source_track='coordinate'` learning per ad the ranking rule enters (`learning_rank`: 留下／換掉
@@ -44,27 +45,28 @@ def _days(start_date, end_date) -> int:
     return (end_date - start_date).days + 1
 
 
-def _judge(cap: dict, campaign: dict, totals: dict, sample_bucket: str,
+def _judge(cap: dict, campaign: dict, totals: dict, sample: dict,
            labels: dict) -> tuple[str, dict]:
     """F28-I01: cost per result against the campaign's one cap (`targets.resolve`) -- lower is
     better, 達成 when at or under the cap. Returns (verdict, verdict_json); `verdict_json`
-    always carries `metric`/`target`/`basis`/`actual`/`window`/`sample_bucket`, plus `missing`
-    only for 看不出, naming what was missing. `labels` is `judgment.conversion_labels()`."""
+    always carries `metric`/`target`/`basis`/`actual`/`window`/`sample`/`sample_bucket`, plus
+    `missing` only for 看不出, naming what was missing. `labels` is `judgment.conversion_labels()`.
+
+    F48 Contract R: the sample size is shown, never a verdict switch -- `sample` is
+    `{purchases, days, bucket}` (`outcome.sample_bucket`), `sample_bucket` its bucket (the key
+    older readers print). 看不出 only when the cap or the actual cost is unknown."""
     target = cap["value"]
     actual = totals["cpa"]
     verdict_json = {
         "metric": "cpa", "target": target, "basis": cap["basis"], "actual": actual,
         "window": {"start": campaign["start_date"], "end": campaign["end_date"]},
-        "sample_bucket": sample_bucket,
+        "sample": sample, "sample_bucket": sample["bucket"],
     }
     if target is None:
         verdict_json["missing"] = "上限沒有設定，沒有數字可比對"
         return "看不出", verdict_json
     if actual is None:
         verdict_json["missing"] = f"{labels['cpa']}未追蹤，沒有數字可以比對"
-        return "看不出", verdict_json
-    if sample_bucket == "低":
-        verdict_json["missing"] = "樣本太小（低），比對出來的結果不可靠"
         return "看不出", verdict_json
     return ("達成" if actual <= target else "未達成"), verdict_json
 
@@ -135,15 +137,16 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
 
     totals = result["totals"]
     days = _days(campaign["start_date"], campaign["end_date"])
-    # `sample_bucket` takes an int. `purchases` is `None` only when no day of the campaign carries
-    # a tracked purchase count (Meta purchases are tracked since F16-I05; a legacy or untracked
-    # day stays NULL) -- untracked reads as 低 sample, never passes `None` in (§0 "an untracked
-    # campaign is 低樣本, ... never passes None").
-    purchases_for_bucket = totals["purchases"] if totals["purchases"] is not None else 0
-    sample_bucket = outcome.sample_bucket(purchases_for_bucket, days)
+    # `purchases` is `None` only when no day of the campaign carries a tracked purchase count
+    # (Meta purchases are tracked since F16-I05; a legacy or untracked day stays NULL) -- passed
+    # as is: the bucket reads 「未追蹤」, never 低 or 0 (F48-I02).
+    sample = {
+        "purchases": totals["purchases"], "days": days,
+        "bucket": outcome.sample_bucket(totals["purchases"], days),
+    }
 
     cap = targets.resolve(conn, org_id, brand_id, campaign)
-    verdict, verdict_json = _judge(cap, campaign, totals, sample_bucket, labels)
+    verdict, verdict_json = _judge(cap, campaign, totals, sample, labels)
     if simulation_mode.enabled(conn, org_id, brand_id):
         verdict_json["data_source"] = "isolated_simulation"
         verdict_json["simulation_receipts"] = recovery.get("days", {}) if recovery else {}

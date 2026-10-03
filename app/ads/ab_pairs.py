@@ -20,6 +20,7 @@ from datetime import timedelta
 from app.ads import change_control, experiments, live_creative, outcome, repository, triage
 from app.core import settings
 
+# The ruler's thresholds through `experiments.DEFAULT_RULES` (F48 Contract R: `triage` constants).
 RULES = {
     "min_days": experiments.DEFAULT_RULES["min_days"],
     "min_conversions_each": experiments.DEFAULT_RULES["min_conversions_each"],

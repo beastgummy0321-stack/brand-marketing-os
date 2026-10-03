@@ -134,9 +134,12 @@ def _brand_month_total(conn, org_id, brand_id, start, end) -> tuple[float | None
 
 
 def _verdict(cost_per_result, target_value) -> str:
-    if cost_per_result is None or target_value is None:
-        return "unjudged"
-    return "met" if cost_per_result <= target_value else "missed"
+    """F48 Contract R: the one cost ruler (`triage.cost_grade`) -- 划算 is met, any other graded
+    cost missed, an unknown cost or no cap unjudged."""
+    grade = triage.cost_grade(cost_per_result, target_value)[0]
+    if grade == "on_target":
+        return "met"
+    return "missed" if grade in triage.GRADED else "unjudged"
 
 
 def _campaign_rows(conn, org_id, brand_id) -> list[dict]:

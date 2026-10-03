@@ -375,13 +375,24 @@ class PeriodGradeTest(OutcomeTestBase):
 
 
 class SampleBucketBoundaryTest(unittest.TestCase):
+    """F48-I02: the bucket's thresholds are the ruler's own (`triage.MIN_RESULT_EVENTS` results,
+    `triage.WINDOW_STEPS[0]` days), and an untracked count is 「未追蹤」, never 低."""
+
     def test_boundaries_are_exact(self):
-        self.assertEqual(outcome.sample_bucket(9, 5), "低")
-        self.assertEqual(outcome.sample_bucket(10, 5), "中")
-        self.assertEqual(outcome.sample_bucket(49, 5), "中")
-        self.assertEqual(outcome.sample_bucket(50, 5), "高")
-        self.assertEqual(outcome.sample_bucket(100, 2), "低")  # 天數不夠，購買數再高也是低
-        self.assertEqual(outcome.sample_bucket(100, 3), "高")
+        from app.ads import triage
+
+        days = triage.WINDOW_STEPS[0]
+        few = triage.MIN_RESULT_EVENTS
+        self.assertEqual(outcome.sample_bucket(few - 1, days), "低")
+        self.assertEqual(outcome.sample_bucket(few, days), "中")
+        self.assertEqual(outcome.sample_bucket(49, days), "中")
+        self.assertEqual(outcome.sample_bucket(50, days), "高")
+        self.assertEqual(outcome.sample_bucket(100, days - 1), "低")  # 天數不夠，購買數再高也是低
+        self.assertEqual(outcome.sample_bucket(100, days), "高")
+
+    def test_untracked_is_its_own_bucket(self):
+        self.assertEqual(outcome.sample_bucket(None, 30), "未追蹤")
+        self.assertEqual(outcome.sample_bucket(0, 30), "低")
 
 
 class IngestEndpointRetiredTest(OutcomeTestBase):
@@ -396,8 +407,8 @@ class IngestEndpointRetiredTest(OutcomeTestBase):
 
 
 class RealPurchasesReachCloseoutTest(OutcomeTestBase):
-    """A bound campaign with three days of platform rows carrying real purchases passes the
-    sample gate (>=10 purchases, >=3 days) and closes as 達成 or 未達成, never 看不出."""
+    """A bound campaign with three days of platform rows carrying real purchases closes as 達成 or
+    未達成, never 看不出 (F48-I02: the sample is shown -- three days is 低 -- never a gate)."""
 
     def _three_days(self, cap):
         detail, _group_ext, _ad_ext = self._bound_campaign(
@@ -422,7 +433,8 @@ class RealPurchasesReachCloseoutTest(OutcomeTestBase):
 
         self.assertEqual(closed["verdict"], "達成")
         self.assertEqual(closed["verdict_json"]["actual"], 100)
-        self.assertEqual(closed["verdict_json"]["sample_bucket"], "中")
+        self.assertEqual(closed["verdict_json"]["sample"],
+                         {"purchases": 12, "days": 3, "bucket": "低"})
 
     def test_bound_campaign_with_real_purchases_below_target_closes_as_missed(self):
         from app.ads import closeout

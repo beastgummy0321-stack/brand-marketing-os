@@ -11,6 +11,10 @@ numbers live only in `learning_rank.py` and `triage.py`. A ruler-shaped literal 
 0.02, 3, 5, 7, 10) compared with, or multiplied into, anything named like spend／result／sales／
 cost／cap／target／purchase／days anywhere else in `app/ads` fails, naming file, function and line.
 `GET …/rules` (Contract R-API) serves exactly the module constants.
+
+F48-I02: a dict literal keyed by two or more grade words (a grade -> decision table like the old
+`settle._FATE`) outside those two files fails too; derived judgements read `learning_rank.rank`
+or `triage` instead.
 """
 
 import ast
@@ -22,7 +26,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import experiments, learning_rank, triage
+from app.ads import ab_pairs, experiments, learning_rank, month_summary, triage
 from app.brand_intelligence import repository as brands
 from app.core import db
 
@@ -41,8 +45,17 @@ NOT_A_RULER = {
     ("assets.py", "_variant_count"): "campaign length -> how many images to make, not a grade",
 }
 # (file, function) -> the issue that moves it onto the ruler constants and deletes the entry.
-PENDING = {
-    ("outcome.py", "sample_bucket"): "F48-I02",
+PENDING: dict = {}
+
+# F48-I02: a dict keyed by grade words is a second grade -> decision table (the old `settle._FATE`
+# and `triage_capacity._CLOSE_RANK` were); judgements derive from `learning_rank`／`triage` only.
+GRADE_WORDS = {
+    "on_target", "watch", "over", "wasted", "划算", "偏貴", "太貴", "沒賣出",
+}
+# (file, variable) -> why a grade-keyed table there is not a judgement. Never widen to hide one.
+GRADE_TABLE_ALLOWED = {
+    ("triage_capacity.py", "GRADE_RANK"):
+        "decision memory: a remembered ad returns only when its grade got worse (F29 Contract B)",
 }
 
 
@@ -121,6 +134,27 @@ def _ruler_literals(tree):
                 yield _enclosing(parents, node), node.lineno, operand.value
 
 
+def _grade_tables(tree):
+    """Yield `(name, lineno)` for every dict literal with two or more grade-word keys -- `name` is
+    the variable it is assigned to (else the enclosing function)."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = [k.value for k in node.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        if len(GRADE_WORDS.intersection(keys)) < 2:
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Assign | ast.AnnAssign):
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            names = [t.id for t in targets if isinstance(t, ast.Name)]
+            if names:
+                yield names[0], node.lineno
+                continue
+        yield _enclosing(parents, node), node.lineno
+
+
 def _ads_files():
     return [p for p in ADS_DIR.rglob("*.py") if "tests" not in p.parts]
 
@@ -188,6 +222,34 @@ class RulerLiteralTest(unittest.TestCase):
             [("judge", 1.2), ("judge", 3), ("judge", 5), ("judge", 7)],
         )
 
+    def test_no_grade_keyed_table_outside_the_two_ruler_modules(self):
+        offenders, seen_allowed = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative in RULER_FILES:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for name, line in _grade_tables(tree):
+                if (relative, name) in GRADE_TABLE_ALLOWED:
+                    seen_allowed.add((relative, name))
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} {name}")
+        self.assertEqual(
+            offenders, [],
+            "a grade -> decision table outside learning_rank.py／triage.py -- derive it from "
+            "learning_rank.rank or triage (F48 R)",
+        )
+        self.assertEqual(set(GRADE_TABLE_ALLOWED), seen_allowed)
+
+    def test_the_grade_table_scan_sees_a_planted_fate_table(self):
+        tree = ast.parse(
+            "_FATE = {'on_target': 'effective', 'over': 'ineffective'}\n"
+            "def pick(row):\n"
+            "    return {'太貴': 1, '沒賣出': 2}[row]\n"
+            "ONE = {'on_target': 1}\n"
+        )
+        self.assertEqual([name for name, _ in _grade_tables(tree)], ["_FATE", "pick"])
+
     def test_the_scan_ignores_slices_ranges_counts_and_unrelated_names(self):
         tree = ast.parse(
             "def show(days, rows, spend, page):\n"
@@ -251,6 +313,19 @@ class RulesEndpointTest(unittest.TestCase):
             {"cap", "on_target", "watch", "over", "wasted", "thin", "money", "notebook",
              "break_even"},
         )
+
+    def test_ab_and_month_rulers_read_the_ruler_modules(self):
+        # F48-I02 "derived rulers": the A/B sample thresholds are triage's own constants.
+        self.assertEqual(experiments.DEFAULT_RULES["min_days"], triage.WINDOW_STEPS[0])
+        self.assertEqual(experiments.DEFAULT_RULES["min_conversions_each"],
+                         triage.MIN_RESULT_EVENTS)
+        self.assertEqual(ab_pairs.RULES, experiments.DEFAULT_RULES)
+        # The month review's met／missed is triage's cost grade.
+        cap = 100
+        self.assertEqual(month_summary._verdict(cap, cap), "met")
+        self.assertEqual(month_summary._verdict(cap * triage.WATCH_BAND, cap), "missed")
+        self.assertEqual(month_summary._verdict(None, cap), "unjudged")
+        self.assertEqual(month_summary._verdict(50, None), "unjudged")
 
     def test_glossary_sentences_carry_todays_numbers(self):
         glossary = triage.rules()["glossary"]

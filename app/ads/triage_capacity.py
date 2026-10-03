@@ -3,7 +3,9 @@ candidate ads for the brand queue. Read-only, no LLM call, no platform write
 (ARCHITECTURE.md §0 "程式整理，LLM 判斷"). Reuses `triage_scale.owner_lookup` for the per-ad
 daily budget owner (never a second, divergent definition of "daily budget owner", feature
 Decisions "Gaps kept honest"). F28-I02: which ads close is decided by `classify()`'s own
-per-ad grade against the one cap (ads.md §6.32), no longer by lowest 7-day spend.
+per-ad grade against the one cap (ads.md §6.32), no longer by lowest 7-day spend. F48-I02: the
+close order is `learning_rank.rank`'s (the one ruler a closeout ranks by), so a cheaper sold ad is
+never cut before a dearer one because of a grade label.
 
 Cleanup never touches an ad in an "open replacement lineage" (pre-dispatch correction 4): a
 replacement ad whose own `new_ad` item hasn't reached `confirmed` yet, or an old ad a confirmed
@@ -16,9 +18,18 @@ This walks the SAME `plan_json.replaces_entity_id` / `ads_handoff_item.entity_id
 import math
 from datetime import datetime, timedelta
 
-from app.ads import review_evidence
+from app.ads import learning_rank, review_evidence
 
 _CLEANUP_WINDOW_DAYS = 7
+
+
+def can_support(daily_budget, target_value):
+    """F48 Contract C: how many ads one day's budget carries at this cap --
+    `floor(daily_budget / (target * 2))`; `None` unless both are known and `target > 0`. Pure: the
+    one formula `capacity_view` and the plan-time ceiling both call."""
+    if daily_budget is None or target_value is None or target_value <= 0:
+        return None
+    return math.floor(daily_budget / (target_value * 2))
 
 
 def capacity_view(items, target_value, owner_by_entity) -> dict:
@@ -27,7 +38,7 @@ def capacity_view(items, target_value, owner_by_entity) -> dict:
     `daily_budget` is `null` when there are no active ads, when any active ad has no daily budget
     owner (correction 4), or when the qualifying owners don't share one currency (never a partial
     sum across currencies, same "Gaps kept honest" rule `triage_scale.py` follows). `can_support`
-    is `floor(daily_budget / (target * 2))` once both are known and `target > 0`."""
+    is `can_support(daily_budget, target)` above."""
     active_ads = len(items)
     daily_budget = currency = None
     if active_ads > 0:
@@ -44,12 +55,9 @@ def capacity_view(items, target_value, owner_by_entity) -> dict:
             if len(currencies) == 1 and next(iter(currencies)) is not None:
                 currency = next(iter(currencies))
                 daily_budget = sum(float(owner["budget_amount"]) for owner in owners.values())
-    can_support = None
-    if daily_budget is not None and target_value is not None and target_value > 0:
-        can_support = math.floor(daily_budget / (target_value * 2))
     return {
         "daily_budget": daily_budget, "currency": currency, "target": target_value,
-        "can_support": can_support, "active_ads": active_ads,
+        "can_support": can_support(daily_budget, target_value), "active_ads": active_ads,
     }
 
 
@@ -148,32 +156,53 @@ def _ad_spend_7d(rows_by_entity, entity_id, start, end):
 
 
 
-
-# F28-I02 (ads.md §6.32): close order -- 沒賣出 always first, then 太貴 before 偏貴. 划算 and every
-# ungraded ad (剛開始／資料不足／未判斷) never close through cleanup.
-_CLOSE_RANK = {"wasted": 0, "over": 1, "watch": 2}
 # F29-I01 Contract B: how bad a grade is -- a remembered ad re-enters a cleanup only when its
-# current grade ranks strictly worse than the grade it had when the user said no.
+# current grade ranks strictly worse than the grade it had when the user said no. Its keys are
+# also the graded grades (`triage.GRADED`, not importable here: `triage` imports this module).
 GRADE_RANK = {"on_target": 0, "watch": 1, "over": 2, "wasted": 3}
-_KEEP_RANK = {"wasted": 0, "over": 1, "watch": 2, "on_target": 3, "insufficient": 4, "no_target": 5}
 
 
-def _cost_desc(item):
-    """Highest cost per result first; an unknown cost sorts after every known one."""
-    cost = item["current"].get("cost_per_result")
-    return (cost is None, -(cost or 0))
+def reason_text(item, ranked=None) -> str:
+    """F48 Contract R "reason texts": why this ad is where it is, built from its own triage grade
+    and numbers (money through `learning_rank.whole`). `ranked` (its `learning_rank.rank` row)
+    prefixes the place 「第 r／n 名，」. An ungraded ad (剛開始／資料不足／未判斷) has no score
+    yet, and says so with its own label. Shared by cleanup entries and the pause read."""
+    grade = item.get("grade")
+    label = item.get("grade_label") or grade
+    current = item.get("current") or {}
+    if grade not in GRADE_RANK:
+        return f"這則還沒有分數：{label}"
+    if grade == "wasted":
+        return f"花了 {learning_rank.whole(current['spend'])}，一筆都沒賣出"
+    head = f"第 {ranked['rank']}／{ranked['of']} 名，" if ranked is not None else ""
+    cost = learning_rank.whole(current["cost_per_result"])
+    if grade == "on_target":
+        return f"{head}每筆 {cost} 在上限內（{label}）"
+    cap = learning_rank.whole((item.get("target") or {})["value"])
+    return f"{head}每筆 {cost} 對上限 {cap}（{label}）"
 
 
-def _spend_desc(item):
-    spend = item["current"].get("spend")
-    return (spend is None, -(spend or 0))
+def _rank_rows(items) -> list[dict]:
+    """`learning_rank.rank` input rows (`period_grades` shape) of the campaign's graded items --
+    the graded window's own numbers (`classify()`'s `current`) against the campaign's one cap."""
+    return [
+        {
+            "entity_id": item["entity_id"], "name": item.get("name"),
+            "spend": item["current"].get("spend"), "results": item["current"].get("result_count"),
+            "currency": item["current"].get("currency"),
+            "cap": (item.get("target") or {}).get("value"),
+        }
+        for item in items if item.get("grade") in GRADE_RANK
+    ]
 
 
-def _ad_view(item, spend_7d, rejected_before=None):
+def _ad_view(item, spend_7d, ranked, of, rejected_before=None):
     """One cleanup `ads`/`keep` entry (F28 Contract "Queue"): the existing keys plus the ad's grade
     and its graded-window numbers (`classify()`'s own `current`, never re-derived). `daily_spend`
     is the last 7 days' average, `None` whenever that 7-day spend isn't fully known.
-    `rejected_before` (F29-I01) is set only on a proposed ad that re-entered after a rejection."""
+    `rejected_before` (F29-I01) is set only on a proposed ad that re-entered after a rejection.
+    F48-I02: the ad's place in `learning_rank.rank` (`rank`, `of`, `sales`, `few`, `verdict`,
+    `verdict_label`, `flags`) and its `reason_text`; an ungraded ad has no place (`rank` null)."""
     current = item["current"]
     return {
         "entity_id": item["entity_id"], "name": item["name"],
@@ -182,6 +211,13 @@ def _ad_view(item, spend_7d, rejected_before=None):
         "spend": current.get("spend"), "result_count": current.get("result_count"),
         "daily_spend": spend_7d / _CLEANUP_WINDOW_DAYS if spend_7d is not None else None,
         "rejected_before": rejected_before,
+        "rank": ranked["rank"] if ranked else None, "of": of,
+        "sales": ranked["sales"] if ranked else None,
+        "few": ranked["few"] if ranked else False,
+        "verdict": ranked["verdict"] if ranked else None,
+        "verdict_label": ranked["verdict_label"] if ranked else None,
+        "flags": list(ranked["flags"]) if ranked else [],
+        "reason_text": reason_text(item, ranked),
     }
 
 
@@ -240,12 +276,18 @@ def cleanup_candidates(
     conn, org_id, brand_id, campaign_id, campaign_name, items, rows_by_entity, cutoff, capacity,
     scale_owner_id=None, memory=None,
 ) -> dict | None:
-    """F28-I02 cleanup rule (ads.md §6.32) over `classify()`'s own grades: every 沒賣出 ad closes;
-    then, while the active ads still exceed `can_support`, 太貴 then 偏貴 close, highest cost per
-    result first (ties: higher spend, then entity id). 划算 and every ungraded ad never close. An ad
-    in an open replacement lineage (correction 4) never closes either -- it stays in `keep`.
+    """F48 Contract R "ordering／verdict" (decision 1): the campaign's graded active ads are ranked
+    by `learning_rank.rank` (sold by cost per sale, 沒賣出 after) and closed from the bottom --
+    every 沒賣出 (verdict `replace` with no cost per sale), then `replace` sold rows most expensive
+    first while the active ads still exceed `can_support`. `keep`／`keep_relative`, every ungraded
+    ad (剛開始／資料不足／未判斷) and an ad in an open replacement lineage (correction 4) never
+    close -- they stay in `keep`. Sample size is shown (`sales`, `few`), never a gate.
 
-    `None` when nothing would close: a campaign over capacity with only 划算／ungraded ads left
+    `ads` (closing) and `keep` come in rank order (the frontend never re-sorts); `keep` lists the
+    ranked rows first, then the ungraded ones in `classify()`'s order. Each entry carries
+    `rank, of, sales, few, verdict, verdict_label, flags, reason_text` (`_ad_view`).
+
+    `None` when nothing would close: a campaign over capacity with only 留下／ungraded ads left
     raises no cleanup row -- its budget owner's `scale_budget` row is the proposal instead.
     `short` is how many ads stay over capacity after the close list (0 when capacity is unknown or
     below one ad -- then only 沒賣出 closes, capacity never drives a close). `scale_owner_id` is
@@ -256,29 +298,26 @@ def cleanup_candidates(
     refilled with the next ad) and is proposed only when its grade got worse, then carrying
     `rejected_before`. A close list the memory empties raises no row."""
     memory = memory or {}
-    can_support = capacity["can_support"]
+    supported = capacity["can_support"]
     active_ads = capacity["active_ads"]
     open_lineage = _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
+    ranked = learning_rank.rank(_rank_rows(items))
+    ranked_by_id = {row["entity_id"]: row for row in ranked}
+    item_by_id = {item["entity_id"]: item for item in items}
+    # From the bottom of the ranking up: the last rows are the worst.
     closable = [
-        item for item in items
-        if item.get("grade") in _CLOSE_RANK and item["entity_id"] not in open_lineage
+        row for row in reversed(ranked)
+        if row["verdict"] == learning_rank.REPLACE and row["entity_id"] not in open_lineage
     ]
-    wasted = sorted(
-        (item for item in closable if item["grade"] == "wasted"),
-        key=lambda item: (_spend_desc(item), item["entity_id"]),
-    )
-    costly = sorted(
-        (item for item in closable if item["grade"] != "wasted"),
-        key=lambda item: (
-            _CLOSE_RANK[item["grade"]], _cost_desc(item), _spend_desc(item), item["entity_id"],
-        ),
-    )
-    capacity_known = can_support is not None and can_support >= 1
-    excess = active_ads - can_support if capacity_known else 0
-    chosen = wasted + costly[:max(0, excess - len(wasted))]
+    unsold = [row for row in closable if row["cost_per_sale"] is None]
+    sold = [row for row in closable if row["cost_per_sale"] is not None]
+    capacity_known = supported is not None and supported >= 1
+    excess = active_ads - supported if capacity_known else 0
+    chosen = unsold + sold[:max(0, excess - len(unsold))]
     close = [
-        item for item in chosen
-        if item["entity_id"] not in memory or got_worse(memory[item["entity_id"]], item["grade"])
+        item_by_id[row["entity_id"]] for row in chosen
+        if row["entity_id"] not in memory
+        or got_worse(memory[row["entity_id"]], item_by_id[row["entity_id"]]["grade"])
     ]
     if not close:
         return None
@@ -289,16 +328,13 @@ def cleanup_candidates(
         for item in items
     }
     closing_ids = {item["entity_id"] for item in close}
-    keep = sorted(
-        (item for item in items if item["entity_id"] not in closing_ids),
-        key=lambda item: (
-            _KEEP_RANK.get(item.get("grade"), len(_KEEP_RANK)), _cost_desc(item),
-            item["entity_id"],
-        ),
-    )
+    close.sort(key=lambda item: ranked_by_id[item["entity_id"]]["rank"])
+    keep = [item_by_id[row["entity_id"]] for row in ranked if row["entity_id"] not in closing_ids]
+    keep += [item for item in items if item["entity_id"] not in ranked_by_id]
+    of = len(ranked)
     ads = [
         _ad_view(
-            item, spend_7d[item["entity_id"]],
+            item, spend_7d[item["entity_id"]], ranked_by_id[item["entity_id"]], of,
             _rejected_before(memory[item["entity_id"]]) if item["entity_id"] in memory else None,
         )
         for item in close
@@ -306,9 +342,12 @@ def cleanup_candidates(
     daily = [ad["daily_spend"] for ad in ads]
     return {
         "campaign_id": campaign_id, "campaign_name": campaign_name,
-        "can_support": can_support, "active_ads": active_ads,
+        "can_support": supported, "active_ads": active_ads,
         "ads": ads,
-        "keep": [_ad_view(item, spend_7d[item["entity_id"]]) for item in keep],
+        "keep": [
+            _ad_view(item, spend_7d[item["entity_id"]], ranked_by_id.get(item["entity_id"]), of)
+            for item in keep
+        ],
         "short": short,
         "daily_saving": sum(daily) if all(d is not None for d in daily) else None,
         "scale_owner_id": scale_owner_id if short > 0 else None,

@@ -1,7 +1,8 @@
 """app/tests/test_ads_closeout.py — F03-I12 falsifiers, re-cut by F28-I01 (one cap): a campaign
 whose cost per result is at or under its cap closes as 達成 with the compared numbers; one over it
-closes as 未達成; one with two purchases closes as 看不出 and still writes a learning (at
-`observed`, text names the small sample); no cap closes as 看不出 naming the missing cap; without
+closes as 未達成; one with two purchases still closes on the cap (F48-I02: the small sample is
+shown, never a verdict switch) and writes a learning at `observed`; no cap closes as 看不出 naming
+the missing cap; without
 an own cap the cap is break-even from product economics; a second campaign with the same result
 kind in the same direction makes the next learning `likely` (another result kind does not count);
 closing twice does not write a second learning; an ended campaign at end+7d or end+6d stays open —
@@ -125,8 +126,20 @@ class MissedTargetClosesUnachievedTest(CloseoutTestBase):
         self.assertAlmostEqual(closed["verdict_json"]["actual"], 400.0)  # 6000/15
 
 
-class LowSampleClosesInconclusiveButStillLearnsTest(CloseoutTestBase):
-    def test_two_purchases_closes_as_inconclusive_and_still_writes_a_learning(self):
+class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
+    """F48-I02 (Contract R, decision 1): a small sample is printed beside the verdict, never turned
+    into 看不出; it only keeps the learning's confidence at `observed`."""
+
+    def _week(self, *, cap, purchases_per_day):
+        start = self.today - timedelta(days=6)
+        campaign = self._campaign(cap=cap, start_date=start, end_date=self.today)
+        group = self._group(campaign["id"])
+        for offset, purchases in enumerate(purchases_per_day):
+            self._outcome_row(campaign["id"], group["id"], start + timedelta(days=offset),
+                              spend=300.0, purchases=purchases, revenue=600.0)
+        return campaign
+
+    def test_two_purchases_closes_on_the_cap_and_still_writes_a_learning(self):
         campaign = self._campaign(cap=300, start_date=self.today, end_date=self.today)
         group = self._group(campaign["id"])
         self._outcome_row(campaign["id"], group["id"], self.today, spend=200.0, purchases=2,
@@ -134,12 +147,51 @@ class LowSampleClosesInconclusiveButStillLearnsTest(CloseoutTestBase):
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
-        self.assertEqual(closed["verdict"], "看不出")
+        self.assertEqual(closed["verdict"], "達成")  # 100 a sale against a cap of 300
+        self.assertEqual(closed["verdict_json"]["sample"],
+                         {"purchases": 2, "days": 1, "bucket": "低"})
         self.assertEqual(closed["verdict_json"]["sample_bucket"], "低")
+        self.assertNotIn("missing", closed["verdict_json"])
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
         self.assertEqual(len(learnings), 1)
         self.assertEqual(learnings[0]["confidence"], "observed")
-        self.assertIn("樣本太小", learnings[0]["learning_text"])
+        self.assertIn("結果達成（樣本低）", learnings[0]["learning_text"])
+        self.assertEqual(learnings[0]["sample_size"], "低")
+
+    def test_a_seven_day_campaign_with_nine_purchases_closes_met_or_missed(self):
+        nine = [2, 1, 1, 1, 2, 1, 1]  # 9 purchases over 7 days, 2,100 spent: 233 a sale
+        met = self._week(cap=300, purchases_per_day=nine)
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, met["id"], actor=ACTOR)
+        self.assertEqual(closed["verdict"], "達成")
+        self.assertEqual(closed["verdict_json"]["sample"],
+                         {"purchases": 9, "days": 7, "bucket": "低"})
+
+        missed = self._week(cap=200, purchases_per_day=nine)
+        closed = closeout.close(self.conn, self.org_id, self.brand_id, missed["id"], actor=ACTOR)
+        self.assertEqual(closed["verdict"], "未達成")
+        self.assertEqual(closed["verdict_json"]["sample"]["bucket"], "低")
+
+    def test_confidence_stays_observed_below_min_result_events(self):
+        # Two campaigns in the same direction, each with 9 purchases: neither counts toward
+        # `likely` (the one place sample size moves a level).
+        nine = [2, 1, 1, 1, 2, 1, 1]
+        for _ in range(2):
+            campaign = self._week(cap=300, purchases_per_day=nine)
+            closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        confidences = [row["confidence"] for row in bi_repo.list_learnings(
+            self.conn, self.brand_id)]
+        self.assertEqual(confidences, ["observed", "observed"])
+        # A third with 10 purchases is itself enough, but the two thin ones still do not count.
+        ten = self._week(cap=300, purchases_per_day=[2, 2, 1, 1, 2, 1, 1])
+        closeout.close(self.conn, self.org_id, self.brand_id, ten["id"], actor=ACTOR)
+        by_cycle = {row["source_cycle_id"]: row for row in bi_repo.list_learnings(
+            self.conn, self.brand_id)}
+        self.assertEqual(by_cycle[ten["id"]]["confidence"], "observed")
+        again = self._week(cap=300, purchases_per_day=[2, 2, 1, 1, 2, 1, 1])
+        closeout.close(self.conn, self.org_id, self.brand_id, again["id"], actor=ACTOR)
+        by_cycle = {row["source_cycle_id"]: row for row in bi_repo.list_learnings(
+            self.conn, self.brand_id)}
+        self.assertEqual(by_cycle[again["id"]]["confidence"], "likely")
 
 
 class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBase):
