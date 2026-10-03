@@ -10,25 +10,33 @@ The model never does arithmetic: it returns percentages (`allocation[].pct`) and
 `budget.split()` (the program) turns a percentage into a NT$ amount. `budget_planned` is a record
 of what the user adopted — after 採用策略 the group daily budgets are the truth, and nothing here
 ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
+
+F48 (Contracts P and S): the prompt is built from `planner_context` (the sell-way, its 「不能講」,
+the offers, the groups, its learnings, last period's goals, the capacity line). The facts under
+the strategy -- groups, offers, numbers, capacity, learnings -- are written by the program
+(`_facts`, recomputed on every campaign read by `current_facts`); the model writes connecting
+prose only, and a reply whose prose carries a digit, `%` or `NT$` is refused.
 """
 
+import re
 from datetime import UTC, datetime
 
 from app.ads import (
     budget,
     calendar_tw,
-    coordinate_learning,
     customer_groups,
     judgment,
     launch_settings,
     learning,
+    learning_rank,
+    planner_context,
+    sell_way,
     targets,
 )
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
-from app.core import rule_cards
-from app.core import settings as coresettings
+from app.core import rule_cards, vocab
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
 
@@ -44,12 +52,6 @@ _ROLE_ORDER = ("new", "retarget", "explore")
 
 # role -> 中文名稱：程式自己填 label，不再叫模型回一個我們已經知道的答案（F04-I03）。
 _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
-
-# 這段的上限跟 `list_learnings` 的上限一樣是模組層常數：不是可調規則卡（那是給使用者調的
-# 門檻），這裡只是「prompt 別灌爆」的成本上限。
-_MAX_LEARNINGS = 10
-# 讀幾筆來挑「每個商品最新一條」——同一個上限的讀取量，不是 prompt 的條數。
-_LEARNING_SCAN = 200
 
 STRATEGY_FAILED_MESSAGE = "AI 沒能整理出一個可信的策略，請再試一次。"
 
@@ -79,96 +81,8 @@ def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
-# 一個母產品最多印幾種賣法（ARCHITECTURE.md §1：每個進 prompt 的清單都要 cap）。
-_MAX_SELL_WAYS = 8
-
-
-def _sell_way_display_name(full_name: str) -> str:
-    """賣法的顯示名已經是「<母產品名> · <賣法>」，這裡只印「 · 」後半段；找不到分隔就整個印。"""
-    return full_name.split(" · ", 1)[-1]
-
-
-def _products_section(
-    conn, org_id: str, brand_id: str, product_ids: list[str],
-) -> tuple[str, list[dict]]:
-    """這個 Campaign 自己的商品（`context_json.product_ids`，已由 F03-I19 的 PATCH 過濾過只
-    會是這個品牌自己的商品）；今天有效的價格，過期一律標出來，絕不悄悄當現在的價格用
-    （跟 `app/ads/brief.py::_products_context` 同一條規則）。
-
-    一個產品、很多賣法（ARCHITECTURE.md §8 第 1 條）：知識掛母產品、金額掛賣法。這裡先按
-    `bi_repo.knowledge_product_ids()` 分組（F43：組合有好幾個商品，每個商品各一個事實區塊，
-    同一個上限），一組商品一段事實＋一行賣法價格清單；`basis` 仍然一個賣法一筆，畫面的
-    「查看策略依據」對得起來。"""
-    if not product_ids:
-        return "【商品】（這個 Campaign 沒有指定商品）", []
-    today = coresettings.today_for_org(conn, org_id=org_id)
-    fact_cap = int(rule_cards.get_value(conn, brand_id, "rule_prompt_cap", "max_active_rules"))
-
-    groups: dict[tuple[str, ...], list[str]] = {}
-    for product_id in product_ids:
-        product = bi_repo.get_product(conn, brand_id, product_id)
-        if product is None:
-            continue  # 存的 id 對不到現存商品——不編一個不存在的商品進 prompt
-        knowledge_ids = tuple(bi_repo.knowledge_product_ids(conn, brand_id, product_id))
-        groups.setdefault(knowledge_ids, []).append(product_id)
-
-    lines: list[str] = []
-    basis: list[dict] = []
-    for knowledge_ids, sell_way_ids in groups.items():
-        fact_lines = [
-            _knowledge_fact_line(conn, brand_id, knowledge_id, fact_cap)
-            for knowledge_id in knowledge_ids
-        ]
-
-        sell_way_pieces: list[str] = []
-        for product_id in sell_way_ids[:_MAX_SELL_WAYS]:
-            sell_way = bi_repo.get_product(conn, brand_id, product_id)
-            display = _sell_way_display_name(sell_way["name"]) if sell_way else product_id
-            economics = bi_repo.get_product_economics(conn, brand_id, product_id)
-            if economics is None:
-                sell_way_pieces.append(f"{display} 沒有價格資料")
-                continue
-            effective_to = economics.get("effective_to")
-            stale = effective_to is not None and effective_to < today
-            price = economics.get("selling_price")
-            piece = f"{display} NT${price}"
-            if stale:
-                piece += "（價格可能過期，僅供參考）"
-            sell_way_pieces.append(piece)
-            basis.append({
-                "product_id": product_id, "price": price,
-                "effective_from": economics.get("effective_from"), "stale": stale,
-                "assumptions": list(economics.get("assumptions_json") or []),
-                "sell_way_name": display,
-            })
-        sell_way_overflow = len(sell_way_ids) - _MAX_SELL_WAYS
-        sell_way_text = "／".join(sell_way_pieces)
-        if sell_way_overflow > 0:
-            sell_way_text += f"（另有 {sell_way_overflow} 種賣法沒有列出）"
-
-        lines.append("\n".join(fact_lines) + f"\n  賣法：{sell_way_text}")
-
-    text = "【商品】\n" + "\n".join(lines) if lines else "【商品】（沒有可用的價格資料）"
-    return text, basis
-
-
-def _knowledge_fact_line(conn, brand_id: str, knowledge_id: str, fact_cap: int) -> str:
-    """One knowledge product's 「- 〈name〉｜事實：…」 line: confirmed facts newest first, capped
-    at `fact_cap` with a 「另有 N 筆」 note."""
-    product = bi_repo.get_product(conn, brand_id, knowledge_id)
-    name = product["name"] if product else knowledge_id
-    facts = sorted(
-        bi_repo.list_product_facts(conn, brand_id, knowledge_id, status="confirmed"),
-        key=lambda f: f.get("confirmed_at") or f["created_at"], reverse=True,
-    )
-    kept_facts, omitted_facts = facts[:fact_cap], facts[fact_cap:]
-    fact_text = (
-        "；".join(f"{f['label']}：{f['value']}" for f in kept_facts)
-        if kept_facts else "尚無確認過的事實"
-    )
-    if omitted_facts:
-        fact_text += f"（另有 {len(omitted_facts)} 筆較舊的事實沒有列出）"
-    return f"- {name}｜事實：{fact_text}"
+# F48 Contract P: the 【這個賣法】 block lives in `planner_context` (one implementation).
+_products_section = planner_context.products_section
 
 
 # product_economics.assumptions_json 的欄位名 -> app.brand_intelligence.benchmarks 的 key
@@ -195,52 +109,12 @@ def _assumption_note(prices_basis: list[dict]) -> str | None:
     return f"用的是假設：{'；'.join(parts)}——之後用真實數字取代。"
 
 
-# 事件學習（暫停確認、A/B、月結算：`ads_learnings.py`／`settle.py`）的 scope 都以這個前綴開頭，
-# 每一條是一個獨立發現；其餘的 ads 軌列是 `learning.write_learning` 寫的「這一期結案判決」句子。
-_EVENT_SCOPE_PREFIX = "ads;"
-
-
-def _newest_per_product(rows: list[dict]) -> list[dict]:
-    """F41-I02 (drill-8 #11): one current campaign verdict per `product_id` -- `rows` come newest
-    first (`learned_at DESC`), so the first verdict of each product wins; a NULL product is one
-    brand-level row. An older period's verdict that contradicts the newer one never reaches the
-    model. Event learnings (`ads;` scope: each one its own finding, never a period verdict) pass
-    through untouched; the order stays newest first. F48 Contract W: every writer stores the
-    campaign's sell-way (`ads_learnings.write`), so this keeps one verdict per sell-way; only an
-    imported campaign's verdict is brand level."""
-    seen: set = set()
-    kept = []
-    for row in rows:
-        if not (row.get("applicability_scope") or "").startswith(_EVENT_SCOPE_PREFIX):
-            if row.get("product_id") in seen:
-                continue
-            seen.add(row.get("product_id"))
-        kept.append(row)
-    return kept
-
-
-def _learnings_section(conn, brand_id: str) -> tuple[str, list[dict]]:
-    """`list_learnings(conn, brand_id)`——不帶 `product_id`：那是等值過濾，帶了會把幾乎所有
-    品牌層學習都濾掉（F03.md 對 F03-I05 的明確警告）。F41-I02：每個商品只留最新一條
-    （`_newest_per_product`），prompt 與 `basis.learnings` 用同一份縮減後的清單。"""
-    learnings = _newest_per_product(
-        bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads"),
-    )[:_MAX_LEARNINGS]
-    if not learnings:
-        return "【過去的學習】（這個品牌還沒有任何學習記錄）", []
-    lines = [
-        f"- {row['learning_text']}（{row['confidence']}"
-        + ("，需要重新驗證" if row["needs_revalidation"] else "") + "）"
-        for row in learnings
-    ]
-    basis = [
-        {
-            "id": row["id"], "text": row["learning_text"], "level": row["confidence"],
-            "needs_revalidation": row["needs_revalidation"],
-        }
-        for row in learnings
-    ]
-    return "【過去的學習】\n" + "\n".join(lines), basis
+def _learnings_section(conn, brand_id: str, product_id: str | None = None) -> tuple[str, list]:
+    """【過去的學習】 and its basis from one read (`planner_context.ads_learnings`): one current
+    verdict per sell-way, event learnings kept, capped. With `product_id`, that sell-way's rows
+    and brand-level ones only (F48 Contract P)."""
+    rows = planner_context.ads_learnings(conn, brand_id, product_id)
+    return planner_context.learnings_text(rows), planner_context.learnings_basis(rows)
 
 
 def _scenarios_section(scenario_result: dict) -> str:
@@ -266,11 +140,27 @@ def _pct_sum_valid(allocation: list[dict]) -> bool:
     return (99 <= pct_sum <= 101) and all(row["pct"] >= 0 for row in allocation)
 
 
+# F48 Contract S: the numbers are the program's (`facts`); prose carrying one is refused.
+_NUMBER_IN_PROSE = re.compile(r"[0-9０-９%％]|NT\$")
+
+
+def _has_number(texts) -> bool:
+    return any(isinstance(t, str) and _NUMBER_IN_PROSE.search(t) for t in texts)
+
+
 def _validate_reply(data, available: frozenset[str]) -> dict | None:
     """`available` 是程式列給模型的【可用角色】（Contract P）：回覆點名一個不在裡面的角色
     （例如沒有再行銷來源的品牌被分了 `retarget`）就整包退回 `None`——`plan.py` 會把每個
-    分配到的角色展開成投放組，一個交接時拿不到受眾的再行銷組不能活到那一步。"""
+    分配到的角色展開成投放組，一個交接時拿不到受眾的再行銷組不能活到那一步。
+    F48 Contract S：`rationale`／`why`／`unknowns`／`learning_goals` 帶阿拉伯數字、`%` 或
+    `NT$` 就退回；`alternatives` 有給就必須是字串陣列。"""
     if not isinstance(data, dict):
+        return None
+    prose = [data.get(key) for key in ("why", "unknowns", "learning_goals")]
+    if _has_number([t for value in prose if isinstance(value, list) for t in value]):
+        return None
+    alternatives = data.get("alternatives", [])
+    if not isinstance(alternatives, list) or not all(isinstance(a, str) for a in alternatives):
         return None
     allocation = data.get("allocation")
     if not isinstance(allocation, list) or not allocation:
@@ -286,6 +176,8 @@ def _validate_reply(data, available: frozenset[str]) -> dict | None:
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
             return None
         rationale = item.get("rationale")
+        if _has_number([rationale]):
+            return None
         # `label` 由程式對照 `_ROLE_LABELS` 填，不再要求模型回——那是花錢買一個我們已經知道
         # 的答案（F04-I03）。模型舊行為回了 `label` 也不理會，一律以程式的對照表為準。
         validated_allocation.append({
@@ -303,12 +195,11 @@ def _validate_reply(data, available: frozenset[str]) -> dict | None:
         # 讓其中一列的金額悄悄消失，group 日預算加總就會少於 budget_planned（§0）。
         return None
 
-    alternatives = data.get("alternatives")
     return {
         "allocation": validated_allocation,
         "why": _str_list(data.get("why")),
         "unknowns": _str_list(data.get("unknowns")),
-        "alternatives": alternatives if isinstance(alternatives, list) else [],
+        "alternatives": alternatives,
         "learning_goals": _str_list(data.get("learning_goals"))[:3],
     }
 
@@ -431,7 +322,7 @@ def _available_roles_section(roles: list[str]) -> str:
 
 def _cap_text(cap: float | None) -> str:
     """The one cap as the strategy prompt reads it (F28-I01) -- `未設定`, never a guessed number."""
-    return "未設定" if cap is None else f"{round(cap):,}"
+    return "未設定" if cap is None else learning_rank.whole(cap)
 
 
 def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
@@ -449,19 +340,10 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
 
     product_ids = list((campaign.get("context_json") or {}).get("product_ids") or [])
     facts_text, facts_basis = _brand_facts_section(conn, brand_id)
-    products_text, prices_basis = _products_section(conn, org_id, brand_id, product_ids)
-    # F43-I02：這個賣法的顧客群（程式挑好、有上限），接在商品之後；分配的 rationale 點名打哪一群。
-    customers_text, listed_groups = customer_groups.prompt_groups(
-        conn, org_id, brand_id, campaign,
-    )
-    customer_group_ids = [group["id"] for group in listed_groups]
-    learnings_text, learnings_basis = _learnings_section(conn, brand_id)
-    # F46 Contract G：程式排好的【上幾期的排名】接在學習句子之後（取代 F39 的【座標成績表】）——
-    # 上幾期每則廣告的每筆成本與留下／換掉，讓 `rationale` 點得出要沿用哪則、避開哪一群＋角度。
-    # 同一份 view 存進 basis.ranked_learnings（查看策略依據＝模型真的看過的）。
-    ranked_view = coordinate_learning.prompt_view(conn, org_id, brand_id)
-    board_text, board_ids = coordinate_learning.ranked_section(
-        conn, org_id, brand_id, campaign, view=ranked_view, listed=listed_groups,
+    # F48 Contract P：這個賣法、不能講、顧客群、優惠、學習、排名、上一期想學的、撐得起幾則——
+    # 一份 planner_context，策略與投放結構讀同一份。
+    ctx = planner_context.planner_context(
+        conn, org_id, brand_id, sell_way.of_campaign(campaign), campaign=campaign,
     )
 
     brand = bi_repo.get_brand(conn, brand_id)
@@ -479,6 +361,12 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         scenario_result, campaign, labels["conversion"], cap=cap,
     )
     scenarios_text = _scenarios_section(scenario_result)
+    recommended_row = next(
+        row for row in scenario_result["scenarios"] if row["key"] == scenario_result["recommended"]
+    )
+    if ctx["capacity"] is None:
+        # No adopted budget yet: the capacity line reads the recommended scenario's day.
+        ctx["capacity"] = planner_context.capacity_of(recommended_row["daily"], cap)
 
     reads = ads_repo.starting_point_reads(conn, org_id, brand_id)
     starting_point_text = _starting_point_section(brand, history, reads, campaign)
@@ -487,14 +375,12 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     # F33-I02（Contract Q）：靜態台灣行事曆只列跟期間重疊的列；表外年份會附「沒有資料」的註記。
     calendar_text = calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
 
-    knowledge_item_ids = (
-        [f["id"] for f in facts_basis]
-        + [p["product_id"] for p in prices_basis]
-        + customer_group_ids
-        + [row["id"] for row in learnings_basis]
-        + board_ids
+    knowledge_item_ids = [f["id"] for f in facts_basis] + ctx["knowledge_item_ids"]
+    sections = "".join(
+        "\n\n" + planner_context.section_text(ctx, which)
+        for which in ("product", "forbidden", "customers", "offers", "learnings", "ranked",
+                      "previous", "capacity")
     )
-
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
     prompt = (
         department_text
@@ -507,10 +393,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n" + roles_text
         + "\n\n" + calendar_text
         + "\n\n" + facts_text
-        + "\n\n" + products_text
-        + "\n\n" + customers_text
-        + "\n\n" + learnings_text
-        + "\n\n" + board_text
+        + sections
         + "\n\n" + scenarios_text
     )
 
@@ -533,22 +416,27 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     if strategy_payload is None:
         raise ValueError("strategy_failed")
 
-    recommended_row = next(
-        row for row in scenario_result["scenarios"] if row["key"] == scenario_result["recommended"]
-    )
     strategy_payload["allocation"] = _apply_amounts(
         strategy_payload["allocation"], recommended_row["total"],
     )
+    strategy_payload["facts"] = _facts(ctx, strategy_payload["allocation"], recommended_row)
 
     estimated_fields = ["daily", "total"] if scenario_result["mode"] == "cold_start" else []
     basis = {
         "knowledge_item_ids": knowledge_item_ids, "llm_task_id": task_row["id"],
         "input_context_hash": task_row["input_context_hash"],
-        "brand_facts": facts_basis, "prices": prices_basis, "learnings": learnings_basis,
-        "coordinate_scoreboard": board_ids, "ranked_learnings": ranked_view,
+        "brand_facts": facts_basis, "prices": ctx["prices"],
+        "learnings": planner_context.learnings_basis(ctx["learnings"]["ads"]),
+        "coordinate_scoreboard": ctx["ranked_ids"], "ranked_learnings": ctx["learnings"]["ranked"],
         "estimated_fields": estimated_fields,
+        "planner_context": {
+            "product_id": (ctx["product"] or {}).get("id"),
+            "forbidden_count": len(ctx["forbidden"]),
+            "offers": [offer["key"] for offer in ctx["offers"]],
+            "previous_campaign_id": (ctx["previous"] or {}).get("campaign_id"),
+        },
     }
-    assumption_note = _assumption_note(prices_basis)
+    assumption_note = _assumption_note(ctx["prices"])
     if assumption_note is not None:
         basis["assumption_note"] = assumption_note
     budget_basis_json = {"strategy": strategy_payload, "scenarios": scenario_result, "basis": basis}
@@ -556,6 +444,112 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     return detail
+
+
+# -- F48 Contract S: the facts under the strategy, written by the program -------------------------
+
+
+def _offer_label(ctx: dict, key: str) -> str:
+    listed = next((offer["label"] for offer in ctx["offers"] if offer["key"] == key), None)
+    return str(listed or vocab.offer_label(key))
+
+
+def _groups_fact(whos: list[str], empty: str) -> str:
+    return f"這期打 {len(whos)} 群：{'、'.join(whos)}" if whos else empty
+
+
+def _numbers_fact(ctx: dict) -> str:
+    """The cap; the newest closed period of this sell-way, its best 每筆 with the ad's name and
+    sales; how many periods it closed. Money through `learning_rank.whole`."""
+    cap = ctx["cap"]
+    parts = ["沒有設上限" if cap is None else f"上限每筆 {learning_rank.whole(cap)}"]
+    previous = ctx["previous"]
+    if previous is None:
+        parts.append("這個賣法還沒有結案過")
+        return "；".join(parts)
+    best = previous["best"]
+    if best is None:
+        parts.append(f"上一期「{previous['name']}」沒有一則賣出")
+    else:
+        parts.append(
+            f"上一期「{previous['name']}」最好的是「{best['ad_name']}」"
+            f"每筆 {learning_rank.whole(best['cost_per_sale'])}（賣 {best['sales']} 筆）"
+        )
+    parts.append(f"已結案 {previous['closed_count']} 期")
+    return "；".join(parts)
+
+
+def _facts(ctx: dict, allocation: list[dict], scenario_row: dict | None, *,
+           adopted: dict | None = None) -> list[dict]:
+    """Contract S: `[{kind, text}]` for groups, offers, numbers, capacity and learnings, every
+    number from the program's rows. `adopted` = `{groups: [who], offers: {key: ads}}` read off the
+    campaign's ads once the plan is adopted (`current_facts`); before that, the listed groups and
+    the available offers with their sentences."""
+    if adopted is not None:
+        groups = _groups_fact(adopted["groups"], "這期的廣告沒有綁顧客群")
+        offers = "、".join(
+            f"用了〈{_offer_label(ctx, key)}〉 {count} 則"
+            for key, count in adopted["offers"].items()
+        ) or "這期的廣告沒有用優惠"
+    else:
+        groups = _groups_fact([g["who"] for g in ctx["customer_groups"]], "這期沒有列出顧客群")
+        offers = "可用的優惠：" + "；".join(
+            f"〈{offer['label']}〉{offer['sentence']}" for offer in ctx["offers"]
+        ) if ctx["offers"] else "沒有可用優惠"
+    capacity = ctx["capacity"]
+    if capacity is None and scenario_row is not None:
+        capacity = planner_context.capacity_of(scenario_row.get("daily"), ctx["cap"])
+    if capacity is not None:
+        capacity = {**capacity, "ceiling": max(capacity["ceiling"], len(allocation))}
+    counts = [c["counts"] for c in ctx["learnings"]["ranked"]["campaigns"]]
+    learnings = (
+        f"讀了上幾期的排名：留下 {sum(c['keep'] for c in counts)} 則、"
+        f"換掉 {sum(c['replace'] for c in counts)} 則；"
+        f"過去的學習 {len(ctx['learnings']['ads'])} 條"
+    )
+    return [
+        {"kind": "groups", "text": groups},
+        {"kind": "offers", "text": offers},
+        {"kind": "numbers", "text": _numbers_fact(ctx)},
+        {"kind": "capacity", "text": planner_context.capacity_line(capacity)},
+        {"kind": "learnings", "text": learnings},
+    ]
+
+
+def current_facts(conn, org_id: str, brand_id: str, campaign: dict, *,
+                  groups: list[dict] | None = None) -> list[dict] | None:
+    """The facts as they read now (the campaign read serves these, not the stored copy): once the
+    campaign has ads, the groups line names the ads' bound customer groups and the offers line
+    counts ads per offer. `groups` = the campaign's delivery groups with their `ads` (the read
+    already holds them). `None` for a campaign without a strategy or an imported one."""
+    budget_basis_json = campaign.get("budget_basis_json") or {}
+    strategy_payload = budget_basis_json.get("strategy")
+    if not strategy_payload or campaign.get("origin") == "imported":
+        return None
+    ctx = planner_context.planner_context(
+        conn, org_id, brand_id, sell_way.of_campaign(campaign), campaign=campaign,
+    )
+    scenarios = budget_basis_json.get("scenarios") or {}
+    scenario_row = next(
+        (row for row in scenarios.get("scenarios") or []
+         if row.get("key") == scenarios.get("recommended")), None,
+    )
+    ads = [ad for group in groups or [] for ad in group.get("ads") or []]
+    adopted = None
+    if ads:
+        by_id = customer_groups.groups_by_id(conn, brand_id, campaign)
+        bound = dict.fromkeys(ad["customer_group_id"] for ad in ads if ad.get("customer_group_id"))
+        offers: dict[str, int] = {}
+        for ad in ads:
+            key = ad.get("offer_key")
+            if key and key != "none":
+                offers[key] = offers.get(key, 0) + 1
+        adopted = {
+            "groups": [(by_id.get(group_id) or {}).get("who") or "已刪除的顧客群"
+                       for group_id in bound],
+            "offers": offers,
+        }
+    return _facts(ctx, strategy_payload.get("allocation") or [], scenario_row, adopted=adopted)
 
 
 class OverCapUnconfirmed(ValueError):

@@ -42,7 +42,14 @@ import json
 import math
 from datetime import date, timedelta
 
-from app.ads import channels, external_models, manual_settings, objectives, wizard_options
+from app.ads import (
+    channels,
+    external_models,
+    manual_settings,
+    objectives,
+    planner_context,
+    wizard_options,
+)
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
@@ -466,9 +473,18 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         # An explicit platform pick is the user's own, like a chip -- it wins over the model.
         constraints["platform"] = extras["platform"]
 
+    # F48 Contract P: a picked sell-way's knowledge (facts, claims, rules) is compiled for it, and
+    # the prompt prints the sell-way and its 「不能講」 list from the one planner context.
+    picked_id = checked["product_ids"][0] if checked is not None else None
     brand_text, knowledge_item_ids, brand_version, _product_version = context_compiler.compile(
-        conn, brand_id, include_personas=False,
+        conn, brand_id, picked_id, include_personas=False,
     )
+    picked_text = ""
+    if picked_id is not None:
+        ctx = planner_context.planner_context(conn, org_id, brand_id, picked_id)
+        picked_text = "".join(
+            "\n\n" + planner_context.section_text(ctx, which) for which in ("product", "forbidden")
+        )
     products_text, economics_ids, brand_product_ids = _products_context(conn, org_id, brand_id)
     brand = bi_repo.get_brand(conn, brand_id) or {}
     conversion_goal = brand.get("conversion_goal")
@@ -501,6 +517,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         + "平台已綁定只表示本機已有連線設定，不證明權限仍有效，也不表示目前活動已匯入。"
         + "品牌月額度不是本次活動預算；不要將它直接套入活動預算。"
         + "\n\n" + products_text
+        + picked_text
     )
 
     context = gateway.TaskContext(

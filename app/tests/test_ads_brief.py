@@ -663,6 +663,40 @@ class StructuredCreateTest(_SellWayBase):
         self.assertEqual(str(ctx.exception), "dates_required")
 
 
+class BriefReadsThePlannerContextTest(_SellWayBase):
+    """F48-I05 (Contract P): a picked sell-way's knowledge is compiled for that sell-way and the
+    parse prompt prints 【這個賣法】 and 【不能講】 from the one planner context; the sentence
+    path (no sell-way picked) compiles at brand level and prints neither block."""
+
+    def setUp(self):
+        super().setUp()
+        bi_repo.create_claim(
+            web.conn, self.brand_id, actor=ACTOR, claim_text="保證不被車撞",
+            claim_type="forbidden", product_id=self.product["id"],
+        )
+        self.provider = _fake("{}")
+        brief.PROVIDER = self.provider
+
+    def _compiled_product(self, create) -> str | None:
+        compile_ = brief.context_compiler.compile
+        with patch.object(brief.context_compiler, "compile", wraps=compile_) as compiled:
+            create()
+        return compiled.call_args.args[2]
+
+    def test_a_picked_sell_way_reaches_compile_and_the_prompt(self):
+        self.assertEqual(self._compiled_product(self._create_picks), self.sell_way["id"])
+        prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertIn("【這個賣法】\n- 夜跑背心｜事實：", prompt)
+        self.assertIn("單件 NT$1000.00｜單品", prompt)
+        self.assertIn("【不能講】\n- 保證不被車撞", prompt)
+
+    def test_the_sentence_path_compiles_at_brand_level(self):
+        self.assertIsNone(self._compiled_product(self._create))
+        prompt = self.provider.calls[0]["messages"][0]["content"]
+        self.assertNotIn("【不能講】\n", prompt)
+        self.assertNotIn("【這個賣法】\n", prompt)
+
+
 class StructuredCreateRouteTest(_SellWayBase):
     def setUp(self):
         super().setUp()

@@ -47,13 +47,15 @@ SCRIPTED_REPLIES: dict[str, dict] = {
         "success_basis": "e2e scripted reply", "product_ids": [], "audience_hint": None,
         "notes": None, "budget_cap": None, "platform": None, "period": None,
     },
+    # F48 Contract S: the strategy's prose may not carry a digit, `%` or `NT$` (the program prints
+    # the numbers), so this template's sentences are digit-free -- not 「e2e」.
     "ads_strategy": {
         "allocation": [
-            {"role": "new", "pct": 50, "rationale": "e2e scripted reply"},
-            {"role": "retarget", "pct": 30, "rationale": "e2e scripted reply"},
-            {"role": "explore", "pct": 20, "rationale": "e2e scripted reply"},
+            {"role": "new", "pct": 50, "rationale": "scripted reply"},
+            {"role": "retarget", "pct": 30, "rationale": "scripted reply"},
+            {"role": "explore", "pct": 20, "rationale": "scripted reply"},
         ],
-        "why": ["e2e scripted reply"], "unknowns": [], "alternatives": [], "learning_goals": [],
+        "why": ["scripted reply"], "unknowns": [], "alternatives": [], "learning_goals": [],
     },
     # Same three roles as ads_strategy above; `plan.adopt_strategy` requires the role sets to match exactly.
     # Both are templates: ScriptedProvider._reply_for follows the roles the prompt offers／adopted (F33-I00).
