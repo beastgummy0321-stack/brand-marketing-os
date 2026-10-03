@@ -43,8 +43,9 @@ interface ClaimRow {
 
 /** Product onboarding `#/p3` 證據與說法 (prototype `R.p3` of `.harness/scratch/prototype/f41-onboarding/index.html`):
  * the product's own proof (AI-found rows + an empty 專家背書 input, 自訂 `product_proof`) and one 可以講／不能講
- * decision per claim found on the page or in reviews (自訂 `claim`). A 食安法 hit (`statutory`) is a red 不能講 row
- * with its law line and cannot be switched. 下一步 stays disabled with 「還有 N 句沒選」 while a claim is unset,
+ * decision per claim found on the page or in reviews (自訂 `claim`). A 食安法 hit (`statutory`) is a reminder only
+ * (F48 decision 13, F34 remind-only): the row is red with its law line, the 可以講／不能講 choice stays the user's and
+ * is sent as chosen. 下一步 stays disabled with 「還有 N 句沒選」 while a claim is unset,
  * then sends both lists in full through `PUT …/onboarding/evidence` and moves on only after the server confirmed. */
 export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
   brandId: string;
@@ -76,7 +77,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
           slots: {},
           claims: evidence.claims.map((c) => ({
             id: c.id, text: c.text, fromNote: c.from_note,
-            verdict: c.statutory ? "no" : c.verdict, statutory: c.statutory, custom: false, added: false,
+            verdict: c.verdict, statutory: c.statutory, custom: false, added: false,
           })),
         };
         // F47-I03 (drill-10 乙 #1, b-04): unsaved edits come back when the step mounts again (back, step bar,
@@ -111,7 +112,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
         ...proof.map((p) => ({ id: p.id, fact_key: p.fact_key, text: p.text.trim() })).filter((p) => p.text),
         ...openSlots.map((s) => ({ fact_key: s.kind, text: (slots[s.kind] ?? "").trim() })).filter((p) => p.text),
       ],
-      claims: claims.map((c) => ({ id: c.id, text: c.text, verdict: c.statutory ? "no" : c.verdict })),
+      claims: claims.map((c) => ({ id: c.id, text: c.text, verdict: c.verdict })),
     };
     await saveProductEvidence(brandId, productId, input);
     clearStepDraft(draftKey);
@@ -135,7 +136,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
   const setVerdict = (row: ClaimRow, verdict: ClaimVerdict) =>
     setClaims((prev) => prev.map((c) => (c.uid === row.uid ? { ...c, verdict } : c)));
   const addClaim = (option: { text: string; verdict: ClaimVerdict; statutory: ProductClaim["statutory"] }) => {
-    const verdict: ClaimVerdict = option.statutory ? "no" : option.verdict;
+    const { verdict } = option; // the proposal's own verdict; `statutory` only adds the reminder
     setClaims((prev) => {
       if (prev.some((c) => c.text === option.text)) {
         return prev.map((c) => (c.text === option.text ? { ...c, verdict, statutory: option.statutory, custom: true } : c));
@@ -274,19 +275,20 @@ function isEvidenceDraft(value: unknown): value is EvidenceDraft {
     && rows(v.claims, (r) => typeof r.text === "string" && (r.verdict === null || r.verdict === "ok" || r.verdict === "no"));
 }
 
-/** Prototype `.it` of the claims card: text, 「來自〈from_note〉」; a 食安法 hit is red with its law line and a locked
- * 不能講 chip, otherwise the 可以講／不能講 segmented control (amber while unset). */
+/** Prototype `.it` of the claims card: text, 「來自〈from_note〉」 and the 可以講／不能講 segmented control (amber while
+ * unset). A 食安法 hit is a reminder only (F48 decision 13): the row is red with its law line, the control stays
+ * enabled and the reminder stays visible whatever the user picks. */
 function ClaimItem({ row, onVerdict, onRemove }: {
   row: ClaimRow;
   onVerdict: (verdict: ClaimVerdict) => void;
   onRemove?: () => void;
 }) {
   const law = row.statutory;
-  const tone = law ? "bad" : row.verdict === null ? "unset" : "set";
   const origin = row.fromNote ? `來自${row.fromNote}` : "";
   return (
     <Item
-      data-claim={tone}
+      data-claim={row.verdict === null ? "unset" : "set"}
+      data-statutory={law ? law.term : undefined}
       className={cn(law && "border-danger/30 bg-zone-over/40", !law && row.verdict === null && "border-warning/30 bg-zone-watch/40")}
     >
       <div className="min-w-0 flex-1">
@@ -300,11 +302,7 @@ function ClaimItem({ row, onVerdict, onRemove }: {
         )}
         {row.custom && <div className="mt-0.5"><CustomMark /></div>}
       </div>
-      {law ? (
-        <Chip data-tone="bad" className="bg-zone-over text-danger">不能講</Chip>
-      ) : (
-        <VerdictSegmented label={row.text} value={row.verdict} onChange={onVerdict} />
-      )}
+      <VerdictSegmented label={row.text} value={row.verdict} onChange={onVerdict} />
       {onRemove && <RemoveButton label={row.text} onClick={onRemove} />}
     </Item>
   );

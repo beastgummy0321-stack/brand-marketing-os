@@ -1,6 +1,6 @@
 /** frontend/src/components/intake/product/ProductEvidenceStep.test.tsx — product onboarding `#/p3` 證據與說法
- * (F43-I10): proof rows + the empty 專家背書 input; one 可以講／不能講 per claim, a 食安法 hit locked 不能講 with its
- * law line; 下一步 disabled with 「還有 N 句沒選」 while a claim is unset; 下一步 sends both lists in full through
+ * (F43-I10): proof rows + the empty 專家背書 input; one 可以講／不能講 per claim, a 食安法 hit a reminder on the row
+ * with its law line and the choice still the user's (F48 decision 13); 下一步 disabled with 「還有 N 句沒選」 while a claim is unset; 下一步 sends both lists in full through
  * `PUT …/onboarding/evidence`; 自訂 results join their lists. No server: the API calls are fakes. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -50,7 +50,7 @@ function evidence(over: Partial<ProductEvidence> = {}): ProductEvidence {
     ],
     claims: [
       { id: "clm_1", text: "每顆含維生素 C 150 mg", from_note: "", source: "saved", verdict: "ok", statutory: null },
-      { id: null, text: "增強免疫力、預防感冒", from_note: "商品頁", source: "ai", verdict: "no", statutory: LAW },
+      { id: null, text: "增強免疫力、預防感冒", from_note: "商品頁", source: "ai", verdict: null, statutory: LAW },
       { id: null, text: "吃了精神變好", from_note: "顧客評論", source: "ai", verdict: null, statutory: null },
       { id: null, text: "不用配水，一天一顆", from_note: "商品頁", source: "ai", verdict: null, statutory: null },
     ],
@@ -69,18 +69,23 @@ const proofCard = () => screen.getByRole("region", { name: "這個商品的證�
 const verdictGroup = (text: string) => within(claimsCard()).getByRole("radiogroup", { name: text });
 
 describe("ProductEvidenceStep", () => {
-  it("食安法命中的說法鎖在「不能講」並寫出法條；其餘每句一組可以講／不能講", async () => {
+  it("F48 decision 13: 食安法命中的說法只在列上提醒法條，可以講／不能講照樣可選；選了可以講提醒還在", async () => {
     mockFetch.mockResolvedValue(evidence());
     renderStep();
 
     await screen.findByRole("region", { name: "這些話可以在廣告裡講嗎" });
     expect(mockFetch).toHaveBeenCalledWith("brd_1", "prd_1");
-    const locked = claimsCard().querySelector('[data-claim="bad"]') as HTMLElement;
-    expect(within(locked).getByText("增強免疫力、預防感冒")).toBeTruthy();
-    expect(within(locked).getByText(LAW.sentence)).toBeTruthy();
-    expect(locked.textContent).toContain("來自商品頁");
-    expect(within(locked).getByText("不能講").getAttribute("data-tone")).toBe("bad");
-    expect(within(locked).queryByRole("radiogroup")).toBeNull();
+    const hit = claimsCard().querySelector(`[data-statutory="${LAW.term}"]`) as HTMLElement;
+    expect(within(hit).getByText("增強免疫力、預防感冒")).toBeTruthy();
+    expect(within(hit).getByText(LAW.sentence)).toBeTruthy();
+    expect(hit.textContent).toContain("來自商品頁");
+    expect(hit.getAttribute("data-claim")).toBe("unset");
+    const ok = within(verdictGroup("增強免疫力、預防感冒")).getByRole("radio", { name: "可以講" }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(false);
+    await userEvent.click(ok);
+    expect(ok.getAttribute("aria-checked")).toBe("true");
+    expect(within(hit).getByText(LAW.sentence)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(verdictGroup("每顆含維生素 C 150 mg")).getByRole("radio", { name: "可以講" }).getAttribute("aria-checked")).toBe("true");
     expect(within(claimsCard()).getByText("來自顧客評論")).toBeTruthy();
   });
@@ -103,10 +108,12 @@ describe("ProductEvidenceStep", () => {
     mockFetch.mockResolvedValue(evidence());
     renderStep();
 
-    await screen.findByText("還有 2 句沒選");
+    await screen.findByText("還有 3 句沒選");
     expect(nextButton().disabled).toBe(true);
-    expect(claimsCard().querySelectorAll('[data-claim="unset"]')).toHaveLength(2);
+    expect(claimsCard().querySelectorAll('[data-claim="unset"]')).toHaveLength(3);
 
+    await userEvent.click(within(verdictGroup("增強免疫力、預防感冒")).getByRole("radio", { name: "不能講" }));
+    expect(screen.getByText("還有 2 句沒選")).toBeTruthy();
     await userEvent.click(within(verdictGroup("吃了精神變好")).getByRole("radio", { name: "不能講" }));
     expect(screen.getByText("還有 1 句沒選")).toBeTruthy();
     expect(nextButton().disabled).toBe(true);
@@ -116,12 +123,13 @@ describe("ProductEvidenceStep", () => {
     expect(nextButton().disabled).toBe(false);
   });
 
-  it("「下一步」把證據與說法整份送出（食安法命中的一律不能講、空白格不送），成功才往下", async () => {
+  it("「下一步」把證據與說法整份送出（食安法命中的照使用者選的可以講送出、空白格不送），成功才往下", async () => {
     mockFetch.mockResolvedValue(evidence());
     mockSave.mockResolvedValue(evidence());
     const onNext = renderStep();
 
     await screen.findByRole("region", { name: "這些話可以在廣告裡講嗎" });
+    await userEvent.click(within(verdictGroup("增強免疫力、預防感冒")).getByRole("radio", { name: "可以講" }));
     await userEvent.click(within(verdictGroup("吃了精神變好")).getByRole("radio", { name: "不能講" }));
     await userEvent.click(within(verdictGroup("不用配水，一天一顆")).getByRole("radio", { name: "可以講" }));
     await userEvent.click(within(verdictGroup("每顆含維生素 C 150 mg")).getByRole("radio", { name: "不能講" }));
@@ -137,7 +145,7 @@ describe("ProductEvidenceStep", () => {
       ],
       claims: [
         { id: "clm_1", text: "每顆含維生素 C 150 mg", verdict: "no" },
-        { id: null, text: "增強免疫力、預防感冒", verdict: "no" },
+        { id: null, text: "增強免疫力、預防感冒", verdict: "ok" },
         { id: null, text: "吃了精神變好", verdict: "no" },
         { id: null, text: "不用配水，一天一顆", verdict: "ok" },
       ],
@@ -155,12 +163,12 @@ describe("ProductEvidenceStep", () => {
     expect(onNext).not.toHaveBeenCalled();
   });
 
-  it("自訂說法照 AI 的判斷加進清單並標「你自訂」，可以拿掉；食安法命中的加進來就鎖在不能講", async () => {
+  it("自訂說法照 AI 的判斷加進清單並標「你自訂」；食安法命中的帶著提醒加進來，判斷不被改", async () => {
     mockFetch.mockResolvedValue(evidence({ claims: [] }));
     mockSave.mockResolvedValue(evidence());
     mockPropose
       .mockResolvedValueOnce({ block: "claim", kind: "option", option: { text: "一天一顆就夠", verdict: "ok", statutory: null } })
-      .mockResolvedValueOnce({ block: "claim", kind: "option", option: { text: "吃了不會感冒", verdict: "no", statutory: LAW } });
+      .mockResolvedValueOnce({ block: "claim", kind: "option", option: { text: "吃了不會感冒", verdict: "ok", statutory: LAW } });
     const onNext = renderStep();
 
     await screen.findByRole("region", { name: "這些話可以在廣告裡講嗎" });
@@ -179,15 +187,38 @@ describe("ProductEvidenceStep", () => {
     await userEvent.type(within(claimsCard()).getByRole("textbox"), "吃了不會感冒");
     await userEvent.click(within(claimsCard()).getByRole("button", { name: "讓 AI 整理" }));
     await within(claimsCard()).findByText(LAW.sentence);
-    const locked = claimsCard().querySelector('[data-claim="bad"]') as HTMLElement;
-    expect(within(locked).queryByRole("radiogroup")).toBeNull();
-
-    await userEvent.click(within(locked).getByRole("button", { name: "拿掉「吃了不會感冒」" }));
-    expect(within(claimsCard()).queryByText("吃了不會感冒")).toBeNull();
+    const hit = claimsCard().querySelector(`[data-statutory="${LAW.term}"]`) as HTMLElement;
+    const hitGroup = within(hit).getByRole("radiogroup", { name: "吃了不會感冒" });
+    expect(within(hitGroup).getByRole("radio", { name: "可以講" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(hit).getByText("你自訂")).toBeTruthy();
 
     await userEvent.click(nextButton());
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
-    expect(mockSave.mock.calls[0][2].claims).toEqual([{ id: null, text: "一天一顆就夠", verdict: "ok" }]);
+    expect(mockSave.mock.calls[0][2].claims).toEqual([
+      { id: null, text: "一天一顆就夠", verdict: "ok" },
+      { id: null, text: "吃了不會感冒", verdict: "ok" },
+    ]);
+  });
+
+  it("自訂的食安法命中說法照 AI 給的不能講加進來，可以拿掉", async () => {
+    mockFetch.mockResolvedValue(evidence({ claims: [] }));
+    mockSave.mockResolvedValue(evidence());
+    mockPropose.mockResolvedValueOnce({ block: "claim", kind: "option", option: { text: "吃了不會感冒", verdict: "no", statutory: LAW } });
+    const onNext = renderStep();
+
+    await screen.findByRole("region", { name: "這些話可以在廣告裡講嗎" });
+    await userEvent.click(within(claimsCard()).getByRole("button", { name: "✎ 自訂：用自己的話說" }));
+    await userEvent.type(within(claimsCard()).getByRole("textbox"), "吃了不會感冒");
+    await userEvent.click(within(claimsCard()).getByRole("button", { name: "讓 AI 整理" }));
+    await within(claimsCard()).findByText(LAW.sentence);
+    const hit = claimsCard().querySelector(`[data-statutory="${LAW.term}"]`) as HTMLElement;
+    expect(within(hit).getByRole("radio", { name: "不能講" }).getAttribute("aria-checked")).toBe("true");
+
+    await userEvent.click(within(hit).getByRole("button", { name: "拿掉「吃了不會感冒」" }));
+    expect(within(claimsCard()).queryByText("吃了不會感冒")).toBeNull();
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][2].claims).toEqual([]);
   });
 
   it("自訂證據照 AI 整理的種類加進證據清單並標「你自訂」，一起送出", async () => {
@@ -231,6 +262,7 @@ describe("ProductEvidenceStep", () => {
     expect((within(proofCard()).getByLabelText("專家背書") as HTMLInputElement).value).toBe("營養師王小明推薦");
 
     await userEvent.click(within(verdictGroup("不用配水，一天一顆")).getByRole("radio", { name: "可以講" }));
+    await userEvent.click(within(verdictGroup("增強免疫力、預防感冒")).getByRole("radio", { name: "不能講" }));
     await userEvent.click(nextButton());
     await waitFor(() => expect(onNext).toHaveBeenCalled());
     expect(sessionStorage.length).toBe(0);

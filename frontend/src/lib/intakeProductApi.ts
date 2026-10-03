@@ -120,7 +120,7 @@ export type ProductCustomProposal =
   | {
       block: "claim";
       kind: "option";
-      /** A 食安法 hit (`statutory`) forces `verdict: "no"` (not editable). */
+      /** `statutory` (a 食安法 hit) is a reminder only; `verdict` is the proposal's own, never derived from it. */
       option: { text: string; verdict: ClaimVerdict; statutory: { term: string; sentence: string } | null };
     };
 
@@ -198,9 +198,10 @@ export interface ProductClaim {
   /** Where the sentence was found (「商品頁」「顧客評論」); "" for a saved one. */
   from_note: string;
   source: OnboardingSource;
-  /** null = not chosen yet. Always "no" when `statutory` is set (not editable). */
+  /** null = not chosen yet. The user's choice; never derived from `statutory`. */
   verdict: ClaimVerdict | null;
-  /** 食安法 hit (brand regime), e.g. `{term: "增強免疫", sentence: "「增強免疫」屬改變生理功能（…）"}`. */
+  /** 食安法 hit (brand regime), a reminder shown on the row (F48 decision 13), e.g.
+   * `{term: "增強免疫", sentence: "「增強免疫」屬改變生理功能（…）"}`. */
   statutory: { term: string; sentence: string } | null;
 }
 
@@ -213,7 +214,7 @@ export interface ProductEvidence {
 export interface ProductEvidenceInput {
   /** Full list; an empty text is a blank slot and is dropped. */
   proof: { id?: string | null; fact_key: ProofKind; text: string }[];
-  /** Full list; every non-statutory claim needs a verdict (400 「還有 N 句沒選…」). */
+  /** Full list; every claim needs a verdict, a 食安法 hit included (400 「還有 N 句沒選…」). */
   claims: { id?: string | null; text: string; verdict: ClaimVerdict | null }[];
 }
 
