@@ -1,10 +1,12 @@
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
+import type { TriageSampleView } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type StructureAd, type StructureGroup } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { perSaleAmount } from "../patterns/csv";
 import {
-  Chip, GradeRules, GradeTermChip, MoneyTag, ReadFailed, Term, TreeRows, formatAmount, type TreeGroup, type TreeLeaf,
+  Chip, GradeRules, GradeTermChip, MoneyTag, ReadFailed, Term, TreeRows, formatAmount, gradeWord, useAdsRules,
+  type AdsRules, type TreeGroup, type TreeLeaf,
 } from "../patterns";
 
 /** v10 (F30-I08) the structure tab's tree (prototype `tabStructure()`): campaign → ad groups (每日・N 則) → ads, from
@@ -21,34 +23,40 @@ const H2 = "text-[15px] font-semibold";
 
 const daily = (v: number | null) => `每日 ${formatAmount(v) ?? "—"}`;
 
-function leafValue(a: StructureAd, breakEven: number | null) {
+/** F48 Contract R: `GET …/structure` serves each ad's `reason_code` and `sample` beside its grade
+ * (`app/ads/workspace_reads.py`); `StructureAd` in `lib/adsWorkspaceApi.ts` (outside this issue's scope) does not
+ * declare them yet, so they are read through this one view until it does. */
+type GradedStructureAd = StructureAd & { reason_code?: string | null; sample?: TriageSampleView | null };
+
+function leafValue(a: GradedStructureAd, breakEven: number | null, rules: AdsRules | null) {
   if (a.grade === "wasted") return "0 筆";
   if (a.grade === "insufficient") {
-    const label = a.grade_label || "剛開始、數字還不夠";
+    const thin = !a.reason_code || a.reason_code === "too_new";
+    const label = a.grade_label || gradeWord(rules, a.grade, a.reason_code) || "";
     // Beside the chip that already says it: wraps onto two short lines so the ad name keeps its width at 1024.
-    return <span className="inline-block max-w-[5.5rem] font-normal leading-snug text-muted-foreground">{label === "剛開始、數字還不夠" ? <Term k="thin">{label}</Term> : label}</span>;
+    return <span className="inline-block max-w-[5.5rem] font-normal leading-snug text-muted-foreground">{thin ? <Term k="thin">{label}</Term> : label}</span>;
   }
   const cost = perSaleAmount(a.cost_per_result);
   return cost === null ? "—" : <>{cost} 元<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>;
 }
 
-function leafOf(a: StructureAd, i: number, breakEven: number | null): TreeLeaf {
+function leafOf(a: GradedStructureAd, i: number, breakEven: number | null, rules: AdsRules | null): TreeLeaf {
   const key = a.entity_id ?? a.ad_id ?? `ad-${i}`;
   if (a.missing_material) return { key, name: a.name, thumbnailUrl: null, missing: true };
   // Not on a platform yet: nothing to grade, nothing spent.
   if (a.entity_id === null) return { key, name: a.name, thumbnailUrl: a.thumbnail_url };
   return {
     key, name: a.name, thumbnailUrl: a.thumbnail_url, dimmed: a.closing,
-    chip: a.closing ? <Chip>關閉中</Chip> : <GradeTermChip grade={a.grade} label={a.grade_label} />,
-    value: leafValue(a, breakEven),
+    chip: a.closing ? <Chip>關閉中</Chip> : <GradeTermChip grade={a.grade} label={a.grade_label} reasonCode={a.reason_code} />,
+    value: leafValue(a, breakEven, rules),
   };
 }
 
-function groupOf(g: StructureGroup, i: number, breakEven: number | null): TreeGroup {
+function groupOf(g: StructureGroup, i: number, breakEven: number | null, rules: AdsRules | null): TreeGroup {
   return {
     key: g.group_id ?? `group-${i}`, kind: "廣告組", name: g.name,
     note: `${daily(g.daily_budget)}・${g.ads.length} 則`,
-    leaves: g.ads.map((a, j) => leafOf(a, j, breakEven)),
+    leaves: g.ads.map((a, j) => leafOf(a, j, breakEven, rules)),
   };
 }
 
@@ -60,6 +68,7 @@ export function StructureTab({ brandId, campaign: c, planKey }: {
 }) {
   const read = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id, planKey]);
   const data = read.data;
+  const rules = useAdsRules();
   const groups = data?.groups ?? [];
   // The campaign's daily total only when every group's daily budget is known; one unknown makes the total unknown.
   const total = groups.length && groups.every((g) => g.daily_budget !== null)
@@ -88,7 +97,7 @@ export function StructureTab({ brandId, campaign: c, planKey }: {
               // An imported objective can be a whole sentence: two lines at most, the full text on hover.
               <span className="line-clamp-2" title={c.objective || undefined}>{`${daily(total)}・${c.objective || "目標待確認"}`}</span>
             ) }}
-            groups={groups.map((g, i) => groupOf(g, i, c.cap.break_even))}
+            groups={groups.map((g, i) => groupOf(g, i, c.cap.break_even, rules))}
           />
           <GradeRules breakEven={c.cap.break_even} />
         </>

@@ -20,16 +20,16 @@ import { Chip, ReadFailed, SlotTile } from "../patterns";
 
 export const VIDEO_NEEDED = "這格要影片腳本，照片不算";
 const SHARED_IMAGE = "同一張圖，文案不同";
-const NO_OFFER = "無優惠";
 export const isVideoSlot = (slot: Slot) => slot.format_key === "video";
 export const flatSlots = (data: CampaignSlots) => data.groups.flatMap((g) => g.slots);
 /** The prototype's `.btn.s.go`: the slot's one next step, primary-bordered; long server sentences wrap. */
 const GO = "h-auto min-h-8 max-w-full shrink whitespace-normal border-primary py-1 text-left font-semibold text-primary hover:text-primary";
 
-/** The ad's offer coordinate as the tile head's chip (accent unless it is 無優惠); nothing for an ad without one. */
+/** The ad's offer coordinate as the tile head's chip — the served label, accent unless its `offer_key` is `none`
+ * (無優惠; F48: the tone branches on the key, never the label); nothing for an ad without one. */
 function offerChip(slot: Slot): ReactNode {
   if (!slot.offer_label) return undefined;
-  return <Chip tone={slot.offer_label === NO_OFFER ? "neutral" : "accent"}>{slot.offer_label}</Chip>;
+  return <Chip tone={slot.offer_key === "none" ? "neutral" : "accent"}>{slot.offer_label}</Chip>;
 }
 
 /** The URL an `<img>` can load: a platform URL as is; an authenticated user-asset path fetched into an object URL

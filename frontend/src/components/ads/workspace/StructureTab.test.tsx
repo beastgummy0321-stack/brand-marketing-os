@@ -4,6 +4,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
+import type { TriageSampleView } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type CampaignStructure, type StructureAd } from "@/lib/adsWorkspaceApi";
 import { StructureTab } from "./StructureTab";
 
@@ -17,7 +18,8 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   } as CampaignDetail;
 }
 
-function ad(overrides: Partial<StructureAd> = {}): StructureAd {
+/** `GET …/structure` also serves `reason_code` and `sample` beside each grade (F48 Contract R). */
+function ad(overrides: Partial<StructureAd> & { reason_code?: string | null; sample?: TriageSampleView | null } = {}): StructureAd {
   return {
     ad_id: "ad_1", entity_id: "ent_1", name: "晨光隨行杯・日常出發", thumbnail_url: "/t/1.png", spend: 960,
     grade: "on_target", grade_label: "划算", cost_per_result: 48, results: 20, closing: false, missing_material: false,
@@ -32,9 +34,9 @@ const LIVE: CampaignStructure = { groups: [
     ad({ ad_id: "ad_3", entity_id: "ent_3", name: "開箱 15 秒", grade: "over", grade_label: "太貴", cost_per_result: 617.5 }),
   ] },
   { group_id: "g_b", name: "B・再行銷 30 天", daily_budget: 800, ads: [
-    ad({ ad_id: "ad_4", entity_id: "ent_4", name: "秋季新色預告", grade: "wasted", grade_label: "沒賣出", cost_per_result: null, results: 0, spend: 1400 }),
-    ad({ ad_id: "ad_5", entity_id: "ent_5", name: "健身情境", grade: "insufficient", grade_label: "剛開始、數字還不夠", cost_per_result: 300, results: 1 }),
-    ad({ ad_id: "ad_6", entity_id: "ent_6", name: "提問式貼文", grade: "insufficient", grade_label: "資料不足", cost_per_result: null }),
+    ad({ ad_id: "ad_4", entity_id: "ent_4", name: "秋季新色預告", grade: "wasted", grade_label: "沒賣出", reason_code: "spend_over_target_no_result", cost_per_result: null, results: 0, spend: 1400 }),
+    ad({ ad_id: "ad_5", entity_id: "ent_5", name: "健身情境", grade: "insufficient", grade_label: "剛開始、數字還不夠", reason_code: "too_new", cost_per_result: 300, results: 1 }),
+    ad({ ad_id: "ad_6", entity_id: "ent_6", name: "提問式貼文", grade: "insufficient", grade_label: "資料不足", reason_code: "result_unknown_days", cost_per_result: null }),
     ad({ ad_id: "ad_7", entity_id: "ent_7", name: "再行銷兩入組", grade: null, grade_label: null, cost_per_result: null, results: null, spend: null }),
     ad({ ad_id: "ad_8", entity_id: "ent_8", name: "關掉的那則", closing: true, grade: "over", grade_label: "太貴", cost_per_result: 700 }),
   ] },
@@ -76,6 +78,9 @@ describe("StructureTab (F30-I08)", () => {
     expect(within(thin).getAllByText("剛開始、數字還不夠")).toHaveLength(2);
     expect(thin.textContent).not.toContain("300 元");
     expect(within(leaf("提問式貼文")).getAllByText("資料不足")).toHaveLength(2);
+    // F48: 剛開始 vs 資料不足 is the served reason_code, not the label: only too_new carries the 剛開始 glossary term.
+    expect(within(thin).getAllByText("剛開始、數字還不夠").filter((el) => el.dataset.slot === "term")).toHaveLength(2);
+    expect(within(leaf("提問式貼文")).getAllByText("資料不足").filter((el) => el.dataset.slot === "term")).toHaveLength(0);
     // Not judged and no cost: 未判斷 and —, never 0.
     const unknown = leaf("再行銷兩入組");
     expect(within(unknown).getByText("未判斷")).toBeTruthy();

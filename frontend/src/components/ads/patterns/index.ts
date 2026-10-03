@@ -22,6 +22,7 @@ export { DiffRow } from "./DiffRow";
 export { CapDots } from "./CapDots";
 export { ProgressSegments, type SegmentState } from "./ProgressSegments";
 export { define, GLOSSARY_KEYS, type GlossaryKey } from "./glossary";
+export { figure, gradeWord, loadAdsRules, sampleWords, unsoldLine, useAdsRules, watchLine, watchTenths, type AdsRules } from "./rules";
 export { GradeTermChip, Term } from "./Term";
 export { MoneyTag, moneyTag, type MoneyFact, type MoneyTone } from "./MoneyTag";
 export { GradeRules, MoneyRule } from "./GradeRules";

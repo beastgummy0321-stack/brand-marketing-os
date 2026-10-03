@@ -1,5 +1,6 @@
-import { GRADE_FILL, GRADE_LABEL, formatAmount, type Grade } from "./Chip";
+import { GRADE_FILL, formatAmount, type Grade } from "./Chip";
 import { GradeRules } from "./GradeRules";
+import { gradeWord, useAdsRules } from "./rules";
 
 /** One bucket of spend per grade (Feature F29 Contract C/E `buckets`). `amount` null = unknown: it draws no
  * width and prints as unknown, never as 0. */
@@ -36,7 +37,9 @@ export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, 
     };
   }).filter((o) => o.count > 0 || o.width > 0);
   const total = merged.reduce((s, o) => s + o.width, 0);
-  const label = (key: (typeof ORDER)[number]["key"]) => (key === "insufficient" && thinLabel ? thinLabel : GRADE_LABEL[key]);
+  const served = useAdsRules();
+  // Served words (F48 Contract R-API); the thin bucket reads 剛開始、數字還不夠 unless the screen words it itself.
+  const label = (key: (typeof ORDER)[number]["key"]) => (key === "insufficient" && thinLabel ? thinLabel : gradeWord(served, key) ?? "");
   return (
     <div data-slot="grade-bar">
       <div className="mt-1 mb-2 flex h-3 overflow-hidden rounded-md bg-muted" aria-hidden="true">

@@ -9,6 +9,8 @@ import { listCampaigns } from "@/lib/adsApi";
 import type { QueueCleanup, QueueItem, QueueSettle, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
 import { getTriage, splitQueue } from "@/lib/adsTriageApi";
 import { apiFetch } from "@/lib/http";
+import { formatAmount } from "../patterns";
+import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
 import { CampaignDetailPage } from "./CampaignDetailPage";
 import {
   ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, trendNote, type GroupKey, type RowAction, type RowExtras,
@@ -42,7 +44,7 @@ function item(o: Partial<TriageItem> & { spend?: number | null; results?: number
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     current: { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     previous: { spend: 1500, result_count: 29, cost_per_result: 52.1, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    change_pct: -0.0787, sample: { gate: true, spend_multiple: 3.2, days_with_events: 12 },
+    change_pct: -0.0787, sample: { sales: results ?? null, few: false, too_new: false, spend_multiple: 3.2, days_with_events: 12 },
     ...rest,
   };
 }
@@ -63,12 +65,16 @@ function cleanupPayload(ids: string[]): QueueCleanup {
   };
 }
 
-const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "沒賣出", spend: 1480, results: 0, cost: null, change_pct: null });
+const wasted = item({ entity_id: "a8", name: "秋季新色預告・直式 9:16 短影音", grade: "wasted", grade_label: "沒賣出", reason_code: "spend_over_target_no_result", spend: 1480, results: 0, cost: null, change_pct: null });
 const over = item({ entity_id: "a7", name: "提問式貼文・早晨第一口是什麼？", grade: "over", grade_label: "太貴", spend: 2470, results: 4, cost: 617.5, change_pct: 0.1002 });
 const watch = item({ entity_id: "a6", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", grade: "watch", grade_label: "偏貴", spend: 3120, results: 6, cost: 520, change_pct: 0.1818 });
 const ok = item({ entity_id: "a2", name: LONG_NAME, spend: 1407, results: 28, cost: 50.25 });
-const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "剛開始、數字還不夠", spend: 120, results: 0, cost: null, change_pct: null });
-const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "insufficient", grade_label: "資料不足", spend: null, results: null, cost: null, change_pct: null });
+const thin = item({ entity_id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", grade_label: "剛開始、數字還不夠", reason_code: "too_new", spend: 120, results: 0, cost: null, change_pct: null });
+const noData = item({ entity_id: "m9", name: "同步缺口那一則", grade: "insufficient", grade_label: "資料不足", reason_code: "result_unknown_days", spend: null, results: null, cost: null, change_pct: null });
+/** The served ruler lines for the 450 cap the fixtures use (F48 Contract R-API: hints come from the rules). */
+const CAP = 450;
+const WATCH = formatAmount(CAP * RULES_FIXTURE.grade.watch_band);
+const UNSOLD = formatAmount(CAP * RULES_FIXTURE.grade.unsold_spend_multiple);
 
 function renderGroups(items: TriageItem[], opts: {
   cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
@@ -91,10 +97,14 @@ function renderGroups(items: TriageItem[], opts: {
 const detailsOf = (title: string) => screen.getByText(title, { selector: "b" }).closest("details")!;
 
 describe("groupOf / trendNote", () => {
-  it("splits insufficient by the backend's own grade_label", () => {
+  it("splits insufficient by the backend's own reason_code (too_new = 剛開始, else 資料不足), never by its label", () => {
     expect(groupOf(thin)).toBe("thin");
     expect(groupOf(noData)).toBe("no_data");
     expect(groupOf(wasted)).toBe("wasted");
+    // A relabelled payload still groups by its code.
+    expect(groupOf({ ...thin, grade_label: "還在累積" })).toBe("thin");
+    expect(groupOf({ ...noData, grade_label: "剛開始、數字還不夠" })).toBe("no_data");
+    expect(groupOf({ ...thin, reason_code: "mixed_currency" })).toBe("no_data");
   });
 
   it("prints the prototype trend note from change_pct and the window length", () => {
@@ -110,13 +120,42 @@ describe("GradeGroups", () => {
     const { container } = renderGroups([ok, thin, watch, noData, over, wasted]);
     const titles = [...container.querySelectorAll("summary b")].map((b) => b.textContent);
     expect(titles).toEqual(["沒賣出", "太貴", "偏貴", "划算", "剛開始、數字還不夠", "資料不足"]);
-    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText("花到 1,350 元還沒賣出")).toBeTruthy();
-    expect(screen.getByText("每筆超過 540 元")).toBeTruthy();
-    expect(screen.getByText("每筆 450–540 元")).toBeTruthy();
+    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText(`花到 ${UNSOLD} 元還沒賣出`)).toBeTruthy();
+    expect(screen.getByText(`每筆超過 ${WATCH} 元`)).toBeTruthy();
+    expect(screen.getByText(`每筆 450–${WATCH} 元`)).toBeTruthy();
     expect(screen.getByText("每筆不到 450 元")).toBeTruthy();
-    expect(screen.getByText("還沒花到 1,350 元")).toBeTruthy();
+    expect(screen.getByText(`還沒花到 ${UNSOLD} 元`)).toBeTruthy();
     // 資料不足 is not about the spend line: no invented hint.
     expect(detailsOf("資料不足").querySelector("summary")!.textContent).toBe("資料不足1 則");
+  });
+
+  it("the hints follow the served rules, and print nothing while the rules are not loaded (no literal fallback)", () => {
+    seedAdsRules({ ...RULES_FIXTURE, grade: { ...RULES_FIXTURE.grade, watch_band: 1.5, unsold_spend_multiple: 4 } });
+    try {
+      const { unmount } = renderGroups([over, wasted]);
+      expect(screen.getByText("每筆超過 675 元")).toBeTruthy();
+      expect(screen.getByText("花到 1,800 元還沒賣出")).toBeTruthy();
+      unmount();
+      seedAdsRules(null);
+      const { container } = renderGroups([over, wasted, thin]);
+      expect(container.textContent).not.toMatch(/每筆超過|還沒賣出|還沒花到/);
+      // The titles are the payload's own words.
+      expect([...container.querySelectorAll("summary b")].map((b) => b.textContent)).toEqual(["沒賣出", "太貴", "剛開始、數字還不夠"]);
+    } finally {
+      seedAdsRules(RULES_FIXTURE);
+    }
+  });
+
+  it("a graded row with a small sample shows 樣本少 (and 還太新) beside its trend note; 剛開始／資料不足 rows show none", () => {
+    const few = item({ entity_id: "f1", name: "小樣本・三筆", cost: 210, results: 3, sample: { sales: 3, few: true, too_new: false, spend_multiple: 1.4, days_with_events: 3 } });
+    const fresh = item({ entity_id: "f2", name: "剛上兩天", grade: "over", grade_label: "太貴", cost: 900, results: 1, sample: { sales: 1, few: true, too_new: true, spend_multiple: 2, days_with_events: 1 } });
+    const thinFresh = { ...thin, sample: { sales: 0, few: false, too_new: true, spend_multiple: 0.3, days_with_events: 0 } };
+    renderGroups([few, fresh, ok, thinFresh], { open: ["on_target", "over", "thin"] });
+    const chips = (id: string) => [...screen.getByTestId(`ad-row-${id}`).querySelectorAll("[data-part=sample]")].map((c) => c.textContent);
+    expect(chips("f1")).toEqual([RULES_FIXTURE.labels.flags.few]);
+    expect(chips("f2")).toEqual([RULES_FIXTURE.labels.flags.few, "還太新"]);
+    expect(chips("a2")).toEqual([]);
+    expect(chips("m2")).toEqual([]);
   });
 
   it("opens only the groups it is told to (default 沒賣出／太貴／偏貴) and reports toggles", () => {

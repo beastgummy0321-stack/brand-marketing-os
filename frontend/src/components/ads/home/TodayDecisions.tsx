@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { GradeMove, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
-import { Chip, Disclosure, GRADE_LABEL, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount } from "../patterns";
+import { Chip, Disclosure, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount, gradeWord, useAdsRules, type AdsRules } from "../patterns";
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
@@ -50,10 +50,10 @@ function hm(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** 「從划算變偏貴」 from the backend's own `grade_move`; no move → the prototype's plain 「每筆變多了」 (never a move
- * guessed from the trend or from `previous_grade`). */
-function moveText(move: GradeMove | null): string {
-  return move ? `從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "每筆變多了";
+/** 「從划算變偏貴」 from the backend's own `grade_move` in the served words (F48 Contract R-API); no move (or the rules
+ * not loaded yet) → the prototype's plain 「每筆變多了」 (never a move guessed from the trend or from `previous_grade`). */
+function moveText(move: GradeMove | null, rules: AdsRules | null): string {
+  return move && rules ? `從${gradeWord(rules, move.from)}變${gradeWord(rules, move.to)}` : "每筆變多了";
 }
 
 type Props = {
@@ -146,15 +146,16 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
 }
 
 /** Prototype `doneLabel(q)`: what was decided, in one line. */
-function doneLabel(d: HomeDecision): string {
+function doneLabel(d: HomeDecision, rules: AdsRules | null): string {
   if (d.kind === "settle") return `結算上一期 ${settleRange(d.row)}`;
   const item = d.item;
   if (item.kind_key === "cleanup") return `清理：${decisionTitle(item)}`;
-  if (item.kind_key === "worse") return `${moveText(item.triage.grade_move)}：${item.triage.name ?? "未命名廣告"}`;
+  if (item.kind_key === "worse") return `${moveText(item.triage.grade_move, rules)}：${item.triage.name ?? "未命名廣告"}`;
   return decisionTitle(item);
 }
 
 function HandledFold({ brandId, done, recovering }: { brandId: string; done: HomeDecision[]; recovering: boolean }) {
+  const rules = useAdsRules();
   if (!done.length) return null;
   return (
     <Disclosure label={`今天處理過 ${done.length} 件`}>
@@ -163,7 +164,7 @@ function HandledFold({ brandId, done, recovering }: { brandId: string; done: Hom
         // drill-10 Q2: the chip opens the decision (a deferred one shows 「M/D 再看」 and leads back to its change set).
         return (
           <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">
-            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d)}</span>
+            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d, rules)}</span>
             {recovering ? <Chip>補完資料後更新</Chip> : <DoneChip action={action} />}
           </div>
         );
@@ -259,6 +260,7 @@ function CleanupCard({ brandId, item, recovering }: { brandId: string; item: Que
  * trend is only the footnote. */
 function WorseCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
   const t = item.triage;
+  const rules = useAdsRules();
   const prev = t.previous.cost_per_result;
   const cur = t.current.cost_per_result;
   const cap = t.target.value;
@@ -269,7 +271,7 @@ function WorseCard({ brandId, item, recovering }: { brandId: string; item: Queue
   const over = cap !== null && cur !== null && cur > cap;
   return (
     <article className={cn(CARD, "border-border")} aria-label={t.name ?? "未命名廣告"}>
-      <CardHead label={moveText(t.grade_move)} className="bg-zone-watch text-warning-strong" campaign={t.campaign_name} />
+      <CardHead label={moveText(t.grade_move, rules)} className="bg-zone-watch text-warning-strong" campaign={t.campaign_name} />
       <div className="text-base font-semibold [overflow-wrap:anywhere]">{t.name ?? "未命名廣告"}</div>
       <div>
         <div className="numeric text-base font-semibold [overflow-wrap:anywhere]">

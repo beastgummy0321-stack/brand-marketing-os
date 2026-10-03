@@ -1,10 +1,14 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { GRADE_FILL, GRADE_LABEL, formatAmount, type Grade } from "./Chip";
+import type { AdsRules } from "@/lib/adsTriageApi";
+import { GRADE_FILL, formatAmount, type Grade } from "./Chip";
 import { perSaleAmount } from "./csv";
+import { gradeWord, unsoldLine, useAdsRules, watchLine } from "./rules";
 
 /** Kit piece for the v9 target ruler (prototype `ruler()`, the signature visual of F28). Pure presentational:
- * every ad arrives already graded by the API (Feature F28 "Grades"); the ruler only places it.
+ * every ad arrives already graded by the API (Feature F28 "Grades"); the ruler only places it. The zone bounds, the
+ * 沒賣出 spend line and every word come from the served rules (F48 Contract R-API); until they load the track is one
+ * plain bar without zone words and the lines' numbers are left out.
  * `data-slot="target-ruler"` + `data-variant` = size (or `empty`) is what `frontend/scripts/ui-evidence.cjs`
  * compares against the prototype's `.rl.rl-<size>`. */
 
@@ -71,6 +75,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
 }) {
   const g = GEOMETRY[size];
   const mini = size === "mini";
+  const rules = useAdsRules();
 
   if (!cap) {
     return (
@@ -83,6 +88,9 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
   }
 
   const T = cap.value;
+  const word = (grade: Grade, gradeLabel?: string | null) => gradeLabel || gradeWord(rules, grade) || "";
+  const band = rules ? watchLine(rules, T) : null;
+  const unsold = rules ? unsoldLine(rules, T) : null;
   const capWord = cap.basis === "break_even" ? (mini ? "暫用" : "暫用打平") : "上限";
   const onAxis = ads.filter((a) => ON_AXIS.has(a.grade) && a.costPerResult !== null);
   const wasted = ads.filter((a) => a.grade === "wasted");
@@ -107,7 +115,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
   const inSet = (id: string) => highlight?.ids.includes(id) ?? false;
 
   const dot = (a: RulerAd, p: number | null, level: number) => {
-    const label = a.gradeLabel || GRADE_LABEL[a.grade];
+    const label = word(a.grade, a.gradeLabel);
     const closing = highlight?.mode === "close" && inSet(a.id);
     const ringed = highlight && highlight.mode !== "close" && inSet(a.id);
     const dim = highlight && (highlight.mode === "close" ? mini && !closing : !inSet(a.id));
@@ -121,7 +129,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
     if (mini) return <span key={a.id} className={common} style={style} aria-hidden="true" data-grade={a.grade}>{body}</span>;
     const tipSide = p === null || p > 70 ? "right-[-4px]" : p < 22 ? "left-[-4px]" : "left-1/2 -translate-x-1/2";
     const facts = a.grade === "wasted"
-      ? `花 ${text(a.spend)} 元・0 筆購買（花到 ${formatAmount(3 * T)} 還沒賣）`
+      ? `花 ${text(a.spend)} 元・0 筆購買${unsold === null ? "" : `（花到 ${formatAmount(unsold)} 還沒賣）`}`
       : `每筆 ${perSale(a.costPerResult)} 元・${label}`;
     const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${text(a.spend)} 元・0 筆購買` : `每筆 ${perSale(a.costPerResult)} 元`}｜${label}`;
     return (
@@ -136,21 +144,23 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
   };
 
   const counts = SUMMARY_ORDER.filter((grade) => ads.some((a) => a.grade === grade))
-    .map((grade) => `${GRADE_LABEL[grade]} ${ads.filter((a) => a.grade === grade).length}`).join("、");
+    .map((grade) => `${word(grade)} ${ads.filter((a) => a.grade === grade).length}`).join("、");
   const capLabel = `${cap.basis === "break_even" ? "暫用打平" : "上限"} ${formatAmount(T)}`;
-  const thinGroups = [...new Set(thin.map((a) => a.gradeLabel || GRADE_LABEL.insufficient))];
+  const thinGroups = [...new Set(thin.map((a) => word(a.grade, a.gradeLabel)))];
 
   return (
     <div data-slot="target-ruler" data-variant={size}>
       <div className="flex items-stretch gap-2" role="group" aria-label={`對照上限：${capLabel}；${counts}`}>
         <div className="relative min-w-0 flex-1">
           <div className="relative" style={{ height: fieldHeight }}>{placed.map((x) => dot(x.a, x.p, x.level))}</div>
-          <div className="flex h-2.5 overflow-hidden rounded-[5px]" aria-hidden="true">
-            <i className={cn("block h-full", GRADE_FILL.on_target)} style={{ width: `${pos(T)}%` }} />
-            <i className={cn("block h-full", GRADE_FILL.watch)} style={{ width: `${pos(T * 1.2) - pos(T)}%` }} />
-            <i className={cn("block h-full flex-1", GRADE_FILL.over)} />
+          <div className={cn("flex h-2.5 overflow-hidden rounded-[5px]", band === null && "bg-muted")} aria-hidden="true">
+            {band !== null && <>
+              <i className={cn("block h-full", GRADE_FILL.on_target)} style={{ width: `${pos(T)}%` }} />
+              <i className={cn("block h-full", GRADE_FILL.watch)} style={{ width: `${pos(band) - pos(T)}%` }} />
+              <i className={cn("block h-full flex-1", GRADE_FILL.over)} />
+            </>}
           </div>
-          {!mini && <ZoneLabels starts={[0, pos(T) + 1, pos(T * 1.2) + 1]} />}
+          {!mini && rules && band !== null && <ZoneLabels rules={rules} starts={[0, pos(T) + 1, pos(band) + 1]} />}
           {showBreakEven && (
             <Mark at={pos(breakEven as number)} bottom={markBottom} side={(breakEven as number) < T ? "left" : "right"} dashed label={mini ? null : `打平 ${formatAmount(breakEven)}`} />
           )}
@@ -159,34 +169,34 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
         <div className="relative flex shrink-0 flex-col items-center justify-end gap-1 rounded-lg border border-dashed border-danger/45 bg-danger/10 pt-1 pb-[22px]" style={{ width: g.box }}>
           {wasted.map((a) => dot(a, null, 0))}
           {!wasted.length && !mini && <span className="mb-1 text-[11.5px] text-muted-foreground">無</span>}
-          <em className="absolute inset-x-0 bottom-[3px] text-center text-[11.5px] font-bold text-danger not-italic">{mini ? "0" : "沒賣出"}</em>
+          <em className="absolute inset-x-0 bottom-[3px] text-center text-[11.5px] font-bold text-danger not-italic">{mini ? "0" : word("wasted")}</em>
         </div>
       </div>
       {tray && thin.length > 0 && (mini ? (
         <div className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-          剛開始、數字還不夠 {thin.length} 則 {thin.map((a) => <span key={a.id} className={cn("inline-block size-2 rounded-full", GRADE_FILL.insufficient)} />)}
+          {word("insufficient")} {thin.length} 則 {thin.map((a) => <span key={a.id} className={cn("inline-block size-2 rounded-full", GRADE_FILL.insufficient)} />)}
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-[10px] bg-muted px-3 py-2.5" data-part="tray">
-          {thinGroups.map((word) => {
-            const group = thin.filter((a) => (a.gradeLabel || GRADE_LABEL.insufficient) === word);
+          {thinGroups.map((heading) => {
+            const group = thin.filter((a) => word(a.grade, a.gradeLabel) === heading);
             return [
-              <span key={`h-${word}`} className="text-xs font-semibold text-muted-foreground">{word} {group.length} 則</span>,
+              <span key={`h-${heading}`} className="text-xs font-semibold text-muted-foreground">{heading} {group.length} 則</span>,
               ...group.map((a) => {
-                const gate = 3 * T;
-                const pct = a.spend === null ? null : Math.round((a.spend / gate) * 100);
+                const gate = unsold;
+                const pct = a.spend === null || gate === null ? null : Math.round((a.spend / gate) * 100);
                 return (
                   <div key={a.id} className="flex max-w-[280px] min-w-[180px] flex-1 items-center gap-2">
                     <Thumb url={a.thumbnailUrl} className="size-[26px] rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <div className="text-[11.5px] font-medium [overflow-wrap:anywhere]">{a.name}</div>
-                      {a.spend !== null && (
+                      {pct !== null && (
                         <div className="relative mt-[3px] mb-0.5 h-1.5 rounded-[5px] bg-card" aria-hidden="true">
                           <i className="absolute inset-y-0 left-0 rounded-[5px] bg-chart-rest" style={{ width: `${Math.min(100, pct as number)}%` }} />
                         </div>
                       )}
                       <div className="numeric flex justify-between gap-2 text-[11.5px] text-muted-foreground">
-                        <span>已花 {text(a.spend)}／{formatAmount(gate)} 元</span>{pct !== null && <span>{pct}%</span>}
+                        <span>已花 {text(a.spend)}{gate === null ? " 元" : `／${formatAmount(gate)} 元`}</span>{pct !== null && <span>{pct}%</span>}
                       </div>
                     </div>
                   </div>
@@ -201,9 +211,9 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
 }
 
 const ZONE_WORDS = [
-  { word: "划算", cls: "text-success" },
-  { word: "偏貴", cls: "text-warning" },
-  { word: "太貴", cls: "text-danger/90" },
+  { grade: "on_target", cls: "text-success" },
+  { grade: "watch", cls: "text-warning" },
+  { grade: "over", cls: "text-danger/90" },
 ] as const;
 const ZONE_GAP = 6;
 
@@ -224,7 +234,7 @@ export function zoneLabelLayout(width: number, starts: number[], widths: number[
 /** The zone-word row under the track (prototype `.rl .zl`). The prototype places the words by percent only, which
  * collides in narrow rulers (the strategy tab at 1024 px); here the row measures itself and applies `zoneLabelLayout`.
  * Before the first measurement (or without layout, e.g. jsdom) the words keep the prototype's percent positions. */
-function ZoneLabels({ starts }: { starts: number[] }) {
+function ZoneLabels({ rules, starts }: { rules: AdsRules; starts: number[] }) {
   const row = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [layout, setLayout] = useState<{ lefts: number[]; caption: boolean } | null>(null);
@@ -247,14 +257,14 @@ function ZoneLabels({ starts }: { starts: number[] }) {
   }, [width, key]);
   return (
     <div ref={row} className="relative h-[18px] text-[11.5px] font-semibold" aria-hidden="true">
-      {ZONE_WORDS.map(({ word, cls }, i) => (
+      {ZONE_WORDS.map(({ grade, cls }, i) => (
         <span
-          key={word}
-          data-zone={word}
+          key={grade}
+          data-zone={rules.labels.grade[grade]}
           className={cn("absolute top-[3px] whitespace-nowrap", cls)}
           style={{ left: layout ? `${layout.lefts[i]}px` : `${starts[i]}%` }}
         >
-          {word}
+          {rules.labels.grade[grade]}
         </span>
       ))}
       <span

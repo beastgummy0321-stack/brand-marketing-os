@@ -13,6 +13,7 @@ import { FieldCard } from "./FieldCard";
 import { JudgmentBand } from "./JudgmentBand";
 import { KpiStrip } from "./KpiStrip";
 import { ReservedSlotCard } from "./ReservedSlotCard";
+import { RULES_FIXTURE, seedAdsRules } from "./rulesFixture";
 
 describe("ads patterns（F04-I07）", () => {
   it("DecisionCard items=[] 印空狀態，沒有「同意」按鈕", () => {
@@ -409,7 +410,7 @@ describe("v10 kit（F29-I09）", () => {
   /** Text as shown: a term's hidden tooltip sentence is not part of the line. */
   const shown = (el: Element) => { const copy = el.cloneNode(true) as Element; copy.querySelectorAll("[role='tooltip']").forEach((t) => t.remove()); return copy.textContent; };
 
-  it("glossary 逐字等於原型 GLOSS；打平線帶自己的數字；剛開始那句寫裁決的門檻", async () => {
+  it("glossary 是後端給的句子（F48）：除了剛開始那句都逐字等於原型 GLOSS；打平線帶自己的數字；還沒載入就是空的", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { define } = await import("./glossary");
@@ -427,9 +428,22 @@ describe("v10 kit（F29-I09）", () => {
     expect(define("money")).toBe(gloss.money);
     expect(define("notebook")).toBe(gloss.note);
     expect(define("break_even", null)).not.toContain("這裡是");
-    expect(define("thin")).not.toBe(gloss.thin);
-    expect(define("thin")).toMatch(/上限 3 倍.*7 天.*10 筆/);
-    expect(define("thin")).not.toContain("3 筆");
+    expect(define("break_even", null)).toBe(RULES_FIXTURE.glossary.break_even);
+    // `thin` is the served sentence (F48 Contract R: sample size is shown, never a gate), built from the rules.
+    expect(define("thin")).toBe(RULES_FIXTURE.glossary.thin);
+    expect(define("thin")).toContain(`上限 ${RULES_FIXTURE.grade.unsold_spend_multiple} 倍`);
+    expect(define("thin")).toContain(`少於 ${RULES_FIXTURE.grade.sample_few} 筆標「${RULES_FIXTURE.labels.flags.few}」`);
+    // A changed served sentence is printed as served — the frontend keeps no copy.
+    const served = { ...RULES_FIXTURE, glossary: { ...RULES_FIXTURE.glossary, watch: "後端改過的句子" } };
+    expect(define("watch", null, served)).toBe("後端改過的句子");
+    // Not loaded: no sentence at all (never a literal fallback).
+    seedAdsRules(null);
+    try {
+      expect(define("cap")).toBe("");
+      expect(define("break_even", 520)).toBe("");
+    } finally {
+      seedAdsRules(RULES_FIXTURE);
+    }
   });
 
   it("Term：虛線字可 tab 到，說明掛在 tooltip；plain 只印字", async () => {
@@ -450,15 +464,19 @@ describe("v10 kit（F29-I09）", () => {
     expect(chips.textContent).toContain("未判斷");
   });
 
-  it("moneyTag：±2% 算剛好打平，差 2.1% 才有賺／在虧；任一未知就不出", async () => {
+  it("moneyTag：±served band（今天 2%）算剛好打平，差 2.1% 才有賺／在虧；任一未知或規則沒載入就不出", async () => {
     const { moneyTag, MoneyTag } = await import("./MoneyTag");
-    expect(moneyTag(520 * 0.98, 520)?.label).toBe("剛好打平");
-    expect(moneyTag(520 * 1.02, 520)?.label).toBe("剛好打平");
-    expect(moneyTag(520 * 0.979, 520)?.label).toBe("有賺");
-    expect(moneyTag(520 * 1.021, 520)?.label).toBe("在虧");
-    expect(moneyTag(null, 520)).toBeNull();
-    expect(moneyTag(353, null)).toBeNull();
-    expect(moneyTag(0, 520)?.label).toBe("有賺");
+    const band = RULES_FIXTURE.grade.break_even_band;
+    expect(moneyTag(520 * (1 - band), 520, band)?.label).toBe("剛好打平");
+    expect(moneyTag(520 * (1 + band), 520, band)?.label).toBe("剛好打平");
+    expect(moneyTag(520 * (1 - band - 0.001), 520, band)?.label).toBe("有賺");
+    expect(moneyTag(520 * (1 + band + 0.001), 520, band)?.label).toBe("在虧");
+    expect(moneyTag(null, 520, band)).toBeNull();
+    expect(moneyTag(353, null, band)).toBeNull();
+    expect(moneyTag(353, 520, null)).toBeNull();
+    expect(moneyTag(0, 520, band)?.label).toBe("有賺");
+    // The band is the served one: a wider band makes the same cost 剛好打平.
+    expect(moneyTag(520 * 0.95, 520, 0.06)?.label).toBe("剛好打平");
 
     const { container } = render(<><MoneyTag cost={353} breakEven={520} /><MoneyTag cost={614} breakEven={null} /></>);
     const tags = container.querySelectorAll("[data-slot='money-tag']");
@@ -741,5 +759,89 @@ describe("campaign words（F47-I08，drill-10 §4.3）", () => {
     expect(["ACTIVE", "PAUSED", "DELETED", "ARCHIVED"].map(nativeStatusWord)).toEqual(["開啟中", "已暫停", "已刪除", "已封存"]);
     expect(nativeStatusWord("paused")).toBe("已暫停");
     for (const odd of ["WITH_ISSUES", "CAMPAIGN_PAUSED", "", null, undefined]) expect(nativeStatusWord(odd)).toBe("平台狀態不明");
+  });
+});
+
+describe("served rules（F48-I08 Contract R-API）", () => {
+  const G = RULES_FIXTURE.grade;
+  const L = RULES_FIXTURE.labels.grade;
+  /** The served rules with one grade threshold and one word changed — what a backend rule change looks like. */
+  const CHANGED = {
+    ...RULES_FIXTURE,
+    grade: { ...G, watch_band: 1.5, unsold_spend_multiple: 4 },
+    labels: { ...RULES_FIXTURE.labels, grade: { ...L, watch: "有點貴" } },
+  };
+  const visible = (el: Element) => { const c = el.cloneNode(true) as Element; c.querySelectorAll("[role='tooltip']").forEach((t) => t.remove()); return c.textContent ?? ""; };
+  const withRules = async (rules: typeof RULES_FIXTURE | null, run: () => void | Promise<void>) => {
+    seedAdsRules(rules);
+    try { await run(); } finally { seedAdsRules(RULES_FIXTURE); }
+  };
+  const band = (["on_target", "wasted", "ungraded"] as const).map((grade) => ({ grade, amount: 1000, count: 1, ads: [] }));
+
+  it("GradeBand legend: the words and numbers are the fixture's (偏貴 band and its 成)", async () => {
+    const { GradeBand } = await import("./GradeBand");
+    const { container } = render(<GradeBand buckets={band} spent={3000} spentLabel="9 月已花" cap={{ value: 450, basis: "own" }} />);
+    const legend = visible(container.querySelector('[data-part="band-legend"]')!);
+    const tenths = String(Math.round((G.watch_band - 1) * 10));
+    expect(legend).toContain(`${L.watch}＝超過上限不到 ${tenths} 成（450–${450 * G.watch_band}）`);
+    expect(legend).toContain(`${L.over}＝超過 ${tenths} 成以上（${450 * G.watch_band} 以上）`);
+    expect(legend).toContain(`${L.too_new} 0 元`);
+  });
+
+  it("a changed rule moves every piece with it: legend, ruler zones, meter colour, chip word, glossary", async () => {
+    await withRules(CHANGED, async () => {
+      const { GradeBand } = await import("./GradeBand");
+      const { TargetRuler, rulerScale } = await import("./TargetRuler");
+      const { MoneyMeter } = await import("./MoneyMeter");
+      const { GradeTermChip } = await import("./Term");
+      const bandView = render(<GradeBand buckets={band} spent={3000} spentLabel="9 月已花" cap={{ value: 450, basis: "own" }} />).container;
+      expect(visible(bandView.querySelector('[data-part="band-legend"]')!)).toContain("有點貴＝超過上限不到 5 成（450–675）");
+
+      const ads = [
+        { id: "w", name: "沒賣出那則", grade: "wasted" as const, costPerResult: null, spend: 2000 },
+        { id: "t", name: "剛開始那則", grade: "insufficient" as const, gradeLabel: L.too_new, costPerResult: null, spend: 900 },
+        { id: "o", name: "太貴那則", grade: "over" as const, costPerResult: 700, spend: 1400 },
+      ];
+      const ruler = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own" }} size="full" />).container;
+      const { pos } = rulerScale(450, [700]);
+      const watchZone = ruler.querySelector("i.bg-grade-watch") as HTMLElement;
+      expect(watchZone.style.width).toBe(`${pos(675) - pos(450)}%`);
+      expect(ruler.querySelector("[data-zone='有點貴']")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^沒賣出那則｜/ }).textContent).toContain("花到 1,800 還沒賣");
+      expect(ruler.textContent).toContain("已花 900／1,800 元");
+
+      const meter = render(<MoneyMeter value={600} cap={{ value: 450, basis: "own" }} size="sm" />).container;
+      expect(meter.querySelector("i")?.className).toContain("bg-warning/80");
+
+      const chip = render(<GradeTermChip grade="watch" />).container;
+      expect(visible(chip)).toBe("有點貴");
+    });
+  });
+
+  it("not loaded yet: words print without numbers, nothing falls back to a literal", async () => {
+    await withRules(null, async () => {
+      const { GradeBand } = await import("./GradeBand");
+      const { GradeRules } = await import("./GradeRules");
+      const { TargetRuler } = await import("./TargetRuler");
+      const { MoneyTag } = await import("./MoneyTag");
+      const { Term } = await import("./Term");
+      const bandView = render(<GradeBand buckets={band} spent={3000} spentLabel="9 月已花" cap={{ value: 450, basis: "own" }} />).container;
+      const legend = visible(bandView.querySelector('[data-part="band-legend"]')!);
+      expect(legend).not.toMatch(/成|偏貴|划算/);
+      expect(legend).toContain("＝每筆沒超過上限（450）");
+
+      const rules = render(<GradeRules breakEven={520} />).container;
+      expect(rules.querySelectorAll("i")).toHaveLength(0);
+      expect(visible(rules)).toBe("有賺／在虧：跟打平線比；分級：跟你的上限比");
+
+      const ruler = render(<TargetRuler ads={[{ id: "w", name: "沒賣出那則", grade: "wasted", costPerResult: null, spend: 2000 }]} cap={{ value: 450, basis: "own" }} size="full" />).container;
+      expect(ruler.querySelector("[data-zone]")).toBeNull();
+      expect(screen.getByRole("button", { name: /^沒賣出那則｜/ }).textContent).not.toContain("花到");
+
+      expect(render(<MoneyTag cost={353} breakEven={520} />).container.querySelector("[data-slot='money-tag']")).toBeNull();
+      const term = render(<Term k="cap">上限</Term>).container;
+      expect(term.querySelector("[role='tooltip']")).toBeNull();
+      expect(term.textContent).toBe("上限");
+    });
   });
 });

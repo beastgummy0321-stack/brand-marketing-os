@@ -31,10 +31,9 @@ export type CampaignObjectiveFamily = "sales" | "engagement" | "traffic" | "othe
 
 export type TriageClass = "stop_loss" | "worse" | "better" | "flat" | "insufficient" | "no_target";
 
-/** F28-I02, v10 words F29-I01: every active ad graded against the campaign's one cap T
- * (`app/ads/triage.py::grade_window`, the one ruler) -- `on_target` 划算 <= T, `watch` 偏貴 <=
- * 1.2T, `over` 太貴 > 1.2T, `wasted` 沒賣出 (spent >= 3T with 0 results), `insufficient`
- * (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise), `no_target` 未判斷.
+/** F28-I02, v10 words F29-I01, F48 Contract R: every active ad graded against the campaign's one cap T
+ * (`app/ads/triage.py::grade_window`, the one ruler; its thresholds are served by `getAdsRules`) -- `on_target`,
+ * `watch`, `over`, `wasted`, `insufficient` (剛開始 when `reason_code` is `too_new`, else 資料不足), `no_target` 未判斷.
  * `grade_label` always comes from the backend. `class` stays the trend note against the previous
  * window and no decision reads it (ads.md §6.33, `components/ads/oneRuler.test.ts`). */
 export type TriageGrade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
@@ -76,8 +75,14 @@ export interface TriageMetricsView {
   result_label: string; // F19-I06: see `TriageTargetView.result_label`.
   derived_zero_days: number; reason: string | null;
 }
+/** F48 Contract R: the graded window's sample size -- shown beside the grade (「樣本少」／「還太新」), never a gate.
+ * `sales` = known result count (`null` unknown); `few` = 1 to `rules.grade.sample_few - 1` sales; `too_new` = data
+ * on fewer than `rules.grade.min_days` days and fewer than `rules.grade.min_results` sales. The three are optional only
+ * for older hand-written fixtures; `gate` is no longer served (kept optional for the same fixtures). */
 export interface TriageSampleView {
-  gate: boolean; spend_multiple: number | null; days_with_events: number;
+  sales?: number | null; few?: boolean; too_new?: boolean;
+  spend_multiple: number | null; days_with_events: number;
+  gate?: boolean;
 }
 /** F27-I01 Contract A: one handling-history entry for an ad or its lineage predecessors, per
  * `app/ads/triage_ladder.py::_entry` — `kind` is never `"budget"` in practice (budget items
@@ -99,6 +104,9 @@ export interface TriageItem {
   campaign_name: string;
   // F20-I01: thumbnail first, else full image, else `null` (`app/ads/triage.py::_thumbnail_url`).
   thumbnail_url: string | null;
+  // F48 Contract R: `reason_code` "too_new" = a known zero under the 沒賣出 line (剛開始、數字還不夠, `grade`
+  // `insufficient`); "spend_over_target_no_result" = 沒賣出; other codes on `insufficient` = 資料不足. Screens branch on
+  // this code, never on `grade_label`.
   class: TriageClass; label: string; reason_code: string;
   grade: TriageGrade; grade_label: string;
   // F29-I01 Contract A: the previous equal-length window graded by the same ruler (null when not
@@ -399,6 +407,24 @@ export interface PauseView {
   closed_at: string | null; last_read_at: string | null; change_set_id: string | null;
 }
 
+/** F48 Contract R-API (`GET …/brands/{b}/rules`, `app/ads/triage.py::rules`): every threshold, label and glossary
+ * sentence the ads screens print, read from the backend's two ruler modules. The frontend keeps no copy; it reads
+ * these through `components/ads/patterns/rules.ts::useAdsRules()`. `glossary.break_even` has no value -- the screen
+ * appends 「（這裡是 X）」. */
+export interface AdsRules {
+  grade: {
+    watch_band: number; unsold_spend_multiple: number; min_results: number; min_days: number;
+    sample_few: number; near_best: number; break_even_band: number;
+  };
+  ab: { min_days: number; min_conversions_each: number; relative_difference: number };
+  labels: {
+    grade: Record<"on_target" | "watch" | "over" | "wasted" | "too_new" | "no_data" | "no_target", string>;
+    verdict: Record<"keep" | "keep_relative" | "replace", string>;
+    flags: Record<"few" | "relative" | "relative_no_cap", string>;
+  };
+  glossary: Record<"cap" | "on_target" | "watch" | "over" | "wasted" | "thin" | "money" | "notebook" | "break_even", string>;
+}
+
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
   /** F29 Contract D: 成本含運 (unit cost incl. shipping) from the same product economics row as
@@ -452,6 +478,10 @@ async function json<T>(path: string, method: string, body?: unknown, signal?: Ab
   return (await response.json()) as T;
 }
 
+/** F48 Contract R-API: served unwrapped (`{grade, ab, labels, glossary}`). */
+export async function getAdsRules(brand: string, signal?: AbortSignal) {
+  return json<AdsRules>(`${brandPath(brand)}/rules`, "GET", undefined, signal);
+}
 export async function getQueue(brand: string, signal?: AbortSignal) {
   return splitQueue((await json<{ queue: WireQueuePayload }>(`${brandPath(brand)}/queue`, "GET", undefined, signal)).queue);
 }

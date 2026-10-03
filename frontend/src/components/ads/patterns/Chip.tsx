@@ -1,5 +1,6 @@
 import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
+import { gradeWord, useAdsRules } from "./rules";
 
 const TONE = {
   neutral: "bg-muted text-muted-foreground",
@@ -30,8 +31,9 @@ export function Chip({ tone = "neutral", className, ...props }: ComponentProps<"
 /** Feature F28 contract: a triage item's `grade` against the campaign's one cap. */
 export type Grade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
 
-/** Default words per grade (prototype `G`). The API's `grade_label` wins when given: `insufficient` reads
- * 「剛開始、數字還不夠」 below the sample gate and 「資料不足」 for any other reason. */
+/** @deprecated F48 Contract R-API: grade words are served (`useAdsRules().labels.grade`, `gradeWord` in `rules.ts`).
+ * Kept only for the importers outside F48-I08's scope — `flow/CleanupEvidence.tsx`, `flow/CleanupProposal.tsx`,
+ * `review/ReviewEvidencePage.tsx` (F48-I09) and `month/RejectedCards.tsx` (unassigned); delete it with the last one. */
 export const GRADE_LABEL: Record<Grade, string> = {
   on_target: "划算",
   watch: "偏貴",
@@ -70,10 +72,12 @@ export const GRADE_TEXT: Record<Grade, string> = {
   no_target: "text-muted-foreground",
 };
 
-/** v9 `gchip()`: the grade as a chip. `grade === null` (not judged) prints 未判斷. */
-export function GradeChip({ grade, label, className }: { grade: Grade | null; label?: string | null; className?: string }) {
+/** v9 `gchip()`: the grade as a chip — the payload's `label` first, else the served word of the grade (F48 Contract
+ * R-API; `reasonCode` splits `insufficient`). `grade === null` (not judged) prints 未判斷. */
+export function GradeChip({ grade, label, reasonCode, className }: { grade: Grade | null; label?: string | null; reasonCode?: string | null; className?: string }) {
+  const rules = useAdsRules();
   const g = grade ?? "no_target";
-  return <Chip tone={GRADE_TONE[g]} data-grade={g} className={className}>{label || GRADE_LABEL[g]}</Chip>;
+  return <Chip tone={GRADE_TONE[g]} data-grade={g} className={className}>{label || gradeWord(rules, g, reasonCode) || ""}</Chip>;
 }
 
 /** Amounts as the prototype prints them (`fmt`): thousands separators, at most two decimals. `null` stays
