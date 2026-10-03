@@ -878,10 +878,10 @@ def get_evidence(conn: Conn, brand_id: str, product_id: str) -> dict:
                     "verdict": None,
                 }
             )
+    # F48 decision 13: a 食安法 hit is a reminder on the row, never the verdict -- the user's
+    # 可以講／不能講 stands.
     for claim in claims:
         claim["statutory"] = statutory_flag(conn, brand, claim["text"])
-        if claim["statutory"] is not None:
-            claim["verdict"] = "no"
     return {
         "proof": proof,
         "proof_kinds": [{"key": k, "label": label} for k, label in vocab.PROOF_KINDS],
@@ -908,8 +908,9 @@ def _check_proof(value, existing_ids: set) -> list:
     return out
 
 
-def _check_claims(conn: Conn, brand: dict, value, existing_ids: set) -> list:
-    """Each claim needs 可以講／不能講; a 食安法 hit is 不能講 whatever was sent."""
+def _check_claims(value, existing_ids: set) -> list:
+    """Each claim needs 可以講／不能講; the sent verdict is kept (F48 decision 13: a 食安法 hit
+    is a reminder on the row, `get_evidence`'s `statutory`, never stored as 不能講)."""
     if not isinstance(value, list):
         raise ValueError("說法清單格式不對。")
     out, seen, unset = [], set(), 0
@@ -926,9 +927,7 @@ def _check_claims(conn: Conn, brand: dict, value, existing_ids: set) -> list:
         verdict = item.get("verdict")
         if verdict not in ("ok", "no", None):
             raise ValueError("每一句說法請選「可以講」或「不能講」。")
-        if statutory_flag(conn, brand, text) is not None:
-            verdict = "no"
-        elif verdict is None:
+        if verdict is None:
             unset += 1
         out.append({"id": claim_id, "text": text, "verdict": verdict})
     if unset:
@@ -940,11 +939,11 @@ def put_evidence(conn: Conn, brand_id: str, product_id: str, body: dict, *, acto
     """`{proof: [{id?, fact_key, text}], claims: [{id?, text, verdict: ok|no}]}` — full lists.
     Everything is validated before anything is written."""
     product = knowledge_product(conn, brand_id, product_id)
-    brand = _brand(conn, brand_id)
+    _brand(conn, brand_id)
     existing_proof = {f["id"]: f for f in _confirmed_facts(conn, brand_id, product_id, "proof")}
     existing_claims = {c["id"]: c for c in _product_claims(conn, brand_id, product_id)}
     proof = _check_proof(body.get("proof", []), set(existing_proof))
-    claims = _check_claims(conn, brand, body.get("claims", []), set(existing_claims))
+    claims = _check_claims(body.get("claims", []), set(existing_claims))
 
     for fact_id in set(existing_proof) - {p["id"] for p in proof if p["id"]}:
         bi_repo.delete_product_fact(conn, brand_id, fact_id, actor=actor)

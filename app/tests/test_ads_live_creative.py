@@ -233,6 +233,38 @@ class LiveCreativeTest(unittest.TestCase):
         self.assertIn("a1", scopes[0].split("、"))
         self.assertNotIn("a-edited", scopes[0].split("、"))
 
+    def test_f48_offer_for_reads_the_dispatch_snapshot_like_the_learning(self):
+        """F48 Contract G: one resolver of the offer an ad's copy was written for -- the
+        dispatched set's snapshot after an edit, the same offer the stored learning names."""
+        ad = self._ad("A")
+        bare = plan.create_ad(
+            self.conn, self.org, self.brand, self.campaign, self.group, name="沒有交棒",
+            coordinates={**_COORDS, "offer": "o3"},
+        )
+        self._edit(ad["id"], offer="o2")
+        self.assertEqual(
+            live_creative.offer_for(self.conn, self.org, self.brand, self.campaign,
+                                    campaigns.get_ad(self.conn, self.org, self.brand, ad["id"])),
+            "o1",
+        )
+        self.assertEqual(self._coords(ad["id"])["offer"], "o1")
+        # No dispatched set: the ad's current key.
+        self.assertEqual(
+            live_creative.offers_for(self.conn, self.org, self.brand, self.campaign,
+                                     [campaigns.get_ad(self.conn, self.org, self.brand,
+                                                       bare["id"])]),
+            {bare["id"]: "o3"},
+        )
+
+        closeout.close(self.conn, self.org, self.brand, self.campaign, actor=ACTOR)
+        scopes = [
+            r["applicability_scope"] for r in brands.list_learnings(self.conn, self.brand)
+            if r.get("source_track") != "visual"
+        ]
+        self.assertTrue(scopes)
+        self.assertTrue(all("o2" not in s.split("、") for s in scopes))
+        self.assertIn("o1", [part for s in scopes for part in s.split("、")])
+
     def test_an_ad_without_a_dispatched_set_uses_its_current_coordinates(self):
         ad = plan.create_ad(
             self.conn, self.org, self.brand, self.campaign, self.group, name="沒有交棒",

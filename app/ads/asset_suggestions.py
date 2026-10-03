@@ -3,10 +3,10 @@
 import hashlib
 import math
 
-from app import background
+from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
+from app.ads import live_creative, sell_way, targets
 from app.ads import repository as campaigns
-from app.ads import sell_way, targets
 from app.ads import user_assets_repository as assets
 from app.core import db, settings
 from app.llm import context_compiler, gateway, providers
@@ -55,11 +55,13 @@ def get_batch(conn, org, brand, campaign, batch_id):
 def _judged_against(conn, org, brand, campaign, ad_id):
     """F44: what a placement's copy is judged against -- the sell-way and the offer coordinate
     of the planned ad it was uploaded for, the same two the copy step wrote it from. A library
-    placement (no ad) has the campaign's sell-way and no offer coordinate."""
+    placement (no ad) has the campaign's sell-way and no offer coordinate.
+    F48 Contract G: the offer is the one the ad's copy was written for (`live_creative.offer_for`:
+    the dispatched set's snapshot, else the ad's current key) -- the slots read the same."""
     ad = campaigns.get_ad(conn, org, brand, ad_id) if ad_id else None
     if ad is None:
         return {"sell_way": sell_way.of_campaign(campaign), "offer_key": None, "offer_label": None}
-    offer_key = ad.get("offer_key")
+    offer_key = live_creative.offer_for(conn, org, brand, campaign["id"], ad)
     label = None
     if offer_key:
         # The label the plan showed. The snapshot is taken at plan time and the coordinate
@@ -135,7 +137,9 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
     )
     text, knowledge, version, _ = context_compiler.compile(conn, brand, include_personas=False)
     campaign_sell_way = sell_way.of_campaign(campaign)
-    sources, forbidden = policy.source_rows(conn, brand, knowledge, campaign_sell_way)
+    sources = policy.source_rows(conn, brand, knowledge, campaign_sell_way)
+    # F48 Contract G: the model is told the same 「不能講」 list the confirmation blocks on.
+    forbidden = workbench.forbidden_terms(conn, org, brand, campaign_sell_way)
     # The sell-way's own claims are sources the brand-level compile did not list.
     knowledge = list(dict.fromkeys([*knowledge, *(s["id"] for s in sources)]))
     native = conn.execute(
@@ -332,10 +336,10 @@ def _result(conn, org, brand, data, item, answer):
     # the copy step used); every problem is a Contract C detail naming the exit that fixes it.
     judged = {k: item[k] for k in ("sell_way", "offer_key", "offer_label")}
     problems = policy.violations(
-        conn, org, brand, original, data["sources"], data["forbidden"], generated=False, **judged
+        conn, org, brand, original, data["sources"], generated=False, **judged
     )
     generated_errors = policy.violations(
-        conn, org, brand, additions, data["sources"], data["forbidden"], generated=True, **judged
+        conn, org, brand, additions, data["sources"], generated=True, **judged
     )
     if generated_errors:
         additions = {}

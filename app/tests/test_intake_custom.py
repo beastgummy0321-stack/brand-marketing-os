@@ -251,13 +251,14 @@ class ProductCustomRouteTest(unittest.TestCase):
         for key, label in vocab.PAIN_KINDS:
             self.assertIn(f"{key}＝{label}", prompt)
 
-    def test_statutory_claim_is_forced_to_no(self):
+    def test_statutory_claim_keeps_its_verdict_and_carries_the_reminder(self):
+        """F48 decision 13: the 食安法 hit is a flag, never a rewritten verdict."""
         bi_repo.set_regulatory_regime(web.conn, self.bid, "food_tw", actor="test")
         web.conn.commit()
         resp = self._post("claim", "可以說增強免疫力", {"text": "增強免疫力", "verdict": "ok"})
         self.assertEqual(resp.status_code, 200, resp.text)
         option = resp.json()["data"]["option"]
-        self.assertEqual(option["verdict"], "no")
+        self.assertEqual(option["verdict"], "ok")
         self.assertIsNotNone(option["statutory"])
         self.assertIn(option["statutory"]["term"], "增強免疫力")
 

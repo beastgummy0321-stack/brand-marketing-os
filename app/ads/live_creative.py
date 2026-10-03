@@ -15,6 +15,10 @@ Two facts, one place:
   after dispatch, learning reads the snapshot taken at dispatch), normalised to keys. An ad with
   no dispatched set uses its current coordinates. F46 Contract F: the `format` of an ad with an
   assigned material is the file's actual format (`actual_format`), not the planned one.
+- **Offer** (F48 Contract G). `offer_for` / `offers_for`: the offer an ad's copy was written for
+  -- the same set's snapshot `offer`, else the ad's current `offer_key`. The copy confirmation
+  (`asset_suggestions`) and the slots read it; one resolver, so the judgement, the slot and the
+  learning name the same offer after a coordinate edit.
 
 Workbench data only through the `app.workbench` facade (`briefs_for_source` /
 `adopted_output`). Private to app/ads.
@@ -168,8 +172,7 @@ def learning_coordinates(conn, org, brand, campaign_id, ads) -> dict:
     materials = _materials(conn, org, brand, campaign_id)
     result = {}
     for ad in ads:
-        record = launched.get(ad["id"]) or {}
-        brief = by_id.get(record.get("set_id")) or by_ad.get(ad["id"])
+        brief = _creative_set(launched.get(ad["id"]), by_ad, by_id, ad["id"])
         keys = snapshot_keys((brief or {}).get("coordinates_snapshot_json"))
         if keys is None:
             keys = {d: ad.get(f"{d}_key") for d in COORDINATE_DIMENSIONS}
@@ -180,6 +183,33 @@ def learning_coordinates(conn, org, brand, campaign_id, ads) -> dict:
             keys = {**keys, "format": actual}
         result[ad["id"]] = keys
     return result
+
+
+def _creative_set(launched_record, by_ad, by_id, ad_id) -> dict | None:
+    """The set an ad's creative came from: the launched set, else its latest dispatched set."""
+    record = launched_record or {}
+    return by_id.get(record.get("set_id")) or by_ad.get(ad_id)
+
+
+def offers_for(conn, org, brand, campaign_id, ads) -> dict:
+    """F48 Contract G: `ad_id -> offer key | None` -- the offer each ad's copy was written for:
+    the `offer` of the snapshot of the set its creative came from (the same lookup
+    `learning_coordinates` uses), else the ad's current `offer_key`. Coordinates stay editable
+    after dispatch (§6.35); the next dispatch picks the new key up."""
+    by_ad, by_id = _sets(conn, org, brand, campaign_id)
+    launched = launched_outputs(conn, org, brand, campaign_id)
+    result = {}
+    for ad in ads:
+        brief = _creative_set(launched.get(ad["id"]), by_ad, by_id, ad["id"])
+        keys = snapshot_keys((brief or {}).get("coordinates_snapshot_json")) or {}
+        result[ad["id"]] = keys.get("offer") or ad.get("offer_key")
+    return result
+
+
+def offer_for(conn, org, brand, campaign_id, ad) -> str | None:
+    """`offers_for` of one ad: the one resolver of 「which offer this ad's copy is for」, read by
+    the copy confirmation (`asset_suggestions`), the slots and the learning coordinates."""
+    return offers_for(conn, org, brand, campaign_id, [ad])[ad["id"]]
 
 
 def with_learning_coordinates(conn, org, brand, detail: dict) -> dict:
