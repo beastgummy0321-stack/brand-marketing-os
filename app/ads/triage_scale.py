@@ -11,7 +11,7 @@ row and its own approval can never disagree (feature Decisions "Rule A").
 import math
 from collections import defaultdict
 
-from app.ads import ad_status
+from app.ads import ad_status, learning_rank
 
 # Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in). F26-I01: the
 # active/closed line now comes from the shared `ad_status.CLOSED_STATUSES` (five values) rather
@@ -94,8 +94,30 @@ def owner_lookup(conn, org_id, brand_id):
     return owner_by_entity
 
 
+SCALE_HOLD_TEXT = "樣本少，先不加碼"
+
+
+def _sales(item) -> int:
+    """The graded window's known result count (unknown counts as none sold)."""
+    count = item["current"].get("result_count")
+    return int(count) if count is not None else 0
+
+
+def _raise_tenths() -> str:
+    """The raise as the owner reads it: `SCALE_FACTOR` 1.2 -> 「2 成」 (no float noise)."""
+    return f"{(SCALE_FACTOR - 1) * 10:g} 成"
+
+
+def scale_reason_text(best_item) -> str:
+    """F48 Contract R "reason texts": the raise's reason from the owner's cheapest 划算 ad --
+    「近期每筆 X 都在上限 Y 內，加碼 2 成擴量」 (money through `learning_rank.whole`)."""
+    cost = learning_rank.whole(best_item["current"]["cost_per_result"])
+    cap = learning_rank.whole(best_item["target"]["value"])
+    return f"近期每筆 {cost} 都在上限 {cap} 內，加碼 {_raise_tenths()}擴量"
+
+
 def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, native_status_by_entity,
-                      month_view):
+                      month_view, holds=None):
     """Rule A -- one candidate per budget owner (adset, or the campaign when the campaign holds
     the budget) whose every ACTIVE graded ad is 划算 (F28-I02, ads.md §6.32: `grade ==
     "on_target"`; 剛開始 is allowed, any other grade or ungraded state blocks), with at least one
@@ -105,7 +127,15 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
     seam `preflight()` uses at approve. `month_view` is `additional_items -> budget dict`,
     already bound to this brand/month (`triage.py::_month_view_fn`) -- kept as a callable so this
     function never needs its own month string or a second `conn`/`org`/`brand` triple, and so
-    tests can stub it without a real month-budget fixture."""
+    tests can stub it without a real month-budget fixture.
+
+    F48 Contract R (a money action states its reason): an owner that qualifies on grades but whose
+    active ads sold fewer than `triage.MIN_RESULT_EVENTS` in their graded windows (summed) is not
+    proposed; when the caller passes a `holds` list it gets one entry per such owner --
+    `{owner_id, owner_name, campaign_id, sales, reason_text: "樣本少，先不加碼"}` (the queue serves
+    them as `scale_hold`). A proposed row's `scale.reason_text` is `scale_reason_text`."""
+    from app.ads import triage  # lazy: triage imports this module
+
     owner_by_entity = owner_lookup(conn, org_id, brand_id)
     items_by_owner = defaultdict(list)
     owner_by_id = {}
@@ -132,6 +162,15 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
         if any(item.get("grade") != "on_target" and not _too_new(item) for item in active):
             continue
         if not any(item.get("grade") == "on_target" for item in active):
+            continue
+        sales = sum(_sales(item) for item in active)
+        if sales < triage.MIN_RESULT_EVENTS:
+            if holds is not None:
+                holds.append({
+                    "owner_id": owner["id"], "owner_name": owner.get("name"),
+                    "campaign_id": active[0]["campaign_id"], "sales": sales,
+                    "reason_text": SCALE_HOLD_TEXT,
+                })
             continue
         qualified.append((owner, items, active, target))
 
@@ -170,6 +209,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
                 "previous_cost_per_result": best_item["previous"]["cost_per_result"],
                 "target": target, "window_days": best_item["window"]["days"],
                 "month": {"available": budget["available"], "extra_needed": extra_needed},
+                "reason_text": scale_reason_text(best_item),
             },
         })
     return candidates

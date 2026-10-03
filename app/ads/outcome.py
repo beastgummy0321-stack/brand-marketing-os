@@ -28,10 +28,19 @@ from app.core.db import Conn, ConnProxy
 _AnyConn = Conn | ConnProxy
 
 
-def sample_bucket(purchases: int, days: int) -> str:
-    """低（< 10 purchases 或 < 3 天）／中（10–49）／高（>= 50）——分級死規則（F03 決策 3），
-    never a percentage. 之後給建議（F04）跟學習分級（F03-I12）共用同一個定義。"""
-    if purchases < 10 or days < 3:
+SAMPLE_UNTRACKED = "未追蹤"
+
+
+def sample_bucket(purchases: int | None, days: int) -> str:
+    """低（< `triage.MIN_RESULT_EVENTS` purchases 或 < `triage.WINDOW_STEPS[0]` 天）／中（到 49）／
+    高（>= 50）；`purchases is None`（沒追蹤到購買數）＝「未追蹤」，never 低 or 0. F48 Contract R:
+    a shown label only -- no verdict reads it -- and its thresholds are the ruler's own
+    (the same "too new" line as triage's `sample`), never a copy."""
+    from app.ads import triage  # 延遲 import 避免循環
+
+    if purchases is None:
+        return SAMPLE_UNTRACKED
+    if purchases < triage.MIN_RESULT_EVENTS or days < triage.WINDOW_STEPS[0]:
         return "低"
     if purchases < 50:
         return "中"

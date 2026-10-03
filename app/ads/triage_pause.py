@@ -8,17 +8,19 @@ read here. Pure reads: no LLM call, no platform write, no platform literal.
 
 from datetime import date, datetime
 
-from app.ads import ad_status, repository, triage
+from app.ads import ad_status, repository, triage, triage_capacity
 
 _DELETED = "DELETED"
 
 
 def pause_view(conn, org_id: str, brand_id: str, campaign_id: str, entity_id: str) -> dict:
-    """`{state, entity_id, name, triage, closed_at, last_read_at, change_set_id}`. `state` is
-    `active` (a platform ad of this campaign that `ad_status.is_closed` does not call closed --
-    unknown status is active), `closed` (closed, not `DELETED`) or `gone` (no such ad in this
-    campaign, not an ad, or `DELETED`; `triage` is then `None`). Raises
-    `ValueError("campaign_unknown")` only for an unknown campaign."""
+    """`{state, entity_id, name, triage, reason_text, closed_at, last_read_at, change_set_id}`.
+    `state` is `active` (a platform ad of this campaign that `ad_status.is_closed` does not call
+    closed -- unknown status is active), `closed` (closed, not `DELETED`) or `gone` (no such ad in
+    this campaign, not an ad, or `DELETED`; `triage` is then `None`). `reason_text` (F48 Contract R
+    "reason texts") is the pause's reason built from this ad's own grade and numbers
+    (`triage_capacity.reason_text`, the cleanup entries' same sentences without a rank), `None`
+    when `triage` is. Raises `ValueError("campaign_unknown")` only for an unknown campaign."""
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -35,6 +37,7 @@ def pause_view(conn, org_id: str, brand_id: str, campaign_id: str, entity_id: st
         "state": state, "entity_id": entity_id,
         "name": entity.get("name") if entity is not None else None,
         "triage": item,
+        "reason_text": triage_capacity.reason_text(item) if item is not None else None,
         "closed_at": _iso(entity.get("status_changed_at")) if entity is not None else None,
         "last_read_at": _iso(entity.get("last_success_at")) if entity is not None else None,
         "change_set_id": _open_pause_set_id(conn, org_id, brand_id, campaign_id, entity_id),

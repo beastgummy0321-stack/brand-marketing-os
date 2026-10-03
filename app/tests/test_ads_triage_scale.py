@@ -70,12 +70,15 @@ class _CandidateFixture(unittest.TestCase):
     @staticmethod
     def item(*, entity_id, cls="flat", cost=80, previous=90, target_value=100,
              window_end=WINDOW_END, window_days=14, campaign_id=None, campaign_name="活動一",
-             reason_code="cost_per_result_flat", thumbnail_url=None, grade=None):
+             reason_code="cost_per_result_flat", thumbnail_url=None, grade=None, sales=None):
         # F29-I01: an unspecified grade follows the class the way `classify()` pairs them (a thin
         # or unknown ad is ungraded, the old stop_loss is 沒賣出, every trend class is 划算 here).
         if grade is None:
             grade = {"insufficient": "insufficient", "no_target": "no_target",
                      "stop_loss": "wasted"}.get(cls, "on_target")
+        # F48-I02: a graded ad's window sold `sales` (default: enough to pass the sample hold).
+        if sales is None:
+            sales = triage.MIN_RESULT_EVENTS if grade in triage.GRADED else 0
         return {
             "entity_id": entity_id, "native_id": entity_id, "name": "廣告",
             "campaign_id": campaign_id, "campaign_name": campaign_name,
@@ -87,7 +90,8 @@ class _CandidateFixture(unittest.TestCase):
                        "extended_from": None},
             "target": {"value": target_value, "basis": "own", "result_kind": "purchase",
                        "missing": [], "result_label": "購買"},
-            "current": {"cost_per_result": cost}, "previous": {"cost_per_result": previous},
+            "current": {"cost_per_result": cost, "result_count": sales},
+            "previous": {"cost_per_result": previous},
             "change_pct": None, "sample": {},
         }
 
@@ -102,11 +106,48 @@ class ScaleCandidatesTest(_CandidateFixture):
     def _by_campaign(self, items):
         return {self.campaign: items}
 
-    def candidates(self, items, *, native_status=None, month_view=None):
+    def candidates(self, items, *, native_status=None, month_view=None, holds=None):
         return triage_scale.scale_candidates(
             self.conn, self.org, self.brand, self._by_campaign(items),
-            native_status or {}, month_view or self.month_view(),
+            native_status or {}, month_view or self.month_view(), holds=holds,
         )
+
+    def test_raised_row_states_its_reason_from_the_cheapest_on_target_ad(self):
+        self.campaign_entity(budget_type="daily", budget_amount=1000)
+        ad1 = self.ad_entity(native_id="ad1")["id"]
+        ad2 = self.ad_entity(native_id="ad2")["id"]
+        items = [
+            self.item(entity_id=ad1, cost=1234.4, target_value=1500, campaign_id=self.campaign),
+            self.item(entity_id=ad2, cost=1400, target_value=1500, campaign_id=self.campaign),
+        ]
+        scale = self.candidates(items)[0]["scale"]
+        self.assertEqual(scale["reason_text"], "近期每筆 1,234 都在上限 1,500 內，加碼 2 成擴量")
+
+    def test_owner_with_too_few_sales_is_held_with_a_stated_reason(self):
+        # Every active ad is 划算, but together they sold fewer than MIN_RESULT_EVENTS: a money
+        # action is not proposed on that, and the hold says why.
+        self.campaign_entity(budget_type="daily", budget_amount=1000, name="主力活動")
+        ad1 = self.ad_entity(native_id="ad1")["id"]
+        ad2 = self.ad_entity(native_id="ad2")["id"]
+        few = triage.MIN_RESULT_EVENTS - 1
+        items = [
+            self.item(entity_id=ad1, cost=70, campaign_id=self.campaign, sales=few - 2),
+            self.item(entity_id=ad2, cost=85, campaign_id=self.campaign, sales=2),
+        ]
+        holds = []
+        self.assertEqual(self.candidates(items, holds=holds), [])
+        self.assertEqual(len(holds), 1)
+        hold = holds[0]
+        self.assertEqual(
+            {k: hold[k] for k in ("owner_name", "campaign_id", "sales", "reason_text")},
+            {"owner_name": "主力活動", "campaign_id": self.campaign, "sales": few,
+             "reason_text": "樣本少，先不加碼"},
+        )
+        # Exactly MIN_RESULT_EVENTS is enough.
+        items[1] = self.item(entity_id=ad2, cost=85, campaign_id=self.campaign, sales=3)
+        holds = []
+        self.assertEqual(len(self.candidates(items, holds=holds)), 1)
+        self.assertEqual(holds, [])
 
     def test_positive_flat_and_better_owner_by_campaign_budget(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)

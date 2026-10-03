@@ -1,6 +1,7 @@
 """app/tests/test_ads_triage_capacity.py — F27-I06 falsifiers: Contract F, per-campaign capacity
-and the cleanup candidate ads; F28-I02: the cut is chosen by grade against the one cap (沒賣出
-always, then 太貴 before 偏貴, highest cost first; 划算 and ungraded ads never).
+and the cleanup candidate ads; F48-I02: the cut follows `learning_rank.rank` (sold ads by cost per
+sale, 沒賣出 after), closed from the bottom -- every 沒賣出, then 換掉 rows most expensive first
+while over capacity; 留下 (keep／keep_relative) and ungraded ads never close.
 
 `CapacityViewTest` proves `capacity_view()` in isolation (pure function, no DB) -- items are built
 by hand (same isolation style as `test_ads_triage_scale.py::_CandidateFixture`). `CleanupCandidates
@@ -19,6 +20,7 @@ from app.brand_intelligence import repository as brands
 from app.core import db
 
 WINDOW_END = date(2026, 1, 7)  # cutoff every CleanupCandidatesTest scenario judges against
+GRADE_LABELS = {"on_target": "划算", "watch": "偏貴", "over": "太貴", "wasted": "沒賣出"}
 
 
 class CapacityViewTest(unittest.TestCase):
@@ -97,6 +99,13 @@ class CapacityViewTest(unittest.TestCase):
         capacity = triage_capacity.capacity_view(self._items("ad1"), 100, {"ad1": owner})
         self.assertEqual(capacity["can_support"], 4)  # floor(999 / 200) == 4.995 -> 4
 
+    def test_can_support_is_the_one_pure_formula(self):
+        self.assertEqual(triage_capacity.can_support(1000, 100), 5)
+        self.assertEqual(triage_capacity.can_support(999, 100), 4)
+        self.assertIsNone(triage_capacity.can_support(None, 100))
+        self.assertIsNone(triage_capacity.can_support(1000, None))
+        self.assertIsNone(triage_capacity.can_support(1000, 0))
+
 
 class CleanupCandidatesTest(unittest.TestCase):
     def setUp(self):
@@ -144,15 +153,25 @@ class CleanupCandidatesTest(unittest.TestCase):
         for offset in range(7):
             self.obs(entity_id, end - timedelta(days=offset), spend=spend)
 
-    @staticmethod
-    def item(entity_id, grade, *, cost=None, spend=None, result_count=None, name="廣告",
+    CAP = 450  # the campaign's one cap: 划算 <= 450 < 偏貴 <= 540 < 太貴
+
+    def item(self, entity_id, grade, *, cost=None, spend=None, result_count=None, name="廣告",
              thumbnail_url=None):
         """The fields `cleanup_candidates` reads off one `classify()` item (F28-I02): `grade`
-        plus the graded window's own `current` numbers."""
+        plus the graded window's own `current` numbers and the cap (F48-I02: ranked by
+        `learning_rank.rank` over spend／results). A sold item given only `cost` (and maybe
+        `spend`) gets the result count that makes `spend ÷ results == cost`."""
+        if grade in GRADE_LABELS and grade != "wasted" and cost is not None:
+            if result_count is None:
+                result_count = round(spend / cost) if spend else 1
+            if spend is None:
+                spend = cost * result_count
         return {
             "entity_id": entity_id, "name": name, "thumbnail_url": thumbnail_url,
-            "grade": grade,
-            "current": {"cost_per_result": cost, "spend": spend, "result_count": result_count},
+            "grade": grade, "grade_label": GRADE_LABELS.get(grade, "剛開始、數字還不夠"),
+            "current": {"cost_per_result": cost, "spend": spend, "result_count": result_count,
+                        "currency": "TWD"},
+            "target": {"value": self.CAP},
         }
 
     def rows_by_entity(self, start, end):
@@ -305,17 +324,20 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(self.ids(result["ads"]), [b])
         self.assertEqual(result["short"], 0)
 
-    def test_several_wasted_close_most_spend_first(self):
+    def test_several_wasted_all_close_served_in_rank_order(self):
         a, b = self.make_ad("a1"), self.make_ad("a2")
         items = [
-            self.item(a, "wasted", spend=1400, result_count=0),
             self.item(b, "wasted", spend=2000, result_count=0),
+            self.item(a, "wasted", spend=1400, result_count=0),
         ]
-        self.assertEqual(self.ids(self.candidates(items, can_support=5)["ads"]), [b, a])
+        result = self.candidates(items, can_support=5)
+        # learning_rank places 沒賣出 cheapest spend first; the list is served in that order.
+        self.assertEqual(self.ids(result["ads"]), [a, b])
+        self.assertEqual([(ad["rank"], ad["of"]) for ad in result["ads"]], [(1, 2), (2, 2)])
 
-    # -- capacity order: 太貴 before 偏貴, highest cost first, 划算 never -------------------------
+    # -- capacity order: learning_rank's, closed from the bottom; 留下 never ----------------------
 
-    def test_over_before_watch_highest_cost_first(self):
+    def test_replace_rows_close_from_the_bottom_and_are_served_in_rank_order(self):
         ads = [self.make_ad(f"a{i}") for i in range(5)]
         items = [
             self.item(ads[0], "on_target", cost=50, spend=1400),
@@ -325,10 +347,60 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(ads[4], "on_target", cost=60, spend=1200),
         ]
         result = self.candidates(items, can_support=2)  # excess 3
-        self.assertEqual(self.ids(result["ads"]), [ads[3], ads[2], ads[1]])
+        self.assertEqual(self.ids(result["ads"]), [ads[1], ads[2], ads[3]])
+        self.assertEqual([ad["rank"] for ad in result["ads"]], [3, 4, 5])
         self.assertEqual(result["short"], 0)
-        result = self.candidates(items, can_support=3)  # excess 2
-        self.assertEqual(self.ids(result["ads"]), [ads[3], ads[2]])
+        result = self.candidates(items, can_support=3)  # excess 2: the two most expensive
+        self.assertEqual(self.ids(result["ads"]), [ads[2], ads[3]])
+        self.assertEqual(self.ids(result["keep"]), [ads[0], ads[4], ads[1]])
+
+    def test_h1_two_sold_ads_order_by_cost_per_sale_not_by_grade_label(self):
+        # Drill-11 H1: 634 a sale over 4 sales stays, 1,009 a sale over 1 sale closes -- whatever
+        # label each one carries (here the dearer ad is even labelled the milder 偏貴).
+        cheap, dear, best = self.make_ad("h1"), self.make_ad("h2"), self.make_ad("h3")
+        items = [
+            self.item(dear, "watch", cost=1009, spend=1009, result_count=1),
+            self.item(cheap, "over", cost=634, spend=2536, result_count=4),
+            self.item(best, "on_target", cost=300, spend=3000, result_count=10),
+        ]
+        result = self.candidates(items, can_support=2)  # excess 1
+        self.assertEqual(self.ids(result["ads"]), [dear])
+        self.assertEqual(self.ids(result["keep"]), [best, cheap])
+        closing = result["ads"][0]
+        self.assertEqual(
+            {k: closing[k] for k in ("rank", "of", "sales", "few", "verdict", "verdict_label",
+                                     "flags", "reason_text")},
+            {"rank": 3, "of": 3, "sales": 1, "few": True, "verdict": "replace",
+             "verdict_label": "換掉", "flags": ["樣本少"],
+             "reason_text": "第 3／3 名，每筆 1,009 對上限 450（偏貴）"},
+        )
+        self.assertEqual(result["keep"][1]["sales"], 4)
+        self.assertTrue(result["keep"][1]["few"])
+
+    def test_unsold_closes_before_any_sold_ad(self):
+        ads = [self.make_ad(f"a{i}") for i in range(3)]
+        items = [
+            self.item(ads[0], "over", cost=900, spend=9000),
+            self.item(ads[1], "wasted", spend=1400, result_count=0),
+            self.item(ads[2], "on_target", cost=50, spend=1400),
+        ]
+        result = self.candidates(items, can_support=2)  # excess 1: the 沒賣出 fills it
+        self.assertEqual(self.ids(result["ads"]), [ads[1]])
+        self.assertEqual(result["ads"][0]["reason_text"], "花了 1,400，一筆都沒賣出")
+
+    def test_keep_relative_never_closes(self):
+        # Nothing is under the cap: the best and those within 30 % of it stay (留下, relative).
+        ads = [self.make_ad(f"a{i}") for i in range(3)]
+        items = [
+            self.item(ads[0], "over", cost=600, spend=6000),
+            self.item(ads[1], "over", cost=700, spend=7000),
+            self.item(ads[2], "over", cost=900, spend=9000),
+        ]
+        result = self.candidates(items, can_support=1)  # excess 2, only one replace row
+        self.assertEqual(self.ids(result["ads"]), [ads[2]])
+        self.assertEqual(result["short"], 1)
+        self.assertEqual([e["verdict"] for e in result["keep"]], ["keep_relative"] * 2)
+        self.assertEqual(result["keep"][0]["flags"], ["相對最好，仍高於上限"])
 
     def test_wasted_counts_toward_the_excess(self):
         ads = [self.make_ad(f"a{i}") for i in range(5)]
@@ -340,9 +412,9 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(ads[4], "on_target", cost=48, spend=1344),
         ]
         result = self.candidates(items, can_support=3)  # excess 2: the 沒賣出 + one more
-        self.assertEqual(self.ids(result["ads"]), [ads[0], ads[1]])
-        # keep: 偏貴 first (closest to closing), then 划算 by cost, highest first.
-        self.assertEqual(self.ids(result["keep"]), [ads[2], ads[3], ads[4]])
+        self.assertEqual(self.ids(result["ads"]), [ads[1], ads[0]])  # rank order
+        # keep: the kept rows in rank order (cheapest cost per sale first).
+        self.assertEqual(self.ids(result["keep"]), [ads[4], ads[3], ads[2]])
 
     def test_short_counts_what_stays_over_capacity_and_echoes_the_scale_owner(self):
         ads = [self.make_ad(f"a{i}") for i in range(4)]
@@ -365,18 +437,17 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(result["short"], 0)
         self.assertIsNone(result["scale_owner_id"])
 
-    def test_equal_cost_ties_close_the_higher_spend_then_entity_id(self):
+    def test_equal_cost_ties_close_the_fewer_sales_then_the_later_name(self):
+        # learning_rank's tie-break: equal cost per sale -> more sales ranks higher, then name.
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")
         items = [
-            self.item(a, "over", cost=600, spend=3000),
-            self.item(b, "over", cost=600, spend=4200),
+            self.item(a, "over", cost=600, spend=3000, name="A 廣告"),  # 5 sales
+            self.item(b, "over", cost=600, spend=4200, name="B 廣告"),  # 7 sales
             self.item(c, "on_target", cost=50, spend=1400),
         ]
+        self.assertEqual(self.ids(self.candidates(items, can_support=2)["ads"]), [a])
+        items[0] = self.item(a, "over", cost=600, spend=4200, name="A 廣告")  # 7 sales each
         self.assertEqual(self.ids(self.candidates(items, can_support=2)["ads"]), [b])
-        items[0]["current"]["spend"] = 4200  # same cost, same spend -> entity id order
-        self.assertEqual(
-            self.ids(self.candidates(items, can_support=2)["ads"]), [min(a, b)],
-        )
 
     # -- payload --------------------------------------------------------------------------------
 
@@ -394,15 +465,24 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(c, "on_target", cost=50, spend=1400, result_count=28),
         ]
         result = self.candidates(items, can_support=1)
-        self.assertEqual(result["ads"][0], {
+        # Rank order: 乙 (2nd of 3, sold) before 甲 (3rd, 沒賣出).
+        self.assertEqual(result["ads"][1], {
             "entity_id": a, "name": "廣告甲", "thumbnail_url": "https://x/1.jpg",
             "spend_7d": 1540.0, "grade": "wasted", "cost_per_result": None, "spend": 1540,
             "result_count": 0, "daily_spend": 220.0, "rejected_before": None,
+            "rank": 3, "of": 3, "sales": 0, "few": False, "verdict": "replace",
+            "verdict_label": "換掉", "flags": [], "reason_text": "花了 1,540，一筆都沒賣出",
         })
-        self.assertEqual(result["ads"][1]["grade"], "over")
-        self.assertEqual(result["ads"][1]["cost_per_result"], 617)
+        self.assertEqual(result["ads"][0]["grade"], "over")
+        self.assertEqual(result["ads"][0]["cost_per_result"], 617)
+        self.assertEqual(result["ads"][0]["reason_text"], "第 2／3 名，每筆 617 對上限 450（太貴）")
         self.assertEqual(result["keep"][0]["entity_id"], c)
         self.assertEqual(result["keep"][0]["daily_spend"], 200.0)
+        self.assertEqual(
+            (result["keep"][0]["rank"], result["keep"][0]["verdict_label"],
+             result["keep"][0]["reason_text"]),
+            (1, "留下", "第 1／3 名，每筆 50 在上限內（划算）"),
+        )
         self.assertEqual(result["daily_saving"], 220.0 + 617.0)
         self.assertEqual(result["can_support"], 1)
         self.assertEqual(result["active_ads"], 3)
@@ -419,9 +499,9 @@ class CleanupCandidatesTest(unittest.TestCase):
             self.item(c, "on_target", cost=50, spend=1400),
         ]
         result = self.candidates(items, can_support=1)
-        self.assertEqual(self.ids(result["ads"]), [a, b])
-        self.assertIsNone(result["ads"][1]["spend_7d"])
-        self.assertIsNone(result["ads"][1]["daily_spend"])
+        self.assertEqual(self.ids(result["ads"]), [b, a])
+        self.assertIsNone(result["ads"][0]["spend_7d"])
+        self.assertIsNone(result["ads"][0]["daily_spend"])
         self.assertIsNone(result["daily_saving"])
 
     # -- open replacement lineage (correction 4) ----------------------------------------------
@@ -431,22 +511,26 @@ class CleanupCandidatesTest(unittest.TestCase):
         new = self.make_ad("new1")
         self.replace_ad(old, new, state="pending")  # not confirmed yet
         other = self.make_ad("other1")
+        keeper = self.make_ad("keeper1")
         items = [
             self.item(new, "wasted", spend=1540, result_count=0),
             self.item(other, "over", cost=600, spend=4200),
+            self.item(keeper, "on_target", cost=50, spend=1400),
         ]
         result = self.candidates(items, can_support=1)
         self.assertEqual(self.ids(result["ads"]), [other])
-        self.assertEqual(self.ids(result["keep"]), [new])
+        self.assertEqual(self.ids(result["keep"]), [keeper, new])
 
     def test_old_ad_awaiting_followup_pause_never_closes(self):
         old = self.make_ad("old2")
         new = self.make_ad("new2")
         self.replace_ad(old, new, state="confirmed")  # replacement is live
         other = self.make_ad("other2")
+        keeper = self.make_ad("keeper2")
         items = [
             self.item(old, "over", cost=900, spend=6300),  # the most expensive, but pending
             self.item(other, "over", cost=600, spend=4200),
+            self.item(keeper, "on_target", cost=50, spend=1400),
         ]
         result = self.candidates(items, can_support=1)
         self.assertEqual(self.ids(result["ads"]), [other])
@@ -502,8 +586,9 @@ class RejectionMemoryTest(unittest.TestCase):
     obs = CleanupCandidatesTest.obs
     rows_by_entity = CleanupCandidatesTest.rows_by_entity
     candidates = CleanupCandidatesTest.candidates
-    item = staticmethod(CleanupCandidatesTest.item)
+    item = CleanupCandidatesTest.item
     ids = staticmethod(CleanupCandidatesTest.ids)
+    CAP = 100  # the remembered cap below: 划算 <= 100 < 偏貴 <= 120 < 太貴
 
     def remember(self, entries, *, reason="還想再看看", grades=True):
         """One rejected cleanup set carrying `decision_grades` (`entity_id -> (grade, at)`);

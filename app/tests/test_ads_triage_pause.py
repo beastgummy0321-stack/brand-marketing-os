@@ -156,12 +156,24 @@ class PauseViewTest(unittest.TestCase):
         self.assertEqual(view["triage"]["current"]["cost_per_result"], 50)
         self.assertIn("ladder", view["triage"])
         self.assertIsNone(view["change_set_id"])
+        # F48-I02: the pause's reason is built from this ad's own grade and numbers.
+        self.assertEqual(view["reason_text"], "每筆 50 在上限內（划算）")
+
+    def test_reason_text_names_the_ads_own_numbers(self):
+        dear = self.ad("ad1", "太貴的")
+        self.purchases(dear, spend=1300, count=10)  # 130 a sale against a cap of 100
+        unsold = self.ad("ad2", "沒賣出的")
+        self.purchases(unsold, spend=100, count=0)  # 700 spent, nothing sold (>= 3 x cap)
+        self.assertEqual(self.pause(dear)["reason_text"], "每筆 130 對上限 100（太貴）")
+        self.assertEqual(self.pause(unsold)["reason_text"], "花了 700，一筆都沒賣出")
 
     def test_unknown_status_is_active(self):
         ad = self.ad("ad1", "沒狀態", status=None)
         view = self.pause(ad)
         self.assertEqual(view["state"], "active")
         self.assertIsNotNone(view["triage"])
+        # No numbers yet: the reason says there is no score, with the ad's own label.
+        self.assertEqual(view["reason_text"], f"這則還沒有分數：{view['triage']['grade_label']}")
 
     def test_paused_ad_is_closed_with_its_own_item(self):
         ad = self.ad("ad1", "停掉的")
@@ -195,7 +207,7 @@ class PauseViewTest(unittest.TestCase):
         view = self.pause("aee_missing")
         self.assertEqual(view, {
             "state": "gone", "entity_id": "aee_missing", "name": None, "triage": None,
-            "closed_at": None, "last_read_at": None, "change_set_id": None,
+            "reason_text": None, "closed_at": None, "last_read_at": None, "change_set_id": None,
         })
 
     def test_non_ad_entity_and_other_campaign_are_gone(self):

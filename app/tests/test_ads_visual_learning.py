@@ -1,7 +1,8 @@
 """app/tests/test_ads_visual_learning.py — F07-I11 falsifiers: 結案時比對「這次選中的圖」
 的指紋跟成效,寫成 `source_track="visual"` 的學習——同一受眾裡兩支廣告只差一個維度時寫一條
 那個維度的學習;第二次同方向升級成 `likely`;第三次反過來贏時,舊贏家最新一條被降級,較舊的
-那條仍在;樣本太小或看不出差別時寫「看不出」但不降級任何人;沒有兩支可比廣告(不同受眾、
+那條仍在;樣本小照樣比、樣本大小寫在學習上(F48-I02);購買數沒追蹤或看不出差別時寫「看不出」
+但不降級任何人;沒有兩支可比廣告(不同受眾、
 沒被採用)時不寫任何學習。全部透過 `closeout.close()` 走(跟 `test_ads_closeout.py` 同一個
 入口),`workbench.briefs_for_source`/`adopted_output` 用 `mock.patch.object` 假造 §5.8 形狀
 的列,不碰 workbench 內部或任何 `workbench_*` 表。
@@ -344,8 +345,11 @@ class PersuasionOnlyDifferenceWritesPersuasionLearningTest(VisualLearningTestBas
         self.assertIn("說服元素", visual_rows[0]["learning_text"])
 
 
-class LowSampleWritesInconclusiveNoExpiryTest(VisualLearningTestBase):
-    def test_low_sample_writes_inconclusive_and_never_expires_anything(self):
+class LowSampleIsComparedAndShownTest(VisualLearningTestBase):
+    """F48-I02 (Contract R): a small sample is compared and written with its bucket shown
+    (`sample_size` 低), never skipped; only an untracked purchase count is left out."""
+
+    def _close_low_sample_campaign(self):
         campaign = self._campaign()
         group = self._group(campaign["id"])
         ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
@@ -361,44 +365,58 @@ class LowSampleWritesInconclusiveNoExpiryTest(VisualLearningTestBase):
             ad_a["id"]: _fp(look="phone_raw"),
             ad_b["id"]: _fp(look="studio_hero"),
         })
-
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        return campaign
+
+    def test_low_sample_writes_the_winner_with_its_sample_shown(self):
+        self._close_low_sample_campaign()
 
         visual_rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
         self.assertEqual(len(visual_rows), 1)
-        self.assertIn("look=看不出", visual_rows[0]["applicability_scope"])
-        self.assertIn("樣本太小", visual_rows[0]["learning_text"])
-        self.assertEqual(visual_rows[0]["confidence"], "observed")
+        row = visual_rows[0]
+        self.assertTrue(row["applicability_scope"].endswith("look=phone_raw"))
+        self.assertEqual(row["sample_size"], "低")
+        self.assertIn("樣本低", row["learning_text"])
+        self.assertEqual(row["confidence"], "observed")
 
-    def test_two_low_sample_campaigns_both_stay_observed(self):
-        def _close_low_sample_campaign():
-            campaign = self._campaign()
-            group = self._group(campaign["id"])
-            ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
-            ad_b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
-            start = campaign["start_date"]
-            self._ad_outcome(campaign["id"], ad_a["id"], start, spend=100.0, purchases=2,
-                              revenue=100.0)
-            self._ad_outcome(campaign["id"], ad_b["id"], start, spend=100.0, purchases=1,
-                              revenue=100.0)
-            self._group_outcome(campaign["id"], group["id"], start, spend=200.0, purchases=3,
-                                 revenue=200.0)
-            self._patch_workbench({
-                ad_a["id"]: _fp(look="phone_raw"),
-                ad_b["id"]: _fp(look="studio_hero"),
-            })
-            closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
-
-        _close_low_sample_campaign()
-        _close_low_sample_campaign()
+    def test_two_low_sample_campaigns_with_the_same_winner_count_as_two(self):
+        # The sample is shown, never a gate: the visual level counts winners as before.
+        self._close_low_sample_campaign()
+        self._close_low_sample_campaign()
 
         rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
-        inconclusive = sorted(
-            (r for r in rows if r["applicability_scope"].endswith("look=看不出")),
-            key=lambda r: r["learned_at"],
-        )
-        self.assertEqual(len(inconclusive), 2)
-        self.assertEqual(inconclusive[-1]["confidence"], "observed")
+        phone = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
+        self.assertEqual(sorted(r["confidence"] for r in phone), ["likely", "observed"])
+        self.assertEqual({r["sample_size"] for r in phone}, {"低"})
+
+    def test_untracked_purchases_write_no_winner_and_say_why(self):
+        campaign = self._campaign()
+        group = self._group(campaign["id"])
+        ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
+        ad_b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
+        start = campaign["start_date"]
+        for ad in (ad_a, ad_b):
+            for offset in range(3):
+                outcome_seed.seed_day(
+                    self.conn, self.org_id, self.brand_id, campaign["id"], "ad", ad["id"],
+                    start + timedelta(days=offset), spend=100.0, impressions=100, clicks=10,
+                    purchases=None, revenue=None, source="meta",
+                )
+        self.conn.commit()
+        self._patch_workbench({
+            ad_a["id"]: _fp(look="phone_raw"),
+            ad_b["id"]: _fp(look="studio_hero"),
+        })
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
+        # No look is named a winner; the only row is the 看不出 note, and it names the cause.
+        self.assertEqual([r["applicability_scope"] for r in rows],
+                         ["visual；audience=cold_unaware；look=看不出"])
+        self.assertIn("成效未追蹤", rows[0]["learning_text"])
+        self.assertNotIn("樣本", rows[0]["learning_text"])
+        self.assertEqual(rows[0]["sample_size"], "未追蹤")
 
 
 class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
@@ -420,7 +438,7 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         })
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
-    def test_only_one_comparable_group_writes_inconclusive_and_does_not_expire(self):
+    def test_a_low_sample_group_is_compared_and_the_same_winner_is_not_expired(self):
         self._establish_phone_raw_winner()
         campaign = self._campaign()
         group = self._group(campaign["id"])
@@ -429,6 +447,7 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         start = campaign["start_date"]
         self._spread(campaign["id"], ad_a["id"], start, 3, daily_spend=100.0,
                      daily_purchases=10, daily_revenue=200.0)
+        # 3 purchases (低): compared all the same -- 33 a sale loses to 10 a sale.
         self._ad_outcome(campaign["id"], ad_b["id"], start, spend=100.0, purchases=3,
                           revenue=100.0)
         self._group_outcome(campaign["id"], group["id"], start, spend=400.0, purchases=13,
@@ -443,14 +462,16 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         rows = bi_repo.list_learnings(
             self.conn, self.brand_id, source_track="visual", include_expired=True,
         )
-        inconclusive = [r for r in rows if r["applicability_scope"].endswith("look=看不出")]
-        self.assertEqual(len(inconclusive), 1)
-        self.assertIn("樣本太小", inconclusive[0]["learning_text"])
+        self.assertEqual(
+            [r for r in rows if r["applicability_scope"].endswith("look=看不出")], [],
+        )
         phone_rows = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
-        self.assertEqual(len(phone_rows), 1)
-        self.assertFalse(phone_rows[0]["expired"])
+        self.assertEqual(len(phone_rows), 2)
+        self.assertFalse(any(r["expired"] for r in phone_rows))
+        newest = max(phone_rows, key=lambda r: r["learned_at"])
+        self.assertEqual((newest["confidence"], newest["sample_size"]), ("likely", "低"))
 
-    def test_new_best_only_downgrades_the_comparable_loser_not_the_low_sample_group(self):
+    def test_new_best_downgrades_every_compared_loser_the_low_sample_one_included(self):
         self._establish_phone_raw_winner()
         campaign = self._campaign()
         group = self._group(campaign["id"])
@@ -464,7 +485,7 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         # soft_light: 中, worse cpa (spend 300 / purchases 30 = 10)
         self._spread(campaign["id"], ad_b["id"], start, 3, daily_spend=100.0,
                      daily_purchases=10, daily_revenue=200.0)
-        # phone_raw: 低 (3 purchases)
+        # phone_raw: 低 (3 purchases, 33 a sale) -- compared, and it lost
         self._ad_outcome(campaign["id"], ad_c["id"], start, spend=100.0, purchases=3,
                           revenue=100.0)
         self._group_outcome(campaign["id"], group["id"], start, spend=550.0, purchases=23,
@@ -483,9 +504,10 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         studio_rows = [r for r in rows if r["applicability_scope"].endswith("look=studio_hero")]
         self.assertEqual(len(studio_rows), 1)
         self.assertFalse(studio_rows[0]["expired"])
+        self.assertEqual(studio_rows[0]["sample_size"], "低")  # the smallest compared bucket
         phone_rows = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
         self.assertEqual(len(phone_rows), 1)
-        self.assertFalse(phone_rows[0]["expired"])
+        self.assertTrue(phone_rows[0]["expired"])  # the low-sample loser was compared too
 
 
 class DifferentAudiencesWriteNoVisualLearningTest(VisualLearningTestBase):

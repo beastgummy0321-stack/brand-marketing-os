@@ -3,10 +3,13 @@ the org timezone (user ruling 2026-09-25, feature Unresolved 1; `app/schedule/pe
 used).
 
 Step 1 (這期成績) is `period_grades.grade_period` over the month -- the same rows the month review
-of that month reads, grades untouched (no second grading rule). Each row's fate follows the one
-ruler (ads.md §6.33): 划算 -> effective, 太貴／沒賣出 -> ineffective, anything else -> skip; an ad
-whose campaign has unsynced days inside the month keeps its grade but is skipped with a named
-`skip_reason` (its numbers could be the gap, so nothing is written from it).
+of that month reads, grades untouched (no second grading rule). F48-I02 (Contract R): each
+campaign's rows are ranked by `learning_rank.rank` (the ruler a closeout ranks by) and the fate
+follows the verdict: 留下 -> effective, 換掉 -> ineffective, a row the ranking cannot place ->
+skip (「沒有可排名的數字」); each row shows its `rank, of, sales, few`. An ad whose campaign has
+unsynced days inside the month keeps its grade but is skipped with a named `skip_reason` (its
+numbers could be the gap, so nothing is written from it). The written scope names the campaign
+and the ad's customer group (`ads;campaign=<id>;group=<customer_group_id|none>`).
 Step 2 reuses `angles.get` (F27 Contract C: one enqueue per ad per copy hash) for
 every row that will be written. Step 3 (`write`) writes one brand-notebook learning per non-skip
 row through `bi_repo.record_learning`, idempotent by `source_cycle_id = settle:<month>:<entity>`.
@@ -22,7 +25,7 @@ import re
 from datetime import date, timedelta
 from typing import cast
 
-from app.ads import ads_learnings, angles, period_grades, repository, targets, triage
+from app.ads import ads_learnings, angles, learning_rank, period_grades, repository, targets, triage
 from app.ads import change_control_data as changes
 from app.brand_intelligence import repository as bi_repo
 from app.core import interrupts
@@ -36,7 +39,7 @@ QUEUE_CATEGORY = "ads_triage_settle"
 RAISE_AFTER_DAYS = 2
 MAX_ANGLE_CHARS = 12
 MISSING_DAYS_REASON = "資料缺天，這期不記"
-_FATE = {"on_target": "effective", "over": "ineffective", "wasted": "ineffective"}
+UNRANKED_REASON = "沒有可排名的數字"
 _MONTH_RE = re.compile(r"\d{4}-\d{2}")
 _TEXT_RE = re.compile(r"^「(.+)」對這群受眾(有效|無效)$")
 _SCAN_LIMIT = 500  # same scan ceiling as `ads_learnings._SCAN_LIMIT` / `visual_learning.py`
@@ -118,20 +121,54 @@ def _written_view(written: dict):
     }
 
 
+def _ranked_by_entity(rows) -> dict:
+    """`entity_id -> learning_rank.rank row`, each campaign's month rows ranked on their own (the
+    one ruler a closeout ranks by, Contract R)."""
+    by_campaign: dict[str, list] = {}
+    for row in rows:
+        by_campaign.setdefault(row["campaign_id"], []).append(row)
+    return {
+        ranked["entity_id"]: ranked
+        for campaign_rows in by_campaign.values()
+        for ranked in learning_rank.rank(campaign_rows)
+    }
+
+
+def _place(ranked) -> dict:
+    """The page row's place in its campaign's ranking (`rank` null when it is not ranked)."""
+    if ranked is None:
+        return {"rank": None, "of": None, "sales": None, "few": False, "verdict": None,
+                "verdict_label": None, "flags": []}
+    return {key: ranked[key] for key in
+            ("rank", "of", "sales", "few", "verdict", "verdict_label", "flags")}
+
+
+def _fate(ranked) -> tuple[str, str | None]:
+    """F48 Contract R "derived rulers": 留下 (`keep`／`keep_relative`) -> effective, 換掉 ->
+    ineffective, a row the ranking cannot place -> skip."""
+    if ranked is None:
+        return "skip", UNRANKED_REASON
+    return ("effective" if learning_rank.is_keep(ranked["verdict"]) else "ineffective"), None
+
+
 def _graded(conn, org_id, brand_id, start, end):
-    """`grade_period` rows (grades exactly as the month review shows them) with each row's `fate`
-    and `skip_reason`, plus `missing` (campaign -> unsynced days)."""
+    """`grade_period` rows (grades exactly as the month review shows them) with each row's place
+    in its campaign's `learning_rank` ranking, its `fate` and `skip_reason`, plus `missing`
+    (campaign -> unsynced days)."""
     rows = period_grades.grade_period(conn, org_id, brand_id, start, end)
     missing = {
         entry["campaign_id"]: entry["missing_days"]
         for entry in period_grades.missing(conn, org_id, brand_id, start, end)
     }
+    ranked_by_entity = _ranked_by_entity(rows)
     out = []
     for row in rows:
+        ranked = ranked_by_entity.get(row["entity_id"])
         if row["campaign_id"] in missing:
-            out.append({**row, "fate": "skip", "skip_reason": MISSING_DAYS_REASON})
+            fate, skip_reason = "skip", MISSING_DAYS_REASON
         else:
-            out.append({**row, "fate": _FATE.get(row["grade"], "skip"), "skip_reason": None})
+            fate, skip_reason = _fate(ranked)
+        out.append({**row, **_place(ranked), "fate": fate, "skip_reason": skip_reason})
     return out, missing
 
 
@@ -147,7 +184,8 @@ def _totals(rows, budget) -> dict:
     currency = next(iter(currencies)) if len(currencies) == 1 else None
     spent = summary["spent"]
     results = _known_total([row["results"] for row in rows]) if rows else None
-    on_target = [row for row in rows if row["grade"] == "on_target"]
+    # 「有效」 = the rows the ranking keeps (留下), the same rows a settle writes as effective.
+    on_target = [row for row in rows if row["verdict"] and learning_rank.is_keep(row["verdict"])]
     on_target_spend = _known_total([row["spend"] for row in on_target])
     return {
         "currency": currency, "spent": spent,
@@ -337,6 +375,31 @@ def _sample_size(results) -> str:
     return str(int(results)) if float(results).is_integer() else str(results)
 
 
+def _customer_groups(conn, org_id, brand_id, entity_ids) -> dict:
+    """`entity_id -> customer_group_id` through each platform ad's local `ads_ad` (`external_id =
+    native_id` in the same campaign, the mapping `coordinate_learning` ranks by). An entity with
+    no local ad, or a local ad with no group, is absent. One read."""
+    if not entity_ids:
+        return {}
+    return {
+        row["entity_id"]: row["customer_group_id"]
+        for row in conn.execute(
+            "SELECT e.id AS entity_id, a.customer_group_id FROM ads_external_entity e "
+            "JOIN ads_ad a ON a.org_id=e.org_id AND a.brand_id=e.brand_id "
+            "AND a.campaign_id=e.campaign_id AND a.external_id=e.native_id "
+            "WHERE e.org_id=%s AND e.brand_id=%s AND e.id = ANY(%s) "
+            "AND a.customer_group_id IS NOT NULL",
+            (org_id, brand_id, list(entity_ids)),
+        ).fetchall()
+    }
+
+
+def _scope(row, group_id) -> str:
+    """The stored scope: the campaign and the customer group the ad spoke to (Contract R; the
+    learning text says 「這群受眾」, so the scope names which)."""
+    return f"ads;campaign={row['campaign_id']};group={group_id or learning_rank.MISSING}"
+
+
 def _resolve_queue_rows(conn, org_id, brand_id, end, actor) -> None:
     key = triage._dedupe_key(QUEUE_KIND, brand_id, end)
     for row in interrupts.list_open(conn, brand_id=brand_id, category=QUEUE_CATEGORY,
@@ -357,6 +420,7 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
     written = _written_rows(learnings, month)
     rows, _missing = _graded(conn, org_id, brand_id, start, end)
     chosen = _picked_angles(rows, written, picks)
+    groups = _customer_groups(conn, org_id, brand_id, list(chosen))
     texts = [row["learning_text"] for row in learnings]
     for row in rows:
         angle = chosen.get(row["entity_id"])
@@ -366,7 +430,7 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
         prior = texts.count(text)
         bi_repo.record_learning(
             cast(Conn, conn), brand_id, actor=actor, learning_text=text,
-            applicability_scope=f"ads;campaign={row['campaign_id']}",
+            applicability_scope=_scope(row, groups.get(row["entity_id"])),
             confidence=ads_learnings._confidence_for_count(prior),
             sample_size=_sample_size(row["results"]),
             source_cycle_id=_cycle_id(month, row["entity_id"]), source_track="ads",

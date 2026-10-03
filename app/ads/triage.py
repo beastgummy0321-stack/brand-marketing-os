@@ -391,17 +391,21 @@ _MIXED_CURRENCY_VIEW = {
 
 
 def _metrics_view(view, spend):
+    """One window's numbers. `currency` (F48-I02) is the window's one currency -- `None` when
+    unknown or mixed -- so a ranking over these numbers (`learning_rank.rank`, cleanup) never has
+    to assume one."""
     if view is None:
         return {
             "spend": spend, "result_count": None, "cost_per_result": None,
             "result_kind": None, "result_label": result_kinds.label(None),
-            "derived_zero_days": 0, "reason": "result_unknown_days",
+            "derived_zero_days": 0, "reason": "result_unknown_days", "currency": None,
         }
     return {
         "spend": spend, "result_count": view["result_count"],
         "cost_per_result": view["cost_per_result"], "result_kind": view["result_kind"],
         "result_label": result_kinds.label(view["result_kind"]),
         "derived_zero_days": view["derived_zero_days"], "reason": view["reason"],
+        "currency": view["currency"],
     }
 
 
@@ -481,7 +485,7 @@ def rules() -> dict:
     from this module and `learning_rank` (the two ruler modules) and `experiments.DEFAULT_RULES`
     (the A/B rules) -- the frontend keeps no copy. Brand-independent today; served per brand so a
     per-brand rule can land without moving the endpoint."""
-    from app.ads import experiments  # lazy: experiments -> outcome -> triage
+    from app.ads import experiments  # lazy: experiments imports triage
 
     watch_tenths = _figure((WATCH_BAND - 1) * 10)
     band_pct = _figure(BREAK_EVEN_BAND * 100)
@@ -913,7 +917,7 @@ def campaign_cleanup(conn, org_id, brand_id, campaign_id) -> dict | None:
     return candidates[0]["payload"]["cleanup"] if candidates else None
 
 
-def _queue_candidates(conn, org_id, brand_id, items, *, settle=True) -> list:
+def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None) -> list:
     """Every row this brand's queue could raise -- qualifying `scale_budget` owners, `cleanup`
     campaigns, one `worse` row per ad whose grade moved from 划算 to 偏貴／太貴 (F29-I01; never
     for an ad already inside its
@@ -921,7 +925,8 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True) -> list:
     campaigns (`triage_scale.py`/`triage_capacity.py`). `stop_loss` rows are no longer raised
     (F28-I02): a 沒賣出 ad closes through its campaign's cleanup row. Each candidate carries its
     `kind`, dedupe identity, window and queue message/action_url, plus the extra payload
-    `_queue_payload` attaches to its row."""
+    `_queue_payload` attaches to its row. `holds` (F48-I02) collects the owners a raise is held
+    back for on sample size (`triage_scale.scale_candidates`)."""
     by_campaign = _classified_items_by_campaign(items)
     native_status = _brand_entity_native_status(
         conn, org_id, brand_id, {item["entity_id"] for item in items}
@@ -930,7 +935,7 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True) -> list:
     scale_owner_by_campaign = {}
     month_view = _month_view_fn(conn, org_id, brand_id)
     for scale in triage_scale.scale_candidates(
-        conn, org_id, brand_id, by_campaign, native_status, month_view
+        conn, org_id, brand_id, by_campaign, native_status, month_view, holds=holds,
     ):
         owner_id = scale["owner_id"]
         scale_owner_by_campaign.setdefault(scale["campaign_id"], owner_id)
@@ -1027,7 +1032,8 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
     F27-I00 Contract J: also records one `queue_refresh` runtime event for this brand (Contract K's
     recovery step 4, a later F27 issue, reads it back) -- same transaction as the enqueue loop."""
     items = _classify_brand(conn, org_id, brand_id)
-    candidates = _queue_candidates(conn, org_id, brand_id, items)
+    holds = []
+    candidates = _queue_candidates(conn, org_id, brand_id, items, holds=holds)
     for candidate in candidates:
         interrupts.enqueue(
             conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[candidate["kind"]],
@@ -1041,7 +1047,7 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
         _dedupe_key(c["kind"], c["identity_id"], c["window_end"]) for c in candidates
     }
     _supersede_stale_open_rows(conn, org_id, brand_id, live_keys)
-    return _queue_payload(conn, org_id, brand_id, items, candidates)
+    return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
 
 
 def brand_items(conn, org_id, brand_id) -> list:
@@ -1058,10 +1064,13 @@ def get_queue(conn, org_id, brand_id, items=None, *, settle=True) -> dict:
     Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`).
     `items` lets a caller that already classified the brand (`month_summary`) skip a second pass;
     `settle=False` skips the brand's month `settle` row (it grades the previous month) for a caller
-    that only counts one campaign's rows (`workspace_reads`)."""
+    that only counts one campaign's rows (`workspace_reads`). `scale_hold` (F48-I02) lists the
+    budget owners whose raise is held back on sample size: `[{owner_id, owner_name, campaign_id,
+    sales, reason_text}]` (`triage_scale.scale_candidates`)."""
     items = _classify_brand(conn, org_id, brand_id) if items is None else items
-    candidates = _queue_candidates(conn, org_id, brand_id, items, settle=settle)
-    return _queue_payload(conn, org_id, brand_id, items, candidates)
+    holds = []
+    candidates = _queue_candidates(conn, org_id, brand_id, items, settle=settle, holds=holds)
+    return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
 
 
 # ---------------------------------------------------------------------------
@@ -1318,7 +1327,7 @@ def _trend_counts(items) -> dict:
     return counts
 
 
-def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
+def _queue_payload(conn, org_id, brand_id, items, candidates, holds=()) -> dict:
     # F19-I01/F25-I01: each open row's own triage item (and, for `scale_budget`/`refresh_creative`
     # rows, their own extra `scale`/`refresh` payload), keyed by the same dedupe key the enqueue
     # used -- the frontend never parses `dedupe_key` strings itself. Every candidate produces a
@@ -1367,4 +1376,5 @@ def _queue_payload(conn, org_id, brand_id, items, candidates) -> dict:
     return {
         "items": open_rows, "counts": _trend_counts(items), "total_ads": len(items),
         "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,
+        "scale_hold": list(holds),
     }

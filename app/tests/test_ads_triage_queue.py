@@ -734,7 +734,9 @@ class ScaleRefreshQueueTest(unittest.TestCase):
                        "previous_start": None, "previous_end": None, "extended_from": None},
             "target": {"value": 100, "basis": "own", "result_kind": "purchase", "missing": [],
                        "result_label": "購買"},
-            "current": {"cost_per_result": 80}, "previous": {"cost_per_result": 85},
+            # F48-I02: enough sales that the raise is not held on sample size.
+            "current": {"cost_per_result": 80, "result_count": triage.MIN_RESULT_EVENTS},
+            "previous": {"cost_per_result": 85},
             "change_pct": None, "sample": {},
         }
 
@@ -773,6 +775,23 @@ class ScaleRefreshQueueTest(unittest.TestCase):
         self.assertEqual(row["scale"]["to"], 1200)
         self.assertNotIn("refresh", row)
         self.assertIsNone(row["proposal"])
+        self.assertEqual(row["scale"]["reason_text"], "近期每筆 80 都在上限 100 內，加碼 2 成擴量")
+        self.assertEqual(result["scale_hold"], [])
+
+    def test_too_few_sales_raise_no_scale_row_and_the_queue_says_why(self):
+        item = self._scale_item(self.ad, self.campaign, date(2026, 1, 7))
+        item["current"]["result_count"] = triage.MIN_RESULT_EVENTS - 1
+        result = self._refresh_queue([item])
+        self.assertEqual(result["items"], [])
+        self.assertEqual(len(result["scale_hold"]), 1)
+        hold = result["scale_hold"][0]
+        self.assertEqual((hold["campaign_id"], hold["reason_text"]),
+                         (self.campaign, "樣本少，先不加碼"))
+        with patch.object(triage, "_classify_brand", return_value=[item]):
+            self.assertEqual(
+                triage.get_queue(self.conn, self.org, self.brand)["scale_hold"],
+                result["scale_hold"],
+            )
 
     def test_scale_row_is_idempotent_and_supersedes_across_windows(self):
         w1, w2 = date(2026, 1, 7), date(2026, 1, 8)
@@ -1086,7 +1105,9 @@ class CleanupQueueTest(unittest.TestCase):
                        "previous_start": None, "previous_end": None, "extended_from": None},
             "target": {"value": target_value, "basis": "own", "result_kind": "purchase",
                        "missing": [], "result_label": "購買"},
-            "current": {"cost_per_result": cost, "spend": 350, "result_count": 7},
+            # F48-I02: the cleanup ranks spend ÷ results, so they agree with `cost`.
+            "current": {"cost_per_result": cost, "spend": cost * 7, "result_count": 7,
+                        "currency": "TWD"},
             "previous": {"cost_per_result": None}, "change_pct": None, "sample": {},
         }
 
@@ -1489,16 +1510,22 @@ class GradedCleanupEndToEndTest(unittest.TestCase):
         cleanup = next(row for row in result["items"] if row["kind_key"] == "cleanup")["cleanup"]
         self.assertEqual(cleanup["can_support"], 6)
         self.assertEqual(cleanup["active_ads"], 8)
+        # F48-I02: served in learning_rank order (7th and 8th of 8), each with its own reason.
         self.assertEqual(
             [ad["entity_id"] for ad in cleanup["ads"]],
-            [self.ids["wasted"], self.ids["costly"]],
+            [self.ids["costly"], self.ids["wasted"]],
         )
-        self.assertEqual([ad["grade"] for ad in cleanup["ads"]], ["wasted", "over"])
-        kept = {ad["entity_id"] for ad in cleanup["keep"]}
+        self.assertEqual([ad["grade"] for ad in cleanup["ads"]], ["over", "wasted"])
+        self.assertEqual([(ad["rank"], ad["of"]) for ad in cleanup["ads"]], [(7, 8), (8, 8)])
         self.assertEqual(
-            kept, {self.ids[n] for n in ("w1", "w2", "w3", "w4", "fit", "pricey")},
+            [ad["reason_text"] for ad in cleanup["ads"]],
+            ["第 7／8 名，每筆 617 對上限 450（太貴）", "花了 1,540，一筆都沒賣出"],
         )
-        self.assertEqual(cleanup["keep"][0]["entity_id"], self.ids["pricey"])
+        self.assertEqual(
+            [ad["entity_id"] for ad in cleanup["keep"]],
+            [self.ids[n] for n in ("w1", "w2", "w3", "w4", "fit", "pricey")],
+        )
+        self.assertEqual([ad["rank"] for ad in cleanup["keep"]], [1, 2, 3, 4, 5, 6])
         self.assertEqual(cleanup["short"], 0)
         self.assertEqual(cleanup["daily_saving"], 220 + 617)
         self.assertIsNone(cleanup["scale_owner_id"])

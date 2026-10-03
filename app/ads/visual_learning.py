@@ -32,7 +32,7 @@ _DIMENSIONS = (
     ("persuasion", "說服元素"),
 )
 
-_BUCKET_RANK = {"低": 0, "中": 1, "高": 2}
+_BUCKET_RANK = {outcome.SAMPLE_UNTRACKED: -1, "低": 0, "中": 1, "高": 2}
 
 
 def _metric_value(metric: str, bucket: dict) -> float | None:
@@ -139,18 +139,17 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
             for value_key, ad_ids in value_groups.items():
                 rows = [r for ad_id in ad_ids for r in rows_by_entity.get(ad_id, [])]
                 bucket = outcome._bucket(rows)  # noqa: SLF001
-                sample = outcome.sample_bucket(bucket["purchases"] or 0, days)
                 buckets[value_key] = {
                     "label": fingerprints[ad_ids[0]][dimension].get("label", value_key),
                     "metric_value": _metric_value(metric, bucket),
-                    "sample_bucket": sample,
+                    "purchases": bucket["purchases"],
+                    "sample_bucket": outcome.sample_bucket(bucket["purchases"], days),
                     "ad_count": len(ad_ids),
                 }
 
-            comparable = {
-                k: b for k, b in buckets.items()
-                if b["metric_value"] is not None and b["sample_bucket"] != "低"
-            }
+            # F48 Contract R: a small sample is compared and written with its bucket shown
+            # (`sample_size` 低), never skipped; only a value with no cost to compare is left out.
+            comparable = {k: b for k, b in buckets.items() if b["metric_value"] is not None}
 
             best_key = None
             if len(comparable) >= 2:
@@ -181,10 +180,11 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                 )
                 sample_size = _smallest_bucket([b["sample_bucket"] for b in comparable.values()])
             else:
-                if any(b["sample_bucket"] == "低" for b in buckets.values()):
-                    reason = "樣本太小"
-                elif any(b["metric_value"] is None for b in buckets.values()):
+                # Untracked purchases are checked first: never reported as a small sample.
+                if any(b["purchases"] is None for b in buckets.values()):
                     reason = "成效未追蹤"
+                elif any(b["metric_value"] is None for b in buckets.values()):
+                    reason = "有一組沒賣出"
                 else:
                     reason = "數字一樣"
                 scope = f"{scope_prefix}=看不出"

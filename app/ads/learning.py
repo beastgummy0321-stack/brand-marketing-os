@@ -10,7 +10,7 @@ or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a r
 
 from typing import cast
 
-from app.ads import live_creative, sell_way, targets
+from app.ads import live_creative, sell_way, targets, triage
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -26,13 +26,18 @@ def _sentence(campaign: dict, verdict: str, verdict_json: dict) -> str:
     always 每筆成本."""
     label = "每筆成本"
     name = campaign["name"]
-    sample = verdict_json.get("sample_bucket")
+    sample = _bucket(verdict_json)
     if verdict == "看不出":
         missing = verdict_json.get("missing", "")
         return f"「{name}」這次投放{missing}（樣本{sample}），{label}上限暫時看不出達成與否。"
     target = _number(verdict_json.get("target"))
     actual = _number(verdict_json.get("actual"))
     return f"「{name}」{label}上限 {target}，實際 {actual}，結果{verdict}（樣本{sample}）。"
+
+
+def _bucket(verdict_json: dict):
+    """The shown sample bucket: `verdict_json.sample.bucket` (F48-I02), else `sample_bucket`."""
+    return (verdict_json.get("sample") or {}).get("bucket", verdict_json.get("sample_bucket"))
 
 
 def _number(value):
@@ -77,19 +82,30 @@ def _needs_revalidation(conn: _AnyConn, brand_id: str, campaign: dict) -> bool:
     return str(econ["effective_from"]) > str(end_date)
 
 
-def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verdict: str) -> str:
+def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verdict: str,
+                verdict_json: dict) -> str:
     """分級死規則（F03 決策 3，F28-I01 改分群）：1 個活動＝`observed`；同一品牌、同一種成果
     （`targets.effective_result_kind`）、同方向（同一個 verdict）累計 ≥2＝`likely`；≥3＝
     `validated`（另一條「同期對照」留給 F04 的人工勾）。`看不出` 不指向任何方向，永遠是
-    `observed`。系統自建的活動沒存 `result_kind` 時一律算購買——SQL 用同一條規則。"""
+    `observed`。系統自建的活動沒存 `result_kind` 時一律算購買——SQL 用同一條規則。
+
+    F48 Contract R: only a campaign whose `verdict_json.sample.purchases` reaches
+    `triage.MIN_RESULT_EVENTS` counts toward a direction -- this one included (below it the level
+    stays `observed`). The one place sample size changes a level; the verdict itself never moves."""
     if verdict == "看不出":
+        return "observed"
+    purchases = (verdict_json.get("sample") or {}).get("purchases")
+    if purchases is None or purchases < triage.MIN_RESULT_EVENTS:
         return "observed"
     row = conn.execute(
         "SELECT COUNT(*) AS n FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
         " AND id != %s AND verdict = %s"
         " AND COALESCE(result_kind, CASE WHEN origin <> 'imported' THEN 'purchase' END)"
-        " IS NOT DISTINCT FROM %s",
-        (org_id, brand_id, campaign["id"], verdict, targets.effective_result_kind(campaign)),
+        " IS NOT DISTINCT FROM %s"
+        " AND CASE WHEN jsonb_typeof(verdict_json->'sample'->'purchases') = 'number'"
+        " THEN (verdict_json->'sample'->>'purchases')::numeric END >= %s",
+        (org_id, brand_id, campaign["id"], verdict, targets.effective_result_kind(campaign),
+         triage.MIN_RESULT_EVENTS),
     ).fetchone()
     assert row is not None  # COUNT(*) 一定回一列
     same_direction = row["n"] + 1  # +1 = 這個 Campaign 自己
@@ -117,12 +133,12 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     text = _sentence(detail, verdict, verdict_json)
     if verdict_json.get("data_source") == "isolated_simulation":
         text = "【隔離模擬，非市場實證】" + text
-    confidence = _confidence(conn, org_id, brand_id, detail, verdict)
+    confidence = _confidence(conn, org_id, brand_id, detail, verdict, verdict_json)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
 
     return bi_repo.record_learning(
         cast(Conn, conn), brand_id, actor=actor, learning_text=text,
         applicability_scope=_applicability_scope(detail), confidence=confidence,
-        sample_size=str(verdict_json.get("sample_bucket")), source_cycle_id=campaign_id,
+        sample_size=str(_bucket(verdict_json)), source_cycle_id=campaign_id,
         needs_revalidation=needs_revalidation,
     )
