@@ -79,7 +79,7 @@ def validate(conn, org, brand, evidence, reply):
         ):
             raise ValueError("建議文案格式錯誤。")
         if copy and policy.violations(
-            conn, org, brand, copy, evidence["sources"], evidence["forbidden"], generated=True
+            conn, org, brand, copy, evidence["sources"], generated=True
         ):
             raise ValueError("建議文案含無法逐字追溯的事實或品牌禁語，未採用。")
         output.append(

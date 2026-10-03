@@ -278,6 +278,31 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(evidence["conditions"]["history"], "unknown")
         self.assertEqual(evidence["previous"]["row_count"], 0)
 
+    def test_f48_forbidden_list_is_scoped_to_the_campaigns_products(self):
+        """F48 Contract G: the review evidence carries the one 「不能講」 list of the campaign's
+        sell-ways (plus brand-level entries); a product outside the campaign never reaches it."""
+        a = brands.create_product(self.conn, self.brand, name="晨光軟糖", actor="test")["id"]
+        b = brands.create_product(self.conn, self.brand, name="午後花茶", actor="test")["id"]
+        way = brands.save_sell_way(self.conn, self.brand, name="單盒", actor="test",
+                                   product_id=a, economics={"selling_price": 399})["id"]
+        brands.create_rule(self.conn, self.brand, actor="test", rule_type="forbidden_word",
+                           content="頻尿", severity="hard")
+        brands.create_claim(self.conn, self.brand, actor="test", claim_text="治療",
+                            claim_type="forbidden", product_id=a)
+        brands.create_claim(self.conn, self.brand, actor="test", claim_text="最便宜",
+                            claim_type="forbidden", product_id=b)
+        self.conn.commit()
+        self.observation()
+        self.assertEqual(self.request()["evidence_json"]["forbidden"], ["頻尿"])  # no product
+        self.conn.execute(
+            # Merged: the sync state lives beside `product_ids` in `context_json`.
+            "UPDATE ads_campaign SET context_json=COALESCE(context_json,'{}'::jsonb)||%s "
+            "WHERE id=%s",
+            (db.jsonb({"product_ids": [way]}), self.campaign),
+        )
+        self.conn.commit()
+        self.assertEqual(self.request()["evidence_json"]["forbidden"], ["治療", "頻尿"])
+
     def test_result_kind_and_cost_per_result_name_the_campaigns_own_result(self):
         # Previous-vs-current comparison for the campaign's own result reads the result view,
         # not the per-attribution_key series (F16-I03 repair).

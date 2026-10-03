@@ -1414,12 +1414,16 @@ def _part_versions(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, pa
     if versions:
         claim_sources = claims.sources(conn, brand_id, product_id, offer_key)
         regime = claims.regime(conn, brand_id)
+        # F48 Contract G: the same names and 「不能講」 list the ads slot blocks on.
+        names = claims.registered_names(conn, brand_id)
+        forbidden = claims.forbidden_terms(conn, brand_id, product_id)
         for version in versions:
             # F46 Contract O: a copy version that leaves out the set's offer sentence says so
             # in the same warning (other parts never carry the offer sentence).
             version["claim_warning"] = claims.warning(
                 version["body"], claim_sources, brand_id,
                 offer_key if part == "copy" else None,
+                names=names, forbidden=forbidden,
             )
             # F34-I02 Contract S: same advisory shape beside claim_warning, never a block.
             version["statutory_warning"] = claims.statutory_warning(
