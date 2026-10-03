@@ -674,17 +674,17 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
   const NAME_FILE = "會議前・午休五分鐘";
   const NAME_RUNNING = "上班日・下午三點";
   const MISMATCH = { text: "這則規劃的是「無優惠」，文案卻寫了「優惠」。", terms: ["優惠"], fix: "copy" as const, more: 0 };
-  const ready = slot({ ad_id: "ada_1", name: NAME_READY, state: "ready", thumbnail_url: thumbOf("1"), blocked: null, offer_label: "組合優惠", workbench_href: SET_HREF,
+  const ready = slot({ ad_id: "ada_1", name: NAME_READY, state: "ready", thumbnail_url: thumbOf("1"), blocked: null, offer_label: "組合優惠", offer_key: "bundle", workbench_href: SET_HREF,
     copy: { source: "placement", label: "已確認", headline: "晨光軟糖三盒組", body: "三盒組優惠價 NT$999（原價 NT$1,500）", description: "每天兩顆" } });
-  const mismatch = slot({ ad_id: "ada_2", name: NAME_MISMATCH, state: "blocked", confirmed: false, thumbnail_url: thumbOf("2"), offer_label: "無優惠", workbench_href: SET_HREF,
+  const mismatch = slot({ ad_id: "ada_2", name: NAME_MISMATCH, state: "blocked", confirmed: false, thumbnail_url: thumbOf("2"), offer_label: "無優惠", offer_key: "none", workbench_href: SET_HREF,
     copy: waiting("晨光軟糖三盒組", "三盒組優惠價 NT$999（原價 NT$1,500）"), blocked: MISMATCH });
   /** An ad added later: no workbench set, two offending words and one more reason behind the first. */
-  const unbacked = slot({ ad_id: "ada_3", name: NAME_UNBACKED, state: "blocked", confirmed: false, thumbnail_url: thumbOf("3"), offer_label: "無優惠", workbench_href: null,
+  const unbacked = slot({ ad_id: "ada_3", name: NAME_UNBACKED, state: "blocked", confirmed: false, thumbnail_url: thumbOf("3"), offer_label: "無優惠", offer_key: "none", workbench_href: null,
     copy: waiting("訓練前一顆", "現在下單加贈一盒，滿千免運"),
     blocked: { text: "文案寫了「加贈、免運」，品牌資料裡沒有登記這個優惠或背書。", terms: ["加贈", "免運"], fix: "copy", more: 1 } });
-  const failedFile = slot({ ad_id: "ada_4", name: NAME_FILE, state: "blocked", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET_HREF,
+  const failedFile = slot({ ad_id: "ada_4", name: NAME_FILE, state: "blocked", confirmed: false, thumbnail_url: null, offer_label: "無優惠", offer_key: "none", workbench_href: SET_HREF,
     copy: null, blocked: { text: "這個檔案處理失敗：圖片格式讀不出來。", terms: [], fix: "file", more: 1 } });
-  const running = slot({ ad_id: "ada_5", name: NAME_RUNNING, state: "in_progress", confirmed: false, thumbnail_url: null, blocked: null, offer_label: "無優惠", workbench_href: SET_HREF,
+  const running = slot({ ad_id: "ada_5", name: NAME_RUNNING, state: "in_progress", confirmed: false, thumbnail_url: null, blocked: null, offer_label: "無優惠", offer_key: "none", workbench_href: SET_HREF,
     copy: waiting("下午三點的會議前", "先補一顆"), job: { kind: "preview", done: null, of: null } });
   /** The prototype's grid: one ready, three blocked (coordinate mismatch, unbacked promise, failed file), one 處理中. */
   const grid = (list: Slot[] = [ready, mismatch, unbacked, failedFile, running]) => slots({ groups: [{ group_id: "adg_new", name: "新客", slots: list }] });
@@ -756,22 +756,25 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
     expect(within(tile(NAME_RUNNING)).getByText("自動更新，不用重整")).toBeTruthy();
   });
 
-  it("every planned slot's head carries its offer chip — accent unless 無優惠; a slot without the label has none", async () => {
+  it("every planned slot's head carries its offer chip — accent unless its offer_key is none (F48: the key, never the label); a slot without the label has none", async () => {
     vi.mocked(getSlots).mockResolvedValue(grid([
       ready, mismatch, running,
-      slot({ ad_id: "ada_6", name: "只有文案的那一則", state: "copy_only", confirmed: false, thumbnail_url: null, offer_label: "免運", workbench_href: SET_HREF,
+      // The served label is printed as is; the tone follows the key.
+      slot({ ad_id: "ada_8", name: "不給誘因的那一則", state: "image_only", confirmed: false, thumbnail_url: thumbOf("9"), offer_label: "只講價值", offer_key: "none", copy: null }),
+      slot({ ad_id: "ada_6", name: "只有文案的那一則", state: "copy_only", confirmed: false, thumbnail_url: null, offer_label: "免運", offer_key: "free_shipping", workbench_href: SET_HREF,
         copy: { source: "workbench", label: "工作檯第 1 版", headline: "滿千免運", body: "三盒一起帶", description: null } }),
-      slot({ ad_id: "ada_7", name: "只有圖的那一則", state: "image_only", confirmed: false, thumbnail_url: thumbOf("7"), offer_label: "無優惠", copy: null }),
+      slot({ ad_id: "ada_7", name: "只有圖的那一則", state: "image_only", confirmed: false, thumbnail_url: thumbOf("7"), offer_label: "無優惠", offer_key: "none", copy: null }),
       slot({ ad_id: null, entity_id: "aex_1", name: "UGC_開箱_v3_1080x1350", thumbnail_url: thumbOf("8"), blocked: null, offer_label: null }),
     ]));
     renderBody();
-    await screen.findByRole("heading", { name: "2／6 格已備妥" });
+    await screen.findByRole("heading", { name: "2／7 格已備妥" });
     const offer = (name: string) => tile(name).querySelector("[data-slot=slot-head] [data-slot=chip]") as HTMLElement | null;
     expect([offer(NAME_READY)?.textContent, offer(NAME_READY)?.dataset.tone]).toEqual(["組合優惠", "accent"]);
     expect([offer(NAME_MISMATCH)?.textContent, offer(NAME_MISMATCH)?.dataset.tone]).toEqual(["無優惠", "neutral"]);
     expect([offer(NAME_RUNNING)?.textContent, offer(NAME_RUNNING)?.dataset.tone]).toEqual(["無優惠", "neutral"]);
     expect([offer("只有文案的那一則")?.textContent, offer("只有文案的那一則")?.dataset.tone]).toEqual(["免運", "accent"]);
     expect(offer("只有圖的那一則")?.textContent).toBe("無優惠");
+    expect([offer("不給誘因的那一則")?.textContent, offer("不給誘因的那一則")?.dataset.tone]).toEqual(["只講價值", "neutral"]);
     expect(offer("UGC_開箱_v3_1080x1350")).toBeNull();
   });
 
@@ -849,7 +852,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
   });
 
   it("an upload that comes back blocked says so and points at the tile, not at the folded placement list", async () => {
-    const missing = slot({ ad_id: "ada_9", name: "早晨第一口・單圖", state: "missing", confirmed: false, thumbnail_url: null, offer_label: "無優惠", copy: null });
+    const missing = slot({ ad_id: "ada_9", name: "早晨第一口・單圖", state: "missing", confirmed: false, thumbnail_url: null, offer_label: "無優惠", offer_key: "none", copy: null });
     vi.mocked(getSlots).mockResolvedValue(grid([ready, missing]));
     vi.mocked(createUploadBatch).mockResolvedValue({ batch: { id: "ub_1", uploads: [{ id: "up_1", batch_id: "ub_1", filename: "morning.png", expected_size: 3, status: "complete", error: null, asset_id: "uas_32", copy_fields: {} }] } });
     const refused = slot({ ...missing, state: "blocked", thumbnail_url: thumbOf("9"), copy: waiting("早晨第一口", "三盒組優惠價 NT$999"), blocked: MISMATCH });
@@ -980,20 +983,20 @@ describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (proto
     a5: "會議前・午休五分鐘", a6: "睡前・隔天精神好", a7: "週末出遊・隨身一盒",
   };
   // The prototype's seven slots in the GET …/slots shape (app/tests/test_ads_slots.py payloads).
-  const a1 = slot({ ad_id: "ada_1", name: NAMES.a1, state: "ready", thumbnail_url: thumbOf("1"), offer_label: "組合優惠", workbench_href: SET(1),
+  const a1 = slot({ ad_id: "ada_1", name: NAMES.a1, state: "ready", thumbnail_url: thumbOf("1"), offer_label: "組合優惠", offer_key: "bundle", workbench_href: SET(1),
     copy: placed("已確認", "三盒組優惠價 NT$999（原價 NT$1,500），通勤包裡放一盒剛好") });
-  const a2 = slot({ ad_id: "ada_2", name: NAMES.a2, state: "ready", thumbnail_url: thumbOf("2"), offer_label: "無優惠", workbench_href: SET(2),
+  const a2 = slot({ ad_id: "ada_2", name: NAMES.a2, state: "ready", thumbnail_url: thumbOf("2"), offer_label: "無優惠", offer_key: "none", workbench_href: SET(2),
     copy: placed("已確認", "練完一顆，三種口味輪著吃") });
-  const a3 = slot({ ad_id: "ada_3", name: NAMES.a3, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET(3),
+  const a3 = slot({ ad_id: "ada_3", name: NAMES.a3, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "無優惠", offer_key: "none", workbench_href: SET(3),
     copy: placed("待確認", "下午三點的會議前，先補一顆"), job: { kind: "preview", done: null, of: null } });
-  const a4 = slot({ ad_id: "ada_4", name: NAMES.a4, state: "waiting", confirmed: false, thumbnail_url: null, offer_label: "無優惠", workbench_href: SET(4),
+  const a4 = slot({ ad_id: "ada_4", name: NAMES.a4, state: "waiting", confirmed: false, thumbnail_url: null, offer_label: "無優惠", offer_key: "none", workbench_href: SET(4),
     copy: null, waiting: { action: "pick_on_workbench", text: "等你：到工作檯選定一版文案" } });
-  const a5 = slot({ ad_id: "ada_5", name: NAMES.a5, state: "waiting", confirmed: false, thumbnail_url: thumbOf("5"), offer_label: "無優惠", workbench_href: SET(5),
+  const a5 = slot({ ad_id: "ada_5", name: NAMES.a5, state: "waiting", confirmed: false, thumbnail_url: thumbOf("5"), offer_label: "無優惠", offer_key: "none", workbench_href: SET(5),
     copy: placed("待確認", "午休 5 分鐘，一顆就好"), waiting: { action: "confirm_copy", text: "等你：確認這版文案" } });
-  const a6 = slot({ ad_id: "ada_6", name: NAMES.a6, state: "blocked", confirmed: false, thumbnail_url: thumbOf("6"), offer_label: "無優惠", workbench_href: SET(6),
+  const a6 = slot({ ad_id: "ada_6", name: NAMES.a6, state: "blocked", confirmed: false, thumbnail_url: thumbOf("6"), offer_label: "無優惠", offer_key: "none", workbench_href: SET(6),
     copy: placed("待確認", "醫師推薦！睡前一顆，隔天精神好"),
     blocked: { text: "文案寫了「醫師推薦」，品牌資料裡沒有登記這個背書。", terms: ["醫師推薦"], fix: "copy", more: 0 } });
-  const a7 = slot({ ad_id: "ada_7", name: NAMES.a7, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "組合優惠", workbench_href: SET(7),
+  const a7 = slot({ ad_id: "ada_7", name: NAMES.a7, state: "in_progress", confirmed: false, thumbnail_url: null, offer_label: "組合優惠", offer_key: "bundle", workbench_href: SET(7),
     copy: null, job: { kind: "copy", done: 1, of: 3 } });
   const grid = (list: Slot[] = [a1, a2, a3, a4, a5, a6, a7]) => slots({ groups: [{ group_id: "adg_new", name: "新客", slots: list }] });
   const tile = (name: string) => screen.getByText(name).closest("[data-slot=slot-tile]") as HTMLElement;

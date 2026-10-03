@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { getQueue, getTriage, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd } from "@/lib/adsWorkspaceApi";
+import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
 import { OverviewBody, dayRange } from "./OverviewBody";
 
 vi.mock("@/lib/adsWorkspaceApi", async () => {
@@ -31,9 +32,12 @@ function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
     next_sync_at: "2026-09-23T04:40:00Z", missing_days: [],
     totals: { start: "2026-09-10", end: "2026-09-23", currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31 }, draft: null, ...o };
 }
+/** `GET …/structure` serves `reason_code` and `sample` beside each grade (F48 Contract R). */
 function ad(id: string, name: string, spend: number, results: number, grade: StructureAd["grade"], o: Partial<StructureAd> = {}): StructureAd {
   return { ad_id: `pad_${id}`, entity_id: id, name, thumbnail_url: null, spend, results, grade,
-    grade_label: grade === "insufficient" ? "剛開始、數字還不夠" : null, cost_per_result: results ? Math.round((spend / results) * 100) / 100 : null,
+    grade_label: grade === "insufficient" ? "剛開始、數字還不夠" : null,
+    reason_code: grade === "insufficient" ? "too_new" : grade === "wasted" ? "spend_over_target_no_result" : null, sample: null,
+    cost_per_result: results ? Math.round((spend / results) * 100) / 100 : null,
     closing: false, missing_material: false, ...o };
 }
 const DAILY: CampaignStructure = { groups: [
@@ -151,6 +155,41 @@ describe("data gap (v10 camp/mid/overview)", () => {
     expect(screen.getByText("缺資料，這兩天不計")).toBeTruthy();
     expect(within(bar()).getByRole("link", { name: "去資料連線補授權 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/connections");
     expect(getQueue).not.toHaveBeenCalled();
+  });
+
+  it("F48: the gate is the served 沒賣出 line; a graded ad with a small sample shows 樣本少 beside its grade; no rules → no gate numbers", async () => {
+    vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [{ group_id: "g", name: "A・送禮受眾", daily_budget: 600, ads: [
+      ad("m1", "中秋禮盒・隨行杯對杯組（家庭團圓情境）", 1200, 3, "on_target", { sample: { sales: 3, few: true, too_new: false, spend_multiple: 2.7, days_with_events: 3 } }),
+      ad("m2", "中秋限定・月光藍開箱", 120, 0, "insufficient", { sample: { sales: 0, few: false, too_new: true, spend_multiple: 0.3, days_with_events: 0 } }),
+      ad("m3", "秋季新色預告・直式 9:16 短影音", 1480, 0, "wasted", { sample: { sales: 0, few: false, too_new: true, spend_multiple: 3.3, days_with_events: 0 } }),
+    ] }] });
+    vi.mocked(getTriage).mockResolvedValue({ data: { status: { state: "partial", label: "", missing_days: [], last_success_at: null } } } as never);
+    const line = 450 * RULES_FIXTURE.grade.unsold_spend_multiple;
+    const { unmount } = renderBody(detail(), gapWs);
+    expect(screen.getByText(`門檻：花到 ${line.toLocaleString("en-US")} 元（上限 × ${RULES_FIXTURE.grade.unsold_spend_multiple}）`)).toBeTruthy();
+    const few = (await screen.findByText("中秋禮盒・隨行杯對杯組（家庭團圓情境）")).parentElement as HTMLElement;
+    expect([...few.querySelectorAll("[data-part=sample]")].map((c) => c.textContent)).toEqual([RULES_FIXTURE.labels.flags.few]);
+    // 剛開始 already says it is new: no sample chip beside it.
+    expect(screen.getByText("中秋限定・月光藍開箱").parentElement!.querySelectorAll("[data-part=sample]")).toHaveLength(0);
+    expect(screen.getByText(`${Math.round((120 / line) * 100)}%`)).toBeTruthy();
+    // 沒賣出 has no cost per sale: the row prints what it spent, 0 筆, on a danger meter against the served line — never
+    // 「每筆 未知」, and no 還太新 beside it.
+    const wasted = screen.getByText("秋季新色預告・直式 9:16 短影音").parentElement as HTMLElement;
+    expect(within(wasted).getByText("花了 1,480 元，0 筆")).toBeTruthy();
+    expect(within(wasted).getByText(`門檻 ${line.toLocaleString("en-US")}`)).toBeTruthy();
+    expect(wasted.querySelector("[data-slot=meter]")?.getAttribute("data-variant")).toBe("danger");
+    expect(wasted.textContent).not.toMatch(/每筆|未知|還太新/);
+    expect(wasted.querySelectorAll("[data-part=sample]")).toHaveLength(0);
+    unmount();
+    seedAdsRules(null);
+    try {
+      renderBody(detail(), gapWs);
+      expect(await screen.findByText("中秋限定・月光藍開箱")).toBeTruthy();
+      expect(screen.queryByText(/門檻/)).toBeNull();
+      expect(document.querySelectorAll("[data-part=sample]")).toHaveLength(0);
+    } finally {
+      seedAdsRules(RULES_FIXTURE);
+    }
   });
 
   it("the structure read fails on its own (ReadFailed + 重試); the missing days still show", async () => {

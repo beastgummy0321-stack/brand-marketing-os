@@ -13,6 +13,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.tsx', 'src/**/*.test.ts'],
+    // F48 Contract R-API: every test file starts with the served ads rules seeded (no request for them).
+    setupFiles: ['./src/components/ads/patterns/rulesFixture.ts'],
     // src/lib/auth.ts builds the Supabase client at import time; tests never connect, so dummy
     // values keep every test off the real .env (and CI, which has none).
     env: {

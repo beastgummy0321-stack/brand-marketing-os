@@ -1,12 +1,14 @@
 import { cn } from "@/lib/utils";
 import { formatAmount } from "./Chip";
+import { useAdsRules, watchLine } from "./rules";
 
 /** Kit piece for the v9 cost meter with a cap line: `.cpm` (home money card, size `lg` with the 0 / cap / end axis)
  * and `.hb` (home campaign rows, size `sm`). `data-slot="money-meter"` + `data-variant` = size.
  *
  * With a cap the axis runs to 4/3 × cap, so the cap line sits at 75% exactly as in the prototype. The fill colour
- * compares the value with the cap (≤ cap 划算 green, ≤ 1.2 × cap amber, above red). `value === null` draws the
- * empty track only — never a zero-length bar that reads as 0. */
+ * compares the value with the cap and the served 偏貴 band (F48 Contract R-API: ≤ cap 划算 green, ≤ the band amber,
+ * above red; above the cap while the rules load stays neutral). `value === null` draws the empty track only — never a
+ * zero-length bar that reads as 0. */
 
 export type MoneyMeterTone = "auto" | "primary";
 
@@ -21,6 +23,7 @@ export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto",
   /** The `lg` cap tick's words; default 「上限」／「打平」. Home mixes campaigns, so it says 「各活動上限」 (v10). */
   capLabel?: string;
 }) {
+  const rules = useAdsRules();
   const scale = cap ? (cap.value * 4) / 3 : max ?? null;
   const known = value !== null && scale !== null && scale > 0;
   const pct = known ? Math.min(100, Math.max(0, ((value as number) / (scale as number)) * 100)) : 0;
@@ -28,7 +31,9 @@ export function MoneyMeter({ value, cap = null, max, size = "sm", tone = "auto",
     ? "bg-primary"
     : !cap
       ? size === "lg" ? "bg-success" : "bg-chart-rest"
-      : (value as number) <= cap.value ? "bg-success" : (value as number) <= cap.value * 1.2 ? "bg-warning/80" : "bg-danger";
+      : (value as number) <= cap.value ? "bg-success"
+        : !rules ? "bg-chart-rest"
+        : (value as number) <= watchLine(rules, cap.value) ? "bg-warning/80" : "bg-danger";
   const lg = size === "lg";
   return (
     <div data-slot="money-meter" data-variant={size}>

@@ -7,9 +7,9 @@ import { getQueue, getTriage, type CampaignDataStatus, type QueueItem, type Queu
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type WorkspaceTotals } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import {
-  ActionBar, Chip, DAY_SWATCH, DayTiles, Disclosure, GRADE_LABEL, GradeRules, GradeTermChip, KindMark, Legend, Meter,
-  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, closedWord, formatAmount, type RulerAd,
-  type RulerCap,
+  ActionBar, Chip, DAY_SWATCH, DayTiles, Disclosure, GradeRules, GradeTermChip, KindMark, Legend, Meter,
+  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, closedWord, figure as ruleFigure, formatAmount, gradeWord,
+  sampleWords, unsoldLine, useAdsRules, watchLine, type RulerAd, type RulerCap,
 } from "../patterns";
 import { cleanupAction, isQueueItemDone, proposalAction } from "../home/status";
 import { decisionTitle } from "../home/QueueRow";
@@ -32,6 +32,8 @@ const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數
 const CARD = "surface px-[22px] py-5";
 const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
 const H2 = "text-[15px] font-semibold";
+
+const RANKED = new Set(["on_target", "watch", "over", "wasted"]);
 
 export function capOf(c: CampaignDetail): RulerCap | null {
   return c.cap.value !== null && c.cap.basis !== null ? { value: c.cap.value, basis: c.cap.basis } : null;
@@ -168,6 +170,9 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
     ? structure.data.groups.flatMap((g) => g.ads).filter((a) => a.entity_id !== null && !a.closing)
     : [];
   const reason = status && status.state !== "ready" && status.state !== "partial" ? status.label.replace(/。$/, "") : null;
+  const rules = useAdsRules();
+  // The served 沒賣出 spend line is the distance a known zero has to cover before it can be judged (F48 Contract R-API).
+  const gate = T !== null && rules ? unsoldLine(rules, T) : null;
   const auth = status?.state === "auth_expired" || status?.state === "disconnected";
 
   return (
@@ -175,21 +180,28 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
       <section className={CARD} aria-labelledby="ov-gap">
         <div className={`${HEAD} mb-1`}>
           <h2 id="ov-gap" className={H2}>每則廣告離可以判斷還差多少</h2>
-          {T !== null ? <Chip>門檻：花到 {formatAmount(3 * T)} 元（上限 × 3）</Chip> : <Chip tone="warn">沒設上限</Chip>}
+          {T === null ? <Chip tone="warn">沒設上限</Chip>
+            : gate !== null && rules ? <Chip>門檻：花到 {formatAmount(gate)} 元（上限 × {ruleFigure(rules.grade.unsold_spend_multiple)}）</Chip> : null}
         </div>
         {structure.status === "loading" && <Skeleton className="h-40 w-full" />}
         {structure.status === "error" && <ReadFailed what={`每則廣告的花費讀不到：${structure.error}`} onRetry={structure.reload} />}
         {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">還沒有在平台上的廣告</p>}
         {ads.map((a) => {
-          const graded = a.grade !== null && a.grade !== "insufficient" && a.grade !== "no_target";
-          const gate = T !== null ? 3 * T : null;
+          const graded = a.grade !== null && RANKED.has(a.grade);
           const pct = a.spend !== null && gate ? Math.min(100, Math.round((a.spend / gate) * 100)) : null;
+          const sample = graded ? sampleWords(rules, a.sample) : [];
           return (
             <div key={a.entity_id} className="grid grid-cols-[40px_minmax(0,1fr)_minmax(160px,240px)_130px] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
               <Thumb url={a.thumbnail_url} size={40} />
               <div className="min-w-0 font-medium [overflow-wrap:anywhere]">{a.name}</div>
               <div>
-                {graded && T !== null ? (
+                {a.grade === "wasted" ? (
+                  // 沒賣出 has no cost per sale: the row shows what it spent against the served 沒賣出 line (same meter as
+                  // the next-decision 沒賣出 figure), never 「每筆 未知」.
+                  <Meter value={a.spend} max={Math.max((gate ?? 0) * 1.4, (a.spend ?? 0) * 1.1)} marker={gate} tone="danger"
+                    left={`花了 ${yuan(a.spend)}，0 筆`}
+                    right={gate !== null ? <span className="whitespace-nowrap">門檻 {formatAmount(gate)}</span> : null} />
+                ) : graded && T !== null ? (
                   <Meter value={a.cost_per_result} max={T * 1.6} marker={T}
                     tone={a.grade === "on_target" ? "success" : a.grade === "watch" ? "warning" : "danger"}
                     left={<>每筆 {perSale(a.cost_per_result)}<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>}
@@ -203,7 +215,10 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
                   </>
                 )}
               </div>
-              <div className="text-right"><GradeTermChip grade={a.grade} label={a.grade_label} /></div>
+              <div className="flex flex-wrap items-center justify-end gap-1">
+                <GradeTermChip grade={a.grade} label={a.grade_label} reasonCode={a.reason_code} />
+                {sample.map((word) => <Chip key={word} data-part="sample">{word}</Chip>)}
+              </div>
             </div>
           );
         })}
@@ -328,9 +343,10 @@ const MARK: Partial<Record<QueueKind, { kind: "cut" | "stop" | "worse" | "up" | 
 function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
   item: QueueItem; ads: RulerAd[] | null; cap: RulerCap | null; breakEven: number | null; workspace: CampaignWorkspace;
 }) {
+  const rules = useAdsRules();
   const move = item.triage.grade_move;
   const mark = item.kind_key === "worse"
-    ? { kind: "worse" as const, label: move ? `從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "每筆變多了" }
+    ? { kind: "worse" as const, label: move && rules ? `從${gradeWord(rules, move.from)}變${gradeWord(rules, move.to)}` : "每筆變多了" }
     : MARK[item.kind_key];
   let figure: ReactNode = null;
   if (item.kind_key === "cleanup" && ads) {
@@ -352,10 +368,10 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
         </div>
       </>
     );
-  } else if (item.kind_key === "stop_loss" && cap) {
-    const line = 3 * cap.value, spend = item.triage.current.spend;
+  } else if (item.kind_key === "stop_loss" && cap && rules) {
+    const line = unsoldLine(rules, cap.value), spend = item.triage.current.spend;
     figure = <Meter value={spend} max={Math.max(line * 1.4, (spend ?? 0) * 1.1)} marker={line} tone="danger"
-      left={`花 ${yuan(spend)}・0 筆`} right={<>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」</>} />;
+      left={`花 ${yuan(spend)}・0 筆`} right={<>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">{rules.labels.grade.wasted}</Term>」</>} />;
   }
   return (
     <div className="grid grid-cols-[48px_minmax(0,1fr)_minmax(180px,240px)] items-center gap-4">
@@ -376,6 +392,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const labels = c.labels ?? DEFAULT_LABELS;
   const t = ws.totals;
   const cap = capOf(c);
+  const rules = useAdsRules();
   const who = c.name.split("・")[0] || c.name;
   const closed = c.status === "closed";
   // On the platform, nothing spent yet: an unknown money cell is 「還沒開始花」, not 「未知」 (Contract E).
@@ -411,9 +428,9 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
           <span className={label}>{labels.conversion === "購買" ? "每賣一筆花多少" : labels.cpa}</span>
           <b className={big}>{cost === null ? <span className="text-base text-muted-foreground">{unknownCost}</span> : money(cost, perSaleAmount)}</b>
           {cost !== null && <MoneyTag cost={cost} breakEven={c.cap.break_even} />}
-          {cost !== null && cap && (
+          {cost !== null && cap && rules && (
             <Meter value={cost} max={cap.value * 1.6} marker={cap.value}
-              tone={cost <= cap.value ? "success" : cost <= cap.value * 1.2 ? "warning" : "danger"} />
+              tone={cost <= cap.value ? "success" : cost <= watchLine(rules, cap.value) ? "warning" : "danger"} />
           )}
           <span className={label}>
             {cap ? <>{who}{cap.basis === "break_even" ? "暫用" : "的"}<Term k={cap.basis === "break_even" ? "break_even" : "cap"} value={c.cap.break_even}>{cap.basis === "break_even" ? "打平線" : "上限"}</Term> {formatAmount(cap.value)}</> : "沒設上限"}

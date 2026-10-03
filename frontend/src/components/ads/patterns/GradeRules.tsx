@@ -1,5 +1,6 @@
 import { GRADE_FILL } from "./Chip";
 import { Term } from "./Term";
+import { useAdsRules, watchTenths } from "./rules";
 
 /** v10 `moneyRule()`: one line naming the two rulers — 有賺／在虧 against break-even, grades against the cap.
  * `data-slot="money-rule"`. */
@@ -11,28 +12,29 @@ export function MoneyRule({ breakEven }: { breakEven?: number | null }) {
   );
 }
 
-const ROWS = [
-  { grade: "on_target", key: "on_target", word: "划算" },
-  { grade: "watch", key: "watch", word: "偏貴" },
-  { grade: "over", key: "over", word: "太貴" },
-  { grade: "wasted", key: "wasted", word: "沒賣出" },
-] as const;
+const ROWS = ["on_target", "watch", "over", "wasted"] as const;
 
 /** v10 `gradeRules()`: the compact grade legend (one swatch + term per grade), then the money rule. Show it once
- * per screen — the prototype prints it only on its first use. `data-slot="grade-rules"`. */
+ * per screen — the prototype prints it only on its first use. Words and the 偏貴 band are the served rules (F48
+ * Contract R-API); until they load the legend waits (nothing to print without them) and the money rule shows alone.
+ * `data-slot="grade-rules"`. */
 export function GradeRules({ money = true, breakEven }: { money?: boolean; breakEven?: number | null }) {
-  const rest = { watch: "＝超過上限不到 2 成", over: "＝超過 2 成以上", wasted: "＝花了錢一筆都沒賣" } as const;
+  const rules = useAdsRules();
+  const tenths = rules ? watchTenths(rules) : null;
+  const rest = { watch: `＝超過上限不到 ${tenths} 成`, over: `＝超過 ${tenths} 成以上`, wasted: "＝花了錢一筆都沒賣" } as const;
   return (
     <div data-slot="grade-rules" className="mt-2">
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-        {ROWS.map((row) => (
-          <span key={row.grade}>
-            <i aria-hidden="true" className={`mr-[5px] inline-block size-2 rounded-[2px] ${GRADE_FILL[row.grade]}`} />
-            <Term k={row.key}>{row.word}</Term>
-            {row.grade === "on_target" ? <>＝每筆沒超過<Term k="cap">上限</Term></> : rest[row.grade]}
-          </span>
-        ))}
-      </div>
+      {rules && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+          {ROWS.map((grade) => (
+            <span key={grade}>
+              <i aria-hidden="true" className={`mr-[5px] inline-block size-2 rounded-[2px] ${GRADE_FILL[grade]}`} />
+              <Term k={grade}>{rules.labels.grade[grade]}</Term>
+              {grade === "on_target" ? <>＝每筆沒超過<Term k="cap">上限</Term></> : rest[grade]}
+            </span>
+          ))}
+        </div>
+      )}
       {money && <MoneyRule breakEven={breakEven} />}
     </div>
   );

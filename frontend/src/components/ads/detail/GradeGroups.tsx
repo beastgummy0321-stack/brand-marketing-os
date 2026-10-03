@@ -4,7 +4,10 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import type { QueueItem, TriageClosedBlock, TriageClosedItem, TriageItem } from "@/lib/adsTriageApi";
-import { Chip, GRADE_FILL, GRADE_LABEL, MoneyTag, Term, formatAmount, type Grade } from "../patterns";
+import {
+  Chip, GRADE_FILL, MoneyTag, Term, formatAmount, gradeWord, sampleWords, unsoldLine, useAdsRules, watchLine,
+  type AdsRules, type Grade,
+} from "../patterns";
 import { cleanupAction, proposalAction } from "../home/status";
 import { perSaleAmount } from "../patterns/csv";
 
@@ -15,8 +18,8 @@ import { perSaleAmount } from "../patterns/csv";
  * carries its money tag against break-even (`MoneyTag`, Contract K). */
 
 /** One group per grade, in the prototype's `ORDER` (沒賣出, 太貴, 偏貴, 划算, 剛開始). `insufficient` splits by the
- * backend's own `grade_label` (剛開始、數字還不夠 below the sample gate, 資料不足 otherwise) so the two honest reasons
- * never share a heading; `no_target` (no cap at all) comes last. */
+ * backend's own `reason_code` (`too_new` = 剛開始、數字還不夠, any other = 資料不足, F48 Contract R) so the two honest
+ * reasons never share a heading; `no_target` (no cap at all) comes last. */
 export type GroupKey = "wasted" | "over" | "watch" | "on_target" | "thin" | "no_data" | "no_target";
 export const GROUP_ORDER: GroupKey[] = ["wasted", "over", "watch", "on_target", "thin", "no_data", "no_target"];
 /** Prototype: 沒賣出／太貴／偏貴 open, everything else folded. */
@@ -28,22 +31,22 @@ const GROUP_GRADE: Record<GroupKey, Grade> = {
 };
 
 export function groupOf(item: TriageItem): GroupKey {
-  if (item.grade === "insufficient") return item.grade_label === GRADE_LABEL.insufficient ? "thin" : "no_data";
+  if (item.grade === "insufficient") return item.reason_code === "too_new" ? "thin" : "no_data";
   return item.grade;
 }
 
-/** The summary's right-hand hint (prototype `tabPerf()`), from the cap T and the grade bands the kit ruler draws
- * (偏貴 up to 1.2 × T, 沒賣出／剛開始 against the 3 × T spend line). No cap, or a reason that is not about the spend
- * line (資料不足), prints no hint rather than an invented one. */
-function groupHint(key: GroupKey, cap: number | null): string | null {
-  if (cap === null) return null;
+/** The summary's right-hand hint (prototype `tabPerf()`), from the cap T and the served grade bands the kit ruler
+ * draws (偏貴 up to the served band, 沒賣出／剛開始 against the served spend line; F48 Contract R-API). No cap, rules not
+ * loaded yet, or a reason that is not about the spend line (資料不足), prints no hint rather than an invented one. */
+function groupHint(key: GroupKey, cap: number | null, rules: AdsRules | null): string | null {
+  if (cap === null || rules === null) return null;
   const f = (v: number) => formatAmount(v) as string;
   switch (key) {
-    case "wasted": return `花到 ${f(3 * cap)} 元還沒賣出`;
-    case "over": return `每筆超過 ${f(cap * 1.2)} 元`;
-    case "watch": return `每筆 ${f(cap)}–${f(cap * 1.2)} 元`;
+    case "wasted": return `花到 ${f(unsoldLine(rules, cap))} 元還沒賣出`;
+    case "over": return `每筆超過 ${f(watchLine(rules, cap))} 元`;
+    case "watch": return `每筆 ${f(cap)}–${f(watchLine(rules, cap))} 元`;
     case "on_target": return `每筆不到 ${f(cap)} 元`;
-    case "thin": return `還沒花到 ${f(3 * cap)} 元`;
+    case "thin": return `還沒花到 ${f(unsoldLine(rules, cap))} 元`;
     default: return null;
   }
 }
@@ -125,7 +128,7 @@ function ResultCell({ item, breakEven }: { item: TriageItem; breakEven: number |
   const purchase = isPurchase(item);
   const label = purchase ? "每賣一筆" : `每次${m.result_label}成本`;
   if (item.grade === "insufficient") {
-    const word = item.grade_label === GRADE_LABEL.insufficient ? <Term k="thin">{item.grade_label}</Term> : item.grade_label;
+    const word = item.reason_code === "too_new" ? <Term k="thin">{item.grade_label}</Term> : item.grade_label;
     return <NumberCell label={label} value={<span className="text-[13px] font-medium text-muted-foreground">{word}</span>} />;
   }
   return (
@@ -151,6 +154,9 @@ function DecisionLink({ action }: { action: RowAction }) {
   return <Button asChild variant="outline" size="sm"><Link to={action.href}>{action.label}</Link></Button>;
 }
 
+/** The grades a cost or a known zero ranks (the sample chips show beside these only; 剛開始／資料不足 already say it). */
+const GRADED = new Set<Grade>(["on_target", "watch", "over", "wasted"]);
+
 // Prototype `.adrow`: 40px thumb · name + trend note · 花費 · per result · decision + menu.
 const ROW = "grid grid-cols-[40px_minmax(0,1fr)_110px_100px_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0";
 
@@ -162,6 +168,9 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref
   highlighted: boolean; rowRef: (el: HTMLDivElement | null) => void; pauseHref: string | null;
 }) {
   const name = item.name ?? "（未命名廣告）";
+  const rules = useAdsRules();
+  // F48 Contract R: a small sample beside a graded ad (樣本少) — shown, never a gate.
+  const sample = GRADED.has(item.grade) ? sampleWords(rules, item.sample) : [];
   return (
     <div ref={rowRef} data-testid={`ad-row-${item.entity_id}`} className={cn(ROW, highlighted && "-mx-2 rounded-lg bg-accent/60 px-2 ring-1 ring-inset ring-primary")}>
       <AdThumb url={item.thumbnail_url} />
@@ -169,6 +178,7 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref
         <p className="text-sm font-medium [overflow-wrap:anywhere]">{name}</p>
         <p className="text-[11.5px] text-muted-foreground">
           {trendNote(item)}
+          {sample.map((word) => <Chip key={word} data-part="sample" className="ml-1.5 py-0.5 align-middle">{word}</Chip>)}
           {extras?.requestOpen && <Chip tone="accent" className="ml-1.5 py-0.5 align-middle">換掉這一則・需求已開</Chip>}
         </p>
         {extras?.error && <p role="alert" className="text-[11.5px] font-medium text-danger">{extras.error}</p>}
@@ -230,6 +240,7 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
   highlightId: string | null;
   registerRow: (id: string, el: HTMLDivElement | null) => void;
 }) {
+  const rules = useAdsRules();
   const grouped = new Map<GroupKey, TriageItem[]>();
   for (const item of items) {
     const key = groupOf(item);
@@ -243,9 +254,9 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
           <Fold
             key={key}
             swatch={GRADE_FILL[GROUP_GRADE[key]]}
-            title={key === "no_data" ? list[0].grade_label : GRADE_LABEL[GROUP_GRADE[key]]}
+            title={list[0].grade_label || gradeWord(rules, GROUP_GRADE[key], list[0].reason_code) || ""}
             count={list.length}
-            hint={key === "no_data" ? dataReason : groupHint(key, cap)}
+            hint={key === "no_data" ? dataReason : groupHint(key, cap, rules)}
             open={openGroups.has(key)}
             onToggle={(open) => onToggle(key, open)}
           >

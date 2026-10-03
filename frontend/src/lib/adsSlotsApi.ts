@@ -32,6 +32,8 @@ export interface SlotCopy {
   source: "workbench" | "placement"; label: string;
   headline: string | null; body: string | null; description: string | null;
 }
+/** F48 Contract G: the statutory (食安法) reminder shape (`workbench.statutory_reminder`) — a reminder, never a block. */
+export interface SlotStatutory { terms: { term: string; tier_label: string }[]; sentence: string; href: string }
 export interface Slot {
   ad_id: string | null; entity_id: string | null; name: string; state: SlotState;
   /** A platform creative URL, or an authenticated same-origin user-asset path (see `isAuthThumbnail`). */
@@ -51,6 +53,12 @@ export interface Slot {
   /** F44 Contract D: the planned ad's offer coordinate label (「無優惠」, 「組合優惠」…); `null` for an ad without one
    * and on an imported campaign. Optional only for older fixtures. */
   offer_label?: string | null;
+  /** F48 Contract G: the offer key the label names (`"none"` = 無優惠) — screens branch on this, never on the label.
+   * Optional only for older fixtures. */
+  offer_key?: string | null;
+  /** F48 Contract G: the statutory reminder for the slot's copy (computed at read; the 素材 tab renders it, F48-I10).
+   * `null` when the copy hits nothing. Optional only for older fixtures. */
+  statutory?: SlotStatutory | null;
   /** F45 Contract W: set exactly when `state === "waiting"`. */
   waiting: SlotWaiting | null;
   /** F45 Contract W: set exactly when `state === "in_progress"`. */
