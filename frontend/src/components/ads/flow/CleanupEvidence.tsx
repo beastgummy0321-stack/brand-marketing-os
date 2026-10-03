@@ -1,8 +1,8 @@
-import { Chip, GRADE_LABEL, GradeTermChip, KindMark } from "../patterns";
+import { Chip, KindMark, useAdsRules } from "../patterns";
 import type { ChangeItem } from "@/lib/adsChangeApi";
 import type { QueueCleanup, QueueCleanupAd } from "@/lib/adsTriageApi";
 import type { CleanupDrift } from "./cleanupDraft";
-import { CostCell, RejectedBeforeNote } from "./CleanupProposal";
+import { CleanupGrade, CleanupName, CostCell, cleanupWord } from "./CleanupProposal";
 import { Tile } from "./Tile";
 
 type Mark = "close" | "added" | "dropped";
@@ -21,6 +21,7 @@ export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEve
   cleanup: QueueCleanup | null; items: ChangeItem[]; picked?: QueueCleanupAd[]; drift?: CleanupDrift | null;
   breakEven?: number | null;
 }) {
+  const rules = useAdsRules();
   const pool = new Map([...(cleanup?.ads ?? []), ...(cleanup?.keep ?? [])].map((ad) => [ad.entity_id, ad]));
   let rows: Row[];
   let keep: number | null;
@@ -72,10 +73,10 @@ export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEve
                 ) : (
                   <p>{row.name ?? "（未命名廣告）"}</p>
                 )}
-                {row.ad && <RejectedBeforeNote ad={row.ad} label={GRADE_LABEL[row.ad.grade]} />}
+                {row.ad && <CleanupName ad={row.ad} word={cleanupWord(rules, row.ad)} withName={false} />}
               </div>
-              {row.ad ? <GradeTermChip grade={row.ad.grade} /> : <span />}
-              <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} label="" withCaption breakEven={breakEven} />}</div>
+              {row.ad ? <CleanupGrade ad={row.ad} /> : <span />}
+              <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} word={cleanupWord(rules, row.ad)} withCaption breakEven={breakEven} />}</div>
               {row.mark === "dropped" ? <Chip tone="neutral">不關</Chip> : <Chip tone="bad">關</Chip>}
             </li>
           ))}

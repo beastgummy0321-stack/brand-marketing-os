@@ -58,12 +58,6 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
 
 /** Files a later F48 issue rewires (it removes its own entries; the last frontend issue leaves this empty). */
 const ALLOWLIST: Record<string, string> = {
-  "components/ads/settle/SettleResult.tsx": "F48-I09",
-  "components/ads/month/MonthGrades.tsx": "F48-I09",
-  "components/ads/learnings/LearningsTab.tsx": "F48-I09",
-  "components/ads/flow/CleanupProposal.tsx": "F48-I09",
-  "components/ads/wait/WaitPage.tsx": "F48-I09",
-  "components/ads/review/ReviewEvidencePage.tsx": "F48-I09",
   "components/ads/flow/confirmParts.tsx": "F48-I11",
   "components/ads/flow/changeFlow.ts": "F48-I11",
 };

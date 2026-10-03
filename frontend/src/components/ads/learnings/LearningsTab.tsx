@@ -4,6 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { ReadFailed } from "../patterns/ReadFailed";
+import { figure, useAdsRules } from "../patterns/rules";
 import { GroupSummary } from "./GroupSummary";
 import { LearningsTable } from "./LearningsTable";
 
@@ -36,8 +37,6 @@ export function learningsCount(data: CoordinateLearnings): number {
   return data.campaigns.reduce((sum, c) => sum + c.rows.length, 0);
 }
 
-const SAMPLE_FEW = 5;
-
 function Heading({ action }: { action?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -61,6 +60,7 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
   highlightCampaignId?: string | null;
 }) {
   const ready = state.status === "ready";
+  const rules = useAdsRules();
   useEffect(() => {
     if (!ready || !highlightCampaignId) return;
     document.getElementById(`camp-${highlightCampaignId}`)?.scrollIntoView?.({ block: "start" });
@@ -85,6 +85,10 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
     );
   }
   const { campaigns, groups, next } = state.data;
+  // The 怎麼判 strip names how one campaign was judged — the highlighted one (from a closeout), else the newest with
+  // ranked rows — in its served `rule_text`, then the brand-wide sample flag from the served rules.
+  const focus = campaigns.find((c) => c.campaign_id === highlightCampaignId && c.rule_text)
+    ?? campaigns.find((c) => c.rule_text) ?? null;
   const adsHome = `/brands/${encodeURIComponent(brandId)}/ads`;
   if (campaigns.length === 0) {
     return (
@@ -107,10 +111,15 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
       />
       <div aria-label="怎麼判" className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-lg bg-background px-3 py-2 text-[12.5px] text-muted-foreground">
         <b className="font-semibold text-foreground">怎麼判</b>
-        <span>每筆低於上限 → 留下</span><span aria-hidden="true" className="text-border">｜</span>
-        <span>都沒有低於上限 → 最好的和差不到 3 成的留下</span><span aria-hidden="true" className="text-border">｜</span>
-        <span>沒賣出和其餘 → 換掉</span><span aria-hidden="true" className="text-border">｜</span>
-        <span>成交少於 {SAMPLE_FEW} 筆標「樣本少」</span>
+        {focus && (
+          <span data-part="rule-text">
+            {focus.campaign_id === highlightCampaignId ? "這一期" : "最近一期"}：{focus.rule_text}
+          </span>
+        )}
+        {focus && rules && <span aria-hidden="true" className="text-border">｜</span>}
+        {rules && (
+          <span data-part="sample-rule">成交少於 {figure(rules.grade.sample_few)} 筆標「{rules.labels.flags.few}」</span>
+        )}
       </div>
       {groups.length > 0 && (
         <section aria-labelledby="learn-groups-h">

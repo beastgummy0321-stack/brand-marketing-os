@@ -15,8 +15,8 @@ import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { proposalAction } from "../home/status";
 import {
-  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GRADE_LABEL, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
-  Term, TodoRow,
+  ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
+  Term, TodoRow, gradeWord, useAdsRules, type AdsRules,
 } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
 import {
@@ -34,8 +34,8 @@ const STEP_PURPOSE = "先看數字，再決定";
 /** F29-I14 (v10 `stepEv()`): the headline names the grade move against the cap (Contract A `grade_move`, the only
  * thing that raises a 變貴 row); without one it stays neutral — no guess from the trend. The purpose names whose cap
  * the ad is measured against (the campaign's own, 「跟<活動>的上限比」). */
-function worseHeadline(move: GradeMove | null | undefined): string {
-  return move ? `這則從${GRADE_LABEL[move.from]}變${GRADE_LABEL[move.to]}` : "看看這則廣告的數字";
+function worseHeadline(move: GradeMove | null | undefined, rules: AdsRules | null): string {
+  return move && rules ? `這則從${gradeWord(rules, move.from)}變${gradeWord(rules, move.to)}` : "看看這則廣告的數字";
 }
 function worsePurpose(campaignName: string | null | undefined): string {
   const short = campaignName?.split("・")[0]?.trim();
@@ -73,6 +73,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   brandId: string; campaignId: string; entityId?: string; reviewId?: string;
 }) {
   const navigate = useNavigate();
+  const rules = useAdsRules();
   const homeHref = `/brands/${brandId}/ads`;
 
   const [review, setReview] = useState<ReviewRound | null>(null);
@@ -349,7 +350,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       <FlowHeader
         steps={STEPS}
         current={0}
-        title={worseHeadline(triageItem?.triage.grade_move)}
+        title={worseHeadline(triageItem?.triage.grade_move, rules)}
         purpose={worsePurpose(triageItem?.triage.campaign_name)}
         context={triageItem ? (
           <>
@@ -511,7 +512,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
                   <TodoRow key={h.change_set_id} no={i + 1} done>
                     <b className="font-medium">{formatEntryDate(h.approved_at)} {HISTORY_KIND_LABEL[h.kind]}</b>
                     <div className="mt-0.5 text-xs text-muted-foreground">
-                      之後 7 天・每次{resultLabel}成本 {formatCostLabel(h.cost_before)} → {formatCostLabel(h.cost_after)}
+                      之後・每次{resultLabel}成本 {formatCostLabel(h.cost_before)} → {formatCostLabel(h.cost_after)}
                     </div>
                   </TodoRow>
                 ))

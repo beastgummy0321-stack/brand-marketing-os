@@ -5,7 +5,7 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
-import type { CampaignObjectiveFamily, RankedGrade, TriageGrade } from "./adsTriageApi";
+import type { CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
 
@@ -43,6 +43,10 @@ export interface PeriodGradeRow {
   spend: number | null; results: number | null; cost_per_result: number | null;
   cap: number | null; break_even: number | null;
   grade: TriageGrade; grade_label: string; currency: string | null;
+  /** F48 Contract R: splits `insufficient` — `too_new` = 剛開始, any other code = 資料不足; screens branch on it, never
+   * on `grade_label`. `sample` = the window's shown sample size (never a gate). Always served; optional only for older
+   * hand-written fixtures. */
+  reason_code?: string | null; sample?: TriageSampleView | null;
 }
 /** One grade's share of the window: `amount` is null when any ad's spend is unknown or the ads
  * span two currencies. Every grade is listed, empty ones with `count` 0. */

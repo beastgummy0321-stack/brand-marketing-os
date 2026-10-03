@@ -2,7 +2,7 @@ import { getAbPairs, type AbPair, type AbSide } from "@/lib/adsAbApi";
 import type { AbChangeBlock, AbChangeSide, ChangeItem } from "@/lib/adsChangeApi";
 import { getTriage, type CampaignObjectiveFamily } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb } from "../patterns";
+import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb, useAdsRules } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
 
 /** F29-I14: the A/B "pause the loser" decision (Contract F, `source: "ab"` change sets; prototype v10 `confirmBody()`
@@ -102,7 +102,10 @@ export function AbEvidence({ ab, context }: { ab: AbChangeBlock; context: AbCont
   const letters = abLetters(ab, pair);
   const liveOf = (side: AbChangeSide) => (pair ? [pair.a, pair.b].find((s) => s.ad_id === side.ad_id) ?? null : null);
   const span = days(ab.window);
-  const rules = pair?.rules ?? { min_days: 7, min_conversions_each: 10 };
+  // F48 Contract R-API: the pair's own rules, else the served A/B rules; while neither is loaded the sentence prints
+  // without its numbers (no number is written down here).
+  const served = useAdsRules();
+  const rules = pair?.rules ?? served?.ab ?? null;
   const w = ab.winner.cost_per_result, l = ab.loser.cost_per_result;
   const pct = w !== null && l !== null && Math.max(w, l) > 0 ? Math.round((Math.abs(l - w) / Math.max(w, l)) * 100) : null;
   const winName = letters ? `${letters.winner} ` : `「${ab.winner.value_label}」`;
@@ -125,7 +128,8 @@ export function AbEvidence({ ab, context }: { ab: AbChangeBlock; context: AbCont
         </div>
       </div>
       <p className="mt-2.5 text-sm font-semibold">
-        {pct !== null && `${winName}每筆便宜 ${pct}%，`}兩則都跑滿 {rules.min_days} 天、各賣到 {rules.min_conversions_each} 筆以上
+        {pct !== null && `${winName}每筆便宜 ${pct}%，`}
+        {rules ? `兩則都跑滿 ${rules.min_days} 天、各賣到 ${rules.min_conversions_each} 筆以上` : "兩則都跑滿天數、各賣到足夠的筆數"}
       </p>
       <ul className="mt-3.5">
         {rows.map(([letter, side, close]) => (

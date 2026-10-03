@@ -7,13 +7,15 @@
 import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
 import type { PeriodGradeBucket, PeriodGradeRow } from "./adsMonthApi";
+import type { LearningVerdict } from "./adsLearningsApi";
 import type { CampaignDataStatus, CapBasis } from "./adsTriageApi";
 
 /** `not_ended`: the month is not over yet in the org timezone (nothing can be written);
  * `open`: ended, nothing written; `written`: the month's learnings are in the brand notebook. */
 export type SettleStatus = "not_ended" | "open" | "written";
-/** 划算 → `effective`, 太貴／沒賣出 → `ineffective`, everything else (偏貴, 剛開始, 資料不足, 未判斷)
- * → `skip` (never written, needs no pick). */
+/** F48 Contract R "derived rulers": the row's place in its campaign's `learning_rank` ranking decides — 留下
+ * (`keep`／`keep_relative`) → `effective`, 換掉 (`replace`) → `ineffective`, a row the ranking cannot place (unknown
+ * results or spend, mixed currency) → `skip` (never written, needs no pick; `skip_reason` says why). */
 export type SettleFate = "effective" | "ineffective" | "skip";
 /** `not_needed`: no pick is needed from the AI (a skip or already written row, or an ad with no
  * copy to read — a non-skip row with no copy still needs a pick, typed by the user). */
@@ -22,9 +24,14 @@ export type SettleAnglesStatus = "pending" | "ready" | "failed" | "not_needed";
 export interface SettleAngles { status: SettleAnglesStatus; candidates: string[] }
 
 export interface SettleRow extends PeriodGradeRow {
+  /** F48-I02: the row's place in its campaign's `learning_rank` ranking, as served (print it, never re-rank): `rank`
+   * of `of` (both `null` when the row is not ranked), `sales` its known sales, `few` = fewer than
+   * `rules.grade.sample_few` sales (「樣本少」), `verdict`／`verdict_label` 留下／換掉, `flags` the served flag words. */
+  rank: number | null; of: number | null; sales: number | null; few: boolean;
+  verdict: LearningVerdict | null; verdict_label: string | null; flags: string[];
   fate: SettleFate;
-  /** Set only when the grade alone would be written but the row is skipped anyway: 「資料缺天，
-   * 這期不記」 (its campaign has unsynced days in the month). The grade stays the month review's. */
+  /** Why a row is not written although it has a grade: 「資料缺天，這期不記」 (its campaign has unsynced days in the
+   * month) or 「沒有可排名的數字」 (the ranking cannot place it). `null` on written rows. */
   skip_reason: string | null;
   /** The ad's own copy (first body, else title); null when the ad has none. */
   copy_text: string | null;

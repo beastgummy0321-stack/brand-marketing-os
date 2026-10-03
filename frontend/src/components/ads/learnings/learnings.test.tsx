@@ -5,6 +5,7 @@ import type { CoordinateLearnings, LearningCampaign, LearningRow } from "@/lib/a
 import { GroupSummary } from "./GroupSummary";
 import { LearningsTab, learningsCount, type LearningsLoad } from "./LearningsTab";
 import { LearningsTable } from "./LearningsTable";
+import { RULES_FIXTURE } from "../patterns/rulesFixture";
 
 const G_STUDY = { id: "pcg_study", who: "學生備考" };
 const G_COMMUTE = { id: "pcg_commute", who: "通勤上班族" };
@@ -135,7 +136,10 @@ describe("LearningsTab 投放學到的", () => {
   it("header: next-plan link to next.new_campaign_href, rule strip and group summary", () => {
     tab({ status: "ready", data: DATA });
     expect(screen.getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?sell_way=prd_box");
-    expect(screen.getByLabelText("怎麼判").textContent).toContain("成交少於 5 筆標「樣本少」");
+    // The strip prints the newest ranked campaign's served rule_text, then the served sample flag (no constant here).
+    const strip = screen.getByLabelText("怎麼判");
+    expect(within(strip).getByText(`最近一期：${B.rule_text}`)).toBeTruthy();
+    expect(strip.textContent).toContain(`成交少於 ${RULES_FIXTURE.grade.sample_few} 筆標「${RULES_FIXTURE.labels.flags.few}」`);
     expect(screen.getByRole("heading", { name: "各顧客群・3 期合計" })).toBeTruthy();
     const groups = screen.getAllByRole("listitem");
     expect(groups.map((g) => g.getAttribute("data-group"))).toEqual(["pcg_study", "pcg_gone", "pcg_commute"]);
@@ -143,6 +147,7 @@ describe("LearningsTab 投放學到的", () => {
 
   it("highlights the campaign from ?campaign= with 剛結案", () => {
     tab({ status: "ready", data: DATA }, { highlight: "adc_A" });
+    expect(within(screen.getByLabelText("怎麼判")).getByText(`這一期：${A.rule_text}`)).toBeTruthy();
     const a = screen.getByRole("region", { name: A.campaign_name });
     expect(a.getAttribute("data-highlight")).toBe("true");
     expect(within(a).getByText("剛結案")).toBeTruthy();

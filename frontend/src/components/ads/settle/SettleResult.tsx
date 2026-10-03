@@ -4,12 +4,15 @@ import { Button } from "@/components/layout/ui/button";
 import type { SettleCampaign, SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { cn } from "@/lib/utils";
 import {
-  ActionBar, Chip, GradeBar, GradeTermChip, Meter, MoneyTag, OriginTag, Term, Thumb, formatAmount, type GradeBarBucket,
+  ActionBar, Chip, GradeBar, GradeTermChip, Meter, MoneyTag, OriginTag, Term, Thumb, formatAmount, gradeWord, sampleWords,
+  unsoldLine, useAdsRules, type GradeBarBucket,
 } from "../patterns";
-import { FROM_META, SETTLE_RULE, campaignOf, campaignShort, downloadSettleCsv, isImported, money, rangeText, yuan } from "./settleCsv";
+import {
+  FROM_META, campaignOf, campaignShort, downloadSettleCsv, isImported, money, rangeText, rankText, settleRule, yuan,
+} from "./settleCsv";
 
 /** F29-I12 step 1 「這期成績」 (prototype v10 `stepRes()` + `glRow()`, hash `d/settle/res`): the month's numbers,
- * the share of spend that was 划算 with its grade bar, then one card per campaign whose ads are graded against that
+ * the share of spend on ads written as 有效 (the ranking keeps them) with its grade bar, then one card per campaign whose ads are graded against that
  * campaign's own cap. Nothing is written here; 下載 CSV saves exactly these numbers. */
 
 const TONE_TEXT = { ok: "text-success", warn: "text-warning", bad: "text-danger", mut: "text-muted-foreground" } as const;
@@ -54,7 +57,7 @@ function Numbers({ view }: { view: SettleView }) {
       <Kv label="花費" value={money(view.spent)} note={budget.text} tone={budget.tone} />
       <Kv
         label="購買" value={view.results === null ? "未知" : `${formatAmount(view.results)} 筆`}
-        note={view.on_target_results === null ? "划算的廣告賣了幾筆還不知道" : `${formatAmount(view.on_target_results)} 筆來自划算的廣告`}
+        note={view.on_target_results === null ? "記成有效的廣告賣了幾筆還不知道" : `${formatAmount(view.on_target_results)} 筆來自記成有效的廣告`}
         tone={view.on_target_results ? "ok" : "mut"}
       />
       <Kv label="每賣一筆花多少" value={yuan(view.cost_per_result)} note={cpp.text} tone={cpp.tone} />
@@ -69,20 +72,23 @@ function sharedBreakEven(campaigns: SettleCampaign[]): number | null {
 }
 
 function Share({ view }: { view: SettleView }) {
+  const rule = settleRule(useAdsRules());
   const pct = view.on_target_spend_share === null ? null : Math.round(view.on_target_spend_share * 100);
   const buckets: GradeBarBucket[] = view.buckets.map((b) => ({ grade: b.grade, amount: b.amount, count: b.count }));
   return (
-    <section aria-label="花得划算的比例" className="surface px-[22px] py-5">
+    <section aria-label="花在有效廣告的比例" className="surface px-[22px] py-5">
       <div className="mb-1.5 flex flex-wrap items-baseline gap-3">
         <span className={cn("numeric text-[30px] font-semibold tracking-tight", pct === null ? "text-muted-foreground" : "text-success")}>
           {pct === null ? "—" : `${pct}%`}
         </span>
-        <span className="text-base font-medium">的錢花得划算</span>
+        <span className="text-base font-medium">的錢花在記成有效的廣告</span>
       </div>
       <GradeBar buckets={buckets} withMoney breakEven={sharedBreakEven(view.campaigns)} />
-      <div className="mt-2 text-xs text-muted-foreground">
-        <i aria-hidden="true" className="mr-[5px] inline-block size-2 rounded-[2px] bg-primary" />{SETTLE_RULE}
-      </div>
+      {rule && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          <i aria-hidden="true" className="mr-[5px] inline-block size-2 rounded-[2px] bg-primary" />{rule}
+        </div>
+      )}
     </section>
   );
 }
@@ -93,37 +99,36 @@ const FATE_TEXT = {
   skip: { text: "不記", cls: "text-muted-foreground" },
 } as const;
 
-/** The sample gate in words (ads.md §6.17 ruling: spend ≥ 3 × cap, or ≥ 10 results over ≥ 7 days). */
-function gateText(cap: number | null): string {
-  return cap === null ? "（要跑滿 7 天賣出 10 筆）" : `（要花到 ${money(3 * cap)}，或跑滿 7 天賣出 10 筆）`;
-}
+const GRADED = new Set(["on_target", "watch", "over", "wasted"]);
 
-/** Prototype `glRow()`: thumbnail, name + ad set, the cost against the cap (or why it is not graded), grade + fate. */
+/** Prototype `glRow()`: thumbnail, name + ad set + the served place in the campaign's ranking (「第 r／n 名・成交 N
+ * 筆」), the cost against the cap (or the grade word when there is no cost yet), then the grade with 「樣本少」 and the
+ * fate the ranking gave (F48 Contract R: 留下 → 有效, 換掉 → 無效, unranked → 不記; sample size is shown, never a gate).
+ * Branches read `grade`／`reason_code`／`fate`, never a label. */
 export function GradedRow({ row }: { row: SettleRow }) {
+  const rules = useAdsRules();
   const cap = row.cap;
-  const graded = cap !== null && (row.grade === "on_target" || row.grade === "watch" || row.grade === "over" || row.grade === "wasted");
-  const thin = !graded;
+  const graded = cap !== null && GRADED.has(row.grade);
+  const thin = row.fate === "skip";
+  const tooNew = row.grade === "insufficient" && (!row.reason_code || row.reason_code === "too_new");
+  const word = row.grade_label || gradeWord(rules, row.grade, row.reason_code) || "";
   let viz: ReactNode;
   if (!graded) {
-    const lead = row.grade === "insufficient" && row.grade_label !== "資料不足"
-      ? <><Term k="thin">{row.grade_label}</Term>，這期不記</>
-      : <>{row.grade_label}，這期不記</>;
     viz = (
       <>
-        <div className="text-[13px] font-medium">{lead}</div>
+        <div className="text-[13px] font-medium">{tooNew ? <Term k="thin">{word}</Term> : word}</div>
         <div className="text-[11.5px]">
           花 {money(row.spend)}・{row.results === null ? "筆數未知" : `${formatAmount(row.results)} 筆`}
-          {row.grade === "insufficient" && row.grade_label !== "資料不足" && gateText(cap)}
         </div>
       </>
     );
   } else if (row.grade === "wasted") {
-    const line = 3 * cap;
+    const line = rules ? unsoldLine(rules, cap) : null;
     viz = (
       <Meter
-        value={row.spend} max={line * 1.4} marker={line} tone="danger"
+        value={row.spend} max={line === null ? null : line * 1.4} marker={line} tone="danger"
         left={<>花 {money(row.spend)}・0 筆</>}
-        right={<>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」</>}
+        right={line === null ? <Term k="wasted">{word}</Term> : <>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">{word}</Term>」</>}
       />
     );
   } else {
@@ -137,8 +142,9 @@ export function GradedRow({ row }: { row: SettleRow }) {
     );
   }
   const fate = FATE_TEXT[row.fate];
+  const place = rankText(row);
   return (
-    <li data-fate={row.fate} className={cn(
+    <li data-fate={row.fate} data-rank={row.rank ?? undefined} className={cn(
       "grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0 md:grid-cols-[40px_minmax(0,1fr)_minmax(150px,230px)_104px]",
       thin && "text-muted-foreground",
     )}>
@@ -146,15 +152,19 @@ export function GradedRow({ row }: { row: SettleRow }) {
       <div className="min-w-0">
         <div className={cn("font-medium [overflow-wrap:anywhere]", !thin && "text-foreground")}>{row.name ?? "（未命名廣告）"}</div>
         {row.group_name && <div className="text-[11.5px] text-muted-foreground [overflow-wrap:anywhere]">{row.group_name}</div>}
+        {place && (
+          <div data-part="rank" className="text-[11.5px] text-muted-foreground">
+            第 {place} 名{row.sales !== null && `・成交 ${formatAmount(row.sales)} 筆`}
+          </div>
+        )}
       </div>
       <div className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:col-start-auto md:row-start-auto">{viz}</div>
       <div className="col-start-3 row-start-1 flex flex-col items-end text-right md:col-start-auto md:row-start-auto">
-        {thin ? <Chip tone="neutral">不記</Chip> : (
-          <>
-            <GradeTermChip grade={row.grade} label={row.grade_label} />
-            <div className={cn("mt-1 text-[11.5px]", fate.cls)}>{row.skip_reason ?? fate.text}</div>
-          </>
-        )}
+        <div className="flex flex-wrap justify-end gap-1">
+          <GradeTermChip grade={row.grade} label={row.grade_label} reasonCode={row.reason_code} />
+          {sampleWords(rules, row).map((w) => <Chip key={w} tone="warn">{w}</Chip>)}
+        </div>
+        <div className={cn("mt-1 text-[11.5px]", fate.cls)}>{row.skip_reason ?? fate.text}</div>
       </div>
     </li>
   );
