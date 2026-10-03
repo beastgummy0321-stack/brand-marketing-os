@@ -75,7 +75,7 @@ export interface TriageMetricsView {
   result_label: string; // F19-I06: see `TriageTargetView.result_label`.
   derived_zero_days: number; reason: string | null;
 }
-/** F48 Contract R: the graded window's sample size -- shown beside the grade (「樣本少」／「還太新」), never a gate.
+/** F48 Contract R: the graded window's sample size -- `few` is shown beside the grade (「樣本少」), never a gate.
  * `sales` = known result count (`null` unknown); `few` = 1 to `rules.grade.sample_few - 1` sales; `too_new` = data
  * on fewer than `rules.grade.min_days` days and fewer than `rules.grade.min_results` sales. The three are optional only
  * for older hand-written fixtures; `gate` is no longer served (kept optional for the same fixtures). */

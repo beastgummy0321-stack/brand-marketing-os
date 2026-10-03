@@ -1,6 +1,5 @@
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
-import type { TriageSampleView } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type StructureAd, type StructureGroup } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { perSaleAmount } from "../patterns/csv";
@@ -23,12 +22,7 @@ const H2 = "text-[15px] font-semibold";
 
 const daily = (v: number | null) => `每日 ${formatAmount(v) ?? "—"}`;
 
-/** F48 Contract R: `GET …/structure` serves each ad's `reason_code` and `sample` beside its grade
- * (`app/ads/workspace_reads.py`); `StructureAd` in `lib/adsWorkspaceApi.ts` (outside this issue's scope) does not
- * declare them yet, so they are read through this one view until it does. */
-type GradedStructureAd = StructureAd & { reason_code?: string | null; sample?: TriageSampleView | null };
-
-function leafValue(a: GradedStructureAd, breakEven: number | null, rules: AdsRules | null) {
+function leafValue(a: StructureAd, breakEven: number | null, rules: AdsRules | null) {
   if (a.grade === "wasted") return "0 筆";
   if (a.grade === "insufficient") {
     const thin = !a.reason_code || a.reason_code === "too_new";
@@ -40,7 +34,7 @@ function leafValue(a: GradedStructureAd, breakEven: number | null, rules: AdsRul
   return cost === null ? "—" : <>{cost} 元<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>;
 }
 
-function leafOf(a: GradedStructureAd, i: number, breakEven: number | null, rules: AdsRules | null): TreeLeaf {
+function leafOf(a: StructureAd, i: number, breakEven: number | null, rules: AdsRules | null): TreeLeaf {
   const key = a.entity_id ?? a.ad_id ?? `ad-${i}`;
   if (a.missing_material) return { key, name: a.name, thumbnailUrl: null, missing: true };
   // Not on a platform yet: nothing to grade, nothing spent.

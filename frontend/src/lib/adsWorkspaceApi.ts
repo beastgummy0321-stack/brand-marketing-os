@@ -23,7 +23,7 @@
  *   there are more); superseded and deferred sets are not listed. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
-import type { TriageGrade } from "./adsTriageApi";
+import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type WorkspaceStageKey = "plan" | "assets" | "launch" | "read" | "decide" | "review";
 
@@ -81,6 +81,11 @@ export interface StructureAd {
   spend: number | null;
   grade: TriageGrade | null;
   grade_label: string | null;
+  /** F48 Contract R: the grade's reason (`too_new` = 剛開始, `spend_over_target_no_result` = 沒賣出, other codes on
+   * `insufficient` = 資料不足); `null` when the ad has no grade. Screens branch on it, never on `grade_label`. */
+  reason_code: string | null;
+  /** F48 Contract R: the graded window's sample size (shown as 「樣本少」 when `few`, never a gate); `null` without a grade. */
+  sample: TriageSampleView | null;
   cost_per_result: number | null;
   results: number | null;
   closing: boolean;

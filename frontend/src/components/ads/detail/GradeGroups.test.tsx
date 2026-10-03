@@ -146,14 +146,15 @@ describe("GradeGroups", () => {
     }
   });
 
-  it("a graded row with a small sample shows 樣本少 (and 還太新) beside its trend note; 剛開始／資料不足 rows show none", () => {
+  it("a graded row with a small sample shows 樣本少 beside its trend note — the only sample chip (no 還太新, even when too_new); 剛開始 rows show none", () => {
     const few = item({ entity_id: "f1", name: "小樣本・三筆", cost: 210, results: 3, sample: { sales: 3, few: true, too_new: false, spend_multiple: 1.4, days_with_events: 3 } });
     const fresh = item({ entity_id: "f2", name: "剛上兩天", grade: "over", grade_label: "太貴", cost: 900, results: 1, sample: { sales: 1, few: true, too_new: true, spend_multiple: 2, days_with_events: 1 } });
     const thinFresh = { ...thin, sample: { sales: 0, few: false, too_new: true, spend_multiple: 0.3, days_with_events: 0 } };
     renderGroups([few, fresh, ok, thinFresh], { open: ["on_target", "over", "thin"] });
     const chips = (id: string) => [...screen.getByTestId(`ad-row-${id}`).querySelectorAll("[data-part=sample]")].map((c) => c.textContent);
     expect(chips("f1")).toEqual([RULES_FIXTURE.labels.flags.few]);
-    expect(chips("f2")).toEqual([RULES_FIXTURE.labels.flags.few, "還太新"]);
+    expect(chips("f2")).toEqual([RULES_FIXTURE.labels.flags.few]);
+    expect(document.body.textContent).not.toContain("還太新");
     expect(chips("a2")).toEqual([]);
     expect(chips("m2")).toEqual([]);
   });

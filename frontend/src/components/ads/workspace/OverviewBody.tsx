@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
-import { getQueue, getTriage, type CampaignDataStatus, type QueueItem, type QueueKind, type TriageSampleView } from "@/lib/adsTriageApi";
-import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd, type WorkspaceTotals } from "@/lib/adsWorkspaceApi";
+import { getQueue, getTriage, type CampaignDataStatus, type QueueItem, type QueueKind } from "@/lib/adsTriageApi";
+import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type WorkspaceTotals } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import {
   ActionBar, Chip, DAY_SWATCH, DayTiles, Disclosure, GradeRules, GradeTermChip, KindMark, Legend, Meter,
@@ -33,9 +33,6 @@ const CARD = "surface px-[22px] py-5";
 const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
 const H2 = "text-[15px] font-semibold";
 
-/** F48 Contract R: `GET …/structure` serves each ad's `reason_code` and `sample` beside its grade; `StructureAd`
- * (`lib/adsWorkspaceApi.ts`, outside this issue's scope) does not declare them yet, so they are read through this view. */
-type GradedStructureAd = StructureAd & { reason_code?: string | null; sample?: TriageSampleView | null };
 const RANKED = new Set(["on_target", "watch", "over", "wasted"]);
 
 export function capOf(c: CampaignDetail): RulerCap | null {
@@ -189,8 +186,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
         {structure.status === "loading" && <Skeleton className="h-40 w-full" />}
         {structure.status === "error" && <ReadFailed what={`每則廣告的花費讀不到：${structure.error}`} onRetry={structure.reload} />}
         {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">還沒有在平台上的廣告</p>}
-        {ads.map((ad) => {
-          const a = ad as GradedStructureAd;
+        {ads.map((a) => {
           const graded = a.grade !== null && RANKED.has(a.grade);
           const pct = a.spend !== null && gate ? Math.min(100, Math.round((a.spend / gate) * 100)) : null;
           const sample = graded ? sampleWords(rules, a.sample) : [];
@@ -199,7 +195,13 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
               <Thumb url={a.thumbnail_url} size={40} />
               <div className="min-w-0 font-medium [overflow-wrap:anywhere]">{a.name}</div>
               <div>
-                {graded && T !== null ? (
+                {a.grade === "wasted" ? (
+                  // 沒賣出 has no cost per sale: the row shows what it spent against the served 沒賣出 line (same meter as
+                  // the next-decision 沒賣出 figure), never 「每筆 未知」.
+                  <Meter value={a.spend} max={Math.max((gate ?? 0) * 1.4, (a.spend ?? 0) * 1.1)} marker={gate} tone="danger"
+                    left={`花了 ${yuan(a.spend)}，0 筆`}
+                    right={gate !== null ? <span className="whitespace-nowrap">門檻 {formatAmount(gate)}</span> : null} />
+                ) : graded && T !== null ? (
                   <Meter value={a.cost_per_result} max={T * 1.6} marker={T}
                     tone={a.grade === "on_target" ? "success" : a.grade === "watch" ? "warning" : "danger"}
                     left={<>每筆 {perSale(a.cost_per_result)}<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>}

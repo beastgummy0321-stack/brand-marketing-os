@@ -103,14 +103,9 @@ export function gradeWord(rules: AdsRules | null, grade: Grade, reasonCode?: str
   return rules.labels.grade[grade];
 }
 
-/** 「還太新」: the sample flag word for an ad with data on fewer than `min_days` days and fewer than `min_results`
- * sales. The endpoint serves `labels.flags.few` (樣本少) but no word for this flag yet, so it is the one word here;
- * a served `labels.flags.too_new` replaces it. */
-export const TOO_NEW_FLAG = "還太新";
-
-/** The sample chips' words of an item's `sample` (樣本少／還太新), in that order; none while the rules are not loaded. */
-export function sampleWords(rules: AdsRules | null, sample: { few?: boolean; too_new?: boolean } | null | undefined): string[] {
-  if (!rules || !sample) return [];
-  const flags = rules.labels.flags as AdsRules["labels"]["flags"] & { too_new?: string };
-  return [sample.few ? flags.few : null, sample.too_new ? flags.too_new ?? TOO_NEW_FLAG : null].filter((w): w is string => !!w);
+/** The sample chip's word of an item's `sample`: the served 「樣本少」 (`labels.flags.few`) when `few`, else none (and
+ * none while the rules are not loaded). The only sample chip: `too_new` is not shown — beside a grade it contradicts it
+ * (沒賣出＋還太新), and on a 7-day campaign it would sit on every row. */
+export function sampleWords(rules: AdsRules | null, sample: { few?: boolean } | null | undefined): string[] {
+  return rules && sample?.few ? [rules.labels.flags.few] : [];
 }

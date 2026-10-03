@@ -169,7 +169,7 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref
 }) {
   const name = item.name ?? "（未命名廣告）";
   const rules = useAdsRules();
-  // F48 Contract R: the sample size beside a graded ad (樣本少／還太新) — shown, never a gate.
+  // F48 Contract R: a small sample beside a graded ad (樣本少) — shown, never a gate.
   const sample = GRADED.has(item.grade) ? sampleWords(rules, item.sample) : [];
   return (
     <div ref={rowRef} data-testid={`ad-row-${item.entity_id}`} className={cn(ROW, highlighted && "-mx-2 rounded-lg bg-accent/60 px-2 ring-1 ring-inset ring-primary")}>

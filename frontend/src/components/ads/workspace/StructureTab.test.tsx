@@ -4,7 +4,6 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
-import type { TriageSampleView } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type CampaignStructure, type StructureAd } from "@/lib/adsWorkspaceApi";
 import { StructureTab } from "./StructureTab";
 
@@ -18,11 +17,11 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   } as CampaignDetail;
 }
 
-/** `GET …/structure` also serves `reason_code` and `sample` beside each grade (F48 Contract R). */
-function ad(overrides: Partial<StructureAd> & { reason_code?: string | null; sample?: TriageSampleView | null } = {}): StructureAd {
+/** `GET …/structure` serves `reason_code` and `sample` beside each grade (F48 Contract R). */
+function ad(overrides: Partial<StructureAd> = {}): StructureAd {
   return {
     ad_id: "ad_1", entity_id: "ent_1", name: "晨光隨行杯・日常出發", thumbnail_url: "/t/1.png", spend: 960,
-    grade: "on_target", grade_label: "划算", cost_per_result: 48, results: 20, closing: false, missing_material: false,
+    grade: "on_target", grade_label: "划算", reason_code: null, sample: null, cost_per_result: 48, results: 20, closing: false, missing_material: false,
     ...overrides,
   };
 }
