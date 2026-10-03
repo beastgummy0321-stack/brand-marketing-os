@@ -348,6 +348,10 @@ class CapResolutionTest(CloseoutTestBase):
         self.assertEqual(closed["verdict_json"]["basis"], "break_even")
         self.assertEqual(closed["verdict_json"]["target"], 500)  # 1000 - 450 - 50
         self.assertEqual(closed["verdict"], "達成")  # 400 <= 500
+        # F48 Contract W: the period verdict is stored with the campaign's sell-way.
+        verdicts = [row for row in bi_repo.list_learnings(self.conn, self.brand_id)
+                    if row["source_cycle_id"] == campaign["id"]]
+        self.assertEqual([row["product_id"] for row in verdicts], [product_id])
 
     def test_cap_set_on_the_target_route_is_the_one_judged(self):
         campaign = self._campaign(

@@ -398,6 +398,24 @@ class SettleWriteTest(SettleFixture):
         self.assertEqual(len(self.learnings()), 8)
         self.assertEqual(again["written"]["count"], 8)
 
+    def test_each_row_carries_its_campaigns_sell_way(self):
+        """F48 Contract W: entity -> its campaign -> that campaign's sell-way; the imported
+        campaign has none, so its rows are brand level."""
+        product = brands.create_product(self.conn, self.brand, name="隨行杯單入", actor="test")
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json"
+            " || jsonb_build_object('product_ids', jsonb_build_array(%s::text)) WHERE id = %s",
+            (product["id"], self.daily),
+        )
+        self.conn.commit()
+        self.write(self.picks(*LEARNABLE, angle="保溫到公司"))
+        by_entity = {row["source_cycle_id"].rsplit(":", 1)[1]: row["product_id"]
+                     for row in self.learnings()}
+        self.assertEqual(
+            by_entity,
+            {self.ads[k]: (product["id"] if k.startswith("p") else None) for k in LEARNABLE},
+        )
+
     def test_confidence_promotes_on_identical_texts(self):
         brands.record_learning(
             self.conn, self.brand, actor="system", learning_text="「保冷」對這群受眾無效",

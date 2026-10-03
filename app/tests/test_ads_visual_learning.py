@@ -160,6 +160,36 @@ class LookDimensionWritesOneLearningTest(VisualLearningTestBase):
         self.assertIn("phone_raw標籤", row["learning_text"])
         self.assertIn("studio_hero標籤", row["learning_text"])
         self.assertIn("這是相關，不代表是風格造成。", row["learning_text"])
+        # F48 Contract W: a campaign without a sell-way writes a brand-level row.
+        self.assertIsNone(row["product_id"])
+
+    def test_the_row_carries_the_campaigns_sell_way(self):
+        """F48 Contract W: the visual learning is stored with the campaign's sell-way."""
+        product = bi_repo.create_product(self.conn, self.brand_id, name="雙入組", actor=ACTOR)
+        campaign = self._campaign()
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json"
+            " || jsonb_build_object('product_ids', jsonb_build_array(%s::text)) WHERE id = %s",
+            (product["id"], campaign["id"]),
+        )
+        self.conn.commit()
+        group = self._group(campaign["id"])
+        ad_a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
+        ad_b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
+        start = campaign["start_date"]
+        self._spread(campaign["id"], ad_a["id"], start, 3, daily_spend=100.0,
+                     daily_purchases=10, daily_revenue=200.0)
+        self._spread(campaign["id"], ad_b["id"], start, 3, daily_spend=100.0,
+                     daily_purchases=5, daily_revenue=200.0)
+        self._patch_workbench({
+            ad_a["id"]: _fp(look="phone_raw"),
+            ad_b["id"]: _fp(look="studio_hero"),
+        })
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        visual_rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
+        self.assertEqual([row["product_id"] for row in visual_rows], [product["id"]])
 
 
 class AudienceEditedAfterDispatchTest(VisualLearningTestBase):

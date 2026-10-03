@@ -12,8 +12,8 @@ Never delete or overwrite anything under `data/`.
 
 from typing import cast
 
-from app.ads import learning as ads_learning
 from app.ads import ads_learnings, live_creative, outcome, sell_way
+from app.ads import learning as ads_learning
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy

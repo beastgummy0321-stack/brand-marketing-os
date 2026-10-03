@@ -15,8 +15,9 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.ads import budget, change_control_launch, plan, strategy
+from app.ads import ads_learnings, budget, change_control_launch, plan, strategy
 from app.ads import external_repository as external
+from app.ads import learning as ads_learning
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -1062,26 +1063,57 @@ class RankedLearningsInStrategyPromptTest(StrategyTestBase):
 
 
 class OneCurrentLearningPerProductTest(StrategyTestBase):
-    """F41-I02 (drill-8 #11): two closed periods' verdicts for the same product -> only the newer
-    reaches the prompt and `basis.learnings`; a NULL product is one brand-level row. Event
-    learnings (`ads;` scope: pause／A/B／month settle) are separate findings and all stay."""
+    """F41-I02 (drill-8 #11): two closed periods' verdicts for the same sell-way -> only the newer
+    reaches the prompt and `basis.learnings`; a campaign without a sell-way (imported) is one
+    brand-level row. Event learnings (`ads;` scope: pause／A/B／month settle) are separate
+    findings and all stay. F48-I03 (Contract W): every row here is written by the production
+    writers (`learning.write_learning`, `ads_learnings.record_for_ab_item`), which store the
+    campaign's sell-way themselves -- so two sell-ways keep two verdicts."""
 
-    def test_only_the_newest_verdict_per_product_reaches_prompt_and_basis(self):
-        now = coredb.now_utc()
-        for text, scope, product_id, days_ago in (
-            ("舊一期：夜跑背心看不出", "aud_old、offer_old", self.product["id"], 30),
-            ("新一期：夜跑背心划算", "aud_new、offer_new", self.product["id"], 1),
-            ("舊一期：品牌整體太貴", "brand", None, 40),
-            ("新一期：品牌整體划算", "brand", None, 2),
-            ("「保溫」對這群受眾有效", "ads;campaign=x", None, 3),
-            ("「保冷」對這群受眾無效", "ads;campaign=x", None, 50),
-        ):
-            bi_repo.record_learning(
-                web.conn, self.brand_id, actor=ACTOR, learning_text=text,
-                applicability_scope=scope, confidence="observed",
-                sample_size="1 個活動", product_id=product_id,
-                learned_at=now - timedelta(days=days_ago),
-            )
+    @staticmethod
+    def _verdict_json(actual: float) -> dict:
+        return {"target": 300.0, "actual": actual,
+                "sample": {"purchases": 6, "days": 10, "bucket": "中"}}
+
+    def _close(self, campaign: dict, verdict: str, actual: float) -> dict:
+        return ads_learning.write_learning(
+            web.conn, self.org_id, self.brand_id, campaign["id"], verdict,
+            self._verdict_json(actual), actor=ACTOR,
+        )
+
+    def test_only_the_newest_verdict_per_sell_way_reaches_prompt_and_basis(self):
+        other = bi_repo.create_product(web.conn, self.brand_id, name="登山背心", actor=ACTOR)
+        imported_old = external.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="舊帳戶・上一季",
+        )
+        imported_new = external.create_imported_campaign(
+            web.conn, self.org_id, self.brand_id, name="舊帳戶・這一季",
+        )
+        old_a = self._create_campaign(name="夜跑背心・第一期")
+        new_a = self._create_campaign(name="夜跑背心・第二期")
+        only_b = self._create_campaign(
+            name="登山背心・第一期", context_json={"product_ids": [other["id"]]},
+        )
+        ab = {"dimension_label": "開場", "winner": {"value_label": "甲"},
+              "loser": {"value_label": "乙"}}
+
+        rows = {
+            "imported_old": self._close(imported_old, "未達成", 500.0),
+            "old_a": self._close(old_a, "未達成", 400.0),
+            "event_a": ads_learnings.record_for_ab_item(
+                web.conn, self.org_id, self.brand_id, old_a["id"],
+                {"plan_json": {"source": "ab", "ab": ab}}, {"id": "adx-ab-1", "kind": "pause"},
+            ),
+            "imported_new": self._close(imported_new, "達成", 280.0),
+            "new_a": self._close(new_a, "達成", 250.0),
+            "only_b": self._close(only_b, "達成", 260.0),
+        }
+        # The writers stored each campaign's sell-way (nothing here passes `product_id`).
+        self.assertEqual({key: row["product_id"] for key, row in rows.items()}, {
+            "imported_old": None, "old_a": self.product["id"], "event_a": self.product["id"],
+            "imported_new": None, "new_a": self.product["id"], "only_b": other["id"],
+        })
+
         self.campaign = self._create_campaign()
         provider = _fake(_VALID_REPLY)
         strategy.PROVIDER = provider
@@ -1089,14 +1121,14 @@ class OneCurrentLearningPerProductTest(StrategyTestBase):
         detail = self._generate()
 
         sent_prompt = provider.calls[0]["messages"][0]["content"]
-        self.assertIn("新一期：夜跑背心划算", sent_prompt)
-        self.assertIn("新一期：品牌整體划算", sent_prompt)
-        self.assertNotIn("舊一期：夜跑背心看不出", sent_prompt)
-        self.assertNotIn("舊一期：品牌整體太貴", sent_prompt)
+        for kept in ("only_b", "new_a", "imported_new", "event_a"):
+            self.assertIn(rows[kept]["learning_text"], sent_prompt)
+        for dropped in ("old_a", "imported_old"):
+            self.assertNotIn(rows[dropped]["learning_text"], sent_prompt)
         texts = [row["text"] for row in detail["budget_basis_json"]["basis"]["learnings"]]
         self.assertEqual(texts, [
-            "新一期：夜跑背心划算", "新一期：品牌整體划算", "「保溫」對這群受眾有效",
-            "「保冷」對這群受眾無效",
+            rows["only_b"]["learning_text"], rows["new_a"]["learning_text"],
+            rows["imported_new"]["learning_text"], rows["event_a"]["learning_text"],
         ])
 
 
