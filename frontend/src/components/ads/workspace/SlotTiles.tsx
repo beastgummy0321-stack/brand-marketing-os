@@ -11,12 +11,15 @@ import {
 import type { CopyFields } from "@/lib/adsUserAssetsApi";
 import { internalHref } from "@/lib/internalHref";
 import { useApiRead } from "@/lib/useApiRead";
-import { Chip, ReadFailed, SlotTile } from "../patterns";
+import { Chip, ReadFailed, SlotTile, type ChipTone } from "../patterns";
 
 /** The 素材 tab's slot tiles and their two dialogs (moved out of `AssetsBody`, F45-I08). One tile per Contract F/T/D/W
- * state: ready and 處理中 (`ReadySlot`; 處理中 says what runs — F45 prototype `f45-slot-states` `.why .job`), 等你
- * (`WaitingSlot`, the server's next action), 卡住 (`BlockedSlot`), missing, copy-only and image-only; the copy picker
- * (`CopyPicker`) and the in-place copy editor (`CopyEditor`, 保存後馬上檢查). */
+ * state: ready, in progress and retrying (`ReadySlot`; a running slot says what runs — F45 prototype `f45-slot-states`
+ * `.why .job`), waiting (`WaitingSlot`, the server's next action), blocked (`BlockedSlot`), failed (`FailedSlot`, the
+ * workbench exit), missing, copy-only and image-only; the copy picker (`CopyPicker`) and the in-place copy editor
+ * (`CopyEditor`, 保存後馬上檢查).
+ * F49 Contract T: every tile's chip prints the served `state_label` and its line the served `state_text` — no tile
+ * picks its own state word. Only the chip's colour is chosen here (`STATE_TONE`, presentation). */
 
 export const VIDEO_NEEDED = "這格要影片腳本，照片不算";
 const SHARED_IMAGE = "同一張圖，文案不同";
@@ -24,6 +27,24 @@ export const isVideoSlot = (slot: Slot) => slot.format_key === "video";
 export const flatSlots = (data: CampaignSlots) => data.groups.flatMap((g) => g.slots);
 /** The prototype's `.btn.s.go`: the slot's one next step, primary-bordered; long server sentences wrap. */
 const GO = "h-auto min-h-8 max-w-full shrink whitespace-normal border-primary py-1 text-left font-semibold text-primary hover:text-primary";
+
+/** The chip colour per slot state (presentation only; the word is the served `state_label`). */
+export const STATE_TONE: Record<Slot["state"], ChipTone> = {
+  ready: "ok", in_progress: "accent", retrying: "accent", failed: "bad", blocked: "bad",
+  waiting: "warn", image_only: "warn", copy_only: "warn", missing: "warn",
+};
+
+/** The slot's served chip (`state_label`), with an optional suffix; nothing when the read carries no label. */
+function StateChip({ slot, suffix = "" }: { slot: Slot; suffix?: string }) {
+  if (!slot.state_label) return null;
+  return <Chip tone={STATE_TONE[slot.state]}>{slot.state_label}{suffix}</Chip>;
+}
+
+/** The slot's served sentence (`state_text`) as the muted line under its chip; nothing when it is empty. */
+function StateLine({ slot }: { slot: Slot }) {
+  if (!slot.state_text) return null;
+  return <p data-slot="slot-state-text" className="text-[11.5px] leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">{slot.state_text}</p>;
+}
 
 /** The ad's offer coordinate as the tile head's chip — the served label, accent unless its `offer_key` is `none`
  * (無優惠; F48: the tone branches on the key, never the label); nothing for an ad without one. */
@@ -67,20 +88,21 @@ function CheckedNote({ checked, failed = "沒有檢查成功" }: { checked: Chec
     : <p role="status" className="text-xs text-muted-foreground">{checked.line}</p>;
 }
 
-/** The job line of a 處理中 slot (prototype `.job`): what runs, 「已寫好 d／n」 with its bar only when the workbench read
- * gives both numbers, and 「自動更新，不用重整」 (the tab re-reads while anything runs). */
-function JobLine({ job }: { job: SlotJob | null }) {
+/** The job line of a running slot (prototype `.job`): the served sentence (「圖片處理中」／「文案產生中」), what runs,
+ * 「已寫好 d／n」 with its bar only when the workbench read gives both numbers, and 「自動更新，不用重整」 (the tab re-reads
+ * while anything runs). A retrying slot (F49 Contract T) has no job: its line is the served sentence alone (the error
+ * and when the next attempt is due), and it keeps polling like a running one. */
+function JobLine({ job, text }: { job: SlotJob | null; text: string | undefined }) {
   const counted = job?.done != null && job.of != null && job.of > 0 ? { done: job.done, of: job.of } : null;
-  // A 處理中 slot without its job (older data) says only that something runs — never a guessed kind.
-  const head = job?.kind === "copy" ? "文案生成中" : job?.kind === "preview" ? "預覽製作中" : "還在跑";
   const what = job?.kind === "copy"
     ? `工作檯正在寫${job.of ? ` ${job.of} 版` : ""}文案${counted ? `，已寫好 ${counted.done}／${counted.of}` : ""}`
-    : job?.kind === "preview" ? "把這張圖和文案合成預覽" : "好了會自己換成結果";
+    : job?.kind === "preview" ? "把這張圖和文案合成預覽" : null;
   return (
     <div className="flex items-start gap-2 text-[12.5px] leading-normal">
       <Spinner className="mt-[3px]" />
       <div className="min-w-0 [overflow-wrap:anywhere]">
-        <b className="font-semibold">{head}</b>：{what}
+        {/* A slot without its sentence (older data) says only that it updates by itself — never a guessed state. */}
+        {text && <b className="font-semibold">{text}</b>}{text && what && "："}{what}
         {counted && (
           <span data-slot="slot-job-steps" aria-hidden="true" className="mt-[5px] flex w-[120px] max-w-full gap-[3px]">
             {Array.from({ length: counted.of }, (_, i) => <i key={i} className={`h-1 flex-1 rounded-sm ${i < counted.done ? "bg-primary" : "bg-muted"}`} />)}
@@ -115,34 +137,60 @@ function StatutoryLine({ statutory }: { statutory: SlotStatutory }) {
   );
 }
 
-/** A ready or in-progress slot. `shared`: another slot in the same response shows the same thumbnail (one original
- * backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was 處理中,
- * 等你 or 卡住 in an earlier read of the same screen and became ready (「已確認・剛處理好」). */
-export function ReadySlot({ slot, shared, justDone, busy, onPick }: {
+/** A ready, in-progress or retrying slot. `shared`: another slot in the same response shows the same thumbnail (one
+ * original backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was
+ * not ready in an earlier read of the same screen and became ready (the served chip + 「・剛處理好」).
+ * F49 Contract T: a ready planned ad whose launch is not approved yet (`copy_editable`) offers 換文案 (`onPickCopy`, the
+ * copy picker); after the approval the served sentence says the copy is frozen. `checked`: why the last 換文案 was
+ * refused, beside the tile. */
+export function ReadySlot({ slot, shared, justDone, busy, onPick, onPickCopy, checked = null }: {
   slot: Slot; shared: boolean; justDone: boolean; busy: boolean; onPick: (file: File) => void;
+  onPickCopy?: () => void; checked?: Checked | null;
 }) {
   const thumb = useShownThumbnail(slot.thumbnail_url);
-  const inProgress = slot.state === "in_progress";
-  const chip = inProgress
-    ? <Chip tone="accent">處理中</Chip>
-    : slot.replace_task_id ? <Chip tone="warn">要換掉</Chip> : <Chip tone="ok">{justDone ? "已確認・剛處理好" : "已確認"}</Chip>;
+  const running = slot.state === "in_progress" || slot.state === "retrying";
+  const chip = !running && slot.replace_task_id
+    ? <Chip tone="warn">要換掉</Chip>
+    : <StateChip slot={slot} suffix={!running && justDone ? "・剛處理好" : ""} />;
+  const swap = !running && slot.copy_editable === true && slot.ad_id !== null && !!onPickCopy;
   const status = (
     <div className="flex flex-col items-start gap-1">
-      {shared && !inProgress && (
+      {shared && !running && (
         <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground" data-slot="slot-shared">
           {SHARED_IMAGE}
           {slot.ad_id !== null && <UploadAction slot={slot} busy={busy} onPick={onPick} label="換一張" variant="link" />}
         </span>
       )}
-      {chip}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {chip}
+        {swap && <Button variant="link" size="xs" className="h-auto px-0" aria-label={`換文案：${slot.name}`} onClick={onPickCopy}>換文案</Button>}
+      </div>
+      {!running && <StateLine slot={slot} />}
       {slot.format_note && <FormatNote text={slot.format_note} />}
       {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
+      <CheckedNote checked={checked} failed="文案沒有換成" />
     </div>
   );
   return (
     <SlotTile variant="ready" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)} status={status}
-      emptyCopy={inProgress && slot.job?.kind === "copy" ? "文案還在寫" : undefined}
-      job={inProgress ? <JobLine job={slot.job} /> : undefined} />
+      emptyCopy={slot.state === "in_progress" && slot.job?.kind === "copy" ? "文案還在寫" : undefined}
+      job={running ? <JobLine job={slot.job} text={slot.state_text} /> : undefined} />
+  );
+}
+
+/** F49 Contract T: the ad's workbench set failed to write its copy. The served chip and sentence (the error), and the
+ * exit that reruns it — the ad's set on the workbench (`workbench_href`, else the campaign's pack). Nothing changes it by
+ * itself, so it does not poll. */
+export function FailedSlot({ slot, workbenchHref }: { slot: Slot; workbenchHref: string }) {
+  const thumb = useShownThumbnail(slot.thumbnail_url);
+  return (
+    <SlotTile variant="blocked" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
+      status={<StateChip slot={slot} />} reason={{ text: slot.state_text ?? "", terms: [] }}
+      actions={
+        <Button variant="outline" size="sm" className={GO} asChild>
+          <Link to={internalHref(slot.workbench_href ?? workbenchHref)}>到工作檯重新產生 →</Link>
+        </Button>
+      } />
   );
 }
 
@@ -170,7 +218,8 @@ export function WaitingSlot({ slot, workbenchHref, checking, checked, onConfirm,
   return (
     <SlotTile variant="waiting" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
       emptyCopy="還沒選文案" status={<>
-        <Chip tone="warn">等你</Chip>
+        {/* The served sentence is the next action itself (the button below); the chip says whose turn it is. */}
+        <StateChip slot={slot} />
         {slot.copy && slot.statutory && <StatutoryLine statutory={slot.statutory} />}
       </>} actions={actions}
       note={<>
@@ -183,17 +232,18 @@ export function WaitingSlot({ slot, workbenchHref, checking, checked, onConfirm,
 /** F44: a slot whose confirmation was refused, or whose file failed. The tile says why and offers the exit that fixes
  * that reason — F45: a copy reason → 改這句文案 (the editor) and 到工作檯換一版 → (the ad's set; without one, the
  * 換一版文案 picker); a file reason → 換一張 — and 再檢查一次 for a reason fixed somewhere else. A `blocked` state
- * without its reason reads as unknown. */
+ * without its reason reads as unknown. F49 Contract T: a refused assignment (reason kind `assign`, `fix: null` — a
+ * closed campaign, an approved launch) shows its sentence with 再檢查一次 only. */
 export function BlockedSlot({ slot, uploading, checking, checked, onPick, onPickCopy, onEdit, onRecheck }: {
   slot: Slot; uploading: boolean; checking: boolean; checked: Checked | null;
   onPick: (file: File) => void; onPickCopy: () => void; onEdit: () => void; onRecheck: () => void;
 }) {
   const thumb = useShownThumbnail(slot.thumbnail_url);
-  const blocked = slot.blocked ?? { text: "卡住的原因讀不到。", terms: [], fix: null, more: 0 };
+  const blocked = slot.blocked ?? { text: slot.state_text || "這一格停下來的原因讀不到。", terms: [], fix: null, more: 0 };
   return (
     <SlotTile variant="blocked" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
       status={<>
-        <Chip tone="bad">卡住</Chip>
+        <StateChip slot={slot} />
         {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
       </>} reason={{ text: blocked.text, terms: blocked.terms, more: blocked.more }}
       actions={slot.ad_id !== null && <>
@@ -251,16 +301,16 @@ export function MissingSlot({ slot, workbenchHref, busy, onPick }: {
   // Only a planned ad takes an upload (an imported campaign's slots are platform ads, always ready).
   const canUpload = slot.ad_id !== null;
   const to = internalHref(slot.workbench_href ?? workbenchHref);
-  if (isVideoSlot(slot)) {
-    return (
-      <SlotTile variant="missing" title={VIDEO_NEEDED} status={<Chip tone="warn">缺影片</Chip>} actions={<>
-        {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-        <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
-      </>} />
-    );
-  }
+  // F49 Contract T: the tile names its ad (like every other tile) over the served chip and sentence; a video-format
+  // slot says what it needs instead of the sentence.
+  const status = <>
+    <StateChip slot={slot} />
+    {isVideoSlot(slot)
+      ? <p className="text-[11.5px] font-semibold leading-[1.45] text-accent-foreground">{VIDEO_NEEDED}</p>
+      : <StateLine slot={slot} />}
+  </>;
   return (
-    <SlotTile variant="missing" actions={<>
+    <SlotTile variant="missing" title={slot.name} status={status} actions={<>
       {canUpload && <UploadAction slot={slot} busy={busy} onPick={onPick} />}
       <Button variant="link" size="xs" asChild><Link to={to}>從素材工作檯</Link></Button>
     </>} />
@@ -281,7 +331,7 @@ export function CopyOnlySlot({ slot, workbenchHref, busy, onPick }: {
         {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
         {slot.workbench_href && <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>}
       </> : undefined}
-      status={<Chip tone="warn">{video ? "缺影片" : "有文案，缺圖"}</Chip>} />
+      status={<><StateChip slot={slot} /><StateLine slot={slot} /></>} />
   );
 }
 
@@ -291,21 +341,25 @@ export function ImageOnlySlot({ slot, onPickCopy }: { slot: Slot; onPickCopy: ()
   return (
     <SlotTile variant="image-only" name={slot.name} thumbnailUrl={thumb} offer={offerChip(slot)}
       copyActions={<Button variant="link" size="xs" aria-label={`選一版文案：${slot.name}`} onClick={onPickCopy}>選一版文案</Button>}
-      status={<Chip tone="warn">有圖，缺文案</Chip>} />
+      status={<><StateChip slot={slot} /><StateLine slot={slot} /></>} />
   );
 }
 
 /** The picker on an image-only slot: one button per workbench copy version; choosing writes it into the slot's
  * pending placement, confirms and assigns it (`chooseSlotCopy`). A 409 (`slot_no_file`) stays inside the dialog.
  * On a blocked slot without a workbench set (F44, 換一版文案) it is the same picker under the prototype's words: the
- * chosen version replaces the refused copy and the confirmation runs again — the slot comes back ready or blocked. */
-export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen }: {
+ * chosen version replaces the refused copy and the confirmation runs again — the slot comes back ready or blocked.
+ * F49 Contract T: on a ready slot whose launch is not approved yet (換文案) the chosen version revises the confirmed
+ * material and the confirmation runs again; a refusal (the launch was approved meanwhile) goes to `onRefused` — the
+ * server's sentence beside the tile — instead of staying in the dialog. */
+export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen, onRefused }: {
   brandId: string; campaignId: string; slot: Slot; onClose: () => void; onChosen: (slots: CampaignSlots) => void;
+  onRefused?: (message: string) => void;
 }) {
   const read = useApiRead((signal) => getSlotCopyOptions(brandId, campaignId, signal), [brandId, campaignId]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const swap = slot.state === "blocked";
+  const swap = slot.state === "blocked" || slot.state === "ready";
   const terms = slot.blocked?.terms ?? [];
   async function choose(option: SlotCopyOption) {
     if (!slot.ad_id || busy) return;
@@ -315,7 +369,9 @@ export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen }: {
       const result = await chooseSlotCopy(brandId, campaignId, slot.ad_id, { set_id: option.set_id, version_id: option.version_id });
       onChosen(result.slots);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "文案沒有放進去，請再試一次。");
+      const message = err instanceof Error ? err.message : "文案沒有放進去，請再試一次。";
+      if (onRefused) onRefused(message);
+      else setError(message);
     } finally {
       setBusy(null);
     }
@@ -327,9 +383,11 @@ export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen }: {
         <DialogDescription>
           {!swap
             ? "工作檯已核准的文案版本。放進去後這一格就備妥；之後想改，到工作檯再產一版。"
-            : terms.length > 0
-              ? `選一版沒有寫「${terms.join("、")}」的文案，這一格會馬上再檢查一次。`
-              : "選另一版文案，這一格會馬上再檢查一次。"}
+            : slot.state === "ready"
+              ? "選另一版文案換上去，這一格會馬上再檢查一次；上架清單核准前都還能換。"
+              : terms.length > 0
+                ? `選一版沒有寫「${terms.join("、")}」的文案，這一格會馬上再檢查一次。`
+                : "選另一版文案，這一格會馬上再檢查一次。"}
         </DialogDescription>
         {read.status === "error"
           ? <ReadFailed what={`文案版本讀不到：${read.error}`} onRetry={read.reload} />

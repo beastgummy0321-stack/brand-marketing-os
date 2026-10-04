@@ -159,7 +159,7 @@ function LegacyAssetsTab({
                       <td className="px-3 py-2">{ad.name}</td>
                       <td className="px-3 py-2">
                         {native
-                          ? <Badge variant="secondary">{native.native_status ?? "平台狀態未知"}</Badge>
+                          ? <Badge variant="secondary">{native.delivery_label ?? "平台狀態不明"}</Badge>
                           : <Badge variant={row?.material_ready ? "default" : "outline"}>{row?.material_ready ? "素材已備妥" : "還不能上架"}</Badge>}
                         {!native && <span className="ml-2 text-xs text-muted-foreground">{PROGRESS_NOTE[rowState]}</span>}
                         {native?.sync_error && <p className="text-xs text-warning">{native.sync_error}</p>}
