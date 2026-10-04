@@ -50,9 +50,9 @@ class CoordinateLearningTestBase(unittest.TestCase):
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": name, "goal_text": "衝一波", "objective": "購買", "target_cost": CAP,
             "start_date": self.start, "end_date": self.today, "status": "live",
+            # F48 Contract M: a non-draft campaign's sell-way is fixed (no PATCH after adoption).
+            "context_json": {"product_ids": [self.product_id]},
         }, created_by=ACTOR)
-        ads_repo.update_campaign(self.conn, self.org_id, self.brand_id, campaign["id"],
-                                 {"product_ids": [self.product_id]})
         outcome_seed.set_coverage(
             self.conn, self.org_id, self.brand_id, campaign["id"], self.start, self.today,
         )

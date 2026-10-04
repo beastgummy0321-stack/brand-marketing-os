@@ -19,6 +19,7 @@ from app.ads import (
     adapters,
     assets,
     brief,
+    budget,
     change_control_data,
     change_control_launch,
     channels,
@@ -284,6 +285,10 @@ _PATCH_CAMPAIGN_ERRORS = {
     "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
     "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
     "customer_group_unknown": (400, "受眾只能選這個賣法的顧客群。"),
+    # F48 Contract M: the plan's money was split for this period／sell-way／audience／platform.
+    "plan_already_adopted": (
+        409, "這個 Campaign 已經展開過投放結構，投放期間、商品、受眾和平台不能再改。",
+    ),
 }
 
 
@@ -309,8 +314,9 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
     # F43-I18: `context_json.customer_group_ids` is `brief.set_customer_groups`'s (the create
     # path's rule), checked against the sell-way *after* this PATCH's `product_ids` is written;
     # a sell-way change without groups in the same PATCH resets them to the new sell-way's.
+    # F48 Contract M: the key stays in `updates` so `update_campaign` refuses it after adoption.
     pick_groups = "customer_group_ids" in updates
-    group_ids = updates.pop("customer_group_ids", None)
+    group_ids = updates.get("customer_group_ids")
     try:
         repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
         if edit_landing_url:
@@ -364,6 +370,10 @@ _SELECT_SCENARIO_ERRORS = {
         400, "這個情境還算不出金額：請先補上商品的售價與成本，或自訂預算。",
     ),
     "custom_total_invalid": (400, "手打的總額必須大於 0。"),
+    "total_below_one_per_day": (400, "總預算太少：每天不到 1 元"),
+    # F48 decision 8: a new total after adoption re-splits only unbound ad sets.
+    "campaign_bound": (409, "投放組已上架，改預算要走變更清單。"),
+    "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
 }
 
 
@@ -372,7 +382,9 @@ def select_strategy_scenario(
     request: Request, brand_id: str, campaign_id: str, body: SelectScenarioRequest,
 ):
     """F03-I05：採用其中一個情境，或手打一個總額——寫 `budget_planned`。F28-I03：超過預算
-    上限要帶 `confirm_over_cap: true`，否則 409 `over_cap_unconfirmed`，訊息寫出超出多少。"""
+    上限要帶 `confirm_over_cap: true`，否則 409 `over_cap_unconfirmed`，訊息寫出超出多少。
+    F48 裁決 8：已展開（`ready`、投放組都還沒上架）時重新分配每個投放組的日預算，回應帶
+    `resplit`；任何投放組已上架 → 409 `campaign_bound`。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
@@ -384,7 +396,7 @@ def select_strategy_scenario(
     except strategy.OverCapUnconfirmed as exc:
         raise web.ApiError(
             409, "over_cap_unconfirmed",
-            f"這個預算 NT${round(exc.total):,} 超出你設的預算上限 NT${exc.cap:,}，"
+            f"這個預算 NT${budget.whole(exc.total):,} 超出你設的預算上限 NT${exc.cap:,}，"
             f"多了 NT${exc.over:,}。確定要超出，請再確認一次。",
             {"total": exc.total, "cap": exc.cap, "over": exc.over},
         ) from exc
@@ -392,7 +404,10 @@ def select_strategy_scenario(
         code = str(exc)
         status, message = _SELECT_SCENARIO_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"campaign": _with_readiness(actor, brand_id, campaign)}
+    # F48 decision 8: `resplit` names each ad set's daily before／after when an adopted plan's
+    # total changed (`null` on a draft).
+    resplit = campaign.pop("resplit", None)
+    return {"campaign": _with_readiness(actor, brand_id, campaign), "resplit": resplit}
 
 
 class BudgetCapRequest(BaseModel):

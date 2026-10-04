@@ -56,9 +56,8 @@ shows is what is stored.
 import math
 from pathlib import Path
 
-from app.ads import channels, learning_view, objectives
+from app.ads import budget, channels, learning_view, objectives
 from app.ads import sell_way as sell_way_mod
-from app.ads.budget import breakeven_cpa
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.core import vocab
@@ -80,14 +79,14 @@ def current_economics(way: dict, today) -> dict | None:
 
 def whole_break_even(way: dict, today) -> float | None:
     """The break-even a create stores as the campaign's own cap when nothing else gives one: the
-    current economics' `breakeven_cpa` in whole currency units (half up, like the page's
-    `Math.round` and the cap editor's 「用打平」 -- the cap input takes whole amounts only);
+    current economics' `breakeven_cpa` in whole currency units (`budget.whole`, half up, the
+    one money rounding -- the cap input takes whole amounts only);
     `None` when unknown or not positive."""
-    value = breakeven_cpa(current_economics(way, today))
+    value = budget.breakeven_cpa(current_economics(way, today))
     if value is None:
         return None
-    whole = float(math.floor(value + 0.5))
-    return whole if whole > 0 else None
+    amount = float(budget.whole(value))
+    return amount if amount > 0 else None
 
 
 def _thumbnails(conn, brand_id: str) -> dict:
@@ -252,7 +251,7 @@ def _history(conn, org_id: str, brand_id: str, way_id: str, campaigns: list[dict
 def _product_option(conn, brand_id: str, way: dict, today, thumbnails: dict) -> dict:
     current = current_economics(way, today)
     price = current.get("selling_price") if current else None
-    break_even = breakeven_cpa(current)
+    break_even = budget.breakeven_cpa(current)
     own_cap = current.get("cap_per_sale") if current else None
     first = way["knowledge_products"][0]
     return {

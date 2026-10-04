@@ -21,7 +21,7 @@ audience=…；pain=…；angle=…；hook=…；proof=…；offer=…；format=
 Private to app/ads.
 """
 
-import math
+from app.ads import budget
 
 SAMPLE_FEW = 5  # 1–4 sales -> 樣本少
 NEAR_BEST = 1.3  # nothing under the cap -> keep the best and those within 30% of it
@@ -107,8 +107,9 @@ def _cap(rows: list[dict]):
 
 
 def whole(value) -> str:
-    """Money as the owner reads it: a whole number, half up, with thousands separators."""
-    return f"{math.floor(float(value) + 0.5):,}"
+    """Money as the owner reads it: `budget.whole` (half up, Contract M) with thousands
+    separators."""
+    return f"{budget.whole(value):,}"
 
 
 def rule_text(ranked: list[dict], cap) -> str | None:

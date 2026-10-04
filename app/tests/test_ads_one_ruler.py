@@ -18,6 +18,10 @@ or `triage` instead.
 
 F48-I03 (Contract W): `record_learning` is called in `app/ads` only inside `ads_learnings.write`,
 whose `product_id` is a required keyword; any other call fails, naming file, function and line.
+
+F48-I07 (Contract M): `round(`／`math.floor(`／`math.ceil(` appear in `app/ads` only in `budget.py`
+(the one money calculator) unless the `(file, function)` is listed with why it is not a money
+figure's rounding; any other call fails, naming file, function and line.
 """
 
 import ast
@@ -30,7 +34,15 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, ads_learnings, experiments, learning_rank, month_summary, triage
+from app.ads import (
+    ab_pairs,
+    ads_learnings,
+    budget,
+    experiments,
+    learning_rank,
+    month_summary,
+    triage,
+)
 from app.brand_intelligence import repository as brands
 from app.core import db
 
@@ -328,6 +340,95 @@ class OneLearningWriterTest(unittest.TestCase):
         product_id = inspect.signature(ads_learnings.write).parameters["product_id"]
         self.assertIs(product_id.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIs(product_id.default, inspect.Parameter.empty)
+
+
+# -- F48 Contract M: one money rounding ------------------------------------------------------------
+
+# The one file allowed to round a money figure (`whole`, `daily_of`, `total_of`).
+MONEY_FILE = "budget.py"
+ROUNDING_CALLS = {"round", "floor", "ceil"}
+# (file relative to app/ads, function) -> why the rounding there is not a money figure's rounding.
+# Never widen this to hide one: call `budget.whole`／`budget.daily_of`／`budget.total_of` instead.
+NOT_MONEY_ROUNDING = {
+    ("ab_pairs.py", "_judge_pair"): "an A/B percent difference shown to one decimal",
+    ("adapters/simulated.py", "day_rows"):
+        "the simulated platform reports cents and whole purchase counts, like a real read",
+    ("simulation_recovery.py", "_row"): "simulated platform rows in cents, like a real read",
+    ("learning.py", "_number"): "a learning's number printed to two decimals",
+    ("learning_rank.py", "_num"): "the stored scope string keeps two decimals (`parse_scope`)",
+    ("learning_rank.py", "_parse_num"): "the inverse of `_num`",
+    ("outcome.py", "_bucket"): "float noise off a sum of cents (two decimals), not a whole figure",
+    ("recovery.py", "_find_gap"): "minutes of a sync gap",
+    ("recovery.py", "_steps"): "hours of a sync gap",
+    ("repository.py", "list_campaigns"): "percent of the budget spent",
+    ("triage.py", "_figure"): "prints a ruler constant without float noise",
+    ("triage_capacity.py", "can_support"): "how many ads a daily budget supports (a count)",
+    ("visual_learning.py", "_fmt"): "a learning's number printed to two decimals",
+    ("workspace_reads.py", "_totals"): "a platform cost per result served in cents",
+    ("workspace_reads.py", "_platform_ad"): "a platform spend served in cents",
+}
+# (file, function) -> a money rounding outside `budget.py` still to move onto `budget.whole`
+# (F48-I07 moved `judgment._fmt_money` and `triage_scale.scale_candidates`; keep it empty).
+PENDING_MONEY: dict = {}
+
+
+def _rounding_calls(tree):
+    """Yield `(function_name, lineno, name)` for every `round(...)`, `math.floor(...)`,
+    `math.ceil(...)` and bare `floor(...)`／`ceil(...)` call."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else \
+            func.attr if isinstance(func, ast.Attribute) else None
+        if name in ROUNDING_CALLS:
+            yield _enclosing(parents, node), node.lineno, name
+
+
+class OneMoneyCalculatorTest(unittest.TestCase):
+    """F48 Contract M: a money figure in `app/ads` is rounded only in `budget.py`."""
+
+    def test_money_is_rounded_only_in_budget_py(self):
+        offenders, seen_allowed = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative == MONEY_FILE:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for function, line, name in _rounding_calls(tree):
+                key = (relative, function)
+                if key in NOT_MONEY_ROUNDING or key in PENDING_MONEY:
+                    seen_allowed.add(key)
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} in {function}(): {name}(")
+        self.assertEqual(
+            offenders, [],
+            "a rounding outside budget.py -- use budget.whole／daily_of／total_of (F48 M)",
+        )
+        # An allow entry whose rounding is gone must go too (the lists only ever shrink).
+        self.assertEqual(set(NOT_MONEY_ROUNDING) | set(PENDING_MONEY), seen_allowed)
+
+    def test_the_scan_sees_every_rounding_shape(self):
+        tree = ast.parse(
+            "import math\n"
+            "from math import floor\n"
+            "def daily(total, days):\n"
+            "    return round(total / days) + math.floor(total / days) + floor(total)\n"
+            "def up(x):\n"
+            "    return math.ceil(x)\n"
+            "def fine(rows):\n"
+            "    return budget.whole(rows)\n"
+        )
+        self.assertEqual(
+            sorted((f, n) for f, _, n in _rounding_calls(tree)),
+            [("daily", "floor"), ("daily", "floor"), ("daily", "round"), ("up", "ceil")],
+        )
+
+    def test_the_calculator_is_half_up_and_floors_the_daily(self):
+        self.assertEqual(budget.whole(2.5), 3)  # Python's round(2.5) is 2
+        self.assertEqual(budget.daily_of(10000, 7), 1428)
+        self.assertEqual(budget.total_of(1428, 7), 9996)
 
 
 class RulesEndpointTest(unittest.TestCase):

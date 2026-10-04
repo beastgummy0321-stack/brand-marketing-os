@@ -301,13 +301,13 @@ class PublishWritesOneApprovalTest(PublishTestBase):
 
     def test_publish_writes_an_approval_even_with_no_dates(self):
         # `plan.adopt_strategy` 本身要求日期才展開得出投放組（每日總額 = budget_planned /
-        # 天數），所以「沒有排期的 Campaign」是採用之後才清掉日期——bound 之前
-        # `local_state == 'unbound'`，PATCH 一路都能改日期（F03-I19 才凍結，見票面）。
+        # 天數），所以「沒有排期的 Campaign」只能是採用之後才清掉日期的舊資料——F48 Contract M
+        # 之後 PATCH 在採用後拒絕改期間（`plan_already_adopted`），這裡直接改列模擬那筆舊資料。
         detail = self._adopted_campaign()
         self._ready_material(detail)
-        ads_repo.update_campaign(
-            web.conn, self.org_id, self.brand_id, detail["id"],
-            {"start_date": None, "end_date": None},
+        web.conn.execute(
+            "UPDATE ads_campaign SET start_date = NULL, end_date = NULL WHERE id = %s",
+            (detail["id"],),
         )
         daily_sum = ads_repo.group_budget_total(web.conn, self.org_id, self.brand_id, detail["id"])
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])

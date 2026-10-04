@@ -178,9 +178,19 @@ def month_fit(conn, org, brand, campaign_id, snapshot) -> dict:
         blocker, text = "short", f"{number} 月預算不夠這期花"
     else:
         blocker, text = None, None
+    # F48 N1: what `extra` is made of -- the launch's days inside this month (the same day count
+    # `month_budget` reserves) and the campaign's whole-period total, so the card can say
+    # 「{N} 月的 {days} 天要花 X（整期 Y）」.
+    today = settings.today_for_org(conn, org_id=org)
+    days = month_budget.pending_days(item, start=month_budget.month_start(month), today=today)
+    period_total = snapshot.get("budget_planned")
     return {
         **without,
         "extra": budget["reserved_increases"] - without["reserved_increases"],
+        "extra_basis": {
+            "month": number, "days": days,
+            "period_total": float(period_total) if period_total is not None else None,
+        },
         "blocker": blocker,
         "blocker_text": text,
     }

@@ -8,10 +8,9 @@ Both rules are pure reads: no LLM call, no platform write (ARCHITECTURE.md §0 "
 row and its own approval can never disagree (feature Decisions "Rule A").
 """
 
-import math
 from collections import defaultdict
 
-from app.ads import ad_status, learning_rank
+from app.ads import ad_status, budget, learning_rank
 
 # Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in). F26-I01: the
 # active/closed line now comes from the shared `ad_status.CLOSED_STATUSES` (five values) rather
@@ -181,16 +180,17 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
     candidates = []
     for owner, items, active, target in qualified:
         from_amount = float(owner["budget_amount"])
-        to_amount = math.ceil(from_amount * SCALE_FACTOR)
+        # F48 Contract M: the raised daily is a money figure -> `budget.whole` (half up).
+        to_amount = budget.whole(from_amount * SCALE_FACTOR)
         proposed_item = {
             "kind": "budget", "target_id": owner["id"],
             "target": {"start_date": owner.get("start_date"), "end_date": owner.get("end_date")},
             "before": {"daily_amount": from_amount}, "after": {"daily_amount": to_amount},
         }
-        budget = month_view([proposed_item])
-        if budget.get("available") is None or budget["available"] < 0:
+        month = month_view([proposed_item])
+        if month.get("available") is None or month["available"] < 0:
             continue
-        extra_needed = budget["reserved_increases"] - baseline["reserved_increases"]
+        extra_needed = month["reserved_increases"] - baseline["reserved_increases"]
         best_item = _cheapest_on_target(active)
         owner_view = {
             "id": owner["id"], "name": owner.get("name"), "native_kind": owner["native_kind"],
@@ -208,7 +208,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
                 "cost_per_result": best_item["current"]["cost_per_result"],
                 "previous_cost_per_result": best_item["previous"]["cost_per_result"],
                 "target": target, "window_days": best_item["window"]["days"],
-                "month": {"available": budget["available"], "extra_needed": extra_needed},
+                "month": {"available": month["available"], "extra_needed": extra_needed},
                 "reason_text": scale_reason_text(best_item),
             },
         })

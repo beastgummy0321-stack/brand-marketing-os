@@ -3,9 +3,10 @@ ARCHITECTURE.md §0/§2/§3/§4/§6). Private to app/ads (container contract §1
 `routes.py`/`__init__.py` import this; nothing outside the package does.
 
 Read shape: `list_campaigns` and `campaign_detail` are the **one** place `budget_total` is
-derived (`sum(group.daily_budget) x days`) — `ads_campaign.budget_planned` is the adopted
-scenario amount and is never recomputed here or anywhere else (F03 decision 4/§0 "One source
-of truth for money after 採用").
+derived (`sum(group.daily_budget) x days`, `budget.total_of`) — `ads_campaign.budget_planned` is
+the adopted scenario amount (F03 decision 4/§0 "One source of truth for money after 採用"); F48
+Contract M: adopt (and a new total after adoption) rewrites it to that same derived total, so
+the two never differ after adoption.
 
 Write shape (this issue): only `create_campaign` — groups/ads/actions/outcomes are written by
 later issues (publish, bind, outcome ingest). This issue is the shared read contract.
@@ -50,7 +51,8 @@ def _budget_total(start_date, end_date, groups: list[dict]) -> float | None:
     daily_sum = sum(float(g["daily_budget"]) for g in groups)
     if daily_sum <= 0:
         return None
-    return round(daily_sum * days, 2)
+    # F48 Contract M: `budget.total_of` (exact) -- after adopt this equals `budget_planned`.
+    return budget.total_of(daily_sum, days)
 
 
 def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *,
@@ -100,6 +102,8 @@ def _valid_cap(value) -> bool:
 
 
 _PATCHABLE_COLUMNS = ("name", "objective", "start_date", "end_date")
+# F48 Contract M: refused by a plain edit once `status != 'draft'` (`plan_already_adopted`).
+_ADOPTED_FIXED_KEYS = ("start_date", "end_date", "product_ids", "customer_group_ids")
 
 
 # F04-I11：使用者改過的那一格，`context_json.field_sources` 要跟著翻成「你說的」
@@ -159,6 +163,18 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         updated = get_campaign(conn, org_id, brand_id, campaign_id)
         assert updated is not None
         return updated
+
+    # F48 Contract M: once the plan is adopted its period, sell-way, audience and platform are what
+    # the groups' money was split for -- they no longer change by a plain edit (the budget cap
+    # stays editable in any status, §6.32). `customer_group_ids` is applied by the route through
+    # `brief.set_customer_groups`; its presence here only gates it.
+    if campaign["status"] != "draft" and (
+        any(key in updates for key in _ADOPTED_FIXED_KEYS)
+        or ("constraints_json" in updates
+            and (updates["constraints_json"] or {}).get("platform")
+            != (campaign.get("constraints_json") or {}).get("platform"))
+    ):
+        raise ValueError("plan_already_adopted")
 
     if "name" in updates:
         value = updates["name"]
@@ -439,6 +455,11 @@ def _groups_for_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id
         (org_id, brand_id, campaign_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_groups(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> list:
+    """The campaign's delivery groups (no ads), in plan order."""
+    return _groups_for_campaign(conn, org_id, brand_id, campaign_id)
 
 
 # F24-I01: canonical order for "the first failing section" in `campaign_sync_state` below --
@@ -816,6 +837,15 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         if campaign["origin"] == "imported" else None
     )
     detail["groups"] = groups
+    strategy_basis = (detail.get("budget_basis_json") or {}).get("strategy") or {}
+    if groups and strategy_basis.get("allocation"):
+        # F48 Contract M: after adoption each role's amount is its groups' daily x days.
+        detail["budget_basis_json"] = {
+            **detail["budget_basis_json"],
+            "strategy": {**strategy_basis, "allocation": budget.adopted_allocation(
+                strategy_basis["allocation"], groups, budget.period_days(campaign),
+            )},
+        }
     detail["manual_handoff"] = manual_settings.handoff(detail)
     detail["budget_total"] = budget_total
     detail["actions"] = [dict(a) for a in latest_actions]
@@ -919,7 +949,7 @@ def _account_history(conn: _AnyConn, org_id: str, brand_id: str) -> dict | None:
     if hist is None or hist["daily_spend"] <= 0:
         return None
     return {
-        "last_daily_budget": round(hist["daily_spend"]),
+        "last_daily_budget": budget.whole(hist["daily_spend"]),
         "cpa": hist["cpa"],
         "sample_days": hist["days"],
         "sample_ads": None,
@@ -1023,6 +1053,18 @@ def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     row = get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None
     return row
+
+
+def set_budget_planned(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                       budget_planned) -> None:
+    """F48 Contract M: adopt (and a new total after adoption) rounds the total -- `budget_planned`
+    becomes `budget.total_of(Σ group daily, days)`, written in the caller's transaction."""
+    require_internal_campaign(conn, org_id, brand_id, campaign_id)
+    conn.execute(
+        "UPDATE ads_campaign SET budget_planned = %s"
+        " WHERE org_id = %s AND brand_id = %s AND id = %s",
+        (budget_planned, org_id, brand_id, campaign_id),
+    )
 
 
 def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,

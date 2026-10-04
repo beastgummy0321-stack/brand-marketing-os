@@ -85,6 +85,20 @@ def _fresh(value):
     return now_utc() - stamp < timedelta(hours=24)
 
 
+def pending_days(item, *, start, today) -> int:
+    """How many days of month `start` a pending budget or launch item still reserves: from the
+    later of the item's start and the first future day (today or the month's first day) to the
+    earlier of its end and the month's last day, both inclusive; 0 when it misses the month."""
+    end = start.replace(day=calendar.monthrange(start.year, start.month)[1])
+    target, after = item.get("target") or {}, item.get("after") or {}
+    first_future = max(start, today)
+    stop = min(end, _date(after.get("end_date") or target.get("end_date")) or end)
+    begin = max(
+        first_future, _date(after.get("start_date") or target.get("start_date")) or first_future
+    )
+    return max((stop - begin).days + 1, 0)
+
+
 def calculate(*, amount, currency, start, today, entities, observations, pending, uncertainties):
     """Pure evidence calculation, independently exercised with contradictory fixtures.
 
@@ -217,11 +231,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         new_daily = money(after.get("daily_amount", 0))
         base = owners.get(target_id)
         old_daily = base["daily"] if base else money(before.get("daily_amount") or 0)
-        stop = min(end, _date(after.get("end_date") or target.get("end_date")) or end)
-        begin = max(
-            first_future, _date(after.get("start_date") or target.get("start_date")) or first_future
-        )
-        days = max((stop - begin).days + 1, 0)
+        days = pending_days(item, start=start, today=today)
         # Even a 'confirmed' action continues to reserve against a stale snapshot.
         delta = max(new_daily - old_daily, Decimal(0)) * days
         holds[target_id] = max(holds.get(target_id, Decimal(0)), delta)

@@ -16,6 +16,8 @@ today_for_org` 的慣例）。私有：`app/ads/` 自己的檔案（`repository.
 from datetime import date, timedelta
 from typing import Any
 
+from app.ads import budget
+
 _VERDICT_TEXT = {
     "達成": "已結案，達成成功條件",
     "未達成": "已結案，未達成成功條件",
@@ -36,7 +38,8 @@ _BUDGET_TIME_GAP = 0.15
 
 
 def _fmt_money(amount) -> str:
-    return f"NT$ {round(float(amount)):,}"
+    # F48 Contract M: half up through `budget.whole` (Python's `round` is banker's).
+    return f"NT$ {budget.whole(amount):,}"
 
 
 def _fmt_date(d: date) -> str:

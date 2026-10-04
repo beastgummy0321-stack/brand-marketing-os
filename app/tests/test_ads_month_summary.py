@@ -609,10 +609,9 @@ class MonthSummaryNextPlanTest(unittest.TestCase):
         campaign = repository.create_campaign(self.conn, self.org, self.brand, {
             "name": name, "goal_text": "x", "objective": "購買", "target_cost": 450,
             "start_date": "2026-09-01", "end_date": "2026-09-14", "status": "closed",
+            # F48 Contract M: a non-draft campaign's sell-way is fixed (no PATCH after adoption).
+            "context_json": {"product_ids": [product_id]} if product_id is not None else {},
         }, created_by="test")
-        if product_id is not None:
-            repository.update_campaign(self.conn, self.org, self.brand, campaign["id"],
-                                       {"product_ids": [product_id]})
         self.conn.execute("UPDATE ads_campaign SET closed_at=%s WHERE id=%s",
                           (closed_at, campaign["id"]))
         self.conn.commit()

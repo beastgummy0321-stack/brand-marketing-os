@@ -337,6 +337,51 @@ def _snapshot(ad: dict, vocab_lookup: dict) -> dict:
     return snapshot
 
 
+def _role_amounts(allocation: list[dict], daily_total: int) -> dict:
+    """role -> whole daily amount: `budget.split` of `daily_total` by the allocation pcts (sums
+    exactly to `daily_total`)."""
+    weights = {str(i): (row["pct"] or 0) / 100 for i, row in enumerate(allocation)}
+    amounts_by_index = {row["label"]: row["amount"] for row in budget.split(daily_total, weights)}
+    return {allocation[i]["role"]: amounts_by_index[str(i)] for i in range(len(allocation))}
+
+
+def resplit_groups(
+    conn, org_id: str, brand_id: str, campaign: dict, total,
+) -> tuple[list, float]:
+    """F48 decision 8: a new total chosen after adoption re-splits every ad set's daily budget by
+    the stored allocation pcts (`budget.resplit` of `budget.daily_of(total, days)`). Only on a
+    `ready` campaign whose groups are all unbound (`ValueError("campaign_bound")` otherwise: a live
+    ad set changes through the change list); the approval ceiling applies. Both checks run before
+    any write. Returns (`[{group_id, role, before, after}]`, the new `budget_planned` =
+    `total_of(Σ group daily, days)` -- adopt's rounding; the caller stores it)."""
+    campaign_id = campaign["id"]
+    groups = ads_repo.list_groups(conn, org_id, brand_id, campaign_id)
+    if campaign["status"] != "ready" or any(g["local_state"] != "unbound" for g in groups):
+        raise ValueError("campaign_bound")
+    days = _days(campaign["start_date"], campaign["end_date"])
+    if days <= 0:
+        raise ValueError("dates_required")
+    daily_total = budget.daily_of(total, days)
+    assert daily_total is not None  # a known total over a positive length
+    _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
+    allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
+        "allocation") or []
+    after = budget.resplit(daily_total, groups, allocation)
+    changes = []
+    for group in groups:
+        before = float(group["daily_budget"])
+        ads_repo.update_group_fields(
+            conn, org_id, brand_id, group["id"], {"daily_budget": after[group["id"]]},
+        )
+        changes.append({
+            "group_id": group["id"], "role": group["role"],
+            "before": int(before) if before.is_integer() else before, "after": after[group["id"]],
+        })
+    new_planned = budget.total_of(sum(after.values()), days)
+    assert new_planned is not None  # a whole daily over a positive length
+    return changes, new_planned
+
+
 def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
     """草稿 -> `ready`：把已採用的策略角色分配展開成投放組／廣告。再跑一次（`status` 已經
     不是 `draft`）一律拒絕——第二次展開會讓已經綁定平台的節點變孤兒（§0）。"""
@@ -357,7 +402,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     days = _days(campaign["start_date"], campaign["end_date"])
     if days <= 0:
         raise ValueError("dates_required")
-    daily_total = round(float(campaign["budget_planned"]) / days)
+    # F48 Contract M: the whole daily the chosen total buys (`floor`, never above the total).
+    daily_total = budget.daily_of(campaign["budget_planned"], days)
+    assert daily_total is not None  # `budget_planned` and a positive length were checked above
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
     # F42: offers are judged against the campaign's sell-way (its price meets a policy's
@@ -442,12 +489,10 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。
-    weights = {str(i): (row["pct"] or 0) / 100 for i, row in enumerate(allocation)}
-    split_rows = budget.split(daily_total, weights)
-    amounts_by_index = {row["label"]: row["amount"] for row in split_rows}
-    amount_by_role = {
-        allocation[i]["role"]: amounts_by_index[str(i)] for i in range(len(allocation))
-    }
+    # F48 Contract M: adopt rounds the total -- `budget_planned := total_of(Σ group daily, days)`
+    # below, in this transaction, so `budget_total == budget_planned` after adopt.
+    amount_by_role = _role_amounts(allocation, daily_total)
+    adopted_total = budget.total_of(sum(amount_by_role.values()), days)
     groups_by_role = {group["role"]: group for group in validated_groups}
 
     declared_platform = (campaign.get("constraints_json") or {}).get("platform")
@@ -468,6 +513,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
                 customer_group_id=customer_group["id"] if customer_group else None,
             )
 
+    ads_repo.set_budget_planned(conn, org_id, brand_id, campaign_id, budget_planned=adopted_total)
     ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "ready")
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
