@@ -719,6 +719,39 @@ class LaunchViewTest(unittest.TestCase):
         self.assertIsNone(items["秋季預購"]["reason_code"])
         self.assertEqual(items["新客"]["state"], "verified")
 
+    def test_an_unknown_item_names_only_a_coded_reason(self):
+        self.approve()
+        self.report_all()
+        ad = self.items(self.readback())["禮盒主圖"]
+        stored = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+
+        def store(**extra):
+            evidence = {
+                k: v
+                for k, v in stored["evidence_json"].items()
+                if k not in {"readback", "reason_code"}
+            }
+            self.conn.execute(
+                "UPDATE ads_handoff_item SET status='unknown',evidence_json=%s WHERE id=%s",
+                (db.jsonb(evidence | extra), ad["id"]),
+            )
+            self.conn.commit()
+            return self.items(self.view())["禮盒主圖"]
+
+        # The check's general remark (no code) is not why the item waits: no reason, no time.
+        ad = store(message="只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。")
+        self.assertEqual(ad["state"], "unknown")
+        self.assertIsNone(ad["reason"])
+        self.assertIsNone(ad["reason_code"])
+        self.assertIsNone(ad["reason_at"])
+        # A coded read gap names itself, its sentence from the one table.
+        ad = store(
+            message=handoff_check.reason_text("landing_url_unread"),
+            reason_code="landing_url_unread",
+        )
+        self.assertEqual(ad["reason"], handoff_check.reason_text("landing_url_unread"))
+        self.assertEqual(ad["reason_code"], "landing_url_unread")
+
     def test_unreport_clears_a_report_until_the_item_is_verified(self):
         self.approve()
         campaign = self.items()["秋季預購"]

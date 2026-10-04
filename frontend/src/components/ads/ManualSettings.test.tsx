@@ -8,8 +8,9 @@ import { saveManualSettings } from "@/lib/adsLaunchApi";
 vi.mock("@/lib/adsLaunchApi", () => ({ saveManualSettings: vi.fn() }));
 vi.mock("@/lib/adsApi", () => ({ getCampaign: vi.fn() }));
 
-function campaign(value = ""): Pick<CampaignDetail, "id" | "status" | "manual_handoff"> {
-  return { id: "c1", status: "ready" as const, manual_handoff: {
+type Lifecycle = CampaignDetail["lifecycle"];
+function campaign(value = "", lifecycle: Lifecycle = { state: "draft", label: "草稿", can_close: false }): Pick<CampaignDetail, "id" | "lifecycle" | "manual_handoff"> {
+  return { id: "c1", lifecycle, manual_handoff: {
     fields: [
       { key: "audience_source", label: "受眾來源", section: "受眾", required: true },
       { key: "execution_notes", label: "執行備註", section: "技術設定", required: false },
@@ -153,6 +154,25 @@ it("groupId (F30-I08 per-group fold): only that group, in one 人工上架設定
   await waitFor(() => expect(document.activeElement).toBe(input));
   await user.type(input, "網站訪客");
   expect(screen.getByRole("button", { name: "人工上架設定 · 有未儲存變更" })).toBeTruthy();
+});
+
+it("F49 Contract L: a campaign whose served lifecycle is closed cannot edit or save its settings", async () => {
+  const user = userEvent.setup();
+  render(<ManualSettings draftScope={testScope} brandId="b1" onSaved={vi.fn()}
+    campaign={campaign("網站訪客", { state: "closed", label: "已結案", can_close: false })} />);
+  await user.click(screen.getByRole("button", { name: /人工上架設定與平台對應/ }));
+  await user.click(screen.getByRole("button", { name: "再行銷 · 已填設定" }));
+  expect((screen.getByRole("textbox", { name: "受眾來源 *" }) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "儲存這組設定" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("F49 Contract L: an ended campaign (not yet closed) still edits its settings", async () => {
+  const user = userEvent.setup();
+  render(<ManualSettings draftScope={testScope} brandId="b1" onSaved={vi.fn()}
+    campaign={campaign("網站訪客", { state: "ended", label: "已結束・待結案", can_close: true })} />);
+  await user.click(screen.getByRole("button", { name: /人工上架設定與平台對應/ }));
+  await user.click(screen.getByRole("button", { name: "再行銷 · 已填設定" }));
+  expect((screen.getByRole("textbox", { name: "受眾來源 *" }) as HTMLInputElement).disabled).toBe(false);
 });
 
 it("groupId of a group without manual settings renders nothing", () => {

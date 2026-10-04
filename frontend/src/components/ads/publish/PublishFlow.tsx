@@ -92,6 +92,13 @@ export function readFailedText(at: string | null | undefined, reason: string): s
   return at ? `${formatSyncTime(at)} 讀回時讀不到：${reason}` : reason;
 }
 
+/** F49 Contract B: the reason an item prints on the platform and verify steps — the served `reason` of an item still
+ * waiting on a read (`built` or `unknown`). The backend serves an `unknown` item's reason only when it carries its code
+ * (`launch_view._reason`), so the check's general remark never reads as a failure here. */
+export function readbackReason(item: LaunchItem): string | null {
+  return awaitsReadback(item.state) ? item.reason : null;
+}
+
 /** `pubHead()`: step dots (earlier steps link back), the campaign chip with 〈launchLabel〉・N 項, title, purpose. */
 export function PublishHead({ brandId, campaignId, current, name, view, title, purpose, aside }: {
   brandId: string; campaignId: string; current: number; name: string; view: LaunchView; title: string; purpose: string; aside?: ReactNode;

@@ -111,6 +111,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
   const cap = capTile(campaign, s.cap);
   const missing = view.deferred_ads.length;
   const daily = formatAmount(s.daily_total);
+  const confirms = view.approval_confirms ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -125,7 +126,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
 
       {month && (
         <BudgetFitCard read={monthRead(month)} month={month.month} extra={month.extra} premiseChanged={false} busy={false}
-          onRecheck={() => {}} budgetHref={monthlyBudgetHref(brandId)}
+          onRecheck={() => {}} budgetHref={monthlyBudgetHref(brandId)} returnTo={publishPath(brandId, campaignId, "list")}
           launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy`, extraBasis: month.extra_basis ?? null }} />
       )}
 
@@ -155,6 +156,13 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
             </CopyFields>
           </TodoRow>
         ))}
+        {/* F49 Contract B (decision 5): what no platform read can see, said once, before 核准 — approving is the
+            confirmation; the readback never asks for these again. */}
+        {!approved && confirms.length > 0 && (
+          <p data-slot="approval-confirms" className="mt-1 border-t border-border pt-3 text-xs text-muted-foreground">
+            平台讀不到這幾項，核准就代表上架時照這樣設：{confirms.map((c) => c.label).join("、")}
+          </p>
+        )}
       </section>
 
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}

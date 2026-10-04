@@ -1,7 +1,3 @@
-/** oneRuler.test.ts pending entries that F49-I12 removes (F49 lead split). Empty or delete when done. */
-export const lifecycle = [
-  { rule: "lifecycle", file: "components/ads/ManualSettings.tsx", issue: "F49-I12" },
-];
-export const stateWords = [
-  { file: "components/ads/publish/PublishVerify.tsx", issue: "F49-I12" },
-];
+/** oneRuler.test.ts pending entries that F49-I12 removes (F49 lead split). Emptied by F49-I12: the readback prints the
+ * served `state_label`, and the manual settings lock on the served lifecycle. */
+export {};
