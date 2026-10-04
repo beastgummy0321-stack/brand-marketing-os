@@ -356,6 +356,16 @@ describe("到平台完成", () => {
     expect(await screen.findByRole("heading", { name: "讀回核對" })).toBeTruthy();
   });
 
+  it("F49 Contract B: an item waiting on a read prints its served reason here too; one without a reason prints none", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
+      h2: { state: "unknown", reason: "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。", reason_code: "audience_unread" },
+      h3: { state: "unknown", reason: null, reason_code: null, unreadable: [{ key: "copy.headline", label: "標題", confirmed: false }] },
+    }));
+    renderAt("platform");
+    expect(await screen.findByText("這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。")).toBeTruthy();
+    expect(document.querySelectorAll("p.text-warning")).toHaveLength(1);
+  });
+
   it("a failed readback keeps the page and says so", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "built" } }));
     vi.mocked(readbackLaunch).mockRejectedValue(new Error("平台上的物件太多，這次沒有讀完，請稍後再讀回一次。"));
@@ -495,19 +505,45 @@ describe("讀回核對", () => {
     expect(screen.getAllByText("核准時已確認")).toHaveLength(1);
   });
 
-  it("an unknown item prints its coded reason; the check's general remark is no reason", async () => {
+  /** F49 Contract B: what `launch_view._reason` serves — an `unknown` item carries its coded sentence; one whose check
+   * only left an eye field (no code) serves no reason at all. */
+  const CODED = { state: "unknown" as const, state_label: "待確認", reason: "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。", reason_code: "audience_unread" };
+  const CODED_AD = { state: "unknown" as const, state_label: "待確認", reason: "這次讀回沒讀到廣告連到的網址，請稍後再讀回一次。", reason_code: "landing_url_unread" };
+
+  it("an unknown item prints its coded reason; an eye-only unknown item prints none", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
-      h1: { state: "verified", state_label: "相符" },
-      h2: { state: "unknown", state_label: "待確認", reason: "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。", reason_code: "audience_unread" },
-      h3: { state: "unknown", state_label: "待確認", reason: "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。", reason_code: null,
-        unreadable: [{ key: "copy.headline", label: "標題", confirmed: false }] },
+      h1: { state: "verified", state_label: "相符" }, h2: CODED,
+      h3: { state: "unknown", state_label: "待確認", reason: null, reason_code: null, unreadable: [{ key: "copy.headline", label: "標題", confirmed: false }] },
     }, read));
     renderAt("verify");
     expect(await screen.findByText("這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。")).toBeTruthy();
-    expect(screen.queryByText(/只記本次物件/)).toBeNull();
+    expect(document.querySelectorAll("[data-slot=readback-error]")).toHaveLength(1);
     expect(screen.getAllByText("待確認")).toHaveLength(2);
-    // The bar names no reason the payload did not give.
-    expect(screen.getByRole("group", { name: "全部標記" }).textContent).not.toContain("只記本次物件");
+    // An eye field is still open on h3: the primary is not 重新讀回 alone.
+    expect(screen.getByRole("group", { name: "全部標記" }).textContent).toBe("1 項讀不到我在 Meta 都看過了，全部標記逐項標記");
+  });
+
+  it("every open item read without an answer for a coded reason, nothing to build: the primary is 重新讀回", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified", state_label: "相符" }, h2: CODED, h3: CODED_AD }, read));
+    vi.mocked(readbackLaunch).mockResolvedValue(approvedView({
+      h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "verified" },
+    }, read));
+    renderAt("verify");
+    expect(await screen.findByText("1／3 已核對")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "繼續建剩下的 →" })).toBeNull();
+    const again = screen.getAllByRole("button", { name: "⟳ 重新讀回" });
+    expect(again).toHaveLength(1); // the primary itself, no outline twin
+    fireEvent.click(again[0]);
+    await waitFor(() => expect(readbackLaunch).toHaveBeenCalledWith("brd_1", "cmp_1"));
+    expect(await screen.findByText("3 項都和核准的一樣")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "回活動總覽 →" })).toBeTruthy();
+  });
+
+  it("an item still to build keeps 繼續建剩下的 even beside a coded unknown item", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: CODED, h3: { state: "todo", state_label: "還沒建" } }, read));
+    renderAt("verify");
+    expect(await screen.findByRole("link", { name: "繼續建剩下的 →" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "⟳ 重新讀回" })).toHaveLength(1);
   });
 
   it("重新讀回 reads the batch again in place", async () => {

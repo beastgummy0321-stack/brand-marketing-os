@@ -92,13 +92,11 @@ export function readFailedText(at: string | null | undefined, reason: string): s
   return at ? `${formatSyncTime(at)} 讀回時讀不到：${reason}` : reason;
 }
 
-/** F49 Contract B: the reason an item prints. A `built` item prints the batch readback's note; an `unknown` item only
- * its coded reason (`reason_code`, one of `READBACK_REASONS`) — without a code the stored text is the check's general
- * remark, not why the item is waiting (drill 11 printed it as a failure under every item). */
+/** F49 Contract B: the reason an item prints on the platform and verify steps — the served `reason` of an item still
+ * waiting on a read (`built` or `unknown`). The backend serves an `unknown` item's reason only when it carries its code
+ * (`launch_view._reason`), so the check's general remark never reads as a failure here. */
 export function readbackReason(item: LaunchItem): string | null {
-  if (!item.reason) return null;
-  if (item.state === "built") return item.reason;
-  return item.state === "unknown" && item.reason_code ? item.reason : null;
+  return awaitsReadback(item.state) ? item.reason : null;
 }
 
 /** `pubHead()`: step dots (earlier steps link back), the campaign chip with 〈launchLabel〉・N 項, title, purpose. */

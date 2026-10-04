@@ -5,7 +5,7 @@ import { reportHandoff } from "@/lib/adsHandoffApi";
 import { fetchLaunchView, readbackLaunch, unreportLaunchItem, type LaunchItem, type LaunchView } from "@/lib/adsLaunchApi";
 import { ActionBar, Chip, CopyField, CopyFields, Disclosure, ResultHero, TodoRow } from "../patterns";
 import { LaunchSettingsCopy } from "./LaunchSettingsCopy";
-import { ItemTitle, LaunchProgress, PublishHead, awaitsReadback, campaignPath, fieldText, type LaunchPlatform } from "./PublishFlow";
+import { ItemTitle, LaunchProgress, PublishHead, awaitsReadback, campaignPath, fieldText, readbackReason, type LaunchPlatform } from "./PublishFlow";
 
 /** F30-I13 step 2 (prototype v10 `pubPlatform()`, hash `pub/fall/platform`): open the platform's ads manager (an
  * external link only), the progress card, the approved launch settings to copy (F29 `LaunchSettingsCopy`), then one
@@ -52,6 +52,7 @@ export function PublishPlatform({ brandId, campaignId, name, view, platform, onV
   const row = (item: LaunchItem, index: number) => {
     const done = item.state === "verified";
     const byKey = new Map(item.fields.map((f) => [f.key, f]));
+    const reason = readbackReason(item);
     const action = done ? <Chip tone="ok">已核對</Chip>
       : awaitsReadback(item.state) ? <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void unreport(item)}>{busy === item.id ? "取消中…" : "取消"}</Button>
       : <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void report(item)}>
@@ -64,7 +65,7 @@ export function PublishPlatform({ brandId, campaignId, name, view, platform, onV
             <Chip key={m.key} tone="warn">不符：{(byKey.get(m.key)?.label ?? m.label)}平台是 {m.observed === null ? "讀不到" : fieldText(m.observed)}</Chip>
           ))}
         </ItemTitle>
-        {item.reason && !done && <p className="mt-1 text-xs text-warning">{item.reason}</p>}
+        {reason && <p className="mt-1 text-xs text-warning">{reason}</p>}
         {!done && (
           <CopyFields>
             {item.fields.map((f) => <CopyField key={f.key} label={f.label} value={fieldText(f.value)} />)}

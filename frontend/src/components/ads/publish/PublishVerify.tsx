@@ -104,10 +104,19 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
         : <ResultHero tone="neutral" mark={String(ok)} title={`${ok}／${n} 已核對`}
           note={[todo ? `還有 ${todo} 項沒建` : null, n - ok - todo ? `${n - ok - todo} 項待讀回或確認` : null, at].filter(Boolean).join("・")} />;
 
+  // Nothing left to build or fix and every item still open was read without an answer for a coded reason (a read gap,
+  // never a build step): the way forward is reading again, not 繼續建剩下的 (drill 11, B/p1-ad-error3-pending2).
+  const open = view.items.filter((i) => i.state !== "verified");
+  const readAgainOnly = !all && dev + nDiff === 0 && todo === 0 && open.length > 0
+    && open.every((i) => i.state === "unknown" && Boolean(i.reason_code));
+  const readAgainLabel = busy === "readback" ? "讀回中…" : "⟳ 重新讀回";
+
   const primary = all
     ? <Button asChild><Link to={campaignPath(brandId, campaignId)}>回活動總覽 →</Link></Button>
     : dev + nDiff > 0
       ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>回平台改 →</Link></Button>
+      : readAgainOnly
+        ? <Button disabled={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>
       : todo + awaiting > 0 || unread === 0
         ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>繼續建剩下的 →</Link></Button>
         : <Button disabled>回活動總覽 →</Button>;
@@ -179,7 +188,8 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
 
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <ActionBar back={{ label: "到平台完成", to: publishPath(brandId, campaignId, "platform") }} hint={waitingOnEye ? "全部核對完才算上架完成" : undefined}>
-        <Button variant="outline" disabled={busy !== null} onClick={() => void readAgain()}>{busy === "readback" ? "讀回中…" : "⟳ 重新讀回"}</Button>
+        {/* When reading again is the primary action, it is the one button (no second outline twin). */}
+        {!readAgainOnly && <Button variant="outline" disabled={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>}
         {primary}
       </ActionBar>
     </div>

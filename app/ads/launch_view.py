@@ -282,7 +282,10 @@ def _reason(row, state):
     if state == "built":
         return note
     if state == "unknown":
-        return note or evidence.get("message")
+        # F49 Contract B: the check's message is a reason only when it carries its code (a
+        # `READBACK_REASONS` sentence). Without one it is the check's general remark
+        # ("只記本次物件與設定核對…"), which drill 11 printed as the failure under every item.
+        return note or (evidence.get("message") if evidence.get("reason_code") else None)
     return None
 
 
