@@ -94,24 +94,38 @@ describe("StructureTab (F30-I08)", () => {
     expect(document.querySelectorAll("[data-slot=grade-rules]")).toHaveLength(1);
   });
 
-  it("draft: planned ads have no grade or cost; missing material is the dashed 缺素材 tile; a null thumbnail is the grey tile", async () => {
+  it("draft (F49 Contract T): each planned ad's material cell is its served slot_label; no grade or cost; missing_material is never read", async () => {
+    const planned = (o: Partial<StructureAd>) => ad({ entity_id: null, grade: null, grade_label: null, cost_per_result: null, spend: null, results: null, ...o });
     vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [
       { group_id: "g_a", name: "A・廣泛受眾", daily_budget: 500, ads: [
-        ad({ entity_id: null, name: "晨光隨行杯（秋季新色）", thumbnail_url: null, grade: null, grade_label: null, cost_per_result: null, spend: null, results: null }),
-        ad({ ad_id: "ad_2", entity_id: null, name: "第四則", thumbnail_url: null, grade: null, grade_label: null, cost_per_result: null, spend: null, results: null, missing_material: true }),
+        // `missing_material` is stale on purpose: the screen prints the slot state, not the compatibility key.
+        planned({ ad_id: "ad_1", name: "晨光隨行杯（秋季新色）", thumbnail_url: "/t/1.png", slot_state: "ready", slot_label: "已確認", missing_material: true }),
+        planned({ ad_id: "ad_2", name: "第四則", thumbnail_url: null, slot_state: "missing", slot_label: "缺", missing_material: true }),
+        planned({ ad_id: "ad_3", name: "訓練前不用配水", thumbnail_url: null, slot_state: "waiting", slot_label: "等你", missing_material: true }),
+        planned({ ad_id: "ad_4", name: "訓練前免沖泡優惠價", thumbnail_url: "/t/4.png", slot_state: "blocked", slot_label: "卡住", missing_material: true }),
+        planned({ ad_id: "ad_5", name: "段考前一次備妥", thumbnail_url: null, slot_state: "failed", slot_label: "失敗", missing_material: true }),
+        // The slot read failed: no state served — the name alone, never a guessed word.
+        planned({ ad_id: "ad_6", name: "讀不到格子的那則", thumbnail_url: null, slot_state: null, slot_label: null, missing_material: false }),
       ] },
     ] });
     render(<StructureTab brandId="brd_1" campaign={campaign({ name: "秋季新色預購", cap: { ...campaign().cap, value: null, basis: null } })} planKey="k" />);
 
-    const planned = (await screen.findByText("晨光隨行杯（秋季新色）")).closest("li") as HTMLElement;
-    expect(planned.getAttribute("data-variant")).toBe("ad");
-    expect(planned.querySelector("[data-slot=chip]")).toBeNull();
-    expect(planned.querySelector("img")).toBeNull();
-    expect(planned.querySelector("div[aria-hidden=true]")).not.toBeNull();
-    const missing = screen.getByText("缺素材").closest("li") as HTMLElement;
-    expect(missing.getAttribute("data-variant")).toBe("missing");
-    expect(screen.queryByText("第四則")).toBeNull();
-    expect(screen.getByText("每日 500・2 則")).toBeTruthy();
+    const chipOf = (name: string) => leaf(name).querySelector("[data-slot=chip]") as HTMLElement | null;
+    const ready = (await screen.findByText("晨光隨行杯（秋季新色）")).closest("li") as HTMLElement;
+    expect(ready.getAttribute("data-variant")).toBe("ad");
+    expect(ready.querySelector("img")?.getAttribute("src")).toBe("/t/1.png");
+    expect([chipOf("晨光隨行杯（秋季新色）")?.textContent, chipOf("晨光隨行杯（秋季新色）")?.dataset.tone]).toEqual(["已確認", "ok"]);
+    // Not ready without a picture: the dashed tile beside the ad's own name, and the served chip.
+    expect(leaf("第四則").getAttribute("data-variant")).toBe("missing");
+    expect([chipOf("第四則")?.textContent, chipOf("第四則")?.dataset.tone]).toEqual(["缺", "warn"]);
+    expect([chipOf("訓練前不用配水")?.textContent, chipOf("訓練前不用配水")?.dataset.tone]).toEqual(["等你", "warn"]);
+    expect([chipOf("段考前一次備妥")?.textContent, chipOf("段考前一次備妥")?.dataset.tone]).toEqual(["失敗", "bad"]);
+    // Not ready with a picture: the picture stays, the chip says why it is not ready.
+    expect(leaf("訓練前免沖泡優惠價").querySelector("img")?.getAttribute("src")).toBe("/t/4.png");
+    expect([chipOf("訓練前免沖泡優惠價")?.textContent, chipOf("訓練前免沖泡優惠價")?.dataset.tone]).toEqual(["卡住", "bad"]);
+    expect(chipOf("讀不到格子的那則")).toBeNull();
+    expect(screen.queryByText("缺素材")).toBeNull();
+    expect(screen.getByText("每日 500・6 則")).toBeTruthy();
     expect(screen.getByText("每日 500・購買")).toBeTruthy();
     expect(screen.queryByText("未判斷")).toBeNull();
   });

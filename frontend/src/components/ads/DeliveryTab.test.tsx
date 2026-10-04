@@ -345,7 +345,8 @@ describe("DeliveryTab（F06-I02）", () => {
 
   it("status live：打開這一組的進階後看得到未綁定徽章", async () => {
     const user = userEvent.setup();
-    renderTab(campaign({ status: "live" }));
+    // F49 Contract L: on a platform is the served lifecycle, not the stored status.
+    renderTab(campaign({ status: "live", lifecycle: { state: "live", label: "投放中", can_close: true } }));
 
     await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
 
@@ -354,11 +355,56 @@ describe("DeliveryTab（F06-I02）", () => {
 
   it("status ready、沒有發布動作：打開這一組的進階後看不到綁定徽章", async () => {
     const user = userEvent.setup();
-    renderTab(campaign({ status: "ready" }));
+    renderTab(campaign({ status: "ready", lifecycle: { state: "draft", label: "草稿", can_close: false } }));
 
     await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
 
     expect(screen.queryByText("未綁定")).toBeNull();
+  });
+
+  it("F49 Contract T: 開始做素材 answered nothing_to_prepare is an outcome — the bar says so and offers the next step, no error, no tab jump", async () => {
+    const user = userEvent.setup();
+    vi.mocked(dispatchPack).mockResolvedValue(null);
+    const carried = campaign({ asset_readiness: { ready_count: 2, total: 2, pack_id: null } });
+    vi.mocked(getCampaign).mockResolvedValue(carried);
+    const { onCampaignChange, onChangeTab } = renderTab(campaign());
+
+    await user.click(barButton("開始做素材 →"));
+
+    expect(dispatchPack).toHaveBeenCalledTimes(1);
+    expect(onCampaignChange).toHaveBeenCalledWith(carried);
+    expect(within(actionBar()).getByRole("status").textContent).toBe("這期的素材都沿用上一期，不用準備");
+    expect(within(actionBar()).queryByRole("alert")).toBeNull();
+    expect(onChangeTab).not.toHaveBeenCalled();
+  });
+
+  it("nothing_to_prepare then the next step: with every ad ready the bar leads to publish, never a second hand-off", async () => {
+    const user = userEvent.setup();
+    vi.mocked(dispatchPack).mockResolvedValue(null);
+    const carried = campaign({ asset_readiness: { ready_count: 2, total: 2, pack_id: null } });
+    vi.mocked(getCampaign).mockResolvedValue(carried);
+    const onChangeTab = vi.fn();
+    const view = renderTab(campaign(), vi.fn(), onChangeTab);
+    await user.click(barButton("開始做素材 →"));
+    // The workspace hands the re-read campaign back down.
+    view.rerender(<MemoryRouter><DeliveryTab brandId="brd_1" campaign={carried} onCampaignChange={vi.fn()} onChangeTab={onChangeTab} /></MemoryRouter>);
+    expect(within(actionBar()).getByRole("status").textContent).toBe("這期的素材都沿用上一期，不用準備");
+    expect(within(actionBar()).queryByRole("button", { name: "開始做素材 →" })).toBeNull();
+    await user.click(barButton("發布 →"));
+    expect(onChangeTab).toHaveBeenCalledWith("publish");
+    expect(dispatchPack).toHaveBeenCalledTimes(1);
+  });
+
+  it("nothing_to_prepare with a read that still says hand-off: the bar leads to the 素材 tab", async () => {
+    const user = userEvent.setup();
+    vi.mocked(dispatchPack).mockResolvedValue(null);
+    vi.mocked(getCampaign).mockResolvedValue(campaign());
+    const { onChangeTab } = renderTab(campaign());
+    await user.click(barButton("開始做素材 →"));
+    expect(within(actionBar()).queryByRole("button", { name: "開始做素材 →" })).toBeNull();
+    await user.click(barButton("前往素材 →"));
+    expect(onChangeTab).toHaveBeenCalledWith("assets");
+    expect(dispatchPack).toHaveBeenCalledTimes(1);
   });
 
   it("結構有未存變更時攔下分頁下一步，並註冊瀏覽器離開保護", async () => {
@@ -471,7 +517,7 @@ it("uses the existing structure tree for native groups and keeps native edits un
   const user = userEvent.setup();
   const native = {
     id: "native-group", platform: "meta", source_account: "account", native_kind: "adset", native_id: "native-42",
-    native_label: null, name: "真實平台投放組", parent_native_id: "native-campaign", native_status: "ACTIVE",
+    native_label: null, name: "真實平台投放組", parent_native_id: "native-campaign", native_status: "ACTIVE", delivery_label: "投放中",
     start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {},
     currency: null, last_success_at: null, sync_error: null, creative: {},
   };
@@ -485,6 +531,9 @@ it("uses the existing structure tree for native groups and keeps native edits un
   expect(screen.getByRole("button", {name: "新增節點"}).hasAttribute("disabled")).toBe(true);
   await user.click(screen.getByRole("button", {name: /真實平台投放組/}));
   expect(screen.getByText("平台 ID：native-42")).toBeTruthy();
+  // F49 Contract L: the served delivery word, never the platform's own code.
+  expect(screen.getByText("狀態：投放中")).toBeTruthy();
+  expect(screen.queryByText(/ACTIVE/)).toBeNull();
   expect(screen.getByText("預算：未知")).toBeTruthy();
   expect(screen.getByRole("button", {name: "儲存"}).hasAttribute("disabled")).toBe(true);
   expect(screen.queryByText("採用時的計畫")).toBeNull();

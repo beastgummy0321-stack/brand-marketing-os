@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -104,6 +104,32 @@ it("a failed request list read is ReadFailed with 重試, and a new refreshKey r
   expect(api.listMaterialTasks).toHaveBeenCalledTimes(2);
   view.rerender(<MemoryRouter initialEntries={["/"]}><MaterialTasksPanel brandId="brand_a" campaignId="campaign_a" refreshKey={1} /></MemoryRouter>);
   await waitFor(() => expect(api.listMaterialTasks).toHaveBeenCalledTimes(3));
+});
+
+it("F49 Contract T: a hand-off left unknown prints the served state and offers 重新交給工作台 — the same dispatch call, never a disabled button", async () => {
+  const user = userEvent.setup();
+  const stuck = { ...task, id: "task_w", mode: "workbench_image" as const, title: "請工作台準備新圖", pack_id: "pack_1", dispatch_status: "unknown" as const, state_label: "交棒沒送出・可重試" };
+  const queued = { ...stuck, dispatch_status: "queued" as const, state_label: "工作檯製作中" };
+  vi.mocked(api.listMaterialTasks).mockResolvedValueOnce({ tasks: [stuck] }).mockResolvedValue({ tasks: [queued] });
+  vi.mocked(api.saveMaterialOperation).mockResolvedValue({ task: queued });
+  render(page());
+  // The saved-request list reads the served word too: an unknown hand-off with a pack is never 「工作台已交接」.
+  const row = await screen.findByRole("button", { name: /請工作台準備新圖 · 版本 1/ });
+  expect(within(row).getByText("交棒沒送出・可重試")).toBeTruthy();
+  expect(within(row).queryByText("工作台已交接")).toBeNull();
+  await user.click(row);
+  expect(screen.getByText("目前：交棒沒送出・可重試")).toBeTruthy();
+  expect(screen.queryByText(/請先重新讀取/)).toBeNull();
+  const retry = screen.getByRole("button", { name: "重新交給工作台" });
+  expect(retry).toHaveProperty("disabled", false);
+  await user.click(retry);
+  await waitFor(() => expect(api.saveMaterialOperation).toHaveBeenCalledTimes(1));
+  const call = vi.mocked(api.saveMaterialOperation).mock.calls[0][0];
+  expect(call.path).toBe(`${api.materialPath("brand_a", "campaign_a")}/task_w/dispatch`);
+  expect(call.body).toMatchObject({ expected_revision: 1, content_hash: stuck.content_hash });
+  // Queued now: the request's served word, and the way to its pack.
+  expect(await screen.findByText("目前：工作檯製作中")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "前往本次工作台任務" }).getAttribute("href")).toBe("/brands/brand_a/workbench/packs/pack_1");
 });
 
 it("F47-I06: 「新增素材需求」 shows only while an editor is open, and brings the request cards back with focus on the first", async () => {

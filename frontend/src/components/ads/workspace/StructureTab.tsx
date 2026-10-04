@@ -7,12 +7,14 @@ import {
   Chip, GradeRules, GradeTermChip, MoneyTag, ReadFailed, Term, TreeRows, formatAmount, gradeWord, useAdsRules,
   type AdsRules, type TreeGroup, type TreeLeaf,
 } from "../patterns";
+import { STATE_TONE } from "./SlotTiles";
 
 /** v10 (F30-I08) the structure tab's tree (prototype `tabStructure()`): campaign → ad groups (每日・N 則) → ads, from
  * `GET …/structure` (app-built: plan groups; imported: platform ad sets). A leaf on a platform shows its grade chip (or
  * 關閉中 while an approved pause is unconfirmed, dimmed) and its cost per result with the money fact: 沒賣出 prints
  * 「0 筆」, a thin sample prints its label, an unknown cost prints 「—」 (never 0). A planned ad not on a platform yet
- * shows no grade; one without ready material is the dashed 缺素材 tile. The grade legend shows once, under the tree.
+ * shows no grade but its slot's served chip (`slot_label`, F49 Contract T); one not ready without a picture keeps the
+ * dashed tile beside its name. The grade legend shows once, under the tree.
  * A failed read is `ReadFailed` with 重試; the editors below the card stay usable. `planKey` re-reads the tree after a
  * plan edit (a new group, a renamed ad, a new daily budget). */
 
@@ -36,9 +38,15 @@ function leafValue(a: StructureAd, breakEven: number | null, rules: AdsRules | n
 
 function leafOf(a: StructureAd, i: number, breakEven: number | null, rules: AdsRules | null): TreeLeaf {
   const key = a.entity_id ?? a.ad_id ?? `ad-${i}`;
-  if (a.missing_material) return { key, name: a.name, thumbnailUrl: null, missing: true };
-  // Not on a platform yet: nothing to grade, nothing spent.
-  if (a.entity_id === null) return { key, name: a.name, thumbnailUrl: a.thumbnail_url };
+  // Not on a platform yet: nothing to grade, nothing spent. F49 Contract T: its material cell is the slot's served
+  // chip (`slot_label`, from the one slot read); a slot not ready with no picture yet keeps the dashed tile beside the
+  // ad's name. A failed slot read serves no state: the name alone, never a guessed word.
+  if (a.entity_id === null) {
+    const state = a.slot_state ?? null;
+    const chip = state && a.slot_label ? <Chip tone={STATE_TONE[state]}>{a.slot_label}</Chip> : undefined;
+    if (state && state !== "ready" && !a.thumbnail_url) return { key, name: a.name, thumbnailUrl: null, missing: true, missingLabel: a.name, chip };
+    return { key, name: a.name, thumbnailUrl: a.thumbnail_url, chip };
+  }
   return {
     key, name: a.name, thumbnailUrl: a.thumbnail_url, dimmed: a.closing,
     chip: a.closing ? <Chip>關閉中</Chip> : <GradeTermChip grade={a.grade} label={a.grade_label} reasonCode={a.reason_code} />,

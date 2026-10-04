@@ -111,6 +111,7 @@ export function DeliveryTab({
   const [deleting, setDeleting] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [nothingToPrepare, setNothingToPrepare] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
   // One manual-settings panel per group fold; each reports its own dirty state.
   const [manualDirty, setManualDirty] = useState<Record<string, boolean>>({});
@@ -209,11 +210,19 @@ export function DeliveryTab({
 
   // §6.2 決議 15：交棒只用 dispatchPack + getCampaign，永遠不交棒第二次。失敗先重讀一次，
   // 發現別處已經交棒（pack_id 已存在）就當作成功繼續走，不比對錯誤文字。
+  // F49 Contract T: a pack route that answers `nothing_to_prepare` (pack_id null — every ad carries last period's
+  // material) is an outcome, not an error: the bar says so and offers the next step instead of leaving the tab.
   async function handleDispatch() {
     setDispatching(true);
     setDispatchError(null);
+    setNothingToPrepare(false);
     try {
-      await dispatchPack(brandId, c.id);
+      const packId = await dispatchPack(brandId, c.id);
+      if (packId === null) {
+        setNothingToPrepare(true);
+        try { onCampaignChange(await getCampaign(brandId, c.id)); } catch { /* the step below still leads on */ }
+        return;
+      }
       onCampaignChange(await getCampaign(brandId, c.id));
       onChangeTab("assets");
     } catch (err) {
@@ -236,7 +245,11 @@ export function DeliveryTab({
   const step = nextStep(c);
   // F35 ruling 3: the material hand-off is the bar's primary on a planned campaign, not a button in the 進階 fold.
   // 「開始做素材 →」 dispatches the pack once; after that 「前往素材 →」. An imported campaign keeps the plain bar.
-  const barStep = !imported && (step.id === "dispatch" || step.id === "make_assets") ? step.id : null;
+  const barStep = !imported && !nothingToPrepare && (step.id === "dispatch" || step.id === "make_assets") ? step.id : null;
+  // After `nothing_to_prepare` the bar's primary is the campaign's next step (publish once every ad is ready); a read
+  // that still says "dispatch" leads to the 素材 tab, never to a second hand-off.
+  const carriedStep: { target: StepTarget; label: string } | null = !nothingToPrepare ? null
+    : step.id === "dispatch" ? { target: "assets", label: "前往素材 →" } : { target: step.target, label: step.label };
 
   if (!imported && c.groups.length === 0) {
     return (
@@ -259,8 +272,9 @@ export function DeliveryTab({
 
   const adCount = c.groups.reduce((sum, g) => sum + g.ads.length, 0);
   // 同 `PublishPage.tsx` 的判斷：已投放過 or 已經有一筆 campaign 層級的發布動作，兩種都算「綁定過」。
+  // F49 Contract L: on a platform = the served lifecycle is past draft (never the stored status).
   const published =
-    ["live", "ended", "closed"].includes(c.status) ||
+    (c.lifecycle !== undefined && c.lifecycle.state !== "draft") ||
     c.actions.some((a) => a.kind === "publish" && a.target_kind === "campaign");
 
   function nativeBudget(row: typeof nativeCampaign) {
@@ -463,7 +477,7 @@ export function DeliveryTab({
                   entity.native_kind === "ad" ? "pl-12" : entity.native_kind === "adset" ? "pl-6" : "pl-2",
                   entity.native_kind === "ad" ? <FileText size={12} /> : <Folder size={13} />,
                   entity.name ?? entity.native_id,
-                  <Badge variant="outline">{entity.native_status ?? "狀態未知"}</Badge>,
+                  <Badge variant="outline">{entity.delivery_label ?? "平台狀態不明"}</Badge>,
                 ))}
                 {!imported && c.groups.map((g) => (
                   <div key={g.id} className="flex items-center gap-2 py-1.5 pl-6 text-sm">
@@ -481,7 +495,7 @@ export function DeliveryTab({
                 <div className="surface-body flex flex-col gap-3 text-sm">
                   <p>平台 ID：{selectedNative.native_id}</p>
                   <p>上層 ID：{selectedNative.parent_native_id ?? "無"}</p>
-                  <p>狀態：{selectedNative.native_status ?? "未知"}</p>
+                  <p>狀態：{selectedNative.delivery_label ?? "平台狀態不明"}</p>
                   <p>預算：{nativeBudget(selectedNative)}</p>
                   {Object.keys(selectedNative.budget_raw ?? {}).length > 0 && <p>平台原始預算（未換算）：{JSON.stringify(selectedNative.budget_raw)}</p>}
                   <p>期間：{selectedNative.start_date ?? "開始未知"} – {selectedNative.end_date ?? "結束未知"}</p>
@@ -514,6 +528,12 @@ export function DeliveryTab({
           </>
         )}
         {barStep === "make_assets" && <Button onClick={() => requestTabChange("assets")}>前往素材 →</Button>}
+        {carriedStep && (
+          <>
+            <p role="status" className="text-sm">這期的素材都沿用上一期，不用準備</p>
+            <Button onClick={() => requestTabChange(carriedStep.target)}>{carriedStep.label}</Button>
+          </>
+        )}
       </ActionBar>
 
       {addGroupOpen && (

@@ -274,9 +274,13 @@ function importedView(): NonNullable<CampaignDetail["external_view"]> {
 it("原生廣告在原素材表查看，不呼叫內部就緒 API 或建立假工作檯連結", async () => {
   vi.mocked(getAssets).mockClear();
   const view = importedView();
-  view.entities.push({ ...view.entities[0], id: "native-ad", native_id: "ad", native_kind: "ad", name: "平台廣告素材", parent_native_id: "root", creative: { kind: "image", fields: { body: "平台原文案" } } });
+  view.entities.push({ ...view.entities[0], id: "native-ad", native_id: "ad", native_kind: "ad", name: "平台廣告素材", parent_native_id: "root", delivery_label: "所屬活動已暫停", creative: { kind: "image", fields: { body: "平台原文案" } } });
   const { onChangeTab } = renderTab(campaign({ origin: "imported", external_view: view, groups: [], asset_readiness: { total: 0, ready_count: 0 } }));
   expect(await screen.findByText("平台廣告素材")).toBeTruthy();
+  // F49 Contract L: the platform ad's served delivery word, never the platform's own code.
+  const row = screen.getByText("平台廣告素材").closest("tr") as HTMLElement;
+  expect(row.textContent).toContain("所屬活動已暫停");
+  expect(row.textContent).not.toContain("PAUSED");
   expect(screen.getByRole("table")).toBeTruthy();
   expect(screen.queryByText("素材已就位")).toBeNull();
   expect(screen.queryByRole("link", { name: "素材組" })).toBeNull();

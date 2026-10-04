@@ -9,10 +9,10 @@ import { getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignS
 import { createUploadBatch, putUpload } from "@/lib/adsUserAssetsApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { useWorkerHealth } from "@/lib/useWorkerHealth";
-import { ActionBar, Chip, ProgressSegments, ReadFailed, SlotGrid, SlotTile, Thumb, type SegmentState } from "../patterns";
+import { ActionBar, Chip, ProgressSegments, ReadFailed, SlotGrid, SlotTile, Thumb, type ChipTone, type SegmentState } from "../patterns";
 import {
-  BlockedSlot, CopyEditor, CopyOnlySlot, CopyPicker, flatSlots, ImageOnlySlot, isVideoSlot, MissingSlot, ReadySlot, useShownThumbnail,
-  VIDEO_NEEDED, WaitingSlot, type Checked,
+  BlockedSlot, CopyEditor, CopyOnlySlot, CopyPicker, FailedSlot, flatSlots, ImageOnlySlot, isVideoSlot, MissingSlot, ReadySlot,
+  STATE_TONE, useShownThumbnail, VIDEO_NEEDED, WaitingSlot, type Checked,
 } from "./SlotTiles";
 import { isDraftCampaign } from "./WorkspaceHead";
 
@@ -50,12 +50,22 @@ import { isDraftCampaign } from "./WorkspaceHead";
  * 卡住／等你／處理中, each state has its progress colour, the draft bar says 「〈counts〉：好了才會進上架清單」 and only
  * 處理中 keeps the poll alive. The tiles and dialogs live in `SlotTiles.tsx`.
  * F47 Contract C: while a slot is 處理中 and the background worker is stopped, the worker-stopped notice sits above the
- * slots (the slot states stay as the server says); 再檢查一次 re-reads the worker and the slots. */
+ * slots (the slot states stay as the server says); 再檢查一次 re-reads the worker and the slots.
+ * F49 Contract T (W10): every tile prints the served `state_label`／`state_text`; the head's count chips are one per
+ * served label; a retrying preview polls like a running one; a failed copy generation offers the workbench; a ready
+ * slot whose launch is not approved yet offers 換文案 (the picker, `chooseSlotCopy`), and a refusal sits beside it. */
 
 const POLL_MS = 3000;
 
 /** The progress segment per slot state (prototype `.prog i.ok` / `.run` / `.wait` / `.bad`); every other state is still to do. */
-const SEGMENT: Partial<Record<Slot["state"], SegmentState>> = { ready: "ok", in_progress: "running", waiting: "waiting", blocked: "blocked" };
+const SEGMENT: Partial<Record<Slot["state"], SegmentState>> = {
+  ready: "ok", in_progress: "running", retrying: "running", waiting: "waiting", image_only: "waiting", copy_only: "waiting",
+  blocked: "blocked", failed: "blocked",
+};
+/** The head's count chips, most urgent colour first (presentation only; each chip's word is the served label). */
+const TONE_RANK: ChipTone[] = ["bad", "warn", "accent"];
+/** A slot that runs by itself: the tab re-reads while one is shown (a retrying preview is tried again on its own). */
+const RUNS = (s: Slot) => s.state === "in_progress" || s.state === "retrying";
 
 const CARD = "surface px-[22px] py-5";
 const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
@@ -143,17 +153,17 @@ const pendingSentence = (reason: string) => `${(reason || "確認文案與用途
 /** What a saved edit did, from the slot the server returned (ready only when it says ready). */
 function editedLine(after: Slot | undefined): string {
   if (after?.state === "ready") return "文案已保存，這一格已確認";
-  if (after?.state === "blocked") return "文案已保存，但卡住了，原因寫在格子裡";
+  if (after?.state === "blocked") return "文案已保存，但沒通過：原因寫在格子裡";
   return "文案已保存，這一格還沒好，下一步寫在格子裡";
 }
 
 /** What the picker's choice did, from the slot the server returned: ready only when it says ready (a chosen copy can
- * still be refused, then the tile carries the reason). */
+ * still be refused, then the tile carries the reason). `before` blocked or ready (換文案) = a swap. */
 function chosenLine(before: Slot, after: Slot | undefined): string {
-  const swapped = before.state === "blocked";
+  const swapped = before.state === "blocked" || before.state === "ready";
   if (after?.state === "ready") return swapped ? "文案換好了，這一格已確認" : "文案已放進這一格，備妥。";
-  if (after?.state === "blocked") return swapped ? "文案換好了，這一格還是卡住，原因寫在格子裡。" : "文案已放進這一格，但卡住了，原因寫在格子裡。";
-  return swapped ? "文案換好了，這一格還在處理中。" : "文案已放進這一格，還在處理中。";
+  if (after?.state === "blocked") return swapped ? "文案換好了，但還是沒通過：原因寫在格子裡。" : "文案已放進這一格，但沒通過：原因寫在格子裡。";
+  return swapped ? "文案換好了，這一格還沒好，下一步寫在格子裡。" : "文案已放進這一格，還沒好，下一步寫在格子裡。";
 }
 
 export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlacementChanged, onOpenPlacements, onRequestsChanged }: {
@@ -191,19 +201,21 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
   const draft = isDraftCampaign(c, null);
 
   const slots = data ? flatSlots(data) : [];
-  const count = (state: Slot["state"]) => slots.filter((s) => s.state === state).length;
-  const blockedCount = count("blocked");
-  // 卡住、等你、處理中 in the prototype's order: the head's chips, the bar's label and the draft bar's hint.
-  const pending = [
-    { n: blockedCount, word: "卡住", tone: "bad" as const },
-    { n: count("waiting"), word: "等你", tone: "warn" as const },
-    { n: count("in_progress"), word: "處理中", tone: "accent" as const },
-  ].filter((p) => p.n > 0);
+  // F49 Contract T: one count chip per served label of the slots that are neither ready nor missing (the server's
+  // words), most urgent colour first: the head's chips, the bar's label and the draft bar's hint.
+  const byLabel = new Map<string, { n: number; word: string; tone: ChipTone }>();
+  for (const s of slots) {
+    if (s.state === "ready" || s.state === "missing" || !s.state_label) continue;
+    const seen = byLabel.get(s.state_label);
+    if (seen) seen.n += 1;
+    else byLabel.set(s.state_label, { n: 1, word: s.state_label, tone: STATE_TONE[s.state] });
+  }
+  const pending = [...byLabel.values()].sort((a, b) => TONE_RANK.indexOf(a.tone) - TONE_RANK.indexOf(b.tone));
   const left = pending.map((p) => `${p.n} 格${p.word}`).join("、");
-  // Polling: while any slot is 處理中 (a job for it runs: its original's preview or its workbench set's copy) the
-  // slots are re-read every 3 s in place; the interval goes when none is in progress or the body unmounts.
-  // A blocked or waiting slot waits for the user, so it never keeps the interval alive.
-  const polling = slots.some((s) => s.state === "in_progress");
+  // Polling: while any slot runs by itself (a job for it runs: its original's preview or its workbench set's copy; or a
+  // failed preview is due to be tried again) the slots are re-read every 3 s in place; the interval goes when none runs
+  // or the body unmounts. A blocked, failed or waiting slot waits for the user, so it never keeps the interval alive.
+  const polling = slots.some(RUNS);
   useEffect(() => {
     if (!polling) return;
     const timer = setInterval(reload, POLL_MS);
@@ -220,7 +232,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     const done: string[] = [];
     for (const s of flatSlots(data)) {
       if (!s.ad_id) continue;
-      if (s.state === "in_progress" || s.state === "waiting" || s.state === "blocked") now.add(s.ad_id);
+      if (s.state !== "ready" && s.state !== "missing") now.add(s.ad_id);
       else if (s.state === "ready" && wasInProgress.current.has(s.ad_id)) done.push(s.ad_id);
     }
     wasInProgress.current = now;
@@ -256,7 +268,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
           ? { name: slot.name, line: `已放進「${slot.name}」這一格；還缺文案，選一版就備妥。`, next: false }
           : returned?.state === "blocked"
             // The refusal and its exit are on the tile; the folded placement list is not the next step.
-            ? { name: slot.name, line: `已放進「${slot.name}」這一格，但卡住了，原因寫在格子裡。`, next: false }
+            ? { name: slot.name, line: `已放進「${slot.name}」這一格，但沒通過：原因寫在格子裡。`, next: false }
             : { name: slot.name, line: `已放進「${slot.name}」這一格；${pendingSentence(result.placement.pending_reason)}`, next: true,
                 adId: slot.ad_id, state: returned?.state });
       onPlacementChanged();
@@ -282,7 +294,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
       const after = flatSlots(result.slots).find((s) => s.ad_id === adId);
       if (after?.state === "blocked") {
         const same = (after.blocked?.text ?? null) === (slot.blocked?.text ?? null);
-        setChecked({ adId, line: same ? "還是卡住：原因沒有變" : "還是卡住：原因換了", error: false });
+        setChecked({ adId, line: same ? "還是沒通過：原因沒有變" : "還是沒通過：原因換了", error: false });
       }
       onPlacementChanged();
     } catch (err) {
@@ -307,7 +319,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
       const after = flatSlots(result.slots).find((s) => s.ad_id === adId);
       setNote({
         name: slot.name, next: false,
-        line: after?.state === "ready" ? "這一格已確認" : after?.state === "blocked" ? "卡住了，原因寫在格子裡" : "這一格還沒好，下一步寫在格子裡",
+        line: after?.state === "ready" ? "這一格已確認" : after?.state === "blocked" ? "沒通過：原因寫在格子裡" : "這一格還沒好，下一步寫在格子裡",
       });
       onPlacementChanged();
     } catch (err) {
@@ -387,6 +399,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
                           onRecheck={() => void recheck(s)} />
                       );
                     }
+                    if (s.state === "failed") return <FailedSlot key={key} slot={s} workbenchHref={workbenchHref} />;
                     if (s.state === "waiting") {
                       return (
                         <WaitingSlot key={key} slot={s} workbenchHref={workbenchHref} checking={checking === s.ad_id}
@@ -396,7 +409,9 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
                     }
                     return (
                       <ReadySlot key={key} slot={s} shared={isShared(s)} justDone={!!s.ad_id && justDone.has(s.ad_id)}
-                        busy={uploading === s.ad_id} onPick={(file) => void upload(s, file)} />
+                        busy={uploading === s.ad_id} onPick={(file) => void upload(s, file)}
+                        onPickCopy={() => { setNote(null); setChecked(null); setPicking(s); }}
+                        checked={checked && checked.adId === s.ad_id ? checked : null} />
                     );
                   })}
                   <SlotTile variant="reserved" title="站內出圖" note="接上後開放" />
@@ -421,7 +436,14 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
             setNote({ name: picking.name, line: chosenLine(picking, flatSlots(next).find((s) => s.ad_id === picking.ad_id)), next: false });
             setPicking(null);
             onPlacementChanged();
-          }} />
+          }}
+          // 換文案 on a ready slot: a refusal (the launch was approved meanwhile) is the server's sentence beside the
+          // tile, and the slots re-read so the tile says what is true now.
+          onRefused={picking.state === "ready" && picking.ad_id ? (message) => {
+            setChecked({ adId: picking.ad_id as string, line: message, error: true });
+            setPicking(null);
+            reload();
+          } : undefined} />
       )}
       {editing && (
         <CopyEditor brandId={brandId} campaignId={c.id} slot={editing} onClose={() => setEditing(null)}
