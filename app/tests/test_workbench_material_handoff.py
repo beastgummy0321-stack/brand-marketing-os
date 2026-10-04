@@ -132,3 +132,43 @@ def test_saved_material_sources_reject_wrong_brand_and_tenant(setup):
             },
         )
     enqueue.assert_not_called()
+
+
+def test_copy_options_narrow_to_one_sell_way_and_none_keeps_the_brand_list(setup):
+    """F49 Contract T: a campaign's copy picker lists its own sell-way's copy only."""
+    conn, org, brand, _ = setup
+    ours = brands.create_product(conn, brand, name="晨光軟糖", actor="test")["id"]
+    theirs = brands.create_product(conn, brand, name="午後花茶", actor="test")["id"]
+    saved = {}
+    for product in (ours, theirs, None):
+        payload = {
+            "source_ref": {"material_fixture": db.new_id("fixture")},
+            "name": "賣法文案",
+            "sets": [{"name": "文案", "required_outputs": {"copy": 1}, "product_id": product}],
+        }
+        workbench.prepare_material_pack(conn, org, brand, payload)
+        (brief,) = workbench.briefs_for_source(
+            conn, org, brand, "schedule_node", payload["source_ref"]
+        )
+        assert brief["product_id"] == product
+        saved[product] = save(setup, brief, "copy", {"sets": [{"body": f"{product} 的文案"}]})
+    narrowed = workbench.material_options(conn, org, brand, part="copy", product_id=ours)
+    assert [o["version_id"] for o in narrowed] == [saved[ours]["id"]]
+    every = workbench.material_options(conn, org, brand, part="copy")
+    assert {o["version_id"] for o in every} == {row["id"] for row in saved.values()}
+
+
+def test_a_failed_enqueue_leaves_the_set_idle_so_the_same_pack_starts_on_retry(setup):
+    conn, org, brand, enqueue = setup
+    pack, brief = prepare(setup, "copy")
+    enqueue.side_effect = RuntimeError("queue down")
+    with pytest.raises(RuntimeError):
+        workbench.start_material_pack(conn, org, brand, pack)
+    (after,) = workbench.briefs_for_source(conn, org, brand, "schedule_node", brief["source_ref"])
+    assert after["status"] == "idle"
+    enqueue.side_effect = None
+    workbench.start_material_pack(conn, org, brand, pack)
+    workbench.start_material_pack(conn, org, brand, pack)  # queued now: never restarted
+    (queued,) = workbench.briefs_for_source(conn, org, brand, "schedule_node", brief["source_ref"])
+    assert queued["status"] == "queued"
+    assert enqueue.call_count == 2

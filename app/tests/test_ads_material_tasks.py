@@ -1,6 +1,6 @@
 """Material provenance persists independently of model generation and platform action."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -270,7 +270,10 @@ def test_dispatch_new_packs_for_imported_campaign_without_disturbing_original_pa
     assert tasks.get(conn, org, brand, campaign, task["id"], 1)["pack_id"] == dispatched["pack_id"]
 
 
-def test_enqueue_failure_is_unknown_and_does_not_resend_automatically(setup):
+def test_enqueue_failure_is_unknown_and_a_second_dispatch_starts_the_same_pack_once(setup):
+    """F49 Contract T (audit W10 #11): a failed enqueue is not a success with a dead button --
+    the revision reads `unknown` 「交棒沒送出・可重試」, and the next dispatch starts that same
+    pack (never a second one) exactly once."""
     conn, org, brand, campaign, enqueue = setup
     task = create(setup, "workbench_image")
     payload = {
@@ -281,10 +284,76 @@ def test_enqueue_failure_is_unknown_and_does_not_resend_automatically(setup):
     enqueue.side_effect = RuntimeError("fixture unavailable")
     result = tasks.dispatch(conn, org, brand, campaign, task["id"], payload, "test")
     assert result["dispatch_status"] == "unknown"
+    assert result["state_label"] == "交棒沒送出・可重試"
     assert result["pack_id"]
-    repeat = tasks.dispatch(conn, org, brand, campaign, task["id"], payload, "test")
-    assert repeat["pack_id"] == result["pack_id"]
     assert enqueue.call_count == 1
+    # The set went back to idle: nothing was queued.
+    (brief,) = workbench.briefs_for_source(
+        conn, org, brand, "schedule_node", {"material_task_id": task["id"]}
+    )
+    assert brief["status"] == "idle"
+
+    enqueue.side_effect = None
+    retried = tasks.dispatch(
+        conn, org, brand, campaign, task["id"], {**payload, "operation_id": "retry"}, "test"
+    )
+    assert (retried["dispatch_status"], retried["state_label"]) == ("queued", "工作檯製作中")
+    assert retried["pack_id"] == result["pack_id"]
+    assert enqueue.call_count == 2
+    # Queued now: neither a replay nor another dispatch enqueues it again.
+    tasks.dispatch(conn, org, brand, campaign, task["id"], payload, "test")
+    tasks.dispatch(
+        conn, org, brand, campaign, task["id"], {**payload, "operation_id": "third"}, "test"
+    )
+    assert enqueue.call_count == 2
+    assert len(workbench.briefs_for_source(
+        conn, org, brand, "schedule_node", {"material_task_id": task["id"]}
+    )) == 1
+
+
+def test_a_replayed_dispatch_retries_an_unknown_hand_off_too(setup):
+    conn, org, brand, campaign, enqueue = setup
+    task = create(setup, "copy")
+    payload = {
+        "operation_id": "same_click",
+        "expected_revision": 1,
+        "content_hash": task["content_hash"],
+    }
+    enqueue.side_effect = RuntimeError("fixture unavailable")
+    first = tasks.dispatch(conn, org, brand, campaign, task["id"], payload, "test")
+    assert first["dispatch_status"] == "unknown"
+    enqueue.side_effect = None
+    replay = tasks.dispatch(conn, org, brand, campaign, task["id"], payload, "test")
+    assert (replay["dispatch_status"], replay["pack_id"]) == ("queued", first["pack_id"])
+    assert enqueue.call_count == 2
+
+
+def test_material_task_labels_follow_the_hand_off_and_the_pack(setup):
+    """F49 Contract T: not handed off, made on the workbench, the workbench failed -- each its own
+    label (they all read 「等素材工作檯」 before)."""
+    conn, org, brand, campaign, _ = setup
+    task = create(setup, "workbench_image")
+    assert task["state_label"] == "還沒交棒"
+    dispatched = tasks.dispatch(
+        conn, org, brand, campaign, task["id"],
+        {"operation_id": db.new_id("op"), "expected_revision": 1,
+         "content_hash": task["content_hash"]},
+        "test",
+    )
+    assert dispatched["state_label"] == "工作檯製作中"
+    real = workbench.briefs_for_source
+
+    def failed(*args, **kwargs):
+        return [{**b, "status": "failed", "last_error": "逾時"} for b in real(*args, **kwargs)]
+
+    with patch.object(workbench, "briefs_for_source", side_effect=failed):
+        assert tasks.get(conn, org, brand, campaign, task["id"])["state_label"] == "工作檯沒做成"
+    gathered = change(setup, tasks.get(conn, org, brand, campaign, task["id"]), "candidates",
+                      asset_ids=[asset(setup)])
+    assert gathered["state_label"] == "有候選圖"
+    chosen = change(setup, gathered, "select", content_hash=gathered["content_hash"],
+                    candidate_id=gathered["candidates"][0]["id"])
+    assert chosen["state_label"] == "已採用"
 
 
 def test_workbench_version_source_uses_public_canonical_text_not_client_text(setup, monkeypatch):

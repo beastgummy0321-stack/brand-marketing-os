@@ -59,9 +59,11 @@ def start_material_pack(conn, org_id, brand_id, pack_id):
     return start(conn, org_id, brand_id, pack_id)
 
 
-def material_options(conn, org_id, brand_id, *, part=None):
+def material_options(conn, org_id, brand_id, *, part=None, product_id=None):
+    """Saved copy／image-prompt versions; `product_id` keeps only that sell-way's sets (F49
+    Contract T), `None` the brand-wide list."""
     from app.workbench.material_handoff import options
-    return options(conn, org_id, brand_id, part=part)
+    return options(conn, org_id, brand_id, part=part, product_id=product_id)
 
 
 def material_source(conn, org_id, brand_id, set_id, version_id, card_index=None):

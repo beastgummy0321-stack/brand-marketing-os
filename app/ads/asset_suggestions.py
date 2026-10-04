@@ -574,18 +574,25 @@ def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_i
     )
 
 
-def store_refusal(conn, org, brand, campaign, placement_id, revision, details) -> list:
+def store_refusal(
+    conn, org, brand, campaign, placement_id, revision, details, *, assignment=False
+) -> list:
     """§6.49: the one writer of a refusal. A refused confirmation keeps its non-`wait` Contract C
     details on that revision (`blocked_reasons`) -- every path that confirms (manual, batch,
     slot upload, copy pick, copy edit, recheck) ends here, so a refusal is never only a response.
     `wait` details (the preview is not made yet) are not a refusal of the copy and are dropped;
     the stored list replaces the previous one (the newest refusal is the fact). A confirmed
-    revision is never touched; `_apply_confirmation` clears the list."""
+    revision is never touched; `_apply_confirmation` clears the list.
+    F49 Contract T: `assignment=True` is the one exception -- why `handoff_assignment.assign`
+    refused a confirmed revision (details of kind `assign`, with their `code`; `[]` clears them
+    once an assignment goes through), written on that confirmed revision only."""
     kept = [d for d in details if d["kind"] != "wait"]
+    if assignment and any(d["kind"] != "assign" for d in kept):
+        raise TypeError("assignment refusals are kind `assign` only")
     conn.execute(
         "UPDATE ads_asset_placement SET blocked_reasons=%s WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND id=%s AND revision=%s AND confirmed_at IS NULL",
-        (db.jsonb(kept), org, brand, campaign, placement_id, revision),
+        "AND campaign_id=%s AND id=%s AND revision=%s AND (confirmed_at IS NULL) <> %s",
+        (db.jsonb(kept), org, brand, campaign, placement_id, revision, assignment),
     )
     conn.commit()
     return kept

@@ -10,6 +10,7 @@ Every number and state here comes from a function that already owns it, never a 
 - `daily_budget`／`can_support`／`active_ads`: see `_capacity`;
 - `next_sync_at`: `home_overview._sync_block` (the home's `sync.next_at`);
 - timeline states: the home row `_handoff` rule plus `change_control_launch.is_stale`;
+- `slot_state`／`slot_label` (F49 Contract T): `slots.read`, once per structure read;
 - `delivery` (F47 Contract E): `_delivery`, from the sync table's spend rows of this campaign.
 
 Unknown is null, never zero: each sub-read runs through `home_overview._guarded`, so a failed read
@@ -22,13 +23,13 @@ from app.ads import (
     campaign_stage,
     change_control_launch,
     coverage,
-    handoff_assignment,
     home_overview,
     lifecycle,
     month_summary,
     queue_done,
     repository,
     review_evidence,
+    slots,
     targets,
     triage,
 )
@@ -306,13 +307,26 @@ def _entity_daily_budget(entity) -> float | None:
     return float(entity["budget_amount"])
 
 
-def _missing_material(conn, org_id, brand_id, campaign_id, ad) -> bool:
-    """Not ready by the launch batch's own rule (`change_control_launch.ready_material`)."""
-    try:
-        material = handoff_assignment.material_snapshot(conn, org_id, brand_id, campaign_id, ad)
-    except ValueError:
-        material = None
-    return not change_control_launch.ready_material(material)
+def _slot_states(conn, org_id, brand_id, campaign_id) -> dict:
+    """F49 Contract T: planned ad id -> its slot (`slots.read`, the one slot-state source), read
+    once; `{}` when the read fails (every planned ad then reads not ready, its state null)."""
+    view = home_overview._guarded(
+        conn, "structure.slots", lambda: slots.read(conn, org_id, brand_id, campaign_id)
+    )
+    if view is None:
+        return {}
+    return {s["ad_id"]: s for g in view["groups"] for s in g["slots"] if s["ad_id"]}
+
+
+def _slot_fields(slot) -> dict:
+    """`slot_state`／`slot_label` of a planned ad, and `missing_material` -- kept only as
+    `slot_state != "ready"` (same source) until the structure tab reads the state (F49-I13)."""
+    state = slot["state"] if slot else None
+    return {
+        "slot_state": state,
+        "slot_label": slot["state_label"] if slot else None,
+        "missing_material": state != "ready",
+    }
 
 
 def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
@@ -333,12 +347,14 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
         "cost_per_result": current.get("cost_per_result"),
         "results": home_overview._count_out(current.get("result_count")),
         "closing": entity["id"] in closing, "missing_material": False,
+        "slot_state": None, "slot_label": None,
     }
 
 
 def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     """App-built: the plan's groups and planned ads (a planned ad matched to a platform ad carries
-    its grade; one not on a platform yet carries `missing_material`), then any live platform ad of
+    its grade; one not on a platform yet carries its slot's `slot_state`／`slot_label` from
+    `slots.read`, F49 Contract T), then any live platform ad of
     the campaign the plan does not hold (e.g. a replacement), under the group its parent was
     matched to, else under its own platform parent. Imported: the platform parents (ad sets) and
     their ads. Only ads that are not off (`lifecycle.may_spend`) are listed -- a closed ad is not in
@@ -364,6 +380,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     if campaign["origin"] != "imported":
         matched = _planned_entities(conn, org_id, brand_id, campaign_id)
         ads = repository.list_ads_for_campaign(conn, org_id, brand_id, campaign_id)
+        slot_of = _slot_states(conn, org_id, brand_id, campaign_id)
         for group in repository._groups_for_campaign(conn, org_id, brand_id, campaign_id):
             group_entity = by_id.get(matched.get(("group", group["id"])))
             if group_entity is not None:
@@ -377,17 +394,17 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                         "thumbnail_url": None, "spend": None, "grade": None,
                         "grade_label": None, "reason_code": None, "sample": None,
                         "cost_per_result": None, "results": None, "closing": False,
-                        "missing_material": _missing_material(
-                            conn, org_id, brand_id, campaign_id, ad
-                        ),
+                        **_slot_fields(slot_of.get(ad["id"])),
                     })
                     continue
                 placed.add(entity["id"])
                 if not lifecycle.may_spend(entity):
                     continue
-                out_ads.append(
-                    _platform_ad(entity, graded, closing, ad_id=ad["id"], name=ad["name"])
-                )
+                out_ads.append({
+                    **_platform_ad(entity, graded, closing, ad_id=ad["id"], name=ad["name"]),
+                    "slot_state": (slot_of.get(ad["id"]) or {}).get("state"),
+                    "slot_label": (slot_of.get(ad["id"]) or {}).get("state_label"),
+                })
             groups.append({
                 "group_id": group["id"], "name": group["name"],
                 # A group on a platform: its platform daily budget (the fact, a later budget

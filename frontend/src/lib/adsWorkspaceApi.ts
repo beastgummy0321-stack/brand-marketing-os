@@ -24,6 +24,7 @@
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow, type CampaignLifecycle, type RunningAds } from "./adsApi";
 import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
+import type { SlotState } from "./adsSlotsApi";
 
 export type WorkspaceStageKey = "plan" | "assets" | "launch" | "read" | "decide" | "review";
 
@@ -92,8 +93,14 @@ export interface StructureAd {
   cost_per_result: number | null;
   results: number | null;
   closing: boolean;
-  /** Only on a planned ad not on a platform yet whose material is not ready. */
+  /** Only on a planned ad not on a platform yet whose material is not ready. F49 Contract T: kept only as
+   * `slot_state !== "ready"` (same source) until the structure tab reads `slot_state` (F49-I13). */
   missing_material: boolean;
+  /** F49 Contract T: the planned ad's slot state from the one slot read (`GET …/slots`); null for a platform ad the
+   * plan does not hold and when the slot read failed. Optional only for older fixtures. */
+  slot_state?: SlotState | null;
+  /** F49 Contract T: that state's chip word (served; never a local word table). */
+  slot_label?: string | null;
 }
 
 export interface StructureGroup {

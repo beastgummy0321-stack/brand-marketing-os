@@ -1,6 +1,7 @@
 """Append-only campaign material requests; pure saving never calls a model."""
 
 import json
+import logging
 from contextlib import contextmanager
 
 from app import workbench
@@ -9,6 +10,8 @@ from app.ads import change_control_data as common
 from app.ads import review_rounds
 from app.ads import user_assets_repository as assets
 from app.core import db
+
+logger = logging.getLogger(__name__)
 
 MODES = {"existing", "external_image", "workbench_image", "copy"}
 EDITABLE = {"title", "instruction", "copy_fields", "prompt", "reference_asset_ids"}
@@ -156,6 +159,7 @@ def get(conn, org, brand, campaign, task_id, revision=None):
         ).fetchall()
     ]
     result["limitations"] = LIMITATIONS
+    result["state_label"] = _state_label(conn, org, brand, result)
     return result
 
 
@@ -192,13 +196,45 @@ def workspace(conn, org, brand, campaign):
 REPLACE_REQUESTS_CAP = 100
 
 
-def _state_label(spec):
-    """The request's own state, newest step first (Contract F)."""
-    if spec.get("placement_id") or spec.get("selected_candidate_id"):
-        return "已採用"
-    if spec.get("candidates"):
-        return "有候選圖"
-    return "等素材工作檯"
+# F49 Contract T: a material request's state, said once (the task read and the replace requests).
+STATE_LABELS = {
+    "not_requested": "還沒交棒",
+    "unknown": "交棒沒送出・可重試",
+    "queued": "工作檯製作中",
+    "failed": "工作檯沒做成",
+    "candidates": "有候選圖",
+    "adopted": "已採用",
+}
+
+
+def _pack_failed(conn, org, brand, task) -> bool:
+    """The revision's workbench pack ran and its generation failed (`slots.brief_state`, the one
+    reader of a set's status in ads)."""
+    from app.ads import slots
+
+    briefs = workbench.briefs_for_source(
+        conn, org, brand, "schedule_node",
+        {"material_task_id": task["id"], "material_revision": task["revision"]},
+    )
+    return any(
+        b.get("pack_id") == task["pack_id"] and slots.brief_state(b) == "failed" for b in briefs
+    )
+
+
+def _state_label(conn, org, brand, task):
+    """The request's own state, newest step first (Contract F): adopted, candidates, then the
+    hand-off -- not sent yet, sent but not confirmed enqueued (retryable), the workbench making
+    it, or its generation failed. `task` carries `id`, `revision`, `pack_id`, `dispatch_status`
+    and the spec's `placement_id`／`selected_candidate_id`／`candidates`."""
+    if task.get("placement_id") or task.get("selected_candidate_id"):
+        state = "adopted"
+    elif task.get("candidates"):
+        state = "candidates"
+    elif task["dispatch_status"] == "queued" and _pack_failed(conn, org, brand, task):
+        state = "failed"
+    else:
+        state = task["dispatch_status"]
+    return STATE_LABELS.get(state, STATE_LABELS["not_requested"])
 
 
 def replace_requests(conn, org, brand, campaign):
@@ -206,7 +242,8 @@ def replace_requests(conn, org, brand, campaign):
     that) and `by_entity` (replaced entity -> task id) over all of them -- at most one open
     request per ad (the partial unique index)."""
     rows = conn.execute(
-        "SELECT t.id,t.created_at,t.replaces_entity_id,r.spec_json FROM ads_material_task t"
+        "SELECT t.id,t.created_at,t.replaces_entity_id,t.revision,r.spec_json,r.pack_id,"
+        "r.dispatch_status FROM ads_material_task t"
         " JOIN ads_material_revision r ON r.task_id=t.id AND r.revision=t.revision"
         " WHERE t.org_id=%s AND t.brand_id=%s AND t.campaign_id=%s AND t.cancelled_at IS NULL"
         " AND t.replaces_entity_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC",
@@ -218,7 +255,13 @@ def replace_requests(conn, org, brand, campaign):
                 "task_id": r["id"],
                 "replaces": _replaces(conn, org, brand, campaign, r["replaces_entity_id"]),
                 "created_at": r["created_at"],
-                "state_label": _state_label(r["spec_json"]),
+                "state_label": _state_label(
+                    conn, org, brand,
+                    {
+                        **r["spec_json"], "id": r["id"], "revision": r["revision"],
+                        "pack_id": r["pack_id"], "dispatch_status": r["dispatch_status"],
+                    },
+                ),
             }
             for r in rows[:REPLACE_REQUESTS_CAP]
         ],
@@ -510,18 +553,55 @@ def mutate(conn, org, brand, campaign, task_id, payload, action, actor):
         return get(conn, org, brand, campaign, task_id)
 
 
+def _retryable(task) -> bool:
+    """F49 Contract T: the hand-off was prepared (a pack exists) but its enqueue is not known to
+    have happened -- `dispatch` starts that same pack again, never a second pack."""
+    return task["dispatch_status"] == "unknown" and bool(task["pack_id"])
+
+
+def _start(conn, org, brand, task_id, revision, pack_id) -> None:
+    """Enqueue the pack's generation; the revision reads `queued` once that went through. A failed
+    enqueue leaves it `unknown` (交棒沒送出・可重試) -- the next `dispatch` retries this pack."""
+    try:
+        workbench.start_material_pack(conn, org, brand, pack_id)
+    except Exception:
+        conn.rollback()
+        logger.exception("starting material pack %s failed", pack_id)
+        return
+    conn.execute(
+        "UPDATE ads_material_revision SET dispatch_status='queued'"
+        " WHERE task_id=%s AND revision=%s AND pack_id=%s",
+        (task_id, revision, pack_id),
+    )
+    conn.commit()
+
+
 def dispatch(conn, org, brand, campaign, task_id, payload, actor):
+    """Hand the revision to the workbench once (a pack, then its enqueue). F49 Contract T: a
+    revision left `unknown` with a pack (the enqueue failed) is retried on that same pack by the
+    next dispatch -- a replay of the same operation included."""
     if set(payload) != {"operation_id", "expected_revision", "content_hash"}:
         raise ValueError("請核對本版內容後再交棒。")
     with _locked(conn, org, brand):
         operation, digest, prior = _prior(conn, org, brand, campaign, payload, "dispatch", task_id)
         if prior:
-            return get(conn, org, brand, campaign, task_id, prior["result_revision"])
+            done = get(conn, org, brand, campaign, task_id, prior["result_revision"])
+            if _retryable(done) and done["cancelled_at"] is None \
+                    and done["revision"] == done["current_revision"]:
+                _campaign(conn, org, brand, campaign, mutable=True)
+                _start(conn, org, brand, task_id, done["revision"], done["pack_id"])
+                return get(conn, org, brand, campaign, task_id, prior["result_revision"])
+            return done
         task, spec = _base(conn, org, brand, campaign, task_id, payload.get("expected_revision"))
         if task["mode"] not in {"workbench_image", "copy"}:
             raise ValueError("已有成品或自行提供提示詞不需要派工生成。")
         if payload["content_hash"] != task["content_hash"]:
             raise ValueError("任務內容已變，請重新檢視後再交棒。")
+        if _retryable(task):
+            _remember(conn, org, brand, campaign, operation, digest, task_id, task["revision"])
+            conn.commit()
+            _start(conn, org, brand, task_id, task["revision"], task["pack_id"])
+            return get(conn, org, brand, campaign, task_id)
         if task["dispatch_status"] != "not_requested":
             # Another operation ID cannot create a second generation for the same content.
             _remember(conn, org, brand, campaign, operation, digest, task_id, task["revision"])
@@ -587,17 +667,7 @@ def dispatch(conn, org, brand, campaign, task_id, payload, actor):
         _remember(conn, org, brand, campaign, operation, digest, task_id, task["revision"])
         # Durable before enqueue: interrupted calls must not blindly send a model twice.
         conn.commit()
-        try:
-            workbench.start_material_pack(conn, org, brand, pack_id)
-        except Exception:
-            conn.rollback()
-            return get(conn, org, brand, campaign, task_id)
-        conn.execute(
-            "UPDATE ads_material_revision SET dispatch_status='queued'"
-            " WHERE task_id=%s AND revision=%s",
-            (task_id, task["revision"]),
-        )
-        conn.commit()
+        _start(conn, org, brand, task_id, task["revision"], pack_id)
         return get(conn, org, brand, campaign, task_id)
 
 

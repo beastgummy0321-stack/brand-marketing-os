@@ -123,7 +123,8 @@ def env():
             "text": "\n".join(row["copy"].values()), "copy_fields": dict(row["copy"]),
         }
 
-    def material_options(conn, org_id, brand_id, *, part=None):
+    def material_options(conn, org_id, brand_id, *, part=None, product_id=None):
+        # F49 Contract T: `product_id` narrows to that sell-way's sets (a version's `product`).
         return [
             {
                 "set_id": set_id, "version_id": row["id"], "part": "copy", "card_index": None,
@@ -132,6 +133,7 @@ def env():
             }
             for set_id, row in versions.items()
             if row["adopted"] and part in (None, "copy")
+            and product_id in (None, row.get("product"))
         ]
 
     patchers = [
@@ -259,7 +261,7 @@ def workbench_copy(env, ad, copy=None, *, adopt=True):
     version_id = db.new_id("wbo")
     env["versions"][brief["id"]] = {
         "id": version_id, "copy": copy or WORKBENCH_COPY, "adopted": adopt,
-        "name": brief.get("name") or "文案",
+        "name": brief.get("name") or "文案", "product": brief.get("product_id"),
     }
     return {"set_id": brief["id"], "version_id": version_id}
 
@@ -286,6 +288,8 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     slot = by_ad(view)
     assert slot[ready_ad] == {
         "ad_id": ready_ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "ready",
+        "state_label": "已確認", "state_text": slots.READY_NOTE["editable"], "retry_at": None,
+        "copy_editable": True,
         "thumbnail_url": thumb(env, ready_asset), "confirmed": True, "replace_task_id": None,
         "copy": placement_copy("已確認"), "workbench_href": None, "format_key": None,
         "blocked": None, "offer_label": None, "waiting": None, "job": None, "format_note": None,
@@ -295,6 +299,9 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     # assigned (material stays confirmed-only); the copy half shows what came with the file.
     # Waiting for a preview is not a refusal: `in_progress` (the preview job), never `blocked`.
     assert (slot[uploaded_ad]["state"], slot[uploaded_ad]["blocked"]) == ("in_progress", None)
+    assert (slot[uploaded_ad]["state_label"], slot[uploaded_ad]["state_text"]) == (
+        "處理中", "圖片處理中",
+    )
     assert slot[uploaded_ad]["job"] == {"kind": "preview", "done": None, "of": None}
     assert slot[uploaded_ad]["waiting"] is None
     assert result["placement"]["blocked_reasons"] == []
@@ -302,6 +309,10 @@ def test_draft_slots_ready_uploaded_and_missing_follow_the_launch_rule(env):
     assert slot[uploaded_ad]["thumbnail_url"] is None  # its preview is not made yet
     assert slot[uploaded_ad]["copy"] == placement_copy("待確認")
     assert slot[missing_ad]["state"] == "missing"
+    assert (slot[missing_ad]["state_label"], slot[missing_ad]["state_text"]) == (
+        "缺", "還沒有素材",
+    )
+    assert slot[missing_ad]["copy_editable"] is False
     assert slot[missing_ad]["thumbnail_url"] is None
     assert (slot[missing_ad]["copy"], slot[missing_ad]["workbench_href"]) == (None, None)
     ad = campaigns.get_ad(env["conn"], env["org"], env["brand"], uploaded_ad)
@@ -558,10 +569,16 @@ def test_image_only_slot_takes_a_workbench_version_through_the_picker(env):
         placement["id"], 2,
     )
     assert row["slot_placement_id"] is None
-    # Once ready the slot has no picker any more (changing copy = a new workbench version).
-    again = client.post(f"{base(env)}/slots/{picked_ad}/copy", json=option)
-    assert again.status_code == 409
-    assert again.json()["error"]["code"] == "slot_no_file"
+    # F49 Contract T: ready and not launched yet, the slot's copy still changes (a new revision
+    # of its assigned material, confirmed and assigned at once -- still ready).
+    assert slot["copy_editable"] is True
+    again = client.post(f"{base(env)}/slots/{picked_ad}/copy", json={"copy_fields": COPY})
+    assert again.status_code == 200, again.text
+    assert (again.json()["placement"]["id"], again.json()["placement"]["revision"]) == (
+        placement["id"], 3,
+    )
+    slot = by_ad(again.json()["slots"])[picked_ad]
+    assert (slot["state"], slot["copy"]) == ("ready", placement_copy("已確認", COPY))
 
 
 def test_copy_options_and_picker_refuse_imported_and_unknown_campaigns(env):
@@ -858,7 +875,9 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
     slot = by_ad(view)
     assert slot[launched_ad] == {
         "ad_id": launched_ad, "entity_id": entity["id"], "name": "晨光隨行杯・日常出發",
-        "state": "ready", "thumbnail_url": "https://t/1.jpg", "confirmed": True,
+        "state": "ready", "state_label": "已確認", "state_text": slots.READY_NOTE["on_platform"],
+        "retry_at": None, "copy_editable": False,
+        "thumbnail_url": "https://t/1.jpg", "confirmed": True,
         "replace_task_id": task["id"], "copy": placement_copy("已確認"), "workbench_href": None,
         "format_key": None, "blocked": None, "offer_label": None, "waiting": None, "job": None,
         "format_note": None, "offer_key": None, "statutory": None,
@@ -870,7 +889,8 @@ def test_replace_request_on_a_launched_app_built_ad_reaches_its_slot(env):
     assert request["replaces"] == {
         "entity_id": entity["id"], "name": "平台廣告 n1", "thumbnail_url": "https://t/1.jpg",
     }
-    assert request["state_label"] == "等素材工作檯"
+    # F49 Contract T: a one-click request not handed to the workbench yet says so.
+    assert request["state_label"] == "還沒交棒"
     assert request["created_at"] == task["created_at"]
     with pytest.raises(ValueError, match="已在平台上"):
         upload(env, launched_ad, {"asset_id": user_asset(env)})
@@ -912,7 +932,7 @@ def test_a_deleted_replaced_entity_keeps_the_request_with_unknown_name_and_thumb
             "task_id": task["id"],
             "replaces": {"entity_id": entity["id"], "name": None, "thumbnail_url": None},
             "created_at": task["created_at"],
-            "state_label": "等素材工作檯",
+            "state_label": "還沒交棒",
         }
     ]
 
@@ -962,6 +982,8 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
     first = view["groups"][1]["slots"][0]
     assert first == {
         "ad_id": None, "entity_id": b1["id"], "name": "晨光 1", "state": "ready",
+        "state_label": "已確認", "state_text": slots.READY_NOTE["on_platform"], "retry_at": None,
+        "copy_editable": False,
         "thumbnail_url": "https://t/b1.jpg", "confirmed": True, "replace_task_id": None,
         "copy": None, "workbench_href": None, "format_key": None,
         "blocked": None, "offer_label": None,  # an imported campaign has no offer coordinate
@@ -1275,6 +1297,7 @@ def test_a_refused_slot_keeps_its_reason_and_reads_blocked_with_the_copy_exit(en
     slot = by_ad(view.json())[ad]
     assert slot == {
         "ad_id": ad, "entity_id": None, "name": "晨光隨行杯・日常出發", "state": "blocked",
+        "state_label": "卡住", "state_text": MISMATCH, "retry_at": None, "copy_editable": False,
         "thumbnail_url": thumb(env, result["placement"]["asset_id"]), "confirmed": False,
         "replace_task_id": None, "copy": placement_copy("待確認", PRICE_COPY),
         "workbench_href": None, "format_key": None,
@@ -1342,10 +1365,12 @@ def test_recheck_returns_the_same_reason_until_its_cause_is_removed(env):
     )
     assert row["slot_placement_id"] is None
 
-    # Ready now: nothing left to check.
+    # Ready now: nothing left to check -- F49 Contract T: the slots come back as they are (a
+    # ready slot is not "no file").
     done = client.post(f"{base(env)}/slots/{ad}/recheck")
-    assert done.status_code == 409, done.text
-    assert done.json()["error"]["code"] == "slot_no_file"
+    assert done.status_code == 200, done.text
+    assert by_ad(done.json()["slots"])[ad]["state"] == "ready"
+    assert stored_reasons(env, result["placement"]["id"]) == []
 
 
 def test_recheck_replaces_the_stored_reasons_with_the_new_refusal(env):
@@ -1373,10 +1398,13 @@ def test_recheck_refuses_slots_with_nothing_to_check_and_foreign_campaigns(env):
     client = TestClient(app)
     empty_ad, ready_ad = env["ads"][0], env["ads"][1]
     assign_confirmed(env, ready_ad, user_asset(env))
-    for ad in (empty_ad, ready_ad):
-        response = client.post(f"{base(env)}/slots/{ad}/recheck")
-        assert response.status_code == 409, response.text
-        assert response.json()["error"]["code"] == "slot_no_file"
+    response = client.post(f"{base(env)}/slots/{empty_ad}/recheck")
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "slot_no_file"
+    # F49 Contract T: a ready slot has a file -- nothing to check, its slots come back.
+    ready = client.post(f"{base(env)}/slots/{ready_ad}/recheck")
+    assert ready.status_code == 200, ready.text
+    assert by_ad(ready.json()["slots"])[ready_ad]["state"] == "ready"
     unknown_ad = client.post(f"{base(env)}/slots/ada_missing/recheck")
     assert unknown_ad.status_code == 409
     assert unknown_ad.json()["error"] == {
@@ -1451,10 +1479,11 @@ def test_a_failed_original_reads_blocked_with_the_file_exit(env):
     assert by_ad(read(env))[refused_ad]["blocked"] == blocked(
         "這個檔案處理失敗：損毀", fix="file", more=1
     )
-    # A transient failure the dispatcher still retries is not a failed original.
+    # A transient failure the dispatcher still retries is not a failed original: it is
+    # `retrying` (F49 Contract T), never a silent 處理中.
     conn.execute("UPDATE ads_user_asset SET status='retryable' WHERE id=%s", (failed,))
     conn.commit()
-    assert by_ad(read(env))[with_copy]["state"] == "in_progress"
+    assert by_ad(read(env))[with_copy]["state"] == "retrying"
 
 
 def test_a_file_without_copy_keeps_its_picker(env):
@@ -1660,7 +1689,7 @@ def test_a_typed_copy_edit_is_checked_at_once(env):
     slot = by_ad(clean.json()["slots"])[ad]
     assert (slot["state"], slot["copy"]) == ("ready", placement_copy("已確認", CLEAN_COPY))
 
-    # The same guards as the picker: bad bodies are 400, a ready slot has nothing to edit.
+    # The same guards as the picker: bad bodies are 400; an empty slot has nothing to edit.
     for bad in (
         {"copy_fields": {"cta": "x"}}, {"copy_fields": "x"}, {"copy_fields": {}},
         {"copy_fields": {"body": 1}}, {"copy_fields": COPY, "set_id": "s"},
@@ -1668,9 +1697,9 @@ def test_a_typed_copy_edit_is_checked_at_once(env):
         response = client.post(f"{base(env)}/slots/{ad}/copy", json=bad)
         assert response.status_code == 400, (bad, response.text)
         assert response.json()["error"]["code"] == "slot_copy_invalid"
-    again = client.post(f"{base(env)}/slots/{ad}/copy", json={"copy_fields": COPY})
-    assert again.status_code == 409
-    assert again.json()["error"]["code"] == "slot_no_file"
+    empty = client.post(f"{base(env)}/slots/{env['ads'][2]}/copy", json={"copy_fields": COPY})
+    assert empty.status_code == 409
+    assert empty.json()["error"]["code"] == "slot_no_file"
 
 
 def test_recheck_on_a_revised_assigned_material_points_the_slot_back_and_confirms(env):
@@ -1925,3 +1954,164 @@ def test_f48_the_slot_judges_against_the_offer_the_copy_was_written_for(env):
         "ready", "bundle", "組合優惠",
     )
     assert result["placement"]["blocked_reasons"] == []
+
+
+# -- F49 Contract T: every stored state told as it is ---------------------------------------------
+
+
+def said(slot):
+    return slot["state_label"], slot["state_text"]
+
+
+def test_f49_every_state_reads_its_own_chip_and_sentence(env):
+    """One table (`slots.STATE_TEXT`): each state's chip, and its sentence filled from the slot's
+    own facts. ready／missing／in_progress(preview) are read in the first test of this file."""
+    conn = env["conn"]
+    copy_ad, image_ad, waiting_ad = env["ads"]
+    workbench_copy(env, copy_ad)  # selected on the workbench, no file yet
+    upload(env, image_ad, {"asset_id": user_asset(env)})  # a file, no copy
+    placement = user_assets.attach(
+        conn, env["org"], env["brand"], env["campaign"], user_asset(env), COPY, "human",
+        ad_id=waiting_ad,
+    )
+    conn.execute(
+        "UPDATE ads_ad SET slot_placement_id=%s WHERE id=%s", (placement["id"], waiting_ad)
+    )
+    conn.commit()
+    slot = by_ad(read(env))
+    assert said(slot[copy_ad]) == ("等你", "有文案，還缺圖")
+    assert said(slot[image_ad]) == ("等你", "有圖，還缺文案")
+    assert said(slot[waiting_ad]) == ("等你", "等你：確認這版文案")
+    for one in slot.values():
+        assert one["state_label"] == slots.STATE_TEXT[one["state"]][0]
+
+
+def test_f49_a_set_being_generated_says_copy_is_being_written(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad, adopt=False)
+    with brief_status("queued"):
+        assert said(by_ad(read(env))[ad]) == ("處理中", "文案產生中")
+
+
+def test_f49_a_retryable_original_says_its_error_and_when_it_is_tried_again(env):
+    conn, ad = env["conn"], env["ads"][0]
+    asset = user_asset(env, status="retryable", thumbnail=False)
+    due = db.now_utc() + timedelta(minutes=5)
+    conn.execute(
+        "UPDATE ads_user_asset SET error='預覽暫時無法完成，原檔保留，可重試。',"
+        "next_attempt_at=%s WHERE id=%s",
+        (due, asset),
+    )
+    conn.commit()
+    slot = by_ad(upload(env, ad, {"asset_id": asset, "copy_fields": COPY})["slots"])[ad]
+    clock = due.astimezone(settings.org_timezone(conn, org_id=env["org"])).strftime("%H:%M")
+    assert slot["state"] == "retrying"
+    assert said(slot) == (
+        "處理中", f"圖片預覽沒做成（預覽暫時無法完成，原檔保留，可重試。），{clock} 會再試",
+    )
+    assert slot["retry_at"] == due
+    assert (slot["job"], slot["blocked"], slot["waiting"]) == (None, None, None)
+    assert slot["copy"] == placement_copy("待確認")
+
+
+def test_f49_a_failed_set_reads_failed_with_its_error_and_the_workbench_exit(env):
+    ad = env["ads"][0]
+    workbench_copy(env, ad, adopt=False)
+    real = workbench.briefs_for_source
+
+    def failed(*args, **kwargs):
+        return [
+            {**brief, "status": "failed", "last_error": "模型逾時，沒有寫出文案。"}
+            for brief in real(*args, **kwargs)
+        ]
+
+    with patch.object(workbench, "briefs_for_source", side_effect=failed):
+        slot = by_ad(read(env))[ad]
+    assert slot["state"] == "failed"
+    assert said(slot) == ("失敗", "文案沒產生出來：模型逾時，沒有寫出文案。")
+    assert slot["workbench_href"]
+    assert (slot["waiting"], slot["job"]) == (None, None)
+
+
+def test_f49_a_refused_assignment_reads_blocked_and_recheck_assigns_again(env):
+    """Drill-11 W10: a confirmed placement whose assignment was refused (here the campaign was
+    closed between the confirmation and the assignment) used to read 「等你：確認這版文案」 and
+    重新檢查 answered 「還沒有圖」. The refusal is stored (kind `assign`) and told; once the cause
+    is gone, recheck assigns it and the refusal is cleared."""
+    conn, ad = env["conn"], env["ads"][0]
+    asset = user_asset(env, status="pending", thumbnail=False)
+    placement = upload(env, ad, {"asset_id": asset, "copy_fields": COPY})["placement"]
+    status = campaigns.get_campaign(conn, env["org"], env["brand"], env["campaign"])["status"]
+    conn.execute("UPDATE ads_user_asset SET status='ready' WHERE id=%s", (asset,))
+    conn.execute(
+        "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
+        (placement["id"],),
+    )
+    conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s", (env["campaign"],))
+    conn.commit()
+    slots.settle(conn, env["org"], env["brand"], env["campaign"], placement["id"])
+
+    text = slots.ASSIGN_REFUSALS["campaign_closed"]
+    assert stored_reasons(env, placement["id"]) == [
+        {"kind": "assign", "text": text, "terms": [], "code": "campaign_closed"}
+    ]
+    slot = by_ad(read(env))[ad]
+    assert (slot["state"], slot["blocked"]) == ("blocked", blocked(text, fix=None))
+    assert said(slot) == ("卡住", text)
+    view = slots.recheck(conn, env["org"], env["brand"], env["campaign"], ad, "human")["slots"]
+    assert by_ad(view)[ad]["state"] == "blocked"
+
+    conn.execute("UPDATE ads_campaign SET status=%s WHERE id=%s", (status, env["campaign"]))
+    conn.commit()
+    view = slots.recheck(conn, env["org"], env["brand"], env["campaign"], ad, "human")["slots"]
+    assert by_ad(view)[ad]["state"] == "ready"
+    assert stored_reasons(env, placement["id"]) == []
+    row = campaigns.get_ad(conn, env["org"], env["brand"], ad)
+    assert (row["material_placement_id"], row["slot_placement_id"]) == (placement["id"], None)
+
+
+def test_f49_a_ready_slots_copy_changes_until_the_launch_is_approved(env):
+    """Drill-11 R2 B5／P4: a confirmed slot had no way to change its copy. Before the launch is
+    approved the copy is written into a new revision of its assigned material, checked and
+    assigned at once (still ready); after the approval the frozen sentence shows and the change
+    is refused."""
+    conn, ad = env["conn"], env["ads"][0]
+    placement = assign_confirmed(env, ad, user_asset(env))
+    edited = slots.choose_copy(
+        conn, env["org"], env["brand"], env["campaign"], ad,
+        {"copy_fields": {"body": "改過的內文"}}, "human",
+    )
+    assert (edited["placement"]["id"], edited["placement"]["revision"]) == (placement["id"], 2)
+    slot = by_ad(edited["slots"])[ad]
+    assert (slot["state"], slot["copy_editable"]) == ("ready", True)
+    assert slot["copy"] == placement_copy("已確認", {**COPY, "body": "改過的內文"})
+    assert said(slot) == ("已確認", slots.READY_NOTE["editable"])
+    row = campaigns.get_ad(conn, env["org"], env["brand"], ad)
+    assert (row["material_placement_revision"], row["slot_placement_id"]) == (2, None)
+
+    launch(env)
+    slot = by_ad(read(env))[ad]
+    assert (slot["state"], slot["copy_editable"]) == ("ready", False)
+    assert said(slot) == ("已確認", slots.READY_NOTE["frozen"])
+    with pytest.raises(ValueError, match="首次投放清單已核准"):
+        slots.choose_copy(
+            conn, env["org"], env["brand"], env["campaign"], ad,
+            {"copy_fields": {"body": "核准後再改"}}, "human",
+        )
+    with pytest.raises(ValueError, match="首次投放清單已核准"):
+        slots.recheck(conn, env["org"], env["brand"], env["campaign"], ad, "human")
+
+
+def test_f49_copy_options_are_the_campaigns_sell_way_only(env):
+    """Drill-11 P4: 「選一版文案」 listed every sell-way's copy. Only the campaign's own now."""
+    way = sell_way_campaign(env)
+    ours = workbench_copy(env, env["ads"][0])
+    env["versions"]["wbs_other"] = {
+        "id": "wbo_other", "copy": COPY, "adopted": True, "name": "別的賣法",
+        "product": "prd_other",
+    }
+    assert env["versions"][ours["set_id"]]["product"] == way
+    options = slots.copy_options(env["conn"], env["org"], env["brand"], env["campaign"])
+    assert [(o["set_id"], o["version_id"]) for o in options["options"]] == [
+        (ours["set_id"], ours["version_id"])
+    ]

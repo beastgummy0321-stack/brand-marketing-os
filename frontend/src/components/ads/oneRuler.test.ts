@@ -26,6 +26,9 @@
  * 9. F49-I05 (Contract Q): no local list of queue kinds (an array, `Set` or object keyed by two or more) and no table
  *    keyed by two or more wait reason codes — the queue serves `decision`／`position`／`decisions {kinds, open}` and
  *    `GET …/rules` serves `reasons`. Type unions are not literals. Today's hits are listed in `QUEUE_PENDING`.
+ * 10. F49-I07 (Contract T): in the slot pieces no chip word (處理中／等你／卡住／失敗) in a string or JSX text, no word
+ *    table keyed by two or more slot states and no `missing_material` read — slots serve `state_label`／`state_text`,
+ *    the structure `slot_state`／`slot_label`. Today's hits are listed in `SLOT_PENDING`.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -609,11 +612,16 @@ const twoOfOneVocabulary = (codes: string[]) =>
 /** Each `{…}` block (no nested braces, comments blanked) keyed by two or more codes of one state vocabulary, and each
  * `switch` whose body has two or more `case`s of one vocabulary and a Chinese literal, at its first line. */
 function stateWordTables(text: string): number[] {
+  return wordTables(text, twoOfOneVocabulary);
+}
+
+/** `stateWordTables` over any vocabulary test (`twoOf` says whether the codes found hold two or more of one). */
+function wordTables(text: string, twoOf: (codes: string[]) => boolean): number[] {
   const code = strip(text, false);
   const lineOf = (index: number) => code.slice(0, index).split("\n").length;
   const lines: number[] = [];
   for (const m of code.matchAll(/\{[^{}]*\}/g)) {
-    if (CJK.test(m[0]) && twoOfOneVocabulary([...m[0].matchAll(STATE_KEY)].map((k) => k[1]))) {
+    if (CJK.test(m[0]) && twoOf([...m[0].matchAll(STATE_KEY)].map((k) => k[1]))) {
       lines.push(lineOf(m.index ?? 0));
     }
   }
@@ -627,7 +635,7 @@ function stateWordTables(text: string): number[] {
       else if (code[end] === "}" && --depth === 0) break;
     }
     const body = code.slice(open, end + 1);
-    if (CJK.test(body) && twoOfOneVocabulary([...body.matchAll(STATE_CASE)].map((k) => k[1]))) {
+    if (CJK.test(body) && twoOf([...body.matchAll(STATE_CASE)].map((k) => k[1]))) {
       lines.push(lineOf(m.index ?? 0));
     }
   }
@@ -784,5 +792,63 @@ describe("one decision queue (F49 Contract Q)", () => {
     expect(reasons('const T = { too_new: "剛開始", needs_resync: "重讀" };')).toEqual([1]);
     expect(reasons('if (code === "too_new") x();')).toEqual([]);
     expect(reasons("const r = rules.reasons[item.reason_code];")).toEqual([]);
+  });
+});
+
+/** F49-I07 (Contract T, decision 11): a slot's chip word and sentence are served (`state_label`／`state_text`, one table
+ * in `app/ads/slots.py` `STATE_TEXT`) and the structure read serves `slot_state`／`slot_label`. In the slot pieces no chip
+ * word (處理中, 等你, 卡住, 失敗) is written as a string or JSX text, no word table is keyed by two or more slot states,
+ * and no screen reads `missing_material` (one 缺素材 for six states). Today's hits are listed in `SLOT_PENDING`, each
+ * naming the issue that moves the piece onto the served fields and deletes the entry; an entry whose file no longer
+ * hits fails the stale-entry test. */
+const SLOT_PIECES = [
+  "components/ads/workspace/SlotTiles.tsx",
+  "components/ads/workspace/AssetsBody.tsx",
+  "components/ads/workspace/StructureTab.tsx",
+  "components/ads/patterns/SlotGrid.tsx",
+];
+const SLOT_STATES = ["ready", "missing", "in_progress", "retrying", "failed", "waiting", "copy_only", "image_only", "blocked"];
+type SlotRule = "chip" | "table" | "missing";
+const SLOT_SCANS: Record<SlotRule, (text: string) => number[]> = {
+  chip: (text) => hits(text, [/處理中|等你|卡住|失敗/]),
+  table: (text) => wordTables(text, (codes) => new Set(codes.filter((c) => SLOT_STATES.includes(c))).size >= 2),
+  missing: (text) => hits(text, [/\bmissing_material\b/]),
+};
+const SLOT_PENDING: { rule: SlotRule; file: string; issue: string }[] = [
+  { rule: "chip", file: "components/ads/workspace/SlotTiles.tsx", issue: "F49-I13" },
+  { rule: "chip", file: "components/ads/workspace/AssetsBody.tsx", issue: "F49-I13" },
+  { rule: "missing", file: "components/ads/workspace/StructureTab.tsx", issue: "F49-I13" },
+];
+
+describe("slot states told as served (F49 Contract T)", () => {
+  for (const rule of ["chip", "table", "missing"] as const) {
+    it(`no slot piece keeps its own ${rule === "chip" ? "chip words" : rule === "table" ? "slot-state word table" : "missing_material read"}`, () => {
+      const offenders = SLOT_PIECES.flatMap((file) => {
+        if (SLOT_PENDING.some((x) => x.rule === rule && x.file === file)) return [];
+        return SLOT_SCANS[rule](readFileSync(join(SRC_DIR, file), "utf-8")).map((line) => `${file}:${line}`);
+      });
+      expect(offenders).toEqual([]);
+    });
+  }
+
+  it("every slot piece exists and every pending entry still hits (the issue that moved it deletes its entry)", () => {
+    const present = new Set(FILES().map(rel));
+    expect(SLOT_PIECES.filter((file) => !present.has(file))).toEqual([]);
+    const stale = SLOT_PENDING.filter(
+      (x) => !present.has(x.file) || SLOT_SCANS[x.rule](readFileSync(join(SRC_DIR, x.file), "utf-8")).length === 0,
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it("the slot scans see chip words, state word tables and missing_material and leave the rest alone", () => {
+    expect(SLOT_SCANS.chip('<Chip tone="warn">等你</Chip>')).toEqual([1]);
+    expect(SLOT_SCANS.chip('const w = { n: 1, word: "卡住" };')).toEqual([1]);
+    expect(SLOT_SCANS.chip("<Chip>{slot.state_label}</Chip>")).toEqual([]);
+    expect(SLOT_SCANS.chip("// 處理中 slots poll every 3 s")).toEqual([]);
+    expect(SLOT_SCANS.table('const W = { ready: "已確認", blocked: "卡住" };')).toEqual([1]);
+    expect(SLOT_SCANS.table('const SEGMENT = { ready: "ok", in_progress: "running", blocked: "blocked" };')).toEqual([]);
+    expect(SLOT_SCANS.table('const one = { ready: "已確認" };')).toEqual([]);
+    expect(SLOT_SCANS.missing("if (a.missing_material) return null;")).toEqual([1]);
+    expect(SLOT_SCANS.missing('if (a.slot_state !== "ready") x();')).toEqual([]);
   });
 });
