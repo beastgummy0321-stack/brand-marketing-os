@@ -59,7 +59,8 @@ function view(o: Partial<LaunchView> = {}): LaunchView {
   };
 }
 // F49 Contract B: the launch view's `approval_confirms`, real shape (`handoff_check.approval_confirms`).
-const APPROVAL_CONFIRMS = [{ key: "manual_settings.audience_source", label: "受眾來源" }, { key: "material", label: "圖片或影片版本" }];
+// The launch-frozen manual keys are the required ones (only the readable landing URL), so in practice only material.
+const APPROVAL_CONFIRMS = [{ key: "material", label: "圖片或影片版本" }];
 const approvedView = (states: Partial<Record<string, Partial<LaunchItem>>> = {}, o: Partial<LaunchView> = {}) =>
   view({ step: "platform", version: 1, approved_at: "2026-09-20T06:05:00Z", items: ITEMS.map((i) => ({ ...i, ...states[i.id] })), ...o });
 
@@ -182,7 +183,7 @@ describe("確認上架清單", () => {
     renderAt("list");
     const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
     const line = screen.getByText(/平台讀不到這幾項/);
-    expect(line.textContent).toBe("平台讀不到這幾項，核准就代表上架時照這樣設：受眾來源、圖片或影片版本");
+    expect(line.textContent).toBe("平台讀不到這幾項，核准就代表上架時照這樣設：圖片或影片版本");
     // It stands before the approve button in reading order.
     expect(line.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -460,10 +461,10 @@ describe("讀回核對", () => {
   });
 
   /** F49 Contract B, real shape of `launch_view._item` after `handoff_check._settings`: the readable fields matched, the
-   * declared ones (material, the group's 受眾來源) are `confirmed_at_approval`, nothing is `unreadable`. */
+   * declared one (the ad material) is `confirmed_at_approval`, nothing is `unreadable`. */
   const declaredOnly = {
     h1: { state: "verified" as const, state_label: "相符" },
-    h2: { state: "verified" as const, state_label: "相符", confirmed_at_approval: [{ key: "manual_settings.audience_source", label: "受眾來源" }] },
+    h2: { state: "verified" as const, state_label: "相符" },
     h3: { state: "verified" as const, state_label: "相符", confirmed_at_approval: [{ key: "material", label: "圖片或影片版本" }] },
   };
 
@@ -471,10 +472,10 @@ describe("讀回核對", () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(approvedView(declaredOnly, read));
     renderAt("verify");
     expect(await screen.findByText("3 項都和核准的一樣")).toBeTruthy();
-    expect(screen.getByText(/^2 項核准時已確認・讀回於/)).toBeTruthy();
+    expect(screen.getByText(/^1 項核准時已確認・讀回於/)).toBeTruthy();
     expect(screen.getAllByText("相符")).toHaveLength(3);
     const approved = document.querySelectorAll("[data-slot=item-approved]");
-    expect([...approved].map((row) => row.textContent)).toEqual(["受眾來源核准時已確認","素材已確認版本・圖片 1 張核准時已確認"]);
+    expect([...approved].map((row) => row.textContent)).toEqual(["素材已確認版本・圖片 1 張核准時已確認"]);
     expect(screen.queryByText(/讀不到/)).toBeNull();
     expect(screen.queryByRole("group", { name: "全部標記" })).toBeNull();
     expect(screen.queryByRole("button", { name: "我看過了，一樣" })).toBeNull();
@@ -491,7 +492,7 @@ describe("讀回核對", () => {
     const settings = screen.getByRole("region", { name: "投放設定讀回" });
     expect(within(settings).getByRole("button", { name: "我看過了，一樣" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "我看過了，一樣" })).toHaveLength(1);
-    expect(screen.getAllByText("核准時已確認")).toHaveLength(2);
+    expect(screen.getAllByText("核准時已確認")).toHaveLength(1);
   });
 
   it("an unknown item prints its coded reason; the check's general remark is no reason", async () => {
