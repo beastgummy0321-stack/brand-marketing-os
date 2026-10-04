@@ -7,6 +7,8 @@
 SaaS 目標下示範品牌改走別的路徑，不在啟動流程寫死種子資料。
 """
 
+from app.core import input_rules
+
 # ---------------------------------------------------------------------------
 # 固定選項清單（畫面用語 -> 內部值 由各自的 *_LABELS dict 提供）
 # ---------------------------------------------------------------------------
@@ -418,6 +420,36 @@ CONVERSION_GOAL_LABELS = {
     "booking": "預約",
     "awareness": "認識品牌",
 }
+
+# ---------------------------------------------------------------------------
+# F50 Contract I: a stored vocab value is checked once, here. `require(kind, value)` =
+# `input_rules.one_of` over the list named by `kind`, the kind's label naming the field. Every
+# `*_TYPES` list above is registered (machine check: app/tests/test_input_rules_gate.py).
+# ---------------------------------------------------------------------------
+
+REQUIRE_KINDS = {
+    "brand_fact": ("品牌資料類型", BRAND_FACT_TYPES),
+    "product_fact": ("商品資料類型", PRODUCT_FACT_TYPES),
+    "rule": ("規則類型", RULE_TYPES),
+    "claim": ("宣稱類型", CLAIM_TYPES),
+    "channel": ("通路", CHANNEL_TYPES),
+    "customer_voice_source": ("顧客聲音來源", CUSTOMER_VOICE_CHANNELS),
+    "policy": ("全店政策", POLICY_TYPES),
+    "persona": ("人設", PERSONA_TYPES),
+}
+
+
+def _choices(items) -> dict:
+    """(key, label) pairs or the policy registry's dicts -> {key: label}."""
+    return {i["key"]: i["label"] for i in items} if items and isinstance(items[0], dict) \
+        else {k: label for k, label in items}
+
+
+def require(kind: str, value) -> str:
+    """`value` when it is a key of the vocab list `kind`, else `InputRuleError` naming the choices."""
+    label, items = REQUIRE_KINDS[kind]
+    return input_rules.one_of(value, label, _choices(items))
+
 
 def _label(pairs, value):
     for internal, human in pairs:

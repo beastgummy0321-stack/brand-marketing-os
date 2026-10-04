@@ -99,10 +99,17 @@ class SettingsApiTest(unittest.TestCase):
         with coredb.connection() as fresh:
             self.assertEqual(coresettings.get_api_key(fresh, org_id=coredb.DEV_ORG_ID), TEST_KEY)
 
-    def test_save_api_key_empty_gives_human_error(self):
-        resp = self.client.post("/api/settings/api-key", json={"api_key": "  "})
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("請貼上 AI 金鑰", resp.json()["error"])
+    def test_save_api_key_refused_by_the_one_rule(self):
+        """F50 Contract I (controls a-07): blank, any string and a key with a space inside are
+        refused with `input_rules.api_key`'s sentence, and nothing is stored."""
+        for bad in ("  ", "abc", "sk-ant- 1234", None):
+            resp = self.client.post("/api/settings/api-key", json={"api_key": bad})
+            self.assertEqual(resp.status_code, 400, bad)
+            self.assertEqual(resp.json()["error"],
+                             "AI 金鑰要以 sk-ant- 開頭，請從 Anthropic 主控台複製完整的一串。")
+        self.assertFalse(self.client.get("/api/settings").json()["data"]["db_key_present"])
+        ok = self.client.post("/api/settings/api-key", json={"api_key": f"  {TEST_KEY}  "})
+        self.assertEqual(ok.status_code, 200, ok.text)
 
     def test_save_api_key_never_writes_plaintext_and_clears_legacy_row(self):
         """票 04-2 驗收 1＋6：手寫一列模擬修好前的明文世界，存一次新金鑰後，app_setting
@@ -197,7 +204,26 @@ class SettingsApiTest(unittest.TestCase):
         不因為改成 JSON 就放寬）。"""
         resp = self.client.post("/api/settings/budget", json={"intake_budget": 0})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("花費上限請填大於 0 的數字", resp.json()["error"])
+        self.assertEqual(resp.json()["error"], "花費上限要大於 0。")
+
+    def test_blank_settings_money_says_fill_a_number_never_zero(self):
+        """F50 Contract I (controls a-05): a blank field is sent as null (or empty text) and is
+        refused with 請填數字 — it is never saved as 0. Typed text is parsed by the server."""
+        before = coresettings.get_intake_budget_limit(web.conn, org_id=coredb.DEV_ORG_ID)
+        for blank in (None, "", "  "):
+            resp = self.client.post("/api/settings/budget", json={"intake_budget": blank})
+            self.assertEqual(resp.status_code, 400, blank)
+            self.assertEqual(resp.json()["error"], "花費上限請填數字。")
+            cap = self.client.post("/api/settings/ai-monthly-cost-limit",
+                                   json={"ai_monthly_cost_limit": blank})
+            self.assertEqual(cap.status_code, 400, blank)
+            self.assertEqual(cap.json()["error"], "AI 月費上限請填數字。")
+        self.assertEqual(
+            coresettings.get_intake_budget_limit(web.conn, org_id=coredb.DEV_ORG_ID), before)
+        typed = self.client.post("/api/settings/budget", json={"intake_budget": "1,200"})
+        self.assertEqual(typed.status_code, 200, typed.text)
+        self.assertEqual(
+            coresettings.get_intake_budget_limit(web.conn, org_id=coredb.DEV_ORG_ID), 1200.0)
 
     # -- 測試連線：假供應商，不打真網路 ------------------------------------------------
 
@@ -281,7 +307,7 @@ class SettingsApiTest(unittest.TestCase):
         resp = self.client.post(
             "/api/settings/ai-monthly-cost-limit", json={"ai_monthly_cost_limit": 0})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("大於 0", resp.json()["error"])
+        self.assertEqual(resp.json()["error"], "AI 月費上限要大於 0。")
 
     def test_ai_monthly_cost_limit_requires_owner(self):
         """比照 test_identity_orgs.py::test_rename_requires_owner 同一套：member 角色不能
@@ -337,10 +363,11 @@ class SettingsApiTest(unittest.TestCase):
 
     def test_save_budget_non_numeric_and_negative_rejected(self):
         """0 之外的無效輸入（非數字／負數）也要擋（原 test_budget_validation_and_save）。"""
-        for bad in ("abc", -5):
+        for bad, sentence in (("abc", "花費上限請填數字。"), (-5, "花費上限要大於 0。"),
+                              (True, "花費上限請填數字。")):
             resp = self.client.post("/api/settings/budget", json={"intake_budget": bad})
             self.assertEqual(resp.status_code, 400, bad)
-            self.assertIn("花費上限請填大於 0 的數字", resp.json()["error"])
+            self.assertEqual(resp.json()["error"], sentence)
 
     def test_json_body_not_a_dict_gives_human_error(self):
         resp = self.client.post("/api/settings/model", content=b"[1,2,3]",

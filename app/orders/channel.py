@@ -23,11 +23,13 @@ import csv
 import hashlib
 import io
 import json
+from datetime import date
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import input_rules, vocab
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
+from app.orders.importer import vendor_date
 from app.shared import csv_columns
 
 # 蝦皮賣家中心「訂單」匯出常見欄名（未經真實檔驗證，見檔頭誠實標注）。order_sn 是
@@ -47,6 +49,8 @@ class ShopeeImportResult:
         self.imported = 0
         self.updated = 0
         self.errors: list = []
+        # F50 Contract I: rows not written, one sentence each; the rest of the file imports.
+        self.refused: list = []
         self.unmatched_columns: list = []
         self.found_columns: list = []
 
@@ -99,7 +103,7 @@ def parse_shopee_csv(text: str) -> tuple:
             if concept == "revenue":
                 row[concept] = csv_columns.to_number(value)
             elif concept == "order_date":
-                row[concept] = (str(value).strip()[:10] or None) if value else None
+                row[concept] = vendor_date(value)
             else:
                 row[concept] = (value or "").strip() or None
         if not row.get("order_sn"):
@@ -126,6 +130,12 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
 
     for row in rows:
         order_sn = row.get("order_sn")
+        try:
+            day = input_rules.iso_date(row.get("order_date"), "訂單日期", optional=True)
+        except input_rules.InputRuleError as exc:
+            result.refused.append(f"訂單 {order_sn}：{exc}")
+            continue
+        entry_date = day.isoformat() if day else None
         existing = conn.execute(
             "SELECT id FROM channel_revenue WHERE brand_id = %s AND channel = 'marketplace'"
             " AND external_id = %s",
@@ -135,7 +145,7 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
             conn.execute(
                 "UPDATE channel_revenue SET entry_date = %s, revenue = %s, source = %s,"
                 " import_batch_id = %s, updated_at = %s WHERE id = %s",
-                (row.get("order_date"), row.get("revenue"), source, batch_id, ts, existing["id"]),
+                (entry_date, row.get("revenue"), source, batch_id, ts, existing["id"]),
             )
             result.updated += 1
         else:
@@ -143,7 +153,7 @@ def save_shopee_rows(conn, brand_id: str, rows: list, *, source: str, actor: str
                 "INSERT INTO channel_revenue (id, org_id, brand_id, channel, entry_date, external_id,"
                 " revenue, source, import_batch_id, created_at, updated_at)"
                 " VALUES (%s, %s, %s, 'marketplace', %s, %s, %s, %s, %s, %s, %s)",
-                (new_id("chr"), org_id, brand_id, row.get("order_date"), order_sn,
+                (new_id("chr"), org_id, brand_id, entry_date, order_sn,
                  row.get("revenue"), source, batch_id, ts, ts),
             )
             result.imported += 1
@@ -188,23 +198,22 @@ def _row_hash(channel: str, entry_date: str, revenue, quantity, note: str | None
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date: str,
-                         revenue: float | None = None, quantity: float | None = None,
+def record_channel_entry(conn, brand_id: str, *, channel: str, entry_date,
+                         revenue=None, quantity=None,
                          note: str | None = None, actor: str) -> dict:
-    valid_channels = {code for code, _ in vocab.CHANNEL_TYPES}
-    if channel not in valid_channels:
-        raise ValueError(f"不認得的通路：{channel}")
+    """One hand-entered channel row. Values as sent (numbers or typed text), checked by the one
+    table (F50 Contract I): channel `vocab.require`, date `iso_date`, revenue unset or `>= 0`
+    (0 stays 0, F47 Contract A), quantity unset or a whole number `>= 0`."""
+    channel = vocab.require("channel", channel)
     if channel in AUTO_LEDGER_CHANNELS:
         raise ValueError(HAND_ENTRY_CHANNEL_FORBIDDEN_MESSAGE)
-    if not entry_date or not entry_date.strip():
-        raise ValueError("日期為必填")
+    entry_date = input_rules.iso_date(entry_date, "日期").isoformat()
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
-    # F47 Contract A: revenue is unset (None) or >= 0 and kept as sent (0 stays 0).
     revenue = input_rules.non_negative(revenue, "營收", optional=True)
+    quantity = input_rules.count(quantity, "數量", minimum=0, optional=True)
     ts = now_utc()
     org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
-    entry_date = entry_date.strip()
     note = note.strip() if note and note.strip() else None
     row_hash = _row_hash(channel, entry_date, revenue, quantity, note)
 
@@ -262,7 +271,7 @@ def demo() -> None:
     csv_text = "訂單編號,訂單成立時間,訂單金額\nSP-1,2026-06-01,\"1,200\"\n"
     rows, result = parse_shopee_csv(csv_text)
     assert result.errors == [], result.errors
-    assert rows == [{"order_sn": "SP-1", "order_date": "2026-06-01", "revenue": 1200.0}], rows
+    assert rows == [{"order_sn": "SP-1", "order_date": date(2026, 6, 1), "revenue": 1200.0}], rows
     print("channel 自檢通過")
 
 

@@ -98,11 +98,14 @@ export function saveModel(llmModel: string): Promise<void> {
   return postSettings("model", { llm_model: llmModel });
 }
 
-export function saveBudget(intakeBudget: number): Promise<void> {
+/** F50 Contract I: the typed text (`typedValue`), null when blank; the server parses it and refuses with a
+ * sentence naming the field. */
+export function saveBudget(intakeBudget: string | null): Promise<void> {
   return postSettings("budget", { intake_budget: intakeBudget });
 }
 
-export function saveAiMonthlyCostLimit(limit: number): Promise<void> {
+/** Same rule as `saveBudget`: the typed text or null. */
+export function saveAiMonthlyCostLimit(limit: string | null): Promise<void> {
   return postSettings("ai-monthly-cost-limit", { ai_monthly_cost_limit: limit });
 }
 

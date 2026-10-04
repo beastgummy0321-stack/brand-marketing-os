@@ -76,11 +76,72 @@ describe("settings saves show the server's sentence", () => {
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ error: "AI 月費上限請填大於 0 的數字，例如 200。" }), { status: 400 })),
     );
-    await expect(saveAiMonthlyCostLimit(0)).rejects.toThrow("AI 月費上限請填大於 0 的數字，例如 200。");
+    await expect(saveAiMonthlyCostLimit("0")).rejects.toThrow("AI 月費上限請填大於 0 的數字，例如 200。");
   });
 
   it("a body without a sentence falls back to the status-code text", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 })));
-    await expect(saveAiMonthlyCostLimit(200)).rejects.toThrow("儲存失敗（狀態碼 502）");
+    await expect(saveAiMonthlyCostLimit("200")).rejects.toThrow("儲存失敗（狀態碼 502）");
+  });
+});
+
+/** F50-I02 (Contract I; controls a-05 blank spend cap, a-07 「AI 金鑰接受任何字串」): the settings fields send what was
+ * typed — a blank is null, never 0 — and print the server's sentence under the field; no local bound. */
+describe("settings fields send the typed text and print the server's sentence", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function refuse(sentence: string) {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: sentence }), { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function sentBody(fetchMock: ReturnType<typeof vi.fn>): unknown {
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    return JSON.parse(String(init.body));
+  }
+
+  it("a blank spend cap is sent as null and the server's 請填數字 shows under the field", async () => {
+    const { SpendCapSection } = await vi.importActual<typeof import("./SpendCapSection")>("./SpendCapSection");
+    const fetchMock = refuse("花費上限請填數字。");
+    render(<SpendCapSection data={SETTINGS} onSaved={() => {}} />);
+    const field = screen.getByRole("textbox", { name: "建檔精靈等 AI 生成的花費上限" });
+    await userEvent.clear(field);
+    await userEvent.click(screen.getByRole("button", { name: "儲存花費上限" }));
+    expect(await screen.findByText("花費上限請填數字。")).toBeTruthy();
+    expect(sentBody(fetchMock)).toEqual({ intake_budget: null });
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    await userEvent.type(field, "4");
+    expect(screen.queryByText("花費上限請填數字。")).toBeNull();
+  });
+
+  it("a typed spend cap goes as typed text — the browser keeps no bound", async () => {
+    const { SpendCapSection } = await vi.importActual<typeof import("./SpendCapSection")>("./SpendCapSection");
+    const fetchMock = refuse("花費上限要大於 0。");
+    render(<SpendCapSection data={SETTINGS} onSaved={() => {}} />);
+    const field = screen.getByRole("textbox", { name: "建檔精靈等 AI 生成的花費上限" });
+    await userEvent.clear(field);
+    await userEvent.type(field, " -5 ");
+    await userEvent.click(screen.getByRole("button", { name: "儲存花費上限" }));
+    expect(await screen.findByText("花費上限要大於 0。")).toBeTruthy();
+    expect(sentBody(fetchMock)).toEqual({ intake_budget: "-5" });
+  });
+
+  it("the AI monthly limit and the AI key print the server's sentences", async () => {
+    const { ApiKeySection } = await vi.importActual<typeof import("./ApiKeySection")>("./ApiKeySection");
+    let fetchMock = refuse("AI 月費上限請填數字。");
+    render(<ApiKeySection data={SETTINGS} onSaved={() => {}} />);
+    const cap = screen.getByRole("textbox", { name: "AI 月費上限（整個組織）" });
+    await userEvent.clear(cap);
+    await userEvent.click(screen.getByRole("button", { name: "儲存月費上限" }));
+    expect(await screen.findByText("AI 月費上限請填數字。")).toBeTruthy();
+    expect(sentBody(fetchMock)).toEqual({ ai_monthly_cost_limit: null });
+
+    const keySentence = "AI 金鑰要以 sk-ant- 開頭，請從 Anthropic 主控台複製完整的一串。";
+    fetchMock = refuse(keySentence);
+    await userEvent.type(screen.getByPlaceholderText("貼上以 sk-ant- 開頭的金鑰"), "abc");
+    await userEvent.click(screen.getByRole("button", { name: "儲存金鑰" }));
+    expect(await screen.findByText(keySentence)).toBeTruthy();
+    expect(sentBody(fetchMock)).toEqual({ api_key: "abc" });
   });
 });

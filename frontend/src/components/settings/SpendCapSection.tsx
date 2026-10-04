@@ -4,12 +4,15 @@ import { saveBudget } from "@/lib/settingsApi";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { useFormSubmit } from "@/lib/useFormSubmit";
+import { typedValue } from "@/lib/typedNumber";
 
-/** 花費上限小節（S15.22–S15.28；票 storage-04 刪掉同卡的素材資料夾表單後只剩這個）。 */
+/** 花費上限小節（S15.22–S15.28；票 storage-04 刪掉同卡的素材資料夾表單後只剩這個）。
+ * F50 Contract I: the field sends what was typed (blank = null, never 0) and prints the server's sentence; it keeps
+ * no bound of its own (no `min`／`step` — the server's `positive` rule answers). */
 export function SpendCapSection({ data, onSaved }: { data: SettingsData; onSaved: () => void }) {
   const [budget, setBudget] = useState(String(data.intake_budget));
   const budgetForm = useFormSubmit(async () => {
-    await saveBudget(Number(budget));
+    await saveBudget(typedValue(budget));
     onSaved();
   });
 
@@ -22,6 +25,7 @@ export function SpendCapSection({ data, onSaved }: { data: SettingsData; onSaved
         <h3 className="text-sm font-medium text-foreground">單一品牌的花費上限</h3>
         <form
           className="flex flex-col gap-4"
+          {...budgetForm.formProps}
           onSubmit={(e) => {
             e.preventDefault();
             void budgetForm.submit();
@@ -32,9 +36,9 @@ export function SpendCapSection({ data, onSaved }: { data: SettingsData; onSaved
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground">US$</span>
               <input
-                type="number"
-                step={1}
-                min={0}
+                inputMode="decimal"
+                aria-label="建檔精靈等 AI 生成的花費上限"
+                aria-invalid={budgetForm.error ? true : undefined}
                 value={budget}
                 onChange={(e) => setBudget(e.target.value)}
                 placeholder="例如 30"

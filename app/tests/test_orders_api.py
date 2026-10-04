@@ -142,7 +142,51 @@ class OrdersApiTest(unittest.TestCase):
             json={"policy_type": "unknown", "changed_at": "2026-08-01", "description": "改成全站 9 折"},
         )
         self.assertEqual(invalid.status_code, 400)
-        self.assertIn("unknown", invalid.json()["detail"])
+        self.assertEqual(invalid.json()["detail"], "口徑類型只能選：折扣規則、退款政策。")
+
+    def test_non_iso_dates_are_400_with_the_field_never_500(self):
+        """F50 Contract I (intake #4): 「13/06/2026」 on each orders date route → 400 naming the
+        field, nothing stored."""
+        policy = self.client.post(
+            f"/api/brands/{self.brand_id}/orders/policy-change",
+            json={"policy_type": "discount", "changed_at": "13/06/2026", "description": "x"})
+        self.assertEqual(policy.status_code, 400, policy.text)
+        self.assertEqual(policy.json()["detail"], "變更日請用 YYYY-MM-DD 格式（例如 2026-10-05）。")
+        entry = self.client.post(
+            f"/api/brands/{self.brand_id}/orders/channel-entry",
+            json={"channel": "physical_store", "entry_date": "13/06/2026", "revenue": 10,
+                  "quantity": None, "note": ""})
+        self.assertEqual(entry.status_code, 400, entry.text)
+        self.assertEqual(entry.json()["detail"], "日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。")
+        body = self.client.get(f"/api/brands/{self.brand_id}/orders").json()
+        self.assertEqual((body["policy_changes"], body["channel_entries"]), ([], []))
+
+    def test_channel_quantity_minus_two_refused(self):
+        """Controls a-59: 數量 -2 used to save; now `count(minimum=0)` refuses it (the panel maps
+        the 「數量」 sentence to its field). A typed whole number is kept."""
+        url = f"/api/brands/{self.brand_id}/orders/channel-entry"
+        for bad in (-2, "-2", "1.5", "abc"):
+            resp = self.client.post(url, json={"channel": "physical_store", "entry_date": "2026-08-19",
+                                               "revenue": 100, "quantity": bad, "note": ""})
+            self.assertEqual(resp.status_code, 400, bad)
+            self.assertEqual(resp.json()["detail"], "數量要是 0 以上的整數。")
+        ok = self.client.post(url, json={"channel": "physical_store", "entry_date": "2026-08-19",
+                                         "revenue": 100, "quantity": "3", "note": ""})
+        self.assertEqual(ok.status_code, 200, ok.text)
+        entries = self.client.get(f"/api/brands/{self.brand_id}/orders").json()["channel_entries"]
+        self.assertEqual([e["quantity"] for e in entries], [3])
+
+    def test_sku_cost_zero_stored_as_zero_and_blank_refused(self):
+        """User ruling 2026-10-04: SKU cost 0 is stored as 0; blank and negative are refused."""
+        url = f"/api/brands/{self.brand_id}/orders/sku-cost"
+        zero = self.client.post(url, json={"sku": "GM-0", "unit_cost": "0"})
+        self.assertEqual(zero.status_code, 200, zero.text)
+        self.assertEqual(zero.json()["message"], "「GM-0」的單位成本已更新為 0.00。")
+        for bad, sentence in (("", "單位成本請填數字。"), (None, "單位成本請填數字。"),
+                              ("-1", "單位成本不能是負數。")):
+            resp = self.client.post(url, json={"sku": "GM-0", "unit_cost": bad})
+            self.assertEqual(resp.status_code, 400, bad)
+            self.assertEqual(resp.json()["detail"], sentence)
 
     def test_channel_entry_revenue_zero_kept_negative_refused(self):
         """F47 Contract A: revenue 0 is stored as 0, JSON null = left empty, -5 is refused with
@@ -199,7 +243,7 @@ class OrdersApiTest(unittest.TestCase):
     def test_shopee_import_reports_imported_and_updated_counts(self):
         result = SimpleNamespace(
             kind="shopee_report", errors=[],
-            shopee_result=SimpleNamespace(imported=2, updated=1),
+            shopee_result=SimpleNamespace(imported=2, updated=1, refused=["訂單 SP-9：訂單日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。"]),
         )
         with patch("app.orders.routes_api.orders_dispatch.import_dropped_file", return_value=result):
             response = self.client.post(
@@ -209,8 +253,9 @@ class OrdersApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["ok"], True)
-        self.assertIn("2", body["message"])
-        self.assertIn("1", body["message"])
+        self.assertEqual(body["message"], "匯入 2 筆新蝦皮訂單、更新 1 筆。有 1 筆沒匯入："
+                         "訂單 SP-9：訂單日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。")
+        self.assertEqual(len(body["refused"]), 1)
 
     def test_all_post_endpoints_return_json_when_brand_is_missing(self):
         missing_brand = "missing"

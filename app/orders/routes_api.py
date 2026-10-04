@@ -19,6 +19,14 @@ def _bad_request(message: str) -> JSONResponse:
     return JSONResponse({"detail": message}, status_code=400)
 
 
+def _refused_text(refused: list) -> str:
+    """Rows an import did not write (F50 Contract I): how many, and the first reasons."""
+    if not refused:
+        return ""
+    shown = "；".join(refused[:3]) + ("……" if len(refused) > 3 else "")
+    return f"有 {len(refused)} 筆沒匯入：{shown}"
+
+
 @router.get("/brands/{brand_id}/orders")
 def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
     """回傳單一品牌的訂單統計與固定大小的一頁訂單清單。"""
@@ -105,12 +113,15 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
         message = (
             f"匯入 {imported.orders_imported} 筆新訂單、更新 {imported.orders_updated} 筆、"
             f"{imported.items_imported} 個商品品項。"
-        )
-        return {"ok": True, "message": message}
+        ) + _refused_text(imported.refused)
+        return {"ok": True, "message": message, "refused": imported.refused}
     if result.errors:
         return _bad_request(result.errors[0])
     imported = result.shopee_result
-    return {"ok": True, "message": f"匯入 {imported.imported} 筆新蝦皮訂單、更新 {imported.updated} 筆。"}
+    return {"ok": True,
+            "message": (f"匯入 {imported.imported} 筆新蝦皮訂單、更新 {imported.updated} 筆。"
+                        + _refused_text(imported.refused)),
+            "refused": imported.refused}
 
 
 @router.post("/brands/{brand_id}/orders/sku-cost")
@@ -121,14 +132,13 @@ def set_sku_cost(request: Request, brand_id: str, payload: dict):
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
     sku = str(payload.get("sku", ""))
-    value, ok = main_mod.parse_number(str(payload.get("unit_cost", "")))
-    if not ok or value is None:
-        return _bad_request("單位成本請填數字。")
+    # F50 Contract I: the typed value goes to the store; `input_rules.non_negative` answers.
     try:
-        orders_repo.set_sku_cost(main_mod.conn, brand_id, sku, value, actor=str(actor.user_id))
+        saved = orders_repo.set_sku_cost(main_mod.conn, brand_id, sku, payload.get("unit_cost"),
+                                         actor=str(actor.user_id))
     except ValueError as exc:
         return _bad_request(str(exc))
-    return {"ok": True, "message": f"「{sku}」的單位成本已更新為 {value:,.2f}。"}
+    return {"ok": True, "message": f"「{saved['sku']}」的單位成本已更新為 {saved['unit_cost']:,.2f}。"}
 
 
 @router.post("/brands/{brand_id}/orders/policy-change")
@@ -141,7 +151,7 @@ def record_policy_change(request: Request, brand_id: str, payload: dict):
     try:
         orders_repo.record_policy_change(
             main_mod.conn, brand_id, policy_type=str(payload.get("policy_type", "")),
-            changed_at=str(payload.get("changed_at", "")), description=str(payload.get("description", "")),
+            changed_at=payload.get("changed_at"), description=str(payload.get("description", "")),
             actor=str(actor.user_id),
         )
     except ValueError as exc:
@@ -159,18 +169,12 @@ def record_channel_entry(request: Request, brand_id: str, payload: dict):
     # 通路合不合法只在 orders_channel.record_channel_entry() 判一次（含「官網不能手動
     # 登錄」），這裡不抄第二份——不合法就是它丟 ValueError，下面統一轉成 400。
     channel = str(payload.get("channel", ""))
-    # JSON null = left empty (unset), never the text "None".
-    revenue_raw, quantity_raw = payload.get("revenue"), payload.get("quantity")
-    revenue, revenue_ok = main_mod.parse_number("" if revenue_raw is None else str(revenue_raw))
-    if not revenue_ok:
-        return _bad_request("營收請填數字，或留空。")
-    quantity, quantity_ok = main_mod.parse_number("" if quantity_raw is None else str(quantity_raw))
-    if not quantity_ok:
-        return _bad_request("數量請填數字，或留空。")
+    # F50 Contract I: values as typed (JSON null = left empty); the store checks them once.
     try:
         orders_channel.record_channel_entry(
-            main_mod.conn, brand_id, channel=channel, entry_date=str(payload.get("entry_date", "")),
-            revenue=revenue, quantity=quantity, note=str(payload.get("note", "")) or None,
+            main_mod.conn, brand_id, channel=channel, entry_date=payload.get("entry_date"),
+            revenue=payload.get("revenue"), quantity=payload.get("quantity"),
+            note=str(payload.get("note", "")) or None,
             actor=str(actor.user_id),
         )
     except ValueError as exc:

@@ -5,9 +5,11 @@ naming the field; nothing is coerced.
 """
 
 import math
+import re
 import struct
 import zlib
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -164,3 +166,134 @@ def test_check_image_upload():
         r.check_image_upload("text.jpg", b"plain text", kinds)
     with pytest.raises(r.InputRuleError, match="不是JPEG、PNG 或 WebP 圖片"):
         r.check_image_upload("anim.gif", b"GIF89a\x01\x00\x01\x00", kinds)
+
+
+# ---------------------------------------------------------------------------
+# F50 Contract I: the rest of the one table (one test per rule and case; the good value passes
+# unchanged, the bad value gets the exact sentence).
+# ---------------------------------------------------------------------------
+
+def _refused(sentence):
+    return pytest.raises(r.InputRuleError, match="^" + re.escape(sentence) + "$")
+
+
+def test_count():
+    assert r.count(3, "數量") == 3
+    assert r.count("12", "數量") == 12
+    assert r.count(0, "數量") == 0
+    assert r.count(2.0, "數量") == 2
+    assert r.count(None, "數量", optional=True) is None
+    assert r.count(" ", "數量", optional=True) is None
+    for bad in (-2, "-2", 1.5, "1.5", "abc", True, None, ""):
+        with _refused("數量要是 0 以上的整數。"):
+            r.count(bad, "數量")
+    assert r.count(1, "件數", minimum=1) == 1
+    with _refused("件數要是 1 以上的整數。"):
+        r.count(0, "件數", minimum=1)
+
+
+def test_percent():
+    assert r.percent(20, "成交率") == 20.0
+    assert r.percent("100", "成交率") == 100.0
+    assert r.percent(0.5, "成交率") == 0.5
+    assert r.percent("", "成交率", optional=True) is None
+    for bad in (0, -1, 100.01, 120, "abc", None):
+        with _refused("成交率要大於 0、最多 100（填 20 代表 20%）。"):
+            r.percent(bad, "成交率")
+
+
+def test_rate_fraction_is_the_one_scale():
+    assert r.rate_fraction(20) == 0.2
+    assert r.rate_fraction(Decimal("45")) == 0.45
+
+
+def test_iso_date():
+    assert r.iso_date("2026-10-05", "日期") == date(2026, 10, 5)
+    assert r.iso_date(" 2026-10-05 ", "日期") == date(2026, 10, 5)
+    assert r.iso_date(date(2026, 10, 5), "日期") == date(2026, 10, 5)
+    assert r.iso_date(datetime(2026, 10, 5, 23, 30), "日期") == date(2026, 10, 5)
+    assert r.iso_date(None, "日期", optional=True) is None
+    for bad in ("13/06/2026", "2026-13-01", "2026-02-30", "20261005", "2026-10-05T00:00",
+                "yesterday", 20261005, None, ""):
+        with _refused("日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。"):
+            r.iso_date(bad, "日期")
+
+
+def test_date_order_reads_iso_only():
+    with _refused("開始日請用 YYYY-MM-DD 格式（例如 2026-10-05）。"):
+        r.date_order("01/10/2026", "2026-10-02")
+
+
+def test_date_within():
+    assert r.date_within("2026-10-05", "2026-10-01", "2026-10-31", "投放組日期", "活動期間") \
+        == date(2026, 10, 5)
+    assert r.date_within("2026-10-01", date(2026, 10, 1), None, "投放組日期", "活動期間") \
+        == date(2026, 10, 1)
+    for bad in ("2026-09-30", "2026-11-01"):
+        with _refused("投放組日期要在活動期間（2026-10-01～2026-10-31）內。"):
+            r.date_within(bad, "2026-10-01", "2026-10-31", "投放組日期", "活動期間")
+
+
+def test_one_of():
+    allowed = {"discount": "折扣規則", "refund": "退款政策"}
+    assert r.one_of("refund", "口徑類型", allowed) == "refund"
+    for bad in ("unknown", "折扣規則", None, ""):
+        with _refused("口徑類型只能選：折扣規則、退款政策。"):
+            r.one_of(bad, "口徑類型", allowed)
+
+
+def test_url():
+    assert r.url(" https://example.com/a?b=1 ", "官網") == "https://example.com/a?b=1"
+    assert r.url("http://localhost:8710/x", "官網") == "http://localhost:8710/x"
+    assert r.url("", "官網", optional=True) is None
+    for bad in ("https://", "example.com", "ftp://example.com", "https://exa mple.com",
+                "https://localhost.", "javascript:alert(1)", "https://nodot"):
+        with _refused(f"官網「{bad}」不是完整的網址，請從 https:// 開始，例如 https://example.com。"):
+            r.url(bad, "官網")
+
+
+def test_urls():
+    assert r.urls(["https://a.com", " ", None, "https://b.com"], "網址", max_count=5) == \
+        ["https://a.com", "https://b.com"]
+    with _refused("最多填 5 個網址。"):
+        r.urls([f"https://a{i}.com" for i in range(6)], "網址", max_count=5)
+    with _refused("網址「https://」不是完整的網址，請從 https:// 開始，例如 https://example.com。"):
+        r.urls(["https://a.com", "https://"], "網址", max_count=5)
+
+
+def test_upload_caps_and_sentences():
+    assert r.UPLOAD_CAPS == {"brand_photo": 10 * 1024 * 1024, "library_asset": 50 * 1024 * 1024,
+                             "ad_asset": 50 * 1024 * 1024}
+    r.check_upload("a.jpg", 10 * 1024 * 1024, path="brand_photo")  # exactly the cap passes
+    with _refused("「a.jpg」是空的檔案，請換一個。"):
+        r.check_upload("a.jpg", 0, path="brand_photo")
+    # A 10.04 MB file (as a MiB display rounds it) is over a 10 MiB cap: bytes, no rounding;
+    # one byte over is over.
+    for size in (int(10.04 * 1024 * 1024), 10 * 1024 * 1024 + 1):
+        with _refused("「a.jpg」超過 10 MB，請換一個小一點的檔案。"):
+            r.check_upload("a.jpg", size, path="brand_photo")
+    with _refused("「v.mp4」超過 50 MB，請換一個小一點的檔案。"):
+        r.check_upload("v.mp4", 50 * 1024 * 1024 + 1, path="ad_asset")
+
+
+def test_api_key():
+    assert r.api_key("  sk-ant-api03-abc  ") == "sk-ant-api03-abc"
+    for bad in ("abc", "", "   ", None, "sk-ant-", "sk-ant- abc", "sk-ant-ab\tc", "sk-abc", 123):
+        with _refused("AI 金鑰要以 sk-ant- 開頭，請從 Anthropic 主控台複製完整的一串。"):
+            r.api_key(bad)
+
+
+def test_vocab_require_is_one_of_over_the_vocab_list():
+    from app.core import vocab
+
+    assert vocab.require("channel", "physical_store") == "physical_store"
+    assert vocab.require("policy", "ship_threshold") == "ship_threshold"
+    assert vocab.require("persona", "kol") == "kol"
+    assert vocab.require("customer_voice_source", "shopee") == "shopee"
+    labels = "、".join(label for _key, label in vocab.CHANNEL_TYPES)
+    with _refused(f"通路只能選：{labels}。"):
+        vocab.require("channel", "pharmacy")
+    with _refused("宣稱類型只能選：可用、高風險、禁用。"):
+        vocab.require("claim", "xyz")
+    with pytest.raises(KeyError):
+        vocab.require("no_such_kind", "x")

@@ -69,4 +69,19 @@ describe("OrdersPage channel revenue sends what was typed (F47-I03, drill-10 甲
     await userEvent.clear(amount);
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("F50-I02 (controls a-59): quantity −2 is sent as typed and the server's count sentence shows under 數量", async () => {
+    vi.mocked(createChannelEntry).mockRejectedValue(new Error("數量要是 0 以上的整數。"));
+    const panel = await openChannelEntry();
+    const date = panel.querySelector('input[type="date"]') as HTMLInputElement;
+    fireEvent.change(date, { target: { value: "2026-09-16" } });
+    const quantity = screen.getByText("數量（選填）").closest("label")!.querySelector("input")!;
+    await userEvent.type(quantity, "-2");
+    await userEvent.click(screen.getByRole("button", { name: "記下這筆" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("數量要是 0 以上的整數。");
+    expect(quantity.closest("label")?.contains(alert)).toBe(true);
+    expect(vi.mocked(createChannelEntry).mock.lastCall?.[1]).toMatchObject({ quantity: "-2" });
+  });
 });

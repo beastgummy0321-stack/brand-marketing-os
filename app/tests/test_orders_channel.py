@@ -166,6 +166,43 @@ class WebsiteChannelRevenueMatchesStatsTest(_BaseChannelTest):
 class ManualChannelEntryDataCorrectnessTest(_BaseChannelTest):
     """定案 1／鐵則 16：revenue NULL＝不知道，不能在彙總途中變成假的 0。"""
 
+    def test_vendor_dates_parse_and_an_unreadable_one_refuses_only_its_row(self):
+        """F50 Contract I (intake #4): a vendor date with a time of day or year-first slashes is
+        read as its calendar date; 「13/06/2026」 refuses that row with its reason (never a
+        `[:10]` slice into the column) and the other rows still land."""
+        rows, _ = orders_channel.parse_shopee_csv(_shopee_csv([
+            ("SN101", "2026-06-02 14:22", "500", None),
+            ("SN102", "2026/06/03 09:00", "300", None),
+            ("SN103", "13/06/2026", "200", None),
+        ]))
+        result = orders_channel.save_shopee_rows(web.conn, self.bid, rows, source="shopee_csv",
+                                                  actor=ACTOR)
+        self.assertEqual(result.imported, 2)
+        self.assertEqual(result.refused,
+                         ["訂單 SN103：訂單日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。"])
+        stored = web.conn.execute(
+            "SELECT external_id, entry_date FROM channel_revenue WHERE brand_id = %s"
+            " AND channel = 'marketplace' ORDER BY external_id", (self.bid,)).fetchall()
+        self.assertEqual([(r["external_id"], r["entry_date"].isoformat()) for r in stored],
+                         [("SN101", "2026-06-02"), ("SN102", "2026-06-03")])
+
+    def test_channel_quantity_is_a_whole_number_and_channel_comes_from_vocab(self):
+        """Controls a-59: quantity -2 used to be stored; `count(minimum=0)` refuses it. An unknown
+        channel is refused by `vocab.require` with the choices."""
+        for bad in (-2, 1.5, "x"):
+            with self.assertRaisesRegex(ValueError, "^數量要是 0 以上的整數。$"):
+                orders_channel.record_channel_entry(
+                    web.conn, self.bid, channel="physical_store", entry_date="2026-06-04",
+                    revenue=10, quantity=bad, note=None, actor=ACTOR)
+        with self.assertRaisesRegex(ValueError, "^通路只能選：官方網站、"):
+            orders_channel.record_channel_entry(
+                web.conn, self.bid, channel="pharmacy", entry_date="2026-06-04",
+                revenue=10, quantity=None, note=None, actor=ACTOR)
+        saved = orders_channel.record_channel_entry(
+            web.conn, self.bid, channel="physical_store", entry_date="2026-06-04",
+            revenue=10, quantity="0", note=None, actor=ACTOR)
+        self.assertEqual((saved["quantity"], saved["entry_date"]), (0, "2026-06-04"))
+
     def test_offline_entry_without_revenue_survives_as_unknown_not_zero(self):
         orders_channel.record_channel_entry(
             web.conn, self.bid, channel="physical_store", entry_date="2026-06-01",

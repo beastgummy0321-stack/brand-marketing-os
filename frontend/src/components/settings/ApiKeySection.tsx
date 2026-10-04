@@ -5,6 +5,7 @@ import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { TestConnectionButton } from "./shared/TestConnectionButton";
 import { useFormSubmit } from "@/lib/useFormSubmit";
+import { typedValue } from "@/lib/typedNumber";
 
 const CLEAR_CONFIRM_TEXT =
   "確定要刪除資料庫裡的金鑰？這個動作無法復原。刪除後如果沒有設定環境變數，AI 功能會顯示尚未設定金鑰。";
@@ -25,7 +26,8 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
 
   const [monthlyCap, setMonthlyCap] = useState(String(data.ai_monthly_cost_limit));
   const capForm = useFormSubmit(async () => {
-    await saveAiMonthlyCostLimit(Number(monthlyCap));
+    // F50 Contract I: what was typed (blank = null); the server checks it and its sentence is printed.
+    await saveAiMonthlyCostLimit(typedValue(monthlyCap));
     onSaved();
   });
 
@@ -38,6 +40,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
   const keyForm = (
     <form
       className="flex flex-col gap-4"
+      {...saveForm.formProps}
       onSubmit={(e) => {
         e.preventDefault();
         void saveForm.submit();
@@ -110,6 +113,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
         {data.ai_cap_applies && data.is_owner && (
           <form
             className="mt-3 flex flex-col gap-2"
+            {...capForm.formProps}
             onSubmit={(e) => {
               e.preventDefault();
               void capForm.submit();
@@ -120,9 +124,9 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">US$</span>
                 <input
-                  type="number"
-                  step={1}
-                  min={0}
+                  inputMode="decimal"
+                  aria-label="AI 月費上限（整個組織）"
+                  aria-invalid={capForm.error ? true : undefined}
                   value={monthlyCap}
                   onChange={(e) => setMonthlyCap(e.target.value)}
                   className="w-32 rounded-md border border-border px-3 py-2 text-sm text-foreground"

@@ -12,7 +12,7 @@
 from datetime import date
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import cleanup
+from app.core import cleanup, input_rules
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, new_id, now_utc
@@ -50,8 +50,8 @@ def _upsert_customer(conn: Conn, brand_id: str, identity_hash: str,
         (brand_id, identity_hash),
     ).fetchone()
     if existing:
-        # first_order_at 是 timestamptz；order_date 是匯入列截到日期的字串（見呼叫端
-        # str(order_date)[:10]），比較前先把 first 也收斂成同一種「YYYY-MM-DD」字串
+        # first_order_at 是 timestamptz；order_date 是匯入列經 input_rules.iso_date 讀成的
+        # 「YYYY-MM-DD」字串（見呼叫端），比較前先把 first 也收斂成同一種字串
         # （02-3b：型別改了，比較基準要對齊，不能拿 str 跟 datetime 直接比）。
         first = existing["first_order_at"]
         first_date = first.date().isoformat() if first else None
@@ -117,6 +117,10 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
 
     匯入前先跑一次雜湊一致性自檢（app.orders.identity.consistency_self_check）：
     正規化規則本身壞了要整批擋下，不是等匯完才發現同一個人被算成兩個顧客。
+
+    F50 Contract I: the order date goes through `input_rules.iso_date` (an importer hands a `date`
+    or the vendor's text); an unreadable date refuses that order — it is listed in
+    `result.refused` with its reason and nothing of it is written. No date at all stays allowed.
     """
     from app.orders.importer import OrderImportResult  # 延後匯入，避免與 importer 循環相依
 
@@ -133,8 +137,12 @@ def save_orders(conn: Conn, brand_id: str, rows: list, *,
         order_number = (row.get("order_number") or "").strip() if row.get("order_number") else None
         if not order_number:
             continue
-        order_date = row.get("order_date")
-        order_date = str(order_date)[:10] if order_date else None
+        try:
+            order_day = input_rules.iso_date(row.get("order_date"), "訂單日期", optional=True)
+        except input_rules.InputRuleError as exc:
+            result.refused.append(f"訂單 {order_number}：{exc}")
+            continue
+        order_date = order_day.isoformat() if order_day else None
 
         identity_hash, identity_type = identity_mod.identity_key(
             billing_email=row.get("billing_email"), billing_phone=row.get("billing_phone"))
@@ -212,12 +220,13 @@ def list_sku_costs(conn: Conn, brand_id: str) -> list:
     ))
 
 
-def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
+def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost, *,
                  actor: str, today: str | None = None) -> dict:
+    """`unit_cost` as sent (a number or typed text): `input_rules.non_negative` — 0 is stored
+    as 0, blank or negative is refused (F47 Contract A, F50 Contract I)."""
     if not sku or not sku.strip():
         raise ValueError("SKU 為必填")
-    if unit_cost is None or unit_cost < 0:
-        raise ValueError("單位成本要是不小於 0 的數字")
+    unit_cost = input_rules.non_negative(unit_cost, "單位成本")
     if not actor or not actor.strip():
         raise ValueError("actor 為必填")
     sku = sku.strip()
@@ -395,11 +404,9 @@ def stats(conn: Conn, brand_id: str, *, since: str | None = None,
 # ---------------------------------------------------------------------------
 
 def record_policy_change(conn: Conn, brand_id: str, *, policy_type: str,
-                         changed_at: str, description: str, actor: str) -> dict:
-    if policy_type not in POLICY_TYPE_LABELS:
-        raise ValueError(f"不認得的口徑類型：{policy_type}")
-    if not changed_at or not changed_at.strip():
-        raise ValueError("變更日為必填")
+                         changed_at, description: str, actor: str) -> dict:
+    policy_type = input_rules.one_of(policy_type, "口徑類型", POLICY_TYPE_LABELS)
+    changed_at = input_rules.iso_date(changed_at, "變更日").isoformat()
     if not description or not description.strip():
         raise ValueError("變更說明為必填")
     if not actor or not actor.strip():
@@ -410,7 +417,7 @@ def record_policy_change(conn: Conn, brand_id: str, *, policy_type: str,
     conn.execute(
         "INSERT INTO policy_change_log (id, org_id, brand_id, policy_type, changed_at, description,"
         " created_by, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-        (row_id, org_id, brand_id, policy_type, changed_at.strip(), description.strip(), actor, ts),
+        (row_id, org_id, brand_id, policy_type, changed_at, description.strip(), actor, ts),
     )
     write_audit(conn, org_id=org_id, brand_id=brand_id, entity_type="policy_change_log", entity_id=row_id,
                 action="create", actor=actor,
