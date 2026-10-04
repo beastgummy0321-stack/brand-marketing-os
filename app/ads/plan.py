@@ -11,19 +11,26 @@ F46-I01 (Contracts A and P): every planned ad binds one listed customer group (`
 = 第 N 群, all ads of one delivery group share it, `pain` within that group's pains), and the
 prompt says how many photos and videos the brand has in hand.
 F46-I04 (Contract G): the prompt carries 【上幾期的排名】 (`coordinate_learning.ranked_section`) and
-a plan that re-runs a 換掉 (customer group, angle) of the newest closed campaign, or reuses none of
-the listed campaigns' 留下 pairs, is refused.
+a plan that re-runs a 換掉 (customer group, angle) of the newest closed campaign is refused.
+F48-I06 (Contracts P, C, K): the prompt is built from `planner_context` (one menu, one 「不能講」
+list, one capacity line); the plan never holds more ads than the capacity ceiling; last period's
+留下 ads are carried in with their creative before the model is asked (so the keep half of the
+Contract G gate is met by construction); hand edits obey the same menu and 「不能講」 list.
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
+import re
+from collections.abc import Set as AbstractSet
 from datetime import date
 
+from app import workbench
 from app.ads import (
     budget,
     calendar_tw,
     channels,
     coordinate_learning,
-    customer_groups,
+    learning_rank,
+    planner_context,
     user_assets_repository,
 )
 from app.ads import repository as ads_repo
@@ -88,58 +95,41 @@ def _vocabulary_lookup(rows: list) -> dict:
     return {(row["dimension"], row["key"]): row for row in rows}
 
 
-def _prompt_rows(rows: list, available_proof: set[str], has_end_date: bool,
-                 available_offer: set[str], media_capability: str | None) -> list:
-    """F38 decision 1/3: the model's menu only offers the proof kinds the brand has confirmed
-    evidence for (plus `none`), and `offer/limited_time` only when the campaign has an end date
-    (the workbench quotes that date as the copy's one deadline). F42 (drill-8 red #1 #2): an
-    `offer` row is offered only when it is `none` or the brand can honour it
-    (`bi_repo.available_offer_keys`; `limited_time` must pass both rules), and `format/video` is
-    dropped for a photo-only brand (`brand.media_capability == "photo"`; NULL = never asked, no
-    format filter). Every other row passes through. `coordinate_vocabulary` itself stays
-    unfiltered -- hand edits and label lookups use it."""
-    allowed_proof = available_proof | {"none"}
-    allowed_offer = available_offer | {"none"}
-    kept = []
-    for row in rows:
-        if row["dimension"] == "proof" and row["key"] not in allowed_proof:
-            continue
-        if row["dimension"] == "offer" and row["key"] not in allowed_offer:
-            continue
-        if row["dimension"] == "offer" and row["key"] == "limited_time" and not has_end_date:
-            continue
-        if row["dimension"] == "format" and row["key"] == "video" and media_capability == "photo":
-            continue
-        kept.append(row)
-    return kept
-
-
-OFFERS_HEADER = "【這期可用的優惠】"
-
-
-def _menu_offer_keys(rows: list) -> set[str]:
-    """The filtered menu's offer keys other than `none` -- what the planner may truly promise."""
-    return {row["key"] for row in rows if row["dimension"] == "offer" and row["key"] != "none"}
-
-
-def _offers_text(rows: list, sources: list) -> str | None:
-    """F44 (outcome 1): 【這期可用的優惠】, one 「- offer=〈key〉｜〈sentence〉」 line per
-    registered sentence (`bi_repo.offer_sources`, price and list price included) whose key is in
-    the filtered menu, each line once. `None` when the menu has no offer other than `none` -- the
-    section is then left out of the prompt."""
-    menu_keys = _menu_offer_keys(rows)
-    lines = []
-    for source in sources:
-        line = f"- offer={source['offer_key']}｜{source['sentence']}"
-        if source["offer_key"] in menu_keys and line not in lines:
-            lines.append(line)
-    if not lines:
-        return None
-    return OFFERS_HEADER + "\n" + "\n".join(lines)
-
-
 def _uses_an_offer(groups: list) -> bool:
     return any(ad["coordinates"]["offer"] != "none" for group in groups for ad in group["ads"])
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def _forbidden_in(name: str, terms: list[str]) -> str | None:
+    """The first 「不能講」 entry written in `name` (whitespace-free, case-blind -- the way
+    `workbench.validate_claims` matches copy), else None."""
+    squashed = _squash(name)
+    return next((term for term in terms if term and _squash(term) in squashed), None)
+
+
+class CoordinateUnavailable(ValueError):
+    """A hand edit picked a vocabulary key this period's menu leaves out (`planner_context.menu`).
+    `str()` is the code `coordinate_unavailable`; the route words the dimension and the reason."""
+
+    def __init__(self, dimension: str, key: str, reason: str):
+        super().__init__("coordinate_unavailable")
+        self.dimension, self.key, self.reason = dimension, key, reason
+
+    @property
+    def dimension_label(self) -> str:
+        return learning_rank.DIMENSION_LABELS.get(self.dimension, self.dimension)
+
+
+class NameForbidden(ValueError):
+    """An ad name carries a 「不能講」 entry (`workbench.forbidden_terms`); `str()` is the code
+    `name_forbidden`, `term` the entry the route quotes."""
+
+    def __init__(self, term: str):
+        super().__init__("name_forbidden")
+        self.term = term
 
 
 def _first_format(rows: list) -> str | None:
@@ -182,10 +172,18 @@ def _scenes_differ_across_audiences(validated_groups: list) -> bool:
     return all(len(audiences) == 1 for audiences in audiences_by_scene.values())
 
 
-def _validate_reply(data, roles: set) -> list | None:
+def _validate_reply(data, roles: set, *, covered: AbstractSet[str] = frozenset(),
+                    room: dict | None = None, limit: int | None = None,
+                    taken: AbstractSet[str] = frozenset()) -> list | None:
     """回覆形狀對不上、角色沒有一字不差對上給的角色集合、座標少一個維度或不是字串、情境
     缺了或長度不對、不同受眾共用同一個情境，一律 `None`——呼叫端翻成
-    `ValueError("delivery_plan_failed")`，不落地半份投放結構。"""
+    `ValueError("delivery_plan_failed")`，不落地半份投放結構。
+
+    F48-I06 (Contracts K, C): `covered` = roles that already hold carried ads (the reply may leave
+    them out), `room` = role -> how many ads the reply may still add there (default
+    `_MAX_ADS_PER_GROUP`), `limit` = the most ads the reply may hold in all (`ceiling − carried`,
+    refused above it like the scene rule), `taken` = carried ad names (a reply name may not
+    repeat one)."""
     if not isinstance(data, dict):
         return None
     groups = data.get("groups")
@@ -194,7 +192,7 @@ def _validate_reply(data, roles: set) -> list | None:
 
     validated_groups = []
     seen_roles = set()
-    seen_ad_names = set()
+    seen_ad_names = set(taken)
     for group in groups:
         if not isinstance(group, dict):
             return None
@@ -206,7 +204,8 @@ def _validate_reply(data, roles: set) -> list | None:
         if not isinstance(name, str) or not name.strip():
             return None
         ads = group.get("ads")
-        if not isinstance(ads, list) or not ads or len(ads) > _MAX_ADS_PER_GROUP:
+        most = _MAX_ADS_PER_GROUP if room is None else room.get(role, _MAX_ADS_PER_GROUP)
+        if not isinstance(ads, list) or not ads or len(ads) > most:
             return None
 
         validated_ads = []
@@ -240,7 +239,10 @@ def _validate_reply(data, roles: set) -> list | None:
             })
         validated_groups.append({"role": role, "name": name.strip(), "ads": validated_ads})
 
-    if seen_roles != roles:  # 角色不能少也不能多（department file 的規則）
+    # 角色不能多；不能少——除非那個角色已經有沿用的廣告（department file 的規則）。
+    if not set(roles) - set(covered) <= seen_roles:
+        return None
+    if limit is not None and sum(len(g["ads"]) for g in validated_groups) > limit:
         return None
     if not _scenes_differ_across_audiences(validated_groups):
         return None
@@ -277,18 +279,33 @@ def _bind_customer_groups(groups: list, listed: list, menu_pain_keys: set) -> bo
     return True
 
 
-def _builds_on_learnings(groups: list, keep_pairs: set, replace_pairs: set) -> bool:
+def _builds_on_learnings(groups: list, replace_pairs: set) -> bool:
     """F46 Contract G, after `_bind_customer_groups`: an ad's (customer group, angle) pair may not
-    be a 換掉 pair of the newest closed campaign, and when the listed campaigns kept any pair at
-    least one ad must reuse one (its other coordinates may change). Ads without a group never
-    match; `False` = refuse the whole reply."""
+    be a 換掉 pair of the newest closed campaign. Ads without a group never match; `False` =
+    refuse the whole reply. F48 Contract K: the keep half is met by construction -- the newest
+    closed campaign's 留下 ads are carried in before the model is asked."""
     pairs = {
         (ad["customer_group"]["id"], ad["coordinates"]["angle"])
         for group in groups for ad in group["ads"] if ad.get("customer_group") is not None
     }
-    if pairs & replace_pairs:
-        return False
-    return not keep_pairs or bool(pairs & keep_pairs)
+    return not pairs & replace_pairs
+
+
+def _same_people_as_carried(groups: list, carried: list) -> bool:
+    """F46 Contract A (one ad set = one set of people) across carried and planned ads: a reply
+    group whose role holds carried ads bound to one customer group binds that group too."""
+    carried_groups: dict = {}
+    for item in carried:
+        if item["ad"].get("customer_group_id"):
+            carried_groups.setdefault(item["target"], set()).add(item["ad"]["customer_group_id"])
+    for group in groups:
+        ids = carried_groups.get(group["role"])
+        if not ids or len(ids) > 1:
+            continue
+        for ad in group["ads"]:
+            if ad.get("customer_group") is not None and ad["customer_group"]["id"] not in ids:
+                return False
+    return True
 
 
 MATERIALS_HEADER = "【手上的素材】"
@@ -382,9 +399,145 @@ def resplit_groups(
     return changes, new_planned
 
 
+CARRIED_HEADER = "【已沿用的廣告】"
+_CARRIED_NONE = "（上一期沒有留下的廣告可以沿用）"
+
+
+def _ceiling(capacity: dict | None) -> int:
+    """Contract C: the most ads this plan may hold -- `capacity.ceiling` (`max(can_support + 1,
+    roles)`), or `_MAX_GROUPS × _MAX_ADS_PER_GROUP` when the cap or the budget is unknown."""
+    return capacity["ceiling"] if capacity is not None else _MAX_GROUPS * _MAX_ADS_PER_GROUP
+
+
+def _target_role(previous_role: str | None, role_order: list[str]) -> str:
+    """Contract K: the new group whose role equals the previous ad's group role; a role this
+    plan did not adopt goes to the `new` group, else the first adopted group."""
+    if previous_role is not None and previous_role in role_order:
+        return previous_role
+    return "new" if "new" in role_order else role_order[0]
+
+
+def _select_carried(kept: list[dict], role_order: list[str], ceiling: int) -> list[dict]:
+    """Contract K + C: the 留下 rows (rank order) that become carried ads, each with its
+    `target` role. A row is taken while its group has room (`_MAX_ADS_PER_GROUP`) and the
+    ceiling still leaves one ad for every adopted role no carried ad covers -- so the model can
+    always complete the plan inside the ceiling."""
+    chosen: list[dict] = []
+    per_role: dict = {}
+    for item in kept:
+        role = _target_role(item["role"], role_order)
+        if per_role.get(role, 0) >= _MAX_ADS_PER_GROUP:
+            continue
+        uncovered = set(role_order) - set(per_role) - {role}
+        if len(chosen) + 1 + len(uncovered) > ceiling:
+            continue
+        chosen.append({**item, "target": role})
+        per_role[role] = per_role.get(role, 0) + 1
+    return chosen
+
+
+def _carried_text(carried: list[dict], listed: list[dict], remaining: int) -> str:
+    """【已沿用的廣告】: one line per carried ad -- name, delivery group role, customer group
+    (第 N 群 of this prompt's list, 「未指定」, or 「這期沒列」) and the seven coordinate keys --
+    then 「請再規劃 K 則」. Nothing carried -> one line saying so (and no K line)."""
+    if not carried:
+        return CARRIED_HEADER + _CARRIED_NONE
+    numbers = {group["id"]: n for n, group in enumerate(listed, start=1)}
+    lines = [CARRIED_HEADER + "（程式已經放進投放組，名稱和七個座標照上一期，不要再寫一次）"]
+    for item in carried:
+        ad = item["ad"]
+        group_id = ad.get("customer_group_id")
+        if group_id is None:
+            who = "未指定"
+        else:
+            who = str(numbers[group_id]) if group_id in numbers else "這期沒列"
+        keys = "、".join(
+            f"{dim}={ad.get(f'{dim}_key') or 'none'}" for dim in _COORDINATE_DIMENSIONS
+        )
+        lines.append(f"- 「{ad['name']}」｜投放組 {item['target']}｜顧客群 {who}｜{keys}")
+    lines.append(f"請再規劃 {remaining} 則")
+    return "\n".join(lines)
+
+
+def _capacity_text(capacity: dict | None, ceiling: int) -> str:
+    """【這期撐得起幾則】: the capacity line (daily, can_support, the explore slot, the ceiling,
+    the cap); unknown cap or budget -> no capacity line, only the plan's upper bound."""
+    if capacity is not None:
+        return planner_context.section_text({"capacity": capacity}, "capacity")
+    return (planner_context.CAPACITY_HEADER + "\n" + planner_context.capacity_line(None)
+            + f"；這期最多 {ceiling} 則")
+
+
+def _carried_snapshot(previous: dict, lookup: dict) -> dict:
+    """The carried ad's `coordinates_snapshot_json`: the seven vocabulary rows of the previous
+    keys, the previous customer group entry, and `carried_from` (Contract K, no migration)."""
+    snapshot: dict = {
+        dim: lookup.get((dim, previous.get(f"{dim}_key")), {"key": previous.get(f"{dim}_key")})
+        for dim in _COORDINATE_DIMENSIONS
+    }
+    group = (previous.get("coordinates_snapshot_json") or {}).get("customer_group")
+    if previous.get("customer_group_id") and group:
+        snapshot["customer_group"] = group
+    snapshot["carried_from"] = {"campaign_id": previous["campaign_id"], "ad_id": previous["id"]}
+    return snapshot
+
+
+def _carry_creatives(conn, org_id: str, brand_id: str, campaign_id: str, placed: list,
+                     actor: str) -> None:
+    """Contract K: each carried ad whose creative was found gets it through the slot path
+    (`slots.carry`); a refusal leaves a normal ad (its slot reads what is missing). The plan is
+    committed first: the slot path commits, and a refusal rolls back only its own placement."""
+    from app.ads import slots  # lazy: slots -> assets -> plan
+
+    if not placed:
+        return
+    conn.commit()
+    for ad_id, creative in placed:
+        try:
+            slots.carry(conn, org_id, brand_id, campaign_id, ad_id, creative["asset_id"],
+                        creative["copy_fields"], actor)
+        except ValueError:
+            conn.rollback()
+
+
+def served(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
+    """The campaign payload's plan fields (F48-I06; the structure editor reads them):
+    `menu` = this period's coordinate menu `[{dimension, key, label}]` (`planner_context.menu`,
+    the rows the delivery plan offered and the hand edits accept) and `capacity` = `{daily, cap,
+    can_support, ceiling, carried}` (Contract C; `None` while the cap or the budget is unknown).
+    Both `None` on an imported campaign (no plan of ours)."""
+    if campaign.get("origin") == "imported":
+        return {"menu": None, "capacity": None}
+    rows = planner_context.menu(
+        conn, org_id, brand_id, sell_way_mod.of_campaign(campaign),
+        campaign.get("end_date") is not None,
+    )["rows"]
+    cap = (campaign.get("cap") or {}).get("value")
+    allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
+        "allocation") or []
+    daily = budget.daily_of(campaign.get("budget_planned"),
+                            _days(campaign.get("start_date"), campaign.get("end_date")))
+    capacity = planner_context.capacity_of(daily, cap, len(allocation))
+    if capacity is not None:
+        capacity["carried"] = sum(
+            1 for group in campaign.get("groups") or [] for ad in group.get("ads") or []
+            if ad.get("carried_label")
+        )
+    return {
+        "menu": [{"dimension": r["dimension"], "key": r["key"], "label": r["label"]}
+                 for r in rows],
+        "capacity": capacity,
+    }
+
+
 def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
     """草稿 -> `ready`：把已採用的策略角色分配展開成投放組／廣告。再跑一次（`status` 已經
-    不是 `draft`）一律拒絕——第二次展開會讓已經綁定平台的節點變孤兒（§0）。"""
+    不是 `draft`）一律拒絕——第二次展開會讓已經綁定平台的節點變孤兒（§0）。
+
+    F48-I06: the prompt is `planner_context`'s sections; 留下 ads of the newest closed campaign
+    of this sell-way are carried in first (Contract K, up to the ceiling of Contract C) and the
+    model plans only the rest; a reply above `ceiling − carried`, re-running a 換掉 pair or
+    naming an ad with a 「不能講」 entry is refused with nothing written."""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
@@ -398,6 +551,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         raise ValueError("strategy_not_adopted")
     allocation = strategy_payload["allocation"]
     roles = {row["role"] for row in allocation}
+    role_order = list(dict.fromkeys(row["role"] for row in allocation))
 
     days = _days(campaign["start_date"], campaign["end_date"])
     if days <= 0:
@@ -407,21 +561,27 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     assert daily_total is not None  # `budget_planned` and a positive length were checked above
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, daily_total)
 
-    # F42: offers are judged against the campaign's sell-way (its price meets a policy's
-    # threshold or not); a campaign without a product is judged at brand level (`None`).
+    # F48 Contract P: one context -- the menu (F42: offers judged against the campaign's
+    # sell-way; `None` = brand level), the 「不能講」 list, the customer groups, the ranking and
+    # the capacity line all come from `planner_context`.
     sell_way = sell_way_mod.of_campaign(campaign)
-    brand = bi_repo.get_brand(conn, brand_id) or {}
-    vocabulary_rows = _prompt_rows(
-        ads_repo.coordinate_vocabulary(conn, org_id, brand_id),
-        bi_repo.available_proof_keys(conn, brand_id),
-        campaign["end_date"] is not None,
-        bi_repo.available_offer_keys(conn, brand_id, sell_way),
-        brand.get("media_capability"),
-    )
+    ctx = planner_context.planner_context(conn, org_id, brand_id, sell_way, campaign=campaign)
+    vocabulary_rows = ctx["menu"]
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
-    # F44: the sentence behind each offer the menu kept -- the menu row alone
-    # (`offer｜bundle｜…`) does not say what the offer is (drill 9: `offer=none` 13/13).
-    offers_text = _offers_text(vocabulary_rows, bi_repo.offer_sources(conn, brand_id, sell_way))
+    listed_groups = ctx["customer_groups"]
+    customer_group_ids = [group["id"] for group in listed_groups]
+
+    # F48 Contracts C + K: the ceiling, and last period's 留下 ads carried in before the model.
+    ceiling = _ceiling(ctx["capacity"])
+    carried = _select_carried(
+        coordinate_learning.keep_ads(conn, org_id, brand_id, sell_way), role_order, ceiling,
+    )
+    remaining = ceiling - len(carried)
+    covered = {item["target"] for item in carried}
+    room = {
+        role: _MAX_ADS_PER_GROUP - sum(1 for item in carried if item["target"] == role)
+        for role in role_order
+    }
 
     allocation_text = "\n".join(
         f"- {row['role']}（{row['label']}）：{row['pct']:g}%"
@@ -429,62 +589,72 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         for row in allocation
     )
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
-    # F43-I02：這個賣法的顧客群（每支廣告的 pain 從列出的群挑、scene 合那群的使用時機），
-    # 接在排名之後、詞彙表之前。
-    customers_text, listed_groups = customer_groups.prompt_groups(
-        conn, org_id, brand_id, campaign,
-    )
-    customer_group_ids = [group["id"] for group in listed_groups]
-    # F46 Contract G：程式排好的【上幾期的排名】（取代 F39 的【座標成績表】）接在行事曆之後、
-    # 詞彙表之前：詞彙表永遠最後，模型答題前最後讀到的是可用的 key。群編號照上面這份顧客群清單。
-    ranked_view = coordinate_learning.prompt_view(conn, org_id, brand_id)
-    board_text, board_ids = coordinate_learning.ranked_section(
-        conn, org_id, brand_id, campaign, view=ranked_view, listed=listed_groups,
-    )
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
-    # F44：【這期可用的優惠】接在顧客群之後、詞彙表之前；沒有可用優惠就整段不出現。
-    # F46 Contract P：【手上的素材】接在顧客群之後、優惠之前。
+    # F48-I06：其後依序是這個賣法、不能講、顧客群、優惠、排名、手上的素材、撐得起幾則、
+    # 已沿用的廣告；詞彙表永遠最後，模型答題前最後讀到的是可用的 key。
     prompt = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
         + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
-        + "\n\n" + board_text
-        + "\n\n" + customers_text
+        + "\n\n" + planner_context.section_text(ctx, "product")
+        + "\n\n" + planner_context.section_text(ctx, "forbidden")
+        + "\n\n" + planner_context.section_text(ctx, "customers")
+        + "\n\n" + planner_context.section_text(ctx, "offers")
+        + "\n\n" + planner_context.section_text(ctx, "ranked")
         + "\n\n" + _materials_text(conn, org_id, brand_id)
-        + ("\n\n" + offers_text if offers_text else "")
+        + "\n\n" + _capacity_text(ctx["capacity"], ceiling)
+        + "\n\n" + _carried_text(carried, listed_groups, remaining)
         + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
 
-    context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id, "campaign_id": campaign_id},
-        knowledge_item_ids=board_ids + customer_group_ids,
-        brand_version=(campaign.get("context_json") or {}).get("brand_version") or 0,
-    )
-    task_row = gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type="ads_delivery_plan",
-        prompt_template_id="ads_delivery_plan", prompt_template_version="v1",
-        system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
-    )
-    if task_row["status"] != "succeeded":
-        raise ValueError("delivery_plan_failed")
-    data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
-    validated_groups = _validate_reply(data, roles) if data is not None else None
-    if validated_groups is None:
-        raise ValueError("delivery_plan_failed")
+    validated_groups: list = []
+    if remaining > 0:
+        context = gateway.TaskContext(
+            context_scope={"brand_id": brand_id, "campaign_id": campaign_id},
+            knowledge_item_ids=(
+                [row["product_id"] for row in ctx["prices"]] + ctx["ranked_ids"]
+                + customer_group_ids
+            ),
+            brand_version=(campaign.get("context_json") or {}).get("brand_version") or 0,
+        )
+        task_row = gateway.run_task(
+            conn, PROVIDER, brand_id=brand_id, task_type="ads_delivery_plan",
+            prompt_template_id="ads_delivery_plan", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": prompt}], context=context,
+            options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
+        )
+        if task_row["status"] != "succeeded":
+            raise ValueError("delivery_plan_failed")
+        data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
+        validated = _validate_reply(
+            data, roles, covered=covered, room=room, limit=remaining,
+            taken={item["ad"]["name"] for item in carried},
+        ) if data is not None else None
+        if validated is None:
+            raise ValueError("delivery_plan_failed")
+        validated_groups = validated
     _gate_reply(validated_groups, vocab_lookup, _first_format(vocabulary_rows))
-    # F44 (outcome 1): the menu offered a real offer and no ad took one -> the whole reply is
-    # refused, like the scene rule; nothing is written.
-    if _menu_offer_keys(vocabulary_rows) and not _uses_an_offer(validated_groups):
+    # F44 (outcome 1): the menu offered a real offer and no ad (carried or planned) took one ->
+    # the whole reply is refused, like the scene rule; nothing is written.
+    offer_keys = planner_context.menu_offer_keys(vocabulary_rows)
+    carried_offer = any(item["ad"].get("offer_key") in offer_keys for item in carried)
+    if offer_keys and not (carried_offer or _uses_an_offer(validated_groups)):
+        raise ValueError("delivery_plan_failed")
+    # F48 Contract P: an ad name carrying a 「不能講」 entry is refused like the scene rule.
+    if any(_forbidden_in(ad["name"], ctx["forbidden"])
+           for group in validated_groups for ad in group["ads"]):
         raise ValueError("delivery_plan_failed")
     menu_pain_keys = {row["key"] for row in vocabulary_rows if row["dimension"] == "pain"}
     if not _bind_customer_groups(validated_groups, listed_groups, menu_pain_keys):
         raise ValueError("delivery_plan_failed")
-    # F46 Contract G: build on 留下, never re-run a 換掉 customer group + angle unchanged.
-    keep_pairs, replace_pairs = coordinate_learning.gate_pairs(
-        ranked_view, set(customer_group_ids),
+    if not _same_people_as_carried(validated_groups, carried):
+        raise ValueError("delivery_plan_failed")
+    # F46 Contract G: never re-run a 換掉 customer group + angle unchanged (the keep half is met
+    # by the carried ads).
+    _, replace_pairs = coordinate_learning.gate_pairs(
+        ctx["learnings"]["ranked"], set(customer_group_ids),
     )
-    if not _builds_on_learnings(validated_groups, keep_pairs, replace_pairs):
+    if not _builds_on_learnings(validated_groups, replace_pairs):
         raise ValueError("delivery_plan_failed")
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
@@ -494,17 +664,34 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     amount_by_role = _role_amounts(allocation, daily_total)
     adopted_total = budget.total_of(sum(amount_by_role.values()), days)
     groups_by_role = {group["role"]: group for group in validated_groups}
+    labels_by_role = {row["role"]: row.get("label") or row["role"] for row in allocation}
+    full_lookup = _vocabulary_lookup(ads_repo.coordinate_vocabulary(conn, org_id, brand_id))
 
     declared_platform = (campaign.get("constraints_json") or {}).get("platform")
     channel_key = channels.default_channel_key(conn, org_id, brand_id, declared_platform)
 
-    for role in roles:
-        plan_group = groups_by_role[role]
+    placed: list = []
+    for role in role_order:
+        plan_group = groups_by_role.get(role)
         group_row = ads_repo.create_group(
             conn, org_id, brand_id, campaign_id, channel_key=channel_key,
-            name=plan_group["name"], role=role, daily_budget=amount_by_role[role],
+            name=plan_group["name"] if plan_group else f"{labels_by_role[role]}組",
+            role=role, daily_budget=amount_by_role[role],
         )
-        for ad in plan_group["ads"]:
+        # Contract K: groups first, carried ads next, then the model's ads.
+        for item in carried:
+            if item["target"] != role:
+                continue
+            previous = item["ad"]
+            new_ad = ads_repo.create_ad(
+                conn, org_id, brand_id, campaign_id, group_row["id"], name=previous["name"],
+                coordinates={dim: previous.get(f"{dim}_key") for dim in _COORDINATE_DIMENSIONS},
+                coordinates_snapshot=_carried_snapshot(previous, full_lookup),
+                scene=previous.get("scene"), customer_group_id=previous.get("customer_group_id"),
+            )
+            if item["creative"] is not None:
+                placed.append((new_ad["id"], item["creative"]))
+        for ad in (plan_group or {}).get("ads", []):
             customer_group = ad.get("customer_group")
             ads_repo.create_ad(
                 conn, org_id, brand_id, campaign_id, group_row["id"], name=ad["name"],
@@ -515,6 +702,8 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
 
     ads_repo.set_budget_planned(conn, org_id, brand_id, campaign_id, budget_planned=adopted_total)
     ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "ready")
+    # The structure is complete before any creative is placed (the slot path commits).
+    _carry_creatives(conn, org_id, brand_id, campaign_id, placed, actor)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     return detail
@@ -626,8 +815,28 @@ def delete_group(conn, org_id: str, brand_id: str, group_id: str) -> None:
     ads_repo.delete_group(conn, org_id, brand_id, group_id)
 
 
+def _refuse_off_menu(excluded: dict, coordinates: dict) -> None:
+    """F48 Contract P: a vocabulary key this period's menu leaves out (`planner_context.menu`'s
+    `excluded`) is refused, naming the dimension and why; a key absent from the vocabulary passes
+    as before (hand-made keys)."""
+    for dim, key in coordinates.items():
+        reason = excluded.get((dim, key))
+        if reason is not None:
+            raise CoordinateUnavailable(dim, key, reason)
+
+
+def _refuse_forbidden_name(conn, org_id: str, brand_id: str, campaign: dict, name: str) -> None:
+    """F48 Contract P／G: an ad name carrying an entry of this sell-way's 「不能講」 list."""
+    terms = workbench.forbidden_terms(conn, org_id, brand_id, sell_way_mod.of_campaign(campaign))
+    term = _forbidden_in(name, terms)
+    if term is not None:
+        raise NameForbidden(term)
+
+
 def create_ad(conn, org_id: str, brand_id: str, campaign_id: str, group_id: str, *, name: str,
               coordinates: dict) -> dict:
+    """A hand-made ad: seven coordinates, a name; the same menu and 「不能講」 list as the planner
+    (`coordinate_unavailable`／`name_forbidden`)."""
     if not isinstance(name, str) or not name.strip():
         raise ValueError("name_unknown")
     group = ads_repo.get_group(conn, org_id, brand_id, group_id)
@@ -639,6 +848,15 @@ def create_ad(conn, org_id: str, brand_id: str, campaign_id: str, group_id: str,
         if not isinstance(value, str) or not value.strip():
             raise ValueError("coordinates_incomplete")
         coords[dim] = value.strip()
+    campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+    the_menu = planner_context.menu(
+        conn, org_id, brand_id, sell_way_mod.of_campaign(campaign),
+        campaign.get("end_date") is not None,
+    )
+    _refuse_off_menu(the_menu["excluded"], coords)
+    _refuse_forbidden_name(conn, org_id, brand_id, campaign, name)
     vocabulary_rows = ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
     snapshot = {dim: vocab_lookup.get((dim, key), {"key": key}) for dim, key in coords.items()}
@@ -658,6 +876,21 @@ def update_ad(conn, org_id: str, brand_id: str, ad_id: str, updates: dict, *, ac
         for dim, value in updates["coordinates"].items():
             if dim not in _COORDINATE_DIMENSIONS or not isinstance(value, str) or not value.strip():
                 raise ValueError("coordinates_incomplete")
+    campaign = ads_repo.get_campaign(conn, org_id, brand_id, ad["campaign_id"])
+    if campaign is None:
+        raise ValueError("ad_unknown")
+    # F48 Contract P: only a key the edit changes is judged -- a key the ad already holds stays
+    # (the editor shows it marked 「這期不能用」).
+    the_menu = planner_context.menu(
+        conn, org_id, brand_id, sell_way_mod.of_campaign(campaign),
+        campaign.get("end_date") is not None,
+    )
+    _refuse_off_menu(the_menu["excluded"], {
+        dim: value.strip() for dim, value in (updates.get("coordinates") or {}).items()
+        if value.strip() != ad.get(f"{dim}_key")
+    })
+    if "name" in updates:
+        _refuse_forbidden_name(conn, org_id, brand_id, campaign, updates["name"])
 
     before = {k: ad.get(k) for k in updates if k != "coordinates"}
     if "coordinates" in updates:

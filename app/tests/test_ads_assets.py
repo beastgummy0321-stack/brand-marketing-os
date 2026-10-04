@@ -74,11 +74,12 @@ class AssetsTestBase(unittest.TestCase):
 
     def _adopted_campaign(self, product_ids: list | None = None) -> dict:
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
+        # F48 Contract C: 600 a day at cap 300 carries 1 ad + 1 explore = the two planned ads.
         campaign = {
             "name": "測試 Campaign", "goal_text": "幫新品衝第一波購買",
             "objective": "購買", "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
-            "budget_planned": 1400, "budget_scenario": "recommended",
+            "budget_planned": 8400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
             "context_json": {"product_ids": product_ids or []},
         }

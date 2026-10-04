@@ -175,11 +175,12 @@ def pack_id(conn, org_id: str, brand_id: str, campaign_id: str) -> str | None:
     return pack["id"] if pack is not None else None
 
 
-def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
+def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str | None:
     """一個 Campaign 一個任務包、一個 `ads_ad` 一個 set；回傳 pack id。`ValueError`：
     `campaign_unknown`、`pack_already_exists`（再交棒一次——已經有一份了）；其餘（
     `sets_unknown`／`required_outputs_unknown`／...）是 `workbench.submit_pack` 自己的驗證，
-    原樣往上丟，這裡不重新包一次。"""
+    原樣往上丟，這裡不重新包一次。F48 Contract K：每一則都是素材已就緒的沿用廣告時沒有
+    東西要做——不建任務包、回 `None`（「不用準備」，不是錯誤）。"""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
@@ -199,6 +200,13 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         if any(ad.get("customer_group_id") for group in groups for ad in group["ads"]) else {}
     )
 
+    # F48 Contract K: a carried 留下 ad whose slot already holds last period's creative (ready)
+    # needs nothing made -- it stays out of the pack.
+    carried_ready = {
+        ad["id"] for group in groups for ad in group["ads"]
+        if ad.get("carried_label") and _material_ready(conn, org_id, brand_id, campaign_id, ad)
+    }
+
     summary: dict = {"情境": campaign["goal_text"]}
     if context_json.get("audience_hint"):
         summary["目標受眾"] = context_json["audience_hint"]
@@ -214,9 +222,13 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "sets": [
             _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"),
                     groups_by_id)
-            for group in groups for ad in group["ads"]
+            for group in groups for ad in group["ads"] if ad["id"] not in carried_ready
         ],
     }
+    if carried_ready and not pack["sets"]:
+        # Every ad is a carried 留下 ad already holding its creative: nothing to prepare. No
+        # pack is made (no job, nothing 「處理中」); the readiness read counts them all ready.
+        return None
     return workbench.submit_pack(conn, org_id, brand_id, pack)
 
 

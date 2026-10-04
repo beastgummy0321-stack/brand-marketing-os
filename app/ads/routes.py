@@ -121,6 +121,8 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
             (campaign.get("context_json") or {}).get("product_ids") or [],
         )
     )
+    # F48-I06: this period's coordinate menu and the capacity line (Contracts P, C).
+    campaign.update(plan.served(web.conn, actor.org_id, brand_id, campaign))
     return campaign
 
 
@@ -602,6 +604,17 @@ _AD_EDIT_ERRORS = {
 }
 
 
+def _ad_edit_error(exc: ValueError) -> web.ApiError:
+    """`_AD_EDIT_ERRORS`, plus the two F48-I06 refusals that name what was refused."""
+    code = str(exc)
+    if isinstance(exc, plan.CoordinateUnavailable):
+        return web.ApiError(400, code, f"這期不能用這個{exc.dimension_label}：{exc.reason}")
+    if isinstance(exc, plan.NameForbidden):
+        return web.ApiError(400, code, f"廣告名稱寫了「{exc.term}」，這是你標了不能講的話")
+    status, message = _AD_EDIT_ERRORS.get(code, (400, code))
+    return web.ApiError(status, code, message)
+
+
 class CreateAdRequest(BaseModel):
     group_id: str = ""
     name: str = ""
@@ -618,9 +631,7 @@ def create_ad(request: Request, brand_id: str, campaign_id: str, body: CreateAdR
             coordinates=body.coordinates,
         )
     except ValueError as exc:
-        code = str(exc)
-        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
+        raise _ad_edit_error(exc) from exc
     return {"ad": ad}
 
 
@@ -639,9 +650,7 @@ def patch_ad(request: Request, brand_id: str, ad_id: str, body: PatchAdRequest):
             web.conn, actor.org_id, brand_id, ad_id, updates, actor=str(actor.user_id),
         )
     except ValueError as exc:
-        code = str(exc)
-        status, message = _AD_EDIT_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
+        raise _ad_edit_error(exc) from exc
     return {"ad": ad}
 
 
@@ -677,7 +686,8 @@ def dispatch_pack(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PACK_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"pack_id": pack_id}
+    # F48 Contract K: every ad already holds last period's creative -> no pack, nothing to do.
+    return {"pack_id": pack_id, "nothing_to_prepare": pack_id is None}
 
 
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}/assets")

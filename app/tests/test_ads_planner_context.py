@@ -8,7 +8,8 @@ the facts above it), and the facts' groups line names the listed groups before a
 ads' bound groups after it.
 
 Machine check: every module in `app/ads` that calls `gateway.run_task` with an `ads_*` task type
-calls `planner_context(` too -- except the listed non-planners and the pending delivery plan.
+calls `planner_context(` too -- except the listed non-planners -- and the hand edits
+(`plan.create_ad`／`update_ad`) read the same menu (`planner_context.menu`).
 """
 
 import ast
@@ -281,8 +282,8 @@ NOT_A_PLANNER = {
     "asset_suggestions.py": "copy suggestions for an uploaded asset; its guard is workbench's",
     "review_jobs.py": "a review round over a closed period's evidence, not a plan",
 }
-# module -> the issue that wires it to planner_context and deletes the entry.
-PENDING = {"plan.py": "F48-I06 removes: adopt_strategy reads planner_context"}
+# module -> the issue that wires it to planner_context and deletes the entry (F48-I06 emptied it).
+PENDING: dict = {}
 
 
 def _constants(tree) -> dict:
@@ -342,6 +343,20 @@ class EveryPlannerReadsThePlannerContextTest(unittest.TestCase):
         self.assertEqual(stale, [], "allowlist entries that no longer call an ads_ task")
         done = sorted(name for name in PENDING if found.get(name))
         self.assertEqual(done, [], "pending entries that now read planner_context: delete them")
+
+    def test_hand_edits_read_the_planners_menu(self):
+        """`plan.create_ad`／`update_ad` call `planner_context.menu` -- the filter the delivery
+        plan's prompt is built from -- and plan.py keeps no menu filter of its own."""
+        tree = ast.parse((ADS_DIR / "plan.py").read_text(encoding="utf-8"))
+        functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        for name in ("create_ad", "update_ad"):
+            calls = {
+                (c.func.value.id, c.func.attr) for c in ast.walk(functions[name])
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                and isinstance(c.func.value, ast.Name)
+            }
+            self.assertIn(("planner_context", "menu"), calls, name)
+        self.assertNotIn("_prompt_rows", functions)
 
 
 if __name__ == "__main__":

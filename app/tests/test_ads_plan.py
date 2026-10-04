@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 import app.shared.web as web
-from app.ads import plan
+from app.ads import plan, planner_context
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
@@ -21,6 +21,7 @@ from app.core import db as coredb
 from app.llm import providers
 
 ACTOR = "測試員"
+OFFERS_HEADER = planner_context.OFFERS_HEADER
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
@@ -417,7 +418,13 @@ class RankedLearningsInDeliveryPlanPromptTest(PlanTestBase):
 
     def test_the_department_file_builds_on_kept_and_leaves_replaced(self):
         text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
-        self.assertIn("至少要有一支廣告沿用一個「留下」的顧客群＋角度", text)
+        # F48 Contract K: 留下 ads are carried in by the program; the model writes the rest.
+        self.assertNotIn("至少要有一支廣告沿用一個「留下」的顧客群＋角度", text)
+        self.assertIn("【已沿用的廣告】是上一期「留下」的廣告，程式已經連同圖片和文案放進投放組",
+                      text)
+        self.assertIn("有寫「請再規劃 K 則」時，你的回覆總共寫 K 則廣告", text)
+        self.assertIn("整份計畫的廣告超過「最多」，整份回覆會被退回", text)
+        self.assertIn("廣告名稱、`scene` 都不能出現這些字", text)
         self.assertIn("「換掉」的顧客群＋角度不要原樣再用", text)
         self.assertIn("標「樣本少」的留下只賣了幾筆，值得再驗一次", text)
         self.assertNotIn("座標成績表", text)
@@ -491,22 +498,26 @@ class RankedLearningGateTest(PlanTestBase):
             {"new": (1, "box"), "retarget": (2, "metro"), "explore": (1, "other")},
         ))
 
-    def test_a_plan_reusing_no_kept_pair_is_refused(self):
-        # The kept angle in another group is not the kept pair; the kept group with a new angle
-        # is not either.
-        self._assert_refused(_pair_reply(
+    def test_a_plan_reusing_no_kept_pair_passes_because_the_kept_ad_is_carried(self):
+        # F48 Contract K: the keep half of the gate is met by construction -- the 留下 ad of the
+        # newest closed campaign of this sell-way is carried in, so the reply may explore.
+        detail = self._adopt_reply(_pair_reply(
             {"new": (2, "box"), "retarget": (1, "fresh"), "explore": (2, "other")},
         ))
+        self.assertEqual(detail["status"], "ready")
+        names = [ad["name"] for g in detail["groups"] for ad in g["ads"]]
+        self.assertIn("考前一週・書包一盒", names)
+        self.assertNotIn("通勤族・地鐵十分鐘", names)  # 換掉 is never carried
 
     def test_a_kept_pair_with_other_coordinates_changed_passes(self):
         detail = self._adopt_reply(_pair_reply(
             {"new": (1, "box"), "retarget": (2, "fresh"), "explore": (1, "other")},
         ))
         self.assertEqual(detail["status"], "ready")
-        by_role = {g["role"]: g["ads"][0] for g in detail["groups"]}
-        self.assertEqual(by_role["new"]["angle_key"], "box")
-        self.assertEqual(by_role["new"]["audience_key"], "aud_new")
-        self.assertEqual(by_role["new"]["customer_group_id"], self.groups[0]["id"])
+        by_name = {ad["name"]: ad for g in detail["groups"] for ad in g["ads"]}
+        self.assertEqual(by_name["new-廣告"]["angle_key"], "box")
+        self.assertEqual(by_name["new-廣告"]["audience_key"], "aud_new")
+        self.assertEqual(by_name["new-廣告"]["customer_group_id"], self.groups[0]["id"])
 
     def test_pairs_of_groups_not_listed_this_time_do_not_count(self):
         # A campaign of another product lists other groups: the old pairs neither bind nor block.
@@ -559,8 +570,10 @@ class CustomerGroupsInDeliveryPlanPromptTest(PlanTestBase):
             "第 1 群：下班後夜跑的上班族｜煩惱：怕買錯（pain=uncertainty）"
             "｜顧客會說：晚上跑步車子看不到我｜什麼時候用：下班後在河濱夜跑", prompt,
         )
+        # F48-I06: the planner_context order -- product, forbidden, customers, offers, ranking.
         customers_at = prompt.rindex("【這個賣法的顧客】")
-        self.assertLess(prompt.rindex(_RANKED_EMPTY), customers_at)
+        self.assertLess(prompt.rindex("【不能講】"), customers_at)
+        self.assertLess(customers_at, prompt.rindex(_RANKED_EMPTY))
         self.assertLess(customers_at, prompt.rindex("【座標詞彙"))
         for group in groups:
             self.assertIn(group["id"], knowledge_item_ids)
@@ -735,7 +748,10 @@ class MaterialsInDeliveryPlanPromptTest(PlanTestBase):
 
     def test_brand_without_assets_prints_zero_and_zero_in_place(self):
         prompt = self._prompt()
-        self.assertIn(f"\n\n{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n【座標詞彙", prompt)
+        # F48-I06: the capacity line follows the materials (the vocabulary stays last).
+        self.assertIn(
+            f"\n\n{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n【這期撐得起幾則】", prompt,
+        )
         materials_at = prompt.rindex(plan.MATERIALS_HEADER)
         self.assertLess(prompt.rindex("【這個賣法的顧客】"), materials_at)
 
@@ -859,7 +875,8 @@ class SceneRuleTest(PlanTestBase):
 
 
 class PromptRowsTest(unittest.TestCase):
-    """F38 decision 1/3 + F42: `_prompt_rows` is the model's menu -- proof kinds the brand has
+    """F38 decision 1/3 + F42: `planner_context.prompt_rows` (F48-I06: moved out of plan.py, one
+    menu for the planner and the hand edits) is the model's menu -- proof kinds the brand has
     evidence for (+ none), offers the brand can honour (+ none), `limited_time` only with an end
     date, no `video` for a photo-only brand, everything else untouched."""
 
@@ -881,7 +898,7 @@ class PromptRowsTest(unittest.TestCase):
 
     def _menu(self, proof: set, end_date: bool, offers: set = frozenset({"limited_time"}),
               media: str | None = None) -> list:
-        return plan._prompt_rows(self._ROWS, proof, end_date, set(offers), media)
+        return planner_context.prompt_rows(self._ROWS, proof, end_date, set(offers), media)
 
     def test_proof_rows_filtered_to_available_plus_none(self):
         kept = self._keys(self._menu({"customer_review"}, True))
@@ -1142,15 +1159,16 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
 
     def test_section_prints_the_offer_sentence_between_customers_and_vocabulary(self):
         _, prompt = self._adopt_reply(self._bundle_campaign(), _offer_reply({"new": "bundle"}))
-        self.assertIn(f"\n\n{plan.OFFERS_HEADER}\n{self._BUNDLE_LINE}\n\n【座標詞彙", prompt)
+        # F48-I06: offers come right after the customers, then the ranking.
+        self.assertIn(f"\n\n{OFFERS_HEADER}\n{self._BUNDLE_LINE}\n\n【上幾期的排名", prompt)
         # The department file names the header too; the last occurrence is the section itself.
-        offers_at = prompt.rindex(plan.OFFERS_HEADER)
+        offers_at = prompt.rindex(OFFERS_HEADER)
         self.assertLess(prompt.rindex("【這個賣法的顧客】"), offers_at)
         self.assertLess(offers_at, prompt.rindex("【座標詞彙"))
         self.assertIn("offer｜bundle｜組合優惠", prompt)
-        # F46 Contract P: 【手上的素材】 sits right before the offers.
+        # 【手上的素材】 after the ranking, then the capacity line.
         self.assertIn(
-            f"{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n{plan.OFFERS_HEADER}", prompt,
+            f"{plan.MATERIALS_HEADER}照片 0 張、影片 0 支\n\n【這期撐得起幾則】", prompt,
         )
 
     def test_section_lists_only_the_offers_the_menu_kept_each_once(self):
@@ -1161,7 +1179,7 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
             {"key": "ship_threshold", "params": {"threshold": 999}},
         ], actor=ACTOR)
         _, prompt = self._adopt_reply(self._bundle_campaign(), _offer_reply({"new": "bundle"}))
-        section = prompt[prompt.rindex(plan.OFFERS_HEADER):prompt.rindex("【座標詞彙")]
+        section = prompt[prompt.rindex(OFFERS_HEADER):prompt.rindex("【上幾期的排名")]
         lines = section.strip().splitlines()[1:]
         self.assertEqual(len(lines), 2)
         self.assertTrue(lines[0].startswith("- offer=free_shipping｜"), lines[0])
@@ -1169,13 +1187,11 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         self.assertEqual(lines[1], self._BUNDLE_LINE)
         self.assertNotIn("首購 9 折", prompt)
 
-    def test_section_is_left_out_when_the_menu_has_no_offer(self):
+    def test_section_says_so_when_the_menu_has_no_offer(self):
         # No product, no policy: the menu's only offer row is `none`; an all-`none` plan passes.
+        # F48-I06: planner_context's section says there is none (it is no longer left out).
         detail, prompt = self._adopt_reply(self._create_adopted_campaign(), _offer_reply({}))
-        department_text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
-        self.assertEqual(
-            prompt.count(plan.OFFERS_HEADER), department_text.count(plan.OFFERS_HEADER),
-        )
+        self.assertIn(f"\n\n{OFFERS_HEADER}（這期沒有可用的優惠）\n\n", prompt)
         self.assertNotIn("- offer=", prompt)
         self.assertEqual(set(self._offer_keys(detail).values()), {"none"})
 
@@ -1199,7 +1215,329 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
     def test_the_department_file_requires_one_ad_to_use_a_listed_offer(self):
         text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
         self.assertIn("至少要有一支廣告的 `offer` 填列出的某個 key", text)
-        self.assertIn("沒有列這一段，每支廣告的 `offer` 都填 `none`", text)
+        self.assertIn("寫「這期沒有可用的優惠」時，每支廣告的\n`offer` 都填 `none`", text)
+
+
+# -- F48-I06: Contracts K (留下 carries the creative), C (ceiling), P (one menu, 不能講) ---------
+
+_KEEP_COPY = {"headline": "上一期的標題", "body": "上一期跑過的內文", "description": "說明"}
+
+
+def _two_role_reply(*, names=("再行銷-補位", "探索-補位"), roles=("retarget", "explore")) -> str:
+    """One ad per role in `roles` (the roles no carried ad covers)."""
+    return json.dumps({"groups": [
+        {"role": role, "name": f"{role} 組", "ads": [{
+            "name": name, "coordinates": _coordinates(role),
+            "scene": f"{role} 這支廣告的受眾晚上在家滑手機",
+        }]}
+        for role, name in zip(roles, names, strict=True)
+    ]}, ensure_ascii=False)
+
+
+def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list) -> tuple:
+    """A closed campaign (no sell-way) with one `new` group and one ad per `(name, tag, verdict,
+    with_creative)`; an ad with a creative gets its own ready original with `_KEEP_COPY`,
+    confirmed and assigned; every ad gets its ranked `coordinate` learning row. Returns
+    (campaign, ads, asset id or None per ad)."""
+    from app.ads import handoff_assignment
+    from app.ads import user_assets_repository as user_assets
+
+    previous = ads_repo.create_campaign(web.conn, org_id, brand_id, {
+        "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
+        "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
+        "status": "ready",
+    }, created_by=ACTOR)
+    group = plan.create_group(web.conn, org_id, brand_id, previous["id"],
+                              name="上一期新客組", role="new", daily_budget=500)
+    ads, assets = [], []
+    for name, tag, _, with_creative in rows:
+        ad = plan.create_ad(web.conn, org_id, brand_id, previous["id"], group["id"],
+                            name=name, coordinates=_coordinates(tag))
+        ads.append(ad)
+        asset = None
+        if with_creative:
+            asset = coredb.new_id("aua")
+            web.conn.execute(
+                "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+                "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'keep.png','image/png',1,"
+                "'ready')",
+                (asset, org_id, brand_id, asset, f"{org_id}/{asset}"),
+            )
+            placement = user_assets.attach(web.conn, org_id, brand_id, previous["id"], asset,
+                                           _KEEP_COPY, ACTOR)
+            web.conn.execute(
+                "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human'"
+                " WHERE id=%s", (placement["id"],),
+            )
+            web.conn.commit()
+            handoff_assignment.assign(web.conn, org_id, brand_id, previous["id"], ad["id"],
+                                      placement["id"], 1)
+        assets.append(asset)
+    for rank, (ad, row) in enumerate(zip(ads, rows, strict=True), start=1):
+        bi_repo.record_learning(
+            web.conn, brand_id, actor=ACTOR, learning_text=ad["name"],
+            applicability_scope=_ranked_scope(
+                verdict=row[2], rank=rank, of=len(rows), sales=6 - rank, spend=1200, group=None,
+                angle=f"angle_{rank}"),
+            confidence="observed", sample_size="高",
+            source_cycle_id=f"{previous['id']}:{ad['id']}", source_track="coordinate",
+        )
+    web.conn.execute(
+        "UPDATE ads_campaign SET status='closed', closed_at=now() WHERE id=%s",
+        (previous["id"],),
+    )
+    web.conn.commit()
+    return previous, ads, assets
+
+
+class CarriedKeepAdsTest(PlanTestBase):
+    """Contract K: adopting the next plan of a sell-way carries the newest closed campaign's 留下
+    ads in (same name, seven keys, scene, customer group, `carried_from`) before the model is
+    asked; a carried ad whose creative is found gets the same original with the same copy and
+    its slot reads ready; one whose creative is gone carries `carry_note` and its slot reads
+    missing; 換掉 rows are never carried. The model plans only 「請再規劃 K 則」 more
+    (Contract C)."""
+
+    def setUp(self):
+        super().setUp()
+        self.previous, ads, assets = _seed_previous_with_creatives(
+            self.org_id, self.brand_id,
+            [("留下-有素材", "keep1", "keep", True),
+             ("留下-沒素材", "keep2", "keep_relative", False),
+             ("換掉-這則", "cut", "replace", False)],
+        )
+        self.kept, self.bare, self.cut = ads
+        self.asset = assets[0]
+        self.campaign = self._create_adopted_campaign()  # 2142 a day at cap 300 -> ceiling 4
+
+    def _adopt_reply(self, reply: str) -> tuple[dict, str]:
+        provider = _fake(reply)
+        plan.PROVIDER = provider
+        detail = self._adopt(self.campaign["id"])
+        return detail, provider.calls[0]["messages"][0]["content"]
+
+    def _ads(self, detail: dict) -> dict:
+        return {ad["name"]: ad for group in detail["groups"] for ad in group["ads"]}
+
+    def test_kept_ads_are_carried_with_their_creative_and_the_model_plans_the_rest(self):
+        from app.ads import slots
+
+        detail, prompt = self._adopt_reply(_two_role_reply())
+        ads = self._ads(detail)
+        self.assertEqual(set(ads), {"留下-有素材", "留下-沒素材", "再行銷-補位", "探索-補位"})
+        carried = ads["留下-有素材"]
+        for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format"):
+            self.assertEqual(carried[f"{dim}_key"], self.kept[f"{dim}_key"])
+        self.assertEqual(carried["coordinates_snapshot_json"]["carried_from"],
+                         {"campaign_id": self.previous["id"], "ad_id": self.kept["id"]})
+        self.assertEqual(carried["carried_label"], "沿用上一期")
+        self.assertIsNone(carried["carry_note"])
+        self.assertIsNone(ads["再行銷-補位"]["carried_label"])
+        by_group = {g["role"]: [ad["name"] for ad in g["ads"]] for g in detail["groups"]}
+        self.assertEqual(by_group["new"], ["留下-有素材", "留下-沒素材"])
+
+        # Same original, same copy, confirmed and assigned: the slot reads ready.
+        material = carried["material_placement_id"]
+        self.assertIsNotNone(material)
+        row = web.conn.execute(
+            "SELECT asset_id, copy_fields, ad_id FROM ads_asset_placement WHERE id=%s"
+            " AND is_current", (material,)).fetchone()
+        self.assertEqual((row["asset_id"], row["copy_fields"], row["ad_id"]),
+                         (self.asset, _KEEP_COPY, carried["id"]))
+        view = slots.read(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        states = {s["name"]: s["state"] for g in view["groups"] for s in g["slots"]}
+        self.assertEqual(states["留下-有素材"], "ready")
+        self.assertEqual(states["留下-沒素材"], "missing")
+        self.assertEqual(ads["留下-沒素材"]["carry_note"], "上一期的素材找不到，要重新準備")
+
+        self.assertIn("【已沿用的廣告】", prompt)
+        self.assertIn("- 「留下-有素材」｜投放組 new｜顧客群 未指定｜audience=aud_keep1、", prompt)
+        self.assertIn("請再規劃 2 則", prompt)
+        self.assertLess(prompt.rindex("【已沿用的廣告】"), prompt.rindex("【座標詞彙"))
+        self.assertNotIn("換掉-這則", set(ads))
+
+    def test_a_reply_above_the_ceiling_is_refused_with_nothing_written(self):
+        # Two carried + three planned = 5 > ceiling 4.
+        with self.assertRaises(ValueError) as ctx:
+            self._adopt_reply(_VALID_PLAN_REPLY)
+        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
+                                            self.campaign["id"])
+        self.assertEqual((reloaded["status"], reloaded["groups"]), ("draft", []))
+
+    def test_a_reply_leaving_out_an_uncovered_role_or_reusing_a_carried_name_is_refused(self):
+        for reply in (_two_role_reply(names=("再行銷-補位",), roles=("retarget",)),
+                      _two_role_reply(names=("留下-有素材", "探索-補位"))):
+            with self.subTest(reply=reply), self.assertRaises(ValueError):
+                self._adopt_reply(reply)
+
+    def test_a_carried_ready_ad_stays_out_of_the_pack(self):
+        from app import workbench
+        from app.ads import assets
+
+        detail, _ = self._adopt_reply(_two_role_reply())
+        ads = self._ads(detail)
+        workbench.register_tasks()
+        assets.dispatch_pack(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        web.conn.commit()
+        packed = {
+            (brief.get("source_ref") or {}).get("ads_ad_id")
+            for brief in workbench.briefs_for_source(
+                web.conn, self.org_id, self.brand_id, assets.PACK_SOURCE_KIND,
+                {"ads_campaign_id": self.campaign["id"]})
+        }
+        self.assertNotIn(ads["留下-有素材"]["id"], packed)
+        self.assertIn(ads["留下-沒素材"]["id"], packed)
+        self.assertIn(ads["探索-補位"]["id"], packed)
+
+    def test_the_payload_serves_capacity_and_menu(self):
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        web.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'proof','lab_report','檢驗報告')",
+            (coredb.new_id("crd"), self.org_id, self.brand_id),
+        )
+        self._adopt_reply(_two_role_reply())
+        web.conn.commit()
+        response = TestClient(main.app).get(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}")
+        self.assertEqual(response.status_code, 200, response.text)
+        campaign = response.json()["campaign"]
+        self.assertEqual(campaign["capacity"],
+                         {"daily": 2142, "cap": 300, "can_support": 3, "ceiling": 4,
+                          "carried": 2})
+        menu = {(row["dimension"], row["key"]) for row in campaign["menu"]}
+        self.assertNotIn(("proof", "lab_report"), menu)  # no evidence registered
+
+
+class EveryAdCarriedTest(PlanTestBase):
+    """Lead review (F48-I06 item 5): a period where every ad is a carried 留下 ad with its
+    creative is a normal case. One adopted role, 600 a day at cap 300 -> can_support 1, ceiling
+    2; two 留下 ads with creatives fill it, so K = 0: no model call, the structure is ready, both
+    slots read 已確認, and dispatching the pack makes no workbench pack ("nothing to prepare",
+    no error) while the readiness read counts every ad ready."""
+
+    def test_two_ready_carried_ads_need_no_model_and_no_pack(self):
+        from fastapi.testclient import TestClient
+
+        from app import main, workbench
+        from app.ads import assets, slots
+
+        _seed_previous_with_creatives(self.org_id, self.brand_id, [
+            ("留下-甲", "keep1", "keep", True), ("留下-乙", "keep2", "keep_relative", True),
+        ])
+        campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": "這一期", "goal_text": "續投留下的", "objective": "購買", "target_cost": 300,
+            "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
+            "budget_planned": 8400, "budget_scenario": "recommended",
+            "budget_basis_json": {"strategy": {"allocation": [
+                {"role": "new", "label": "新客", "pct": 100, "rationale": None}]}},
+        }, created_by=ACTOR)
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+
+        detail = self._adopt(campaign["id"])
+
+        self.assertEqual(provider.calls, [])  # K = 0: the model is not asked
+        self.assertEqual(detail["status"], "ready")
+        ads = [ad for group in detail["groups"] for ad in group["ads"]]
+        self.assertEqual([ad["name"] for ad in ads], ["留下-甲", "留下-乙"])
+        view = slots.read(web.conn, self.org_id, self.brand_id, campaign["id"])
+        tiles = [s for g in view["groups"] for s in g["slots"]]
+        self.assertEqual([(s["state"], s["confirmed"]) for s in tiles],
+                         [("ready", True), ("ready", True)])
+
+        with mock.patch.object(workbench, "submit_pack") as submit:
+            self.assertIsNone(
+                assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"]))
+            web.conn.commit()
+            response = TestClient(main.app).post(
+                f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/pack")
+        submit.assert_not_called()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"pack_id": None, "nothing_to_prepare": True})
+        rows = assets.readiness(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(assets.readiness_summary(rows, None),
+                         {"ready_count": 2, "total": 2, "pack_id": None})
+        self.assertNotIn("in_progress", {row["state"] for row in rows})
+
+
+class HandEditsObeyTheMenuTest(PlanTestBase):
+    """Contract P: a hand-made or edited ad may not take a vocabulary key this period's menu
+    leaves out (400 `coordinate_unavailable`, naming the dimension and why) nor a name carrying
+    a 「不能講」 entry (400 `name_forbidden`); keys outside the vocabulary pass as before, and the
+    delivery plan's reply is refused for a forbidden name too."""
+
+    def setUp(self):
+        super().setUp()
+        web.conn.execute(
+            "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label) "
+            "VALUES(%s,%s,%s,'proof','lab_report','檢驗報告')",
+            (coredb.new_id("crd"), self.org_id, self.brand_id),
+        )
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="保證治癒",
+                             claim_type="forbidden")
+        self.campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        self.group = self._adopt(self.campaign["id"])["groups"][0]
+        web.conn.commit()
+
+    def _post(self, body: dict):
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        return TestClient(main.app).post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/ads",
+            json={"group_id": self.group["id"], **body})
+
+    def test_an_unevidenced_proof_key_is_refused_with_its_reason(self):
+        response = self._post({"name": "手動廣告",
+                               "coordinates": {**_coordinates("hand"), "proof": "lab_report"}})
+        self.assertEqual(response.status_code, 400, response.text)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "coordinate_unavailable")
+        self.assertEqual(error["message"], "這期不能用這個證據：沒有登記證據")
+        ok = self._post({"name": "手動廣告", "coordinates": _coordinates("hand")})
+        self.assertEqual(ok.status_code, 200, ok.text)  # keys outside the vocabulary pass
+
+    def test_a_forbidden_word_in_the_name_is_refused(self):
+        response = self._post({"name": "保證 治癒的夜跑背心", "coordinates": _coordinates("hand")})
+        self.assertEqual(response.status_code, 400, response.text)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "name_forbidden")
+        self.assertEqual(error["message"], "廣告名稱寫了「保證治癒」，這是你標了不能講的話")
+        ad = self.group["ads"][0]
+        with self.assertRaises(plan.NameForbidden):
+            plan.update_ad(web.conn, self.org_id, self.brand_id, ad["id"],
+                           {"name": "保證治癒"}, actor=ACTOR)
+
+    def test_an_edit_keeping_an_excluded_key_the_ad_holds_passes(self):
+        ad = self.group["ads"][0]
+        web.conn.execute("UPDATE ads_ad SET proof_key='lab_report' WHERE id=%s", (ad["id"],))
+        updated = plan.update_ad(
+            web.conn, self.org_id, self.brand_id, ad["id"],
+            {"coordinates": {"proof": "lab_report", "hook": "hook_new"}}, actor=ACTOR)
+        self.assertEqual(updated["hook_key"], "hook_new")
+        plan.update_ad(web.conn, self.org_id, self.brand_id, ad["id"],
+                       {"coordinates": {"proof": "none"}}, actor=ACTOR)
+        with self.assertRaises(plan.CoordinateUnavailable) as ctx:
+            plan.update_ad(web.conn, self.org_id, self.brand_id, ad["id"],
+                           {"coordinates": {"proof": "lab_report"}}, actor=ACTOR)
+        self.assertEqual((ctx.exception.dimension_label, ctx.exception.reason),
+                         ("證據", "沒有登記證據"))
+
+    def test_the_plan_reply_naming_a_forbidden_word_is_refused(self):
+        campaign = self._create_adopted_campaign()
+        reply = json.loads(_VALID_PLAN_REPLY)
+        reply["groups"][0]["ads"][0]["name"] = "保證治癒・新客"
+        plan.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
+        with self.assertRaises(ValueError) as ctx:
+            self._adopt(campaign["id"])
+        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
 
 
 if __name__ == "__main__":

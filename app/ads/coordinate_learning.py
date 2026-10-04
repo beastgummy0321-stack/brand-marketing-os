@@ -15,9 +15,12 @@ No model call:
 - `ranked_section` prints 【上幾期的排名】 for the strategy and delivery-plan prompts from
   `learning_view.learnings_view` (the same view the owner sees); `gate_pairs` gives the delivery
   plan's program gate its (customer group, angle) pairs.
+- `keep_ads` (F48 Contract K) gives the delivery plan the newest closed campaign's 留下 ads of
+  this sell-way with the creative each went out with, so 留下 carries its image and copy.
 
-Private to app/ads (container contract §1): only `closeout.py`, `plan.py` and `strategy.py`
-import this. Ledger access goes through `app.brand_intelligence.repository`'s public functions.
+Private to app/ads (container contract §1): only `closeout.py`, `plan.py`, `planner_context.py`
+and `strategy.py` import this. Ledger access goes through `app.brand_intelligence.repository`'s
+public functions.
 """
 
 from typing import cast
@@ -31,8 +34,10 @@ from app.ads import (
     period_grades,
     sell_way,
 )
+from app.ads import asset_binding_repository as bindings
 from app.ads import learning as ads_learning
 from app.ads import repository as ads_repo
+from app.ads import user_assets_repository as user_assets
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -241,6 +246,86 @@ def ranked_section(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *
                 f"｜花 {learning_rank.whole(row['spend'])}｜{_prompt_coordinates(row, labels)}"
             )
     return "\n".join(lines), ids
+
+
+# -- Contract K: 留下 carries the creative --------------------------------------------------------
+
+_COPY_FIELDS = ("headline", "body", "description")
+
+
+def _newest_closed(conn: _AnyConn, org_id: str, brand_id: str, sell_way_id: str | None):
+    """The newest closed internal campaign of this sell-way (`None` = brand level), else None."""
+    for row in conn.execute(
+        "SELECT id, context_json FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
+        " AND status = 'closed' AND origin = 'internal' ORDER BY closed_at DESC NULLS LAST, id",
+        (org_id, brand_id),
+    ).fetchall():
+        if sell_way.of_campaign(dict(row)) == sell_way_id:
+            return dict(row)
+    return None
+
+
+def _copy_of(fields) -> dict | None:
+    """The three copy fields when a headline or a body is written, else None."""
+    if not isinstance(fields, dict):
+        return None
+    copy = {k: fields[k] for k in _COPY_FIELDS if isinstance(fields.get(k), str)}
+    return copy if any(copy.get(k, "").strip() for k in ("headline", "body")) else None
+
+
+def _live_copy(ad: dict) -> dict | None:
+    """The copy the launch froze (`live_creative_json.outputs.copy`, its first set)."""
+    output = ((ad.get("live_creative_json") or {}).get("outputs") or {}).get("copy") or {}
+    sets = (output.get("body_json") or {}).get("sets")
+    return _copy_of(sets[0]) if isinstance(sets, list) and sets else None
+
+
+def _creative(conn: _AnyConn, org_id: str, brand_id: str, ad: dict) -> dict | None:
+    """`{asset_id, copy_fields}` the previous ad went out with: its confirmed material's
+    placement (else the placement waiting in its slot) -- the original and that placement's
+    effective copy, else the launch's frozen copy. None when the original or the copy is gone."""
+    if ad.get("material_placement_id"):
+        placement_id, revision = ad["material_placement_id"], ad.get("material_placement_revision")
+    elif ad.get("slot_placement_id"):
+        placement_id, revision = ad["slot_placement_id"], None
+    else:
+        return None
+    try:
+        placement = user_assets.placement(conn, org_id, brand_id, ad["campaign_id"],
+                                          placement_id, revision)
+        user_assets.get_asset(conn, org_id, brand_id, placement["asset_id"])
+    except ValueError:
+        return None
+    copy = _copy_of(bindings.effective_copy(placement)) or _live_copy(ad)
+    if copy is None:
+        return None
+    return {"asset_id": placement["asset_id"], "copy_fields": copy}
+
+
+def keep_ads(conn: _AnyConn, org_id: str, brand_id: str, sell_way_id: str | None) -> list[dict]:
+    """Contract K: the 留下／相對留下 rows of the newest closed campaign of this sell-way, in rank
+    order, each `{row, ad, role, creative}` -- `ad` the previous `ads_ad` row (through the row's
+    `source_cycle_id` = `<campaign>:<ad>`), `role` its delivery group's role, `creative` its
+    original and copy (None when not found). A row whose ad is gone is skipped."""
+    campaign = _newest_closed(conn, org_id, brand_id, sell_way_id)
+    if campaign is None:
+        return []
+    view = learning_view.learnings_view(conn, org_id, brand_id, campaign_id=campaign["id"],
+                                        limit=1)
+    kept = []
+    for campaign_view in view["campaigns"]:
+        for row in campaign_view["rows"]:
+            if not learning_rank.is_keep(row["verdict"]):
+                continue
+            ad = ads_repo.get_ad(conn, org_id, brand_id, row["ad_id"])
+            if ad is None or ad["campaign_id"] != campaign["id"]:
+                continue
+            group = ads_repo.get_group(conn, org_id, brand_id, ad["group_id"])
+            kept.append({
+                "row": row, "ad": ad, "role": (group or {}).get("role"),
+                "creative": _creative(conn, org_id, brand_id, ad),
+            })
+    return kept
 
 
 def _angle(row: dict) -> str | None:

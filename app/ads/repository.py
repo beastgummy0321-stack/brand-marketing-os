@@ -794,6 +794,23 @@ def _target_name(conn: _AnyConn, org_id: str, brand_id: str, action: dict,
     return row["name"] if row is not None else None
 
 
+CARRIED_LABEL = "沿用上一期"
+CARRY_NOTE = "上一期的素材找不到，要重新準備"
+
+
+def _carried_fields(ad: dict) -> dict:
+    """F48 Contract K, computed at read: a carried ad (`coordinates_snapshot_json.carried_from`)
+    reads `carried_label` 「沿用上一期」; while no file sits in its slot or is assigned to it
+    (the previous creative was not found, or nothing was placed since), `carry_note` says to
+    prepare one. Both `None` on any other ad."""
+    carried = bool((ad.get("coordinates_snapshot_json") or {}).get("carried_from"))
+    empty = not ad.get("material_placement_id") and not ad.get("slot_placement_id")
+    return {
+        "carried_label": CARRIED_LABEL if carried else None,
+        "carry_note": CARRY_NOTE if carried and empty else None,
+    }
+
+
 def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
     """`GET /campaigns/{c}`：整個五分頁工作區要讀的一份 dict——campaign 本身 + 投放組 +
     廣告（掛在各自的投放組下）+ 每個節點最新一筆 action + 成效小計 + F04-I08 的
@@ -814,6 +831,7 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     ads_by_group: dict[str, list] = {}
     for row in ad_rows:
         row = dict(row)
+        row.update(_carried_fields(row))
         ads_by_group.setdefault(row["group_id"], []).append(row)
     for group in groups:
         group["ads"] = ads_by_group.get(group["id"], [])

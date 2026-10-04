@@ -853,6 +853,10 @@ class ScriptedProvider:
     # time (`coordinate_learning.ranked_section`, F46 Contract G):
     # `- <campaign>第 r／n 名｜留下…｜顧客群 <N>｜「<ad>」｜…（angle=<key>）…`.
     _KEPT_ROW = re.compile(r"^- .*第 \d+／\d+ 名｜留下[^｜]*｜顧客群 (\d+)｜.*（angle=([^）]+)）")
+    # Delivery-plan prompt's 【已沿用的廣告】 (`plan._carried_text`, F48 Contract K): one line per
+    # carried ad `- 「<name>」｜投放組 <role>｜顧客群 <N|未指定|這期沒列>｜…`, then 「請再規劃 K 則」.
+    _CARRIED_LINE = re.compile(r"^- 「.*」｜投放組 (\w+)｜顧客群 ([^｜]+)｜")
+    _REMAINING = re.compile(r"^請再規劃 (\d+) 則$")
 
     def __init__(self, reply: dict):
         self._reply = reply
@@ -883,7 +887,9 @@ class ScriptedProvider:
         and, when the prompt lists 【這期可用的優惠】 lines, uses the first listed offer key (F44);
         when it lists 【這個賣法的顧客】 groups, every ad binds 第 1 群 with that group's pain (F46);
         when 【上幾期的排名】 lists a 留下 row of a listed group, the first group's ads take that
-        group and the first ad its angle (F46 Contract G).
+        group and the first ad its angle (F46 Contract G); when 【已沿用的廣告】 says 「請再規劃 K
+        則」, it plans `min(K, roles)` ads, one per role -- roles no carried ad covers first -- and a
+        covered role's ads bind the carried ads' 第 N 群 (F48 Contract K).
         Any other template, or a prompt without those sections, returns the template unchanged."""
         prompt = self._last_user_text(messages)
         if "allocation" in self._reply:
@@ -903,6 +909,12 @@ class ScriptedProvider:
             roles = self._adopted_roles(prompt)
             if not roles:
                 return self._reply
+            carried, remaining = self._carried(prompt)
+            if remaining is not None:
+                # F48 Contract K: the program carried some ads in; plan only the rest, roles no
+                # carried ad covers first (each needs one), one ad per role.
+                ordered = [r for r in roles if r not in carried] + [r for r in roles if r in carried]
+                roles = ordered[:min(remaining, len(roles))]
             template = self._reply["groups"][0]
             groups = [
                 {"role": role, "name": f"e2e {role} group", "ads": [{
@@ -939,8 +951,36 @@ class ScriptedProvider:
                     if pains:
                         ad["coordinates"]["pain"] = pains[0]
                 groups[0]["ads"][0]["coordinates"]["angle"] = angle
+            # F48 Contract K: an ad set speaks to one set of people -- a role holding carried ads
+            # takes their customer group number.
+            for group in groups:
+                number = carried.get(group["role"])
+                if number is None:
+                    continue
+                pains = self._customer_group_pains(prompt, number)
+                for ad in group["ads"]:
+                    ad["customer_group"] = number
+                    if pains:
+                        ad["coordinates"]["pain"] = pains[0]
             return {**self._reply, "groups": groups}
         return self._reply
+
+    @classmethod
+    def _carried(cls, prompt: str) -> tuple[dict, int | None]:
+        """({role: 第 N 群 or None} of the 【已沿用的廣告】 lines, K of 「請再規劃 K 則」 or None)."""
+        carried: dict = {}
+        remaining = None
+        for line in prompt.splitlines():
+            line = line.strip()
+            match = cls._CARRIED_LINE.match(line)
+            if match:
+                who = match.group(2)
+                carried.setdefault(match.group(1), int(who) if who.isdigit() else None)
+                continue
+            match = cls._REMAINING.match(line)
+            if match:
+                remaining = int(match.group(1))
+        return carried, remaining
 
     @staticmethod
     def _last_user_text(messages: list) -> str:
