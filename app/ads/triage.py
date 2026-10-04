@@ -11,9 +11,9 @@ from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
-    ad_status,
     external_sync,
     learning_rank,
+    lifecycle,
     month_budget,
     queue_done,
     repository,
@@ -68,11 +68,12 @@ _NOT_JUDGED = ("no_target", GRADE_LABELS["no_target"])
 
 
 def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
-    """F26-I01: judges only ACTIVE ads (`ad_status.is_closed` false, including an unknown/null
-    `native_status` -- unknown is never closed) -- a closed ad (paused/deleted/archived/its own
-    adset or campaign paused on the platform) is kept and reported through the `closed` block
-    below, never judged, never silently dropped (measured cause, feature Decisions "I01": the
-    home strip used to read most of its 「資料不足」 count from closed ads)."""
+    """F26-I01, F49 Contract L: judges the running ads and the ones whose delivery is unknown
+    (`lifecycle.judged` -- unknown is never dropped, §6.30); an ad not delivering (in review,
+    disapproved, billing) or off (paused／archived／deleted／its own adset or campaign paused) is
+    kept and reported through the `closed` block below with its `delivery {state, label}`, never
+    judged, never silently dropped (measured cause, feature Decisions "I01": the home strip used
+    to read most of its 「資料不足」 count from closed ads)."""
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
@@ -84,8 +85,8 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         "AND native_kind='ad' ORDER BY name,id",
         (org_id, brand_id, campaign_id),
     ).fetchall()
-    active_ads = [ad for ad in ads if not ad_status.is_closed(ad["native_status"])]
-    closed_ads = [ad for ad in ads if ad_status.is_closed(ad["native_status"])]
+    active_ads = [ad for ad in ads if lifecycle.judged(ad)]
+    closed_ads = [ad for ad in ads if not lifecycle.judged(ad)]
     # One read for the whole campaign (review fix: was one query per ad per window step). Still
     # reads every ad's rows, closed ones included -- the `closed` block's own numbers (below)
     # reuse this same read, never a second query.
@@ -152,6 +153,12 @@ def ad_item(conn, org_id, brand_id, campaign, entity) -> dict:
     return item
 
 
+def _delivery_fields(entity) -> dict:
+    """F49 Contract L: the ad's served delivery (`lifecycle.delivery`) beside its native status."""
+    view = lifecycle.delivery(entity)
+    return {"delivery": view, "delivery_label": view["label"]}
+
+
 def _item(entity, campaign_name, campaign_objective, target, cutoff, coverage, rows_by_entity,
           bound_ad_by_native) -> dict:
     """One ad's triage item before the ladder -- shared by `classify()` and `ad_item()`."""
@@ -159,6 +166,7 @@ def _item(entity, campaign_name, campaign_objective, target, cutoff, coverage, r
         **_classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage,
                        rows_by_entity.get(entity["id"], [])),
         "bound_ad_id": bound_ad_by_native.get(entity["native_id"]),
+        **_delivery_fields(entity),
     }
 
 
@@ -194,6 +202,10 @@ def _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id) -> dict:
 
 
 _CLOSED_ITEMS_CAP = 50
+# The two delivery labels the legacy `paused`／`archived` counts name (`adapters.delivery` serves
+# them); every other not-judged ad counts as `other`. Goes with those keys (F49-I09).
+_PAUSED_LABEL = "已暫停"
+_ARCHIVED_LABEL = "已封存"
 
 
 def _closed_item(entity, entity_rows, cutoff, bound_ad_by_native):
@@ -206,7 +218,8 @@ def _closed_item(entity, entity_rows, cutoff, bound_ad_by_native):
     view, spend = _ad_window(entity_rows, start, end)
     return {
         "entity_id": entity["id"], "name": entity.get("name"),
-        "native_status": entity.get("native_status"), "thumbnail_url": _thumbnail_url(entity),
+        "native_status": entity.get("native_status"), **_delivery_fields(entity),
+        "thumbnail_url": _thumbnail_url(entity),
         "spend": spend, "cost_per_result": view["cost_per_result"] if view else None,
         "result_label": result_kinds.label(view["result_kind"] if view else None),
         "bound_ad_id": bound_ad_by_native.get(entity["native_id"]),
@@ -214,28 +227,29 @@ def _closed_item(entity, entity_rows, cutoff, bound_ad_by_native):
 
 
 def _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native):
-    """The `closed` block of `classify()`'s result (feature Decisions "I01") -- `paused`/
-    `archived` count the two statuses the frontend groups the strip by; every other closed status
-    (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`) falls into `other`, so `paused + archived + other
-    == total` always. `items` is capped at `_CLOSED_ITEMS_CAP`, in the same (name, id) order the
-    campaign's own ad query already returned; `truncated` tells the frontend there's more than the
-    cap without it having to compare lengths itself."""
-    paused = archived = other = 0
+    """The `closed` block of `classify()`'s result (feature Decisions "I01", F49 Contract L):
+    every ad not judged -- not delivering or off -- grouped by its served delivery label
+    (`groups [{state, label, count}]`, first seen first, in the (name, id) order the campaign's
+    own ad query returned), so the counts add up to `total`. `paused`／`archived`／`other` are the
+    older three-way counts by the same labels, kept while `GradeGroups` still prints them (F49-I09
+    moves it onto `groups`). `items` is capped at `_CLOSED_ITEMS_CAP`; `truncated` tells the
+    frontend there's more than the cap without it having to compare lengths itself."""
+    groups: dict = {}
     for ad in closed_ads:
-        status = ad["native_status"]
-        if status == "PAUSED":
-            paused += 1
-        elif status == "ARCHIVED":
-            archived += 1
-        else:
-            other += 1
+        view = lifecycle.delivery(ad)
+        group = groups.setdefault(view["label"], {**view, "count": 0})
+        group["count"] += 1
+    paused = groups.get(_PAUSED_LABEL, {}).get("count", 0)
+    archived = groups.get(_ARCHIVED_LABEL, {}).get("count", 0)
     items = [
         _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff, bound_ad_by_native)
         for ad in closed_ads[:_CLOSED_ITEMS_CAP]
     ]
     return {
-        "paused": paused, "archived": archived, "other": other, "total": len(closed_ads),
-        "items": items, "truncated": len(closed_ads) > _CLOSED_ITEMS_CAP,
+        "groups": list(groups.values()),
+        "paused": paused, "archived": archived, "other": len(closed_ads) - paused - archived,
+        "total": len(closed_ads), "items": items,
+        "truncated": len(closed_ads) > _CLOSED_ITEMS_CAP,
     }
 
 
@@ -693,11 +707,7 @@ _NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10
 
 
 def _non_closed_campaign_ids(conn, org_id, brand_id):
-    rows = conn.execute(
-        "SELECT id FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND status != 'closed'",
-        (org_id, brand_id),
-    ).fetchall()
-    return [row["id"] for row in rows]
+    return lifecycle.campaign_ids(conn, org_id, brand_id, lifecycle.NOT_CLOSED)
 
 
 def _classify_brand(conn, org_id, brand_id):
@@ -928,14 +938,11 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
     `_queue_payload` attaches to its row. `holds` (F48-I02) collects the owners a raise is held
     back for on sample size (`triage_scale.scale_candidates`)."""
     by_campaign = _classified_items_by_campaign(items)
-    native_status = _brand_entity_native_status(
-        conn, org_id, brand_id, {item["entity_id"] for item in items}
-    )
     candidates = []
     scale_owner_by_campaign = {}
     month_view = _month_view_fn(conn, org_id, brand_id)
     for scale in triage_scale.scale_candidates(
-        conn, org_id, brand_id, by_campaign, native_status, month_view, holds=holds,
+        conn, org_id, brand_id, by_campaign, month_view, holds=holds,
     ):
         owner_id = scale["owner_id"]
         scale_owner_by_campaign.setdefault(scale["campaign_id"], owner_id)
@@ -971,7 +978,7 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
     # raised (cleanup first) -- `identity_id` is the campaign id for both kinds.
     cleanup_campaign_ids = {c["identity_id"] for c in cleanup_candidates}
     candidates.extend(cleanup_candidates)
-    for refresh in triage_scale.refresh_candidates(by_campaign, native_status):
+    for refresh in triage_scale.refresh_candidates(by_campaign):
         campaign_id = refresh["campaign_id"]
         if campaign_id in cleanup_campaign_ids:
             continue
@@ -1110,19 +1117,6 @@ def _brand_action_verification_states(conn, org_id, brand_id) -> dict:
         (org_id, brand_id),
     ).fetchall()
     return {row["id"]: row["verification_state"] for row in rows}
-
-
-def _brand_entity_native_status(conn, org_id, brand_id, entity_ids) -> dict:
-    """`ads_external_entity.id -> native_status` for exactly the entities this refresh might need
-    it for (`triage_scale`'s active-ad filter) -- one bounded query, never per row."""
-    if not entity_ids:
-        return {}
-    rows = conn.execute(
-        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
-        "AND id = ANY(%s)",
-        (org_id, brand_id, list(entity_ids)),
-    ).fetchall()
-    return {row["id"]: row["native_status"] for row in rows}
 
 
 def _brand_review_rounds(conn, org_id, brand_id) -> dict:

@@ -25,6 +25,7 @@ from datetime import date, timedelta
 
 from app.ads import (
     coordinate_learning,
+    lifecycle,
     outcome,
     repository,
     simulation_mode,
@@ -120,6 +121,9 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         raise ValueError("campaign_unknown")
     if campaign["status"] == "closed":
         return campaign
+    # F49 Contract L (planning #19): a campaign never on a platform has no period to close.
+    if lifecycle.of(conn, org_id, brand_id, campaign)["state"] == "draft":
+        raise ValueError("campaign_not_launched")
 
     result = outcome.summary(conn, org_id, brand_id, campaign_id)
     skipped_gap = _coverage_check(campaign, result["coverage"], skip_missing)

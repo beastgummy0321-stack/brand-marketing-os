@@ -8,16 +8,15 @@ read here. Pure reads: no LLM call, no platform write, no platform literal.
 
 from datetime import date, datetime
 
-from app.ads import ad_status, repository, triage, triage_capacity
-
-_DELETED = "DELETED"
+from app.ads import lifecycle, repository, triage, triage_capacity
 
 
 def pause_view(conn, org_id: str, brand_id: str, campaign_id: str, entity_id: str) -> dict:
     """`{state, entity_id, name, triage, reason_text, closed_at, last_read_at, change_set_id}`.
-    `state` is `active` (a platform ad of this campaign that `ad_status.is_closed` does not call
-    closed -- unknown status is active), `closed` (closed, not `DELETED`) or `gone` (no such ad in
-    this campaign, not an ad, or `DELETED`; `triage` is then `None`). `reason_text` (F48 Contract R
+    `state` is `active` (a platform ad of this campaign that `lifecycle.judged` grades -- running,
+    or unknown status), `closed` (not delivering or off, still on the platform) or `gone` (no such
+    ad in this campaign, not an ad, or one the platform no longer has, `lifecycle.gone`; `triage`
+    is then `None`). `reason_text` (F48 Contract R
     "reason texts") is the pause's reason built from this ad's own grade and numbers
     (`triage_capacity.reason_text`, the cleanup entries' same sentences without a rank), `None`
     when `triage` is. Raises `ValueError("campaign_unknown")` only for an unknown campaign."""
@@ -45,9 +44,9 @@ def pause_view(conn, org_id: str, brand_id: str, campaign_id: str, entity_id: st
 
 
 def _state(entity) -> str:
-    if entity is None or entity["native_kind"] != "ad" or entity["native_status"] == _DELETED:
+    if entity is None or entity["native_kind"] != "ad" or lifecycle.gone(entity):
         return "gone"
-    return "closed" if ad_status.is_closed(entity["native_status"]) else "active"
+    return "active" if lifecycle.judged(entity) else "closed"
 
 
 def _iso(value):

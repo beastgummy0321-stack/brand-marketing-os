@@ -3,7 +3,7 @@ head and stage (`workspace`), the tree (`structure`) and the change history (`ti
 Read-only: no LLM call, no write, no platform call (ARCHITECTURE.md §0 "程式整理，LLM 判斷").
 
 Every number and state here comes from a function that already owns it, never a second copy:
-- stage: `campaign_stage.stage`, fed by `home_overview._is_draft`, `targets.resolve`,
+- stage: `campaign_stage.stage`, fed by `lifecycle.state`, `targets.resolve`,
   `change_control_launch.launch_set`, triage `data.status` and this campaign's open queue rows
   (`triage.get_queue`, over this campaign's own `classify()` items);
 - grades: `triage.classify` (the one cap ruler), never the trend `class`;
@@ -19,11 +19,11 @@ nulls only its own field (and rolls the read transaction back for the next one).
 from datetime import timedelta
 
 from app.ads import (
-    ad_status,
     campaign_stage,
     change_control_launch,
     handoff_assignment,
     home_overview,
+    lifecycle,
     month_summary,
     repository,
     review_evidence,
@@ -54,10 +54,6 @@ def _entities(conn, org_id, brand_id, campaign_id) -> list[dict]:
         (org_id, brand_id, campaign_id),
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-def _is_draft(campaign, entities) -> bool:
-    return home_overview._is_draft(campaign, {campaign["id"]} if entities else set())
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +200,17 @@ def _capacity(conn, org_id, brand_id, campaign, draft, triaged) -> dict:
 def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
     entities = _entities(conn, org_id, brand_id, campaign_id)
-    draft = _is_draft(campaign, entities)
-    closed = campaign["status"] == "closed"
+    state = lifecycle.view(
+        campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id),
+        today=coresettings.today_for_org(conn, org_id=org_id),
+    )
+    draft = state["state"] == "draft"
+    closed = state["state"] == "closed"
     cap = targets.resolve(conn, org_id, brand_id, campaign)
     launch = change_control_launch.launch_set(conn, org_id, brand_id, campaign_id)
-    active_ads = sum(
-        1 for e in entities
-        if e["native_kind"] == "ad" and not ad_status.is_closed(e.get("native_status"))
+    running = lifecycle.running_view(
+        campaign, [e for e in entities if e["native_kind"] == "ad"],
+        lifecycle.newest_reported(conn, org_id, brand_id, campaign_id).get(campaign_id),
     )
 
     triaged = None
@@ -253,13 +253,15 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     )
     return {
         "stage": campaign_stage.stage(
-            closed=closed, draft=draft, launch_approved=launch is not None,
+            state=state["state"], launch_approved=launch is not None,
             cap_set=cap["value"] is not None, data_ready=data_ready, open_items=pending,
         ),
+        "lifecycle": state,
         "pending_count": pending,
         "delivery": _delivery(conn, org_id, brand_id, campaign_id, draft=draft, closed=closed),
         **_capacity(conn, org_id, brand_id, campaign, draft, triaged),
-        "active_ads": active_ads,
+        "active_ads": running["count"],
+        "running": running,
         "next_sync_at": sync["next_at"] if sync is not None else None,
         "missing_days": missing_days,
         "totals": totals,
@@ -340,8 +342,8 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     its grade; one not on a platform yet carries `missing_material`), then any live platform ad of
     the campaign the plan does not hold (e.g. a replacement), under the group its parent was
     matched to, else under its own platform parent. Imported: the platform parents (ad sets) and
-    their ads. Only live ads (`ad_status.is_closed` false) are listed -- a closed ad is not in the
-    structure any more. Grades are `triage.classify`'s; a failed triage read leaves every grade
+    their ads. Only ads that are not off (`lifecycle.may_spend`) are listed -- a closed ad is not in
+    the structure any more. Grades are `triage.classify`'s; a failed triage read leaves every grade
     null, never a guess."""
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
     entities = _entities(conn, org_id, brand_id, campaign_id)
@@ -355,10 +357,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         graded = None if triaged is None else {i["entity_id"]: i for i in triaged["items"]}
     by_id = {e["id"]: e for e in entities}
     by_native = {(e["native_kind"], e["native_id"]): e for e in entities}
-    live_ads = [
-        e for e in entities
-        if e["native_kind"] == "ad" and not ad_status.is_closed(e.get("native_status"))
-    ]
+    live_ads = [e for e in entities if e["native_kind"] == "ad" and lifecycle.may_spend(e)]
 
     groups: list[dict] = []
     placed: set = set()
@@ -385,7 +384,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                     })
                     continue
                 placed.add(entity["id"])
-                if ad_status.is_closed(entity.get("native_status")):
+                if not lifecycle.may_spend(entity):
                     continue
                 out_ads.append(
                     _platform_ad(entity, graded, closing, ad_id=ad["id"], name=ad["name"])

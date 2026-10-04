@@ -388,6 +388,28 @@ def objective_family(objective) -> str:
     return _RESULT_LABEL_FAMILY.get(mapped[0], "other")
 
 
+# F49 Contract L: Meta's own `effective_status` -> (delivery state, the word a screen prints).
+# States: `running` | `not_running` (on, but not delivering) | `off` (stopped). A status missing
+# here (or None) is `unknown` -- `adapters.delivery` answers that, never a guess.
+STATUS_TABLE = {
+    "ACTIVE": ("running", "投放中"),
+    "IN_PROCESS": ("not_running", "審核中"),
+    "PENDING_REVIEW": ("not_running", "審核中"),
+    "PREAPPROVED": ("not_running", "審核中"),
+    "PENDING_BILLING_INFO": ("not_running", "待付款設定"),
+    "WITH_ISSUES": ("not_running", "有問題"),
+    "DISAPPROVED": ("not_running", "被拒登"),
+    "PAUSED": ("off", "已暫停"),
+    "ADSET_PAUSED": ("off", "所屬廣告組已暫停"),
+    "CAMPAIGN_PAUSED": ("off", "所屬活動已暫停"),
+    "ARCHIVED": ("off", "已封存"),
+    "DELETED": ("off", "已刪除"),
+}
+# The statuses after which the object is no longer on the platform at all (the pause page's
+# `gone`), a subset of the `off` ones.
+GONE_STATUSES = frozenset({"DELETED"})
+
+
 # F27-I09 Contract I / pre-dispatch correction 2: this platform's own stored sync error codes
 # that mean the connection's READ PERMISSION itself has been revoked/expired, never a raw Meta
 # Graph error number -- `app/meta/repository.py::read_external_page` already collapses every

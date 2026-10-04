@@ -222,6 +222,8 @@ class LiveCreativeTest(unittest.TestCase):
     def test_closeout_scope_names_the_dispatch_coordinates(self):
         ad = self._ad("A")
         self._edit(ad["id"], angle="a-edited")
+        # F49 Contract L: only a campaign read back on a platform has a period to close.
+        outcome_seed.bind_platform(self.conn, self.org, self.brand, self.campaign)
 
         closeout.close(self.conn, self.org, self.brand, self.campaign, actor=ACTOR)
 
@@ -256,6 +258,8 @@ class LiveCreativeTest(unittest.TestCase):
             {bare["id"]: "o3"},
         )
 
+        # F49 Contract L: only a campaign read back on a platform has a period to close.
+        outcome_seed.bind_platform(self.conn, self.org, self.brand, self.campaign)
         closeout.close(self.conn, self.org, self.brand, self.campaign, actor=ACTOR)
         scopes = [
             r["applicability_scope"] for r in brands.list_learnings(self.conn, self.brand)

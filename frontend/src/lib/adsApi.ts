@@ -15,6 +15,17 @@ import type { BudgetPreview, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasi
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
 
+/** F49 Contract L (`app/ads/lifecycle.py`): the served campaign lifecycle — screens branch on `state` and print
+ * `label`; 結案 shows only when `can_close`. */
+export type LifecycleState = "draft" | "live" | "ended" | "closed";
+export interface CampaignLifecycle { state: LifecycleState; label: string; can_close: boolean }
+/** F49 Contract L: one platform object's served delivery (its adapter's status table); `unknown` is never dropped. */
+export type DeliveryState = "running" | "not_running" | "off" | "unknown";
+export interface DeliveryView { state: DeliveryState; label: string }
+/** F49 Contract L: 「在投」 = `count` running ads; `unknown` ads apart; `read_at` = the newest clean structure read,
+ * `stale` when it is older than the newest launch item the user reported done. */
+export interface RunningAds { count: number; unknown: number; read_at: string | null; stale: boolean }
+
 export interface CampaignOutcomeTotals {
   spend: number | null;
   purchases: number | null;
@@ -72,6 +83,7 @@ export interface CampaignCard extends ExternalCampaignFields {
   id: string;
   name: string;
   status: CampaignStatus;
+  lifecycle?: CampaignLifecycle;
   start_date: string | null;
   end_date: string | null;
   objective: string; // F27-I09: `campaign_objective` optional, see `adsTriageApi.ts`.
@@ -167,6 +179,7 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   start_date: string | null;
   end_date: string | null;
   status: CampaignStatus;
+  lifecycle?: CampaignLifecycle;
   budget_planned: number | null;
   budget_scenario: string | null;
   /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——讀前先檢查 `.strategy` 存不存在。 */

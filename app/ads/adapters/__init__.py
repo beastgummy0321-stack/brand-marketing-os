@@ -92,6 +92,39 @@ def is_auth_error(platform: str | None, code: str | None) -> bool:
     return False
 
 
+UNKNOWN_DELIVERY = ("unknown", "平台狀態不明")
+
+
+def _status_table(platform: str | None) -> dict:
+    """The platform's own native status -> (delivery state, label) table. The simulated platform
+    writes Meta's vocabulary (`simulated.py` registers its nodes as Meta would report them), so it
+    reads Meta's table. Same lazy-import dispatch seam as `platform_url` above."""
+    if platform in ("meta", "simulated"):
+        from app.ads.adapters import meta_read
+
+        return meta_read.STATUS_TABLE
+    return {}
+
+
+def delivery(platform: str | None, native_status: str | None) -> dict:
+    """F49 Contract L: `{state, label}` of one platform object's stored native status --
+    `running | not_running | off | unknown`. None, an unmapped status or an unknown platform ->
+    `unknown` 平台狀態不明, never a guess. `app/ads/lifecycle.py` is the only caller."""
+    state, label = _status_table(platform).get(native_status, UNKNOWN_DELIVERY) \
+        if native_status is not None else UNKNOWN_DELIVERY
+    return {"state": state, "label": label}
+
+
+def gone(platform: str | None, native_status: str | None) -> bool:
+    """Whether this stored native status says the object no longer exists on the platform (a
+    subset of `off`). Unknown platform or status -> `False`."""
+    if platform in ("meta", "simulated"):
+        from app.ads.adapters import meta_read
+
+        return native_status in meta_read.GONE_STATUSES
+    return False
+
+
 def pixel_id_error(platform: str | None, pixel_id: str) -> str | None:
     """F47-I06 (Contract A ids): the pixel-id format belongs to the platform adapter. The
     sentence for a typed pixel id this platform could never have issued, else `None`. A platform

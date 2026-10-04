@@ -22,7 +22,7 @@
  * - Timeline rows are newest first (`created_at DESC, id DESC`), at most 50 (`truncated` says
  *   there are more); superseded and deferred sets are not listed. */
 import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { BASE, parseJsonOrThrow, type CampaignLifecycle, type RunningAds } from "./adsApi";
 import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type WorkspaceStageKey = "plan" | "assets" | "launch" | "read" | "decide" | "review";
@@ -59,8 +59,11 @@ export interface CampaignWorkspace {
   pending_count: number | null;
   delivery: WorkspaceDelivery | null;
   daily_budget: number | null;
-  /** Live (not closed) platform ads. */
+  /** Running platform ads (`running.count`, F49 Contract L). */
   active_ads: number;
+  /** F49 Contract L: the served lifecycle and 「在投」 with the read time it rests on. */
+  lifecycle?: CampaignLifecycle;
+  running?: RunningAds;
   can_support: number | null;
   next_sync_at: string | null;
   /** Days (YYYY-MM-DD) of the judged window never read from the platform — the campaign's

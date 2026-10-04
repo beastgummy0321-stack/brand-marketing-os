@@ -178,15 +178,15 @@ class _WithReader(unittest.TestCase):
 
 class StageFunctionTest(unittest.TestCase):
     def stage(self, **facts):
-        base = {"closed": False, "draft": False, "launch_approved": False, "cap_set": False,
+        base = {"state": "live", "launch_approved": False, "cap_set": False,
                 "data_ready": True, "open_items": 0}
         return campaign_stage.stage(**{**base, **facts})
 
     def test_draft_plan_assets_launch(self):
-        self.assertEqual(self.stage(draft=True), {"key": "plan", "done": []})
-        self.assertEqual(self.stage(draft=True, cap_set=True),
+        self.assertEqual(self.stage(state="draft"), {"key": "plan", "done": []})
+        self.assertEqual(self.stage(state="draft", cap_set=True),
                          {"key": "assets", "done": ["plan"]})
-        self.assertEqual(self.stage(draft=True, launch_approved=True),
+        self.assertEqual(self.stage(state="draft", launch_approved=True),
                          {"key": "launch", "done": ["plan", "assets"]})
 
     def test_launched_read_and_decide(self):
@@ -199,9 +199,13 @@ class StageFunctionTest(unittest.TestCase):
         self.assertEqual(self.stage(open_items=None)["key"], "read")
         self.assertEqual(self.stage(open_items=3, data_ready=None)["key"], "read")
 
-    def test_closed_is_review(self):
-        self.assertEqual(self.stage(closed=True, draft=True, open_items=4),
+    def test_ended_waits_on_review_and_closed_is_review_done(self):
+        # F49 Contract L: an ended campaign's waiting step is its closeout; a closed one is done.
+        self.assertEqual(self.stage(state="ended", open_items=4),
                          {"key": "review", "done": ["plan", "assets", "launch", "read", "decide"]})
+        self.assertEqual(self.stage(state="closed", open_items=4),
+                         {"key": "review",
+                          "done": ["plan", "assets", "launch", "read", "decide", "review"]})
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +849,7 @@ class RouteTest(_WithReader):
         self.assertEqual(ws.status_code, 200, ws.text)
         self.assertEqual(set(ws.json()), {
             "stage", "pending_count", "delivery", "daily_budget", "active_ads", "can_support",
-            "next_sync_at", "missing_days", "totals", "draft",
+            "next_sync_at", "missing_days", "totals", "draft", "lifecycle", "running",
         })
         structure = client.get(f"{base}/{draft}/structure")
         self.assertEqual(structure.status_code, 200, structure.text)

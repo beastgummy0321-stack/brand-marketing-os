@@ -22,6 +22,11 @@ whose `product_id` is a required keyword; any other call fails, naming file, fun
 F48-I07 (Contract M): `round(`／`math.floor(`／`math.ceil(` appear in `app/ads` only in `budget.py`
 (the one money calculator) unless the `(file, function)` is listed with why it is not a money
 figure's rounding; any other call fails, naming file, function and line.
+
+F49-I01 (Contract L, one lifecycle): a platform status word (ACTIVE, PAUSED, …) written in code
+outside `app/ads/adapters/` (allowlist: the change-set pause payload, W19); a `native_status`
+comparison outside `lifecycle.py`／`adapters/`; and campaign-selection SQL on `ads_campaign`
+(`status != 'closed'`, `status IN (…)`) outside `lifecycle.py` each fail, naming file and line.
 """
 
 import ast
@@ -429,6 +434,193 @@ class OneMoneyCalculatorTest(unittest.TestCase):
         self.assertEqual(budget.whole(2.5), 3)  # Python's round(2.5) is 2
         self.assertEqual(budget.daily_of(10000, 7), 1428)
         self.assertEqual(budget.total_of(1428, 7), 9996)
+
+
+# -- F49 Contract L: one lifecycle ---------------------------------------------------------------
+
+# A platform's own status vocabulary belongs to its adapter (`adapters/meta_read.py`
+# `STATUS_TABLE`); everything else reads `lifecycle.delivery`.
+NATIVE_STATUS_WORDS = frozenset({
+    "ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "ADSET_PAUSED", "CAMPAIGN_PAUSED", "DISAPPROVED",
+    "WITH_ISSUES", "IN_PROCESS", "PENDING_REVIEW", "PREAPPROVED", "PENDING_BILLING_INFO",
+})
+_SQL_STATUS_WORD = re.compile(r"'(" + "|".join(sorted(NATIVE_STATUS_WORDS)) + r")'")
+# (file relative to app/ads, text on the hit line, why) -- never widen to hide a status rule.
+NATIVE_WORD_ALLOWED = [
+    ("ab_pairs.py", '{"status": "PAUSED"}',
+     "W19 (feature D): the change-set pause payload is written in the platform's own word"),
+    ("change_control_data.py", '{"status": "PAUSED"}',
+     "W19 (feature D): the change-set pause payload, validated as written"),
+]
+# The only owners of a `native_status` comparison and of the campaign-selection SQL.
+LIFECYCLE_FILE = "lifecycle.py"
+_NATIVE_COMPARE_SQL = re.compile(r"\bnative_status\s*(=|<>|!=|\bIN\b|\bNOT\s+IN\b)", re.I)
+_CAMPAIGN_TABLE = re.compile(r"\bads_campaign\b")
+# `IN (…)` counts when the list names a campaign-only status (a change set is `draft` too).
+_CAMPAIGN_SELECTION = re.compile(
+    r"\bstatus\s*(!=|<>)\s*'closed'|\bstatus\s+IN\s*\([^)]*'(ready|live|ended|closed)'", re.I,
+)
+
+
+def _docstrings(tree) -> set:
+    """The string constants that are docstrings (prose, not code)."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) \
+                and node.body and isinstance(node.body[0], ast.Expr) \
+                and isinstance(node.body[0].value, ast.Constant):
+            found.add(node.body[0].value)
+    return found
+
+
+def _code_strings(tree):
+    """Yield `(lineno, value)` for every string constant in code (docstrings left out)."""
+    skip = _docstrings(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in skip:
+            yield node.lineno, node.value
+
+
+def _native_words(tree):
+    """Yield the line of every native-status word written in code: a string that is the word, or
+    a SQL string quoting it (`native_status='ACTIVE'`)."""
+    for line, value in _code_strings(tree):
+        if value in NATIVE_STATUS_WORDS or _SQL_STATUS_WORD.search(value):
+            yield line
+
+
+def _is_native_key(node) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "native_status"
+
+
+def _names_native_status(node) -> bool:
+    """The operand reads a `native_status` value: `x["native_status"]`, `x.get("native_status")`,
+    `x.native_status` or a variable named for it. The bare key (`"native_status" in changed`, a
+    field-presence check) is not a value, and neither is a call's result (`lifecycle.may_spend(x)`
+    compared with another is a derived state): calls other than `.get` are not walked into."""
+    stack = [node]
+    while stack:
+        sub = stack.pop()
+        if isinstance(sub, ast.Name) and "native_status" in sub.id:
+            return True
+        if isinstance(sub, ast.Attribute) and sub.attr == "native_status":
+            return True
+        if isinstance(sub, ast.Subscript) and _is_native_key(sub.slice):
+            return True
+        if isinstance(sub, ast.Call):
+            if isinstance(sub.func, ast.Attribute) and sub.func.attr == "get" and sub.args \
+                    and _is_native_key(sub.args[0]):
+                return True
+            continue
+        stack.extend(ast.iter_child_nodes(sub))
+    return False
+
+
+def _native_comparisons(tree):
+    """Yield the line of every `==`／`!=`／`in`／`not in` with an operand naming `native_status`
+    (`x["native_status"]`, `x.get("native_status")`, a `native_status` variable) and of every SQL
+    string comparing the column. `is None` is a null check, not a vocabulary rule."""
+    for node in ast.walk(tree):
+        compares = (ast.Eq, ast.NotEq, ast.In, ast.NotIn)
+        if isinstance(node, ast.Compare) \
+                and any(isinstance(op, compares) for op in node.ops) \
+                and any(_names_native_status(o) for o in [node.left, *node.comparators]):
+            yield node.lineno
+    for line, value in _code_strings(tree):
+        if _NATIVE_COMPARE_SQL.search(value):
+            yield line
+
+
+def _campaign_selections(tree):
+    """Yield the line of every SQL string on `ads_campaign` selecting by stored status
+    (`status != 'closed'`, `status <> 'closed'`, `status IN ('live', …)`)."""
+    for line, value in _code_strings(tree):
+        if _CAMPAIGN_TABLE.search(value) and _CAMPAIGN_SELECTION.search(value):
+            yield line
+
+
+class OneLifecycleTest(unittest.TestCase):
+    """F49 Contract L: the platform status vocabulary lives in the adapters, `native_status` is
+    compared only in `lifecycle.py`／`adapters/`, and "which campaigns" SQL only in
+    `lifecycle.py`."""
+
+    def _scan(self, scan, *, skip):
+        hits = []
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if skip(relative):
+                continue
+            text = path.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            tree = ast.parse(text, filename=str(path))
+            hits.extend((relative, line, lines[line - 1]) for line in sorted(set(scan(tree))))
+        return hits
+
+    @staticmethod
+    def _in_adapters(relative):
+        return relative.startswith("adapters/")
+
+    def test_no_native_status_word_outside_the_adapters(self):
+        hits = self._scan(_native_words, skip=self._in_adapters)
+        offenders, seen = [], set()
+        for relative, line, text in hits:
+            allowed = [(f, t) for f, t, _why in NATIVE_WORD_ALLOWED if f == relative and t in text]
+            if allowed:
+                seen.update(allowed)
+                continue
+            offenders.append(f"app/ads/{relative}:{line}: {text.strip()}")
+        self.assertEqual(
+            offenders, [],
+            "a platform status word outside adapters/ -- read lifecycle.delivery (F49 L)",
+        )
+        # An allow entry whose line is gone must go too (the list only ever shrinks).
+        self.assertEqual({(f, t) for f, t, _why in NATIVE_WORD_ALLOWED}, seen)
+
+    def test_native_status_is_compared_only_in_the_lifecycle(self):
+        hits = self._scan(
+            _native_comparisons,
+            skip=lambda r: r == LIFECYCLE_FILE or self._in_adapters(r),
+        )
+        self.assertEqual(
+            [f"app/ads/{r}:{line}: {text.strip()}" for r, line, text in hits], [],
+            "a native_status comparison outside lifecycle.py／adapters/ (F49 L)",
+        )
+
+    def test_campaign_selection_sql_lives_only_in_the_lifecycle(self):
+        hits = self._scan(_campaign_selections, skip=lambda r: r == LIFECYCLE_FILE)
+        self.assertEqual(
+            [f"app/ads/{r}:{line}: {text.strip()}" for r, line, text in hits], [],
+            "a campaign selected by stored status outside lifecycle.py -- call "
+            "lifecycle.campaigns／campaign_ids／brands (F49 L)",
+        )
+        # The selectors themselves still hold the stored-status filter.
+        tree = ast.parse((ADS_DIR / LIFECYCLE_FILE).read_text(encoding="utf-8"))
+        self.assertTrue(any("status <> 'closed'" in value for _, value in _code_strings(tree)))
+
+    def test_the_scans_see_each_planted_shape(self):
+        tree = ast.parse(
+            '"""ACTIVE in prose is fine."""\n'
+            "def rule(ad, rows, native_status):\n"
+            "    if ad['native_status'] == 'ACTIVE':\n"
+            "        pass\n"
+            "    if ad.get('native_status') in CLOSED:\n"
+            "        pass\n"
+            "    if native_status != x:\n"
+            "        pass\n"
+            "    if lifecycle.may_spend({**ad, 'native_status': ad['native_status']}) != y:\n"
+            "        pass\n"
+            "    if ad['native_status'] is None:\n"
+            "        pass\n"
+            "    q = \"SELECT 1 FROM ads_external_entity WHERE native_status='PAUSED'\"\n"
+            "    s = \"SELECT id FROM ads_campaign WHERE org_id=%s AND status != 'closed'\"\n"
+            "    t = \"SELECT id FROM ads_campaign WHERE status IN ('live','ended')\"\n"
+            "    u = (\"SELECT s.id FROM ads_change_set s JOIN ads_campaign c \"\n"
+            "         \"ON c.id=s.campaign_id WHERE s.status IN ('draft','deferred')\")\n"
+            "    return {'status': 'PAUSED'}\n"
+        )
+        self.assertEqual(sorted(set(_native_words(tree))), [3, 13, 18])
+        self.assertEqual(sorted(set(_native_comparisons(tree))), [3, 5, 7, 13])
+        self.assertEqual(sorted(_campaign_selections(tree)), [14, 15])
 
 
 class RulesEndpointTest(unittest.TestCase):

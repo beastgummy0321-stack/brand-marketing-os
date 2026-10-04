@@ -226,6 +226,31 @@ class OneSpentTest(_Pinned):
         self.assertIsNone(lead["cost_per_purchase"])
         self.assertIsNone(lead["cap"])  # a lead campaign has no break-even and no own cap
 
+    def test_running_counts_only_running_ads_and_the_lifecycle_is_served(self):
+        """F49 Contract L: 「在投」 is the running count; a disapproved ad is not running, an ad
+        with no status is counted apart as unknown."""
+        conn, org, brand = self.conn, self.org, self.brand
+        _ad(conn, org, brand, self.buy, "a4", "c_buy", status="DISAPPROVED")
+        _ad(conn, org, brand, self.buy, "a5", "c_buy", status=None)
+        home = self.overview(brand)
+        buy = next(c for c in home["campaigns"] if c["campaign_id"] == self.buy)
+        self.assertEqual(buy["active_ads"], 2)
+        self.assertEqual(buy["running"],
+                         {"count": 2, "unknown": 1, "read_at": None, "stale": False})
+        self.assertEqual(buy["lifecycle"],
+                         {"state": "live", "label": "投放中", "can_close": False})
+
+    def test_closed_this_month_counts_campaigns_closed_in_the_month(self):
+        # N3: the closed campaign is gone from the rows, but the home knows one was closed.
+        self.assertEqual(self.overview(self.brand)["closed_this_month"], 0)  # no closed_at
+        self.conn.execute(
+            "UPDATE ads_campaign SET closed_at=%s WHERE id=%s",
+            (datetime(2026, 9, 10, 4, 0, tzinfo=UTC), self.old),
+        )
+        self.conn.commit()
+        self.assertEqual(self.overview(self.brand)["closed_this_month"], 1)
+        self.assertEqual(self.overview(self.brand, "2026-08")["closed_this_month"], 0)
+
     def test_previous_same_period_counts_the_same_elapsed_days(self):
         conn, org = self.conn, self.org
         _obs(conn, org, self.brand, self.buy, self.a1, date(2026, 8, 22), spend=300, count=3,
@@ -522,7 +547,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(ok.status_code, 200, ok.text)
         self.assertEqual(set(ok.json()), {
             "month", "day_of_month", "days_in_month", "currency", "spent", "money", "pace",
-            "quality", "timeline", "campaigns", "sync",
+            "quality", "timeline", "campaigns", "sync", "closed_this_month",
         })
         bad = client.get(f"/api/ads/brands/{brand}/home?month=2026-9")
         self.assertEqual(bad.status_code, 422, bad.text)

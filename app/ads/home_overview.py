@@ -24,13 +24,13 @@ Invariants (issue Done #2):
 import calendar
 import logging
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from app.ads import (
-    ad_status,
     change_control_launch,
     handoff_assignment,
+    lifecycle,
     month_budget,
     month_summary,
     repository,
@@ -177,15 +177,12 @@ def _entities(conn, org_id, brand_id) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _is_draft(campaign, entity_campaigns) -> bool:
-    """Not on any platform yet: a system-built campaign still being prepared (draft/ready) with no
-    platform object read back under it. An imported campaign is never a draft -- it was read from
-    a platform (its own `status` stays the table default)."""
-    return (
-        campaign["origin"] != "imported"
-        and campaign["status"] in ("draft", "ready")
-        and campaign["id"] not in entity_campaigns
-    )
+def _lifecycles(campaigns, roots, today) -> dict:
+    """campaign id -> its served `lifecycle {state, label, can_close}` (`lifecycle.view`)."""
+    return {
+        campaign_id: lifecycle.view(campaign, root=roots.get(campaign_id), today=today)
+        for campaign_id, campaign in campaigns.items()
+    }
 
 
 def _campaign_money(rows, start, end, brand_currency_ok) -> dict:
@@ -332,23 +329,24 @@ def _pace_block(conn, org_id, brand_id, month, win, rows, spent) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _graded_items(conn, org_id, brand_id, campaigns, entities) -> dict:
-    """Every active ad's own triage item (`triage.classify`, the I02 grades), for every
+def _graded_items(conn, org_id, brand_id, campaigns, entities, states) -> dict:
+    """Every judged ad's own triage item (`triage.classify`, the I02 grades), for every
     non-closed campaign that has an ad on a platform -- keyed by entity id."""
     with_ads = {e["campaign_id"] for e in entities if e["native_kind"] == "ad"}
     graded = {}
-    for campaign_id, campaign in campaigns.items():
-        if campaign["status"] == "closed" or campaign_id not in with_ads:
+    for campaign_id in campaigns:
+        if states[campaign_id]["state"] == "closed" or campaign_id not in with_ads:
             continue
         for item in triage.classify(conn, org_id, brand_id, campaign_id)["items"]:
             graded[item["entity_id"]] = item
     return graded
 
 
-def _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities) -> dict | None:
+def _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities,
+                   states) -> dict | None:
     if spent is None:
         return None
-    graded = _graded_items(conn, org_id, brand_id, campaigns, entities)
+    graded = _graded_items(conn, org_id, brand_id, campaigns, entities, states)
     entity_by_id = {e["id"]: e for e in entities}
     spend_by_ad = defaultdict(lambda: Decimal(0))
     for row in rows:
@@ -415,7 +413,8 @@ def _daily_budget(conn, org_id, brand_id, campaign, active_ads, draft,
                   owner_by_entity=None) -> float | None:
     """Draft: the plan's group total. Launched (ads.md §6.34, 2026-09-26): the ONE rule the
     workspace uses too -- `triage_capacity.capacity_view` over the daily budget owners of the
-    campaign's ACTIVE ads; an owner whose ads are all paused never counts."""
+    campaign's judged ads (`lifecycle.judged`, the ads triage grades); an owner whose ads are all
+    paused never counts."""
     if draft:
         total = repository.group_budget_total(conn, org_id, brand_id, campaign["id"])
         return total or None
@@ -491,21 +490,25 @@ def _handoff(conn, org_id, brand_id, campaign_id, sets) -> dict | None:
 
 
 def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, rows_by_campaign,
-                     currency_ok) -> list:
-    entity_campaigns = {e["campaign_id"] for e in entities}
+                     currency_ok, states) -> list:
     handoff_sets = _handoff_sets(conn, org_id, brand_id)
     ads_by_campaign = defaultdict(list)
     for entity in entities:
-        if entity["native_kind"] == "ad" and not ad_status.is_closed(entity.get("native_status")):
+        if entity["native_kind"] == "ad":
             ads_by_campaign[entity["campaign_id"]].append(entity)
+    reported = lifecycle.newest_reported(conn, org_id, brand_id)
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     accounts_cache: dict = {}
     live, drafts = [], []
     for campaign_id, campaign in campaigns.items():
-        if campaign["status"] == "closed":
+        state = states[campaign_id]
+        if state["state"] == "closed":
             continue
         cap = caps(campaign_id)
-        draft = _is_draft(campaign, entity_campaigns)
+        draft = state["state"] == "draft"
+        ads = ads_by_campaign[campaign_id]
+        judged_ads = [ad for ad in ads if lifecycle.judged(ad)]
+        running = lifecycle.running_view(campaign, ads, reported.get(campaign_id))
         rows = rows_by_campaign.get(campaign_id, [])
         month = (
             _campaign_money(rows, win["start"], win["cutoff"], currency_ok) if rows
@@ -519,16 +522,15 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         missing_days = [] if draft else _missing_days(campaign, win)
         entry = {
             "campaign_id": campaign_id, "name": campaign["name"], "origin": campaign["origin"],
-            "status": campaign["status"],
+            "status": campaign["status"], "lifecycle": state, "running": running,
             "month_spend": _money_out(spend),
             "purchases": _count_out(purchases),
             "cost_per_purchase": _money_out(spend / purchases)
             if spend is not None and purchases else None,
             "cap": _cap_out(cap),
-            "active_ads": len(ads_by_campaign[campaign_id]),
+            "active_ads": running["count"],
             "daily_budget": _daily_budget(
-                conn, org_id, brand_id, campaign, ads_by_campaign[campaign_id], draft,
-                owner_by_entity,
+                conn, org_id, brand_id, campaign, judged_ads, draft, owner_by_entity,
             ),
             "missing_days": missing_days,
             "sync_state": sync["state"],
@@ -606,11 +608,24 @@ def _sync_block(conn, org_id, brand_id) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _closed_this_month(conn, org_id, brand_id, win) -> int:
+    """How many campaigns were closed in this calendar month (org timezone), so the empty state
+    never reads 「還沒有活動」 over them (drill-11 N3)."""
+    zone = coresettings.org_timezone(conn, org_id=org_id)
+    start = datetime.combine(win["start"], time.min, tzinfo=zone)
+    end = datetime.combine(win["end"] + timedelta(days=1), time.min, tzinfo=zone)
+    return len([
+        c for c in lifecycle.campaigns(conn, org_id, brand_id, {"closed"})
+        if c["closed_at"] is not None and start <= c["closed_at"] < end
+    ])
+
+
 def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
     month = month_summary._require_month(month)
     win = _window(conn, org_id, month)
     campaigns = _campaigns(conn, org_id, brand_id)
     caps = _Caps(conn, org_id, brand_id, campaigns)
+    states = _lifecycles(campaigns, lifecycle.roots(conn, org_id, brand_id), win["today"])
 
     rows = _guarded(
         conn, "spend", lambda: _ad_rows(conn, org_id, brand_id, win["start"], win["cutoff"])
@@ -633,19 +648,23 @@ def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
     )
     quality = None if rows is None or entities is None else _guarded(
         conn, "quality",
-        lambda: _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities),
+        lambda: _quality_block(conn, org_id, brand_id, rows, spent, campaigns, entities,
+                               states),
     )
     # A failed spend read nulls the campaign rows too: their numbers and `data_status` rest on
     # it, and a failed read never reads as "no rows".
     campaigns_out = None if entities is None or rows is None else _guarded(
         conn, "campaigns",
         lambda: _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities,
-                                 rows_by_campaign, currency_ok),
+                                 rows_by_campaign, currency_ok, states),
     )
     timeline = None if campaigns_out is None else _guarded(
         conn, "timeline", lambda: _timeline_block(win, campaigns_out, campaigns)
     )
     sync = _guarded(conn, "sync", lambda: _sync_block(conn, org_id, brand_id))
+    closed_this_month = _guarded(
+        conn, "closed_this_month", lambda: _closed_this_month(conn, org_id, brand_id, win)
+    )
 
     return {
         "month": month, "day_of_month": win["day_of_month"],
@@ -653,5 +672,5 @@ def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
         "currency": spend["currency"] if rows is not None else None,
         "spent": _money_out(spent),
         "money": money, "pace": pace, "quality": quality, "timeline": timeline,
-        "campaigns": campaigns_out, "sync": sync,
+        "campaigns": campaigns_out, "sync": sync, "closed_this_month": closed_this_month,
     }

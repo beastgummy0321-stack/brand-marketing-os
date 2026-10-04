@@ -878,6 +878,8 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
 
 _OUTCOME_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
+    # F49 Contract L (planning #19): a draft has no period on a platform to close.
+    "campaign_not_launched": (409, "這個活動還沒上架，沒有可以結案的一期。"),
 }
 
 

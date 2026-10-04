@@ -10,23 +10,17 @@ row and its own approval can never disagree (feature Decisions "Rule A").
 
 from collections import defaultdict
 
-from app.ads import ad_status, budget, learning_rank
+from app.ads import budget, learning_rank
 
-# Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in). F26-I01: the
-# active/closed line now comes from the shared `ad_status.CLOSED_STATUSES` (five values) rather
-# than this file's own three-value copy -- `classify()` already excludes closed ads from `items`
-# entirely, so this filter is now mostly a defensive no-op against `native_status_by_entity`
-# reading a status `classify()` didn't see (never re-diverges from the one true definition).
-# F29-I01 (ads.md §6.33 "One ruler"): an ad is readable once the cap ruler gives it a cost grade
-# (划算／偏貴／太貴) -- the trend note (`class`) no longer decides it.
+# Feature Decisions "Rule A"/"Rule B" (pre-dispatch challenge corrections folded in). F49 Contract
+# L: both rules read the judged items `classify()` produced (running ads and unknown ones,
+# `lifecycle.judged`) -- an ad not delivering or off is never in them, so no second status filter
+# lives here. F29-I01 (ads.md §6.33 "One ruler"): an ad is readable once the cap ruler gives it a
+# cost grade (划算／偏貴／太貴) -- the trend note (`class`) no longer decides it.
 _READABLE_GRADES = {"on_target", "watch", "over"}
 SCALE_FACTOR = 1.2
 MIN_ACTIVE_ADS_FOR_REFRESH_GATE = 3
 MAX_READABLE_FOR_REFRESH_ROW = 2
-
-
-def _is_active(item, native_status_by_entity):
-    return not ad_status.is_closed(native_status_by_entity.get(item["entity_id"]))
 
 
 def _too_new(item):
@@ -115,8 +109,7 @@ def scale_reason_text(best_item) -> str:
     return f"近期每筆 {cost} 都在上限 {cap} 內，加碼 {_raise_tenths()}擴量"
 
 
-def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, native_status_by_entity,
-                      month_view, holds=None):
+def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, month_view, holds=None):
     """Rule A -- one candidate per budget owner (adset, or the campaign when the campaign holds
     the budget) whose every ACTIVE graded ad is 划算 (F28-I02, ads.md §6.32: `grade ==
     "on_target"`; 剛開始 is allowed, any other grade or ungraded state blocks), with at least one
@@ -155,9 +148,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
         target = items[0]["target"]
         if target.get("value") is None:
             continue
-        active = [item for item in items if _is_active(item, native_status_by_entity)]
-        if not active:
-            continue
+        active = items
         if any(item.get("grade") != "on_target" and not _too_new(item) for item in active):
             continue
         if not any(item.get("grade") == "on_target" for item in active):
@@ -195,8 +186,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
         owner_view = {
             "id": owner["id"], "name": owner.get("name"), "native_kind": owner["native_kind"],
             "native_id": owner["native_id"],
-            # This owner's whole ad group, not just the currently-active subset -- a budget
-            # change affects every ad sitting under this owner, paused ones included.
+            # This owner's judged ads (`classify()` leaves the ones not delivering out).
             "ads_count": len(items), "currency": owner.get("currency"),
         }
         candidates.append({
@@ -215,7 +205,7 @@ def scale_candidates(conn, org_id, brand_id, classified_items_by_campaign, nativ
     return candidates
 
 
-def refresh_candidates(classified_items_by_campaign, native_status_by_entity):
+def refresh_candidates(classified_items_by_campaign):
     """Rule B -- one candidate per campaign (with a target) whose readable active ads (a cost
     grade 划算／偏貴／太貴, F29-I01) have thinned to 2 or fewer while at least 3 active ads exist
     with some classification -- skipped entirely when any ad (active or not) reads `needs_resync`
@@ -229,7 +219,7 @@ def refresh_candidates(classified_items_by_campaign, native_status_by_entity):
         target = items[0]["target"]
         if target.get("value") is None:
             continue
-        active = [item for item in items if _is_active(item, native_status_by_entity)]
+        active = items
         if len(active) < MIN_ACTIVE_ADS_FOR_REFRESH_GATE:
             continue
         readable = [item for item in active if item.get("grade") in _READABLE_GRADES]

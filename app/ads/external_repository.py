@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from app.ads import ad_status, channels
+from app.ads import channels, lifecycle
 from app.ads.external_models import ExternalEntity, ExternalObservation
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings
@@ -47,7 +47,7 @@ def create_imported_campaign(conn, org_id, brand_id, *, name, created_by=None):
 
 
 def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
-    _campaign(conn, org_id, brand_id, campaign_id)
+    campaign = _campaign(conn, org_id, brand_id, campaign_id)
     model = ExternalEntity.model_validate(entity)
     data = model.model_dump()
     changed = model.model_fields_set
@@ -66,18 +66,18 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     ).fetchone()
     if existing and existing["campaign_id"] != campaign_id:
         raise ValueError("external_entity_already_imported")
-    # F27-I00 Done #4: `status_changed_at` only moves when this write actually crosses the
-    # active/closed boundary -- a first insert (no `existing` row) or an unchanged category never
-    # touches it. Both the previously stored and the newly written `native_status` must be known
-    # (contract J: "both non-null") -- an unknown -> known transition is not evidence the ad
-    # itself changed category, only that it became observable.
+    # F27-I00 Done #4, F49 Contract L: `status_changed_at` only moves when this write actually
+    # crosses the off／not-off boundary (`lifecycle.may_spend`) -- a first insert (no `existing`
+    # row) or an unchanged category never touches it. Both the previously stored and the newly
+    # written `native_status` must be known (contract J: "both non-null") -- an unknown -> known
+    # transition is not evidence the ad itself changed category, only that it became observable.
     status_changed = bool(
         existing is not None
         and "native_status" in changed
         and existing["native_status"] is not None
         and data.get("native_status") is not None
-        and ad_status.is_closed(existing["native_status"])
-        != ad_status.is_closed(data["native_status"])
+        and lifecycle.may_spend({**data, "native_status": existing["native_status"]})
+        != lifecycle.may_spend(data)
     )
     columns = list(data)
     values = [
@@ -100,6 +100,9 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
     ).fetchone()
     if row is None:
         raise ValueError("external_entity_already_imported")
+    # F49 Contract L: an imported campaign's state follows its root (draft／live／ended).
+    if campaign["origin"] == "imported" and row["parent_native_id"] is None:
+        lifecycle.record(conn, org_id, brand_id, campaign_id)
     return dict(row)
 
 
@@ -260,7 +263,7 @@ def external_view(
             }
         )
     return {
-        "entities": [dict(row) for row in entities[:limit]],
+        "entities": [_with_delivery(row) for row in entities[:limit]],
         "observations": [dict(row) for row in observations[:limit]],
         "next_entity_cursor": entities[limit - 1]["id"] if len(entities) > limit else None,
         "next_observation_cursor": observations[limit - 1]["id"]
@@ -271,6 +274,12 @@ def external_view(
         "coverage": {key: value.get("coverage") for key, value in sync.items()},
         "sync": sync,
     }
+
+
+def _with_delivery(entity) -> dict:
+    """F49 Contract L: an entity row plus its served `delivery_label` (`lifecycle.delivery`)."""
+    entity = dict(entity)
+    return {**entity, "delivery_label": lifecycle.delivery(entity)["label"]}
 
 
 def cache_listing(conn, org_id, brand_id, platform, account, item):
@@ -313,7 +322,13 @@ def listing(conn, org_id, brand_id, platform, account, *, after=None, limit=100)
         (org_id, brand_id, platform, account, after, after, limit + 1),
     ).fetchall()
     return {
-        "items": [dict(row) for row in rows[:limit]],
+        "items": [
+            {**dict(row), "delivery_label": lifecycle.delivery({
+                "platform": row["platform"],
+                "native_status": (row["snapshot"] or {}).get("native_status"),
+            })["label"]}
+            for row in rows[:limit]
+        ],
         "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
     }
 

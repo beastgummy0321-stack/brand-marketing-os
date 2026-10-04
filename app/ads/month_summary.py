@@ -36,9 +36,9 @@ from datetime import date, datetime, time, timedelta
 
 from app import orders
 from app.ads import (
-    ad_status,
     learning_rank,
     learning_view,
+    lifecycle,
     period_grades,
     repository,
     result_kinds,
@@ -159,12 +159,13 @@ def _campaign_rows(conn, org_id, brand_id) -> list[dict]:
 
 
 def _has_active_ad(conn, org_id, brand_id, campaign_id) -> bool:
+    """An ad a grade would be given to (`lifecycle.judged`: running or unknown)."""
     rows = conn.execute(
-        "SELECT native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "SELECT platform,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
         "AND campaign_id=%s AND native_kind='ad'",
         (org_id, brand_id, campaign_id),
     ).fetchall()
-    return any(not ad_status.is_closed(row["native_status"]) for row in rows)
+    return any(lifecycle.judged(dict(row)) for row in rows)
 
 
 def _orders_comparison(conn, org_id, brand_id, start, days_elapsed) -> dict | None:
@@ -218,11 +219,12 @@ def _closed_this_month(conn, org_id, brand_id, start, end) -> tuple[int | None, 
     range_start = datetime.combine(start, time.min, tzinfo=zone)
     range_end = datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone)
     rows = conn.execute(
-        "SELECT native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "SELECT platform,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
         "AND native_kind='ad' AND status_changed_at >= %s AND status_changed_at < %s",
         (org_id, brand_id, range_start, range_end),
     ).fetchall()
-    return sum(1 for row in rows if ad_status.is_closed(row["native_status"])), tracking_since
+    # `status_changed_at` moves when the ad's off-ness changes; the ones now off were closed.
+    return sum(1 for row in rows if not lifecycle.may_spend(dict(row))), tracking_since
 
 
 def _dismissed_keys(campaign: dict, month: str) -> list:

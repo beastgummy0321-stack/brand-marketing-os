@@ -14,7 +14,7 @@ page's order (null when none) -- the top bar links to that page, so the two can 
 draft never on a platform has no source row there, so it is never counted.
 """
 
-from app.ads import connections, queue_done, repository, triage
+from app.ads import connections, lifecycle, queue_done, repository, triage
 
 
 def _attention(conn, org_id: str, brand_id: str) -> dict:
@@ -26,10 +26,7 @@ def _attention(conn, org_id: str, brand_id: str) -> dict:
 
 
 def get_status_summary(conn, org_id: str, brand_id: str) -> dict:
-    rows = conn.execute(
-        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND status != 'closed'",
-        (org_id, brand_id),
-    ).fetchall()
+    rows = lifecycle.campaigns(conn, org_id, brand_id, lifecycle.NOT_CLOSED)
     accounts_cache: dict = {}
     last_success_at = None
     for row in rows:

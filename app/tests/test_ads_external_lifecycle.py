@@ -114,8 +114,16 @@ class ExternalLifecycleTest(unittest.TestCase):
         )
         self.conn.commit()
         campaign = self.client.get(self.url).json()["campaign"]
-        self.assertEqual(campaign["status"], "draft")
-        self.assertEqual(campaign["external_view"]["entities"][0]["native_status"], "PAUSED")
+        # F49 Contract L (decision 12): a root past its end date is ended -- never closed, and
+        # imported has no closeout.
+        self.assertEqual(campaign["status"], "ended")
+        self.assertEqual(campaign["lifecycle"],
+                         {"state": "ended", "label": "已結束", "can_close": False})
+        entity = campaign["external_view"]["entities"][0]
+        self.assertEqual(entity["native_status"], "PAUSED")
+        # A platform with no status table reads unknown, never a guess.
+        self.assertEqual(entity["delivery_label"], "平台狀態不明")
+        self.assertNotIn("結案", campaign["judgment"]["text"])
         self.assertNotIn("結案", campaign["judgment"]["detail"])
 
     def test_internal_contract_and_capabilities_remain(self):

@@ -9,7 +9,7 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from app.ads import ad_status, channels
+from app.ads import channels, lifecycle
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
 from app.core import db, input_rules, settings
@@ -159,7 +159,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
     for entity in entities:
         if entity["native_kind"] in {"ad"}:
             continue
-        if ad_status.is_closed(entity.get("native_status")):
+        if not lifecycle.may_spend(entity):  # F49 Contract L: an owner that is off spends nothing
             continue
         parent_key = (
             entity["platform"],

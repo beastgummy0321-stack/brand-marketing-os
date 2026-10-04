@@ -18,6 +18,8 @@ export interface NativeEntity {
   objective?: string | null;
   parent_native_kind?: string | null;
   availability?: Record<string, string>;
+  /** F49 Contract L: the served word for `native_status` (`external_view` entities) — print it, never the code. */
+  delivery_label?: string;
 }
 export interface NativeObservation {
   id: string; entity_id: string; day: string; metric_scope: string; attribution_key: string;
@@ -30,7 +32,11 @@ export interface SyncJob { id: string; status: string; last_success_at: string |
 export interface ExistingPage {
   /** `campaign_id`: the workspace campaign this platform campaign is
    * already in, so the join dialog marks it 「已在工作區」 instead of offering to add it again. */
-  items: { id: string; native_kind: string; native_id: string; snapshot: NativeEntity; campaign_id: string | null }[];
+  items: {
+    id: string; native_kind: string; native_id: string; snapshot: NativeEntity; campaign_id: string | null;
+    /** F49 Contract L: the served word for `snapshot.native_status`. */
+    delivery_label?: string;
+  }[];
   sources: SourceAccount[]; platform?: string; source_account?: string;
   next_cursor: string | null; job: SyncJob | null;
 }

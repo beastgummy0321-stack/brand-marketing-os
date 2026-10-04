@@ -4,7 +4,7 @@ import json
 
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
-from app.ads import handoff_data, material_tasks, review_evidence, review_rounds
+from app.ads import handoff_data, lifecycle, material_tasks, review_evidence, review_rounds
 from app.core import db, settings
 from app.shared.web import to_json_value
 
@@ -96,7 +96,7 @@ def _active_ad(conn, org, brand, campaign, entity_id):
         ad = bindings.entity(conn, org, brand, campaign, entity_id)
     except ValueError:
         return False
-    return ad["native_kind"] == "ad" and ad["native_status"] == "ACTIVE"
+    return ad["native_kind"] == "ad" and lifecycle.ad_running(ad) is True
 
 
 def create(conn, org, brand, campaign, payload, actor):
@@ -132,7 +132,7 @@ def create(conn, org, brand, campaign, payload, actor):
     replaces_entity_id = payload.get("replaces_entity_id")
     if replaces_entity_id is not None:
         old_ad = bindings.entity(conn, org, brand, campaign, replaces_entity_id)
-        if old_ad["native_kind"] != "ad" or old_ad["native_status"] != "ACTIVE":
+        if old_ad["native_kind"] != "ad" or lifecycle.ad_running(old_ad) is not True:
             raise ValueError("要取代的廣告必須是本活動目前正在投放中的廣告，請重新選擇。")
     elif reference.get("material_task_id"):
         # Contract H: a "replace this ad" request carries its ad into the new-ad handoff. The
@@ -300,9 +300,10 @@ def validate_approval(conn, org, brand, campaign, item):
     if changes.digest(current) != item["premise_hash"]:
         raise ValueError("新廣告素材、父層或預算條件已改變，請重新建立交接清單。")
     budget = current["budget_owner"]
+    # The budget owner is the parent or its root, on the parent's own platform.
     if (
-        parent["native_status"] != "ACTIVE"
-        or budget["native_status"] != "ACTIVE"
+        lifecycle.ad_running(parent) is not True
+        or lifecycle.ad_running({**budget, "platform": parent["platform"]}) is not True
         or budget["budget_type"] != "daily"
         or budget["budget_amount"] is None
         or budget["budget_amount"] <= 0

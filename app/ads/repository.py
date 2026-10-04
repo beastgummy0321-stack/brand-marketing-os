@@ -18,12 +18,12 @@ from datetime import date, timedelta
 from typing import cast
 
 from app.ads import (
-    ad_status,
     budget,
     channels,
     external_models,
     external_repository,
     judgment,
+    lifecycle,
     manual_settings,
     objectives,
     result_kinds,
@@ -656,13 +656,12 @@ def _campaign_capacity(
     from app.ads import targets, triage_capacity
 
     rows = conn.execute(
-        "SELECT id,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND native_kind='ad'",
+        "SELECT id,platform,native_status FROM ads_external_entity WHERE org_id=%s "
+        "AND brand_id=%s AND campaign_id=%s AND native_kind='ad'",
         (org_id, brand_id, campaign["id"]),
     ).fetchall()
-    items = [
-        {"entity_id": row["id"]} for row in rows if not ad_status.is_closed(row["native_status"])
-    ]
+    # F49 Contract L: the judged ads (running or unknown), the same set `triage.classify` grades.
+    items = [{"entity_id": row["id"]} for row in rows if lifecycle.judged(dict(row))]
     target = targets.resolve(conn, org_id, brand_id, campaign)
     return triage_capacity.capacity_view(items, target["value"], owner_by_entity)
 
@@ -680,9 +679,11 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     # One brand-wide owner lookup shared by every campaign card below (F27-I06, same
     # query-sharing shape `accounts_cache` already uses for sync state).
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
+    roots = lifecycle.roots(conn, org_id, brand_id)
     entries = []
     for row in rows:
         row = dict(row)
+        state = lifecycle.view(row, root=roots.get(row["id"]), today=today)
         groups = _groups_for_campaign(conn, org_id, brand_id, row["id"])
         outcome = (_empty_external_outcome() if row["origin"] == "imported" else
                    _outcome_totals(conn, org_id, brand_id, row["id"]))
@@ -694,7 +695,8 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
         )
         entries.append({
             "id": row["id"], "name": row["name"], "status": row["status"],
-            "origin": row["origin"], "capabilities": external_models.capabilities(row["origin"]),
+            "lifecycle": state, "origin": row["origin"],
+            "capabilities": external_models.capabilities(row["origin"]),
             "start_date": row["start_date"], "end_date": row["end_date"],
             "objective": row["objective"],
             "campaign_objective": campaign_objective_family(conn, org_id, brand_id, row),
@@ -705,7 +707,8 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "spend": spend,
             "outcome": outcome,
             "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
-                                                     "spend": spend}, today=today),
+                                                     "spend": spend}, today=today,
+                                                   state=state["state"]),
             "data": {
                 "sync": campaign_sync_state(
                     conn, org_id, brand_id, row, accounts_cache=accounts_cache,
@@ -849,6 +852,9 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     from app.ads import targets
 
     detail["cap"] = targets.resolve(conn, org_id, brand_id, campaign)
+    detail["lifecycle"] = lifecycle.view(
+        campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id), today=today,
+    )
     detail["capabilities"] = external_models.capabilities(campaign["origin"])
     detail["external_view"] = (
         external_repository.external_view(conn, org_id, brand_id, campaign_id)
@@ -871,6 +877,7 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     detail_spend = float(outcome["spend"]) if outcome["row_count"] else None
     detail["judgment"] = judgment.campaign_judgment(
         {**campaign, "budget_total": budget_total, "spend": detail_spend}, today=today,
+        state=detail["lifecycle"]["state"],
     )
     detail["action_lines"] = [
         {

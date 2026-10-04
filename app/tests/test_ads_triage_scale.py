@@ -105,10 +105,10 @@ class ScaleCandidatesTest(_CandidateFixture):
     def _by_campaign(self, items):
         return {self.campaign: items}
 
-    def candidates(self, items, *, native_status=None, month_view=None, holds=None):
+    def candidates(self, items, *, month_view=None, holds=None):
         return triage_scale.scale_candidates(
             self.conn, self.org, self.brand, self._by_campaign(items),
-            native_status or {}, month_view or self.month_view(), holds=holds,
+            month_view or self.month_view(), holds=holds,
         )
 
     def test_raised_row_states_its_reason_from_the_cheapest_on_target_ad(self):
@@ -294,41 +294,21 @@ class ScaleCandidatesTest(_CandidateFixture):
 
     def test_paused_ad_never_blocks_the_owner(self):
         """A paused ad from the stop-loss flow must not block the owner forever (feature
-        Decisions)."""
+        Decisions). F49 Contract L: the rule reads the judged items `classify()` gives -- a paused
+        (off) ad is not among them (`test_ads_triage` proves that cut), so only the running ad
+        decides."""
         self.campaign_entity(budget_type="daily", budget_amount=1000)
-        paused = self.ad_entity(native_id="ad1")["id"]
+        self.ad_entity(native_id="ad1", native_status="PAUSED")
         active = self.ad_entity(native_id="ad2")["id"]
-        items = [
-            self.item(entity_id=paused, cls="stop_loss", grade="wasted", campaign_id=self.campaign),
-            self.item(entity_id=active, cls="flat", campaign_id=self.campaign),
-        ]
-        candidates = self.candidates(items, native_status={paused: "PAUSED"})
+        items = [self.item(entity_id=active, cls="flat", campaign_id=self.campaign)]
+        candidates = self.candidates(items)
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["scale"]["owner"]["ads_count"], 2)
-
-    def test_adset_paused_ad_never_blocks_the_owner(self):
-        """F26-I01: `ADSET_PAUSED` (the ad's own parent adset paused on the platform) now comes
-        from the shared `ad_status.CLOSED_STATUSES` (five values) rather than this file's old
-        three-value set -- same "never blocks the owner" rule `test_paused_ad_never_blocks_the_
-        owner` proves for `PAUSED`."""
-        self.campaign_entity(budget_type="daily", budget_amount=1000)
-        adset_paused = self.ad_entity(native_id="ad1")["id"]
-        active = self.ad_entity(native_id="ad2")["id"]
-        items = [
-            self.item(entity_id=adset_paused, cls="worse", grade="over",
-                      campaign_id=self.campaign),
-            self.item(entity_id=active, cls="flat", campaign_id=self.campaign),
-        ]
-        candidates = self.candidates(items, native_status={adset_paused: "ADSET_PAUSED"})
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["scale"]["owner"]["ads_count"], 2)
+        self.assertEqual(candidates[0]["scale"]["owner"]["ads_count"], 1)
 
     def test_owner_with_only_paused_ads_never_qualifies(self):
         self.campaign_entity(budget_type="daily", budget_amount=1000)
-        ad1 = self.ad_entity(native_id="ad1")["id"]
-        items = [self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign)]
-        candidates = self.candidates(items, native_status={ad1: "PAUSED"})
-        self.assertEqual(candidates, [])
+        self.ad_entity(native_id="ad1", native_status="PAUSED")
+        self.assertEqual(self.candidates([]), [])
 
     def test_adset_budget_owner_used_when_adset_carries_the_budget(self):
         self.campaign_entity(budget_type="unknown", budget_amount=None)
@@ -383,9 +363,9 @@ class ScaleCandidatesTest(_CandidateFixture):
 class RefreshCandidatesTest(_CandidateFixture):
     """Rule B -- feature Decisions "Rule B"."""
 
-    def candidates(self, items, *, native_status=None):
+    def candidates(self, items):
         by_campaign = {self.campaign: items}
-        return triage_scale.refresh_candidates(by_campaign, native_status or {})
+        return triage_scale.refresh_candidates(by_campaign)
 
     def _ad(self, native_id):
         # No parent set -- Rule B never reads the parent chain (only Rule A's owner lookup does),
@@ -448,34 +428,17 @@ class RefreshCandidatesTest(_CandidateFixture):
         self.assertEqual(self.candidates(items), [])
 
     def test_paused_ads_excluded_from_both_counts(self):
-        a, b, c, d = self._ad("a1"), self._ad("a2"), self._ad("a3"), self._ad("a4")
+        """F49 Contract L: the rule reads the judged items `classify()` gives; a paused ad (d) is
+        not among them -- active is {a,b,c} (still meets the >=3 gate), readable {a,b} (2, at the
+        gate) instead of {a,b,d} (3, over it)."""
+        a, b, c = self._ad("a1"), self._ad("a2"), self._ad("a3")
         items = [
             self.item(entity_id=a, cls="worse", campaign_id=self.campaign),
             self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
             self.item(entity_id=c, cls="insufficient", reason_code="too_new",
                      campaign_id=self.campaign),
-            self.item(entity_id=d, cls="worse", campaign_id=self.campaign),
         ]
-        # d is paused -- active becomes {a,b,c} (still meets the >=3 gate), readable becomes
-        # {a,b} (2, at the gate) instead of {a,b,d} (3, over it).
-        candidates = self.candidates(items, native_status={d: "PAUSED"})
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["refresh"]["classified_count"], 3)
-        self.assertEqual(candidates[0]["refresh"]["readable_count"], 2)
-
-    def test_adset_paused_ads_excluded_too(self):
-        """F26-I01: same exclusion as `test_paused_ads_excluded_from_both_counts`, but for
-        `ADSET_PAUSED` -- only reachable now that the shared `ad_status.CLOSED_STATUSES` (five
-        values) replaces this file's old three-value set."""
-        a, b, c, d = self._ad("a1"), self._ad("a2"), self._ad("a3"), self._ad("a4")
-        items = [
-            self.item(entity_id=a, cls="worse", campaign_id=self.campaign),
-            self.item(entity_id=b, cls="flat", campaign_id=self.campaign),
-            self.item(entity_id=c, cls="insufficient", reason_code="too_new",
-                     campaign_id=self.campaign),
-            self.item(entity_id=d, cls="worse", campaign_id=self.campaign),
-        ]
-        candidates = self.candidates(items, native_status={d: "ADSET_PAUSED"})
+        candidates = self.candidates(items)
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["refresh"]["classified_count"], 3)
         self.assertEqual(candidates[0]["refresh"]["readable_count"], 2)
