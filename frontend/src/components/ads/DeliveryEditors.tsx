@@ -10,6 +10,7 @@ import {
 } from "@/components/layout/ui/dialog";
 import { COORDINATE_DIMENSIONS, type Coordinate, type CoordinateDimension } from "@/lib/coordinatesApi";
 import {
+  AdsApiError,
   createAd,
   createGroup,
   patchAd,
@@ -19,9 +20,11 @@ import {
   type CampaignStatus,
   type CreateAdInput,
   type DeliveryGroupRow,
+  type PlanMenuRow,
   type StrategyRole,
 } from "@/lib/adsApi";
 import type { Channel } from "@/lib/adsLaunchApi";
+import { Chip } from "./patterns";
 
 type GroupDraft = {
   name: string;
@@ -85,6 +88,31 @@ function BoundNotice({ localState }: { localState: string }) {
 }
 
 const LAST_GROUP_REASON = "至少要留一個投放組；想換掉請先新增再刪。";
+
+/** F48-I06: the dimensions this period's menu (`campaign.menu`) narrows — the proof the brand has, the offers this
+ * sell-way can honour, the formats the brand makes. Other dimensions list the brand vocabulary as before. */
+const MENU_DIMENSIONS: CoordinateDimension[] = ["proof", "offer", "format"];
+/** A key the ad already holds that this period's menu leaves out: still shown so the select never lies about it. */
+const NOT_THIS_PERIOD = "這期不能用";
+
+/** Where a refused ad save's sentence belongs: `name_forbidden` beside the name, `coordinate_unavailable` beside the
+ * coordinates, anything else under the form. The sentence is always the server's. */
+type AdErrors = { name: string | null; coords: string | null; other: string | null };
+const NO_AD_ERRORS: AdErrors = { name: null, coords: null, other: null };
+function adErrorsFrom(err: unknown, fallback: string): AdErrors {
+  const message = err instanceof Error ? err.message : fallback;
+  const code = err instanceof AdsApiError ? err.code : null;
+  if (code === "name_forbidden") return { ...NO_AD_ERRORS, name: message };
+  if (code === "coordinate_unavailable") return { ...NO_AD_ERRORS, coords: message };
+  return { ...NO_AD_ERRORS, other: message };
+}
+const FieldError = ({ text }: { text: string | null }) =>
+  text ? <p role="alert" className="text-xs text-danger [overflow-wrap:anywhere]">{text}</p> : null;
+
+/** F48 Contract K: the served 「沿用上一期」 chip of a carried ad (nothing for any other ad). */
+export function CarriedChip({ ad }: { ad: AdRow }) {
+  return ad.carried_label ? <Chip tone="accent">{ad.carried_label}</Chip> : null;
+}
 
 export function GroupPanel({
   brandId,
@@ -279,6 +307,7 @@ export function AdPanel({
   brandId,
   ad: a,
   vocabulary,
+  menu = null,
   campaignStatus,
   onSaved,
   onDelete,
@@ -288,6 +317,8 @@ export function AdPanel({
   brandId: string;
   ad: AdRow;
   vocabulary: Coordinate[];
+  /** This period's menu (`campaign.menu`); null = not known, the vocabulary is listed unfiltered. */
+  menu?: PlanMenuRow[] | null;
   campaignStatus: CampaignStatus;
   onSaved: (ad: AdRow) => void;
   onDelete: () => void;
@@ -303,7 +334,7 @@ export function AdPanel({
   const [coords, setCoords] = useState<AdCoordinates>(restoredDraft.current?.coords ?? coordinatesFromAd(a));
   const [restored, setRestored] = useState(Boolean(restoredDraft.current));
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<AdErrors>(NO_AD_ERRORS);
   const [baseline, setBaseline] = useState(a);
   const baselineCoords = coordinatesFromAd(baseline);
   const dirty =
@@ -323,26 +354,26 @@ export function AdPanel({
     if (dirty) saveDeliveryDraft(draftKey, { name, coords });
     else clearDeliveryDraft(draftKey);
   }, [coords, dirty, draftKey, name]);
-  useEffect(() => { setError(null); }, [name, coords]);
+  useEffect(() => { setErrors(NO_AD_ERRORS); }, [name, coords]);
 
   function reset(next: AdRow) {
     setName(next.name);
     setCoords(coordinatesFromAd(next));
     setBaseline(next);
-    setError(null);
+    setErrors(NO_AD_ERRORS);
     setRestored(false);
   }
 
   async function handleSave() {
     setSaving(true);
-    setError(null);
+    setErrors(NO_AD_ERRORS);
     try {
       const next = await patchAd(brandId, a.id, { name, coordinates: coords });
       reset(next);
       clearDeliveryDraft(draftKey);
       onSaved(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新廣告失敗，請稍後再試。");
+      setErrors(adErrorsFrom(err, "更新廣告失敗，請稍後再試。"));
     } finally {
       setSaving(false);
     }
@@ -351,22 +382,26 @@ export function AdPanel({
   return (
     <div className="surface">
       <div className="surface-header">
-        <h2 className="flex items-center gap-1.5">
-          <FileText size={15} /> {a.name}
+        <h2 className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <FileText size={15} /> {a.name} <CarriedChip ad={a} />
         </h2>
         <Button variant="ghost" size="sm" onClick={onDelete} disabled={a.local_state === "bound"}>
           刪除
         </Button>
       </div>
       <div className="surface-body flex flex-col gap-4">
+        {a.carry_note && <p data-slot="carry-note" className="text-xs text-muted-foreground">{a.carry_note}</p>}
         <BoundNotice localState={a.local_state} />
         {restored && <p role="status" className="text-sm text-warning">
           已恢復未儲存草稿；最新已保存值可能已變更，請確認後再儲存。
         </p>}
-        <label className="flex flex-col gap-1 text-sm">
-          名稱
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
+        <div className="flex flex-col gap-1">
+          <label className="flex flex-col gap-1 text-sm">
+            名稱
+            <Input value={name} onChange={(e) => setName(e.target.value)} aria-invalid={errors.name !== null} />
+          </label>
+          <FieldError text={errors.name} />
+        </div>
         <div className="grid grid-cols-2 gap-3">
           {COORDINATE_DIMENSIONS.map(([dim, label]) => (
             <CoordinateSelect
@@ -375,10 +410,12 @@ export function AdPanel({
               label={label}
               value={coords[dim]}
               vocabulary={vocabulary}
+              menu={menu}
               onChange={(next) => setCoords((prev) => ({ ...prev, [dim]: next }))}
             />
           ))}
         </div>
+        <FieldError text={errors.coords} />
         <div className="flex flex-col gap-1 text-sm">
           <span className="text-xs text-muted-foreground">實際花費占比（觀察值）</span>
           {/* ponytail: 花費占比的單一出處是成效分頁的表（F03-I16），這一頁不重算、也不再多一支請求。 */}
@@ -388,7 +425,7 @@ export function AdPanel({
             <span>還沒發布，沒有花費可以分。</span>
           )}
         </div>
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {errors.other && <p className="text-sm text-danger">{errors.other}</p>}
         {(dirty || saving) && (
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => void handleSave()} disabled={saving}>
@@ -414,25 +451,38 @@ function coordinatesFromAd(a: AdRow): AdCoordinates {
   };
 }
 
+/** One coordinate's select. On a menu dimension the options are this period's menu (`menu`); a key the ad already
+ * holds outside it stays listed, marked 「這期不能用」 (saving it again is refused by the server, which says why). */
 function CoordinateSelect({
   dimension,
   label,
   value,
   vocabulary,
+  menu = null,
   onChange,
 }: {
   dimension: CoordinateDimension;
   label: string;
   value: string;
   vocabulary: Coordinate[];
+  menu?: PlanMenuRow[] | null;
   onChange: (next: string) => void;
 }) {
-  const options = vocabulary.filter((v) => v.dimension === dimension && !v.disabled_at && !v.rejected);
+  const allowed = menu && MENU_DIMENSIONS.includes(dimension)
+    ? new Set(menu.filter((row) => row.dimension === dimension).map((row) => row.key))
+    : null;
+  const options = vocabulary.filter((v) => v.dimension === dimension && !v.disabled_at && !v.rejected && (!allowed || allowed.has(v.key)));
+  const held = value && !options.some((o) => o.key === value)
+    ? vocabulary.find((v) => v.dimension === dimension && v.key === value) ?? null
+    : null;
+  const heldText = held ? held.label : value;
   return (
     <label className="flex flex-col gap-1 text-sm">
       {label}
       <select className={selectClassName()} value={value} onChange={(e) => onChange(e.target.value)}>
-        {value && !options.some((o) => o.key === value) && <option value={value}>{value}</option>}
+        {value && !options.some((o) => o.key === value) && (
+          <option value={value}>{allowed && !allowed.has(value) ? `${heldText}（${NOT_THIS_PERIOD}）` : heldText}</option>
+        )}
         <option value="">未設定</option>
         {options.map((o) => (
           <option key={o.id} value={o.key}>
@@ -519,6 +569,7 @@ export function AddAdDialog({
   groups,
   defaultGroupId,
   vocabulary,
+  menu = null,
   onClose,
   onCreated,
 }: {
@@ -527,6 +578,8 @@ export function AddAdDialog({
   groups: DeliveryGroupRow[];
   defaultGroupId: string;
   vocabulary: Coordinate[];
+  /** This period's menu (`campaign.menu`), the same one the planner chose from. */
+  menu?: PlanMenuRow[] | null;
   onClose: () => void;
   onCreated: (ad: AdRow) => void;
 }) {
@@ -542,7 +595,7 @@ export function AddAdDialog({
     format: "",
   });
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<AdErrors>(NO_AD_ERRORS);
 
   const complete = name.trim() && Object.values(coords).every((v) => v.trim());
   // F47-I06 (V7): the greyed-out 新增 names what is still empty.
@@ -550,16 +603,16 @@ export function AddAdDialog({
     ...(name.trim() ? [] : ["名稱"]),
     ...COORDINATE_DIMENSIONS.filter(([dim]) => !coords[dim].trim()).map(([, label]) => label),
   ];
-  useEffect(() => { setError(null); }, [groupId, name, coords]);
+  useEffect(() => { setErrors(NO_AD_ERRORS); }, [groupId, name, coords]);
 
   async function handleCreate() {
     setSaving(true);
-    setError(null);
+    setErrors(NO_AD_ERRORS);
     try {
       const input: CreateAdInput = { group_id: groupId, name, coordinates: coords };
       onCreated(await createAd(brandId, campaignId, input));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "新增廣告失敗，請稍後再試。");
+      setErrors(adErrorsFrom(err, "新增廣告失敗，請稍後再試。"));
     } finally {
       setSaving(false);
     }
@@ -580,10 +633,13 @@ export function AddAdDialog({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-sm">
-            名稱
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
+          <div className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1 text-sm">
+              名稱
+              <Input value={name} onChange={(e) => setName(e.target.value)} aria-invalid={errors.name !== null} />
+            </label>
+            <FieldError text={errors.name} />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             {COORDINATE_DIMENSIONS.map(([dim, label]) => (
               <CoordinateSelect
@@ -592,12 +648,14 @@ export function AddAdDialog({
                 label={label}
                 value={coords[dim]}
                 vocabulary={vocabulary}
+                menu={menu}
                 onChange={(next) => setCoords((prev) => ({ ...prev, [dim]: next }))}
               />
             ))}
           </div>
+          <FieldError text={errors.coords} />
         </div>
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {errors.other && <p className="text-sm text-danger">{errors.other}</p>}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             取消

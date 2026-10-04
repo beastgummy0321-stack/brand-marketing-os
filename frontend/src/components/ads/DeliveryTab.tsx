@@ -21,7 +21,6 @@ import {
 } from "@/components/layout/ui/dropdown-menu";
 import { fetchCoordinates } from "@/lib/coordinatesApi";
 import {
-  currentBudgetTotal,
   deleteAd,
   deleteGroup,
   dispatchPack,
@@ -32,9 +31,9 @@ import {
 } from "@/lib/adsApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { ActionBar, Disclosure, KpiStrip, ReadFailed, type KpiCell } from "./patterns";
+import { ActionBar, Disclosure, KpiStrip, ReadFailed, formatAmount, type KpiCell } from "./patterns";
 import { nextStep, NextStepButton, StepButton, type StepTarget } from "./nextStep";
-import { ROLE_LABEL, GroupPanel, AdPanel, AddGroupDialog, AddAdDialog } from "./DeliveryEditors";
+import { ROLE_LABEL, GroupPanel, AdPanel, AddGroupDialog, AddAdDialog, CarriedChip } from "./DeliveryEditors";
 import { ManualSettings } from "./ManualSettings";
 import { StructureTab } from "./workspace/StructureTab";
 
@@ -152,8 +151,20 @@ export function DeliveryTab({
     setSelected(next);
   }
 
+  /** F48 Contract M: after a group's budget or dates change the tab re-reads the campaign (one GET) — the period
+   * total, the capacity and the strategy's amounts are the server's, never recomputed here. A failed re-read keeps
+   * the saved group in place (its numbers refresh on the next read). */
+  async function reread(local: CampaignDetail) {
+    onCampaignChange(local);
+    try {
+      onCampaignChange(await getCampaign(brandId, c.id));
+    } catch {
+      // The saved row already shows; the totals catch up on the next read.
+    }
+  }
+
   function replaceGroup(next: DeliveryGroupRow) {
-    onCampaignChange({
+    void reread({
       ...c,
       groups: c.groups.map((g) => (g.id === next.id ? { ...next, ads: g.ads } : g)),
     });
@@ -175,7 +186,7 @@ export function DeliveryTab({
     try {
       if (deleteTarget.kind === "group") {
         await deleteGroup(brandId, deleteTarget.row.id);
-        onCampaignChange({ ...c, groups: c.groups.filter((g) => g.id !== deleteTarget.row.id) });
+        void reread({ ...c, groups: c.groups.filter((g) => g.id !== deleteTarget.row.id) });
       } else {
         await deleteAd(brandId, deleteTarget.row.id);
         onCampaignChange({
@@ -246,8 +257,6 @@ export function DeliveryTab({
   // The tree re-reads when the plan behind it changes (a group or ad added, renamed, removed, re-budgeted).
   const planKey = c.groups.map((g) => `${g.id}:${g.name}:${g.daily_budget}:${g.ads.map((a) => `${a.id}:${a.name}`).join(",")}`).join("|");
 
-  const t = currentBudgetTotal(c);
-  const diff = t.total !== null && c.budget_planned !== null ? t.total - c.budget_planned : null;
   const adCount = c.groups.reduce((sum, g) => sum + g.ads.length, 0);
   // 同 `PublishPage.tsx` 的判斷：已投放過 or 已經有一筆 campaign 層級的發布動作，兩種都算「綁定過」。
   const published =
@@ -278,9 +287,9 @@ export function DeliveryTab({
     },
     {
       icon: Wallet,
-      label: "每日合計",
-      value: formatCurrency(t.dailySum),
-      caption: t.total !== null ? `共 ${t.days} 天，總計 ${formatCurrency(t.total)}` : "還沒設定投放起訖日",
+      label: "這期總預算",
+      value: c.budget_total !== null ? formatCurrency(c.budget_total) : "尚未設定",
+      caption: c.budget_total !== null ? "各投放組每日預算 × 投放天數" : "還沒有投放組預算或起訖日",
     },
     {
       icon: Calendar,
@@ -319,7 +328,8 @@ export function DeliveryTab({
             <div className="surface">
               <div className="surface-body flex flex-col">
                 {nodeButton(`group:${g.id}`, "pl-2", <Folder size={13} className="shrink-0 text-muted-foreground" />, g.name, bindBadge(g.local_state))}
-                {g.ads.map((a) => nodeButton(`ad:${a.id}`, "pl-8", <FileText size={12} className="shrink-0 text-muted-foreground" />, a.name, bindBadge(a.local_state)))}
+                {g.ads.map((a) => nodeButton(`ad:${a.id}`, "pl-8", <FileText size={12} className="shrink-0 text-muted-foreground" />, a.name,
+                  <>{a.carried_label && <CarriedChip ad={a} />}{bindBadge(a.local_state)}</>))}
                 <Button variant="outline" size="sm" className="mt-2 w-fit" onClick={() => { setAddAdGroupId(g.id); setAddAdOpen(true); }}>
                   <Plus size={14} /> 在這一組新增廣告
                 </Button>
@@ -345,6 +355,7 @@ export function DeliveryTab({
                 brandId={brandId}
                 ad={selectedAd}
                 vocabulary={vocabulary}
+                menu={c.menu}
                 campaignStatus={c.status}
                 onSaved={replaceAd}
                 onDelete={() => setDeleteTarget({ kind: "ad", row: selectedAd })}
@@ -363,6 +374,13 @@ export function DeliveryTab({
   return (
     <div className="flex flex-col gap-4">
       <StructureTab brandId={brandId} campaign={c} planKey={planKey} />
+      {c.capacity && (
+        // F48 Contract C: what this period's daily budget carries, as served (`plan.served`).
+        <p data-slot="plan-capacity" className="-mt-2 px-1 text-[13px] text-muted-foreground">
+          每天 {formatAmount(c.capacity.daily)}，撐得起 {c.capacity.can_support} 則，另加一則探索（這期最多 {c.capacity.ceiling} 則
+          {(c.capacity.carried ?? 0) > 0 && `，其中 ${c.capacity.carried} 則沿用上一期`}）
+        </p>
+      )}
 
       {failedReads.length > 0 && (
         <ReadFailed what={`${failedReads.join("、")}讀取失敗，下方的結構編輯可能缺少選項。`} onRetry={retryFailedReads} />
@@ -393,41 +411,13 @@ export function DeliveryTab({
             <div className="surface-header">
               <h2>預算（這個 Campaign）</h2>
             </div>
-            <div className="surface-body grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs text-muted-foreground">目前投放組合計</div>
-                <p className="metric-number">{t.total !== null ? formatCurrency(t.total) : "尚未設定"}</p>
-                <div className="text-xs text-muted-foreground">
-                  {t.total !== null
-                    ? `各投放組日預算 ${formatCurrency(t.dailySum)}／天 × ${t.days} 天（${c.start_date} ~ ${c.end_date}）`
-                    : "還沒設定投放起訖日，算不出總預算"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">採用時的計畫</div>
-                <p className="metric-number">
-                  {c.budget_planned !== null ? formatCurrency(c.budget_planned) : "尚未設定"}
-                </p>
-                <div className="text-xs text-muted-foreground">
-                  {c.budget_planned !== null
-                    ? `採用策略時的情境金額${c.budget_scenario ? `（${c.budget_scenario}）` : ""}，不會跟著日預算改`
-                    : "還沒採用預算情境"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">差額</div>
-                <p className="metric-number">
-                  {diff === null
-                    ? "算不出來"
-                    : diff === 0
-                      ? "持平"
-                      : diff > 0
-                        ? `＋${formatCurrency(diff)}`
-                        : `－${formatCurrency(Math.abs(diff))}`}
-                </p>
-                <div className="text-xs text-muted-foreground">
-                  {diff !== null ? "目前投放組合計 − 採用時的計畫" : "兩邊都有金額才算得出差額"}
-                </div>
+            <div className="surface-body">
+              <div className="text-xs text-muted-foreground">這期總預算</div>
+              <p className="metric-number">{c.budget_total !== null ? formatCurrency(c.budget_total) : "尚未設定"}</p>
+              <div className="text-xs text-muted-foreground">
+                {c.budget_total !== null
+                  ? `各投放組每日預算 × 投放天數（${c.start_date} ~ ${c.end_date}）`
+                  : "還沒有投放組預算或起訖日，算不出總預算"}
               </div>
             </div>
           </div>}
@@ -532,7 +522,7 @@ export function DeliveryTab({
           campaignId={c.id}
           onClose={() => setAddGroupOpen(false)}
           onCreated={(group) => {
-            onCampaignChange({ ...c, groups: [...c.groups, { ...group, ads: [] }] });
+            void reread({ ...c, groups: [...c.groups, { ...group, ads: [] }] });
             setSelected(`group:${group.id}`);
             setAddGroupOpen(false);
           }}
@@ -545,6 +535,7 @@ export function DeliveryTab({
           groups={c.groups}
           defaultGroupId={addAdGroupId ?? selectedGroup?.id ?? selectedAd?.group_id ?? c.groups[0].id}
           vocabulary={vocabulary}
+          menu={c.menu}
           onClose={() => { setAddAdOpen(false); setAddAdGroupId(null); }}
           onCreated={(ad) => {
             onCampaignChange({

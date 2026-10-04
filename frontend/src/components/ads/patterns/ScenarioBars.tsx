@@ -101,10 +101,11 @@ export function allocationFills(parts: { key: string; pct: number }[]): Record<s
   return fills;
 }
 
-/** `.alloc` + legend: how the period budget splits across audiences. `total === null` prints percentages only
- * (「選好預算後算金額」 is the caller's heading note). `legend={false}` is the F41 prototype's thin `.bb` bar — no text
- * in the segments and no legend line — for a caller that prints one row per part itself (swatches: `allocationFills`). */
-export function AllocationBar({ parts, total, legend = true }: { parts: { key: string; label: string; pct: number }[]; total: number | null; legend?: boolean }) {
+/** `.alloc` + legend: how the period budget splits across audiences. Each part's money is the API's own `amount`
+ * (F48 Contract M: `budget.split`, never priced here); a part without one prints its percentage only (「選好預算後
+ * 算金額」 is the caller's heading note). `legend={false}` is the F41 prototype's thin `.bb` bar — no text in the
+ * segments and no legend line — for a caller that prints one row per part itself (swatches: `allocationFills`). */
+export function AllocationBar({ parts, legend = true }: { parts: { key: string; label: string; pct: number; amount?: number | null }[]; legend?: boolean }) {
   const shown = parts.filter((p) => p.pct > 0);
   const fills = allocationFills(parts);
   if (!legend) {
@@ -127,7 +128,7 @@ export function AllocationBar({ parts, total, legend = true }: { parts: { key: s
         {shown.map((p) => (
           <span key={p.key}>
             <i className={cn("mr-1.5 inline-block size-2 rounded-[2px]", fills[p.key])} />
-            {p.label} {p.pct}%{total !== null && `・${formatAmount(Math.round((total * p.pct) / 100))}`}
+            {p.label} {p.pct}%{p.amount != null && `・${formatAmount(p.amount)}`}
           </span>
         ))}
       </div>

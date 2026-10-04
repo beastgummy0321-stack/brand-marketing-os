@@ -1,7 +1,7 @@
 import { Target, Wallet, BarChart2, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { formatCurrency, formatSyncTime } from "@/lib/format";
-import { currentBudgetTotal, type CampaignDetail, type CampaignLabels } from "@/lib/adsApi";
+import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
 import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 import type { StepTarget } from "./nextStep";
 
@@ -40,13 +40,14 @@ export function OverviewTab({
   const nativeIndex = nativeStates.indexOf(root?.native_status ?? "");
   const idx = nativeIndex < 0 ? 4 : nativeIndex;
   const lastRead = Object.values(c.external_view?.sync ?? {}).map(s => s.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1);
-  const t = currentBudgetTotal(c);
+  // F48 Contract M: the period total is the server's `budget_total` (after adoption it equals the chosen total); the
+  // overview computes no money of its own.
+  const total = c.budget_total;
   const hasOutcome = (c.outcome.spend ?? 0) > 0 || (c.outcome.purchases ?? 0) > 0 || (c.outcome.revenue ?? 0) > 0;
-  const pct = c.outcome.spend !== null && t.total !== null && t.total > 0 ? Math.round((c.outcome.spend / t.total) * 100) : null;
 
-  const budgetCaption =
-    (t.total !== null ? `投放組日預算 × ${t.days} 天` : "還沒設定投放起訖日") +
-    (c.budget_planned !== null ? `・採用情境 ${formatCurrency(c.budget_planned)}` : "");
+  const budgetCaption = total !== null
+    ? "投放組每日預算 × 投放天數"
+    : c.budget_planned !== null ? `已選 ${formatCurrency(c.budget_planned)}，展開投放組後算總預算` : "還沒選預算";
 
   const kpiCells: KpiCell[] = [
     {
@@ -62,7 +63,7 @@ export function OverviewTab({
     {
       icon: Wallet,
       label: "總預算",
-      value: t.total !== null ? formatCurrency(t.total) : "尚未設定",
+      value: total !== null ? formatCurrency(total) : "尚未設定",
       caption: budgetCaption,
     },
     {
@@ -70,9 +71,7 @@ export function OverviewTab({
       label: "已花費",
       value: hasOutcome && c.outcome.spend !== null ? formatCurrency(c.outcome.spend) : "還沒有成效資料",
       caption: hasOutcome
-        ? t.total !== null
-          ? `佔總預算 ${pct}%・平台回報`
-          : "累計花費・平台回報"
+        ? "累計花費・平台回報"
         : "發布後才會有花費資料",
     },
   ];

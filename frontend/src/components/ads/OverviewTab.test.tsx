@@ -1,8 +1,8 @@
 /** frontend/src/components/ads/OverviewTab.test.tsx — F03-I23: 總覽 tab is a pure-props
  * component (no fetch), so this hand-builds a `CampaignDetail` literal and asserts the two
  * bugs the integration review caught are gone: an untracked Meta `0` must never print as
- * 購買, and 目前投放組合計／採用時的計畫 must stay two separately-labelled numbers instead of
- * blending into one. */
+ * 購買. F48-I10 (Contract M): 總預算 is the server's one `budget_total` — after adoption it equals the chosen
+ * total, so the old 目前投放組合計／採用時的計畫 pair is gone and nothing is re-derived here. */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -79,24 +79,35 @@ describe("OverviewTab（F03-I23）", () => {
     expect(screen.queryByText("購買")).toBeNull();
   });
 
-  it("兩個投放組、10 天期間：目前投放組合計算對；依據只說「投放組日預算 × 天數」，不在工作區頭部的每日預算旁再印一個日預算數字", () => {
+  it("F48 Contract M: 總預算 is the server's budget_total as sent — never re-derived from the groups in the browser", () => {
     render(
       <OverviewTab
         campaign={campaign({
+          // The groups would sum to 15,000 over 10 days; the served total is what prints.
           groups: [
             group({ id: "g1", daily_budget: 1000 }),
             group({ id: "g2", daily_budget: 500 }),
           ],
           start_date: "2026-01-01",
           end_date: "2026-01-10",
+          budget_total: 14990,
+          outcome: { spend: 3000, purchases: 2, revenue: 4000 },
         })}
         onChangeTab={vi.fn()}
       />,
     );
 
-    expect(screen.getByText("NT$ 15,000")).toBeTruthy();
-    expect(screen.getByText("投放組日預算 × 10 天")).toBeTruthy();
+    expect(screen.getByText("NT$ 14,990")).toBeTruthy();
+    expect(screen.queryByText("NT$ 15,000")).toBeNull();
+    expect(screen.getByText("投放組每日預算 × 投放天數")).toBeTruthy();
     expect(screen.queryByText(/1,500/)).toBeNull();
+    // No share of the total is priced here.
+    expect(screen.queryByText(/佔總預算/)).toBeNull();
+  });
+
+  it("a chosen budget before the plan is adopted: 總預算 says it is not set yet and names the chosen amount once", () => {
+    render(<OverviewTab campaign={campaign({ status: "draft", budget_planned: 30000, budget_total: null })} onChangeTab={vi.fn()} />);
+    expect(screen.getByText("已選 NT$ 30,000，展開投放組後算總預算")).toBeTruthy();
   });
 
   it("budget_planned 跟起訖日都是 null：顯示「尚未設定」，不顯示「累積中」", () => {

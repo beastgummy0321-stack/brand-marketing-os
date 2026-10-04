@@ -16,7 +16,10 @@ import {
   selectScenario,
   setAllocation,
   type CampaignDetail,
+  type ResplitRow,
+  type SelectScenarioResult,
   type StrategyCoordinateLearning,
+  type StrategyFact,
   type StrategyRole,
 } from "@/lib/adsApi";
 import { cn } from "@/lib/utils";
@@ -79,6 +82,25 @@ function UsedLearnings({ brandId, ranked, rows }: {
         到品牌智庫看完整表 →
       </Link>
     </div>
+  );
+}
+
+/** F48 Contract S: the lead word of each program-built fact line (the line itself is the API's `text`). */
+const FACT_LEAD: Record<StrategyFact["kind"], string> = {
+  groups: "顧客群", offers: "優惠", numbers: "數字", capacity: "預算", learnings: "學習",
+};
+
+/** The facts the program built for this strategy, one row each: a muted lead word, then the served sentence. */
+function StrategyFacts({ facts }: { facts: StrategyFact[] }) {
+  return (
+    <ul data-slot="strategy-facts" className="flex flex-col gap-1">
+      {facts.map((fact, i) => (
+        <li key={`${fact.kind}-${i}`} data-kind={fact.kind} className="flex gap-2.5 text-[13px]">
+          <span className="w-12 shrink-0 text-muted-foreground">{FACT_LEAD[fact.kind] ?? fact.kind}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">{fact.text}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -158,6 +180,8 @@ export function StrategyTab({
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
+  // F48 decision 8: the ad sets the last saved total re-split (an adopted, still unbound plan); null otherwise.
+  const [resplit, setResplit] = useState<ResplitRow[] | null>(null);
   const timezone = resolveOrgTimezone(useWorkspace().identity?.org?.timezone);
 
   const strategy = imported ? undefined : c.budget_basis_json.strategy;
@@ -189,9 +213,15 @@ export function StrategyTab({
     }
   }
 
+  /** A saved total: the campaign as the API returned it, and the re-split it reports (a draft reports none). */
+  function budgetSaved(result: SelectScenarioResult) {
+    onCampaignChange(result.campaign);
+    setResplit(result.resplit && result.resplit.length > 0 ? result.resplit : null);
+  }
+
   const saveBudget = () => run(async () => {
     if (!picked) return;
-    onCampaignChange(await selectScenario(brandId, c.id, { scenario_key: picked, custom_total: null }));
+    budgetSaved(await selectScenario(brandId, c.id, { scenario_key: picked, custom_total: null }));
     setPicked(null);
   }, "儲存預算失敗，請稍後再試。");
 
@@ -245,10 +275,10 @@ export function StrategyTab({
   }
 
   const allocationTotal = pickedRow?.total ?? c.budget_planned;
-  // A row's 元: an unsaved pick is priced locally (as the old legend did); otherwise the API's own `amount`, but only
-  // once a budget is saved — generating fills `amount` from the recommended total before the user chose anything.
-  const amountOf = (pct: number, amount: number | null) =>
-    pickedRow?.total != null ? Math.round((pickedRow.total * pct) / 100) : c.budget_planned !== null ? amount : null;
+  // A row's 元 is the API's own `amount` (F48 Contract M: `budget.split`, after adoption the groups' daily × days),
+  // shown only for the saved budget: generating fills `amount` from the recommended total before the user chose
+  // anything, and an unsaved pick is not split until it is saved (percent only until then).
+  const showAmounts = c.budget_planned !== null && pickedRow === null;
   const fills = strategy ? allocationFills(strategy.allocation.map((item) => ({ key: item.role, pct: item.pct }))) : {};
   const coordinateLearnings = basis?.coordinate_learnings ?? [];
   const rankedLearnings = basis?.ranked_learnings;
@@ -281,6 +311,8 @@ export function StrategyTab({
               pending={pending}
               onPending={setPending}
               onCampaignChange={onCampaignChange}
+              onBudgetSaved={budgetSaved}
+              resplit={resplit}
             />
 
             <section className="surface px-[22px] py-5" aria-labelledby="allocation-title">
@@ -296,11 +328,11 @@ export function StrategyTab({
               {c.materials && <MaterialsRow materials={c.materials} />}
               {allocationPct === null ? (
                 <>
-                  <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} total={allocationTotal} legend={false} />
+                  <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} legend={false} />
                   {/* Prototype F41 ② `.why`: one row per role — swatch, label, 「N%・M 元」, and the planner's reason. */}
                   <ul>
                     {strategy.allocation.map((item) => {
-                      const amount = formatAmount(amountOf(item.pct, item.amount));
+                      const amount = showAmounts ? formatAmount(item.amount) : null;
                       return (
                         <li key={item.role} data-slot="allocation-row" data-role={item.role} className="flex items-start gap-2.5 border-t border-border py-3 first:border-t-0">
                           <i className={cn("mt-1.5 size-2.5 shrink-0 rounded-[3px]", fills[item.role] ?? "bg-muted")} aria-hidden="true" />
@@ -359,6 +391,8 @@ export function StrategyTab({
         {strategy && (
           <Disclosure label="為什麼這樣建議">
             <div className="flex flex-col gap-3 text-sm">
+              {/* F48 Contract S: the program's facts first; the model's prose below them has no numbers of its own. */}
+              {(strategy.facts ?? []).length > 0 && <StrategyFacts facts={strategy.facts ?? []} />}
               {strategy.why.length > 0 && <ul className="list-disc space-y-1 pl-5">{strategy.why.map((line, i) => <li key={i}>{line}</li>)}</ul>}
               {(strategy.learning_goals ?? []).length > 0 && (
                 <div>

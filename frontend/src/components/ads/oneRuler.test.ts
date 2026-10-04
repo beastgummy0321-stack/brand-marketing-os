@@ -11,6 +11,10 @@
  *    `N 成`, `N 筆`) in a string or JSX text. A fact a screen prints comes from a served field through `${…}`／`{…}`;
  *    the revisit quick picks 「N 天後」 are the frontend's own choices, and a zero (「0 筆」) is a grade's definition, not
  *    a figure. A `%` counts only after a space or a CJK character (`w-[30%]`, `width="100%"` are layout).
+ * 5. F48-I10 (Contract M, one money calculator): no browser money arithmetic — no `Math.round(` whose argument names
+ *    `total`, `budget`, `amount` or `pct` (a whole identifier, `x.total` included), and no comment that declares a
+ *    copy of a backend rule (`mirrors`, `same formula as`, `same rule as`, 「同一套」) while naming `app/`. Amounts,
+ *    totals and splits are the API's (`budget_total`, `budget_preview`, `allocation[].amount`).
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -62,6 +66,12 @@ const LABEL_COMPARE = [
   /["'`][\u4e00-\u9fff][^"'`]*["'`]\s*[!=]==?\s*(?!(?:step|action)\.)[\w$.?]*[lL]abel\b/,
 ];
 
+/** Money arithmetic (F48-I10): `Math.round(` over an expression naming a total／budget／amount／pct, read in code. */
+const MONEY_WORD = /^(?:total|budget|amount|pct)$/i;
+/** A comment declaring a copy of a backend rule; it is a hit only when the same comment names `app/`. */
+const MIRROR_WORDS = /\bmirrors?\b|same (?:formula|rule) as|同一套/i;
+const NAMES_APP = /(?<![\w/])app\//;
+
 /** Hits that are not the ruler, excused one line at a time (`text` must appear on the hit line), with the reason. An
  * entry whose line is gone fails the stale-entry test. Entries marked "debt" are numbers the backend owns that a later
  * feature serves (F48 Decisions: time／input rules are W11–W14, feature C); they are excused here, not fixed. */
@@ -77,6 +87,23 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   { file: "components/ads/patterns/SlotGrid.tsx", text: "\"缺 1 則\"", why: "a slot placeholder is one missing ad by construction, not a figure" },
   { file: "components/ads/ExperimentPlan.tsx", text: "0.1 代表 10%", why: "explains the input's number format (a fraction), not a fact" },
   { file: "components/ads/StrategyTab.tsx", text: "剛好 100%", why: "percent shares sum to 100 by definition, not a fact" },
+  // F48-I10 money scan. Debt outside this issue's touch (reported to the feature lead): browser arithmetic over a
+  // backend number, and comments that say a frontend function re-derives a backend rule.
+  { file: "components/ads/patterns/PaceChart.tsx", text: "const pace = Math.round((budget * dayOfMonth) / daysInMonth);", why: "debt: today's pace on the home month chart is priced in the browser; home_overview's pace block should serve it" },
+  { file: "components/ads/PerformanceTab.tsx", text: "跟 `app/ads/learning.py::_sentence` 同一套公式", why: "debt: the closeout learning sentence is rebuilt in the browser; the close response should serve it" },
+  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_spend` exactly", why: "debt: an ad's window spend is summed in the browser; the review read should serve it" },
+  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_window`", why: "debt: the ad's result view is picked in the browser by triage's rule; the review read should serve it" },
+  // Read-shape notes: a type file saying which route serves its shape re-derives no rule (rewording them is a
+  // one-word change in files outside this issue's touch).
+  { file: "lib/adsConnectionsApi.ts", text: "Mirrors `app/ads/connections.py::get_connections` exactly", why: "a response type's shape, not a rule" },
+  { file: "lib/adsTriageApi.ts", text: "decision queue, per-ad program triage, and campaign target sub-resource. Mirrors", why: "a response type's shape, not a rule" },
+  { file: "lib/adsHomeApi.ts", text: "Mirrors `app/ads/home_overview.py` exactly", why: "a response type's shape, not a rule" },
+  { file: "lib/adsMonthApi.ts", text: "Mirrors `app/ads/month_summary.py`", why: "a response type's shape, not a rule" },
+  { file: "lib/adsSettleApi.ts", text: "Mirrors `app/ads/settle.py`", why: "a response type's shape, not a rule" },
+  { file: "lib/adsStatusApi.ts", text: "Mirrors `app/ads/status_summary.py::get_status_summary`", why: "a response type's shape, not a rule" },
+  { file: "lib/adsStatusApi.ts", text: "mirrors `app/ads/recovery.py::get_recovery`", why: "a response type's shape, not a rule" },
+  { file: "lib/adsWizardApi.ts", text: "Mirrors `app/ads/wizard_options.py`", why: "a response type's shape, not a rule" },
+  { file: "lib/adsWorkspaceApi.ts", text: "Mirrors `app/ads/workspace_reads.py` exactly", why: "a response type's shape, not a rule" },
 ];
 
 /** Test data that lives beside the sources: the served rules as a test fixture (the app never imports it). */
@@ -171,6 +198,51 @@ function hits(text: string, patterns: RegExp[], blankStrings = false): number[] 
   return lines;
 }
 
+/** Each `Math.round(` whose argument (balanced parentheses, strings blanked) names a money word, by line. */
+function moneyRounding(text: string): number[] {
+  const code = strip(text, true);
+  const lines: number[] = [];
+  for (const m of code.matchAll(/Math\.round\(/g)) {
+    let depth = 1;
+    let j = (m.index ?? 0) + m[0].length;
+    const from = j;
+    while (j < code.length && depth > 0) {
+      if (code[j] === "(") depth++;
+      else if (code[j] === ")") depth--;
+      j++;
+    }
+    const names = code.slice(from, j - 1).match(/[A-Za-z_$][\w$]*/g) ?? [];
+    if (names.some((name) => MONEY_WORD.test(name))) lines.push(code.slice(0, m.index).split("\n").length);
+  }
+  return [...new Set(lines)];
+}
+
+/** Comment text only (code blanked, line numbers kept). A run of lines that carry comment text is one comment; a
+ * clause of it (up to `.`／`;`／。／；) with a mirror word that also names `app/` is a hit, reported at the mirror
+ * word's line. 「this builder mirrors the same shape」 in a comment that names `app/` elsewhere is not. */
+function mirrorComments(text: string): number[] {
+  const code = strip(text, false);
+  let comments = "";
+  for (let i = 0; i < text.length; i++) comments += text[i] === "\n" ? "\n" : code[i] === text[i] ? " " : text[i];
+  const rows = comments.split("\n");
+  const lines: number[] = [];
+  let block: number[] = [];
+  const flush = () => {
+    const joined = block.map((n) => rows[n]).join("\n");
+    let start = 0;
+    for (const clause of joined.split(/[.;](?=\s|$)|[。；]/)) {
+      const at = joined.indexOf(clause, start);
+      start = at + clause.length;
+      const word = MIRROR_WORDS.exec(clause);
+      if (word && NAMES_APP.test(clause)) lines.push(block[joined.slice(0, at + word.index).split("\n").length - 1] + 1);
+    }
+    block = [];
+  };
+  rows.forEach((row, n) => { if (row.trim()) block.push(n); else if (block.length) flush(); });
+  if (block.length) flush();
+  return [...new Set(lines)];
+}
+
 const classComparisons = (text: string) => hits(text, CLASS_COMPARE);
 const rulerLiterals = (text: string) =>
   [...new Set([...hits(text, RULER_NUMBERS, true), ...hits(text, RULER_WORDS)])].sort((a, b) => a - b);
@@ -227,10 +299,41 @@ describe("rules come from the API (F48 Contract R-API, decision 11)", () => {
       if (!present.has(x.file)) return true;
       const text = readFileSync(join(SRC_DIR, x.file), "utf-8");
       const lines = text.split("\n");
-      const hit = [...rulerLiterals(text), ...labelComparisons(text), ...factLiterals(text)];
+      const hit = [...rulerLiterals(text), ...labelComparisons(text), ...factLiterals(text), ...moneyRounding(text), ...mirrorComments(text)];
       return !hit.some((line) => lines[line - 1].includes(x.text));
     });
     expect(stale).toEqual([]);
+  });
+
+  it("no ads source does money arithmetic or re-derives a backend rule (F48-I10, Contract M)", () => {
+    expect(offenders(moneyRounding, true)).toEqual([]);
+    expect(offenders(mirrorComments, true)).toEqual([]);
+  });
+
+  it("the money scan sees each planted rounding and leaves other rounding alone", () => {
+    expect(moneyRounding("const a = Math.round((pickedRow.total * pct) / 100);")).toEqual([1]);
+    expect(moneyRounding("const t = Math.round(dailySum * days) + Math.round(c.budget);")).toEqual([1]);
+    expect(moneyRounding("const x = formatAmount(Math.round((total * p.pct) / 100));")).toEqual([1]);
+    expect(moneyRounding("const a = 1;\nconst y = Math.round(\n  item?.amount ?? 0,\n);")).toEqual([2]);
+    expect(moneyRounding("const p = Math.round((spent / t.TOTAL) * 100);")).toEqual([1]);
+    expect(moneyRounding("const d = Math.round((end - start) / 86_400_000);")).toEqual([]);
+    expect(moneyRounding("const p = Math.round(item.change_pct * 100); const q = Math.round(okAmount / spent);")).toEqual([]);
+    expect(moneyRounding('const s = Math.round(x) + " total budget";')).toEqual([]);
+    expect(moneyRounding("// Math.round(total * pct)")).toEqual([]);
+    expect(moneyRounding("const n = Math.floor(total);")).toEqual([]);
+  });
+
+  it("the mirror scan sees a comment that copies a backend rule and leaves other comments alone", () => {
+    expect(mirrorComments("/** F03-I23: mirrors `app/ads/repository.py::_budget_total` exactly. */\nexport const a = 1;")).toEqual([1]);
+    expect(mirrorComments("// Same formula as the backend:\n// `app/ads/budget.py::split`\nconst a = 1;")).toEqual([1]);
+    expect(mirrorComments("/** 跟 `app/ads/learning.py::_sentence` 同一套公式 */")).toEqual([1]);
+    expect(mirrorComments("/** Same rule as `app/ads/triage.py` */ const a = 1;")).toEqual([1]);
+    expect(mirrorComments("/** mirrors the prototype's layout */\nconst a = 1;")).toEqual([]);
+    expect(mirrorComments("/** Served by `app/ads/budget.py`. */")).toEqual([]);
+    expect(mirrorComments('const s = "mirrors app/ads";')).toEqual([]);
+    expect(mirrorComments("// mirrors the old screen\n\n// `app/ads/x.py` serves this")).toEqual([]);
+    expect(mirrorComments("/** The backend sends it twice (`app/ads/triage.py`); this builder mirrors that shape. */")).toEqual([]);
+    expect(mirrorComments("/** Shape read from `app/ads/x.py`.\n * The union just mirrors the contract's own type. */")).toEqual([]);
   });
 
   it("the fact scan sees each planted literal", () => {

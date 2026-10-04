@@ -6,7 +6,7 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { Skeleton } from "@/components/layout/Skeleton";
 import {
   chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, isAuthThumbnail,
-  type CampaignSlots, type Slot, type SlotCopy, type SlotCopyOption, type SlotJob,
+  type CampaignSlots, type Slot, type SlotCopy, type SlotCopyOption, type SlotJob, type SlotStatutory,
 } from "@/lib/adsSlotsApi";
 import type { CopyFields } from "@/lib/adsUserAssetsApi";
 import { internalHref } from "@/lib/internalHref";
@@ -102,6 +102,19 @@ function FormatNote({ text }: { text: string }) {
   );
 }
 
+/** F48 Contract G (F34 remind-only): the statutory reminder for the slot's copy — one muted line under the copy half:
+ * the terms the copy hits, the server's sentence and the regulation link. It never blocks the slot. */
+function StatutoryLine({ statutory }: { statutory: SlotStatutory }) {
+  return (
+    <p data-slot="slot-statutory" className="text-[11.5px] leading-[1.45] text-muted-foreground [overflow-wrap:anywhere]">
+      <b className="font-semibold">食安法提醒</b>
+      {statutory.terms.map((t) => <span key={t.term}>・「{t.term}」{t.tier_label}</span>)}
+      <span>：{statutory.sentence} </span>
+      <a className="underline underline-offset-2" href={statutory.href} target="_blank" rel="noreferrer">衛福部認定準則</a>
+    </p>
+  );
+}
+
 /** A ready or in-progress slot. `shared`: another slot in the same response shows the same thumbnail (one original
  * backing several ads) — the caption and 換一張 (a new upload into this ad's slot). `justDone`: this slot was 處理中,
  * 等你 or 卡住 in an earlier read of the same screen and became ready (「已確認・剛處理好」). */
@@ -123,6 +136,7 @@ export function ReadySlot({ slot, shared, justDone, busy, onPick }: {
       )}
       {chip}
       {slot.format_note && <FormatNote text={slot.format_note} />}
+      {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
     </div>
   );
   return (
@@ -155,7 +169,10 @@ export function WaitingSlot({ slot, workbenchHref, checking, checked, onConfirm,
   }
   return (
     <SlotTile variant="waiting" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
-      emptyCopy="還沒選文案" status={<Chip tone="warn">等你</Chip>} actions={actions}
+      emptyCopy="還沒選文案" status={<>
+        <Chip tone="warn">等你</Chip>
+        {slot.copy && slot.statutory && <StatutoryLine statutory={slot.statutory} />}
+      </>} actions={actions}
       note={<>
         {!next && <p className="text-xs text-muted-foreground">下一步讀不到，請重新整理。</p>}
         <CheckedNote checked={checked} />
@@ -175,7 +192,10 @@ export function BlockedSlot({ slot, uploading, checking, checked, onPick, onPick
   const blocked = slot.blocked ?? { text: "卡住的原因讀不到。", terms: [], fix: null, more: 0 };
   return (
     <SlotTile variant="blocked" name={slot.name} thumbnailUrl={thumb} copy={slot.copy && copyText(slot.copy)} offer={offerChip(slot)}
-      status={<Chip tone="bad">卡住</Chip>} reason={{ text: blocked.text, terms: blocked.terms, more: blocked.more }}
+      status={<>
+        <Chip tone="bad">卡住</Chip>
+        {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
+      </>} reason={{ text: blocked.text, terms: blocked.terms, more: blocked.more }}
       actions={slot.ad_id !== null && <>
         {blocked.fix === "copy" && <Button variant="outline" size="sm" className={GO} aria-label={`改這句文案：${slot.name}`} onClick={onEdit}>改這句文案</Button>}
         {blocked.fix === "copy" && (slot.workbench_href
@@ -257,9 +277,10 @@ export function CopyOnlySlot({ slot, workbenchHref, busy, onPick }: {
   return (
     <SlotTile variant="copy-only" name={slot.name} copy={copyText(slot.copy)} offer={offerChip(slot)}
       imageActions={video ? <VideoPlaceholder slot={slot} busy={busy} onPick={onPick} /> : <UploadAction slot={slot} busy={busy} onPick={onPick} />}
-      extra={slot.workbench_href
-        ? <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>
-        : undefined}
+      extra={slot.workbench_href || slot.statutory ? <>
+        {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
+        {slot.workbench_href && <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>}
+      </> : undefined}
       status={<Chip tone="warn">{video ? "缺影片" : "有文案，缺圖"}</Chip>} />
   );
 }

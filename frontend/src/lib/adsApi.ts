@@ -10,7 +10,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
-import type { StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
+import type { BudgetPreview, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
@@ -118,6 +118,10 @@ export interface AdRow extends EntityBinding {
   asset_ready_source: "workbench" | "manual" | null;
   asset_ready_by: string | null;
   asset_ready_at: string | null;
+  /** F48 Contract K: 「沿用上一期」 on an ad carried from the previous period (`null` otherwise); `carry_note` says
+   * what is still missing (the previous creative was not found). Optional only for hand-written fixtures. */
+  carried_label?: string | null;
+  carry_note?: string | null;
 }
 
 export interface DeliveryGroupRow extends EntityBinding {
@@ -193,6 +197,12 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
     proof: { key: string; label: string; text: string }[];
     media: "photo" | "photo_video" | null;
   } | null;
+  /** F48 Contract M: the chosen total's whole daily and real period total (`null` before a total is chosen). */
+  budget_preview?: BudgetPreview | null;
+  /** F48-I06: this period's coordinate menu and capacity (`plan.served`); `null` on an imported campaign, capacity
+   * also `null` while the cap or the budget is unknown. Optional only for hand-written fixtures. */
+  menu?: PlanMenuRow[] | null;
+  capacity?: PlanCapacity | null;
 }
 
 /** F04-I08：`app/ads/judgment.py::action_line()` 的回傳形狀，加上呼叫端補的 campaign
@@ -291,7 +301,7 @@ export interface BudgetScenarios {
 }
 
 // F41-I04: the strategy shapes live in `adsStrategyTypes.ts` (this file's 800-line cap); re-exported here.
-export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
+export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyFact, BudgetPreview, ResplitRow, PlanMenuRow, PlanCapacity, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
 
 /** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
  * Campaign 這一列，沒有另開表。 */
@@ -307,34 +317,28 @@ export interface SelectScenarioInput {
   custom_total?: number | null;
 }
 
-/** F03-I23: mirrors `app/ads/repository.py::_budget_total` exactly (days inclusive of both
- * ends, `null` when either date is missing or `days <= 0`). The browser re-derives this
- * instead of reading `campaign.budget_total` because that field is the value at load time —
- * `patchGroup` returns only the edited group, so after an edit the payload field goes stale
- * while `c.groups` (updated by the caller) stays current. */
-export function currentBudgetTotal(
-  c: CampaignDetail,
-): { dailySum: number; days: number | null; total: number | null } {
-  const dailySum = c.groups.reduce((sum, g) => sum + g.daily_budget, 0);
-  if (!c.start_date || !c.end_date) return { dailySum, days: null, total: null };
-  const days =
-    Math.round(
-      (new Date(c.end_date).getTime() - new Date(c.start_date).getTime()) / 86_400_000,
-    ) + 1;
-  if (days <= 0) return { dailySum, days: null, total: null };
-  return { dailySum, days, total: Math.round(dailySum * days) };
+/** A refused ads request: `message` is the server's sentence, `code` its `error.code` (e.g. `name_forbidden`,
+ * `coordinate_unavailable`) so a form can put the sentence beside the field it is about. */
+export class AdsApiError extends Error {
+  readonly code: string | null;
+  constructor(message: string, code: string | null) {
+    super(message);
+    this.code = code;
+  }
 }
 
 async function ensureOk(res: Response, fallback: string): Promise<void> {
   if (res.ok) return;
   let message = fallback;
+  let code: string | null = null;
   try {
-    const data = (await res.json()) as { error?: { message?: string } };
+    const data = (await res.json()) as { error?: { message?: string; code?: unknown } };
     message = errorMessageFrom(data, message);
+    if (data && typeof data.error === "object" && typeof data.error?.code === "string") code = data.error.code;
   } catch {
     // 回應不是 JSON，用預設訊息。
   }
-  throw new Error(message);
+  throw new AdsApiError(message, code);
 }
 
 export async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
@@ -393,20 +397,23 @@ export async function generateStrategy(brandId: string, campaignId: string): Pro
   return data.campaign;
 }
 
-/** F28-I03: a total above the budget cap needs `{ confirmOverCap: true }`, else 409 `over_cap_unconfirmed`. */
+/** F28-I03: a total above the budget cap needs `{ confirmOverCap: true }`, else 409 `over_cap_unconfirmed`.
+ * F48 decision 8: `resplit` lists the ad sets a new total re-split after adoption (`null` on a draft); a campaign
+ * with an ad set on the platform → 409 `campaign_bound` (the server's sentence is the error). */
+export interface SelectScenarioResult { campaign: CampaignDetail; resplit: ResplitRow[] | null }
 export async function selectScenario(
   brandId: string,
   campaignId: string,
   input: SelectScenarioInput,
   options: { confirmOverCap?: boolean } = {},
-): Promise<CampaignDetail> {
+): Promise<SelectScenarioResult> {
   const body = options.confirmOverCap ? { ...input, confirm_over_cap: true } : input;
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/scenario`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "選擇預算情境失敗。");
-  return data.campaign;
+  const data = await parseJsonOrThrow<{ campaign: CampaignDetail; resplit?: ResplitRow[] | null }>(res, "選擇預算情境失敗。");
+  return { campaign: data.campaign, resplit: data.resplit ?? null };
 }
 
 /** F28-I03: editable in any status; a positive integer sets, `null` clears. Internal only. */
@@ -556,13 +563,14 @@ export async function deleteAd(brandId: string, adId: string): Promise<void> {
 // -- F03-I08：素材就緒 -- 交棒工作檯任務包／讀就緒狀態／手動勾「素材已就位」 -------------------
 
 /** `POST .../campaigns/{id}/pack` — 把這個 Campaign 底下所有廣告一次交棒成一個素材工作檯
- * 任務包，回傳新建的 pack id。已經交棒過會回 400（`pack_already_exists`）。 */
-export async function dispatchPack(brandId: string, campaignId: string): Promise<string> {
+ * 任務包，回傳新建的 pack id。已經交棒過會回 400（`pack_already_exists`）。F48 Contract K：每則都是素材已備妥的
+ * 沿用廣告時沒有東西要做，回 `null`（`nothing_to_prepare`）。 */
+export async function dispatchPack(brandId: string, campaignId: string): Promise<string | null> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/pack`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ pack_id: string }>(res, "交棒素材工作檯失敗。");
+  const data = await parseJsonOrThrow<{ pack_id: string | null }>(res, "交棒素材工作檯失敗。");
   return data.pack_id;
 }
 

@@ -1216,3 +1216,45 @@ describe("AssetsBody — F46 format note (prototype f45-slot-states slot a2)", (
     expect(screen.getByRole("heading", { name: "2／2 格已備妥" })).toBeTruthy();
   });
 });
+
+describe("AssetsBody — F48 Contract G statutory reminder (F34 remind-only)", () => {
+  /** `workbench.statutory_reminder` in its served shape. */
+  const STATUTE = {
+    terms: [{ term: "提神", tier_label: "易生誤解" }, { term: "專注力", tier_label: "易生誤解" }],
+    sentence: "這些字在食品廣告容易被認定誇大，建議改成描述成分或情境。",
+    href: "https://www.fda.gov.tw/statute",
+  };
+  const COPY = { source: "placement" as const, label: "已確認", headline: "考前提神一顆", body: "專注力撐到最後一題", description: null };
+
+  it("a slot whose copy hits the reminder prints one muted line under the copy — terms, sentence, link — and stays ready", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "adg_a", name: "新客", slots: [
+      slot({ ad_id: "ad_s1", name: "考前一週・書包一盒", copy: COPY, statutory: STATUTE }),
+      slot({ ad_id: "ad_s2", name: "通勤情境單圖", copy: { ...COPY, headline: "早上一顆", body: "通勤路上吃" }, statutory: null }),
+    ] }] }));
+    renderBody();
+    const tiles = within(await screen.findByRole("list", { name: "新客" })).getAllByRole("listitem");
+    const hit = tiles.find((el) => within(el).queryByText("考前一週・書包一盒"))!;
+    const plain = tiles.find((el) => within(el).queryByText("通勤情境單圖"))!;
+    const line = hit.querySelector("[data-slot=slot-statutory]") as HTMLElement;
+    expect(line.textContent).toBe("食安法提醒・「提神」易生誤解・「專注力」易生誤解：這些字在食品廣告容易被認定誇大，建議改成描述成分或情境。 衛福部認定準則");
+    expect(within(line).getByRole("link", { name: "衛福部認定準則" }).getAttribute("href")).toBe(STATUTE.href);
+    // Under the copy half, and nothing blocks: the slot still reads 已確認 and counts as ready.
+    const copy = hit.querySelector("[data-slot=slot-copy]") as HTMLElement;
+    expect(copy.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(hit).getByText("已確認")).toBeTruthy();
+    expect(hit.getAttribute("data-variant")).toBe("ready");
+    expect(plain.querySelector("[data-slot=slot-statutory]")).toBeNull();
+    expect(screen.getByRole("heading", { name: "2／2 格已備妥" })).toBeTruthy();
+  });
+
+  it("a copy-only slot prints the reminder under its copy too, beside 看圖片提示詞", async () => {
+    vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "adg_a", name: "新客", slots: [
+      slot({ ad_id: "ad_s3", name: "只有文案的那一則", state: "copy_only", confirmed: false, thumbnail_url: null,
+        copy: { ...COPY, source: "workbench", label: "工作檯第 1 版" }, statutory: STATUTE, workbench_href: "/app/workbench/sets/set_1" }),
+    ] }] }));
+    renderBody();
+    const tile = (await screen.findByText("只有文案的那一則")).closest("[data-slot=slot-tile]") as HTMLElement;
+    expect(tile.querySelector("[data-slot=slot-statutory]")).toBeTruthy();
+    expect(within(tile).getByRole("link", { name: "看圖片提示詞" })).toBeTruthy();
+  });
+});
