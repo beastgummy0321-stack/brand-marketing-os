@@ -9,8 +9,9 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-from app.ads import channels, handoff_data, recovery
+from app.ads import channels, handoff_data, lifecycle, recovery
 from app.ads import external_repository as external
+from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.core import settings as coresettings
@@ -320,6 +321,38 @@ class RecoveryTest(unittest.TestCase):
         )
         result = self.get()
         self.assertEqual(result["steps"][4]["state"], "active")
+
+    def test_reports_step_ignores_items_of_campaigns_no_longer_monitored(self):
+        # F49 Contract N: the tick never re-checks a closed campaign or one ended past the grace
+        # days, so their unchecked items cannot hold the step open; a monitored one still does.
+        now = db.now_utc()
+        gap_end = now - timedelta(hours=1)
+        self._beat(gap_end - timedelta(hours=3))
+        self._beat(gap_end)
+        self._beat(gap_end + timedelta(minutes=1))
+        self._queue_refresh(gap_end + timedelta(minutes=1))
+        today = coresettings.today_for_org(self.conn, org_id=self.org)
+        for status, end in (
+            ("closed", today - timedelta(days=1)),
+            ("ended", today - timedelta(days=lifecycle.ENDED_GRACE_DAYS + 1)),
+        ):
+            campaign_id = ads_repo.create_campaign(
+                self.conn, self.org, self.brand,
+                {"name": f"不再監測 {status}", "goal_text": "恢復測試", "objective": "awareness",
+                 "start_date": end - timedelta(days=7), "end_date": end, "status": status},
+                created_by="test",
+            )["id"]
+            external.upsert_entity(
+                self.conn, self.org, self.brand, campaign_id,
+                {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+                 "native_id": f"root-{status}"},
+            )
+            self.conn.commit()
+            self._reported_action(campaign_id, self._change_set(campaign_id), checked_at=None)
+        self.assertEqual(self.get(), {"recovering": False, "gap": None, "steps": []})
+        live = self._campaign()
+        self._reported_action(live, self._change_set(live), checked_at=None)
+        self.assertEqual(self.get()["steps"][4]["state"], "active")
 
     def test_reports_step_vacuously_done_with_nothing_pending_collapses_the_whole_response(self):
         # Same collapse as above, from the vacuous side: nothing was ever pending, so as soon

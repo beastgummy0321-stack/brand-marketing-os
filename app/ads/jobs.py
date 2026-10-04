@@ -15,21 +15,22 @@ _CLOSE_CRON = "0 4 * * *"
 
 
 def close_expired_campaigns(org_id: str) -> None:
-    """Compatibility handler for already-queued jobs: enqueue monitoring, never close."""
+    """Compatibility handler for already-queued jobs: enqueue monitoring, never close. Only the
+    campaigns the lifecycle still monitors (F49 Contract N: live, or ended within the grace days),
+    the same set `runtime.dispatch` reads."""
     from app.ads import lifecycle, runtime
 
     with connection() as conn:
         rows = [
-            campaign
-            for brand in lifecycle.brands(conn, {"live", "ended"}) if brand["org_id"] == org_id
-            for campaign in lifecycle.campaigns(conn, org_id, brand["brand_id"], {"live", "ended"})
-            if campaign["end_date"] is not None
+            (brand["brand_id"], campaign_id)
+            for brand in lifecycle.brands(conn, lifecycle.NOT_CLOSED) if brand["org_id"] == org_id
+            for campaign_id in sorted(lifecycle.monitored_ids(conn, org_id, brand["brand_id"]))
         ]
-    for row in rows:
-        lock = "ads-runtime:" + row["id"]
+    for brand_id, campaign_id in rows:
+        lock = "ads-runtime:" + campaign_id
         if not background.is_active(lock):
             background.enqueue(runtime.TASK, org_id=org_id, lock=lock,
-                               brand_id=row["brand_id"], campaign_id=row["id"])
+                               brand_id=brand_id, campaign_id=campaign_id)
 
 
 def _dispatch_close_expired(timestamp: int) -> None:
