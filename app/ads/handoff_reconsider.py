@@ -1,6 +1,6 @@
 """A freshly verified stopped ad can release its old handoff for a new revision."""
 
-from app.ads import asset_binding, external_sync, handoff_data
+from app.ads import asset_binding, external_sync, handoff_data, lifecycle
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
 from app.ads import external_repository as external
@@ -39,7 +39,7 @@ def reconsider(conn, org, brand, campaign, item_id, reason):
         node = ExternalEntity.model_validate(
             {k: v for k, v in proof["entity"].items() if k in ExternalEntity.model_fields}
         ).model_dump()
-        if node["native_status"] not in {"PAUSED", "ARCHIVED", "DELETED"}:
+        if lifecycle.may_spend({**node, "platform": leaf["platform"]}):
             raise ValueError("原廣告尚未證明已停止；請先獨立暫停並核對，不可直接重建新廣告。")
         external_sync.account_reader(conn, org, brand, leaf["platform"], leaf["source_account"])
         changes.lock(conn, org, brand)

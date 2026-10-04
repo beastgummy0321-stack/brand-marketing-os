@@ -91,23 +91,34 @@ def _live_judgment(campaign: dict[str, Any]) -> dict:
     return {"tone": "good", "text": "投放中，預算與時間同步", "detail": detail}
 
 
-def campaign_judgment(campaign: dict[str, Any], *, today: date) -> dict:
-    """回 `{"tone": "neutral"|"good"|"warn", "text": str, "detail": str}`。第一個命中的規則
-    就是答案（見票面表格）。`campaign` 至少要有 `status`／`verdict`／`closed_at`／`end_date`／
-    `start_date`／`budget_basis_json`（campaign row 原欄位）加上 `budget_total`／`spend`
-    （呼叫端算好的衍生值）。"""
-    if campaign.get("origin") == "imported":
-        return {"tone": "neutral", "text": "既有活動工作區",
-                "detail": "平台狀態與工作區分開；成功條件待確認。"}
-    status = campaign.get("status")
+_IMPORTED = {
+    "draft": {"tone": "neutral", "text": "既有活動工作區",
+              "detail": "還沒讀到平台上的活動結構，按重新讀取。"},
+    "live": {"tone": "neutral", "text": "既有活動投放中",
+             "detail": "平台狀態與工作區分開；成功條件待確認。"},
+    "ended": {"tone": "neutral", "text": "既有活動已結束",
+              "detail": "平台上的活動已停止或已過結束日。"},
+}
 
-    if status == "closed":
+
+def campaign_judgment(campaign: dict[str, Any], *, today: date, state: str) -> dict:
+    """回 `{"tone": "neutral"|"good"|"warn", "text": str, "detail": str}`。第一個命中的規則
+    就是答案（見票面表格）。`state` 是 `lifecycle.state`（F49 Contract L）——先看狀態、再看
+    來源：既有活動的 live／ended／draft 各有自己的句子。`campaign` 至少要有 `origin`／
+    `status`／`verdict`／`closed_at`／`end_date`／`start_date`／`budget_basis_json`（campaign row
+    原欄位）加上 `budget_total`／`spend`（呼叫端算好的衍生值）。"""
+    imported = campaign.get("origin") == "imported"
+
+    if state == "closed":
         text = _VERDICT_TEXT.get(str(campaign.get("verdict") or ""), "已結案，看不出來")
         closed_date = _as_date(campaign.get("closed_at"))
         detail = f"結案於 {_fmt_date(closed_date)}" if closed_date else "結案於未知日期"
         return {"tone": "neutral", "text": text, "detail": detail}
 
-    if status == "ended":
+    if imported:
+        return dict(_IMPORTED[state])
+
+    if state == "ended":
         end_date = campaign.get("end_date")
         detail = (
             f"結束於 {_fmt_date(end_date)}，待人工結案"
@@ -115,16 +126,17 @@ def campaign_judgment(campaign: dict[str, Any], *, today: date) -> dict:
         )
         return {"tone": "neutral", "text": "投放已結束，還沒結案", "detail": detail}
 
-    if status == "live":
+    if state == "live":
         return _live_judgment({**campaign, "_today": today})
 
-    if status == "ready":
+    # state == "draft"
+    if campaign.get("status") == "ready":
         start_date = campaign.get("start_date")
-        detail = f"預計 {_fmt_date(start_date)} 上線" if start_date is not None \
+        detail = (
+            f"預計 {_fmt_date(start_date)} 上線" if start_date is not None
             else "還沒設定投放期間"
+        )
         return {"tone": "neutral", "text": "投放結構已就緒，還沒發布", "detail": detail}
-
-    # status == "draft"
     has_strategy = bool((campaign.get("budget_basis_json") or {}).get("strategy"))
     if has_strategy:
         return {

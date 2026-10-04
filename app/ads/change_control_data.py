@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.ads import ads_learnings
+from app.ads import ads_learnings, lifecycle
 from app.ads import asset_binding_repository as bindings
 from app.ads import repository as campaigns
 from app.core import db, settings
@@ -328,6 +328,25 @@ def build_item(conn, org, brand, campaign_id, item, c):
     }
 
 
+def status_labels(item, evidence) -> dict | None:
+    """F49 Contract L: the served words of a status item's before／after／observed native status
+    (`lifecycle.delivery` on the item target's platform), read-time only. None for an item that
+    changes no status."""
+    sides = {
+        key: value if isinstance(value, dict) else {}
+        for key, value in (("before", item.get("before")), ("after", item.get("after")),
+                           ("observed", evidence.get("observed")))
+    }
+    if not any("status" in side for side in (sides["before"], sides["after"])):
+        return None
+    platform = (item.get("target") or {}).get("platform")
+    return {
+        key: lifecycle.delivery({"platform": platform, "native_status": side["status"]})["label"]
+        if side.get("status") is not None else None
+        for key, side in sides.items()
+    }
+
+
 def get(conn, org, brand, campaign_id, set_id):
     # Lazy: `app.ads.adapters` -> `manual` -> `change_control_launch` -> this module would be an
     # import-time cycle if this were a module-level import (same seam `channels.py` uses for the
@@ -364,6 +383,7 @@ def get(conn, org, brand, campaign_id, set_id):
             # derived from it (`content_hash`, `premise_hash`) are computed before this point and
             # never touched here.
             "platform_url": adapters.platform_url(item["target"]),
+            "status_labels": status_labels(item, action.get("evidence_json") or {}),
             # Contract D: only a `pause` item can ever carry an `angle` (`build_item`'s
             # `angle()` refuses one on any other kind), so every other item's learning is
             # trivially "not recorded" without a lookup.

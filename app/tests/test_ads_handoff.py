@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from app.ads import (
+    adapters,
     change_control,
     change_control_data,
     change_control_launch,
@@ -17,6 +18,7 @@ from app.ads import (
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
+from app.ads.adapters import meta_read
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 
@@ -102,6 +104,11 @@ class HandoffTest(unittest.TestCase):
             external_sync,
             "account_reader",
             return_value=(self.reader, {"account_id": self.account}),
+        ).start()
+        # F49 Contract L: the fixture platform reports Meta's status vocabulary, so its objects'
+        # delivery (`lifecycle.ad_running`) reads Meta's table.
+        patch.object(
+            adapters, "_status_table", side_effect=lambda platform: meta_read.STATUS_TABLE
         ).start()
         self.addCleanup(patch.stopall)
         self.conn.commit()

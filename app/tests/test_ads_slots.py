@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 from app import workbench
 from app.ads import (
+    adapters,
     asset_suggestions,
     change_control_data,
     change_control_launch,
@@ -44,6 +45,7 @@ from app.ads import (
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as user_assets
+from app.ads.adapters import meta_read
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.main import app
@@ -948,7 +950,10 @@ def test_imported_campaign_slots_are_its_live_platform_ads_under_their_ad_sets(e
     platform_entity(env, "closed", campaign=imported, native_status="DELETED", **parent)
     task = replace(env, b2["id"], campaign=imported)
 
-    view = read(env, imported)
+    # F49 Contract L: imported slots skip `off` ads; the fixture platform reports Meta's status
+    # vocabulary, so its delivery reads Meta's table.
+    with patch.object(adapters, "_status_table", side_effect=lambda _p: meta_read.STATUS_TABLE):
+        view = read(env, imported)
     assert (view["ready"], view["total"]) == (3, 3)
     assert [g["name"] for g in view["groups"]] == ["A 組", "B 組"]
     assert all(g["group_id"] is None for g in view["groups"])

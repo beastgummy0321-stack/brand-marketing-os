@@ -84,9 +84,11 @@ class RuntimeTest(unittest.TestCase):
                 value["last_checked_at"],
             )
         sync.assert_not_called()
+        # F49 Contract L (decision 12): the tick records the imported campaign's lifecycle -- its
+        # root was read and has not ended, so it is live (never closed).
         self.assertEqual(
             repository.get_campaign(self.conn, self.org, self.brand, self.campaign)["status"],
-            "draft",
+            "live",
         )
 
     def test_failed_source_keeps_health_and_does_not_claim_complete(self):

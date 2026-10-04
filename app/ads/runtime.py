@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from app import background
 from app.ads import change_control_data as changes
-from app.ads import channels, external_sync, month_budget
+from app.ads import channels, external_sync, lifecycle, month_budget
 from app.core import db, interrupts, settings
 
 TASK = "background.ads_runtime_campaign"
@@ -239,20 +239,17 @@ def _health(conn, org, brand, campaign, now):
         add("budget_exceeded", "依目前整月花費與持續投放預估，已超出月總額。請檢視降低風險操作。")
     if value.get("end_date") and value["end_date"] <= today:
         add("plan_date_passed", "原計畫日期已到。活動與平台投放仍保留，請確認期限與下一步。")
-        # F32-I01: a hand-launched campaign whose planned end date has passed is `ended` so the
-        # list, the judgment and the close-out entry agree. `ended` is not `closed`: dates
-        # prompt a review, never a close-out; `closed` and imported rows are never touched.
-        if value.get("status") == "live" and value.get("origin") == "internal":
-            conn.execute(
-                "UPDATE ads_campaign SET status='ended' WHERE org_id=%s AND brand_id=%s "
-                "AND id=%s AND status='live' AND origin='internal'",
-                (org, brand, campaign),
-            )
-    expired = conn.execute(
-        "SELECT COUNT(*) AS n FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND end_date<=%s AND native_status='ACTIVE'",
+    # F32-I01, F49 Contract L: the derived transitions (an internal live campaign past its end
+    # date -> `ended`, an imported one following its root) are written by the one lifecycle
+    # writer. `ended` is not `closed`: dates prompt a review, never a close-out.
+    lifecycle.record(conn, org, brand, campaign)
+    entities = conn.execute(
+        "SELECT platform,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s AND end_date<%s",
         (org, brand, campaign, today),
-    ).fetchone()["n"]
+    ).fetchall()
+    # Still running on the platform past the object's own end date (its last delivery day).
+    expired = sum(1 for entity in entities if lifecycle.ad_running(dict(entity)) is True)
     if expired:
         add("source_date_passed", "仍標示投放中的平台物件已超過讀回的排程期限，請核對狀態。")
     sources = _sources(conn, org, brand, campaign)

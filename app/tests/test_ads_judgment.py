@@ -27,7 +27,7 @@ class CampaignJudgmentLiveTest(unittest.TestCase):
             "status": "live", "start_date": date(2026, 9, 1), "end_date": date(2026, 9, 30),
             "budget_total": 10000, "spend": 6000,
         }
-        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
+        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12), state="live")
         self.assertEqual(result["tone"], "warn")
         self.assertIn("花得比時間快", result["text"])
         self.assertIn("第 12／30 天", result["detail"])
@@ -37,7 +37,7 @@ class CampaignJudgmentLiveTest(unittest.TestCase):
             "status": "live", "start_date": date(2026, 9, 1), "end_date": date(2026, 9, 30),
             "budget_total": None, "spend": 0,
         }
-        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
+        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12), state="live")
         self.assertEqual(result["tone"], "neutral")
         self.assertEqual(result["detail"], "還沒有可比的總預算")
         self.assertNotIn("0", result["text"])
@@ -48,7 +48,7 @@ class CampaignJudgmentLiveTest(unittest.TestCase):
             "status": "live", "start_date": date(2026, 9, 1), "end_date": date(2026, 9, 30),
             "budget_total": 10000, "spend": None,
         }
-        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
+        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12), state="live")
         self.assertEqual(result["tone"], "neutral")
         self.assertEqual(result["text"], "投放中")
         self.assertNotIn("已花費", result["detail"])
@@ -58,13 +58,41 @@ class CampaignJudgmentLiveTest(unittest.TestCase):
 class CampaignJudgmentDraftTest(unittest.TestCase):
     def test_draft_without_strategy(self):
         campaign = {"status": "draft", "budget_basis_json": {}}
-        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
+        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12), state="draft")
         self.assertEqual(result["text"], "還沒產生策略")
 
     def test_draft_with_strategy_not_adopted(self):
         campaign = {"status": "draft", "budget_basis_json": {"strategy": {"allocation": []}}}
-        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12))
+        result = judgment.campaign_judgment(campaign, today=date(2026, 9, 12), state="draft")
         self.assertEqual(result["text"], "策略已產生，還沒採用")
+
+
+class CampaignJudgmentStateTest(unittest.TestCase):
+    """F49 Contract L: the sentence follows the lifecycle state first, then the origin."""
+
+    TODAY = date(2026, 9, 12)
+
+    def test_stored_live_past_its_end_date_reads_ended(self):
+        campaign = {"origin": "internal", "status": "live", "end_date": date(2026, 9, 10)}
+        result = judgment.campaign_judgment(campaign, today=self.TODAY, state="ended")
+        self.assertEqual(result["text"], "投放已結束，還沒結案")
+        self.assertEqual(result["detail"], "結束於 9月10日，待人工結案")
+
+    def test_imported_live_and_ended_have_their_own_sentences(self):
+        live = judgment.campaign_judgment({"origin": "imported"}, today=self.TODAY, state="live")
+        ended = judgment.campaign_judgment({"origin": "imported"}, today=self.TODAY,
+                                           state="ended")
+        draft = judgment.campaign_judgment({"origin": "imported"}, today=self.TODAY,
+                                           state="draft")
+        self.assertEqual(live["text"], "既有活動投放中")
+        self.assertEqual(ended["text"], "既有活動已結束")
+        self.assertEqual(draft["text"], "既有活動工作區")
+        self.assertNotIn("結案", ended["text"])  # closeout is internal-only
+
+    def test_ready_without_a_platform_read_is_still_a_draft_sentence(self):
+        campaign = {"origin": "internal", "status": "ready", "start_date": date(2026, 9, 20)}
+        result = judgment.campaign_judgment(campaign, today=self.TODAY, state="draft")
+        self.assertEqual(result["text"], "投放結構已就緒，還沒發布")
 
 
 class ActionLineTest(unittest.TestCase):

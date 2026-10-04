@@ -39,7 +39,7 @@ per read), computed at read and never stored.
 """
 
 from app import workbench
-from app.ads import actual_format, ad_status, handoff_assignment, material_tasks
+from app.ads import actual_format, handoff_assignment, lifecycle, material_tasks
 from app.ads import asset_binding_repository as bindings
 from app.ads import assets as legacy_readiness
 from app.ads import change_control_launch as launch
@@ -394,7 +394,7 @@ def _platform_groups(conn, org, brand, campaign, replace_by_entity) -> list:
     by_native = {(r["native_kind"], r["native_id"]): r for r in rows}
     groups: dict = {}
     for entity in rows:
-        if entity["native_kind"] != "ad" or ad_status.is_closed(entity.get("native_status")):
+        if entity["native_kind"] != "ad" or not lifecycle.may_spend(entity):
             continue
         parent = by_native.get((entity.get("parent_native_kind"), entity.get("parent_native_id")))
         key = parent["id"] if parent is not None else None

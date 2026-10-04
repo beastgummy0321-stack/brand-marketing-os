@@ -14,7 +14,7 @@ on `ads_handoff_item`/`ads_action`). No migration, no interrupt/queue write.
 
 from datetime import datetime, timedelta
 
-from app.ads import repository, runtime_events
+from app.ads import lifecycle, repository, runtime_events
 from app.core import db
 
 _GAP_MINUTES = 120
@@ -61,11 +61,7 @@ def _find_gap(beats: list[dict]) -> dict | None:
 
 
 def _campaigns(conn, org_id: str, brand_id: str) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND status != 'closed'",
-        (org_id, brand_id),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    return lifecycle.campaigns(conn, org_id, brand_id, lifecycle.NOT_CLOSED)
 
 
 def _reconnect_done(conn, brand_id: str, gap_end) -> bool:

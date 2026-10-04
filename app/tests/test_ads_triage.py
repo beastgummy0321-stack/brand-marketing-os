@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app.ads import ad_status, channels, repository, result_kinds, tracked_zero, triage
+from app.ads import channels, repository, result_kinds, tracked_zero, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -703,24 +703,10 @@ class TriageDataViewTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# F26-I01: `ad_status.is_closed` (the shared predicate) and `classify()`'s own `closed` block --
-# judgement reads ACTIVE ads only, closed ads are kept and reported, never judged.
+# F26-I01, F49 Contract L: `classify()`'s own `closed` block -- judgement reads running ads and
+# unknown ones (`lifecycle.judged`); ads not delivering or off are kept and reported, never judged.
+# The status table itself is tested in `test_ads_lifecycle.py`.
 # ---------------------------------------------------------------------------
-
-
-class AdStatusTest(unittest.TestCase):
-    def test_none_is_never_closed(self):
-        self.assertFalse(ad_status.is_closed(None))
-
-    def test_active_is_not_closed(self):
-        self.assertFalse(ad_status.is_closed("ACTIVE"))
-
-    def test_every_registered_status_is_closed(self):
-        for status in ad_status.CLOSED_STATUSES:
-            self.assertTrue(ad_status.is_closed(status))
-
-    def test_unrecognised_status_is_not_closed(self):
-        self.assertFalse(ad_status.is_closed("SOME_FUTURE_STATUS"))
 
 
 class TriageClosedAdsTest(unittest.TestCase):
@@ -767,16 +753,39 @@ class TriageClosedAdsTest(unittest.TestCase):
         result = triage.classify(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(len(result["items"]), 5)
         self.assertEqual(result["closed"], {
+            "groups": [
+                {"state": "off", "label": "已封存", "count": 4},
+                {"state": "off", "label": "已暫停", "count": 11},
+            ],
             "paused": 11, "archived": 4, "other": 0, "total": 15,
             "items": result["closed"]["items"], "truncated": False,
         })
         self.assertEqual(len(result["closed"]["items"]), 15)
+
+    def test_disapproved_ad_is_not_judged_and_listed_closed(self):
+        """F49 Contract L: an ad on the platform but not delivering (被拒登) holds no capacity and
+        gets no grade -- it is listed in the closed block with its served delivery label."""
+        self.make_ad("live", native_status="ACTIVE")
+        self.make_ad("refused", native_status="DISAPPROVED", name="被拒的廣告")
+        self.conn.commit()
+        result = triage.classify(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual([i["name"] for i in result["items"]], ["live"])
+        self.assertEqual(result["items"][0]["delivery"], {"state": "running", "label": "投放中"})
+        self.assertEqual(result["closed"]["groups"],
+                         [{"state": "not_running", "label": "被拒登", "count": 1}])
+        self.assertEqual(result["closed"]["other"], 1)
+        item = result["closed"]["items"][0]
+        self.assertEqual(item["name"], "被拒的廣告")
+        self.assertEqual(item["delivery"], {"state": "not_running", "label": "被拒登"})
+        self.assertEqual(item["delivery_label"], "被拒登")
 
     def test_null_status_is_active_never_closed(self):
         self.make_ad("no_status", native_status=None)
         self.conn.commit()
         result = triage.classify(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["delivery"],
+                         {"state": "unknown", "label": "平台狀態不明"})
         self.assertEqual(result["closed"]["total"], 0)
 
     def test_other_bucket_covers_deleted_and_the_two_cascade_pauses(self):
@@ -786,6 +795,11 @@ class TriageClosedAdsTest(unittest.TestCase):
         self.conn.commit()
         result = triage.classify(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(result["closed"], {
+            "groups": [
+                {"state": "off", "label": "已刪除", "count": 1},
+                {"state": "off", "label": "所屬廣告組已暫停", "count": 1},
+                {"state": "off", "label": "所屬活動已暫停", "count": 1},
+            ],
             "paused": 0, "archived": 0, "other": 3, "total": 3,
             "items": result["closed"]["items"], "truncated": False,
         })

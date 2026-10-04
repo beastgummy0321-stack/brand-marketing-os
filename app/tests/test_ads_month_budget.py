@@ -12,7 +12,9 @@ from app.core import db
 def root(**changes):
     return {
         "id": "c",
-        "platform": "fixture",
+        # F49 Contract L: an owner's delivery is read through its platform's status table
+        # (`lifecycle.may_spend`), so the fixture names a platform that has one.
+        "platform": "meta",
         "source_account": "a",
         "native_kind": "campaign",
         "native_id": "1",

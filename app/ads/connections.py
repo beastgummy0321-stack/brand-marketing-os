@@ -46,7 +46,7 @@ import calendar
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ads import adapters, channels, repository, triage, wizard_options
+from app.ads import adapters, channels, lifecycle, repository, triage, wizard_options
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 
@@ -145,14 +145,19 @@ def _reread(platform, account_id, state, missing_days, window_start, yesterday) 
 
 
 def _account_campaigns(conn, org_id, brand_id, platform, account_id) -> list[dict]:
-    rows = conn.execute(
-        "SELECT DISTINCT c.* FROM ads_campaign c JOIN ads_external_entity e "
-        "ON e.campaign_id=c.id AND e.org_id=c.org_id AND e.brand_id=c.brand_id "
-        "WHERE c.org_id=%s AND c.brand_id=%s AND c.status != 'closed' AND e.platform=%s "
-        "AND e.source_account=%s AND e.parent_native_id IS NULL ORDER BY c.name, c.id",
-        (org_id, brand_id, platform, account_id),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    """The not-closed campaigns (`lifecycle.campaigns`) with a root on this account."""
+    on_account = {
+        row["campaign_id"] for row in conn.execute(
+            "SELECT DISTINCT campaign_id FROM ads_external_entity WHERE org_id=%s "
+            "AND brand_id=%s AND platform=%s AND source_account=%s AND parent_native_id IS NULL",
+            (org_id, brand_id, platform, account_id),
+        ).fetchall()
+    }
+    rows = [
+        c for c in lifecycle.campaigns(conn, org_id, brand_id, lifecycle.NOT_CLOSED)
+        if c["id"] in on_account
+    ]
+    return sorted(rows, key=lambda c: (c["name"] or "", c["id"]))
 
 
 def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):

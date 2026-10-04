@@ -16,14 +16,15 @@ _CLOSE_CRON = "0 4 * * *"
 
 def close_expired_campaigns(org_id: str) -> None:
     """Compatibility handler for already-queued jobs: enqueue monitoring, never close."""
-    from app.ads import runtime
+    from app.ads import lifecycle, runtime
 
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT id,brand_id FROM ads_campaign WHERE org_id=%s "
-            "AND status IN ('live','ended') AND end_date IS NOT NULL",
-            (org_id,),
-        ).fetchall()
+        rows = [
+            campaign
+            for brand in lifecycle.brands(conn, {"live", "ended"}) if brand["org_id"] == org_id
+            for campaign in lifecycle.campaigns(conn, org_id, brand["brand_id"], {"live", "ended"})
+            if campaign["end_date"] is not None
+        ]
     for row in rows:
         lock = "ads-runtime:" + row["id"]
         if not background.is_active(lock):
@@ -51,13 +52,11 @@ def _dispatch_queue_refresh(timestamp: int) -> None:  # noqa: ARG001 -- cron pas
     failing (refresh or digest) is rolled back and logged; the other brands still run, and a brand
     whose refresh raised gets no digest.
     """
-    from app.ads import digest, triage
+    from app.ads import digest, lifecycle, triage
     from app.core import settings as coresettings
 
     with connection() as conn:
-        active_brands = conn.execute(
-            "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
-        ).fetchall()
+        active_brands = lifecycle.brands(conn, lifecycle.NOT_CLOSED)
         for row in active_brands:
             org_id, brand_id = row["org_id"], row["brand_id"]
             try:
@@ -73,16 +72,14 @@ def _dispatch_runtime_beat(timestamp: int):
     """Wraps the existing every-minute `runtime.dispatch` periodic task (F27-I00 Contract J,
     rescoped by F27-I24 correction 12) -- records one `beat` runtime event per (org_id, brand_id)
     that currently has at least one non-closed `ads_campaign` (one query per minute; the same
-    `status != 'closed'` shape `triage.py` already uses), proving that brand's own slice of the
-    ads background system is alive. Prunes rows older than 48h once an hour (`timestamp` is a
+    `lifecycle.brands` selector `_dispatch_queue_refresh` uses), proving that brand's own slice of
+    the ads background system is alive. Prunes rows older than 48h once an hour (`timestamp` is a
     whole-minute epoch second from the cron scheduler, so `% 3600 == 0` fires exactly once per
     hour), then runs the unchanged `runtime.dispatch(timestamp)`."""
-    from app.ads import runtime, runtime_events
+    from app.ads import lifecycle, runtime, runtime_events
 
     with connection() as conn:
-        active_brands = conn.execute(
-            "SELECT DISTINCT org_id, brand_id FROM ads_campaign WHERE status != 'closed'",
-        ).fetchall()
+        active_brands = lifecycle.brands(conn, lifecycle.NOT_CLOSED)
         for row in active_brands:
             runtime_events.record(conn, "beat", org_id=row["org_id"], brand_id=row["brand_id"])
         if timestamp % 3600 == 0:
