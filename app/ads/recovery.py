@@ -113,21 +113,26 @@ def _pending_evidence(conn, org_id: str, brand_id: str) -> list[dict]:
     `'unknown'` (a check ran but couldn't confirm it), scoped to approved change sets, same shape
     `runtime.py::_readback` periodically re-checks (its two queries here, minus the LIMIT/ORDER):
     handoff items with a bound entity, and actions with no handoff item of their own (simple
-    settings changes verified directly)."""
+    settings changes verified directly). F49 Contract N: only items of campaigns the lifecycle
+    still monitors -- the tick never re-checks a closed campaign, or one ended past the grace
+    days, so its items would hold this step open forever."""
+    monitored = sorted(lifecycle.monitored_ids(conn, org_id, brand_id))
     handoff_rows = conn.execute(
         "SELECT h.evidence_json FROM ads_handoff_item h JOIN ads_change_set c "
         "ON c.id=h.change_set_id AND c.org_id=h.org_id AND c.brand_id=h.brand_id "
         "WHERE h.org_id=%s AND h.brand_id=%s AND c.status='approved' "
-        "AND h.entity_id IS NOT NULL AND h.status IN ('reported','unknown')",
-        (org_id, brand_id),
+        "AND h.entity_id IS NOT NULL AND h.status IN ('reported','unknown') "
+        "AND h.campaign_id = ANY(%s)",
+        (org_id, brand_id, monitored),
     ).fetchall()
     action_rows = conn.execute(
         "SELECT a.evidence_json FROM ads_action a JOIN ads_change_set c "
         "ON c.id=a.change_set_id AND c.org_id=a.org_id AND c.brand_id=a.brand_id "
         "WHERE a.org_id=%s AND a.brand_id=%s AND c.status='approved' "
         "AND a.verification_state IN ('reported','unknown') "
+        "AND a.campaign_id = ANY(%s) "
         "AND NOT EXISTS (SELECT 1 FROM ads_handoff_item h WHERE h.action_id=a.id)",
-        (org_id, brand_id),
+        (org_id, brand_id, monitored),
     ).fetchall()
     return [row["evidence_json"] for row in handoff_rows] + [
         row["evidence_json"] for row in action_rows

@@ -579,7 +579,7 @@ class MonitoredOnlyTest(unittest.TestCase):
         return patch.object(runtime.lifecycle, "brands",
                             return_value=[{"org_id": self.org, "brand_id": self.brand}])
 
-    def test_dispatch_enqueues_only_monitored_campaigns(self):
+    def _dispatch(self):
         empty = dict(reviews_recovered=0, reviews_unknown=0, reviews_failed=0,
                      reviews_enqueued=0, has_more=False)
         with (
@@ -592,9 +592,27 @@ class MonitoredOnlyTest(unittest.TestCase):
             patch.object(runtime.background, "enqueue", return_value=1) as enqueue,
         ):
             runtime.dispatch(int(db.now_utc().timestamp()))
-        self.assertEqual(
-            {c.kwargs["campaign_id"] for c in enqueue.call_args_list}, {self.live, self.in_grace}
-        )
+        return {c.kwargs["campaign_id"] for c in enqueue.call_args_list}
+
+    def test_dispatch_enqueues_only_monitored_campaigns(self):
+        self.assertEqual(self._dispatch(), {self.live, self.in_grace})
+
+    def test_dispatch_sweeps_alerts_of_campaigns_that_left_the_monitored_set_once_a_day(self):
+        # A campaign past the grace days is never ticked again: the dispatcher resolves its open
+        # runtime alerts (old dated keys too) once a day; a monitored campaign's stay open.
+        left = [
+            f"ads-runtime:{self.past_grace}:source_incomplete:{self.today}",
+            f"ads-runtime:{self.past_grace}:{self.today}:budget_unknown",
+        ]
+        kept = f"ads-runtime:{self.live}:budget_unknown:{self.today}"
+        self._raise(*left, kept)
+        with patch.object(runtime, "_last_sweep_day", None):
+            self._dispatch()
+            self.assertEqual(self._open_keys(), {kept})
+            late = f"ads-runtime:{self.past_grace}:source_incomplete:late"
+            self._raise(late)
+            self._dispatch()  # the same day: no second sweep
+            self.assertIn(late, self._open_keys())
 
     def test_compatibility_handler_enqueues_only_monitored_campaigns(self):
         from app.ads import jobs
@@ -659,13 +677,63 @@ class MonitoredOnlyTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn(self.past_grace, self._task_campaigns(response.json()["job"]))
 
-    def test_two_ticks_on_the_same_alert_leave_one_open_row_without_a_date(self):
+    def _episode_key(self, code, since=None):
+        return f"ads-runtime:{self.live}:{code}:{since or self.today}"
+
+    def _tick(self, *, budget_known=False, today=None):
+        """One `_health` of the live campaign, with the month budget known or not (the
+        `budget_unknown` alert) and, optionally, another org day."""
+        budget = {
+            "month": self.today.strftime("%Y-%m"), "currency": "TWD", "amount": 1000.0,
+            "known_spend": 0.0, "available": 1000.0 if budget_known else None,
+            "uncertainties": [], "can_increase": budget_known,
+        }
+        day = today or self.today
+        with (
+            patch.object(runtime.month_budget, "view", return_value=budget),
+            patch.object(settings, "today_for_org", return_value=day),
+        ):
+            health, _ = runtime._health(self.conn, self.org, self.brand, self.live, db.now_utc())
+        return {item["code"] for item in health}
+
+    def test_two_ticks_on_the_same_alert_leave_one_open_row(self):
         for _ in range(2):
             health, _ = runtime._health(self.conn, self.org, self.brand, self.live, db.now_utc())
         codes = {item["code"] for item in health}
         self.assertIn("budget_unknown", codes)
-        self.assertEqual(
-            self._open_keys(), {f"ads-runtime:{self.live}:{code}" for code in codes}
+        self.assertEqual(self._open_keys(), {self._episode_key(code) for code in codes})
+
+    def test_a_cleared_alert_that_returns_raises_a_new_row(self):
+        self.assertIn("budget_unknown", self._tick())
+        first = self._episode_key("budget_unknown")
+        self.assertIn(first, self._open_keys())
+        # The next day it persists: the same episode, still one row.
+        tomorrow = self.today + timedelta(days=1)
+        self._tick(today=tomorrow)
+        self.assertIn(first, self._open_keys())
+        # It clears: the row resolves and the episode ends.
+        self.assertNotIn("budget_unknown", self._tick(budget_known=True, today=tomorrow))
+        self.assertNotIn(first, self._open_keys())
+        # It returns later: a new episode, a new open row.
+        later = self.today + timedelta(days=2)
+        self._tick(today=later)
+        self.assertIn(self._episode_key("budget_unknown", later), self._open_keys())
+        self.assertNotIn(first, self._open_keys())
+
+    def test_a_row_the_user_resolved_is_not_raised_again_while_the_alert_persists(self):
+        self._tick()
+        key = self._episode_key("budget_unknown")
+        row = next(
+            row for row in interrupts.list_open(
+                self.conn, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
+                archive_stale=False,
+            ) if row["dedupe_key"] == key
+        )
+        interrupts.resolve(self.conn, row["id"], actor="test", org_id=self.org)
+        self._tick(today=self.today + timedelta(days=1))
+        self.assertNotIn(key, self._open_keys())
+        self.assertFalse(
+            [k for k in self._open_keys() if k.startswith(f"ads-runtime:{self.live}:budget")]
         )
 
     def test_a_cleared_alert_and_old_dated_keys_resolve_on_the_next_tick(self):
@@ -684,5 +752,5 @@ class MonitoredOnlyTest(unittest.TestCase):
         self.assertIn(other, open_keys)  # another campaign's row is not this tick's
         self.assertEqual(
             {key for key in open_keys if key.startswith(f"ads-runtime:{self.live}:")},
-            {f"ads-runtime:{self.live}:{code}" for code in codes},
+            {self._episode_key(code) for code in codes},
         )

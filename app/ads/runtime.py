@@ -29,12 +29,7 @@ def _due(value, now, seconds):
 
 
 def _save(conn, org, brand, campaign, patch):
-    conn.execute(
-        "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{runtime}',"
-        "COALESCE(context_json->'runtime','{}'::jsonb) || %s::jsonb) "
-        "WHERE org_id=%s AND brand_id=%s AND id=%s",
-        (db.jsonb(patch), org, brand, campaign),
-    )
+    _patch_runtime(conn, org, brand, campaign, patch)
     conn.commit()
 
 
@@ -222,30 +217,53 @@ def _readback(conn, org, brand, campaign):
     return len(items) + len(actions)
 
 
-def _alert_key(campaign, code):
-    return f"{_alert_prefix(campaign)}{code}"
+def _alert_key(campaign, code, since):
+    """One row per episode of an alert: `since` is the day this run of the condition was first
+    seen. While it persists the key stays the same (one open row, and a row the user resolved is
+    not raised again); once it clears and later returns, the new episode raises a new row (the
+    interrupt dedupe index spans every status, so a reused key could never come back)."""
+    return f"{_alert_prefix(campaign)}{code}:{since}"
 
 
 def _alert_prefix(campaign):
     return f"ads-runtime:{campaign}:"
 
 
+def _episodes(saved, codes, today):
+    """`{code: since}` for the codes raised now: a code already running keeps its day, a new one
+    starts today; a code no longer raised is dropped (its episode ended)."""
+    since = saved if isinstance(saved, dict) else {}
+    return {code: since.get(code) or today.isoformat() for code in codes}
+
+
+def _patch_runtime(conn, org, brand, campaign, patch):
+    conn.execute(
+        "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{runtime}',"
+        "COALESCE(context_json->'runtime','{}'::jsonb) || %s::jsonb) "
+        "WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (db.jsonb(patch), org, brand, campaign),
+    )
+
+
 def resolve_alerts(conn, org, brand, campaign, *, keep=()):
     """Resolve (`interrupts.resolve`, actor `system`) every open `ads_runtime_attention` row of
     this campaign whose key is not in `keep` -- the old dated keys (`ads-runtime:{c}:{day}:{code}`)
-    included, by prefix. Called by the tick after raising (`keep` = what it raised), by a run that
-    finds the campaign no longer monitored, and by `closeout.close` (`keep=()`). Each resolve
-    commits (the public API's rule)."""
+    included, by prefix. Called by the tick after raising (`keep` = what it raised), and with
+    `keep=()` by a run that finds the campaign no longer monitored, the dispatcher's daily sweep
+    and `closeout.close` -- which also end every episode, so a campaign monitored again starts
+    fresh. Commits (each resolve does, the public API's rule)."""
     prefix, keep = _alert_prefix(campaign), set(keep)
+    if not keep:
+        _patch_runtime(conn, org, brand, campaign, {"alert_since": {}})
     for row in interrupts.list_open(conn, brand_id=brand, category=ALERT_CATEGORY,
                                     archive_stale=False):
         if row["dedupe_key"].startswith(prefix) and row["dedupe_key"] not in keep:
             interrupts.resolve(conn, row["id"], actor="system", org_id=org)
-
+    conn.commit()
 
 
 def _health(conn, org, brand, campaign, now):
-    changes.campaign(conn, org, brand, campaign)  # an unknown campaign raises
+    value = changes.campaign(conn, org, brand, campaign)  # an unknown campaign raises
     today = settings.today_for_org(conn, org_id=org)
     budget = month_budget.view(conn, org, brand, today.strftime("%Y-%m"))
     health = []
@@ -275,9 +293,12 @@ def _health(conn, org, brand, campaign, now):
     sources = _sources(conn, org, brand, campaign)
     if any(s["error"] or s["status"] == "unknown" for s in sources):
         add("source_incomplete", "來源資料未完整讀回；保留舊紀錄，請檢視連線與缺漏。", "unknown")
-    # F49 Contract N: one row per (campaign, code), no date -- an alert that persists stays one
-    # row; one whose condition cleared is resolved below by the same tick.
-    raised = [_alert_key(campaign, alert["code"]) for alert in health]
+    # F49 Contract N: one row per (campaign, code, episode) -- an alert that persists stays one
+    # row; one whose condition cleared is resolved below by the same tick and its episode ends.
+    saved = ((value.get("context_json") or {}).get("runtime") or {}).get("alert_since")
+    episodes = _episodes(saved, [alert["code"] for alert in health], today)
+    _patch_runtime(conn, org, brand, campaign, {"alert_since": episodes})
+    raised = [_alert_key(campaign, code, since) for code, since in episodes.items()]
     for key in raised:
         interrupts.enqueue(
             conn, org_id=org, brand_id=brand, category=ALERT_CATEGORY, dedupe_key=key,
@@ -389,6 +410,32 @@ def _sync_brand_accounts(conn, now):
     return count
 
 
+_last_sweep_day = None
+
+
+def _sweep_unmonitored_alerts(conn, now, by_brand):
+    """Once a day (per worker process): a campaign that left the monitored set without a run
+    noticing (past the grace days; closed ones resolve at closeout) is never ticked again, so its
+    open runtime alerts are resolved here. `by_brand` = `{(org, brand): monitored ids}`. Returns
+    how many campaigns were swept."""
+    global _last_sweep_day
+    if _last_sweep_day == now.date():
+        return 0
+    _last_sweep_day = now.date()
+    swept = 0
+    for (org, brand), monitored in by_brand.items():
+        stale = set()
+        for row in interrupts.list_open(conn, brand_id=brand, category=ALERT_CATEGORY,
+                                        archive_stale=False):
+            parts = row["dedupe_key"].split(":")
+            if len(parts) > 2 and parts[0] == "ads-runtime" and parts[1] not in monitored:
+                stale.add(parts[1])
+        for campaign in sorted(stale):
+            resolve_alerts(conn, org, brand, campaign)
+            swept += 1
+    return swept
+
+
 def dispatch(timestamp, *, limit=100):
     from app.ads import review_jobs, review_monitor
 
@@ -401,11 +448,14 @@ def dispatch(timestamp, *, limit=100):
         # F49 Contract N: only campaigns the lifecycle still monitors (live, or ended within the
         # grace days). Filtered before the LIMIT: a closed campaign's old `last_checked_at` would
         # otherwise sort first forever and starve the live ones.
-        monitored = sorted(
-            campaign_id
+        by_brand = {
+            (brand["org_id"], brand["brand_id"]): lifecycle.monitored_ids(
+                conn, brand["org_id"], brand["brand_id"]
+            )
             for brand in lifecycle.brands(conn, lifecycle.NOT_CLOSED)
-            for campaign_id in lifecycle.monitored_ids(conn, brand["org_id"], brand["brand_id"])
-        )
+        }
+        monitored = sorted(set().union(*by_brand.values()))
+        _sweep_unmonitored_alerts(conn, now, by_brand)
         rows = conn.execute(
             "SELECT c.id,c.org_id,c.brand_id,c.context_json FROM ads_campaign c WHERE "
             "c.id = ANY(%s) AND ("
