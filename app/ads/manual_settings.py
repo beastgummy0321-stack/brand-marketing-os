@@ -9,53 +9,87 @@ from app.core.db import jsonb
 # `app/ads/launch_settings.py` now. The rest stay free text per ad set, folded under 進階設定
 # (F29 Unresolved 5): the landing URL and a retarget group's audience ID keep their required rule,
 # the others are optional.
+#
+# F49 Contract B (decision 5): `readable` says whether any platform reader can see the value. A
+# field declared `readable: False` is never asked of the user after launch: approving the launch
+# is its one confirmation (`handoff_check._settings` files it under `confirmed_at_approval`).
+# `readable: True` marks a value the Meta read does carry -- the retarget audience ID inside the ad
+# set's `targeting`, the landing URL inside the ad creative's `object_story_spec` link -- so it is
+# not declared, even though no comparison reads it yet (it stays a per-field eye confirm).
 FIELDS = [
-    {"key": "audience_source", "label": "受眾來源與納入條件", "section": "受眾", "required": False},
+    {
+        "key": "audience_source",
+        "label": "受眾來源與納入條件",
+        "section": "受眾",
+        "required": False,
+        "readable": False,
+    },
     {
         "key": "audience_window",
         "label": "回溯期間（新客填不適用）",
         "section": "受眾",
         "required": False,
+        "readable": False,
     },
     {
         "key": "audience_exclusions",
         "label": "排除條件（沒有請填無）",
         "section": "受眾",
         "required": False,
+        "readable": False,
     },
     {
         "key": "audience_id",
         "label": "平台受眾 ID（再行銷必填）",
         "section": "受眾",
         "required": False,
+        "readable": True,
     },
-    {"key": "attribution", "label": "歸因期間", "section": "追蹤", "required": False},
-    {"key": "landing_url", "label": "落地頁網址", "section": "追蹤", "required": True},
+    {
+        "key": "attribution",
+        "label": "歸因期間",
+        "section": "追蹤",
+        "required": False,
+        "readable": False,
+    },
+    {
+        "key": "landing_url",
+        "label": "落地頁網址",
+        "section": "追蹤",
+        "required": True,
+        "readable": True,
+    },
     {
         "key": "campaign_platform_id",
         "label": "平台活動 ID（手動紀錄）",
         "section": "上架紀錄",
         "required": False,
+        "readable": False,
     },
     {
         "key": "group_platform_id",
         "label": "平台投放組 ID（手動紀錄）",
         "section": "上架紀錄",
         "required": False,
+        "readable": False,
     },
     {
         "key": "ad_platform_ids",
         "label": "廣告對應（每行：系統廣告 ID = 平台廣告 ID）",
         "section": "上架紀錄",
         "required": False,
+        "readable": False,
     },
     {
         "key": "execution_notes",
         "label": "實際執行差異與核對紀錄",
         "section": "上架紀錄",
         "required": False,
+        "readable": False,
     },
 ]
+# The keys no reader can see (decision 5).
+DECLARED_UNREADABLE = frozenset(f["key"] for f in FIELDS if not f["readable"])
 # The free-text keys that moved into launch settings. A value saved before stays in its record,
 # readable and accepted back on save, but it is neither required nor part of the launch content.
 LEGACY_KEYS = frozenset({"placements", "bidding", "optimization_event", "tracking", "utm"})

@@ -24,6 +24,9 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   id: string; target: Pick<NativeEntity, "id" | "name" | "platform" | "source_account" | "native_kind" | "native_id">;
   before: SettingValues;
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  /** F49 Contract B: the one word for `verification_state` (`change_control_data.VERIFICATION_LABELS`). Optional:
+   * absent from test literals. */
+  verification_label?: string;
   evidence_json: Record<string, unknown>; reported_at: string | null;
   first_observed_at: string | null; verified_at: string | null; stale_reason?: string | null;
   // F22-I01: read time only (`app/ads/adapters::platform_url`, keyed by `target.platform`) --
@@ -48,6 +51,10 @@ export interface ChangeSet {
   status: "draft" | "approved" | "rejected" | "deferred" | "superseded";
   reason: string | null; revisit_at: string | null; approval_id: string | null;
   created_at: string; approved_at: string | null; items: ChangeItem[];
+  /** F49 Contract B: the worst of the items' states (`change_control_data.worst_state`) and its word. Optional:
+   * absent from test literals. */
+  verification_state?: ChangeItem["verification_state"];
+  verification_label?: string;
   can_revise?: boolean;
   review_id?: string | null; recommendation_id?: string | null;
   material_task_id?: string | null; material_revision?: number | null;

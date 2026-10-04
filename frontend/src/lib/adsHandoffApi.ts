@@ -13,10 +13,16 @@ export interface HandoffEvidence {
   deviated_fields?: string[];
   message?: string;
   delivery_confirmed?: boolean;
+  /** F49 Contract B: why a read could not prove the item (`app/ads/handoff_check.py::READBACK_REASONS`). */
+  reason_code?: string;
+  /** F49 Contract B (decision 5): the declared-unreadable fields the approval confirmed. */
+  confirmed_at_approval?: { key: string; label: string }[];
 }
 export interface HandoffItem {
   id: string; name: string; planned_kind: string; planned_id: string;
   status: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  /** F49 Contract B: the one word for `status` (`change_control_data.VERIFICATION_LABELS`). Optional: absent from test literals. */
+  status_label?: string;
   change_set_id: string; parent_item_id: string | null; expected_parent_name: string | null;
   placement_id: string | null; placement_revision: number | null;
   entity_id: string | null; platform: string | null; source_account: string | null;
@@ -47,6 +53,11 @@ export interface HandoffWorkspace {
   /** F29 Contract I: the approved launch settings against the platform read; null before any ad set or ad was read
    * back, or for a launch approved before launch settings existed. */
   settings_readback: SettingsReadback | null;
+  /** F49 Contract D: every platform ad of the campaign → its ad set (`destinations[].id`), whatever the campaign's
+   * origin. Optional: absent from test literals. */
+  destination_by_ad?: Record<string, string>;
+  /** F49 Contract D: why there is no destination to offer (null when `destinations` has some). */
+  destinations_note?: string | null;
 }
 export interface LaunchDecision { change_set_id: string; content_hash: string }
 export interface HandoffIdentity {

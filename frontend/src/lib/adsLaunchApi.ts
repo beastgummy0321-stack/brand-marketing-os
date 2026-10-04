@@ -53,7 +53,8 @@ export async function fetchChannels(brandId: string): Promise<Channel[]> {
 
 
 export interface ManualHandoff {
-  fields: { key: string; label: string; section: string; required: boolean }[];
+  /** `readable` (F49 decision 5): false when no platform reader can see the value -- approving the launch confirms it. */
+  fields: { key: string; label: string; section: string; required: boolean; readable?: boolean }[];
   groups: { id: string; name: string; values: Record<string, string>; missing: string[];
     status: string; saved_at: string | null; saved_by: string | null;
     ads: { id: string; name: string }[] }[];
@@ -100,6 +101,8 @@ export interface LaunchMismatch {
 }
 /** A required field the platform read cannot see (e.g. the landing URL), confirmed by eye. */
 export interface LaunchUnreadable { key: string; label: string; confirmed: boolean }
+/** F49 Contract B (decision 5): a field no reader can see, declared so -- approving the launch was its confirmation. */
+export interface ApprovalConfirm { key: string; label: string }
 
 export interface LaunchItem {
   /** The handoff item id once approved; the planned id on the `list` step. */
@@ -109,10 +112,16 @@ export interface LaunchItem {
   parent_name: string | null;
   fields: LaunchField[];
   state: LaunchItemState;
+  /** F49 Contract B: the one word for `state` (`app/ads/launch_view.py::STATE_LABELS`). Optional: absent from test literals. */
+  state_label?: string;
   mismatches: LaunchMismatch[];
   unreadable: LaunchUnreadable[];
+  /** F49 Contract B: the declared-unreadable fields of this item, confirmed by the approval (never asked again). */
+  confirmed_at_approval?: ApprovalConfirm[];
   /** Why a readback left the item `built` (not found, ambiguous name) or `unknown`. */
   reason: string | null;
+  /** F49 Contract B: the code of `reason` (`app/ads/handoff_check.py::READBACK_REASONS`); null without one. */
+  reason_code?: string | null;
   /** F47-I06: when that reason was read (`app/ads/launch_view.py::_reason_at`); null without a reason. */
   reason_at: string | null;
 }
@@ -144,6 +153,8 @@ export interface LaunchView {
   settings_readback: SettingsReadback | null;
   /** Null on approved steps; absent from an older backend (and from test literals). Either way: no card, no blocker. */
   month_budget?: LaunchMonthBudget | null;
+  /** F49 Contract B (decision 5): what approving this launch confirms -- printed on the approval screen before 核准. */
+  approval_confirms?: ApprovalConfirm[];
 }
 
 const launchPath = (brandId: string, campaignId: string) =>

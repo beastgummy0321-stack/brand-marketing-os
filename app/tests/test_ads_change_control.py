@@ -399,6 +399,56 @@ class ChangeControlTest(unittest.TestCase):
         )
         self.assertEqual(self._readback(approved)["items"][0]["verification_state"], "confirmed")
 
+    def test_a_failed_readback_names_why_and_a_code_bug_propagates(self):
+        """F49 Contract B: the evidence carries the refusal's reason code and the sentence for it
+        (never the provider's own text); an AttributeError is a bug, not a failed read."""
+        from app.ads import handoff_check
+        from app.ads.adapters.external import SourceReadError
+
+        approved = self.approve(self.create())
+
+        def evidence(**kwargs):
+            return self._readback(approved, **kwargs)["items"][0]["evidence_json"]
+
+        failed = evidence(fail=True)
+        self.assertEqual(failed["reason_code"], "unverifiable")
+        self.assertNotIn("private", failed["message"])
+        self.assertEqual(evidence(wrong_account=True)["reason_code"], "chain_mismatch")
+
+        def read_with(error):
+            class Reader:
+                def verify_native(self, *args, **kwargs):
+                    raise error
+
+            with patch.object(external_sync, "account_reader", return_value=(Reader(), {})):
+                return verification.check(
+                    self.conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "test",
+                )
+
+        denied = read_with(SourceReadError("private detail", "permission_denied"))
+        item = denied["items"][0]
+        self.assertEqual(item["verification_state"], "unknown")
+        self.assertEqual(item["evidence_json"]["reason_code"], "permission_denied")
+        self.assertEqual(
+            item["evidence_json"]["message"], handoff_check.READBACK_REASONS["permission_denied"]
+        )
+        with self.assertRaises(AttributeError):
+            read_with(AttributeError("a bug"))
+
+    def test_items_and_the_set_carry_one_verification_label(self):
+        approved = self.approve(self.create())
+        self.assertEqual(approved["items"][0]["verification_state"], "pending")
+        self.assertEqual(
+            approved["items"][0]["verification_label"],
+            data.VERIFICATION_LABELS["pending"],
+        )
+        self.assertEqual(approved["verification_state"], "pending")
+        checked = self._readback(approved, body="外部版本")
+        self.assertEqual(checked["items"][0]["verification_label"], "與核准內容不同")
+        self.assertEqual(checked["verification_state"], "deviated")
+        self.assertEqual(checked["verification_label"], "與核准內容不同")
+
     def test_same_target_pending_action_cannot_be_approved_twice(self):
         self.approve(self.create())
         with self.assertRaisesRegex(ValueError, "已有相同操作"):

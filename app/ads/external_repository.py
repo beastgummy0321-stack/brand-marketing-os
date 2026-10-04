@@ -17,6 +17,10 @@ from app.core.db import jsonb, new_id, now_utc
 MONTHLY_BUDGET_ATTRIBUTION_KEY = "account_monthly_spend"
 
 
+# Entity columns that record a read, not the object read (F49 Contract B: never a change).
+READ_BOOKKEEPING = frozenset({"last_success_at", "last_attempt_at", "sync_status", "sync_error"})
+
+
 def is_monthly_budget_row(attribution_key: str | None) -> bool:
     return attribution_key == MONTHLY_BUDGET_ATTRIBUTION_KEY
 
@@ -85,7 +89,25 @@ def upsert_entity(conn, org_id, brand_id, campaign_id, entity):
         for key, value in data.items()
     ]
     set_clause = ",".join(key + "=EXCLUDED." + key for key in columns if key in changed)
-    set_clause += ",updated_at=now()"
+    # F49 Contract B: `updated_at` is the source version a readback compares
+    # (`handoff_check._source_versions`, `handoff_reconsider`) -- it moves only when a content
+    # column actually changed, so a periodic re-read of the same object never races a check.
+    # The read bookkeeping (`last_*_at`, `sync_*`, the creative's own `observed_at`) is written but
+    # is not a change.
+    content = [
+        f"(ads_external_entity.{key} - 'observed_at') IS DISTINCT FROM "
+        f"(EXCLUDED.{key} - 'observed_at')"
+        if key == "creative"
+        else f"ads_external_entity.{key} IS DISTINCT FROM EXCLUDED.{key}"
+        for key in columns
+        if key in changed and key not in READ_BOOKKEEPING
+    ]
+    set_clause += (
+        ",updated_at=CASE WHEN " + " OR ".join(content) + " THEN now() "
+        "ELSE ads_external_entity.updated_at END"
+        if content
+        else ",updated_at=ads_external_entity.updated_at"
+    )
     if status_changed:
         set_clause += ",status_changed_at=now()"
     row = conn.execute(

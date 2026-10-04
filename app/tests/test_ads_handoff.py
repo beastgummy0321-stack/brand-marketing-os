@@ -289,7 +289,8 @@ class HandoffTest(unittest.TestCase):
 
     def _read_back_with_unreadable_fields(self):
         """A read-back launch whose ad set cannot see 2 launch settings and whose items cannot see
-        3 fields: the group's landing URL, the ad's description and its material."""
+        2 fields: the group's landing URL and the ad's description. The ad's material is declared
+        unreadable (F49 decision 5): confirmed at approval, never asked again."""
         _, nodes = self.launch()
         frozen = nodes["group"]["expected_json"]["launch_settings"]
         audience = frozen["audience"]
@@ -343,14 +344,17 @@ class HandoffTest(unittest.TestCase):
             {
                 ("計畫投放組", "manual_settings.landing_url"): False,
                 ("原廣告", "copy.description"): False,
-                ("原廣告", "material"): False,
             },
+        )
+        ad_view = next(i for i in before["items"] if i["name"] == "原廣告")
+        self.assertEqual(
+            ad_view["confirmed_at_approval"], [{"key": "material", "label": "圖片或影片版本"}]
         )
 
         first = client.post(base + "/handoff/launch/confirm-all")
         self.assertEqual(first.status_code, 200, first.text)
         result = first.json()
-        self.assertEqual(result["confirmed_items"], 3)
+        self.assertEqual(result["confirmed_items"], 2)
         self.assertEqual(result["confirmed_settings"], 2)
         view = result["view"]
         self.assertEqual(set(view), set(before), "the same payload GET …/launch returns")
@@ -362,8 +366,9 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual({i["state"] for i in view["items"]}, {"verified"})
         # A readable field is untouched: only the unreadable keys are recorded as confirmed.
         item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
-        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description", "material"})
-        self.assertEqual(item["evidence_json"]["material_evidence"], "user_verified")
+        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description"})
+        # The material is not eye-confirmed after launch: its evidence stays what the read proved.
+        self.assertEqual(item["evidence_json"]["material_evidence"], "unknown")
         item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, group["id"])
         self.assertEqual(set(item["evidence_json"]["confirmed"]), {"manual_settings.landing_url"})
         launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
@@ -461,7 +466,14 @@ class HandoffTest(unittest.TestCase):
         observed = self.check(item, "ad", "B2")
         self.assertTrue(observed["entity_exists"], observed["evidence_json"])
         self.assertEqual(observed["material_evidence"], "unknown")
-        self.assertEqual(observed["status"], "unknown")
+        # F49 decision 5: the material no read proved was confirmed at approval -- the item is
+        # confirmed on its readable fields, the material filed under `confirmed_at_approval`.
+        self.assertEqual(observed["status"], "confirmed", observed["evidence_json"])
+        self.assertEqual(
+            observed["evidence_json"]["confirmed_at_approval"],
+            [{"key": "material", "label": "圖片或影片版本"}],
+        )
+        self.assertEqual(observed["evidence_json"]["unreadable"], [])
         verified = self.check(item, "ad", "B2", user_verified=True)
         self.assertEqual(verified["status"], "confirmed", verified["evidence_json"])
         self.assertEqual(verified["material_evidence"], "user_verified")
@@ -492,6 +504,11 @@ class HandoffTest(unittest.TestCase):
         failed = self.check(nodes["campaign"], "campaign", "root")
         self.assertEqual(failed["status"], "unknown")
         self.assertIsNone(failed["entity_id"])
+        # F49 Contract B: the evidence names why -- the object belongs to another brand.
+        self.assertEqual(failed["evidence_json"]["reason_code"], "owned_elsewhere")
+        self.assertEqual(
+            failed["evidence_json"]["message"], handoff_check.READBACK_REASONS["owned_elsewhere"]
+        )
         self.assertIsNone(
             campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)["external_id"]
         )
@@ -1251,6 +1268,186 @@ class HandoffTest(unittest.TestCase):
         self.conn.commit()
         after = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(change_control_data.digest(before), change_control_data.digest(after))
+
+    # -- F49 Contract B: reason codes, one aggregate, declared fields ----------------------------
+
+    def _refused(self, item, kind, native_id, **extra):
+        with self.assertRaises(handoff_check.Refused) as caught:
+            self.check(item, kind, native_id, **extra)
+        self.assertEqual(str(caught.exception), handoff_check.reason_text(caught.exception.code))
+        return caught.exception.code
+
+    def _bind(self, item_id, entity_id):
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET entity_id=%s WHERE id=%s", (entity_id, item_id)
+        )
+        self.conn.commit()
+
+    def test_each_refusal_before_the_read_carries_its_own_code(self):
+        _, nodes = self.launch()
+        self.assertEqual(self._refused(nodes["group"], "adset", "group"), "parent_unread")
+        self.check(nodes["campaign"], "campaign", "root")
+        self.assertEqual(
+            self._refused(nodes["group"], "adset", "group", source_account="another"),
+            "account_mismatch",
+        )
+        self.assertEqual(self._refused(nodes["campaign"], "campaign", "root-2"), "identity_taken")
+        self.check(nodes["group"], "adset", "group")
+        self.assertEqual(self._refused(nodes["ad"], "adset", "group"), "wrong_level")
+        self.conn.execute(
+            "UPDATE ads_change_set SET status='deferred' WHERE id=%s",
+            (nodes["ad"]["change_set_id"],),
+        )
+        self.conn.commit()
+        self.assertEqual(self._refused(nodes["ad"], "ad", "B2"), "not_approved")
+
+    def test_new_ad_refusals_carry_their_codes(self):
+        _, item = self.approve(self.new_ad())
+        self.assertEqual(self._refused(item, "ad", "B"), "preexisting_ad")
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET expected_json=expected_json || %s::jsonb WHERE id=%s",
+            (db.jsonb({"source_entity_id": self.existing_ad_id}), item["id"]),
+        )
+        self.conn.commit()
+        self.assertEqual(self._refused(item, "ad", "B"), "original_as_new")
+
+    def test_each_refusal_inside_the_read_is_stored_with_its_code(self):
+        _, nodes = self.launch()
+        # The chain the platform returns does not end at the object chosen as the root.
+        chain = self.check(nodes["campaign"], "adset", "group")
+        self.assertEqual(chain["status"], "unknown")
+        self.assertEqual(chain["evidence_json"]["reason_code"], "chain_mismatch")
+        root = self.check(nodes["campaign"], "campaign", "root")
+        group = self.check(nodes["group"], "adset", "group")
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        # Another item already answers for this platform ad.
+        self._bind(nodes["ad"]["id"], None)
+        self._bind(nodes["campaign"]["id"], ad["entity_id"])
+        taken = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(taken["evidence_json"]["reason_code"], "item_taken")
+        self.assertEqual(
+            taken["evidence_json"]["message"], handoff_check.READBACK_REASONS["item_taken"]
+        )
+        # The ad's platform parent is not the object its planned parent was read back as.
+        self._bind(nodes["campaign"]["id"], root["entity_id"])
+        self._bind(nodes["group"]["id"], ad["entity_id"])
+        moved = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(moved["evidence_json"]["reason_code"], "parent_mismatch")
+        self._bind(nodes["group"]["id"], group["entity_id"])
+        # A read that succeeds drops the old reason.
+        again = self.check(nodes["ad"], "ad", "B2")
+        self.assertNotIn("reason_code", again["evidence_json"])
+
+    def test_a_code_bug_in_the_readback_propagates(self):
+        _, nodes = self.launch()
+        with (
+            patch.object(handoff_check, "_settings", side_effect=AttributeError("a bug")),
+            self.assertRaises(AttributeError),
+        ):
+            self.check(nodes["campaign"], "campaign", "root")
+
+    def test_one_deviated_item_makes_the_action_deviated(self):
+        result, nodes = self.launch()
+        self.check(nodes["campaign"], "campaign", "root")
+        self.native_group["budget_amount"] = 999
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "deviated", group["evidence_json"])
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        action = change_control_data.get(
+            self.conn, self.org, self.brand, self.campaign, result["change_set_id"]
+        )["items"][0]
+        self.assertEqual(action["verification_state"], "deviated")
+        self.assertEqual(action["verification_label"], "與核准內容不同")
+        items = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)["items"]
+        self.assertEqual(
+            {i["status"]: i["status_label"] for i in items},
+            {
+                "confirmed": change_control_data.VERIFICATION_LABELS["confirmed"],
+                "deviated": change_control_data.VERIFICATION_LABELS["deviated"],
+            },
+        )
+
+    def test_a_declared_manual_field_is_confirmed_at_approval_not_asked_again(self):
+        """Decision 5: a launch whose readable fields all match and whose manual field no reader
+        can see is declared ends confirmed without a click, the label under
+        `confirmed_at_approval` (the landing URL stands in for a declared key here)."""
+        _, nodes = self.launch()
+        self.check(nodes["campaign"], "campaign", "root")
+        with patch.object(
+            handoff_check.manual_settings, "DECLARED_UNREADABLE", frozenset({"landing_url"})
+        ):
+            group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["unreadable"], [])
+        self.assertEqual(
+            group["evidence_json"]["confirmed_at_approval"],
+            [{"key": "manual_settings.landing_url", "label": "落地頁網址"}],
+        )
+        # Not declared (today): the landing URL is still the user's eye check.
+        undeclared = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(undeclared["status"], "unknown")
+        self.assertEqual(
+            [u["key"] for u in undeclared["evidence_json"]["unreadable"]],
+            ["manual_settings.landing_url"],
+        )
+
+    def test_identical_upserts_leave_updated_at_alone(self):
+        external_repository.upsert_entity(self.conn, self.org, self.brand, self.campaign, self.root)
+        first = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_group
+        )
+        self.conn.commit()
+        # A re-read of the same object: only the read bookkeeping moves.
+        again = dict(self.native_group, last_success_at=db.now_utc(), last_attempt_at=db.now_utc())
+        second = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, again
+        )
+        self.conn.commit()
+        self.assertEqual(second["updated_at"], first["updated_at"])
+        self.assertEqual(second["status_changed_at"], first["status_changed_at"])
+        self.assertNotEqual(second["last_success_at"], first["last_success_at"])
+        # A creative re-read differs only in its own read time.
+        ad = dict(self.native_ad, creative={**self.native_ad["creative"], "observed_at": "a"})
+        upsert = external_repository.upsert_entity
+        before = upsert(self.conn, self.org, self.brand, self.campaign, ad)
+        self.conn.commit()
+        ad["creative"] = {**ad["creative"], "observed_at": "b"}
+        after = upsert(self.conn, self.org, self.brand, self.campaign, ad)
+        self.conn.commit()
+        self.assertEqual(after["updated_at"], before["updated_at"])
+        # A real change moves it (and an off／not-off change moves status_changed_at too).
+        changed = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            dict(self.native_group, native_status="PAUSED"),
+        )
+        self.conn.commit()
+        self.assertGreater(changed["updated_at"], first["updated_at"])
+        self.assertIsNotNone(changed["status_changed_at"])
+
+    def test_destination_by_ad_names_the_ad_set_of_a_launched_ad(self):
+        _, nodes = self.launch()
+        root = self.check(nodes["campaign"], "campaign", "root")
+        group = self.check(nodes["group"], "adset", "group")
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertTrue(root["entity_id"])
+        workspace = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["destination_by_ad"], {ad["entity_id"]: group["entity_id"]})
+        self.assertIsNone(workspace["destinations_note"])
+
+    def test_destinations_note_on_an_internal_draft(self):
+        workspace = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["destinations"], [])
+        self.assertEqual(workspace["destination_by_ad"], {})
+        self.assertEqual(workspace["destinations_note"], handoff_data.DESTINATIONS_NOTE_DRAFT)
+        # An imported campaign whose structure was not read says so.
+        imported = external_repository.create_imported_campaign(
+            self.conn, self.org, self.brand, name="匯入的活動"
+        )["id"]
+        self.conn.commit()
+        note = handoff_data.workspace(self.conn, self.org, self.brand, imported)
+        self.assertEqual(note["destinations_note"], handoff_data.DESTINATIONS_NOTE_UNREAD)
 
     def test_an_ad_without_ready_material_is_deferred_from_the_batch(self):
         # F30 Unresolved 1: no workbench output or copy stands in for the material any more.

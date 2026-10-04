@@ -1,6 +1,6 @@
 """Read back one approved action. A matching setting is not delivery or causality."""
 
-from app.ads import asset_binding, change_control, external_sync
+from app.ads import asset_binding, change_control, external_sync, handoff_check
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as data
 from app.ads import external_repository as external
@@ -102,7 +102,9 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
             root_id=root["native_id"],
             original={},
         )
-        asset_binding._validate_chain(proof, leaf, root)
+        handoff_check._coded(
+            "chain_mismatch", asset_binding._validate_chain, proof, leaf, root
+        )
         nodes = [proof["entity"], *proof["parents"]]
         validated = [
             ExternalEntity.model_validate(
@@ -177,9 +179,16 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
             source_account=leaf["source_account"],
         )
         snapshot_proof = validated
-    except (ValueError, AttributeError):
+    except ValueError as exc:
+        # F49 Contract B: a refusal only -- a code bug propagates. The evidence names why.
         conn.rollback()
-        evidence["message"] = "目前無法核對帳戶、物件或設定。請確認連線後重試；未標為完成。"
+        code, text = handoff_check.refusal(exc)
+        evidence["reason_code"] = code
+        evidence["message"] = (
+            "目前無法核對帳戶、物件或設定。請確認連線後重試；未標為完成。"
+            if code == "unverifiable"
+            else text
+        )
     try:
         data.lock(conn, org, brand)
         latest, latest_action = change_control.item(conn, org, brand, campaign, set_id, action_id)

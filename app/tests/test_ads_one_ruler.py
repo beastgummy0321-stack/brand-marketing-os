@@ -37,6 +37,11 @@ F49-I03 (Contract V, coverage): a read of a `coverage`／`ranges` key (`x["cover
 `external_repository.record_sync` fails, naming file, function and line -- unless the
 `(file, function, key)` is listed with why it is not the stored observations read range (the
 monthly task's own proof, a served block's key).
+
+F49-I06 (Contract B, readback): `except (ValueError, AttributeError)` anywhere in `app/ads` fails
+(a code bug is not a refusal); every verification state named in `app/ads` code -- and every value
+the `ads_action.verification_state`／`ads_handoff_item.status` CHECKs allow -- has its word in
+`change_control_data.VERIFICATION_LABELS`.
 """
 
 import ast
@@ -822,6 +827,146 @@ class OneCoverageReaderTest(unittest.TestCase):
             [("gap", 4, "coverage"), ("gap", 4, "ranges"), ("gap", 5, "ranges"),
              ("gap", 6, "coverage")],
         )
+
+
+# -- F49 Contract B: readback says why, and calls each state by one name --------------------------
+
+# (file relative to app/ads, why) -- a `except (ValueError, AttributeError)` still to narrow, naming
+# the issue that removes the entry. Never widen: an AttributeError is a code bug, not a refusal.
+VALUE_OR_ATTRIBUTE_PENDING = {
+    "asset_binding.py": "unassigned -- outside F49-I06's touch (reported to the lead): "
+    "`verify`'s provider read still reads a code bug as a failed read",
+}
+_STATE_SQL = re.compile(
+    r"verification_state\s*(?:=|<>|!=)\s*'(\w+)'|THEN\s+'(\w+)'"
+    r"|verification_state\s+(?:NOT\s+)?IN\s*\(([^)]*)\)",
+    re.I,
+)
+
+
+def _value_or_attribute_handlers(tree):
+    """Yield the line of every `except (ValueError, AttributeError)` (either order, any extras)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and isinstance(node.type, ast.Tuple):
+            names = {e.id for e in node.type.elts if isinstance(e, ast.Name)}
+            if {"ValueError", "AttributeError"} <= names:
+                yield node.lineno
+
+
+def _verification_state_words(tree):
+    """Yield `(lineno, word)` for every verification-state value named in code: an SQL literal
+    beside `verification_state` (`= 'x'`, `<> 'x'`, `IN ('x', …)`, and a `CASE … THEN 'x'` in the
+    same string), and a Python `"verification_state": "x"` entry."""
+    for line, value in _code_strings(tree):
+        if "verification_state" not in value:
+            continue
+        for match in _STATE_SQL.finditer(value):
+            listed = match.group(3)
+            words = re.findall(r"'(\w+)'", listed) if listed else [match.group(1) or match.group(2)]
+            yield from ((line, word) for word in words)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, val in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value == "verification_state" \
+                        and isinstance(val, ast.Constant) and isinstance(val.value, str):
+                    yield val.lineno, val.value
+
+
+def _checked_states(table_column):
+    """The values a migration's CHECK allows for `column` (`verification_state IN (…)`,
+    `status IN (…)` in the `CREATE TABLE <table>` block)."""
+    table, column = table_column
+    migrations = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+    found = set()
+    for path in migrations.glob("*_ads_*.sql"):
+        text = path.read_text(encoding="utf-8")
+        if table not in text:
+            continue
+        for match in re.finditer(column + r"\s+IN\s*\(([^)]*)\)", text):
+            start = text.rfind(";", 0, match.start())
+            if table in text[start:match.start()]:
+                found.update(re.findall(r"'(\w+)'", match.group(1)))
+    return found
+
+
+class ReadbackVocabularyTest(unittest.TestCase):
+    """F49 Contract B: a readback refusal is a `ValueError` with a reason code -- a code bug
+    (`AttributeError`) is never caught as one -- and every verification state the ads code names
+    has its one word in `change_control_data.VERIFICATION_LABELS`."""
+
+    def test_no_value_or_attribute_error_handler_in_app_ads(self):
+        offenders, seen = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for line in _value_or_attribute_handlers(tree):
+                if relative in VALUE_OR_ATTRIBUTE_PENDING:
+                    seen.add(relative)
+                    continue
+                offenders.append(f"app/ads/{relative}:{line}")
+        self.assertEqual(
+            offenders, [],
+            "`except (ValueError, AttributeError)` reads a code bug as a refusal -- catch "
+            "ValueError only (F49 B)",
+        )
+        # An allow entry whose handler is gone must go too (the list only ever shrinks).
+        self.assertEqual(set(VALUE_OR_ATTRIBUTE_PENDING), seen)
+
+    def test_every_named_verification_state_has_its_label(self):
+        from app.ads import change_control_data
+
+        labels = change_control_data.VERIFICATION_LABELS
+        missing, named = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for line, word in _verification_state_words(tree):
+                named.add(word)
+                if word not in labels:
+                    missing.append(f"app/ads/{relative}:{line}: {word}")
+        self.assertEqual(missing, [], "a verification state without a VERIFICATION_LABELS word")
+        self.assertTrue({"pending", "reported", "unknown", "confirmed", "stale"} <= named)
+        # Every value the tables allow is a word too: the action's state and the handoff item's.
+        for table_column in (("ads_action", "verification_state"), ("ads_handoff_item", "status")):
+            allowed = _checked_states(table_column)
+            self.assertTrue(allowed, table_column)
+            self.assertEqual(allowed - set(labels), set(), table_column)
+
+    def test_the_scans_see_each_planted_shape(self):
+        tree = ast.parse(
+            "def check(conn, exc):\n"
+            "    try:\n"
+            "        pass\n"
+            "    except (AttributeError, ValueError, KeyError):\n"
+            "        pass\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ValueError:\n"
+            "        pass\n"
+            "    conn.execute(\"UPDATE ads_action SET verification_state=CASE WHEN \"\n"
+            "                 \"verification_state='pending' THEN 'gone' END WHERE kind='x'\")\n"
+            "    q = \"SELECT 1 WHERE a.verification_state NOT IN ('done','stale')\"\n"
+            "    return {'verification_state': 'odd', 'status': 'other'}\n"
+        )
+        self.assertEqual(list(_value_or_attribute_handlers(tree)), [4])
+        self.assertEqual(
+            sorted(word for _, word in _verification_state_words(tree)),
+            ["done", "gone", "odd", "pending", "stale"],
+        )
+
+    def test_worst_state_is_the_one_aggregate(self):
+        from app.ads import change_control_data
+
+        worst = change_control_data.worst_state
+        self.assertEqual(worst(["confirmed", "confirmed"]), "confirmed")
+        self.assertEqual(worst(["confirmed", "deviated", "unknown"]), "deviated")
+        self.assertEqual(worst(["confirmed", "stale", "unknown"]), "stale")
+        self.assertEqual(worst(["confirmed", "reported", "unknown"]), "unknown")
+        self.assertEqual(worst(["pending", "reported", "confirmed"]), "reported")
+        self.assertEqual(worst(["confirmed", "pending"]), "pending")
+        self.assertEqual(worst([]), "pending")
+        labels = change_control_data.VERIFICATION_LABELS
+        self.assertNotEqual(labels["unknown"], labels["reported"])
 
 
 class RulesEndpointTest(unittest.TestCase):

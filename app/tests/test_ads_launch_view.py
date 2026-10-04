@@ -262,6 +262,14 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(group["audience_hint"], "新客・排除：已購買者")
         self.assertEqual(ad["parent_name"], "新客")
         self.assertIsNone(view["settings_readback"])
+        # F49 Contract B: the approval screen prints what approving confirms (decision 5), and
+        # every item carries the word for its state.
+        self.assertEqual(
+            view["approval_confirms"], [{"key": "material", "label": "圖片或影片版本"}]
+        )
+        self.assertEqual(
+            {i["state_label"] for i in view["items"]}, {launch_view.STATE_LABELS["todo"]}
+        )
 
     # -- F36-I07 Contract V: the plan's audience as a read-only hint on the group row ------------
 
@@ -571,10 +579,19 @@ class LaunchViewTest(unittest.TestCase):
             group["unreadable"],
             [{"key": "manual_settings.landing_url", "label": "落地頁網址", "confirmed": False}],
         )
-        self.assertEqual(ad["state"], "unknown")
+        # F49 decision 5: the material is declared unreadable -- confirmed at approval, so the ad
+        # whose readable fields all match is verified without a click.
+        self.assertEqual(ad["state"], "verified")
+        self.assertEqual(ad["state_label"], launch_view.STATE_LABELS["verified"])
+        self.assertEqual(ad["unreadable"], [])
         self.assertEqual(
-            ad["unreadable"], [{"key": "material", "label": "圖片或影片版本", "confirmed": False}]
+            ad["confirmed_at_approval"], [{"key": "material", "label": "圖片或影片版本"}]
         )
+        self.assertEqual(
+            view["approval_confirms"], [{"key": "material", "label": "圖片或影片版本"}]
+        )
+        refused = self.post(f"/items/{ad['id']}/confirm", key="material")
+        self.assertEqual(refused.status_code, 409, refused.text)
 
         # Only a field the read could not see can be confirmed.
         refused = self.post(f"/items/{group['id']}/confirm", key="budget_amount")
@@ -586,9 +603,36 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(group["unreadable"][0]["confirmed"], True)
         again = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
         self.assertEqual(again.status_code, 409, again.text)
+        self.assertEqual({i["state"] for i in confirmed.json()["items"]}, {"verified"})
+        launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
+        action = self.conn.execute(
+            "SELECT verification_state FROM ads_action WHERE change_set_id=%s", (launch["id"],)
+        ).fetchone()
+        self.assertEqual(action["verification_state"], "confirmed")
 
-        done = self.post(f"/items/{ad['id']}/confirm", key="material").json()
-        self.assertEqual({i["state"] for i in done["items"]}, {"verified"})
+    def _legacy_material_unread(self, ad_id):
+        """An item read back before F49 decision 5, whose stored evidence still lists the material
+        as unreadable (the eye confirm keeps working for it)."""
+        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad_id)
+        evidence = {
+            **item["evidence_json"],
+            "unreadable": [{"key": "material", "label": "圖片或影片版本"}],
+            "confirmed_at_approval": [],
+        }
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET status='unknown',evidence_json=%s WHERE id=%s",
+            (db.jsonb(evidence), ad_id),
+        )
+        self.conn.commit()
+
+    def test_a_legacy_unread_material_confirmed_by_eye_upgrades_the_binding(self):
+        self.approve()
+        self.report_all()
+        ad = self.items(self.readback())["禮盒主圖"]
+        self._legacy_material_unread(ad["id"])
+        done = self.post(f"/items/{ad['id']}/confirm", key="material")
+        self.assertEqual(done.status_code, 200, done.text)
+        self.assertEqual(self.items(done.json())["禮盒主圖"]["state"], "verified")
         # Confirming the material by eye upgrades the binding, as the check path does.
         item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
         self.assertEqual(item["evidence_json"]["material_evidence"], "user_verified")
@@ -597,16 +641,12 @@ class LaunchViewTest(unittest.TestCase):
             (self.brand,),
         ).fetchone()
         self.assertEqual(binding["evidence_level"], "user_verified")
-        launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
-        action = self.conn.execute(
-            "SELECT verification_state FROM ads_action WHERE change_set_id=%s", (launch["id"],)
-        ).fetchone()
-        self.assertEqual(action["verification_state"], "confirmed")
 
     def test_confirming_material_by_eye_stands_when_the_platform_recheck_fails(self):
         self.approve()
         self.report_all()
         ad = self.items(self.readback())["禮盒主圖"]
+        self._legacy_material_unread(ad["id"])
         before = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
         with patch.object(
             handoff_check.asset_binding, "verify", side_effect=ValueError("read failed")
@@ -651,16 +691,25 @@ class LaunchViewTest(unittest.TestCase):
         campaign = items["秋季預購"]
         self.assertEqual(campaign["state"], "built")
         self.assertIn("找不到", campaign["reason"])
+        # F49 Contract B: the reason carries its code, its sentence from the one table.
+        self.assertEqual(campaign["reason_code"], "not_found")
+        self.assertEqual(
+            campaign["reason"],
+            handoff_check.reason_text("not_found", name="秋季預購", kind="活動"),
+        )
+        self.assertEqual(campaign["state_label"], launch_view.STATE_LABELS["built"])
         # F47-I06: the stored reason carries when it was read (「M/D HH:MM 讀回時讀不到」).
         self.assertIsNotNone(campaign["reason_at"])
         self.assertEqual(items["新客"]["state"], "built")
         self.assertIn("上一層還沒讀回", items["新客"]["reason"])
+        self.assertEqual(items["新客"]["reason_code"], "parent_unread")
 
         self.campaigns[0]["name"] = "秋季預購"
         self.campaigns.append(self.node("C2", "campaign", "秋季預購", objective="awareness"))
         campaign = self.items(self.readback())["秋季預購"]
         self.assertEqual(campaign["state"], "built")
         self.assertIn("2 個", campaign["reason"])
+        self.assertEqual(campaign["reason_code"], "ambiguous")
 
         # An ad set named alike under another campaign is never taken for this one.
         self.campaigns.pop()
@@ -679,6 +728,7 @@ class LaunchViewTest(unittest.TestCase):
         self.assertEqual(items["秋季預購"]["state"], "verified")
         # A successful read drops the old reason and its time.
         self.assertIsNone(items["秋季預購"]["reason_at"])
+        self.assertIsNone(items["秋季預購"]["reason_code"])
         self.assertEqual(items["新客"]["state"], "unknown")
 
     def test_unreport_clears_a_report_until_the_item_is_verified(self):
