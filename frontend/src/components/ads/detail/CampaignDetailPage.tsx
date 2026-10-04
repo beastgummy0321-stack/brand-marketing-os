@@ -19,7 +19,7 @@ import { AdRowMenu, useReplaceRequests } from "./AdRowMenu";
 import {
   ClosedGroup, GradeGroups, OPEN_BY_DEFAULT, adActions, groupOf, openCleanup, recordHref, trendNote, type GroupKey,
 } from "./GradeGroups";
-import { PeriodStatusRow } from "./PeriodStatusRow";
+import { PeriodStatusRow, type SyncNote } from "./PeriodStatusRow";
 
 /** F28-I10, v10 F29-I13: campaign detail = the campaign's active ads graded against its one cap (prototype v10
  * `tabPerf()`, hash `camp/daily/perf`). Since F30-I07 it is the workspace's perf tab body (the workspace head carries
@@ -27,7 +27,8 @@ import { PeriodStatusRow } from "./PeriodStatusRow";
  * `TargetRuler` card (+ the grade legend once), the automatic A/B block, the grade groups with each row's 「⋯」 menu
  * (換掉這一則／看紀錄) and, under 不在投的, the closed ads. The cap is read-only here — 去改上限 goes to the strategy tab.
  * F40-I06 (drill-7 #7 #9 #12): the 「這期狀態列」 (`PeriodStatusRow`) sits on top when the caller hands in the
- * `CampaignDetail` of a live／ended／closed campaign, and the ruler title's 在投 N counts only the platform ads
+ * `CampaignDetail` of a campaign whose served lifecycle is past draft (F49 Contract L), and the ruler title's 在投 N
+ * counts only the platform ads
  * (the triage items) — the local ads never built and the platform ads not built here are each their own line.
  * Why numbers are missing is the campaign's one `data.status` (Contract D), never a per-section rule. Every read
  * fails on its own (`useApiRead` + `ReadFailed`): triage (ruler + groups), the brand
@@ -220,20 +221,22 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 /** The workspace perf tab body (prototype v10 `tabPerf()` under `wsHead()`): the ruler card, the A/B block, the grade
  * groups, 不在投的 and the bottom bar. The workspace head (name, chips, rail, tabs) is the caller's. `origin`: an
  * imported campaign has no A/B block (never read). */
-export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared, campaign, onCampaignChange, onSync, syncing = false, syncError = "" }: {
+export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared, campaign, onCampaignChange, onSync, syncing = false, syncError = "", syncNote = null }: {
   brandId: string; campaignId: string; origin: "internal" | "imported" | undefined;
   /** The caller's own triage read (the standalone page shares it with its header); else the body reads it. */
   triage?: ApiRead<CampaignTriage>;
   /** A same-page fold placed above the bottom bar (the workspace's 「進階：每日資料、次要指標與舊版檢討」). */
   advanced?: ReactNode;
-  /** F40-I06: the campaign itself (the workspace's read) — with it the 這期狀態列 renders on top for a
-   * live／ended／closed campaign and the ruler title names the local ads never built. */
+  /** F40-I06: the campaign itself (the workspace's read) — with it the 這期狀態列 renders on top once the served
+   * lifecycle is past draft and the ruler title names the local ads never built. */
   campaign?: CampaignDetail;
   onCampaignChange?: (campaign: CampaignDetail) => void;
   /** The workspace's platform read (the row's 重新讀取平台 and the close dialog's re-read). */
   onSync?: () => void;
   syncing?: boolean;
   syncError?: string;
+  /** F49 Contract O: the outcome of the workspace's last platform read (printed beside 重新讀取平台). */
+  syncNote?: SyncNote | null;
 }) {
   const [searchParams] = useSearchParams();
   const highlightAdParam = searchParams.get("ad");
@@ -286,13 +289,13 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
   const active = items !== null && items.length > 0 ? items : null;
   const breakEven = active?.[0].target.break_even ?? null;
   const lastSuccessAt = triage.status === "ready" ? triage.data.data?.sync.last_success_at ?? null : null;
-  const withRow = campaign && onCampaignChange && (campaign.status === "live" || campaign.status === "ended" || campaign.status === "closed");
+  const withRow = campaign && onCampaignChange && campaign.lifecycle !== undefined && campaign.lifecycle.state !== "draft";
 
   return (
     <div className="flex flex-col gap-4">
       {withRow && (
         <PeriodStatusRow brandId={brandId} campaign={campaign} lastSuccessAt={lastSuccessAt} onCampaignChange={onCampaignChange}
-          onSync={onSync} syncing={syncing} syncError={syncError} />
+          onSync={onSync} syncing={syncing} syncError={syncError} syncNote={syncNote} />
       )}
       {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
       {triage.status === "error" && (

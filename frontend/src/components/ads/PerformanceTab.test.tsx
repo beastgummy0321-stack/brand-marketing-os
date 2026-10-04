@@ -167,8 +167,17 @@ function ad(overrides: Partial<AdRow> = {}): AdRow {
   };
 }
 
+/** F49 Contract L: the served lifecycle for a stored status, as `app/ads/lifecycle.py` labels it (imported never closes). */
+function lifecycleOf(status: CampaignDetail["status"], imported: boolean): CampaignDetail["lifecycle"] {
+  if (status === "draft" || status === "ready") return { state: imported ? "live" : "draft", label: imported ? "投放中" : "草稿", can_close: false };
+  if (status === "closed") return { state: "closed", label: "已結案", can_close: false };
+  if (status === "ended") return { state: "ended", label: imported ? "已結束" : "已結束・待結案", can_close: !imported };
+  return { state: "live", label: "投放中", can_close: !imported };
+}
+
 function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   return {
+    lifecycle: lifecycleOf(overrides.status ?? "live", overrides.origin === "imported"),
     id: "cmp_1",
     name: "測試 Campaign",
     goal_text: "想在雙十一衝一波業績",
@@ -269,6 +278,27 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     expect(await screen.findByRole("button", { name: "立即結案" })).toBeTruthy();
     expect(screen.getByText("投放已結束，待人工結案；可以現在手動結案。")).toBeTruthy();
     expect(screen.queryByText(/現在結案等於提前結束/)).toBeNull();
+  });
+
+  it("F49 Contract L：served lifecycle 是 ended（儲存狀態還是 live）就是已結束的句子；can_close 為 false 就沒有結案卡", async () => {
+    const { unmount } = renderTab(campaign({ status: "live", lifecycle: { state: "ended", label: "已結束・待結案", can_close: true } }));
+    expect(await screen.findByText("投放已結束，待人工結案；可以現在手動結案。")).toBeTruthy();
+    unmount();
+    renderTab(campaign({ status: "live", lifecycle: { state: "live", label: "投放中", can_close: false } }));
+    expect(await screen.findByText("目前成果")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "立即結案" })).toBeNull();
+  });
+
+  it("F49 Contract O：上一次讀取平台的結果原句印在「重新讀取平台」下面", async () => {
+    render(
+      <MemoryRouter>
+        <PerformanceTab brandId="brd_1" campaign={campaign({ status: "live" })} onCampaignChange={vi.fn()} onChangeTab={vi.fn()}
+          onSync={vi.fn()} syncNote={{ state: "empty", text: "沒有讀到資料：平台在這段期間沒有回傳任何資料" }} />
+      </MemoryRouter>,
+    );
+    const note = await screen.findByRole("status");
+    expect(note.textContent).toBe("沒有讀到資料：平台在這段期間沒有回傳任何資料");
+    expect(note.getAttribute("data-state")).toBe("empty");
   });
 
   it("draft：結案卡不存在，畫面是空狀態", () => {
@@ -653,7 +683,7 @@ describe("F46 結案對話框：結果與兩個出口", () => {
 
   async function openAndConfirm(c: CampaignDetail) {
     const user = userEvent.setup();
-    const closed = { ...c, status: "closed" as const };
+    const closed = { ...c, status: "closed" as const, lifecycle: lifecycleOf("closed", false) };
     vi.mocked(closeCampaign).mockResolvedValue(closed);
     const utils = renderTab(c);
     await user.click(await screen.findByRole("button", { name: "立即結案" }));

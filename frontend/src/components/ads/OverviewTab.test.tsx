@@ -189,7 +189,7 @@ describe("OverviewTab（F03-I23）", () => {
 
 function importedView(): NonNullable<CampaignDetail["external_view"]> {
   return {
-    entities: [{ id: "native-root", platform: "meta", source_account: "account", native_kind: "campaign", native_id: "root", native_label: "活動", name: "平台活動", parent_native_id: null, native_status: "PAUSED", start_date: "2026-08-01", end_date: null, budget_amount: null, budget_type: "daily", budget_raw: { daily_budget: "30000" }, currency: "TWD", last_success_at: "2026-09-19", sync_error: null, creative: {} }],
+    entities: [{ id: "native-root", platform: "meta", source_account: "account", native_kind: "campaign", native_id: "root", native_label: "活動", name: "平台活動", parent_native_id: null, native_status: "PAUSED", delivery_label: "已暫停", start_date: "2026-08-01", end_date: null, budget_amount: null, budget_type: "daily", budget_raw: { daily_budget: "30000" }, currency: "TWD", last_success_at: "2026-09-19", sync_error: null, creative: {} }],
     observations: [], next_entity_cursor: null, next_observation_cursor: null,
     window: { start: "2026-08-01", end: "2026-09-19" }, connections: [], sync: {}, coverage: {},
   };
@@ -199,7 +199,9 @@ it("匯入活動使用原總覽但不推算預算、不捏造內部歷程", () =
   const { container } = render(<OverviewTab campaign={campaign({ origin: "imported", status: "draft", external_view: importedView(), groups: [group()], start_date: "2026-08-01", end_date: "2026-08-10" })} onChangeTab={vi.fn()} />);
   expect(screen.getByText("活動層級預算未知")).toBeTruthy();
   expect(screen.getByText("尚無已讀回成效")).toBeTruthy();
-  expect(screen.getByText("平台狀態：已暫停（PAUSED）")).toBeTruthy();
+  // F49 Contract L: the root's served delivery word, never the platform code.
+  expect(screen.getByText("平台狀態：已暫停")).toBeTruthy();
+  expect(document.body.textContent).not.toContain("PAUSED");
   expect(screen.queryByText("草稿")).toBeNull();
   expect(container.querySelectorAll(".bg-success").length).toBe(0);
   expect(screen.queryByText(/日預算.*×/)).toBeNull();
@@ -222,4 +224,16 @@ it("匯入活動：平台連線、最近成功與重新讀取平台在這個收�
   expect(screen.getByRole("alert").textContent).toBe("同步失敗：授權過期");
   await user.click(screen.getByRole("button", { name: "重新讀取平台" }));
   expect(onSync).toHaveBeenCalledTimes(1);
+});
+it("F49 Contract L: a root without a served delivery word reads 平台狀態不明", () => {
+  const view = importedView(); delete view.entities[0].delivery_label;
+  render(<OverviewTab campaign={campaign({ origin: "imported", external_view: view })} onChangeTab={vi.fn()} />);
+  expect(screen.getByText("平台狀態：平台狀態不明")).toBeTruthy();
+});
+it("F49 Contract O: the last platform read's served outcome prints under 重新讀取平台 (a failed read names why)", () => {
+  render(<OverviewTab campaign={campaign({ origin: "imported", external_view: importedView() })} onChangeTab={vi.fn()}
+    platformSync={{ onSync: vi.fn(), syncing: false, error: "", note: { state: "failed", text: "這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權" } }} />);
+  const status = screen.getByRole("status");
+  expect(status.textContent).toBe("這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權");
+  expect(status.className).toContain("text-danger");
 });

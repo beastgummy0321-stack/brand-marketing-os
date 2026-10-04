@@ -782,7 +782,7 @@ class TriageClosedAdsTest(unittest.TestCase):
                 {"state": "off", "label": "已封存", "count": 4},
                 {"state": "off", "label": "已暫停", "count": 11},
             ],
-            "paused": 11, "archived": 4, "other": 0, "total": 15,
+            "total": 15,
             "items": result["closed"]["items"], "truncated": False,
         })
         self.assertEqual(len(result["closed"]["items"]), 15)
@@ -798,7 +798,7 @@ class TriageClosedAdsTest(unittest.TestCase):
         self.assertEqual(result["items"][0]["delivery"], {"state": "running", "label": "投放中"})
         self.assertEqual(result["closed"]["groups"],
                          [{"state": "not_running", "label": "被拒登", "count": 1}])
-        self.assertEqual(result["closed"]["other"], 1)
+        self.assertEqual(result["closed"]["total"], 1)
         item = result["closed"]["items"][0]
         self.assertEqual(item["name"], "被拒的廣告")
         self.assertEqual(item["delivery"], {"state": "not_running", "label": "被拒登"})
@@ -813,7 +813,7 @@ class TriageClosedAdsTest(unittest.TestCase):
                          {"state": "unknown", "label": "平台狀態不明"})
         self.assertEqual(result["closed"]["total"], 0)
 
-    def test_other_bucket_covers_deleted_and_the_two_cascade_pauses(self):
+    def test_closed_groups_cover_deleted_and_the_two_cascade_pauses(self):
         self.make_ad("d1", native_status="DELETED")
         self.make_ad("d2", native_status="ADSET_PAUSED")
         self.make_ad("d3", native_status="CAMPAIGN_PAUSED")
@@ -825,7 +825,7 @@ class TriageClosedAdsTest(unittest.TestCase):
                 {"state": "off", "label": "所屬廣告組已暫停", "count": 1},
                 {"state": "off", "label": "所屬活動已暫停", "count": 1},
             ],
-            "paused": 0, "archived": 0, "other": 3, "total": 3,
+            "total": 3,
             "items": result["closed"]["items"], "truncated": False,
         })
 

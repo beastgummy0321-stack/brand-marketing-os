@@ -101,7 +101,7 @@ function dailyAds(cap: Cap = OWN_450): TriageItem[] {
   ];
 }
 
-const EMPTY_CLOSED: TriageClosedBlock = { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false };
+const EMPTY_CLOSED = { groups: [], total: 0, items: [], truncated: false } as unknown as TriageClosedBlock;
 
 function triage(items: TriageItem[], extra: Partial<CampaignTriage> = {}): CampaignTriage {
   return {
@@ -437,12 +437,15 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     second.unmount();
 
     vi.mocked(getTriage).mockResolvedValue(triage([], {
-      closed: { paused: 11, archived: 4, other: 0, total: 15, truncated: false, items: [{ entity_id: "c1", name: "舊版主視覺 0715", native_status: "PAUSED", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" }] },
+      closed: {
+        groups: [{ state: "off", label: "已暫停", count: 11 }, { state: "off", label: "已封存", count: 4 }], total: 15, truncated: false,
+        items: [{ entity_id: "c1", name: "舊版主視覺 0715", delivery: { state: "off", label: "已暫停" }, delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" }],
+      } as unknown as TriageClosedBlock,
     }));
     renderPage();
-    expect(await screen.findByText("暫停 11・已封存 4・不算在上面的在投數量裡")).toBeTruthy();
+    expect(await screen.findByText("已暫停 11・已封存 4・不算在上面的在投數量裡")).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
-    expect(detailsOf("已關閉的 15 則").open).toBe(false);
+    expect(detailsOf("共 15 則").open).toBe(false);
     // F45-I06: a closed row keeps its 已暫停 look — no 「暫停」 button.
     const closedRow = screen.getByTestId("closed-ad-row-c1");
     expect(within(closedRow).getByText("已暫停")).toBeTruthy();
@@ -680,9 +683,17 @@ function localAd(id: string, name: string, local_state: AdRow["local_state"]): A
     external_id: local_state === "bound" ? `ext_${id}` : null, external_name: null, external_status: null, local_state, bound_at: null,
   } as unknown as AdRow;
 }
+/** F49 Contract L: the served lifecycle for a stored status, as `app/ads/lifecycle.py` labels it (imported never closes). */
+function lifecycleOf(status: CampaignDetail["status"], imported: boolean): CampaignDetail["lifecycle"] {
+  if (status === "draft" || status === "ready") return { state: "draft", label: "草稿", can_close: false };
+  if (status === "closed") return { state: "closed", label: "已結案", can_close: false };
+  if (status === "ended") return { state: "ended", label: imported ? "已結束" : "已結束・待結案", can_close: !imported };
+  return { state: "live", label: "投放中", can_close: !imported };
+}
 /** The drill-7 period-2 shape: 4 built ads, 2 never built (缺圖). */
 function campaignDetail(o: Partial<CampaignDetail> = {}, ads?: AdRow[]): CampaignDetail {
   return {
+    lifecycle: lifecycleOf(o.status ?? "live", o.origin === "imported"),
     id: "cmp_1", name: "10 月第一期・讀書與運動", objective: "購買", origin: "internal", status: "live", cap: CAP_450,
     start_date: "2026-09-26", end_date: "2026-10-02", context_json: {}, constraints_json: {}, verdict: null, verdict_json: {},
     capabilities: { allowed: [], unavailable: {} }, external_view: null,
@@ -716,12 +727,13 @@ const LEARNED: CoordinateLearnings = {
 };
 
 type BodyProps = Partial<Parameters<typeof CampaignPerfBody>[0]>;
-function renderBody(c: CampaignDetail, extra: BodyProps = {}) {
+function renderBody(c: CampaignDetail, extra: BodyProps = {}, search = "?tab=perf") {
   const onCampaignChange = vi.fn();
   const onSync = vi.fn();
   const view = (p: BodyProps) => (
-    <MemoryRouter initialEntries={[`${WS}?tab=perf`]}>
+    <MemoryRouter initialEntries={[`${WS}${search}`]}>
       <CampaignPerfBody brandId="brd_1" campaignId="cmp_1" origin={c.origin} campaign={c} onCampaignChange={onCampaignChange} onSync={onSync} {...extra} {...p} />
+      <Where />
     </MemoryRouter>
   );
   const utils = render(view({}));
@@ -889,6 +901,49 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
     expect(screen.queryByTestId("period-status-row")).toBeNull();
     expect(getPerformance).not.toHaveBeenCalled();
+  });
+
+  it("F49 Contract L: an ended campaign (stored live, past its end date) keeps 結案這一期; the served lifecycle decides", async () => {
+    renderBody(campaignDetail({ status: "live", lifecycle: { state: "ended", label: "已結束・待結案", can_close: true } }));
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
+  });
+
+  it("F49 Contract L: 結案這一期 shows only when the served lifecycle can close", async () => {
+    renderBody(campaignDetail({ lifecycle: { state: "live", label: "投放中", can_close: false } }));
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
+    expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
+  });
+
+  it("F49 Contract Q: the closeout row's ?close=1 opens the close dialog once on load; closing it drops the param", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderBody(campaignDetail({ status: "ended" }), {}, "?tab=perf&close=1");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "確認結案" })).toBeTruthy();
+    // An ended campaign is not closing early: no early-close sentence.
+    expect(within(dialog).queryByText(/提前結案/)).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=perf`);
+  });
+
+  it("?close=1 on a campaign that cannot close (already closed) opens nothing and drops the param", async () => {
+    vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
+    renderBody(campaignDetail({ status: "closed" }), {}, "?tab=perf&close=1");
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    await vi.waitFor(() => expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=perf`));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("F49 Contract O: the last platform read's served outcome prints beside 重新讀取平台 (a partial read names its reason)", async () => {
+    const note = { state: "partial" as const, text: "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試" };
+    renderBody(campaignDetail(), { syncNote: note });
+    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    const status = within(row()).getByRole("status");
+    expect(status.textContent).toBe(note.text);
+    expect(status.getAttribute("data-state")).toBe("partial");
+    expect(status.className).toContain("text-warning");
   });
 
   it("period helpers: days count through today only; a long gap prints as a range", () => {

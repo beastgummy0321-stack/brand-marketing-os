@@ -204,10 +204,6 @@ def _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id) -> dict:
 
 
 _CLOSED_ITEMS_CAP = 50
-# The two delivery labels the legacy `paused`／`archived` counts name (`adapters.delivery` serves
-# them); every other not-judged ad counts as `other`. Goes with those keys (F49-I09).
-_PAUSED_LABEL = "已暫停"
-_ARCHIVED_LABEL = "已封存"
 
 
 def _closed_item(entity, entity_rows, cutoff, bound_ad_by_native):
@@ -232,24 +228,20 @@ def _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native):
     """The `closed` block of `classify()`'s result (feature Decisions "I01", F49 Contract L):
     every ad not judged -- not delivering or off -- grouped by its served delivery label
     (`groups [{state, label, count}]`, first seen first, in the (name, id) order the campaign's
-    own ad query returned), so the counts add up to `total`. `paused`／`archived`／`other` are the
-    older three-way counts by the same labels, kept while `GradeGroups` still prints them (F49-I09
-    moves it onto `groups`). `items` is capped at `_CLOSED_ITEMS_CAP`; `truncated` tells the
-    frontend there's more than the cap without it having to compare lengths itself."""
+    own ad query returned), so the counts add up to `total`. `items` is capped at
+    `_CLOSED_ITEMS_CAP`; `truncated` tells the frontend there's more than the cap without it having
+    to compare lengths itself."""
     groups: dict = {}
     for ad in closed_ads:
         view = lifecycle.delivery(ad)
         group = groups.setdefault(view["label"], {**view, "count": 0})
         group["count"] += 1
-    paused = groups.get(_PAUSED_LABEL, {}).get("count", 0)
-    archived = groups.get(_ARCHIVED_LABEL, {}).get("count", 0)
     items = [
         _closed_item(dict(ad), rows_by_entity.get(ad["id"], []), cutoff, bound_ad_by_native)
         for ad in closed_ads[:_CLOSED_ITEMS_CAP]
     ]
     return {
         "groups": list(groups.values()),
-        "paused": paused, "archived": archived, "other": len(closed_ads) - paused - archived,
         "total": len(closed_ads), "items": items,
         "truncated": len(closed_ads) > _CLOSED_ITEMS_CAP,
     }

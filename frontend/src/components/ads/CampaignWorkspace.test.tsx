@@ -6,7 +6,7 @@ import { assetHandoff, type Placement } from "@/lib/adsUserAssetsApi";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
-import { completeExternalView, existingCampaigns } from "@/lib/adsExternalApi";
+import { completeExternalView, existingCampaigns, syncCampaign, syncJob, syncOutcome, type CampaignSyncOutcome } from "@/lib/adsExternalApi";
 import { getCampaignWorkspace, type CampaignWorkspace as WorkspaceRead } from "@/lib/adsWorkspaceApi";
 import type { StepTarget } from "./nextStep";
 import { CampaignWorkspace } from "./CampaignWorkspace";
@@ -35,7 +35,7 @@ function useKiritimati() {
 }
 vi.mock("@/lib/adsApi", () => ({ getCampaign: vi.fn() }));
 vi.mock("@/lib/adsWorkspaceApi", () => ({ getCampaignWorkspace: vi.fn() }));
-vi.mock("@/lib/adsExternalApi", () => ({ completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), existingCampaigns: vi.fn() }));
+vi.mock("@/lib/adsExternalApi", () => ({ completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn(), existingCampaigns: vi.fn() }));
 // F36-I09: `AssetHandoffPanel` and `currentBudgetMonth` have no suite of their own; this is the nearest one (issue Done #4).
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), assetHandoff: vi.fn(), bindingAction: vi.fn(), bindingCandidates: vi.fn(), versionMetrics: vi.fn() }));
 vi.mock("./AuthAssetMedia", () => ({ AuthAssetMedia: () => null }));
@@ -51,8 +51,20 @@ vi.mock("./AssetsTab", () => ({ AssetsTab: () => <h2>共用素材</h2> }));
 vi.mock("./ChangeControl", () => ({ ChangeControl: () => <h2>共用變更</h2> }));
 vi.mock("./ReviewPanel", () => ({ ReviewPanel: () => <h2>單則廣告檢討</h2> }));
 vi.mock("./PerformanceTab", () => ({ PerformanceTab: () => <h2>共用成效</h2> }));
+// The perf body stub exposes what the workspace hands it for the platform read: its button, the busy flag, the
+// finished read's served sentence and the close dialog's failure text.
 vi.mock("./detail/CampaignDetailPage", () => ({
-  CampaignPerfBody: ({ advanced }: { advanced: unknown }) => <div><h2>F29 成效本體</h2>{advanced as never}</div>,
+  CampaignPerfBody: ({ advanced, onSync, syncing, syncNote, syncError }: {
+    advanced: unknown; onSync: () => void; syncing: boolean; syncNote: { state: string; text: string } | null; syncError: string;
+  }) => (
+    <div>
+      <h2>F29 成效本體</h2>
+      <button type="button" onClick={onSync} disabled={syncing}>{syncing ? "讀取中…" : "重新讀取平台"}</button>
+      <p data-testid="sync-note" data-state={syncNote?.state ?? ""}>{syncNote?.text ?? ""}</p>
+      <p data-testid="sync-error">{syncError}</p>
+      {advanced as never}
+    </div>
+  ),
 }));
 
 const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
@@ -172,6 +184,59 @@ it("'publish' on a campaign that cannot publish (imported) opens the assets tab 
   go!("publish");
   expect(await screen.findByText("共用素材")).toBeTruthy();
   expect(screen.getByTestId("where").textContent).toBe("?tab=assets");
+});
+
+describe("F49 Contract O: 重新讀取平台 follows the campaign's one served outcome", () => {
+  const outcome = (state: CampaignSyncOutcome["state"], text: string, code: string | null = null): CampaignSyncOutcome =>
+    ({ state, code, text, job_ids: ["aes_1"], last_success_at: "2026-10-11T04:30:00Z" });
+  const JOB = { id: "aes_1", status: "pending", last_success_at: null };
+
+  it("a half-failed read is never silent: the partial outcome's reason prints, the campaign and progress re-read, the job is never polled", async () => {
+    vi.mocked(syncCampaign).mockResolvedValue({ job: JOB, jobs: [JOB] });
+    vi.mocked(syncOutcome).mockResolvedValue(outcome("partial", "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試", "source_error"));
+    renderAt("/brands/b/ads/campaigns/c?tab=perf");
+    fireEvent.click(await screen.findByRole("button", { name: "重新讀取平台" }));
+    await vi.waitFor(() => expect(screen.getByTestId("sync-note").textContent).toBe("有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試"));
+    expect(screen.getByTestId("sync-note").getAttribute("data-state")).toBe("partial");
+    expect(screen.getByTestId("sync-error").textContent).toBe("有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試");
+    expect(screen.getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
+    expect(syncCampaign).toHaveBeenCalledWith("b", "c");
+    expect(syncOutcome).toHaveBeenCalledWith("b", "c", expect.any(AbortSignal));
+    expect(syncJob).not.toHaveBeenCalled();
+    expect(getCampaign).toHaveBeenCalledTimes(2);
+    expect(getCampaignWorkspace).toHaveBeenCalledTimes(2);
+  });
+
+  it("while the read runs the button is busy; it settles on the served outcome after polling (found prints, no failure text)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(syncCampaign).mockResolvedValue({ job: JOB });
+      vi.mocked(syncOutcome)
+        .mockResolvedValueOnce(outcome("running", "正在讀取平台資料"))
+        .mockResolvedValueOnce(outcome("found", "已讀到平台資料"));
+      renderAt("/brands/b/ads/campaigns/c?tab=perf");
+      fireEvent.click(await screen.findByRole("button", { name: "重新讀取平台" }));
+      expect(await screen.findByRole("button", { name: "讀取中…" })).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(3000);
+      await vi.waitFor(() => expect(screen.getByTestId("sync-note").textContent).toBe("已讀到平台資料"));
+      expect(screen.getByTestId("sync-error").textContent).toBe("");
+      expect(syncOutcome).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a failed read names why; a request that fails prints its own error", async () => {
+    vi.mocked(syncCampaign).mockResolvedValueOnce({ job: JOB }).mockRejectedValueOnce(new Error("同步失敗：伺服器忙碌"));
+    vi.mocked(syncOutcome).mockResolvedValue(outcome("failed", "這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權", "permission_denied"));
+    renderAt("/brands/b/ads/campaigns/c?tab=perf");
+    fireEvent.click(await screen.findByRole("button", { name: "重新讀取平台" }));
+    await vi.waitFor(() => expect(screen.getByTestId("sync-note").getAttribute("data-state")).toBe("failed"));
+    expect(screen.getByTestId("sync-note").textContent).toBe("這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權");
+    fireEvent.click(screen.getByRole("button", { name: "重新讀取平台" }));
+    await vi.waitFor(() => expect(screen.getByTestId("sync-note").textContent).toBe("同步失敗：伺服器忙碌"));
+    expect(screen.getByTestId("sync-note").getAttribute("data-state")).toBe("error");
+  });
 });
 
 describe("F36-I09 組織時鐘：交接面板與月預算月份", () => {
