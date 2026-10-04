@@ -143,15 +143,18 @@ async function setupAds(
   campaignId: string,
   withPair: boolean,
 ): Promise<{ groupId: string }> {
-  const coordinates = await api<{ coordinates: Coordinate[] }>(
-    page, headers, "GET", `/api/schedule/brands/${brandId}/coordinates`,
+  // F48-I06: a hand-made ad obeys this period's menu (the campaign read serves it); a vocabulary
+  // key the menu leaves out (e.g. a proof the brand has no evidence for) is refused with a 400.
+  const { campaign } = await api<{ campaign: { menu: Coordinate[] } }>(
+    page, headers, "GET", `/api/ads/brands/${brandId}/campaigns/${campaignId}`,
   );
+  const menu = campaign.menu;
   const values = Object.fromEntries(DIMENSIONS.map((dimension) => {
-    const value = coordinates.coordinates.find((row) => row.dimension === dimension)?.key;
+    const value = menu.find((row) => row.dimension === dimension)?.key;
     expect(value, `missing ${dimension} coordinate`).toBeTruthy();
     return [dimension, value!];
   }));
-  const alternateHook = coordinates.coordinates.find(
+  const alternateHook = menu.find(
     (row) => row.dimension === "hook" && row.key !== values.hook,
   )?.key;
   expect(alternateHook, "missing alternate hook coordinate").toBeTruthy();
