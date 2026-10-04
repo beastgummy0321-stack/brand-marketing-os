@@ -2042,3 +2042,48 @@ literals in strings, `Math.round` over money, mirror comments; per-line `NOT_A_R
 - **Known debt left to features C／D**: `NOT_A_RULER` excuses in `oneRuler.test.ts` for browser arithmetic (`PaceChart.tsx`,
   `PerformanceTab.tsx`, `reviewFlow.ts`) and copied backend numbers (`ReviewPanel`, `ReviewTracking`, `NewCampaignPage`, `CopyPage`,
   `OverviewBody` 「近 14 天」); the statutory reminder row has no regulation link field (intake).
+
+### 6.51 One lifecycle, one decision queue, one sync outcome, one coverage, readback compared, slot states served（ruled 2026-10-04；built in F49）
+Audit 2026-10-04 W7–W10, W17 (decisions 5, 6, 11, 12; user rulings 2026-10-04: `ENDED_GRACE_DAYS = 7`, 加預算 is not a decision).
+Supersedes §6.36's `end_date <= today` and 「Monitoring is not status-driven」, every earlier `ad_status` reference, and the
+readback rule that listed unprovable fields as 「請到 Meta 看一眼」. Machine checks: `app/tests/test_ads_one_ruler.py`
+(`OneLifecycleTest`, `OneSyncOutcomeTest`, `OneCoverageReaderTest`, `SlotStatesTest`, queue-kind and reason-code tables, verification
+labels, no `except (ValueError, AttributeError)`), `frontend/src/components/ads/oneRuler.test.ts` (platform status words, lifecycle
+compares, sync job reads outside `useSyncOutcome`, local state-word tables, queue-kind／reason tables, slot words, `external_view`
+readers). Leftover allowances live one file per owner in `frontend/src/components/ads/oneRulerPending/` (today only `W14.ts`, `W19.ts`).
+- **Lifecycle (Contract L).** `app/ads/lifecycle.py` owns campaign state `draft | live | ended | closed` (internal: stored closed;
+  draft = stored draft／ready with no root read; ended = stored ended or `end_date < today` once on a platform; imported: draft
+  without a root read, ended when the root is off or past its end date, never closed) and ad delivery
+  `running | not_running | off | unknown` from the adapter's `STATUS_TABLE` (`adapters.delivery`／`gone`); platform status words
+  live only in `adapters/`. `lifecycle.monitored` = live, or ended within `ENDED_GRACE_DAYS`. Campaign reads serve
+  `lifecycle {state, label, can_close}`, `running {count, unknown, read_at, stale}`, `delivery_label`, `closed_this_month`. Closing a
+  draft → 409.
+- **Runtime gate (Contract N).** Dispatch, per-campaign sync and readback ticks cover monitored campaigns only (plus an explicit
+  re-read and a just-imported campaign); readback skips confirmed／stale items; runtime alert key
+  `ads-runtime:{campaign}:{code}:{since}` (an episode: a cleared alert that returns raises a new row); unmonitored campaigns' alerts
+  are swept daily and closeout resolves them; `recovery` counts only monitored campaigns.
+- **Sync outcome (Contract O).** `external_sync.outcome` = `running | failed | partial | empty | found` + code + sentence, written by
+  `_update_task` (job status／error actually written; request failures stored as a failed `request` task; `not_read` for never
+  read). Served by `GET sync-jobs/{id}`, `GET campaigns/{c}/sync-outcome`; `GET existing-campaigns` is read-only. Frontend reads it
+  only through `lib/useSyncOutcome.ts` (`refresh()` resets to running until the next answer).
+- **Coverage (Contract V).** `app/ads/coverage.py`: a day is `data` (has a row), `empty` (inside a merged clean read range, no row)
+  or `missing`; ranges are a merged union (`observations.ranges`), never overwritten; every window is clipped to the campaign's
+  start／end; triage serves `data.days`. Month budget and A/B (pads only cleanly read days) read the same module.
+- **Decision queue (Contract Q).** `queue_done.DECISION_KINDS = (cleanup, worse, closeout, settle, refresh_creative)`;
+  `scale_budget`／`insufficient_data` are notices (served, never inbox rows). Rows carry `decision`, `done`, `position`,
+  `campaign_id`; the payload `decisions {kinds, open}`; home count = 「下一件」 = inbox. An internal ended campaign gets one
+  `ads_triage_closeout` row (`?tab=perf&close=1`), no new proposals; rows opened before the end stay (matched by their
+  `ads-triage:{kind}:{identity}:` prefix) until closeout. A decision, a confirming readback and closeout resolve their inbox rows in
+  the same request; decided rows leave the queue at once. `/rules` serves `reasons` (code → sentence + fix kind).
+- **Readback (Contract B).** Material is confirmed once at approval (`approval_confirms`); landing URL and audience are compared by
+  the program through `adapters.creative_links／audience_ids` (URL: host without `www.`, path without trailing slash, query without
+  `utm_*`／`fbclid`／`gclid`); mismatch → `deviated` with a coded reason, nothing read → `unknown` with a coded reason, never an eye
+  check. Every refusal has a reason code from `handoff_check.READBACK_REASONS`; `worst_state` order deviated > stale > unknown >
+  reported > pending; `VERIFICATION_LABELS`／`STATE_LABELS` served; `launch_view` names a reason only when it carries a code;
+  `upsert_entity` bumps `updated_at` only on a real change. Handoff serves `destination_by_ad` and `destinations_note` for any
+  origin (C1: review 「換一張圖」 works on system-built campaigns); `external_view` is read only by imported-only screens.
+- **Slot states (Contract T).** `slots.STATE_TEXT` is the one state → label＋sentence table (`retrying` with its retry time, `failed`
+  with the workbench exit, a refused assignment stored as reason kind `assign`); a ready slot's copy is editable until launch
+  approval (new revision); copy options are this sell-way's only; structure ads serve `slot_state`／`slot_label`; a material hand-off
+  left `unknown` retries on the same pack.
+- **Drill tool.** `scripts/drill/fake_meta.py` mirrors the planned landing URL and audience so drill readback can confirm them.

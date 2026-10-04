@@ -12,7 +12,8 @@ the file:line rows for their ticket only.
 
 ## Status
 - W1–W6 built in F48 (2026-10-04): `docs/architecture/ads.md` §6.50, `workbench.md` §5.16, `intake.md` 「F48」.
-- W7–W10, W17 = feature B (F49); W11–W14 = C; W15, W16, W18, W19 = D.
+- W7–W10, W17 built in F49 (2026-10-04): `docs/architecture/ads.md` §6.51.
+- W11–W14 = C; W15, W16, W18, W19 = D.
 
 ## Workstreams (each removes one generator; rows cite cluster file → finding ids)
 
