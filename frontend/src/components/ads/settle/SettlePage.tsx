@@ -6,8 +6,9 @@ import { getSettle, writeSettle, SettleRequestRejected, type SettleView } from "
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { fetchActiveJobs } from "@/lib/jobsApi";
 import { Chip, FlowHeader, ReadFailed, useAdsRules, type FlowStep } from "../patterns";
-import { homeAction } from "../home/QueueRow";
-import { homeDecisions } from "../home/TodayDecisions";
+import { decisionHref } from "../home/QueueRow";
+import { homeBoard } from "../home/TodayDecisions";
+import { settlePosition } from "../home/status";
 import { SettleAngles, angleOf, learnRows, type AnglePick, type AnglePicks, type JobsRead } from "./SettleAngles";
 import { SettleNote } from "./SettleNote";
 import { SettleResult } from "./SettleResult";
@@ -31,8 +32,6 @@ export function settlePath(brandId: string, month: string, step: SettleStep): st
 }
 
 type Read = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; view: SettleView };
-
-const ORDER_BEFORE_SETTLE = new Set(["cleanup", "worse"]);
 
 export function SettlePage({ brandId, month }: { brandId: string; month: string }) {
   const [searchParams] = useSearchParams();
@@ -144,11 +143,13 @@ export function SettlePage({ brandId, month }: { brandId: string; month: string 
   const steps: FlowStep[] = labels.map((label, i) => ({ label, to: i < current ? path(STEPS[i]) : undefined }));
   const campaignCount = new Set(view.rows.map((row) => row.campaign_id)).size;
   const importedCount = view.campaigns.filter((c) => isImported(c.origin) && view.rows.some((row) => row.campaign_id === c.campaign_id)).length;
-  const decisions = queue ? homeDecisions(brandId, queue).open : [];
-  const position = queue?.settle && view.status === "open"
-    ? { pos: decisions.filter((item) => ORDER_BEFORE_SETTLE.has(item.kind_key)).length + 1, total: decisions.length + 1 }
-    : null;
-  const nextHref = decisions.map((item) => homeAction(brandId, item).href).find((href): href is string => !!href) ?? null;
+  // F49 Contract Q: 「第 N 件（共 M 件）」 is the settle row's served `position` among `decisions.open`; 「下一件」 is the
+  // first other open decision on the home board (served order).
+  const position = view.status === "open" ? settlePosition(brandId, queue) : null;
+  const nextHref = (queue ? homeBoard(brandId, queue).open : [])
+    .filter((d) => d.kind !== "settle")
+    .map((d) => decisionHref(brandId, d))
+    .find((href): href is string => !!href) ?? null;
 
   const header = (title: string, purpose: string, aside?: ReactNode) => (
     <FlowHeader

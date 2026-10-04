@@ -1,21 +1,22 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { GradeMove, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
+import type { CloseoutQueueRow, GradeMove, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 import { Chip, Disclosure, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount, gradeWord, useAdsRules, type AdsRules } from "../patterns";
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
 import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
-import { DoneChip, QueueRow, decisionTitle, homeAction } from "./QueueRow";
+import { CloseoutRow, DoneChip, QueueRow, closeoutAction, closeoutNote, decisionTitle, homeAction } from "./QueueRow";
 import { SettleCard, SettleRow, settleRange } from "./SettleCard";
-import { decisionBoard, decisionRows, settleAction, type HomeDecision } from "./status";
+import { decisionBoard, decisionCount, settleAction, type HomeDecision } from "./status";
 
-/** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open `cleanup`, `worse`, period `settle`
- * and `refresh_creative` rows, in that order; three as cards (the settle card spans the row), the rest behind one
- * fold; decisions already handled behind 「今天處理過」. The queue is its own request: loading, syncing and failure
- * only change this block. */
+/** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open decision rows — ad rows, the period
+ * `settle` row and the ended campaigns' `closeout` rows — in their served `position` (F49 Contract Q: which rows are
+ * decisions and their order are the backend's); three as cards (the settle card spans the row), the rest behind one
+ * fold; decisions already handled behind 「今天處理過」. The count is the served `decisions.open`. The queue is its
+ * own request: loading, syncing and failure only change this block. */
 
 export type QueueState =
   | { status: "loading" }
@@ -24,19 +25,16 @@ export type QueueState =
 
 const SHOWN = 3;
 
-/** The ad-level home decisions of a queue, split into open and handled, in board order (the settle row is not an ad
- * row; `homeBoard` adds it). Also read by the settle page for its 「第 N 件」 position. F47-I07: the rule lives in
- * `status.ts::decisionRows`, shared with the flow pages' 「第 N 件／共 M 件」. */
-export function homeDecisions(_brandId: string, queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
-  return decisionRows(queue);
-}
-
 export type { HomeDecision };
 
-/** Board order (prototype): cleanup, worse, settle, refresh_creative. The count on 「今天」 is `open.length`. */
-export const homeBoard = decisionBoard;
+/** The home board (`status.ts::decisionBoard`) and its count (`decisionCount`), shared with the flow pages' 「第 N 件／共
+ * M 件」 and the settle page. */
+export function homeBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[]; count: number } {
+  const board = decisionBoard(brandId, queue);
+  return { ...board, count: decisionCount(queue, board) };
+}
 
-const keyOf = (d: HomeDecision) => (d.kind === "settle" ? `settle-${d.row.id}` : d.item.id);
+const keyOf = (d: HomeDecision) => (d.kind === "item" ? d.item.id : `${d.kind}-${d.row.id}`);
 
 /** 「09/22 22:40」 in the browser's time zone (prototype `SYNC_AT`). */
 export function stamp(iso: string): string {
@@ -73,7 +71,7 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
   const done = board?.done ?? [];
   const chip = syncing
     ? <Chip tone="accent">同步中・完成後才判斷</Chip>
-    : state.status === "ready" && open.length ? <Chip>{open.length} 件</Chip> : null;
+    : board && open.length ? <Chip>{board.count} 件</Chip> : null;
 
   let body;
   if (syncing || state.status === "loading") {
@@ -123,12 +121,16 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
         <div className="grid grid-cols-1 gap-3.5 min-[1100px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
           {shown.map((d) => (d.kind === "settle"
             ? <SettleCard key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} />
+            : d.kind === "closeout"
+            ? <CloseoutCard key={keyOf(d)} row={d.row} recovering={recovering} />
             : <DecisionCardFor key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} />))}
         </div>
         {rest.length > 0 && (
           <Disclosure label={`還有 ${rest.length} 件要決定`}>
             {rest.map((d) => (d.kind === "settle"
               ? <SettleRow key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} />
+              : d.kind === "closeout"
+              ? <CloseoutRow key={keyOf(d)} row={d.row} recovering={recovering} />
               : <QueueRow key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} />))}
           </Disclosure>
         )}
@@ -148,6 +150,7 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
 /** Prototype `doneLabel(q)`: what was decided, in one line. */
 function doneLabel(d: HomeDecision, rules: AdsRules | null): string {
   if (d.kind === "settle") return `結算上一期 ${settleRange(d.row)}`;
+  if (d.kind === "closeout") return d.row.message;
   const item = d.item;
   if (item.kind_key === "cleanup") return `清理：${decisionTitle(item)}`;
   if (item.kind_key === "worse") return `${moveText(item.triage.grade_move, rules)}：${item.triage.name ?? "未命名廣告"}`;
@@ -160,7 +163,8 @@ function HandledFold({ brandId, done, recovering }: { brandId: string; done: Hom
   return (
     <Disclosure label={`今天處理過 ${done.length} 件`}>
       {done.map((d) => {
-        const action = d.kind === "settle" ? settleAction(brandId, d.row) : homeAction(brandId, d.item);
+        const action = d.kind === "settle" ? settleAction(brandId, d.row)
+          : d.kind === "closeout" ? closeoutAction(d.row) : homeAction(brandId, d.item);
         // drill-10 Q2: the chip opens the decision (a deferred one shows 「M/D 再看」 and leads back to its change set).
         return (
           <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">
@@ -283,6 +287,24 @@ function WorseCard({ brandId, item, recovering }: { brandId: string; item: Queue
       </div>
       <div className="flex-1" />
       {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={false} />}
+    </article>
+  );
+}
+
+/** F49 Contract Q: an ended campaign's closeout decision, in the same card shape as the others — the served sentence
+ * (「「X」已結束，待結案」), the end date and any ads still running on the platform, and 結案這一期 to the row's own link. */
+function CloseoutCard({ row, recovering }: { row: CloseoutQueueRow; recovering: boolean }) {
+  const action = closeoutAction(row);
+  const note = closeoutNote(row);
+  return (
+    <article className={cn(CARD, "border-border")} aria-label={row.message}>
+      <CardHead label="結案" className="bg-zone-watch text-warning-strong" campaign={row.closeout.campaign_name} />
+      <div className="text-base font-semibold [overflow-wrap:anywhere]">{row.message}</div>
+      {note && <div className="text-sm text-muted-foreground">{note}</div>}
+      <div className="flex-1" />
+      {recovering ? <Recovering /> : action.href && (
+        <Button asChild className="h-10 w-full"><Link to={action.href}>{action.label} →</Link></Button>
+      )}
     </article>
   );
 }

@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import type { CampaignCard } from "@/lib/adsApi";
+import type { CampaignCard, LifecycleState } from "@/lib/adsApi";
 import { listCampaigns } from "@/lib/adsApi";
 import { AllCampaignsPage } from "./AllCampaignsPage";
 
@@ -32,6 +32,12 @@ function campaignCard(overrides: Partial<CampaignCard> = {}): CampaignCard {
   };
 }
 
+/** F49 Contract L: the served lifecycle (state + its word) a campaign read carries. */
+const LABEL: [LifecycleState, string][] = [["draft", "草稿"], ["live", "投放中"], ["ended", "已結束・待結案"], ["closed", "已結案"]];
+function lc(state: LifecycleState, label = LABEL.find(([s]) => s === state)?.[1] ?? "") {
+  return { lifecycle: { state, label, can_close: state === "live" || state === "ended" } };
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -41,38 +47,46 @@ function renderPage() {
 }
 
 describe("AllCampaignsPage（F04-I10）", () => {
-  it("六筆（3 live／2 ready／1 closed）→ 四顆 pill 的數字是 6／3／2／1", async () => {
+  it("pills count the served lifecycle state: 已結束 (待結案) and 已結案 are separate", async () => {
     vi.mocked(listCampaigns).mockResolvedValue([
-      campaignCard({ id: "l1", name: "live 1", status: "live" }),
-      campaignCard({ id: "l2", name: "live 2", status: "live" }),
-      campaignCard({ id: "l3", name: "live 3", status: "live" }),
-      campaignCard({ id: "r1", name: "ready 1", status: "ready" }),
-      campaignCard({ id: "r2", name: "ready 2", status: "ready" }),
-      campaignCard({ id: "c1", name: "closed 1", status: "closed" }),
+      campaignCard({ id: "l1", name: "live 1", status: "live", ...lc("live") }),
+      campaignCard({ id: "l2", name: "live 2", status: "live", ...lc("live") }),
+      // Stored `live` past its end date: the served state says ended, and the list follows it.
+      campaignCard({ id: "l3", name: "past end", status: "live", ...lc("ended") }),
+      campaignCard({ id: "r1", name: "ready 1", status: "ready", ...lc("draft") }),
+      campaignCard({ id: "r2", name: "ready on platform", status: "ready", ...lc("live") }),
+      campaignCard({ id: "c1", name: "closed 1", status: "closed", ...lc("closed") }),
+      campaignCard({ id: "i1", name: "imported ended", status: "draft", origin: "imported", ...lc("ended", "已結束") }),
     ]);
 
     renderPage();
 
-    expect(await screen.findByRole("button", { name: "全部 6" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "全部 7" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "既有平台活動 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "進行中 3" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "即將上線 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "即將上線 1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "已結束 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "已結案 1" })).toBeTruthy();
   });
 
-  it("點「已結束」→ 表格只剩 1 列，而且是那一筆 closed 的名稱", async () => {
+  it("點「已結束」只剩待結案的那一筆；點「已結案」只剩結案的那一筆", async () => {
     vi.mocked(listCampaigns).mockResolvedValue([
-      campaignCard({ id: "l1", name: "live 1", status: "live" }),
-      campaignCard({ id: "c1", name: "closed 1", status: "closed" }),
+      campaignCard({ id: "l1", name: "live 1", status: "live", ...lc("live") }),
+      campaignCard({ id: "e1", name: "ended 1", status: "live", ...lc("ended") }),
+      campaignCard({ id: "c1", name: "closed 1", status: "closed", ...lc("closed") }),
     ]);
 
     const { default: userEvent } = await import("@testing-library/user-event");
     renderPage();
 
-    const endedBtn = await screen.findByRole("button", { name: "已結束 1" });
-    await userEvent.click(endedBtn);
-
-    expect(screen.getByText("closed 1")).toBeTruthy();
+    await userEvent.click(await screen.findByRole("button", { name: "已結束 1" }));
+    expect(screen.getByText("ended 1")).toBeTruthy();
+    expect(screen.queryByText("closed 1")).toBeNull();
     expect(screen.queryByText("live 1")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "已結案 1" }));
+    expect(screen.getByText("closed 1")).toBeTruthy();
+    expect(screen.queryByText("ended 1")).toBeNull();
   });
 
   it("budget_progress.total = null 的那一列印「尚未設定總預算」且沒有 0%", async () => {
@@ -91,18 +105,19 @@ describe("AllCampaignsPage（F04-I10）", () => {
     expect(screen.queryByText("0%")).toBeNull();
   });
 
-  it("F47-I08：狀態欄每個活動一個字（跟工作區、首頁同一套）：待發布也叫草稿，匯入的不寫「平台狀態見原始資料」", async () => {
+  it("F47-I08／F49 Contract L：狀態欄每個活動一個字＝後端給的 lifecycle.label，不看 status", async () => {
     vi.mocked(listCampaigns).mockResolvedValue([
-      campaignCard({ id: "d1", name: "草稿活動", status: "draft" }),
-      campaignCard({ id: "r1", name: "待發布活動", status: "ready" }),
-      campaignCard({ id: "l1", name: "投放中活動", status: "live" }),
-      campaignCard({ id: "i1", name: "匯入活動", status: "draft", origin: "imported" }),
-      campaignCard({ id: "c1", name: "結案活動", status: "closed" }),
+      campaignCard({ id: "d1", name: "草稿活動", status: "draft", ...lc("draft") }),
+      campaignCard({ id: "r1", name: "待發布活動", status: "ready", ...lc("draft") }),
+      campaignCard({ id: "l1", name: "投放中活動", status: "live", ...lc("live") }),
+      campaignCard({ id: "e1", name: "過了結束日", status: "live", ...lc("ended") }),
+      campaignCard({ id: "i1", name: "匯入活動", status: "draft", origin: "imported", ...lc("live") }),
+      campaignCard({ id: "c1", name: "結案活動", status: "closed", ...lc("closed") }),
     ]);
     renderPage();
     await screen.findByText("草稿活動");
     const words = [...document.querySelectorAll("tbody tr")].map((tr) => tr.querySelectorAll("td")[1].textContent);
-    expect(words).toEqual(["草稿", "草稿", "投放中", "投放中", "已結案"]);
+    expect(words).toEqual(["草稿", "草稿", "投放中", "已結束・待結案", "投放中", "已結案"]);
     expect(screen.queryByText("待發布")).toBeNull();
     expect(screen.queryByText("平台狀態見原始資料")).toBeNull();
   });

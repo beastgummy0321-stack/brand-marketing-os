@@ -63,10 +63,20 @@ type Props = {
   /** F46-I09: arrived through a 「設定／提高 N 月月預算」 link — the adjust area opens on load, scrolls into view and
    * the monthly-budget form starts in edit mode. */
   openBudget?: boolean;
+  /** F49 Contract Q (drill-11 Q4): the approval page the budget link came from (`?return=`, already checked to be an
+   * ads path of this brand). Once the editor saves or the area closes, 「← 回到剛才的核准」 leads back there. */
+  returnTo?: string | null;
 };
 
-export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed, openBudget = false }: Props) {
+export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed, openBudget = false, returnTo = null }: Props) {
   const [adjusting, setAdjusting] = useState(openBudget);
+  // Saved or closed once: the way back to the approval shows from then on.
+  const [settled, setSettled] = useState(false);
+  const back = returnTo && settled ? (
+    <Button asChild variant="outline" size="sm" className="self-start">
+      <Link to={returnTo}>← 回到剛才的核准</Link>
+    </Button>
+  ) : null;
   // Only the first opening came from the link; a later 調整 opens the panel as before.
   const [linked, setLinked] = useState(openBudget);
   const month = state.status === "ready" ? state.home.month : null;
@@ -100,14 +110,17 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed,
           </>
         )}
       </section>
-      {adjusting && month && (
+      {adjusting && month ? (
         <div ref={adjustRef} className="flex scroll-mt-4 flex-col gap-2">
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => { setAdjusting(false); setLinked(false); onBudgetClosed(); }}>
-            ← 收起
-          </Button>
-          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} onSaved={onRetry} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => { setAdjusting(false); setLinked(false); setSettled(true); onBudgetClosed(); }}>
+              ← 收起
+            </Button>
+            {back}
+          </div>
+          <MonthlyBudgetPanel brandId={brandId} month={month} compact startEditing={linked} onSaved={() => { setSettled(true); onRetry(); }} />
         </div>
-      )}
+      ) : back}
     </>
   );
 }

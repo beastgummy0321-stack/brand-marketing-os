@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { QueueCleanupProposal, QueueItem, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
+import type { CloseoutQueueRow, QueueCleanupProposal, QueueItem, QueuePayload, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import { bandState, cleanupAction, decisionPosition, isQueueItemDone, settleAction } from "./status";
+import { bandState, cleanupAction, decisionBoard, decisionPosition, isQueueItemDone, proposalAction, settleAction, settlePosition } from "./status";
 import { nextOpenQueueItem } from "../flow/changeFlow";
 
 // F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
@@ -38,6 +38,21 @@ describe("cleanupAction", () => {
     expect(cleanupAction("brd_1", "cmp_1", cleanupSet("approved", "reported"), null)).toMatchObject({ href: `${base}/verify` });
   });
 
+  it("F49 Contract B: an approved set's label is the served verification word; the state only picks the step", () => {
+    const base = "/brands/brd_1/ads/campaigns/cmp_1/changes/cs_1";
+    const served = (state: QueueCleanupProposal["verification_state"], label: string) => ({ ...cleanupSet("approved", state), verification_label: label });
+    expect(cleanupAction("brd_1", "cmp_1", served("pending", "尚未回報"), null)).toEqual({ label: "尚未回報", href: `${base}/handoff`, done: false });
+    expect(cleanupAction("brd_1", "cmp_1", served("unknown", "讀到了，還不能確認"), null)).toEqual({ label: "讀到了，還不能確認", href: `${base}/verify`, done: false });
+    expect(cleanupAction("brd_1", "cmp_1", served("deviated", "與核准內容不同"), null)).toEqual({ label: "與核准內容不同", href: `${base}/verify`, done: false });
+    expect(cleanupAction("brd_1", "cmp_1", served("confirmed", "已核對相符"), null)).toEqual({ label: "已核對相符", href: `${base}/verify`, done: true });
+    // A worse row's copy set carries its own served word through the review round.
+    const review: QueueReviewProposal = { ...deferredReviewShape, status: "completed", decision: "completed", change_set_id: "cs_9",
+      change_set_status: "approved", verification_state: "reported", verification_label: "已回報，待讀回" };
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", review, "review")).toEqual({
+      label: "已回報，待讀回", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/cs_9/verify", done: false,
+    });
+  });
+
   it("uses the row's own proposal link before any change set exists", () => {
     expect(cleanupAction("brd_1", "cmp_1", null, "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1"))
       .toMatchObject({ label: "看提議", href: "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1" });
@@ -56,6 +71,11 @@ const triageItem = (overrides: Partial<TriageItem> = {}): TriageItem => ({
   change_pct: 0.18, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
   ...overrides,
 });
+const deferredReviewShape: QueueReviewProposal = {
+  kind: "review", review_id: "arv_1", status: "deferred", decision: "deferred", reason: "下週再看",
+  revisit_at: null, recommendation_id: null, change_set_id: null, change_set_status: null,
+  verification_state: null, multi: false,
+};
 const deferredReview: QueueReviewProposal = {
   kind: "review", review_id: "arv_1", status: "deferred", decision: "deferred", reason: "下週再看",
   revisit_at: null, recommendation_id: null, change_set_id: null, change_set_status: null,
@@ -77,28 +97,56 @@ describe("isQueueItemDone", () => {
   });
 });
 
-// F47-I07: the flow pages' 「第 N 件／共 M 件」 and the home count share one owner: open home decisions by `done`.
-describe("decisionPosition", () => {
-  const payload = (items: QueueItem[], settle: SettleQueueRow | null = null) => ({
-    items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0,
-    kinds_available: [], kinds_pending: [], settle,
-  });
-  const refresh = queueItem({ id: "r", kind_key: "refresh_creative" });
-  const worse = queueItem({ id: "w" });
-  const handled = queueItem({ id: "h", done: true });
-  const gap = queueItem({ id: "g", kind_key: "insufficient_data" });
+// F49 Contract Q: the board, 「第 N 件」 and 「共 M 件」 read the served `decision`／`position`／`decisions.open` — the
+// served order here (refresh, settle, closeout, worse) is not the old local list (cleanup, worse, settle, refresh).
+const closeoutRow = (overrides: Partial<CloseoutQueueRow> = {}): CloseoutQueueRow => ({
+  id: "itr_c", dedupe_key: "closeout", category: "ads_triage_closeout", severity: "rule_warning", message: "「秋季檔期」已結束，待結案",
+  action_url: "/brands/brd_1/ads/campaigns/cmp_9?tab=perf&close=1", visible_from: null, status: "open", created_at: "2026-10-10T00:00:00Z",
+  campaign_id: "cmp_9", decision: true, position: 3, done: false,
+  closeout: { campaign_id: "cmp_9", campaign_name: "秋季檔期", end_date: "2026-10-09", running: { count: 2, read_at: "2026-10-10T02:00:00Z" } },
+  ...overrides,
+});
+const served = (items: QueueItem[], extra: Partial<QueuePayload> = {}): QueuePayload => ({
+  items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0,
+  kinds_available: [], kinds_pending: [], settle: null, closeouts: [], ...extra,
+});
 
-  it("counts open home decisions in board order, settle before refresh; skips handled and non-board rows", () => {
-    const q = payload([refresh, handled, gap, worse], settleRow());
-    expect(decisionPosition(q, worse)).toEqual({ pos: 1, total: 3 });
-    expect(decisionPosition(q, refresh)).toEqual({ pos: 3, total: 3 });
+describe("decisionBoard／decisionPosition（F49 Contract Q）", () => {
+  const refresh = queueItem({ id: "r", kind_key: "refresh_creative", decision: true, position: 1 });
+  const worse = queueItem({ id: "w", decision: true, position: 4 });
+  const handled = queueItem({ id: "h", decision: true, position: null, done: true });
+  const gap = queueItem({ id: "g", kind_key: "insufficient_data", decision: false, position: null });
+  const scale = queueItem({ id: "s", kind_key: "scale_budget", decision: false, position: null });
+  const q = served([worse, handled, gap, refresh, scale], {
+    settle: settleRow({ decision: true, position: 2, done: false }), closeouts: [closeoutRow()],
+    decisions: { kinds: ["cleanup", "worse", "closeout", "refresh_creative"], open: 4 },
   });
 
-  it("a handled row or a row the board does not show has no position", () => {
-    const q = payload([worse, handled, gap]);
+  it("lists open decision rows by served position, then the handled ones; notices never", () => {
+    const board = decisionBoard("brd_1", q);
+    expect(board.open.map((d) => (d.kind === "item" ? d.item.id : d.row.id))).toEqual(["r", "itr_s", "itr_c", "w"]);
+    expect(board.done.map((d) => (d.kind === "item" ? d.item.id : d.row.id))).toEqual(["h"]);
+  });
+
+  it("「第 N 件／共 M 件」 is the row's served position over decisions.open", () => {
+    expect(decisionPosition(q, worse)).toEqual({ pos: 4, total: 4 });
+    expect(decisionPosition(q, refresh)).toEqual({ pos: 1, total: 4 });
+    expect(settlePosition("brd_1", q)).toEqual({ pos: 2, total: 4 });
+    // The total is the served count, even when this read carries fewer rows than it counts.
+    expect(decisionPosition({ ...q, decisions: { kinds: [], open: 7 } }, worse)).toEqual({ pos: 4, total: 7 });
+  });
+
+  it("a handled row, a notice row, or no queue has no position", () => {
     expect(decisionPosition(q, handled)).toBeNull();
     expect(decisionPosition(q, gap)).toBeNull();
+    expect(decisionPosition(q, scale)).toBeNull();
     expect(decisionPosition(null, worse)).toBeNull();
+    expect(settlePosition("brd_1", served([]))).toBeNull();
+  });
+
+  it("a payload without the served fields (older fixtures only) counts its open rows in served order", () => {
+    const one = queueItem({ id: "w1" });
+    expect(decisionPosition(served([one]), one)).toEqual({ pos: 1, total: 1 });
   });
 });
 
