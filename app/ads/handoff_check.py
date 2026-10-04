@@ -381,6 +381,7 @@ def _resolve(status, evidence):
 
 
 def _aggregate(conn, org, action_id, item_id, message, observed):
+    """Write the action's state from its items (the one aggregate) and return it."""
     peers = conn.execute(
         "SELECT status FROM ads_handoff_item WHERE org_id=%s AND action_id=%s", (org, action_id)
     ).fetchall()
@@ -408,6 +409,17 @@ def _aggregate(conn, org, action_id, item_id, message, observed):
             action_id,
         ),
     )
+    return aggregate
+
+
+def _resolve_queue_row(conn, org, brand, action_id, state):
+    """F49 Contract Q: once an action's readback `confirmed` has committed, the queue row its set
+    answers leaves the inbox if it is done now (`triage.resolve_action`; each resolve commits)."""
+    if state != "confirmed":
+        return
+    from app.ads import triage
+
+    triage.resolve_action(conn, org, brand, action_id)
 
 
 def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id=None):
@@ -427,9 +439,12 @@ def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, enti
         (status, db.jsonb(evidence), entity_id, observed, org, brand, campaign, item_id, attempt),
     )
     current = handoff_data.get(conn, org, brand, campaign, item_id)
+    aggregate = None
     if current["attempt_id"] == attempt:
-        _aggregate(conn, org, current["action_id"], item_id, evidence["message"], observed)
+        aggregate = _aggregate(conn, org, current["action_id"], item_id, evidence["message"],
+                               observed)
     conn.commit()
+    _resolve_queue_row(conn, org, brand, current["action_id"], aggregate)
     return handoff_data.get(conn, org, brand, campaign, item_id)
 
 
@@ -477,9 +492,11 @@ def confirm_field(conn, org, brand, campaign, item_id, key, actor):
         "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
         (status, db.jsonb(evidence), org, brand, campaign, item_id),
     )
+    aggregate = None
     if status != item["status"]:
-        _aggregate(conn, org, item["action_id"], item_id, evidence["message"], True)
+        aggregate = _aggregate(conn, org, item["action_id"], item_id, evidence["message"], True)
     conn.commit()
+    _resolve_queue_row(conn, org, brand, item["action_id"], aggregate)
     return handoff_data.get(conn, org, brand, campaign, item_id)
 
 

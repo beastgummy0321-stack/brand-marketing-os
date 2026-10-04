@@ -5,10 +5,10 @@ One builder (`build`) and one sender per channel (`SENDERS`): a later channel (L
 sender here and never rewrites the digest. Nothing leaves the app today.
 
 The digest never classifies anything itself: its items are the open rows of the same brand queue
-the ads home reads (`triage.get_queue`, or the payload `triage.refresh_queue` just returned),
-settle row included, in the queue's own order. The inbox row it writes has its own category
-(`ads_daily_digest`, informational) outside `triage.QUEUE_CATEGORY`, so it never counts toward
-the home decisions or the brand health colour.
+the ads home reads (`triage.get_queue`, or the payload `triage.refresh_queue` just returned) --
+its open decision rows (F49 Contract Q), settle and closeout rows included, in the queue's order.
+The inbox row it writes has its own category (`ads_daily_digest`, informational) outside
+`triage.QUEUE_CATEGORY`, so it never counts toward the home decisions or the brand health colour.
 """
 
 from datetime import date
@@ -32,12 +32,14 @@ def build(conn, org_id: str, brand_id: str, today: date, *,
     passes `refresh_queue`'s own return), so the queue is never derived a second time."""
     if queue is None:
         queue = triage.get_queue(conn, org_id, brand_id)
-    rows = queue["items"]
+    # F49 Contract Q: the open decision rows, counted as the home and the top bar count them
+    # (`decisions.open`) -- notices and done rows are not waiting on anyone.
+    rows = [row for row in queue["items"] if row["decision"] and not row["done"]]
     if not rows:
         return None
     return {
         "date": today.isoformat(),
-        "open_count": len(rows),
+        "open_count": queue["decisions"]["open"],
         "items": [
             {"kind": row["kind_key"], "message": row["message"], "action_url": row["action_url"]}
             for row in rows[:MAX_ITEMS]

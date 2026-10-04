@@ -198,6 +198,17 @@ message="結算上一期，待寫進筆記本",
             {"severity": "rule_warning", "label": "活動資料不足待處理"},
         )
 
+    def test_ads_triage_closeout_category_registered(self):
+        """F49 Contract Q: an ended campaign's closeout row -- never done until the campaign
+        closes, so never auto-archived (rule_warning, not informational), ranked right after
+        `worse` (board order cleanup > worse > closeout)."""
+        self.assertEqual(
+            core_interrupts.CATEGORIES["ads_triage_closeout"],
+            {"severity": "rule_warning", "label": "活動已結束待結案"},
+        )
+        order = list(core_interrupts.CATEGORIES)
+        self.assertEqual(order.index("ads_triage_closeout"), order.index("ads_triage_worse") + 1)
+
     def test_ads_triage_cleanup_category_registered(self):
         """F28-I06: the cleanup row carries the 白花 ads that used to raise `stop_loss`, so its
         weight never drops below it -- money_loss, ranked right after stop_loss."""
