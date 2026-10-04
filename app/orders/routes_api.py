@@ -1,10 +1,9 @@
 """訂單總覽的 JSON API。"""
 
-from datetime import date
-
 from fastapi import APIRouter, File, Query, Request, UploadFile
 
 import app.shared.web as main_mod
+from app.core import settings as coresettings
 from app.core import vocab
 from app.orders import channel as orders_channel
 from app.orders import dispatch as orders_dispatch
@@ -28,7 +27,8 @@ def orders(request: Request, brand_id: str, page: int = Query(default=1, ge=1)):
         brand = main_mod.require_brand(brand_id, actor)
     except main_mod.NotFoundKind:
         return JSONResponse({"detail": "找不到品牌"}, status_code=404)
-    summary = orders_repo.stats(main_mod.conn, brand_id, today=date.today().isoformat())
+    today = coresettings.today_for_org(main_mod.conn, org_id=actor.org_id).isoformat()
+    summary = orders_repo.stats(main_mod.conn, brand_id, today=today)
     total = orders_repo.count_orders(main_mod.conn, brand_id)
     rows = orders_repo.list_orders(
         main_mod.conn, brand_id, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE,
@@ -93,7 +93,8 @@ async def import_orders(request: Request, brand_id: str, drop_file: UploadFile =
 
     result = orders_dispatch.import_dropped_file(
         main_mod.conn, brand_id, filename=drop_file.filename, content=content,
-        actor=str(actor.user_id), today=date.today().isoformat(),
+        actor=str(actor.user_id),
+        today=coresettings.today_for_org(main_mod.conn, org_id=actor.org_id).isoformat(),
     )
     if result.kind == "unknown":
         return _bad_request(result.errors[0] if result.errors else "認不出這個檔案的格式。")

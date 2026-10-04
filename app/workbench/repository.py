@@ -11,11 +11,10 @@ seeding a brand's coordinate vocabulary is schedule's job, not something a promp
 should trigger as a side effect of reading.
 """
 
-from datetime import UTC, datetime
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
-from app.core.db import Conn, ConnProxy, jsonb, new_id
+from app.core.db import Conn, ConnProxy, jsonb, new_id, now_iso
 from app.workbench import claims, image_cards, image_port
 from app.workbench import looks as looks_mod
 
@@ -818,7 +817,7 @@ _COMPLETION_KEYS = frozenset(key for key, _label in _COMPLETION_ITEMS)
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return now_iso()
 
 
 def _get_pack_row(conn: _AnyConn, org_id: str, brand_id: str, pack_id: str) -> dict | None:

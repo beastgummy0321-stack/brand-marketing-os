@@ -55,7 +55,6 @@ what procrastinate does not do on Windows").
 """
 
 import hashlib
-import time
 
 import app.main  # noqa: F401 — triggers .env load, logging install, task registration
 from app import ads, background
@@ -144,7 +143,7 @@ def main(*, wait: bool = True) -> None:
         try:
             llm_gateway.fail_interrupted_tasks(conn)
             _recover_queue_backlog()
-            ads.bootstrap_runtime(conn, int(time.time()), limit=100)
+            ads.bootstrap_runtime(conn, int(coredb.now_utc().timestamp()), limit=100)
             with llm_gateway.worker_execution():
                 background_app().run_worker(wait=wait, concurrency=CONCURRENCY)
         finally:

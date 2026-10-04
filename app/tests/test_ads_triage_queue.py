@@ -816,7 +816,7 @@ class ScaleRefreshQueueTest(unittest.TestCase):
         self.assertEqual(len(second["items"]), 1)
         self.assertNotEqual(second["items"][0]["id"], row["id"])
         self.assertEqual(
-            core_interrupts.list_open(self.conn, brand_id=self.brand,
+            core_interrupts.list_open(self.conn, org_id=self.org, brand_id=self.brand,
                                       category="ads_triage_scale_budget", archive_stale=False),
             [],
         )
@@ -1027,7 +1027,7 @@ class InsufficientDataQueueTest(unittest.TestCase):
         )[0]
         self.assertEqual(again_row["id"], first_row["id"])  # same window -> same row
         self.assertEqual(
-            core_interrupts.list_open(self.conn, brand_id=self.brand,
+            core_interrupts.list_open(self.conn, org_id=self.org, brand_id=self.brand,
                                       category="ads_triage_insufficient_data",
                                       archive_stale=False),
             [],
@@ -1624,7 +1624,8 @@ class _RealCampaignQueue(unittest.TestCase):
 
     def _open(self, kind):
         return core_interrupts.list_open(
-            self.conn, brand_id=self.brand, category=triage.QUEUE_CATEGORY[kind],
+            self.conn, org_id=self.org, brand_id=self.brand,
+            category=triage.QUEUE_CATEGORY[kind],
             archive_stale=False,
         )
 

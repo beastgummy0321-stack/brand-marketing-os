@@ -4,9 +4,12 @@ fixture 一律虛構品牌（「虛構晨光茶行」），嚴禁真實客戶資
 """
 
 import unittest
+from datetime import UTC, date, datetime
+from unittest import mock
 
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
+from app.core import db
 from app.core.db import DEV_ORG_ID  # noqa: E402
 from app.orders import repository as orders_repo
 
@@ -164,6 +167,31 @@ class NoHistoryTest(_BaseOrdersTest):
         self.assertIsNone(summary["average_order_value"])
         self.assertIsNone(summary["repurchase_rate"])
         self.assertEqual(summary["sku_margins"], [])
+
+
+class OrgClockTest(_BaseOrdersTest):
+    """F50 Contract K: 「最近 30 天」 is exactly 30 dates and the org's calendar decides today."""
+
+    def test_default_window_has_exactly_thirty_dates(self):
+        rows = [_order("W-OUT", "2026-05-31", 300), _order("W-IN", "2026-06-01", 500)]
+        orders_repo.save_orders(web.conn, self.bid, rows, source="test", actor=ACTOR)
+        summary = orders_repo.stats(web.conn, self.bid, today="2026-06-30")
+        self.assertEqual((summary["since"], summary["until"]), ("2026-06-01", "2026-06-30"))
+        since, until = (date.fromisoformat(summary[k]) for k in ("since", "until"))
+        self.assertEqual((until - since).days + 1, 30)
+        self.assertEqual(summary["net_revenue"], 500, "the 31st day back is outside the window")
+
+    def test_today_and_sku_cost_valid_from_follow_the_org_calendar(self):
+        # 23:30 UTC on 30 June is 07:30 on 1 July in Taipei: the org's day is the 1st.
+        with mock.patch.object(db, "now_utc",
+                               return_value=datetime(2026, 6, 30, 23, 30, tzinfo=UTC)):
+            summary = orders_repo.stats(web.conn, self.bid)
+            orders_repo.set_sku_cost(web.conn, self.bid, "SKU-T", 10, actor=ACTOR)
+        self.assertEqual(summary["until"], "2026-07-01")
+        version = web.conn.execute(
+            "SELECT valid_from FROM sku_cost_version WHERE brand_id = %s AND sku = 'SKU-T'",
+            (self.bid,)).fetchone()
+        self.assertEqual(str(version["valid_from"]), "2026-07-01")
 
 
 class PolicyChangeLogTest(_BaseOrdersTest):

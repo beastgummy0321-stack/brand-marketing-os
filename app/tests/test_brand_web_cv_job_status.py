@@ -62,7 +62,8 @@ class CustomerVoiceJobStatusTest(unittest.TestCase):
             "status": "failed", "message": background_module.JOB_FAILED_MESSAGE,
         })
         self.assertEqual(repo.list_customer_voices(web.conn, self.bid), [])
-        notices = [r["message"] for r in core_interrupts.list_open(web.conn, brand_id=self.bid)
+        notices = [r["message"] for r in core_interrupts.list_open(
+                       web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.bid)
                    if r["category"] == "customer_voice_extraction_done"]
         self.assertEqual(len(notices), 1)
         self.assertIn("失敗", notices[0])

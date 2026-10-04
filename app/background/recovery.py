@@ -16,12 +16,13 @@ restarts because it lives on the job row.
 
 import asyncio
 from collections.abc import Collection
-from datetime import UTC, datetime
 
 import procrastinate
 from procrastinate.exceptions import UniqueViolation
 from procrastinate.jobs import Status
 from procrastinate.manager import QUEUEING_LOCK_CONSTRAINT
+
+from app.core import db
 
 # No prefix matching: adding a read-only task requires checking its side effects first.
 # The legacy Meta handlers recompute their existing date window on restart;
@@ -91,7 +92,7 @@ async def _recover(dsn: str, retry: frozenset[str], fail: frozenset[str], limit:
                 receipt["stranded_again"].append({"id": job.id, "task_name": job.task_name})
                 continue
             try:
-                await manager.retry_job_by_id_async(job.id, retry_at=datetime.now(UTC))
+                await manager.retry_job_by_id_async(job.id, retry_at=db.now_utc())
             except UniqueViolation as exc:
                 # Enqueue can race the initial check; its transaction is separate.
                 if exc.constraint_name != QUEUEING_LOCK_CONSTRAINT or not job.queueing_lock:

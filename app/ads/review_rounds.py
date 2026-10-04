@@ -280,7 +280,7 @@ def _superseded(conn, org, brand, campaign, review_id):
 def _resolve_ready_notice(conn, org, brand, review_id):
     """End the 「廣告檢討已備妥」 notice `runtime` raised for this round (commits)."""
     for row in interrupts.list_open(
-        conn, brand_id=brand, category="ads_review_ready", archive_stale=False
+        conn, org_id=org, brand_id=brand, category="ads_review_ready", archive_stale=False
     ):
         if row["dedupe_key"] == "ads-review:" + review_id:
             interrupts.resolve(conn, row["id"], actor="system", org_id=org)

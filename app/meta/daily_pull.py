@@ -31,7 +31,7 @@ ADR 0039 點名的那個洞（機器沒開的日子沒有人補；ADR 0063 沒�
 """
 
 import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from app.background import app as background_app
@@ -94,7 +94,7 @@ def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
     `spend_date` 不是從這裡的 today 寫進資料庫：每一列用 Meta 自己回的 `date_start`（票 S1
     D7）。今天的拉取兩者相同，補拉時一次回應橫跨好幾天，只有 `date_start` 是對的。"""
     timezone_name = account.get("timezone_name")
-    today = (datetime.now(ZoneInfo(timezone_name)).date() if timezone_name
+    today = (coresettings.today_in(ZoneInfo(timezone_name)) if timezone_name
              else coresettings.today_for_org(conn, org_id=org_id))
     # 拉的是 [今天-7, 今天]，不是只有今天。歸因窗是 `7d_click`（graph.py `_ATTRIBUTION_WINDOWS`）
     # ——一天的 roas 在那天之後還會被歸因進來的轉換改變七天。只拉當天，等於把每一天的數字

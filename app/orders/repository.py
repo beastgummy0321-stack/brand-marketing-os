@@ -9,17 +9,19 @@
 跟 performance_snapshot 的 append-only 是不同性質的資料，不能照搬同一套規則。
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
+from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import Conn, new_id, now_utc
 from app.orders import identity as identity_mod
 
 VOIDED_ORDER_STATUSES = {"cancelled", "canceled", "voided", "void"}
 
-# 統計卡預設視窗：比照 app/ads/sync.py DEFAULT_LOOKBACK_DAYS 的「最近一段時間」慣例。
+# 統計卡預設視窗：「最近 30 天」＝含今天剛好 30 個日期（F50 Contract K：
+# `settings.day_window(today, 30)`，intake #18——以前是 today-30～today，31 天）。
 DEFAULT_STATS_WINDOW_DAYS = 30
 
 POLICY_TYPE_LABELS = {"discount": "折扣規則", "refund": "退款政策"}
@@ -249,7 +251,8 @@ def set_sku_cost(conn: Conn, brand_id: str, sku: str, unit_cost: float, *,
 
 def _bump_sku_cost_version(conn: Conn, brand_id: str, sku: str, unit_cost: float,
                             *, actor: str, org_id: str, today: str | None = None) -> dict:
-    today = today or date.today().isoformat()
+    # F50 Contract K: a new version is valid from the org's calendar day, not the machine's.
+    today = today or coresettings.today_for_org(conn, org_id=org_id).isoformat()
     prev = conn.execute(
         "SELECT * FROM sku_cost_version WHERE brand_id = %s AND sku = %s AND valid_to IS NULL",
         (brand_id, sku),
@@ -312,13 +315,18 @@ def stats(conn: Conn, brand_id: str, *, since: str | None = None,
          until: str | None = None, today: str | None = None) -> dict:
     """五項統計卡：實收營收（扣退款棄單）、新舊客、客單價、回購率、逐 SKU 毛利。
 
-    預設視窗＝最近 30 天。任何指標的分母是 0 時回 None，不回 0 或假造——
+    預設視窗＝最近 30 天（含 until 共 30 個日期）；today 省略＝組織行事曆上的今天
+    （`today_for_org`，F50 Contract K）。任何指標的分母是 0 時回 None，不回 0 或假造——
     「沒得算」跟「等於 0」是兩件事（鐵則 16，比照 app/ads/performance.py compute_kpis）。
     完全沒有歷史資料時 has_history=False，畫面顯示「累積中」而不是報錯（決策 0025 第 6 點）。
     """
-    today = today or date.today().isoformat()
+    if today is None:
+        org_id = bi_repo.get_brand(conn, brand_id)["org_id"]
+        today = coresettings.today_for_org(conn, org_id=org_id).isoformat()
     until = until or today
-    since = since or (date.fromisoformat(until) - timedelta(days=DEFAULT_STATS_WINDOW_DAYS)).isoformat()
+    if not since:
+        since = coresettings.day_window(
+            date.fromisoformat(until), DEFAULT_STATS_WINDOW_DAYS)[0].isoformat()
 
     orders = _rows(conn.execute(
         "SELECT * FROM order_record WHERE brand_id = %s AND order_date >= %s AND order_date <= %s",

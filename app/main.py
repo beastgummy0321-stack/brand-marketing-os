@@ -28,7 +28,6 @@ ADR 0027 起：連線不再全程共用一條，改成每個 request／背景工
 import os
 import sys
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -115,7 +114,7 @@ def _purge_expired_llm_task_content_if_new_day() -> None:
     """跨日才清一次 llm_task 的過期大欄位（修憲落地 A5，見 app/core/retention.py）；
     每個 request 前比一次日期字串（成本極低），只有真的跨日才動手清。"""
     global _last_retention_check
-    today = datetime.now(UTC).date().isoformat()
+    today = coredb.now_utc().date().isoformat()
     if today != _last_retention_check:
         core_retention.purge_expired_llm_task_content(web.conn)
         _last_retention_check = today
@@ -308,7 +307,7 @@ def _settings_json_data(*, org_id: str, is_owner: bool) -> dict:
     共用同一批底層存取函式，這裡只是換一種給 JSON 用的型別（原始 float／list，不是表單
     用的字串）。"""
     ai_creds = coresettings.resolve_ai_credentials(web.conn, org_id=org_id)
-    this_month_start = datetime.now(UTC).strftime("%Y-%m-01T00:00:00")
+    this_month_start = coresettings.org_month_start(web.conn, org_id=org_id)
     return {
         "masked_key": _masked_key(coresettings.get_api_key(web.conn, org_id=org_id)),
         "api_key_source": coresettings.api_key_source(web.conn, org_id=org_id),
@@ -340,7 +339,7 @@ def api_settings_get(request: Request):
     actor = web.require_actor(request)
     return {
         "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": coredb.now_iso(),
     }
 
 

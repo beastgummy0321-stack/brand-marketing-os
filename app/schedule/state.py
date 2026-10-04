@@ -10,7 +10,7 @@ CLI 驅動也照樣需要，所以它們是工作，不是端點。
 """
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from app import workbench  # module entry point only (docs/contracts/workbench.md)
 from app.background import JOB_FAILED_MESSAGE
@@ -19,7 +19,7 @@ from app.brand_intelligence import personas
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core import settings as coresettings
-from app.core.db import APP_DIR
+from app.core.db import APP_DIR, now_utc
 from app.meta import repository as meta_repo
 from app.schedule import binding as binding_mod
 from app.schedule import period as period_mod
@@ -77,7 +77,7 @@ def job_placeholder_row(task_type: str, status: str) -> dict:
     return {
         "id": None, "task_type": task_type, "status": status,
         "error": JOB_FAILED_MESSAGE if status == "failed" else None,
-        "started_at": datetime.now(UTC), "context_scope_json": {}, "rendered_output": None,
+        "started_at": now_utc(), "context_scope_json": {}, "rendered_output": None,
         "structured_output_json": None, "usage_json": None,
     }
 

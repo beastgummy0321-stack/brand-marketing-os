@@ -24,6 +24,7 @@ import inspect
 import os
 import unittest
 from contextlib import contextmanager
+from datetime import timedelta
 from unittest import mock
 
 import psycopg
@@ -415,17 +416,28 @@ class QueueSnapshotTest(unittest.TestCase):
         self._queue("DELETE FROM procrastinate_jobs")
         self._queue("DELETE FROM procrastinate_workers")
 
+    @staticmethod
+    def _snapshot():
+        # F50 Contract K: `since` is required (the caller's org-day start); an hour back covers
+        # every event these tests write.
+        return background_module.queue_snapshot(since=db.now_utc() - timedelta(hours=1))
+
+    def test_since_is_required(self):
+        """F50 Contract K: no default "00:00 UTC today" -- the caller passes its org's day."""
+        with self.assertRaises(TypeError):
+            background_module.queue_snapshot()  # type: ignore[call-arg]
+
     def test_worker_alive_needs_a_fresh_heartbeat(self):
         """F47 Contract C: no worker row, or only a stale one (a killed worker leaves it), is
         not alive; a heartbeat within 60 s is."""
-        self.assertFalse(background_module.queue_snapshot()["worker_alive"], "no worker row")
+        self.assertFalse(self._snapshot()["worker_alive"], "no worker row")
         self._queue("INSERT INTO procrastinate_workers (last_heartbeat)"
                     " VALUES (now() - interval '2 minutes')")
-        self.assertFalse(background_module.queue_snapshot()["worker_alive"],
+        self.assertFalse(self._snapshot()["worker_alive"],
                          "a heartbeat older than 60 s is a stopped worker")
         self._queue("INSERT INTO procrastinate_workers (last_heartbeat)"
                     " VALUES (now() - interval '5 seconds')")
-        self.assertTrue(background_module.queue_snapshot()["worker_alive"])
+        self.assertTrue(self._snapshot()["worker_alive"])
 
     def test_pick_order_positions_and_waits(self):
         a = background_module.app()
@@ -440,7 +452,7 @@ class QueueSnapshotTest(unittest.TestCase):
             "WHERE id = %s", (later,),
         )
 
-        snap = background_module.queue_snapshot()
+        snap = self._snapshot()
 
         self.assertEqual(snap["total"], 4)
         self.assertEqual(
@@ -462,7 +474,7 @@ class QueueSnapshotTest(unittest.TestCase):
             self._queue("UPDATE procrastinate_jobs SET status = 'doing' WHERE id = %s", (job_id,))
             self._queue("UPDATE procrastinate_jobs SET status = %s WHERE id = %s", (end, job_id))
 
-        snap = background_module.queue_snapshot()
+        snap = self._snapshot()
 
         self.assertEqual((snap["jobs"], snap["total"]), ([], 0))
         self.assertEqual(snap["done_today"], {"org_a": 1, "org_b": 1})
@@ -471,7 +483,7 @@ class QueueSnapshotTest(unittest.TestCase):
     def test_memory_mode_reads_nothing(self):
         with mock.patch.object(config.settings(), "brand_os_job_queue", "memory"), \
                 mock.patch.object(background_module, "_sync_app_for_defer") as queue:
-            snap = background_module.queue_snapshot()
+            snap = self._snapshot()
         queue.assert_not_called()
         self.assertEqual(snap, {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
                                 "worker_alive": True})

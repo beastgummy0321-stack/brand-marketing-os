@@ -10,11 +10,11 @@
 理由同 `app/brand_intelligence/routes_settings.py` 檔頭）。誰依賴它：只有 `app/main.py`。
 """
 
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
 from app.core import interrupts as core_interrupts
+from app.core.db import now_iso
 from app.shared import web
 from app.shared.web import _with_brand_names, require_actor
 
@@ -54,7 +54,7 @@ def api_inbox(request: Request):
                  _with_brand_names(core_interrupts.list_done(web.conn, org_id=actor.org_id))]
     return {
         "data": {"open": open_items, "done": done_items},
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(),
     }
 
 

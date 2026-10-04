@@ -283,7 +283,8 @@ class ReviewRetryTest(unittest.TestCase):
 
         def open_keys():
             return {r["dedupe_key"] for r in interrupts.list_open(
-                self.conn, brand_id=self.brand, category="ads_review_ready", archive_stale=False
+                self.conn, org_id=self.org, brand_id=self.brand, category="ads_review_ready",
+                archive_stale=False,
             )}
 
         old = self.rejected_round()

@@ -7,10 +7,12 @@ sections(report) -> list[dict]；recent(brand_id) -> bool。
 不碰什麼：不 import app.brand_web.routes；不修改或 import app.brand_intelligence.report 的內部實作。
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC
 
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
+from app.core import settings as coresettings
+from app.core.db import now_utc
 from app.llm import context_compiler, gateway, providers
 from app.shared import web
 
@@ -37,7 +39,7 @@ def generate(conn, brand_id: str, actor: str, provider=None) -> tuple:
     context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
     products = [p["name"] for p in repo.list_products(conn, brand_id)]
     source_fact_count = len(knowledge_item_ids)
-    today = date.today().isoformat()
+    today = coresettings.today_for_org(conn, org_id=brand["org_id"]).isoformat()
     user_text = brand_report_mod._build_user_text(
         brand, products, context_text, source_fact_count, today)
     context = gateway.TaskContext(
@@ -79,7 +81,7 @@ def recent(brand_id: str) -> bool:
     generated_at = latest["generated_at"]
     if generated_at.tzinfo is None:
         generated_at = generated_at.replace(tzinfo=UTC)
-    age = (datetime.now(UTC) - generated_at).total_seconds()
+    age = (now_utc() - generated_at).total_seconds()
     return age < _REPORT_RECENT_SECONDS
 
 

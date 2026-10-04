@@ -13,7 +13,6 @@ Entry point: this file's `router` (`app/intake/__init__.register` includes it). 
 `app/intake/__init__.py` only (the background task).
 """
 
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, File, Request, UploadFile
 
@@ -21,7 +20,7 @@ from app import schedule
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id
+from app.core.db import new_id, now_iso
 from app.intake import ai, onboarding, state
 from app.intake import repository as ir
 from app.shared import web
@@ -35,7 +34,7 @@ def _error(status_code: int, message: str) -> JSONResponse:
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 # ---------------------------------------------------------------------------

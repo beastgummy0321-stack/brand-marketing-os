@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request
 from app import background, workbench
 from app.brand_intelligence import repository as bi
 from app.core import settings
+from app.core.db import now_iso, now_utc
 from app.shared import web
 from app.shared.web import require_actor
 
@@ -80,8 +81,8 @@ def _action_url(conn, org_id: str, brand_id: str, kind: str, args: dict) -> str:
 
 def _since(conn, org_id: str) -> datetime:
     """00:00 today in the org's own timezone (the same "today" every other screen uses)."""
-    zone = settings.org_timezone(conn, org_id=org_id)
-    return datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    return settings.org_day_start(conn, org_id=org_id,
+                                  day=settings.today_for_org(conn, org_id=org_id))
 
 
 @router.get("/api/jobs/active")
@@ -110,7 +111,7 @@ def jobs_active(request: Request):
         started_at = ""
         if job["status"] == "running" and waited is not None:
             started_at = datetime.fromtimestamp(
-                datetime.now(UTC).timestamp() - waited, UTC).isoformat()
+                now_utc().timestamp() - waited, UTC).isoformat()
         jobs.append({
             "brand_id": brand_id, "brand_name": brand["name"], "kind": kind,
             "status": job["status"], "stage": stage, "started_at": started_at,
@@ -127,5 +128,5 @@ def jobs_active(request: Request):
         "failed_today": snapshot["failed_today"].get(actor.org_id, 0),
         "worker_alive": worker_alive,
         "stalled": not worker_alive and org_waiting,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(),
     }

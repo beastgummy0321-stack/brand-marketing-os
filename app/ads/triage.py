@@ -1168,11 +1168,12 @@ def _scoped_candidates(conn, org_id, brand_id, items, open_rows, *, settle=True,
     return items, kept
 
 
-def _open_queue_rows(conn, brand_id) -> list:
+def _open_queue_rows(conn, org_id, brand_id) -> list:
     """This brand's open rows in every queue category (`archive_stale=False`: no side effect)."""
     categories = set(QUEUE_CATEGORY.values())
     return [
-        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        row for row in interrupts.list_open(conn, org_id=org_id, brand_id=brand_id,
+                                            archive_stale=False)
         if row["category"] in categories
     ]
 
@@ -1191,8 +1192,8 @@ def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
     `insufficient_data`) is never live here, so its open rows resolve."""
     for category in QUEUE_CATEGORY.values():
         stale = [
-            row for row in interrupts.list_open(conn, brand_id=brand_id, category=category,
-                                                 archive_stale=False)
+            row for row in interrupts.list_open(conn, org_id=org_id, brand_id=brand_id,
+                                                 category=category, archive_stale=False)
             if row["dedupe_key"] not in live_keys
         ]
         for row in stale:
@@ -1214,7 +1215,8 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
     items = _classify_brand(conn, org_id, brand_id, scope["ids"])
     holds = []
     items, candidates = _scoped_candidates(
-        conn, org_id, brand_id, items, _open_queue_rows(conn, brand_id), holds=holds, scope=scope,
+        conn, org_id, brand_id, items, _open_queue_rows(conn, org_id, brand_id), holds=holds,
+        scope=scope,
     )
     decisions = [c for c in candidates if c["kind"] in queue_done.DECISION_KINDS]
     for candidate in decisions:
@@ -1255,7 +1257,7 @@ def get_queue(conn, org_id, brand_id, items=None, *, settle=True) -> dict:
         items = _classify_brand(conn, org_id, brand_id, scope["ids"])
     holds = []
     items, candidates = _scoped_candidates(
-        conn, org_id, brand_id, items, _open_queue_rows(conn, brand_id), settle=settle,
+        conn, org_id, brand_id, items, _open_queue_rows(conn, org_id, brand_id), settle=settle,
         holds=holds, scope=scope,
     )
     return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
@@ -1317,7 +1319,8 @@ def resolve_done(conn, org_id, brand_id, *, kind, identity_id) -> None:
     prefix = _key_prefix(kind, identity_id)
     open_rows = [
         row for row in interrupts.list_open(
-            conn, brand_id=brand_id, category=QUEUE_CATEGORY[kind], archive_stale=False,
+            conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[kind],
+            archive_stale=False,
         )
         if row["dedupe_key"].startswith(prefix)
     ]
@@ -1371,7 +1374,7 @@ def resolve_campaign(conn, org_id, brand_id, campaign_id) -> None:
     }
     settle_category = QUEUE_CATEGORY["settle"]
     open_rows = [
-        row for row in _open_queue_rows(conn, brand_id)
+        row for row in _open_queue_rows(conn, org_id, brand_id)
         if row["category"] != settle_category and _key_identity(row["dedupe_key"]) in identities
     ]
     _resolve_unless_waiting(conn, org_id, brand_id, open_rows, campaign_id)
@@ -1650,7 +1653,8 @@ def _queue_payload(conn, org_id, brand_id, items, candidates, holds=()) -> dict:
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
     listed = [
         (row, decision_by_key[row["dedupe_key"]])
-        for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        for row in interrupts.list_open(conn, org_id=org_id, brand_id=brand_id,
+                                        archive_stale=False)
         if row["category"] in queue_categories and row["dedupe_key"] in decision_by_key
     ]
     listed.extend(

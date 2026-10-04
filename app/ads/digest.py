@@ -58,7 +58,7 @@ def inbox_message(digest: dict) -> str:
 def close_previous_inbox(conn, org_id: str, brand_id: str, keep_key: str | None) -> None:
     """Resolve every open digest row of this brand except `keep_key` (today's, when today has
     one) -- the inbox holds at most the latest digest, and none once nothing is open."""
-    for row in interrupts.list_open(conn, brand_id=brand_id, category=CATEGORY,
+    for row in interrupts.list_open(conn, org_id=org_id, brand_id=brand_id, category=CATEGORY,
                                     archive_stale=False):
         if row["dedupe_key"] != keep_key:
             interrupts.resolve(conn, row["id"], actor="system", org_id=org_id)
