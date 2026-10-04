@@ -1991,3 +1991,54 @@ those modules' docstrings; the ads-side rules:
   floored); CSV numbers are rounded to 2 decimals. The crumb and step chip share one launch name (`PublishFlow.tsx::launchLabel`);
   the verify step shows the readback reason with its time (`LaunchItem.reason_at`).
 - `app/core/db.new_id` is monotonic within a millisecond (rows of one transaction keep creation order).
+
+### 6.50 One ruler, one money calculator, one planner context, one claims guard（ruled 2026-10-04；built in F48）
+Audit 2026-10-04 W1–W6 (`docs/backlog/audit-2026-10-04/README.md`; decisions 1–4, 7, 8, 11, 13 user-confirmed). Supersedes §6.32's
+「below the gate」 grading and §6.33's sample-gate wording (sample size is a shown flag, never a gate); for the discount family
+only, §6.48／§6.49.1 Contract O's exact-term rule. Machine checks: `app/tests/test_ads_one_ruler.py` (AST: ruler numbers only in
+`learning_rank.py`／`triage.py`; grade-keyed tables; `record_learning` only in `ads_learnings.write`; money `round`／`floor`／`ceil`
+only in `budget.py`), `app/tests/test_ads_planner_context.py` (every `ads_*` planner calls `planner_context`; hand edits call
+`planner_context.menu`), `frontend/src/components/ads/oneRuler.test.ts` (ruler literals, label-string branches, number+unit
+literals in strings, `Math.round` over money, mirror comments; per-line `NOT_A_RULER` excuses fail when stale).
+- **One ruler (Contract R).** `triage.grade_window` grades every known cost: 划算 ≤ T, 偏貴 ≤ 1.2T, 太貴 > 1.2T; a known zero at
+  ≥ `STOP_LOSS_SPEND_MULTIPLE`×T is 沒賣出; a known zero below that line is `too_new` 「剛開始」 (reason code renamed from
+  `below_sample_gate`); unknown／mixed currency 資料不足; no cap 未判斷. Items carry `sample {sales, few, too_new, …}`
+  (`too_new` uses the ad's own days with data). `learning_rank.rank` ranks the same rows: a known zero below the line, or with no
+  cap, is not ranked anywhere (cleanup, settle 「還沒賣出，花費也還沒到門檻」, closeout learning; F48-I13). Cleanup closes from the
+  bottom of `learning_rank.rank` (every 沒賣出, then `replace` rows most expensive first while over capacity); `keep`／`keep_relative`
+  and unranked never close; entries carry `rank, of, sales, few, verdict, verdict_label, flags, reason_text` in served order.
+  Settle fates follow `learning_rank.is_keep`, rows served in rank order; closeout verdict is 達成／未達成 on the cap alone with
+  `verdict_json.sample {purchases, days, bucket}` shown; `learning._confidence` counts campaigns with ≥ `MIN_RESULT_EVENTS`
+  purchases; scale-up skips an owner under `MIN_RESULT_EVENTS` sales and the queue serves it in `scale_hold` 「樣本少，先不加碼」.
+  Pause／cleanup／scale `reason_text` is built from the ad's own grade and numbers.
+- **Rules served (Contract R-API).** `GET /api/ads/brands/{b}/rules` → `{grade, ab, labels, glossary}` from the ruler modules;
+  `frontend/src/components/ads/patterns/rules.ts::useAdsRules()` is the only reader (tests seeded via vitest `setupFiles`); while
+  unloaded, words print without numbers. One sample chip only: 「樣本少」; no 「還太新」 chip.
+- **One learning writer (Contract W).** `ads_learnings.write(..., product_id=...)` is the only `record_learning` caller in
+  `app/ads`; every row carries its sell-way (`None` only for imported campaigns), so `_newest_per_product` works per sell-way.
+- **留下 carries the creative (Contract K, decision 2).** `plan.adopt_strategy` carries the newest closed campaign's `keep`／
+  `keep_relative` ads of this sell-way before asking the model (same coordinates, name, group, scene;
+  `coordinates_snapshot_json.carried_from`), attaches their confirmed original and copy through the slot path (slot 已確認), and asks
+  the model only for the remaining ads; a carried ad is skipped when it would leave an uncovered role without a place or its group
+  already holds 3; a carried ad whose creative is gone stays normal with `carry_note`. Ads serve `carried_label` 「沿用上一期」.
+  When every ad is a ready carried ad, `dispatch_pack` submits nothing (`{pack_id: null, nothing_to_prepare: true}`).
+- **Capacity (Contract C, decision 4).** `triage_capacity.can_support(daily, cap)` is the one formula; ceiling =
+  `max(can_support + 1, roles)`; a reply over the ceiling is refused; the campaign payload serves `capacity {daily, cap,
+  can_support, ceiling, carried}` and `menu`.
+- **One money calculator (Contract M, decision 8).** `budget.whole` (half up) is the only money rounding; `budget.daily_of` =
+  floor(total／days) (the one exception: never above the chosen total); `total_of` exact. Adopt writes `budget_planned :=
+  total_of(Σ group daily, days)`, so `budget_total == budget_planned`; reads never re-split; `budget_preview {daily, total, chosen,
+  note}`; a total under one per day → 400 「總預算太少：每天不到 1 元」. After adoption, dates／products／groups／platform PATCH → 409
+  `plan_already_adopted` (the cap stays editable) and `ConfirmBriefPage` redirects a non-draft campaign to `?tab=strategy`; a new
+  total on a `ready` campaign with unbound groups re-splits them and returns `resplit`; bound → 409 `campaign_bound`.
+  `month_fit.extra_basis {month, days, period_total}` prints 「N 月的 D 天要花 X（整期 Y）」.
+- **Planner context (Contract P).** `app/ads/planner_context.py` is the one input every planner reads (brief, strategy, plan,
+  `create_ad`／`update_ad`): sell-way facts and kind, 【不能講】, offers with sentences, customer groups, sell-way learnings (plus
+  brand-level imported rows), previous `learning_goals`, capacity, the one coordinate `menu` (excluded keys carry a reason). Hand
+  edits outside the menu → 400 `coordinate_unavailable`; names with a forbidden term → 400 `name_forbidden`.
+- **Strategy facts (Contract S, decision 3).** `strategy.facts [{kind, text}]` (groups, offers, numbers, capacity, learnings) are
+  built by the program and recomputed on every campaign read; the model's prose is refused when a digit, `%` or `NT$` is left after
+  stripping the names it was given (`planner_context.quoted_names`).
+- **Known debt left to features C／D**: `NOT_A_RULER` excuses in `oneRuler.test.ts` for browser arithmetic (`PaceChart.tsx`,
+  `PerformanceTab.tsx`, `reviewFlow.ts`) and copied backend numbers (`ReviewPanel`, `ReviewTracking`, `NewCampaignPage`, `CopyPage`,
+  `OverviewBody` 「近 14 天」); the statutory reminder row has no regulation link field (intake).

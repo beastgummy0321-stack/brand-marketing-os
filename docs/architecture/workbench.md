@@ -367,3 +367,13 @@ F47: the brief is committed before its jobs are enqueued (`enqueue()` defers on 
 生成設定仍為本次生成的 readonly 快照，只有原接口支持的 run parameters 才能編輯。不改 F07 十張／輪播／主力探索／腳本／使用者選定／驗證規則，不新增 LLM 呼叫或 provider。F07 原人工驗收内容保持，生成設定／特徵文字改由展開詳情讀取；其未完成驗收不因此結案。
 
 內部整理留在 workbench，外部只經現有 index.ts、API client 與後端 public entry；不從 ads 引入私有 UI 元件，不為共用收合增加業務依賴。表單收合草稿、可存取性與狀態遵循 design-system.md §F12。
+
+### 5.16 One claims guard（F48 Contract G, 2026-10-04）
+`claims.forbidden_terms(conn, brand, product_id)` (facade `workbench.forbidden_terms`) is the one 「不能講」 list: forbidden claims and
+`forbidden_word` rules of the sell-way's knowledge products plus brand-level ones; another product's entries never apply.
+`claims.registered_names` (active product and sell-way names) are stripped before any scan, so 「超能特惠組」 is a name, not a
+promise. Approved product claims count as typed (the length／fulfilment filters are for brand facts only). A discount-family word
+(折扣、特價、優惠、原價、特惠 …) is backed by any `discount` offer row (decision 7); 限時／買N送／滿額 keep the exact-term rule.
+`validate_claims` returns `forbidden_terms`; the workbench warns on them and the ads slot blocks on the same list. The offer an ad
+was written for is `live_creative.offer_for` (the dispatch snapshot, else the current key). `workbench.statutory_reminder` serves the
+食安法 reminder for slot copy (computed at read, never stored, never blocking).

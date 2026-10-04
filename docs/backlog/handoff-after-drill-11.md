@@ -6,6 +6,7 @@ Start here in the next session. A board, not an implementation authorization. Re
 - **2026-10-04 whole-program audit** (user order: this round is the final fix, end the simulate→find→fix loop):
   `audit-2026-10-04/README.md` groups R1–R7 plus ~110 new verified findings into 19 generator workstreams W1–W19 with the
   machine check each must install; decisions 10–14 there extend §2 below. Carve from that README, not from §1 here.
+  R1, R2 (E1/B13/E7/B6) and R5 (B2/N1) are built: `../architecture/ads.md` §6.50 (F48).
 - Drill 11 ran 2026-10-03 03:40–07:45. **Bar not met**: blocking 0 (drill 10's three all gone) but no B dimension reached 7.
   B 5 / 6 / 4 (drill-10 measure 6) / 5 / 6 / 6 / 6 / 6 / 5 (drill 10: 5 / 5 / 2 / 3 / 6 / 4 / 6 / 4 / 3). Result: `../drills/drill-11/report.md`.
 - **User ruling 2026-10-03**: review 「換一張圖」 dead end on system-built campaigns (report §4.1 C1) = 要繞路, not blocking. Blocking count final at 0.

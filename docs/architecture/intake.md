@@ -232,3 +232,8 @@ drill 9 #9: quantity had no unit, so a ×N sell-way priced its cost from whichev
   token that lists no ad account is not stored (400) and the input stays on screen; a stored token offers 「換一把權杖」.
 - **Unsaved step edits** survive 上一步, the step bar and a reload: one helper `frontend/src/components/intake/shared/stepDraft.ts`
   (sessionStorage per brand / product and step, dropped once 下一步 saves); brand step 3 and product steps 1–3 use it.
+
+### F48 (2026-10-04): a 食安法 hit is a reminder, never the verdict
+Supersedes F43's 「食安法 hits forced 不能講」 (decision 13). `product_onboarding.get_evidence`／`_check_claims` and `custom.py` keep
+the user's 可以講／不能講 and attach `statutory` as a flag; the product claims step shows the reminder on the row and both buttons
+stay usable. The reminder has no regulation link yet (no URL field is served).
