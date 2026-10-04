@@ -1,6 +1,6 @@
 """Scoped cache/import/sync APIs. HTTP handlers never wait for platform reads."""
 
-from datetime import UTC, date, timedelta
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -52,50 +52,34 @@ def existing(
     cursor: str | None = None,
     limit: int = Query(100, ge=1, le=100),
 ):
+    """F49 Contract O: read-only -- the cached listing, the account's job and its outcome. It never
+    requests a read (that is `POST …/existing-campaigns/refresh`); an unreadable account answers
+    200 with its cached items, `job: null` and a failed outcome naming why."""
     actor = web.require_actor(request)
     sources = _sources(web.conn, actor.org_id, brand_id)
     if not sources and platform is None:
-        return {"items": [], "sources": [], "job": None, "next_cursor": None}
+        return {"items": [], "sources": [], "job": None, "outcome": None, "next_cursor": None}
     platform = platform or sources[0]["platform"]
     source_account = source_account or next(
         (a["account_id"] for a in sources if a["platform"] == platform), ""
     )
+    result = repo.listing(
+        web.conn, actor.org_id, brand_id, platform, source_account, after=cursor, limit=limit
+    )
     try:
         sync.account_reader(web.conn, actor.org_id, brand_id, platform, source_account)
-        row = web.conn.execute(
-            "SELECT * FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s "
-            "AND platform=%s AND source_account=%s",
-            (actor.org_id, brand_id, platform, source_account),
-        ).fetchone()
-        from datetime import datetime
-
-        now = datetime.now(UTC)
-        stale = not row or (
-            row["status"] not in {"pending", "running"}
-            and (
-                row["last_attempt_at"] is None
-                or now - row["last_attempt_at"] > timedelta(minutes=5)
-            )
-            and (
-                row["last_success_at"] is None or now - row["last_success_at"] > timedelta(hours=6)
-            )
-        )
-        job = (
-            sync.request_sync(web.conn, actor.org_id, brand_id, platform, source_account)
-            if stale
-            else dict(row or {})
-        )
-        result = repo.listing(
-            web.conn, actor.org_id, brand_id, platform, source_account, after=cursor, limit=limit
-        )
     except ValueError as exc:
-        raise _error(exc) from exc
+        job, outcome = None, sync.failed_outcome(exc)
+    else:
+        job = sync.account_job(web.conn, actor.org_id, brand_id, platform, source_account)
+        outcome = sync.outcome(job["tasks"] if job else {})
     return {
         **result,
         "sources": sources,
         "platform": platform,
         "source_account": source_account,
         "job": job,
+        "outcome": outcome,
     }
 
 
@@ -163,42 +147,36 @@ class Window(BaseModel):
 
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/sync")
 def campaign_sync(request: Request, brand_id: str, campaign_id: str, body: Window):
+    """Every job the re-read requested (`jobs`, drill-11 #14): each root account, or -- a campaign
+    not yet on the platform (first launch handoff, drill 5) -- every bound account's listing.
+    `job` is the first, kept for callers not yet on `jobs`."""
     actor = web.require_actor(request)
     try:
         repo._campaign(web.conn, actor.org_id, brand_id, campaign_id)
-        source = web.conn.execute(
-            "SELECT platform,source_account FROM ads_external_entity "
-            "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND parent_native_id IS NULL",
-            (actor.org_id, brand_id, campaign_id),
-        ).fetchone()
-        if source is None:
-            # A campaign not yet on the platform (first launch handoff) has no native root: its
-            # candidates come from the brand's bound account listing, so refresh that account
-            # (drill 5: the handoff could never see the campaign the user had just built).
-            accounts = [
-                (channel["key"], account["account_id"])
-                for channel in channels.CHANNELS
-                if (reader := channels.external_reader(channel["key"]))
-                for account in reader.accounts(web.conn, actor.org_id, brand_id)
-            ]
-            if not accounts:
-                raise ValueError("此工作區沒有可同步的原生來源。")
-            jobs = [
-                sync.request_sync(web.conn, actor.org_id, brand_id, platform, account)
-                for platform, account in accounts
-            ]
-            return {"job": jobs[0]}
-        return {
-            "job": sync.request_sync(
-                web.conn, actor.org_id, brand_id, **dict(source), **body.model_dump()
-            )
-        }
+        jobs = sync.request_campaign_sync(
+            web.conn, actor.org_id, brand_id, campaign_id, **body.model_dump()
+        )
     except ValueError as exc:
         raise _error(exc) from exc
+    return {"job": jobs[0], "jobs": jobs}
+
+
+@router.get("/brands/{brand_id}/campaigns/{campaign_id}/sync-outcome")
+def campaign_sync_outcome(request: Request, brand_id: str, campaign_id: str):
+    """F49 Contract O: `{state, code, text, job_ids, last_success_at}` -- the worst outcome over
+    the jobs covering the campaign. Read-only."""
+    actor = web.require_actor(request)
+    try:
+        repo._campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    except ValueError as exc:
+        raise web.ApiError(404, "campaign_unknown", str(exc)) from exc
+    return sync.campaign_outcome(web.conn, actor.org_id, brand_id, campaign_id)
 
 
 @router.get("/brands/{brand_id}/sync-jobs/{job_id}")
-def job_status(request: Request, brand_id: str, job_id: str):
+def job_status(request: Request, brand_id: str, job_id: str, campaign_id: str | None = None):
+    """`{job, connected, outcome}`; `campaign_id` scopes the outcome to that campaign's tasks
+    (plus the account's own)."""
     actor = web.require_actor(request)
     try:
         job = repo.get_job(web.conn, actor.org_id, brand_id, job_id)
@@ -211,7 +189,11 @@ def job_status(request: Request, brand_id: str, job_id: str):
         connected = True
     except ValueError:
         connected = False
-    return {"job": job, "connected": connected}
+    return {
+        "job": job,
+        "connected": connected,
+        "outcome": sync.outcome(job["tasks"], campaign_id=campaign_id),
+    }
 
 
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}/external")

@@ -659,7 +659,10 @@ class ExternalSyncTest(unittest.TestCase):
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
         self.reader.connected = False
         job = self.run_pages(job)
-        self.assertEqual(job["status"], "partial")
+        # F49 Contract O: every task of this read failed -> `failed`, and the job says why.
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(sync.outcome(job["tasks"])["code"], "disconnected")
+        self.assertEqual(job["error"], sync.outcome(job["tasks"])["text"])
         self.assertEqual(
             len(repo.listing(self.conn, self.org, self.brand, "other", "account")["items"]), 2
         )
@@ -955,3 +958,117 @@ class ObservedAtClockTest(unittest.TestCase):
             (self.org, self.brand),
         ).fetchone()["observed_at"]
         self.assertEqual(stored, later)
+
+
+class SyncOutcomeTest(unittest.TestCase):
+    """F49 Contract O: one outcome per read, written by the sync, computed by `outcome`."""
+
+    setUp = ExternalSyncTest.setUp
+    run_pages = ExternalSyncTest.run_pages
+
+    def _import(self):
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        return campaign["id"]
+
+    def test_outcome_states_in_order(self):
+        ok = {"status": "succeeded", "rows": 3}
+        bad = {"status": "failed", "error_code": "source_error"}
+        cases = [
+            ({"list": ok, "a": {"campaign_id": "c", "status": "pending"}}, "running", None),
+            ({"list": bad, "monthly:x": {**bad, "error_code": "permission_denied"}},
+             "failed", "permission_denied"),
+            ({"list": ok, "monthly:x": ok, "c:observations": {**bad, "campaign_id": "c",
+                                                              "error_code": "page_limit"}},
+             "partial", "page_limit"),
+            ({"list": ok, "c:observations": {"campaign_id": "c", "section": "observations",
+                                             "status": "succeeded", "rows": 0}},
+             "empty", "no_rows"),
+            ({"list": {**ok, "section": "list", "rows": 0}}, "empty", "no_rows"),
+            ({"list": {"section": "list", "status": "succeeded"}}, "found", None),  # uncounted
+            ({}, "empty", "not_read"),
+        ]
+        for tasks, state, code in cases:
+            with self.subTest(state=state, code=code):
+                result = sync.outcome(tasks)
+                self.assertEqual((result["state"], result["code"]), (state, code))
+                self.assertTrue(result["text"].startswith(sync.SYNC_TEXT[state]))
+                if code:
+                    self.assertIn(sync.SYNC_REASONS[code], result["text"])
+        # Codes by the fixed priority, not by task order; an unknown code follows them.
+        tasks = {"a": {**bad, "error_code": "derive_failed"},
+                 "b": {**bad, "error_code": "disconnected"}, "c": {**bad, "error_code": "odd"}}
+        self.assertEqual(sync.outcome(tasks)["code"], "disconnected")
+        # Scope: the account's tasks plus that campaign's -- another campaign's failure is not it.
+        tasks = {"list": ok, "c1:observations": {**bad, "campaign_id": "c1"},
+                 "c2:observations": {**ok, "campaign_id": "c2", "section": "observations"}}
+        self.assertEqual(sync.outcome(tasks, campaign_id="c2")["state"], "found")
+        self.assertEqual(sync.outcome(tasks, campaign_id="c1")["state"], "partial")
+        self.assertEqual(sync.outcome(tasks)["state"], "partial")
+
+    def test_one_failed_task_of_several_is_partial_with_its_code_and_sentence(self):
+        campaign = self._import()
+        with patch.object(
+            self.reader, "read_creatives", side_effect=SourceReadError("private", "page_limit"),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "partial")
+        read = sync.outcome(job["tasks"], campaign_id=campaign)
+        self.assertEqual((read["state"], read["code"]), ("partial", "page_limit"))
+        self.assertEqual(job["error"], sync.outcome(job["tasks"])["text"])
+        self.assertIn(sync.SYNC_REASONS["page_limit"], job["error"])
+        self.assertNotIn("private", job["error"])
+        # A clean re-read clears the job's error.
+        job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        self.assertIsNone(job["error"])
+        self.assertEqual(sync.outcome(job["tasks"], campaign_id=campaign)["state"], "found")
+
+    def test_every_task_failed_is_failed(self):
+        with patch.object(
+            self.reader, "list_existing", side_effect=SourceReadError("x", "permission_denied"),
+        ), patch.object(
+            self.reader, "read_monthly", side_effect=SourceReadError("x", "permission_denied"),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "failed")
+        read = sync.outcome(job["tasks"])
+        self.assertEqual((read["state"], read["code"]), ("failed", "permission_denied"))
+        self.assertEqual(job["error"], read["text"])
+
+    def test_clean_read_with_no_observation_rows_is_empty(self):
+        campaign = self._import()
+        with patch.object(self.reader, "read_observations", return_value=SourcePage([])):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        self.assertIsNone(job["error"])
+        read = sync.outcome(job["tasks"], campaign_id=campaign)
+        self.assertEqual((read["state"], read["code"]), ("empty", "no_rows"))
+        # The rows the reads saved are counted per task (the listing read two pages).
+        self.assertEqual(job["tasks"]["list"]["rows"], 2)
+        observed = next(t for t in job["tasks"].values() if t["section"] == "observations")
+        self.assertEqual(observed["rows"], 0)
+
+    def test_request_failure_is_an_account_failure_the_next_request_clears(self):
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        sync.record_request_failure(
+            self.conn, self.org, self.brand, "other", "account", "unsupported",
+        )
+        job = self.conn.execute(
+            "SELECT * FROM ads_external_sync_job WHERE brand_id=%s", (self.brand,)
+        ).fetchone()
+        read = sync.outcome(job["tasks"])
+        # The earlier clean reads stay (their coverage proof too); the request names the reason.
+        self.assertEqual((read["state"], read["code"]), ("partial", "unsupported"))
+        self.assertEqual((job["status"], job["error"]), ("partial", read["text"]))
+        job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        self.assertNotIn(sync.REQUEST_TASK, job["tasks"])

@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from app import background
 from app.ads import change_control_data as changes
 from app.ads import channels, external_sync, lifecycle, month_budget
+from app.ads.adapters.external import SourceReadError
 from app.core import db, interrupts, settings
 
 TASK = "background.ads_runtime_campaign"
@@ -39,7 +40,7 @@ def _save(conn, org, brand, campaign, patch):
 def _sources(conn, org, brand, campaign):
     rows = conn.execute(
         "SELECT DISTINCT e.platform,e.source_account,j.status,j.last_attempt_at,j.last_success_at,"
-        "j.tasks,j.error FROM ads_external_entity e LEFT JOIN ads_external_sync_job j "
+        "j.tasks FROM ads_external_entity e LEFT JOIN ads_external_sync_job j "
         "ON j.org_id=e.org_id AND j.brand_id=e.brand_id AND j.platform=e.platform "
         "AND j.source_account=e.source_account WHERE e.org_id=%s AND e.brand_id=%s "
         "AND e.campaign_id=%s AND e.parent_native_id IS NULL ORDER BY e.platform,e.source_account",
@@ -53,14 +54,15 @@ def _sources(conn, org, brand, campaign):
             and t.get("section") == "observations" and t.get("status") == "succeeded"
         ]
         latest = max(periods, key=lambda t: t["end"]) if periods else None
-        failed = bool(row["error"]) or any(t.get("status") == "failed" for t in tasks)
+        # F49 Contract O: the read's one outcome, scoped to this campaign (and its account).
+        read = external_sync.outcome(row["tasks"] or {}, campaign_id=campaign)
         result.append({
             **{k: row[k] for k in (
                 "platform", "source_account", "last_attempt_at", "last_success_at"
             )},
             "status": row["status"] or "unknown",
             "coverage": {"start": latest["start"], "end": latest["end"]} if latest else None,
-            "error": "部分來源未能讀取；請檢視連線與同步缺漏。" if failed else None,
+            "error": read["text"] if read["state"] in {"failed", "partial"} else None,
         })
     return result
 
@@ -130,19 +132,14 @@ def _sync_sources(conn, org, brand, campaign, now):
                     start=start, end=end,
                 )
                 count += 1
-        except Exception:
+        except Exception as exc:
             conn.rollback()
             # Even a disconnected account needs a persisted backoff. A failure before
             # request_sync's insert must not cause a new source attempt every minute.
-            conn.execute(
-                "INSERT INTO ads_external_sync_job(id,org_id,brand_id,platform,source_account,"
-                "status,error,last_attempt_at) VALUES(%s,%s,%s,%s,%s,'partial',%s,%s) "
-                "ON CONFLICT(org_id,brand_id,platform,source_account) DO UPDATE SET "
-                "last_attempt_at=EXCLUDED.last_attempt_at,updated_at=now(),error=EXCLUDED.error",
-                (db.new_id("aes"), org, brand, source["platform"], source["source_account"],
-                 "來源連線或排程未完成；已保留原進度，稍後重試。", now),
+            external_sync.record_request_failure(
+                conn, org, brand, source["platform"], source["source_account"],
+                exc.code if isinstance(exc, SourceReadError) else None,
             )
-            conn.commit()
     return count
 
 

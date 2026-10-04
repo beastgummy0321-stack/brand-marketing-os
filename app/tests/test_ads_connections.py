@@ -330,7 +330,10 @@ class ConnectionsTest(unittest.TestCase):
         })
         source = self._source(self._read(), "meta:act_main")
         self.assertEqual(source["state"], "failed")
-        self.assertEqual(source["note"], "Meta 暫時讀不到；09/17、09/18 讀不到")
+        # F49 Contract O: the reason is the one sync outcome's sentence (the list failed, the
+        # month read: partial), never a task's own error text.
+        reason = f"{sync.SYNC_TEXT['partial']}：{sync.SYNC_REASONS['source_error']}"
+        self.assertEqual(source["note"], f"{reason}；09/17、09/18 讀不到")
         self.assertEqual(source["reread"], {"platform": "meta", "source_account": "act_main",
                                             "start": "2026-09-17", "end": "2026-09-18"})
 
@@ -338,7 +341,9 @@ class ConnectionsTest(unittest.TestCase):
         self._job("act_main", {"list": {"section": "list", "status": "failed",
                                         "error_code": "source_error", "errors": ["來源讀取失敗"]}})
         source = self._source(self._read(), "meta:act_main")
-        self.assertEqual(source["note"], "來源讀取失敗")
+        self.assertEqual(
+            source["note"], f"{sync.SYNC_TEXT['failed']}：{sync.SYNC_REASONS['source_error']}",
+        )
         self.assertEqual((source["reread"]["start"], source["reread"]["end"]),
                          ("2026-08-22", "2026-09-18"))
 
