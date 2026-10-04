@@ -663,14 +663,32 @@ def upload(conn, org, brand, campaign_id, ad_id, body, actor) -> dict:
     placement = user_assets.attach_selected(
         conn, org, brand, campaign_id, body, actor, purpose=ad["name"], ad_id=ad["id"]
     )
-    _point(conn, org, brand, campaign_id, ad_id, placement["id"])
-    conn.commit()
-    _confirm_if_ready(conn, org, brand, campaign_id, placement, actor)
-    settle(conn, org, brand, campaign_id, placement["id"])
+    _place(conn, org, brand, campaign_id, ad_id, placement, actor)
     return {
         "placement": user_assets.placement(conn, org, brand, campaign_id, placement["id"]),
         "slots": read(conn, org, brand, campaign_id),
     }
+
+
+def _place(conn, org, brand, campaign_id, ad_id, placement, actor) -> None:
+    """Point the slot at `placement`, then the no-AI confirmation and the assignment."""
+    _point(conn, org, brand, campaign_id, ad_id, placement["id"])
+    conn.commit()
+    _confirm_if_ready(conn, org, brand, campaign_id, placement, actor)
+    settle(conn, org, brand, campaign_id, placement["id"])
+
+
+def carry(conn, org, brand, campaign_id, ad_id, asset_id, copy_fields, actor) -> None:
+    """F48 Contract K: a 留下 ad carried into the next plan takes the original and copy it went
+    out with -- `user_assets.attach(…, ad_id=…)` on the same original with that copy (purpose =
+    the ad's name), then the same pointer／confirmation／assignment an upload runs, so the slot
+    reads ready without a second click (or `blocked` with the refusal's reason)."""
+    ad = _slot_ad_for_write(conn, org, brand, campaign_id, ad_id)
+    placement = user_assets.attach(
+        conn, org, brand, campaign_id, asset_id, copy_fields, actor, purpose=ad["name"],
+        ad_id=ad_id,
+    )
+    _place(conn, org, brand, campaign_id, ad_id, placement, actor)
 
 
 def copy_options(conn, org, brand, campaign_id) -> dict:

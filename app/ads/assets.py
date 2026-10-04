@@ -211,10 +211,14 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str:
         "name": campaign["name"],
         "summary": summary,
         "context": _origin(brand_id, brand_name, campaign, groups),
+        # F48 Contract K: a carried 留下 ad whose slot already holds last period's creative
+        # (ready) needs nothing made -- it stays out of the pack.
         "sets": [
             _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"),
                     groups_by_id)
             for group in groups for ad in group["ads"]
+            if not (ad.get("carried_label")
+                    and _material_ready(conn, org_id, brand_id, campaign_id, ad))
         ],
     }
     return workbench.submit_pack(conn, org_id, brand_id, pack)

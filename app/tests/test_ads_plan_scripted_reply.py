@@ -10,7 +10,7 @@ reply builds one group per adopted-allocation line `- <role>（<label>）：<pct
 import json
 import unittest
 
-from app.ads import plan
+from app.ads import plan, planner_context
 from app.llm import providers
 
 _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
@@ -69,7 +69,7 @@ class ScriptedDeliveryPlanValidatesTest(unittest.TestCase):
         )
         vocabulary = "\n\n【座標詞彙】\n- offer｜bundle｜組合優惠\n- offer｜none｜無優惠"
         offers = (
-            "\n\n" + plan.OFFERS_HEADER
+            "\n\n" + planner_context.OFFERS_HEADER
             + "\n- offer=free_shipping｜滿 NT$999 免運"
             + "\n- offer=bundle｜三盒組優惠價 NT$999（原價 NT$1,197）"
         )
@@ -166,6 +166,53 @@ class ScriptedDeliveryPlanValidatesTest(unittest.TestCase):
         without = _scripted("ads_delivery_plan", base + customers)
         self.assertEqual(without["groups"][0]["ads"][0]["customer_group"], 1)
         self.assertEqual(without["groups"][0]["ads"][0]["coordinates"]["angle"], "e2e")
+
+    def test_carried_ads_leave_k_ads_roles_without_a_carried_ad_first(self):
+        """F48 Contract K: with 【已沿用的廣告】 and 「請再規劃 K 則」 the scripted plan writes
+        `min(K, roles)` ads, one per role, roles no carried ad covers first; a covered role's ads
+        bind the carried ads' 第 N 群. The reply passes `_validate_reply` with the same limits
+        `adopt_strategy` passes."""
+        allocation = providers.SCRIPTED_REPLIES["ads_strategy"]["allocation"]
+        base = "部門提示\n\n## 這次投放已採用的角色分配\n\n" + _adopted_lines(allocation)
+        customers = (
+            "\n\n【這個賣法的顧客】"
+            "\n第 1 群：通勤上班族｜煩惱：怕麻煩（pain=effort）｜顧客會說：（沒寫）"
+            "\n第 2 群：學生備考｜煩惱：熬夜（pain=late）｜顧客會說：（沒寫）"
+        )
+        carried_lines = (
+            "\n\n【已沿用的廣告】（程式已經放進投放組）"
+            "\n- 「上一期留下的」｜投放組 new｜顧客群 2｜audience=a、pain=late、angle=b"
+        )
+        roles = {row["role"] for row in allocation}
+        carried = [{"target": "new", "ad": {"name": "上一期留下的"}}]
+        room = {"new": 2, "retarget": 3, "explore": 3}
+
+        two = _scripted("ads_delivery_plan",
+                        base + customers + carried_lines + "\n請再規劃 2 則")
+        self.assertEqual([g["role"] for g in two["groups"]], ["retarget", "explore"])
+        self.assertIsNotNone(plan._validate_reply(
+            two, roles, covered={"new"}, room=room, limit=2, taken={"上一期留下的"}))
+
+        three = _scripted("ads_delivery_plan",
+                          base + customers + carried_lines + "\n請再規劃 5 則")
+        self.assertEqual([g["role"] for g in three["groups"]], ["retarget", "explore", "new"])
+        new_group = three["groups"][2]
+        self.assertEqual(new_group["ads"][0]["customer_group"], 2)
+        self.assertEqual(new_group["ads"][0]["coordinates"]["pain"], "late")
+        validated = plan._validate_reply(
+            three, roles, covered={"new"}, room=room, limit=5, taken={"上一期留下的"})
+        assert validated is not None
+        listed = [{"id": "pcg_1", "who": "通勤上班族", "pain_keys": ["effort"]},
+                  {"id": "pcg_2", "who": "學生備考", "pain_keys": ["late"]}]
+        self.assertTrue(plan._bind_customer_groups(validated, listed, set()))
+        carried[0]["ad"]["customer_group_id"] = "pcg_2"
+        self.assertTrue(plan._same_people_as_carried(validated, carried))
+
+        # Without the K line (nothing carried) the reply is the unchanged one-per-role plan.
+        plain = _scripted(
+            "ads_delivery_plan", base + "\n\n【已沿用的廣告】（上一期沒有留下的廣告可以沿用）",
+        )
+        self.assertEqual([g["role"] for g in plain["groups"]], ["new", "retarget", "explore"])
 
 
 if __name__ == "__main__":

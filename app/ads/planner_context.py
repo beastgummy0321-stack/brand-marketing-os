@@ -1,12 +1,13 @@
 """app/ads/planner_context.py — F48 Contract P: the one planner context every ads planner reads
-(the brief and the strategy; the delivery plan from F48-I06). The program gathers and caps what a
-planner may use for one sell-way -- the product and its facts, the 「不能講」 list, the offers the
-menu keeps with their sentences, the customer groups, the product's learnings, last period's
+(the brief, the strategy and the delivery plan). The program gathers and caps what a planner may
+use for one sell-way -- the product and its facts, the 「不能講」 list, the coordinate menu and the
+offers it keeps with their sentences, the customer groups, the product's learnings, last period's
 learning goals and the capacity line -- and `section_text` prints each prompt block. No model
 call, no write. Private to app/ads.
 
-Headers that already existed elsewhere keep their exact wording (`customer_groups.HEADER`,
-`coordinate_learning.HEADER`, `plan.OFFERS_HEADER`'s 【這期可用的優惠】 with its
+The menu (`prompt_rows`／`menu`) is the one filter the delivery plan's prompt and the hand edits
+(`plan.create_ad`／`update_ad`) share. Headers that already existed elsewhere keep their exact
+wording (`customer_groups.HEADER`, `coordinate_learning.HEADER`, 【這期可用的優惠】 with its
 「- offer=〈key〉｜〈sentence〉」 lines), so `providers.ScriptedProvider`'s parsers keep working.
 """
 
@@ -174,21 +175,76 @@ def _product(blocks: list[dict], product_id: str | None) -> dict | None:
     return None
 
 
+# -- the menu (F38／F42; one filter for the planner and the hand edits, F48-I06) ------------------
+
+# Why a vocabulary row is off this period's menu -- the hand-edit refusal names it.
+NO_EVIDENCE = "沒有登記證據"
+OFFER_NOT_HONOURED = "優惠不適用"
+NO_END_DATE = "沒有結束日"
+PHOTOS_ONLY = "只有照片"
+
+
+def _exclusion(row: dict, allowed_proof: set, has_end_date: bool, allowed_offer: set,
+               media_capability: str | None) -> str | None:
+    dimension, key = row["dimension"], row["key"]
+    if dimension == "proof" and key not in allowed_proof:
+        return NO_EVIDENCE
+    if dimension == "offer" and key not in allowed_offer:
+        return OFFER_NOT_HONOURED
+    if dimension == "offer" and key == "limited_time" and not has_end_date:
+        return NO_END_DATE
+    if dimension == "format" and key == "video" and media_capability == "photo":
+        return PHOTOS_ONLY
+    return None
+
+
+def prompt_rows(rows: list, available_proof: set[str], has_end_date: bool,
+                available_offer: set[str], media_capability: str | None) -> list:
+    """F38 decision 1/3: the model's menu only offers the proof kinds the brand has confirmed
+    evidence for (plus `none`), and `offer/limited_time` only when the campaign has an end date
+    (the workbench quotes that date as the copy's one deadline). F42 (drill-8 red #1 #2): an
+    `offer` row is offered only when it is `none` or the brand can honour it
+    (`bi_repo.available_offer_keys`; `limited_time` must pass both rules), and `format/video` is
+    dropped for a photo-only brand (`brand.media_capability == "photo"`; NULL = never asked, no
+    format filter). Every other row passes through. `coordinate_vocabulary` itself stays
+    unfiltered -- label lookups use it."""
+    allowed_proof, allowed_offer = available_proof | {"none"}, available_offer | {"none"}
+    return [row for row in rows if _exclusion(
+        row, allowed_proof, has_end_date, allowed_offer, media_capability) is None]
+
+
+def menu(conn, org_id: str, brand_id: str, product_id: str | None, has_end_date: bool) -> dict:
+    """`{rows, excluded}` for one sell-way: `rows` = `prompt_rows` over the brand vocabulary (the
+    delivery plan's menu, served as the campaign's `menu`); `excluded` = `{(dimension, key):
+    reason}` for every vocabulary row the menu leaves out (`create_ad`／`update_ad` refuse those
+    keys and say why)."""
+    brand = bi_repo.get_brand(conn, brand_id) or {}
+    vocabulary = ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
+    allowed_proof = bi_repo.available_proof_keys(conn, brand_id) | {"none"}
+    allowed_offer = bi_repo.available_offer_keys(conn, brand_id, product_id) | {"none"}
+    rows, excluded = [], {}
+    for row in vocabulary:
+        reason = _exclusion(row, allowed_proof, has_end_date, allowed_offer,
+                            brand.get("media_capability"))
+        if reason is None:
+            rows.append(row)
+        else:
+            excluded[(row["dimension"], row["key"])] = reason
+    return {"rows": rows, "excluded": excluded}
+
+
+def menu_offer_keys(rows: list) -> set[str]:
+    """The filtered menu's offer keys other than `none` -- what the planner may truly promise."""
+    return {row["key"] for row in rows if row["dimension"] == "offer" and row["key"] != "none"}
+
+
 # -- offers -------------------------------------------------------------------------------------
 
 
-def _offers(conn, org_id: str, brand_id: str, product_id: str | None, has_end_date: bool) -> list:
+def _offers(conn, brand_id: str, product_id: str | None, rows: list) -> list:
     """`[{key, label, sentence}]`: each registered offer sentence (`bi_repo.offer_sources`) whose
-    key the planner's filtered menu keeps (`plan._prompt_rows`: the brand vocabulary, the offers
-    this sell-way can honour, `limited_time` only with an end date), each sentence once."""
-    from app.ads import plan  # lazy: plan reads this module from F48-I06 on
-
-    brand = bi_repo.get_brand(conn, brand_id) or {}
-    rows = plan._prompt_rows(  # noqa: SLF001 -- the one menu filter, until F48-I06 moves it here
-        ads_repo.coordinate_vocabulary(conn, org_id, brand_id),
-        bi_repo.available_proof_keys(conn, brand_id), has_end_date,
-        bi_repo.available_offer_keys(conn, brand_id, product_id), brand.get("media_capability"),
-    )
+    key the filtered menu `rows` keeps (the brand vocabulary, the offers this sell-way can honour,
+    `limited_time` only with an end date), each sentence once."""
     labels = {row["key"]: row["label"] for row in rows
               if row["dimension"] == "offer" and row["key"] != "none"}
     out: list[dict] = []
@@ -309,6 +365,7 @@ def capacity_line(capacity: dict | None) -> str:
     return (
         f"這期每天 {learning_rank.whole(capacity['daily'])}，撐得起 {capacity['can_support']} 則"
         f"（另加 1 則探索）；最多 {capacity['ceiling']} 則"
+        f"（上限每筆 {learning_rank.whole(capacity['cap'])}）"
     )
 
 
@@ -348,14 +405,17 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         daily = budget.daily_of(campaign.get("budget_planned"), _days(campaign))
         capacity = capacity_of(daily, cap, len(allocation))
     basis = prices_basis(blocks)
+    # The delivery plan's menu (and the offers it keeps) for the caller's sell-way.
+    the_menu = menu(conn, org_id, brand_id, product_id,
+                    campaign is None or campaign.get("end_date") is not None)
     return {
         "product": product,
         "product_ids": product_ids,
         "product_blocks": blocks,
         "prices": basis,
         "forbidden": workbench.forbidden_terms(conn, org_id, brand_id, known),
-        "offers": _offers(conn, org_id, brand_id, known,
-                          campaign is None or campaign.get("end_date") is not None),
+        "menu": the_menu["rows"],
+        "offers": _offers(conn, brand_id, product_id, the_menu["rows"]),
         "customer_groups": listed,
         "customers_text": customers_text,
         "learnings": {"ads": rows, "ranked": view},
