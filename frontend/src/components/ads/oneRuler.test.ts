@@ -15,6 +15,10 @@
  *    `total`, `budget`, `amount` or `pct` (a whole identifier, `x.total` included), and no comment that declares a
  *    copy of a backend rule (`mirrors`, `same formula as`, `same rule as`, 「同一套」) while naming `app/`. Amounts,
  *    totals and splits are the API's (`budget_total`, `budget_preview`, `allocation[].amount`).
+ * 6. F49-I01 (Contract L, one lifecycle): no platform status word (`ACTIVE`, `PAUSED`, …) and no `.native_status`
+ *    read — screens print the served `delivery_label`; no `.status ===` against `live|ended|closed` and no local list
+ *    or map of two or more of those codes — screens read the served `lifecycle {state, label, can_close}`. Today's
+ *    hits are listed in `LIFECYCLE_PENDING`, each naming the issue that removes it.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -232,6 +236,84 @@ function mirrorComments(text: string): number[] {
   return [...new Set(lines)];
 }
 
+/** F49 Contract L (decision 11): a platform's own status vocabulary and the `native_status` field are the backend
+ * adapter's (`app/ads/adapters/meta_read.py` `STATUS_TABLE`); a screen prints the served `delivery_label`／`delivery`. */
+const NATIVE_STATUS = [
+  /(?<![\w$])(?:ACTIVE|PAUSED|ARCHIVED|DELETED|ADSET_PAUSED|CAMPAIGN_PAUSED|DISAPPROVED|WITH_ISSUES|IN_PROCESS|PENDING_REVIEW|PREAPPROVED|PENDING_BILLING_INFO)(?![\w$])/,
+  /\.native_status\b/,
+];
+/** F49 Contract L: the campaign lifecycle (`live|ended|closed`) is served as `lifecycle {state, label, can_close}`; a
+ * screen never compares `.status` to those codes nor keeps its own list or map of two or more of them. */
+const LIFECYCLE_CODE = `(?:live|ended|closed)`;
+const LIFECYCLE_COMPARE = [
+  new RegExp(String.raw`\.status\s*[!=]==?\s*["'\x60]${LIFECYCLE_CODE}["'\x60]`),
+  new RegExp(String.raw`["'\x60]${LIFECYCLE_CODE}["'\x60]\s*[!=]==?\s*[\w$.?]*\.status\b`),
+  new RegExp(String.raw`\[[^\[\]\n]*["']${LIFECYCLE_CODE}["'][^\[\]\n]*["']${LIFECYCLE_CODE}["'][^\[\]\n]*\]`),
+];
+const LIFECYCLE_KEY = new RegExp(String.raw`(?:^|[\s{,;])["']?(live|ended|closed)["']?\s*:`, "g");
+
+/** Each `{…}` block (no nested braces, comments blanked) keyed by two or more lifecycle codes, at its `{` line. */
+function lifecycleMaps(text: string): number[] {
+  const code = strip(text, false);
+  const lines: number[] = [];
+  for (const m of code.matchAll(/\{[^{}]*\}/g)) {
+    const keys = new Set([...m[0].matchAll(LIFECYCLE_KEY)].map((k) => k[1]));
+    if (keys.size >= 2) lines.push(code.slice(0, m.index).split("\n").length);
+  }
+  return lines;
+}
+
+const nativeStatus = (text: string) => hits(text, NATIVE_STATUS);
+const lifecycleCodes = (text: string) =>
+  [...new Set([...hits(text, LIFECYCLE_COMPARE), ...lifecycleMaps(text)])].sort((a, b) => a - b);
+
+/** Today's hits of the two F49 lifecycle rules, each naming the issue that moves the file onto the served fields and
+ * deletes the entry (an entry with `text` excuses only its lines). An entry whose file no longer hits fails the
+ * stale-entry test, so every screen issue deletes its own entries. The W19 entries (the change-set pause payload is
+ * the platform's own word, feature D) stay. */
+type LifecycleRule = "native" | "lifecycle";
+const LIFECYCLE_PENDING: { rule: LifecycleRule; file: string; issue: string; text?: string }[] = [
+  { rule: "native", file: "components/ads/detail/GradeGroups.tsx", issue: "F49-I09" },
+  { rule: "native", file: "components/ads/OverviewTab.tsx", issue: "F49-I09" },
+  { rule: "native", file: "components/ads/flow/VerifyPage.tsx", issue: "F49-I11" },
+  { rule: "native", file: "components/ads/AssetsTab.tsx", issue: "F49-I13" },
+  { rule: "native", file: "components/ads/DeliveryTab.tsx", issue: "F49-I13" },
+  { rule: "native", file: "components/ads/ExistingCampaignDialog.tsx", issue: "F49-I14" },
+  { rule: "native", file: "components/ads/ExternalCampaignPanel.tsx", issue: "F49-I14" },
+  { rule: "native", file: "components/ads/ChangeSetView.tsx", issue: "F49-I14" },
+  { rule: "native", file: "components/ads/patterns/campaignWords.ts", issue: "F49-I14" },
+  { rule: "native", file: "components/ads/flow/changeFlow.ts", issue: "W19", text: 'after: { status: "PAUSED" }' },
+  { rule: "native", file: "components/ads/ChangeComposer.tsx", issue: "W19", text: '{ status: "PAUSED" }' },
+  { rule: "lifecycle", file: "components/ads/AllCampaignsPage.tsx", issue: "F49-I08" },
+  { rule: "lifecycle", file: "components/ads/patterns/campaignWords.ts", issue: "F49-I08" },
+  { rule: "lifecycle", file: "components/ads/home/status.ts", issue: "F49-I08" },
+  { rule: "lifecycle", file: "components/ads/nextStep.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/PerformanceTab.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/detail/CampaignDetailPage.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/detail/PeriodStatusRow.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/workspace/OverviewBody.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/workspace/WorkspaceHead.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/DeliveryTab.tsx", issue: "F49-I13" },
+  { rule: "lifecycle", file: "components/ads/UserAssetPlacements.tsx", issue: "F49-I14" },
+  // Not in any F49 screen issue's touch (F49-I01 report): the lead assigns them.
+  { rule: "lifecycle", file: "components/ads/CloseCampaignDialog.tsx", issue: "unassigned" },
+  { rule: "lifecycle", file: "components/ads/ManualSettings.tsx", issue: "unassigned" },
+];
+const LIFECYCLE_SCANS: Record<LifecycleRule, (text: string) => number[]> = { native: nativeStatus, lifecycle: lifecycleCodes };
+
+/** Every hit of `rule` as `file:line`, the `LIFECYCLE_PENDING` ones left out. */
+function lifecycleOffenders(rule: LifecycleRule): string[] {
+  const files = FILES();
+  expect(files.length).toBeGreaterThan(20);
+  return files.flatMap((full) => {
+    const text = readFileSync(full, "utf-8");
+    const lines = text.split("\n");
+    const entries = LIFECYCLE_PENDING.filter((x) => x.rule === rule && x.file === rel(full));
+    const excused = (line: number) => entries.some((x) => x.text === undefined || lines[line - 1].includes(x.text));
+    return LIFECYCLE_SCANS[rule](text).filter((line) => !excused(line)).map((line) => `${rel(full)}:${line}`);
+  });
+}
+
 const classComparisons = (text: string) => hits(text, CLASS_COMPARE);
 const rulerLiterals = (text: string) =>
   [...new Set([...hits(text, RULER_NUMBERS, true), ...hits(text, RULER_WORDS)])].sort((a, b) => a - b);
@@ -392,5 +474,48 @@ describe("rules come from the API (F48 Contract R-API, decision 11)", () => {
     expect(labelComparisons('if (item.reason_code === "too_new") x();')).toEqual([]);
     expect(labelComparisons("const word = item.grade_label || rules.labels.grade.too_new;")).toEqual([]);
     expect(labelComparisons('// was: item.grade_label === "資料不足"')).toEqual([]);
+  });
+});
+
+describe("one lifecycle (F49 Contract L, decision 11)", () => {
+  it("no ads source writes a platform status word or reads `.native_status`", () => {
+    expect(lifecycleOffenders("native")).toEqual([]);
+  });
+
+  it("no ads source compares `.status` to a lifecycle code or keeps its own list or map of them", () => {
+    expect(lifecycleOffenders("lifecycle")).toEqual([]);
+  });
+
+  it("every pending entry still hits (an issue that moved its file deletes its entry)", () => {
+    const present = new Set(FILES().map(rel));
+    const stale = LIFECYCLE_PENDING.filter((x) => {
+      if (!present.has(x.file)) return true;
+      const text = readFileSync(join(SRC_DIR, x.file), "utf-8");
+      const lines = text.split("\n");
+      return !LIFECYCLE_SCANS[x.rule](text).some((line) => x.text === undefined || lines[line - 1].includes(x.text));
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it("the native scan sees status words and `.native_status` and leaves comments and served labels alone", () => {
+    expect(nativeStatus('if (ad.native_status === "ACTIVE") x();')).toEqual([1]);
+    expect(nativeStatus("const W = { PAUSED: '已暫停', ARCHIVED: '已封存' };")).toEqual([1]);
+    expect(nativeStatus("const s = row?.native_status ?? null;")).toEqual([1]);
+    expect(nativeStatus('const k = "DISAPPROVED";')).toEqual([1]);
+    expect(nativeStatus("<Chip>{item.delivery_label}</Chip>")).toEqual([]);
+    expect(nativeStatus("// was: native_status === 'ACTIVE'")).toEqual([]);
+    expect(nativeStatus('const s = "ACTIVE_FILTER" + IS_ACTIVE;')).toEqual([]);
+  });
+
+  it("the lifecycle scan sees comparisons, lists and maps of the codes", () => {
+    expect(lifecycleCodes('if (c.status === "closed") x();')).toEqual([1]);
+    expect(lifecycleCodes("const a = 'ended' !== campaign.status;")).toEqual([1]);
+    expect(lifecycleCodes('const ENDED = ["ended", "closed"];')).toEqual([1]);
+    expect(lifecycleCodes('const s = new Set(["live", "ended"]);')).toEqual([1]);
+    expect(lifecycleCodes('const W = {\n  draft: "草稿",\n  live: "投放中",\n  ended: "已結束",\n};')).toEqual([1]);
+    expect(lifecycleCodes('if (c.lifecycle.state === "ended") x();')).toEqual([]);
+    expect(lifecycleCodes('const one = ["live"]; const k = { live: 1 };')).toEqual([]);
+    expect(lifecycleCodes('// c.status === "live"')).toEqual([]);
+    expect(lifecycleCodes('if (job.status === "running") x();')).toEqual([]);
   });
 });

@@ -12,7 +12,9 @@
  * - The month's data stops at yesterday (org timezone): `pace.daily` ends yesterday, and
  *   `previous_same_period.days` is that many days at the start of the previous month. */
 import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow, type CampaignStatus, type CampaignSyncState } from "./adsApi";
+import {
+  BASE, parseJsonOrThrow, type CampaignLifecycle, type CampaignStatus, type CampaignSyncState, type RunningAds,
+} from "./adsApi";
 import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
 
 /** F29 Contract D: `break_even` beside the cap (null when no product break-even is known; on
@@ -86,6 +88,9 @@ export interface HomeDraft {
 
 export interface HomeCampaign {
   campaign_id: string; name: string; origin: "internal" | "imported"; status: CampaignStatus;
+  /** F49 Contract L: the served lifecycle and 「在投」 (`active_ads` = `running.count`). */
+  lifecycle?: CampaignLifecycle;
+  running?: RunningAds;
   month_spend: number | null;
   purchases: number | null;
   cost_per_purchase: number | null;
@@ -114,6 +119,8 @@ export interface HomeOverview {
   timeline: HomeTimelineItem[] | null;
   campaigns: HomeCampaign[] | null;
   sync: HomeSync | null;
+  /** F49 Contract L (drill-11 N3): campaigns closed this month — the empty state never says 「還沒有活動」 over them. */
+  closed_this_month?: number | null;
 }
 
 /** `month` (YYYY-MM) is optional: the backend defaults to the org timezone's current month. */

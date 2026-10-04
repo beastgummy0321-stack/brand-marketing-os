@@ -31,6 +31,9 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   // deep link, or an identifying field is missing; the caller falls back to the target's own
   // name/native id + 「複製編號」.
   platform_url: string | null;
+  // F49 Contract L: read time only -- the served words of a status item's before／after／observed platform status
+  // (null on an item that changes no status, and on a side with no status).
+  status_labels?: { before: string | null; after: string | null; observed: string | null } | null;
   // Contract D (F27-I04): read time only, only ever set for a `pause` item that carries an
   // `angle` -- optional so existing test factories need no change.
   learning?: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number };

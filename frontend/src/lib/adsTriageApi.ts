@@ -5,7 +5,7 @@
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */
 import { apiFetch } from "./http";
 import { BASE } from "./adsApi";
-import type { CampaignSyncState } from "./adsApi";
+import type { CampaignSyncState, DeliveryView } from "./adsApi";
 import type { AlertSeverity } from "./api";
 import type { PeriodGradeBucket } from "./adsMonthApi";
 
@@ -100,6 +100,8 @@ export interface TriageLadder {
 }
 export interface TriageItem {
   entity_id: string; native_id: string; name: string | null; campaign_id: string;
+  // F49 Contract L: the ad's served delivery (a judged ad is running, or unknown); print `delivery_label`.
+  delivery?: DeliveryView; delivery_label?: string;
   // F19-I07: the campaign's own name; always sent (`app/ads/triage.py::classify`).
   campaign_name: string;
   // F20-I01: thumbnail first, else full image, else `null` (`app/ads/triage.py::_thumbnail_url`).
@@ -164,6 +166,8 @@ export interface TriageData {
  * second, different-shaped query from `TriageMetricsView`). */
 export interface TriageClosedItem {
   entity_id: string; name: string | null; native_status: string | null;
+  // F49 Contract L: why it is not judged (not delivering, or off) — print `delivery_label`, never `native_status`.
+  delivery?: DeliveryView; delivery_label?: string;
   thumbnail_url: string | null; spend: number | null; cost_per_result: number | null;
   result_label: string;
 }
@@ -176,6 +180,9 @@ export interface TriageClosedItem {
  * there's more than that cap. Real responses always carry this (`triage.py::classify`), same
  * reason it's required here unlike `data` above. */
 export interface TriageClosedBlock {
+  // F49 Contract L: the not-judged ads grouped by their served delivery label, first seen first; counts add up to
+  // `total`. `paused`／`archived`／`other` are the older three-way counts by the same labels.
+  groups?: (DeliveryView & { count: number })[];
   paused: number; archived: number; other: number; total: number;
   items: TriageClosedItem[]; truncated: boolean;
 }
