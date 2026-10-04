@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -113,7 +113,11 @@ it("F49 Contract T: a hand-off left unknown prints the served state and offers �
   vi.mocked(api.listMaterialTasks).mockResolvedValueOnce({ tasks: [stuck] }).mockResolvedValue({ tasks: [queued] });
   vi.mocked(api.saveMaterialOperation).mockResolvedValue({ task: queued });
   render(page());
-  await user.click(await screen.findByRole("button", { name: /請工作台準備新圖 · 版本 1/ }));
+  // The saved-request list reads the served word too: an unknown hand-off with a pack is never 「工作台已交接」.
+  const row = await screen.findByRole("button", { name: /請工作台準備新圖 · 版本 1/ });
+  expect(within(row).getByText("交棒沒送出・可重試")).toBeTruthy();
+  expect(within(row).queryByText("工作台已交接")).toBeNull();
+  await user.click(row);
   expect(screen.getByText("目前：交棒沒送出・可重試")).toBeTruthy();
   expect(screen.queryByText(/請先重新讀取/)).toBeNull();
   const retry = screen.getByRole("button", { name: "重新交給工作台" });
