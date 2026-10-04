@@ -80,7 +80,7 @@ function triageItem(entityId: string, reasonCode: string, gradeLabel = ""): Tria
 function campaignTriage(daily: number | null, items: TriageItem[] = []): CampaignTriage {
   return {
     window_days: 14, items,
-    closed: { total: 0, paused: 0, archived: 0, other: 0, items: [], truncated: false },
+    closed: { groups: [], total: 0, items: [], truncated: false },
     data: { sync: { state: "fresh" }, coverage: null, missing_days: [], status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null }, capacity: { daily_budget: daily, currency: "TWD", target: 450, can_support: 4, active_ads: 7 } },
   } as unknown as CampaignTriage;
 }

@@ -6,7 +6,7 @@ import type { ChangeInput, ChangeItem, ChangeKind, ChangeSet } from "@/lib/adsCh
 import type { QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
 // F25-I03: 「下一件」跨 kind 共用同一顆判斷——home 列表跟這裡的 handoff/verify 頁不能各算各的
 // （feature Decisions「下一件」）。只 import，不改 `home/status.ts`（F25-I02 同時在改那支檔）。
-import { decisionPosition, isQueueItemDone, proposalAction, type ProposalAction } from "../home/status";
+import { decisionBoard, decisionPosition, proposalAction, settleAction, type ProposalAction } from "../home/status";
 
 export type FlowStepName = "confirm" | "handoff" | "verify";
 
@@ -277,36 +277,43 @@ export function queueItemEntityId(item: QueueItem): string {
   return item.triage.entity_id;
 }
 
-/** 「下一件」（F25-I03，feature Decisions）：佇列順序中第一個還沒完成
- * （列自己的 `done`，F47 Contract D，`home/status.ts::isQueueItemDone`）且識別碼跟目前這件不同的項目，同原型 `nextOf` 的做法
- * （`open().find(q=>q.id!==id)`——從頭找第一個「開著、不是自己」的，不是「陣列位置上的下一個」）。
- * `stop_loss`／`worse`／已有提議的 `scale_budget` 都直接交給 `proposalAction`（跟首頁同一份規則，
- * feature Decisions「budget 分支＝pause 分支」）；`scale_budget` 還沒建草稿時的正確連結是
- * `propose/budget/:ownerId`（`proposalAction` 的 null-proposal 分支目前寫死 `propose/pause`，
- * 那個分支的既有行為是給 `stop_loss` 用的，不在這裡動 `home/status.ts` 去改它），`refresh_creative`
- * 從來沒有 change-set 流程可走，兩種都在這裡直接組——不硬套一個 `proposalAction` 目前接不住的
- * kind 字串。F47-I07（drill-10 Q1）：`資料不足` 列一樣沒有提議流程，走它自己的 `action_url`（等資料頁），
- * 不再被當成暫停提議組出 `propose/pause/<活動第一則廣告>`。 */
-export function nextOpenQueueItem(queue: QueuePayload | null, currentEntityId: string | undefined): ProposalAction | null {
+/** Where 「下一件」 leads. `closeout` = the next decision is an ended campaign's closeout row: the page labels the
+ * button 「結案這一期 →」 instead of 「下一件 →」 (F49 Contract Q exits). */
+export interface NextAction extends ProposalAction { closeout?: boolean }
+
+/** 「下一件」（F25-I03; F49 Contract Q）: the open decision row with the lowest served `position` other than the row
+ * this page is about (`current`, matched by its row id) — read off the home board's owner
+ * (`home/status.ts::decisionBoard`: decision rows only, open by each row's served `done`, in served `position`), so
+ * a notice (`decision: false` — 資料不足 on the campaign row, 加預算 on the money card) is never next and the order
+ * is the same 「第 N 件」 the home and the top bar show. The board carries the brand's settle row and the ended
+ * campaigns' closeout rows too: a closeout goes to its own `action_url` (「結案這一期 →」), settle to its settle page.
+ * An ad-level row's link is built per kind: `worse` and every row with a change set go through `proposalAction`
+ * (the home row's own rule); a `scale_budget`／`cleanup` row with no draft yet opens its propose route
+ * (`proposalAction`'s null-proposal branch is `propose/pause`); `refresh_creative` has no change-set flow and opens
+ * the workbench; a 資料不足 row (should one ever be served as a decision) its own `action_url`. */
+export function nextOpenQueueItem(brandId: string, queue: QueuePayload | null, current: QueueItem | null): NextAction | null {
   if (!queue) return null;
-  const next = queue.items.find((item) => !isQueueItemDone(item) && queueItemEntityId(item) !== currentEntityId);
-  if (!next || next.brand_id === null) return null;
-  if (next.kind_key === "refresh_creative") {
-    return { label: "準備新素材", href: materialWorkbenchPath(next.brand_id, next.triage.campaign_id), done: false };
+  const next = decisionBoard(brandId, queue).open.find((d) => d.kind !== "item" || d.item.id !== current?.id);
+  if (!next) return null;
+  if (next.kind === "closeout") {
+    const href = next.row.action_url ?? `${campaignPath(brandId, next.row.campaign_id)}?tab=perf&close=1`;
+    return { label: "結案這一期", href, done: false, closeout: true };
   }
-  if (next.kind_key === "insufficient_data") {
-    return next.action_url ? { label: "去處理", href: next.action_url, done: false } : null;
+  if (next.kind === "settle") return settleAction(brandId, next.row);
+  const item = next.item;
+  const brand = item.brand_id ?? brandId;
+  if (item.kind_key === "refresh_creative") {
+    return { label: "準備新素材", href: materialWorkbenchPath(brand, item.triage.campaign_id), done: false };
   }
-  if (next.kind_key === "scale_budget" && next.proposal === null) {
-    return { label: "看提議", href: proposeBudgetPath(next.brand_id, next.triage.campaign_id, queueItemEntityId(next)), done: false };
+  if (item.kind_key === "insufficient_data") {
+    return item.action_url ? { label: "去處理", href: item.action_url, done: false } : null;
   }
-  // F27-I15 Contract F: same "null-proposal owns its own link" shape as `scale_budget` above —
-  // `proposalAction`'s null-proposal branch is hard-coded to `propose/pause` (that branch's
-  // existing behaviour belongs to `stop_loss`, not touched here). Once a cleanup set exists, fall
-  // through to that generic call for its label/step, same as every other kind.
-  if (isCleanupKind(next.kind_key) && next.proposal === null) {
-    return { label: "看提議", href: cleanupProposePath(next.brand_id, next.triage.campaign_id), done: false };
+  if (item.kind_key === "scale_budget" && item.proposal === null) {
+    return { label: "看提議", href: proposeBudgetPath(brand, item.triage.campaign_id, queueItemEntityId(item)), done: false };
   }
-  const kind = next.kind_key === "worse" ? "review" : "pause";
-  return proposalAction(next.brand_id, next.triage.campaign_id, queueItemEntityId(next), next.proposal, kind);
+  if (isCleanupKind(item.kind_key) && item.proposal === null) {
+    return { label: "看提議", href: cleanupProposePath(brand, item.triage.campaign_id), done: false };
+  }
+  const kind = item.kind_key === "worse" ? "review" : "pause";
+  return proposalAction(brand, item.triage.campaign_id, queueItemEntityId(item), item.proposal, kind);
 }

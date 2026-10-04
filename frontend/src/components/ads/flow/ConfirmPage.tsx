@@ -31,7 +31,7 @@ import { CleanupProposal, cleanupSteps } from "./CleanupProposal";
 import { AdoptLatestButton } from "./CleanupRebuild";
 import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
-import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
+import { ANGLE_MAX, BudgetEvidence, CopyEvidence, NextOrHome, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
 import { closedNote, monthDay, pauseBack, pauseReason, usePauseView, windowText } from "./usePauseView";
 import { formatRevisitLabel } from "../home/status";
 import {
@@ -471,6 +471,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
         <ReadFailed what={`這則廣告的資料讀不到（${pauseRead.error}）；還沒有任何變更被寫入`} onRetry={pauseRead.reload} />
+        <ActionBar><NextOrHome next={null} homeHref={homeHref} /></ActionBar>
       </div>
     );
   }
@@ -487,6 +488,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
         <ReadFailed what={`這件提議的資料讀不到（${queueRead.error}）；還沒有任何變更被寫入`} onRetry={queueRead.reload} />
+        <ActionBar><NextOrHome next={null} homeHref={homeHref} /></ActionBar>
       </div>
     );
   }
@@ -585,11 +587,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       // drill-10 C3-D: a deferred set names its revisit date, the same 「M/D 再看」 the home row shows.
       : `已暫緩・${changeSet.reason ?? ""}${changeSet.revisit_at ? `・${formatRevisitLabel(changeSet.revisit_at)}` : ""}`)
     : "";
-  // 「下一件」（F25-I03）：跟 VerifyPage 共用同一顆判斷，不各自算各自的（feature Decisions
-  // 「下一件」）。目前這件的識別碼：propose 網址就是 `entityId` 本身；`setId` 網址（含已關閉的
-  // 清單）從比對到的 `triageItem` 反推。
-  const currentEntityId = entityId ?? (triageItem ? queueItemEntityId(triageItem) : undefined);
-  const nextAction = closed ? nextOpenQueueItem(queue, currentEntityId) : null;
+  // 「下一件」（F25-I03, F49 Contract Q）：跟 VerifyPage／HandoffPage 共用同一顆判斷（`nextOpenQueueItem`，served
+  // `position` 最小、不是這一列的開放決定）。A closed set's bar always has a forward exit: 下一件, else ← 回投放中心
+  // (then the bar drops its 「← 投放中心」 back link, so two buttons never lead to one place).
+  const nextAction = closed ? nextOpenQueueItem(brandId, queue, triageItem) : null;
   // 改文案清單、還沒關閉（草稿）、承接自某一輪檢討：返回鍵改成「修改內容」回那一輪的改文案頁
   // （v7 原型 `confirmPage()` 的 `back:i.kind==="copy"?["修改內容",...]`）；已關閉或核准之後的清單
   // （`stepFromChangeSet` 這裡不會再回傳 confirm 步驟）都留原本的「投放中心」（issue Done 3）。
@@ -640,7 +641,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             item={item}
             scale={triageItem?.scale ?? null}
             bestAdThumbnailUrl={triageItem?.triage.thumbnail_url ?? null}
-            fit={{ read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(), budgetHref: monthlyBudgetHref(brandId) }}
+            fit={{
+              read: budgetRead, month: budgetMonth, premiseChanged: premiseSet !== null, busy, onRecheck: () => void handleRecheck(),
+              budgetHref: monthlyBudgetHref(brandId), returnTo: `${location.pathname}${location.search}`,
+            }}
           />
         )}
         {kind === "new_ad" && item && <NewAdEvidence item={item} />}
@@ -688,7 +692,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       {adClosed ? (
         <ActionBar><Button asChild><Link to={back.to}>← 回上一頁（{back.label}）</Link></Button></ActionBar>
       ) : <ActionBar
-        back={pauseMode && !settled ? back : {
+        back={pauseMode && !settled ? back : closed && !nextAction ? undefined : {
           label: editCopyHref ? "修改內容" : cleanupBackHref ? "提議" : abBackHref ? "成效" : "投放中心",
           to: editCopyHref ?? cleanupBackHref ?? abBackHref ?? homeHref,
         }}
@@ -707,9 +711,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             {approveBlock && <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {approveBlock}</span>}
             <Button disabled={busy || nothingPicked || approveBlock !== null} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
           </>
-        ) : nextAction ? (
-          <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
-        ) : null}
+        ) : <NextOrHome next={nextAction} homeHref={homeHref} />}
       </ActionBar>}
 
       {sheetOpen && (

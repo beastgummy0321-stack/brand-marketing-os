@@ -10,12 +10,22 @@ import type { AnglesStatus } from "@/lib/adsAnglesApi";
 import type { ApiRead } from "@/lib/useApiRead";
 import { Chip, GradeChip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term, figure, rulerScale, unsoldLine, useAdsRules } from "../patterns";
 import { Tile } from "./Tile";
-import { formatAmount, formatTargetAmount } from "./changeFlow";
+import { formatAmount, formatTargetAmount, type NextAction } from "./changeFlow";
 import { perSaleAmount } from "../patterns/csv";
 
 /** The evidence and learn cards of the confirm step (`ConfirmPage`), split out so the page stays under the
  * 800-line cap (`architectureBoundaries.test.ts`). The cards are page-private except `BudgetFitCard`, which the
- * first-launch list (`publish/PublishList.tsx`, F41-I05) reuses so the month-budget card exists once. */
+ * first-launch list (`publish/PublishList.tsx`, F41-I05) reuses so the month-budget card exists once, and
+ * `NextOrHome`, the one forward exit of the three flow pages. */
+
+/** F49 Contract Q exits: the forward exit every state of the confirm／handoff／verify pages carries — 「下一件 →」 to
+ * the next open decision (`changeFlow.ts::nextOpenQueueItem`; 「結案這一期 →」 when that is a closeout row), else
+ * 「← 回投放中心」. `quiet` draws it as a secondary (ghost) button beside a state's own primary action. */
+export function NextOrHome({ next, homeHref, quiet = false }: { next: NextAction | null; homeHref: string; quiet?: boolean }) {
+  const variant = quiet ? "ghost" : "default";
+  if (!next) return <Button variant={variant} asChild><Link to={homeHref}>← 回投放中心</Link></Button>;
+  return <Button variant={variant} asChild><Link to={next.href}>{next.closeout ? "結案這一期" : "下一件"} →</Link></Button>;
+}
 
 const nt = (value: number | null) => (value === null ? formatCurrency(null) : `NT$ ${perSaleAmount(value)}`);
 
@@ -316,13 +326,19 @@ function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
  * `launch`（F41-I05，原型 `#/publish`）只給第一次上架清單：多一個 (iv) 放不下——「N 月只剩 X」、「這期要花 Y」、
  * 「提高 N 月月預算」（`budgetHref`）與「改這期總預算」（`launch.strategyHref`）；沒給時 `ConfirmPage` 照舊。
  * F48 Contract M：`launch.extraBasis`（後端 `month_fit.extra_basis`）在時，「這期要花 X」改印「{N} 月的 {days} 天要花 X
- * （整期 Y）」——數字照後端給的印，瀏覽器不換算。加預算頁的「這次要花」不變。 */
-export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref, launch }: {
+ * （整期 Y）」——數字照後端給的印，瀏覽器不換算。加預算頁的「這次要花」不變。
+ * F49 Contract Q（drill-11 Q4）：`returnTo`＝呼叫這張卡的頁面自己的路徑；「設定／提高 N 月月預算」連結帶
+ * `&return=<returnTo>`，首頁月預算存好後給「← 回到剛才的核准」（F49-I08）。選填：沒給就是原本的連結。 */
+export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref, returnTo, launch }: {
   read: ApiRead<MonthlyBudget | null>; month: string; extra?: number;
   premiseChanged: boolean; busy: boolean; onRecheck: () => void; budgetHref: string;
+  returnTo?: string;
   launch?: { strategyHref: string; extraBasis?: ExtraBasis | null };
 }) {
   const id = useId();
+  const budgetLink = returnTo
+    ? `${budgetHref}${budgetHref.includes("?") ? "&" : "?"}return=${encodeURIComponent(returnTo)}`
+    : budgetHref;
   const budget = read.data;
   const n = monthOf(budget?.month ?? month);
   const launchText = launch ? extraSpendText(extra, launch.extraBasis ?? null) : undefined;
@@ -349,7 +365,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
           <BudgetBar budget={budget} extra={extra} launch extraText={launchText} />
           {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
           <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
-            <Button variant="outline" size="sm" asChild><Link to={budgetHref}>提高 {n} 月月預算</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link to={budgetLink}>提高 {n} 月月預算</Link></Button>
             <Button variant="ghost" size="sm" asChild><Link to={launch.strategyHref}>改這期總預算</Link></Button>
           </div>
         </>
@@ -363,7 +379,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
       {state === "unset" && (
         <div className="mt-3 flex flex-wrap items-center gap-3.5">
           <p className="text-sm"><b>{n} 月還沒設月預算</b><span className="text-muted-foreground">，算不出放不放得下</span></p>
-          <Button asChild><Link to={budgetHref}>設定 {n} 月月預算 →</Link></Button>
+          <Button asChild><Link to={budgetLink}>設定 {n} 月月預算 →</Link></Button>
         </div>
       )}
       {state === "fit" && read.status === "error" && (

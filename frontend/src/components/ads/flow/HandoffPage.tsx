@@ -30,8 +30,10 @@ import {
   formatTargetAmount,
   isAbSet,
   isCleanupTriageItem,
+  nextOpenQueueItem,
   stepRoute,
 } from "./changeFlow";
+import { NextOrHome } from "./confirmParts";
 
 const STEP_PURPOSE = "照清單手動修改";
 /** Same size as the neighbouring `Button size="sm"` actions. */
@@ -210,6 +212,16 @@ export function HandoffPage({ brandId, campaignId, setId }: {
   // F47-I07: a set already past this step (opened from 「回到在平台完成」) shows its rows as reported and one link
   // forward — 「我做完了」 is not offered twice.
   const reported = new Set(changeSet.items.filter((i) => i.reported_at !== null).map((i) => i.id));
+  // F49 Contract Q exits: 「← 還沒做完，先離開」 is this step's way home; when another decision is open, 「下一件 →」
+  // beside it (`nextOpenQueueItem`, the same rule as the confirm and verify pages), so the user can move on and come
+  // back to finish on the platform.
+  const nextAction = nextOpenQueueItem(brandId, queue, triageItem);
+  const leave = (
+    <>
+      <Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>
+      {nextAction && <NextOrHome next={nextAction} homeHref={homeHref} quiet />}
+    </>
+  );
   const aheadBar = ahead ? (
     <ActionBar back={{ label: "投放中心", to: homeHref }} hint="這一步已經回報過了">
       <Button asChild><Link to={changeStepPath(brandId, campaignId, changeSet.id, ahead)}>{AHEAD_LABEL[ahead]} →</Link></Button>
@@ -240,7 +252,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
         {aheadBar ?? <ActionBar
-          back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
+          back={leave}
           hint="核對結果由上面的交接面板決定"
         >
           <Button onClick={() => setReloadKey((k) => k + 1)}>看目前核對結果 →</Button>
@@ -268,7 +280,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
         {aheadBar ?? <ActionBar
-          back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
+          back={leave}
           hint="系統會逐則讀回平台核對"
         >
           <Button disabled={busy} onClick={() => void handleCleanupDone(changeSet.items)}>{busy ? "處理中…" : "我都做完了，開始核對 →"}</Button>
@@ -358,7 +370,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
 
       <div className="flex-1" />
       {aheadBar ?? <ActionBar
-        back={<Button variant="ghost" asChild><Link to={homeHref}>← 還沒做完，先離開</Link></Button>}
+        back={leave}
         hint="系統會讀回平台核對"
       >
         <Button disabled={busy} onClick={() => void handleDone(item)}>{busy ? "處理中…" : "我做完了，開始核對 →"}</Button>

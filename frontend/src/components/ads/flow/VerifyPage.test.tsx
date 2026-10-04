@@ -66,11 +66,22 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     id: "item_1", kind: "pause", target_id: "aex_1",
     target: { id: "aex_1", name: "1150706 健身情境單圖", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
     before: { status: "PAUSED" }, after: { status: "PAUSED" }, reason: "花費超過停損線（目標 × 3）仍未達成目標",
-    verification_state: "confirmed", evidence_json: { setting_matches: true, observed_at: "2026-09-22T02:13:00Z" },
+    verification_state: "confirmed", verification_label: "已核對相符",
+    evidence_json: { setting_matches: true, observed_at: "2026-09-22T02:13:00Z" },
+    // F49 Contract L: the served words of the platform status on each side (`change_control_data.status_labels`).
+    status_labels: { before: "已暫停", after: "已暫停", observed: "已暫停" },
     reported_at: "2026-09-22T02:00:00Z", first_observed_at: "2026-09-22T02:13:00Z", verified_at: "2026-09-22T02:13:00Z",
     platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
     ...overrides,
   };
+}
+/** F49 Contract B: each served state with its served word (`change_control_data.VERIFICATION_LABELS`). */
+const LABEL = {
+  pending: "尚未回報", reported: "已回報，待讀回", unknown: "讀到了，還不能確認",
+  confirmed: "已核對相符", deviated: "與核准內容不同", stale: "設定已變，需要重新檢視",
+} as const;
+function served(state: ChangeItem["verification_state"]): Pick<ChangeItem, "verification_state" | "verification_label"> {
+  return { verification_state: state, verification_label: LABEL[state] };
 }
 function changeSet(overrides: Partial<ChangeSet> = {}): ChangeSet {
   return {
@@ -113,7 +124,8 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(await screen.findByText("平台上這則廣告已經關閉")).toBeTruthy();
     expect(screen.getByText(/讀回於/)).toBeTruthy();
     expect(screen.getByText("✓ 設定相符")).toBeTruthy();
-    expect(screen.getByText("狀態：暫停")).toBeTruthy();
+    // F49 Contract L: the served status word, never a local map of platform statuses.
+    expect(screen.getByText("狀態：已暫停")).toBeTruthy();
     // F27-I16 Contract H/D：沒有 `timeline`／`learning`（既有 factory 沒帶這兩個欄位）當作
     // 「還不知道」，跟「明天確認」／「沒標主打，未記入」畫同一格，不是省略整格。
     expect(screen.getByText("花費停止")).toBeTruthy();
@@ -121,7 +133,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(screen.getByText("品牌學習")).toBeTruthy();
     expect(screen.getByText("沒標主打，未記入")).toBeTruthy();
     expect(screen.getByRole("button", { name: "⟳ 重新核對" })).toBeTruthy();
-    const home = screen.getByRole("link", { name: "回投放中心 →" }) as HTMLAnchorElement;
+    const home = screen.getByRole("link", { name: "← 回投放中心" }) as HTMLAnchorElement;
     expect(home.getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 
@@ -254,7 +266,19 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     ]));
     renderAt(verifyPath());
     await screen.findByText("平台上這則廣告已經關閉");
-    expect(screen.getByRole("link", { name: "回投放中心 →" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← 回投放中心" })).toBeTruthy();
+  });
+
+  it("F49 Contract Q：下一件跳過通知列（decision: false），照 served position 挑最前面的", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem({ decision: true, position: 1 }),
+      queueItem({ id: "int_gap", kind_key: "insufficient_data", decision: false, position: null, action_url: "/brands/brd_1/ads/campaigns/cmp_9/wait", triage: triage({ entity_id: "aex_9", campaign_id: "cmp_9" }) }),
+      queueItem({ id: "int_4", triage: triage({ entity_id: "aex_4", campaign_id: "cmp_4" }), decision: true, position: 4 }),
+      queueItem({ id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }), decision: true, position: 2 }),
+    ]));
+    renderAt(verifyPath());
+    const next = await screen.findByRole("link", { name: "下一件 →" });
+    expect(next.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_2/propose/pause/aex_2");
   });
 
   it("copy：文案相符文字＋標題內文格", async () => {
@@ -302,16 +326,19 @@ describe("VerifyPage（F22-I04）deviated", () => {
   it("pause：核准與平台目前的狀態對照，主按鈕回平台改成核准內容", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
-        verification_state: "deviated",
+        ...served("deviated"),
         evidence_json: { observed_at: "2026-09-22T05:00:00Z", observed: { status: "ACTIVE" } },
+        status_labels: { before: "投放中", after: "已暫停", observed: "投放中" },
       })] })],
     });
     renderAt(verifyPath());
     expect(await screen.findByText("平台上的狀態和核准的不一樣")).toBeTruthy();
-    expect(screen.getByText("狀態：暫停")).toBeTruthy();
-    expect(screen.getByText("狀態：啟用")).toBeTruthy();
+    expect(screen.getByText("狀態：已暫停")).toBeTruthy();
+    expect(screen.getByText("狀態：投放中")).toBeTruthy();
     const link = screen.getByRole("link", { name: "回平台改成核准內容 →" }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff");
+    // F49 Contract Q: a forward exit beside the state's own action.
+    expect(screen.getByRole("link", { name: "← 回投放中心" })).toBeTruthy();
   });
 
   it("copy：逐行標記平台目前跟核准內容不同的地方", async () => {
@@ -403,30 +430,39 @@ describe("VerifyPage（F22-I04）pending（reported_at 已寫）", () => {
   });
 });
 
-describe("VerifyPage（F22-I04）reported／unknown", () => {
-  it("reported：核對中，只有重新核對可按", async () => {
+// F49 Contract B (drill-11 c3-11): `reported` (not read yet) and `unknown` (read, not provable) are told apart by their
+// served words, and neither leaves the user with ⟳ alone — each carries a forward exit.
+describe("VerifyPage（F22-I04, F49-I11）reported／unknown", () => {
+  it("reported：印 served 的字，重新核對＋往前的出口（沒有下一件就回投放中心）", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
-        verification_state: "reported", reported_at: "2026-09-22T02:00:00Z", evidence_json: {},
+        ...served("reported"), reported_at: "2026-09-22T02:00:00Z", evidence_json: {},
       })] })],
     });
     renderAt(verifyPath());
-    expect(await screen.findByText("還沒讀到平台上的新設定")).toBeTruthy();
-    expect(screen.getByText("稍後重新核對即可。")).toBeTruthy();
+    expect(await screen.findByText("已回報，待讀回")).toBeTruthy();
+    expect(screen.queryByText("讀到了，還不能確認")).toBeNull();
     expect(screen.getByRole("button", { name: "⟳ 重新核對" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: /回投放中心|下一件/ })).toBeNull();
+    expect(screen.getByRole("link", { name: "← 回投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
   });
 
-  it("unknown：核對中，顯示 evidence_json.message", async () => {
+  it("unknown：另一個字＋存下的原因，重新核對＋下一件", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem(),
+      queueItem({ id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }), proposal: null }),
+    ]));
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
-        verification_state: "unknown", reported_at: "2026-09-22T02:00:00Z",
-        evidence_json: { message: "核對期間有其他設定同步，保留較新資料；稍後重新核對即可，無需重複核准。" },
+        ...served("unknown"), reported_at: "2026-09-22T02:00:00Z",
+        evidence_json: { reason_code: "unverifiable", message: "目前無法核對帳戶、物件或設定。請確認連線後重試；未標為完成。" },
       })] })],
     });
     renderAt(verifyPath());
-    expect(await screen.findByText("還沒讀到平台上的新設定")).toBeTruthy();
-    expect(screen.getByText("核對期間有其他設定同步，保留較新資料；稍後重新核對即可，無需重複核准。")).toBeTruthy();
+    expect(await screen.findByText("讀到了，還不能確認")).toBeTruthy();
+    expect(screen.queryByText("已回報，待讀回")).toBeNull();
+    expect(screen.getByText("目前無法核對帳戶、物件或設定。請確認連線後重試；未標為完成。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "⟳ 重新核對" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "下一件 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_2/propose/pause/aex_2");
   });
 });
 
@@ -522,10 +558,11 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     });
   }
 
-  it("全部已核對：摘要 hero 顯示都已經關閉，逐列各自狀態", async () => {
+  it("全部已核對：摘要 hero 顯示都已經關閉，逐列印 served 的字", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({
+        ...served("confirmed"),
         items: [lowItem(), lowItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" } })],
       })],
     });
@@ -533,7 +570,7 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     expect(await screen.findByText("這批要清理的廣告都已經關閉")).toBeTruthy();
     expect(screen.getByText("1150701 情境圖 A")).toBeTruthy();
     expect(screen.getByText("1150702 情境圖 B")).toBeTruthy();
-    expect(screen.getAllByText("已核對，已關閉")).toHaveLength(2);
+    expect(screen.getAllByText("已核對相符")).toHaveLength(2);
   });
 
   it("F28-I14：四步驟 提議／確認／到平台完成／核對結果，目前在最後一步，確認與到平台完成可回去", async () => {
@@ -549,23 +586,29 @@ describe("VerifyPage（F27-I15 Contract F）cleanup kind", () => {
     expect(screen.queryByRole("link", { name: "回到「提議」" })).toBeNull();
   });
 
-  it("其中一則已回報但還在核對：摘要 hero 挑第一個不是 confirmed 的狀態（不是嚴重度排序）", async () => {
+  it("F49 Contract B：摘要 hero 是整份 served 的最差狀態與字；unknown 的列印出存下的原因，跟 reported 不同字", async () => {
     // `verification_state:"pending"` 且 `reported_at===null` 的項目會讓
-    // `changeFlow.ts::stepFromChangeSet` 整份都還算「到平台完成」，導回 handoff 頁——這裡要留在
-    // verify 頁測「摘要挑第一個非 confirmed」，兩則都要先過 reported。
+    // `changeFlow.ts::stepFromChangeSet` 整份都還算「到平台完成」，導回 handoff 頁——這裡要留在 verify 頁。
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));
+    const target3 = { id: "aex_low3", name: "1150703 情境圖 C", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low3" };
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({
+        // The backend's `worst_state` (unknown > reported), not the first non-confirmed row.
+        ...served("unknown"),
         items: [
-          lowItem({ verification_state: "reported" }),
+          lowItem({ ...served("reported") }),
           lowItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" } }),
+          lowItem({ id: "item_low3", target_id: "aex_low3", target: target3, ...served("unknown"), evidence_json: { reason_code: "chain_mismatch", message: "讀到的廣告不在原本的投放組底下，請重新核對。" } }),
         ],
       })],
     });
     renderAt(verifyPath());
-    expect(await screen.findByText("還在等系統核對")).toBeTruthy();
-    expect(screen.getByText("已回報，核對中")).toBeTruthy();
-    expect(screen.getByText("已核對，已關閉")).toBeTruthy();
+    expect(await screen.findAllByText("讀到了，還不能確認")).toHaveLength(2); // hero + the unknown row
+    expect(screen.getByText("已回報，待讀回")).toBeTruthy();
+    expect(screen.getByText("已核對相符")).toBeTruthy();
+    expect(screen.getByText("讀到的廣告不在原本的投放組底下，請重新核對。")).toBeTruthy();
+    // A forward exit beside 全部重新核對.
+    expect(screen.getByRole("link", { name: "← 回投放中心" })).toBeTruthy();
   });
 
   it("⟳ 全部重新核對：對每一則各呼叫一次 check", async () => {

@@ -108,7 +108,7 @@ const SETTINGS: LaunchSettingsView = {
 describe("StrategyTab (F28-I09)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false } });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { groups: [], total: 0, items: [], truncated: false } });
   });
 
   it("shows the three cards in prototype order; the folds start closed", async () => {

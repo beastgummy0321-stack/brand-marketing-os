@@ -6,7 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueueCleanup, QueueItem, QueueSettle, TriageClosedBlock, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
+import type { QueueCleanup, QueueItem, QueueSettle, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
 import { getTriage, splitQueue } from "@/lib/adsTriageApi";
 import { apiFetch } from "@/lib/http";
 import { formatAmount } from "../patterns";
@@ -358,11 +358,11 @@ describe("ClosedGroup", () => {
             groups: [{ ...off("已暫停"), count: 40 }, { ...off("已封存"), count: 16 }, { ...off("已刪除"), count: 1 }],
             total: 57, truncated: true,
             items: [
-              { entity_id: "c1", name: "舊版主視覺 0715", delivery: off("已暫停"), delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" },
-              { entity_id: "c2", name: "開箱長版 0605", delivery: off("已封存"), delivery_label: "已封存", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" },
-              { entity_id: "c3", name: null, delivery: off("已刪除"), delivery_label: "已刪除", thumbnail_url: null, spend: 0, cost_per_result: null, result_label: "購買" },
+              { entity_id: "c1", name: "舊版主視覺 0715", native_status: "PAUSED", delivery: off("已暫停"), delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" },
+              { entity_id: "c2", name: "開箱長版 0605", native_status: "ARCHIVED", delivery: off("已封存"), delivery_label: "已封存", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" },
+              { entity_id: "c3", name: null, native_status: "DELETED", delivery: off("已刪除"), delivery_label: "已刪除", thumbnail_url: null, spend: 0, cost_per_result: null, result_label: "購買" },
             ],
-          } as unknown as TriageClosedBlock}
+          }}
         />
       </MemoryRouter>,
     );
@@ -389,8 +389,8 @@ describe("ClosedGroup", () => {
         <ClosedGroup open={false} onToggle={() => {}} closed={{
           groups: [{ state: "not_running", label: "被拒登", count: 1 }, { ...off("所屬廣告組已暫停"), count: 2 }],
           total: 3, truncated: false,
-          items: [{ entity_id: "r1", name: "被拒的廣告", delivery: { state: "not_running", label: "被拒登" }, delivery_label: "被拒登", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" }],
-        } as unknown as TriageClosedBlock} />
+          items: [{ entity_id: "r1", name: "被拒的廣告", native_status: "DISAPPROVED", delivery: { state: "not_running", label: "被拒登" }, delivery_label: "被拒登", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" }],
+        }} />
       </MemoryRouter>,
     );
     expect(screen.getByText("被拒登 1・所屬廣告組已暫停 2・不算在上面的在投數量裡")).toBeTruthy();
@@ -450,7 +450,7 @@ describe("queue settle row (F29-I03)", () => {
       judgment: { tone: "neutral", text: "投放中", detail: "" }, outcome: { spend: 0, purchases: 0, revenue: 0 },
     }]);
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 28, items, closed: { groups: [], total: 0, items: [], truncated: false } as unknown as TriageClosedBlock,
+      window_days: 28, items, closed: { groups: [], total: 0, items: [], truncated: false },
       data: {
         sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [],
         status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null },
