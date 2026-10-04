@@ -686,7 +686,8 @@ def dispatch_pack(request: Request, brand_id: str, campaign_id: str):
         code = str(exc)
         status, message = _PACK_ERRORS.get(code, (400, code))
         raise web.ApiError(status, code, message) from exc
-    return {"pack_id": pack_id}
+    # F48 Contract K: every ad already holds last period's creative -> no pack, nothing to do.
+    return {"pack_id": pack_id, "nothing_to_prepare": pack_id is None}
 
 
 @router.get("/brands/{brand_id}/campaigns/{campaign_id}/assets")

@@ -1234,6 +1234,62 @@ def _two_role_reply(*, names=("再行銷-補位", "探索-補位"), roles=("reta
     ]}, ensure_ascii=False)
 
 
+def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list) -> tuple:
+    """A closed campaign (no sell-way) with one `new` group and one ad per `(name, tag, verdict,
+    with_creative)`; an ad with a creative gets its own ready original with `_KEEP_COPY`,
+    confirmed and assigned; every ad gets its ranked `coordinate` learning row. Returns
+    (campaign, ads, asset id or None per ad)."""
+    from app.ads import handoff_assignment
+    from app.ads import user_assets_repository as user_assets
+
+    previous = ads_repo.create_campaign(web.conn, org_id, brand_id, {
+        "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
+        "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
+        "status": "ready",
+    }, created_by=ACTOR)
+    group = plan.create_group(web.conn, org_id, brand_id, previous["id"],
+                              name="上一期新客組", role="new", daily_budget=500)
+    ads, assets = [], []
+    for name, tag, _, with_creative in rows:
+        ad = plan.create_ad(web.conn, org_id, brand_id, previous["id"], group["id"],
+                            name=name, coordinates=_coordinates(tag))
+        ads.append(ad)
+        asset = None
+        if with_creative:
+            asset = coredb.new_id("aua")
+            web.conn.execute(
+                "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+                "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'keep.png','image/png',1,"
+                "'ready')",
+                (asset, org_id, brand_id, asset, f"{org_id}/{asset}"),
+            )
+            placement = user_assets.attach(web.conn, org_id, brand_id, previous["id"], asset,
+                                           _KEEP_COPY, ACTOR)
+            web.conn.execute(
+                "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human'"
+                " WHERE id=%s", (placement["id"],),
+            )
+            web.conn.commit()
+            handoff_assignment.assign(web.conn, org_id, brand_id, previous["id"], ad["id"],
+                                      placement["id"], 1)
+        assets.append(asset)
+    for rank, (ad, row) in enumerate(zip(ads, rows, strict=True), start=1):
+        bi_repo.record_learning(
+            web.conn, brand_id, actor=ACTOR, learning_text=ad["name"],
+            applicability_scope=_ranked_scope(
+                verdict=row[2], rank=rank, of=len(rows), sales=6 - rank, spend=1200, group=None,
+                angle=f"angle_{rank}"),
+            confidence="observed", sample_size="高",
+            source_cycle_id=f"{previous['id']}:{ad['id']}", source_track="coordinate",
+        )
+    web.conn.execute(
+        "UPDATE ads_campaign SET status='closed', closed_at=now() WHERE id=%s",
+        (previous["id"],),
+    )
+    web.conn.commit()
+    return previous, ads, assets
+
+
 class CarriedKeepAdsTest(PlanTestBase):
     """Contract K: adopting the next plan of a sell-way carries the newest closed campaign's 留下
     ads in (same name, seven keys, scene, customer group, `carried_from`) before the model is
@@ -1244,55 +1300,14 @@ class CarriedKeepAdsTest(PlanTestBase):
 
     def setUp(self):
         super().setUp()
-        from app.ads import handoff_assignment
-        from app.ads import user_assets_repository as user_assets
-
-        previous = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
-            "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
-            "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
-            "status": "ready",
-        }, created_by=ACTOR)
-        group = plan.create_group(web.conn, self.org_id, self.brand_id, previous["id"],
-                                  name="上一期新客組", role="new", daily_budget=500)
-        self.kept, self.bare, self.cut = (
-            plan.create_ad(web.conn, self.org_id, self.brand_id, previous["id"], group["id"],
-                           name=name, coordinates=_coordinates(tag))
-            for name, tag in (("留下-有素材", "keep1"), ("留下-沒素材", "keep2"),
-                              ("換掉-這則", "cut"))
+        self.previous, ads, assets = _seed_previous_with_creatives(
+            self.org_id, self.brand_id,
+            [("留下-有素材", "keep1", "keep", True),
+             ("留下-沒素材", "keep2", "keep_relative", False),
+             ("換掉-這則", "cut", "replace", False)],
         )
-        self.asset = coredb.new_id("aua")
-        web.conn.execute(
-            "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
-            "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'keep.png','image/png',1,"
-            "'ready')",
-            (self.asset, self.org_id, self.brand_id, self.asset, f"{self.org_id}/{self.asset}"),
-        )
-        placement = user_assets.attach(web.conn, self.org_id, self.brand_id, previous["id"],
-                                       self.asset, _KEEP_COPY, ACTOR)
-        web.conn.execute(
-            "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
-            (placement["id"],),
-        )
-        web.conn.commit()
-        handoff_assignment.assign(web.conn, self.org_id, self.brand_id, previous["id"],
-                                  self.kept["id"], placement["id"], 1)
-        for rank, (ad, verdict) in enumerate(
-                ((self.kept, "keep"), (self.bare, "keep_relative"), (self.cut, "replace")),
-                start=1):
-            bi_repo.record_learning(
-                web.conn, self.brand_id, actor=ACTOR, learning_text=ad["name"],
-                applicability_scope=_ranked_scope(
-                    verdict=verdict, rank=rank, of=3, sales=6 - rank, spend=1200, group=None,
-                    angle=f"angle_{rank}"),
-                confidence="observed", sample_size="高",
-                source_cycle_id=f"{previous['id']}:{ad['id']}", source_track="coordinate",
-            )
-        web.conn.execute(
-            "UPDATE ads_campaign SET status='closed', closed_at=now() WHERE id=%s",
-            (previous["id"],),
-        )
-        web.conn.commit()
-        self.previous = previous
+        self.kept, self.bare, self.cut = ads
+        self.asset = assets[0]
         self.campaign = self._create_adopted_campaign()  # 2142 a day at cap 300 -> ceiling 4
 
     def _adopt_reply(self, reply: str) -> tuple[dict, str]:
@@ -1396,6 +1411,58 @@ class CarriedKeepAdsTest(PlanTestBase):
                           "carried": 2})
         menu = {(row["dimension"], row["key"]) for row in campaign["menu"]}
         self.assertNotIn(("proof", "lab_report"), menu)  # no evidence registered
+
+
+class EveryAdCarriedTest(PlanTestBase):
+    """Lead review (F48-I06 item 5): a period where every ad is a carried 留下 ad with its
+    creative is a normal case. One adopted role, 600 a day at cap 300 -> can_support 1, ceiling
+    2; two 留下 ads with creatives fill it, so K = 0: no model call, the structure is ready, both
+    slots read 已確認, and dispatching the pack makes no workbench pack ("nothing to prepare",
+    no error) while the readiness read counts every ad ready."""
+
+    def test_two_ready_carried_ads_need_no_model_and_no_pack(self):
+        from fastapi.testclient import TestClient
+
+        from app import main, workbench
+        from app.ads import assets, slots
+
+        _seed_previous_with_creatives(self.org_id, self.brand_id, [
+            ("留下-甲", "keep1", "keep", True), ("留下-乙", "keep2", "keep_relative", True),
+        ])
+        campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": "這一期", "goal_text": "續投留下的", "objective": "購買", "target_cost": 300,
+            "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
+            "budget_planned": 8400, "budget_scenario": "recommended",
+            "budget_basis_json": {"strategy": {"allocation": [
+                {"role": "new", "label": "新客", "pct": 100, "rationale": None}]}},
+        }, created_by=ACTOR)
+        provider = _fake(_VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+
+        detail = self._adopt(campaign["id"])
+
+        self.assertEqual(provider.calls, [])  # K = 0: the model is not asked
+        self.assertEqual(detail["status"], "ready")
+        ads = [ad for group in detail["groups"] for ad in group["ads"]]
+        self.assertEqual([ad["name"] for ad in ads], ["留下-甲", "留下-乙"])
+        view = slots.read(web.conn, self.org_id, self.brand_id, campaign["id"])
+        tiles = [s for g in view["groups"] for s in g["slots"]]
+        self.assertEqual([(s["state"], s["confirmed"]) for s in tiles],
+                         [("ready", True), ("ready", True)])
+
+        with mock.patch.object(workbench, "submit_pack") as submit:
+            self.assertIsNone(
+                assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"]))
+            web.conn.commit()
+            response = TestClient(main.app).post(
+                f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/pack")
+        submit.assert_not_called()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"pack_id": None, "nothing_to_prepare": True})
+        rows = assets.readiness(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(assets.readiness_summary(rows, None),
+                         {"ready_count": 2, "total": 2, "pack_id": None})
+        self.assertNotIn("in_progress", {row["state"] for row in rows})
 
 
 class HandEditsObeyTheMenuTest(PlanTestBase):
