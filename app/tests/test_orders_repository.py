@@ -194,6 +194,35 @@ class OrgClockTest(_BaseOrdersTest):
         self.assertEqual(str(version["valid_from"]), "2026-07-01")
 
 
+class StoreTimeRulesTest(_BaseOrdersTest):
+    """F50 Contract I: the order date and the SKU cost go through `input_rules`."""
+
+    def test_unreadable_order_date_refuses_that_order_with_its_reason(self):
+        rows = [_order("ORD-OK", datetime(2026, 6, 1, 14, 22), 500),
+                _order("ORD-BAD", "13/06/2026", 700),
+                _order("ORD-NODATE", None, 300)]
+        result = orders_repo.save_orders(web.conn, self.bid, rows, source="easystore_xlsx",
+                                         actor=ACTOR)
+        self.assertEqual(result.orders_imported, 2)
+        self.assertEqual(result.refused,
+                         ["訂單 ORD-BAD：訂單日期請用 YYYY-MM-DD 格式（例如 2026-10-05）。"])
+        stored = {r["order_number"]: r["order_date"] for r in web.conn.execute(
+            "SELECT order_number, order_date FROM order_record WHERE brand_id = %s", (self.bid,))}
+        self.assertEqual(set(stored), {"ORD-OK", "ORD-NODATE"})
+        self.assertEqual(stored["ORD-OK"].isoformat()[:10], "2026-06-01")
+
+    def test_sku_cost_zero_stays_zero_blank_and_negative_refused(self):
+        saved = orders_repo.set_sku_cost(web.conn, self.bid, "SKU-Z", "0", actor=ACTOR)
+        self.assertEqual(saved["unit_cost"], 0.0)
+        self.assertEqual(float(web.conn.execute(
+            "SELECT unit_cost FROM sku_cost WHERE brand_id = %s AND sku = 'SKU-Z'",
+            (self.bid,)).fetchone()["unit_cost"]), 0.0)
+        for bad, sentence in (("", "^單位成本請填數字。$"), (None, "^單位成本請填數字。$"),
+                              (-1, "^單位成本不能是負數。$")):
+            with self.assertRaisesRegex(ValueError, sentence):
+                orders_repo.set_sku_cost(web.conn, self.bid, "SKU-Z", bad, actor=ACTOR)
+
+
 class PolicyChangeLogTest(_BaseOrdersTest):
     """票 #39：折扣／退款口徑變更記變更日（決策 0025 第 4 點）。"""
 
@@ -205,8 +234,15 @@ class PolicyChangeLogTest(_BaseOrdersTest):
         self.assertEqual(len(changes), 1)
         self.assertEqual(changes[0]["policy_type"], "discount")
 
+    def test_non_iso_changed_at_is_refused(self):
+        sentence = "^變更日請用 YYYY-MM-DD 格式（例如 2026-10-05）。$"
+        with self.assertRaisesRegex(ValueError, sentence):
+            orders_repo.record_policy_change(
+                web.conn, self.bid, policy_type="refund", changed_at="2026/13/01",
+                description="x", actor=ACTOR)
+
     def test_unknown_policy_type_is_rejected(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "^口徑類型只能選：折扣規則、退款政策。$"):
             orders_repo.record_policy_change(
                 web.conn, self.bid, policy_type="shipping", changed_at="2026-05-01",
                 description="改運費規則", actor=ACTOR)

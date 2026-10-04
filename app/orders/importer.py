@@ -14,7 +14,9 @@ email 等）只認同一組裡的第一列，後續列即使 Order Number 有填
 """
 
 import io
+import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from app.shared import csv_columns
 
@@ -54,8 +56,38 @@ class OrderImportResult:
     orders_updated: int = 0
     items_imported: int = 0
     errors: list = field(default_factory=list)
+    # F50 Contract I: orders not written, one sentence each (「訂單 X：…」); the rest imports.
+    refused: list = field(default_factory=list)
     unmatched_columns: list = field(default_factory=list)
     found_columns: list = field(default_factory=list)
+
+
+_YEAR_FIRST = re.compile(r"(\d{4})[/.](\d{1,2})[/.](\d{1,2})(?:[ T].*)?")
+
+
+def vendor_date(value):
+    """A vendor date cell for the store's `input_rules.iso_date`: an Excel date cell is already a
+    `datetime`; ISO text, with or without a time of day (「2026-06-01 14:22:10」), and year-first
+    slashes become a `date`; any other text is handed on unchanged, so the store refuses that row
+    with its reason. The calendar part is the vendor's own; nothing is sliced."""
+    if value is None or isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    # Year-first with slashes or dots (「2026/06/01 14:22」) is unambiguous; day-first
+    # (「01/06/2026」) is not, and is left for the store to refuse.
+    match = _YEAR_FIRST.fullmatch(text)
+    if match:
+        try:
+            return date(int(match[1]), int(match[2]), int(match[3]))
+        except ValueError:
+            pass
+    return text
 
 
 def match_order_columns(headers: list) -> tuple:
@@ -133,7 +165,7 @@ def parse_easystore_xlsx(content: bytes) -> tuple:
             # 新訂單開頭列（Order Number 跟前一列不同）：訂單層欄位在這一列
             orders[order_number] = {
                 "order_number": order_number,
-                "order_date": _cell(data_row, "order_date"),
+                "order_date": vendor_date(_cell(data_row, "order_date")),
                 "total_amount": csv_columns.to_number(_cell(data_row, "total_amount")),
                 "refunded_amount": csv_columns.to_number(_cell(data_row, "refunded_amount")),
                 "financial_status": _cell(data_row, "financial_status"),

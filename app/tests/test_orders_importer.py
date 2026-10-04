@@ -7,6 +7,7 @@ Billing Phone/Item SKU/Item Price/Quantity（一單多商品列，訂單層欄�
 
 import io
 import unittest
+from datetime import date, datetime
 
 import openpyxl
 
@@ -105,6 +106,33 @@ class ParseEasyStoreXlsxTest(unittest.TestCase):
         rows, result = importer.parse_easystore_xlsx(buf.getvalue())
         self.assertEqual(rows, [])
         self.assertTrue(result.errors)
+
+
+class VendorDateTest(unittest.TestCase):
+    """F50 Contract I: the importer hands the store a `date` (or the vendor's text, which the
+    store's `iso_date` refuses with its reason); nothing is sliced."""
+
+    def test_excel_date_cells_and_iso_text_become_dates(self):
+        rows_data = [
+            ["ORD3001", datetime(2026, 6, 1, 14, 22), 100, 0, "paid", "fulfilled", "completed",
+             None, "a@example.com", None, "SKU-A", 100, 1],
+            ["ORD3002", "2026-06-02 09:30:00", 100, 0, "paid", "fulfilled", "completed",
+             None, "b@example.com", None, "SKU-A", 100, 1],
+            ["ORD3003", "13/06/2026", 100, 0, "paid", "fulfilled", "completed",
+             None, "c@example.com", None, "SKU-A", 100, 1],
+        ]
+        rows, result = importer.parse_easystore_xlsx(_build_xlsx(rows_data))
+        self.assertEqual(result.errors, [])
+        self.assertEqual([r["order_date"] for r in rows],
+                         [datetime(2026, 6, 1, 14, 22), date(2026, 6, 2), "13/06/2026"])
+
+    def test_vendor_date(self):
+        self.assertEqual(importer.vendor_date("2026-06-02"), date(2026, 6, 2))
+        self.assertEqual(importer.vendor_date("2026/6/3 10:00"), date(2026, 6, 3))
+        self.assertEqual(importer.vendor_date("2026/02/30"), "2026/02/30")
+        self.assertEqual(importer.vendor_date("01/06/2026"), "01/06/2026")
+        self.assertIsNone(importer.vendor_date("  "))
+        self.assertIsNone(importer.vendor_date(None))
 
 
 class SniffFileKindTest(unittest.TestCase):

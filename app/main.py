@@ -89,6 +89,7 @@ core_config.settings()  # ADR 0062：環境變數在這裡驗一次、開機就�
 # 打進來的 request 才發現設定錯了。
 
 from app.core import db as coredb
+from app.core import input_rules
 from app.core import retention as core_retention
 from app.core import settings as coresettings
 from app.llm import gateway as llm_gateway
@@ -99,8 +100,6 @@ from app.shared import web
 from app.shared.web import (
     MODEL_CHOICES,
     _num_str,
-    clean,
-    parse_number,
 )
 
 # ---------------------------------------------------------------------------
@@ -214,10 +213,12 @@ def _masked_key(key: str | None) -> str | None:
 # （HTML 表單路由已刪除，見票 T4 A4；不為了 JSON 契約重寫第二份寫入邏輯，票 B1-settings）。
 # ---------------------------------------------------------------------------
 
-def _write_api_key(api_key: str, *, org_id: str) -> str | None:
-    key = clean(api_key)
-    if not key:
-        return "請貼上 AI 金鑰。"
+def _write_api_key(api_key, *, org_id: str) -> str | None:
+    """F50 Contract I: the key is checked by `input_rules.api_key` (sk-ant-, no whitespace)."""
+    try:
+        key = input_rules.api_key(api_key)
+    except input_rules.InputRuleError as exc:
+        return str(exc)
     coresettings.save_api_key(web.conn, key, org_id=org_id)
     return None
 
@@ -231,23 +232,23 @@ def _write_model(llm_model: str, *, org_id: str) -> str | None:
 
 
 def _write_budget(raw_budget, *, org_id: str) -> str | None:
-    """raw_budget 接受字串（表單）或數字（JSON）——先轉字串再走既有 parse_number，
-    驗證規則只寫一份。"""
-    raw = "" if raw_budget is None else str(raw_budget)
-    value, ok = parse_number(raw)
-    if not ok or value is None or value <= 0:
-        return "花費上限請填大於 0 的數字，例如 30。"
+    """Brand spend cap: what was typed (text or a JSON number) through `input_rules.positive` —
+    blank says 請填數字, never 0 (F50 Contract I)."""
+    try:
+        value = input_rules.positive(raw_budget, "花費上限")
+    except input_rules.InputRuleError as exc:
+        return str(exc)
     coresettings.set_setting(web.conn, coresettings.INTAKE_BUDGET_SETTING, _num_str(value), org_id=org_id)
     return None
 
 
 def _write_ai_monthly_cost_limit(raw_limit, *, org_id: str) -> str | None:
     """組織每月 AI 花費上限（票 04-1a，D4-2）——只有 owner 可以改，呼叫端在路由層先擋
-    （app.identity 已經在 ActorContext 帶 role，不必另外查一次）。"""
-    raw = "" if raw_limit is None else str(raw_limit)
-    value, ok = parse_number(raw)
-    if not ok or value is None or value <= 0:
-        return "AI 月費上限請填大於 0 的數字，例如 200。"
+    （app.identity 已經在 ActorContext 帶 role，不必另外查一次）。規則同上（`positive`）。"""
+    try:
+        value = input_rules.positive(raw_limit, "AI 月費上限")
+    except input_rules.InputRuleError as exc:
+        return str(exc)
     coresettings.set_setting(
         web.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, _num_str(value), org_id=org_id)
     return None
@@ -349,7 +350,7 @@ async def api_settings_api_key_post(request: Request):
     if err:
         return err
     actor = web.require_actor(request)
-    error = _write_api_key(body.get("api_key", ""), org_id=actor.org_id)
+    error = _write_api_key(body.get("api_key"), org_id=actor.org_id)
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return {}
