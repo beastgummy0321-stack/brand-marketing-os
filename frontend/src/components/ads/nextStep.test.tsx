@@ -92,22 +92,35 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
 
 const WITH_STRATEGY = { strategy: { allocation: [{ role: "new" as const, label: "新客", pct: 100, rationale: null, amount: null }], why: [], unknowns: [], alternatives: [], learning_goals: [] } };
 
+/** F49 Contract L: the served lifecycle (`app/ads/lifecycle.py`), as the backend labels it. */
+const LIFE = {
+  draft: { state: "draft", label: "草稿", can_close: false },
+  live: { state: "live", label: "投放中", can_close: true },
+  ended: { state: "ended", label: "已結束・待結案", can_close: true },
+  closed: { state: "closed", label: "已結案", can_close: false },
+} as const;
+
 describe("nextStep（F06-I01）", () => {
-  it("status closed：id performance、target perf (v10 tab key)、stageIndex 5", () => {
-    const step = nextStep(campaign({ status: "closed", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
+  it("lifecycle closed：id performance、target perf (v10 tab key)、stageIndex 5", () => {
+    const step = nextStep(campaign({ status: "closed", lifecycle: LIFE.closed, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
     expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 5, label: "查看成效 →" });
   });
 
-  it("status live：id performance、stageIndex 4，句子提到「投放中」", () => {
-    const step = nextStep(campaign({ status: "live", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
+  it("lifecycle live：id performance、stageIndex 4，句子提到「投放中」", () => {
+    const step = nextStep(campaign({ status: "live", lifecycle: LIFE.live, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
     expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 4 });
     expect(step.sentence).toContain("投放中");
   });
 
-  it("status ended：id performance、stageIndex 4，句子提到「結束」", () => {
-    const step = nextStep(campaign({ status: "ended", budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
+  it("lifecycle ended：id performance、stageIndex 4，句子提到「結束」", () => {
+    const step = nextStep(campaign({ status: "ended", lifecycle: LIFE.ended, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
     expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 4 });
     expect(step.sentence).toContain("結束");
+  });
+
+  it("F49 Contract L: the served lifecycle decides, not the stored status — past its end date a stored live reads ended", () => {
+    const step = nextStep(campaign({ status: "live", lifecycle: LIFE.ended, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
+    expect(step.sentence).toBe("投放已結束，到成效看結果或結案。");
   });
 
   it("沒有策略：id strategy_generate、target strategy、stageIndex 0", () => {

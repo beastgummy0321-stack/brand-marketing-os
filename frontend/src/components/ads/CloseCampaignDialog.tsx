@@ -12,7 +12,7 @@ import { LearningsTable } from "./learnings/LearningsTable";
  * re-read / skip, error text, 確認結案) so the 成效分頁's 「這期狀態列」 (`detail/PeriodStatusRow.tsx`) and the folded
  * old panel open the same one. The server re-validates every close; this only mirrors its last answer. */
 
-/** F04-I23：結案卡與確認對話框共用同一句，`live` 時都要看到——只宣告一次，不抽成新元件。 */
+/** F04-I23：結案卡與確認對話框共用同一句，served lifecycle 是 `live` 時都要看到——只宣告一次，不抽成新元件。 */
 export const EARLY_CLOSE_SENTENCE = "提前結案會用到目前為止的成效判定，判定後這個 Campaign 不再更新成效";
 
 /** `2026-09-27` → `09/27` (prototype day chips). */
@@ -241,7 +241,7 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
           {/* F48-I11: no count — the planned ads are not the platform ads closeout ranks, and that count is not on
               this payload. */}
           結案後會把這期的廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。
-          {c.status === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
+          {c.lifecycle?.state === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
         </DialogDescription>
         {coverageGap && (
           <CoverageNote gap={coverageGap} syncError={lastSyncError} syncing={syncing} reread={reread}

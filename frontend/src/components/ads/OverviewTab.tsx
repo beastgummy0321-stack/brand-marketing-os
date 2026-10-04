@@ -4,6 +4,7 @@ import { formatCurrency, formatSyncTime } from "@/lib/format";
 import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
 import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 import type { StepTarget } from "./nextStep";
+import { syncNoteTone, type SyncNote } from "./detail/PeriodStatusRow";
 
 // F05-I12：後端一律回傳 `campaign.labels`；這裡的預設值只在舊測試 fixture 沒帶這個欄位時
 // 頂上（同 `judgment` 選填的先例），跟 `app/ads/judgment.py::_CONVERSION_LABELS["purchase"]`
@@ -13,7 +14,9 @@ const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數
 const JUDGMENT_ICON = { good: TrendingUp, warn: AlertTriangle, neutral: Clock } as const;
 
 /** The imported campaign's platform read: 重新讀取平台 and its failure (the workspace owns the sync job). */
-export interface PlatformSync { onSync: () => void; syncing: boolean; error: string }
+/** The imported campaign's platform read: 重新讀取平台, a request that failed, and the last read's served outcome (F49
+ * Contract O, printed as served). */
+export interface PlatformSync { onSync: () => void; syncing: boolean; error: string; note?: SyncNote | null }
 
 /** v10 (F30-I07): the overview's 「進階：更多活動資訊」 fold — what the old overview showed that the v10 prototype does
  * not (the three-number strip, the backend's judgement sentence, 檢討與持續追蹤, 最近做了什麼, and for an imported
@@ -35,10 +38,6 @@ export function OverviewTab({
   const checkedAt = runtime && typeof runtime === "object" && "last_checked_at" in runtime && typeof runtime.last_checked_at === "string" ? runtime.last_checked_at : null;
   const roots = c.external_view?.entities.filter(e => e.native_kind === "campaign") ?? [];
   const root = roots.length === 1 ? roots[0] : undefined;
-  const nativeStates = ["ACTIVE", "PAUSED", "ARCHIVED", "DELETED"];
-  const nativeLabels = ["投放啟用", "已暫停", "已封存", "已刪除", "狀態未知"];
-  const nativeIndex = nativeStates.indexOf(root?.native_status ?? "");
-  const idx = nativeIndex < 0 ? 4 : nativeIndex;
   const lastRead = Object.values(c.external_view?.sync ?? {}).map(s => s.last_success_at).filter((value): value is string => Boolean(value)).sort().at(-1);
   // F48 Contract M: the period total is the server's `budget_total` (after adoption it equals the chosen total); the
   // overview computes no money of its own.
@@ -105,7 +104,8 @@ export function OverviewTab({
 
       {imported ? (
         <>
-          <JudgmentBand icon={Clock} sentence={`平台狀態：${nativeLabels[idx]}${root?.native_status ? `（${root.native_status}）` : ""}`} facts="顯示最近讀回的平台狀態；不代表內部策略、素材確認或上架流程已完成。" tone="neutral" />
+          {/* F49 Contract L: the root's served delivery word (its platform adapter's status table), never the code. */}
+          <JudgmentBand icon={Clock} sentence={`平台狀態：${root?.delivery_label ?? "平台狀態不明"}`} facts="顯示最近讀回的平台狀態；不代表內部策略、素材確認或上架流程已完成。" tone="neutral" />
           <div className="flex flex-wrap items-center gap-3">
             <p className="min-w-0 flex-1 text-xs text-muted-foreground">
               {c.external_view?.connections.map(connection => `${connection.platform === "meta" ? "Meta" : connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
@@ -120,6 +120,9 @@ export function OverviewTab({
             )}
           </div>
           {platformSync?.error && <p role="alert" className="text-sm text-destructive">{platformSync.error}</p>}
+          {!platformSync?.error && platformSync?.note && !platformSync.syncing && (
+            <p role="status" data-state={platformSync.note.state} className={`text-sm ${syncNoteTone(platformSync.note)}`}>{platformSync.note.text}</p>
+          )}
         </>
       ) : c.judgment && (
         <JudgmentBand

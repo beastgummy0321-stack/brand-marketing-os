@@ -6,7 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { listCampaigns } from "@/lib/adsApi";
-import type { QueueCleanup, QueueItem, QueueSettle, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
+import type { QueueCleanup, QueueItem, QueueSettle, TriageClosedBlock, TriageItem, WireQueuePayload } from "@/lib/adsTriageApi";
 import { getTriage, splitQueue } from "@/lib/adsTriageApi";
 import { apiFetch } from "@/lib/http";
 import { formatAmount } from "../patterns";
@@ -348,27 +348,29 @@ describe("adActions", () => {
 });
 
 describe("ClosedGroup", () => {
-  it("under 不在投的, folded by default, 已關閉的 N 則; rows are thumb, name and status only; truncated prints the rest", () => {
+  const off = (label: string) => ({ state: "off" as const, label });
+  it("under 不在投的, folded by default, 共 N 則; rows are thumb, name and the served delivery word only; truncated prints the rest", () => {
     render(
       <MemoryRouter>
         <ClosedGroup
           open={false} onToggle={() => {}}
           closed={{
-            paused: 40, archived: 17, other: 0, total: 57, truncated: true,
+            groups: [{ ...off("已暫停"), count: 40 }, { ...off("已封存"), count: 16 }, { ...off("已刪除"), count: 1 }],
+            total: 57, truncated: true,
             items: [
-              { entity_id: "c1", name: "舊版主視覺 0715", native_status: "PAUSED", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" },
-              { entity_id: "c2", name: "開箱長版 0605", native_status: "ARCHIVED", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" },
-              { entity_id: "c3", name: null, native_status: "DELETED", thumbnail_url: null, spend: 0, cost_per_result: null, result_label: "購買" },
+              { entity_id: "c1", name: "舊版主視覺 0715", delivery: off("已暫停"), delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" },
+              { entity_id: "c2", name: "開箱長版 0605", delivery: off("已封存"), delivery_label: "已封存", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" },
+              { entity_id: "c3", name: null, delivery: off("已刪除"), delivery_label: "已刪除", thumbnail_url: null, spend: 0, cost_per_result: null, result_label: "購買" },
             ],
-          }}
+          } as unknown as TriageClosedBlock}
         />
       </MemoryRouter>,
     );
     expect(screen.getByRole("heading", { level: 2, name: "不在投的" })).toBeTruthy();
-    const details = detailsOf("已關閉的 57 則");
+    const details = detailsOf("共 57 則");
     expect(details.open).toBe(false);
     expect(within(details.querySelector("summary")!).queryByText("57 則")).toBeNull();
-    expect(screen.getByText("暫停 40・已封存 17・不算在上面的在投數量裡")).toBeTruthy();
+    expect(screen.getByText("已暫停 40・已封存 16・已刪除 1・不算在上面的在投數量裡")).toBeTruthy();
     const paused = screen.getByTestId("closed-ad-row-c1");
     expect(within(paused).getByText("舊版主視覺 0715")).toBeTruthy();
     expect(within(paused).getByText("已暫停")).toBeTruthy();
@@ -377,17 +379,22 @@ describe("ClosedGroup", () => {
     expect(within(screen.getByTestId("closed-ad-row-c2")).getByText("已封存")).toBeTruthy();
     const deleted = screen.getByTestId("closed-ad-row-c3");
     expect(within(deleted).getByText("（未命名廣告）")).toBeTruthy();
-    expect(within(deleted).getByText("已關閉")).toBeTruthy();
+    expect(within(deleted).getByText("已刪除")).toBeTruthy();
     expect(screen.getByText("…其餘 54 則")).toBeTruthy();
   });
 
-  it("closed ads outside 暫停／封存 are counted as 其他 rather than dropped from the hint", () => {
+  it("F49 Contract L: an ad on the platform but not delivering (被拒登) prints its served word, and the hint counts every served group", () => {
     render(
       <MemoryRouter>
-        <ClosedGroup open={false} onToggle={() => {}} closed={{ paused: 2, archived: 0, other: 1, total: 3, truncated: false, items: [] }} />
+        <ClosedGroup open={false} onToggle={() => {}} closed={{
+          groups: [{ state: "not_running", label: "被拒登", count: 1 }, { ...off("所屬廣告組已暫停"), count: 2 }],
+          total: 3, truncated: false,
+          items: [{ entity_id: "r1", name: "被拒的廣告", delivery: { state: "not_running", label: "被拒登" }, delivery_label: "被拒登", thumbnail_url: null, spend: null, cost_per_result: null, result_label: "購買" }],
+        } as unknown as TriageClosedBlock} />
       </MemoryRouter>,
     );
-    expect(screen.getByText("暫停 2・已封存 0・其他 1・不算在上面的在投數量裡")).toBeTruthy();
+    expect(screen.getByText("被拒登 1・所屬廣告組已暫停 2・不算在上面的在投數量裡")).toBeTruthy();
+    expect(within(screen.getByTestId("closed-ad-row-r1")).getByText("被拒登")).toBeTruthy();
   });
 });
 
@@ -443,7 +450,7 @@ describe("queue settle row (F29-I03)", () => {
       judgment: { tone: "neutral", text: "投放中", detail: "" }, outcome: { spend: 0, purchases: 0, revenue: 0 },
     }]);
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 28, items, closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false },
+      window_days: 28, items, closed: { groups: [], total: 0, items: [], truncated: false } as unknown as TriageClosedBlock,
       data: {
         sync: { state: "ok", error: null, last_success_at: null }, coverage: { start: "2026-08-27", end: "2026-09-23" }, missing_days: [],
         status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: null },

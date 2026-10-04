@@ -2,9 +2,10 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
+import { formatSyncTime } from "@/lib/format";
 import type { CampaignWorkspace } from "@/lib/adsWorkspaceApi";
 import type { ApiRead } from "@/lib/useApiRead";
-import { Chip, ReadFailed, StageRail, Term, campaignWord, closedWord, formatAmount, type StageStation } from "../patterns";
+import { Chip, ReadFailed, StageRail, Term, formatAmount, type StageStation } from "../patterns";
 import type { WorkspaceTab } from "../nextStep";
 
 /** v10 (F30-I07) campaign workspace head (prototype `wsHead()`): breadcrumb, the campaign name, one chip row
@@ -12,8 +13,10 @@ import type { WorkspaceTab } from "../nextStep";
  * the six tabs with the open-decision count on 總覽. Unknown values print nothing rather than a guess: an unknown
  * pending count shows no number (never 0), an unknown daily budget no chip. The daily budget shown is the
  * workspace's own `daily_budget` only — never next to another daily figure.
- * F47-I08: the campaign's word is the one `campaignWord` (草稿 here as on the home and the list); a closed campaign never
- * says 在投 (「已結案」 / 「已結案・平台上還開著 N 則」). */
+ * F47-I08: a closed campaign never says 在投 (「平台上還開著 N 則」 at most).
+ * F49 Contract L: the campaign's word is the served `lifecycle.label` (草稿／投放中／已結束・待結案／已結案), its own
+ * chip; 在投 is the served `running.count` (never a recount), with the read time it rests on when that read is older
+ * than the newest launch the user reported done (`running.stale`), and the ads whose platform state is unknown apart. */
 
 export const WORKSPACE_TABS: { value: WorkspaceTab; label: string }[] = [
   { value: "overview", label: "總覽" },
@@ -58,11 +61,22 @@ export function CapChip({ campaign: c }: { campaign: CampaignDetail }) {
     : <Chip tone="accent" className="max-w-[22rem]"><span className="truncate">{who}的</span><Term k="cap">上限</Term> {value}</Chip>;
 }
 
-/** A draft has no platform ads yet: the workspace says so (`draft` block); before it answers, the campaign's own
- * status stands in (an imported campaign is never a draft). */
+/** A draft has no platform ads yet: the workspace says so (`draft` block); before it answers, the campaign's served
+ * lifecycle stands in (F49 Contract L). */
 export function isDraftCampaign(c: CampaignDetail, ws: CampaignWorkspace | null): boolean {
   if (ws) return ws.draft !== null;
+  if (c.lifecycle) return c.lifecycle.state === "draft";
   return c.origin !== "imported" && (c.status === "draft" || c.status === "ready");
+}
+
+/** 「在投 N 則」 from the served `running`, with 「（MM/DD HH:MM 讀取）」 when the count rests on a stale read and the
+ * unknown ads apart; null before the workspace answers. */
+export function runningText(ws: CampaignWorkspace | null): string | null {
+  if (!ws) return null;
+  const r = ws.running;
+  if (!r) return `在投 ${ws.active_ads} 則`;
+  const when = r.stale ? (r.read_at ? `（${formatSyncTime(r.read_at)} 讀取）` : "（還沒讀到平台）") : "";
+  return `在投 ${r.count} 則${when}${r.unknown > 0 ? `・${r.unknown} 則狀態不明` : ""}`;
 }
 
 export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, showTabs = true }: {
@@ -78,6 +92,10 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
   const tabLabel = WORKSPACE_TABS.find((t) => t.value === tab)?.label ?? "總覽";
   const home = `/brands/${brandId}/ads`;
   const draft = c ? isDraftCampaign(c, ws) : false;
+  const life = c?.lifecycle ?? ws?.lifecycle ?? null;
+  const closed = life?.state === "closed";
+  const running = runningText(ws);
+  const stillOpen = ws ? (ws.running?.count ?? ws.active_ads) : 0;
   const pending = ws?.pending_count ?? null;
   const items = WORKSPACE_TABS.map((t) => (t.value === "overview" && pending !== null && pending > 0 ? { ...t, count: pending } : t));
 
@@ -90,13 +108,14 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
         <div className="mt-4 min-w-0">
           <h1 className="text-[26px] leading-tight font-semibold tracking-tight [overflow-wrap:anywhere]">{c.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {draft ? <Chip>{campaignWord(c, { onPlatform: false })}</Chip> : (
+            {life && <Chip data-state={life.state} tone={life.state === "ended" ? "warn" : undefined}>{life.label}</Chip>}
+            {!draft && (
               // An imported objective can be a whole sentence: only it truncates, 「・在投 N 則」 always shows.
-              <Chip className="max-w-[22rem] gap-0">
+              <Chip className="max-w-[26rem] gap-0">
                 <span className="min-w-0 truncate" title={c.objective || undefined}>{c.objective || "目標待確認"}</span>
-                {c.status === "closed"
-                  ? <span className="shrink-0">・{closedWord(ws?.active_ads ?? 0)}</span>
-                  : ws && <span className="shrink-0">・在投 {ws.active_ads} 則</span>}
+                {closed
+                  ? stillOpen > 0 && <span className="shrink-0">・平台上還開著 {stillOpen} 則</span>
+                  : running && <span className="shrink-0">・{running}</span>}
               </Chip>
             )}
             {ws && ws.daily_budget !== null && ws.daily_budget > 0 && <Chip>每日 {formatAmount(ws.daily_budget)}</Chip>}

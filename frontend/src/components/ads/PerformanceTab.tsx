@@ -24,6 +24,7 @@ import { nextStep, NextStepButton, type StepTarget } from "./nextStep";
 import { Disclosure } from "./patterns";
 import { perSaleAmount } from "./patterns/csv";
 import { nativeMetricScopes, nativePerformance, type PerformanceView } from "./nativePerformance";
+import { syncNoteTone, type SyncNote } from "./detail/PeriodStatusRow";
 
 // F05-I12：後端一律回傳 `campaign.labels`；預設值只在舊測試 fixture 沒帶這個欄位時頂上
 // （同 `OverviewTab.tsx`／`StrategyTab.tsx` 的先例）。
@@ -158,7 +159,10 @@ function hasSavedComparison(campaign: CampaignDetail) {
 /** 成效 tab（F03-I16）：素材／策略／結構那幾頁是「編輯」，這頁是「唯讀＋兩個動作」
  * （重新讀取平台、立即結案）——所有數字只認 `getPerformance`（F37：平台同步表），絕不讀
  * `campaign_detail.outcome`（那是列表卡片的 SQL 小計，§0「Two total-derivers exist」）。
- * 重新讀取平台一律是工作區的 `onSync`（同一個 `POST …/sync` 工作，自建與既有活動都一樣）。 */
+ * 重新讀取平台一律是工作區的 `onSync`（同一個 `POST …/sync` 工作，自建與既有活動都一樣）。
+ * F49 Contract L: published／ended／closed come from the served `lifecycle.state`, 立即結案 only when `can_close`
+ * (an imported campaign keeps its disabled button with the capability's reason); Contract O: the last read's served
+ * outcome sentence prints under 重新讀取平台 (`syncNote`). */
 export function PerformanceTab({
   brandId,
   campaign: c,
@@ -167,6 +171,7 @@ export function PerformanceTab({
   onSync,
   syncing = false,
   syncError = "",
+  syncNote = null,
 }: {
   brandId: string;
   campaign: CampaignDetail;
@@ -176,6 +181,8 @@ export function PerformanceTab({
   syncing?: boolean;
   /** The workspace's last sync failure (job error); the close dialog's 重讀仍失敗 note shows it. */
   syncError?: string;
+  /** F49 Contract O: the outcome of the workspace's last platform read. */
+  syncNote?: SyncNote | null;
 }) {
   const { scope: draftScope } = useWorkspace();
   const [searchParams] = useSearchParams();
@@ -187,7 +194,8 @@ export function PerformanceTab({
   const [scopeKey, setScopeKey] = useState<string>();
   const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? (highlightAd ? scopes.find(scope => scope.metricScope === "ad") : undefined) ?? scopes[0];
   const nativeData = useMemo(() => nativePerformance(c.external_view, selectedScope?.key), [c.external_view, selectedScope?.key]);
-  const published = c.status === "live" || c.status === "ended" || c.status === "closed";
+  const life = c.lifecycle?.state ?? null;
+  const published = life !== null && life !== "draft";
   const labels = c.labels ?? DEFAULT_LABELS;
   const { today } = useOrgClock(); // F36-I09 (ruling G): org calendar, not the browser's
 
@@ -251,7 +259,7 @@ export function PerformanceTab({
     <div className="flex flex-col gap-4">
       {imported ? (
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
-          onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null}
+          onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null} note={syncNote}
           scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${c.external_view?.window.start ?? "未知"} ～ ${c.external_view?.window.end ?? "未知"}`}
           scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
           highlightAd={highlightAd} />
@@ -263,11 +271,11 @@ export function PerformanceTab({
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
       ) : (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
-          data={state.data} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync}
+          data={state.data} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync} note={syncNote}
           highlightAd={highlightAd} />
       )}
 
-      {(imported || c.status === "live" || c.status === "ended") && (
+      {(imported || c.lifecycle?.can_close === true) && (
         <div className="surface">
           <div className="surface-header">
             <h2>結案</h2>
@@ -275,11 +283,11 @@ export function PerformanceTab({
           <div className="surface-body flex items-center justify-between gap-4">
             <span className="flex flex-col gap-1 text-sm text-muted-foreground">
               <span>
-                {imported ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。") : c.status === "ended"
+                {imported ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。") : life === "ended"
                   ? "投放已結束，待人工結案；可以現在手動結案。"
                   : EARLY_CLOSE_SENTENCE}
               </span>
-              {!imported && c.status === "live" && c.end_date && c.end_date > today && (
+              {!imported && life === "live" && c.end_date && c.end_date > today && (
                 <span className="text-xs text-muted-foreground">
                   投放期間到 {c.end_date}，現在結案等於提前結束
                 </span>
@@ -290,7 +298,7 @@ export function PerformanceTab({
         </div>
       )}
 
-      {!imported && c.status === "closed" && <VerdictCard brandId={brandId} campaign={c} />}
+      {!imported && life === "closed" && <VerdictCard brandId={brandId} campaign={c} />}
 
       {comparison}
       {recovery}
@@ -315,6 +323,7 @@ function PerformanceReady({
   scopeCaption,
   refreshDisabled = false,
   highlightAd = null,
+  note = null,
 }: {
   simulated: boolean;
   data: PerformanceView;
@@ -327,6 +336,7 @@ function PerformanceReady({
   scopeCaption?: string;
   refreshDisabled?: boolean;
   highlightAd?: string | null;
+  note?: SyncNote | null;
 }) {
   const t = data.totals;
   const money = (value: number | null) => native ? nativeMoney(value, currency) : formatCurrency(value);
@@ -375,6 +385,7 @@ function PerformanceReady({
           </Button>
         </div>
         <div className="surface-body flex flex-col gap-2">
+          {note && !refreshing && <p role="status" data-state={note.state} className={`text-xs ${syncNoteTone(note)}`}>{note.text}</p>}
           <p className="text-sm font-medium">{outcome}</p>
           {native && <p className="text-xs text-muted-foreground">{scopeCaption}。僅彙整已讀回資料，完整性未知。</p>}
           <p className="text-xs text-muted-foreground">資料狀態：{readStatus}；來源為{source}。</p>

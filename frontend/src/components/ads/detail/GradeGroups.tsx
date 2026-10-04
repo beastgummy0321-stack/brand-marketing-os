@@ -279,40 +279,33 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
   );
 }
 
-// A closed ad's own status chip: pause-family statuses read 已暫停, ARCHIVED 已封存; anything else (DELETED, null)
-// stays the honest, generic 已關閉 rather than a raw enum value.
-const CLOSED_STATUS_LABEL: Record<string, string> = {
-  PAUSED: "已暫停", ADSET_PAUSED: "已暫停", CAMPAIGN_PAUSED: "已暫停", ARCHIVED: "已封存",
-};
-function closedStatusLabel(status: string | null): string {
-  return (status && CLOSED_STATUS_LABEL[status]) || "已關閉";
-}
-
-/** Prototype v10 closed row: thumb, name, status — kept on record, never judged, so no numbers and no decision. */
+/** Prototype v10 closed row: thumb, name, status — kept on record, never judged, so no numbers and no decision. The
+ * status is the served delivery word (F49 Contract L: the platform adapter's status table), never a local map. */
 function ClosedAdRow({ item }: { item: TriageClosedItem }) {
   const name = item.name ?? "（未命名廣告）";
   return (
     <div data-testid={`closed-ad-row-${item.entity_id}`} className={cn(ROW, "grid-cols-[40px_minmax(0,1fr)_auto]")}>
       <AdThumb url={item.thumbnail_url} />
       <p className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{name}</p>
-      <Chip>{closedStatusLabel(item.native_status)}</Chip>
+      <Chip>{item.delivery?.label ?? item.delivery_label}</Chip>
     </div>
   );
 }
 
 /** The closed ads (prototype v10: under the 不在投的 heading, last, grey, folded by default): kept on record, never
- * judged, not counted in the active number above. */
+ * judged, not counted in the active number above. The hint counts them by the served delivery groups (`groups`, first
+ * seen first; they add up to `total`). */
 export function ClosedGroup({ closed, open, onToggle }: {
   closed: TriageClosedBlock; open: boolean; onToggle: (open: boolean) => void;
 }) {
   const remaining = closed.total - closed.items.length;
-  const counts = [`暫停 ${closed.paused}`, `已封存 ${closed.archived}`, ...(closed.other ? [`其他 ${closed.other}`] : [])];
+  const counts = (closed.groups ?? []).map((g) => `${g.label} ${g.count}`);
   return (
     <section aria-label="不在投的">
       <h2 className="mt-3 mb-2.5 text-[15px] font-semibold text-muted-foreground">不在投的</h2>
       <Fold
-        swatch="bg-border" title={`已關閉的 ${closed.total} 則`} count={null} muted open={open} onToggle={onToggle}
-        hint={`${counts.join("・")}・不算在上面的在投數量裡`}
+        swatch="bg-border" title={`共 ${closed.total} 則`} count={null} muted open={open} onToggle={onToggle}
+        hint={[...counts, "不算在上面的在投數量裡"].join("・")}
       >
         {closed.items.map((item) => <ClosedAdRow key={item.entity_id} item={item} />)}
         {closed.truncated && <p className="py-2.5 text-[11.5px] text-muted-foreground">…其餘 {remaining} 則</p>}

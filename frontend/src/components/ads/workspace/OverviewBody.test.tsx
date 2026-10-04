@@ -6,7 +6,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
-import { getQueue, getTriage, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
+import { getQueue, getTriage, type CloseoutQueueRow, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd } from "@/lib/adsWorkspaceApi";
 import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
 import { OverviewBody, dayRange } from "./OverviewBody";
@@ -23,7 +23,7 @@ vi.mock("@/lib/adsTriageApi", async () => {
 const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: "prd_cup", result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
 const NO_CAP = { ...CAP, value: null, basis: null, own_value: null, break_even: null, product_id: "prd_fall", knowledge_product_id: "kp_fall" };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
-  return { id: "cmp_daily", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", cap: CAP,
+  return { id: "cmp_daily", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", lifecycle: LIVE, cap: CAP,
     budget_planned: 30000, labels: { conversion: "購買", count: "購買數", cpa: "每次購買成本" }, groups: [], ...o } as unknown as CampaignDetail;
 }
 const DRAFT = { cap_set: false, budget_set: false, slots_ready: 7, slots_total: 8, launch_checked: 0, launch_total: 0 };
@@ -57,16 +57,38 @@ function triageOf(id: string, o: Record<string, unknown> = {}) {
   return { entity_id: id, name: id, campaign_id: "cmp_daily", thumbnail_url: null, grade_move: null,
     current: { spend: 3120, result_count: 6, cost_per_result: 520 }, ...o };
 }
-function cleanupRow(): QueueItem {
+/** F49 Contract Q: every row as `queue_done.stamp` serves it — `decision`, `done`, `position` (1-based over the brand's
+ * open decision rows in board order, null on a done row or a notice) and its `campaign_id`. */
+function cleanupRow(position: number | null = 1): QueueItem {
   return { id: "q1", brand_id: "brd_1", kind_key: "cleanup", proposal: null, action_url: "/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily",
+    campaign_id: "cmp_daily", decision: true, done: position === null, position,
     triage: triageOf("a8"), cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8,
       ads: [{ entity_id: "a8" }, { entity_id: "a7" }], keep: [{}, {}, {}, {}, {}, {}], short: 0, daily_saving: 260, scale_owner_id: null } } as unknown as QueueItem;
 }
-function worseRow(campaign = "cmp_daily"): QueueItem {
-  return { id: "q2", brand_id: "brd_1", kind_key: "worse", proposal: null, action_url: null,
+function worseRow(campaign = "cmp_daily", position: number | null = 2): QueueItem {
+  return { id: `q2_${campaign}`, brand_id: "brd_1", kind_key: "worse", proposal: null, action_url: null,
+    campaign_id: campaign, decision: true, done: position === null, position,
     triage: triageOf("a6", { campaign_id: campaign, name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", grade_move: { from: "on_target", to: "watch" } }) } as unknown as QueueItem;
 }
-const queue = (items: QueueItem[]) => ({ items, counts: {}, total_ads: 0, kinds_available: [], kinds_pending: [] }) as unknown as QueuePayload;
+/** A notice row (Contract Q: `scale_budget` is shown on the money card, never a decision). */
+function scaleNotice(): QueueItem {
+  return { id: "q9", brand_id: "brd_1", kind_key: "scale_budget", proposal: null, action_url: null, campaign_id: "cmp_daily",
+    decision: false, done: false, position: null, triage: triageOf("a1") } as unknown as QueueItem;
+}
+/** The ended campaign's closeout row as served (`kind_key: "closeout"`, split into `closeouts`). */
+function closeoutRow(position = 1, running: { count: number; read_at: string | null } = { count: 2, read_at: "2026-10-11T04:30:00Z" }): CloseoutQueueRow {
+  return { id: "q_close", dedupe_key: "ads-closeout:cmp_daily", category: "ads_triage_closeout", severity: "warning",
+    message: "「日常商品推廣・轉換」已結束，待結案", action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=perf&close=1",
+    visible_from: null, status: "open", created_at: "2026-10-10T00:00:00Z", campaign_id: "cmp_daily", decision: true, position, done: false,
+    closeout: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", end_date: "2026-10-09", running } } as unknown as CloseoutQueueRow;
+}
+const queue = (items: QueueItem[], closeouts: CloseoutQueueRow[] = []) => ({
+  items, closeouts, counts: {}, total_ads: 0, kinds_available: [], kinds_pending: [],
+  decisions: { kinds: ["cleanup", "worse", "closeout", "settle", "refresh_creative"], open: [...items, ...closeouts].filter((r) => typeof r.position === "number").length },
+}) as unknown as QueuePayload;
+const LIVE = { state: "live", label: "投放中", can_close: true } as const;
+const ENDED = { state: "ended", label: "已結束・待結案", can_close: true } as const;
+const CLOSED = { state: "closed", label: "已結案", can_close: false } as const;
 
 function renderBody(c: CampaignDetail, w: CampaignWorkspace, canPublish = true) {
   const onGo = vi.fn();
@@ -79,7 +101,7 @@ const plain = (el: Element) => { const c = el.cloneNode(true) as HTMLElement; c.
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getCampaignStructure).mockResolvedValue(DAILY);
-  vi.mocked(getQueue).mockResolvedValue(queue([worseRow(), cleanupRow(), worseRow("cmp_other")]));
+  vi.mocked(getQueue).mockResolvedValue(queue([worseRow(), cleanupRow(), worseRow("cmp_other", 3)]));
 });
 
 describe("draft (v10 camp/fall/overview)", () => {
@@ -211,9 +233,9 @@ describe("data gap (v10 camp/mid/overview)", () => {
 });
 
 describe("live (v10 camp/daily/overview)", () => {
-  it("the next decision is this campaign's cleanup first: 第 1 件（共 2 件）, its title, the bar opens it", async () => {
+  it("the next decision is this campaign's lowest served position (cleanup): 第 1 件（共 3 件）, its title, the bar opens it", async () => {
     renderBody(detail(), ws());
-    expect(await screen.findByText("今天要決定的第 1 件（共 2 件）")).toBeTruthy();
+    expect(await screen.findByText("今天要決定的第 1 件（共 3 件）")).toBeTruthy();
     expect(screen.getByText("關 2 則、留 6 則")).toBeTruthy();
     expect(screen.getByText("清理")).toBeTruthy();
     expect(within(bar()).getByRole("link", { name: "看提議 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily");
@@ -263,7 +285,7 @@ describe("live (v10 camp/daily/overview)", () => {
   });
 
   it("a worse decision names its grade move", async () => {
-    vi.mocked(getQueue).mockResolvedValue(queue([worseRow()]));
+    vi.mocked(getQueue).mockResolvedValue(queue([worseRow("cmp_daily", 1)]));
     renderBody(detail(), ws({ pending_count: 1 }));
     expect(await screen.findByText("從划算變偏貴")).toBeTruthy();
     expect(within(bar()).getByRole("link", { name: "看證據 →" })).toBeTruthy();
@@ -313,7 +335,7 @@ describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
 
   it("a closed campaign never says 在投: 已結案・平台上還開著 N 則, and the ruler heading drops 在投 (drill-10 c1-ov)", async () => {
     vi.mocked(getQueue).mockResolvedValue(queue([]));
-    renderBody(detail({ status: "closed" }), ws({ delivery: null, pending_count: 0, active_ads: 6, can_support: 1,
+    renderBody(detail({ status: "closed", lifecycle: CLOSED }), ws({ delivery: null, pending_count: 0, active_ads: 6, can_support: 1,
       stage: { key: "review", done: ["plan", "assets", "launch", "read", "decide"] } }));
     const kv = screen.getByRole("region", { name: "近 14 天數字" });
     expect(within(kv).getByText("已結案・平台上還開著 6 則")).toBeTruthy();
@@ -322,7 +344,56 @@ describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
   });
 
   it("a closed campaign with every platform ad closed reads 已結案", () => {
-    renderBody(detail({ status: "closed" }), ws({ delivery: null, pending_count: 0, active_ads: 0 }));
+    renderBody(detail({ status: "closed", lifecycle: CLOSED }), ws({ delivery: null, pending_count: 0, active_ads: 0 }));
     expect(within(screen.getByRole("region", { name: "近 14 天數字" })).getByText("已結案")).toBeTruthy();
+  });
+});
+
+describe("F49 Contract Q／L: the served decision queue and the closeout row", () => {
+  it("drill-11 c3-06: an approved and confirmed cleanup (done, no position) is not a decision — 沒有要決定的事, no step in the bar", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([cleanupRow(null), worseRow("cmp_other", 1)]));
+    renderBody(detail(), ws({ pending_count: 0 }));
+    expect(await screen.findByText("這個活動沒有要決定的事")).toBeTruthy();
+    expect(screen.queryByText(/今天要決定的第/)).toBeNull();
+    expect(bar().textContent).toBe("← 投放中心");
+  });
+
+  it("a notice (scale_budget, decision false) is never the next decision", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([scaleNotice()]));
+    renderBody(detail(), ws({ pending_count: 0 }));
+    expect(await screen.findByText("這個活動沒有要決定的事")).toBeTruthy();
+  });
+
+  it("「第 N 件（共 M 件）」 is the row's served position and the brand's open count, never a recount", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([cleanupRow(null), worseRow("cmp_other", 1), worseRow("cmp_daily", 2)]));
+    renderBody(detail(), ws({ pending_count: 1 }));
+    expect(await screen.findByText("今天要決定的第 2 件（共 2 件）")).toBeTruthy();
+    expect(screen.getByText("從划算變偏貴")).toBeTruthy();
+  });
+
+  it("drill-11 p2: an ended campaign's closeout row is its card — the served sentence, the end date, what still runs — and 結案這一期 → opens ?tab=perf&close=1", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([worseRow("cmp_other", 2)], [closeoutRow(1)]));
+    renderBody(detail({ lifecycle: ENDED, end_date: "2026-10-09" }), ws({ pending_count: 1, stage: { key: "review", done: ["plan", "assets", "launch", "read", "decide"] } }));
+    expect(await screen.findByText("今天要決定的第 1 件（共 2 件）")).toBeTruthy();
+    const card = screen.getByTestId("closeout-decision");
+    expect(within(card).getByText("已結束・待結案")).toBeTruthy();
+    expect(within(card).getByText("「日常商品推廣・轉換」已結束，待結案")).toBeTruthy();
+    expect(within(card).getByText("10/09 結束")).toBeTruthy();
+    expect(within(card).getByText(/^平台上還在投 2 則（10\/11 \d\d:30 讀取）$/)).toBeTruthy();
+    expect(within(bar()).getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=perf&close=1");
+  });
+
+  it("an ended campaign with unread days still shows its closeout card (the close dialog re-reads first), not the data-gap view", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([], [closeoutRow(1, { count: 0, read_at: null })]));
+    renderBody(detail({ lifecycle: ENDED }), ws({ pending_count: 1, missing_days: ["2026-10-08"] }));
+    expect(await screen.findByTestId("closeout-decision")).toBeTruthy();
+    expect(screen.getByText("平台上的廣告還沒讀過")).toBeTruthy();
+    expect(screen.queryByText("每則廣告離可以判斷還差多少")).toBeNull();
+  });
+
+  it("another campaign's closeout row is not this campaign's decision", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([], [{ ...closeoutRow(1), campaign_id: "cmp_other" }]));
+    renderBody(detail(), ws({ pending_count: 0 }));
+    expect(await screen.findByText("這個活動沒有要決定的事")).toBeTruthy();
   });
 });

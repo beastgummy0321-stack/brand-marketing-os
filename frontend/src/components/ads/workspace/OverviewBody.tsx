@@ -3,15 +3,16 @@ import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
-import { getQueue, getTriage, type CampaignDataStatus, type QueueItem, type QueueKind } from "@/lib/adsTriageApi";
+import { getQueue, getTriage, type CampaignDataStatus, type CloseoutQueueRow, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
+import { formatSyncTime } from "@/lib/format";
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type WorkspaceTotals } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import {
   ActionBar, Chip, DAY_SWATCH, DayTiles, Disclosure, GradeRules, GradeTermChip, KindMark, Legend, Meter,
-  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, closedWord, figure as ruleFigure, formatAmount, gradeWord,
+  MoneyMeter, MoneyTag, ReadFailed, TargetRuler, Term, Thumb, TodoRow, figure as ruleFigure, formatAmount, gradeWord,
   sampleWords, unsoldLine, useAdsRules, watchLine, type RulerAd, type RulerCap,
 } from "../patterns";
-import { cleanupAction, isQueueItemDone, proposalAction } from "../home/status";
+import { cleanupAction, proposalAction } from "../home/status";
 import { decisionTitle } from "../home/QueueRow";
 import type { StepTarget } from "../nextStep";
 import { perSaleAmount } from "../patterns/csv";
@@ -26,7 +27,14 @@ import { perSaleAmount } from "../patterns/csv";
  *
  * F47-I08 (Contract E, drill-10 S3): a campaign on the platform that has not spent yet (`delivery === "waiting"`) says
  * so in the ✓ next-step card (「已上架，等平台開始投放」 + when its first number can show up) and its money cells read
- * 「還沒開始花」, never 「未知」. A closed campaign never says 在投: 「已結案」 or 「已結案・平台上還開著 N 則」. */
+ * 「還沒開始花」, never 「未知」. A closed campaign never says 在投: 「已結案」 or 「已結案・平台上還開著 N 則」.
+ *
+ * F49 Contract Q: the next decision is this campaign's open decision row with the lowest served `position` (the home
+ * board's order, never a local kind order); 「第 N 件（共 M 件）」 is that `position` and the queue's `decisions.open`. An
+ * ended campaign's `closeout` row (Contract L／Q) is a decision too: its card names the end date and what is still
+ * running, and the bar's 結案這一期 → opens the perf tab's close dialog (`?tab=perf&close=1`). An ended campaign skips the
+ * data-gap view: the close dialog itself asks to re-read missing days first. The campaign's word is the served
+ * `lifecycle.label`. */
 
 const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數", cpa: "每次購買成本" };
 const CARD = "surface px-[22px] py-5";
@@ -67,7 +75,7 @@ export function OverviewBody({ brandId, campaign: c, workspace: ws, canPublish, 
   advanced: ReactNode;
 }) {
   const draft = ws.draft;
-  const gap = draft === null && (ws.missing_days?.length ?? 0) > 0;
+  const gap = draft === null && (ws.missing_days?.length ?? 0) > 0 && c.lifecycle?.state !== "ended";
   const fold = <Disclosure label="進階：更多活動資訊">{advanced}</Disclosure>;
   if (draft) return <DraftOverview brandId={brandId} campaign={c} workspace={ws} draft={draft} canPublish={canPublish} onGo={onGo} fold={fold} />;
   if (gap) return <GapOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} />;
@@ -248,9 +256,8 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
 // live
 // ---------------------------------------------------------------------------------------------------------------
 
-const KIND_ORDER: QueueKind[] = ["cleanup", "stop_loss", "worse", "scale_budget", "refresh_creative", "insufficient_data"];
-
-/** Where this decision's one step goes, with the same helpers as the home rows and the flows. */
+/** Where this decision's one step goes, with the same helpers as the home rows and the flows. Only decision rows reach
+ * here (Contract Q: `scale_budget` and `insufficient_data` are notices, never the next decision). */
 export function decisionAction(brandId: string, item: QueueItem): { label: string; href: string | null } {
   const campaignId = item.triage.campaign_id;
   switch (item.kind_key) {
@@ -259,20 +266,24 @@ export function decisionAction(brandId: string, item: QueueItem): { label: strin
       return a ? { label: item.proposal === null ? "看提議" : a.label, href: a.href } : { label: "看提議", href: null };
     }
     case "worse": return proposalAction(brandId, campaignId, item.triage.entity_id, item.proposal, "review");
-    case "stop_loss": return proposalAction(brandId, campaignId, item.triage.entity_id, item.proposal, "pause");
-    case "scale_budget":
-      return item.scale ? proposalAction(brandId, campaignId, item.scale.owner.id, item.proposal, "budget") : { label: "看提議", href: item.action_url };
     default: return { label: "去處理", href: item.action_url };
   }
 }
 
-/** This campaign's open decisions, in the home board's order. */
-export function openDecisions(items: QueueItem[], campaignId: string): QueueItem[] {
-  return items
-    .filter((q) => (q.cleanup?.campaign_id ?? q.triage.campaign_id) === campaignId && !isQueueItemDone(q))
-    .map((q, i) => ({ q, i }))
-    .sort((a, b) => KIND_ORDER.indexOf(a.q.kind_key) - KIND_ORDER.indexOf(b.q.kind_key) || a.i - b.i)
-    .map(({ q }) => q);
+/** One open decision of this campaign: an ad-level row or the campaign's closeout row, at its served `position`. */
+export type OpenDecision =
+  | { type: "ad"; position: number; item: QueueItem }
+  | { type: "closeout"; position: number; row: CloseoutQueueRow };
+
+/** This campaign's open decisions in the served board order (`position`; done rows and notices carry none). */
+export function openDecisions(queue: QueuePayload, campaignId: string): OpenDecision[] {
+  const ads: OpenDecision[] = queue.items
+    .filter((q) => (q.campaign_id ?? q.triage.campaign_id) === campaignId && q.decision === true && typeof q.position === "number")
+    .map((item) => ({ type: "ad", position: item.position as number, item }));
+  const closeouts: OpenDecision[] = (queue.closeouts ?? [])
+    .filter((r) => r.campaign_id === campaignId && r.decision && typeof r.position === "number")
+    .map((row) => ({ type: "closeout", position: row.position as number, row }));
+  return [...ads, ...closeouts].sort((a, b) => a.position - b.position);
 }
 
 function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
@@ -280,13 +291,16 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
 }) {
   const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id]);
   const queue = useApiRead((signal) => getQueue(brandId, signal), [brandId]);
-  const open = queue.status === "ready" ? openDecisions(queue.data.items, c.id) : [];
+  const open = queue.status === "ready" ? openDecisions(queue.data, c.id) : [];
   const first = open[0] ?? null;
-  const action = first ? decisionAction(brandId, first) : null;
+  const total = queue.status === "ready" ? queue.data.decisions?.open ?? null : null;
+  const action = first === null ? null
+    : first.type === "closeout" ? { label: "結案這一期", href: first.row.action_url }
+    : decisionAction(brandId, first.item);
   const cap = capOf(c);
   const ads = structure.status === "ready" ? rulerAds(structure.data) : null;
   const perfHref = `/brands/${brandId}/ads/campaigns/${c.id}?tab=perf`;
-  const closed = c.status === "closed";
+  const closed = c.lifecycle?.state === "closed";
   const waiting = ws.delivery === "waiting";
   const rulerTitle = closed ? "廣告對照上限" : ads ? `在投 ${ads.length} 則對照上限` : "在投廣告對照上限";
 
@@ -298,9 +312,11 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
           <section className={CARD} aria-labelledby="ov-next">
             <div className={HEAD}>
               <h2 id="ov-next" className={H2}>下一步</h2>
-              <span className="text-sm text-muted-foreground">今天要決定的第 1 件（共 {open.length} 件）</span>
+              <span className="text-sm text-muted-foreground">今天要決定的第 {first.position} 件{total !== null && `（共 ${total} 件）`}</span>
             </div>
-            <NextDecision item={first} ads={ads} cap={cap} breakEven={c.cap.break_even} workspace={ws} />
+            {first.type === "closeout"
+              ? <CloseoutDecision row={first.row} campaign={c} />
+              : <NextDecision item={first.item} ads={ads} cap={cap} breakEven={c.cap.break_even} workspace={ws} />}
           </section>
         ) : (
           <section className={`${CARD} flex items-center gap-4`} aria-label="下一步">
@@ -332,22 +348,47 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
   );
 }
 
-const MARK: Partial<Record<QueueKind, { kind: "cut" | "stop" | "worse" | "up" | "fresh"; label: string }>> = {
-  cleanup: { kind: "cut", label: "清理" },
-  stop_loss: { kind: "stop", label: "沒賣出" },
-  scale_budget: { kind: "up", label: "可加預算" },
-  refresh_creative: { kind: "fresh", label: "補素材" },
-};
+/** The decision's mark (prototype `qRow` `.kind`): the cleanup's ✂ 清理, a worse ad's grade move, 補素材. */
+function markOf(item: QueueItem, rules: ReturnType<typeof useAdsRules>): { kind: "cut" | "worse" | "fresh"; label: string } | null {
+  switch (item.kind_key) {
+    case "cleanup": return { kind: "cut", label: "清理" };
+    case "worse": {
+      const move = item.triage.grade_move;
+      return { kind: "worse", label: move && rules ? `從${gradeWord(rules, move.from)}變${gradeWord(rules, move.to)}` : "每筆變多了" };
+    }
+    case "refresh_creative": return { kind: "fresh", label: "補素材" };
+    default: return null;
+  }
+}
+
+/** An ended campaign's closeout row (F49 Contract Q): its served sentence, the end date, and what the platform still
+ * runs at the last read (`closeout.running`). The step itself is the bar's 結案這一期 →. */
+function CloseoutDecision({ row, campaign: c }: { row: CloseoutQueueRow; campaign: CampaignDetail }) {
+  const { end_date: end, running } = row.closeout;
+  const still = running.read_at === null ? "平台上的廣告還沒讀過"
+    : running.count > 0 ? `平台上還在投 ${running.count} 則（${formatSyncTime(running.read_at)} 讀取）`
+    : "平台上已沒有在投的廣告";
+  return (
+    <div className="grid grid-cols-[48px_minmax(0,1fr)_minmax(180px,240px)] items-center gap-4" data-testid="closeout-decision">
+      <span className="grid size-12 place-items-center rounded-[10px] bg-zone-over text-xl text-danger" aria-hidden="true">■</span>
+      <div className="min-w-0">
+        {c.lifecycle && <KindMark kind="stop">{c.lifecycle.label}</KindMark>}
+        <div className="mt-1.5 font-semibold [overflow-wrap:anywhere]">{row.message}</div>
+      </div>
+      <div className="numeric flex flex-col gap-0.5 text-[12.5px] text-muted-foreground">
+        <span>{end ? `${md(end)} 結束` : "結束日未知"}</span>
+        <span>{still}</span>
+      </div>
+    </div>
+  );
+}
 
 /** Prototype `qRow(q, …, bare)`: the decision's mark and title, and its figure on the right. */
 function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
   item: QueueItem; ads: RulerAd[] | null; cap: RulerCap | null; breakEven: number | null; workspace: CampaignWorkspace;
 }) {
   const rules = useAdsRules();
-  const move = item.triage.grade_move;
-  const mark = item.kind_key === "worse"
-    ? { kind: "worse" as const, label: move && rules ? `從${gradeWord(rules, move.from)}變${gradeWord(rules, move.to)}` : "每筆變多了" }
-    : MARK[item.kind_key];
+  const mark = markOf(item, rules);
   let figure: ReactNode = null;
   if (item.kind_key === "cleanup" && ads) {
     figure = (
@@ -368,10 +409,6 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
         </div>
       </>
     );
-  } else if (item.kind_key === "stop_loss" && cap && rules) {
-    const line = unsoldLine(rules, cap.value), spend = item.triage.current.spend;
-    figure = <Meter value={spend} max={Math.max(line * 1.4, (spend ?? 0) * 1.1)} marker={line} tone="danger"
-      left={`花 ${yuan(spend)}・0 筆`} right={<>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">{rules.labels.grade.wasted}</Term>」</>} />;
   }
   return (
     <div className="grid grid-cols-[48px_minmax(0,1fr)_minmax(180px,240px)] items-center gap-4">
@@ -394,7 +431,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const cap = capOf(c);
   const rules = useAdsRules();
   const who = c.name.split("・")[0] || c.name;
-  const closed = c.status === "closed";
+  const closed = c.lifecycle?.state === "closed";
   // On the platform, nothing spent yet: an unknown money cell is 「還沒開始花」, not 「未知」 (Contract E).
   const notSpent = ws.delivery === "waiting" ? "還沒開始花" : "未知";
   const money = (v: number | null, format: (v: number | null) => string | null = formatAmount) => {
@@ -440,7 +477,9 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
         {closed ? (
           <div className={cell}>
             <span className={label}>狀態</span>
-            <b className="my-0.5 block text-[17px] font-semibold tracking-tight">{closedWord(ws.active_ads)}</b>
+            <b className="my-0.5 block text-[17px] font-semibold tracking-tight">
+              {c.lifecycle?.label}{ws.active_ads > 0 && `・平台上還開著 ${ws.active_ads} 則`}
+            </b>
           </div>
         ) : (
           <div className={cell}>

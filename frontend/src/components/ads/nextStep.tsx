@@ -29,17 +29,19 @@ export interface NextStep {
   label: string;
 }
 
+/** F49 Contract L: a launched campaign's step reads the served `lifecycle.state`, never the stored status. */
 export function nextStep(c: CampaignDetail): NextStep {
   if (c.origin === "imported" || c.capabilities?.unavailable.strategy) {
     return { id: "make_assets", target: "assets", stageIndex: -1, sentence: "查看平台資料，安排自帶素材與手動交接；內部確認不代表平台已上架。", label: "安排自帶素材 →" };
   }
-  if (c.status === "closed") {
+  const life = c.lifecycle?.state;
+  if (life === "closed") {
     return { id: "performance", target: "perf", stageIndex: 5, sentence: "已結案，結案紀錄在成效。", label: "查看成效 →" };
   }
-  if (c.status === "live") {
+  if (life === "live") {
     return { id: "performance", target: "perf", stageIndex: 4, sentence: "投放中，每天的花費與結果在成效。", label: "查看成效 →" };
   }
-  if (c.status === "ended") {
+  if (life === "ended") {
     return { id: "performance", target: "perf", stageIndex: 4, sentence: "投放已結束，到成效看結果或結案。", label: "查看成效 →" };
   }
   if (!c.budget_basis_json.strategy) {
